@@ -1,4 +1,6 @@
-import { isHostedAgentType } from "@codecast/shared/contracts";
+import { isAdoptedChild, isHostedAgentType } from "@codecast/shared/contracts";
+import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import type { InboxSession } from "../store/inboxStore";
 import { cleanTitle } from "./conversationProcessor";
 import { conversationTitle } from "./conversationTitle";
 
@@ -11,6 +13,15 @@ import { conversationTitle } from "./conversationTitle";
 export function sessionCardTitle(session: { title?: string | null; agent_type?: string | null; last_user_message?: string | null; first_prompt?: string | null }): string {
   if (isHostedAgentType(session.agent_type)) return conversationTitle(session);
   return cleanTitle(sessionTitleText(session));
+}
+
+/** Whether a card draws as a nested child row: a trigger's run, a Task
+ *  subagent, an agent-team teammate. A station the person adopted stands
+ *  alone (isAdoptedChild), so it draws as a full card despite its parent. */
+export function drawsNested(session: InboxSession, subRow?: unknown): boolean {
+  if (subRow) return true;
+  if (isAdoptedChild(session)) return false;
+  return !!session.is_subagent || !!nestParentIdOf(session);
 }
 
 /** The text a session is called by before cleaning: its title, else what it

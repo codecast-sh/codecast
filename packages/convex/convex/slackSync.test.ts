@@ -1,12 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
-import { makeFakeDb } from "./testDb";
 import {
   applyInboundDelete,
   applyInboundEdit,
   applyInboundMessage,
   applyInboundReaction,
-  commitLink,
   pushContext,
   getTeamSlack,
   setDmSync,
@@ -17,8 +15,6 @@ import {
   reattributeSlackPerson,
   listSlackPeople,
   linkSignedInPerson,
-  patchBackfill,
-  backfillSinceTs,
   ingestEvent,
   slackClientId,
   stampOutbound,
@@ -30,91 +26,13 @@ import {
   channelFileRepairContext,
   fileRepairPage,
   applyFileRepair,
-  recordOutboundFailure,
 } from "./slackSync";
 import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
 import { USER_SCOPES } from "./lib/slackOAuth";
 import { pushReaction, reactionSpeaker } from "./slackReactions";
-import { listChannels, sendMessage, toggleReaction, updateChannel } from "./chat";
+import { listChannels, sendMessage, toggleReaction } from "./chat";
 import { resolveChatMentions } from "./lib/mentionResolve";
-
-const ALICE = "user-alice" as any;
-const BOB = "user-bob" as any;
-const TEAM = "team-main" as any;
-const CHANNEL = "chat_channels_1" as any;
-const OTHER_CHANNEL = "chat_channels_2" as any;
-const INSTALL = "slack_installations_old" as any;
-const LINK = "slack_channel_links_1" as any;
-const WS = "T0UNION";
-const SLACK_CH = "C0GENERAL";
-
-function seed(over: Record<string, any[]> = {}) {
-  return {
-    users: [
-      { _id: ALICE, name: "Alice", email: "alice@example.test", emailVerificationTime: 1, github_username: "alice" },
-      { _id: BOB, name: "Bob", email: "bob@example.test", emailVerificationTime: 1, github_username: "bob" },
-    ],
-    teams: [{ _id: TEAM, name: "Union", invite_code: "U", created_at: 1, features: { chat: true } }],
-    team_memberships: [
-      { _id: "m-alice", user_id: ALICE, team_id: TEAM, role: "admin" },
-      { _id: "m-bob", user_id: BOB, team_id: TEAM, role: "member" },
-    ],
-    chat_channels: [
-      { _id: CHANNEL, team_id: TEAM, name: "general", created_by: ALICE, created_at: 1_000, updated_at: 1_000 },
-      { _id: OTHER_CHANNEL, team_id: TEAM, name: "random", created_by: BOB, created_at: 1_000, updated_at: 1_000 },
-    ],
-    chat_messages: [],
-    chat_reactions: [],
-    chat_reads: [],
-    chat_channel_members: [],
-    rate_limits: [],
-    notifications: [],
-    push_outbox: [],
-    entity_subscriptions: [],
-    user_presence: [],
-    anchors: [],
-    anchor_channels: [],
-    pending_messages: [],
-    conversations: [],
-    slack_installations: [{
-      _id: INSTALL, workspace_id: WS, workspace_name: "Union", bot_user_id: "UBOT", bot_token: "xoxb-test", app_id: "A0CODECAST",
-      team_id: TEAM, installed_by_user_id: ALICE, created_at: 1, updated_at: 1,
-    }],
-    slack_channel_links: [{
-      _id: LINK, team_id: TEAM, installation_id: INSTALL, workspace_id: WS, slack_channel_id: SLACK_CH, slack_channel_name: "general",
-      chat_channel_id: CHANNEL, direction: "both",
-      options: { threads: true, reactions: true, edits: true, files: true, bot_messages: false, system_messages: false, agent_lines: true, match_people_by_email: true },
-      since_ts: "1000.000000", created_by: ALICE, created_at: 1, updated_at: 1,
-    }],
-    slack_events: [],
-    slack_sync_events: [],
-    slack_users: [],
-    slack_user_tokens: [],
-    ...over,
-  };
-}
-
-function context(user: string | null, over: Record<string, any[]> = {}) {
-  const db = makeFakeDb(seed(over));
-  const scheduled: Array<{ delay: number; name: string; args: any }> = [];
-  const emitted: Array<{ reference: unknown; args: any }> = [];
-  const ctx: any = {
-    db,
-    auth: { async getUserIdentity() { return user ? { subject: `${user}|session` } : null; } },
-    async runQuery() { throw new Error("no runQuery in this test"); },
-    async runMutation(reference: unknown, args: any) {
-      emitted.push({ reference, args });
-      return undefined;
-    },
-    scheduler: { async runAfter(delay: number, reference: unknown, args: any) { scheduled.push({ delay, name: getFunctionName(reference as any), args }); } },
-    _scheduled: scheduled,
-    _emitted: emitted,
-  };
-  return ctx;
-}
-const call = (fn: any, ctx: any, args: any) => (fn as any)._handler(ctx, args);
-const messages = (ctx: any) => ctx.db._tables.chat_messages as any[];
-const scheduledNames = (ctx: any) => ctx._scheduled.map((s: any) => s.name);
+import { ALICE, BOB, TEAM, CHANNEL, OTHER_CHANNEL, INSTALL, LINK, WS, SLACK_CH, context, call, messages, scheduledNames } from "./slackSync.testkit";
 
 describe("ingestEvent", () => {
   test("routes a channel message to a job and dedupes on event id", async () => {
@@ -758,114 +676,6 @@ describe("direct messages", () => {
     } as any);
     const r = await call(applyInboundMessage, ctx, { link_id: LINK, ts: "5000.000001", content: "from codecast", attachments: [], slack_user: "UALICE", author_user_id: ALICE, live: true });
     expect(r.status).toBe("duplicate");
-  });
-});
-
-describe("link management", () => {
-  test("commitLink refuses a second mirror on either side, and a manager-only write", async () => {
-    const ctx = context(ALICE);
-    await expect(call(commitLink, ctx, { chat_channel_id: CHANNEL, slack_channel_id: "C0NEW", since_ts: "1" })).rejects.toThrow(/already mirrors/);
-    await expect(call(commitLink, ctx, { chat_channel_id: OTHER_CHANNEL, slack_channel_id: SLACK_CH, since_ts: "1" })).rejects.toThrow(/already mirrors/);
-    const bob = context(BOB);
-    // Bob created #random, so he may link it; he may not touch #general's link.
-    await expect(call(updateLink, bob, { link_id: LINK, paused: true })).rejects.toThrow();
-    const ok = await call(commitLink, bob, { chat_channel_id: OTHER_CHANNEL, slack_channel_id: "C0RANDOM", slack_channel_name: "random-chatter", since_ts: "1" });
-    expect(ok.link_id).toBeTruthy();
-    // The chat channel takes the Slack channel's name, and the caller is told.
-    expect((await bob.db.get(OTHER_CHANNEL)).name).toBe("random-chatter");
-    expect(ok.chat_channel_name).toBe("random-chatter");
-    expect(ok.slack_channel_name).toBe("random-chatter");
-    const notice = bob.db._tables.chat_messages.find((m: any) => m.channel_id === OTHER_CHANNEL);
-    expect(notice.sync_local_only).toBe(true);
-    expect(notice.external_author.name).toBe("Slack");
-  });
-  test("a mirrored channel keeps the Slack name: our rename is refused, a taken Slack name is not adopted", async () => {
-    const ctx = context(ALICE);
-    await expect(call(updateChannel, ctx, { channel_id: CHANNEL, name: "something-else" })).rejects.toThrow(/Slack/);
-    // The topic is still ours to set.
-    await call(updateChannel, ctx, { channel_id: CHANNEL, topic: "mirrored room" });
-    expect((await ctx.db.get(CHANNEL)).topic).toBe("mirrored room");
-    // #general is taken by the mirrored channel, so #random linked to a Slack #general stays #random.
-    const ok = await call(commitLink, ctx, { chat_channel_id: OTHER_CHANNEL, slack_channel_id: "C0GEN2", slack_channel_name: "general", since_ts: "1" });
-    expect(ok.chat_channel_name).toBe("random");
-    expect((await ctx.db.get(OTHER_CHANNEL)).name).toBe("random");
-  });
-  test("a history window seeds the import progress on the link; none leaves it off", async () => {
-    const ctx = context(ALICE);
-    const ok = await call(commitLink, ctx, { chat_channel_id: OTHER_CHANNEL, slack_channel_id: "C0HIST", slack_channel_name: "history", since_ts: "1", backfill_window: "90d" });
-    const link = await ctx.db.get(ok.link_id);
-    expect(link.backfill).toMatchObject({ window: "90d", status: "running", fetched: 0 });
-    await call(patchBackfill, ctx, { link_id: ok.link_id, fetched: 240, status: "running" });
-    expect((await ctx.db.get(ok.link_id)).backfill.fetched).toBe(240);
-    await call(patchBackfill, ctx, { link_id: ok.link_id, fetched: 5000, status: "done", capped: true });
-    const done = (await ctx.db.get(ok.link_id)).backfill;
-    expect(done.status).toBe("done");
-    expect(done.capped).toBe(true);
-    expect(done.finished_at).toBeGreaterThan(0);
-    // A failed import restarts when the link is resumed.
-    await call(patchBackfill, ctx, { link_id: ok.link_id, fetched: 12, status: "failed", error: "Slack: ratelimited" });
-    await call(updateLink, ctx, { link_id: ok.link_id, paused: false });
-    expect((await ctx.db.get(ok.link_id)).backfill).toMatchObject({ status: "running", fetched: 0 });
-    expect(scheduledNames(ctx)).toContain("slackSync:backfill");
-    // While it runs, another run is refused; once done, an explicit reimport
-    // and turning a kind of line on both run it again.
-    await expect(call(updateLink, ctx, { link_id: ok.link_id, reimport: true })).rejects.toThrow(/still running/);
-    await call(patchBackfill, ctx, { link_id: ok.link_id, fetched: 40, status: "done" });
-    await call(updateLink, ctx, { link_id: ok.link_id, options: { bot_messages: false } });
-    expect((await ctx.db.get(ok.link_id)).backfill.status).toBe("done"); // turning OFF changes nothing
-    await call(updateLink, ctx, { link_id: ok.link_id, options: { bot_messages: true } });
-    expect((await ctx.db.get(ok.link_id)).backfill).toMatchObject({ status: "running", fetched: 0, window: "90d" });
-    await call(patchBackfill, ctx, { link_id: ok.link_id, fetched: 55, status: "done" });
-    const r = await call(updateLink, ctx, { link_id: ok.link_id, reimport: true });
-    expect(r.reimport).toBe(true);
-    expect((await ctx.db.get(ok.link_id)).backfill.status).toBe("running");
-    // No window, no progress object at all.
-    const plain = context(BOB);
-    const ok2 = await call(commitLink, plain, { chat_channel_id: OTHER_CHANNEL, slack_channel_id: "C0PLAIN", slack_channel_name: "plain", since_ts: "1", backfill_window: "none" });
-    expect((await plain.db.get(ok2.link_id)).backfill).toBeUndefined();
-  });
-  test("history windows resolve to a Slack ts floor", () => {
-    const now = 1_700_000_000_000;
-    expect(backfillSinceTs("none", now)).toBe("1700000000.000000");
-    expect(backfillSinceTs("7d", now)).toBe(((now - 7 * 86_400_000) / 1000).toFixed(6));
-    expect(backfillSinceTs("all", now)).toBe("0");
-  });
-  test("a link whose installation is gone is replaced, not a blocker", async () => {
-    const ctx = context(ALICE, { slack_installations: [] });
-    await ctx.db.insert("slack_installations", { workspace_id: "T0NEW", workspace_name: "New", bot_user_id: "UB2", bot_token: "x", team_id: TEAM, installed_by_user_id: ALICE, created_at: 1, updated_at: 1 });
-    const ok = await call(commitLink, ctx, { chat_channel_id: CHANNEL, slack_channel_id: "C0X", since_ts: "1" });
-    expect(ok.link_id).toBeTruthy();
-    expect(ctx.db._tables.slack_channel_links.length).toBe(1);
-  });
-  test("updateLink merges options and clears the error on resume", async () => {
-    const ctx = context(ALICE);
-    await ctx.db.patch(LINK, { paused: true, last_error: "boom", last_error_at: 5 });
-    await call(updateLink, ctx, { link_id: LINK, options: { threads: false }, paused: false, direction: "slack_to_codecast" });
-    const link = await ctx.db.get(LINK);
-    expect(link.options.threads).toBe(false);
-    expect(link.options.reactions).toBe(true);
-    expect(link.paused).toBe(false);
-    expect(link.last_error).toBeUndefined();
-    expect(link.direction).toBe("slack_to_codecast");
-  });
-  test("a read-only Slack conversation turns the link one-way instead of erroring forever", async () => {
-    const ctx = context(ALICE);
-    await call(recordOutboundFailure, ctx, { link_id: LINK, error: "restricted_action_read_only_channel" });
-    let link = await ctx.db.get(LINK);
-    expect(link.direction).toBe("slack_to_codecast");
-    expect(link.slack_read_only).toBe(true);
-    expect(link.last_error).toBeUndefined();
-    expect(link.paused).toBeFalsy();
-    await call(updateLink, ctx, { link_id: LINK, direction: "both" });
-    link = await ctx.db.get(LINK);
-    expect(link.slack_read_only).toBeUndefined();
-  });
-  test("other outbound failures still record the error", async () => {
-    const ctx = context(ALICE);
-    await call(recordOutboundFailure, ctx, { link_id: LINK, error: "rate_limited" });
-    const link = await ctx.db.get(LINK);
-    expect(link.last_error).toBe("rate_limited");
-    expect(link.direction).toBe("both");
   });
 });
 

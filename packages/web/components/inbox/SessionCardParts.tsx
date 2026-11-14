@@ -4,8 +4,7 @@ import { Tag, UserCheck, CheckSquare, Square } from "lucide-react";
 import { formatRelative, formatDateFull } from "../../lib/utils";
 import { sessionCardTitle } from "../../lib/sessionCard";
 import { sessionStartupState } from "../../lib/sessionLifecycle";
-import { isHostedAgentType, isAdoptedChild } from "@codecast/shared/contracts";
-import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import { isHostedAgentType } from "@codecast/shared/contracts";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import type { InboxSession } from "../../store/inboxStore";
 import { AuthErrorBadge } from "../AuthErrorBadge";
@@ -481,14 +480,6 @@ export function UnreadDot() {
 
 /** The card's tick while a selection is live: every card shows its box, so
  *  the mode is visible, and the box itself toggles the card. */
-/** Whether a card draws as a nested child row: a trigger's run, a Task
- *  subagent, an agent-team teammate. A station the person adopted stands
- *  alone (isAdoptedChild), so it draws as a full card despite its parent. */
-export function drawsNested(session: InboxSession, subRow?: unknown): boolean {
-  if (subRow) return true;
-  if (isAdoptedChild(session)) return false;
-  return !!session.is_subagent || !!nestParentIdOf(session);
-}
 
 export function SelectTick({ sessionId, isSelected, selecting, onToggle }: { sessionId: string; isSelected: boolean; selecting: boolean; onToggle?: (id: string) => void }) {
   if (!selecting) return null;

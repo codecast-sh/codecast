@@ -350,35 +350,84 @@ export function mergeRecentFiles(
   return capped;
 }
 
-/** Tool results in a row that came back as errors. */
-const failedResults = (results: ReadonlyArray<{ is_error?: boolean }> | undefined) =>
-  results?.filter((r) => r.is_error).length ?? 0;
+type TallyRow = { tool_results?: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | null };
+
+// The line `git commit` prints when it made a commit, at the start of a line:
+// `[<branch> <hash>] <subject>`, `[<branch> (root-commit) <hash>]` or
+// `[detached HEAD <hash>]`. A refused commit ("nothing to commit") prints none.
+const COMMIT_MADE_LINES = /^\[[^\]\n]+ [a-f0-9]{7,40}\] /gm;
+
+/** A tool result's shell text: Codex stores a command's result as a JSON
+ *  envelope (`{"output": "...", "metadata": {...}}`), where git's lines are not
+ *  at a line start until the string is decoded. */
+function shellOutputOf(content: string): string {
+  if (!content.startsWith("{")) return content;
+  try {
+    const parsed = JSON.parse(content);
+    return typeof parsed?.output === "string" ? parsed.output : content;
+  } catch {
+    return content;
+  }
+}
+
+const failedResults = (row: TallyRow | undefined) => row?.tool_results?.filter((r) => r.is_error).length ?? 0;
+const commitLines = (content: string) => shellOutputOf(content).match(COMMIT_MADE_LINES)?.length ?? 0;
+const commitLinesIn = (row: TallyRow | undefined) =>
+  (row?.tool_results ?? []).reduce((n, r) => n + commitLines(r.content), 0);
+
+/** Commits a row's results report, counted only for a result whose call the
+ *  session recorded as a `git commit` (its commit file_changes row, keyed by
+ *  the call id): reading an old log that holds a commit line made no commit.
+ *  A result that committed and then failed keeps its commits. */
+async function confirmedCommits(ctx: MutationCtx, conversationId: Id<"conversations">, row: TallyRow | undefined): Promise<number> {
+  let commits = 0;
+  for (const r of row?.tool_results ?? []) {
+    const lines = commitLines(r.content);
+    if (!lines || !r.tool_use_id) continue;
+    const change = await ctx.db
+      .query("file_changes")
+      .withIndex("by_conversation_change_key", (q) => q.eq("conversation_id", conversationId).eq("change_key", r.tool_use_id))
+      .first();
+    if (change?.change_type === "commit") commits += lines;
+  }
+  return commits;
+}
 
 /**
- * Keep conversations.failed_tool_count current as a row's tool_results change.
- * Counts the change between the row's old and new results, so a re-synced or
- * re-streamed row adds nothing, a row whose error was rewritten gives it back,
- * and a deleted row takes its failures with it. A session is counted only from
- * its first message: one that already had messages when counting began keeps
- * no count, rather than a partial one that reads as its total.
- * `conversation` is the row as the mutation first read it; it spares a read on
- * the common no-op write.
+ * Keep conversations.session_tallies current as a row changes: tool results
+ * that came back as errors (as the harness flags them) and commits the session
+ * made. Counts the change between the row's old and new results, so a
+ * re-synced or re-streamed row adds nothing, a rewritten row trades its old
+ * counts for its new ones, and a deleted row (`after` undefined) takes its
+ * counts with it. Call it after the row's file changes are materialized. A
+ * session is counted only from its first message: one that already had
+ * messages when counting began keeps no tallies, rather than partial ones
+ * that read as its totals. `conversation` is the row as the mutation first
+ * read it; it spares a read on the common no-op write.
  */
-export async function bumpFailedTools(
+export async function bumpSessionTallies(
   ctx: MutationCtx,
   conversation: Doc<"conversations">,
-  before: ReadonlyArray<{ is_error?: boolean }> | undefined,
-  after: ReadonlyArray<{ is_error?: boolean }> | undefined,
+  before: TallyRow | undefined,
+  after: TallyRow | undefined,
 ): Promise<void> {
-  const delta = failedResults(after) - failedResults(before);
-  const counting = conversation.failed_tool_count !== undefined;
-  if (counting && delta === 0) return;
+  const failed = failedResults(after) - failedResults(before);
+  // Commit lines that came or went: only then is a lookup worth making.
+  const commitText = commitLinesIn(after) !== commitLinesIn(before);
+  const counting = conversation.session_tallies !== undefined;
+  if (counting && failed === 0 && !commitText) return;
   if (!counting && conversation.message_count > 0) return;
   const conv = await ctx.db.get(conversation._id);
   if (!conv) return;
-  if (conv.failed_tool_count === undefined && conv.message_count > 0) return;
-  const next = Math.max(0, (conv.failed_tool_count ?? 0) + delta);
-  if (next !== conv.failed_tool_count) await ctx.db.patch(conversation._id, { failed_tool_count: next });
+  if (conv.session_tallies === undefined && conv.message_count > 0) return;
+  const commits = commitText
+    ? (await confirmedCommits(ctx, conversation._id, after)) - (await confirmedCommits(ctx, conversation._id, before))
+    : 0;
+  const was = conv.session_tallies ?? { failed_tools: 0, commits: 0 };
+  const next = { failed_tools: Math.max(0, was.failed_tools + failed), commits: Math.max(0, was.commits + commits) };
+  if (conv.session_tallies === undefined || next.failed_tools !== was.failed_tools || next.commits !== was.commits) {
+    await ctx.db.patch(conversation._id, { session_tallies: next });
+  }
 }
 
 /**
@@ -1075,7 +1124,7 @@ export const addMessage = mutation({
           await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
             current.tool_calls, current.tool_results, extractFileChanges([existing]));
         }
-        await bumpFailedTools(ctx, conversation, existing.tool_results, current.tool_results);
+        await bumpSessionTallies(ctx, conversation, existing, current);
         return existing._id;
       }
     }
@@ -1149,7 +1198,7 @@ export const addMessage = mutation({
     await scheduleUserSend(ctx, conversation, sendMsg, msgTimestamp);
     const origin = turnOrigin(conversation, sendMsg);
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
-    await bumpFailedTools(ctx, conversation, undefined, safeToolResults);
+    await bumpSessionTallies(ctx, conversation, undefined, { tool_results: safeToolResults });
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     if (args.role === "assistant") await markAnsweredReviewNotes(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp });
     if (args.role === "assistant") await relayDecisionReply(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp, subtype: args.subtype });
@@ -1751,7 +1800,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
           await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
             current.tool_calls, current.tool_results, extractFileChanges([existing]));
         }
-        await bumpFailedTools(ctx, conversation, existing.tool_results, current.tool_results);
+        await bumpSessionTallies(ctx, conversation, existing, current);
         if (hosted) await storeHostedReplay(ctx, args.conversation_id, existing._id, msg, { thinking: safeThinking, tool_calls: safeToolCalls });
         // A re-upload of a stored turn settles what it echoes: the id makes
         // the retry converge on the one row, whichever upload stamped first.
@@ -1851,7 +1900,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
     await scheduleUserSend(ctx, conversation, sendMsg, msgTimestamp);
     lastTurnOrigin = turnOrigin(conversation, sendMsg) ?? lastTurnOrigin;
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
-    await bumpFailedTools(ctx, conversation, undefined, safeToolResults);
+    await bumpSessionTallies(ctx, conversation, undefined, { tool_results: safeToolResults });
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     if (msg.role === "assistant") await markAnsweredReviewNotes(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp });
     if (msg.role === "assistant") await relayDecisionReply(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp, subtype: msg.subtype });
@@ -2169,7 +2218,7 @@ export const deleteMessagesByUuid = mutation({
       if (existing) {
         await ctx.db.delete(existing._id);
         await dropMirroredMessage(ctx, existing._id);
-        await bumpFailedTools(ctx, conversation, existing.tool_results, undefined);
+        await bumpSessionTallies(ctx, conversation, existing, undefined);
         deleted++;
       }
     }

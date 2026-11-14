@@ -83,6 +83,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // the rest of store/
   "store/gestureBridge.ts:sourceToken": "window",
   "store/gestureBridge.ts:channelFactory": { shared: "set once per realm by the sim's device bridge" },
+  // The docs shots mode's offline Convex client: set only by lib/docsShots/install, which the sim never runs.
+  "lib/docsShots/flag.ts:client": { shared: "the docs shots mode's offline Convex client; the sim never installs it, so it stays null" },
   "store/workProjects.ts:memo": { shared: "keyed on the sessions, tasks and plans refs it was built from; another window's state has its own refs, so it misses and rebuilds" },
   "store/viewNav.ts:pendingSource": "window",
   "store/viewNav.ts:appliedNavCount": "window",

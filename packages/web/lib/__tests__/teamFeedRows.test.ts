@@ -107,6 +107,6 @@ describe("teamShareState", () => {
     expect(teamShareState({ is_private: false, team_visibility: "full" }, { visibility: "hidden" })).toEqual({ mode: "private", gated: true });
     expect(teamShareState({ is_private: false }, { visibility: "activity" })).toEqual({ mode: "private", gated: true });
     // No membership row at all reads at the default level, which is shareable.
-    expect(teamShareState({ is_private: false }, null)).toEqual({ mode: "summary", gated: false });
+    expect(teamShareState({ is_private: false }, null)).toEqual({ mode: "full", gated: false });
   });
 });

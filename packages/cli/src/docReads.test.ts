@@ -24,8 +24,8 @@ describe("doc read ledger", () => {
     expect(mod.docReadBase("sess-a", mod.docKey("d1"))).toBe("4.def.2");
   });
 
-  test("a plan read is found by the short id the write names, and by its doc", () => {
-    mod.noteDocRevisions("sess-a", "/cli/plans/get", { short_id: "pl-9" }, { short_id: "pl-9", doc_id: "d9", doc_revision: "1.x.1" });
+  test("a plan's own create is found by the short id the write names, and by its doc", () => {
+    mod.noteDocRevisions("sess-a", "/cli/plans/create", { title: "x" }, { short_id: "pl-9", doc_id: "d9", doc_revision: "1.x.1" });
     expect(mod.docReadBase("sess-a", mod.planKey("pl-9"))).toBe("1.x.1");
     expect(mod.docReadBase("sess-a", mod.docKey("d9"))).toBe("1.x.1");
   });
@@ -48,6 +48,13 @@ describe("doc read ledger", () => {
     mod.noteDocRevisions("sess-c", "/cli/docs/get", { id: "d2" }, null);
     mod.noteDocRevisions("sess-c", "/cli/tasks/get", { id: "d2" }, { revision: "9" });
     expect(mod.docReadBase("sess-c", mod.docKey("d2"))).toBeUndefined();
+  });
+
+  test("a body read under two names answers with the newer read", async () => {
+    mod.noteDocRevisions("sess-e", "/cli/plans/create", { title: "y" }, { short_id: "pl-2", doc_id: "d8", doc_revision: "1.old.1" });
+    await new Promise((r) => setTimeout(r, 5));
+    mod.noteDocRevisions("sess-e", "/cli/docs/get", { id: "d8" }, { _id: "d8", revision: "2.new.1" });
+    expect(mod.latestDocReadBase("sess-e", [mod.planKey("pl-2"), mod.docKey("d8")])).toBe("2.new.1");
   });
 
   test("outside a session each shell keeps its own reads", () => {

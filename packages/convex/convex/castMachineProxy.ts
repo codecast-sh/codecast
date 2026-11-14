@@ -5,6 +5,7 @@
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { sha256Hex } from "./lib/awsSigV4";
+import { forwardMessages } from "./lib/anthropic";
 
 /** Under /cli/, the prefix the public host hands to HTTP actions. */
 export const CAST_MODEL_PROXY_PATH = "/cli/cast/anthropic";
@@ -33,9 +34,7 @@ export const castModelProxy = httpAction(async (ctx, request) => {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
-  const upstream = await fetch(`https://api.anthropic.com${route}${url.search}`, {
-    method: "POST", headers, body: await request.arrayBuffer(),
-  });
+  const upstream = await forwardMessages(`${route}${url.search}`, headers, await request.arrayBuffer());
   const out = new Headers();
   for (const name of FORWARDED_RESPONSE_HEADERS) {
     const value = upstream.headers.get(name);

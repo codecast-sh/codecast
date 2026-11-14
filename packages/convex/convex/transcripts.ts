@@ -36,7 +36,6 @@ import {
   authorizeRoom,
   authorizeRoomNoGrant,
   isRoomTranscribeOff,
-  isSeat,
   liveMembers,
   readRoomState,
   stampRoomWordsPublic,
@@ -91,6 +90,10 @@ import { slackSend } from "./lib/slackSend";
 import { CHEAP_MODEL, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
 import { openaiFetch, openaiRefusal } from "./lib/openai";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
+import { RECORDING_TRANSCRIBE_MODEL, SEGMENT_WRITE_BATCH, parseTranscriptionSegments } from "./lib/recordingTranscription";
+export { parseTranscriptionSegments };
+import { HUDDLE_GRACE_MS, quietSince, withinHuddleGrace } from "./lib/huddleGrace";
+export { HUDDLE_GRACE_MS };
 
 export { asrTranscriptionSession };
 
@@ -1097,46 +1100,6 @@ export async function endTranscript(
   });
 }
 
-/** How long an emptied room's huddle waits for somebody to come back. A
- *  rejoin, a window handoff, a dropped connection or an accidental hop to
- *  another room inside this window is the same conversation, and the same
- *  record carries on. */
-export const HUDDLE_GRACE_MS = 3 * 60_000;
-
-/** When a live huddle went quiet: the stamp the last leave left on the
- *  record, else the latest of the room's own emptied stamp (the last leave,
- *  with or without a record: call_room_state.emptied_at) and the last lease
- *  any seat refreshed (a tab that died never leaves). SEATS ONLY: a prewarm
- *  row is somebody holding a connection open after the huddle died, and
- *  dating the end from it would inflate the call by up to ninety seconds. */
-function quietSince(
-  t: Doc<"transcripts"> | null,
-  rows: Array<{ last_seen: number; prewarm?: boolean }>,
-  emptiedAt?: number,
-): number | null {
-  if (t?.idle_since) return t.idle_since;
-  const lastSeen = rows.filter(isSeat).reduce((m, r) => Math.max(m, r.last_seen), emptiedAt ?? 0);
-  return lastSeen || null;
-}
-
-/** Is an EMPTY room still inside its huddle's grace? The one answer to "is
- *  this the same huddle", for the people coming back (resumeOrEndHuddle) and
- *  for the guests they let in (huddleAlive), so the two can never disagree.
- *  With a live record, a record nobody dated yet counts as just gone quiet.
- *  Without one (transcription off, or nobody scribing yet) the room's own
- *  stamps date it: when the last person left, or when the last seat lapsed.
- *  Both cases get the same grace, so a teammate who reloads the tab comes
- *  back to the same huddle whether or not anything was transcribing it. */
-function withinHuddleGrace(
-  t: Doc<"transcripts"> | null,
-  rows: Array<{ last_seen: number; prewarm?: boolean }>,
-  now: number,
-  emptiedAt?: number,
-): boolean {
-  const quiet = t ? (quietSince(t, rows, emptiedAt) ?? now) : quietSince(null, rows, emptiedAt);
-  return quiet !== null && now - quiet < HUDDLE_GRACE_MS;
-}
-
 /** When the room's last leave emptied it, from the room's state row. */
 async function roomEmptiedAt(ctx: any, roomKey: string): Promise<number | undefined> {
   return (await readRoomState(ctx, roomKey))?.emptied_at;
@@ -1628,73 +1591,6 @@ export const retryFailedSummaries = internalMutation({
 // cannot open one: React Native has no AudioContext and no way to tap a
 // microphone as samples. So a phone recording arrives as a finished m4a with
 // an empty transcript, and this is where it gets its words.
-
-/**
- * What reads the file.
- *
- * Deliberately NOT the live recognizer's model. The live path streams words as
- * they are spoken and has no use for timestamps; a recording is a finished
- * thing somebody scrolls through next to a player, so every line needs to know
- * when it was said. `whisper-1` is the transcription model that returns
- * segment boundaries, which is the whole reason it is used here.
- */
-const RECORDING_TRANSCRIBE_MODEL = "whisper-1";
-
-/** Segments written per mutation. A two hour meeting is a couple of thousand
- *  lines, and one mutation inserting all of them would run past what a
- *  transaction should do; the seq watermark makes the batches safe to resume
- *  from and stitch back together in order. */
-const SEGMENT_WRITE_BATCH = 200;
-
-/** One microphone in a room heard everybody. There is no diarization here and
- *  no honest name to put on a line, so every segment carries the same one and
- *  the surfaces that render a recording hide the label entirely. */
-const RECORDING_SPEAKER = { id: "mic", name: "Speaker" } as const;
-
-/**
- * The transcriber's reply, as segments this table can hold.
- *
- * `verbose_json` gives `{ text, segments: [{ start, end, text }] }` with the
- * times in seconds. A reply without a segments array is still words — the
- * models degrade to a plain transcript under load and for very short audio —
- * so it becomes one segment spanning the whole file rather than nothing.
- * Exported for its test: this is the seam between somebody else's JSON and our
- * rows, and it is the piece most likely to change under us.
- */
-export function parseTranscriptionSegments(
-  payload: unknown,
-  fallbackDurationMs: number,
-): { speaker_id: string; speaker_name: string; text: string; t0: number; t1: number }[] {
-  const body = (payload ?? {}) as {
-    text?: unknown;
-    segments?: unknown;
-  };
-  const speaker = {
-    speaker_id: RECORDING_SPEAKER.id,
-    speaker_name: RECORDING_SPEAKER.name,
-  };
-  if (Array.isArray(body.segments)) {
-    const out = body.segments
-      .map((raw: any) => {
-        const text = typeof raw?.text === "string" ? raw.text.trim() : "";
-        if (!text) return null;
-        const t0 = Math.max(0, Math.round((Number(raw?.start) || 0) * 1000));
-        const t1 = Math.max(t0, Math.round((Number(raw?.end) || 0) * 1000));
-        return { ...speaker, text, t0, t1 };
-      })
-      .filter(Boolean) as {
-      speaker_id: string;
-      speaker_name: string;
-      text: string;
-      t0: number;
-      t1: number;
-    }[];
-    if (out.length) return out;
-  }
-  const whole = typeof body.text === "string" ? body.text.trim() : "";
-  if (!whole) return [];
-  return [{ ...speaker, text: whole, t0: 0, t1: Math.max(0, fallbackDurationMs) }];
-}
 
 /** Append a batch of a recording's transcribed words. Owner-checked at the
  *  scheduling end (only `attachRecording` reaches this), rec-checked here so a

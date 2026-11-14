@@ -224,7 +224,7 @@ export const run = action({
  */
 export const runOnDoc = action({
   args: { api_token: v.string(), id: v.id("docs"), session_id: v.optional(v.string()), occurrence: v.optional(v.number()), ...requestArgs },
-  handler: async (ctx, args): Promise<{ result: LabResult; applied: number; missed: string[]; words_before: number; words_after: number }> => {
+  handler: async (ctx, args): Promise<{ result: LabResult; applied: number; missed: string[]; words_before: number; words_after: number; conflict?: string }> => {
     const doc: any = await ctx.runQuery(api.docs.get, { api_token: args.api_token, id: args.id });
     if (!doc) throw new Error("Doc not found");
     const req = toRequest(args);
@@ -234,11 +234,20 @@ export const runOnDoc = action({
     const context = req.tool === "alternatives" ? surrounding(clean, req.target) : "";
     const result = await runLab({ ctx, scope: { workspace: doc.workspace ?? null, apiToken: args.api_token } }, req.tool === "alternatives" ? { ...req, context } : req, clean);
     const landed = applyLabResult(md, result, { target: req.tool === "alternatives" ? req.target : undefined, occurrence: args.occurrence });
+    let conflict: string | undefined;
     if (landed.md !== md) {
-      // The model ran for seconds on the text read above: a person typing or
-      // another writer since then refuses this write rather than losing theirs.
-      await ctx.runMutation(api.docs.update, { api_token: args.api_token, id: args.id, content: landed.md, session_id: args.session_id, base: doc.revision });
+      // The model ran for seconds on the text read above, so the write names
+      // that read: an edit made since refuses it rather than being lost. The
+      // result is not replayed on the newer text (a pass first clears marks of
+      // its own kind, which would take any added since); it comes back unapplied.
+      try {
+        await ctx.runMutation(api.docs.update, { api_token: args.api_token, id: args.id, content: landed.md, session_id: args.session_id, base: doc.revision });
+      } catch (e: any) {
+        if (e?.data?.code !== "CONFLICT") throw e;
+        conflict = e.data.message;
+      }
     }
+    if (conflict) return { result, applied: 0, missed: landed.missed, words_before: wordCount(clean), words_after: wordCount(clean), conflict };
     return {
       result,
       applied: landed.applied,

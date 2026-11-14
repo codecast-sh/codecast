@@ -191,6 +191,10 @@ type SearchPoolFilter = {
 // The message index content search reads right now, as one function: the
 // recent mirror while its walker is caught up, else the deep messages index,
 // which can only be narrowed to one conversation (its sole filter field).
+// Rows one message lookup returns. A lookup that comes back full may have left
+// matches behind, so a word the pool lacks is unknown there, not absent.
+const MESSAGE_POOL_TAKE = 512;
+
 async function messageSearchTier(ctx: QueryCtx): Promise<{
   tier: "recent" | "deep";
   search: (text: string, filter?: SearchPoolFilter, take?: number) => Promise<SearchPoolMessage[]>;
@@ -202,7 +206,7 @@ async function messageSearchTier(ctx: QueryCtx): Promise<{
   if (mirror?.live) {
     return {
       tier: "recent",
-      search: async (text, filter = {}, take = 512) => {
+      search: async (text, filter = {}, take = MESSAGE_POOL_TAKE) => {
         const rows = await ctx.db
           .query("message_search_recent")
           .withSearchIndex("search_content_r2", (q) => {
@@ -227,7 +231,7 @@ async function messageSearchTier(ctx: QueryCtx): Promise<{
   }
   return {
     tier: "deep",
-    search: async (text, filter = {}, take = 512) => {
+    search: async (text, filter = {}, take = MESSAGE_POOL_TAKE) => {
       if (filter.user_id || filter.team_id) return [];
       const docs = await ctx.db
         .query("messages")
@@ -262,8 +266,8 @@ async function fetchMessageSearchPool(
   // mirror rows are snapshots — visibility is still enforced downstream
   // against the live conversation doc.
   scope?: { userId: Id<"users">; teamIds: Id<"teams">[] },
-): Promise<{ pool: SearchPoolMessage[]; tier: "recent" | "deep" }> {
-  if (terms.all.length === 0) return { pool: [], tier: "deep" };
+): Promise<{ pool: SearchPoolMessage[]; tier: "recent" | "deep"; saturated: boolean }> {
+  if (terms.all.length === 0) return { pool: [], tier: "deep", saturated: false };
   const searchQuery = terms.lookup;
   const { tier, search } = await messageSearchTier(ctx);
   // Scoped lookups FIRST: coverage ranking downstream is a stable sort, so
@@ -292,7 +296,7 @@ async function fetchMessageSearchPool(
       pool.push(r);
     }
   }
-  return { tier, pool };
+  return { tier, pool, saturated: batches.some((batch) => batch.length >= MESSAGE_POOL_TAKE) };
 }
 
 // How many operator-narrowed sessions get a text lookup of their own. The
@@ -410,7 +414,7 @@ const CONTENT_WINDOW_DAYS = Math.round(MIRROR_WINDOW_MS / 86_400_000);
 // active team (resolveInboxTeamScope), else none, which is the personal
 // workspace. Every team the caller belongs to only when the caller asks for it
 // by name (allTeams), and then each row says which team it came from
-// (workspaceOf). The caller's own sessions are always listed; `ownTeamId` is
+// (workspaceOf). The caller's own sessions follow their routing (see isOwn); `ownTeamId` is
 // set when a team was named or mapped, for reads that keep the caller's own
 // sessions inside it too.
 type ReadScope = {
@@ -469,7 +473,14 @@ async function resolveReadScope(
   const teamUsers = [...userById.values()];
   userById.set(userId.toString(), user);
 
-  const isOwn = (conv: Doc<"conversations">) => conv.user_id.toString() === userId.toString();
+  // The caller's own sessions follow their routing like everyone else's: a
+  // team read lists those routed to that team, a personal read those routed
+  // to none. Only an all-teams or mine-only read lists all of them.
+  const ownAnywhere = !!opts.allTeams || !!opts.mineOnly;
+  const scopeTeam = teamIds.length === 1 ? teamIds[0].toString() : null;
+  const isOwn = (conv: Doc<"conversations">) =>
+    conv.user_id.toString() === userId.toString() &&
+    (ownAnywhere || (scopeTeam ? String(conv.team_id ?? "") === scopeTeam : !conv.team_id));
   const teamFilterFor = (conv: Doc<"conversations">): TeamFeedFilter | undefined => {
     if (!conv.team_id || !userById.has(conv.user_id.toString())) return undefined;
     return feedFilters.get(conv.team_id.toString());
@@ -530,6 +541,28 @@ async function loadConversationSearchScope(
 // conversations table, so they stay within budget even when the message
 // full-text search can't (see the fetchMessageSearchPool NOTE) — which is why
 // searchConversationTitles exposes them on their own.
+// The sessions whose title, subtitle or idle summary the index matches, up to
+// TITLE_FIELD_TAKE per field, before any visibility filter. `saturated` when a
+// field hit its cap, so more sessions may match than were read.
+const TITLE_FIELD_TAKE = 50;
+async function titleFieldRows(ctx: QueryCtx, searchQuery: string) {
+  const fieldHits = await Promise.all([
+    ctx.db
+      .query("conversations")
+      .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
+      .take(TITLE_FIELD_TAKE),
+    ctx.db
+      .query("conversations")
+      .withSearchIndex("search_subtitle", (q) => q.search("subtitle", searchQuery))
+      .take(TITLE_FIELD_TAKE),
+    ctx.db
+      .query("conversations")
+      .withSearchIndex("search_idle_summary", (q) => q.search("idle_summary", searchQuery))
+      .take(TITLE_FIELD_TAKE),
+  ]);
+  return { rows: fieldHits.flat(), saturated: fieldHits.some((hits) => hits.length >= TITLE_FIELD_TAKE) };
+}
+
 async function fetchTitleFieldHits(
   ctx: QueryCtx,
   terms: ParsedTerms,
@@ -537,27 +570,13 @@ async function fetchTitleFieldHits(
   // content is hidden matches on its listed fields alone.
   view: (conv: Doc<"conversations">) => Doc<"conversations"> = (conv) => conv,
 ) {
-  const searchQuery = terms.lookup;
-  const fieldHits = await Promise.all([
-    ctx.db
-      .query("conversations")
-      .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
-      .take(50),
-    ctx.db
-      .query("conversations")
-      .withSearchIndex("search_subtitle", (q) => q.search("subtitle", searchQuery))
-      .take(50),
-    ctx.db
-      .query("conversations")
-      .withSearchIndex("search_idle_summary", (q) => q.search("idle_summary", searchQuery))
-      .take(50),
-  ]);
+  const { rows } = await titleFieldRows(ctx, terms.lookup);
   // The index matches any one word; a session qualifies only by the same
   // coverage rule content search uses, so "jon stewart" does not surface every
   // summary that mentions a Jon. Best coverage first.
   const convs = new Map<string, Doc<"conversations">>();
   const groups = new Map<string, Array<{ content: string }>>();
-  for (const hit of fieldHits.flat()) {
+  for (const hit of rows) {
     const conv = view(hit);
     const convId = conv._id.toString();
     if (convs.has(convId)) continue;
@@ -4425,28 +4444,22 @@ export const getSessionLinks = mutation({
   },
 });
 
-// What a hit's session did, for the line under its title: commits it made,
-// pull requests it is linked to, tool calls that failed. Absent when none, so
-// the line stays short. Reads only small rows (commits, pull request links),
-// each bounded; a capped count says so.
-const SEARCH_COMMITS_COUNTED = 50;
+// What a hit's session did, for the line under its title: commits it made and
+// tool calls that failed (session_tallies, kept at message write), and pull
+// requests it is linked to (the small link rows, never the pull request rows,
+// which carry patches). Absent when none, so the line stays short.
 async function searchRowFacts(
   ctx: QueryCtx,
   conv: Doc<"conversations">,
   canSeeTeam: (teamId: Id<"teams">) => Promise<boolean>,
-): Promise<{ commits?: number; commits_capped?: boolean; prs?: number[]; prs_capped?: boolean; failed_tools?: number }> {
-  const commitRows = await ctx.db
-    .query("commits")
-    .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-    .take(SEARCH_COMMITS_COUNTED + 1);
-  const shas = new Set(commitRows.slice(0, SEARCH_COMMITS_COUNTED).map((c) => c.sha));
+): Promise<{ commits?: number; prs?: number[]; prs_capped?: boolean; failed_tools?: number }> {
   const prs = await linkedPullRequestNumbers(ctx, conv._id, canSeeTeam);
+  const tallies = conv.session_tallies;
   return {
-    ...(shas.size ? { commits: shas.size } : {}),
-    ...(commitRows.length > SEARCH_COMMITS_COUNTED ? { commits_capped: true } : {}),
+    ...(tallies?.commits ? { commits: tallies.commits } : {}),
     ...(prs.numbers.length ? { prs: prs.numbers } : {}),
     ...(prs.capped ? { prs_capped: true } : {}),
-    ...(conv.failed_tool_count ? { failed_tools: conv.failed_tool_count } : {}),
+    ...(tallies?.failed_tools ? { failed_tools: tallies.failed_tools } : {}),
   };
 }
 
@@ -4750,8 +4763,8 @@ export const searchForCLI = query({
       };
     }
 
-    const { pool: searchResults } = operatorHits
-      ? { pool: [] as SearchPoolMessage[] }
+    const { pool: searchResults, saturated: poolSaturated } = operatorHits
+      ? { pool: [] as SearchPoolMessage[], saturated: false }
       : await fetchMessageSearchPool(ctx, terms, {
           userId: authUserId,
           teamIds: effectiveTeamIds,
@@ -4769,7 +4782,9 @@ export const searchForCLI = query({
     // only when every session found holding it is out of scope; past a
     // bounded check it is assumed held, so the claim is never made on a guess.
     const WORD_HOLDER_CHECKS = 25;
-    const WORDS_TITLE_CHECKED = 3;
+    const TITLE_LOOKUPS = 3;
+    const SATURATED_GAP_LOOKUPS = 30;
+    const GAP_PROBE_TAKE = 5;
     const wordsNoVisibleSessionHolds = async (words: string[]): Promise<string[]> => {
       const index = new Map(terms.words.map((w, i) => [w, i]));
       const holders = new Map<string, string[]>(words.map((w) => [w, []]));
@@ -4778,27 +4793,37 @@ export const searchForCLI = query({
         for (const m of messages) addEvidence(evidence, m.content, terms);
         for (const w of words) if (evidence.best[index.get(w)!] > 0) holders.get(w)!.push(convId);
       }
+      // A holder counts when the caller may see it: its messages only when its
+      // content is visible, its listed fields (searchableAs) otherwise.
       const visible = new Map<string, boolean>();
-      const isVisibleHolder = async (convId: string) => {
-        if (!visible.has(convId)) {
+      const isVisibleHolder = async (convId: string, needsContent: boolean) => {
+        const key = `${convId}:${needsContent}`;
+        if (!visible.has(key)) {
           const id = ctx.db.normalizeId("conversations", convId);
           const conv = id ? await ctx.db.get(id) : null;
-          visible.set(convId, !!conv && isEligibleConv(conv) && !(inSelfFamily && (await inSelfFamily(conv))));
+          visible.set(key, !!conv && isEligibleConv(conv) && (!needsContent || scope.contentVisible(conv)) &&
+            !(inSelfFamily && (await inSelfFamily(conv))));
         }
-        return visible.get(convId)!;
+        return visible.get(key)!;
       };
       const missing: string[] = [];
+      let titleLookups = 0;
       for (const w of words) {
         const ids = holders.get(w)!;
         if (ids.length > WORD_HOLDER_CHECKS) continue;
         let held = false;
-        for (const id of ids) if ((held = await isVisibleHolder(id))) break;
+        for (const id of ids) if ((held = await isVisibleHolder(id, true))) break;
         if (held) continue;
-        if (missing.length >= WORDS_TITLE_CHECKED) continue;
-        for (const { conv } of (await fetchTitleFieldHits(ctx, parseSearchTerms(w))).values()) {
-          if ((held = await isVisibleHolder(conv._id.toString()))) break;
+        if (titleLookups++ >= TITLE_LOOKUPS) continue;
+        const wordTerms = parseSearchTerms(w);
+        const { rows, saturated } = await titleFieldRows(ctx, wordTerms.lookup);
+        for (const conv of rows) {
+          const fields = emptyEvidence(wordTerms);
+          for (const field of searchFieldsOf(searchableAs(scope, conv))) addEvidence(fields, field, wordTerms);
+          if (fields.best[0] > 0 && (held = await isVisibleHolder(conv._id.toString(), false))) break;
         }
-        if (!held) missing.push(w);
+        // A capped lookup that found no visible holder proves nothing.
+        if (!held && !saturated) missing.push(w);
       }
       return missing;
     };
@@ -4916,11 +4941,50 @@ export const searchForCLI = query({
       ...eligible.map((c) => [c.conv._id.toString(), c.missing] as [string, string[]]),
       ...windowTitleMissing,
     ]);
-    const partial = partialCoverage([...missingById.values()].map((missing) => ({ missing })), terms);
+    let gapRows = [...missingById.values()];
+    // Operator hits came from per-session lookups that are capped too.
+    const gapsUnproven = poolSaturated || !!operatorHits;
+    if (gapsUnproven && partialCoverage(gapRows.map((missing) => ({ missing })), terms)) {
+      // A capped lookup left matches behind, so its gaps prove nothing. Each
+      // page row's gaps are looked up in that session alone; the notice then
+      // rests on those rows (and title rows, whose fields are whole), and a
+      // gap that cannot be checked means no claim at all.
+      gapRows = [...windowTitleMissing.values()];
+      const tier = await messageSearchTier(ctx);
+      let lookups = 0;
+      let unknown = false;
+      for (const candidate of page) {
+        const id = candidate.conv._id.toString();
+        const gaps = missingById.get(id) ?? [];
+        // A row whose content the caller cannot see was matched on its listed
+        // fields alone, which are whole: its gaps stand without a lookup.
+        if (!scope.contentVisible(candidate.conv)) { gapRows.push(gaps); continue; }
+        // A folded row speaks for its workers too, which one lookup cannot check.
+        if (candidate.workers && gaps.length) { unknown = true; break; }
+        const remaining: string[] = [];
+        for (const w of gaps) {
+          if (lookups++ >= SATURATED_GAP_LOOKUPS) { unknown = true; break; }
+          const wordTerms = parseSearchTerms(w);
+          const found = await tier.search(wordTerms.lookup, { conversation_id: candidate.conv._id }, GAP_PROBE_TAKE);
+          // The same messages the search itself counts (-u: what the person wrote).
+          const counted = userOnly ? found.filter((m) => m.role === "user") : found;
+          if (counted.some((m) => contentMatchesAnyTerm(m.content || "", wordTerms))) continue;
+          // A full probe may have stopped short of the match: unknown.
+          if (found.length >= GAP_PROBE_TAKE) { unknown = true; break; }
+          remaining.push(w);
+        }
+        if (unknown) break;
+        missingById.set(id, remaining);
+        gapRows.push(remaining);
+      }
+      if (unknown) gapRows = [[]];
+    }
+    const partial = partialCoverage(gapRows.map((missing) => ({ missing })), terms);
     if (partial && partial.missing_everywhere.length > 0) {
       // Operator hits were ranked inside searchByOperators, whose rejected
-      // sessions are not at hand here: name no word there rather than guess.
-      partial.missing_everywhere = operatorHits ? [] : await wordsNoVisibleSessionHolds(partial.missing_everywhere);
+      // sessions are not at hand here, and a full lookup hides what it left
+      // behind: name no word in either case rather than guess.
+      partial.missing_everywhere = gapsUnproven ? [] : await wordsNoVisibleSessionHolds(partial.missing_everywhere);
     }
     if (partial) {
       for (const row of [...results, ...windowTitleRows]) {
@@ -11131,6 +11195,9 @@ export async function collectInboxSessionsPaginated(
     stripInboxLiveness(row);
     rows.push(row);
     for (const child of subagentChildren) {
+      // An adopted child is a top-level row of its own (shared isAdoptedChild),
+      // listed by the scan itself, as listInboxSessions does.
+      if (isAdoptedChild(child)) continue;
       const childRow = await buildSubagentChildRow(child, maps, now, conv._id, (id) => ctx.db.get(id));
       await stampInboxViewerFields(childRow, child, userId, await sessionOwnerRow(ctx, child._id, userId), getDoc);
       stripInboxLiveness(childRow);

@@ -3,6 +3,15 @@ import { computeCumulativeFiles, type CumulativeChange } from "@codecast/shared/
 import { structuredPayloadSummary, structuredPayloadKeysFromRaw, toolSummary } from "@codecast/shared/render";
 import { agentDisplayName, threadStateHeadline, parseThreadStateStatus, sessionLivenessVerdict } from "@codecast/shared/contracts";
 import type { AskResult, LivenessVerdict } from "@codecast/shared/contracts";
+import {
+  parseToolInput,
+  extractFileChanges,
+  extractGoal,
+  extractApproach,
+  extractKeyDecisions,
+  summarizeOutcome,
+  type SummaryMessage,
+} from "./sessionSummaryExtract.js";
 
 // One glyph per liveness verdict. Green is positive contact. The gray ring is a
 // session that settled — its own agent said so, or we tore it down. The dim ? is
@@ -138,9 +147,8 @@ interface SearchConversation extends SessionPresence {
   origin?: { started_as?: string; earlier_titles?: string[] };
   /** Worker sessions that matched and are folded into this row. */
   workers?: number;
-  /** What the session did: commits it made (capped), pull requests linked to it, tool calls that failed. */
+  /** What the session did: git commits it ran, pull requests linked to it (capped), tool calls that failed. */
   commits?: number;
-  commits_capped?: boolean;
   prs?: number[];
   prs_capped?: boolean;
   failed_tools?: number;
@@ -179,8 +187,8 @@ export function searchQualifiers(r: { partial?: SearchPartial; excluded_self?: E
   const out: string[] = [];
   if (r.partial) {
     const missing = r.partial.missing_everywhere;
-    out.push(`${c.yellow}Partial:${c.reset} no session holds every word of "${r.partial.words.join(" ")}"` +
-      (missing.length ? `; ${missing.map((w) => `"${w}"`).join(", ")} found nowhere searched` : "; each row names what it lacks"));
+    out.push(`${c.yellow}Partial:${c.reset} no result holds every word of "${r.partial.words.join(" ")}"` +
+      (missing.length ? `; ${missing.map((w) => `"${w}"`).join(", ")} found nowhere searched` : "; each row names the words not found in it"));
   }
   if (r.excluded_self) {
     const { id, sessions } = r.excluded_self;
@@ -198,9 +206,9 @@ function livenessWord(s: SessionPresence): string {
 }
 
 /** "commits=3 pr=#482,#490 failed=4": what a hit's session did, empty when nothing. */
-export function sessionFacts(conv: Pick<SearchConversation, "commits" | "commits_capped" | "prs" | "prs_capped" | "failed_tools">): string {
+export function sessionFacts(conv: Pick<SearchConversation, "commits" | "prs" | "prs_capped" | "failed_tools">): string {
   return [
-    conv.commits ? `commits=${conv.commits}${conv.commits_capped ? "+" : ""}` : "",
+    conv.commits ? `commits=${conv.commits}` : "",
     conv.prs?.length ? `pr=${conv.prs.map((n) => `#${n}`).join(",")}${conv.prs_capped ? "+" : ""}` : "",
     conv.failed_tools ? `failed=${conv.failed_tools}` : "",
   ].filter(Boolean).join(" ");
@@ -238,7 +246,7 @@ export function formatSearchSessions(result: SearchResult, options: SearchOption
         who,
         conv.workers ? `+${conv.workers} worker${conv.workers === 1 ? "" : "s"}` : "",
         sessionFacts(conv),
-        conv.missing_terms?.length ? `lacks ${conv.missing_terms.join(",")}` : "",
+        conv.missing_terms?.length ? `not found: ${conv.missing_terms.join(",")}` : "",
       ].filter(Boolean).join(" · ")}${c.reset}`,
     ].join("  ");
   });
@@ -500,7 +508,7 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
       sessionFacts(conv),
       !result.titles_only && conv.title_match ? `${c.dim}title match${c.reset}` : "",
-      conv.missing_terms?.length ? `${c.yellow}lacks ${conv.missing_terms.join(",")}${c.reset}` : "",
+      conv.missing_terms?.length ? `${c.yellow}not found: ${conv.missing_terms.join(",")}${c.reset}` : "",
     ].filter(Boolean).join(" | ");
     lines.push(meta);
 
@@ -667,15 +675,6 @@ interface FeedOptions {
   page?: number;
 }
 
-interface SummaryMessage {
-  line: number;
-  role: string;
-  content: string;
-  timestamp: string;
-  tool_calls?: Array<{ name?: string; input?: unknown }>;
-  tool_results?: Array<{ content?: string; isError?: boolean }>;
-}
-
 interface SummaryResult {
   conversation: {
     id: string;
@@ -685,160 +684,6 @@ interface SummaryResult {
     updated_at: string;
   };
   messages: SummaryMessage[];
-}
-
-interface FileChange {
-  path: string;
-  additions: number;
-  deletions: number;
-}
-
-function parseToolInput(input: unknown): Record<string, unknown> | null {
-  if (!input) return null;
-  if (typeof input === "object") return input as Record<string, unknown>;
-  if (typeof input === "string") {
-    try {
-      return JSON.parse(input);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function extractFileChanges(messages: SummaryMessage[]): FileChange[] {
-  const fileChanges = new Map<string, { additions: number; deletions: number }>();
-
-  for (const msg of messages) {
-    if (!msg.tool_calls) continue;
-
-    for (const tc of msg.tool_calls) {
-      const input = parseToolInput(tc.input);
-      if (!input) continue;
-
-      if (tc.name === "Edit" || tc.name === "Write") {
-        const filePath = input.file_path as string;
-        if (!filePath) continue;
-
-        const existing = fileChanges.get(filePath) || { additions: 0, deletions: 0 };
-
-        if (tc.name === "Edit") {
-          const oldStr = (input.old_string as string) || "";
-          const newStr = (input.new_string as string) || "";
-          existing.additions += newStr.split("\n").length;
-          existing.deletions += oldStr.split("\n").length;
-        } else {
-          const content = (input.content as string) || "";
-          existing.additions += content.split("\n").length;
-        }
-
-        fileChanges.set(filePath, existing);
-      }
-    }
-  }
-
-  return Array.from(fileChanges.entries())
-    .map(([path, stats]) => ({ path, ...stats }))
-    .sort((a, b) => (b.additions + b.deletions) - (a.additions + a.deletions));
-}
-
-function extractGoal(messages: SummaryMessage[]): string {
-  const firstUser = messages.find((m) => m.role === "user" && m.content);
-  if (!firstUser) return "No user message found";
-
-  const content = firstUser.content.trim();
-  const lines = content.split("\n");
-  if (lines.length <= 3) return content;
-
-  return lines.slice(0, 3).join("\n") + "...";
-}
-
-function extractApproach(messages: SummaryMessage[]): string[] {
-  const approaches: string[] = [];
-  const seen = new Set<string>();
-
-  for (const msg of messages) {
-    if (msg.role !== "assistant" || !msg.content) continue;
-
-    const content = msg.content.trim();
-    if (content.length < 20) continue;
-
-    const firstLine = content.split("\n")[0].slice(0, 100);
-    if (seen.has(firstLine)) continue;
-    seen.add(firstLine);
-
-    if (content.includes("I'll ") || content.includes("I will ") ||
-        content.includes("Let me ") || content.includes("I'm going to ")) {
-      const sentences = content.match(/[^.!?]+[.!?]+/g) || [];
-      for (const sentence of sentences.slice(0, 2)) {
-        const trimmed = sentence.trim();
-        if (trimmed.length > 20 && trimmed.length < 150) {
-          approaches.push("- " + trimmed);
-          break;
-        }
-      }
-    }
-
-    if (approaches.length >= 5) break;
-  }
-
-  return approaches.slice(0, 5);
-}
-
-function extractKeyDecisions(messages: SummaryMessage[]): string[] {
-  const decisions: string[] = [];
-
-  for (const msg of messages) {
-    if (msg.role !== "assistant" || !msg.content) continue;
-
-    const content = msg.content.toLowerCase();
-    if (content.includes("chose ") || content.includes("decided ") ||
-        content.includes("instead of ") || content.includes("rather than ") ||
-        content.includes("better to ") || content.includes("approach is ")) {
-      const sentences = msg.content.match(/[^.!?]+[.!?]+/g) || [];
-      for (const sentence of sentences) {
-        const lower = sentence.toLowerCase();
-        if (lower.includes("chose") || lower.includes("decided") ||
-            lower.includes("instead") || lower.includes("rather than") ||
-            lower.includes("better to") || lower.includes("approach")) {
-          const trimmed = sentence.trim();
-          if (trimmed.length > 20 && trimmed.length < 200) {
-            decisions.push("- " + trimmed);
-            break;
-          }
-        }
-      }
-    }
-
-    if (decisions.length >= 3) break;
-  }
-
-  return decisions;
-}
-
-function summarizeOutcome(messages: SummaryMessage[]): string {
-  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
-  if (!lastAssistant) return "Session ended";
-
-  const content = lastAssistant.content.trim();
-
-  if (content.toLowerCase().includes("successfully") ||
-      content.toLowerCase().includes("complete") ||
-      content.toLowerCase().includes("done") ||
-      content.toLowerCase().includes("finished")) {
-    const sentences = content.match(/[^.!?]+[.!?]+/g) || [];
-    for (const sentence of sentences) {
-      if (sentence.toLowerCase().includes("success") ||
-          sentence.toLowerCase().includes("complete") ||
-          sentence.toLowerCase().includes("done") ||
-          sentence.toLowerCase().includes("finished")) {
-        return sentence.trim().slice(0, 150);
-      }
-    }
-  }
-
-  const firstSentence = content.match(/^[^.!?]+[.!?]+/);
-  return firstSentence ? firstSentence[0].trim().slice(0, 150) : "Session ended";
 }
 
 export function formatSummary(result: SummaryResult): string {

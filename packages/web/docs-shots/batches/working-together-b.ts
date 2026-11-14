@@ -16,7 +16,12 @@ const openSheet = (section: string): Step => ({ js: `__inboxStore.getState().ope
 const closeSheet: Step = { js: "__inboxStore.getState().closeSettingsModal?.()" };
 /** Scrolls the sheet's panel so the section headed `title` sits at the top (the sheet caps its height at 880px). */
 const scrollTo = (title: string): Step => ({
-  js: `(() => { const h = [...document.querySelectorAll(${JSON.stringify(SHEET)} + " *")].find((e) => e.childElementCount === 0 && e.textContent.trim() === ${JSON.stringify(title)}); h.scrollIntoView({ block: "start" }); for (let e = h.parentElement; e; e = e.parentElement) if (e.scrollTop > 0) { e.scrollTop -= 16; break; } })()`,
+  js: `(() => {
+    const h = [...document.querySelectorAll(${JSON.stringify(SHEET)} + " *")].find((e) => e.childElementCount === 0 && e.textContent.trim() === ${JSON.stringify(title)});
+    let box = h.parentElement;
+    while (box && !(box.scrollHeight > box.clientHeight + 4 && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+    box.scrollTop += h.getBoundingClientRect().top - box.getBoundingClientRect().top - 16;
+  })()`,
 });
 /** Marks the row of one folder on the sharing list, so a crop can name it. */
 const markRow = (folder: string): Step => ({
@@ -30,8 +35,8 @@ export const WORKING_TOGETHER_B: Shot[] = [
   {
     name: "app/team-settings",
     route: "/inbox",
-    viewport: { width: 1200, height: 960 },
-    steps: [closeSheet, { sleep: 300 }, openSheet("team"), { wait: SHEET, text: "Members" }, scrollTo("Members"), { sleep: 1500 }],
+    viewport: { width: 1200, height: 900 },
+    steps: [closeSheet, { sleep: 300 }, openSheet("team"), { wait: SHEET, text: "Members" }, scrollTo("Members"), { sleep: 3000 }],
     crop: { selector: SHEET },
     frame: "element",
     out: "public/docs/app/team-settings.webp",
@@ -72,15 +77,15 @@ export const WORKING_TOGETHER_B: Shot[] = [
       { sleep: 300 },
       openSheet("sync"),
       { wait: SHEET, text: "billing-api" },
-      scrollTo("Sharing"),
-      // Low in the sheet's scroller a pointer press misses the button; the DOM click is the same press.
-      { js: `(() => { const b = document.querySelector('button[aria-label="Who can open billing-api"]'); b.scrollIntoView({ block: "center" }); b.click(); })()` },
+      // The script's pointer presses miss inside the sheet's scroller; DOM clicks are the same presses.
+      { js: `(() => { document.querySelector('button[aria-label="Who can open billing-api"]').click(); })()` },
       { wait: "[data-share-panel]" },
       { js: `[...document.querySelectorAll("[data-share-panel] [role=radio]")].find((b) => b.textContent.includes("Acme")).click()` },
       { wait: "[data-share-panel] [role=radiogroup]", text: "From today on" },
       { js: `[...document.querySelectorAll("[data-share-panel] label")].find((l) => l.textContent.includes("From today on")).click()` },
+      // Scroll once the panel is open, so the scroller can bring the row to the top.
+      scrollTo("billing-api"),
       markRow("billing-api"),
-      { js: `document.querySelector("[data-shot-row]").scrollIntoView({ block: "start" })` },
       { sleep: 800 },
     ],
     crop: { selector: "[data-shot-row]", include: "[data-share-panel]", pad: 8 },
@@ -166,32 +171,16 @@ export const WORKING_TOGETHER_B: Shot[] = [
     out: "public/documentation/share-a-session/share-messages.webp",
   },
   {
-    name: "share-a-session/shared-messages-page",
-    route: `/share/message/${SHARED_MESSAGE_TOKEN}`,
-    viewport: { width: 1100, height: 800 },
-    ready: "body",
-    steps: [closeSheet, { wait: "body", text: "View full conversation" }, { sleep: 800 }],
-    frame: "window",
-    out: "public/documentation/share-a-session/shared-messages-page.webp",
-  },
-  {
     name: "opencode/codecast-session",
     route: conversation(CONVERSATIONS.opencode),
-    viewport: { width: 1000, height: 900 },
-    steps: [closeSheet, { wait: PANE, text: "All 14 tests pass" }, { click: `${PANE} button`, text: "Read 1 file" }, { sleep: 600 }, scrollPane("top"), { sleep: 400 }],
+    viewport: { width: 1000, height: 1100 },
+    steps: [closeSheet, { wait: PANE, text: "All 14 tests pass" }, { js: `[...document.querySelectorAll("main [role=button]")].find((e) => e.textContent.startsWith("read 1 file")).click()` }, { sleep: 600 }, scrollPane("top"), { sleep: 400 }],
     crop: { selector: PANE },
     frame: "element",
     out: "public/documentation/opencode/codecast-session.webp",
   },
-  {
-    name: "opencode/codecast-follow-up",
-    route: conversation(CONVERSATIONS.opencode),
-    viewport: { width: 1000, height: 900 },
-    steps: [closeSheet, { wait: PANE, text: "Capped." }, { click: `${PANE} button`, text: "1 edit" }, { sleep: 600 }, scrollPane("bottom"), { sleep: 400 }],
-    crop: { selector: PANE },
-    frame: "element",
-    out: "public/documentation/opencode/codecast-follow-up.webp",
-  },
+  // Between the two OpenCode shots: the script presses Escape before each shot, and Escape in an open
+  // conversation interrupts its agent, so a shot never directly follows its own conversation.
   {
     name: "t3-code/codecast-session",
     route: conversation(CONVERSATIONS.t3),
@@ -200,7 +189,16 @@ export const WORKING_TOGETHER_B: Shot[] = [
     crop: { selector: PANE },
     frame: "element",
     out: "public/documentation/t3-code/codecast-session.webp",
+  },  {
+    name: "opencode/codecast-follow-up",
+    route: conversation(CONVERSATIONS.opencode),
+    viewport: { width: 1000, height: 900 },
+    steps: [closeSheet, { wait: PANE, text: "Capped." }, { js: `[...document.querySelectorAll("main [role=button]")].find((e) => e.textContent.startsWith("1 edit · ran 1 command")).click()` }, { sleep: 600 }, scrollPane("bottom"), { sleep: 400 }],
+    crop: { selector: PANE },
+    frame: "element",
+    out: "public/documentation/opencode/codecast-follow-up.webp",
   },
+
   {
     name: "opencode/codecast-new-session",
     route: "/inbox",
@@ -219,24 +217,39 @@ export const WORKING_TOGETHER_B: Shot[] = [
     name: "agent-snippets/agent-features-intro",
     route: "/agent-features",
     viewport: { width: 1200, height: 860 },
-    steps: [closeSheet, { wait: "h1", text: "Agent features" }, { sleep: 1000 }],
-    frame: "window",
+    steps: [
+      closeSheet,
+      { wait: "h1", text: "Agent features" },
+      { wait: "body", text: " on Alex" },
+      // The count line closes the filter row: mark it so the crop can reach it.
+      { js: `[...document.querySelectorAll("[data-main-scroll] *")].find((e) => /\\d+ of \\d+ on /.test(e.textContent) && e.textContent.length < 60).setAttribute("data-shot-count", "")` },
+      { sleep: 800 },
+    ],
+    crop: { selector: "[data-main-scroll] header", include: "[data-shot-count]", pad: 16 },
+    frame: "element",
     out: "public/documentation/agent-snippets/agent-features-intro.webp",
   },
   {
     name: "agent-snippets/feature-group",
     route: "/agent-features",
-    viewport: { width: 1200, height: 1100 },
-    steps: [closeSheet, { wait: "h1", text: "Agent features" }, { sleep: 1000 }],
-    frame: "window",
+    viewport: { width: 1200, height: 2000 },
+    steps: [
+      closeSheet,
+      { wait: "body", text: "Thread State" },
+      // The Context group: the smallest block holding its heading and its three cards.
+      { js: `[...document.querySelectorAll("[data-main-scroll] *")].filter((e) => e.textContent.includes("3 of 3 on") && e.textContent.includes("Thread State") && e.textContent.includes("Stable context")).pop().setAttribute("data-shot-group", "")` },
+      { sleep: 800 },
+    ],
+    crop: { selector: "[data-shot-group]", pad: 16 },
+    frame: "element",
     out: "public/documentation/agent-snippets/feature-group.webp",
   },
   {
     name: "agent-snippets/feature-detail",
     route: "/agent-features?feature=memory",
     viewport: { width: 1200, height: 900 },
-    steps: [closeSheet, { wait: "[role=dialog]", text: "Memory" }, { sleep: 1000 }],
-    crop: { selector: "[role=dialog]", pad: 0 },
+    steps: [closeSheet, { wait: "[role=dialog][data-state=open]", text: "Memory" }, { sleep: 1000 }],
+    crop: { selector: "[role=dialog][data-state=open]", pad: 0 },
     frame: "element",
     out: "public/documentation/agent-snippets/feature-detail.webp",
   },
@@ -271,6 +284,16 @@ export const WORKING_TOGETHER_B: Shot[] = [
     ],
     frame: "window",
     out: "public/documentation/agent-snippets/new-features-banner.webp",
+  },
+  // Last: the public page has no app shell, so a shot after it would wait for the app to boot.
+  {
+    name: "share-a-session/shared-messages-page",
+    route: `/share/message/${SHARED_MESSAGE_TOKEN}`,
+    viewport: { width: 1100, height: 540 },
+    ready: "body",
+    steps: [closeSheet, { wait: "body", text: "View full conversation" }, { sleep: 800 }],
+    frame: "window",
+    out: "public/documentation/share-a-session/shared-messages-page.webp",
   },
 ];
 

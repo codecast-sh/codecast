@@ -294,7 +294,15 @@ describe("command groups stay off the boot graph", () => {
     // relay) and tasks/planState.ts. 356 the same day: stableContextHooks.ts,
     // the hook script and installers split out of stableContext.ts for its
     // max-lines cap (no new code).
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(356);
+    // 358 on 2026-11-13, two leaves: serverError.ts (an 8-line, import-free
+    // reader of the server's sentence out of a Convex error, which castApi.ts
+    // shows) and docReads.ts (the per-process doc read bases the doc commands
+    // share; it reads only fs, path and codecastDir.ts, already here).
+    // 359 the same day: sessionSummaryExtract.ts, split out of formatter.ts for
+    // its max-lines cap, no new code. 360 the same day: contracts/inboxMembership.ts,
+    // the membership identity rules split out of contracts/inboxProjection.ts
+    // for its max-lines pin, no new code.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(360);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -400,7 +408,10 @@ describe("command groups stay off the boot graph", () => {
     // calls) and daemonCommands.ts (+0.6, export_folder and export_session).
     // 4655: cliHttp.ts (+0.7, isTransientNetworkError, so a migration batch
     // keeps moving through a network blip).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4655);
+    // 4666 on 2026-11-13: the doc read bases and stale-doc checks (docReads.ts
+    // +4.2, index.ts +6.3) and search qualifiers in formatter.ts (+3.4), with
+    // serverError.ts (+0.3); formatter.ts's split took some of it back.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4666);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -584,8 +595,12 @@ describe("command groups stay off the boot graph", () => {
     // fastPath.ts, which stableContext.ts now reads. 590 with stableContextHooks.ts,
     // the same max-lines split as on index.ts's graph. 591 after folderFetchGate.ts,
     // the import-free retry gate split out of folderSync.ts so the folder fetch
-    // itself stays a lazy import.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(591);
+    // itself stays a lazy import. 592 after serverError.ts, the same import-free
+    // leaf castApi.ts reads on index.ts's graph. 593 after sessionSummaryExtract.ts,
+    // split out of formatter.ts for its max-lines cap, no new code. 594 after
+    // contracts/inboxMembership.ts, split out of contracts/inboxProjection.ts
+    // for its max-lines pin (2026-11-13), no new code.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(594);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

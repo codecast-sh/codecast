@@ -53,7 +53,7 @@ export function seedAcmeWorld({ now = Date.now(), ui = {}, extra = {} }: { now?:
     s.syncTable("clientState", {
       user_id: user._id,
       ...extra,
-      ui: { active_team_id: TEAM_ID, inbox_scope: "mine", sounds_enabled: false, ...ui },
+      ui: { active_team_id: TEAM_ID, sounds_enabled: false, ...ui },
     }),
   );
   write("callConfig", () => s.syncTable("callConfig", { enabled: true, url: "wss://shots.invalid", teams: [TEAM_ID] }));

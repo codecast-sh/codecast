@@ -40,6 +40,7 @@ import { patchDepMirror } from "./tasks";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 import { cliDocWriter, docLiveState, docRevision, writeDocBody } from "./lib/docBody";
+import { mergePlanEntries, recalcProgress } from "./lib/planProgress";
 export { canAccessPlan };
 
 async function canReadPlanTask(ctx: any, userId: Id<"users">, plan: any, task: any) {
@@ -50,77 +51,6 @@ async function canReadPlanTask(ctx: any, userId: Id<"users">, plan: any, task: a
 async function canReadPlanDoc(ctx: any, userId: Id<"users">, plan: any, doc: any) {
   return isSameWorkspace(doc, workspaceForResource(plan))
     && await canAccessDoc(ctx, userId, doc);
-}
-
-async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
-  let total = 0, done = 0, in_progress = 0, open = 0;
-  let exec_done = 0, exec_done_with_concerns = 0, exec_blocked = 0, exec_needs_context = 0;
-
-  for (const tid of taskIds) {
-    const task = await ctx.db.get(tid);
-    if (!task || task.status === "dropped") continue;
-    // A subtask is never a plan's unit of progress (the parent is). Exclude any
-    // that slipped into task_ids before that rule — matches tasks.recalcPlanProgress.
-    if (task.parent_id) continue;
-    total++;
-    if (task.status === "done") done++;
-    else if (task.status === "in_progress" || task.status === "in_review") in_progress++;
-    else if (task.status === "open" || task.status === "backlog") open++;
-
-    const es = (task as any).execution_status;
-    if (es === "done") exec_done++;
-    else if (es === "done_with_concerns") exec_done_with_concerns++;
-    else if (es === "blocked") exec_blocked++;
-    else if (es === "needs_context") exec_needs_context++;
-  }
-
-  return {
-    total, done, in_progress, open,
-    execution_status: {
-      done: exec_done,
-      done_with_concerns: exec_done_with_concerns,
-      blocked: exec_blocked,
-      needs_context: exec_needs_context,
-    },
-  };
-}
-
-
-// Merge legacy per-type arrays with new unified entries into a single sorted timeline.
-// Deduplicates by timestamp+content to avoid showing entries written to both old and new.
-function mergePlanEntries(plan: any): Array<{
-  type: string; timestamp: number; content: string;
-  session_id?: string; author?: string; rationale?: string; path_or_url?: string;
-}> {
-  const seen = new Set<string>();
-  const all: any[] = [];
-
-  const add = (e: any) => {
-    const key = `${e.timestamp}:${e.content}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    all.push(e);
-  };
-
-  // New unified entries (preferred)
-  for (const e of (plan.entries || [])) add(e);
-
-  // Legacy arrays
-  for (const e of (plan.progress_log || [])) {
-    add({ type: "progress", timestamp: e.timestamp, content: e.entry, session_id: e.session_id });
-  }
-  for (const e of (plan.decision_log || [])) {
-    add({ type: "decision", timestamp: e.timestamp, content: e.decision, rationale: e.rationale, session_id: e.session_id });
-  }
-  for (const e of (plan.discoveries || [])) {
-    add({ type: "discovery", timestamp: e.timestamp, content: e.finding, session_id: e.session_id });
-  }
-  for (const e of (plan.context_pointers || [])) {
-    add({ type: "reference", timestamp: 0, content: e.label, path_or_url: e.path_or_url });
-  }
-
-  all.sort((a, b) => a.timestamp - b.timestamp);
-  return all;
 }
 
 // --- API token mutations ---
@@ -423,9 +353,10 @@ export const update = mutation({
     workflow_id: v.optional(v.string()),
     // The charter (org-staffing.md S7); `goal` above completes it.
     ...planCharterArgs,
-    // The plan doc's revision `body` was computed from, and the deliberate
-    // overwrite (lib/docBody.ts writeDocBody).
+    // The plan doc's revision `body` was computed from, the deliberate
+    // overwrite, and the session writing (lib/docBody.ts writeDocBody).
     base: v.optional(v.string()),
+    session_id: v.optional(v.string()),
     force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -482,7 +413,7 @@ export const update = mutation({
         const doc = await requireAccessibleDoc(ctx, auth.userId, plan.doc_id);
         requireSameWorkspace(doc, planWorkspace, "plan doc");
         ({ revision: doc_revision } = await writeDocBody(ctx, doc, { content: args.body, title: args.title || doc.title }, {
-          writer: await cliDocWriter(ctx, auth.userId, undefined), base: args.base, force: args.force, requireBase: true,
+          writer: await cliDocWriter(ctx, auth.userId, args.session_id), base: args.base, force: args.force, requireBase: true,
         }));
       } else {
         const db = await createDataContext(ctx, {

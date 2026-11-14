@@ -746,7 +746,8 @@ export function enqueueDispatch(entry: OutboxEntry): Promise<void> {
   // A write for an account this window no longer acts for parks nowhere: the
   // clear that follows the boundary unbinds the outbox, and this covers the
   // gap before that clear. Resolved, not rejected: it is not a storage fault.
-  if (!persistenceOwned() || !PERSISTENCE_AVAILABLE) return Promise.resolve();
+  // Docs shots keep nothing, their outbox included.
+  if (!persistenceOwned() || DOCS_SHOTS) return Promise.resolve();
   // The engine hands over the args as the caller passed them; a tab address in them is stored in its safe form (lib/tabSafePath).
   return db.dispatchOutbox.put({ ...entry, args: storableActionArgs(entry.action, entry.args) }).then(() => {});
 }

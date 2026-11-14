@@ -82,8 +82,9 @@ describe("the org's operating words are retired from what a person reads (S23)",
     const repo = join(WEB_ROOT, "..", "..");
     for (const root of ROOTS) {
       for (const file of walkSources(root)) {
-        // Marketing copy and the dev preview's sample proposals are not the product's surfaces.
-        if (file.includes("(marketing)") || /Fixture\.tsx?$/.test(file)) continue;
+        // Marketing copy, the dev preview's sample proposals and the docs shots' fixture
+        // world (a fictional team capping its webhook retries) are not the product's surfaces.
+        if (file.includes("(marketing)") || /Fixture\.tsx?$/.test(file) || file.includes("/lib/acmeWorld/")) continue;
         const rel = file.slice(repo.length + 1);
         for (const { line, n } of codeLines(readFileSync(file, "utf8"))) {
           // Cheap gate before the quote parse: most lines carry none of the words.

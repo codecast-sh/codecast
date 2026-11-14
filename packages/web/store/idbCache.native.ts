@@ -1,5 +1,5 @@
 import { captureException } from "./pendingInputError";
-import { PENDING_JOURNAL_PREFIX, readPendingMessageJournal, writePendingMessageJournal, type PendingJournalStorage } from "./pendingMessageJournal";
+import { readPendingMessageJournal, writePendingMessageJournal, type PendingJournalStorage } from "./pendingMessageJournal";
 import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, type PendingMessages } from "./pendingMessageJournal";
 // expo-sqlite's kv-store default export is an AsyncStorage-compatible, SQLite-backed
 // key-value store (getItem/setItem/removeItem + multiGet). It is durable and survives
@@ -20,13 +20,14 @@ import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMess
 import type { Patch } from "mutative";
 import type { AuthTokenState } from "@platform/auth/web";
 import { cacheOwnershipVerdict } from "./cacheOwnershipRule";
+import { collectionRowValidator, collectionRowHydrator, isPersistedClientStoreKey } from "./clientSyncRegistry";
 import {
-  COLLECTION_STORE_KEYS,
-  META_STORE_KEYS,
-  collectionRowValidator,
-  collectionRowHydrator,
-  isPersistedClientStoreKey,
-} from "./clientSyncRegistry";
+  COLLECTION_TABLES, META_KEYS, COLLECTION_PREFIX, META_PREFIX, CONVMSG_PREFIX, CONVUSERMSG_PREFIX, OUTBOX_KEY,
+  PENDING_INPUT_PREFIX, SPLIT_PREFIX, PER_ROW_META_KEYS, collectionBlobKey, collectionRowKey, readPlan, readPlanSql,
+  rowsToMap, collectReadKeys, isPurgeable, ownedKeysWhere,
+} from "./idbCacheKeys.native";
+import { createWriteBehind } from "./idbCacheWriteBehind.native";
+export { readPlan, readPlanSql };
 import { diffCollection, durableDeletes } from "./idbCollectionDiff";
 import { partitionSessionRetention, COLLECTION_RETENTION, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
 
@@ -60,16 +61,6 @@ export type OutboxEntry = {
   ts: number;
 };
 
-const COLLECTION_TABLES = new Set<string>(COLLECTION_STORE_KEYS);
-const META_KEYS = new Set<string>(META_STORE_KEYS);
-
-// KV key prefixes namespace the flat store so reads can reconstruct the same
-// shape Dexie's per-table layout produces.
-const COLLECTION_PREFIX = "col:";
-const META_PREFIX = "meta:";
-const CONVMSG_PREFIX = "convmsg:";
-const CONVUSERMSG_PREFIX = "convusermsg:";
-const OUTBOX_KEY = "dispatchOutbox";
 
 let _hydrating = false;
 
@@ -85,26 +76,9 @@ const lastPersisted = new Map<string, Map<string, any>>();
 // null-guarded as defense in depth.
 export const PERSISTENCE_AVAILABLE = Storage != null;
 
-// ── Write-behind ─────────────────────────────────────────────────────────────
-// Collections used to live as ONE JSON blob per table. A busy account's
-// sessions blob is ~4.5 MB and tasks ~6.8 MB; overlay heartbeats change a
-// handful of row refs many times a second, and JSON.stringify of the whole
-// table on the JS thread froze taps for seconds (and, written eagerly, piled
-// strings until Hermes aborted — Sentry REACT-NATIVE-J "LLVM ERROR" inside
-// JSON.stringify, watchdog RAM kill REACT-NATIVE-H).
-//
-// Per-row keys match the web Dexie engine: a heartbeat stringifies one row,
-// not the table. Writes are still scheduled, not eager — the latest producer
-// wins, a short trailing delay folds a burst, and at most one write per key
-// is in flight. A global inflight cap keeps a boot migration of thousands of
-// row keys from opening that many SQLite statements at once. Reads of a
-// scheduled key see the scheduled value; a null producer is a delete.
-const WRITE_COALESCE_MS = 250;
-const MAX_INFLIGHT = 8;
-type Produce = (() => string) | null;
-const pendingWrites = new Map<string, Produce>();
-const inflightWrites = new Map<string, Promise<void>>();
-let flushTimer: ReturnType<typeof setTimeout> | null = null;
+// Scheduled per-key writes (idbCacheWriteBehind.native).
+const writes = createWriteBehind(Storage);
+const { scheduleWrite, scheduleRemove, scheduledValue } = writes;
 // One remove of the leftover whole-table blob per collection per process, so a
 // heartbeat does not keep issuing removeItem for a key that is already gone.
 const droppedLegacyBlobs = new Set<string>();
@@ -113,68 +87,11 @@ const droppedLegacyBlobs = new Set<string>();
 export function _resetPersistedShadow() {
   lastPersisted.clear();
   droppedLegacyBlobs.clear();
-  pendingWrites.clear();
-  if (flushTimer != null) { clearTimeout(flushTimer); flushTimer = null; }
+  writes.clearScheduled();
 }
 
-function afterInteractions(fn: () => void) {
-  try {
-    const IM = require("react-native").InteractionManager;
-    if (IM?.runAfterInteractions) {
-      IM.runAfterInteractions(fn);
-      return;
-    }
-  } catch { /* bun tests have no RN */ }
-  fn();
-}
-
-function scheduleWrite(key: string, produce: Produce) {
-  pendingWrites.set(key, produce);
-  if (flushTimer == null) flushTimer = setTimeout(flushScheduledWrites, WRITE_COALESCE_MS);
-}
-
-function scheduleRemove(key: string) {
-  scheduleWrite(key, null);
-}
-
-function flushScheduledWrites() {
-  flushTimer = null;
-  afterInteractions(flushScheduledWritesNow);
-}
-
-function flushScheduledWritesNow() {
-  for (const [key, produce] of pendingWrites) {
-    if (inflightWrites.has(key)) continue;
-    if (inflightWrites.size >= MAX_INFLIGHT) break;
-    pendingWrites.delete(key);
-    const write = Promise.resolve().then(() => {
-      if (produce == null) return Storage.removeItem(key);
-      return Storage.setItem(key, produce());
-    }).catch(() => {}).then(() => {
-      inflightWrites.delete(key);
-      if (pendingWrites.size > 0 && flushTimer == null) flushTimer = setTimeout(flushScheduledWrites, 0);
-    });
-    inflightWrites.set(key, write);
-  }
-}
-
-/** A scheduled-but-unflushed value, so a read never sees older bytes than the
- *  store has already committed to disk-in-spirit. A pending delete is absent. */
-function scheduledValue(key: string): string | undefined {
-  if (!pendingWrites.has(key)) return undefined;
-  const produce = pendingWrites.get(key);
-  return produce ? produce() : undefined;
-}
-
-/** Drain every scheduled and in-flight write. Tests and a deliberate shutdown
- *  path want a settled disk; the app itself never needs to wait. */
-export async function flushPersistence(): Promise<void> {
-  while (pendingWrites.size > 0 || inflightWrites.size > 0) {
-    if (flushTimer != null) { clearTimeout(flushTimer); flushTimer = null; }
-    // Tests and shutdown must not wait for the interaction queue.
-    flushScheduledWritesNow();
-    await Promise.all([...inflightWrites.values()]);
-  }
+export function flushPersistence(): Promise<void> {
+  return writes.flush();
 }
 
 // A top-level store key is durable iff it maps to a dedicated collection or is
@@ -183,8 +100,6 @@ export async function flushPersistence(): Promise<void> {
 export function isPersistedStoreKey(key: string): boolean {
   return isPersistedClientStoreKey(key);
 }
-
-const PENDING_INPUT_PREFIX = "pendingInput:v1:";
 
 const pendingJournalStorage: PendingJournalStorage = {
   getItem: key => PendingStorage.getItemSync(key),
@@ -245,29 +160,11 @@ async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
   return pendingMessagesFromRecords(rows);
 }
 
-function collectionBlobKey(key: string): string {
-  return COLLECTION_PREFIX + key;
-}
-
-function collectionRowKey(key: string, id: string): string {
-  return COLLECTION_PREFIX + key + ":" + id;
-}
-
-function isCollectionRowKey(storageKey: string, collectionKey: string): boolean {
-  return storageKey.startsWith(COLLECTION_PREFIX + collectionKey + ":");
-}
-
 function dropLegacyBlob(blobKey: string) {
   if (droppedLegacyBlobs.has(blobKey)) return;
   droppedLegacyBlobs.add(blobKey);
   scheduleRemove(blobKey);
 }
-
-// conversations is registered as a meta blob (one JSON object) so web Dexie
-// can store it in the meta table. On native that blob is the sessions twin:
-// creating a session stringified the whole map on the JS thread and froze
-// the send button on a new session. Persist it per-row like collections.
-const PER_ROW_META_KEYS = new Set(["conversations"]);
 
 function persistKeyedRows(
   storeKey: string,
@@ -355,64 +252,10 @@ function openCacheDbSync(): any | null {
   return cacheDbSync;
 }
 
-/** What a read covers: whole key prefixes (a collection's rows) and exact keys (blobs, meta). */
-export function readPlan(wanted: Set<string> | null): { prefixes: string[]; exact: string[] } {
-  const collectionKeys = [...COLLECTION_TABLES].filter(key => !wanted || wanted.has(key));
-  const perRowMeta = [...PER_ROW_META_KEYS].filter(key => !wanted || wanted.has(key));
-  const metaKeys = [...META_KEYS].filter(key => (!wanted || wanted.has(key)) && !PER_ROW_META_KEYS.has(key));
-  return {
-    prefixes: [
-      ...collectionKeys.map(key => COLLECTION_PREFIX + key + ":"),
-      ...perRowMeta.map(key => META_PREFIX + key + ":"),
-    ],
-    exact: [
-      ...collectionKeys.map(collectionBlobKey),
-      ...perRowMeta.map(key => META_PREFIX + key),
-      ...metaKeys.map(key => META_PREFIX + key),
-    ],
-  };
-}
-
-/** `SELECT key, value` over the plan: a half-open range per prefix, IN for the exact keys. */
-export function readPlanSql(plan: { prefixes: string[]; exact: string[] }): { sql: string; params: string[] } {
-  const clauses: string[] = [];
-  const params: string[] = [];
-  for (const prefix of plan.prefixes) {
-    clauses.push("(key >= ? AND key < ?)");
-    params.push(prefix, prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1));
-  }
-  if (plan.exact.length > 0) {
-    clauses.push(`key IN (${plan.exact.map(() => "?").join(", ")})`);
-    params.push(...plan.exact);
-  }
-  return { sql: `SELECT key, value FROM storage WHERE ${clauses.join(" OR ") || "0"}`, params };
-}
-
-function rowsToMap(rows: { key: string; value: string | null }[]): Map<string, string | null> {
-  const byKey = new Map<string, string | null>();
-  for (const row of rows) byKey.set(row.key, row.value);
-  return byKey;
-}
-
 async function storageKeys(): Promise<string[]> {
   if (typeof Storage.getAllKeysSync === "function") return Storage.getAllKeysSync();
   if (typeof Storage.getAllKeys === "function") return await Storage.getAllKeys();
   return [];
-}
-
-function collectReadKeys(allKeys: string[], wanted: Set<string> | null): string[] {
-  const collectionKeys = [...COLLECTION_TABLES].filter(key => !wanted || wanted.has(key));
-  const metaKeys = [...META_KEYS].filter(key => !wanted || wanted.has(key));
-  const collectionStorageKeys = allKeys.filter((k: string) =>
-    collectionKeys.some((key) => k === collectionBlobKey(key) || isCollectionRowKey(k, key)),
-  );
-  const perRowMetaKeys = allKeys.filter((k: string) =>
-    [...PER_ROW_META_KEYS].some((key) =>
-      (!wanted || wanted.has(key)) && (k === META_PREFIX + key || k.startsWith(META_PREFIX + key + ":")),
-    ),
-  );
-  const metaStorageKeys = metaKeys.filter((k) => !PER_ROW_META_KEYS.has(k)).map((k) => META_PREFIX + k);
-  return [...collectionStorageKeys, ...perRowMetaKeys, ...metaStorageKeys];
 }
 
 function materializeLoadedCache(
@@ -762,13 +605,6 @@ export function setHydrating(v: boolean) {
   _hydrating = v;
 }
 
-// The split feeder's held rows (hooks/useSplitQuery), one key per row holding
-// the server's hash for it and the row: "<hash>\n<json>". With them on disk a
-// relaunch rebuilds the first split result instead of downloading the whole
-// inbox and hashing every row of it again. Every rebuild is still checked
-// against the server's hash, so a stale or foreign row only costs that fetch.
-const SPLIT_PREFIX = "split:v1:";
-
 /** The rows held for one split query at the last flush, with their hashes. */
 export async function loadSplitRows(name: string): Promise<Array<{ id: string; hash: string; row: unknown }>> {
   if (!Storage || !cacheAccess().serve) return [];
@@ -994,9 +830,8 @@ async function purgeLocalCacheNow(keep: string | null): Promise<void> {
   servedTo = null;
   if (!Storage) return;
   // Nothing queued for the cache being purged may land after the delete.
-  pendingWrites.clear();
-  if (flushTimer != null) { clearTimeout(flushTimer); flushTimer = null; }
-  await Promise.allSettled([...inflightWrites.values()]);
+  writes.clearScheduled();
+  await writes.settleInflight();
   await _outboxQueue.catch(() => {});
   lastPersisted.clear();
   droppedLegacyBlobs.clear();
@@ -1011,27 +846,6 @@ async function purgeLocalCacheNow(keep: string | null): Promise<void> {
       if (batch.ownerId !== keep) PendingStorage.removeItemSync(batch.key);
     }
   }
-}
-
-// The kv-store database is shared (the push catch-up watermark lives in it
-// too), so ownership checks and purges cover only the keys this module writes.
-function ownedKeyPrefixes(): string[] {
-  return [COLLECTION_PREFIX, META_PREFIX, CONVMSG_PREFIX, CONVUSERMSG_PREFIX, SPLIT_PREFIX, PENDING_INPUT_PREFIX, PENDING_JOURNAL_PREFIX];
-}
-
-/** A key this module wrote, outside `keepPrefix`. */
-function isPurgeable(key: string, keepPrefix: string | null): boolean {
-  if (keepPrefix && key.startsWith(keepPrefix)) return false;
-  return key === OUTBOX_KEY || ownedKeyPrefixes().some((prefix) => key.startsWith(prefix));
-}
-
-/** isPurgeable as a SQL condition over kv-store's `storage` table. */
-function ownedKeysWhere(keepPrefix: string | null): { where: string; params: Array<string | number> } {
-  const prefixes = ownedKeyPrefixes();
-  const owned = [...prefixes.map(() => "substr(key, 1, ?) = ?"), "key = ?"].join(" OR ");
-  const params: Array<string | number> = [...prefixes.flatMap((p) => [p.length, p]), OUTBOX_KEY];
-  if (!keepPrefix) return { where: `(${owned})`, params };
-  return { where: `(${owned}) AND substr(key, 1, ?) <> ?`, params: [...params, keepPrefix.length, keepPrefix] };
 }
 
 async function deleteOwnedKeys(keepPrefix: string | null): Promise<void> {

@@ -39,6 +39,7 @@ export function docRevision(content: string | undefined | null, version: number)
 }
 
 function ago(at: number, now: number): string {
+  if (!Number.isFinite(at)) return "earlier";
   const s = Math.max(0, Math.round((now - at) / 1000));
   if (s < 5) return "just now";
   if (s < 60) return `${s}s ago`;
@@ -52,10 +53,42 @@ async function personName(ctx: QueryCtx, userId: Id<"users"> | undefined): Promi
   return user?.name || (user as any)?.github_username || "Someone";
 }
 
+/** Refuse while the editor holds steps not saved to `content`: anything
+ *  computed from `content` now (a whole body, a find-and-replace) would miss
+ *  them, and rewriting the collab history would delete them. */
+export async function refuseUnsavedEdits(
+  ctx: QueryCtx,
+  doc: Doc<"docs">,
+  live?: { unsaved: any | null },
+  reread = `re-read it with \`cast doc show ${doc._id} --full\``,
+): Promise<void> {
+  const { unsaved } = live ?? (await docLiveState(ctx, doc._id));
+  const now = Date.now();
+  if (!unsaved) {
+    // Steps a person typed a moment ago may still be on their way: the editor
+    // sends its cursor with every keystroke (CollabDocEditor's presence), so a
+    // cursor that just moved means typing the server may not have yet.
+    const typing = await ctx.db.query("doc_presence").withIndex("by_doc", (q: any) => q.eq("doc_id", String(doc._id)))
+      .filter((q: any) => q.gt(q.field("updated_at"), now - CURSOR_MOVED_MS)).first();
+    if (typing && typing.cursor_pos !== undefined) {
+      throw docConflict("live_edit", `${typing.user_name} is editing it in the editor right now. Nothing was written. Wait a few seconds, ${reread}, and write again.`);
+    }
+    return;
+  }
+  const who = await personName(ctx, unsaved.user_id);
+  const at = unsaved._creationTime;
+  throw docConflict("live_edit", now - at < LIVE_EDIT_FRESH_MS
+    ? `${who} is editing it in the editor right now and their last change is not saved to the doc yet. Nothing was written. Wait a few seconds, ${reread}, and write again.`
+    : `${who}'s editor left changes unsaved ${ago(at, now)}. Opening the doc in the browser saves them; \`--force\` writes over them.`);
+}
+
 /** A person's editor has sent steps more recently than this: they are typing,
  *  and the save lands in about a second. Older unsaved steps were left by a
  *  tab that closed or failed to save. */
 const LIVE_EDIT_FRESH_MS = 30_000;
+
+/** A cursor that moved this recently in the editor counts as typing in flight. */
+const CURSOR_MOVED_MS = 3_000;
 
 function docConflict(reason: "stale" | "live_edit" | "no_base", message: string): ConvexError<any> {
   return new ConvexError({ code: "CONFLICT", reason, message });
@@ -86,15 +119,9 @@ export async function writeDocBody(
 ): Promise<{ revision: string }> {
   const now = Date.now();
   // How this caller reads the doc again; each writer names its own read.
-  const reread = opts.reread ?? `re-read it with \`cast doc show ${doc._id}\``;
+  const reread = opts.reread ?? `re-read it with \`cast doc show ${doc._id} --full\``;
   const live = await docLiveState(ctx, doc._id);
-  if (!opts.force && live.unsaved) {
-    const who = await personName(ctx, live.unsaved.user_id);
-    const at = live.unsaved._creationTime;
-    throw docConflict("live_edit", now - at < LIVE_EDIT_FRESH_MS
-      ? `${who} is editing it in the editor right now and their last change is not saved to the doc yet. Nothing was written. Wait a few seconds, ${reread}, and write again.`
-      : `${who}'s editor left changes unsaved ${ago(at, now)}. Opening the doc in the browser saves them; \`--force\` writes over them.`);
-  }
+  if (!opts.force) await refuseUnsavedEdits(ctx, doc, live, reread);
   if (!opts.force && opts.requireBase && opts.base === undefined) {
     throw docConflict("no_base", `This write does not say which version of "${doc.title}" it was computed from, so it could undo edits made since. Nothing was written. ${reread[0].toUpperCase()}${reread.slice(1)} and write again (an older cast needs \`cast update\` first).`);
   }
@@ -173,7 +200,9 @@ export function markdownToDoc(text: string): DocNode {
 
     if (/^---+$/.test(line.trim())) { content.push({ type: "horizontalRule" }); i++; continue; }
 
-    const hm = line.match(/^(#{1,6})\s+(.+)/);
+    // The editor has headings 1 to 3 (web editorExtensions); a deeper one
+    // stays its literal text in a paragraph rather than showing as an H1.
+    const hm = line.match(/^(#{1,3})\s+(.+)/);
     if (hm) {
       content.push({ type: "heading", attrs: { level: hm[1].length }, content: draftTextNodes(hm[2]) });
       i++;
@@ -200,12 +229,12 @@ export function markdownToDoc(text: string): DocNode {
     if (line.trim() === "") { i++; continue; }
 
     // A paragraph runs until a line another block claims. Its first line is
-    // always its own: a line no block above took ("#tag", "####" with no
-    // text) would otherwise stop the loop without consuming anything.
+    // always its own: a line no block above took ("#tag", "#### Deep") would
+    // otherwise stop the loop without consuming anything.
     const paraLines: string[] = [line];
     i++;
     while (i < lines.length && lines[i].trim() !== "" &&
-           !/^#{1,6}\s+\S/.test(lines[i]) && !lines[i].startsWith("```") &&
+           !/^#{1,3}\s+\S/.test(lines[i]) && !lines[i].startsWith("```") &&
            !lines[i].startsWith("> ") && !/^[-*]\s/.test(lines[i]) &&
            !/^---+$/.test(lines[i].trim())) {
       paraLines.push(lines[i]);

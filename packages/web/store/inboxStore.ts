@@ -6661,6 +6661,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setDeviceShares: (deviceId: string, teamIds: string[]) => void;
   /** Settings > Machines' "Accept direct links" (peer-transport.md); the server home is devices.direct_links_off. */
   setDeviceDirectLinks: (deviceId: string, enabled: boolean) => void;
+  setDeviceAppearance: (deviceId: string, change: { display_name?: string; icon?: string; icon_color?: string }, ownerUserId?: string) => void;
   /** Put one of the viewer's accounts in exactly these teams' pools (empty
    *  takes it back): Settings > Claude Accounts' pool pill. Server home is
    *  account_shares; the accountPool snapshot reconciles the draft. */
@@ -10049,6 +10050,24 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setDeviceDirectLinks: action(function (this: Draft, deviceId: string, enabled: boolean) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.direct_links_off = enabled ? undefined : true;
+  }),
+  // Settings > Devices' name and icon paint the machine's row: the roster's
+  // for the viewer's own machines, the agent box list's for a box they admin.
+  // The setDeviceAppearance side effect writes the device row, whose rules
+  // (convex/deviceAppearance.ts) these mirror: an empty name or icon clears
+  // it, and clearing the icon clears its color.
+  setDeviceAppearance: action(function (this: Draft, deviceId: string, change: { display_name?: string; icon?: string; icon_color?: string }, _ownerUserId?: string) {
+    const boxesKey = settingsDataKey("agentBoxes", (this.currentUser as any)?._id);
+    const boxes = boxesKey ? (this.settingsData as any)[boxesKey]?.value : undefined;
+    const rows = [this.machineRoster.find((d) => d.device_id === deviceId), Array.isArray(boxes) ? boxes.find((b: any) => b.device_id === deviceId) : undefined];
+    for (const row of rows as any[]) {
+      if (!row) continue;
+      if (change.display_name !== undefined) row.display_name = change.display_name.replace(/\s+/g, " ").trim() || null;
+      const icon = change.icon !== undefined ? change.icon.trim().toLowerCase() || null : row.icon ?? null;
+      if (change.icon !== undefined) row.icon = icon;
+      if (!icon) row.icon_color = null;
+      else if (change.icon_color !== undefined) row.icon_color = change.icon_color.trim().toLowerCase() || null;
+    }
   }),
   setAccountDevices: action(function (this: Draft, email: string, deviceIds: string[] | null) {
     const pool = this.accountPool as Record<string, any>;

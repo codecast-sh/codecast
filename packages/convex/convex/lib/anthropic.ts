@@ -121,6 +121,13 @@ function sendMessages(req: SurfaceRequest, apiKey: string, signal?: AbortSignal)
   });
 }
 
+/** Forward a Messages call byte for byte under the deployment's key: a cast
+ *  machine's model route (castMachineProxy.ts), which streams the raw answer
+ *  back to the machine. `path` is the route and query, `/v1/messages…`. */
+export function forwardMessages(path: string, headers: Headers, body: ArrayBuffer): Promise<Response> {
+  return fetch(`https://api.anthropic.com${path}`, { method: "POST", headers, body });
+}
+
 // Message Batches: the same request bodies, run asynchronously at half the
 // price. For passes over many rows where nothing waits on the answer.
 

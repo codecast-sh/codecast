@@ -45,9 +45,9 @@ describe("level copy", () => {
     }
   });
 
-  test("an unknown level reads as summary, the server default", () => {
-    expect(teamVisibilityOption(undefined).value).toBe("summary");
-    expect(teamVisibilityOption("bogus").value).toBe("summary");
+  test("an unknown level reads as full, the server default", () => {
+    expect(teamVisibilityOption(undefined).value).toBe("full");
+    expect(teamVisibilityOption("bogus").value).toBe("full");
   });
 
   test("teamVisibilityFor matches by id as a string", () => {

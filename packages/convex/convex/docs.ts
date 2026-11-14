@@ -41,7 +41,7 @@ import {
 } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { claimShareToken } from "./lib/shareToken";
-import { cliDocWriter, docLiveState, docRevision, markdownToDoc, rewriteCollab, writeDocBody, type DocWriter } from "./lib/docBody";
+import { cliDocWriter, docLiveState, docRevision, markdownToDoc, refuseUnsavedEdits, rewriteCollab, writeDocBody, type DocWriter } from "./lib/docBody";
 export { markdownToDoc, writeDocBody, docRevision } from "./lib/docBody";
 import { docTitleFromContent, docTypeChangeAllowed, draftTextNodes, renderDocMentionExcerpt, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
@@ -388,12 +388,17 @@ export const create = mutation({
       const existing = await ownDocsBySourceFile(ctx, auth.userId, args.source_file).first();
       if (existing) {
         requireSameWorkspace(existing, db.workspace, "existing doc");
-        await ctx.db.patch(existing._id, { title, content, updated_at: now });
+        // The file is the source of truth here, so no base; but never over a
+        // person's unsaved typing, and an open editor follows the new text.
+        const unchanged = existing.content === content && existing.title === title;
+        const revision = unchanged
+          ? docRevision(content, (await docLiveState(ctx, existing._id)).version)
+          : (await writeDocBody(ctx, existing, { content, title }, { writer: await cliDocWriter(ctx, auth.userId, args.conversation_id) })).revision;
         const userTeamId = db.workspace.type === "team" ? db.workspace.teamId : undefined;
         if ((args.source || existing.source) === "plan_mode") {
           await syncDocToPlanEntity(ctx, existing._id, content, auth.userId, userTeamId, existing.project_id, existing.conversation_id);
         }
-        return { id: existing._id, updated: true, revision: docRevision(content, (await docLiveState(ctx, existing._id)).version) };
+        return { id: existing._id, updated: true, revision };
       }
     }
 
@@ -625,6 +630,9 @@ export const update = mutation({
     await refuseRoleCharterWrite(ctx, auth.userId, doc, args.session_id);
 
     const text = docTextUpdates(doc, { title: args.title || undefined, content: args.content });
+    // A forced body equal to the stored markdown still rewrites the editor's
+    // history: that is how a caller discards steps that never saved.
+    if (args.force && args.content !== undefined && text.content === undefined) text.content = doc.content ?? "";
     let revision: string | undefined;
     if (text.content !== undefined) {
       ({ revision } = await writeDocBody(ctx, doc, { content: text.content, title: text.title ?? doc.title }, {
@@ -707,9 +715,11 @@ export const addComment = mutation({
   },
 });
 
-// Rewrite a doc's collab history from `content`. Kept for older callers;
-// docs.update and docs.patch now rewrite it themselves, in the same
-// transaction as the write (writeDocBody).
+// Rebuild a doc's collab history from its stored body: a repair, never a
+// write. Nothing in the tree calls it any more (docs.update and docs.patch
+// rewrite the history themselves, in the same transaction as the write), and
+// the `content` an older caller passes is ignored, so it cannot install text
+// computed from an old read (lib/docBody.ts).
 export const resetSync = mutation({
   args: {
     api_token: v.string(),
@@ -721,8 +731,9 @@ export const resetSync = mutation({
     if (!auth) throw new Error("Unauthorized");
     // Owner-or-team, matching the sibling `patch` mutation. Without this, any caller
     // could wipe a doc's deltas and overwrite its snapshot content by id.
-    await requireAccessibleDoc(ctx, auth.userId, args.id);
-    await rewriteCollab(ctx, args.id, args.content || "", (await docLiveState(ctx, args.id)).version + 1);
+    const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
+    await refuseUnsavedEdits(ctx, doc);
+    await rewriteCollab(ctx, args.id, doc.content ?? "", (await docLiveState(ctx, args.id)).version + 1);
     await ctx.db.patch(args.id, { cli_edited_at: Date.now() });
     return { success: true };
   },
@@ -747,8 +758,10 @@ export const patch = mutation({
     await requireArtifactEditor(ctx, doc, auth.userId);
     await refuseRoleCharterWrite(ctx, auth.userId, doc, args.session_id);
 
-    // Computed here from the stored text, so it needs no base; writeDocBody
-    // still refuses while the editor holds steps that text lacks.
+    // Computed here from the stored text, so it needs no base, but only once
+    // that text holds everything the editor has: before searching it, so a
+    // miss is never an answer about text the person has typed over.
+    await refuseUnsavedEdits(ctx, doc);
     const content = doc.content || "";
     const parts = args.old_string ? content.split(args.old_string) : [content];
     if (parts.length === 1) throw new Error("old_string not found in document content");

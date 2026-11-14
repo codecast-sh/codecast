@@ -142,7 +142,6 @@ packages/convex/convex/sessionMigrations.ts 1300
 packages/convex/convex/sessionOwnership.ts 1150
 packages/convex/convex/signals.test.ts 1400
 packages/convex/convex/signals.ts 2300
-packages/convex/convex/slackSync.test.ts 900
 packages/convex/convex/slackSync.ts 3250
 packages/convex/convex/smallViews.v2.test.ts 850
 packages/convex/convex/sources/sentry.test.ts 950
@@ -178,7 +177,7 @@ packages/shared/entities/index.ts
 packages/shared/render/toolCall.ts 900
 packages/shared/tasks/graph.ts 950
 packages/web/app/(marketing)/compare/comparisons.ts 1100
-packages/web/app/(marketing)/documentation/page.tsx 1450
+packages/web/app/(marketing)/documentation/page.tsx 900
 packages/web/app/(marketing)/features/browser/Sections.tsx 850
 packages/web/app/(marketing)/heroFly/timeline.ts 1000
 packages/web/app/admin/daemon-logs/page.tsx 900
@@ -223,7 +222,6 @@ packages/web/components/conversation/sessionControls.tsx
 packages/web/components/decisions/ChangeCardView.tsx 1250
 packages/web/components/faces/FaceRow.tsx 1050
 packages/web/components/faces/__tests__/faceRow.mount.test.tsx 1050
-packages/web/components/inbox/SessionCardView.tsx 900
 packages/web/components/org/OrgGraph.tsx 850
 packages/web/components/org/OrgNodeCards.tsx 850
 packages/web/components/org/orgLayout.ts 850

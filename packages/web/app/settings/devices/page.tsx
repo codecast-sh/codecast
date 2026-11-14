@@ -1,7 +1,7 @@
 "use client";
 
 import { copyToClipboard } from "../../../lib/utils";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -142,86 +142,32 @@ function DeviceAppearance({
   ownerUserId?: string;
   readOnly?: boolean;
 }) {
-  const setAppearance = useMutation(api.devices.setDeviceAppearance);
+  const setDeviceAppearance = useInboxStore((s) => s.setDeviceAppearance);
   const storedName = d.display_name ?? "";
-  const serverIcon = d.icon ?? "";
-  const serverColor = d.icon_color ?? "";
+  // The row is the store's (the roster, or the agent box list): a pick paints
+  // it at once and the server's echo lands on the same row.
+  const chosenIcon = d.icon ?? "";
+  const chosenColor = d.icon_color ?? "";
   const [value, setValue] = useState(storedName);
   const [committed, setCommitted] = useState(storedName);
-  const [chosenIcon, setChosenIcon] = useState(serverIcon);
-  const [chosenColor, setChosenColor] = useState(serverColor);
-  const [iconCommitted, setIconCommitted] = useState(serverIcon);
-  const [colorCommitted, setColorCommitted] = useState(serverColor);
-  const [saving, setSaving] = useState(false);
   if (storedName !== committed && value === committed) {
     setCommitted(storedName);
     setValue(storedName);
   }
-  // The roster echo replaces a choice once it lands, and never while a click
-  // is in flight: that click already painted the tile it picked. An effect,
-  // not a render-time setState: the save's toast flushes a render, and a
-  // setState from inside that render is the flushSync error React throws.
-  useEffect(() => {
-    if (saving) return;
-    if (serverIcon !== iconCommitted && chosenIcon === iconCommitted) {
-      setIconCommitted(serverIcon);
-      setChosenIcon(serverIcon);
-    }
-    if (serverColor !== colorCommitted && chosenColor === colorCommitted) {
-      setColorCommitted(serverColor);
-      setChosenColor(serverColor);
-    }
-  }, [saving, serverIcon, serverColor, iconCommitted, colorCommitted, chosenIcon, chosenColor]);
   const automatic = deviceDisplayName({ ...d, display_name: null });
   const dirty = value.trim() !== committed;
 
-  const saveName = async () => {
-    if (!dirty || saving || readOnly) return;
-    setSaving(true);
-    try {
-      const res = await setAppearance({
-        device_id: d.device_id,
-        display_name: value.trim(),
-        ...(ownerUserId ? { owner_user_id: ownerUserId as any } : {}),
-      });
-      const next = res?.display_name ?? "";
-      setCommitted(next);
-      setValue(next);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save the name");
-    } finally {
-      setSaving(false);
-    }
+  const saveName = () => {
+    if (!dirty || readOnly) return;
+    const next = value.replace(/\s+/g, " ").trim();
+    setCommitted(next);
+    setValue(next);
+    setDeviceAppearance(d.device_id, { display_name: next }, ownerUserId);
   };
 
-  const saveIcon = async (nextIcon: string, color?: string) => {
-    if (readOnly || saving) return;
-    const prevIcon = chosenIcon;
-    const prevColor = chosenColor;
-    const nextColor = nextIcon ? (color ?? chosenColor) : "";
-    setChosenIcon(nextIcon);
-    setChosenColor(nextColor);
-    setSaving(true);
-    try {
-      const res = await setAppearance({
-        device_id: d.device_id,
-        icon: nextIcon,
-        ...(color !== undefined || !nextIcon ? { icon_color: nextColor } : {}),
-        ...(ownerUserId ? { owner_user_id: ownerUserId as any } : {}),
-      });
-      const storedIcon = res?.icon ?? "";
-      const storedColor = res?.icon_color ?? "";
-      setChosenIcon(storedIcon);
-      setChosenColor(storedColor);
-      setIconCommitted(storedIcon);
-      setColorCommitted(storedColor);
-    } catch (e) {
-      setChosenIcon(prevIcon);
-      setChosenColor(prevColor);
-      toast.error(e instanceof Error ? e.message : "Couldn't save the icon");
-    } finally {
-      setSaving(false);
-    }
+  const saveIcon = (nextIcon: string, color?: string) => {
+    if (readOnly) return;
+    setDeviceAppearance(d.device_id, { icon: nextIcon, ...(color !== undefined ? { icon_color: color } : {}) }, ownerUserId);
   };
 
   return (
@@ -234,9 +180,9 @@ function DeviceAppearance({
           id={`name-${d.device_id}`}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          onBlur={() => void saveName()}
+          onBlur={saveName}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void saveName();
+            if (e.key === "Enter") saveName();
             if (e.key === "Escape") setValue(committed);
           }}
           placeholder={automatic}
@@ -247,8 +193,8 @@ function DeviceAppearance({
           className="h-7 flex-1 min-w-0 px-2 text-meta bg-transparent border-sol-border"
         />
         {dirty && (
-          <Button size="sm" onClick={() => void saveName()} disabled={saving} variant="cyan" className="h-7">
-            {saving ? "Saving…" : "Save"}
+          <Button size="sm" onClick={saveName} variant="cyan" className="h-7">
+            Save
           </Button>
         )}
       </div>
@@ -259,7 +205,7 @@ function DeviceAppearance({
           aria-checked={!chosenIcon}
           aria-label="Platform icon"
           disabled={readOnly}
-          onClick={() => void saveIcon("")}
+          onClick={() => saveIcon("")}
           className={cn("rounded-md p-1.5", !chosenIcon ? "bg-sol-bg-alt ring-1 ring-sol-border" : "hover:bg-sol-bg-alt", readOnly && "opacity-50")}
         >
           <DeviceIcon d={{ ...d, icon: null }} className="h-4 w-4 text-sol-text-muted" />
@@ -274,7 +220,7 @@ function DeviceAppearance({
               aria-checked={selected}
               aria-label={iconLabelMap[icon]}
               disabled={readOnly}
-              onClick={() => void saveIcon(icon)}
+              onClick={() => saveIcon(icon)}
               className={cn("rounded-md p-1.5", selected ? "bg-sol-bg-alt ring-1 ring-sol-border" : "hover:bg-sol-bg-alt", readOnly && "opacity-50")}
             >
               <TeamIcon icon={icon} color={selected ? chosenColor : undefined} className={cn("h-4 w-4", !selected && "text-sol-text-muted")} />
@@ -292,7 +238,7 @@ function DeviceAppearance({
               aria-checked={chosenColor === color}
               aria-label={color}
               disabled={readOnly}
-              onClick={() => void saveIcon(chosenIcon, color)}
+              onClick={() => saveIcon(chosenIcon, color)}
               className={cn("rounded-full p-1", readOnly && "opacity-50")}
             >
               <span

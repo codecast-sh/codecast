@@ -130,7 +130,7 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
         const others = doc.others.length ? `\n\nOther matches: ${doc.others.map((o: any) => `${o.title} (${o.id})`).join("; ")}` : "";
         return {
           content: `Doc ${doc.id}: ${doc.title} (updated ${doc.updated}, revision ${doc.revision})\n\n${doc.content}${doc.truncated ? "\n[cut: the doc goes on]" : ""}${others}`,
-          details: { doc_id: doc.id },
+          details: { doc_id: doc.id, revision: doc.revision },
         };
       },
     }),
@@ -159,12 +159,12 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
         id: Type.String(),
         content: Type.String({ description: "The note's new text in full, Markdown." }),
         title: Type.Optional(Type.String({ description: "A new title, if it changes." })),
-        base: Type.Optional(Type.String({ description: "The revision read_doc showed for the text you rewrote." })),
+        // In the arguments, so it survives the wait for the person's approval.
+        base: Type.String({ description: "The revision read_doc showed for the text you rewrote." }),
       }),
       risk: "write",
-      run: async ({ id, content, title, base: named }) => {
-        const base = named ?? readAt.get(id);
-        const done = await deps.runMutation(ops.writeDoc, { ...user, id, content, ...(title ? { title } : {}), ...(base ? { base } : {}) });
+      run: async ({ id, content, title, base }) => {
+        const done = await deps.runMutation(ops.writeDoc, { ...user, id, content, base, ...(title ? { title } : {}) });
         return { content: `Rewrote doc ${done.id}.`, details: { doc_id: done.id } };
       },
     }),

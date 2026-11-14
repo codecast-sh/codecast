@@ -79,6 +79,8 @@ describe("projection stamp fields never appear in render code", () => {
       // Renders feedForCLI items (the CLI-shaped feed payload, a different
       // contract) — not store session rows.
       ["components/StableContextCards.tsx", "StableContextItem.work_state from feedForCLI"],
+      // The docs shots world's stable context record: feedForCLI items again, never a store row.
+      ["lib/acmeWorld/recall.ts", "feedForCLI-shaped items in a stable context record"],
       // Reads the store's own placement ({ bucket, work_state } from
       // placeInboxRows / sessionPlacement), the chokepoint's output, never a row.
       ["lib/instantSessionSearch.ts", "sessionStanding reads the store's placement"],

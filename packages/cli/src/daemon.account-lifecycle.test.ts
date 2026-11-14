@@ -51,6 +51,7 @@ function harness() {
   const deps = {
     accountLifecycleGate: gate, resumeInFlight, resumeInFlightStarted, resumeSessionCache,
     hibernationInFlight, expectedHibernationExits, lastResumeAt: new Map<string, number>(),
+    pacedAccountRevive: null,
     RESUME_IN_FLIGHT_TIMEOUT_MS: 60_000, SWITCH_CONTINUE_SPACING_MS: 1,
     swapHeld: (id: string) => state.swapping.has(id),
     backendSwitchHeld: () => false,

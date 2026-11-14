@@ -266,6 +266,11 @@ export const writeDoc = internalMutation({
     }
     const shown = args.append ? await publicCopy(ctx, "docs", doc) : null;
     if (shown) throw new Error(`Doc "${doc.title}" ${shown.reason}. Use replace_doc, which shows the person the new text first.`);
+    // read_doc shows only the first DOC_READ_MAX_CHARS, so a whole rewrite
+    // of a longer doc would drop the part it never saw.
+    if (!args.append && (doc.content ?? "").length > DOC_READ_MAX_CHARS) {
+      throw new Error(`Doc "${doc.title}" is longer than read_doc shows, so rewriting it whole would lose its end. Ask the person to edit it, or add to it with write_doc.`);
+    }
     const content = args.append ? `${(doc.content ?? "").trimEnd()}\n\n${args.content}` : args.content;
     await updateDocAs(ctx, args.user_id, { id: doc._id, content, ...(args.title?.trim() ? { title: args.title.trim() } : {}) }, {
       writer: ASSISTANT_WRITER, base: args.append ? undefined : args.base, requireBase: !args.append, reread: "read it again with read_doc",

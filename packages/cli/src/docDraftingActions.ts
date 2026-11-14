@@ -199,6 +199,7 @@ export async function lab(deps: DocDraftingDeps, id: string, tool: string, arg: 
       else if (tool === "alts" || tool === "alternatives") Object.assign(body, { tool: "alternatives", target: arg ?? fail("alts needs the text"), occurrence: nth(options) });
       else fail(`Unknown tool "${tool}": use trim, typos, flag or alts`);
       const r = await deps.post("/cli/docs/lab", body);
+      if (r.conflict) fail(`${r.conflict} The Lab's result was not applied; run it again once the doc is quiet.`);
       const missed = r.missed?.length ? ` ${c.dim}(${r.missed.length} not found in the text, skipped)${c.reset}` : "";
       if (tool === "trim") {
         const pct = r.words_before ? Math.round(((r.words_after - r.words_before) / r.words_before) * 100) : 0;

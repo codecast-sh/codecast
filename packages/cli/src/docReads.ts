@@ -5,9 +5,9 @@
 // agent's write, between an agent's read and its write survives.
 //
 // One small file per session under ~/.codecast/doc-reads/ (outside a session,
-// per shell). Only the reads that show a body record (`cast doc show`,
-// `cast plan show --json`, `cast brief`), and the writes of a body the caller
-// wrote itself; writers ask docReadBase for the doc they are about to replace.
+// per shell). Only the reads that show a whole body record (`cast doc show`
+// in full, `cast brief`), and the writes of a body the caller wrote itself;
+// writers ask docReadBase for the doc they are about to replace.
 import fs from "fs";
 import path from "path";
 import { codecastPath } from "./codecastDir.js";
@@ -58,6 +58,14 @@ export function docReadBase(session: string | null | undefined, key: string): st
   return entry.rev;
 }
 
+/** The newest revision this session saw under any of `keys`: one body can be
+ *  read under two names (a plan, and the doc behind it). */
+export function latestDocReadBase(session: string | null | undefined, keys: string[]): string | undefined {
+  const ledger = load(ledgerFile(session));
+  const fresh = keys.map((k) => ledger[k]).filter((e) => e && (session || Date.now() - e.at <= SHELL_ENTRY_TTL_MS));
+  return fresh.sort((a, b) => b!.at - a!.at)[0]?.rev;
+}
+
 export const docKey = (id: string) => `doc:${id}`;
 export const planKey = (ref: string) => `plan:${ref}`;
 export const briefKey = (ref: string) => `brief:${ref}`;
@@ -80,7 +88,6 @@ export function noteDocRevisions(session: string | null | undefined, urlPath: st
     case "/cli/plans/update":
       if (body.body === undefined) return;
     // falls through
-    case "/cli/plans/get":
     case "/cli/plans/create": {
       const keys = [body.short_id, result.short_id].filter(Boolean).map((r: string) => planKey(String(r)));
       if (result.doc_id) keys.push(docKey(String(result.doc_id)));

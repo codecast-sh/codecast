@@ -157,7 +157,7 @@ import { findAgentAncestor, ownDaemonPids, snapshotProcessTable } from "./proces
 import { autostartDisabledByEnv, findSystemDaemonUnit, isTemplateInstance, setDaemonWanted, unitUsesWantedFlag } from "./systemdDaemonUnit.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
 import { registerDocDraftingCommands } from "./docDraftingCommand.js";
-import { briefKey, docKey, docReadBase, noteDocRevisions, planKey } from "./docReads.js";
+import { briefKey, docKey, docReadBase, latestDocReadBase, noteDocRevisions, planKey } from "./docReads.js";
 import { commandTree, didYouMean, listDescription, nearMatches, unknownCommandNextStep } from "./commandSuggestion.js";
 import { choiceOption, countOption, exitNotFound, idKindOf, nonNegativeCountOption, notFoundLine, stateOption, unknownActionError, wrongKindIdError, withSessionIdHint, SESSION_ID_HINT, DATE_FORMS } from "./argChecks.js";
 import { requireDestructiveConfirm } from "./destructiveCommands.js";
@@ -13499,7 +13499,7 @@ program
               preview,
               match_type: conv.title_match ? "title" : "text",
               match_detail: searchQuery,
-              facts: [sessionFacts(conv), conv.missing_terms?.length ? `lacks ${conv.missing_terms.join(",")}` : ""].filter(Boolean).join(" "),
+              facts: [sessionFacts(conv), conv.missing_terms?.length ? `not found: ${conv.missing_terms.join(",")}` : ""].filter(Boolean).join(" "),
             });
           }
         }
@@ -14650,7 +14650,9 @@ briefCmd
     try {
       const body = { role_id, content, from_session: callingSession(), ...(base ? { base } : {}) };
       result = await cliPost("/cli/brief/edit", body, { throwOnError: true });
-      noteDocRevisions(docLedgerSession(), "/cli/brief/edit", body, result);
+      // A patch was computed from a read this command never showed: it must
+      // not become the base of a later whole-narrative save.
+      if (!patching) noteDocRevisions(docLedgerSession(), "/cli/brief/edit", body, result);
     } catch (err) {
       const message = (err as Error).message;
       // The refusal states the exact size, whatever wording the backend has.
@@ -19241,12 +19243,14 @@ doc
   .action(async (id: string, range: string | undefined, options: any) => {
     const result = await cliPost("/cli/docs/get", { id });
     if (!result) exitNotFound("doc", id, `cast doc search "<words from its title>"`);
-    noteDocRevisions(docLedgerSession(), "/cli/docs/get", { id }, result);
+    // A whole-body rewrite may build on this read only when it showed the
+    // whole body as stored: all of it, raw (below, or --json).
+    const sawBody = () => noteDocRevisions(docLedgerSession(), "/cli/docs/get", { id }, result);
     if (options.clean || options.final) {
       const { stripDrafting } = await import("@codecast/shared/docs/drafting");
       result.content = stripDrafting(result.content || "", { dropGhosts: !!options.final });
     }
-    if (options.json) { printJson(result); return; }
+    if (options.json) { if (!options.clean && !options.final) sawBody(); printJson(result); return; }
     if (result.live_unsaved) {
       console.error(`${c.yellow}note${c.reset} someone is typing in this doc in the editor; their last few seconds are not in this copy yet. Read it again before rewriting it whole.`);
     }
@@ -19297,6 +19301,7 @@ doc
           : "";
 
     console.log("");
+    if (start <= 1 && end >= total && !options.clean && !options.final) sawBody();
     if (!result.content) {
       console.log("(empty)");
     } else {
@@ -19408,7 +19413,7 @@ doc
         body.base = options.base ?? docReadBase(docLedgerSession(), docKey(id));
         if (options.force) body.force = true;
         else if (!body.base) {
-          console.error(`This session has not read doc ${id}, so replacing its whole content could undo edits you have not seen. Read it first with \`cast doc show ${id}\`, then write again (or change part of it with --old/--new).`);
+          console.error(`This session has not read all of doc ${id}, so replacing its whole content could undo edits you have not seen. Read it first with \`cast doc show ${id} --full\`, then write again (or change part of it with --old/--new).`);
           process.exit(1);
         }
       }
@@ -19771,13 +19776,14 @@ charterOptions(plan.commands.find((x: any) => x.name() === "update"), false)
         body.body = bodyContent;
         // The body was written against some read of the plan (`cast plan
         // show`): its revision lets the server refuse it if the doc moved on.
-        // Plan bodies are read as their doc (`cast doc show <doc>`) or as
-        // `cast plan show --json`: either read is the base.
+        // A plan's body is read as its doc (`cast doc show <doc> --full`); the
+        // plan's own create or body write counts too, the newer one winning.
         const docId = options.base || options.force ? undefined : (await cliPost("/cli/plans/get", { short_id: planId }))?.doc_id;
-        body.base = options.base ?? docReadBase(docLedgerSession(), planKey(planId)) ?? (docId ? docReadBase(docLedgerSession(), docKey(String(docId))) : undefined);
+        if (sessionId) body.session_id = sessionId;
+        body.base = options.base ?? latestDocReadBase(docLedgerSession(), [planKey(planId), ...(docId ? [docKey(String(docId))] : [])]);
         if (options.force) body.force = true;
         else if (!body.base && docId) {
-          console.error(`This session has not read the body of plan ${planId}, so replacing it could undo edits you have not seen. Read it first with \`cast doc show ${docId}\`, then write again.`);
+          console.error(`This session has not read the body of plan ${planId}, so replacing it could undo edits you have not seen. Read it first with \`cast doc show ${docId} --full\`, then write again.`);
           process.exit(1);
         }
       }

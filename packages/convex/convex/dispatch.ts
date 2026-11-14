@@ -23,6 +23,7 @@ import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { performSetDeviceDirectLinks } from "./peerLinks";
+import { performSetDeviceAppearance, type DeviceAppearanceChange } from "./deviceAppearance";
 import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, performSetDeviceSnippet, performRequestDeviceUpdate, performSetProviderKey } from "./devices";
 import { performJoinTeamHost, performRemoveTeamHostMember, performRenameTeamHost, performUnregisterTeamHost } from "./teamHosts";
 import { performSetAccountDevices, performSetAccountShares } from "./accountPool";
@@ -1396,6 +1397,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // itself is what the device's next beat picks up.
   requestDeviceUpdate: async (ctx, userId, [deviceId]: [string]) =>
     performRequestDeviceUpdate(ctx as any, userId, deviceId),
+  // Settings > Devices' name and icon: the web paints the roster row (or the
+  // agent box's settings row); the device row is the server home.
+  setDeviceAppearance: async (ctx, userId, [deviceId, change, ownerUserId]: [string, DeviceAppearanceChange, string | undefined]) =>
+    performSetDeviceAppearance(ctx as any, userId, deviceId, change, ownerUserId as Id<"users"> | undefined),
 
   linkConversation: async (ctx, userId, [objectType, objectId, conversationId]: [string, string, string]) => {
     await linkConversationToObject(

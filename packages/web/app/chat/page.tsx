@@ -43,7 +43,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _chatApi } from "@codecast/convex/convex/_generated/api";
 const api = _chatApi as any;
-import { Headphones, Lock, BellOff, Bell, Bot, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
+import { Headphones, Lock, BellOff, Bell, Bot, Plus, AlertTriangle, RotateCw, SquarePen } from "lucide-react";
 import { toast } from "sonner";
 import { ChannelMembersButton, DmHeadline } from "../../components/chat/ChannelPeople";
 import { linkSendsOutbound } from "@codecast/convex/convex/lib/slackMirror";
@@ -56,16 +56,14 @@ import { channelHuddleMemberIds } from "@codecast/shared/contracts";
 import { NewMessageModal } from "../../components/chat/NewMessageModal";
 import { ChatSearch } from "../../components/chat/ChatSearch";
 import { useShortcutAction } from "../../shortcuts";
-import { MenuKeyCaps } from "../../components/KeyboardShortcutsHelp";
 import { channelDisplayName } from "../../lib/chatViews";
 import { useSwitchWorkspace } from "../../hooks/useSwitchWorkspace";
 import { useInboxStore, selectChannelReadMarker, selectNavHidden, type ChatNotifyLevel, type ChatRailScope } from "../../store/inboxStore";
 import { windowOrgTree } from "../../store/orgSlice";
-import Link from "next/link";
 import { useAuthGate } from "@platform/auth/web";
 import { useLocalAuth } from "../../lib/localAuth";
 import { isStandaloneCommunityPath, openExternalUrl } from "../../lib/desktop";
-import { Logo } from "../../components/Logo";
+import { CommunityBar, SearchPill, SignInToPost } from "../../components/chat/ChatPageChrome";
 import { findDmChannelId, type ChatAttachment } from "../../store/chatSlice";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import {
@@ -104,61 +102,6 @@ import { teamMembersOf } from "../../lib/activeTeam";
 /** The clock the whole surface shares. Relative times ("3m ago") must stay
  *  honest without a re-render per row per second — see hooks/useCoarseNow. */
 const CLOCK_MS = 30_000;
-
-/** The header's search affordance — a quiet pill wearing its shortcut. */
-function SearchPill({ onOpen }: { onOpen: () => void }) {
-  return (
-    <button type="button" className="ch-search-open" title="Search messages" onClick={onOpen}>
-      <Search className="w-3 h-3" />
-      Search
-      <span className="ch-search-keys">
-        <MenuKeyCaps action="chat.search" />
-      </span>
-    </button>
-  );
-}
-
-/** Where the composer would be, for a visitor: reading is open, posting needs
- *  an account. The link comes back to this exact room. */
-function SignInToPost({ compact }: { compact?: boolean }) {
-  const here = typeof window === "undefined" ? "/community" : window.location.pathname + window.location.search;
-  const back = encodeURIComponent(here);
-  return (
-    <div className={`ch-guest-post${compact ? " ch-guest-post-compact" : ""}`}>
-      <span className="ch-guest-post-text">Anyone can read. Sign in to post.</span>
-      <Link href={`/login?return_to=${back}`} className="ch-empty-action">Sign in</Link>
-      <Link href={`/signup?return_to=${back}`} className="ch-guest-post-alt">Create an account</Link>
-    </div>
-  );
-}
-
-/** The community page's own chrome when it stands alone in a browser: who we
- *  are, where this is, the way back to the site, and the door into the app. */
-function CommunityBar({ isGuest }: { isGuest: boolean }) {
-  const here = typeof window === "undefined" ? "/community" : window.location.pathname + window.location.search;
-  return (
-    <header className="ch-community-bar">
-      <a href="/" className="ch-community-brand" aria-label="Codecast home">
-        <Logo size="sm" className="[--logo-c:currentColor]" />
-      </a>
-      <span className="ch-community-where">
-        <span className="ch-community-slash" aria-hidden="true">/</span>
-        community
-      </span>
-      <nav className="ch-community-links" aria-label="Site">
-        <a href="/documentation">Docs</a>
-        <a href="/changelog">Changelog</a>
-        <a href="/support">Support</a>
-      </nav>
-      <span className="ch-community-spacer" />
-      {isGuest ? (
-        <Link href={`/login?return_to=${encodeURIComponent(here)}`} className="ch-community-cta">Sign in</Link>
-      ) : (
-        <Link href="/inbox" className="ch-community-cta">Open the app</Link>
-      )}
-    </header>
-  );
-}
 
 export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } = {}) {
   const params = useParams<{ channelId?: string }>();

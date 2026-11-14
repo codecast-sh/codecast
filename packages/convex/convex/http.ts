@@ -4187,7 +4187,7 @@ cliRoute("/cli/brief/get", async (ctx, { from_session, ...body }) => {
   if (brief && from_session) await ctx.runMutation(internal.orgRoles.markBriefRead, { role_id: brief.role._id, session: from_session });
   return brief;
 });
-cliRoute("/cli/brief/edit", async (ctx, body) => ctx.runMutation(api.orgRoles.briefEdit, body));
+cliRoute("/cli/brief/edit", async (ctx, body) => waitingOutLiveEdits(body, (args) => ctx.runMutation(api.orgRoles.briefEdit, args)));
 // Scopes and the scope feed (docs/architecture/scopes-and-feed.md F1, F2).
 cliRoute("/cli/org/scope", async (ctx, body) => {
   return await ctx.runMutation(api.orgRoles.setScope, body);
@@ -4704,9 +4704,7 @@ cliRoute("/cli/plans/list", async (ctx, body) => {
 cliRoute("/cli/plans/get", async (ctx, body) => {
   return await ctx.runQuery(api.plans.get, body);
 });
-cliRoute("/cli/plans/update", async (ctx, body) => {
-  return await ctx.runMutation(api.plans.update, body);
-});
+cliRoute("/cli/plans/update", async (ctx, body) => waitingOutLiveEdits(body, (args) => ctx.runMutation(api.plans.update, args)));
 cliRoute("/cli/plans/bind", async (ctx, body) => {
   return await ctx.runMutation(api.plans.bindSession, body);
 });
@@ -4814,11 +4812,13 @@ cliRoute("/cli/docs/get", async (ctx, body) => {
   return await ctx.runQuery(api.docs.get, body);
 });
 // A whole-body write refuses while a person's editor holds steps it has not
-// saved yet (docs.writeDocBody); it saves about a second after the last
-// keystroke, so wait that out before answering. wait_ms bounds the wait.
+// saved yet (lib/docBody.ts writeDocBody). The editor saves a second after
+// its last step reaches the server, which on a live rig measured about five
+// seconds after the last keystroke, so wait that out before answering.
+// wait_ms bounds the wait.
 async function waitingOutLiveEdits<T>(body: any, run: (args: any) => Promise<T>): Promise<T> {
   const { wait_ms, ...args } = body;
-  const deadline = Date.now() + (typeof wait_ms === "number" ? Math.min(Math.max(wait_ms, 0), 15_000) : 4_000);
+  const deadline = Date.now() + (typeof wait_ms === "number" ? Math.min(Math.max(wait_ms, 0), 15_000) : 10_000);
   for (;;) {
     try {
       return await run(args);

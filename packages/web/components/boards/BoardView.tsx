@@ -12,7 +12,6 @@ import { toast } from "sonner";
 import { Map as MapIcon, Minus, Plus, Scan, ScanSearch } from "lucide-react";
 import type { ArtifactPosition } from "@codecast/shared/artifacts";
 import {
-  alignBoxes,
   boardArtFor,
   BOARD_TEMPLATES,
   BOARD_TEMPLATE_ART,
@@ -26,14 +25,9 @@ import {
   cloneOps,
   connectorGeometry,
   elbowObstacles,
-  frameAround,
-  distributeBoxes,
-  tidyBoxes,
   elementBounds,
   elementBox,
   intersects,
-  labelSpot,
-  textWidth,
   nextZ,
   readingOrder,
   unionBox,
@@ -50,7 +44,6 @@ import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { KeyCap } from "../KeyCap";
 import { BoardElementView, ConnectorView } from "./BoardElements";
 import { BOARD_ASK_SLOT, MOD, SHIFT, editField } from "./boardModel";
-import { plainText } from "./boardMarks";
 import { BoardContextMenu, type BoardMenuItem, type BoardMenuPayload } from "./BoardContextMenu";
 import { useContextMenu } from "../ui/context-menu";
 import { isMac } from "../../shortcuts";
@@ -63,7 +56,7 @@ import { initialsOf, pinPoints, useThreads } from "./commentThreads";
 import { useBoardCamera } from "./useBoardCamera";
 import { useBoardGestures, withFrameContents } from "./useBoardGestures";
 import { useBoardKeys } from "./useBoardKeys";
-import { pasteOps, placeImage, serializeSelection, stickiesToTasks } from "./boardActions";
+import { pasteOps, placeImage, serializeSelection } from "./boardActions";
 import type { BoardEl, BoardTool } from "./boardTypes";
 import { drawOrder, fitBox } from "./boardFrame";
 import { BoardMinimap } from "./BoardMinimap";
@@ -72,6 +65,9 @@ import { BoardEditBar } from "./BoardEditBar";
 import { BOARD_ART_URLS } from "./boardArtUrls";
 import { BoardSessionBar, BoardVoteDots } from "./BoardSessionBar";
 import { clearVotingOps, readSession, sessionOp, startVotingOps, toggleVoteOps, votesOf, votesUsed } from "./boardSession";
+import { runBoardBar } from "./boardCommands";
+import { useBoardOpeningFit } from "./useBoardOpeningFit";
+import { useBoardSelectionChrome } from "./useBoardSelectionChrome";
 
 const MINIMAP_KEY = "board-minimap";
 /** Below this pane width the overview would cover the board itself, so it is not offered. */
@@ -129,10 +125,13 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   // What the board's own chrome covers at its edges: the zoom bar above, the toolbar below, the overview at the right.
   const chromeInsets = () => {
     const w = cam.rootRef.current?.clientWidth ?? 0;
-    // An open overview map sits at the bottom right: fitted content stays clear of it.
     // The zoom bar and the Vote/Timer buttons end 46px down; in a narrow pane a running vote or timer adds a row.
     const sessionRow = w > 0 && w < 600 && (session.voting || session.timer);
-    return { top: w ? (sessionRow ? 92 : 56) : 0, bottom: 64, right: minimapOn.current && w >= MINIMAP_MIN_W ? 196 : 0 };
+    // An open overview sits at the bottom right (top right in a mid-size pane): fitted content stays clear
+    // of it by height, so it stays centred across the pane.
+    const map = minimapOn.current && w >= MINIMAP_MIN_W;
+    const mapTop = map && w < 820;
+    return { top: w ? (mapTop ? 136 : sessionRow ? 92 : 56) : 0, bottom: map && !mapTop ? 200 : 64, right: 0 };
   };
   const minimapOn = useRef(false);
   const [locked, setLocked] = useState(false);
@@ -149,39 +148,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   }, []);
 
   // ── Camera: first paint fits the content; cursors follow every frame ──────
-  // Until the person moves the camera, the opening frame (a fit, or the camera
-  // this tab left the board at) follows the pane: a resize (a side panel
-  // opening, the window narrowing) frames the content again.
-  const fitted = useRef(cam.hadSaved.current);
-  const autoCam = useRef<{ x: number; y: number; z: number } | null>(null);
-  const lastFit = useRef<{ w: number; h: number; ready: boolean; count: number } | null>(null);
-  useWatchEffect(() => {
-    if (!cam.viewport.w) return;
-    if (!live.ready && elements.length === 0) return;
-    // A camera saved in a pane of another size (a narrow split, a smaller window) would open off frame.
-    const was = cam.savedFor.current;
-    if (was) {
-      cam.savedFor.current = null;
-      if (Math.abs(was.w - cam.viewport.w) > was.w * 0.1 || Math.abs(was.h - cam.viewport.h) > was.h * 0.1) fitted.current = false;
-      else {
-        // Kept as the opening frame: it stays, and follows the pane until the person moves it.
-        autoCam.current = { ...cam.cam.current };
-        return;
-      }
-    }
-    const c = cam.cam.current;
-    const untouched = autoCam.current && c.x === autoCam.current.x && c.y === autoCam.current.y && c.z === autoCam.current.z;
-    if (fitted.current && !untouched) return;
-    // Once the board has loaded, a new element is someone's edit, not more of the board arriving:
-    // the view stays put (only a pane resize frames it again).
-    // (A board that was empty at that fit, like a fresh duplicate whose copy lands a moment later, still fits its first content.)
-    const last = lastFit.current;
-    if (fitted.current && last && last.ready && last.count > 0 && last.w === cam.viewport.w && last.h === cam.viewport.h) return;
-    fitted.current = true;
-    cam.fit(fitBox(elements, byKey, pinPoints(threads, byKey).values()), { instant: true, minReadable: true, insets: chromeInsets() });
-    autoCam.current = { ...cam.cam.current };
-    lastFit.current = { w: cam.viewport.w, h: cam.viewport.h, ready: live.ready, count: elements.length };
-  }, [cam.viewport.w, cam.viewport.h, live.ready, elements.length]);
+  useBoardOpeningFit({ cam, live, elements, byKey, threads, chromeInsets });
 
   const screenOf = useCallback((pos: ArtifactPosition & { key?: string }) => {
     const root = cam.rootRef.current;
@@ -383,84 +350,8 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     const r = cam.rootRef.current;
     return cam.toWorld({ x: (r?.clientWidth ?? 0) / 2, y: (r?.clientHeight ?? 0) / 2 });
   };
-  const runBar = (a: BarAction) => {
-    const boxes = new Map(selectedEls.filter((e) => e.kind !== "connector").map((e) => [e.key, elementBox(e)]));
-    switch (a.type) {
-      case "set":
-        live.apply(selectedEls.filter((e) => !a.kinds || a.kinds.includes(e.kind)).filter((e) => {
-          if ("color" in a.fields) return ["sticky", "shape", "frame", "text", "connector", "pen"].includes(e.kind);
-          return true;
-        }).map((e) => ({ k: e.key, set: a.fields })));
-        return;
-      case "align":
-        live.apply([...alignBoxes(boxes, a.mode)].map(([k, p]) => ({ k, set: { x: p.x, y: p.y } })));
-        return;
-      case "tidy":
-        live.apply([...tidyBoxes(boxes)].map(([k, p]) => ({ k, set: { x: p.x, y: p.y } })));
-        return;
-      case "distribute":
-        live.apply([...distributeBoxes(boxes, a.axis)].map(([k, p]) => ({ k, set: { x: p.x, y: p.y } })));
-        return;
-      case "group": {
-        const g = newElementKey("g");
-        live.apply(selection.map((k) => ({ k, set: { group: g } })));
-        return;
-      }
-      case "ungroup":
-        live.apply(selection.map((k) => ({ k, set: { group: null } })));
-        return;
-      case "order": {
-        let z = a.where === "front" ? nextZ({ elements: allEls() }) : bottomZ({ elements: allEls() }) - selection.length;
-        const sorted = [...selectedEls].sort((x, y) => (Number(x.z) || 0) - (Number(y.z) || 0));
-        live.apply(sorted.map((e) => ({ k: e.key, set: { z: z++ } })));
-        return;
-      }
-      case "tasks":
-      case "plan": {
-        const stickies = selectedEls.filter((e) => e.kind === "sticky");
-        const frame = selectedEls.find((e) => e.kind === "frame");
-        const title = a.type === "plan" ? String(frame?.title || stickies[0]?.text?.toString().split("\n")[0] || doc.title) : undefined;
-        void stickiesToTasks(live, stickies, allEls(), title, (k) => byKeyRef.current.get(k));
-        return;
-      }
-      case "describe":
-        openAsk("describe");
-        return;
-      case "edit":
-        if (selection.length === 1) startEdit(selection[0]);
-        return;
-      case "frame": {
-        // Wrap what is selected in a new frame, title ready to type, as FigJam's Frame selection does.
-        const inside = selectedEls.filter((e) => e.kind !== "connector").map(elementBounds);
-        // Even padding, as wide as it can be without reaching into what is not being framed.
-        const sel = new Set(selection);
-        const others = allEls().filter((e) => !sel.has(e.key) && e.kind !== "connector" && e.kind !== "frame").map(elementBounds);
-        const pad = [24, 16, 8].find((p) => {
-          const f = frameAround(inside, "Frame", 0, p);
-          if (!f || !("put" in f)) return true;
-          const b = f.put as unknown as Box;
-          return !others.some((o) => intersects(b, { x: o.x + 1, y: o.y + 1, w: o.w - 2, h: o.h - 2 }));
-        }) ?? 8;
-        const op = frameAround(inside, "Frame", bottomZ({ elements: allEls() }), pad);
-        if (!op) return;
-        live.apply([op]);
-        byKeyRef.current.set(op.k, { ...("put" in op ? (op.put as any) : {}), key: op.k, rev: 0 });
-        setSelection([op.k]);
-        startEdit(op.k);
-        return;
-      }
-      case "open": {
-        const node = cam.rootRef.current?.querySelector(`[data-key="${CSS.escape(selection[0])}"] a[href]`) as HTMLAnchorElement | null;
-        node?.click();
-        return;
-      }
-      case "duplicate":
-        duplicate();
-        break;
-      case "delete":
-        deleteSelection();
-    }
-  };
+  const runBar = (a: BarAction) =>
+    runBoardBar(a, { live, selection, selectedEls, allEls, byKeyRef, setSelection, startEdit, openAsk, duplicate, deleteSelection, root: cam.rootRef.current, docTitle: doc.title });
   const startTemplate = (t: BoardTemplate) => {
     const { ops } = templateOps(t, { x: 0, y: 0 }, bottomZ({ elements: allEls() }), nextZ({ elements: allEls() }));
     live.apply(ops);
@@ -658,45 +549,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     });
   }, [ordered, world.x, world.y, world.w, world.h, byKey, selection, editing]);
 
-  // ── Selection bar placement (screen space, above the selection) ───────────
-  const selBox = useMemo(() => {
-    // A connector's bar clears the elements it joins, so it never sits on them.
-    const boxes = selectedEls.flatMap((e) => {
-      if (e.kind !== "connector") return [elementBounds(e)];
-      const ends = [e.from, e.to].map((k) => (typeof k === "string" ? byKey.get(k) : undefined)).filter(Boolean).map((x) => elementBounds(x!));
-      // Routed as the canvas draws it (an elbow goes around obstacles), with its label's chip.
-      const g = connectorGeometry(e, (k) => byKey.get(k), e.curve === "elbow" ? obstacles : undefined);
-      const label = typeof e.label === "string" ? e.label : "";
-      const at = g && label ? labelSpot(g, label) : null;
-      const lw = textWidth(label, 15) + 16;
-      return [...ends, ...(g ? [g.box] : []), ...(at ? [{ x: at.x - lw / 2, y: at.y - 12, w: lw, h: 24 }] : [])];
-    });
-    return unionBox(boxes);
-  }, [selectedEls, byKey, obstacles]);
-  const barAt = useMemo(() => {
-    if (!selBox || !cam.viewport.w) return null;
-    const top = selBox.y * vcam.z + vcam.y, bottom = (selBox.y + selBox.h) * vcam.z + vcam.y;
-    const x = (selBox.x + selBox.w / 2) * vcam.z + vcam.x;
-    const below = top < 90;
-    // 34px clears the rotate handle that sits above the selection's top-right corner.
-    return { x, y: below ? Math.min(bottom + 34, cam.viewport.h - 120) : top - 34, below };
-  }, [selBox, vcam, cam.viewport.w, cam.viewport.h]);
-
-  // Where the format bar sits while text is being edited: above the element, like the selection bar.
-  const editAt = useMemo(() => {
-    const el = editing ? byKey.get(editing) : undefined;
-    if (!el || readOnly || el.kind === "frame" || el.kind === "connector" || !cam.viewport.w) return null;
-    const b = elementBounds(el);
-    const top = b.y * vcam.z + vcam.y;
-    return { x: (b.x + b.w / 2) * vcam.z + vcam.x, y: Math.max(48, top - 12) };
-  }, [editing, byKey, vcam, readOnly, cam.viewport.w]);
-  // What a screen reader hears when the selection moves.
-  const announce = useMemo(() => {
-    if (selectedEls.length !== 1) return selectedEls.length ? `${selectedEls.length} selected` : "";
-    const e = selectedEls[0];
-    const words = plainText(String(e.text ?? e.title ?? e.label ?? e.ref ?? e.emoji ?? "")).replace(/\s+/g, " ").slice(0, 120);
-    return `${e.kind}${e.shape ? ` ${e.shape}` : ""}${words ? `: ${words}` : ""}`;
-  }, [selectedEls]);
+  const { barAt, editAt, announce } = useBoardSelectionChrome({ selectedEls, byKey, obstacles, editing, readOnly, viewport: cam.viewport });
 
   const openThread = threads.find((t) => t.root.key === thread);
   const threadAt = openThread ? (() => { const p = pinPoints(threads, byKey).get(openThread.root.key); return p ? cam.toScreen(p) : null; })() : null;

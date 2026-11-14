@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildPassages } from "../roomThreadModel";
-import { passageHits } from "../ThreadFind";
-import { termsOf } from "../CallSearch";
+import { passageHits } from "../../../hooks/useThreadFind";
+import { termsOf } from "../../../hooks/useCallSearch";
 
 const seg = (seq: number, t0: number, text: string, speaker = "a") => ({
   seq,

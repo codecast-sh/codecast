@@ -29,7 +29,7 @@ function field<T>(conv: Record<string, unknown> | undefined, sess: Record<string
   return sess?.[key] as T | undefined;
 }
 
-export function useSessionAccount(conversationId: string | undefined): SessionAccountLabel | null {
+function useSessionAccount(conversationId: string | undefined): SessionAccountLabel | null {
   return useInboxStore(useShallow((s) => {
     if (!conversationId) return null;
     const id = s.resolveLiveSessionId(conversationId);

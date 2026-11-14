@@ -11,6 +11,8 @@ import { api, internal } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
 import { presentToken } from "@platform/auth/convex";
+import { writeBrief } from "./orgHandoff";
+import { markdownToDoc } from "./lib/docBody";
 
 setDefaultTimeout(30_000);
 
@@ -186,11 +188,13 @@ describe("the other whole-body writers go through the same check", () => {
     const a = (await w.post("/cli/plans/get", { api_token: w.tokA, short_id: created.short_id })).body;
     const b = (await w.post("/cli/plans/get", { api_token: w.tokB, short_id: created.short_id })).body;
     expect(a.doc_revision).toBe(created.doc_revision);
-    const first = await w.post("/cli/plans/update", { api_token: w.tokB, short_id: created.short_id, body: "# Ship it\n\nB's steps", base: b.doc_revision });
+    await w.t.run(async (ctx) => { await ctx.db.insert("conversations", { user_id: w.ids.riley, session_id: "sess-b", short_id: "jx7bbbb", status: "active", agent_type: "claude_code", started_at: 1, updated_at: 1, message_count: 0 } as any); });
+    const first = await w.post("/cli/plans/update", { api_token: w.tokB, short_id: created.short_id, body: "# Ship it\n\nB's steps", base: b.doc_revision, session_id: "sess-b" });
     expect(first.status).toBe(200);
     const stale = await w.post("/cli/plans/update", { api_token: w.tokA, short_id: created.short_id, body: "# Ship it\n\nA's steps", base: a.doc_revision });
     expect(stale.status).toBe(409);
     expect(stale.body.error).toMatch(/changed since you read it/);
+    expect(stale.body.error).toMatch(/Riley \(session jx7bbbb\) wrote it/);
     const fresh = await w.post("/cli/plans/update", { api_token: w.tokA, short_id: created.short_id, body: "# Ship it\n\nA's steps", base: first.body.doc_revision });
     expect(fresh.status).toBe(200);
     const snap = await w.human.query(api.docSync.getSnapshot, { id: created.doc_id });
@@ -228,6 +232,75 @@ describe("the other whole-body writers go through the same check", () => {
   });
 });
 
+describe("review round 9", () => {
+  test("--force with the stored text still discards steps that never saved", async () => {
+    const w = await world();
+    await w.openEditor("first line");
+    await w.human.mutation(api.docSync.submitSteps, { id: w.ids.doc, version: 1, clientId: "tab", steps: ["s"] });
+    const r = await w.post("/cli/docs/update", { api_token: w.tokA, id: w.ids.doc, content: "# Plan\n\nfirst line", force: true });
+    expect(r.status).toBe(200);
+    expect((await w.deltas()).length).toBe(0);
+  });
+});
+
+describe("review round 6", () => {
+  test("the collab reset rebuilds from the stored body and ignores text a caller hands it", async () => {
+    const w = await world();
+    await w.openEditor("first line");
+    await w.t.mutation(api.docs.resetSync, { api_token: w.tokA, id: w.ids.doc, content: "# Plan\n\nold text from an old read" });
+    expect(await w.stored()).toBe("# Plan\n\nfirst line");
+    expect((await w.human.query(api.docSync.getSnapshot, { id: w.ids.doc })).content).toContain("first line");
+  });
+});
+
+describe("review round 5", () => {
+  test("a handoff's brief write never aborts over an open brief: it keeps the person's steps and writes the markdown", async () => {
+    const w = await world();
+    await w.openEditor("first line");
+    await w.human.mutation(api.docSync.submitSteps, { id: w.ids.doc, version: 1, clientId: "tab", steps: ["s"] });
+    await w.t.run(async (ctx) => { await writeBrief(ctx as any, { brief_doc_id: w.ids.doc, name: "Infra" }, "# Plan\n\nhanded over", Date.now()); });
+    expect(await w.stored()).toBe("# Plan\n\nhanded over");
+    expect((await w.deltas()).length).toBe(1);
+  });
+
+  test("headings deeper than the editor's three stay literal text", () => {
+    const doc = markdownToDoc("#### Deep\n\n## Two");
+    expect(doc.content![0]).toMatchObject({ type: "paragraph", content: [{ type: "text", text: "#### Deep" }] });
+    expect(doc.content![1]).toMatchObject({ type: "heading", attrs: { level: 2 } });
+  });
+});
+
+describe("review round 4", () => {
+  test("the legacy collab reset refuses over unsaved typing", async () => {
+    const w = await world();
+    await w.openEditor("first line");
+    await w.human.mutation(api.docSync.submitSteps, { id: w.ids.doc, version: 1, clientId: "tab", steps: ["s"] });
+    await expect(w.t.mutation(api.docs.resetSync, { api_token: w.tokA, id: w.ids.doc, content: "old" })).rejects.toThrow(/is editing it in the editor/);
+    expect((await w.deltas()).length).toBe(1);
+  });
+
+  test("a source-file upsert reaches the open editor and never lands over unsaved typing", async () => {
+    const w = await world();
+    const first = (await w.post("/cli/docs/create", { api_token: w.tokA, title: "Synced plan", content: "# Synced plan\n\nfrom the file", source_file: "/repo/plan.md" })).body;
+    await w.human.mutation(api.docSync.submitSnapshot, { id: first.id, version: 1, content: pmDoc("from the file") });
+    const again = await w.post("/cli/docs/create", { api_token: w.tokA, title: "Synced plan", content: "# Synced plan\n\nfile v2", source_file: "/repo/plan.md" });
+    expect(again.status).toBe(200);
+    expect((await w.human.query(api.docSync.getSnapshot, { id: first.id })).content).toContain("file v2");
+    await w.human.mutation(api.docSync.submitSteps, { id: first.id, version: 2, clientId: "tab", steps: ["s"] });
+    const blocked = await w.post("/cli/docs/create", { api_token: w.tokA, title: "Synced plan", content: "# Synced plan\n\nfile v3", source_file: "/repo/plan.md" });
+    expect(blocked.body.reason).toBe("live_edit");
+  });
+
+  test("the assistant cannot rewrite whole a doc longer than read_doc shows", async () => {
+    const w = await world();
+    const long = "# Plan\n\n" + "word ".repeat(5000);
+    await w.post("/cli/docs/update", { api_token: w.tokA, id: w.ids.doc, content: long, base: (await w.read(w.tokA)).revision });
+    const read = await w.t.query(internal.assistant.tools.workspace.readDoc, { user_id: w.ids.riley, id: String(w.ids.doc) } as any);
+    await expect(w.t.mutation(internal.assistant.tools.workspace.writeDoc, { user_id: w.ids.riley, id: String(w.ids.doc), content: "short", base: (read as any).revision } as any))
+      .rejects.toThrow(/longer than read_doc shows/);
+  });
+});
+
 describe("review round 2", () => {
   test("a body write that names no base is refused, for docs, plans and briefs", async () => {
     const w = await world();
@@ -245,6 +318,25 @@ describe("review round 2", () => {
     const w = await world();
     const r = await w.post("/cli/docs/update", { api_token: w.tokA, id: w.ids.doc, content: "", doc_type: "runbook" });
     expect(r.body.reason).toBe("no_base");
+  });
+});
+
+describe("live rig findings", () => {
+  test("a cursor that just moved in the editor counts as typing the server has not received yet", async () => {
+    const w = await world();
+    await w.openEditor("first line");
+    await w.human.mutation(api.docSync.updatePresence, { doc_id: String(w.ids.doc), cursor_pos: 12, anchor_pos: 12 });
+    const r = await w.post("/cli/docs/patch", { api_token: w.tokA, id: w.ids.doc, old_string: "first", new_string: "opening", wait_ms: 0 });
+    expect(r.body.reason).toBe("live_edit");
+    expect(r.body.error).toMatch(/Riley is editing it in the editor/);
+  });
+
+  test("a find-and-replace never answers 'not found' from text the editor has moved past", async () => {
+    const w = await world();
+    await w.openEditor("first line");
+    await w.human.mutation(api.docSync.submitSteps, { id: w.ids.doc, version: 1, clientId: "tab", steps: ["s"] });
+    const r = await w.post("/cli/docs/patch", { api_token: w.tokA, id: w.ids.doc, old_string: "a line Riley just typed", new_string: "x", wait_ms: 0 });
+    expect(r.body.reason).toBe("live_edit");
   });
 });
 

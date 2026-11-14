@@ -102,9 +102,16 @@ async function briefOf(ctx: Ctx, role: any): Promise<{ doc: any | null; content:
 export async function writeBrief(ctx: Ctx, role: any, content: string, now: number): Promise<void> {
   const doc = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
   if (doc) {
-    // Computed in this transaction from the brief as stored, so no base; a
-    // person's unsaved typing in the brief still refuses it.
-    await writeDocBody(ctx as any, doc, { content, title: doc.title }, { writer: { name: role.name } });
+    // Computed in this transaction from the brief as stored, so no base. A
+    // handoff must not fail because someone has the brief open mid-edit:
+    // then only the markdown is written, as before, and their editor's next
+    // save decides the collab text.
+    try {
+      await writeDocBody(ctx as any, doc, { content, title: doc.title }, { writer: { name: role.name } });
+    } catch (e: any) {
+      if (e?.data?.reason !== "live_edit") throw e;
+      await ctx.db.patch(role.brief_doc_id, { content, updated_at: now });
+    }
   } else {
     const id = await ctx.db.insert("docs", { user_id: role.host_user_id, team_id: role.team_id ?? undefined, title: `Brief: ${role.name}`, content, doc_type: "brief", source: "agent", created_at: now, updated_at: now });
     await ctx.db.patch(role._id, { brief_doc_id: id, updated_at: now });
