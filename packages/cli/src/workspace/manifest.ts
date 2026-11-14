@@ -16,6 +16,8 @@ import type {
   ShipSpec,
   SyncSpec,
   PortSpec,
+  RunJob,
+  RunSpec,
   ServiceSpec,
   SetupSpec,
   TeardownSpec,
@@ -89,11 +91,12 @@ function validate(raw: Record<string, unknown>, file?: string): WorkspaceManifes
   const sync = validateSync(raw["sync"], file);
   const ship = validateShip(raw["ship"], file);
   const vault = validateVault(raw["vault"], file);
+  const run = validateRun(raw["run"], file);
 
   // Reject unknown top-level keys so typos in manifest are surfaced loudly.
   const known = new Set([
     "setup", "ports", "services", "env", "teardown", "verify", "browser",
-    "backend", "detected", "host", "sync", "ship", "vault",
+    "backend", "detected", "host", "sync", "ship", "vault", "run",
   ]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) {
@@ -112,7 +115,7 @@ function validate(raw: Record<string, unknown>, file?: string): WorkspaceManifes
   }
   const backend = backendRaw ?? "local";
 
-  return { ...(ship ? { ship } : {}), ...(host ? { host } : {}), ...(sync ? { sync } : {}), ...(vault ? { vault } : {}), setup, ports, services, env, teardown, ...(verify ? { verify } : {}), browser, backend, detected };
+  return { ...(run ? { run } : {}), ...(ship ? { ship } : {}), ...(host ? { host } : {}), ...(sync ? { sync } : {}), ...(vault ? { vault } : {}), setup, ports, services, env, teardown, ...(verify ? { verify } : {}), browser, backend, detected };
 }
 
 /** An apt package or systemd unit name: nothing a shell would read as more than one word. */
@@ -187,6 +190,57 @@ function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
     return { name, when, run, stage };
   });
   return { mode, check, tests: (raw["tests"] as boolean | undefined) ?? true, level: (raw["level"] as boolean | undefined) ?? false, deploy };
+}
+
+/** A repo-relative path or glob: no absolute paths, no `..`, nothing under .git. */
+function validateRepoGlob(value: string, at: string, file?: string): void {
+  if (!value || value.startsWith("/") || /[\\\x00-\x1f\x7f]/.test(value) || value.split("/").some((part) => !part || part === "." || part === ".." || part.toLowerCase() === ".git")) {
+    throw new ManifestError(`'${at}' must be a path or glob inside the repo`, file, at);
+  }
+}
+
+function positiveNumber(raw: unknown, at: string, file?: string, max = Infinity): number | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0 || raw > max) throw new ManifestError(`'${at}' must be a positive number`, file, at);
+  return raw;
+}
+
+function validateRun(raw: unknown, file?: string): RunSpec | undefined {
+  if (raw === undefined) return undefined;
+  if (!isPlainObject(raw)) throw new ManifestError("'run' must be a table", file, "run");
+  const known = new Set(["install", "deps_key", "keep_deps", "max_upload_mb", "jobs"]);
+  for (const key of Object.keys(raw)) {
+    if (!known.has(key)) throw new ManifestError(`unknown key in [run]: '${key}'`, file, `run.${key}`);
+  }
+  const install = raw["install"] === undefined ? undefined : typeof raw["install"] === "string" ? [raw["install"]] : validateStringArray(raw["install"], "run.install", file);
+  const depsKey = raw["deps_key"] === undefined ? undefined : validateStringArray(raw["deps_key"], "run.deps_key", file);
+  depsKey?.forEach((g, i) => validateRepoGlob(g, `run.deps_key[${i}]`, file));
+  const keepDeps = positiveNumber(raw["keep_deps"], "run.keep_deps", file, 100) ?? 3;
+  if (!Number.isInteger(keepDeps)) throw new ManifestError("'run.keep_deps' must be a whole number", file, "run.keep_deps");
+  const maxUploadMb = positiveNumber(raw["max_upload_mb"], "run.max_upload_mb", file, 100_000) ?? 50;
+  const jobsRaw = raw["jobs"] ?? [];
+  if (!Array.isArray(jobsRaw)) throw new ManifestError("'run.jobs' must be an array of tables ([[run.jobs]])", file, "run.jobs");
+  const names = new Set<string>();
+  const jobs = jobsRaw.map((job, i): RunJob => {
+    const at = `run.jobs[${i}]`;
+    if (!isPlainObject(job)) throw new ManifestError(`'${at}' must be a table`, file, at);
+    for (const key of Object.keys(job)) {
+      if (!["name", "argv", "outputs", "memory_gb", "timeout_min", "keep_daemons"].includes(key)) throw new ManifestError(`unknown key in [[run.jobs]]: '${key}'`, file, `${at}.${key}`);
+    }
+    const argv = typeof job["argv"] === "string" ? job["argv"].trim().split(/\s+/).filter(Boolean) : validateStringArray(job["argv"], `${at}.argv`, file);
+    if (!argv.length || argv.some((w) => !w)) throw new ManifestError(`'${at}.argv' must name the command's leading words, like ["bun", "test"]`, file, `${at}.argv`);
+    const name = job["name"] ?? argv.join(" ");
+    if (typeof name !== "string" || !name.trim()) throw new ManifestError(`'${at}.name' must be a non-empty string`, file, `${at}.name`);
+    if (names.has(name)) throw new ManifestError(`'${at}.name' repeats job '${name}'`, file, `${at}.name`);
+    names.add(name);
+    const outputs = validateStringArray(job["outputs"], `${at}.outputs`, file);
+    outputs.forEach((g, j) => validateRepoGlob(g, `${at}.outputs[${j}]`, file));
+    const memoryGb = positiveNumber(job["memory_gb"], `${at}.memory_gb`, file, 1024);
+    const timeoutMin = positiveNumber(job["timeout_min"], `${at}.timeout_min`, file, 24 * 60);
+    if (job["keep_daemons"] !== undefined && typeof job["keep_daemons"] !== "boolean") throw new ManifestError(`'${at}.keep_daemons' must be true or false`, file, `${at}.keep_daemons`);
+    return { name, argv, outputs, ...(memoryGb !== undefined ? { memoryGb } : {}), ...(timeoutMin !== undefined ? { timeoutMin } : {}), ...(job["keep_daemons"] === true ? { keepDaemons: true } : {}) };
+  });
+  return { ...(install ? { install } : {}), ...(depsKey ? { depsKey } : {}), keepDeps, maxUploadMb, jobs };
 }
 
 /**
