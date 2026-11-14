@@ -15,10 +15,10 @@ function block(startMarker: string, endMarker: string) {
 const card = () => block("function SessionMessageBlock(", "// ── Team chat");
 
 // Naming the sender is not the same as showing where the message came from. The
-// card offers the sending turn as its own link, in words, rather than leaving it
-// to a reader who thinks to click a badge.
+// card offers the sending turn as its own arrow, named for screen readers and on
+// hover, rather than leaving it to a reader who thinks to click a badge.
 test("the card offers the sending message as a visible link", () => {
-  expect(card()).toContain("Open the sending message");
+  expect(card()).toContain('aria-label="Open the sending message"');
 });
 
 // Both shapes of sender resolve: a teammate id or subagent name arrives already

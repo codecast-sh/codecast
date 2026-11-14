@@ -770,7 +770,14 @@ function recipientStatusOf(row: Parameters<typeof agentStatusAt>[0] | undefined)
   return row ? agentStatusAt(row, Date.now()) : undefined;
 }
 
-export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendingReason, pendingScreen, pendingMessageId, recipientConversationId, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; pendingReason?: string; pendingScreen?: string; pendingMessageId?: string; recipientConversationId?: string; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string }) {
+// What a `cast send --fyi` / `--done` asks back, on the card's header.
+export const SESSION_INTENT_TAG: Record<string, { label: string; tip: string }> = {
+  inform: { label: "FYI", tip: "Sent for information: needs no reply" },
+  done: { label: "Done", tip: "Closes the exchange: not to be answered" },
+};
+
+export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendingReason, pendingScreen, pendingMessageId, recipientConversationId, variant = "session", color, summary, linkToConversationId, intent }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; pendingReason?: string; pendingScreen?: string; pendingMessageId?: string; recipientConversationId?: string; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string; intent?: string }) {
+  const intentTag = intent ? SESSION_INTENT_TAG[intent] : undefined;
   const relativeTime = useRelativeTime();
   // A queued card is never a dead end: the person can send it again, cancel
   // it, and, when the daemon held it for a dialog, open the terminal rows it
@@ -869,20 +876,23 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
         )}
         {/* The sender's identity says WHO wrote this; this says WHERE. Naming a
             session alone lands a reader at its tail, which is almost never the
-            moment the message was written — so the card offers the turn itself,
-            plainly, rather than hiding it behind the badge. */}
+            moment the message was written, so the card offers the turn itself
+            as its own arrow beside the badge rather than hiding it behind it. */}
         {senderRef && (
           <button
             onClick={() => { void jumpToSendingMessage(); }}
-            className={`inline-flex items-center gap-0.5 text-meta font-medium shrink-0 underline underline-offset-2 decoration-dotted hover:decoration-solid ${linkText}`}
-            title="Open the sender's session at the message that sent this"
+            className={`inline-flex items-center shrink-0 opacity-70 hover:opacity-100 ${linkText}`}
+            title="Open the sending message"
+            aria-label="Open the sending message"
           >
-            <ArrowUpRight className="w-3 h-3 modern:w-4 modern:h-4" />
-            <span className="modern:sr-only">Open the sending message</span>
+            <ArrowUpRight className="w-3.5 h-3.5 modern:w-4 modern:h-4" />
           </button>
         )}
         {isTeammate && summary && (
           <span data-cc-row-tag className="text-mark uppercase tracking-wider font-medium text-sol-text-dim/50 truncate">{summary}</span>
+        )}
+        {intentTag && (
+          <span data-cc-row-tag data-intent={intent} title={intentTag.tip} className={`text-mark uppercase tracking-wider font-medium rounded border px-1.5 py-0.5 shrink-0 ${intent === "done" ? "text-sol-green/80 border-sol-green/30 bg-sol-green/10" : "text-sol-text-dim/70 border-sol-border/60"}`}>{intentTag.label}</span>
         )}
         {queueLabel && (pendingScreen ? (
           <button
