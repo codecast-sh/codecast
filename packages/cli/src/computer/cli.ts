@@ -27,10 +27,15 @@ function run(verb: ComputerVerb, o: ComputerOptions, deps: ComputerCommandDeps):
 
 /** `--app` plus the window selector, on every verb that targets a window. */
 function targetFlags<T extends Command>(cmd: T): T {
-  return cmd
+  return onFlag(cmd)
     .requiredOption("--app <selector>", "bundle id (com.apple.TextEdit; on Linux the WM_CLASS, google-chrome), app name (TextEdit), or pid:1234")
     .option("--window-id <id>", "target this window id (from list-windows)")
     .option("--window-index <n>", "target this window index (from list-windows)");
+}
+
+/** Where the verb runs: this machine, or from a cloud host the person's laptop (computer/remoteClient.ts). */
+function onFlag<T extends Command>(cmd: T): T {
+  return cmd.option("--on <laptop>", "from a cloud host: drive your person's laptop (laptop, or its name or device id when several are linked) once they allowed this host");
 }
 
 /**
@@ -45,7 +50,9 @@ function targetFlags<T extends Command>(cmd: T): T {
 function observeFlags<T extends Command>(cmd: T, kind: "snapshot" | "action" = "snapshot"): T {
   const shot =
     kind === "snapshot"
-      ? cmd.option("--no-screenshot", "skip the capture (faster, and the tree is usually the answer)")
+      ? cmd
+          .option("--no-screenshot", "skip the capture (faster, and the tree is usually the answer)")
+          .option("--crop <x,y,w,h>", "zoom: only this window region (window points) at full pixel density, for small text")
       : cmd
           .option("--screenshot", "also capture the window after the action (off by default: the output says what changed)")
           .option("--no-screenshot", "the default for an action; kept so older scripts still parse")
@@ -111,7 +118,8 @@ shell history and every other user's \`ps\` output would keep them.
 Behaviour: do not push, submit a form, send a message, buy anything, delete
 data or change account settings unless the human asked for that action.
 
-Coordinates are window-local: action x/y = screenshot pixel / screenshot.scale.
+Coordinates are window-local: action x/y = screenshot pixel / screenshot.scale,
+plus the crop's x/y for a --crop picture.
 
 \`cast computer help <verb>\` prints that verb's flags from this binary, so the
 guidance in a CLAUDE.md never has to list them and can never describe an older
@@ -133,6 +141,7 @@ release than the one about to run.
     .command("capabilities")
     .description("What this helper supports on this machine (materializes it on first run)")
     .option("--json", "as JSON")
+    .option("--on <laptop>", "from a cloud host: drive your person's laptop (laptop, or its name or device id when several are linked) once they allowed this host")
     .action((o) => run("capabilities", o, deps));
 
   computer
@@ -154,6 +163,7 @@ release than the one about to run.
     .command("list-apps")
     .description("Running apps with a bundle id and a pid")
     .option("--json", "as JSON")
+    .option("--on <laptop>", "from a cloud host: drive your person's laptop (laptop, or its name or device id when several are linked) once they allowed this host")
     .action((o) => run("list-apps", o, deps));
 
   computer
@@ -161,6 +171,7 @@ release than the one about to run.
     .description("Visible windows of one app, with the id and index the other verbs target")
     .requiredOption("--app <selector>", "bundle id, app name, or pid:1234")
     .option("--json", "as JSON")
+    .option("--on <laptop>", "from a cloud host: drive your person's laptop (laptop, or its name or device id when several are linked) once they allowed this host")
     .action((o) => run("list-windows", o, deps));
 
   observeFlags(
@@ -290,11 +301,30 @@ Steps read the way the window does, and each takes the single command's flags:
   type <text>   paste <text>   press <key>   hotkey <chord>   (hotkey CmdOrCtrl+A)
   find <text>   (a bare click or action next acts on what it found)
   type, paste, find and wait take the rest of the step as the text: "paste Draft 2"
-  wait <text> [--gone] [--change] [--timeout s]   snapshot [--find t]   shot   sleep <ms>`,
+  wait <text> [--gone] [--change] [--timeout s]   snapshot [--find t]   shot [--crop x,y,w,h]   sleep <ms>`,
     )
     .action((steps: string[], o) =>
       import("./batch.js").then(({ runComputerDo }) => runComputerDo(steps, o, deps)),
     );
+
+  const remote = computer
+    .command("remote")
+    .description("On the laptop: which cloud hosts may drive this Mac's apps (`cast computer --on laptop` there); grant is your person's, revoke is anyone's")
+    .option("--json", "as JSON")
+    .action((o: { json?: boolean }) => import("./remoteCommands.js").then(({ listRemote }) => listRemote(o)));
+  remote
+    .command("grant")
+    .description("Let a cloud host's sessions drive this Mac's apps until revoked (the person's call; an agent asks with the card this prints)")
+    .requiredOption("--host <id>", "the cloud host (cast hosts ls)")
+    .option("--session <id...>", "only these sessions on that host")
+    .option("--for <duration>", "end on its own after this long: 30m, 8h, 2d")
+    .option("--apps <apps...>", "only these apps (bundle ids or names)")
+    .action((o: { host: string; session?: string[]; for?: string; apps?: string[] }) => import("./remoteCommands.js").then(({ grantRemote }) => grantRemote(o)));
+  remote
+    .command("revoke")
+    .description("Stop a cloud host driving this Mac's apps; its live sessions are cut off within seconds")
+    .requiredOption("--host <id>", "the cloud host")
+    .action((o: { host: string }) => import("./remoteCommands.js").then(({ revokeRemote }) => revokeRemote(o)));
 
   // Commander only wires its implicit `help [command]` when the parent has no
   // action handler, and this group needs one to make an invented verb fail

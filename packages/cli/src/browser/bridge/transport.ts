@@ -9,7 +9,7 @@ const SERVER_BUDGET = 256 * 1024 * 1024;
 type Driver = {
   readonly readyState: number;
   readonly bufferedAmount: number;
-  send(data: string | Buffer): number | void;
+  send(data: string | Buffer, binary: boolean): number | void;
   close(code?: number, reason?: string): void;
   terminate(): void;
 };
@@ -36,7 +36,8 @@ export class BridgeSocket extends EventEmitter {
   get readyState() { return this.stopped ? WebSocket.CLOSED : this.driver.readyState; }
   get bufferedAmount() { return this.driver.bufferedAmount; }
 
-  send(data: string | Buffer, _options?: { binary: boolean }): void {
+  /** Text unless `binary: true`: every CDP and extension frame is text, a Buffer included. */
+  send(data: string | Buffer, options?: { binary: boolean }): void {
     if (this.readyState !== WebSocket.OPEN) return;
     const bytes = typeof data === "string" ? Buffer.byteLength(data) : data.length;
     const buffered = this.owner.refresh(this);
@@ -45,7 +46,7 @@ export class BridgeSocket extends EventEmitter {
       return;
     }
     if (!this.owner.makeRoom(this, bytes)) return;
-    const sent = this.driver.send(data);
+    const sent = this.driver.send(data, options?.binary === true && typeof data !== "string");
     if (sent === 0) {
       this.owner.overflow(this, "transport refused a frame");
       return;
@@ -151,7 +152,7 @@ export async function serveBridge(opts: Options) {
           const socket = new BridgeSocket({
             get readyState() { return ws.readyState; },
             get bufferedAmount() { return ws.getBufferedAmount(); },
-            send(data) { return ws.sendText(typeof data === "string" ? data : data.toString("utf8")); },
+            send(data, binary) { return binary ? ws.sendBinary(data as Buffer) : ws.sendText(typeof data === "string" ? data : data.toString("utf8")); },
             close(code, reason) { ws.close(code, reason); },
             terminate() { ws.terminate(); },
           }, state);
@@ -193,7 +194,7 @@ export async function serveBridge(opts: Options) {
       const socket = new BridgeSocket({
         get readyState() { return ws.readyState; },
         get bufferedAmount() { return ws.bufferedAmount; },
-        send(data) { ws.send(data, { binary: false }, () => state.refresh(socket)); },
+        send(data, binary) { ws.send(data, { binary }, () => state.refresh(socket)); },
         close(code, reason) { ws.close(code, reason); },
         terminate() { ws.terminate(); },
       }, state);

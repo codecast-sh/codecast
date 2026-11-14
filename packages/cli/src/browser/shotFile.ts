@@ -10,10 +10,10 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { downscaleWithSips } from "../imageCommand.js";
-import { MAX_IMAGE_SIZE } from "../syncService.js";
+import { downscaleWithSips } from "../imageDownscale.js";
+import { MAX_IMAGE_SIZE } from "../imageDownscale.js";
 import { agentTempPath, secureTempFile, TEMP_FILE_MODE } from "../tempFiles.js";
-import { formatBytes } from "./profile.js";
+import { formatBytes } from "./formatBytes.js";
 import { fmt, icons } from "../colors.js";
 
 export interface WriteShotOptions {
@@ -72,6 +72,18 @@ export function imageSize(buf: Buffer): { width: number; height: number } | null
  */
 export function writeShotFile(buf: Buffer, out: string, o: WriteShotOptions): string | null {
   fs.mkdirSync(path.dirname(out), { recursive: true });
+  return publishShot(buf, out, o, true);
+}
+
+/**
+ * The same for a picture already on disk (a helper wrote it): rewritten only
+ * when it must shrink to reach the conversation.
+ */
+export function offerShotFile(file: string, o: WriteShotOptions): string | null {
+  return publishShot(fs.readFileSync(file), file, o, false);
+}
+
+function publishShot(buf: Buffer, out: string, o: WriteShotOptions, write: boolean): string | null {
   let bytes = buf;
   let shrunk = false;
   if (bytes.length > MAX_IMAGE_SIZE) {
@@ -81,10 +93,12 @@ export function writeShotFile(buf: Buffer, out: string, o: WriteShotOptions): st
       shrunk = true;
     }
   }
-  // Owner-only: a screenshot carries whatever the page was showing, and the
-  // mode argument only applies when the file is new, so chmod the rest.
-  fs.writeFileSync(out, bytes, { mode: TEMP_FILE_MODE });
-  secureTempFile(out);
+  if (write || shrunk) {
+    // Owner-only: a screenshot carries whatever the page was showing, and the
+    // mode argument only applies when the file is new, so chmod the rest.
+    fs.writeFileSync(out, bytes, { mode: TEMP_FILE_MODE });
+    secureTempFile(out);
+  }
   if (!o.quiet) {
     console.log(
       `${fmt.success(icons.check)} ${out} (${formatBytes(bytes.length)}${shrunk ? `, downscaled from ${formatBytes(buf.length)}` : ""})`,

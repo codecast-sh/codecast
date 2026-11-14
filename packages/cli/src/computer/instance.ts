@@ -21,9 +21,8 @@ import { atomicWriteFile } from "../atomicWrite.js";
 import { acquireFileLock } from "../lockFile.js";
 import { execFileSync } from "../proc.js";
 import { isPidAlive } from "../workspace/chrome.js";
-import { readState, writeState } from "../browser/instance.js";
 import { computerHome } from "./helperApp.js";
-import { COMPUTER_PROTOCOL_VERSION } from "./types.js";
+import { COMPUTER_PROTOCOL_VERSION, type ComputerProviderCapabilities } from "./types.js";
 
 export interface ComputerInstanceState {
   pid: number;
@@ -78,6 +77,37 @@ export function clearInstance(): void {
   }
 }
 
+/**
+ * The helper's handshake answer, kept beside its socket.
+ *
+ * Every `cast computer` command is a new process, and a handshake on each one
+ * was a round trip per agent step to learn what this same helper said the last
+ * time. The answer cannot change while the helper lives, and the socket
+ * directory is minted per launch and swept with it, so a file there is valid
+ * for exactly as long as the helper is. It carries no authority: the helper
+ * checks the token and the peer on every request, handshake or not.
+ */
+function capsPath(state: ComputerInstanceState): string {
+  return path.join(state.socketDir, "caps.json");
+}
+
+export function readHelperCaps(state: ComputerInstanceState): ComputerProviderCapabilities | null {
+  try {
+    const caps = JSON.parse(fs.readFileSync(capsPath(state), "utf-8")) as ComputerProviderCapabilities;
+    return typeof caps?.protocolVersion === "number" ? caps : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeHelperCaps(state: ComputerInstanceState, caps: ComputerProviderCapabilities): void {
+  try {
+    atomicWriteFile(capsPath(state), JSON.stringify(caps), { mode: 0o600 });
+  } catch {
+    /* the next command handshakes instead */
+  }
+}
+
 export type Liveness = "live" | "unresponsive" | "dead";
 
 /**
@@ -122,9 +152,14 @@ export async function probeLiveness(
  * daemon nothing — see InstanceState.computerRaisedAt. With no managed browser
  * there is no state to patch and nothing to bounce, so skipping is correct
  * rather than lossy.
+ *
+ * The browser's state module is loaded here, on a raise, rather than at the top
+ * of this file: it brings the whole Chrome launcher with it, and every
+ * `cast computer` command loads this file.
  */
-export function stampComputerRaise(): void {
+export async function stampComputerRaise(): Promise<void> {
   try {
+    const { readState, writeState } = await import("../browser/instance.js");
     const fresh = readState();
     if (fresh) writeState({ ...fresh, computerRaisedAt: Date.now() });
   } catch {

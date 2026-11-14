@@ -58,6 +58,7 @@ const ALLOWED: Record<string, string> = {
   "computer/client.ts": "stamps the deliberate raise before the request goes out, so the sentinel spares it",
   "computer/permissions.ts": "opens the settings window for --open-settings, stamped the same way",
   "computer/setup.ts": "opens each missing pane only past the confirm a human answered, or an explicit --yes",
+  "computer/remoteGrant.ts": "reads restoreWindow only to refuse it: a cloud host never raises a window on the laptop",
 };
 
 const SKIP_DIRS = new Set(["node_modules", "dist", "__fixtures__", "test-helpers"]);

@@ -274,7 +274,7 @@ export async function openPermissionSettings(permissionId?: ComputerPermissionId
   closeExistingSetupHelpers();
   const appPath = base.helperAppPath ?? helperAppPath();
   const args = permissionId ? ["--permission", permissionId] : ["--permissions"];
-  stampComputerRaise();
+  await stampComputerRaise();
   // LaunchServices, not a disclaimed spawn: this mode puts a window on screen,
   // and `open` is what gives a bundled app a normal activation. Synchronously,
   // because `open` exits as soon as it has handed the bundle over — and when

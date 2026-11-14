@@ -17,6 +17,7 @@
  *   FAKE_REQUIRE_HANDSHAKE   refuse every request until a handshake arrives,
  *                            the way the real helper refuses a peer it was
  *                            never told about (SocketHandshake.swift)
+ *   FAKE_HANDSHAKE_LOG       append one line per handshake answered
  */
 
 import * as fs from "node:fs";
@@ -146,6 +147,7 @@ function handle(socket: net.Socket, line: string): void {
   }
   if (request.method === "handshake") {
     handshaken = true;
+    if (process.env.FAKE_HANDSHAKE_LOG) fs.appendFileSync(process.env.FAKE_HANDSHAKE_LOG, `${process.pid}\n`);
     reply(socket, { id: request.id, ok: true, result: capabilities });
     return;
   }
