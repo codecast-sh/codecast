@@ -70,10 +70,40 @@ export interface ReplayMatch {
   /** A group id the recording caught. */
   group?: string;
   since?: number;
+  /** Started before this instant. */
+  until?: number;
+  /** A page it was on: a substring of the first URL or any visited path, or a glob with `*` (replayUrlMatches). */
+  url?: string;
+  /** One person by email (any case) or by the vendor's distinct id. */
+  user?: string;
+  /** Caught a console error or a failed request. */
+  failing?: boolean;
   browser?: string;
   os?: string;
   device?: string;
   country?: string;
+}
+
+/**
+ * Whether a recording was on a page: `pattern` against its first URL and
+ * every path it visited (shape.paths). Plain text matches anywhere, any case;
+ * with `*` it is a glob over the whole URL or path: a star on each side of /book/intro/ finds that page anywhere.
+ */
+export function replayUrlMatches(row: Pick<ReplayListRow, "url" | "shape">, pattern: string): boolean {
+  const p = pattern.trim().toLowerCase();
+  if (!p) return true;
+  const urls = [row.url, ...(row.shape?.paths ?? [])].filter((u): u is string => !!u).map((u) => u.toLowerCase());
+  if (!p.includes("*")) return urls.some((u) => u.includes(p));
+  const escaped = p.split("*").map((part) => part.replace(/[.+?^$()|[\]{}\\]/g, "\\$&"));
+  const re = new RegExp(`^${escaped.join(".*")}$`);
+  return urls.some((u) => re.test(u));
+}
+
+/** Whether a recording is of `who`: their email in any case, or the vendor's id for them. */
+export function replayUserMatches(user: ReplayListRow["user"], who: string): boolean {
+  const w = who.trim();
+  if (!w || !user) return false;
+  return user.email?.trim().toLowerCase() === w.toLowerCase() || user.id === w;
 }
 
 /** The environment filters, in the order the toolbar shows them. */
@@ -270,6 +300,10 @@ export function replayMatches(row: ReplayListRow, m: ReplayMatch): boolean {
   const exact = exactReplayId(m.q);
   if (exact) return row.short_id.toLowerCase() === exact;
   if (m.since !== undefined && row.started_at < m.since) return false;
+  if (m.until !== undefined && row.started_at >= m.until) return false;
+  if (m.url && !replayUrlMatches(row, m.url)) return false;
+  if (m.user && !replayUserMatches(row.user, m.user)) return false;
+  if (m.failing && !(row.counts.errors > 0 || row.counts.failed_requests > 0 || (row.facts?.console_errors ?? 0) > 0)) return false;
   if (m.person && personKey(row.user) !== m.person) return false;
   if (m.min_ms !== undefined || m.max_ms !== undefined) {
     // An unknown length matches no length filter: nothing says it is short or long.
