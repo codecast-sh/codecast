@@ -1,4 +1,6 @@
 import { permissionRemovalValidator } from "./lib/permissionRemoval";
+import { settlePermissionProposals, viewerSeesDetail } from "./teamSuggestions";
+import { redactSecrets } from "./redact";
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -152,6 +154,7 @@ export const cancelPermissionRequest = mutation({
       status: "cancelled",
       resolved_at: Date.now(),
     });
+    await settlePermissionProposals(ctx, permission, "cancelled");
     return true;
   },
 });
@@ -262,6 +265,7 @@ async function answerPermission(
     ...(answer.message ? { deny_message: answer.message } : {}),
     ...(answer.remember ? { remember: true } : {}),
   });
+  await settlePermissionProposals(ctx, p, answer.status);
   await recordAuthorityEvent(ctx, {
     kind: "permission_answered",
     actor_user_id: userId,
@@ -311,6 +315,7 @@ export const cancelPendingPermissions = mutation({
         status: "cancelled",
         resolved_at: Date.now(),
       });
+      await settlePermissionProposals(ctx, p, "cancelled");
       cancelled++;
     }
     return cancelled;
@@ -320,6 +325,10 @@ export const cancelPendingPermissions = mutation({
 export const getPendingPermissions = query({
   args: {
     conversation_id: v.id("conversations"),
+    // A client that draws proposals for non-runners (web teamProposals) asks
+    // for their rows; any other client keeps getting only the runner's, so
+    // it never draws an Approve its viewer cannot press.
+    as_proposer: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -332,9 +341,13 @@ export const getPendingPermissions = query({
       return [];
     }
 
-    if (conversation.user_id.toString() !== userId.toString()) {
-      return [];
-    }
+    // The runner answers. A team member or owner who can open the session
+    // sees the same rows so they can propose an answer the runner presses
+    // (teamSuggestions.proposePermissionFor). A share link's viewer does not.
+    const runner = conversation.user_id.toString() === userId.toString();
+    // A bot-run session's prompts are answered from that account's own view,
+    // which never shows a person's proposal, so nobody is offered one.
+    if (!runner && (!args.as_proposer || (await ctx.db.get(conversation.user_id))?.is_bot || !(await viewerSeesDetail(ctx, userId, conversation)))) return [];
 
     // Safety net: hide pending rows older than 2 hours. The daemon's local
     // handler cancels rows on its own timeout (~1h), but if the daemon was
@@ -351,9 +364,22 @@ export const getPendingPermissions = query({
       )
       .collect();
 
-    return permissions
+    const live = permissions
       .filter((p) => p.created_at > cutoff)
       .sort((a, b) => a.created_at - b.created_at);
+    if (runner) return live;
+    // What a proposer needs to pick an answer, with secrets in the command
+    // redacted the way the transcript's own tool inputs are.
+    return live.map((p) => ({
+      _id: p._id,
+      _creationTime: p._creationTime,
+      conversation_id: p.conversation_id,
+      session_id: p.session_id,
+      tool_name: p.tool_name,
+      arguments_preview: redactSecrets(p.arguments_preview),
+      status: p.status,
+      created_at: p.created_at,
+    }));
   },
 });
 
@@ -466,6 +492,7 @@ export const prunePendingPermissions = internalMutation({
       const isOldResolved = p.status !== "pending" && (p.resolved_at ?? 0) < resolvedCutoff;
       const isStalePending = p.status === "pending" && p.created_at < staleCutoff;
       if (isOldResolved || isStalePending) {
+        if (isStalePending) await settlePermissionProposals(ctx, p, "cancelled");
         await ctx.db.delete(p._id);
         deleted++;
       }
@@ -501,6 +528,7 @@ export const expireOfflinePermissions = internalMutation({
       }
       if (!lapsed) continue;
       await ctx.db.patch(p._id, { status: "cancelled", resolved_at: now });
+      await settlePermissionProposals(ctx, p, "cancelled");
       expired++;
     }
     return { expired, pending: pending.length };
