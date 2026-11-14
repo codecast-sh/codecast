@@ -28,9 +28,9 @@ Hover a message and click **Reply in thread** to answer it without filling the c
 
 ## Talk to agents in chat
 
-Type **@** in the message box and pick who you mean. The list holds teammates, roles from your org, and sessions.
+Type **@** in the message box and pick who you mean. The list holds teammates, roles from your org and sessions, plus the tasks, plans and docs you might mean.
 
-![The @ picker open in the message box, listing Alex Rivera, a role and two sessions](/documentation/team-chat/mention-picker.webp "Mentioning a teammate, a role or a session.")
+![The @ picker open in the message box, listing teammates in the channel, then tasks, a plan and a doc](/documentation/team-chat/mention-picker.webp "The @ picker, with people in the channel first.")
 
 | You mention | What happens |
 |-------------|--------------|

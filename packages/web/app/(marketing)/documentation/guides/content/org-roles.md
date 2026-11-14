@@ -2,8 +2,6 @@ A session is one conversation: it does a piece of work and ends. Work that lasts
 
 Work goes to the role, not to whichever session happens to be running. Assign a task to `@growth`, mention `@growth` in chat, or write on its page, and it reaches whoever holds the seat today. Restart or replace the session and the role keeps its area, its notes, its tasks and its place on the chart.
 
-![The Org page before anyone was hired, offering to hire the Head of People](/documentation/org-roles/hire-head-of-people.webp "A new org starts with one offer: hire the Head of People.")
-
 ## Open the Org page
 
 Click **Org** in the sidebar, under **Work**. It shows your people, roles and their sessions as one chart, with **People**, **Everything** and **Goals** views. **Needs you** narrows the chart to what is waiting on you, and **Hire** adds a role. A panel beside the chart holds the Head of People's conversation.

@@ -1,49 +1,45 @@
 # Screenshot capture guide
 
-The product screenshots come from the product film on the codecast.sh homepage. The film renders
-the real product views (inbox, conversation, task board, PR page and so on) inside a sandbox fed
-only by fixture data: a made-up "Acme" workspace with Alex Rivera, Maya Ortiz and Sarah Chen
-working on webhook retries. Nothing from a real workspace can reach the image, which matters
-because this repository is public. Never capture the live app for a public image: a real inbox
-shows other teams, private sessions and people's faces.
+The product screenshots in the README, the docs page and the guides come from the real app running in docs shots mode: a dev-only build that renders every route over a fixture "Acme" workspace (Alex Rivera, Maya Ortiz and Sarah Chen working on webhook retries) with no server, its own origin, and no outbox. Nothing from a real workspace can reach an image, which matters because this repository is public. Never capture the live app for a public image: a real inbox shows other teams, private sessions and people's faces.
 
-The fixtures live in `packages/web/app/(marketing)/heroFly/fixtures/` and the chapters that lay
-them out in `heroFly/chapters/`. Change a fixture there and recapture to change what a shot shows.
+The fixture world lives in `packages/web/lib/acmeWorld/`, shared with the phone's store shots mode. Change it there and recapture to change what a shot shows.
 
-## Current screenshots
-
-Each shot is 1920×1140, captured at 2x from the film's native 1280×760 stage and scaled down.
-
-| File | Film time (`hero-t`) | What it shows |
-|---|---|---|
-| `hero.png` | 40.7 | Inbox, an open conversation, and a decision card answered inline |
-| `inbox.png` | 6.6 | Sessions grouped by who acts next, next to the open conversation |
-| `conversation.png` | 11.5 | A conversation with an inline diff and a tool call |
-| `fanout.png` | 18 | Two workers (Cursor and Codex) spawned by one lead |
-| `mobile-chat.png` | 27 | A worker's question answered from the phone |
-| `session-messages.png` | 33.5 | Two sessions messaging each other |
-| `tasks.png` | 46.5 | A project's tasks with status, links to Linear, and activity |
-| `automations.png` | 53.3 | A workflow graph, triggers, and a run paused at a gate |
-| `team-chat.png` | 58.5 | Team channel with an agent replying, and a transcribed huddle |
-| `pull-request.png` | 65.5 | A PR page with its owning session, checks and review |
-| `pages.png` | 72.5 | A published report with viewer comments |
-| `command-palette.png` | 77.5 | Palette search across sessions and tasks |
-| `blame.png` | 80.7 | `cast blame` in the repo view: each line's session |
-| `logo.png` | | App mark used at the top of the README |
-
-## How to capture
+## How shots are made
 
 ```bash
-cast browser open "https://codecast.sh/?hero-t=6.6"
-bun packages/web/scripts/readme-shots.ts            # every shot in the table
-bun packages/web/scripts/readme-shots.ts inbox pr   # just these
+packages/web/scripts/docs-shots-dev.sh                    # shots server on :3290
+bun packages/web/scripts/docs-shots.ts                    # every shot
+bun packages/web/scripts/docs-shots.ts --batch <name>     # one batch
+bun packages/web/scripts/docs-shots.ts <name> <name>      # just these
 ```
 
-The script (`packages/web/scripts/readme-shots.ts`) freezes the film with `?hero-t=<seconds>`,
-dismisses the desktop handoff overlay, lifts the film out of the page column so it lays out at its
-native 1280×760 with no scale, captures it at 2x over the cast browser bridge (`cast browser shot`
-captures at 1x), and writes 1920×1140 PNGs here. To add a shot, add a name and a time to its
-`SHOTS` table: the chapter windows are `CHAPTERS` in `heroFly/world.ts`, each with a `hold`; pick a
-time inside one, after the chapter's motion settles.
+Each shot is one entry in `packages/web/docs-shots/batches/<batch>.ts`: the route, any setup, the crop, and the output path under `packages/web/public`. The script captures at 2x and composes the capture through `packages/web/docs-shots/frame.html` (window, element or phone frame, Modern palette plate) into a `.webp`. `packages/web/docs-shots/README.md` has the details. Phone shots come from the iOS simulator in store shots mode (`packages/mobile/store-shots/`) and go through the same frame with `--batch phone`.
 
-Look at every capture before keeping it. A time between holds catches windows mid-fade.
+## The README set
+
+The PNGs here are the README's copies of framed docs shots, scaled to 1920 wide (the phone shot to 900):
+
+| File | Source under `packages/web/public` |
+|---|---|
+| `hero.png` | `docs/app/inbox.webp` |
+| `inbox.png` | `documentation/shots/inbox.webp` |
+| `conversation.png` | `docs/app/diff.webp` |
+| `fanout.png` | `documentation/forks-and-spawn/workers.webp` |
+| `mobile-chat.png` | `docs/app/mobile-session.webp` |
+| `session-messages.png` | `documentation/shots/session-messages.webp` |
+| `tasks.png` | `docs/app/tasks.webp` |
+| `automations.png` | `docs/app/triggers.webp` |
+| `team-chat.png` | `docs/app/chat.webp` |
+| `pull-request.png` | `documentation/shots/pull-request.webp` |
+| `pages.png` | `documentation/publish/page.webp` |
+| `command-palette.png` | `docs/app/palette.webp` |
+| `blame.png` | `documentation/which-session-wrote-this-line/session-blame.webp` |
+| `logo.png` | App mark used at the top of the README |
+
+To refresh one after recapturing its source:
+
+```bash
+magick packages/web/public/docs/app/inbox.webp -resize '1920x>' -strip docs/screenshots/hero.png
+```
+
+Look at every capture before keeping it.

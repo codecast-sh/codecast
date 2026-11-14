@@ -25,8 +25,6 @@ Turning calls on also teaches the agents on every member's computers to read the
 
 Before anyone is rung, **Start a huddle** shows your camera, a meter for your microphone and the device pickers, so you know you can be heard. Pick **Team** (teammates see it and can join) or **Private** (only people you ring in), then **Start**. Started from a channel, the dialog says how many members it will buzz, in orange when the channel is large. Answering a ring goes through the same check, and **Check camera and mic first** in your Calls settings turns it off.
 
-![The Start a huddle dialog with a camera preview, the microphone meter, device pickers and the Team and Private toggle](/documentation/calls/start-huddle.webp "Checking camera and microphone before a huddle starts.")
-
 Once someone is in a room, its button turns into a chip with their faces. **Happening now** on the Calls page lists every huddle running in your team.
 
 ## In the call
@@ -41,7 +39,7 @@ Every huddle is transcribed unless someone in it turns that off. The **transcrib
 
 When the huddle ends, a digest lands where it was held: a message in the channel or DM with the title, the length, who spoke, a summary and the action items, with the transcript a click away. A very short huddle keeps its words instead of a summary.
 
-![The digest of a finished huddle in the #eng channel, with its title, length, speakers, summary and action items](/documentation/calls/digest.webp "The digest a huddle leaves in its channel.")
+![A huddle digest in #eng: a summary of what was agreed, with links to the transcript and the call page](/documentation/calls/digest.webp "The digest a huddle leaves in its channel.")
 
 The **Calls** page lists every huddle and voice note you can open, live ones first, with a filter for calls with video. Click one to open its page: the summary, the action items and the whole transcript, plus the video if it was recorded. **Record a voice note** at the top records just your microphone; a voice note starts private to you, and you can share it into a team from its page.
 
@@ -69,8 +67,6 @@ After a call, **Send to agent** on its page hands the whole call, or the lines y
 Press **Record this huddle** on the call, or on its card at the top of the window beside **Mute**. Everyone in the call is told, guests included, and a red **REC** mark shows wherever the call does. Stopping asks once more, because it stops for everyone, and recording stops by itself when the huddle ends.
 
 On the call's page the video plays beside the transcript and stays in step with it. Click a line to jump to that moment; the line being said lights up as it plays, and **Back to the moment** returns to it after you scroll away. You can copy a link to the exact second. A screen share is kept at full resolution, so code on a shared screen stays legible, and you can switch the view to it.
-
-![A recorded call's page with the video on the left and the transcript on the right, the current line highlighted](/documentation/calls/call-video.webp "A recorded huddle, with the video in step with the transcript.")
 
 Whoever can open the call's room can watch its video. Whoever pressed record, or a team admin, can delete the recording. A call can also get a public link; the video joins it only if someone turns on **Include the video recording**.
 

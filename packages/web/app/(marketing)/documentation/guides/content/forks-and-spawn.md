@@ -51,9 +51,9 @@ Opening a teammate's session works the same way. Its message box reads *Reply to
 
 ## Change the agent or the model
 
-The agent and model chip in a session's header offers three ways to move a conversation:
+The model chip in a session's message box opens a menu whose **Move this session** part offers three ways to move a conversation:
 
-![The session control menu with Switch agent, Fork as and Hand off to, each listing installed agents](/documentation/forks-and-spawn/move-menu.webp "Moving a session to another agent.")
+![The model chip menu: the model, effort, where the session runs, and Switch agent, Fork as and Hand off to under Move this session](/documentation/forks-and-spawn/move-menu.webp "Moving a session to another agent from the model chip.")
 
 | Choice | What it does |
 |--------|--------------|

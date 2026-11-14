@@ -325,8 +325,8 @@ export default function DocsPage() {
           <div className="mb-10">
             <h1 className="text-4xl font-bold font-mono mb-4" style={{ color: SOL.base03 }}>Documentation</h1>
             <p className="text-lg leading-relaxed" style={{ color: SOL.base00 }}>
-              Codecast is where you and your team run coding agents. Every Claude Code, Codex, Cursor, Gemini
-              and OpenCode session lands in one inbox you can watch, answer and search, in the browser, on the
+              Codecast is where you and your team run coding agents. Every Claude Code, Codex, Cursor, Gemini,
+              OpenCode, pi and Grok session lands in one inbox you can watch, answer and search, in the browser, on the
               Mac and on your phone. This page walks through the app one screen at a time.
             </p>
           </div>
