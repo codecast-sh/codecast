@@ -77,6 +77,16 @@ kind = "cohesion"
 fingerprint = "lesson:<task>:<note hash> (a card's Revise or Drop note), lesson:<rule slug> (cast-lessons)"
 runs = "convex lineLearn on a card answered Revise or Drop; the cast-lessons skill, weekly"
 
+# What people hit in the app (Ashot, 2026-11-14): the replay-review judge
+# watches each used recording and its findings open problems, the way errors do.
+[[line.finders]]
+id = "replay-review"
+source = "judge:replay-review"
+kind = ["ux", "bug", "cohesion"]
+fingerprint = "evidence:replay/<recording>:@replay-review:<hash>"
+runs = "codecast judge replay-review on codecast-web replay moments (30s+, 3+ clicks), .codecast/moments/replay.ts"
+opens_causes = true
+
 # Not built: Sentry (codecast-a2, projects javascript-react and react-native).
 # No Sentry API token exists for this repo or its hosts, only DSNs, so the
 # one way to read issues is a signed-in browser tab, and a finder scraping a

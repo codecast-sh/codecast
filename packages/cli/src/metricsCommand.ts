@@ -63,7 +63,6 @@ export function metricAddBody(name: string, o: MetricAddOptions): Record<string,
   const raw = o.above ?? o.below;
   const threshold = raw === undefined ? undefined : Number(raw);
   if (raw !== undefined && (raw.trim() === "" || !Number.isFinite(threshold))) throw new Error(`"${raw}" is not a number`);
-  if (!o.reader && raw === undefined) throw new Error("Pass --above <n> or --below <n>: a PostHog watch alerts on a line");
   if (o.args) {
     try {
       const parsed = JSON.parse(o.args);

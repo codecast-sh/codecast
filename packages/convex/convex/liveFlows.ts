@@ -488,6 +488,10 @@ export async function createLiveFlowCore(ctx: Ctx, args: { team_id: Id<"teams">;
   return { id: String(id), on: linesOn.length > 0, carried_lines_on: linesOn };
 }
 
+/** A library flow as the web's start and move send it: the store's action carries the flow it paints ({ id, slug, label }), so the server reads its id. */
+export type LibraryFlowRef = string | { id: string };
+export const libraryFlowId = (flow: LibraryFlowRef): string => (typeof flow === "string" ? flow : flow?.id ?? "");
+
 /** The web's start (the Flows stage of a team with none): a team admin makes one of the team's library flows its live
  *  flow, on the same terms as createLiveFlowCore. Dispatch runs it as the signed-in person only. */
 export async function startLiveFlowCore(ctx: Ctx, userId: Id<"users">, args: { team_id: string; workflow_id: string; client_key?: string }) {

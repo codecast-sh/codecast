@@ -4,11 +4,10 @@ import { SCOPE, useCliHarness } from "./externalDataCli.testHarness.js";
 import { formatHistoryLine, formatQueryResult, formatWatchLine, metricAddBody, type WatchRow } from "./metricsCommand.js";
 
 describe("metricAddBody", () => {
-  test("needs a source, one query and one direction", () => {
+  test("needs a source, one query and at most one direction", () => {
     expect(() => metricAddBody("x", { hogql: "q", above: "1" })).toThrow("--source");
     expect(() => metricAddBody("x", { source: "ph", above: "1" })).toThrow("--hogql");
     expect(() => metricAddBody("x", { source: "ph", hogql: "q", insight: "4", above: "1" })).toThrow("exactly one of --hogql");
-    expect(() => metricAddBody("x", { source: "ph", hogql: "q" })).toThrow("--above");
     expect(() => metricAddBody("x", { source: "ph", hogql: "q", above: "1", below: "2" })).toThrow("--above");
     expect(() => metricAddBody("x", { source: "ph", hogql: "q", below: "lots" })).toThrow("not a number");
   });
@@ -92,12 +91,12 @@ describe("formatHistoryLine", () => {
 });
 
 describe("a reader watch, and a series with no line", () => {
-  test("--reader with --args makes a reader query; no --above/--below makes a plain series", () => {
+  test("--reader with --args makes a reader query; no --above/--below makes a plain series, for any source", () => {
     expect(metricAddBody("Dollars per intro", { source: "union", reader: "metrics.read", args: '{"key":"dollars_per_intro"}', unit: "$", every: "1h" })).toEqual({
       source: "union", name: "Dollars per intro", query_kind: "reader", query: 'metrics.read {"key":"dollars_per_intro"}', unit: "$", interval_ms: 3600_000,
     });
     expect(metricAddBody("Bounces", { source: "union", reader: "metrics.read", args: '{"key":"b"}', above: "5" })).toMatchObject({ threshold: 5, direction: "above" });
-    expect(() => metricAddBody("x", { source: "p", hogql: "select 1" })).toThrow("a PostHog watch alerts on a line");
+    expect(metricAddBody("Weekly actives", { source: "p", hogql: "select 1" })).toEqual({ source: "p", name: "Weekly actives", query_kind: "hogql", query: "select 1" });
     expect(() => metricAddBody("x", { source: "union", reader: "metrics.read", args: "[1]" })).toThrow("--args is a JSON object");
     expect(() => metricAddBody("x", { source: "union", hogql: "select 1", args: "{}" , above: "1" })).toThrow("--args goes with --reader");
   });
