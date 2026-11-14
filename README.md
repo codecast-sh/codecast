@@ -30,7 +30,7 @@ It works with the agents you already run. A background daemon watches the histor
 
 One person can run dozens of agents and still be in command of them. An inbox sorts every session by who acts next. A decision queue collects the choices only a person can make. A permanent record lets you search every conversation, ask questions across it, and trace any line of code back to the session that wrote it with `cast blame`.
 
-![Codecast workspace: the inbox grouped by who acts next, an agent's conversation, and a decision the agent queued answered inline](docs/screenshots/hero.png)
+![Codecast in its default look: the inbox grouped by who acts next, beside a running conversation with a permission prompt](docs/screenshots/hero.png)
 
 ## Install
 
@@ -69,7 +69,7 @@ The installer ships a prebuilt binary, so no runtime is required. The daemon run
 
 Codecast watches your local agent history files and syncs conversations in real time. The inbox is a triage queue: sessions are grouped by who acts next (needs input, working, idle, done) so the ones waiting on you are at the top. Pin important sessions, stash noisy ones, file them under labels, kill what's done.
 
-![Inbox: sessions grouped into needs input, done and working, with agent, project and status on each, beside the open conversation](docs/screenshots/inbox.png)
+![Inbox: sessions grouped by who acts next, beside the open conversation](docs/screenshots/inbox.png)
 
 - **Every agent.** Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok and Muse Spark, plus cloud agents from Cursor and OpenAI. See [Supported Agents](#supported-agents) for what each one can do.
 - **Every machine.** Laptops and cloud hosts in one list. `cast migrate` moves live sessions between them without losing a message.
@@ -82,7 +82,7 @@ Codecast watches your local agent history files and syncs conversations in real 
 
 Every conversation renders with syntax-highlighted code, collapsible tool calls, and per-edit diffs. Messages you send from the web, desktop or phone are injected into the live terminal session, with delivery verification and retry.
 
-![Conversation: an agent's reply with an inline diff of the file it edited and the test run that followed](docs/screenshots/conversation.png)
+![A conversation with the diff panel open: the files this session changed and one file's edits](docs/screenshots/conversation.png)
 
 - **Steer from anywhere.** Send messages, queue follow-ups, and approve or deny permission prompts with `Y`/`N`.
 - **Inline review.** Quote selected text into your reply, or step through the replies and comment on them (`R`), then send the comments as one review.
@@ -101,13 +101,13 @@ Your agents' history does not evaporate when the terminal closes. Every conversa
 - **Handoffs.** `cast handoff` writes a context transfer so a fresh session picks up where the last one stopped.
 - **Agent memory.** When an agent runs `cast search` or `cast ask`, it queries your whole team's history.
 
-![cast blame in the repo view: each line of retry.ts is attributed to the session that wrote it](docs/screenshots/blame.png)
+![Session blame in the repo view: each line of the webhook code is attributed to the session that wrote it](docs/screenshots/blame.png)
 
 ### Chat
 
 Team channels and threads, shared by people and agents. Agents post the facts other people need (a decision, a release, a blocker) and answer in the thread when you mention them.
 
-![Team channel where an agent session answers a question, next to a live transcribed huddle](docs/screenshots/team-chat.png)
+![A team channel where people and agent sessions both post](docs/screenshots/team-chat.png)
 
 - **Mentions.** `@name` notifies a teammate. Mentioning the workspace's agent or a session starts a turn that replies in the thread.
 - **Live references.** Task, plan, session and doc ids render as pills with their title and current state.
@@ -124,7 +124,7 @@ Team huddles with exact speaker attribution in the transcript. When a call ends 
 
 Tasks are assigned to agents the same way they are assigned to people. An agent claims a task, reports progress on it, attaches evidence, and marks it done with what it verified.
 
-![A project's tasks with status, assignees and linked Linear issues, its progress, and the activity behind it](docs/screenshots/tasks.png)
+![The task board: tasks held by people and agents, with status, priority and age](docs/screenshots/tasks.png)
 
 - **Start an agent from a task.** Assign a task and a session launches with the task bound.
 - **Subtasks and projects.** Break a task into steps, group work into projects, and view it as a list or a kanban board.
@@ -136,7 +136,7 @@ Tasks are assigned to agents the same way they are assigned to people. An agent 
 
 A pull request carries its checks, reviews, threads, and the session that owns it. That session wakes when a review lands or a check fails, makes the fix, pushes, and answers the thread.
 
-![Pull request page with its owning session, linked sessions and task, checks, review and timeline](docs/screenshots/pull-request.png)
+![Pull request page with its owning session, linked task, checks and review](docs/screenshots/pull-request.png)
 
 - **Review as a batch.** Hold a note on each line, then send them as one review with one verdict.
 - **Linked work.** Every pull request and commit links to the sessions that wrote it.
@@ -150,7 +150,7 @@ Agents queue the choices only a person can make (a schema, a spend, a tradeoff o
 
 Work that runs without you.
 
-![A workflow graph looping implement and verify, the triggers that run on a schedule or an event, and a run paused at its review gate](docs/screenshots/automations.png)
+![Triggers: a 24-hour rail of past runs and upcoming fires above the scheduled and event triggers](docs/screenshots/automations.png)
 
 - **Triggers.** Run an agent after a delay (`--in 30m`), on a schedule (`--every 4h`), or on an event (`--on pr_comment`, `--on issue_opened`). A `--precheck` command skips runs when nothing changed, and `--safe` makes a run read-only.
 - **Workflows.** Execution graphs with agent steps, shell commands, conditions, loops and human approval gates, bound to a task or plan and shown live.
@@ -168,7 +168,7 @@ Standing agents that each look after an area of the work and report up a line, w
 
 ### Fleets and cloud hosts
 
-![One lead session's two workers, on Cursor and Codex, each reading the code for its half of the change](docs/screenshots/fanout.png)
+![One lead session's workers, each reporting back on its half of the change](docs/screenshots/fanout.png)
 
 - **Spawn and fork.** `cast spawn` starts a fresh session on any agent, `cast fork` branches the current conversation in several directions at once, and `cast spawn --subagent` runs workers that report back to the session that started them.
 - **Any agent, mid-flight.** `cast switch --agent codex` continues the same session under a different agent or model.
@@ -186,7 +186,7 @@ Standing agents that each look after an area of the work and report up a line, w
 
 A command palette (`Cmd+K`) for everything: sessions, tasks, plans, docs, and actions. A search page covers every session with keyword and semantic modes.
 
-![Command palette searching sessions and tasks for "webhook retry"](docs/screenshots/command-palette.png)
+![Command palette searching sessions for "retry"](docs/screenshots/command-palette.png)
 
 More than 140 context-aware shortcuts keep the whole app usable from the keyboard (`?` shows them all).
 
@@ -197,7 +197,7 @@ More than 140 context-aware shortcuts keep the whole app usable from the keyboar
 - **Workspaces.** Switch between personal and team workspaces, each with its own tasks, plans and docs.
 - **Message any session.** `cast send <id> "text"` reaches your sessions or a teammate's, and replies arrive attributed to the sender.
 
-![Two sessions messaging each other: one hands over the API's route and schema, the other reports its half done](docs/screenshots/session-messages.png)
+![Two sessions messaging each other about the change they are splitting](docs/screenshots/session-messages.png)
 
 ### Desktop, mobile and editor
 
@@ -205,7 +205,7 @@ More than 140 context-aware shortcuts keep the whole app usable from the keyboar
 - **Mobile.** An iOS app with the same inbox, push notifications when an agent needs you, and approve or deny for permission prompts.
 - **Editor.** A VS Code and Cursor extension shows `cast blame` in the gutter and opens the conversation behind a line. Vim works through fugitive.
 
-![A worker's question answered from the phone, and the same thread on the desktop](docs/screenshots/mobile-chat.png)
+<img src="docs/screenshots/mobile-chat.png" alt="A worker's session on the phone, where you can read and answer it" width="320" />
 
 ## CLI
 
