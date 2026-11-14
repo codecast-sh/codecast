@@ -265,6 +265,20 @@ describe("live artifacts", () => {
     await expect(as(rosa).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!A1", "z")], claim: { scope: "tab:t1", write: "w4", base: 999, first: false } })).rejects.toThrow(/stopped partway/);
   });
 
+  test("a typed version name never replaces a restore's record", async () => {
+    const { t, doc, rosa, as } = await setup();
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", text: "a" } }] });
+    const head = (await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 }))!.head;
+    await t.run((ctx: any) => ctx.db.insert("live_versions", { doc_id: doc, rev: head, reason: "restore", label: 'Restored "v1"', by: `u:${rosa}`, by_name: "Rosa", at: 1 }));
+    await as(rosa).mutation(api.liveArtifacts.checkpoint, { doc_id: doc, label: "before anchors" });
+    const labels = (await as(rosa).query(api.liveArtifacts.versions, { doc_id: doc }))!.versions.filter((v: any) => v.rev === head).map((v: any) => v.label).sort();
+    expect(labels).toEqual(['Restored "v1"', "before anchors"]);
+    // Naming it again with no edits renames the caller's own version, not the restore.
+    await as(rosa).mutation(api.liveArtifacts.checkpoint, { doc_id: doc, label: "before anchors 2" });
+    const again = (await as(rosa).query(api.liveArtifacts.versions, { doc_id: doc }))!.versions.filter((v: any) => v.rev === head).map((v: any) => v.label).sort();
+    expect(again).toEqual(['Restored "v1"', "before anchors 2"]);
+  });
+
   test("a batch delivered again lands once, so a replayed put never takes back a later edit", async () => {
     const { t, doc, rosa, as } = await setup();
     const seed = { doc_id: doc, client_id: "seed-1", ops: [{ k: "el_t", put: { kind: "sticky", text: "" } }] };

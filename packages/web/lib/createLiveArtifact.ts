@@ -28,9 +28,14 @@ export function createLiveArtifact(type: ArtifactType, stamp: WorkspaceStamp, na
   // The press shows at once; the artifact opens when the server has made it.
   const toastId = toast.loading(`Creating ${title}…`);
   const run = (async () => {
-    const res = await (useInboxStore.getState() as any).createDoc({ title, content: "", doc_type: type, ...stamp }, { version: 1, kind: "navigate" });
+    // No "navigate" receipt continuation: it would move the view whenever the server answered, even
+    // after the person moved on. The row the receipt carries seeds the store here instead, so the
+    // artifact's page paints at once when this decides to open it.
+    const store = useInboxStore.getState() as any;
+    const res = await store.createDoc({ title, content: "", doc_type: type, ...stamp });
     const id: string | undefined = res?.row?._id ?? res?.id ?? res?._id;
     if (!id) throw new Error("no id");
+    if (res?.row && !store.docs?.[id]) store.syncRecord("docs", id, res.row);
     const ops = start?.ops ?? spec.seed?.() ?? [];
     if (ops.length) sendLiveOps(id, "main", ops);
     const href = `/docs/${id}`;

@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   applyOp,
+  artifactSpec,
   chunkOps,
   coalesceOps,
   fromElement,
@@ -87,7 +88,12 @@ const UNDO_MAX = 200;
 // Later writes wait here, painted from the queued overlay, and go out
 // coalesced, in order, when the send ahead of them resolves.
 /** A whole-range rewrite's claim, as a caller names it (lib/liveArtifactWrite claimsAfter on the server). */
-export type LiveClaim = { scope: string; base?: number };
+export type LiveClaim = { scope: string; base?: number; /** An undo or redo: a refusal says it couldn't take the edit back. */ undo?: boolean };
+// Write ids of claimed undos and redos in flight, so a refusal is worded for an undo.
+const undoWrites = new Set<string>();
+// The "Not saved" state comes down once the rows are back and the person has had time to read why.
+const REFUSAL_SHOWN_MS = 8000;
+const refusalTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** How a whole write ended: landed (at `rev`), parked for a later send, or refused by the server. */
 export type LiveWriteOutcome = { outcome: "sent"; rev: number } | { outcome: "parked" } | { outcome: "refused" };
 type Queued = { layer: LiveLayer; ops: ArtifactOp[]; claim?: LiveClaim; batchClaims?: LiveBatchClaim[]; done?: (o: LiveWriteOutcome) => void };
@@ -230,12 +236,13 @@ function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[], claim?:
   const batches = chunkOps(coalesceOps(ops));
   // Every batch of a claimed rewrite carries the same write id; the last lets the scope go.
   const write = claim ? nanoid(10) : "";
+  if (claim?.undo) undoWrites.add(write);
   const claimFor = (i: number): LiveBatchClaim | undefined => (claim ? { scope: claim.scope, write, base: claim.base ?? 0, first: i === 0, last: i === batches.length - 1 } : undefined);
   const [first, ...rest] = batches;
   const firstSend = sendBatch(docId, layer, first, false, claimFor(0));
   const sends: Promise<LiveWriteOutcome>[] = [firstSend];
   let reported = false;
-  const report = (o: LiveWriteOutcome) => { if (!reported) { reported = true; done?.(o); } };
+  const report = (o: LiveWriteOutcome) => { if (!reported) { reported = true; undoWrites.delete(write); done?.(o); } };
   const finish = () => {
     // The write's outcome: refused if any batch was, parked if any waits, else landed at its last revision.
     void Promise.all(sends).then((all) => {
@@ -318,9 +325,20 @@ function sendBatch(docId: string, layer: LiveLayer, batch: ArtifactOp[], held = 
       // The store already put the rows back (a held batch has no locks to undo: the server's rows go back over it);
       // say so once, and keep it on the save state.
       if (held) restoreServerRows(rowIds);
-      const why = refusalText(e);
-      if (refused.get(docId) !== why) toast.error(`Not saved: ${why}`);
+      const reason = refusalText(e);
+      const why = claim && undoWrites.has(claim.write)
+        ? /changed since|rewriting/.test(reason) ? "Can't undo: someone changed this range since" : `Can't undo: ${reason}`
+        : `Not saved: ${reason}`;
+      if (refused.get(docId) !== why) toast.error(why);
+      // A refused undo left nothing unsaved (the edit it would have taken back stands): the toast says it, the
+      // save state stays as it was.
+      if (claim && undoWrites.has(claim.write)) return { outcome: "refused" };
       refused.set(docId, why);
+      clearTimeout(refusalTimers.get(docId));
+      refusalTimers.set(docId, setTimeout(() => {
+        refusalTimers.delete(docId);
+        if (refused.get(docId) === why) { refused.delete(docId); for (const fn of unsettledListeners) fn(); }
+      }, REFUSAL_SHOWN_MS));
       return { outcome: "refused" };
     })
     .finally(() => countUnsettled(docId, -1));
@@ -400,7 +418,7 @@ export function sendLiveOps(docId: string, layer: LiveLayer, ops: ArtifactOp[], 
   if (!q) sendQueues.set(docId, (q = { inflight: false, pending: [], staged: [] }));
   // A rewrite is computed from what this tab has read: its base is the revision the tab holds the whole
   // doc through (never the head a first page announces before the rest arrives), unless the caller knows better.
-  const claim = opts?.claim ? { scope: opts.claim.scope, base: opts.claim.base ?? liveReadThrough(docId) } : undefined;
+  const claim = opts?.claim ? { ...opts.claim, base: opts.claim.base ?? liveReadThrough(docId) } : undefined;
   if (opts?.claim && !claimReady(docId, opts.claim)) return;
   if (!q.inflight) {
     dispatchNow(docId, layer, ops, claim, opts?.done);
@@ -513,7 +531,7 @@ export function useLiveArtifact(docId: string): LiveHandle {
 
   /** Send a taking-back entry: a claimed one claims its scope from the revision its write landed at. */
   const sendEntry = useCallback((entry: UndoEntry, follow?: (o: LiveWriteOutcome) => void) => {
-    if (entry.scope) sendLiveOps(docId, entry.layer, entry.ops, { claim: { scope: entry.scope, base: entry.landed ?? 0 }, done: follow });
+    if (entry.scope) sendLiveOps(docId, entry.layer, entry.ops, { claim: { scope: entry.scope, base: entry.landed ?? 0, undo: true }, done: follow });
     else send(entry.layer, entry.ops);
   }, [docId, send]);
 
@@ -573,11 +591,29 @@ export function useLiveArtifact(docId: string): LiveHandle {
     return true;
   };
 
+  // This tab has already read someone else's write into the range since the write landed: taking it back would
+  // be refused by the server, and painting it meanwhile would show rows no server holds. Said here, painted never.
+  const changedSince = (entry: UndoEntry) => {
+    if (!entry.scope || entry.landed === undefined) return false;
+    const type = (useInboxStore.getState() as any).docs?.[docId]?.doc_type;
+    const scopeOf = type ? artifactSpec(type).claimScope : undefined;
+    if (!scopeOf) return false;
+    const mine = me?._id ? `u:${me._id}` : "";
+    for (const row of docRows(docId).main.values()) {
+      if (Number(row.rev) > entry.landed && row.by && row.by !== mine && scopeOf(row.key, row) === entry.scope) {
+        toast.error("Can't undo: someone changed this range since");
+        return true;
+      }
+    }
+    return false;
+  };
+
   const undo = useCallback(() => {
     flushGesture(true);
     const entry = undoRef.current[undoRef.current.length - 1];
     if (!entry || stillSaving(entry)) return;
     undoRef.current.pop();
+    if (changedSince(entry)) { setStackTick((t) => t + 1); return; }
     const back: UndoEntry = { layer: entry.layer, ops: invertOps(stateOf, entry.ops), ...(entry.scope ? { scope: entry.scope } : {}) };
     redoRef.current.push(back);
     sendEntry(entry, followEntry(redoRef, back));
@@ -588,6 +624,7 @@ export function useLiveArtifact(docId: string): LiveHandle {
     const entry = redoRef.current[redoRef.current.length - 1];
     if (!entry || stillSaving(entry)) return;
     redoRef.current.pop();
+    if (changedSince(entry)) { setStackTick((t) => t + 1); return; }
     const back: UndoEntry = { layer: entry.layer, ops: invertOps(stateOf, entry.ops), ...(entry.scope ? { scope: entry.scope } : {}) };
     undoRef.current.push(back);
     sendEntry(entry, followEntry(undoRef, back));

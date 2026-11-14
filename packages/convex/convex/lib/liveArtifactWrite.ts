@@ -90,13 +90,17 @@ export async function insertVersion(
   /** A name the person typed: it wins over whatever label the version at this point has. */
   named = false,
 ): Promise<Id<"live_versions"> | null> {
-  const existing = await ctx.db
+  const atRev = await ctx.db
     .query("live_versions")
     .withIndex("by_doc_rev", (q: any) => q.eq("doc_id", docId).eq("rev", rev))
-    .first();
+    .take(10);
+  // A typed name renames an autosave at this point, or the caller's own version (saving twice with no edits
+  // between): never a restore, a saved draft or someone else's named version, which keep their record and
+  // get the name beside them as a version of their own.
+  const mine = atRev.find((v: any) => v.reason === "auto" || (v.reason === "manual" && v.by === caller.actor));
+  const existing = named ? mine : atRev[0];
   if (existing) {
-    // A person naming the current version names the one already at this point, whatever made it.
-    if (named || (reason !== "auto" && existing.reason === "auto")) await ctx.db.patch(existing._id, { reason: existing.reason === "auto" ? reason : existing.reason, label });
+    if (named || (reason !== "auto" && existing.reason === "auto")) await ctx.db.patch(existing._id, { reason: existing.reason === "auto" ? reason : existing.reason, label, ...(existing.reason === "auto" ? { by: caller.actor, by_name: caller.name } : {}) });
     return existing._id;
   }
   const id = await ctx.db.insert("live_versions", { doc_id: docId, rev, reason, label, by: caller.actor, by_name: caller.name, at: Date.now() });
@@ -185,7 +189,8 @@ function claimsAfter(
       if (last && last.rev > claim.base && last.actor !== caller.actor) throw new ConvexError("This range changed since you started; do it again");
     }
     if (claim.last) delete claims[claim.scope];
-    else claims[claim.scope] = { write: claim.write, actor: caller.actor, name: caller.name, at: now };
+    // An agent is named as one: its session title alone ("Live artifacts") reads as a person or a thing.
+    else claims[claim.scope] = { write: claim.write, actor: caller.actor, name: caller.kind === "agent" ? `An agent (${caller.name})` : caller.name, at: now };
     scopes.add(claim.scope);
   } else {
     for (const scope of scopes) {

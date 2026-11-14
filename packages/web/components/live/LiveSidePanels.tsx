@@ -80,7 +80,9 @@ export function CommentsPanel({
   const open = threads.filter((t) => !t.root.resolved);
   const resolved = threads.filter((t) => t.root.resolved);
   // A thread whose element is gone is shown, but no longer counts as open.
-  const openCount = open.filter((t) => anchorOf(t.root) !== null).length;
+  // The tab counts every open thread it lists, those whose element was deleted included (they sit under
+  // their own heading below), as the CLI's "N open comments" does.
+  const openCount = open.length;
   const shown = tab === "open" ? open : resolved;
   // Once words are in the new-comment box, it stays on the element it was started for: clicking elsewhere
   // moves the selection, not the comment. Posting or emptying the box lets go.

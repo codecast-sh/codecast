@@ -121,6 +121,9 @@ export function useUndoWalk(): void {
     // The undo card's own root owns its keys, and the step is the card's own
     // (the desktop Edit menu hands its ⌘Z back here while the card has focus).
     if (source === "key" && focus && !isTextEditingControl(focus) && keysOwnedElsewhere(focus, focus.closest(CARD_SELECTOR))) return false;
+    // An open board, sheet or dashboard owns ⌘Z for its own edits (its undo stack, components/live), wherever
+    // focus sits in it (a sheet keeps focus in a hidden cell editor): the chord is never the app's while one is up.
+    if (source === "key" && artifactOwnsKeys(focus)) return false;
     // A gesture still waiting on its exit animation is the newest entry: it
     // records now, so the field's judgement and the landing below see it.
     commitPendingUndoGestures();
@@ -189,6 +192,11 @@ export function useUndoWalk(): void {
     if (!isElectron()) return;
     return bridge("onAppEditCommand")?.((dir) => {
       const focus = document.activeElement;
+      // An open artifact's undo listens for the key itself: hand it the press the menu took.
+      if (artifactOwnsKeys(focus)) {
+        (focus ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", metaKey: true, shiftKey: dir === "redo", bubbles: true, cancelable: true }));
+        return;
+      }
       const action = dir === "undo" ? "ui.undo" : "ui.redo";
       if (getShortcutsForAction(action).some((d) => shortcutAllowedAt(focus, d, KEY_OWNERSHIP))) step(dir, "key");
     });
@@ -276,4 +284,15 @@ export function useUndoWalk(): void {
     if (phase !== "peek" && phase !== "fading" && phase !== "hovered") return;
     if ((e.target as Element | null)?.closest?.(CARD_SELECTOR)) feed({ type: "cardPress" });
   }, undefined, CAPTURE);
+}
+
+/**
+ * A live artifact (board, sheet, dashboard) is open on screen and the press is its: focus is inside it, or on
+ * nothing in particular. Focus in a pane beside it (a session, the status panel) keeps the app's undo.
+ */
+function artifactOwnsKeys(focus: Element | null): boolean {
+  if (typeof document === "undefined") return false;
+  const owner = document.querySelector("[data-detail-owns-keys]");
+  if (!owner || owner.getClientRects().length === 0) return false;
+  return !focus || focus === document.body || owner.contains(focus);
 }
