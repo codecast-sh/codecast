@@ -26,7 +26,7 @@ import { RecoveryModeSelect, RecoveryDecisionNote } from "./RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../hooks/useMachineAccountSwitch";
 import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, profileHasSetupToken, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { formatAgo, headroomScore, describeDecision, planTypeLabel } from "@codecast/shared/contracts";
+import { accountAlias, accountDisplayName, formatAgo, headroomScore, describeDecision, planTypeLabel } from "@codecast/shared/contracts";
 import { planAgentType, resolveAccountChip } from "../lib/accountUsageChip";
 import { machineSwitchBlock, machineSwitchPendingCopy, profileIsCurrentLogin } from "../lib/machineAccountSwitch";
 import { usageTone } from "../lib/usageTone";
@@ -92,7 +92,7 @@ function ClaudeSwitchControl({
       onPointerDown={(ev) => ev.stopPropagation()}
       disabled={switching}
       onClick={() => onSwitch(profile, email)}
-      title={`Switch this machine to "${profile}". Running sessions keep the account they started on.`}
+      title={`Switch this machine to "${accountDisplayName({ name: profile, email })}". Running sessions keep the account they started on.`}
       className="shrink-0 text-meta font-medium text-sol-cyan/70 hover:text-sol-cyan hover:underline disabled:opacity-40 disabled:pointer-events-none"
     >
       switch →
@@ -308,8 +308,7 @@ export function AccountUsageChip() {
                 </span>
               )}
               <span className="min-w-0 flex-1 truncate text-meta text-sol-text-dim">
-                {e.p.name}
-                {(e.p.subscription ?? e.p.tier) ? ` · ${e.p.subscription ? planTypeLabel(e.p.subscription) : e.p.tier}` : ""}
+                {[accountAlias(e.p), e.p.subscription ? planTypeLabel(e.p.subscription) : e.p.tier].filter(Boolean).join(" · ")}
               </span>
               {e.provider === "claude" && sw.switching === e.p.name ? (
                 <span className="inline-flex shrink-0 items-center gap-1 text-meta font-medium text-sol-cyan">
@@ -493,7 +492,7 @@ export function AccountUsageChip() {
               sw.outcome.message
             ) : (
               <>
-                Now using {sw.outcome?.profile}. Running sessions keep the account they started on.
+                Now using {accountDisplayName({ name: sw.outcome?.profile, email: sw.outcome?.email })}. Running sessions keep the account they started on.
               </>
             )}
           </div>

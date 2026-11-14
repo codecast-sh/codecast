@@ -17,7 +17,7 @@
 import Link from "next/link";
 import { Check, Hourglass, Loader2, RefreshCw, TimerReset, Zap } from "lucide-react";
 import { exhaustionBannerCopy, isExhaustionCurrent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { describeDecision, pendingProposal, formatAgo, standingLabel } from "@codecast/shared/contracts";
+import { accountDisplayName, describeDecision, pendingProposal, formatAgo, standingLabel } from "@codecast/shared/contracts";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useInboxStore } from "../store/inboxStore";
 import { DISPATCH_REFUSED, latestSessionCommand, switchPending } from "../lib/sessionCommands";
@@ -56,18 +56,21 @@ export function LimitParkCard({
   const windowLabel = limitWindowLabel(message);
   const printedReset = limitResetAsPrinted(message);
   const pinnedAccount = useInboxStore((s) => (conversationId ? s.sessions[conversationId]?.cc_account : undefined));
+  const sessionModel = useInboxStore((s) => (conversationId ? s.sessions[conversationId]?.model : undefined));
 
   const profiles: Profile[] = device?.profiles ?? [];
   // The account the session ran on (its own token pin when it has one, else
   // the machine's fleet account) and the account the button continues on: one
   // rule, shared with the phone (lib/limitContinue).
-  const { fleetEmail, active, best } = limitContinueTarget(device, now, live);
-  const accountLabel = pinnedAccount ?? active?.name ?? fleetEmail;
+  const models = sessionModel ? [sessionModel] : undefined;
+  const { fleetEmail, active, best } = limitContinueTarget(device, now, live, { pinned: pinnedAccount, models });
+  const accountLabel = accountDisplayName(active, pinnedAccount ?? fleetEmail);
+  const bestLabel = accountDisplayName(best);
   const exhausted = isExhaustionCurrent(device?.auto_switch_state?.exhausted_at, profiles, now);
   const proposal = live && device ? pendingProposal([device], now) : null;
   // The standing shown on the button matches the meters: "stale" when a rolled
   // window is unmeasured, never a confident green percent the switcher distrusts.
-  const bestNote = best ? standingLabel(best.usage, now) : null;
+  const bestNote = best ? standingLabel(best.usage, now, models) : null;
   const canSwitch = !!best && !!device && device.online && !device.is_remote && !!conversationId;
 
   const switchAndContinue = () => {
@@ -145,7 +148,7 @@ export function LimitParkCard({
         </span>
         <span className={`text-sm ${tone.fg}`} title={printedReset ? `Provider said: resets ${printedReset}` : undefined}>
           {windowLabel}
-          {accountLabel && live ? <span className="text-sol-text-muted"> on {accountLabel}</span> : null}
+          {accountLabel && live ? <span className="text-sol-text-muted" > on {accountLabel}</span> : null}
           {when ? <span className="text-sol-text-muted"> · {when}</span> : null}
         </span>
         {timestamp != null && (
@@ -175,16 +178,16 @@ export function LimitParkCard({
                 disabled={busy}
                 title={
                   proposal
-                    ? `Approve the switch this machine proposed: move ${device?.label ?? "the owner machine"} to ${best?.email ?? best?.name}, restart this session, and continue it there`
-                    : `Switch ${device?.label ?? "the owner machine"} to ${best?.email ?? best?.name}, restart this session, and continue it there`
+                    ? `Approve the switch this machine proposed: move ${device?.label ?? "the owner machine"} to ${bestLabel}, restart this session, and continue it there`
+                    : `Switch ${device?.label ?? "the owner machine"} to ${bestLabel}, restart this session, and continue it there`
                 }
                 className="rounded border border-amber-500/40 px-2 py-0.5 text-meta font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 disabled:opacity-60"
               >
                 {busy
                   ? "Switching…"
                   : proposal
-                    ? `Approve switch to ${best?.name}${bestNote ? ` (${bestNote})` : ""}`
-                    : `Continue on ${best?.name}${bestNote ? ` (${bestNote})` : ""}`}
+                    ? `Approve switch to ${bestLabel}${bestNote ? ` (${bestNote})` : ""}`
+                    : `Continue on ${bestLabel}${bestNote ? ` (${bestNote})` : ""}`}
               </button>
             )}
             <Link href="/settings/claude-accounts" className="text-meta text-sol-cyan hover:underline">
