@@ -2956,10 +2956,14 @@ program
   .addHelpText("after",
     "\nExamples:\n" +
     "  cast auth                # open the browser sign-in page and link this machine\n" +
-    "  cast auth status         # signed in or not, and the daemon's state\n" +
+    "  cast auth status         # signed in or not, and the daemon's state; exits 1 when not signed in\n" +
     "  cast login -             # no browser here: paste a setup token from codecast.sh/cli")
   .action(async (action?: string) => {
-    if (action === "status") return showStatus({ network: false });
+    if (action === "status") {
+      await showStatus({ network: false });
+      if (!readConfig()?.auth_token || readDaemonState()?.authExpired) process.exitCode = 1;
+      return;
+    }
     if (action) {
       console.error(`Unknown auth action "${action}". Run ${fmt.cmd("cast auth")} to sign in or ${fmt.cmd("cast auth status")} to check.`);
       process.exit(1);
