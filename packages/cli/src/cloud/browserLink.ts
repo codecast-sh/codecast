@@ -38,7 +38,8 @@ import { HeldConnections } from "./heldConnection.js";
 import { mintHostClientToken, readBridgeState, revokeHostClient, type BridgeState } from "../browser/bridge/host.js";
 import { hashHostToken } from "../browser/bridge/hostClients.js";
 import { askToRun } from "@codecast/shared/contracts/commandRun";
-import { LAPTOP_LINK_CLOSED_FILE, LAPTOP_LINK_FILE, type LaptopLink, type LaptopLinkClosed } from "../browser/bridge/laptopLink.js";
+import { LAPTOP_LINK_CLOSED_FILE, LAPTOP_LINK_FILE, LAPTOP_LINKS_DIR, isLinkDevice, linkHostPort, ownUserId, type LaptopLink, type LaptopLinkClosed } from "../browser/bridge/laptopLink.js";
+import { deviceId } from "../remote/device.js";
 
 /** The idle watchdog version that subtracts the link's own connection. */
 export const BROWSER_LINK_MIN_WATCHDOG = 4;
@@ -51,23 +52,37 @@ export const BROWSER_LINK_TICK_MS = 60_000;
 /** How long a host that refused the link (exit 4) is left before the next try: a fixed host links again without a restart. */
 export const BROWSER_LINK_REFUSAL_RETRY_MS = 30 * 60_000;
 
-const LINK = `~/.codecast/browser/${LAPTOP_LINK_FILE}`;
-const CLOSED = `~/.codecast/browser/${LAPTOP_LINK_CLOSED_FILE}`;
+const LEGACY = `~/.codecast/browser/${LAPTOP_LINK_FILE}`;
+const LEGACY_CLOSED = `~/.codecast/browser/${LAPTOP_LINK_CLOSED_FILE}`;
 
-export const BROWSER_LINK_REMOTE =
-  `umask 077; mkdir -p ~/.codecast/browser || exit ${BROWSER_LINK_REFUSED_EXIT}; ` +
-  `IFS= read -r L || exit ${BROWSER_LINK_REFUSED_EXIT}; ` +
-  `rm -f ${CLOSED}; ` +
-  `printf '%s\\n' "$L" > ${LINK}.tmp && mv -f ${LINK}.tmp ${LINK} || exit ${BROWSER_LINK_REFUSED_EXIT}; ` +
-  // The closing line lands in /tmp first, so a box that powers off mid-link leaves nothing behind.
-  `C=$(mktemp) || exit ${BROWSER_LINK_REFUSED_EXIT}; (exec -a ${BROWSER_LINK_ARGV0} cat > "$C"); ` +
-  `if [ "$(cat ${LINK} 2>/dev/null)" = "$L" ]; then rm -f ${LINK}; [ -s "$C" ] && mv -f "$C" ${CLOSED}; fi; ` +
-  `rm -f "$C"; exit 0`;
+/**
+ * The remote side of one laptop's link. It writes that laptop's own file under
+ * laptop-links/ and the legacy single file (for a host cast that reads only
+ * that one), blocks in `cat`, and on the way out removes each file only if it
+ * is still this link's, so a second laptop's link is never torn down by the
+ * first one closing.
+ */
+export function browserLinkRemote(device: string): string {
+  if (!isLinkDevice(device)) throw new Error(`not a device id: ${device}`);
+  const dir = `~/.codecast/browser/${LAPTOP_LINKS_DIR}`;
+  const link = `${dir}/${device}.json`;
+  const closed = `${dir}/${device}.closed.json`;
+  return `umask 077; mkdir -p ${dir} || exit ${BROWSER_LINK_REFUSED_EXIT}; ` +
+    `IFS= read -r L || exit ${BROWSER_LINK_REFUSED_EXIT}; ` +
+    `rm -f ${closed} ${LEGACY_CLOSED}; ` +
+    `printf '%s\\n' "$L" > ${link}.tmp && mv -f ${link}.tmp ${link} || exit ${BROWSER_LINK_REFUSED_EXIT}; ` +
+    `printf '%s\\n' "$L" > ${LEGACY}.tmp && mv -f ${LEGACY}.tmp ${LEGACY}; ` +
+    // The closing line lands in /tmp first, so a box that powers off mid-link leaves nothing behind.
+    `C=$(mktemp) || exit ${BROWSER_LINK_REFUSED_EXIT}; (exec -a ${BROWSER_LINK_ARGV0} cat > "$C"); ` +
+    `if [ "$(cat ${LEGACY} 2>/dev/null)" = "$L" ]; then rm -f ${LEGACY}; fi; ` +
+    `if [ "$(cat ${link} 2>/dev/null)" = "$L" ]; then rm -f ${link}; [ -s "$C" ] && mv -f "$C" ${closed}; fi; ` +
+    `rm -f "$C"; exit 0`;
+}
 
-/** The ssh argv for one link: the reverse forward, failing loudly when the host's port is taken. */
-export function browserLinkArgs(host: RemoteHost, bridgePort: number): string[] {
-  return heldSshArgs(host, BROWSER_LINK_REMOTE, {
-    extra: ["-o", "ExitOnForwardFailure=yes", "-R", `127.0.0.1:${bridgePort}:127.0.0.1:${bridgePort}`],
+/** The ssh argv for one link: this laptop's bridge port, forwarded to its own port on the host, failing loudly when that port is taken. */
+export function browserLinkArgs(host: RemoteHost, bridgePort: number, device: string): string[] {
+  return heldSshArgs(host, browserLinkRemote(device), {
+    extra: ["-o", "ExitOnForwardFailure=yes", "-R", `127.0.0.1:${linkHostPort(device)}:127.0.0.1:${bridgePort}`],
   });
 }
 
@@ -79,8 +94,12 @@ export function browserLinkArgs(host: RemoteHost, bridgePort: number): string[] 
  */
 export function browserLinkRefusal(cloud: CloudHost, bridge: BridgeState | null, opts: { explicit?: boolean } = {}): string | null {
   if (cloud.shared) return "the host is shared with teammates: their sessions would drive this human's Chrome";
-  if (cloud.laptopBrowser === false) return `turned off for this host; turning it on is your person's call: ${askToRun("Let this cloud host use your Chrome?", `cast browser extension link --host ${cloud.id}`)}`;
-  if (!bridge?.token || !bridge.extensionSeenAt) return "this laptop's Chrome extension was never paired: any `cast browser` command here puts the pairing card in front of your person";
+  // The link carries the Chrome and, once the person grants it, the apps
+  // (computer/remoteGrant.ts): either one is reason to hold it.
+  const computer = !!cloud.laptopComputer;
+  if (cloud.laptopBrowser === false && !computer) return `turned off for this host; turning it on is your person's call: ${askToRun("Let this cloud host use your Chrome?", `cast browser extension link --host ${cloud.id}`)}`;
+  if (!bridge?.token) return "this laptop's bridge is not set up: any `cast browser` command here sets it up";
+  if (!bridge.extensionSeenAt && !computer) return "this laptop's Chrome extension was never paired: any `cast browser` command here puts the pairing card in front of your person";
   if (!opts.explicit && (cloud.watchdogVersion ?? 0) < BROWSER_LINK_MIN_WATCHDOG) {
     return `the host's idle watchdog (version ${cloud.watchdogVersion ?? 1}) would count the link as activity; \`cast hosts provision ${cloud.id}\` installs version ${BROWSER_LINK_MIN_WATCHDOG}`;
   }
@@ -97,7 +116,7 @@ const laptopName = (): string => os.hostname().replace(/\.local$/, "");
 export function openBrowserLink(
   cloud: CloudHost,
   remote: RemoteHost,
-  deps: { spawn?: typeof spawn; bridge?: BridgeState | null; laptop?: string } = {},
+  deps: { spawn?: typeof spawn; bridge?: BridgeState | null; laptop?: string; device?: string; owner?: string | null } = {},
 ): { child: ChildProcess; tokenHash: string } | { heldBy: number } {
   const bridge = deps.bridge ?? readBridgeState();
   if (!bridge?.token) throw new Error("this laptop's bridge is not set up");
@@ -105,8 +124,10 @@ export function openBrowserLink(
   const minted = mintHostClientToken(cloud.id, `${cloud.id}${remote.address ? ` (${remote.address})` : ""}`);
   if ("heldBy" in minted) return minted;
   const { token } = minted;
-  const link: LaptopLink = { v: 1, port: bridge.port, token, hostId: cloud.id, laptop, linkedAt: Date.now() };
-  const child = (deps.spawn ?? spawn)("ssh", browserLinkArgs(remote, bridge.port), { stdio: ["pipe", "ignore", "pipe"], env: process.env });
+  const device = deps.device ?? deviceId();
+  const owner = deps.owner === undefined ? ownUserId() : deps.owner;
+  const link: LaptopLink = { v: 1, port: linkHostPort(device), token, hostId: cloud.id, laptop, linkedAt: Date.now(), device, ...(owner ? { owner } : {}) };
+  const child = (deps.spawn ?? spawn)("ssh", browserLinkArgs(remote, bridge.port, device), { stdio: ["pipe", "ignore", "pipe"], env: process.env });
   child.stdin?.on("error", () => {});
   child.stdin?.write(`${JSON.stringify(link)}\n`);
   return { child, tokenHash: hashHostToken(token) };
@@ -214,7 +235,7 @@ export class BrowserLinks {
         this.tokens.set(h.id, tokenHash);
         child.once("exit", () => { revokeHostClient(h.id, tokenHash); });
         this.held.hold(h.id, `Chrome link to ${h.id}`, remote.address, child);
-        this.o.log(`[BROWSER-LINK] ${h.id} (${remote.address}) reaches this laptop's Chrome at its 127.0.0.1:${bridge!.port}`);
+        this.o.log(`[BROWSER-LINK] ${h.id} (${remote.address}) reaches this laptop's bridge at its 127.0.0.1:${linkHostPort(deviceId())}`);
       }
     } catch (err) {
       this.o.log(`[BROWSER-LINK] maintenance failed: ${err instanceof Error ? err.message : String(err)}`, "warn");

@@ -325,10 +325,12 @@ export interface Config extends CloudSessionSyncSettings {
   // (shared/contracts/subagentFleet.ts). Also the default `--max` of
   // `cast plan orchestrate` and `autopilot`.
   subagents?: { per_session?: number; per_machine?: number };
-  // How many typecheck watchers this machine keeps (default 6) and how many
-  // commands run as Interactive jobs at once (default 8); past either, a
-  // caller waits its turn (machineCaps.ts). `cast config check.per_machine 8`.
-  check?: { per_machine?: number };
+  // Typecheck watchers: one per 12 GB of RAM always run; more start while their
+  // learned memory fits in the machine's total minus `check.reserve_gb`
+  // (default 8 GB or a fifth, whichever is more; watcherMemory.ts), up to
+  // `check.per_machine` (default 16). Interactive jobs run 8 at
+  // once by default. Past either, a caller waits its turn (machineCaps.ts).
+  check?: { per_machine?: number; reserve_gb?: number };
   interactive_jobs?: { per_machine?: number };
 
   // --- Server-stamped bookkeeping (index.ts) ---
