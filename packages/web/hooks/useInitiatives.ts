@@ -22,7 +22,7 @@ const api = _api as any;
 
 export function useSyncInitiatives() {
   const workspaceArgs = useWorkspaceArgs();
-  useSyncCollection("initiatives", api.initiatives.webList, workspaceArgs === "skip" ? "skip" : workspaceStamp(workspaceArgs));
+  return useSyncCollection("initiatives", api.initiatives.webList, workspaceArgs === "skip" ? "skip" : workspaceStamp(workspaceArgs));
 }
 
 /** Every initiative of the active workspace, waking on the fields a surface paints. */
