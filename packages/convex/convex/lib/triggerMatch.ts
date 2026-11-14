@@ -21,6 +21,8 @@ export type TriggerMatchArgs = {
   source?: string;
   workspace?: string;
   call_id?: Id<"transcripts">;
+  channel_id?: Id<"chat_channels">;
+  origin_conversation_id?: string;
   event_ref?: {
     external_event_id?: Id<"external_events">;
     group_short_id?: string;

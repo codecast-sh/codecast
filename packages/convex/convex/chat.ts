@@ -21,6 +21,8 @@
 // not in returns nothing rather than someone else's chat.
 
 import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
+import { scheduleTriggerMatch } from "./lib/triggerMatch";
+import { siteUrl } from "./lib/siteUrl";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -977,7 +979,13 @@ export async function threadSummariesFor(
     // A silent placeholder (the anchor listening, or having chosen to stay
     // quiet) is not a reply: it must not count, show a face, or say "thinking".
     const live = replies.filter((r) => !r.deleted_at && !isSilentAgentRow(r));
-    if (live.length === 0) continue;
+    if (replies.length === 0) continue;
+    // Every reply went (a session's thinking row closed without an answer):
+    // say so, stamped newest, or a client keeps the summary it last had.
+    if (live.length === 0) {
+      out.push({ root_id: root._id, reply_count: 0, reply_capped: false, last_reply_at: replies[0].created_at, reply_user_ids: [], reply_faces: [] });
+      continue;
+    }
     const seen = new Set<string>();
     const faces: Id<"users">[] = [];
     const replyFaces: ThreadSummary["reply_faces"] = [];
@@ -2801,6 +2809,22 @@ export async function postChatMessage(
       actorAvatar: opts.externalAuthor?.avatar_url,
       actorUserId: voiced ? authorUserId : undefined,
     });
+
+  // A project watching this channel hears the line (trigger event
+  // chat_message). History is not news, and a DM room is nobody's source.
+  if (!opts.history && channel.kind !== "dm") {
+    await scheduleTriggerMatch(ctx, {
+      event_type: "chat_message",
+      team_id: channel.team_id,
+      channel_id: channel._id,
+      ...(originSession ? { origin_conversation_id: originSession.id } : {}),
+      event_ref: {
+        group_short_id: `#${channel.name}`,
+        title: `${actorName}: ${oneLine(content, 280)}`,
+        url: `${siteUrl()}/chat/${channel._id}`,
+      },
+    });
+  }
 
   return { messageId, mentions, roles: resolved.roles, sessions: resolved.sessions, hereCount, actorName, createdAt: now };
 }

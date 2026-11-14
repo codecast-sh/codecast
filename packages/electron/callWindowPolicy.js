@@ -68,8 +68,9 @@ function isCallSize(size) {
  *
  * The float is a glance you keep over your work: it floats above other apps,
  * follows you between desktops, and lets the mouse through everywhere the
- * renderer has not said there is a face or a card. The panel is an ordinary
- * window you put where you like and resize by its edges. The wall floats
+ * renderer has not said there is a face or a card. The panel is a window
+ * you put where you like and resize by its edges, above Codecast's own
+ * windows while the app is in front and ordinary otherwise. The wall floats
  * only by its own pin.
  *
  * `resizable` is not only about the person dragging an edge. Electron refuses
@@ -86,19 +87,27 @@ function callWindowChrome(size, opts = {}) {
     const pinned = opts.pinned === true;
     return { alwaysOnTop: pinned, visibleOnAllWorkspaces: pinned, clickThrough: false, resizable: true };
   }
-  const floating = s !== "panel";
+  if (s === "panel") {
+    // The stage is an ordinary window to every other app, but never under
+    // Codecast's own: while the app is the one in front, a click in the main
+    // window or a tab must not bury the call. "floating" puts it over the
+    // app's windows; the moment the person leaves for another app it drops
+    // back to normal and stops covering their work there.
+    const over = opts.appActive === true;
+    return { alwaysOnTop: over, ...(over ? { level: "floating" } : {}), visibleOnAllWorkspaces: false, clickThrough: false, resizable: true };
+  }
   return {
-    alwaysOnTop: floating,
+    alwaysOnTop: true,
     // Above every other app's floating panels, not among them. At macOS's
     // "floating" level the row shared a layer with every other app's
     // always-on-top window, and whichever was ordered front last won: the
     // faces were over the work some of the time and under it the rest.
     // "status" sits above all of those and still below menus and the
     // system's own overlays.
-    ...(floating ? { level: "status" } : {}),
-    visibleOnAllWorkspaces: floating,
-    clickThrough: floating,
-    resizable: !floating,
+    level: "status",
+    visibleOnAllWorkspaces: true,
+    clickThrough: true,
+    resizable: false,
   };
 }
 
