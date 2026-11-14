@@ -29,6 +29,7 @@ import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { internalAction, internalMutation } from "../functions";
 import { MAX_CHANNELS_PER_TEAM, UNREAD_CAP, plainPreview } from "../chatText";
+import { canAccessChannel } from "../chatAccess";
 import { rewriteNotificationMessage } from "../lib/notificationActor";
 import { deliver } from "./send";
 import { notificationDigest, type DigestEntry, type DigestSection } from "./templates";
@@ -380,6 +381,9 @@ async function buildDigestForUser(
       .withIndex("by_team_name", (q: any) => q.eq("team_id", membership.team_id))
       .take(MAX_CHANNELS_PER_TEAM);
     for (const channel of channels) {
+      // Chat's own read rule: a restricted room counts only while the person
+      // is still in it. A read row outlives removal, so it proves nothing.
+      if (!(await canAccessChannel(ctx, userId, channel))) continue;
       // No read row = never opened the channel = mentions-only semantics
       // (mirrors listChannels). Mentions arrive as notification rows anyway.
       const read = await ctx.db

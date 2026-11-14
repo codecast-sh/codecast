@@ -95,7 +95,7 @@ describe("operator search end to end", () => {
           user_id, agent_type: "claude_code", status: "active", started_at: 1, message_count: 1, session_id: `s${Math.random()}`,
           git_remote_url: remote, ...extra,
         } as any);
-      const mine = await conv(viewer, { title: "Viewer auth work", git_root: "/Users/v/src/repo", project_path: "/Users/v/src/repo", is_private: true, updated_at: now - 3000 });
+      const mine = await conv(viewer, { title: "Viewer auth work", git_root: "/Users/v/src/repo", project_path: "/Users/v/src/repo", is_private: true, team_id: team, updated_at: now - 3000 });
       const shared = await conv(mate, { title: "Mate auth fix", git_root: "/Users/m/code/repo", project_path: "/Users/m/code/repo", is_private: false, team_id: team, updated_at: now - 2000 });
       const hidden = await conv(mate, { title: "Mate private", git_root: "/Users/m/code/repo", project_path: "/Users/m/code/repo", is_private: true, team_id: team, updated_at: now - 1000 });
       const foreign = await conv(outsider, { title: "Outsider", git_root: "/Users/o/repo", project_path: "/Users/o/repo", is_private: false, updated_at: now });

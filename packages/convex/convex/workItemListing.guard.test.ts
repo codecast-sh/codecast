@@ -34,7 +34,6 @@ const ALLOWED: Record<string, string> = {
   "externalEvents.ts::listForContainer": "every row goes through filterReadable -> canReadEvent, the events table's own key check",
   "chat.ts::createChannel": "name-uniqueness lookup inside the caller's team; returns no other channel",
   "chat.ts::listChannels": "chat's access rule is channel membership: restricted rooms are filtered by chat_channel_members",
-  "emails/digest.ts::buildDigestForUser": "counts unread only in channels the user has a chat_reads row for",
   "orgChannels.ts::resolveChannel": "by-name lookup; the channel then goes through loadChannel's access check",
   "slackSync.ts::adoptSlackName": "name-collision check while syncing a channel's Slack name; returns no row",
 };

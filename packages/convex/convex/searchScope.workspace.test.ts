@@ -46,6 +46,8 @@ async function seed() {
     // Only its text matches: a summary-level session never surfaces for it.
     await session(summary, T, "summary-text-only", "unrelated work");
     await session(other, O, "other", "quokka other");
+    // The viewer's own session in the other team follows its routing.
+    await session(viewer, O, "mine-in-o", "quokka mine in O");
     return { viewer, T, O };
   });
   return { t, ...ids };
@@ -73,6 +75,7 @@ test("web search reads the active team, and summary sessions match on their titl
   const all: any = await as.query(api.conversations.searchConversations, { query: "quokka", allTeams: true });
   const allRows = byTitle(all.results);
   expect(allRows["quokka other"]?.teamName).toBe("O");
+  expect(allRows["quokka mine in O"]?.teamName).toBe("O");
   expect(allRows["quokka other"].workspace).toBe(`team:${O}`);
   expect(allRows["quokka full"].teamName).toBe("T");
   expect(allRows["quokka summary"].matches).toEqual([]);
