@@ -1,7 +1,8 @@
 "use client";
 
 // The top bar's machine gauge: a live vital sign for the laptops you run
-// sessions on. Its needle sits at the busiest laptop's load (loadPercent) and
+// sessions on. Its needle sits at this computer's load (loadPercent), or at
+// another laptop's when that one is under worse sustained pressure, and
 // its color warms from muted through yellow to red as the load climbs; a dot
 // marks sustained pressure, the same incident the overload notification
 // reports. Hovering it shows the vitals, the sessions doing the work and a way
@@ -17,6 +18,8 @@ import { useOpenSession } from "../../hooks/useOpenSession";
 import { HoverCardClose } from "../../lib/hoverCardsOff";
 import { cn } from "../../lib/utils";
 import { useDevices } from "../DeviceBadge";
+import { useInboxStore } from "../../store/inboxStore";
+import { localDeviceIdOf } from "../../hooks/useLocalDeviceId";
 import { TopbarButton } from "../TopbarButton";
 import { HoverCard } from "../ui/HoverCard";
 import { MiniTrace } from "./HealthStrip";
@@ -66,23 +69,34 @@ const RANK: Record<Level, number> = { calm: 0, elevated: 1, critical: 2 };
 const TONE: Record<Level, string> = { calm: "", elevated: "text-sol-yellow", critical: "text-sol-red" };
 const DOT: Record<Level, string> = { calm: "", elevated: "bg-sol-yellow", critical: "bg-sol-red" };
 
-type Watched = { machine: ResourceMachine; incident: ResourceIncident | null; level: Level; load: number };
+export type Watched = { machine: ResourceMachine; incident: ResourceIncident | null; level: Level; load: number };
 
-/** The local machine to show: the one in the worst state among those reporting live. */
+/** The local machine to show: this computer, unless another live laptop is
+ *  under worse sustained pressure. When this computer has no live reading, the
+ *  laptop in the worst state, then the busiest. */
+export function pickWatched(candidates: Watched[], localDeviceId: string | null): Watched | null {
+  const here = (w: Watched) => w.machine.deviceId === localDeviceId;
+  let best: Watched | null = null;
+  for (const c of candidates) {
+    if (!best || RANK[c.level] > RANK[best.level]) best = c;
+    else if (RANK[c.level] === RANK[best.level] && !here(best) && (here(c) || c.load > best.load)) best = c;
+  }
+  return best;
+}
+
 function useWatchedMachine(now: number): Watched | null {
   const rows = useMachineResourceRows();
   const { devices } = useDevices();
+  const localDeviceId = useInboxStore(localDeviceIdOf);
   return useMemo(() => {
-    let best: Watched | null = null;
+    const candidates: Watched[] = [];
     for (const machine of joinMachines(devices, rows)) {
       if (machine.role !== "local" || freshness(machine, now) !== "live") continue;
       const incident = sustainedResourcePressure(machine.history, now);
-      const level = levelOf(incident);
-      const load = loadPercent(machine.snapshot!.sample);
-      if (!best || RANK[level] > RANK[best.level] || (RANK[level] === RANK[best.level] && load > best.load)) best = { machine, incident, level, load };
+      candidates.push({ machine, incident, level: levelOf(incident), load: loadPercent(machine.snapshot!.sample) });
     }
-    return best;
-  }, [devices, rows, now]);
+    return pickWatched(candidates, localDeviceId);
+  }, [devices, rows, now, localDeviceId]);
 }
 
 export function ResourcePressureGauge() {

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { levelOf, loadColor, needleAngle } from "./ResourcePressureGauge";
+import { levelOf, loadColor, needleAngle, pickWatched, type Watched } from "./ResourcePressureGauge";
+import type { ResourceMachine } from "./types";
 import { loadPercent } from "./resourceModel";
 
 test("the gauge's dot follows the sustained incident, the same one the overload notification reports", () => {
@@ -23,4 +24,18 @@ test("load is the busier of CPU and memory, raised to the OS pressure verdict", 
   expect(loadPercent({ ...p, cpuPercent: 96 })).toBe(96);
   expect(loadPercent({ ...p, pressure: "elevated" })).toBe(80);
   expect(loadPercent({ ...p, pressure: "critical" })).toBe(95);
+});
+
+test("the gauge shows this computer unless another laptop is under worse sustained pressure", () => {
+  const w = (deviceId: string, load: number, level: Watched["level"] = "calm"): Watched =>
+    ({ machine: { deviceId } as ResourceMachine, incident: level === "calm" ? null : { level, since: 0, reason: "x" }, level, load });
+  const here = w("mbp-182", 12);
+  const busy = w("mbp-2", 32);
+  expect(pickWatched([busy, here], "mbp-182")).toBe(here);
+  const hot = w("mbp-2", 95, "critical");
+  expect(pickWatched([hot, here], "mbp-182")).toBe(hot);
+  expect(pickWatched([busy, w("mbp-182", 80, "elevated"), hot], "mbp-182")).toBe(hot);
+  expect(pickWatched([here, busy], null)).toBe(busy);
+  expect(pickWatched([w("mbp-3", 5), busy], "mbp-182")).toBe(busy);
+  expect(pickWatched([], "mbp-182")).toBe(null);
 });
