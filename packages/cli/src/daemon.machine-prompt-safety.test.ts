@@ -14,6 +14,7 @@ import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor,
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 import { DeliveryEchoLedger } from "./deliveryEchoLedger";
+import { stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
 import { parseTranscriptFor } from "./parser";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice, parseDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer";
@@ -270,6 +271,7 @@ function fixture(transport = "tmux", cached = true) {
     // along: a private one per fixture, so no test reads the machine's.
     tmuxDeliveryJournal: () => (journal ??= new TmuxDeliveryJournal(path.join(directory, "delivery.sqlite"))),
     deliveryEchoLedger: () => (echoes ??= new DeliveryEchoLedger(path.join(directory, "echoes.sqlite"))),
+    stampDeliveryId, withoutDeliveryId,
     parseTranscriptFor,
     selfHealIfTimersStalled: () => {}, assertLegacyDeliveryEnvelope: () => {},
     messagesInFlight: new Map(), conversationDeliveryActive: new Set(), injectedMessageTs,
@@ -634,9 +636,9 @@ describe("machine prompt delivery safety", () => {
     expect(f.deps.injectedMessageTs.has("update")).toBe(false);
     expect(f.statuses.filter((s: { status: string }) => s.status === "delivered" || s.status === "undeliverable")).toEqual([]);
     await f.scan([{ _id: "update", content }]);
-    expect(f.bodies).toEqual([content]);
+    expect(f.bodies).toEqual([stampDeliveryId(content, "update")]);
     await f.scan([{ _id: "update", content }]);
-    expect(f.bodies).toEqual([content]);
+    expect(f.bodies).toEqual([stampDeliveryId(content, "update")]);
   });
 
   test("a held conversation is skipped without touching the pane until the prompt closes", async () => {
@@ -657,7 +659,7 @@ describe("machine prompt delivery safety", () => {
     expect(releasePromptHold("conv")).toBe(true);
     expect(redriven).toBe(1);
     await f.scan([{ _id: "held", content }]);
-    expect(f.bodies).toEqual([content]);
+    expect(f.bodies).toEqual([stampDeliveryId(content, "held")]);
   });
 
   // jx78gaw (2026-10-10): a message held for a dialog nobody was shown sat
@@ -783,7 +785,7 @@ describe("machine prompt delivery safety", () => {
     expect(f.state.menu).toBeNull();
     expect(promptHoldRemainingMs("conv")).toBe(0);
     await f.scan([{ _id: "msg", content }]);
-    expect(f.bodies).toEqual([content]);
+    expect(f.bodies).toEqual([stampDeliveryId(content, "msg")]);
   });
 
   test("a card answer walks the highlight of an unnumbered select dialog, then confirms", async () => {
