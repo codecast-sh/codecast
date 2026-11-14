@@ -3,6 +3,8 @@
 // (or the heartbeat's active_email moves). Callers must not treat "command
 // inserted" as success — that is what made Switch look like a no-op.
 
+import { accountDisplayName } from "@codecast/shared/contracts";
+
 export const MACHINE_SWITCH_TIMEOUT_MS = 90_000;
 export const MACHINE_SWITCH_SLOW_MS = 12_000;
 
@@ -93,8 +95,8 @@ export function resolveMachineSwitch(opts: {
     return {
       phase: "failed",
       error: opts.command?.executed_at
-        ? `The daemon finished switching to "${opts.pending.profile}", but the updated login hasn't been confirmed. Refresh the account list to check this machine.`
-        : `The daemon didn't confirm the switch to "${opts.pending.profile}" in time. It may still complete — check this machine before trying again.`,
+        ? `The daemon finished switching to "${accountDisplayName({ name: opts.pending.profile, email: opts.pending.email })}", but the updated login hasn't been confirmed. Refresh the account list to check this machine.`
+        : `The daemon didn't confirm the switch to "${accountDisplayName({ name: opts.pending.profile, email: opts.pending.email })}" in time. It may still complete — check this machine before trying again.`,
     };
   }
   if (opts.command?.executed_at) return { phase: "confirming" };
@@ -114,14 +116,16 @@ export function humanizeSwitchError(msg: string): string {
   return stripped;
 }
 
-export function machineSwitchPendingCopy(phase: MachineSwitchPhase, profile: string, deviceLabel?: string): string {
+export function machineSwitchPendingCopy(phase: MachineSwitchPhase, account: string, deviceLabel?: string): string {
+  const profile = accountDisplayName(undefined, account);
   const where = deviceLabel ? ` on ${deviceLabel}` : "";
   if (phase === "confirming") return `Confirming the active account${where} is "${profile}"…`;
   if (phase === "slow") return `Still waiting${where} to switch to "${profile}"…`;
   return `Switching this machine to "${profile}"…`;
 }
 
-export function machineSwitchSuccessCopy(profile: string, viaToken = false): { title: string; description: string } {
+export function machineSwitchSuccessCopy(account: string, viaToken = false): { title: string; description: string } {
+  const profile = accountDisplayName(undefined, account);
   if (viaToken) {
     return {
       title: `Sessions now run on "${profile}"`,

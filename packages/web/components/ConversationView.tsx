@@ -31,6 +31,7 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { getShareTokenScope, shareTokenArg } from "../lib/shareTokenScope";
 import { useRecordConversationOpen } from "../lib/accessLogOpen";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
+import { SessionCanvasToggle } from "./conversation/SessionCanvasToggle";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
@@ -99,13 +100,13 @@ import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { SessionDecisionCard } from "./SessionDecisionCard";
 import { PreloadPublishedPage } from "./PublishedPageEmbed";
 import { HostedApprovalCard, HostedApprovalPending, HostedApprovalSettled } from "./conversation/HostedApprovalCard";
-import { PermissionAnswer, PermissionAskCard, PermissionRecordLine } from "./conversation/PermissionAsk";
+import { PermissionAnswer, PermissionAskCard, RunningPermissionLine } from "./conversation/PermissionAsk";
 import { useRunningPermission } from "../hooks/useRunningPermission";
 import { DecisionStepperContext, usePendingDecisionItems } from "../hooks/useDecisionQueue";
 import { copyToClipboard, shareOrigin, inferHomeDir } from "../lib/utils";
 import { useWorkflowRun, useWorkflows } from "../hooks/useSyncWorkflows";
 import { usePendingMessageStatus, usePendingPermissions } from "../hooks/useSyncPendingPermissions";
-import { useAckActiveConversation } from "../hooks/useAckActiveConversation";
+import { AckActiveConversation } from "../hooks/useAckActiveConversation";
 import type { SentFileData } from "./tools/SentFileBlock";
 import { dropScrapedProseTwins } from "../lib/proseTwins";
 import { MessagePromptPreview } from "./MessagePromptPreview";
@@ -180,6 +181,7 @@ import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversati
 import { PeerTransferStrip } from "./conversation/PeerTransferStrip";
 import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { HeaderModelControl } from "./SessionControlMenu";
+import { SessionNotifyIndicator, SessionNotifySubmenu } from "./SessionNotifyMenu";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
 import { NewSessionFoot, NewSessionView, NonOwnerMessageInput } from "./conversation/sessionControls";
@@ -1032,15 +1034,26 @@ const ConversationViewInner = (
   // Slack-style "New" divider anchor: "seen up to" advances only when you leave
   // a session, so it holds steady for the whole visit. Everything strictly after
   // it arrived while you were away.
-  const unreadAnchorAt = useInboxStore((s) => s._seenUpToAt[pendingConvId] ?? 0);
+  // Both marks are read while this is the current session: leaving stamps them
+  // for the next visit, and a pane still painted while the next one mounts
+  // (InboxConversation defers the swap) keeps the divider it showed.
+  const visitMarksRef = useRef<[number, number] | null>(null);
+  const [unreadAnchorAt, enteredAt] = useInboxStore((s) => {
+    const held = visitMarksRef.current;
+    if (held && s.currentSessionId !== pendingConvId) return held;
+    const seen = s._seenUpToAt[pendingConvId] ?? 0;
+    const entered = s._lastViewedAt[pendingConvId] ?? 0;
+    if (held && held[0] === seen && held[1] === entered) return held;
+    return (visitMarksRef.current = [seen, entered]);
+  });
   // The server-backed read mark, which is a different thing from the divider
   // above: the divider is where THIS device stopped reading, the ack is what
-  // clears the card's unread dot on every device. Presence-gated inside.
-  useAckActiveConversation(pendingConvId);
-  // Upper bound for the "New" divider — the moment you last focused this
-  // session (re-stamped on every entry, including window-focus). Messages newer
-  // than this arrived while you were here watching and must not be split off.
-  const enteredAt = useInboxStore((s) => s._lastViewedAt[pendingConvId] ?? 0);
+  // clears the card's unread dot on every device: AckActiveConversation,
+  // mounted as a leaf at the top of the tree below. Presence-gated inside.
+  // enteredAt (above) is the upper bound for the "New" divider — the moment you
+  // last focused this session (re-stamped on every entry, including
+  // window-focus). Messages newer than this arrived while you were here
+  // watching and must not be split off.
 
   // Commits and pull requests linked to this session but made outside the
   // transcript: a push the webhook matched to it, a commit the daemon
@@ -3265,7 +3278,7 @@ const ConversationViewInner = (
   const hostedTailCard = !conversation || onSendOverride ? null
     : inlineApproval ? (runAsk ? <PermissionAskCard key={decisionItem!.key} item={decisionItem!} /> : <HostedApprovalCard key={decisionItem!.key} item={decisionItem!} keys />)
     // A Yes still running: one line holds the card's place until the result lands.
-    : runningPermission ? <PermissionRecordLine question={runningPermission.question} outcome="running" className="pt-4" />
+    : runningPermission ? <RunningPermissionLine id={runningPermission.id} question={runningPermission.question} />
     // The turn parked on an approval before its decision row arrived: hold
     // the card's place in one quiet line.
     : !decisionItem && hostedSettledAnswer ? <HostedApprovalSettled label={hostedSettledAnswer} />
@@ -4082,6 +4095,7 @@ const ConversationViewInner = (
 
   const el = (
     <HighlightContext.Provider value={highlightQuery}>
+    <AckActiveConversation conversationId={pendingConvId} />
     <FilePathContext.Provider value={filePathCtx}>
     <WorktreesProvider repository={codeRepository}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
@@ -4400,6 +4414,7 @@ const ConversationViewInner = (
                 )}
 
                 {sessionGalleryItems.length > 0 && <SessionGalleryButton items={sessionGalleryItems} />}
+                {!guest && conversation?._id && <SessionCanvasToggle conversationId={String(conversation._id)} />}
 
 
                 {/* Copy link, send to chat, search, a huddle, density and the
@@ -4407,6 +4422,8 @@ const ConversationViewInner = (
                     in the menu below, not as bare icons: share and the menu are
                     the row's only plain actions. */}
                 {headerExtra}
+
+                {!guest && <SessionNotifyIndicator conversation={conversation as any} />}
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -4484,6 +4501,7 @@ const ConversationViewInner = (
                     )}
                     {/* A phone hides the header's facts strip, so the cloud agent's link and actions live here too. */}
                     {!guest && <CloudAgentMenuItems actions={cloudAgentActions} />}
+                    {!guest && <SessionNotifySubmenu conversation={conversation as any} />}
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">View</DropdownMenuLabel>
                     <DropdownMenuItem onSelect={() => setTimeout(() => { if (propHighlightQuery) propClearHighlight?.(); setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); })}>

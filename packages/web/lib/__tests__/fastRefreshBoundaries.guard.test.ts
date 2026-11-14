@@ -49,7 +49,6 @@ const ALLOWED = new Set<string>([
   "components/EdgePeek.tsx",
   "components/FormattedSummary.tsx",
   "components/GlobalSearch.tsx",
-  "components/HtmlSnippet.tsx",
   "components/ImageGallery.tsx",
   "components/InlineDiff.tsx",
   "components/OwnersBadge.tsx",
