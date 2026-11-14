@@ -311,7 +311,7 @@ describe("messages.send/v2 durable command", () => {
           is_private: false,
         })],
         team_memberships: [
-          { _id: "team-owner", team_id: TEAM, user_id: OWNER, visibility: "summary" },
+          { _id: "team-owner", team_id: TEAM, user_id: OWNER, visibility: "full" },
           { _id: "team-member", team_id: TEAM, user_id: MEMBER, visibility: "summary" },
         ],
       }],
@@ -547,7 +547,7 @@ describe("messages.byConversation/v2 command coverage", () => {
     const teamCtx = context(MEMBER, {
       conversations: [conversation(CONVERSATION, OWNER, { team_id: TEAM, is_private: false })],
       team_memberships: [
-        { _id: "team-owner", team_id: TEAM, user_id: OWNER, visibility: "summary" },
+        { _id: "team-owner", team_id: TEAM, user_id: OWNER, visibility: "full" },
         { _id: "team-member", team_id: TEAM, user_id: MEMBER, visibility: "summary" },
       ],
     });
