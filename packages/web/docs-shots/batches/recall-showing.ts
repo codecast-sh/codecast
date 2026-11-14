@@ -19,11 +19,10 @@ export const RECALL_SHOWING: Shot[] = [
   /* ── Main docs page ──────────────────────────────────────────────────── */
   {
     name: "app/doc",
-    // Opened from the Docs list, so its back link reads Docs whatever the last shot showed.
-    route: "/docs",
+    route: "/inbox",
     viewport: { width: 1280, height: 860 },
     steps: [
-      { js: `history.pushState(null, "", "/docs/${RETRY_SPEC_ID}"); dispatchEvent(new PopStateEvent("popstate"))` },
+      ...from(`/docs/${RETRY_SPEC_ID}`),
       { wait: ".doc-editor-content", text: "Retry queue for failed webhooks" },
       { sleep: 800 },
     ],
@@ -36,7 +35,7 @@ export const RECALL_SHOWING: Shot[] = [
     name: "ambient-awareness/stable-context",
     route: "/inbox",
     viewport: { width: 1200, height: 800 },
-    steps: [...from(RECALL), { wait: "[data-sv-feed] button[aria-expanded]", text: "session pointers" }, { click: "button[aria-expanded]", text: "session pointers" }, { sleep: 600 }, { js: `document.querySelector("div.conv-col:has(> button[aria-expanded=true])").scrollIntoView({ block: "center" })` }, { sleep: 600 }],
+    steps: [...from(RECALL), { wait: "[data-sv-feed] button[aria-expanded]", text: "session pointers" }, { js: `document.querySelector("button[aria-expanded=false]:has(.lucide-layers)")?.click()` }, { wait: "button[aria-expanded=true]", text: "session pointers" }, { sleep: 600 }, { js: `document.querySelector("div.conv-col:has(> button[aria-expanded=true])").scrollIntoView({ block: "center" })` }, { sleep: 600 }],
     crop: { selector: "div.conv-col:has(> button[aria-expanded=true])", pad: 16 },
     frame: "element",
     out: "public/documentation/ambient-awareness/stable-context.webp",
