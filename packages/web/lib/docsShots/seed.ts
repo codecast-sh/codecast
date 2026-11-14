@@ -6,13 +6,15 @@ import { useInboxStore } from "../../store/inboxStore";
 import { settleFreshHomeLaunch } from "../../store/viewNav";
 import { TOURS } from "../../tours/registry";
 import { tourSeenId } from "../../tours/seen";
+import { TIPS } from "../../tips/registry";
 import { SNIPPET_CATALOG } from "@codecast/shared/contracts";
 import { snippetIntroKey } from "../newSnippets";
 import { placeAcmeInbox, seedAcmeWorld } from "../acmeWorld/seed";
 
 export function seedDocsShots(ui: Record<string, unknown>) {
   const extra = {
-    tips: { completed: TOURS.map((t) => tourSeenId(t.id)), seen: [], dismissed: [] },
+    // Every tip seen: a milestone ("Keyboard shortcut unlocked") otherwise toasts on the first shortcut a step presses.
+    tips: { completed: TOURS.map((t) => tourSeenId(t.id)), seen: TIPS.map((t) => t.id), dismissed: [] },
     dismissed: {
       desktop_app: true,
       ios_app: true,
