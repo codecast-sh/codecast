@@ -604,8 +604,10 @@ describe("command groups stay off the boot graph", () => {
     // for its max-lines pin (2026-11-13), no new code. 595 after
     // foreignSessionWriter.ts (2026-11-14, GitHub #88): the resume path's
     // check for another program running the session; sessionProcessMatcher.ts,
-    // its natural home, sits at the max-lines cap.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(595);
+    // its natural home, sits at the max-lines cap. 596 after headlessRuns.ts
+    // (2026-11-14): the one rule that keeps headless agent runs out of the
+    // inbox, read by the daemon's create paths and its repair of leaked rows.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(596);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
