@@ -105,6 +105,15 @@ describe("verbs and ops", () => {
     expect(d.input("c:Sheet1!D3")).toBe("5");
   });
 
+  test("a range read shows spilled dates as dates, through nested array functions", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "Due\tN\n2026-11-20\t2\n2026-11-05\t9\n2026-12-01\t5");
+    d.verb("write", ["D1"], "=FILTER(A2:A4,B2:B4>3)");
+    d.verb("write", ["E1"], "=SORT(FILTER(A2:B4,B2:B4>1))");
+    const r = readSheetRange(d.elements(), "D1:F3", { datesAsText: true });
+    expect(r).toMatchObject({ values: [["2026-11-05", "2026-11-05", 9], ["2026-12-01", "2026-11-20", 2], [null, "2026-12-01", 5]] });
+  });
+
   test("sort moves rows and their formulas", () => {
     const d = doc(sheetSpec.seed!());
     d.verb("write", ["A1"], "Name\tN\tDouble\nb\t2\t=B2*2\nc\t3\t=B3*2\na\t1\t=B4*2");

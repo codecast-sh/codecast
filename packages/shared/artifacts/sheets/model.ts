@@ -281,10 +281,9 @@ export function readSheetRange(
     row.map((v, j) => {
       if (opts.datesAsText && typeof v === "number") {
         const col = rect.c0 + j, row = rect.r0 + i;
-        const el = t.cells.get(cellNum(col, row));
-        const info = wb.cell(r.tab.id, col, row);
-        const own = styleOf(el);
-        const implied = info?.formula ? inheritedFormat(model, r.tab.id, info.input) : info?.implied;
+        // The format the grid shows: a cell's own, else its formula's or its spill source's (displayFormat).
+        const own = styleOf(t.cells.get(cellNum(col, row)));
+        const implied = displayFormat(model, wb, r.tab.id, col, row);
         const nf = own.nf ?? implied?.nf;
         if (nf === "date" || nf === "datetime" || nf === "time") return formatValue(v, own, implied);
       }
