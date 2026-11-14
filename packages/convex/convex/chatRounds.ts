@@ -175,7 +175,7 @@ async function advance(
       continue;
     }
     round = grantFloor(round, member.key, String(conversation._id), String(wakeId), Date.now());
-    await openSessionReply(ctx, { channel, threadRootId: rootId, wakeId });
+    await openSessionReply(ctx, { channel, threadRootId: rootId, wakeId, grant: false });
     await ctx.scheduler.runAfter(FLOOR_PICKUP_MS, internal.chatRounds.checkFloor, { root_id: rootId, wake_id: String(wakeId) });
     return round;
   }
