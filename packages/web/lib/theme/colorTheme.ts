@@ -23,9 +23,15 @@ export type ThemeChoice = { key: string; modTitle?: string; theme: ModTheme };
 export const DEFAULT_COLOR_THEME = themeKey(BUILTIN_THEME_SOURCE, DEFAULT_THEME.id);
 export const ORIGINAL_COLOR_THEME = themeKey(BUILTIN_THEME_SOURCE, "original");
 
+/** Themes codecast no longer ships, and the one closest to each. */
+const RETIRED_THEMES: Record<string, string> = {
+  [themeKey(BUILTIN_THEME_SOURCE, "kiln")]: themeKey(BUILTIN_THEME_SOURCE, "vellum"),
+};
+
 /** The stored choice (clientState.ui.color_theme), or the default when there is none. */
 export function resolveColorThemeKey(stored: string | null | undefined): string {
-  return stored || DEFAULT_COLOR_THEME;
+  const key = stored || DEFAULT_COLOR_THEME;
+  return RETIRED_THEMES[key] ?? key;
 }
 
 const BUILTIN_CHOICES: ThemeChoice[] = BUILTIN_THEMES.map((theme) => ({ key: themeKey(BUILTIN_THEME_SOURCE, theme.id), theme }));

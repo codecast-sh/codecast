@@ -18,6 +18,8 @@ describe("built-in color themes", () => {
     expect(DEFAULT_THEME.dark).toEqual(byId("fjord").dark!);
     expect(resolveColorThemeKey(undefined)).toBe(DEFAULT_COLOR_THEME);
     expect(resolveColorThemeKey("")).toBe(DEFAULT_COLOR_THEME);
+    // A retired theme resolves to its closest survivor, never to nothing.
+    expect(resolveColorThemeKey("codecast/kiln")).toBe("codecast/vellum");
     const original = availableThemes([], []).find((c) => c.key === ORIGINAL_COLOR_THEME)!;
     expect(themeVarsByMode(original.theme)).toEqual({ light: {}, dark: {} });
   });

@@ -73,22 +73,6 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
     },
   },
   {
-    id: "kiln",
-    title: "Kiln",
-    light: {
-      bg: "#f7eedd", "bg-alt": "#eee2c6", card: "#fcf6e8", border: "#d8c8a4",
-      text: "#3c3836", "text-muted": "#564e49", "text-dim": "#6e635a", link: "#af3a03",
-      red: "#b8261a", orange: "#a7490a", amber: "#8b5a06", yellow: "#73650a",
-      green: "#5f6c10", cyan: "#386f50", blue: "#2f6a72", violet: "#7b4b8f", magenta: "#9a3d63",
-    },
-    dark: {
-      bg: "#1f1c1a", "bg-alt": "#262220", card: "#2c2724", border: "#403833",
-      text: "#ebdbb2", "text-muted": "#bdae93", "text-dim": "#9a8c78", link: "#f0b232",
-      red: "#f2594b", orange: "#f28534", amber: "#f0b232", yellow: "#d8c048",
-      green: "#a9b83a", cyan: "#7fbfa6", blue: "#83a598", violet: "#b38bc4", magenta: "#d3869b",
-    },
-  },
-  {
     id: "rosewood",
     title: "Rosewood",
     light: {
@@ -118,6 +102,70 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
       text: "#d4d9f2", "text-muted": "#9aa1c4", "text-dim": "#7f85a6", link: "#7aa2f7",
       red: "#f7768e", orange: "#ff9e64", amber: "#e0af68", yellow: "#e3cf7a",
       green: "#9ece6a", cyan: "#7dcfff", blue: "#7aa2f7", violet: "#bb9af7", magenta: "#e48bd2",
+    },
+  },
+  {
+    id: "graphite",
+    title: "Graphite",
+    light: {
+      bg: "#f5f5f5", "bg-alt": "#ebebeb", card: "#ffffff", border: "#d4d4d4",
+      text: "#1a1a1a", "text-muted": "#454545", "text-dim": "#5c5c5c", link: "#1f5fbf",
+      red: "#b42d2d", orange: "#a14a12", amber: "#875c06", yellow: "#6e6510",
+      green: "#2f6e34", cyan: "#16697a", blue: "#2a5db0", violet: "#6646b0", magenta: "#a03a78",
+    },
+    dark: {
+      bg: "#161616", "bg-alt": "#1d1d1d", card: "#232323", border: "#383838",
+      text: "#e8e8e8", "text-muted": "#b4b4b4", "text-dim": "#949494", link: "#8ab4f8",
+      red: "#f08080", orange: "#f0a070", amber: "#e6bb6a", yellow: "#dcd07a",
+      green: "#8fcf8a", cyan: "#7cc8d4", blue: "#8ab4f8", violet: "#b9a4f2", magenta: "#e690c4",
+    },
+  },
+  {
+    id: "sakura",
+    title: "Sakura",
+    light: {
+      bg: "#fdf2f5", "bg-alt": "#f8e5eb", card: "#fffafb", border: "#ecc9d4",
+      text: "#3b1f2b", "text-muted": "#673a4c", "text-dim": "#7a4d5f", link: "#b02a62",
+      red: "#b8283f", orange: "#a5481c", amber: "#875a08", yellow: "#6e6210",
+      green: "#3a6d33", cyan: "#1d6b74", blue: "#3a5aa8", violet: "#7a45ad", magenta: "#b02a72",
+    },
+    dark: {
+      bg: "#22141b", "bg-alt": "#2a1922", card: "#311e28", border: "#4a2e3c",
+      text: "#f5dde6", "text-muted": "#d4a8b9", "text-dim": "#b68b9b", link: "#ff8fb8",
+      red: "#ff7a8a", orange: "#ff9e7a", amber: "#f2b56b", yellow: "#e8d27a",
+      green: "#9fd49a", cyan: "#86d4d4", blue: "#8fb0f0", violet: "#c9a2f2", magenta: "#ff8fc8",
+    },
+  },
+  {
+    id: "citrine",
+    title: "Citrine",
+    light: {
+      bg: "#fbf8e6", "bg-alt": "#f3eecf", card: "#fffdf2", border: "#ddd4a3",
+      text: "#2f2a10", "text-muted": "#524a1f", "text-dim": "#655d32", link: "#7a5600",
+      red: "#b3301f", orange: "#a0480c", amber: "#835900", yellow: "#665c00",
+      green: "#456a10", cyan: "#1d685f", blue: "#2e5f9e", violet: "#6a4c9c", magenta: "#9c3a6a",
+    },
+    dark: {
+      bg: "#1a1908", "bg-alt": "#211f0c", card: "#282612", border: "#3d3a1c",
+      text: "#f2ecc4", "text-muted": "#cac291", "text-dim": "#a9a173", link: "#f5d442",
+      red: "#f2735a", orange: "#f59a45", amber: "#f5c542", yellow: "#e8e055",
+      green: "#b5d158", cyan: "#7fcfb8", blue: "#8ab0e0", violet: "#c0a0e0", magenta: "#e890b8",
+    },
+  },
+  {
+    id: "cobalt",
+    title: "Cobalt",
+    light: {
+      bg: "#eef4ff", "bg-alt": "#e1ebfc", card: "#f9fbff", border: "#c3d4f0",
+      text: "#0f2347", "text-muted": "#334d78", "text-dim": "#465f8b", link: "#1a56d6",
+      red: "#bd2a3a", orange: "#a3460c", amber: "#855700", yellow: "#6a6000",
+      green: "#2b6b30", cyan: "#0a6782", blue: "#1a52cc", violet: "#5e3ebd", magenta: "#a32e86",
+    },
+    dark: {
+      bg: "#0a1a3a", "bg-alt": "#0e2147", card: "#132a55", border: "#23407a",
+      text: "#e2ecff", "text-muted": "#abc1ea", "text-dim": "#90a8d6", link: "#6cb4ff",
+      red: "#ff7a85", orange: "#ffa060", amber: "#ffc85a", yellow: "#f2e070",
+      green: "#8ee08a", cyan: "#5fdcf0", blue: "#6cb4ff", violet: "#b4a0ff", magenta: "#ff8ad0",
     },
   },
   {
@@ -164,7 +212,7 @@ export const ORIGINAL_PREVIEW: Record<"classic" | "minimal" | "modern", Record<"
       red: "#e8787a", orange: "#e88a64", amber: "#d9a05e", yellow: "#dcb25a", green: "#9bb873", cyan: "#73b2a8", blue: "#7ea7e2", violet: "#a99ce6", magenta: "#d185ad",
     },
   },
-  // Modern has no Solarized: with Original chosen it paints Verdigris, the
-  // palette it was drawn against (components/ThemeProvider.tsx applies it).
+  // Modern has no Solarized: with Original chosen it paints the default theme
+  // (and the picker hides Original there) (components/ThemeProvider.tsx applies it).
   modern: { light: BUILTIN_THEMES[0].light!, dark: BUILTIN_THEMES[0].dark! },
 };
