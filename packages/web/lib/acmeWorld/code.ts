@@ -65,7 +65,7 @@ export function history(event: WebhookEvent) {
 }
 `;
 
-const LINES = FILE.trimEnd().split("\n").length;
+const LINES = FILE.split("\n").length;
 
 type Commit = { sha: string; message: string; who: Person; ago: number; session?: { _id: string; short_id: string; title: string; who: Person } };
 

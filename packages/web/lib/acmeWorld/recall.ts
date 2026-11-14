@@ -3,15 +3,17 @@
 // session started with the team's stable context feed, so its transcript
 // opens on the strip of session pointers it was handed. The same feed
 // (conversations.feedForCLI) answers the new-session screen's Context
-// preview. The conversation is written as a conversation record only, never
-// an inbox row, so the inbox shots stay as they are. Mobile's Metro reaches
+// preview. The session is filed out of the inbox (dismissed), so the inbox
+// shots stay as they are. Mobile's Metro reaches
 // this file, so imports stay relative.
 
 import type { AcmePart } from "./parts";
-import { MIN, PEOPLE, TEAM_ID, WORKSPACE, cid } from "./world";
+import { MIN, PEOPLE, cid, session } from "./world";
 import { OWN_SESSIONS, TEAM_SESSIONS as T, type TeamSession } from "./teamSessions";
 
-export const RECALL_SESSION = { _id: cid("whybackoff"), short_id: "jx7z4wb", title: "Why webhook retries back off", agent_type: "claude_code" };
+export const RECALL_SESSION = { _id: cid("whybackoff"), short_id: "jx7z4wb", title: "Why deliveries back off this way", agent_type: "claude_code" };
+
+const TEAM_BY_ID = new Map<string, TeamSession>(Object.values(T).map((s) => [s._id, s]));
 
 /** The feed, newest first: what a team-mode session is pointed at when it starts. */
 const FEED: TeamSession[] = [...OWN_SESSIONS, ...Object.values(T)].sort((a, b) => a.ago - b.ago);
@@ -32,7 +34,7 @@ const feedItem = (s: TeamSession, now: number) => ({
 const STABLE_CONTEXT = (now: number) =>
   JSON.stringify({ mode: "team", global: false, injected_at: now - 6 * MIN, items: FEED.slice(0, 15).map((s) => feedItem(s, now)) });
 
-const REPLY = `Because Maya measured it. In [Backoff schedule for webhook retries](/conversation/${T.backoff._id}) she replayed a week of failed deliveries: exponential backoff with jitter recovered 96% by the fifth attempt, against 71% for a fixed 5s retry. The 2s, 4s, 8s, 16s steps outlast the ledger's restarts without piling retries onto it while it comes back, and the jitter keeps a burst of failures from retrying in lockstep.`;
+const REPLY = `Because Maya measured it. In @[Backoff schedule for webhook retries ${T.backoff._id}] she replayed a week of failed deliveries: exponential backoff with jitter recovered 96% by the fifth attempt, against 71% for a fixed 5s retry. The 2s, 4s, 8s, 16s steps outlast the ledger's restarts without piling retries onto it while it comes back, and the jitter keeps a burst of failures from retrying in lockstep.`;
 
 export const RECALL_TRANSCRIPT = (now: number) => {
   const t = (minsAgo: number) => now - minsAgo * MIN;
@@ -63,38 +65,36 @@ export const RECALL_TRANSCRIPT = (now: number) => {
   ];
 };
 
-const recallRow = (now: number) => ({
-  _id: RECALL_SESSION._id,
-  session_id: `${RECALL_SESSION._id}-sess`,
-  short_id: RECALL_SESSION.short_id,
-  title: RECALL_SESSION.title,
-  agent_type: RECALL_SESSION.agent_type,
-  user_id: PEOPLE.me._id,
-  author_name: PEOPLE.me.name,
-  is_own: true,
-  status: "active",
-  team_id: TEAM_ID,
-  workspace: WORKSPACE,
-  project_path: "~/src/billing",
-  git_root: "~/src/billing",
-  git_branch: "main",
-  message_count: 3,
-  started_at: now - 6 * MIN,
-  updated_at: now - 3 * MIN,
-  last_message_at: now - 3 * MIN,
-  agent_status: "done",
-  agent_status_at: now - 3 * MIN,
-  is_idle: true,
-  stable_context: STABLE_CONTEXT(now),
-});
+/** Filed out of the inbox (dismissed), so the inbox shots are unchanged, yet it opens like any session. */
+const recallRow = (now: number) =>
+  session(now, RECALL_SESSION, {
+    ago: 3 * MIN,
+    waiting: "done",
+    project: "~/src/billing",
+    messages: 3,
+    extra: { stable_context: STABLE_CONTEXT(now), inbox_dismissed_at: now - 2 * MIN },
+  });
 
 export const RECALL_PART: AcmePart = {
   name: "recall",
+  sessions: (now) => [recallRow(now)],
   seed: (s, now) => {
-    s.syncRecord("conversations", RECALL_SESSION._id, recallRow(now));
     s.applyTailMessages(RECALL_SESSION._id, 0, RECALL_TRANSCRIPT(now) as any, null);
   },
   answers: {
+    // A reference to a teammate's session (the memory answer's citation) resolves through these.
+    "entities:resolveIdType": (a) => (TEAM_BY_ID.has(String(a?.id)) ? "session" : null),
+    "conversations:webGet": (a) => {
+      const s = TEAM_BY_ID.get(String(a?.id)) ?? [...TEAM_BY_ID.values()].find((x) => x.short_id === a?.short_id);
+      if (!s) return null;
+      const now = Date.now();
+      return {
+        _id: s._id, short_id: s.short_id, title: s.title, agent_type: s.agent_type, status: "active",
+        user_id: s.who._id, author_name: s.who.name, user: { name: s.who.name, image: s.who.image, avatar_url: s.who.image },
+        project_path: s.project, message_count: s.messages, updated_at: now - s.ago, started_at: now - s.ago - 40 * MIN,
+        agent_status: s.state === "working" ? "working" : "done", is_own: false,
+      };
+    },
     "conversations:feedForCLI": (a) => {
       const now = Date.now();
       const limit = Number(a?.limit) || 15;

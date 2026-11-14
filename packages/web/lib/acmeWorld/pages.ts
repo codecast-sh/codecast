@@ -4,7 +4,7 @@
 // reaches this file, so imports stay relative.
 
 import type { AcmePart } from "./parts";
-import { DAY, HOUR, MIN, PEOPLE, SESSIONS, WORKSPACE, type Person } from "./world";
+import { DAY, HOUR, MIN, PEOPLE, SESSIONS, WORKSPACE, cid, session, type Person } from "./world";
 
 export const REPORT_SLUG = "acme-webhook-retry-failures";
 
@@ -59,7 +59,44 @@ export const PAGES = (now: number) =>
     };
   });
 
+/** The session that published the report, with the page's link alone on a line of its reply: the app embeds it.
+ *  Filed out of the inbox (dismissed), so the inbox shots are unchanged. */
+export const REPORT_SESSION = { _id: cid("rptfailures"), short_id: "jx7m8rp", title: "Failure report for support", agent_type: "claude_code" };
+
+const REPORT_TRANSCRIPT = (now: number) => [
+  { _id: "hero-rpt-m1", role: "user", content: "Make a page with last week's webhook retry failures that support can read.", timestamp: now - 16 * MIN },
+  {
+    _id: "hero-rpt-m2",
+    role: "assistant",
+    content: "Pulling last week's failed deliveries and building the report.",
+    tool_calls: [{ id: "hero-rpt-tc1", name: "Bash", input: JSON.stringify({ command: "cast publish report.html", description: "Publish the report" }) }],
+    tool_results: [{ tool_use_id: "hero-rpt-tc1", content: `Published v3: https://codecast.sh/a/${REPORT_SLUG}` }],
+    timestamp: now - 15 * MIN,
+  },
+  {
+    _id: "hero-rpt-m3",
+    role: "assistant",
+    content: `The report is up:\n\nhttps://codecast.sh/a/${REPORT_SLUG}\n\nMost failures cluster around the 02:00 ledger restart, and 96% of them landed on a retry.`,
+    timestamp: now - 14 * MIN,
+  },
+];
+
+const reportRow = (now: number) =>
+  session(now, REPORT_SESSION, { ago: 14 * MIN, waiting: "done", project: "~/src/billing", messages: 3, extra: { inbox_dismissed_at: now - 10 * MIN } });
+
 export const PAGES_PART: AcmePart = {
   name: "pages",
-  answers: { "artifacts:listForWeb": () => ({ artifacts: PAGES(Date.now()) }) },
+  sessions: (now) => [reportRow(now)],
+  seed: (s, now) => {
+    s.applyTailMessages(REPORT_SESSION._id, 0, REPORT_TRANSCRIPT(now) as any, null);
+  },
+  answers: {
+    "artifacts:listForWeb": () => ({ artifacts: PAGES(Date.now()) }),
+    // What an embed needs to frame a page (artifacts.embedInfo): open pages only, so no gate tokens.
+    "artifacts:embedInfo": (a) =>
+      (a?.pages ?? []).map((p: { slug: string }) => {
+        const page = PAGES(Date.now()).find((x) => x.slug === p.slug);
+        return page ? { slug: page.slug, title: page.title, version: page.version, kind: page.kind, gated: false, thumb: false } : { slug: p.slug, missing: true };
+      }),
+  },
 };

@@ -23,8 +23,8 @@ export type TeamSession = {
 export const TEAM_SESSIONS = {
   backoff: { _id: cid("bckoffmaya"), short_id: "jx7p2mb", title: "Backoff schedule for webhook retries", agent_type: "claude_code", who: PEOPLE.maya, ago: 2 * DAY, project: "~/src/billing", messages: 58, state: "done" },
   replay: { _id: cid("rplysarah"), short_id: "jx7q8sr", title: "Replay dropped Stripe webhooks", agent_type: "codex", who: PEOPLE.sarah, ago: 26 * HOUR, project: "~/src/support-tools", messages: 18, state: "done" },
-  dlq: { _id: cid("dlqmaya"), short_id: "jx7r4dl", title: "Dead-letter queue for poisoned events", agent_type: "cursor", who: PEOPLE.maya, ago: 5 * HOUR, project: "~/src/billing", messages: 37, state: "needs_input" },
-  hmac: { _id: cid("hmcsarah"), short_id: "jx7s1hm", title: "Sign webhook payloads with HMAC", agent_type: "claude_code", who: PEOPLE.sarah, ago: 3 * HOUR, project: "~/src/billing", messages: 44, state: "working" },
+  dlq: { _id: cid("dlqmaya"), short_id: "jx7r4dl", title: "Dead-letter queue for poisoned events", agent_type: "cursor", who: PEOPLE.maya, ago: 50_000, project: "~/src/billing", messages: 37, state: "needs_input" },
+  hmac: { _id: cid("hmcsarah"), short_id: "jx7s1hm", title: "Sign webhook payloads with HMAC", agent_type: "claude_code", who: PEOPLE.sarah, ago: 30_000, project: "~/src/billing", messages: 44, state: "working" },
   sigrot: { _id: cid("sgnmaya"), short_id: "jx7t6sg", title: "Webhook signature rotation", agent_type: "claude_code", who: PEOPLE.maya, ago: 9 * HOUR, project: "~/src/billing", messages: 41, state: "done" },
   oncall: { _id: cid("pgrsarah"), short_id: "jx7u3pg", title: "Page on-call when retries run out", agent_type: "codex", who: PEOPLE.sarah, ago: DAY, project: "~/src/infra", messages: 12, state: "done" },
   ledger: { _id: cid("ldgmaya"), short_id: "jx7v9lg", title: "Ledger restart drops webhooks", agent_type: "claude_code", who: PEOPLE.maya, ago: 3 * DAY, project: "~/src/billing", messages: 26, state: "done" },

@@ -9,7 +9,7 @@ import { DAY, HOUR, MIN, PEOPLE, SESSIONS, TEAM_ID, WORKSPACE, cid } from "./wor
 
 export const RETRY_SPEC_ID = cid("docretryspec");
 
-const RETRY_SPEC = `Support saw two Stripe events dropped overnight. Both failed on a 502 from the ledger during its restart, and nothing tried them again. This page is the policy every webhook delivery follows from now on.
+const RETRY_SPEC = `Support saw two Stripe events dropped overnight. Both failed on a 502 from the ledger during its restart, and nothing tried them again. This page is the policy every webhook delivery follows from now on, enforced by @[Retry queue for failed webhooks ct-4182].
 
 ## When a delivery is retried
 
@@ -27,7 +27,7 @@ A delivery is retried when the endpoint answers 5xx or 429, or does not answer w
 | 4 | 8s | 14s |
 | 5 | 16s | 30s |
 
-Each wait carries up to 20% jitter, so a burst of failures does not retry in lockstep. The queue is built in @[Retry queue for failed webhooks ct-4182].
+Each wait carries up to 20% jitter, so a burst of failures does not retry in lockstep.
 
 ## After the last attempt
 
