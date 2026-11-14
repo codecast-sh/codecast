@@ -8,13 +8,16 @@ import { SESSIONS } from "../../lib/acmeWorld/world";
 const card = (slug: string) => ({ selector: `[data-feature-card="${slug}"]`, pad: 12 });
 const dialog = { selector: "[role=dialog][data-state=open]", pad: 0 };
 const feed = { selector: "[data-sv-feed]", pad: 0 };
-const conv = (id: string) => `/inbox?s=${id}`;
+/** Sessions open from the inbox: the route lands there and `open` moves to the session. */
+const conv = (_id: string) => "/inbox";
 /** A world scene, once the page (reloaded by anyone's edit) has installed them. */
 const scene = (call: string) => ({
   js: `new Promise((done) => { const go = () => (window.__acmeScene ? done(__acmeScene.${call}) : setTimeout(go, 200)); go(); })`,
 });
-/** Puts one of the machine sessions in the inbox, so its pane draws the transcript. */
-const open = (id: string) => scene(`open(${JSON.stringify(id)})`);
+/** Puts one of the machine sessions in the inbox (its pane draws a transcript only
+ *  for a session the inbox holds), then opens it at its address. */
+const open = (id: string) =>
+  scene(`open(${JSON.stringify(id)}), history.pushState(null, "", "/inbox?s=${id}"), dispatchEvent(new PopStateEvent("popstate"))`);
 /** The Stripe test key a person pastes: built here so no whole key literal sits in the source. */
 const FAKE_KEY = ["sk", "test", "51AcmeFixtureOnlyNotARealKey00"].join("_");
 /** A transcript shot: the conversation's feed column, once its rows painted. */
@@ -74,8 +77,8 @@ export const MACHINES_SHOTS: Shot[] = [
   feature("usage-limits/limits-feature", "limits", "public/documentation/usage-limits/limits-feature.webp"),
 
   /* ── Transcripts ── */
-  transcript("browser/conversation", MS.browser._id, "Retries are on for the Stripe endpoint", "public/documentation/browser/conversation.webp"),
-  transcript("browser/setup-card", MS.browserSetup._id, "Pair", "public/documentation/browser/setup-card.webp"),
+  transcript("browser/conversation", MS.browser._id, "Retries are on for the Stripe endpoint", "public/documentation/browser/conversation.webp", { viewport: { width: 1100, height: 760 } }),
+  transcript("browser/setup-card", MS.browserSetup._id, "Pair", "public/documentation/browser/setup-card.webp", { viewport: { width: 1100, height: 800 } }),
   {
     name: "browser/watch-live",
     route: conv(MS.watch._id),
@@ -84,10 +87,10 @@ export const MACHINES_SHOTS: Shot[] = [
     frame: "window",
     out: "public/documentation/browser/watch-live.webp",
   },
-  transcript("computer/conversation", MS.computer._id, "nothing else was changed", "public/documentation/computer/conversation.webp"),
-  transcript("skills/conversation", MS.skills._id, "judgment calls", "public/documentation/skills/conversation.webp"),
-  transcript("typecheck/conversation", MS.check._id, "typechecks clean", "public/documentation/typecheck/conversation.webp"),
-  transcript("vault/request-card", MS.vault._id, "stripe-test", "public/documentation/vault/request-card.webp"),
+  transcript("computer/conversation", MS.computer._id, "nothing else was changed", "public/documentation/computer/conversation.webp", { viewport: { width: 1100, height: 820 } }),
+  transcript("skills/conversation", MS.skills._id, "judgment calls", "public/documentation/skills/conversation.webp", { viewport: { width: 1100, height: 1040 } }),
+  transcript("typecheck/conversation", MS.check._id, "typechecks clean", "public/documentation/typecheck/conversation.webp", { viewport: { width: 1100, height: 940 } }),
+  transcript("vault/request-card", MS.vault._id, "stripe-test", "public/documentation/vault/request-card.webp", { crop: { selector: "[data-vault-request-card]", pad: 6 } }),
   transcript("usage-limits/limit-card", MS.limit._id, "resolved", "public/documentation/usage-limits/limit-card.webp"),
   {
     name: "vault/composer-catch",
@@ -100,7 +103,7 @@ export const MACHINES_SHOTS: Shot[] = [
   },
   {
     name: "skills/slash-menu",
-    route: conv(SESSIONS.lead._id),
+    route: `/conversation/${SESSIONS.lead._id}`,
     viewport: { width: 1100, height: 900 },
     steps: [{ wait: "[data-composer-field]" }, { click: "[data-composer-field]" }, { type: "/cast-" }, { wait: "body", text: "cast-second-opinion" }, { sleep: 800 }],
     crop: { selector: "[data-composer-shell]", pad: 16 },

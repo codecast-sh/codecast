@@ -264,7 +264,7 @@ const CHECK = (now: number): Msg[] => {
     {
       _id: "hero-mk-4",
       role: "assistant",
-      content: "",
+      content: "Checking again.",
       tool_calls: [sh("hero-mk-tc5", "cast check webhooks")],
       tool_results: [result("hero-mk-tc5", "webhooks  ✓ typecheck passed, 0 errors (1.8s)")],
       timestamp: t(4),
