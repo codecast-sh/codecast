@@ -230,3 +230,64 @@ describe("runChain records the chain as a run (the-line.md L7)", () => {
     expect(launched).toHaveLength(0);
   });
 });
+
+import * as nodeFs from "node:fs";
+import * as nodeOs from "node:os";
+import * as nodePath from "node:path";
+import { announcedSessionId, startLaunch } from "./execCommand.js";
+import { declaredSpawnParent } from "./spawnParents.js";
+
+describe("cast exec declares its caller as the child's parent", () => {
+  const codexHeader = "Reading additional input from stdin...\nOpenAI Codex v0.169.0\n--------\nworkdir: /tmp\nsession id: 01a1db20-ae68-77e1-94ea-6e2c7df84697\n--------\n";
+
+  test("reads codex's thread id from its stderr header and from --json output", () => {
+    expect(announcedSessionId("codex", codexHeader)).toBe("01a1db20-ae68-77e1-94ea-6e2c7df84697");
+    expect(announcedSessionId("codex", '{"type":"thread.started","thread_id":"01a1db21-3904-7be0-b0de-2e368b8ff290"}\n'))
+      .toBe("01a1db21-3904-7be0-b0de-2e368b8ff290");
+    expect(announcedSessionId("codex", "workdir: /tmp\n")).toBeNull();
+    expect(announcedSessionId("claude", codexHeader)).toBeNull();
+  });
+
+  // A codex review that fails on auth exits in about a second, before the daemon
+  // walks its process ancestry; without a declaration it became a loose inbox card.
+  test("a codex child that exits at once is still declared, even with its header split across chunks", async () => {
+    const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), "exec-parent-"));
+    try {
+      const result = await startLaunch(
+        { agent: "codex", binary: "codex", binaryArgs: [] },
+        { cwd: dir, inheritStdin: false },
+        async (_bin, _args, opts) => {
+          opts.watchOutput?.(codexHeader.slice(0, 70));
+          opts.watchOutput?.(codexHeader.slice(70));
+          opts.watchOutput?.("ERROR: You've hit your usage limit.\n");
+          return { code: 1, output: "" };
+        },
+        "caller-session",
+        dir,
+      );
+      expect(result.code).toBe(1);
+      expect(declaredSpawnParent(dir, "01a1db20-ae68-77e1-94ea-6e2c7df84697")).toEqual({ sessionId: "caller-session" });
+    } finally {
+      nodeFs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a claude child is declared before it starts and its output is not tapped", async () => {
+    const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), "exec-parent-"));
+    try {
+      await startLaunch(
+        { agent: "claude", binary: "claude", binaryArgs: [], childSessionId: "child-uuid" },
+        { cwd: dir, inheritStdin: false },
+        async (_bin, _args, opts) => {
+          expect(declaredSpawnParent(dir, "child-uuid")).toEqual({ sessionId: "caller-session" });
+          expect(opts.watchOutput).toBeUndefined();
+          return { code: 0, output: "" };
+        },
+        "caller-session",
+        dir,
+      );
+    } finally {
+      nodeFs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

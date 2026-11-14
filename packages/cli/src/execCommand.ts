@@ -143,6 +143,9 @@ export interface RunChildOptions {
   inheritStdin: boolean;
   capture?: boolean;
   onChunk?: (text: string) => void;
+  /** Sees every stdout and stderr chunk. Without `capture` the child's output is
+   *  piped through to this process's own streams so it can be read on the way. */
+  watchOutput?: (text: string) => void;
 }
 
 /** How a resolved print command is started. The default spawns the binary; a
@@ -152,19 +155,26 @@ export type ChildLauncher = (binary: string, args: string[], opts: RunChildOptio
 
 function runChild(binary: string, args: string[], opts: RunChildOptions): Promise<ChildResult> {
   return new Promise((resolve, reject) => {
+    const piped = opts.capture || !!opts.watchOutput;
     const child = spawn(binary, args, {
       cwd: opts.cwd,
-      stdio: [opts.inheritStdin ? "inherit" : "ignore", opts.capture ? "pipe" : "inherit", opts.capture ? "pipe" : "inherit"],
+      stdio: [opts.inheritStdin ? "inherit" : "ignore", piped ? "pipe" : "inherit", piped ? "pipe" : "inherit"],
     });
     const chunks: string[] = [];
-    if (opts.capture) {
+    if (piped) {
       child.stdout?.setEncoding("utf8");
       child.stdout?.on("data", (d: string) => {
+        opts.watchOutput?.(d);
+        if (!opts.capture) return void process.stdout.write(d);
         chunks.push(d);
         opts.onChunk?.(d);
       });
       child.stderr?.setEncoding("utf8");
-      child.stderr?.on("data", (d: string) => opts.onChunk?.(d));
+      child.stderr?.on("data", (d: string) => {
+        opts.watchOutput?.(d);
+        if (!opts.capture) return void process.stderr.write(d);
+        opts.onChunk?.(d);
+      });
     }
     let timedOut = false;
     const timer = opts.timeoutMs
@@ -270,17 +280,52 @@ function resolveLaunch(prompt: string, flags: ExecFlags, definition: AgentDefini
   return { agent, binary: launchBinary(agent), binaryArgs, warnings, childSessionId };
 }
 
-/** Start a resolved launch. A child with a known session id is declared as the
- *  calling session's own first, so the daemon nests it under that session
- *  instead of filing it as a loose inbox card. */
+// Codex picks its own thread id and prints it as it starts: `session id: <id>`
+// in the stderr header, or a `thread.started` event on stdout under --json.
+const CODEX_SESSION_ID = /(?:^|\n)session id: ([A-Za-z0-9-]+)|"type":"thread\.started","thread_id":"([A-Za-z0-9-]+)"/;
+
+function announcesSessionId(agent: AgentClientId): boolean {
+  return agent === "codex";
+}
+
+/** The session id a child announces in its own output, for clients that cannot
+ *  be told one up front. */
+export function announcedSessionId(agent: AgentClientId, text: string): string | null {
+  if (!announcesSessionId(agent)) return null;
+  const m = CODEX_SESSION_ID.exec(text);
+  return m ? (m[1] ?? m[2]) : null;
+}
+
+/** Start a resolved launch. The child is declared as the calling session's own,
+ *  so the daemon nests it under that session instead of filing it as a loose
+ *  inbox card, even when the child exits before the daemon can walk its process
+ *  ancestry (a run that fails on auth in a second). A client told its session id
+ *  is declared before it starts; one that picks its own is declared the moment
+ *  it prints the id. */
 export function startLaunch(
-  launch: Pick<ResolvedLaunch, "binary" | "binaryArgs" | "childSessionId">,
+  launch: Pick<ResolvedLaunch, "agent" | "binary" | "binaryArgs" | "childSessionId">,
   opts: RunChildOptions,
   start: ChildLauncher = runChild,
   callerSessionId: string | null = sessionIdFromEnv(),
+  configDir: string = CONFIG_DIR,
 ): Promise<ChildResult> {
-  if (launch.childSessionId && callerSessionId) declareSpawnParent(CONFIG_DIR, launch.childSessionId, callerSessionId);
-  return start(launch.binary, launch.binaryArgs, opts);
+  if (!callerSessionId) return start(launch.binary, launch.binaryArgs, opts);
+  if (launch.childSessionId) {
+    declareSpawnParent(configDir, launch.childSessionId, callerSessionId);
+    return start(launch.binary, launch.binaryArgs, opts);
+  }
+  if (!announcesSessionId(launch.agent)) return start(launch.binary, launch.binaryArgs, opts);
+  let head = "";
+  let declared = false;
+  const watchOutput = (text: string) => {
+    if (declared) return;
+    head = (head + text).slice(-4096);
+    const id = announcedSessionId(launch.agent, head);
+    if (!id) return;
+    declared = true;
+    declareSpawnParent(configDir, id, callerSessionId);
+  };
+  return start(launch.binary, launch.binaryArgs, { ...opts, watchOutput });
 }
 
 // ─── Definitions and chains from the workspace ──────────────────────────────

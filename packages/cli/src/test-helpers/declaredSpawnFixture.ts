@@ -9,7 +9,7 @@ import { resolveSpawnerConversation } from "../daemon.js";
 const dir = process.argv[2];
 let started: string[] = [];
 await startLaunch(
-  { binary: "claude", binaryArgs: ["-p", "hi", "--session-id", "child-session"], childSessionId: "child-session" },
+  { agent: "claude", binary: "claude", binaryArgs: ["-p", "hi", "--session-id", "child-session"], childSessionId: "child-session" },
   { cwd: dir, inheritStdin: false, capture: true },
   async (_binary, args) => { started = args; return { code: 0, output: "" }; },
   "parent-session",
