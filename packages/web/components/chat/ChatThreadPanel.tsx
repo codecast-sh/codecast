@@ -99,7 +99,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
    *  the link lands nowhere unless the panel scrolls to it. */
   targetMessageId?: string;
   onClose: () => void;
-  onSend: (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean }) => void;
+  onSend: (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean }) => string | void;
   onReact?: (messageId: string, emoji: string) => void;
   onEdit?: (messageId: string, content: string) => void;
   onDelete?: (messageId: string) => void;

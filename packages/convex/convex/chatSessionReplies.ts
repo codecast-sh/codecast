@@ -35,6 +35,7 @@ import { resolveActor } from "./lib/actor";
 import { nextChatStamp, patchChat } from "./lib/chatRows";
 import { chatWaitClientId, parseChatWaitClientId } from "./lib/chatWakeIds";
 import { oneLine } from "./chatText";
+import { grantSessionRoom, grantTargetOf } from "./chatAccess";
 
 /** How often an open row checks that its session is still running. */
 export const SESSION_REPLY_CHECK_MS = 30 * 60_000;
@@ -68,10 +69,22 @@ export async function openSessionReply(
     channel: Doc<"chat_channels">;
     threadRootId?: Id<"chat_messages">;
     wakeId: Id<"pending_messages"> | null;
+    /** What the wake lets the session read in a DM (chatAccess): the room
+     *  (a person's mention, a hand-off), the thread only (a reply
+     *  relayed into the session that started it), or nothing (another
+     *  session's line set it off, which must not open a DM for a sibling). */
+    grant: "room" | "thread" | false;
   },
 ): Promise<Id<"chat_messages"> | null> {
   if (!opts.wakeId) return null;
   const wake = await ctx.db.get(opts.wakeId);
+  // The wake carried this room's line into the session, held or not: it may
+  // read the room now (chatAccess sessionMayReadChannel).
+  const grant = opts.grant;
+  if (wake && grant && (grant === "room" || opts.threadRootId)) {
+    const target = await ctx.db.get(wake.conversation_id);
+    if (target) await grantSessionRoom(ctx, opts.channel, grantTargetOf(target), grant === "thread" ? "relay" : "wake", grant === "thread" ? opts.threadRootId : undefined);
+  }
   // A held note is read on the session's next turn, not now: nothing is thinking.
   if (!wake?.client_id || wake.status === "held" || !UNREAD_WAKE.has(wake.status)) return null;
   const conversation = await ctx.db.get(wake.conversation_id);
@@ -112,6 +125,13 @@ export async function openSessionReply(
   });
   await ctx.scheduler.runAfter(SESSION_REPLY_CHECK_MS, internal.chatSessionReplies.checkSessionReply, { message_id: id });
   return id;
+}
+
+/** The session no longer holds this thread (it was handed to another): its thinking row there goes. */
+export async function closeSessionRepliesIn(ctx: MutationCtx, sessionId: string, channelId: Id<"chat_channels">, threadRootId: Id<"chat_messages">): Promise<void> {
+  for (const row of await openRows(ctx, sessionId)) {
+    if (samePlace(row, channelId, threadRootId)) await closeRow(ctx, row);
+  }
 }
 
 /** The session just posted `answer`: its thinking row in that place is done. */

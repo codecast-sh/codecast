@@ -99,6 +99,8 @@ export type ChatMessageView = {
   threadRootId?: string;
   /** The session the sender had open when they wrote this line. */
   contextSessionId?: string;
+  /** The session this thread was handed to (root rows only). */
+  boundSessionId?: string;
   /** Thread rollup, present only on a root message that has replies. */
   replyCount?: number;
   lastReplyAt?: number;
