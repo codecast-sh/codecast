@@ -600,12 +600,12 @@ describe("overlay read budget", () => {
     // One newest-message read for the non-idle row, one for the un-backfilled
     // row (shared by its fallback and its probe), none for settled rows.
     expect(by("messages")).toBe(2);
-    // The scan: recent x2 ranges, the subagent window, pinned, dismissed x2,
-    // stashed x2, snoozed x2, owners.
-    expect(by("conversations")).toBe(10);
+    // The scan: recent x2 ranges, the subagent window, pinned, adopted,
+    // dismissed x2, stashed x2, snoozed x2, owners.
+    expect(by("conversations")).toBe(11);
     expect(by("session_owners")).toBe(1);
     expect(by("get")).toBe(0);
-    expect(ops.length).toBe(16);
+    expect(ops.length).toBe(17);
   });
 });
 
