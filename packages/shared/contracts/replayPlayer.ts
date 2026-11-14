@@ -129,6 +129,74 @@ export const REPLAY_CHUNK_KINDS = ["events", "dom"] as const;
 export type ReplayChunkKind = (typeof REPLAY_CHUNK_KINDS)[number];
 
 /**
+ * Stylesheets a DOM capture names by href. Copying every linked sheet's text
+ * into every snapshot was three quarters of a snapshot's time and size (60 ms
+ * and 4.5 MB on the codecast inbox, against 16 ms and 1.5 MB without), so the
+ * SDK records a `<link>` as rrweb leaves it, href and all, and uploads each
+ * sheet's text once (replay-sign `kind: "style"`). The bucket keeps one copy
+ * per source, day and content (styles/<day>/<sha256>), so a sheet is stored
+ * once a day however many recordings name it, and never outlives a recording
+ * made that day under the bucket's 30 day rule. The player puts each sheet
+ * back where its link was (applyReplayStyles) before rrweb rebuilds the page.
+ */
+export const REPLAY_STYLE_LIMITS = {
+  /** One gzipped sheet. */
+  max_bytes: 4 * 1024 * 1024,
+  /** What one sheet may inflate to when read back. */
+  max_inflated_bytes: 16 * 1024 * 1024,
+  /** Sheets one recording may name. */
+  max_per_replay: 100,
+  href_max_chars: 2_048,
+} as const;
+
+/** One stored stylesheet in a player manifest: the href the capture names and a GET signed for a few minutes. */
+export interface ReplayPlayerStyle {
+  href: string;
+  url: string;
+}
+
+/** rrweb's serialized node kinds and event types this file reads. */
+const RRWEB_ELEMENT = 2;
+const RRWEB_FULL_SNAPSHOT = 2;
+const RRWEB_INCREMENTAL = 3;
+const RRWEB_MUTATION = 0;
+
+/**
+ * Put stored stylesheets back into a capture: every `<link rel=stylesheet>`
+ * whose href has text in `css` gets it as `_cssText`, the shape rrweb records
+ * when it inlines a sheet itself, so rrweb rebuilds it as a `<style>` and the
+ * player's CSP never sees a remote stylesheet. Walks full snapshots and the
+ * nodes mutations add. Edits the events in place; answers how many links it filled.
+ */
+export function applyReplayStyles(events: readonly unknown[], css: ReadonlyMap<string, string>): number {
+  if (!css.size) return 0;
+  let filled = 0;
+  const stack: unknown[] = [];
+  for (const e of events as Array<{ type?: number; data?: any }>) {
+    if (e?.type === RRWEB_FULL_SNAPSHOT && e.data?.node) stack.push(e.data.node);
+    else if (e?.type === RRWEB_INCREMENTAL && e.data?.source === RRWEB_MUTATION && Array.isArray(e.data.adds)) {
+      for (const add of e.data.adds) if (add?.node) stack.push(add.node);
+    }
+    while (stack.length) {
+      const n = stack.pop() as { type?: number; tagName?: string; attributes?: Record<string, unknown>; childNodes?: unknown[] };
+      if (!n || typeof n !== "object") continue;
+      const a = n.attributes;
+      if (n.type === RRWEB_ELEMENT && n.tagName === "link" && a && typeof a.href === "string" && /\bstylesheet\b/i.test(String(a.rel ?? ""))) {
+        const text = css.get(a.href);
+        if (text !== undefined) {
+          a._cssText = text;
+          delete a.href;
+          delete a.rel;
+          filled++;
+        }
+      }
+      if (Array.isArray(n.childNodes)) for (const c of n.childNodes) stack.push(c);
+    }
+  }
+  return filled;
+}
+
+/**
  * Why rrweb could not draw a capture, or null when it can. rrweb rebuilds a
  * page only from a full snapshot (type 2) that holds a serialized document;
  * anything else draws a blank frame, so the import keeps no such capture and
@@ -232,6 +300,8 @@ export interface ReplayPlayerManifest {
   t0: number;
   /** DOM chunks, in order, each a GET signed for a few minutes (gzipped JSON arrays of rrweb events). Empty when there is no capture. */
   dom_urls: string[];
+  /** Stylesheets the capture names by href (REPLAY_STYLE_LIMITS); absent or empty when it inlined its own. */
+  styles?: ReplayPlayerStyle[];
   /** When the capability lapses (epoch ms). */
   expires_at: number;
 }

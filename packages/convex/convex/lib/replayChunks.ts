@@ -8,7 +8,7 @@ import { readBodyCapped } from "./tokenHttp";
 import { parseReplayChunkKey, r2FreshGetUrl, r2Presign, replayDomChunkKey, replaysBucketFromEnv, safeReplayPathSegment, type R2Bucket } from "./r2";
 import { REPLAY_LIMITS, type ReplayEvent } from "@codecast/shared/contracts/replay";
 import { foldRepeatNavs, parseReplayEvents, sortReplayEvents, type RrwebEvent } from "@codecast/shared/replay";
-import { REPLAY_DOM_LIMITS, type ReplayDomChunkMeta, type ReplayPlayerManifest } from "@codecast/shared/contracts/replayPlayer";
+import { REPLAY_DOM_LIMITS, type ReplayDomChunkMeta, type ReplayPlayerManifest, type ReplayPlayerStyle } from "@codecast/shared/contracts/replayPlayer";
 
 /**
  * The most a chunk may expand to when gunzipped. A real chunk is at most
@@ -283,13 +283,15 @@ export async function signReplayChunks<T extends { chunk_keys: string[] }>(res: 
 
 /** The manifest the player reads, with the DOM keys swapped for URLs signed now. */
 export async function signPlayerManifest(
-  row: { dom_chunk_keys: string[]; replay: ReplayPlayerManifest["replay"]; t0: number },
+  row: { dom_chunk_keys: string[]; style_keys?: { href: string; key: string }[]; replay: ReplayPlayerManifest["replay"]; t0: number },
   expiresAt: number,
   bucket: R2Bucket,
   now: number = Date.now(),
 ): Promise<ReplayPlayerManifest> {
   const dom_urls: string[] = [];
   for (const key of row.dom_chunk_keys) dom_urls.push((await r2FreshGetUrl(bucket, key, now)).url);
-  return { replay: row.replay, t0: row.t0, dom_urls, expires_at: expiresAt };
+  const styles: ReplayPlayerStyle[] = [];
+  for (const s of row.style_keys ?? []) styles.push({ href: s.href, url: (await r2FreshGetUrl(bucket, s.key, now)).url });
+  return { replay: row.replay, t0: row.t0, dom_urls, ...(styles.length ? { styles } : {}), expires_at: expiresAt };
 }
 

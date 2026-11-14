@@ -12,6 +12,7 @@ import type { CodecastEventName, CodecastEventProps } from "@codecast/shared/ana
 export function initAnalytics() {}
 export function identifyUser(_userId: string, _traits?: Record<string, unknown>) {}
 export function resetUser() {}
+export function keepReplay(_reason: string) {}
 // Same signature as the web twin so a shared hook typechecks in both programs.
 export function track<N extends CodecastEventName>(event: N, properties: CodecastEventProps<N>) {
   trackNative(event, properties as Record<string, string | number | boolean>);

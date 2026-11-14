@@ -28,7 +28,7 @@
 // whose new chunks the page then reads like any other.
 import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
-import { needsVendorImport, type ReplayEvent } from "@codecast/shared/contracts/replay";
+import { keepReasonLabel, needsVendorImport, type ReplayEvent } from "@codecast/shared/contracts/replay";
 import { ExternalLink, Play } from "lucide-react";
 import { activeMsOf, formatReplayTime, isAnonymous, personKey, personLabel, routeOf } from "@codecast/shared/replay";
 import { detailGone, useOpsReplay, useOpsReplayTimeline, useOpsSources, useSyncOpsReplay } from "../../hooks/useSyncOps";
@@ -136,6 +136,7 @@ export function ReplayPage({ id, t: asked, tAlt }: { id: string; t: number | nul
               )}
               {pages !== undefined && <span className="rp-fact ops-num">{plural(pages, "page")}</span>}
               <ReplayFigures replay={replay} />
+              {(replay.kept_for?.length ?? 0) > 0 && <span className="rp-fact rp-kept" title="Why the recorder kept this session">kept: {replay.kept_for!.map(keepReasonLabel).join(" · ")}</span>}
               {replay.facts && <span className="rp-fact"><EnvMarks facts={replay.facts} full /></span>}
             </div>
           </div>

@@ -10,6 +10,7 @@
 import { dropRequestIds, type SignalKind } from "./signalFingerprint";
 import { JUDGE_BACKENDS, MOMENT_RETENTIONS, MOMENT_STORAGES, validateMomentEvent, type MomentEventItem } from "./moments";
 import { isCiRunSeries, parseVolumeQuery } from "./volumeWatch";
+import { cleanKeepReasons } from "./replay";
 
 // ── Sources ──
 
@@ -467,6 +468,8 @@ export type IngestItem =
       /** Chunks uploaded so far; chunk keys derive from the replay and the index. */
       chunks?: number;
       counts?: { clicks?: number; errors?: number; failed_requests?: number };
+      /** Why the SDK kept the recording, first reason first (contracts/replay REPLAY_KEEP_REASONS). */
+      kept_for?: string[];
       at: number;
     }
   /** Something worth judging happened (learning-loop.md LL7): kept and coalesced into a moment, never counted only. */
@@ -685,6 +688,7 @@ function validateItem(raw: unknown, now: number): IngestItem | string {
         duration_ms: num(raw.duration_ms),
         chunks: num(raw.chunks),
         counts,
+        kept_for: cleanKeepReasons(raw.kept_for),
         at,
       };
     }

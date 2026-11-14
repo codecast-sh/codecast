@@ -122,13 +122,13 @@ export function initAnalytics(): Promise<void> {
 
 // The replay recorder rides the codecast sink: with no sink (no key, or
 // development) it never loads. Its own chunk, loaded after init, so the boot
-// path pays nothing for it. codecast.json's `replay` block sets it: by
-// default sample 0 (a recording uploads only when an error is reported,
-// carrying the minute before it) and DOM capture off. The DOM capture (rrweb,
-// its own chunk again) costs main-thread time on every DOM change, about
-// 2.5 ms per burst of churn and a ~55 ms snapshot every 30 s on the inbox
-// (docs/architecture/external-data.md X5), which is why it stays off here
-// unless the file turns it on.
+// path pays nothing for it. codecast.json's `replay` block sets it: a 5%
+// sample, plus every session something keeps (an error, a rage click, a 5xx
+// or slow request, a frozen page, a person's first week), carrying the minute
+// before it. The DOM capture (rrweb, its own chunk again) ships only for
+// those kept sessions and runs only while someone attends the tab: about
+// 2.5 ms per burst of DOM churn and a ~16 ms snapshot when they come back
+// (docs/architecture/external-data.md X5).
 function startReplayOnError(analytics: AnalyticsRuntime) {
   const sink = analytics.getCodecastSink();
   if (!sink || regulated || typeof window === "undefined") return;
@@ -138,6 +138,7 @@ function startReplayOnError(analytics: AnalyticsRuntime) {
     .then(({ startReplay }) => {
       replayRecorder = startReplay({ sink, sampleRate: replay?.sampleRate ?? 0, replayDom: replay?.dom ?? "off" });
       if (regulated) replayRecorder.stop();
+      else for (const reason of pendingKeeps.splice(0)) replayRecorder.keep(reason);
     })
     .catch(() => {});
 }
@@ -152,7 +153,18 @@ function startReplayOnError(analytics: AnalyticsRuntime) {
 // next load; PostHog opts back in at once.
 const REGULATED_KEY = "codecast.regulated-data";
 let regulated = readRegulatedMarker();
-let replayRecorder: { stop(): void } | undefined;
+let replayRecorder: { stop(): void; keep(reason: string): void } | undefined;
+/** Reasons asked for before the recorder loaded, applied when it does. */
+const pendingKeeps: string[] = [];
+
+/**
+ * Keep this tab's replay, page capture included, for an app reason (a short
+ * token, platform REPLAY_KEEP_REASON_PATTERN). A no-op where nothing records.
+ */
+export function keepReplay(reason: string) {
+  if (replayRecorder) replayRecorder.keep(reason);
+  else if (!pendingKeeps.includes(reason)) pendingKeeps.push(reason);
+}
 
 function readRegulatedMarker(): boolean {
   try {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  applyReplayStyles,
   REPLAY_HOST_SOURCE,
   REPLAY_PLAYER_ORIGIN,
   isReplayPlayerMessage,
@@ -94,5 +95,29 @@ describe("a long capture's window (replayDomWindow)", () => {
 
   test("always reaches the chunk holding t, past the budget if it must", () => {
     expect(replayDomWindow(meta, 1000, 3 * 60_000 + 10_000, 15 * MB)).toMatchObject({ from: 0, to: 3 });
+  });
+});
+
+describe("applyReplayStyles", () => {
+  const link = (href: string, rel = "stylesheet") => ({ type: 2, tagName: "link", attributes: { rel, href }, childNodes: [], id: 9 });
+  test("fills every stylesheet link it has text for, in snapshots and in added nodes, and nothing else", () => {
+    const events: any[] = [
+      { type: 2, timestamp: 1, data: { node: { type: 0, childNodes: [{ type: 2, tagName: "head", attributes: {}, childNodes: [link("https://a.test/x.css"), link("https://a.test/icon.png", "icon"), link("https://a.test/unknown.css")] }] } } },
+      { type: 3, timestamp: 2, data: { source: 0, adds: [{ parentId: 1, node: link("https://a.test/x.css") }], texts: [], attributes: [], removes: [] } },
+      { type: 3, timestamp: 3, data: { source: 2, x: 1 } },
+    ];
+    const filled = applyReplayStyles(events, new Map([["https://a.test/x.css", ".x{}"]]));
+    expect(filled).toBe(2);
+    const head = events[0].data.node.childNodes[0].childNodes;
+    expect(head[0].attributes).toEqual({ _cssText: ".x{}" });
+    expect(head[1].attributes).toEqual({ rel: "icon", href: "https://a.test/icon.png" });
+    expect(head[2].attributes).toEqual({ rel: "stylesheet", href: "https://a.test/unknown.css" });
+    expect(events[1].data.adds[0].node.attributes).toEqual({ _cssText: ".x{}" });
+  });
+
+  test("an empty map changes nothing", () => {
+    const events: any[] = [{ type: 2, timestamp: 1, data: { node: link("https://a.test/x.css") } }];
+    expect(applyReplayStyles(events, new Map())).toBe(0);
+    expect(events[0].data.node.attributes.href).toBe("https://a.test/x.css");
   });
 });

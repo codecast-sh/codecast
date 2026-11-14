@@ -496,6 +496,10 @@ export const ingestTables = {
     dom_chunk_keys: v.optional(v.array(v.string())),
     /** Each DOM chunk's span and JSON size, parallel to dom_chunk_keys (shared ReplayDomChunkMeta): how the player opens a long capture a stretch at a time. Ignored when its length differs. */
     dom_chunk_meta: v.optional(v.array(replayDomChunkMetaValidator)),
+    /** Why the SDK kept the recording, first reason first (shared REPLAY_KEEP_REASONS, or an app's own token). Absent for vendor imports and older SDKs. */
+    kept_for: v.optional(v.array(v.string())),
+    /** Stylesheets the capture names by href, stored apart once a day per source (shared REPLAY_STYLE_LIMITS): the player puts each back where its link was. */
+    dom_styles: v.optional(v.array(v.object({ href: v.string(), key: v.string() }))),
     /** The capture's gzipped size in bytes. */
     dom_bytes: v.optional(v.number()),
     /** The epoch ms of the replay clock's zero (the stream's first event), which the player maps rrweb timestamps against. */

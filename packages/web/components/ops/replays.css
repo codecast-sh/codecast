@@ -240,6 +240,7 @@
 .rp-facts { display: flex; align-items: center; gap: 6px 14px; flex-wrap: wrap; font-size: 12px; color: var(--sol-text-muted); }
 .rp-fact { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .rp-fact-link { color: var(--sol-blue); }
+.rp-kept { color: var(--sol-text-muted); }
 .rp-fact-link:hover { text-decoration: underline; }
 .rp-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .rp-actions .ops-btn { white-space: nowrap; }

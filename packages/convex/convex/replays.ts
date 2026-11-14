@@ -23,7 +23,7 @@ import { nextShortId } from "./counters";
 import { countLanded, patchSourceStats } from "./lib/sourceStats";
 import { ingestUserValidator, replayDomChunkMetaValidator, replayImportRestValidator, replayReadToValidator, replayProviderValidator, replayShapeValidator } from "./ingestSchema";
 import { parseReplayChunkKey, parseReplayDomChunkKey, replaysBucketFromEnv, type R2Bucket } from "./lib/r2";
-import { REPLAY_LIMITS, VENDOR_CONVERTER_VERSION, VENDOR_REFRESH_WHYS, needsVendorImport, type ReplayProvider } from "@codecast/shared/contracts/replay";
+import { REPLAY_LIMITS, VENDOR_CONVERTER_VERSION, VENDOR_REFRESH_WHYS, cleanKeepReasons, needsVendorImport, type ReplayProvider } from "@codecast/shared/contracts/replay";
 import { INGEST_SHORT_ID_PREFIX, type IngestItem, type SourceProvider } from "@codecast/shared/contracts/ingest";
 import { replayShape, SHAPE_VERSION, type ReplayMatch } from "@codecast/shared/replay";
 import {
@@ -32,6 +32,7 @@ import {
   REPLAY_FRAME_PATH,
   REPLAY_PLAYER_ORIGIN,
   REPLAY_PLAYER_MODES,
+  REPLAY_STYLE_LIMITS,
   replayDomWindow,
   replayPlayerUrl,
   type ReplayChunkKind,
@@ -131,6 +132,9 @@ export async function upsertReplayManifest(ctx: WriteCtx, source: Doc<"event_sou
   if (item.user) patch.user = item.user;
   if (item.started_at !== undefined && item.started_at < row.started_at) patch.started_at = item.started_at;
   if (item.duration_ms !== undefined) patch.duration_ms = Math.max(0, item.duration_ms);
+  // Reasons only add up: a later manifest names the earlier ones too, but one that arrives out of order must not drop any.
+  const keptFor = cleanKeepReasons([...(row.kept_for ?? []), ...(item.kept_for ?? [])]);
+  if (keptFor && keptFor.join() !== (row.kept_for ?? []).join()) patch.kept_for = keptFor;
   if (item.counts && !row.timeline_at) {
     patch.counts = {
       clicks: item.counts.clicks ?? row.counts.clicks,
@@ -217,6 +221,30 @@ export async function recordReplayChunk(
   return { ok: true, replay_id: row._id };
 }
 
+/**
+ * Name one stylesheet a recording's DOM capture links to (contracts/replayPlayer
+ * REPLAY_STYLE_LIMITS). A href already named points at the newer copy, so a
+ * sheet stored again on a later day stays readable for as long as the
+ * recording is. Refuses past max_per_replay.
+ */
+export async function recordReplayStyle(
+  ctx: Db,
+  source: Doc<"event_sources">,
+  externalId: string,
+  href: string,
+  key: string,
+  now: number,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const row = await ensureReplay(ctx, source, externalId, now);
+  if (!row) return { ok: false, reason: `this source opened ${REPLAYS_NEW_PER_HOUR} recordings in the last hour; try again later` };
+  const current = row.dom_styles ?? [];
+  const same = current.find((s) => s.href === href);
+  if (same?.key === key) return { ok: true };
+  if (!same && current.length >= REPLAY_STYLE_LIMITS.max_per_replay) return { ok: false, reason: `a recording names at most ${REPLAY_STYLE_LIMITS.max_per_replay} stylesheets` };
+  await ctx.db.patch(row._id, { dom_styles: [...current.filter((s) => s.href !== href), { href, key }], updated_at: now });
+  return { ok: true };
+}
+
 async function sourceOrThrow(ctx: Db, id: Id<"event_sources">): Promise<Doc<"event_sources">> {
   const source = await ctx.db.get(id);
   if (!source) throw new Error("Source not found");
@@ -244,6 +272,11 @@ export const upsertManifest = internalMutation({
 export const linkGroup = internalMutation({
   args: { source_id: v.id("event_sources"), replay_external_id: v.string(), group_id: v.id("event_groups") },
   handler: async (ctx, args) => linkReplayToGroup(ctx, await sourceOrThrow(ctx, args.source_id), args.replay_external_id, args.group_id, Date.now()),
+});
+
+export const recordStyle = internalMutation({
+  args: { source_id: v.id("event_sources"), replay_external_id: v.string(), href: v.string(), key: v.string() },
+  handler: async (ctx, args) => recordReplayStyle(ctx, await sourceOrThrow(ctx, args.source_id), args.replay_external_id, args.href, args.key, Date.now()),
 });
 
 export const recordChunk = internalMutation({
@@ -913,6 +946,7 @@ export const playerManifestRow = internalQuery({
     const window = args.t_ms !== undefined ? replayDomWindow(domChunkMeta(row), row.dom_t0 ?? row.started_at, args.t_ms) : null;
     return {
       dom_chunk_keys: window ? keys.slice(window.from, window.to + 1) : keys,
+      style_keys: row.dom_styles ?? [],
       replay: { short_id: row.short_id, provider: row.provider, url: row.url ?? null, started_at: row.started_at, duration_ms: row.duration_ms ?? null },
       t0: row.dom_t0 ?? row.started_at,
     };

@@ -19,10 +19,11 @@ import { bridge } from "@/lib/desktop";
 import { TipProvider } from "@/tips/TipProvider";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { identifyUser, resetUser } from "@/lib/analytics";
+import { identifyUser, keepReplay, resetUser } from "@/lib/analytics";
 import { CodecastAuthRoot } from "@/lib/authRoot";
 import { CONVEX_URL } from "@/lib/localAuth";
 import { DOCS_SHOTS, docsShotsConvex } from "@/lib/docsShots/flag";
+import { AgentTabOverride } from "@/lib/agentTabGuard";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // The person's own key bindings (client_state.ui.key_bindings) into the live
@@ -98,6 +99,8 @@ function DispatchFailureToast() {
   return null;
 }
 
+const NEW_USER_REPLAY_MS = 7 * 24 * 3600_000;
+
 function AnalyticsIdentify() {
   const { user } = useCurrentUser();
   const lastId = useRef<string | null>(null);
@@ -109,6 +112,8 @@ function AnalyticsIdentify() {
       name: user!.name,
       github_username: user!.github_username,
     });
+    // A person's first week is where the product loses them: every one of those sessions is worth watching.
+    if (Date.now() - user!._creationTime < NEW_USER_REPLAY_MS) keepReplay("new_user");
   } else if (!id && lastId.current) {
     lastId.current = null;
     resetUser();
@@ -143,7 +148,11 @@ export function Providers({ children }: { children: ReactNode }) {
       <ThemeProvider>
         <ShortcutProvider>
         <TipProvider>
+        {/* Docs shots capture what a person sees from an agent's tab, on an
+            origin holding only the fixture world; elsewhere no override. */}
+        <AgentTabOverride.Provider value={DOCS_SHOTS ? false : undefined}>
         {children}
+        </AgentTabOverride.Provider>
         <ErrorBoundary name="DesktopProvider" level="inline">
           <DesktopProvider />
         </ErrorBoundary>

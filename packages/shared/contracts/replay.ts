@@ -167,6 +167,39 @@ export function needsVendorImport(
   return (row.converter_version ?? 1) < VENDOR_CONVERTER_VERSION && !(row.vendor_refresh_after && row.vendor_refresh_after > now);
 }
 
+/**
+ * Why the SDK kept a recording (the replay item's kept_for): the sample, an
+ * error, a rage click, a 5xx or slow request to the app's own site, a frozen
+ * page, or an app's own reason (keep(reason), a token matching the pattern).
+ * The platform recorder spells the same list; a drift test holds the two.
+ */
+export const REPLAY_KEEP_REASONS = ["sample", "error", "rage_click", "server_error", "slow_request", "freeze"] as const;
+export type ReplayKeepReason = (typeof REPLAY_KEEP_REASONS)[number];
+export const REPLAY_KEEP_REASON_PATTERN = /^[a-z0-9_:-]{1,40}$/;
+export const REPLAY_KEEP_REASONS_MAX = 8;
+
+const KEEP_REASON_LABELS: Record<ReplayKeepReason, string> = {
+  sample: "sampled",
+  error: "error",
+  rage_click: "rage click",
+  server_error: "server error",
+  slow_request: "slow request",
+  freeze: "page froze",
+};
+
+/** A keep reason as a person reads it; an app's own token with its separators as spaces. */
+export function keepReasonLabel(reason: string): string {
+  return (KEEP_REASON_LABELS as Record<string, string>)[reason] ?? reason.replace(/[_:-]+/g, " ");
+}
+
+/** A kept_for list as stored: valid tokens only, each once, at most REPLAY_KEEP_REASONS_MAX. */
+export function cleanKeepReasons(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const r of raw) if (typeof r === "string" && REPLAY_KEEP_REASON_PATTERN.test(r) && !out.includes(r) && out.length < REPLAY_KEEP_REASONS_MAX) out.push(r);
+  return out.length ? out : undefined;
+}
+
 export const REPLAY_LIMITS = {
   /** The recorder's ring buffer: what an error upload carries. */
   ring_buffer_ms: 60_000,
@@ -306,11 +339,22 @@ export function replayBackfillResumes(b: Pick<ReplayBackfill, "status" | "update
   return !!b && (b.status === "paused" || b.status === "error" || replayBackfillStalled(b, now));
 }
 
+/**
+ * Whether a run is a follow-up (tendImport): it covers only what arrived after
+ * the run before it, not the window the import was started with, so its
+ * counts are of that short span and say nothing of what is stored.
+ */
+export function replayBackfillFollows(b: Pick<ReplayBackfill, "window" | "since" | "until">): boolean {
+  if (b.since === undefined) return false;
+  const start = replayBackfillSince(b.window, b.until);
+  return start === undefined || b.since - start > 3600_000;
+}
+
 /** One line for the CLI and the web: what the import did and where it stands. */
 export function replayBackfillLine(b: ReplayBackfill, now: number = Date.now()): string {
   const state = replayBackfillState(b, now);
   const head = { running: "importing", done: "imported", paused: "paused", error: "stopped", stalled: "stalled" }[state];
-  const window = b.window === "all" ? "all retained recordings" : `the last ${b.window}`;
+  const window = replayBackfillFollows(b) ? `recordings new since ${new Date(b.since!).toISOString().slice(0, 16).replace("T", " ")} UTC` : b.window === "all" ? "all retained recordings" : `the last ${b.window}`;
   const counts = [`${b.imported} imported`, b.skipped ? `${b.skipped} already here` : "", b.failed ? `${b.failed} failed` : ""].filter(Boolean).join(", ");
   const tail = state === "paused" || state === "error" ? (b.last_error ? `: ${b.last_error}` : "") : "";
   return `${head} ${window}: ${b.listed} listed, ${counts}${tail}`;

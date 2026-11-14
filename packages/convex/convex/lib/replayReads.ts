@@ -38,6 +38,8 @@ export function replayView(row: Doc<"replays">, sourceName: string | null) {
     started_at: row.started_at,
     duration_ms: row.duration_ms ?? null,
     counts: row.counts,
+    /** Why the SDK kept it (shared REPLAY_KEEP_REASONS, or an app's own token); empty for vendor imports and older SDKs. */
+    kept_for: row.kept_for ?? [],
     /** Activity, failures, rage clicks and active time (shared/replay/list.ts); null until the stream is read. */
     shape: row.shape ?? null,
     /** What the vendor says of it: length, activity, browser, OS, device, country, referrer (shared/replay/list.ts ReplayFacts). */
@@ -231,3 +233,68 @@ export async function browseCore(
   };
 }
 
+
+/** Recordings a search page reads from the index; a page's rows are a few KB each, well inside a query's read cap. */
+export const REPLAY_SEARCH_PAGE = 300;
+
+export type ReplaySearchFilter = Pick<ReplayMatch, "url" | "user" | "since" | "until" | "failing" | "active_min_ms"> & { source?: string; group_id?: Id<"event_groups"> };
+
+/**
+ * One page of `cast replay ls`'s search over the imported store: the next
+ * REPLAY_SEARCH_PAGE recordings of the scope, newest first, inside the date
+ * range (read by the index), and the ones among them that match. The caller
+ * follows `cursor` until `done`, so every match is found however many
+ * recordings the workspace holds, and the count of them is exact. An email
+ * reads that person's recordings by their own index (lib/replayIndex.ts).
+ */
+export async function searchCore(ctx: Db, userId: Id<"users">, workspaceKey: string, f: ReplaySearchFilter, cursor: string | null) {
+  const sourceId: Id<"event_sources"> | null = f.source ? (await sourceByRef(ctx, userId, workspaceKey, f.source))._id : null;
+  const range = (q: any) => {
+    const lo = f.since !== undefined ? q.gte("started_at", f.since) : q;
+    return f.until !== undefined ? lo.lt("started_at", f.until) : lo;
+  };
+  const email = f.user?.includes("@") ? f.user.trim().toLowerCase() : null;
+  const indexed = email
+    ? sourceId
+      ? ctx.db.query("replays").withIndex("by_source_person", (q: any) => range(q.eq("source_id", sourceId).eq("person_key", email)))
+      : ctx.db.query("replays").withIndex("by_workspace_person", (q: any) => range(q.eq("workspace", workspaceKey).eq("person_key", email)))
+    : sourceId
+      ? ctx.db.query("replays").withIndex("by_source_started", (q: any) => range(q.eq("source_id", sourceId)))
+      : ctx.db.query("replays").withIndex("by_workspace_started", (q: any) => range(q.eq("workspace", workspaceKey)));
+  const page = await indexed.order("desc").paginate({ cursor, numItems: REPLAY_SEARCH_PAGE });
+  const match: ReplayMatch = {
+    ...(f.url?.trim() ? { url: f.url.trim().slice(0, 500) } : {}),
+    ...(f.user?.trim() ? { user: f.user.trim() } : {}),
+    ...(f.since !== undefined ? { since: f.since } : {}),
+    ...(f.until !== undefined ? { until: f.until } : {}),
+    ...(f.failing ? { failing: true } : {}),
+    ...(f.active_min_ms ? { active_min_ms: f.active_min_ms } : {}),
+    ...(f.group_id ? { group: f.group_id } : {}),
+  };
+  const names = new Map<string, string | null>();
+  const rows = [];
+  for (const row of page.page as Doc<"replays">[]) {
+    if (row.workspace !== workspaceKey || !replayMatches(row, match)) continue;
+    const key = String(row.source_id);
+    if (!names.has(key)) names.set(key, (await ctx.db.get(row.source_id))?.name ?? null);
+    rows.push(replayView(row, names.get(key) ?? null));
+  }
+  return { rows, scanned: page.page.length, cursor: page.continueCursor as string, done: page.isDone as boolean };
+}
+
+/**
+ * What a source holds in the store, for `cast replay import --status`: how
+ * many recordings (exact from the tallies once counted, else null), and the
+ * oldest and newest start, read by the index.
+ */
+export async function storedCore(ctx: Db, workspaceKey: string, sourceId: Id<"event_sources">) {
+  const byStart = () => ctx.db.query("replays").withIndex("by_source_started", (q: any) => q.eq("source_id", sourceId));
+  const oldest: Doc<"replays"> | null = await byStart().order("asc").first();
+  const newest: Doc<"replays"> | null = await byStart().order("desc").first();
+  const tallies = await scopeTallies(ctx, workspaceKey, sourceId);
+  return {
+    count: tallies ? readTallies(tallies, false).total : null,
+    oldest_at: oldest?.started_at ?? null,
+    newest_at: newest?.started_at ?? null,
+  };
+}

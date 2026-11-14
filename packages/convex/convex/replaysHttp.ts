@@ -22,10 +22,10 @@
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { r2FreshGetUrl, r2Presign, replayChunkKey, replayDomChunkKey, replaysBucketFromEnv, safeReplayPathSegment } from "./lib/r2";
+import { r2FreshGetUrl, r2Presign, replayChunkKey, replayDomChunkKey, replayStyleKey, replaysBucketFromEnv, safeReplayPathSegment } from "./lib/r2";
 import { openReplayCap, replayCapKey } from "./lib/replayCap";
 import { signPlayerManifest } from "./lib/replayChunks";
-import { REPLAY_DOM_LIMITS, REPLAY_FRAME_ADMIT_PATH, REPLAY_FRAME_LIMITS, REPLAY_PLAYER_MANIFEST_PATH, type ReplayChunkKind } from "@codecast/shared/contracts/replayPlayer";
+import { REPLAY_DOM_LIMITS, REPLAY_FRAME_ADMIT_PATH, REPLAY_FRAME_LIMITS, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_STYLE_LIMITS, type ReplayChunkKind } from "@codecast/shared/contracts/replayPlayer";
 import { keyRateLimited } from "./lib/httpRateLimit";
 import { sha256Hex } from "./lib/hash";
 import { admitIngestKey, ingestCorsHeaders, ingestJson, ingestRoute } from "./ingestHttp";
@@ -50,36 +50,55 @@ export function replaySignKey(pathname: string): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-export interface ReplaySignBody {
-  replay_id: string;
-  seq: number;
-  sha256: string;
-  size: number;
-  /** Which stream the chunk is: the semantic events (default) or the DOM capture. */
-  kind: ReplayChunkKind;
-}
+export type ReplaySignBody =
+  | {
+      replay_id: string;
+      seq: number;
+      sha256: string;
+      size: number;
+      /** Which stream the chunk is: the semantic events (default) or the DOM capture. */
+      kind: ReplayChunkKind;
+    }
+  | {
+      replay_id: string;
+      sha256: string;
+      size: number;
+      /** One stylesheet the DOM capture names by href (REPLAY_STYLE_LIMITS): gzipped CSS text. */
+      kind: "style";
+      href: string;
+    };
 
 /** The sign request, checked, or the reason it is refused (always a 400: retrying will not help). */
 export function validateReplaySign(body: unknown): ReplaySignBody | string {
   if (!body || typeof body !== "object") return "body must be a JSON object";
   const b = body as Record<string, unknown>;
-  if (b.kind !== undefined && b.kind !== "events" && b.kind !== "dom") return `kind must be "events" or "dom"`;
+  if (b.kind !== undefined && b.kind !== "events" && b.kind !== "dom" && b.kind !== "style") return `kind must be "events", "dom" or "style"`;
+  if (typeof b.replay_id !== "string" || !b.replay_id.trim() || b.replay_id.length > 200) return "replay_id must be a string of 1 to 200 characters";
+  if (typeof b.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(b.sha256)) return "sha256 must be 64 lowercase hex characters (of the gzipped chunk)";
+  if (typeof b.size !== "number" || !Number.isInteger(b.size) || b.size <= 0) return "size must be the chunk's byte length";
+  if (b.kind === "style") {
+    if (typeof b.href !== "string" || !b.href || b.href.length > REPLAY_STYLE_LIMITS.href_max_chars) return `href must be a string of 1 to ${REPLAY_STYLE_LIMITS.href_max_chars} characters`;
+    if (b.size > REPLAY_STYLE_LIMITS.max_bytes) return `a stylesheet is at most ${REPLAY_STYLE_LIMITS.max_bytes} bytes`;
+    return { replay_id: b.replay_id.trim(), sha256: b.sha256, size: b.size, kind: "style", href: b.href };
+  }
   const kind: ReplayChunkKind = b.kind === "dom" ? "dom" : "events";
   const limits = kind === "dom" ? REPLAY_DOM_LIMITS : REPLAY_LIMITS;
-  if (typeof b.replay_id !== "string" || !b.replay_id.trim() || b.replay_id.length > 200) return "replay_id must be a string of 1 to 200 characters";
   if (typeof b.seq !== "number" || !Number.isInteger(b.seq) || b.seq < 0 || b.seq >= limits.max_chunks_per_replay) {
     return `seq must be an integer from 0 to ${limits.max_chunks_per_replay - 1}`;
   }
-  if (typeof b.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(b.sha256)) return "sha256 must be 64 lowercase hex characters (of the gzipped chunk)";
-  if (typeof b.size !== "number" || !Number.isInteger(b.size) || b.size <= 0) return "size must be the chunk's byte length";
   if (b.size > limits.chunk_max_bytes) return `a ${kind === "dom" ? "DOM " : ""}chunk is at most ${limits.chunk_max_bytes} bytes`;
   return { replay_id: b.replay_id.trim(), seq: b.seq, sha256: b.sha256, size: b.size, kind };
 }
+
+/** The UTC day a stylesheet is stored under (replayStyleKey). */
+const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 /**
  * POST <prefix><key> { replay_id, seq, sha256, size, kind? } -> { key, upload_url, exists, expires_in }.
  * `kind: "dom"` signs a chunk of the DOM capture (gzipped JSON array of rrweb
  * events) under the recording's dom/ prefix, held to REPLAY_DOM_LIMITS.
+ * `kind: "style"` (with `href`, no `seq`) signs one stylesheet the capture
+ * names by href, stored once per source and day (REPLAY_STYLE_LIMITS).
  * 401 stops the SDK (bad key), 403 stops it for a refused origin, 400 drops
  * the chunk, 429 and 503 are worth a retry (a paused source is a 503). The
  * upload URL signs the declared size as the PUT's content-length, so the
@@ -102,6 +121,17 @@ export async function handleReplaySign(ctx: any, request: Request, key: string):
 
     const bucket = replaysBucketFromEnv();
     if (!bucket) return ingestJson(503, { error: "replay storage is not configured" }, cors);
+    if (sign.kind === "style") {
+      // One copy per source, day and content: a sheet some recording stored
+      // today answers `exists`, and this recording names it all the same.
+      const styleKey = replayStyleKey({ sourceId: String(source._id), day: utcDay(Date.now()), sha256: sign.sha256 });
+      const named = await ctx.runMutation(internal.replays.recordStyle, { source_id: source._id, replay_external_id: sign.replay_id, href: sign.href, key: styleKey });
+      if (!named.ok) return ingestJson(400, { error: named.reason }, cors);
+      const there = await fetch(await r2Presign(bucket, "HEAD", styleKey, REPLAY_LIMITS.signed_url_ttl_s), { method: "HEAD" }).catch(() => null);
+      if (there?.ok) return ingestJson(200, { key: styleKey, upload_url: null, exists: true }, cors);
+      const putUrl = await r2Presign(bucket, "PUT", styleKey, REPLAY_LIMITS.signed_url_ttl_s, undefined, undefined, { "content-length": String(sign.size) });
+      return ingestJson(200, { key: styleKey, upload_url: putUrl, exists: false, expires_in: REPLAY_LIMITS.signed_url_ttl_s }, cors);
+    }
     const keyParts = { sourceId: String(source._id), replay: safeReplayPathSegment(sign.replay_id), seq: sign.seq, sha256: sign.sha256 };
     const objectKey = sign.kind === "dom" ? replayDomChunkKey(keyParts) : replayChunkKey(keyParts);
     const record = (replace_unlanded?: string) => ctx.runMutation(internal.replays.recordChunk, { source_id: source._id, replay_external_id: sign.replay_id, seq: sign.seq, key: objectKey, kind: sign.kind, ...(replace_unlanded ? { replace_unlanded } : {}) });

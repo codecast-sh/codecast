@@ -7,7 +7,7 @@
     }
   },
   "replay": {
-    "dom": "off",
+    "dom": "onError",
     "sampleRate": 0.05
   }
 }

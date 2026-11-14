@@ -110,6 +110,15 @@ export function replayDomChunkKey(opts: { sourceId: string; replay: string; seq:
   return `${REPLAYS_ROOT}${opts.sourceId}/${opts.replay}/dom/${String(opts.seq).padStart(4, "0")}-${opts.sha256}.json.gz`;
 }
 
+/** One stylesheet a DOM capture names (contracts/replayPlayer REPLAY_STYLE_LIMITS): content addressed
+ *  under its source and the UTC day it was stored, so recordings made that day share one copy and
+ *  none outlives the bucket's 30 day rule while a recording that names it is still kept. The
+ *  `~styles` segment can never be a recording's (safeReplayPathSegment puts "~" only after a
+ *  non-empty prefix). */
+export function replayStyleKey(opts: { sourceId: string; day: string; sha256: string }): string {
+  return `${REPLAYS_ROOT}${opts.sourceId}/~styles/${opts.day}/${opts.sha256}.css.gz`;
+}
+
 /** The sequence number and sha256 a DOM chunk key names, or null for a key outside that layout. */
 export function parseReplayDomChunkKey(key: string): { seq: number; sha256: string } | null {
   const m = key.match(/^replays\/[^/]+\/[^/]+\/dom\/(\d{4,})-([0-9a-f]{64})\.json\.gz$/);
@@ -120,7 +129,7 @@ export function parseReplayDomChunkKey(key: string): { seq: number; sha256: stri
  *  when `key` is empty (a listing), with any query `params` signed in. */
 export function r2Presign(
   b: R2Bucket,
-  method: "GET" | "HEAD" | "PUT" | "DELETE",
+  method: "GET" | "HEAD" | "PUT" | "POST" | "DELETE",
   key: string,
   expiresSeconds: number,
   now?: Date,
@@ -340,4 +349,58 @@ function callRecordingFileStem(opts: CallRecordingFileRef): string {
   const base = callRecordingRunPrefix(opts);
   if (opts.kind === "composite") return `${base}composite`;
   return `${base}screen-${(opts.trackSid ?? "track").replace(/[^A-Za-z0-9_-]/g, "")}`;
+}
+
+/** How much of a copied file one upload part carries: above S3's 5 MB floor
+ *  for every part but the last, small enough that an action holds one at a
+ *  time comfortably. */
+export const R2_COPY_PART_BYTES = 8 * 1024 * 1024;
+
+const xmlField = (xml: string, name: string): string | null => xml.match(new RegExp(`<${name}>([^<]+)</${name}>`))?.[1] ?? null;
+
+/** Copy a file another service hosts (a URL that answers Range requests)
+ *  into the bucket under `key`, one part at a time, so a meeting's video of
+ *  hundreds of megabytes never sits whole in an action's memory. A failure
+ *  part way aborts the upload, leaving nothing behind. Returns the size. */
+export async function r2CopyFromUrl(
+  b: R2Bucket,
+  key: string,
+  sourceUrl: string,
+  opts: { contentType?: string; partBytes?: number } = {},
+): Promise<{ bytes: number }> {
+  const partBytes = opts.partBytes ?? R2_COPY_PART_BYTES;
+  const probe = await fetch(sourceUrl, { headers: { Range: "bytes=0-0" } });
+  const total = Number(probe.headers.get("content-range")?.split("/")[1] ?? probe.headers.get("content-length"));
+  await probe.body?.cancel();
+  if (!probe.ok || !Number.isFinite(total) || total <= 0) throw new Error(`source answered ${probe.status} with no size`);
+  const headers = opts.contentType ? { "content-type": opts.contentType } : undefined;
+  const created = await fetch(await r2Presign(b, "POST", key, 600, undefined, { uploads: "" }, headers), {
+    method: "POST",
+    ...(headers ? { headers } : {}),
+  });
+  const uploadId = xmlField(await created.text(), "UploadId");
+  if (!created.ok || !uploadId) throw new Error(`could not start the upload (${created.status})`);
+  const parts: Array<{ n: number; etag: string }> = [];
+  try {
+    for (let start = 0, n = 1; start < total; start += partBytes, n++) {
+      const end = Math.min(start + partBytes, total) - 1;
+      const piece = await fetch(sourceUrl, { headers: { Range: `bytes=${start}-${end}` } });
+      if (piece.status !== 206 && !(piece.status === 200 && start === 0 && end === total - 1)) {
+        throw new Error(`source answered ${piece.status} for bytes ${start}-${end}`);
+      }
+      const body = await piece.arrayBuffer();
+      const put = await fetch(await r2Presign(b, "PUT", key, 600, undefined, { partNumber: String(n), uploadId }), { method: "PUT", body });
+      const etag = put.headers.get("etag");
+      if (!put.ok || !etag) throw new Error(`part ${n} answered ${put.status}`);
+      parts.push({ n, etag });
+    }
+    const xml = `<CompleteMultipartUpload>${parts.map((p) => `<Part><PartNumber>${p.n}</PartNumber><ETag>${p.etag}</ETag></Part>`).join("")}</CompleteMultipartUpload>`;
+    const done = await fetch(await r2Presign(b, "POST", key, 600, undefined, { uploadId }), { method: "POST", body: xml });
+    const answer = await done.text();
+    if (!done.ok || /<Error>/.test(answer)) throw new Error(`could not finish the upload (${done.status})`);
+    return { bytes: total };
+  } catch (e) {
+    await fetch(await r2Presign(b, "DELETE", key, 600, undefined, { uploadId }), { method: "DELETE" }).catch(() => {});
+    throw e;
+  }
 }

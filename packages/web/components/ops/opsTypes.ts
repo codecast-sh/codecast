@@ -170,6 +170,8 @@ export type OpsReplay = {
   started_at: number;
   duration_ms: number | null;
   counts: { clicks: number; errors: number; failed_requests: number };
+  /** Why the SDK kept it (shared REPLAY_KEEP_REASONS, or the app's own token). Absent from an older backend. */
+  kept_for?: string[];
   /** Activity strip, failure marks, rage clicks, active time (shared/replay/list.ts); null until the stream is read. */
   shape?: ReplayShape | null;
   /** What the vendor says of it (length, activity, browser, OS, device, country, referrer); absent from an older backend. */

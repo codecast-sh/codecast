@@ -487,34 +487,70 @@ Convex's limits, but on a project with that many recordings prefer a window
 (`--since 30d`) to `all`, and watch the scheduler backlog while it runs.
 
 The SDK recorder (`@platform/analytics/replay`) keeps a ring buffer of the last
-60 seconds and uploads it when an error happens (always), or for a sampled
-share of sessions (`sampleRate`, default 0). It never records an input
-value, and drops URLs matching `redactUrl`. It costs one capture listener per
-event type and a throttled outline walk at navigation, nothing per mutation.
-This is the lesson from the August 2026 rrweb slowdown.
+60 seconds and uploads it once something worth seeing keeps the recording,
+or for a sampled share of sessions (`sampleRate`, default 0). It never
+records an input value, and drops URLs matching `redactUrl`. It costs one
+capture listener per event type and a throttled outline walk at navigation,
+nothing per mutation. This is the lesson from the August 2026 rrweb slowdown.
+
+What keeps a recording (`REPLAY_KEEP_REASONS`, sent as the manifest's
+`kept_for`, stored on the row and shown on the replay page): an error the
+sink captures; a rage click (4 clicks on one target inside 1.5 s); a request
+to the page's own site (same registrable domain, so codecast.sh and
+convex.codecast.sh are one site and a blocked ad pixel is not) answering 5xx
+or taking 8 s or more; a frame that held the main thread 1 s or more
+(long-animation-frame, else longtask); and the app's own `keep(reason)`, a
+short token. `keepOn` turns each off or retunes it. Codecast's web keeps
+every session of a person in their first week (`new_user`). The door caps a
+source at 300 new recordings an hour whatever keeps them.
 
 Its DOM mode (`replayDom: "off" | "onError" | "sampled"`, default off) adds
 the page capture the player plays, and is the one part that does cost per
-mutation, so an app turns it on knowing that. `"onError"` uploads the capture
-only when an error keeps the recording; `"sampled"` also uploads it from the
-start in sessions the sample keeps. rrweb's record (`@rrweb/record` 2.1.7, an
-optional peer, the version the player pins) is imported on demand only when
-the mode is on, configured in `replayDom.ts`: no mouse movement, clicks only
-among mouse interactions, scroll every 500 ms and media every 800 ms at most,
-every input masked, the text of any editable region masked, `[data-private]`
-blocked whole (an empty box its size), no canvas, fonts, inline images or
-cross-origin iframes. A checkout (fresh full snapshot) every 30 s or 5,000
-events bounds the ring: until the capture ships, the recorder holds the
-current segment and the one before, so the oldest event it ships is always a
-snapshot the player can start from. Each event is serialized once at upload,
-its strings through the app's `scrubUrl` (per string, never over the JSON
-text) and a Meta href through `cleanUrl` too. A door that keeps refusing drops
-the capture back to a ring opening on a fresh snapshot; past 60 DOM chunks the
-DOM recording stops and the semantic one carries on.
+mutation. `"onError"` uploads the capture whenever a keep reason fires;
+`"sampled"` also uploads it from the start in sessions the sample keeps.
+rrweb's record (`@rrweb/record` 2.1.7, an optional peer, the version the
+player pins) is imported on demand only when the mode is on, configured in
+`replayDom.ts`: no mouse movement, clicks only among mouse interactions,
+scroll every 500 ms and media every 800 ms at most, every input masked, the
+text of any editable region masked, `[data-private]` blocked whole (an empty
+box its size), no canvas, fonts, inline images or cross-origin iframes, and
+linked stylesheets left as hrefs (below).
+
+rrweb runs only while the page is attended: the tab visible and a pointer
+move, key, wheel, touch or focus in the last 15 s (`DOM_IDLE_MS`). Past that
+it stops; the next input starts it on a fresh snapshot, and so does any keep
+reason (an error in an unattended tab ships the page as it was then). A ring
+segment older than the 60 s window is dropped on waking. Between, a timed
+checkout (fresh full snapshot) every 30 s, run at the page's next idle
+moment, or rrweb's own after 5,000 events, bounds the ring: until the capture
+ships, the recorder holds the current segment and the one before, so the
+oldest event it ships is always a snapshot the player can start from. Each
+event is serialized once at upload, its strings through the app's `scrubUrl`
+(per string, never over the JSON text) and a Meta href through `cleanUrl`
+too. A door that keeps refusing drops the capture back to a ring opening on
+a fresh snapshot; past 60 DOM chunks the DOM recording stops and the semantic
+one carries on.
+
+Stylesheets. rrweb copies every linked sheet's text into every snapshot by
+default; on the codecast inbox (48 linked sheets, 2.0M characters of CSS)
+that was three quarters of a snapshot: 53 to 68 ms and 4.46 MB, against 16 to
+20 ms and 1.50 MB with `inlineStylesheet: false` (2026-11-14, six runs each).
+So a `<link rel=stylesheet>` stays an href, and when the capture ships the
+recorder reads each sheet it names (the browser's cache usually has it),
+makes its relative `url()`s absolute, and uploads it once per recording:
+replay-sign `kind: "style"` with the href the capture holds. The door stores
+one copy per source, UTC day and content (`replays/<source>/~styles/<day>/
+<sha256>.css.gz`, answering `exists` for a sheet already stored that day) and
+names it on the row (`dom_styles`), so the bucket's 30 day rule never deletes
+a sheet before a recording made that day. The player manifest signs each
+sheet beside the chunks, and the player puts its text back where the link
+was (`applyReplayStyles`) before rrweb rebuilds the page; its CSP still loads
+no remote stylesheet. A sheet the page cannot read (another origin without
+CORS) is drawn without, as rrweb's own inlining would.
 
 An app sets both in its codecast.json `replay` block (X1), which the platform
 and codecast parsers read alike (a drift test holds the two, and the DOM caps,
-equal). Codecast's own web ships `"dom": "off"`, `"sampleRate": 0`.
+equal). Codecast's own web ships `"dom": "onError"`, `"sampleRate": 0.05`.
 
 Measured in Chrome (`platform/packages/analytics/bench/replayDomBench.ts`,
 2026-10-07, layout settled before each step, means over 450 steps). On a
@@ -522,11 +558,12 @@ Measured in Chrome (`platform/packages/analytics/bench/replayDomBench.ts`,
 toggles and 5 rows in and out costs 0.83 ms with no recorder, 1.05 ms with the
 semantic recorder and 3.5 ms with DOM mode on: about 2.5 ms per burst for
 rrweb (p95 8.4 ms against 3.4 ms). A click plus a keystroke costs 0.2 ms more.
-The one-off costs are larger. rrweb's start (its first full snapshot) took
-51 to 66 ms and a checkout 25 ms on that page. On the codecast inbox (5,200 to
-5,500 nodes, stylesheets inlined) they were 83 to 90 ms and 56 ms, so DOM mode
-there is a ~56 ms long task every 30 s. Two snapshots of the inbox were
-4.3 MB of JSON and 520 KB gzipped, with 17 ms to serialize at upload.
+No rrweb option moves the per-burst cost (masking, blocking and slimDOM
+variants all measured within noise on 2026-11-14), which is why the recorder
+limits when rrweb runs rather than how. The one-off costs were 51 to 66 ms
+for rrweb's start on the synthetic page and, on the codecast inbox with
+stylesheets inlined, 83 to 90 ms and a 56 ms checkout every 30 s; without the
+stylesheets a snapshot of the inbox is about 16 ms.
 
 ### Playing a replay
 

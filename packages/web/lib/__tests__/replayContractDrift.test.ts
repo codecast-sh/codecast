@@ -25,6 +25,14 @@ describe("the platform recorder speaks codecast's replay contract", () => {
     expect(platform.REPLAY_LIMITS).toEqual(shared.REPLAY_LIMITS);
   });
 
+  test("keep reasons and the stylesheet caps match", () => {
+    expect([...platform.REPLAY_KEEP_REASONS]).toEqual([...shared.REPLAY_KEEP_REASONS]);
+    expect(platform.REPLAY_KEEP_REASON_PATTERN.source).toBe(shared.REPLAY_KEEP_REASON_PATTERN.source);
+    expect(platform.REPLAY_KEEP_REASONS_MAX).toBe(shared.REPLAY_KEEP_REASONS_MAX);
+    expect(platform.REPLAY_STYLE_MAX).toBe(player.REPLAY_STYLE_LIMITS.max_per_replay);
+    expect(platform.REPLAY_STYLE_MAX_BYTES).toBe(player.REPLAY_STYLE_LIMITS.max_bytes);
+  });
+
   test("the DOM capture's caps and modes match, and both read a codecast.json's replay block alike", () => {
     expect(platform.REPLAY_DOM_LIMITS).toEqual(player.REPLAY_DOM_LIMITS);
     expect([...PLATFORM_DOM_MODES]).toEqual([...REPLAY_DOM_MODES]);
@@ -37,9 +45,12 @@ describe("the platform recorder speaks codecast's replay contract", () => {
     for (const file of files) expect(parseCodecastJson(file)).toEqual(parseCodecastConfig(file) as never);
   });
 
-  test("codecast web ships with DOM capture off", () => {
+  // The capture runs only while a person attends the page and ships only when
+  // something keeps the recording (external-data.md X5); "sampled" would ship
+  // the page of every sampled session, which nobody has decided to pay for.
+  test("codecast web ships the page capture only when something keeps the recording", () => {
     const parsed = parseCodecastConfig(codecastJson);
-    expect(parsed.ok && (parsed.config.replay?.dom ?? "off")).toBe("off");
+    expect(parsed.ok && (parsed.config.replay?.dom ?? "off")).toBe("onError");
   });
 
   test("both clean a URL the same way, so an imported replay keeps no more than a recorded one", () => {

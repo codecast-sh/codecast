@@ -24,6 +24,8 @@ import {
   REPLAY_FRAME_LIMITS,
   REPLAY_PLAYER_SOURCE,
   REPLAY_PLAYER_SPEEDS,
+  REPLAY_STYLE_LIMITS,
+  applyReplayStyles,
   parseReplayHostMessage,
   parseReplayPlayerUrl,
   replayCaptureProblem,
@@ -145,6 +147,25 @@ async function readChunk(url: string): Promise<unknown[]> {
   return Array.isArray(parsed) ? parsed : [];
 }
 
+/** Each stored stylesheet's text by the href the capture names. One that cannot be read is left out: its link stays as recorded. */
+async function readStyles(styles: ReplayPlayerManifest["styles"]): Promise<Map<string, string>> {
+  const css = new Map<string, string>();
+  await Promise.all(
+    (styles ?? []).slice(0, REPLAY_STYLE_LIMITS.max_per_replay).map(async (s) => {
+      try {
+        const res = await fetch(s.url, { referrerPolicy: "no-referrer", credentials: "omit" });
+        if (!res.ok || !res.body) return;
+        let bytes = await readCapped(res.body, REPLAY_STYLE_LIMITS.max_inflated_bytes);
+        if (bytes[0] === 0x1f && bytes[1] === 0x8b) bytes = await readCapped(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")), REPLAY_STYLE_LIMITS.max_inflated_bytes);
+        css.set(s.href, new TextDecoder().decode(bytes));
+      } catch {
+        // drawn without that sheet
+      }
+    }),
+  );
+  return css;
+}
+
 /** Every chunk, a few at a time, in order. */
 async function readChunks(urls: string[], parallel = 4): Promise<unknown[]> {
   const out: unknown[][] = new Array(urls.length);
@@ -212,7 +233,9 @@ async function main() {
 
   let events: any[] = [];
   try {
-    events = await readChunks(manifest.dom_urls);
+    const [read, css] = await Promise.all([readChunks(manifest.dom_urls), readStyles(manifest.styles)]);
+    events = read;
+    applyReplayStyles(events, css);
   } catch (err) {
     return fail(`The recording could not be read: ${err instanceof Error ? err.message : String(err)}`);
   }
