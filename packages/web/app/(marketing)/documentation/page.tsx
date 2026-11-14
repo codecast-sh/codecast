@@ -125,12 +125,12 @@ function PhoneShot({ src, alt, caption }: { src: string; alt: string; caption: s
 
 /** The thumbnail tour under the hero: each card jumps to its section. */
 const TOUR = [
-  { id: "inbox", label: "Inbox", line: "Every agent, grouped by what it needs from you", src: "/docs/app/inbox.webp", focus: "100% 0%" },
-  { id: "conversations", label: "Conversations", line: "Watch and steer a session live", src: "/docs/app/conversation.webp", focus: "30% 20%" },
-  { id: "command-palette", label: "Command palette", line: "Jump to anything with one key", src: "/docs/app/palette.webp", focus: "50% 25%" },
-  { id: "changes", label: "Changes", line: "What the team shipped, day by day", src: "/docs/app/changes.webp", focus: "35% 0%" },
-  { id: "tasks-plans", label: "Tasks & plans", line: "One board for people and agents", src: "/docs/app/tasks.webp", focus: "35% 0%" },
-  { id: "mobile-app", label: "Mobile", line: "Answer an agent from your phone", src: "/docs/app/mobile.webp", focus: "50% 30%" },
+  { id: "inbox", label: "Inbox", line: "Every agent, grouped by what it needs from you", src: "/docs/app/inbox.webp", focus: "97% 22%", zoom: 2.4 },
+  { id: "conversations", label: "Conversations", line: "Watch and steer a session live", src: "/docs/app/conversation.webp", focus: "48% 38%", zoom: 1.9 },
+  { id: "command-palette", label: "Command palette", line: "Jump to anything with one key", src: "/docs/app/palette.webp", focus: "50% 42%", zoom: 1.7 },
+  { id: "changes", label: "Changes", line: "What the team shipped, day by day", src: "/docs/app/changes.webp", focus: "45% 28%", zoom: 1.9 },
+  { id: "tasks-plans", label: "Tasks & plans", line: "One board for people and agents", src: "/docs/app/tasks.webp", focus: "45% 28%", zoom: 1.9 },
+  { id: "mobile-app", label: "Mobile", line: "Answer an agent from your phone", src: "/docs/app/mobile.webp", focus: "50% 30%", zoom: 1.3 },
 ];
 
 /** The inbox's sections, top to bottom, in the colors the app draws them. */
@@ -346,7 +346,7 @@ export default function DocsPage() {
               >
                 <div className="aspect-[16/9] overflow-hidden" style={{ backgroundColor: SOL.base2 }}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={t.src} alt="" loading="lazy" className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" style={{ objectPosition: t.focus }} />
+                  <img src={t.src} alt="" loading="lazy" className="w-full h-full object-cover" style={{ objectPosition: t.focus, transform: `scale(${t.zoom})`, transformOrigin: t.focus }} />
                 </div>
                 <div className="px-3 py-2.5">
                   <div className="font-mono text-sm font-semibold" style={{ color: SOL.base03 }}>{t.label}</div>
