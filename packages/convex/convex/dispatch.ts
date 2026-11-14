@@ -1928,6 +1928,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // `grant`: the Touch ID grant string turning it off spends.
   setSecretAskFirst: async (ctx, userId, [id, askFirst, grant]: [string, boolean, string?]) =>
     liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setAskFirst, { ref: id, ask_first: askFirst, grant })),
+  setSecretTouchId: async (ctx, userId, [id, touchId, grant]: [string, boolean, string?]) =>
+    liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setTouchId, { ref: id, touch_id: touchId, grant })),
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {
       provider: opts.provider,
@@ -3013,6 +3015,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // currentUser first).
   updateNotificationSettings: async (ctx, _userId, [patch]: [Record<string, any>]) => {
     return await ctx.runMutation!(api.users.updateNotificationPreferences, patch as any);
+  },
+  // How loudly the viewer hears one session (store setSessionNotify paints the
+  // sessionNotify row first).
+  setSessionNotify: async (ctx, _userId, [conversationId, level]: [string, "default" | "all" | "needs_input" | "muted"]) => {
+    return await ctx.runMutation!(api.sessionWatch.setLevel, { conversation_id: conversationId, level });
   },
   setAgentPermissionModes: async (ctx, _userId, [modes]: [Record<string, any>]) => {
     return await ctx.runMutation!(api.users.updateAgentPermissionModes, modes as any);
