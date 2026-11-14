@@ -6,7 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireUser } from "./lib/auth";
 import { commitRecordedBy, isConversationLinkable, normalizeRepository } from "./lib/gitRefs";
 import { patchPullRequest } from "./prShepherd";
-import { linkPullRequestSessions, pullRequestsLinkedToConversation, syncPullRequestSessions } from "./lib/prSessions";
+import { linkPullRequestSessions, pullRequestsLinkedToConversation, syncPullRequestSessions, SESSION_CARD_MAX_SESSIONS, SESSION_CARD_PR_FIELDS } from "./lib/prSessions";
 import {
   canAccessConversation,
   canAccessPullRequest,
@@ -468,6 +468,86 @@ export const getPRsForConversation = query({
       if (await canAccessPullRequest(ctx, userId, pr)) visible.push(pr);
     }
     return visible;
+  },
+});
+
+const SESSION_CARD_LINKS_PER_SESSION = 10;
+const SESSION_CARD_LINKS_SCANNED = 30;
+const SESSION_CARD_READ_BUDGET = 8 * 1024 * 1024;
+const SESSION_CARD_MAX_PRS = 80;
+
+/**
+ * The pull requests the inbox cards draw as chips, for the sessions the
+ * client names, best first (the ones it lists): each session's links out of
+ * pull_request_sessions, with their tier, and each linked pull request as
+ * the fields a chip draws (SESSION_CARD_PR_FIELDS), never its patches or the
+ * other sessions it links. Only pull requests of the viewer's teams, and
+ * their links, come back.
+ */
+export const sessionCardPRs = query({
+  args: { conversation_ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const ids = [...new Set(args.conversation_ids.slice(0, SESSION_CARD_MAX_SESSIONS))];
+    const member = new Map<string, boolean>();
+    const readable = async (pr: { team_id: Id<"teams"> }) => {
+      const key = String(pr.team_id);
+      if (!member.has(key)) member.set(key, await canAccessPullRequest(ctx, userId, pr));
+      return member.get(key)!;
+    };
+    const links: { _id: Id<"pull_request_sessions">; pull_request_id: Id<"pull_requests">; conversation_id: Id<"conversations">; tier: "observed" | "committed" }[] = [];
+    const pullRequests = new Map<string, Record<string, unknown>>();
+    const denied = new Set<string>();
+    let readBytes = 0;
+    const utf8 = new TextEncoder();
+    // The sessions this answer speaks for: the links of theirs it carries are
+    // the links the client should hold. The client prunes only these, so a
+    // session skipped for the caps never loses what it had.
+    const answered: string[] = [];
+    for (const raw of ids) {
+      const id = ctx.db.normalizeId("conversations", raw);
+      if (!id) continue;
+      // No read of the conversation itself: it is patched on every message,
+      // and having it in the read set re-ran this whole query each time. A
+      // link is shown only for a pull request the viewer's team owns, which
+      // is what getPRsForTimeline already shows with its linked sessions.
+      const rows = await ctx.db
+        .query("pull_request_sessions")
+        .withIndex("by_conversation", (q) => q.eq("conversation_id", id))
+        .order("desc")
+        .take(SESSION_CARD_LINKS_SCANNED);
+      // Past its first links, a session keeps its committed links before the
+      // ones it only sat on the branch of; newest first within each.
+      const kept = [...rows.filter((r) => r.tier === "committed"), ...rows.filter((r) => r.tier !== "committed")].slice(0, SESSION_CARD_LINKS_PER_SESSION);
+      const fresh = new Set(kept.map((row) => String(row.pull_request_id)).filter((key) => !pullRequests.has(key) && !denied.has(key))).size;
+      // Over the cap: this session waits (unanswered, so nothing of it is
+      // pruned); a later one with fewer new pull requests may still fit.
+      if (pullRequests.size + fresh > SESSION_CARD_MAX_PRS) continue;
+
+      // A pull request row with its patches reaches 1 MB, and the whole read
+      // is capped (16 MiB): past half of it, reading stops, and the session
+      // it stopped in stays unanswered (its links so far are kept, none pruned).
+      let stopped = false;
+      for (const row of kept) {
+        const key = String(row.pull_request_id);
+        if (denied.has(key)) continue;
+        if (!pullRequests.has(key)) {
+          if (readBytes > SESSION_CARD_READ_BUDGET) { stopped = true; break; }
+          const pr = await ctx.db.get(row.pull_request_id);
+          if (pr) readBytes += utf8.encode(JSON.stringify(pr)).length;
+          if (!pr || !(await readable(pr))) { denied.add(key); continue; }
+          const slim: Record<string, unknown> = {};
+          for (const field of SESSION_CARD_PR_FIELDS) if (pr[field] !== undefined) slim[field] = pr[field];
+          pullRequests.set(key, slim);
+        }
+        links.push({ _id: row._id, pull_request_id: row.pull_request_id, conversation_id: row.conversation_id, tier: row.tier ?? "observed" });
+      }
+      if (stopped) break;
+      // A session cut to its first links is answered for exactly those: the
+      // client keeps what was sent and drops the rest, as the server does.
+      answered.push(String(id));
+    }
+    return { links, pull_requests: [...pullRequests.values()], answered };
   },
 });
 
