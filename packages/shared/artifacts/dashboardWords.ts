@@ -157,10 +157,11 @@ export function textProblems(text: string, kpi: (key: string) => { title?: strin
  * live tokens say them instead.
  */
 export function writtenTextProblem(text: string): string | null {
+  // Every claim is named at once, numbers and direction words alike, the way the editor names them.
   const typed = typedNumbers(text);
-  if (typed.length) return `${typed.join(", ")} ${typed.length === 1 ? "is a typed number" : "are typed numbers"}: reference the KPI that holds it as {b_key}, or its change as {b_key.delta}`;
-  const dirs = directionWords(text);
-  if (dirs.length) return `"${dirs[0].word}" states a direction in words, which goes wrong when the data turns: write it as {b_key.trend} ("up 12%", "down 4%", "flat"), or show the signed change with {b_key.delta}`;
-  return null;
+  const dirs = directionWords(text).map((d) => `"${d.word}"`);
+  if (!typed.length && !dirs.length) return null;
+  const how = [typed.length ? "a number as {b_key} or its change as {b_key.delta}" : "", dirs.length ? 'a direction as {b_key.trend} ("up 12%", "flat")' : ""].filter(Boolean).join(", and ");
+  return `typed ${[...typed, ...dirs].join(", ")}: write ${how}, so the words follow the data when it turns`;
 }
 

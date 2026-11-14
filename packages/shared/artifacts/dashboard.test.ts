@@ -456,8 +456,10 @@ describe("words against the data", () => {
   test("the verbs refuse typed numbers and worded directions, and allow windows and ranks", () => {
     const view = artifactView("dashboard", "T", [el("b_n", "kpi", { order: 1 })]);
     expect(() => dashboardSpec.verbs!.text.run(view, ["Spend rose this week"])).toThrow(/\{b_key\.trend\}/);
-    expect(() => dashboardSpec.verbs!.story.run(view, ["scrolly", "--headline", "Pre-orders hit 58,500"])).toThrow(/typed number/);
+    expect(() => dashboardSpec.verbs!.story.run(view, ["scrolly", "--headline", "Pre-orders hit 58,500"])).toThrow(/typed 58,500/);
     expect(() => dashboardSpec.verbs!.say.run(view, ["b_n", "Throughput", "up from May"])).toThrow(/direction/);
+    // One message names every claim, numbers and direction words together, as the editor does.
+    expect(() => dashboardSpec.verbs!.text.run(view, ["Spend fell 40% this month"])).toThrow(/typed 40%, "fell"/);
     expect(dashboardSpec.verbs!.text.run(view, ["Top 10 repos over the last 30 days: {b_n}, {b_n.trend}. Set up in 2026."]).ops).toHaveLength(1);
     expect(() => dashboardSpec.verbs!.table.run(view, ["--where", '{"person":{"in":"ada"}}'])).toThrow(/takes a list/);
   });

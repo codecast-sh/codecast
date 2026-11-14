@@ -364,6 +364,7 @@ function writeBlock(view: ArtifactView, kind: BlockKind, f: Flags, fields: Recor
   if (stray) {
     // A misspelling, or a flag named after the field it sets (--chart is set with --type).
     const ALIAS: Record<string, string> = { chart: "type", kind: "type", value: "field", metric: "field", column: "field" };
+    if (stray === "text" && kind === "text") throw new Error(`text takes the words as its argument: text <doc> "Spend is {b_spend}."`);
     const near = ALIAS[stray] && takes.has(ALIAS[stray]) ? ALIAS[stray] : [...takes].find((t) => t.length > 2 && [...t].sort().join("") === [...stray].sort().join(""));
     throw new Error(`${kind} takes no --${stray}${near ? ` (did you mean --${near}?)` : ""}`);
   }

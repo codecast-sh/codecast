@@ -681,7 +681,7 @@ export function evaluateTable(raw: TableBlock, result: DataResult | undefined, s
     rows: shown.map((r) => idx.map((i) => src.rows[r][i])),
     used: back ? shown.flatMap((i) => back![i]) : shown,
     total,
-    how: `${cols.length} columns, ${shown.length}${total > shown.length ? ` of ${total}` : ""} ${back ? `groups by ${block.group}` : "rows"}${block.sort ? `, sorted by ${block.sort.replace(/^-/, "")}${block.sort.startsWith("-") ? " descending" : ""}` : ""}`,
+    how: `${cols.length} columns, ${shown.length}${total > shown.length ? ` of ${total}` : ""} ${back ? `${shown.length === 1 ? "group" : "groups"} by ${block.group}` : shown.length === 1 ? "row" : "rows"}${block.sort ? `, sorted by ${block.sort.replace(/^-/, "")}${block.sort.startsWith("-") ? " descending" : ""}` : ""}`,
   };
 }
 
