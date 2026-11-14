@@ -43,6 +43,7 @@ import {
   cleanSecretList,
   cleanSecretSites,
   compareSecrets,
+  loginSitesProblem,
   siteProblem,
   ambiguousSecretName,
   APPROVE_FOR_SESSION,
@@ -556,7 +557,7 @@ export const create = action({
     const env = cleanSecretList(args.env);
     const sites = cleanSecretSites(args.sites);
     const note = args.note?.trim() || undefined;
-    const problem = metaProblem({ name, kind: args.kind, env, sites, note });
+    const problem = metaProblem({ name, kind: args.kind, env, sites, note }) ?? loginSitesProblem(args.kind, sites);
     if (problem) return { error: problem };
     const checked = validatePayload(args.kind as SecretKind, args.payload);
     if ("error" in checked) return checked;
@@ -831,6 +832,7 @@ export const updateMeta = mutation({
     // A person setting a sign-in's sites vouches for them; a token naming a new one (a request's) answers for it.
     if (row.kind === "signin" && (person ? "sites" in patch : widens)) patch.sites_by_token = await scopedBy(ctx, userId, person, patch.sites);
     const problem = metaProblem({ name: patch.name, env: patch.env, sites: patch.sites, note: patch.note })
+      ?? ("sites" in patch ? loginSitesProblem(row.kind, patch.sites) : null)
       ?? secretEnvProblem({ name: patch.name ?? row.name, kind: row.kind, env: "env" in patch ? patch.env : row.env });
     if (problem) return { error: problem };
     if (patch.name && patch.name !== row.name) {
@@ -1033,7 +1035,7 @@ export const request = mutation({
       return { error: `${name} is already requested as a ${row.kind} (${row.short_id}): ask with --kind ${row.kind}, or pick another name` };
     }
     const kind = row?.kind ?? args.kind ?? "key";
-    const envProblem = secretEnvProblem({ name, kind, env });
+    const envProblem = secretEnvProblem({ name, kind, env }) ?? loginSitesProblem(kind, sites ?? row?.sites);
     if (envProblem) return { error: envProblem };
     // The sites a sign-in is asked for are the ones its fill's cookies go under (scopedBy).
     const person = await isPerson(ctx);

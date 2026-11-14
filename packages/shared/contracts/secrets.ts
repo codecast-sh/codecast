@@ -220,6 +220,15 @@ export function siteProblem(site: string): string | null {
   return null;
 }
 
+/**
+ * Why a login cannot be stored with these sites, or null. A login is a
+ * website account and a browser fill types it only on its sites, so one
+ * stored without a site could never be used to sign in.
+ */
+export function loginSitesProblem(kind: SecretKind | undefined, sites: string[] | undefined): string | null {
+  return kind === "login" && !sites?.length ? "A login names the site it signs in to, like facebook.com (--site, or Site on the Vault page): browser fill types it only there" : null;
+}
+
 /** A site as a sign-in compares it: lowercase, no leading dots or `www.`. */
 export const bareSite = (site: string) => site.toLowerCase().replace(/^\.+/, "").replace(/^www\./, "");
 

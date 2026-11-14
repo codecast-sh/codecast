@@ -119,7 +119,7 @@ test("another team's member cannot list, read, reveal, change or delete a team s
 
 test("a personal secret is its owner's alone", async () => {
   const { as, ana, ben } = await seed();
-  const made = await as(ana).action(api.secrets.create, { name: "mine", kind: "login", payload: { username: "ana", password: "pw-ana-secret" }, personal: true });
+  const made = await as(ana).action(api.secrets.create, { name: "mine", kind: "login", payload: { username: "ana", password: "pw-ana-secret" }, sites: ["example.com"], personal: true });
   expect(await as(ben).query(api.secrets.list, {})).toEqual([]);
   expect(await as(ben).action(api.secrets.reveal, { ref: made.short_id })).toMatchObject({ error: expect.any(String) });
   expect(await as(ana).action(api.secrets.reveal, { ref: "mine" })).toEqual({ payload: { username: "ana", password: "pw-ana-secret" } });
@@ -141,7 +141,7 @@ test("a ciphertext moved to another workspace does not decrypt", async () => {
 test("cliRead records one read per secret naming the session, and bumps use", async () => {
   const { t, as, ana, acme, conv } = await seed();
   await as(ana).action(api.secrets.create, { name: "stripe-test", kind: "key", payload: { value: STRIPE }, team_id: acme });
-  await as(ana).action(api.secrets.create, { name: "staging", kind: "login", payload: { username: "admin", password: "pw-staging-1" }, team_id: acme });
+  await as(ana).action(api.secrets.create, { name: "staging", kind: "login", payload: { username: "admin", password: "pw-staging-1" }, sites: ["example.com"], team_id: acme });
   const r = await t.action(api.secrets.cliRead, { api_token: ANA_TOKEN, refs: ["stripe-test", "staging"], conversation: "jx7ana1", purpose: "run" });
   expect(r.secrets.map((s: any) => [s.name, s.payload])).toEqual([["stripe-test", { value: STRIPE }], ["staging", { username: "admin", password: "pw-staging-1" }]]);
   const { rows, reads } = await t.run(async (ctx: any) => ({
@@ -185,6 +185,20 @@ test("request then fulfill: the asking session gets a ready line with no value, 
   expect(await allText(t)).not.toContain(VALUE);
   const kinds = (await as(ana).query(api.secrets.events, { ref: "vercel-token" })).map((e: any) => e.kind);
   expect(kinds).toEqual(["fulfilled", "requested", "requested"]);
+});
+
+test("a login names its site: create, request and an edit that clears it are refused", async () => {
+  const { t, as, ana, acme } = await seed();
+  expect(await as(ana).action(api.secrets.create, { name: "fb", kind: "login", payload: { username: "ana", password: "pw-ana-secret" }, team_id: acme }))
+    .toMatchObject({ error: expect.stringMatching(/names the site it signs in to/) });
+  expect(await t.mutation(api.secrets.request, { api_token: ANA_TOKEN, name: "fb", kind: "login", team_id: acme }))
+    .toMatchObject({ error: expect.stringMatching(/names the site it signs in to/) });
+  const made = await as(ana).action(api.secrets.create, { name: "fb", kind: "login", payload: { username: "ana", password: "pw-ana-secret" }, sites: ["facebook.com"], team_id: acme });
+  expect(made).toMatchObject({ short_id: expect.any(String) });
+  expect(await as(ana).mutation(api.secrets.updateMeta, { ref: "fb", sites: [] }))
+    .toMatchObject({ error: expect.stringMatching(/names the site it signs in to/) });
+  // A key needs no site.
+  expect(await t.mutation(api.secrets.request, { api_token: ANA_TOKEN, name: "npm-token", team_id: acme })).toMatchObject({ short_id: expect.any(String) });
 });
 
 test("asking again keeps the open request's kind: left out it stays, a different one is refused", async () => {
@@ -371,7 +385,7 @@ test("a session run by a bot account is approved by its owner, the person the ca
 
 test("two partial login rotates at once keep both edits, and two fills at once fill once", async () => {
   const { t, as, ana, acme } = await seed();
-  await as(ana).action(api.secrets.create, { name: "db", kind: "login", payload: { username: "admin", password: "first-pass-123" }, team_id: acme });
+  await as(ana).action(api.secrets.create, { name: "db", kind: "login", payload: { username: "admin", password: "first-pass-123" }, sites: ["example.com"], team_id: acme });
   // Both read the same stored login; the later write merges again instead of dropping the other's field.
   const [a, b] = await Promise.all([
     as(ana).action(api.secrets.rotate, { ref: "db", payload: { username: "root" } }),
@@ -461,7 +475,7 @@ test("rotate keeps the previous value as a version, restore swaps it back, refre
 
 test("a login's has_otp is stored at write time, and a rotate keeps the fields it leaves out and clears an empty one", async () => {
   const { as, ana, ben, acme } = await seed();
-  await as(ana).action(api.secrets.create, { name: "staging", kind: "login", payload: { username: "admin", password: "pw-1", totp_seed: SEED }, team_id: acme });
+  await as(ana).action(api.secrets.create, { name: "staging", kind: "login", payload: { username: "admin", password: "pw-1", totp_seed: SEED }, sites: ["example.com"], team_id: acme });
   expect(await as(ana).query(api.secrets.show, { ref: "staging" })).toMatchObject({ has_otp: true, updated_by_name: "Ana" });
   await as(ben).action(api.secrets.rotate, { ref: "staging", payload: { password: "pw-2" } });
   expect(await as(ana).action(api.secrets.reveal, { ref: "staging" })).toEqual({ payload: { username: "admin", password: "pw-2", totp_seed: SEED } });
@@ -484,7 +498,7 @@ test("events are found by short id after delete, inside the viewer's workspaces 
 test("a redaction fetch is not a read: it counts no use and records one copy per value", async () => {
   const { t, as, ana, acme } = await seed();
   await as(ana).action(api.secrets.create, { name: "a", kind: "key", payload: { value: "value-a-123456" }, team_id: acme });
-  await as(ana).action(api.secrets.create, { name: "b", kind: "login", payload: { username: "u", password: "value-b-123456" }, team_id: acme });
+  await as(ana).action(api.secrets.create, { name: "b", kind: "login", payload: { username: "u", password: "value-b-123456" }, sites: ["example.com"], team_id: acme });
   await as(ana).action(api.secrets.create, { name: "c", kind: "key", payload: { value: "value-c-123456" }, personal: true });
   expect((await t.action(api.secrets.redactionValues, { api_token: ANA_TOKEN })).values).toHaveLength(3);
   await t.action(api.secrets.redactionValues, { api_token: ANA_TOKEN });

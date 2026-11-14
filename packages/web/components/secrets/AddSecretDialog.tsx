@@ -7,7 +7,7 @@
 import { useMemo, useRef, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { toast } from "sonner";
-import { SECRET_REDACTION_MIN, envFor, envNameIssue, totpParams, type SecretKind, type SecretMeta } from "@codecast/shared/contracts/secrets";
+import { SECRET_REDACTION_MIN, envFor, envNameIssue, loginSitesProblem, totpParams, type SecretKind, type SecretMeta } from "@codecast/shared/contracts/secrets";
 import type { VaultScope } from "../../hooks/useSyncSecrets";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 import { KeyCap } from "../KeyCap";
@@ -142,6 +142,7 @@ function SinglePane({
   const [note, setNote] = useState("");
   const [issuer, setIssuer] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
+  const siteRef = useRef<HTMLInputElement>(null);
   const kindsRef = useRef<HTMLDivElement>(null);
   const arrowed = useRef(false);
   // An arrow keeps focus in the kind group; this runs after the new fields' autoFocus would take it.
@@ -164,12 +165,14 @@ function SinglePane({
   const envProblem = env.map(envNameIssue).find(Boolean) ?? null;
   const checked = checkedPayload(kind, draft);
   const valueReady = "payload" in checked;
-  const canSave = valueReady && !nameProblem && !envProblem;
-  // Save stays pressable while only the name is missing: the press says so by taking the person to it.
+  const siteMissing = !!loginSitesProblem(kind, sites);
+  const canSave = valueReady && !nameProblem && !envProblem && !siteMissing;
+  // Save stays pressable while only the name or a login's site is missing: the press says so by taking the person to it.
   const canPress = valueReady && !envProblem;
 
   const submit = async () => {
     setTried(true);
+    if (canPress && siteMissing) return siteRef.current?.focus();
     if (canPress && nameProblem) return nameRef.current?.focus();
     if (!canSave) return;
     onCreated?.(name);
@@ -232,7 +235,7 @@ function SinglePane({
       <div className="flex min-h-0 flex-col overflow-y-auto px-5 py-3">
         {kind === "login" && (
           <Row label="Site" align="input">
-            <input value={sitesText} onChange={(e) => setSitesText(e.target.value)} placeholder="github.com (optional)" spellCheck={false} className={FIELD_MONO} />
+            <input ref={siteRef} value={sitesText} onChange={(e) => setSitesText(e.target.value)} placeholder="github.com" required aria-invalid={tried && siteMissing} spellCheck={false} className={`${FIELD_MONO} ${tried && siteMissing ? "border-sol-red/70" : ""}`} />
           </Row>
         )}
         {/* A login's own lines (Username, Password, 2FA) are the rows, so the form keeps one label column. */}

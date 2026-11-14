@@ -393,7 +393,7 @@ function registerWriteVerbs(vault: Command, deps: PublishDeps): void {
       .argument("<name>", "Lowercase letters, digits and hyphens, like stripe-test")
       .option("--kind <kind>", "key (default), login or file")
       .option("--env <VAR>", "Env var it fills under cast vault run (repeatable; a login: one name is the password, two are username then password)", collect, [])
-      .option("--site <host>", "Site it is for (repeatable)", collect, [])
+      .option("--site <host>", "Site it is for (repeatable; a login needs one: browser fill types it only there)", collect, [])
       .option("--note <text>", "What it is for"),
   )
     .option(...WRITE_TEAM_OPTION)
@@ -522,7 +522,7 @@ function registerRequestVerbs(vault: Command, deps: PublishDeps): void {
     .argument("<name>", "The name it should have, like stripe-test")
     .option("--kind <kind>", "key (default), login, file or signin")
     .option("--env <VAR>", "Env var it should fill (repeatable)", collect, [])
-    .option("--site <host>", "Site it is for (repeatable)", collect, [])
+    .option("--site <host>", "Site it is for (repeatable; a login needs one: browser fill types it only there)", collect, [])
     .option("--why <text>", "What you need it for, shown to the person")
     .option(...WRITE_TEAM_OPTION)
     .option(...PERSONAL_OPTION)
