@@ -341,6 +341,7 @@ import { ghosttyPane } from "./ghostty.js";
 import type { PaneTransport } from "./paneTransport.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
 import { TerminalHoldError } from "./terminalHold.js";
+import { ForeignWriterHoldError, foreignSessionWriter, foreignWriterScreen, parsePsRows, PS_ROWS_ARGS, type PsRow } from "./foreignSessionWriter.js";
 import { HERD_TAKE_PATH, SwapHeldError, abortableWait, closeHerdrPane, pollUntilUp, serveHerdTake, swapHeld, takeBusy, type HerdTakeDeps } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
@@ -17577,7 +17578,7 @@ export function holdScreen(pane: string): string {
 // No fallback (a resume, a repair, a second pane) may swallow one of these and
 // write the message somewhere else.
 export function isDeliveryVerdict(err: unknown): boolean {
-  if (err instanceof InputBlockedError || err instanceof TerminalHoldError || err instanceof TmuxDeliveryUncertainError || err instanceof TmuxDeliveryExhaustedError) return true;
+  if (err instanceof InputBlockedError || err instanceof TerminalHoldError || err instanceof ForeignWriterHoldError || err instanceof TmuxDeliveryUncertainError || err instanceof TmuxDeliveryExhaustedError) return true;
   return /^(AGENT_STDIN_NOT_READY|TMUX_SERVER_BUSY|INJECT_UNVERIFIED|INJECT_EXHAUSTED):/.test(err instanceof Error ? err.message : String(err));
 }
 
@@ -25890,6 +25891,22 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     }
   }
 
+  // Another program's agent still running this session (another app's runner,
+  // a person's terminal): a copy here would be a second writer on its
+  // transcript (GitHub #88). Checked before any transcript repair below, which
+  // would rewrite the file under that writer. A delivery is held with the
+  // process on its card; "Send anyway", or a resume the person asked for,
+  // goes ahead.
+  if (!opts?.userInitiated && !isForcedPastDialog(opts?.delivery?.messageId)) {
+    const rows = await _execFileAsync("ps", PS_ROWS_ARGS, { timeout: 5_000 }).then(({ stdout }) => parsePsRows(String(stdout)), () => [] as PsRow[]);
+    const writer = foreignSessionWriter(rows, sessionId, process.pid);
+    if (writer) {
+      logDelivery(`Not resuming ${resumeShortId(sessionId)}: pid=${writer.pid} outside Codecast already runs it (${writer.args.slice(0, 160)})`);
+      if (opts?.delivery) throw new ForeignWriterHoldError(writer, foreignWriterScreen(writer, rows));
+      return false;
+    }
+  }
+
   // A native fork has no transcript of its own yet: the parent's stands in for
   // cwd resolution and readiness timing, and its absence means the fork cannot
   // run here (the client copies state it must be able to read).
@@ -33552,6 +33569,7 @@ async function main(): Promise<void> {
     messageContent: string,
     holdReason?: string,
     holdMs = 5000,
+    holdScreen?: string,
   ) {
     if (messageRetryTimers.has(messageId)) return;
     const delays = [1000, 5000, 15000, 30000, 60000, 120000, 300000];
@@ -33561,7 +33579,7 @@ async function main(): Promise<void> {
     setTimeout(async () => {
       messageRetryTimers.delete(messageId);
       try {
-        await rependAfterAttempt(syncService, messageId, holdReason ? { holdReason } : undefined);
+        await rependAfterAttempt(syncService, messageId, holdReason ? { holdReason, ...(holdScreen ? { holdScreen } : {}) } : undefined);
         logDelivery(`Retry ${retryCount + 1} triggered for msg=${messageId.slice(0, 8)}`);
         // A hold re-pends the row unchanged (same retry count, same reason),
         // so the subscription has nothing new to push: drive the scan now
@@ -33571,7 +33589,7 @@ async function main(): Promise<void> {
         const error = err instanceof Error ? err.message : String(err);
         logDelivery(`Retry trigger failed for msg=${messageId.slice(0, 8)}: ${error}`);
         if (!error.includes("Message not found")) {
-          scheduleMessageRetry(messageId, retryCount + 1, conversationId, messageContent, holdReason, holdMs);
+          scheduleMessageRetry(messageId, retryCount + 1, conversationId, messageContent, holdReason, holdMs, holdScreen);
         }
       }
     }, delay);
@@ -33861,13 +33879,13 @@ async function main(): Promise<void> {
               ? { holdReason: err.holdReason, holdScreen: err.screen }
               : { holdReason: "waiting for a human answer in the terminal" };
             rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
-          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
+          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof ForeignWriterHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
             // never spending the retry budget, and tried again at the error's
             // own pace.
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${err.holdReason}: ${errMsg}`);
-            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, err.holdReason, err.recheckMs);
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, err.holdReason, err.recheckMs, err instanceof ForeignWriterHoldError ? err.holdScreen : undefined);
           } else if (err instanceof TmuxDeliveryExhaustedError) {
             // The pane took this payload TMUX_PASTE_WRITE_CAP times with no
             // exact echo. A submitted write may have run (a client that
