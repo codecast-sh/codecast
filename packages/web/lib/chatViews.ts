@@ -10,6 +10,7 @@
 // time — which is what makes a renamed teammate rename everywhere at once.
 
 import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
+import { isConvexId } from "./entityLinks";
 import { memberAvatarUrl, memberDisplayName } from "./liveEntities";
 import { compareMembersByPresence } from "../components/presence/memberPresence";
 import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
@@ -446,6 +447,11 @@ export function seatAuthorFor(userId: string, ctx: Pick<ViewContext, "members" |
   return { ...base, name: seat.name, role: { shortId: seat.shortId, handle: seat.handle, avatar: seat.avatar, title: seat.title } };
 }
 
+/** A binding the server holds, or one this window's pending hand still stands behind (its stub session exists). */
+export function liveBinding(id: string | undefined, ctx: Pick<ViewContext, "sessionFor">): string | undefined {
+  return id && (isConvexId(id) || !!ctx.sessionFor?.(id)) ? id : undefined;
+}
+
 export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessageView {
   const local = ctx.rollups?.get(row._id);
   const summary = ctx.summaries?.[row._id];
@@ -467,6 +473,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
     localOnly: row.sync_local_only || undefined,
     threadRootId: row.thread_root_id,
     contextSessionId: row.context_session_id,
+    boundSessionId: liveBinding(row.bound_session_id, ctx),
     content: row.content,
     createdAt: row.created_at,
     editedAt: row.edited_at,
