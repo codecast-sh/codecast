@@ -459,6 +459,23 @@ export const SCENES: Scene[] = [
   { id: "remote", name: "Anywhere", start: 82.3, end: DURATION, hold: 83.2, caption: "Sessions run on your laptop or a cloud host, all in one inbox." },
 ];
 
+/**
+ * The scrubber's five acts, each a run of consecutive scenes. The scenes keep
+ * their own captions; the bar names only the act, so a visitor reads five
+ * stops instead of thirteen.
+ */
+export type Act = { name: string; first: number; last: number };
+const ACT_SCENES: [string, ChapterId, ChapterId][] = [
+  ["Inbox", "inbox", "conversation"],
+  ["Agents", "fanout", "talk"],
+  ["Decide", "decide", "automation"],
+  ["Team", "team", "publish"],
+  ["Memory", "memory", "remote"],
+];
+export const ACTS: Act[] = ACT_SCENES.map(([name, a, b]) => ({ name, first: SCENES.findIndex((s) => s.id === a), last: SCENES.findIndex((s) => s.id === b) }));
+/** The act a scene index belongs to. */
+export const actOf = (scene: number) => ACTS.findIndex((a) => scene >= a.first && scene <= a.last);
+
 /** Reduced motion: each chapter's settled frame, the end of its last hold unless the scene names one. */
 export const STILLS: number[] = SCENES.map((s) => {
   if (s.still !== undefined) return s.still;
