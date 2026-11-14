@@ -18,10 +18,10 @@ const STARTED_AGO = 22 * HOUR;
 const LENGTH = 14 * MIN;
 
 export const CALL_SUMMARY =
-  "Failed webhooks retry with exponential backoff capped at one hour, eight attempts, then a dead-letter queue support can replay from. Maya's replay of last week's failures showed 96% delivered by the fifth attempt. Sarah wants on-call paged only for customers on an SLA.";
+  "Failed webhooks retry with exponential backoff, 2s, 4s, 8s and 16s with jitter, five attempts, then a dead-letter queue support can replay from. Maya's replay of last week's failures showed 96% delivered by the fifth attempt. Sarah wants on-call paged only for customers on an SLA.";
 
 export const CALL_ACTIONS = [
-  "Alex: build the retry queue with exponential backoff, capped at 1 hour (ct-4182)",
+  "Alex: build the retry queue with exponential backoff, five attempts (ct-4182)",
   "Maya: dead-letter queue with a replay button for support (ct-4184)",
   "Sarah: page on-call when an SLA customer's webhook dead-letters (ct-4185)",
 ];
@@ -35,9 +35,9 @@ const LINES: [Who, number, string][] = [
   ["maya", 15, "I replayed last week's failures, 1,284 of them, under a fixed schedule and under exponential backoff."],
   ["maya", 26, "Exponential with jitter got 96% delivered by the fifth attempt. Fixed every five minutes got 91, and a short blip waits the full five minutes."],
   ["sarah", 41, "How long does exponential keep going before it gives up?"],
-  ["me", 47, "Two, four, eight seconds, doubling up to an hour between attempts. Eight attempts, then it lands in dead letters."],
-  ["sarah", 58, "Fine by me, as long as the cap is an hour. I don't want an endpoint that's down getting hit all night."],
-  ["maya", 72, "Agreed on exponential, capped at one hour. Support needs a way to replay what dead-letters."],
+  ["me", 47, "Two, four, eight, sixteen seconds, with jitter. Five attempts, about thirty seconds all told, then it lands in dead letters."],
+  ["sarah", 58, "Fine by me, as long as it stops at five. I don't want an endpoint that's down getting hit all night."],
+  ["maya", 72, "Agreed on exponential, five attempts. Support needs a way to replay what dead-letters."],
   ["me", 81, "Maya, can you take the dead-letter queue and the replay button? I'll build the retry queue."],
   ["maya", 88, "Yes, I'll take it."],
   ["sarah", 96, "And let's page on-call only for the customers on an SLA. Everyone else goes to billing-alerts in the morning."],
@@ -81,8 +81,8 @@ const AGENT = { conversation_id: RETRIES._id, short_id: RETRIES.short_id, title:
 const thread = (now: number) => {
   const start = now - STARTED_AGO;
   return [
-    { _id: cid("callchat1"), user_id: PEOPLE.me._id, user_name: PEOPLE.me.name, user_image: PEOPLE.me.image, text: `@${RETRIES.short_id} how many of last week's failures would a one-hour cap still deliver?`, at: start + 52_000, mine: true, transcript_id: CALL_ID, agent: null, event: null },
-    { _id: cid("callchat2"), user_id: PEOPLE.me._id, user_name: AGENT.name, text: "All but 9 of the 1,284. Those 9 were endpoints that stayed down for more than a day, and they land in dead letters either way.", at: start + 64_000, mine: false, transcript_id: CALL_ID, agent: AGENT, event: null },
+    { _id: cid("callchat1"), user_id: PEOPLE.me._id, user_name: PEOPLE.me.name, user_image: PEOPLE.me.image, text: `@${RETRIES.short_id} how many of last week's failures would five attempts still deliver?`, at: start + 52_000, mine: true, transcript_id: CALL_ID, agent: null, event: null },
+    { _id: cid("callchat2"), user_id: PEOPLE.me._id, user_name: AGENT.name, text: "1,233 of the 1,284, 96%. The other 51 went to endpoints that stayed down past the fifth attempt, and they land in dead letters for support to replay.", at: start + 64_000, mine: false, transcript_id: CALL_ID, agent: AGENT, event: null },
   ].map((r) => ({ ...r, attachments: undefined, event_reason: null, event_guest_name: null, event_run_id: null, event_span: null }));
 };
 
@@ -121,7 +121,7 @@ const RECAP_TRANSCRIPT = (now: number) => [
   {
     _id: "hero-cr-m2",
     role: "assistant",
-    content: `On ${CALL_SHORT} you settled on exponential backoff, capped at one hour between attempts. Sarah set the cap and Maya agreed:\n\n${CALL_SHORT}:${AGREED - 1}-${AGREED}\n\nMaya took the dead-letter queue and its replay button, and Sarah took paging on-call for SLA customers.`,
+    content: `On ${CALL_SHORT} you settled on exponential backoff, five attempts at 2s, 4s, 8s and 16s with jitter. Sarah set the limit and Maya agreed:\n\n${CALL_SHORT}:${AGREED - 1}-${AGREED}\n\nMaya took the dead-letter queue and its replay button, and Sarah took paging on-call for SLA customers.`,
     timestamp: now - 2 * MIN,
   },
 ];
@@ -171,7 +171,7 @@ const liveDetail = (now: number) => ({
 const liveThread = (now: number) =>
   [
     { _id: cid("livechat1"), user_id: PEOPLE.me._id, user_name: PEOPLE.me.name, user_image: PEOPLE.me.image, text: `@${RETRIES.short_id} what's left before the retry queue can ship?`, at: now - 3 * MIN, mine: true, agent: null },
-    { _id: cid("livechat2"), user_id: PEOPLE.me._id, user_name: AGENT.name, text: "Two tests on the one-hour cap, then review. PR #482 is up; I'll post in #eng when it merges.", at: now - 2 * MIN - 30_000, mine: false, agent: AGENT },
+    { _id: cid("livechat2"), user_id: PEOPLE.me._id, user_name: AGENT.name, text: "Two tests on the five-attempt limit, then review. PR #482 is up; I'll post in #eng when it merges.", at: now - 2 * MIN - 30_000, mine: false, agent: AGENT },
   ].map((r) => ({ ...r, transcript_id: LIVE_ID, attachments: undefined, event: null, event_reason: null, event_guest_name: null, event_run_id: null, event_span: null }));
 
 const seat = (p: { _id: string; name: string; image: string }, joinedAgo: number, now: number) => ({ user_id: p._id, user_name: p.name, user_image: p.image, muted: false, joined_at: now - joinedAgo });

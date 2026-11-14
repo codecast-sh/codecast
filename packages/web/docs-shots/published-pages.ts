@@ -7,10 +7,11 @@
 // every request the page and its bar make (/cli/a/<slug>, ?meta=1,
 // /cli/artifacts/*), so nothing reaches a real origin. The address bar is not
 // in the capture; the bar names the page by its codecast.sh share link. The
-// embed is the app's own embed in the report session's transcript, its frame
-// pointed at the same local page (the app frames convex.codecast.sh, which has
-// no Acme pages). The PNGs land in docs-shots/raw/publish and the manifest
-// frames them (`raw` entries in batches/recall-showing.ts).
+// shots mode points the app's page URLs at this origin (lib/publishedPageUrls),
+// so the embed in the report session's transcript and the Pages list's
+// previews frame these pages too: keep `serve` running while the
+// recall-showing batch captures. The PNGs land in docs-shots/raw/publish and
+// the manifest frames them (`raw` entries in batches/recall-showing.ts).
 //
 //   bun packages/web/docs-shots/published-pages.ts           all three
 //   bun packages/web/docs-shots/published-pages.ts embed     one (page, manage, embed)
@@ -21,13 +22,14 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { brandArtifactHtml } from "../../convex/convex/artifactPages";
 import { attachCastTab, type CastTab } from "../scripts/castTab";
+import { DOCS_SHOTS_PAGES_ORIGIN } from "../lib/docsShots/flag";
 import { MIN, PEOPLE, SESSIONS } from "../lib/acmeWorld/world";
 import { PAGES, REPORT_SESSION, REPORT_SLUG } from "../lib/acmeWorld/pages";
 
 const OUT = resolve(import.meta.dir, "raw/publish");
 const SHOTS_ORIGIN = "http://127.0.0.1:3290";
 const VIEWPORT = { width: 1280, height: 860, deviceScaleFactor: 2, mobile: false };
-const LOCAL = "http://127.0.0.1:3297";
+const LOCAL = DOCS_SHOTS_PAGES_ORIGIN;
 const API = LOCAL;
 const OWNER_KEY = "acme-owner-key";
 const wanted = process.argv.slice(2);
@@ -136,9 +138,34 @@ function pageHtml(embed: boolean) {
   });
 }
 
+/* ── The other pages, as their previews (?preview=1: the page alone, no bar) ── */
+
+const doc = (title: string, body: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><style>
+body{font-family:-apple-system,"Inter",system-ui,sans-serif;color:#1f2a2a;background:#fbf8f1;margin:0}
+main{max-width:1040px;margin:0 auto;padding:48px 56px}
+h1{font-size:44px;margin:0 0 10px;letter-spacing:-.01em}.sub{color:#5b6b6b;font-size:22px;margin:0 0 32px}
+.row{display:flex;gap:18px}.card{flex:1;background:#fff;border:1px solid #e5e0d4;border-radius:14px;padding:20px 22px}
+.card b{display:block;font-size:34px}.card span{color:#5b6b6b;font-size:17px}
+.bars{display:flex;align-items:flex-end;gap:10px;height:200px;margin-top:28px;background:#fff;border:1px solid #e5e0d4;border-radius:14px;padding:18px}
+.bars i{flex:1;border-radius:5px 5px 0 0;background:#0f766e}
+table{width:100%;border-collapse:collapse;font-size:19px;background:#fff;border:1px solid #e5e0d4}td,th{padding:12px 16px;border-bottom:1px solid #eee8db;text-align:left}
+.ok{color:#15803d}.bad{color:#c2410c}
+</style></head><body><main>${body}</main></body></html>`;
+const barChart = (hs: number[], hot = -1) => `<div class="bars">${hs.map((h, i) => `<i style="height:${h}%;${i === hot ? "background:#c2410c" : ""}"></i>`).join("")}</div>`;
+
+const PREVIEWS: Record<string, string> = {
+  d4nq8vz2tlwc: doc("Retry queue dashboard", `<h1>Retry queue</h1><p class="sub">Live, last 24 hours</p><div class="row"><div class="card"><b>38</b><span>waiting to retry</span></div><div class="card"><b>2.1s</b><span>median wait</span></div><div class="card"><b>4</b><span>dead-lettered</span></div></div>${barChart([20, 35, 30, 55, 40, 70, 45, 30, 25, 60, 50, 35], 5)}`),
+  m9hc3pxr6ayk: doc("Attempt history mockup", `<h1>evt_1Q8x… <span style="font-size:24px;color:#c2410c">failed</span></h1><p class="sub">hooks.northwind.io/stripe · charge.refunded</p><table><tr><th>Attempt</th><th>When</th><th>Status</th></tr><tr><td>1</td><td>02:00:04</td><td class="bad">502</td></tr><tr><td>2</td><td>02:00:06</td><td class="bad">502</td></tr><tr><td>3</td><td>02:00:10</td><td class="ok">200</td></tr></table><p style="margin-top:26px"><span style="background:#0f766e;color:#fff;padding:12px 22px;border-radius:10px;font-size:19px">Retry now</span></p>`),
+  b2wf7kqn5jre: doc("Backoff strategies compared", `<h1>Backoff strategies</h1><p class="sub">Recovered by the fifth attempt, 1,284 failed deliveries</p><div class="row"><div class="card"><b>71%</b><span>fixed 5s</span></div><div class="card"><b>82%</b><span>linear</span></div><div class="card" style="border-color:#0f766e"><b class="ok">96%</b><span>exponential + jitter</span></div></div>${barChart([41, 58, 66, 71, 41, 63, 74, 82, 41, 77, 89, 96], 11)}`),
+  l5yr9cbw3npx: doc("Ledger restart incident review", `<h1>Ledger restart, Nov 10</h1><p class="sub">02:00 to 02:04 UTC · 2 events dropped, both replayed</p><h2 style="font-size:26px">What happened</h2><p style="font-size:20px;line-height:1.6">The ledger restarted for the Postgres 16 upgrade. Webhook deliveries in those four minutes got a 502 and were not tried again. The retry queue now covers this case.</p>`),
+  [REPORT_SLUG]: REPORT,
+};
+
 type Reply = { status?: number; type: string; body: string };
 function answer(url: URL, method: string): Reply | null {
   const json = (o: unknown): Reply => ({ type: "application/json", body: JSON.stringify(o) });
+  const slug = /\/a\/([A-Za-z0-9]+)$/.exec(url.pathname)?.[1];
+  if (slug && url.searchParams.get("preview") === "1" && PREVIEWS[slug]) return { type: "text/html; charset=utf-8", body: PREVIEWS[slug] };
   if (url.pathname.endsWith(`/a/${REPORT_SLUG}`)) {
     if (url.searchParams.get("meta") === "1") return json(META);
     return { type: "text/html; charset=utf-8", body: pageHtml(url.searchParams.get("embed") === "1") };
@@ -188,6 +215,8 @@ async function point(tab: CastTab, selectorJs: string, click: boolean) {
   const at = await tab.evaluate<{ x: number; y: number } | null>(`(() => { const e = ${selectorJs}; if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
   if (!at) throw new Error(`nothing at ${selectorJs}`);
   await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...at });
+  // A background tab handles input only once it draws a frame: a 1px capture makes it draw.
+  await tab.send("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 } });
   if (!click) return;
   for (const type of ["mousePressed", "mouseReleased"]) await tab.send("Input.dispatchMouseEvent", { type, button: "left", clickCount: 1, ...at });
 }
@@ -240,13 +269,22 @@ async function embed() {
   try {
     await tab.send("Emulation.setDeviceMetricsOverride", { width: 1100, height: 900, deviceScaleFactor: 2, mobile: false });
     await until(tab, `window.__docsShots?.ready && document.querySelector("[data-cc-shell]")`, "the docs shots app", 300_000);
-    await tab.evaluate(`(() => { __inboxStore.getState().closeSidePanel?.(); history.pushState(null, "", "/conversation/${REPORT_SESSION._id}"); dispatchEvent(new PopStateEvent("popstate")); })()`);
+    await tab.evaluate(`(() => { __inboxStore.getState().closeSidePanel?.(); history.pushState(null, "", "/inbox"); dispatchEvent(new PopStateEvent("popstate")); })()`);
+    await Bun.sleep(1500);
+    await tab.evaluate(`(() => { history.pushState(null, "", "/conversation/${REPORT_SESSION._id}"); dispatchEvent(new PopStateEvent("popstate")); })()`);
     await until(tab, `document.querySelector("[data-sv-feed] iframe[src*='${REPORT_SLUG}']")`, "the embed");
-    await tab.evaluate(`(() => { const f = document.querySelector("[data-sv-feed] iframe[src*='${REPORT_SLUG}']"); f.src = ${JSON.stringify(`${LOCAL}/cli/a/${REPORT_SLUG}?theme=light&embed=1&r=v3`)}; })()`);
     await Bun.sleep(5000);
-    await point(tab, `document.querySelector("[data-sv-feed] iframe[src*='${REPORT_SLUG}']")`, false);
+    // The reply in view below the sticky header, the pointer on the embed's own row.
+    await tab.evaluate(`document.querySelector("[data-sv-feed] iframe[src*='${REPORT_SLUG}']").closest(".page-embed").scrollIntoView({ block: "center" })`);
     await Bun.sleep(800);
-    const clip = await tab.evaluate<any>(boxOf(`document.querySelector("[data-sv-feed] iframe[src*='${REPORT_SLUG}']")?.closest("[data-message-id], [data-msg-id], .conv-col")`, 16));
+    await point(tab, `[...document.querySelectorAll(".page-embed *")].find((e) => e.children.length === 0 && e.textContent.trim() === "Expand") ?? document.querySelector(".page-embed")`, false);
+    // A background tab may not apply :hover; the toolbar also shows on .page-embed:focus-within, and a focused
+    // frame draws no ring.
+    await tab.evaluate(`document.querySelector("[data-sv-feed] iframe[src*='${REPORT_SLUG}']").focus()`);
+    await Bun.sleep(800);
+    await tab.send("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 } });
+    // The reply around the embed: the smallest block holding its first and last lines.
+    const clip = await tab.evaluate<any>(boxOf(`[...document.querySelectorAll("[data-sv-feed] *")].filter((e) => e.textContent.includes("The report is up") && e.textContent.includes("landed on a retry")).at(-1)`, 16));
     await shoot(tab, "embed", clip ?? undefined);
   } finally {
     tab.close();

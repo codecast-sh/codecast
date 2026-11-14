@@ -836,6 +836,10 @@ export async function startBridgeHost(opts: {
   hostClients?: () => HostClients | undefined;
   /** A line for the log when a cloud host's client connects, leaves or is cut off. */
   onHostClient?: (line: string) => void;
+  /** Whether a cloud host may still drive the Chrome (`laptopBrowser`); its token may stay alive for the computer face alone. */
+  hostAllowsBrowser?: (host: string) => boolean;
+  /** Serve one cloud host's `/computer` socket (computer/remoteServe.ts); absent, the face is refused. */
+  computer?: (ws: BridgeSocket, caller: { host: string; session: string | null; tokenLive: () => boolean }) => void;
   /** Take-back marks and each session's profile, as a previous host left them. */
   takenBack?: TakenBack;
   sessionProfiles?: Record<string, string>;
@@ -865,7 +869,7 @@ export async function startBridgeHost(opts: {
   const clientOf = (presented: string | null | undefined): { host: string | null } | null => {
     if (secretMatches(token, presented)) return { host: null };
     const host = matchHostClient(opts.hostClients?.(), presented);
-    return host ? { host } : null;
+    return host && (opts.hostAllowsBrowser?.(host) ?? true) ? { host } : null;
   };
 
   // One link per connected Chrome profile (links.ts), and the host's own tab
@@ -2116,9 +2120,20 @@ export async function startBridgeHost(opts: {
     const url = new URL(req.url);
     const origin = req.headers.get("origin") ?? undefined;
     const pathToken = /^\/devtools\/browser\/([^/?]+)$/.exec(url.pathname)?.[1];
-    const role: "ext" | "cdp" | null =
-      url.pathname === "/ext" ? "ext" : pathToken || url.pathname === "/devtools/browser" ? "cdp" : null;
+    const role: "ext" | "cdp" | "computer" | null =
+      url.pathname === "/ext" ? "ext" : url.pathname === "/computer" ? "computer" : pathToken || url.pathname === "/devtools/browser" ? "cdp" : null;
     const presented = url.searchParams.get("token") ?? pathToken;
+
+    // A cloud host's own token only: this machine's processes talk to the
+    // helper directly, so the machine token has no business on this face.
+    if (role === "computer") {
+      const host = matchHostClient(opts.hostClients?.(), presented);
+      if (!bridgeUpgradeOriginAllowed(origin) || !isLoopbackHost(req.headers.get("host") ?? undefined)) return new Response("forbidden\n", { status: 403 });
+      if (!host || !opts.computer) return (ws) => ws.close(CLOSE_BAD_TOKEN, "bad token");
+      const hash = hashHostToken(presented!);
+      const tokenLive = () => opts.hostClients?.()?.[host]?.hash === hash;
+      return (ws) => opts.computer!(ws, { host, session: url.searchParams.get("session") || null, tokenLive });
+    }
 
     // CDP clients present the token in the URL (they are our own processes,
     // which verified the host first); the extension proves it in its hello.
@@ -2261,6 +2276,35 @@ function hostClientsReader(): () => HostClients | undefined {
   return fileReader(bridgeStatePath(), () => readBridgeState()?.hostClients);
 }
 
+/**
+ * The cloud hosts' switches as hosts.json holds them now, and the `/computer`
+ * face that serves a granted host's session (computer/remoteServe.ts).
+ */
+async function remoteComputerFace(log: (line: string) => void): Promise<Pick<Parameters<typeof startBridgeHost>[0], "hostAllowsBrowser" | "computer">> {
+  const [{ readHosts, registryFile }, { serveComputerSocket }, { noticeDue }, { createComputerClient }, os, { execFile }] = await Promise.all([
+    import("../cloudHost.js"), import("../../computer/remoteServe.js"), import("../../computer/remoteGrant.js"), import("../../computer/run.js"), import("node:os"), import("node:child_process"),
+  ]);
+  const hosts = fileReader(registryFile(), () => readHosts());
+  const entry = (id: string) => hosts()?.find((h) => h.id === id);
+  const laptop = os.hostname().replace(/\.local$/, "");
+  const seen: Record<string, string> = {};
+  return {
+    hostAllowsBrowser: (id) => entry(id)?.laptopBrowser !== false,
+    computer: (ws, caller) => serveComputerSocket(ws, {
+      host: caller.host,
+      session: caller.session,
+      laptop,
+      hostEntry: () => (caller.tokenLive() ? entry(caller.host) : undefined),
+      client: () => createComputerClient({}),
+      log,
+      onFirstUse: (id) => {
+        if (!noticeDue(seen, id) || process.platform !== "darwin") return;
+        execFile("osascript", ["-e", `display notification "A session on cloud host ${id} is using this Mac's apps. cast computer remote revoke --host ${id} stops it." with title "codecast"`], () => {});
+      },
+    }),
+  };
+}
+
 /** The `cast browser bridge-host` entry: run until told to stop. */
 export async function runBridgeHost(): Promise<void> {
   const state = ensureBridgeConfig();
@@ -2299,6 +2343,7 @@ export async function runBridgeHost(): Promise<void> {
       onTraffic: log,
       hostClients: hostClientsReader(),
       onHostClient: log,
+      ...await remoteComputerFace(log),
       profiles: fileReader(pairingPath(), () => readPairing().profiles),
       revokedProfiles: fileReader(pairingPath(), () => readPairing().revoked),
       pinnedProfile: pinned,

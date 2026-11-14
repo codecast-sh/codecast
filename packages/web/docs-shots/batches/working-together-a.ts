@@ -33,17 +33,19 @@ export const WORKING_TOGETHER_A: Shot[] = [
   {
     name: "decisions/decisions-page",
     route: "/decisions",
-    // The tabs fold into a menu below a 1235px header (ListViewHeader .cq-tabs-compact).
-    viewport: { width: 1800, height: 720 },
-    frame: "window",
+    // The tabs fold into a menu below a 1235px header (ListViewHeader .cq-tabs-compact); short, so the list is the picture.
+    viewport: { width: 1800, height: 300 },
+    crop: { selector: "[data-list-view]", pad: 0 },
+    frame: "element",
     out: "public/documentation/decisions/decisions-page.webp",
   },
   {
     name: "decisions/one-at-a-time",
-    route: "/decisions?mode=step",
+    // The step view, entered at the Webhook retries question (as an inbox card opens it).
+    route: `/decisions?s=${D.retries._id}`,
     viewport: { width: 1280, height: 820 },
     ready: "[data-session-decision]",
-    steps: [{ sleep: 800 }, { wait: "[data-session-decision]" }],
+    steps: [{ sleep: 800 }],
     frame: "window",
     out: "public/documentation/decisions/one-at-a-time.webp",
   },
@@ -91,14 +93,18 @@ export const WORKING_TOGETHER_A: Shot[] = [
   {
     name: "forks-and-spawn/workers",
     route: conv(D.retries._id),
-    viewport: { width: 1100, height: 1300 },
+    viewport: { width: 1100, height: 1560 },
     steps: [
       FULL,
-      // Before the question: parked on its two workers, so the pane shows the thread.
-      { js: "__acmeScene.nest()" },
-      { wait: "[data-sv-feed]", text: "Both workers are done" },
+      // After the answer, so the pane shows the thread (a pending ask shows its card instead).
+      { js: "__acmeScene.answered()" },
+      { wait: "[data-sv-feed]", text: "Exponential it is" },
+      // The new turns pull the feed to its tail; once they settle, go back to the top.
+      { sleep: 2000 },
       { js: "document.querySelector('[data-sv-feed]').scrollTo(0, 0)" },
-      { sleep: 1200 },
+      { sleep: 1500 },
+      { js: "document.querySelector('[data-sv-feed]').scrollTo(0, 0)" },
+      { sleep: 800 },
     ],
     crop: { selector: "[data-sv-feed]", pad: 0 },
     frame: "element",
@@ -137,7 +143,7 @@ export const WORKING_TOGETHER_A: Shot[] = [
     route: `/calls/${CALL_ID}`,
     viewport: { width: 1280, height: 860 },
     ready: "[data-cc-shell]",
-    steps: [{ wait: "main", text: "Makes sense. Sarah" }, { sleep: 600 }],
+    steps: [{ wait: "[data-cc-shell]", text: "Makes sense. Sarah" }, { click: "button", text: "Summary" }, { sleep: 700 }],
     frame: "window",
     out: "public/docs/app/call.webp",
   },
@@ -145,15 +151,17 @@ export const WORKING_TOGETHER_A: Shot[] = [
     name: "calls/call-page",
     route: `/calls/${CALL_ID}`,
     viewport: { width: 1280, height: 860 },
-    steps: [{ wait: "main", text: "Makes sense. Sarah" }, { click: "button", text: "Summary" }, { sleep: 700 }],
+    steps: [{ wait: "[data-cc-shell]", text: "Makes sense. Sarah" }, { click: "button", text: "Summary" }, { sleep: 700 }],
     frame: "window",
     out: "public/documentation/calls/call-page.webp",
   },
   {
     name: "calls/digest",
     route: "/chat",
-    viewport: { width: 1200, height: 800 },
+    viewport: { width: 1200, height: 1500 },
     ready: ".ch-msg:has(.ch-call-head)",
+    // Tall enough that all of #eng fits: a scrolled virtual list moves the row between measuring and capturing.
+    steps: [{ sleep: 1500 }],
     crop: { selector: ".ch-msg:has(.ch-call-head)", pad: 12 },
     frame: "element",
     out: "public/documentation/calls/digest.webp",
@@ -189,7 +197,7 @@ export const WORKING_TOGETHER_A: Shot[] = [
   {
     name: "team-chat/session-thread",
     route: "/chat",
-    viewport: { width: 1280, height: 820 },
+    viewport: { width: 1280, height: 680 },
     ready: ".ch-thread-link",
     steps: [{ click: ".ch-thread-link" }, { wait: "aside.ch-thread", text: "evt_1Q8" }, { sleep: 600 }],
     crop: { selector: "aside.ch-thread", pad: 0 },
@@ -200,7 +208,7 @@ export const WORKING_TOGETHER_A: Shot[] = [
   {
     name: "team-chat/slack-mirror",
     route: "/chat",
-    viewport: { width: 1200, height: 1000 },
+    viewport: { width: 1200, height: 1300 },
     ready: "button[data-nav-subrow][title=eng]",
     steps: [
       { rightClick: "button[data-nav-subrow][title=eng]" },
@@ -236,7 +244,7 @@ export const WORKING_TOGETHER_A: Shot[] = [
       { click: "[data-open-call]" },
       { wait: ".call-stage" },
       { click: ".call-stage button[aria-label^='Open the thread']" },
-      { wait: ".call-stage aside", text: "Two tests on the one-hour cap" },
+      { wait: ".call-stage aside", text: "Two tests on the five-attempt limit" },
       { sleep: 900 },
     ],
     frame: "window",
@@ -252,7 +260,7 @@ export const WORKING_TOGETHER_A: Shot[] = [
       { js: "document.querySelector('.call-stage') || document.querySelector('[data-open-call]').click()" },
       { wait: ".call-stage" },
       { js: "document.querySelector('.call-stage aside') || document.querySelector(\".call-stage button[aria-label^='Open the thread']\").click()" },
-      { wait: ".call-stage aside", text: "Two tests on the one-hour cap" },
+      { wait: ".call-stage aside", text: "Two tests on the five-attempt limit" },
       { sleep: 900 },
     ],
     crop: { selector: ".call-stage aside", pad: 0 },

@@ -98,8 +98,9 @@ async function mouse(tab: CastTab, params: Record<string, unknown>) {
 /** A real pointer event at the element's center: hover cards, menus and context menus need one, not el.click(). */
 async function pointer(tab: CastTab, selector: string, text: string | undefined, kind: "hover" | "left" | "right") {
   // Measured after the scroll settles: a scroller that moves under the
-  // pointer makes the press land beside the element.
-  const at = await tab.evaluate<{ x: number; y: number } | null>(`(async () => { const e = ${find(selector, text)}; if (!e) return null; e.scrollIntoView({ block: "nearest" }); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 150))); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  // pointer makes the press land beside the element. setTimeout, never
+  // requestAnimationFrame: a background tab runs no frames.
+  const at = await tab.evaluate<{ x: number; y: number } | null>(`(async () => { const e = ${find(selector, text)}; if (!e) return null; e.scrollIntoView({ block: "nearest" }); await new Promise((r) => setTimeout(r, 200)); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
   if (!at) throw new Error(`no element matches ${selector}${text ? ` containing "${text}"` : ""}`);
   await mouse(tab, { type: "mouseMoved", ...at });
   if (kind === "hover") return;
@@ -254,6 +255,7 @@ async function frame(tab: CastTab, base: string, shot: Shot): Promise<Buffer> {
 }
 
 const raws = new Map<string, string>();
+const failed: string[] = [];
 // One tab does everything: the app's shots, then each frame page.
 const tab = await tabOn(origin, `${origin}/inbox`);
 try {
@@ -262,8 +264,14 @@ try {
     // A fresh tab boots the app; under load that takes a while.
     await until(tab, BOOTED, "the docs shots app to boot", 300_000);
     for (const shot of rendered) {
-      raws.set(stem(shot), await captureWithRetry(tab, shot));
-      console.log(`captured ${shot.name.padEnd(28)} ${raws.get(stem(shot))}`);
+      // One shot that keeps failing is reported and skipped; the rest still get written.
+      try {
+        raws.set(stem(shot), await captureWithRetry(tab, shot));
+        console.log(`captured ${shot.name.padEnd(28)} ${raws.get(stem(shot))}`);
+      } catch (e) {
+        failed.push(shot.name);
+        console.error(`FAILED   ${shot.name.padEnd(28)} ${(e as Error).message.split("\n")[0]}`);
+      }
     }
   }
   for (const shot of wanted.filter((s) => s.raw)) {
@@ -299,4 +307,9 @@ async function frameAll(tab: CastTab) {
   } finally {
     server.stop(true);
   }
+}
+
+if (failed.length) {
+  console.error(`\n${failed.length} shot(s) failed and were not written: ${failed.join(", ")}`);
+  process.exitCode = 1;
 }

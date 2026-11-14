@@ -150,7 +150,7 @@ const SHARED_MESSAGE = (now: number) => {
     conversation_id: conv._id,
     role: "assistant",
     content:
-      "Five attempts over about half an hour. Wait 2s, 4s, 8s, then 16s, each with up to 20% jitter so retries from one outage don't arrive together. That rides out the ledger's restarts, which last a few minutes, and a delivery that still fails after the fifth attempt goes to the dead-letter queue with its last response.\n\nRetry 5xx, 429 and timeouts. Don't retry a 4xx other than 429: the request itself is wrong, and sending it again can't fix it.",
+      "Five attempts over about thirty seconds. Wait 2s, 4s, 8s, then 16s, each with up to 20% jitter so retries from one outage don't arrive together. That rides out a short blip, and a delivery that still fails after the fifth attempt goes to the dead-letter queue with its last response, where support can replay it once the endpoint is back.\n\nRetry 5xx, 429 and timeouts. Don't retry a 4xx other than 429: the request itself is wrong, and sending it again can't fix it.",
     timestamp: at,
   };
   return {

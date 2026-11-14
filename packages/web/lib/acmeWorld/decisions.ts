@@ -27,7 +27,7 @@ export const BACKOFF_DECISION_ID = cid("decbackoff");
 export const BACKOFF = {
   question: "Retry failed webhooks with exponential backoff or a fixed schedule?",
   options: [
-    { label: "Exponential backoff, capped at 1 hour", description: "Waits 2s, 4s, 8s and up to an hour between attempts, then dead-letters after 8. Rides out a ledger restart without hammering it." },
+    { label: "Exponential backoff, five attempts", description: "Waits 2s, 4s, 8s and 16s with jitter, then dead-letters after the fifth attempt. Rides out a ledger restart without hammering it." },
     { label: "Fixed schedule, every 5 minutes", description: "12 attempts over an hour. Simpler to explain to support, but a short outage waits the full 5 minutes for its first retry." },
   ],
 };
@@ -36,7 +36,7 @@ const BACKOFF_CONTEXT = `Support found two Stripe events dropped overnight. Both
 
 I replayed last week's 1,284 failed deliveries under both schedules:
 
-- **Exponential, capped at 1 hour:** 96% delivered by the fifth attempt, median 14s.
+- **Exponential, 2s to 16s with jitter:** 96% delivered by the fifth attempt, median 14s.
 - **Fixed, every 5 minutes:** 91% delivered by the fifth attempt, median 5 min.
 
 Either one fixes the dropped events. The difference is how fast a short blip recovers and how hard we hit an endpoint that is down.`;
@@ -251,8 +251,8 @@ export const ANSWERED_TAIL = (now: number) => [
   {
     _id: "hero-rt-m9",
     role: "assistant",
-    content: "Exponential it is. Building the retry queue: attempts wait 2s, 4s, 8s and double from there up to an hour, with jitter, and an event that fails its eighth attempt goes to dead letters. Writing the schedule tests first.",
-    tool_calls: [call("hero-rt-tc4", "Write", { file_path: "src/billing/retrySchedule.test.ts", content: "describe(\"backoff\", () => { /* 2s, 4s, 8s … capped at 1h */ })" })],
+    content: "Exponential it is. Building the retry queue: attempts wait 2s, 4s, 8s and 16s with jitter, and an event that fails its fifth attempt goes to dead letters. Writing the schedule tests first.",
+    tool_calls: [call("hero-rt-tc4", "Write", { file_path: "src/billing/retrySchedule.test.ts", content: "describe(\"backoff\", () => { /* 2s, 4s, 8s, 16s, five attempts */ })" })],
     tool_results: [result("hero-rt-tc4", "File created successfully at: src/billing/retrySchedule.test.ts")],
     timestamp: now - 20_000,
   },
@@ -293,7 +293,8 @@ function installScenes(s: any) {
       const now = Date.now();
       const row = DECISIONS(now)[0];
       st().syncRecord("sessionDecisions", row._id, { ...row, status: "withdrawn" });
-      const parked = session(now, S.retries, { ago: 3 * MIN, waiting: "dormant" as any, project: "~/src/billing", messages: 3, state: "Waiting on two workers: provider research and delivery tests\nNext: combine their results" });
+      // agent_status is the daemon's settle status: a declared dormant parks the row (inboxProjection restState).
+      const parked = session(now, S.retries, { ago: 3 * MIN, waiting: "dormant" as any, project: "~/src/billing", messages: 3, state: "Waiting on two workers: provider research and delivery tests\nNext: combine their results", extra: { agent_status: "dormant" } });
       st().syncRecord("sessions", S.retries._id, parked);
       st().syncRecord("conversations", S.retries._id, parked);
     },
