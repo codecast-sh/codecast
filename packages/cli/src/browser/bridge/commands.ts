@@ -493,8 +493,10 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       }
       if (o.host) {
         const { patchHost, readHosts } = await import("../cloudHost.js");
-        const known = readHosts().some((h) => h.id === o.host);
-        const revoked = revokeHostClient(o.host);
+        const entry = readHosts().find((h) => h.id === o.host);
+        const known = !!entry;
+        // A host still allowed the apps keeps its key; the bridge refuses it the Chrome from here on.
+        const revoked = entry?.laptopComputer ? true : revokeHostClient(o.host);
         if (known) patchHost(o.host, { laptopBrowser: false });
         if (!known && !revoked) die(`no cloud host ${o.host} holds a token here (cast hosts ls)`);
         console.log(`${OK} ${o.host} is cut off from this laptop's Chrome${revoked ? "; its live connections close within seconds" : ""}`);
