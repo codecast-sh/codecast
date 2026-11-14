@@ -16,7 +16,7 @@ docs/architecture/agent-comms.md.
         [--user <users id>] [--account <profile>] [--model <id>] [--skip-export]
 
 Whose sessions to read is a Convex users id, given as --user or in
-$CODECAST_ORG_COMMS_USER; it is never written in this file. The first column
+$CODECAST_ORG_COMMS_USER, else the baseline's own user; it is never written in this file. The first column
 of every report is $CODECAST_EVALS_HOME/org-comms/baseline.json (the
 2026-10-06 measurement); the run stops before it exports anything when that
 file is absent.
@@ -172,6 +172,7 @@ def main():
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--skip-export", action="store_true")
     a = ap.parse_args()
+    if not a.user and os.path.exists(BASELINE): a.user = json.load(open(BASELINE)).get("user")
     if not a.user: sys.exit(f"monitor.py: no user. Pass --user <users id> or set {USER_ENV} to the Convex users id whose sessions to read.")
     if not os.path.exists(BASELINE): sys.exit(f"monitor.py: {BASELINE} is missing. The baseline report is private and lives in EVALS_HOME, not in git; copy it there before running.")
 
