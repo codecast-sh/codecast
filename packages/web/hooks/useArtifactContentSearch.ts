@@ -25,7 +25,13 @@ export function useArtifactContentSearch(): {
   // flash out and back. New words drop it: rows for the old words would read as wrong results.
   const last = useRef<{ q: string; data: unknown }>({ q: "", data: undefined });
   if (answer !== undefined) last.current = { q, data: answer };
-  const data = answer ?? (q.length >= 2 && last.current.q && q.startsWith(last.current.q) ? last.current.data : undefined);
+  const held = answer === undefined && q.length >= 2 && last.current.q && q.startsWith(last.current.q) ? last.current.data : undefined;
+  // Held rows that can't hold the longer words (in their title or the words shown) go at once.
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const data = answer ?? (held as any[] | undefined)?.filter((h) => {
+    const text = `${h.title ?? ""} ${h.snippet ?? ""}`.toLowerCase();
+    return words.every((w) => text.includes(w));
+  });
   // An answer counts only for the words still typed: replacing them drops it at once, not a debounce later.
   const typedExtends = query.trim().toLowerCase().startsWith(q.toLowerCase());
   const snippets = useMemo(() => {

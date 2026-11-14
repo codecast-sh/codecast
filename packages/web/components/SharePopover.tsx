@@ -44,6 +44,8 @@ interface SharePopoverProps {
   /** What else the public link carries, decided per object (a call's video),
    *  shown under link access for whoever manages it. */
   linkExtra?: React.ReactNode;
+  /** Under the team level, while the team can see it. */
+  teamExtra?: React.ReactNode;
   /** Why this viewer may close the public link but not open it (a call they
    *  were not in): the choice holds still and says who can, rather than
    *  failing on the press. */
@@ -107,6 +109,7 @@ export function SharePopover({
   sharedVia,
   canManage = true,
   linkExtra,
+  teamExtra,
   access,
   openRefusal,
   defaultOpen = false,
@@ -197,13 +200,16 @@ export function SharePopover({
         <div className="px-3.5 pb-3.5 pt-2 space-y-3.5 [&>*+*]:border-t [&>*+*]:border-sol-border/60 [&>*+*]:pt-3.5">
           {access}
           {canManage && hasTeam && (
-            <TeamShareModePicker
-              mode={currentMode}
-              onChange={(mode) => (mode === "private" ? onSetPrivate?.() : onSetTeamVisibility?.(mode))}
-              teamId={teamId}
-              sharedVia={sharedVia}
-              onNavigate={() => setIsOpen(false)}
-            />
+            <div className="space-y-2">
+              <TeamShareModePicker
+                mode={currentMode}
+                onChange={(mode) => (mode === "private" ? onSetPrivate?.() : onSetTeamVisibility?.(mode))}
+                teamId={teamId}
+                sharedVia={sharedVia}
+                onNavigate={() => setIsOpen(false)}
+              />
+              {currentMode !== "private" && teamExtra}
+            </div>
           )}
 
           {canManage && (
