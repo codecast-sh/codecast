@@ -184,6 +184,103 @@ describe("the session is the run's subject", () => {
   }, 60_000);
 });
 
+describe("a change named by branch from inside a session (ct-85594)", () => {
+  /** The session committed its change on its own branch and ran `cast flow run change --task ct-9 --branch feat` from inside itself. */
+  function branchWorld(content: string) {
+    const { root } = world("unused\n");
+    git(root, "checkout", "-q", "-b", "feat");
+    fs.writeFileSync(path.join(root, "a.txt"), content);
+    git(root, "commit", "-qam", "the change");
+    git(root, "checkout", "-q", "main");
+    // The run's worktree holds the branch, so the session commits from elsewhere: here, with plumbing.
+    const commit = (text: string) => {
+      const blob = execFileSync("git", ["-C", root, "hash-object", "-w", "--stdin"], { input: text, encoding: "utf-8" }).trim();
+      const tree = execFileSync("git", ["-C", root, "mktree"], { input: `100644 blob ${blob}\ta.txt\n`, encoding: "utf-8" }).trim();
+      const tip = git(root, "commit-tree", tree, "-p", "feat", "-m", "fix");
+      git(root, "update-ref", "refs/heads/feat", tip);
+    };
+    return { root, commit };
+  }
+
+  async function startOnBranch(root: string, graph = graphIn(root), subject = true) {
+    const runDir = lineRunDir(root, runSlug(graph, { task_id: "ct-9" }, "run"));
+    const tip = git(root, "rev-parse", "feat");
+    writeFrozenChange(runDir, { source: "branch", ...(subject ? { session: CONV.slice(0, 7), conversation: CONV } : {}), base: tip, tip, branch: "feat", worktree: "change-ct-9", paths: [], shared: [], held: [] });
+    console.log = () => {};
+    try {
+      return await runWorkflow(graph, { cwd: root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 });
+    } finally {
+      console.log = origLog;
+    }
+  }
+
+  test("the session that started it is the subject: a failed check reaches it, it commits the fix to the branch, the run reads the branch again", async () => {
+    const { root, commit } = branchWorld("bad\n");
+    const s = server(() => commit("good\n"));
+    expect(await startOnBranch(root)).toBe("completed");
+    const [brief] = s.sent();
+    expect(brief.to).toBe(CONV);
+    expect(brief.body).toContain("error: a.txt says bad, expected good");
+    expect(s.calls.some((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")).toBe(false);
+  }, 60_000);
+
+  // The check's own segment, shaped like the shipped check.cast: exit 2 is this machine's, not the change's.
+  const machineGraph = (root: string) => {
+    fs.writeFileSync(path.join(root, "mcheck.cast"), `digraph mcheck {
+      graph [kind="segment", label="Check"]
+      start [shape=Mdiamond]
+      verify [label="Verify", shape=parallelogram, script="echo '{\\"ok\\":false,\\"steps\\":[{\\"name\\":\\"test database\\",\\"ok\\":false,\\"detail\\":\\"role postgres does not exist\\"}]}'; exit 2"]
+      passed [shape=Msquare, label="Passed"]
+      failed [shape=Msquare, label="Checks failed", stop="The project's check failed on the change: $verify.summary"]
+      unjudged [shape=Msquare, label="Not checked here", machine=true, stop="This machine could not run the project's check: $verify.summary."]
+      start -> verify
+      verify -> passed [condition="outcome = success"]
+      verify -> failed [condition="outcome = failure and verify.exit_code != 2"]
+      verify -> unjudged [condition="outcome = failure and verify.exit_code = 2"]
+    }`);
+    return parseWorkflowSource(`digraph change {
+      graph [label="Change", on_failure=stop]
+      start [shape=Mdiamond]
+      check [flow="mcheck"]
+      fix_check [label="Fix check", backend=subject, max_visits=3, prompt="Check failed on $task_id.\\n\\n$stop_reason"]
+      unchecked [shape=Msquare, label="Not checked here", machine=true, stop="$stop_reason"]
+      exit [shape=Msquare, label="Done"]
+      start -> check
+      check -> exit
+      check -> fix_check [condition="outcome = failure and check.exit != unjudged"]
+      check -> unchecked [condition="outcome = failure and check.exit = unjudged"]
+      fix_check -> check
+    }`, root);
+  };
+  const comments = (s: ReturnType<typeof server>) => s.calls.filter((c) => c.route === "/cli/work/comment").map((c) => c.body);
+
+  test("a check the machine could not run stops at once: a note on the task in the run's voice, the session told, no blocker", async () => {
+    const { root } = branchWorld("good\n");
+    const s = server(() => { throw new Error("the session is never asked to fix the machine"); });
+    expect(await startOnBranch(root, machineGraph(root))).toBe("failed");
+    const [note, ...rest] = comments(s);
+    expect(rest).toEqual([]);
+    expect(note).toMatchObject({ short_id: "ct-9", comment_type: "note", conversation_id: "conv_run" });
+    expect(note.to_owner).toBeUndefined();
+    expect(note.text).toContain("This machine could not run the project's check: test database (role postgres does not exist).");
+    expect(note.text).toContain("Full output: ");
+    expect(note.text).toContain("/workflows/runs/run-9");
+    expect(note.text).not.toContain("{");
+    expect(s.calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ status: "in_review" });
+    const told = s.sent();
+    expect(told).toHaveLength(1);
+    expect(told[0].body).toContain("stopped at Not checked here: This machine could not run the project's check");
+  }, 60_000);
+
+  test("with no session behind the run, the note is for the run's owner alone", async () => {
+    const { root } = branchWorld("good\n");
+    const s = server(() => {});
+    expect(await startOnBranch(root, machineGraph(root), false)).toBe("failed");
+    expect(comments(s)[0]).toMatchObject({ comment_type: "note", conversation_id: "conv_run", to_owner: true });
+    expect(s.sent()).toHaveLength(0);
+  }, 60_000);
+});
+
 describe("runEndMessage", () => {
   const g = parseWorkflowSource(`digraph "quick-change" { graph [label="Quick"] start [shape=Mdiamond] exit [shape=Msquare] start -> exit }`);
   test("a stop before Land says nothing shipped and how to run it again; one after Land says the change is on main", () => {

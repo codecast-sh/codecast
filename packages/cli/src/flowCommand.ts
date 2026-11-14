@@ -56,12 +56,28 @@ const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const KIND_MARK: Record<string, string> = { agent: "◉", script: "▶", person: "◇", segment: "▣", call: "○", parallel: "⫴" };
 
+/** A session's inbox row, from any ref to it (its codecast id, short id or agent session id); null when unreadable. */
+async function sessionRowOf(ref: string, deps: Pick<FlowDeps, "cliPost">): Promise<any | null> {
+  const read = await deps.cliPost("/cli/inbox", { session_ids: [ref], show_all: true, limit: 5 }).catch(() => null);
+  const rows: any[] = read?.sessions ?? [];
+  return rows.find((r) => r.id === ref) ?? (rows.length === 1 ? rows[0] : null);
+}
+
 /** A session's own title, when it has one worth naming a change by. */
 async function sessionTitleOf(conversation: string, deps: Pick<FlowDeps, "cliPost">): Promise<string | null> {
-  const read = await deps.cliPost("/cli/inbox", { session_ids: [conversation], show_all: true, limit: 5 }).catch(() => null);
-  const row = (read?.sessions ?? []).find((r: any) => r.id === conversation);
+  const row = await sessionRowOf(conversation, deps);
   const t = String(row?.short_title || row?.title || "").trim();
   return t && t !== "New Session" ? t.slice(0, 120) : null;
+}
+
+/**
+ * The run's subject when the change is named (a task, branch or pull request) from inside a session: that session
+ * started the run, so it hears what each stage finds (flows.md FL4). Undefined at a plain shell.
+ */
+export async function callingSubject(deps: Pick<FlowDeps, "cliPost" | "callingSession">): Promise<{ session: string; conversation: string } | undefined> {
+  const ref = deps.callingSession();
+  const row = ref ? await sessionRowOf(ref, deps) : null;
+  return row?.id ? { session: String(row.id).slice(0, 7), conversation: String(row.id) } : undefined;
 }
 
 /** The task a session is bound to (its task pulse, written by `cast task start`), while that task is still open. */
@@ -358,7 +374,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (branch) {
         const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();
         if (!head) { console.error(`No branch ${branch} here`); process.exit(1); }
-        change = { source: opts.pr ? "pr" : "branch", base: head, tip: head, branch, worktree, paths: [], shared: [], held: [] };
+        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps)), base: head, tip: head, branch, worktree, paths: [], shared: [], held: [] };
       } else if (sessionRef) {
         const { freezeSessionChange } = await import("./workflow/flowChange.js");
         try {

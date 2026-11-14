@@ -495,6 +495,10 @@ export async function resolveSessionConversation(
     .withIndex("by_session_id", (q: any) => q.eq("session_id", sessionRef))
     .first();
   if (direct && (await canAccessConversation(ctx, userId, direct))) return direct;
+  // A conversation's own id: a run's runner holds its primary session that way, with no agent session behind it.
+  const byId = ctx.db.normalizeId("conversations", sessionRef);
+  const row = byId ? await ctx.db.get(byId) : null;
+  if (row && (await canAccessConversation(ctx, userId, row))) return row;
   // Owner-scoped resolution, including the managed_sessions fallback.
   return await findConversationBySessionReference(ctx, sessionRef, userId);
 }

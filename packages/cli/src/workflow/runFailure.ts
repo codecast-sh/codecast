@@ -49,10 +49,34 @@ function fenced(text: string): string {
  * log, follows as a code block rather than prose a markdown renderer would
  * fold into one paragraph.
  */
+type CheckStep = { name: string; ok?: boolean; detail?: unknown };
+const checkSteps = (json: any): CheckStep[] => Array.isArray(json?.steps) ? json.steps.filter((s: any) => typeof s?.name === "string") : [];
+
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
+const SAYS_WHY = /\b(error|errors|fail|failed|failing|failure|cannot|could not|not found|does not exist|denied|refused|TS\d{4})\b/i;
+
+/**
+ * What a station's output comes to, in one line a person reads at a glance: the
+ * steps a check (LP4 `{ steps: [{ name, ok, detail }] }`) marks failed, each
+ * with the start of its detail, else the last line that says what went wrong.
+ * The whole output stays on the run; this is what a stop's words carry.
+ */
+export function outputSummary(text: string, json?: unknown, max = 400): string {
+  const steps = checkSteps(json);
+  if (steps.length) {
+    const failed = steps.filter((s) => s.ok === false);
+    if (!failed.length) return "every step passed";
+    const each = Math.max(60, Math.floor(max / failed.length) - 4);
+    return clip(failed.map((s) => clip(s.detail ? `${s.name} (${String(s.detail)})` : s.name, each)).join("; "), max);
+  }
+  const lines = text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split("\n").map((l) => l.trim()).filter((l) => l && !/^[{[]/.test(l));
+  return clip([...lines].reverse().find((l) => SAYS_WHY.test(l)) ?? lines[lines.length - 1] ?? "", max);
+}
+
 export function stationFailureMarkdown(context: Record<string, string>, nodeId: string): string {
   let json: any;
   try { json = JSON.parse(context[`${nodeId}.json`] ?? ""); } catch {}
-  const steps = Array.isArray(json?.steps) ? json.steps.filter((s: any) => typeof s?.name === "string") : [];
+  const steps = checkSteps(json);
   const list = steps.map((s: any) => `- ${s.ok === false ? "✗" : "✓"} ${s.name}${s.ok === false && s.detail ? `: ${String(s.detail)}` : ""}`).join("\n");
   const raw = context[`${nodeId}.output`] || context["last_error"] || "";
   const log = raw.split("\n").filter((line) => !(json && /^\s*\{/.test(line) && extractJsonOutput(line) !== undefined)).join("\n").trim();
@@ -99,6 +123,8 @@ export function taskStopCard(graph: WorkflowGraph, state: WorkflowRunState, task
       body: `${lead}${detail}${footer}`,
     };
   }
-  const detail = state.context["last_error"] ? fenced(state.context["last_error"].slice(0, 1500)) : "";
+  // The reason already says it when it is the station's own error: shown once.
+  const error = state.context["last_error"]?.trim();
+  const detail = error && !reason.includes(error) ? fenced(error.slice(0, 1500)) : "";
   return { question: `${title} failed. What next?`, summary: failReasonWords(reason, label), body: `${detail}${footer}`.trim() };
 }

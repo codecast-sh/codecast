@@ -75,6 +75,12 @@ export async function freezeSessionChange(root: string, session: string, opts: {
   };
 }
 
+/** Where a named branch stands now; a pull request's is fetched first, since its session pushes rather than commits here. */
+async function branchTip(root: string, change: FrozenChange): Promise<string> {
+  if (change.source === "pr") await git(root, ["fetch", "--quiet", "origin", `+${change.branch}:${change.branch}`]).catch(() => "");
+  return (await git(root, ["rev-parse", `refs/heads/${change.branch}`])).trim();
+}
+
 /**
  * Freeze a session's change again, after the session worked on what a stage
  * found (flows.md FL4): the same files cut the same way, on the same branch, so
@@ -85,7 +91,10 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
   const { readFrozenChange, writeFrozenChange } = await import("./flowChangeFile.js");
   const before = readFrozenChange(runDir);
   if (!before?.session) throw new Error("The run's change did not come from a session, so there is no session's change to freeze again");
-  const change = await freezeSessionChange(root, before.conversation ?? before.session, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null });
+  // A named branch or pull request is the change: the session fixes it by committing there (a pull request's by pushing).
+  const change: FrozenChange = before.source === "session"
+    ? await freezeSessionChange(root, before.conversation ?? before.session, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null })
+    : { ...before, tip: await branchTip(root, before) };
   const tree = (rev: string) => git(root, ["rev-parse", `${rev}^{tree}`]).then((s) => s.trim()).catch(() => rev);
   const moved = (await tree(before.tip)) !== (await tree(change.tip));
   // The run's worktree holds no work of its own: it is the change, so it follows the new tip.

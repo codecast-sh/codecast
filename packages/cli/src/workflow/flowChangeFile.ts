@@ -46,6 +46,13 @@ export function readFrozenChange(runDir: string | undefined): FrozenChange | nul
   }
 }
 
+/** How the run takes the subject's fix back, as the briefs say it ($change_return): its edits, or the branch it names. */
+export function changeReturnWords(change: Partial<FrozenChange>): string {
+  if (change.source === "pr") return `Push the fix to the pull request's branch ${change.branch}; when you end your turn the run fetches that branch again`;
+  if (change.source === "branch" || change.source === "task") return `Commit the fix to branch ${change.branch}; when you end your turn the run reads that branch again`;
+  return "When you end your turn the run freezes this session's edits again";
+}
+
 /** The variables a run starts with when a change was frozen for it: every station works on that change. */
 export function frozenChangeContext(runDir: string | undefined): Record<string, string> {
   if (!runDir) return {};
@@ -58,6 +65,7 @@ export function frozenChangeContext(runDir: string | undefined): Record<string, 
       ...(change.session ? { change_session: change.session } : {}),
       ...(change.conversation ? { change_conversation: change.conversation } : {}),
       change_files: (change.paths ?? []).join(" "),
+      change_return: changeReturnWords(change),
     };
   } catch {
     return {};

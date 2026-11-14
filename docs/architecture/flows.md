@@ -189,8 +189,28 @@ station passes `--branch $branch` to `cast ship run`). Each way back has
 `max_visits=3`; the fourth visit ends the run. A rejection, a Drop and a ship
 that fails for any other reason end it too. The session hears Decide's answer
 when it is Ship, and how the run ended (done, or stopped where and why) in its
-own turn. A run on a branch or a pull request has no subject, so its first
-fixable stop ends it with what the stage found.
+own turn. A run on a task, a branch or a pull request started from inside a
+session has that session as its subject too (`callingSubject` in
+`flowCommand.ts` writes it into `change.json`): the session fixes the change by
+committing to the branch (pushing, for a pull request), and the run reads the
+branch again rather than freezing edits (`$change_return` in the briefs says
+which). Started from a plain shell it has no subject, so its first fixable stop
+ends it with what the stage found.
+
+A check the machine could not run (LP4: the check exits 2, say no test
+database could be built) is not a finding about the change. Check routes it to
+its own exit, `Not checked here`, marked `machine=true`, and the change flows
+send that exit to a stop of their own rather than to Fix check. The runner
+returns the task to in_review, posts the reason as a note (not a blocker, so
+the task's followers are not notified), and the run's owner hears it: its
+subject session in the run's end message, else the person whose account ran
+it, through a note posted `to_owner`.
+
+Every comment a run posts goes through the run's own primary session, so it is
+signed by the run ("Change run"), and so are its notifications
+(`lib/actor.ts` kind `run`); the stop words carry `$<station>.summary`, the
+check's failing steps in one line, and the comment links the run's page for
+the full output.
 
 ### Deploy: the run waits for the deploy that carries the change
 

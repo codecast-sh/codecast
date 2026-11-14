@@ -26,12 +26,14 @@ digraph "quick-change" {
   fix_conflict [label="Resolve conflict", backend=subject, max_visits=3,
     prompt="@change/fix_conflict.md"]
 
+  unchecked [shape=Msquare, label="Not checked here", machine=true, stop="$stop_reason"]
   rejected  [shape=Msquare, label="Rejected", stop="The reviewer rejected the change. $review_note"]
   unshipped [shape=Msquare, label="Not shipped", stop="$stop_reason"]
 
   start -> check
   check -> review
-  check -> fix_check [condition="outcome = failure", label="check failed"]
+  check -> fix_check [condition="outcome = failure and check.exit != unjudged", label="check failed"]
+  check -> unchecked [condition="outcome = failure and check.exit = unjudged", label="not checked here"]
   review -> ship
   review -> fix_review [condition="outcome = failure and review.exit = changes", label="changes asked"]
   review -> rejected   [condition="outcome = failure and review.exit = rejected", label="rejected"]

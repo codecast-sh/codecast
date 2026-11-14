@@ -23,12 +23,27 @@ export type Actor = {
   user_id: Id<"users">;
   // Display name for author fields that store a string.
   name: string | undefined;
-  kind: "user" | "role" | "hand";
+  kind: "user" | "role" | "hand" | "run";
   // The role the calling conversation belongs to (standing or hand), if any.
   role: Doc<"org_roles"> | null;
   anchor: any | null;
   conversation: any | null;
+  // kind "run": the workflow run whose own session made the call. Its user_id is its owner (the machine's account).
+  run?: Doc<"workflow_runs">;
 };
+
+/** The run a run's primary session speaks for, when the run still names it as its primary. */
+async function runOfPrimary(ctx: Ctx, conversation: any): Promise<Doc<"workflow_runs"> | null> {
+  const run = conversation?.workflow_run_id ? await ctx.db.get(conversation.workflow_run_id) : null;
+  return run && String(run.primary_conversation_id ?? "") === String(conversation._id) ? run : null;
+}
+
+/** How a run signs what it writes: its flow's name ("Change run"). */
+export async function runVoiceName(ctx: Ctx, run: { workflow_id?: Id<"workflows"> | null; workflow_name?: string | null }): Promise<string> {
+  const flow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+  const name = String(flow?.label || run.workflow_name || "Workflow").trim();
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} run`;
+}
 
 // The role a conversation belongs to: the one it IS (standing session) or the
 // one it reports to (hand). Null for an ordinary session.
@@ -92,6 +107,12 @@ export async function resolveActor(
         conversation,
       };
     }
+  }
+  // A run's own session (its primary, the voice its runner posts through) is the run: what it writes on a task
+  // names the flow, never the person whose account and machine run it.
+  if (conversation?.is_workflow_primary) {
+    const run = await runOfPrimary(ctx, conversation);
+    if (run) return { user_id: callerUserId, name: await runVoiceName(ctx, run), kind: "run", role: null, anchor: null, conversation, run };
   }
   if (conversation?.org_role_id) {
     const role = await ctx.db.get(conversation.org_role_id);

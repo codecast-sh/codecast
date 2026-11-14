@@ -2625,7 +2625,9 @@ export async function insertTaskComment(
     image_storage_ids?: string[];
   },
   actorId?: Id<"users">,
-  notify?: { tokenOwner: Id<"users">; conversationId?: Id<"conversations"> },
+  // `run`: the comment is a workflow run's (lib/actor kind "run"). It notifies under the run's name, and its owner is
+  // not its actor, so the owner hears it too; `ownerOnly` reaches the owner alone.
+  notify?: { tokenOwner: Id<"users">; conversationId?: Id<"conversations">; run?: { name: string; owner: Id<"users">; ownerOnly: boolean } },
 ) {
   const now = Date.now();
   const id = await ctx.db.insert("task_comments", {
@@ -2665,7 +2667,8 @@ export async function insertTaskComment(
     }
     // Ephemeral bookkeeping stays out of the Threads inbox (TG9) unless the
     // comment calls on someone.
-    const recipients = commentReaches(task, fields.comment_type, news, mentionedSet);
+    const run = notify?.run;
+    const recipients = run?.ownerOnly ? [run.owner, ...mentioned.filter((m) => String(m) !== String(run.owner))] : commentReaches(task, fields.comment_type, news, mentionedSet);
     if (!task.ephemeral || recipients.length) await touchThread(ctx, {
       kind: "task",
       rootKey: String(taskId),
@@ -2685,12 +2688,12 @@ export async function insertTaskComment(
     if (notify) {
       await ctx.runMutation(internal.notificationRouter.emit, {
         event_type: "task_commented",
-        actor_user_id: actorId ?? notify.tokenOwner,
+        ...(run ? { actor_name: run.name } : { actor_user_id: actorId ?? notify.tokenOwner }),
         entity_type: "task",
         entity_id: String(taskId),
         message: `commented on ${task.short_id}: ${fields.text.slice(0, 100)}`,
         conversation_id: notify.conversationId,
-        recipient_ids: recipients.filter((r) => String(r) !== String(notify.tokenOwner)),
+        recipient_ids: run ? recipients : recipients.filter((r) => String(r) !== String(notify.tokenOwner)),
       });
     }
   }
@@ -2727,6 +2730,8 @@ export const addComment = mutation({
     author: v.optional(v.string()),
     comment_type: v.optional(v.string()),
     conversation_id: v.optional(v.string()),
+    // From a run's own session: the comment is for the run's owner alone (a stop the machine caused), not the task's followers.
+    to_owner: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -2742,21 +2747,28 @@ export const addComment = mutation({
       ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id)
       : null;
     const conversation_id = conv?._id;
-    const notificationConversationId = conv && workspacesMatch(workspaceForConversation(conv), workspaceForResource(task))
-      ? conv._id : undefined;
 
     // A post from inside a session is an agent's: no actor, so the owner's
     // thread lights up. A person running the CLI by hand is the actor. The
     // name is the server resolved identity (lib/actor): a role's standing
-    // session signs as the role, everyone else as the token's owner. The
-    // author argument is accepted for older CLIs and never read.
+    // session signs as the role, a run's own session as the run, everyone
+    // else as the token's owner. The author argument is accepted for older
+    // CLIs and never read.
     const actor = await resolveActor(ctx, auth.userId, conv);
+    if (args.to_owner && actor.kind !== "run") throw new Error("to_owner is for a run's own comments");
+    // A run is nobody's session to open: its notification names the run and leads to the task.
+    const notificationConversationId = actor.kind !== "run" && conv && workspacesMatch(workspaceForConversation(conv), workspaceForResource(task))
+      ? conv._id : undefined;
     const id = await insertTaskComment(ctx, task._id, {
       author: actor.name || "unknown",
       text: args.text,
       conversation_id,
       comment_type: args.comment_type || "note",
-    }, args.conversation_id ? undefined : auth.userId, { tokenOwner: auth.userId, conversationId: notificationConversationId });
+    }, args.conversation_id ? undefined : auth.userId, {
+      tokenOwner: auth.userId,
+      conversationId: notificationConversationId,
+      ...(actor.kind === "run" ? { run: { name: actor.name ?? "A run", owner: actor.run!.user_id, ownerOnly: !!args.to_owner } } : {}),
+    });
 
     await subscribeUser(ctx, auth.userId, task._id, "commenter", cliVia(args));
     await schedulePushComment(ctx, task, id);

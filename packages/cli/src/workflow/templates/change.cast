@@ -16,8 +16,10 @@
 // and Decide accepted. Deploy then waits, holding no slot and no session, for
 // the deploy that carries the landed commit, and the session hears the dp-N
 // it went live in, or that the deploy failed. Each way back runs at most three times; the fourth ends
-// the run, and the session hears why. A change run from a branch or a pull
-// request has no session to send it to, and stops at the first finding.
+// the run, and the session hears why. A task, branch or pull request named from
+// inside a session has that session as its subject; named from a plain shell it
+// has none, and stops at the first finding. A check this machine could not run
+// stops at Not checked here: the machine's to fix, not the session's.
 //
 //   cast flow run change            # this session's own edits
 //   cast flow run change --task ct-N
@@ -41,13 +43,15 @@ digraph change {
   fix_conflict [label="Resolve conflict", backend=subject, max_visits=3,
     prompt="@change/fix_conflict.md"]
 
+  unchecked [shape=Msquare, label="Not checked here", machine=true, stop="$stop_reason"]
   rejected  [shape=Msquare, label="Rejected", stop="The reviewer rejected the change. $review_note"]
   dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]
   unshipped [shape=Msquare, label="Not shipped", stop="$stop_reason"]
 
   start -> check
   check -> review
-  check -> fix_check [condition="outcome = failure", label="check failed"]
+  check -> fix_check [condition="outcome = failure and check.exit != unjudged", label="check failed"]
+  check -> unchecked [condition="outcome = failure and check.exit = unjudged", label="not checked here"]
   review -> decide
   review -> fix_review [condition="outcome = failure and review.exit = changes", label="changes asked"]
   review -> rejected   [condition="outcome = failure and review.exit = rejected", label="rejected"]

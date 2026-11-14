@@ -30,6 +30,7 @@ import { c } from "../colors.js";
 import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { frozenChangeContext } from "./flowChangeFile.js";
+import { webBaseUrl } from "../config/readLocalConfig.js";
 import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { restoreRunTree } from "./runWorktree.js";
@@ -1458,13 +1459,25 @@ async function returnTaskOnFailure(options: RunOptions, graph: WorkflowGraph, st
   // The card names the station's session, which a nested worker no longer
   // puts in the inbox on its own, so the blocker leads straight there.
   const card = taskStopCard(graph, state, options.taskId);
-  let text = card.body ? `${card.summary}\n\n${card.body}` : card.summary;
+  // The whole output stays on the run: the comment carries what it comes to, and the way there.
+  const output = options.runId ? `\n\nFull output: ${runPageUrl(options.runId)}` : "";
+  let text = `${card.body ? `${card.summary}\n\n${card.body}` : card.summary}${output}`;
+  // A stop the machine caused (no test database, a missing tool) says nothing about the change: the task keeps it
+  // in review with a note, and the run's owner hears it (its subject session at the run's end, else the person),
+  // never the task's followers as a blocker.
+  const stoppedAt = state.context["stopped_at"] ? graph.nodes.get(state.context["stopped_at"]) : undefined;
+  if (stoppedAt?.machine) {
+    await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "in_review" });
+    const why = (state.failReason ?? "").replace(/^Stopped:\s*/, "");
+    await runComment(options, "note", `${why}${output}`, { toOwner: !subjectOf(state.context) });
+    return;
+  }
   // A run that stopped on purpose (a stop exit), or any failure on a graph
   // that stops on failure, leaves its problem open with why and asks nobody.
   if (state.context["stopped_at"] || graph.on_failure === "stop") {
-    const stopped = state.context["stopped_at"] ? `${state.failReason}${state.context[`${state.context["stopped_at"]}.from`] ?? ""}` : text;
+    const stopped = state.context["stopped_at"] ? `${state.failReason}${state.context[`${state.context["stopped_at"]}.from`] ?? ""}${output}` : text;
     await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "open" });
-    await cliCall(options, "/cli/work/comment", { short_id: options.taskId, comment_type: "blocker", text: stopped });
+    await runComment(options, "blocker", stopped);
     return;
   }
   // A hand that handed off blocked already parked the task in review; a
@@ -1479,7 +1492,23 @@ async function returnTaskOnFailure(options: RunOptions, graph: WorkflowGraph, st
     const queued = await queueTaskDecision(options, card.question, card.body || card.summary, state.currentNodeId);
     if (!queued) text += "\n\nNo decision queued: the run has no owning session.";
   }
-  await cliCall(options, "/cli/work/comment", { short_id: options.taskId, comment_type: "blocker", text });
+  await runComment(options, "blocker", text);
+}
+
+/** The run's page, where its every station's output is kept. */
+function runPageUrl(runId: string): string {
+  return `${webBaseUrl().replace(/\/+$/, "")}/workflows/runs/${runId}`;
+}
+
+/**
+ * A comment the run posts on its task, in the run's own voice: through its primary session, so the task and every
+ * notification name the run, never the person whose account runs it. `toOwner` is for the run's owner alone, not the
+ * task's followers. A backend from before `to_owner` refuses the call whole; the note then posts plainly.
+ */
+async function runComment(options: RunOptions, type: "blocker" | "note", text: string, opts: { toOwner?: boolean } = {}): Promise<void> {
+  const body = { short_id: options.taskId, comment_type: type, text, ...(options.runSession ? { conversation_id: options.runSession } : {}) };
+  if (opts.toOwner && options.runSession && (await cliCall(options, "/cli/work/comment", { ...body, to_owner: true }))) return;
+  await cliCall(options, "/cli/work/comment", body);
 }
 
 // ─── Goal gate check (runs when exit node is reached) ────
@@ -1902,11 +1931,7 @@ async function driveRun(
     if (options.taskId && state.context["review_verdict"] === "reject") {
       const note = state.context["review_note"] ? `Reviewer note:\n${state.context["review_note"]}` : "The reviewer rejected the branch.";
       const queued = await queueTaskDecision(options, `${quotedTitle(state.context, options.taskId)}: review rejected. What next?`, note, current.id);
-      await cliCall(options, "/cli/work/comment", {
-        short_id: options.taskId,
-        comment_type: "blocker",
-        text: `Review rejected; task left open as blocked.${queued ? " Decision queued to the run's owner." : " No decision queued: the run has no owning session."}`,
-      });
+      await runComment(options, "blocker", `Review rejected; task left open as blocked.${queued ? " Decision queued to the run's owner." : " No decision queued: the run has no owning session."}`);
     }
     if (options.runId) {
       await reportProgress(options, {

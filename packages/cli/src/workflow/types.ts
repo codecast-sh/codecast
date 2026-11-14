@@ -91,6 +91,10 @@ export interface WorkflowNode {
   // ($vars expand) as "Stopped: ...", its task goes back to open, and nobody
   // is asked anything.
   stop?: string;
+  // A stop that says the machine the run ran on could not do the step (no
+  // test database, a missing tool), not that the change is wrong: the task
+  // gets a note and the run's owner hears it, never followers as a blocker.
+  machine?: boolean;
   // A station that came from a segment (flows.md FL3): the node that named the
   // segment, the segment's name and slug, and for its entry and exits which one.
   segment?: string;

@@ -127,6 +127,13 @@ a declaration.
 ## LP4. Project commands, one contract each
 
 - **check** exits 0 when the branch is sound. It is the verify station.
+  It exits 2 when this machine could not judge the branch (a test database
+  that could not be built, a missing tool): the run then stops as the
+  machine's, not the change's (flows.md FL4), and nobody is sent to fix the
+  change. Any other failure is the change's. On stdout it may print
+  `{ ok, steps: [{ name, ok, detail, log }], logs }`; the failing steps'
+  names and details are what a stop says (`$verify.summary`), and the whole
+  output stays on the run.
 - **prove** exits 0 only when the miss is shown: every miss moment fails on
   the base and every guard passes. It writes `$run_dir/proven.json`.
 - **eval** writes `$run_dir/reps.json`: per surface, per freeze, per side

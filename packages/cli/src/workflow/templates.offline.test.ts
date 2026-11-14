@@ -298,7 +298,7 @@ describe("line.cast offline run through the session path", () => {
     expect(outcome).toBe("failed");
     expect(calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "failed" && c.body.session_id === "s1")).toBe(true);
     expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
-    expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("killed");
+    expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("ran out of time");
     expect(calls.filter((c) => c.route === "/cli/spawn")).toHaveLength(1);
   }, 30000);
 
@@ -373,9 +373,9 @@ describe("line.cast offline run through the session path", () => {
       expect(calls.some((c) => c.route === "/cli/decide")).toBe(false);
       expect(calls.filter((c) => c.route === "/cli/work/update").at(-1)?.body).toMatchObject({ short_id: "ct-7", status: "open" });
       const blocker = calls.find((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")?.body.text;
-      expect(blocker).toBe("Stopped: The fix needs the release branch, which this checkout does not have.");
+      expect(blocker).toBe("Stopped: The fix needs the release branch, which this checkout does not have.\n\nFull output: https://codecast.sh/workflows/runs/run_1");
       const ended = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed").at(-1)?.body;
-      expect(ended?.fail_reason).toBe(blocker);
+      expect(`${ended?.fail_reason}\n\nFull output: https://codecast.sh/workflows/runs/run_1`).toBe(blocker!);
     }, 30000);
   }
 
@@ -388,7 +388,7 @@ describe("line.cast offline run through the session path", () => {
     expect(stations()).toEqual(["ground", "plan"]);
     expect(calls.some((c) => c.route === "/cli/workflow-runs/gate" || c.route === "/cli/decide")).toBe(false);
     expect(calls.find((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")?.body.text)
-      .toBe("Stopped: No record says which billing provider the new plan uses.");
+      .toBe("Stopped: No record says which billing provider the new plan uses.\n\nFull output: https://codecast.sh/workflows/runs/run_1");
   }, 30000);
 
   test("a hand that ends with no handoff is asked for one once, then returns the task to open", async () => {

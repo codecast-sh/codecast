@@ -6,6 +6,7 @@ import { lineCommandEnv } from "../lineProfile.js";
 import { c } from "../colors.js";
 import { extractJsonOutput, lookupContextVar } from "./condition";
 import { keepEnds } from "./keepEnds";
+import { outputSummary } from "./runFailure";
 import type { NodeOutcome, WorkflowNode } from "./types";
 
 // One $name as both expanders read it. `$human_message` is the gate note,
@@ -15,7 +16,7 @@ import type { NodeOutcome, WorkflowNode } from "./types";
 // hand that never spawned).
 export function contextVar(context: Record<string, string>, key: string): string | undefined {
   if (key === "human_message") return context["human.message"] ?? "";
-  if (key.endsWith(".output")) return lookupContextVar(context, key) ?? "";
+  if (key.endsWith(".output") || key.endsWith(".summary")) return lookupContextVar(context, key) ?? "";
   return lookupContextVar(context, key);
 }
 
@@ -28,6 +29,7 @@ const NODE_JSON_CAP = 64_000;
 export function recordNodeOutput(context: Record<string, string>, nodeId: string, text: string, jsonSource = text): void {
   context[`${nodeId}.output`] = keepEnds(text, 4000);
   const parsed = extractJsonOutput(jsonSource);
+  context[`${nodeId}.summary`] = outputSummary(text, parsed);
   const json = parsed === undefined ? undefined : JSON.stringify(parsed);
   if (json !== undefined && json.length <= NODE_JSON_CAP) context[`${nodeId}.json`] = json;
   else delete context[`${nodeId}.json`];
