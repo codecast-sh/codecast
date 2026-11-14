@@ -10,3 +10,14 @@ export const CODECAST_MARK_ARROW_PATH =
 
 /** The view box that crops the mark tight, so it fills its box. */
 export const CODECAST_MARK_VIEWBOX = "290 340 440 340";
+
+// The one-color mark redrawn from geometry: a C cut from two circles and a
+// notched play arrow, in the traced original's proportions. Drawn in one ink
+// (the web's MonoMark, the social cards).
+export const CODECAST_MONO_MARK = {
+  viewBox: "0 1 38 32",
+  paths: [
+    "M21 3.25A15 15 0 1 0 21 30.75V23.97A9.2 9.2 0 1 1 21 10.03Z",
+    "M24.3 5.2L36.8 17L24.3 28.8V21.6L28.9 17L24.3 12.4Z",
+  ],
+} as const;

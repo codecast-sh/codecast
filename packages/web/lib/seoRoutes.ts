@@ -48,7 +48,7 @@ const STATIC_ENTRIES: SeoEntry[] = [
     path: "/",
     title: DEFAULT_TITLE,
     description: DEFAULT_DESCRIPTION,
-    card: { art: "public/hero/page.jpg" },
+    card: { art: "public/hero/page.jpg", color: "orange" },
   },
   {
     path: "/about",

@@ -1,4 +1,4 @@
-import { CODECAST_MARK_ARROW_PATH as ARROW_PATH, CODECAST_MARK_C_PATH as C_PATH, CODECAST_MARK_VIEWBOX } from "@codecast/shared/render/codecastMark";
+import { CODECAST_MARK_ARROW_PATH as ARROW_PATH, CODECAST_MARK_C_PATH as C_PATH, CODECAST_MARK_VIEWBOX, CODECAST_MONO_MARK } from "@codecast/shared/render/codecastMark";
 
 interface LogoProps {
   size?: "sm" | "md" | "lg" | "xl";
@@ -54,15 +54,13 @@ export function LogoMark({
 }
 
 /**
- * The mark redrawn from geometry, in one color: a C cut from two circles and
- * a notched play arrow, the same proportions as the traced original. It takes
- * currentColor, so it follows whatever ink it sits in.
+ * The one-color mark (CODECAST_MONO_MARK) in currentColor, so it follows
+ * whatever ink it sits in.
  */
 export function MonoMark({ size = 24, className = "" }: { size?: number; className?: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 1 38 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
-      <path d="M21 3.25A15 15 0 1 0 21 30.75V23.97A9.2 9.2 0 1 1 21 10.03Z" />
-      <path d="M24.3 5.2L36.8 17L24.3 28.8V21.6L28.9 17L24.3 12.4Z" />
+    <svg width={size} height={size} viewBox={CODECAST_MONO_MARK.viewBox} fill="currentColor" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
+      {CODECAST_MONO_MARK.paths.map((d) => <path key={d} d={d} />)}
     </svg>
   );
 }

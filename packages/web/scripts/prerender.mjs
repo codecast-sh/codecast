@@ -116,7 +116,7 @@ async function main() {
   );
 
   const entryMod = await import(pathToFileURL(join(WEB_ROOT, "dist-ssr", "prerender-entry.mjs")).href);
-  const { render, SEO_ROUTES, SITE_URL, buildBlogFeed, BLOG_FEED_PATH, cardHeading, cardImagePath } = entryMod;
+  const { render, SEO_ROUTES, SITE_URL, buildBlogFeed, BLOG_FEED_PATH, cardHeading, cardImagePath, CODECAST_MONO_MARK } = entryMod;
 
   const shellRaw = readFileSync(join(DIST, "index.html"), "utf-8");
   const ROOT_DIV = '<div id="root"></div>';
@@ -139,7 +139,7 @@ async function main() {
       cardHeading,
       cardImagePath,
       outDir: DIST,
-      logoPath: join(WEB_ROOT, "public", "logo-final.png"),
+      mark: CODECAST_MONO_MARK,
     });
   } catch (err) {
     console.error("social cards FAILED entirely (every route keeps the default image):", err?.message ?? err);
