@@ -8,9 +8,13 @@ import { SESSIONS } from "../../lib/acmeWorld/world";
 const card = (slug: string) => ({ selector: `[data-feature-card="${slug}"]`, pad: 12 });
 const dialog = { selector: "[role=dialog][data-state=open]", pad: 0 };
 const feed = { selector: "[data-sv-feed]", pad: 0 };
-const conv = (id: string) => `/conversation/${id}`;
+const conv = (id: string) => `/inbox?s=${id}`;
+/** A world scene, once the page (reloaded by anyone's edit) has installed them. */
+const scene = (call: string) => ({
+  js: `new Promise((done) => { const go = () => (window.__acmeScene ? done(__acmeScene.${call}) : setTimeout(go, 200)); go(); })`,
+});
 /** Puts one of the machine sessions in the inbox, so its pane draws the transcript. */
-const open = (id: string) => ({ js: `__acmeScene.open(${JSON.stringify(id)})` });
+const open = (id: string) => scene(`open(${JSON.stringify(id)})`);
 /** The Stripe test key a person pastes: built here so no whole key literal sits in the source. */
 const FAKE_KEY = ["sk", "test", "51AcmeFixtureOnlyNotARealKey00"].join("_");
 /** A transcript shot: the conversation's feed column, once its rows painted. */
@@ -28,7 +32,7 @@ const transcript = (name: string, id: string, waitText: string, out: string, ext
 const feature = (name: string, slug: string, out: string): Shot => ({
   name,
   route: "/agent-features",
-  viewport: { width: 1280, height: 900 },
+  viewport: { width: 1280, height: 1300 },
   steps: [{ wait: `[data-feature-card="${slug}"]` }, { js: `document.querySelector('[data-feature-card="${slug}"]').click()` }, { wait: "[role=dialog][data-state=open]" }, { sleep: 900 }],
   crop: { selector: "[role=dialog][data-state=open]", pad: 0 },
   frame: "element",
@@ -143,7 +147,7 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "vault/ask-first-decision",
     route: "/decisions/sd-4120",
     viewport: { width: 1280, height: 900 },
-    steps: [{ js: "__acmeScene.askFirst()" }, { wait: "body", text: "Approve for this session" }, { sleep: 1000 }],
+    steps: [scene("askFirst()"), { wait: "body", text: "Approve for this session" }, { sleep: 1000 }],
     crop: { selector: "[data-decision-card]", pad: 16 },
     frame: "element",
     out: "public/documentation/vault/ask-first-decision.webp",
@@ -191,7 +195,7 @@ export const MACHINES_SHOTS: Shot[] = [
     route: conv(MS.cloud._id),
     viewport: { width: 1440, height: 900 },
     rail: true,
-    steps: [open(MS.cloud._id), { js: "__acmeScene.machinesAwake()" }, { wait: "[data-sv-feed]", text: "96% of failed deliveries" }, { sleep: 1200 }],
+    steps: [open(MS.cloud._id), scene("machinesAwake()"), { wait: "[data-sv-feed]", text: "96% of failed deliveries" }, { sleep: 1200 }],
     frame: "window",
     out: "public/documentation/remote-and-cloud-sessions/cloud-worker.webp",
   },
@@ -199,7 +203,7 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "remote-and-cloud-sessions/placement-menu",
     route: conv(MS.placeNew._id),
     viewport: { width: 1100, height: 900 },
-    steps: [open(MS.placeNew._id), { js: "__acmeScene.machinesAwake()" }, { wait: "[data-sv-convhead]" }, { sleep: 1500 }, { click: "button[title='Where this session runs']" }, { wait: "[role=menu]", text: "Start from" }, { sleep: 600 }],
+    steps: [open(MS.placeNew._id), scene("machinesAwake()"), { wait: "[data-sv-convhead]" }, { sleep: 1500 }, { click: "button[title='Where this session runs']" }, { wait: "[role=menu]", text: "Start from" }, { sleep: 600 }],
     frame: "window",
     out: "public/documentation/remote-and-cloud-sessions/placement-menu.webp",
   },
@@ -207,7 +211,7 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "remote-and-cloud-sessions/machine-menu",
     route: conv(MS.check._id),
     viewport: { width: 1280, height: 800 },
-    steps: [open(MS.check._id), { js: "__acmeScene.machinesAwake()" }, { wait: "[data-sv-convhead]" }, { sleep: 1500 }, { click: "button[data-runner-device]" }, { wait: "[role=menu]", text: "acme-mac" }, { sleep: 600 }],
+    steps: [open(MS.check._id), scene("machinesAwake()"), { wait: "[data-sv-convhead]" }, { sleep: 1500 }, { click: "button[data-runner-device]" }, { wait: "[role=menu]", text: "acme-mac" }, { sleep: 600 }],
     frame: "window",
     out: "public/documentation/remote-and-cloud-sessions/machine-menu.webp",
   },
@@ -215,7 +219,7 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "remote-and-cloud-sessions/sync-chip",
     route: conv(MS.cloud._id),
     viewport: { width: 1280, height: 800 },
-    steps: [open(MS.cloud._id), { js: "__acmeScene.machinesAwake()" }, { wait: "[data-sv-convhead]" }, { sleep: 1500 }, { click: "button[data-local-mirror]" }, { wait: "[role=menu]", text: "Stop syncing" }, { sleep: 600 }],
+    steps: [open(MS.cloud._id), scene("machinesAwake()"), { wait: "[data-sv-convhead]" }, { sleep: 1500 }, { click: "button[data-local-mirror]" }, { wait: "[role=menu]", text: "Stop syncing" }, { sleep: 600 }],
     frame: "window",
     out: "public/documentation/remote-and-cloud-sessions/sync-chip.webp",
   },
@@ -243,7 +247,7 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "remote-and-cloud-sessions/devices",
     route: "/settings/devices",
     viewport: { width: 1280, height: 1000 },
-    steps: [{ js: "__acmeScene.linuxAsleep()" }, { wait: "body", text: "Asleep" }, { sleep: 800 }],
+    steps: [scene("linuxAsleep()"), { wait: "body", text: "Asleep" }, { sleep: 800 }],
     frame: "window",
     out: "public/documentation/remote-and-cloud-sessions/devices.webp",
   },
@@ -260,7 +264,7 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "app/connect",
     route: "/inbox",
     viewport: { width: 1280, height: 860 },
-    steps: [{ js: "__acmeScene.fresh()" }, { wait: "button", text: "Set up this machine" }, { sleep: 900 }],
+    steps: [scene("fresh()"), { wait: "button", text: "Set up this machine" }, { sleep: 900 }],
     crop: { selector: ".rounded-2xl.backdrop-blur-xl", pad: 32 },
     frame: "element",
     out: "public/docs/app/connect.webp",

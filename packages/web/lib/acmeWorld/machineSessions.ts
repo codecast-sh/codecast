@@ -348,7 +348,15 @@ const mirror = (now: number) => ({
   at: now - 12_000,
 });
 
-export const MACHINE_SESSION_ROWS = (now: number) => [
+/** A teammate's session names its person on their messages; Alex's own read "You". */
+const withOwner = (row: Record<string, any>) => {
+  const p = Object.values(PEOPLE).find((x) => x._id === row.user_id);
+  return p && p._id !== PEOPLE.me._id ? { ...row, user: { name: p.name, email: p.email, avatar_url: p.image } } : row;
+};
+
+export const MACHINE_SESSION_ROWS = (now: number) => MACHINE_SESSIONS_RAW(now).map(withOwner);
+
+const MACHINE_SESSIONS_RAW = (now: number) => [
   session(now, MS.browser, { ago: 3 * MIN, waiting: "done", project: "~/src/billing", messages: 4, state: "Stripe endpoint retries are on, 5 attempts\nStatus: reported", extra: onLaptop }),
   session(now, MS.browserSetup, { ago: 2 * MIN, waiting: "blocked", project: "~/src/billing", messages: 3, owner: PEOPLE.maya, state: "Needs the browser set up\nBlocked: Chrome extension not paired" }),
   session(now, MS.watch, { ago: 20_000, waiting: "working", project: "~/src/billing", messages: 3, owner: PEOPLE.maya, state: "Retrying a failed delivery on staging" }),
@@ -494,7 +502,8 @@ const ASK_FIRST_DECISION = (now: number) => ({
 /* ── Scenes ──────────────────────────────────────────────────────────────── */
 
 function installScenes() {
-  const st = () => useInboxStore.getState() as any;
+  // The live app store: a hot update re-evaluates this module, and its import could be a stale copy.
+  const st = () => ((globalThis as any).__inboxStore ?? useInboxStore).getState() as any;
   (globalThis as any).__acmeScene = {
     ...(globalThis as any).__acmeScene,
     /** acme-linux stopped: Settings > Devices reads it Asleep with its cost. */
