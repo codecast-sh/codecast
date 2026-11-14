@@ -8,7 +8,7 @@ import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { isBlockedConversation } from '@codecast/convex/convex/ccAccountsShared';
-import { standingLabel } from '@codecast/shared/contracts';
+import { accountDisplayName, standingLabel } from '@codecast/shared/contracts';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { continueOnAccount, limitContinueTarget } from '@codecast/web/lib/limitContinue';
@@ -58,13 +58,15 @@ export function AccountRecoveryBanner({ conversationId }: { conversationId: stri
     );
   }
 
-  const { best } = limitContinueTarget(device, now, true);
+  const models = session.model ? [session.model] : undefined;
+  const { best } = limitContinueTarget(device, now, true, { pinned: session.cc_account, models });
   const canContinue = !!best?.email && !!device?.online && !device.is_remote;
+  const bestLabel = accountDisplayName(best);
   return (
     <Bar
       icon="hourglass-half"
-      text={canContinue ? `Out of usage · ${best!.name}: ${standingLabel(best!.usage, now) ?? 'has room'}` : 'Out of usage on this account'}
-      action={canContinue ? `Continue on ${best!.name}` : 'Accounts'}
+      text={canContinue ? `Out of usage · ${bestLabel}: ${standingLabel(best!.usage, now, models)}` : 'Out of usage on this account'}
+      action={canContinue ? `Continue on ${bestLabel}` : 'Accounts'}
       onAction={() => {
         if (!canContinue) return router.push('/accounts');
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

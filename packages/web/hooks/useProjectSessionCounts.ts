@@ -9,14 +9,19 @@ import { workProjectsBySession } from "../store/workProjects";
 import { useCoarseNow } from "./useCoarseNow";
 import { EMPTY_COUNTS, type StateCounts } from "../components/org/orgTypes";
 
-export function useProjectSessionCounts(): ReadonlyMap<string, StateCounts> {
+const NO_COUNTS: ReadonlyMap<string, StateCounts> = new Map();
+
+/** `only` limits the count to those projects; an empty list reads nothing. */
+export function useProjectSessionCounts(only?: readonly string[]): ReadonlyMap<string, StateCounts> {
   const now = useCoarseNow(30_000);
   const digest = useInboxStore((s) => {
+    if (only && only.length === 0) return "";
+    const wanted = only ? new Set(only) : null;
     const by = workProjectsBySession(s);
     const counts = new Map<string, Record<string, number>>();
     for (const [sessionId, projectId] of by) {
       const row = projectId ? s.sessions[sessionId] : undefined;
-      if (!row) continue;
+      if (!row || (wanted && !wanted.has(projectId!))) continue;
       const state = sessionWorkState(row, now);
       const c = counts.get(projectId!) ?? {};
       c[state] = (c[state] ?? 0) + 1;
@@ -25,6 +30,7 @@ export function useProjectSessionCounts(): ReadonlyMap<string, StateCounts> {
     return [...counts].map(([p, c]) => `${p}=${Object.entries(c).map(([k, v]) => `${k}:${v}`).join(",")}`).sort().join(";");
   });
   return useMemo(() => {
+    if (!digest) return NO_COUNTS;
     const out = new Map<string, StateCounts>();
     for (const part of digest.split(";").filter(Boolean)) {
       const [p, body] = part.split("=");

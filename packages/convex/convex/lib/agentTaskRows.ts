@@ -4,6 +4,7 @@
 // agentTasks.ts so conversations.ts and cleanup.ts can call them without
 // importing agentTasks, which reaches the big import cycle (ct-92432).
 import type { Doc, Id } from "../_generated/dataModel";
+import { internal } from "../_generated/api";
 import { armedTriggerKindFor } from "../dormancy";
 import { runParentOf } from "@codecast/shared/contracts";
 import { hostedHomeStamp } from "../assistant/routines";
@@ -35,6 +36,22 @@ export async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: R
   }
   await ctx.db.patch(task._id, patch);
   if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
+  const next = { ...task, ...patch };
+  if (("run_at" in patch || "status" in patch) && next.status === "scheduled") await scheduleProjectFire(ctx, next, next.run_at);
+}
+
+/** A project trigger whose runs are turns in the project's main session: the
+ *  server fires it (projectSources.fireProjectTrigger), never a daemon. */
+export function projectRunsInline(task: Pick<Doc<"agent_tasks">, "project_id" | "project_spawn">): boolean {
+  return !!task.project_id && !task.project_spawn;
+}
+
+/** Wake the server firing for an inline project trigger at its run_at. Every
+ *  arming path reaches it (patchTask, insertTask, matchTaskTriggers); the
+ *  firing reads the row again, so an outrun wake does nothing. */
+export async function scheduleProjectFire(ctx: TaskCtx, task: Pick<Doc<"agent_tasks">, "_id" | "project_id" | "project_spawn">, runAt: number | undefined): Promise<void> {
+  if (!projectRunsInline(task) || runAt === undefined || !ctx.scheduler) return;
+  await ctx.scheduler.runAfter(Math.max(0, runAt - Date.now()), internal.projectSources.fireProjectTrigger, { task_id: task._id });
 }
 
 // A recurring trigger keeps a cadence: slots one interval apart. run_at is when
