@@ -5,7 +5,7 @@
 // sessionDecisions calls in and hands over its delivery, so this file never
 // imports that module graph.
 
-import { RUN_OPTION, approvesCommandRun, clipRunOutput, commandLine, runResultText, type CommandRun } from "@codecast/shared/contracts/commandRun";
+import { RUN_ON_LAPTOP, RUN_OPTION, approvesCommandRun, clipRunOutput, commandLine, runResultText, type CommandRun } from "@codecast/shared/contracts/commandRun";
 import { decisionAnswerClientId, parseDecisionAnswer } from "@codecast/shared/contracts/decisionAnswers";
 import type { Doc, Id } from "../_generated/dataModel";
 import { consumePresence, presenceRefusal } from "./presence";
@@ -24,6 +24,35 @@ const approves = (row: Row, verdict: Verdict) => verdict.status === "answered" &
 async function mayRun(ctx: Ctx, conversation: Doc<"conversations"> | null, userId: Id<"users"> | undefined): Promise<boolean> {
   if (!conversation || !userId) return false;
   return String(conversation.user_id) === String(userId) || (await isSessionOwner(ctx, conversation._id, userId));
+}
+
+type RunDevice = { device_id: string; label: string; last_seen: number; is_remote?: boolean; cloud_host?: { managed_by: string } | null };
+
+/**
+ * The machine a run goes to: the session's own, or the one `--on` names among
+ * the person's devices. `laptop` (RUN_ON_LAPTOP) is the person's computer: the
+ * session's own when it is not a cloud host, else the laptop that manages the
+ * host, else the laptop seen last. Anything else matches a device id, an id
+ * prefix or a label, and must match one device.
+ */
+export function resolveRunDevice(devices: RunDevice[], ownerDeviceId: string | undefined, on: string | undefined): { device_id?: string } | { error: string } {
+  const wanted = on?.trim();
+  if (!wanted) return { device_id: ownerDeviceId };
+  const owner = devices.find((d) => d.device_id === ownerDeviceId);
+  if (wanted.toLowerCase() === RUN_ON_LAPTOP) {
+    if (owner && !owner.is_remote) return { device_id: owner.device_id };
+    const manager = devices.find((d) => !d.is_remote && d.device_id === owner?.cloud_host?.managed_by);
+    const latest = devices.filter((d) => !d.is_remote).sort((a, b) => b.last_seen - a.last_seen)[0];
+    const laptop = manager ?? latest;
+    return laptop ? { device_id: laptop.device_id } : { error: "--on laptop: no computer of yours is signed in to codecast" };
+  }
+  const exact = devices.find((d) => d.device_id === wanted);
+  if (exact) return { device_id: exact.device_id };
+  const needle = wanted.toLowerCase();
+  const hits = devices.filter((d) => d.device_id.startsWith(wanted) || d.label.toLowerCase().includes(needle));
+  if (hits.length === 1) return { device_id: hits[0].device_id };
+  const names = devices.map((d) => d.label).join(", ");
+  return { error: hits.length ? `--on ${wanted} matches ${hits.length} machines (${hits.map((d) => d.label).join(", ")}): name one` : `--on ${wanted}: none of your machines (${names || "none"}) matches` };
 }
 
 /**

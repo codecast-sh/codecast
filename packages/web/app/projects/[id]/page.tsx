@@ -37,6 +37,7 @@ import { toast } from "sonner";
 import { ChevronDown, Copy, History, LayoutGrid, Info, ListChecks, MessagesSquare, ScrollText, Workflow } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ProjectSession } from "../../../components/projects/ProjectSession";
+import { ProjectPinButton } from "../../../components/projects/ProjectPinButton";
 import { projectDefaultSessionOf } from "../../../lib/projectDefaultSession";
 import { ProjectInboxFilter } from "../../../components/projects/ProjectInboxFilter";
 import { ProjectLineTab } from "../../../components/line/ProjectLineTab";
@@ -205,6 +206,7 @@ function ProjectDetailContent() {
       )}
       <ProjectViewMenu tabs={tabs} active={tab} onTab={setTab} counts={{ tasks: openTasks }} shortId={project.short_id} />
       <ProjectInboxFilter projectId={project._id} hasMain={hasMain} />
+      <ProjectPinButton projectId={project._id} title={project.title} />
   </>);
   const actions = <>{verbs}{share}</>;
   const glyph = <span className={cn("w-2 h-2 rotate-45 rounded-[2px] flex-shrink-0", projectDotClass(project))} data-project-glyph />;
