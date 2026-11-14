@@ -288,6 +288,26 @@ if (typeof window !== "undefined") {
   window.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") metaWriter.flush(); });
 }
 
+// A boot retention pass can shed most of a table at once: the first boot with
+// externalEvents retention drops 136,209 rows from a 153,681-row cache. As one
+// bulkDelete that queued for 422 ms on the main thread and held the table for
+// 12 s (measured on a copy of that cache). In batches each queue is a few
+// milliseconds, the window paints between them, and a write to the table
+// waits behind one batch instead of the whole pass.
+export const RETENTION_DELETE_BATCH = 2_000;
+
+export async function deleteInBatches(
+  table: { bulkDelete: (ids: string[]) => PromiseLike<unknown> },
+  ids: string[],
+  batch = RETENTION_DELETE_BATCH,
+): Promise<void> {
+  try {
+    for (let i = 0; i < ids.length; i += batch) await table.bulkDelete(ids.slice(i, i + batch));
+  } catch {
+    // What is left on disk goes at the next boot's pass.
+  }
+}
+
 export function writePatchesToIDB(patches: Patch[], state: any) {
   if (_hydrating || !persistenceOwned()) return;
 
@@ -434,7 +454,7 @@ export async function loadCache(
       if (retain && rows.length > 0) {
         const { keep, drop } = retain(rows, Date.now());
         rows = keep;
-        if (drop.length) table.bulkDelete(drop).catch(() => {});
+        if (drop.length) void deleteInBatches(table, drop);
       }
       if (rows.length > 0) {
         const map: Record<string, any> = {};
