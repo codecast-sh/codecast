@@ -1,7 +1,7 @@
 import { Suspense, lazy, type ReactNode } from "react";
 import { CodeBlock } from "../components/CodeBlock";
 import { MermaidDiagram } from "../components/MermaidDiagram";
-import { tryRenderCanvas } from "../components/HtmlSnippet";
+import { tryRenderCanvas } from "../components/canvasFence";
 import { tryRenderCastDiff } from "../components/InlineDiff";
 import { ModFence } from "../components/mods/ModSurface";
 import { LINE_FENCE_LANG } from "./line/lineFence";

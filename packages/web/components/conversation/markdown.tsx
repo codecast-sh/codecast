@@ -4,7 +4,7 @@ import { rehypeSearchHighlight } from "../../lib/rehypeSearchHighlight";
 import { parseSearchTerms } from "@codecast/shared/search";
 import { splitMarkdownBlocks } from "../../lib/markdownBlocks";
 import { RevealHost } from "../ObjectReveal";
-import { tryRenderHtmlMessage } from "../HtmlSnippet";
+import { tryRenderHtmlMessage } from "../canvasFence";
 import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_COMPONENTS, USER_MD_REMARK, ASSISTANT_MD_REMARK } from "../messageMarkdown";
 import { QuotedText } from "../ReplyQuote";

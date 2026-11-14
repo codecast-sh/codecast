@@ -5,7 +5,7 @@ import Link from "next/link";
 import { CodeBlock } from "@/components/CodeBlock";
 import { MarkdownRenderer } from "@/components/tools/MarkdownRenderer";
 import { isMarkdownFile, isPlanFile } from "@/lib/markdownFiles";
-import { tryRenderHtmlMessage } from "@/components/HtmlSnippet";
+import { tryRenderHtmlMessage } from "@/components/canvasFence";
 import { RoleAvatar } from "@/components/org/avatars";
 import { RoleIconTile } from "@/components/identity/RoleIconTile";
 import { useIdentityPrefs } from "@/hooks/useIdentityPrefs";
