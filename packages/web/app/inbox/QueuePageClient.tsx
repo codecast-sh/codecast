@@ -41,6 +41,7 @@ import { bootstrapCut, windowConversationSince, type WindowedConversation } from
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
 import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVisit";
 import { requestSessionRestart } from "../../lib/sessionCommands";
+import { afterBootIdle } from "../../lib/bootIdle";
 import { SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
@@ -761,9 +762,11 @@ export function QueuePageClient() {
   const currentSessionIdForWarm = currentSession?._id ?? null;
   useWatchEffect(() => {
     if (currentSessionIdForWarm) ensureHydrated(currentSessionIdForWarm);
-    for (const s of sortedSessions.slice(0, 50)) {
-      if (s._id !== currentSessionIdForWarm) ensureHydrated(s._id);
-    }
+    return afterBootIdle(() => {
+      for (const s of sortedSessions.slice(0, 50)) {
+        if (s._id !== currentSessionIdForWarm) ensureHydrated(s._id);
+      }
+    });
   }, [sortedSessions, currentSessionIdForWarm]);
 
   const handleClearHighlight = useCallback(() => {

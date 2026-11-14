@@ -24,7 +24,7 @@ import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { RunFallbackLine } from "./RunFallbackLine";
 import { ChangeCardHeadline, ChangeCardView, SepRow, cardAnswerIndexes } from "./ChangeCardView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
-import { hasCanvasFence } from "../HtmlSnippet";
+import { hasCanvasFence } from "../canvasFence";
 import { stripMarkdown } from "../../lib/notificationText";
 import "./decisions.css";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";

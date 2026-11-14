@@ -1786,16 +1786,20 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     }
     return (c: any) => byId.get(String(c._id)) ?? sessionStanding(c, meId, null);
   }, [recentPool]);
+  // A typed query ranks favorites with everything else, by how well the
+  // words name them: a favorite is not a reason to outrank a title that
+  // starts with what was typed. The Favorites group is the empty palette's.
+  const typedPool = useMemo(
+    () => (favorites?.length ? withFavorites(recentPool, favorites, pick?.exclude) : recentPool),
+    [recentPool, favorites, pick],
+  );
   const recentMatches = useMemo(() => {
     const q = rankQuery.trim().toLowerCase();
-    // A typed query ranks favorites with everything else, by how well the
-    // words name them: a favorite is not a reason to outrank a title that
-    // starts with what was typed. The Favorites group is the empty palette's.
-    const pool = q && favorites?.length ? withFavorites(recentPool, favorites, pick?.exclude) : recentPool;
+    const pool = q ? typedPool : recentPool;
     // One ranking for every session search (lib/instantSessionSearch): how
     // directly the words name it, then where it stands and how recent it is.
     return rankSessions(pool, q, standingOf, q ? RECENT_RENDER_CAP : RECENT_IDLE_CAP);
-  }, [recentPool, rankQuery, standingOf, favorites, pick]);
+  }, [recentPool, typedPool, rankQuery, standingOf]);
   // The machine most recents run on goes unsaid; a row names its machine only
   // when it runs somewhere else (a cloud host, the other laptop).
   const machineRoster = useInboxStore((s) => (open ? s.machineRoster : EMPTY_ROSTER)) as Device[];
@@ -2549,6 +2553,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 conversationId={PALETTE_PICK_DRAFT}
                 bareComposer
                 chatMentionMode={chatTarget}
+                sessionReplies={chatTarget}
                 mentionTeamId={activeTeamId ? String(activeTeamId) : undefined}
                 composerPlaceholder={pick.notePlaceholder}
                 autoFocusInput

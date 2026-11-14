@@ -140,8 +140,15 @@ const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ??
 // (a navigation, a layout change) does not re-run this rail's hooks. The create
 // dialogs it used to host live in DashboardLayout's CreateModalHost, mounted
 // at every width.
-export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope, peek = false }: SidebarProps) {
-  const pathname = usePathname();
+export const Sidebar = memo(function Sidebar(props: SidebarProps) {
+  return <SidebarBody {...props} pathname={railPath(usePathname())} />;
+});
+
+// The rail places every /conversation/<id> under Inbox; collapsing the id keeps
+// a session switch from re-rendering the whole rail.
+const railPath = (pathname: string | null) => (pathname?.startsWith("/conversation/") ? "/conversation" : pathname);
+
+const SidebarBody = memo(function SidebarBody({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope, peek = false, pathname }: SidebarProps & { pathname: string | null }) {
   const router = useRouter();
   const modern = useIsModernStyle();
   const isSessions = pathname?.startsWith("/sessions");
@@ -233,7 +240,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
     for (const bm of visible) prefetchBookmark(bm);
   }, [bookmarks, showAllBookmarks, prefetchBookmark]);
   const toggleBookmark = useInboxStore((s) => s.toggleBookmark);
-  const openConversationId = useInboxStore((s) => s.currentSessionId);
+  const openConversationId = useInboxStore((s) => (s.bookmarks.some((bm: any) => bm.conversation_id === s.currentSessionId) ? s.currentSessionId : null));
   // Saved views live on the server now, so a shared one shows up here for every
   // member of the team — see convex/savedViews.ts.
   useSyncSavedViews();
