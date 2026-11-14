@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { LINE_RUNS_PER_RUNNER, requeueCore, sweepCore } from "./orgLine";
-import { barFromCli, clearHoldCore, clearHoldFromCli, createLiveFlowCore, moveLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, setBarCore, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
+import { barFromCli, clearHoldCore, libraryFlowId, clearHoldFromCli, createLiveFlowCore, moveLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, setBarCore, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
 import { hashToken } from "./apiTokens";
 
 // A team's live flow (liveFlows.ts): one queue in start order across every
@@ -402,3 +402,10 @@ describe("liveFlows: moving the live flow onto another library flow", () => {
 function tables0() {
   return { _id: "workflows_spine", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, slug: "agentwatch", name: "agentwatch", label: "Acme fix flow", nodes: [], edges: [], created_at: 1, updated_at: 1 };
 }
+
+describe("libraryFlowId", () => {
+  test("reads the id from the flow the web's Make live sends, and takes a bare id as is", () => {
+    expect(libraryFlowId({ id: "workflows_onefix", slug: "onefix", label: "Union fix flow" } as { id: string })).toBe("workflows_onefix");
+    expect(libraryFlowId("workflows_onefix")).toBe("workflows_onefix");
+  });
+});

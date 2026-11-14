@@ -535,7 +535,7 @@ describe("requestAccountSwitch scoped to conversation ids", () => {
     const res = await (requestAccountSwitch as any)._handler({ db: f.db, auth }, {});
     expect(res.conversations).toBe(31);
     const args = JSON.parse(f.tables.daemon_commands[0].args);
-    expect([...(args.conversation_ids ?? []), ...(args.follow_ids ?? [])]).toHaveLength(31);
+    expect(args.conversation_ids).toHaveLength(31);
   });
   test("a named worker is acted on, an unblocked id is ignored", async () => {
     const f = fixture();
