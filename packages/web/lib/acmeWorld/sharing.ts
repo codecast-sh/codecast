@@ -101,6 +101,11 @@ export const SHARING_ANSWERS: Record<string, (args: any) => unknown> = {
   "users:getDirectoryTeamMappings": () => MAPPINGS(Date.now()),
   "users:shareImpactForPaths": IMPACT,
   "users:listConversationsForPath": SESSIONS_FOR_PATH,
-  "teams:getTeamMembers": () => TEAM_MEMBERS(Date.now()),
+  "teams:getTeamMembers": () => {
+    const now = Date.now();
+    // When each member's daemon last checked in (Settings > Team reads it as Online or "N hours ago").
+    const seen: Record<string, number> = { [PEOPLE.me._id]: 10_000, [PEOPLE.sarah._id]: 20_000, [PEOPLE.maya._id]: 30_000, [PEOPLE.jordan._id]: 3 * HOUR, [PEOPLE.priya._id]: DAY };
+    return TEAM_MEMBERS(now).map((m) => ({ ...m, daemon_last_seen: now - seen[m._id] }));
+  },
   "teams:getTeam": () => ({ ...TEAMS[0], created_by: PEOPLE.me._id, created_at: Date.now() - 120 * DAY }),
 };

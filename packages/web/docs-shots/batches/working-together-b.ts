@@ -10,12 +10,14 @@ const BACKOFF = conversation(CONVERSATIONS.backoff);
 const SHEET = "[role=dialog] > div";
 const PANE = "main[data-cc-conversation]";
 
-/** A settings route opens as a sheet over the page; later shots close it the way the app does. */
+/** Settings open as a sheet over the page, the way the gear menu opens them (a /settings route
+ *  turns into the page beneath once the sheet is up); later shots close it the same way. */
+const openSheet = (section: string): Step => ({ js: `__inboxStore.getState().openSettingsModal(${JSON.stringify(section)})` });
 const closeSheet: Step = { js: "__inboxStore.getState().closeSettingsModal?.()" };
-/** The sheet caps its height; let it grow to its content so one capture holds the whole panel. */
-const growSheet: Step = {
-  js: `(() => { const d = document.querySelector(${JSON.stringify(SHEET)}); d.style.height = "auto"; d.style.maxHeight = "none"; for (const e of d.querySelectorAll(".overflow-y-auto, .overflow-auto")) e.style.overflow = "visible"; })()`,
-};
+/** Scrolls the sheet's panel so the section headed `title` sits at the top (the sheet caps its height at 880px). */
+const scrollTo = (title: string): Step => ({
+  js: `(() => { const h = [...document.querySelectorAll(${JSON.stringify(SHEET)} + " *")].find((e) => e.childElementCount === 0 && e.textContent.trim() === ${JSON.stringify(title)}); h.scrollIntoView({ block: "start" }); for (let e = h.parentElement; e; e = e.parentElement) if (e.scrollTop > 0) { e.scrollTop -= 16; break; } })()`,
+});
 /** Marks the row of one folder on the sharing list, so a crop can name it. */
 const markRow = (folder: string): Step => ({
   js: `(() => { const t = [...document.querySelectorAll('button[aria-label="Who can open ${folder}"]')][0]; let e = t; while (e && !(e.parentElement && e.parentElement.querySelectorAll('button[aria-label^="Who can open"]').length > 1)) e = e.parentElement; e.setAttribute("data-shot-row", ""); })()`,
@@ -27,51 +29,58 @@ const scrollPane = (to: "top" | "bottom"): Step => ({
 export const WORKING_TOGETHER_B: Shot[] = [
   {
     name: "app/team-settings",
-    route: "/settings/team",
-    viewport: { width: 1200, height: 900 },
-    steps: [{ wait: SHEET, text: "Members" }, growSheet, { sleep: 500 }],
+    route: "/inbox",
+    viewport: { width: 1200, height: 960 },
+    steps: [closeSheet, { sleep: 300 }, openSheet("team"), { wait: SHEET, text: "Members" }, scrollTo("Members"), { sleep: 1500 }],
     crop: { selector: SHEET },
     frame: "element",
     out: "public/docs/app/team-settings.webp",
   },
   {
     name: "app/sharing",
-    route: "/settings/sync",
-    viewport: { width: 1200, height: 900 },
-    steps: [{ wait: SHEET, text: "acme-api" }, growSheet, { sleep: 500 }],
+    route: "/inbox",
+    viewport: { width: 1200, height: 960 },
+    steps: [closeSheet, { sleep: 300 }, openSheet("sync"), { wait: SHEET, text: "acme-api" }, scrollTo("Sharing"), { sleep: 500 }],
     crop: { selector: SHEET },
     frame: "element",
     out: "public/docs/app/sharing.webp",
   },
   {
     name: "team-sessions/sharing-settings",
-    route: "/settings/sync",
+    route: "/inbox",
     viewport: { width: 1200, height: 900 },
     steps: [
+      closeSheet,
+      { sleep: 300 },
+      openSheet("sync"),
       { wait: SHEET, text: "webhooks" },
-      growSheet,
+      scrollTo("Sharing"),
       { click: 'button[aria-label="Who can open webhooks"]' },
       { wait: "[data-share-panel]" },
-      { js: `[...document.querySelectorAll("h2,h3,div")].find((e) => e.childElementCount <= 3 && e.textContent.trim() === "Sharing").closest("section, [data-settings-section]")?.setAttribute("data-shot-section", "") ?? (() => { let e = document.querySelector("[data-share-panel]"); for (let i = 0; i < 4; i++) e = e.parentElement; e.setAttribute("data-shot-section", ""); })()` },
       { sleep: 500 },
     ],
-    crop: { selector: "[data-shot-section]", pad: 8 },
+    crop: { selector: SHEET },
     frame: "element",
     out: "public/documentation/team-sessions/sharing-settings.webp",
   },
   {
     name: "team-sessions/share-review",
-    route: "/settings/sync",
+    route: "/inbox",
     viewport: { width: 1200, height: 900 },
     steps: [
+      closeSheet,
+      { sleep: 300 },
+      openSheet("sync"),
       { wait: SHEET, text: "billing-api" },
-      growSheet,
-      { click: 'button[aria-label="Who can open billing-api"]' },
+      scrollTo("Sharing"),
+      // Low in the sheet's scroller a pointer press misses the button; the DOM click is the same press.
+      { js: `(() => { const b = document.querySelector('button[aria-label="Who can open billing-api"]'); b.scrollIntoView({ block: "center" }); b.click(); })()` },
       { wait: "[data-share-panel]" },
-      { click: "[data-share-panel] [role=radio]", text: "Acme" },
+      { js: `[...document.querySelectorAll("[data-share-panel] [role=radio]")].find((b) => b.textContent.includes("Acme")).click()` },
       { wait: "[data-share-panel] [role=radiogroup]", text: "From today on" },
-      { click: "[data-share-panel] label", text: "From today on" },
+      { js: `[...document.querySelectorAll("[data-share-panel] label")].find((l) => l.textContent.includes("From today on")).click()` },
       markRow("billing-api"),
+      { js: `document.querySelector("[data-shot-row]").scrollIntoView({ block: "start" })` },
       { sleep: 800 },
     ],
     crop: { selector: "[data-shot-row]", include: "[data-share-panel]", pad: 8 },
@@ -82,7 +91,7 @@ export const WORKING_TOGETHER_B: Shot[] = [
     name: "team-sessions/activity",
     route: "/team/activity?project=billing",
     viewport: { width: 1280, height: 860 },
-    steps: [closeSheet, { wait: "main", text: "Now" }, { sleep: 800 }],
+    steps: [closeSheet, { wait: "body", text: "PRs merged" }, { sleep: 800 }],
     frame: "window",
     out: "public/documentation/team-sessions/activity.webp",
   },
@@ -107,7 +116,7 @@ export const WORKING_TOGETHER_B: Shot[] = [
   {
     name: "thread-state/inbox-card",
     route: BACKOFF,
-    viewport: { width: 1440, height: 860 },
+    viewport: { width: 1440, height: 1500 },
     rail: true,
     steps: [closeSheet, { wait: `[data-mc=card][data-session-id="${CONVERSATIONS.backoff._id}"]` }, { sleep: 600 }],
     crop: { selector: "[data-sv-rail]" },
@@ -129,11 +138,26 @@ export const WORKING_TOGETHER_B: Shot[] = [
     viewport: { width: 1000, height: 860 },
     steps: [
       closeSheet,
-      { wait: "#msg-hero-bk-m1" },
-      { rightClick: "#msg-hero-bk-m1" },
-      { click: "[role=menuitem]", text: "Share messages" },
-      { click: "#msg-hero-bk-m3" },
-      { click: "#msg-hero-bk-m4" },
+      { wait: "#msg-hero-bk-m4" },
+      // The script's CDP right press opens no React context menu here; a contextmenu event is the same
+      // gesture. One awaited step, so the menu is used the moment it opens.
+      {
+        js: `(async () => {
+          const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+          const msg = (id) => document.querySelector("#msg-hero-bk-" + id);
+          for (let i = 0; i < 20 && !document.querySelector("[role=menuitem]"); i++) {
+            const r = msg("m4").getBoundingClientRect();
+            msg("m4").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: r.x + 40, clientY: r.y + 20 }));
+            await pause(500);
+          }
+          [...document.querySelectorAll("[role=menuitem]")].find((e) => e.textContent.includes("Share messages")).click();
+          await pause(800);
+          msg("m3").click();
+          await pause(800);
+          msg("m1").click();
+          await pause(800);
+        })()`,
+      },
       { wait: PANE, text: "3 messages selected" },
       { sleep: 500 },
     ],
