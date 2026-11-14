@@ -23,7 +23,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { DISPATCH_REFUSED, latestSessionCommand, switchPending } from "../lib/sessionCommands";
 import { formatResetPhrase, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
 import type { LimitRecoveryAction } from "../lib/limitRecovery";
-import { continueOnAccount, limitContinueTarget } from "../lib/limitContinue";
+import { accountDisplayName, continueOnAccount, limitContinueTarget } from "../lib/limitContinue";
 import { Button } from "./ui/button";
 
 type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
@@ -62,7 +62,8 @@ export function LimitParkCard({
   // the machine's fleet account) and the account the button continues on: one
   // rule, shared with the phone (lib/limitContinue).
   const { fleetEmail, active, best } = limitContinueTarget(device, now, live);
-  const accountLabel = pinnedAccount ?? active?.name ?? fleetEmail;
+  const accountLabel = accountDisplayName(profiles, pinnedAccount ?? active?.email ?? fleetEmail);
+  const bestLabel = best?.email ?? best?.name;
   const exhausted = isExhaustionCurrent(device?.auto_switch_state?.exhausted_at, profiles, now);
   const proposal = live && device ? pendingProposal([device], now) : null;
   // The standing shown on the button matches the meters: "stale" when a rolled
@@ -175,16 +176,16 @@ export function LimitParkCard({
                 disabled={busy}
                 title={
                   proposal
-                    ? `Approve the switch this machine proposed: move ${device?.label ?? "the owner machine"} to ${best?.email ?? best?.name}, restart this session, and continue it there`
-                    : `Switch ${device?.label ?? "the owner machine"} to ${best?.email ?? best?.name}, restart this session, and continue it there`
+                    ? `Approve the switch this machine proposed: move ${device?.label ?? "the owner machine"} to ${bestLabel}, restart this session, and continue it there`
+                    : `Switch ${device?.label ?? "the owner machine"} to ${bestLabel}, restart this session, and continue it there`
                 }
                 className="rounded border border-amber-500/40 px-2 py-0.5 text-meta font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 disabled:opacity-60"
               >
                 {busy
                   ? "Switching…"
                   : proposal
-                    ? `Approve switch to ${best?.name}${bestNote ? ` (${bestNote})` : ""}`
-                    : `Continue on ${best?.name}${bestNote ? ` (${bestNote})` : ""}`}
+                    ? `Approve switch to ${bestLabel}${bestNote ? ` (${bestNote})` : ""}`
+                    : `Continue on ${bestLabel}${bestNote ? ` (${bestNote})` : ""}`}
               </button>
             )}
             <Link href="/settings/claude-accounts" className="text-meta text-sol-cyan hover:underline">

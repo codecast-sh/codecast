@@ -12,6 +12,18 @@ import { requestAccountSwitchCommand } from "./sessionCommands";
 
 export type LimitProfile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
 
+/**
+ * How an account reads on screen: its email. A profile's name is the daemon's
+ * id for it (an account-pool share is saved as `pool-<local part>`), never a
+ * label. `key` may be either, as a session's `cc_account` pin is.
+ */
+export function accountDisplayName(profiles: Array<{ name: string; email?: string | null }>, key?: string | null): string | undefined {
+  const want = key?.trim().toLowerCase();
+  if (!want) return undefined;
+  const p = profiles.find((x) => x.name.toLowerCase() === want || x.email?.toLowerCase() === want);
+  return p?.email || p?.name || key!.trim();
+}
+
 /** The account the session ran on (fleet), and the best other one to continue on. */
 export function limitContinueTarget(device: any, now: number, live: boolean): { fleetEmail?: string; active?: LimitProfile; best?: LimitProfile } {
   const profiles: LimitProfile[] = device?.profiles ?? [];

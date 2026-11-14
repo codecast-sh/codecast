@@ -63,8 +63,8 @@ export function AccountRecoveryBanner({ conversationId }: { conversationId: stri
   return (
     <Bar
       icon="hourglass-half"
-      text={canContinue ? `Out of usage · ${best!.name}: ${standingLabel(best!.usage, now) ?? 'has room'}` : 'Out of usage on this account'}
-      action={canContinue ? `Continue on ${best!.name}` : 'Accounts'}
+      text={canContinue ? `Out of usage · ${best!.email}: ${standingLabel(best!.usage, now) ?? 'has room'}` : 'Out of usage on this account'}
+      action={canContinue ? `Continue on ${best!.email}` : 'Accounts'}
       onAction={() => {
         if (!canContinue) return router.push('/accounts');
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

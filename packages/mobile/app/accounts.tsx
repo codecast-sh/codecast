@@ -8,8 +8,8 @@ import { Stack } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { formatCountdown, peggedWindow, worstUsagePercent } from '@codecast/shared/contracts';
-import { profileHasSetupToken, profileNeedsSignIn } from '@codecast/convex/convex/ccAccountsShared';
-import { machineSwitchBlock, profileIsFleetAccount } from '@codecast/web/lib/machineAccountSwitch';
+import { isFleetProfile, profileHasSetupToken, profileNeedsSignIn } from '@codecast/convex/convex/ccAccountsShared';
+import { machineSwitchBlock } from '@codecast/web/lib/machineAccountSwitch';
 import { useMachineSwitchState } from '@codecast/web/hooks/useMachineSwitchState';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { Text as RNText } from '@/components/Themed';
@@ -50,7 +50,7 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
   const usable = device.online && !device.is_remote;
 
   const profiles: Profile[] = [...device.profiles].sort((a, b) =>
-    Number(profileIsFleetAccount(b, fleet)) - Number(profileIsFleetAccount(a, fleet)));
+    Number(isFleetProfile(b, device, now)) - Number(isFleetProfile(a, device, now)));
   // The machine's login with no saved profile yet still gets a row.
   const loginRow = device.active_email && !profiles.some((p) => p.email === device.active_email)
     ? [{ name: device.active_email.split('@')[0], email: device.active_email } as Profile]
@@ -67,7 +67,7 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
   };
 
   const onRow = (p: Profile) => {
-    const current = profileIsFleetAccount(p, fleet);
+    const current = isFleetProfile(p, device, now);
     const saved = device.profiles.some((x) => x.name === p.name);
     const blocked = machineSwitchBlock({
       isActive: current,
@@ -79,7 +79,7 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
     });
     const items = [];
     if (!blocked && saved) {
-      items.push({ label: `Switch ${machine} to ${p.name}`, onPress: () => void sw.request(p.name, p.email) });
+      items.push({ label: `Switch ${machine} to ${p.email ?? p.name}`, onPress: () => void sw.request(p.name, p.email) });
     }
     if (usable) {
       // The current login signs in on the machine's own keychain; any other
@@ -87,7 +87,7 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
       items.push({ label: 'Sign in again', onPress: () => void startSignIn(current && !p.login_expired_at ? undefined : p.name) });
     }
     if (items.length === 0) {
-      appAlert(p.name, blocked?.label ?? `${machine} is offline.`);
+      appAlert(p.email ?? p.name, blocked?.label ?? `${machine} is offline.`);
       return;
     }
     showActionSheet(p.email ?? p.name, items);
@@ -103,7 +103,7 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
             label={p.email ?? p.name}
             usage={p.usage}
             now={now}
-            current={profileIsFleetAccount(p, fleet)}
+            current={isFleetProfile(p, device, now)}
             switching={sw.switching === p.name}
             expired={profileNeedsSignIn(p, now)}
             onPress={() => onRow(p)}
