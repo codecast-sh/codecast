@@ -79,6 +79,21 @@ for (const platform of ["ios", "android"] as const) {
       expect(hit).toEqual([]);
     });
 
+    // Hermes cannot parse `import.meta` at all (not even under a typeof
+    // check): one reachable file fails the whole bundle with a SyntaxError,
+    // as web/lib/convexUrl.ts did through the commit screen's repo hook.
+    test("no file in the native bundle reads import.meta", () => {
+      const offenders = [...graph.nodes.keys()].filter((file) => {
+        if (file.includes("/node_modules/") || !fs.existsSync(file)) return false;
+        // Comments and string contents are text, not code (a template of example code may name it).
+        const code = fs.readFileSync(file, "utf8")
+          .replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, "")
+          .replace(/`(?:\\[\s\S]|[^`\\])*`|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/g, "\"\"");
+        return /\bimport\.meta\b/.test(code);
+      });
+      expect(offenders.map(chainTo)).toEqual([]);
+    });
+
     test("a shared web file never uses the @/ alias, which Metro points at mobile", () => {
       const offenders: string[] = [];
       for (const file of graph.nodes.keys()) {

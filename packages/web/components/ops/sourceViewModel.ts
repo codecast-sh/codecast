@@ -12,6 +12,7 @@ import { sourceLastDay, type AttentionItem, type AttentionTask } from "./opsHome
 import type { CreateOpsWatchInput } from "../../store/opsSlice";
 import type { FixFacts } from "./opsModel";
 import type { OpsGroup, OpsReplay, OpsSample, OpsSource, OpsWatch } from "./opsTypes";
+import { sampleWho, shortUrl } from "./sampleText";
 
 const DAY = 86_400_000;
 
@@ -251,16 +252,7 @@ export function deliveryWord(source: Pick<OpsSource, "provider" | "keyed">): str
 
 // ── Occurrence rows ──
 
-/** A url as a row shows it: the path (and query), without the origin every row shares. */
-export function shortUrl(url: string | undefined): string | null {
-  if (!url) return null;
-  try {
-    const u = new URL(url);
-    return `${u.pathname}${u.search}` || "/";
-  } catch {
-    return url;
-  }
-}
+export { sampleWho, shortUrl };
 
 /**
  * A failed request as a replay issue keeps it (shared/replay/issues.ts:
@@ -281,8 +273,6 @@ export function requestLevel(r: Pick<RequestLine, "code">): "error" | "warning" 
   if (r.code === null || r.code >= 500) return "error";
   return r.code >= 400 ? "warning" : "info";
 }
-
-export const sampleWho = (x: Pick<OpsSample, "user">) => x.user?.email ?? x.user?.name ?? x.user?.id ?? null;
 
 /** The first line of a message, else the issue's title. */
 export function sampleTitle(x: Pick<OpsSample, "message">, group?: Pick<OpsGroup, "title">): string {
