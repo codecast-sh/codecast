@@ -2956,10 +2956,14 @@ program
   .addHelpText("after",
     "\nExamples:\n" +
     "  cast auth                # open the browser sign-in page and link this machine\n" +
-    "  cast auth status         # signed in or not, and the daemon's state\n" +
+    "  cast auth status         # signed in or not, and the daemon's state; exits 1 when not signed in\n" +
     "  cast login -             # no browser here: paste a setup token from codecast.sh/cli")
   .action(async (action?: string) => {
-    if (action === "status") return showStatus({ network: false });
+    if (action === "status") {
+      await showStatus({ network: false });
+      if (!readConfig()?.auth_token || readDaemonState()?.authExpired) process.exitCode = 1;
+      return;
+    }
     if (action) {
       console.error(`Unknown auth action "${action}". Run ${fmt.cmd("cast auth")} to sign in or ${fmt.cmd("cast auth status")} to check.`);
       process.exit(1);
@@ -15841,12 +15845,14 @@ trigger
   .option("--repo <owner/name>", "Only fire for this repository (pull request events default to the checkout's origin; pass \"\" for every repository)")
   .option("--pr <number>", "Only fire for this pull request")
   .option("--source <name|src-N>", "Only fire for this source (with --on and an event a source reports: error_new, job_failed, check_failed, ...; see cast sources ls). Checked when saved")
+  .option("--channel <#name|id>", "The team channel a chat_message trigger watches (required with --on chat_message; cast chat channels lists them). Checked when saved")
   .option("--title <title>", stdinText("Short title (defaults to first 60 chars of prompt)"))
   // Accepted so old snippets still parse; it captures nothing.
   .addOption(new Option("--context <mode>").hideHelp())
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked. A run that continues an existing session inherits that session's rules instead.")
   .option("--mode <mode>", "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.")
-  .option("--project <path>", "Project path for agent cwd")
+  .option("--project <ref>", "A codecast project this trigger feeds (short id, id or title substring): each run is a turn in the project's main session, found at the firing, and pausing the project pauses it. With --spawn, runs start fresh sessions instead. A path here is read as --project-path")
+  .option("--project-path <path>", "Project path for agent cwd")
   .option("--device <name>", "Machine whose daemon runs this trigger (device id prefix, label or hostname, e.g. studio). Default: this machine. Runs wait while it is offline")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--as <definition>", "Spawned runs launch as this agent definition (cast agent ls): model, effort, tools and prompt")
@@ -15906,6 +15912,10 @@ Examples:
       console.error("--spawn conflicts with --for: a --spawn run starts a fresh session, a --for run injects into that session. Pick one.");
       process.exit(1);
     }
+    if (options.for && options.project) {
+      console.error("--project conflicts with --for: a project trigger's runs land in the project's main session. Pick one.");
+      process.exit(1);
+    }
     // --repo, --pr and --source narrow an event filter, so they mean nothing
     // without one. Silently ignoring them would arm a trigger far wider than
     // the caller asked.
@@ -15920,6 +15930,12 @@ Examples:
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+    // --project once took the run's folder; a path-shaped value still means that.
+    if (options.project && /^[/.~]/.test(options.project) && !options.projectPath) {
+      options.projectPath = options.project;
+      options.project = undefined;
+    }
+    const projectId = options.project ? await resolveProjectId(options.project) : undefined;
 
     // The trigger runs only on the device it is bound to (TaskScheduler.canServeTask):
     // --device names one of yours; else a spawning trigger goes to your saved
@@ -15934,7 +15950,7 @@ Examples:
         runDeviceId = (await pickOwnDevice(devices, options.device, "--device", () => client.query(api.devices.listAgentBoxes, { api_token: token }))).device_id;
       } else {
         // A backend without the query answers an error: keep this machine.
-        const saved = await client.query(api.newSessionDefaults.defaultDevice, { api_token: token, project_path: options.project || getRealCwd() }).catch(() => null);
+        const saved = await client.query(api.newSessionDefaults.defaultDevice, { api_token: token, project_path: options.projectPath || getRealCwd() }).catch(() => null);
         if (saved) runDeviceId = saved;
       }
     }
@@ -15983,7 +15999,8 @@ Examples:
     //     the binding so each run spawns a fresh agent, linked back to the
     //     trigger via agent_task_id (the strip at the top of the session).
     const creatorSessionUuid = ownSessionId(getRealCwd());
-    const sessionId = options.for || options.spawn ? null : creatorSessionUuid;
+    // A project trigger's runs land in the project's main session, never this one.
+    const sessionId = options.for || options.spawn || projectId ? null : creatorSessionUuid;
     // --spawn --thread resolves the creator for the post target alone.
     const lookupSessionId = sessionId ?? (options.thread ? creatorSessionUuid : null);
     if (lookupSessionId) {
@@ -16016,10 +16033,12 @@ Examples:
     if (options.wake && !(options.spawn && schedule_type === "once" && creatorSessionUuid)) {
       console.error("--wake needs --spawn, a trigger that fires once (--in), and a calling session to wake; it is ignored here");
     }
-    if (options.spawn) {
+    if (projectId && !options.spawn) {
+      console.error("runs will be turns in the project's main session (started on the first firing if it has none)");
+    } else if (options.spawn) {
       console.error(
         "runs will spawn fresh sessions (no history) in " +
-          (options.project || getRealCwd()) +
+          (options.projectPath || getRealCwd()) +
           ", each linked back to this trigger" +
           (creatorSessionUuid ? " and to this session as its creator" : "")
       );
@@ -16034,7 +16053,7 @@ Examples:
     } else if (!originating_conversation_id && !options.for) {
       console.error(
         "note: could not link this trigger to a session, so runs will spawn fresh agents in " +
-          (options.project || getRealCwd()) +
+          (options.projectPath || getRealCwd()) +
           " (use --for <session> to bind one, or pass --spawn to make this explicit)"
       );
     }
@@ -16052,7 +16071,7 @@ Examples:
           originating_session_ref: options.for,
           created_by_session_ref: creatorSessionUuid ?? undefined,
           target_conversation_id,
-          project_path: options.project || getRealCwd(),
+          project_path: options.projectPath || getRealCwd(),
           agent_type: options.agent,
           model: options.model,
           agent_definition: options.as || undefined,
@@ -16069,6 +16088,7 @@ Examples:
           // "exit" is the default, stored as absent.
           precheck_mode: precheckMode === "exit" ? undefined : precheckMode,
           wake_creator: options.wake || undefined,
+          ...(projectId ? { project_id: projectId, ...(options.spawn ? { project_spawn: true } : {}) } : {}),
         }),
       });
 
@@ -16104,7 +16124,7 @@ const TRIGGER_STATUSES = ["scheduled", "running", "paused", "completed", "failed
 
 /** When a trigger fires next, as ls and show print it. */
 function triggerScheduleText(t: any): string {
-  if (t.schedule_type === "event") return t.event_filter ? describeEventScope(t.event_filter) : "on event";
+  if (t.schedule_type === "event") return t.event_filter ? describeEventScope({ ...t.event_filter, channel_name: t.channel_name }) : "on event";
   // A paused trigger has no next run until it is resumed.
   const next = t.run_at && t.status === "scheduled" ? formatRunAt(t.run_at) : "";
   if (t.schedule_type === "recurring") return `every ${formatMs(t.interval_ms)}${next ? `, next ${next}` : ""}`;
@@ -16113,6 +16133,7 @@ function triggerScheduleText(t: any): string {
 
 /** Where a trigger's runs go: into its bound session, or a fresh agent on its model. */
 function triggerRunsIn(t: any): string {
+  if (t.project_id && !t.project_spawn) return "project main session";
   return t.originating_conversation_id ? "inline" : `${t.agent_type || "claude"}/${t.model || "default"}`;
 }
 
@@ -16123,6 +16144,7 @@ trigger
   .option("-a, --all", "Include completed, failed and cancelled triggers")
   .option("-q, --query <text>", "Only triggers whose title or prompt contains this text")
   .option("-l, --long", "Add each trigger's gist and its last run's summary")
+  .option("--project <ref>", "The triggers feeding this project (short id, id or title substring), whoever armed them, that you may manage")
   .option("--json", "Machine-readable output (full trigger rows)")
   .action(async (options) => {
     const config = readConfig();
@@ -16135,6 +16157,7 @@ trigger
     try {
       const body: any = { api_token: config.auth_token };
       if (options.status) body.status = options.status;
+      if (options.project) body.project_id = await resolveProjectId(options.project);
 
       const response = await cliFetchRead(`${siteUrl}/cli/tasks/list`, {
         method: "POST",
@@ -16359,7 +16382,8 @@ trigger
   .option("--source <name|src-N>", "Only fire for this source (with --on and an event a source reports). Checked when saved")
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked")
   .option("--mode <mode>", "Agent mode: apply (can act) or propose (read-only). Prefer --safe.")
-  .option("--project <path>", "Project path for agent cwd")
+  .option("--project-path <path>", "Project path for agent cwd")
+  .addOption(new Option("--project <path>").hideHelp())
   .option("--agent <type>", "Agent type: claude or codex")
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id); 'default' clears the pin")
   .option("--max-runtime <duration>", "Max runtime (e.g., 10m)")
@@ -16427,7 +16451,7 @@ trigger
     }
     if (options.safe) body.mode = "propose";
     else if (options.mode !== undefined) body.mode = options.mode;
-    if (options.project !== undefined) body.project_path = options.project;
+    if ((options.projectPath ?? options.project) !== undefined) body.project_path = options.projectPath ?? options.project;
     if (options.agent !== undefined) body.agent_type = options.agent;
     if (options.model !== undefined) body.model = options.model;
     if (options.maxRuntime !== undefined) body.max_runtime_ms = parseDurationFlag("--max-runtime", options.maxRuntime);
@@ -18401,6 +18425,14 @@ projectCmd
     if (p.description) console.log(`\n  ${p.description}`);
     if (p.labels?.length) console.log(`  ${c.dim}Labels: ${p.labels.join(", ")}${c.reset}`);
     if (p.project_path) console.log(`  ${c.dim}Path: ${p.project_path}${c.reset}`);
+    if (p.goal) console.log(`\n  ${c.bold}Goal${c.reset} ${p.goal}`);
+    for (const m of p.success_metrics ?? []) console.log(`  ${c.dim}-${c.reset} ${m}`);
+    if (p.instructions) console.log(`\n  ${c.bold}Instructions${c.reset}\n${String(p.instructions).split("\n").map((l: string) => `  ${l}`).join("\n")}`);
+    const memory = await tryCliPost("/cli/docs/list", { project_id: id, pinned: true, limit: 50 });
+    if (Array.isArray(memory) && memory.length) {
+      console.log(`\n  ${c.bold}Memory (${memory.length})${c.reset}`);
+      for (const d of memory) console.log(`  ${c.cyan}${d._id}${c.reset} ${d.title}`);
+    }
     if (p.tasks?.length) {
       console.log(`\n  ${c.bold}Tasks (${p.tasks.length}${p.tasks_truncated ? "+, open work first" : ""})${c.reset}`);
       for (const t of p.tasks) {
@@ -18464,6 +18496,8 @@ projectCmd
   .argument("<id>", "Project short id (pj-...), id, or title substring")
   .option("--title <text>", stdinText("New title"))
   .option("--description <text>", stdinText("New description"))
+  .option("--instructions <text>", stdinText("Instructions every session in the project starts with, verbatim ('none' clears)"))
+  .option("--instructions-file <path>", "Read the instructions from a file ('-' for stdin)")
   .option("--status <status>", "New status: planning, active, paused, done", choiceOption(PROJECT_STATUSES))
   .option("--labels <labels>", "Comma-separated labels (replaces existing)")
   .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears); drives the burndown deadline")
@@ -18474,13 +18508,15 @@ charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true
     const body: Record<string, any> = { id: await resolveProjectId(ref), ...charterBody(options) };
     if (options.title) body.title = options.title;
     if (options.description !== undefined) body.description = options.description;
+    if (options.instructionsFile) body.instructions = options.instructionsFile === "-" ? readStdinBody() : fs.readFileSync(options.instructionsFile, "utf-8");
+    else if (options.instructions !== undefined) body.instructions = NONE(options.instructions) ? "" : options.instructions;
     if (options.status) body.status = options.status;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     if (options.deadline) body.target_date = parseDeadlineDate(options.deadline);
     if (options.path !== undefined) body.project_path = NONE(options.path) ? null : path.resolve(options.path);
     if (options.number?.length) body.metrics = initiativeMetricsArg(options.number, "--number");
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update: pass --title, --description, --status, --labels, --deadline, --path, --number, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens, --horizon)");
+      console.error("Nothing to update: pass --title, --description, --instructions, --status, --labels, --deadline, --path, --number, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens, --horizon)");
       process.exit(1);
     }
     await cliPost("/cli/projects/update", body);
@@ -18516,6 +18552,75 @@ projectCmd
   .argument("[session]", "Session id or short id (default: this session)")
   .action(async (session: string | undefined) => {
     await setSessionProject(session, null);
+  });
+
+// A project's memory is its pinned docs (session-projects.md SP6): every
+// session in the project starts with their index. Remember files one, forget
+// unpins it (the doc stays, editable through cast doc).
+async function memoryProject(ref: string | undefined): Promise<{ id: string; label: string }> {
+  if (ref) {
+    const id = await resolveProjectId(ref);
+    const p = await cliPost("/cli/projects/get", { id });
+    if (!p) exitNotFound("project", ref, "cast project ls");
+    return { id: p._id, label: p.short_id ?? p._id };
+  }
+  const session = callingSession() || detectCurrentSessionId();
+  const context = session ? await tryCliPost("/cli/projects/context", { session }) : null;
+  if (!context?.id) {
+    console.error("This session is in no project: name one (cast project ls), or put the session in one (cast project join <project>)");
+    process.exit(1);
+  }
+  return { id: context.id, label: context.short_id ?? context.id };
+}
+
+projectCmd
+  .command("remember")
+  .description("Record a fact every session in a project should know: a pinned note in the project, listed at every session's start")
+  .argument("<project-or-fact>", stdinText("The project (short id, id or title substring) when a fact follows; else the fact"))
+  .argument("[fact]", stdinText("The fact (markdown), when the project is named first"))
+  .option("--title <text>", "The note's title (default: the fact's opening words)")
+  .action(async (first: string, second: string | undefined, options: any) => {
+    const ref = second === undefined ? undefined : first;
+    const text = (second ?? first).trim();
+    if (!text) { console.error("Nothing to remember: the fact is empty"); process.exit(1); }
+    const project = await memoryProject(ref);
+    const row = await cliPost("/cli/projects/get", { id: project.id });
+    const firstLine = text.split("\n")[0].replace(/^#+\s*/, "").trim();
+    const title = options.title?.trim() || (firstLine.length > 80 ? `${firstLine.slice(0, 77).trimEnd()}...` : firstLine);
+    const result = await cliPost("/cli/docs/create", {
+      title,
+      content: text,
+      doc_type: "note",
+      project_id: project.id,
+      pinned: true,
+      // The project's access key, not its routing team: a team project private to its owner keeps its notes personal.
+      ...(row?.team_id && (row.workspace ?? `team:${row.team_id}`).startsWith("team:") ? { workspace: "team", team_id: row.team_id } : { workspace: "personal" }),
+    });
+    console.log(`${c.green}ok${c.reset} Remembered in ${c.cyan}${project.label}${c.reset} as ${c.cyan}${result.id}${c.reset}: ${title}`);
+  });
+
+projectCmd
+  .command("memory")
+  .description("List a project's memory: its pinned docs")
+  .argument("[project]", "Project short id, id or title substring (default: this session's project)")
+  .option("--json", "Output as JSON (the doc rows)")
+  .action(async (ref: string | undefined, options: any) => {
+    const project = await memoryProject(ref);
+    const docs = await cliPost("/cli/docs/list", { project_id: project.id, pinned: true, limit: 100 });
+    const rows = Array.isArray(docs) ? docs : [];
+    if (options.json) { printJson(rows); return; }
+    if (!rows.length) { console.log(fmt.muted(`No memory in ${project.label} yet: cast project remember "<fact>"`)); return; }
+    for (const d of rows) console.log(`  ${c.cyan}${d._id}${c.reset} ${d.title} ${c.dim}${formatRelativeTime(d.updated_at)}${c.reset}`);
+    console.log(fmt.muted(`\n  ${rows.length} in ${project.label}; cast doc show <id> opens one, cast project forget <id> unpins it`));
+  });
+
+projectCmd
+  .command("forget")
+  .description("Take a doc out of its project's memory (unpins it; the doc stays)")
+  .argument("<doc>", "Doc id")
+  .action(async (docId: string) => {
+    await cliPost("/cli/docs/update", { id: docId, pinned: false });
+    console.log(`${c.green}ok${c.reset} ${c.cyan}${docId}${c.reset} is out of the project's memory; the doc stays (cast doc show ${docId})`);
   });
 
 // "2026-09-26" → ms at local end-of-day, so a deadline includes its own day.
@@ -18690,6 +18795,55 @@ projectCmd
     if (events.length === body.limit) {
       console.log(fmt.muted(`  … showing the ${events.length} most recent (raise -n for more)`));
     }
+  });
+
+const OUTPUT_PR_GROUPS: Array<[string, string]> = [["attention", "Needs attention"], ["review", "In review"], ["done", "Merged or closed"]];
+
+function outputRefs(o: any): string {
+  const refs = [o.session ? (o.session.short_id ?? o.session.id) : null, o.task?.short_id].filter(Boolean).join(" ");
+  return `${c.dim}${refs ? `${refs} · ` : ""}${formatRelativeTime(o.updated_at)}${c.reset}`;
+}
+
+projectCmd
+  .command("outputs")
+  .description("What a project produced: its pull requests by what they need, then its pages, docs and images, each with the session and task that made it")
+  .argument("<id>", "Project short id (pj-...), id, or title substring")
+  .option("--all", "List merged and closed pull requests too")
+  .option("--json", "Output as JSON")
+  .action(async (ref: string, options: any) => {
+    const id = await resolveProjectId(ref);
+    const out = await cliPost("/cli/projects/outputs", { id });
+    if (!out) exitNotFound("project", ref, "cast project ls");
+    if (options.json) { printJson(out); return; }
+    console.log(`\n  ${c.bold}${out.project.title}${c.reset} ${c.cyan}${out.project.short_id ?? out.project.id}${c.reset}`);
+    const empty = !out.prs.length && !out.pages.length && !out.docs.length && !out.images.length;
+    if (empty) console.log(fmt.muted("\n  No outputs yet."));
+    for (const [group, label] of OUTPUT_PR_GROUPS) {
+      const rows = out.prs.filter((p: any) => p.group === group);
+      if (!rows.length) continue;
+      console.log(`\n  ${c.bold}${label} (${rows.length})${c.reset}`);
+      if (group === "done" && !options.all) { console.log(fmt.muted("    --all lists them")); continue; }
+      for (const p of rows) {
+        const status = `${p.draft ? "draft · " : ""}${p.status.replace(/_/g, " ")}`;
+        console.log(`    ${c.cyan}${p.repository}#${p.number}${c.reset} ${p.title} ${c.yellow}${status}${c.reset} ${outputRefs(p)}`);
+        console.log(`      ${c.dim}${p.github_url}${c.reset}`);
+      }
+    }
+    const sections: Array<[string, any[], (o: any) => string]> = [
+      ["Pages", out.pages, (o) => `https://codecast.sh${o.href}`],
+      ["Docs", out.docs, (o) => `${WEB_URL}${o.href}`],
+      ["Images", out.images, (o) => o.url],
+    ];
+    for (const [label, rows, link] of sections) {
+      if (!rows.length) continue;
+      console.log(`\n  ${c.bold}${label} (${rows.length})${c.reset}`);
+      for (const o of rows) {
+        console.log(`    ${o.title} ${outputRefs(o)}`);
+        console.log(`      ${c.dim}${link(o)}${c.reset}`);
+      }
+    }
+    if (out.truncated) console.log(fmt.muted("\n  Older outputs exist past what was read."));
+    console.log();
   });
 
 // --- Goals ---

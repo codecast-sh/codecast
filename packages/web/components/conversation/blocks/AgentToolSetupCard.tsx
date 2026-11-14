@@ -57,8 +57,7 @@ export function AgentToolSetupCard({ tool, conversationId }: { tool: AgentSetupT
 
 /**
  * The steps themselves, for one machine: under a failed command in a
- * conversation, and in the Browser and Computer features on the Agent
- * features page. `afterReady` adds to the done line; it is told whether this
+ * conversation. `afterReady` adds to the done line; it is told whether this
  * panel watched setup go from missing to done.
  */
 export function AgentToolSetupPanel({
@@ -66,7 +65,6 @@ export function AgentToolSetupPanel({
   target,
   machineName,
   canAct = true,
-  compact = false,
   className = "",
   afterReady,
 }: {
@@ -74,8 +72,6 @@ export function AgentToolSetupPanel({
   target: AgentSetupTarget;
   machineName: string | null;
   canAct?: boolean;
-  /** One line and the buttons for what is left, for a feature card. */
-  compact?: boolean;
   className?: string;
   afterReady?: (sawMissing: boolean) => React.ReactNode;
 }) {
@@ -114,34 +110,19 @@ export function AgentToolSetupPanel({
     );
   }
 
-  const steps = agentSetupSteps(tool, status);
-  const next = steps.findIndex((st) => !st.done);
-  const action = (st: AgentSetupStep) => st.action && <StepAction action={st.action} waiting={setup.waiting} onStart={() => void setup.start()} />;
-
-  if (compact) {
-    const left = steps.filter((st) => !st.done);
+  // Until the machine answers, nothing is known: steps drawn as undone would read as "set this up" on a machine that is already set up.
+  if (setup.checking) {
     return (
-      <div data-cc-agent-setup className={`${className} space-y-1.5`}>
-        <div className="flex items-center gap-1.5 text-meta text-sol-yellow">
-          {setup.checking || setup.waiting ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-          <span>
-            {setup.checking
-              ? "Checking setup…"
-              : setup.waiting
-                ? tool === "computer" ? "Turn on \"codecast computer\" in System Settings" : "Click Pair in Chrome"
-                : `Next: ${left.map((st) => st.next).join(", then ")}`}
-          </span>
-        </div>
-        {!setup.checking && (
-          <div className="flex flex-wrap gap-1.5 text-meta">
-            {/* One button per action: both grants open the same System Settings flow. */}
-            {left.filter((st, i) => st.action && left.findIndex((o) => o.action?.label === st.action!.label) === i).map((st) => <span key={st.label}>{action(st)}</span>)}
-          </div>
-        )}
-        {setup.error && <p className="text-meta text-sol-red/90">{setup.error}</p>}
+      <div data-cc-agent-setup className={`${className} flex items-center gap-2 border-l-2 border-sol-cyan/50 pl-2.5 py-1 text-[12px] text-sol-text-dim`}>
+        <Loader2 className="w-3 h-3 animate-spin" />
+        <span>Checking {tool === "browser" ? "the Chrome extension" : "macOS permissions"}{machineName ? ` on ${machineName}` : ""}…</span>
       </div>
     );
   }
+
+  const steps = agentSetupSteps(tool, status);
+  const next = steps.findIndex((st) => !st.done);
+  const action = (st: AgentSetupStep) => st.action && <StepAction action={st.action} waiting={setup.waiting} onStart={() => void setup.start()} />;
 
   return (
     <div data-cc-agent-setup className={`${className} border-l-2 border-sol-cyan/50 pl-2.5 py-1 space-y-2 max-w-xl`}>
