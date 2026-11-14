@@ -181,7 +181,8 @@ function hueFor(seed: string): string {
 }
 
 function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
+  // Letters only, asides dropped: "Tess Peer (test)" is TP, not T( or TT.
+  const parts = name.replace(/\([^)]*\)/g, ' ').trim().split(/\s+/).map((w) => w.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean);
   if (parts.length === 0) return '?';
   if (parts.length === 1) return parts[0].slice(0, 2);
   return parts[0][0] + parts[parts.length - 1][0];

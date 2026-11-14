@@ -72,7 +72,7 @@ export default function OrgScreen() {
     if (item.kind === 'person') {
       const p = item.person;
       return (
-        <RNView style={[styles.row, styles.personRow, pad]}>
+        <TouchableOpacity style={[styles.row, styles.personRow, pad]} activeOpacity={0.6} onPress={() => router.push(`/person/${encodeURIComponent(p.user_id)}` as never)}>
           <ChatAvatar author={{ id: p.user_id, name: p.name, avatarUrl: p.image }} size={34} />
           <RNView style={styles.rowBody}>
             <RNText style={styles.personName} numberOfLines={1}>{p.name}{p.is_me ? ' (you)' : ''}</RNText>
@@ -82,7 +82,7 @@ export default function OrgScreen() {
             </RNView>
           </RNView>
           <Fold collapsed={item.collapsed} hidden={item.hidden} onPress={() => toggleFold(item.key)} />
-        </RNView>
+        </TouchableOpacity>
       );
     }
     if (item.kind === 'role') {

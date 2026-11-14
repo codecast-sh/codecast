@@ -14,10 +14,9 @@ import { useChatRail } from '@codecast/web/hooks/useChatSync';
 import { isChatRailLive, subscribeChatRailLive } from '@codecast/web/lib/chatLive';
 import { useInboxStore, type ChatRailChannel } from '@codecast/web/store/inboxStore';
 import { SlackLogo } from '@/components/SlackLogo';
-import { dmRoomKey } from '@codecast/shared/contracts';
 import { ChatAvatar } from './MessageRow';
 import { LivePulse, LiveRoomCard, type LiveRoomRow } from '@/components/calls/LiveRooms';
-import { joinCall, startHuddle } from '@/lib/calls/callManager';
+import { openDmWith, huddleWith as huddleWithPerson, liveRoomOf } from './personActions';
 import { isPerson } from '@codecast/shared/team/memberKind';
 import { showActionSheet } from '@/lib/popups';
 
@@ -159,7 +158,7 @@ export function ChatHomeList({
       for (let i = 0; i < 3; i++) out.push({ kind: 'loading', key: `skp-${i}` });
     }
     for (const m of people) {
-      const inRoom = (liveRooms ?? []).find((r) => r.members.some((x) => String(x.user_id) === String(m._id))) ?? null;
+      const inRoom = liveRoomOf(liveRooms, String(m._id));
       out.push({ kind: 'member', key: `m-${m._id}`, member: m, inRoom });
     }
     return out;
@@ -168,24 +167,11 @@ export function ChatHomeList({
   const openChannel = (channel: ChatRailChannel) =>
     router.push({ pathname: '/chat/[id]', params: { id: channel.id } } as never);
 
-  // Local-first: openDmChannel answers in this tick with the room's real id or
-  // a stub the server row supersedes, so the push never waits on the network.
   const openPerson = (m: any) => {
-    if (!chatOn) return;
-    void Haptics.selectionAsync();
-    const channelId = useInboxStore.getState().openDmChannel([String(m._id)]);
-    router.push({ pathname: '/chat/[id]', params: { id: channelId } } as never);
+    if (chatOn) openDmWith(router, String(m._id));
   };
 
-  const huddleWith = (m: any, inRoom: LiveRoomRow | null) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    if (inRoom && (inRoom.canJoin || inRoom.mine)) {
-      void joinCall(inRoom.roomKey);
-    } else {
-      void startHuddle({ roomKey: dmRoomKey(viewerId, String(m._id)), toUserIds: [String(m._id)] });
-    }
-    router.push('/call');
-  };
+  const huddleWith = (m: any, inRoom: LiveRoomRow | null) => huddleWithPerson(router, viewerId, String(m._id), inRoom);
 
   // Hold a room for the things a swipe would hide: read it all, or change how
   // loudly it reaches you. Same three levels as the web rail.
