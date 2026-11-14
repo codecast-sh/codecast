@@ -179,6 +179,7 @@ export function AccountUsageChip() {
     localDeviceId,
     currentAgentType,
     lastShown: lastShownProvider.current,
+    now,
   });
   const device = resolved?.device;
   // Hooks run unconditionally; the placeholder device is never flipped because

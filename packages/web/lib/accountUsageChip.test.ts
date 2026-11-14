@@ -52,6 +52,7 @@ describe("resolveAccountChip", () => {
       devices: [claude({ online: false })],
       currentAgentType: "claude_code",
       lastShown: null,
+      now: 0,
     });
     expect(resolved?.shown).toBe("claude");
     expect(resolved?.claudeLabel).toBe("ashot");
@@ -69,6 +70,7 @@ describe("resolveAccountChip", () => {
       ],
       currentAgentType: "claude_code",
       lastShown: null,
+      now: 0,
     });
     expect(resolved?.active).toBeUndefined();
     expect(resolved?.shown).toBe("claude");
@@ -87,6 +89,7 @@ describe("resolveAccountChip", () => {
       ],
       currentAgentType: "claude_code",
       lastShown: null,
+      now: 0,
     });
     expect(resolved?.active).toEqual(profile);
     expect(resolved?.claudeLabel).toBe("joannagerkin");
@@ -104,6 +107,7 @@ describe("resolveAccountChip", () => {
       ],
       currentAgentType: "claude_code",
       lastShown: "codex",
+      now: 0,
     });
     expect(resolved?.shown).toBe("claude");
     expect(resolved?.claudeLabel).toBe("ashot");
@@ -116,6 +120,7 @@ describe("resolveAccountChip", () => {
         devices: [claude({ is_remote: true, profiles: [{ name: "box" }] })],
         currentAgentType: null,
         lastShown: null,
+        now: 0,
       }),
     ).toBeNull();
     expect(
@@ -124,6 +129,7 @@ describe("resolveAccountChip", () => {
         devices: [claude({ profiles: [], active_email: undefined, codex_accounts: undefined })],
         currentAgentType: null,
         lastShown: null,
+        now: 0,
       }),
     ).toBeNull();
   });
@@ -135,6 +141,7 @@ describe("accountChipProvider", () => {
       accountChipProvider({
         currentAgentType: "codex",
         lastShown: "claude",
+        now: 0,
         hasClaude: true,
         hasCodex: true,
       }),
@@ -146,6 +153,7 @@ describe("accountChipProvider", () => {
       accountChipProvider({
         currentAgentType: "claude_code",
         lastShown: null,
+        now: 0,
         hasClaude: false,
         hasCodex: true,
       }),
