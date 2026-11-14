@@ -413,7 +413,11 @@ describe("command groups stay off the boot graph", () => {
     // serverError.ts (+0.3); formatter.ts's split took some of it back.
     // 4667 on 2026-11-14: `cast read --queued` (index.ts +0.4: the flag, its
     // help line and the pointer in cast kill's output; the handler is lazy).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4667);
+    // 4700 (2026-11-14, from 4667): the prototype batch, measured one patch at a
+    // time against fc5339c41: send receipts +10 (arrival states, intent, the
+    // messaging snippet), cast run +9 (the [run] manifest table, the run group),
+    // check-exit +3 (exit codes, hint line), delivery ids +2, source_uuid +1.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4700);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

@@ -21,6 +21,7 @@
  */
 
 import { formatBytes } from "../browser/profile.js";
+import { actionVerdict, verdictLine } from "./verdict.js";
 import { pixelVerdict } from "./pixels.js";
 import { diffTrees, filterTree, formatDiff, type TreeFilter } from "./tree.js";
 import type {
@@ -94,18 +95,21 @@ function screenshotLine(result: ComputerSnapshotResult): string {
   if (status.state === "failed") return `  Screenshot failed (${status.code}): ${status.message}`;
   const shot = result.screenshot;
   if (!shot) return "  Screenshot captured but not returned";
-  const bytes = shot.data ? Buffer.byteLength(shot.data, "base64") : null;
   const engine = status.metadata?.engine;
   const scale = trimNumber(shot.scale);
+  const crop = shot.crop;
   const parts = [
     shot.format,
-    bytes === null ? null : formatBytes(bytes),
+    shot.bytes === undefined ? null : formatBytes(shot.bytes),
     `${shot.width}x${shot.height}`,
+    crop ? `crop ${crop.x},${crop.y},${crop.width},${crop.height}` : null,
     `scale ${scale}`,
   ].filter(Boolean);
   // The conversion is spelled out because getting it wrong on a retina display
   // clicks at twice the intended offset and reads as a broken tool.
-  const mapping = shot.scale === 1 ? "pixels are window points" : `coordinate x/y = screenshot pixels / ${scale}`;
+  const offset = crop ? ` + ${crop.x},${crop.y}` : "";
+  const mapping =
+    shot.scale === 1 && !crop ? "pixels are window points" : `coordinate x/y = screenshot pixels / ${scale}${offset}`;
   return `  Screenshot captured (${parts.join(", ")}; ${mapping}${engine ? `, ${engine}` : ""})`;
 }
 
@@ -182,11 +186,13 @@ export function formatAction(method: string, appSelector: string, result: Comput
   const via = action?.path ? ` via ${action.path}${action.actionName && action.path === "accessibility" ? ` (${action.actionName})` : ""}` : "";
   const windowChanged = verification?.state === "unverified" && verification.reason === "window_changed";
   const sentence = `${label} ${verified ? "completed" : "attempted"}${via}, ${verificationPhrase(verification)}.`;
+  const verdict = verdictLine(actionVerdict(result));
   const win = result.snapshot.window;
   if (windowChanged) {
     const follow = followUpCommand({ app: appSelector, windowId: null, windowIndex: null });
     return [
       sentence,
+      verdict,
       `The target window is gone; this is now id:${win.id ?? "?"} "${win.title}". Next: \`${follow}\`.`,
       treeBody(result, filter, false),
     ].join("\n");
@@ -194,7 +200,7 @@ export function formatAction(method: string, appSelector: string, result: Comput
   if (result.baselineTreeText === undefined) {
     // A helper from before the diff: say how to look instead.
     const follow = followUpCommand({ app: appSelector, windowId: action?.targetWindowId ?? win.id, windowIndex: action?.targetWindowIndex });
-    return `${sentence} ${result.snapshot.elementCount} visible elements in current window. Use \`${follow}\` to inspect.`;
+    return `${sentence} ${result.snapshot.elementCount} visible elements in current window. Use \`${follow}\` to inspect.\n${verdict}`;
   }
   const body = filter.find !== undefined || filter.under !== undefined
     ? treeBody(result, filter, false)
@@ -204,7 +210,7 @@ export function formatAction(method: string, appSelector: string, result: Comput
         pixels: pixelVerdict(result.pixelChange),
       }) ??
       `The window changed substantially; the whole tree:\n${result.snapshot.treeText}`);
-  return `${sentence}\n${body}`;
+  return `${sentence}\n${verdict}\n${body}`;
 }
 
 /** What `--json` says changed, in place of the raw baseline tree and pixel regions. */

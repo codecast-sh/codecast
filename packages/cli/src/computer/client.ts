@@ -120,6 +120,15 @@ export function defaultHelperLaunch(socketPath: string, tokenPath: string, versi
 
 /** Fill a missing verification from the action path, so an older helper can
  *  never look verified (design 14.3). */
+const READ_METHODS: ReadonlySet<ComputerMethod> = new Set(["handshake", "listApps", "listWindows", "getAppState", "terminate"]);
+
+/** A mutation that timed out may still have landed, and is never retried. */
+function timeoutMessage(method: ComputerMethod): string {
+  return READ_METHODS.has(method)
+    ? `computer helper ${method} timed out`
+    : `computer helper ${method} timed out, so whether it took effect is unknown; it was not retried. Read the window before acting again`;
+}
+
 export function normalizeActionResult(result: ComputerActionResult): ComputerActionResult {
   const action = result?.action;
   if (!action || action.verification) return result;
@@ -238,12 +247,15 @@ export class ComputerClient {
     return result;
   }
 
-  private request<T>(method: ComputerMethod, params: unknown): Promise<T> {
-    return this.enqueue(async () => {
-      await this.ensureCompatible();
-      if (isRestoreWindow(params)) (this.opts.stampRaise ?? stampComputerRaise)();
-      return (await this.send(method, params)) as T;
-    });
+  /**
+   * Only the handshake waits in line. The helper serializes requests per
+   * target app and answers each by id, so a request on one app never waits
+   * for another app that has stopped answering.
+   */
+  private async request<T>(method: ComputerMethod, params: unknown): Promise<T> {
+    await this.enqueue(() => this.ensureCompatible());
+    if (isRestoreWindow(params)) (this.opts.stampRaise ?? stampComputerRaise)();
+    return (await this.send(method, params)) as T;
   }
 
   // ── handshake ────────────────────────────────────────────────────────────
@@ -320,10 +332,11 @@ export class ComputerClient {
     const result = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        // Shut the connection down rather than leaving a request the helper may
-        // still answer later on a socket the next command would reuse.
-        this.shutdown();
-        reject(new ComputerError("action_timeout", `computer helper ${method} timed out`));
+        // A late answer to this id is dropped on arrival. The connection goes
+        // only when nothing else is waiting on it: another app's request in
+        // flight on it is still being answered.
+        if (this.pending.size === 0) this.shutdown();
+        reject(new ComputerError("action_timeout", timeoutMessage(method), { outcomeUnknown: !READ_METHODS.has(method) }));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
     });
