@@ -79,10 +79,25 @@ kill $(helper_pid) 2>/dev/null; sleep 1
 for p in $(pgrep -f "cc-[c]hrome"); do kill $p 2>/dev/null; done
 for p in $(pgrep -x gtk3-widget-fac); do kill $p; done
 sleep 1; rm -rf /tmp/cc-chrome
+# A fresh Xvfb (no window manager) starts in PointerRoot focus: keys follow the
+# pointer, and GTK marks itself active when it maps under the pointer and keeps
+# reporting a focused field after another window takes the focus. Start from
+# the state any later run has, focus on the root window, so "unfocused keyboard
+# refused" tests the helper rather than that quirk.
+DISPLAY=:99 python3 -c "from Xlib import X, display; d = display.Display(); d.set_input_focus(d.screen().root, X.RevertToParent, X.CurrentTime); d.sync()"
 env -i HOME=$HOME PATH=/usr/bin:/bin DISPLAY=:99 setsid google-chrome --user-data-dir=/tmp/cc-chrome --no-first-run --no-default-browser-check --window-position=40,40 --window-size=1000,800 file://$PAGE >/dev/null 2>&1 < /dev/null &
 env -i HOME=$HOME PATH=/usr/bin:/bin DISPLAY=:99 setsid gtk3-widget-factory >/dev/null 2>&1 < /dev/null &
-sleep 8
-CH="--app pid:$(ps -eo pid,args | grep -E '[c]hrome.*cc-chrome' | grep -v type= | awk '{print $1}' | head -1)"
+# Wait for both windows rather than a fixed time: on a cold boot a window that
+# maps after the first --restore-window takes the keyboard focus from it.
+chrome_pid(){ ps -eo pid,args | grep -E '[c]hrome.*cc-chrome' | grep -v type= | awk '{print $1}' | head -1; }
+for _ in $(seq 1 60); do
+  CP=$(chrome_pid)
+  [ -n "$CP" ] && $C computer list-windows --app "pid:$CP" 2>/dev/null | grep -q "CC Test" \
+    && $C computer list-windows --app gtk3-widget-factory 2>/dev/null | grep -q "id:" && break
+  sleep 1
+done
+sleep 1
+CH="--app pid:$(chrome_pid)"
 G="--app gtk3-widget-factory"
 
 check "capabilities report linux"          "on linux \(protocol 1\)"                $C computer capabilities

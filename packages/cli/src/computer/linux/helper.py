@@ -3,9 +3,9 @@
 
 It answers the same newline JSON protocol as the macOS helper
 (native/computer-use-macos), so the CLI's client, formatter, tree filters and
-diffs work unchanged. Trees come from AT-SPI; windows, focus, pointer input and
-screenshots from the X server (python-xlib and XTEST); keyboard input from
-xdotool and the clipboard from xclip.
+diffs work unchanged. Trees come from AT-SPI; windows, focus, pointer and keyboard
+input and screenshots from the X server (python-xlib and XTEST), and the
+clipboard from xclip.
 
 The CLI embeds this file and writes it to ~/.codecast/computer/linux/. The
 pure parts (the renderer, chords, PNG encoding) import nothing beyond the
@@ -13,6 +13,7 @@ standard library, so `--self-test` runs them on any machine.
 """
 
 import base64
+import contextlib
 import warnings
 import json
 import os
@@ -40,8 +41,13 @@ UNCLAIMED_DEADLINE = 30.0
 IDLE_DEADLINE = CACHE_MAX_AGE
 PASTE_CAP = 16 * 1024 * 1024
 MAX_CLICK_COUNT = 3
+# How long a temporarily bound keycode stays bound after its last press, so
+# the app has read the press before the binding goes.
+TYPE_REBIND_PAUSE = 0.03
 WHEEL_CLICKS_PER_PAGE = 5
 ATSPI_TIMEOUT_MS = 2500
+# How often the idle server dispatches queued AT-SPI events.
+IDLE_PUMP_SECONDS = 0.25
 
 REDACTED = "[redacted]"
 SECRET_MARKERS = ("secure", "password", "passcode", "verification code", "one-time code")
@@ -51,6 +57,35 @@ BLOCKED_APPS = {
     "1password", "bitwarden", "keepassxc", "org.keepassxc.keepassxc", "keepass2", "keepass",
     "proton pass", "proton-pass", "nordpass", "lastpass", "dashlane", "enpass",
 }
+
+
+class Phases:
+    """Where one request's time goes, written to stderr per request when
+    CODECAST_COMPUTER_TIMING is set (computer-linux-bench.py reads it)."""
+
+    def __init__(self):
+        self.enabled = bool(os.environ.get("CODECAST_COMPUTER_TIMING"))
+        self.spent = {}
+
+    def __call__(self, name):
+        phases = self
+
+        class Span:
+            def __enter__(self):
+                self.t0 = time.perf_counter()
+
+            def __exit__(self, *_):
+                phases.spent[name] = phases.spent.get(name, 0.0) + time.perf_counter() - self.t0
+        return Span()
+
+    def flush(self, method):
+        if self.enabled and self.spent:
+            sys.stderr.write("timing %s %s\n" % (method, json.dumps({k: round(v * 1000, 1) for k, v in self.spent.items()})))
+            sys.stderr.flush()
+        self.spent = {}
+
+
+PHASES = Phases()
 
 
 class ProviderError(Exception):
@@ -345,10 +380,14 @@ def blocked_note(dialog_title, window_id):
 
 def window_match_score(ext, name, win):
     """How well an AT-SPI window (its screen extents and name) matches an X
-    window: the share of the X window it covers, plus one for a matching title."""
+    window: their overlap over their union, plus one for a matching title. A
+    parent window under its centered dialog covers all of the dialog, so a
+    share of the X window alone ties the two."""
     ix = max(0, min(ext[0] + ext[2], win["x"] + win["width"]) - max(ext[0], win["x"]))
     iy = max(0, min(ext[1] + ext[3], win["y"] + win["height"]) - max(ext[1], win["y"]))
-    score = (ix * iy) / max(1, win["width"] * win["height"])
+    inter = ix * iy
+    union = max(0, ext[2]) * max(0, ext[3]) + win["width"] * win["height"] - inter
+    score = inter / max(1, union)
     title = win["title"]
     if name and title and (name == title or title.startswith(name) or name.startswith(title)):
         score += 1.0
@@ -399,6 +438,46 @@ def _first_diff(a, b):
     return lo
 
 
+# How long an action waits before the snapshot it returns, like the macOS
+# helper's ActionSettle.swift. The app says when it has reacted: each change to
+# its tree posts an AT-SPI event, and the helper counts them per application.
+# The wait ends a short quiet spell after the last one, which is sooner than
+# any fixed sleep for a checkbox and later than one for a dialog still arriving.
+# An app that posts nothing gets the reaction window and no more: synthetic
+# input is only queued, and the app handles it on its next main loop turn.
+SETTLE_QUIET = 0.06
+SETTLE_CEILING = 0.8
+SETTLE_POLL = 0.005
+
+
+def reaction_window(path):
+    return 0.25 if path in ("synthetic", "clipboard") else 0.12
+
+
+class ActionSettle:
+    """`count_before` is read before the action runs; `count` is None when the
+    app cannot be observed."""
+
+    def __init__(self, path, count_before, now):
+        self.reaction = reaction_window(path)
+        self.started = now
+        self.last_count = count_before
+        self.last_change = None
+
+    def is_settled(self, count, now):
+        elapsed = now - self.started
+        if count is None or self.last_count is None:
+            return elapsed >= self.reaction
+        if count != self.last_count:
+            self.last_count = count
+            self.last_change = now
+        if elapsed >= SETTLE_CEILING:
+            return True
+        if self.last_change is None:
+            return elapsed >= self.reaction
+        return now - self.last_change >= SETTLE_QUIET
+
+
 MODIFIERS = {
     "cmd": "ctrl", "command": "ctrl", "cmdorctrl": "ctrl", "commandorcontrol": "ctrl",
     "ctrl": "ctrl", "control": "ctrl", "alt": "alt", "option": "alt", "shift": "shift",
@@ -443,10 +522,14 @@ def keysym(name):
     raise ProviderError("invalid_argument", "unsupported key '%s'" % name)
 
 
-def xdotool_chord(spec):
-    parts = split_chord(spec)
+# The key that holds each modifier down.
+MODIFIER_KEYSYMS = {"ctrl": "Control_L", "shift": "Shift_L", "alt": "Alt_L", "super": "Super_L"}
+
+
+def chord_keysyms(spec):
+    """A chord as the keysym names to press in order: modifiers, then the key."""
     mods, keys = [], []
-    for part in parts:
+    for part in split_chord(spec):
         mod = MODIFIERS.get(part.lower())
         if mod:
             if mod not in mods:
@@ -455,7 +538,20 @@ def xdotool_chord(spec):
             keys.append(keysym(part))
     if len(keys) != 1:
         raise ProviderError("invalid_argument", "a chord needs exactly one non-modifier key: '%s'" % spec)
-    return "+".join(mods + keys)
+    return [MODIFIER_KEYSYMS[m] for m in mods] + keys
+
+
+def char_keysym(ch):
+    """The X keysym that types one character: Latin-1 keysyms are the code
+    point itself, every other character is 0x01000000 plus its code point."""
+    if ch == "\n" or ch == "\r":
+        return 0xFF0D  # Return
+    if ch == "\t":
+        return 0xFF09  # Tab
+    code = ord(ch)
+    if 0x20 <= code <= 0x7E or 0xA0 <= code <= 0xFF:
+        return code
+    return 0x01000000 | code
 
 
 def parse_modifiers(spec):
@@ -588,6 +684,8 @@ class XServer:
         if current != address:
             self.root.change_property(self.atom("AT_SPI_BUS"), self.Xatom.STRING, 8, address.encode())
             self.d.sync()
+            return True
+        return False
 
     def wm_present(self):
         return self.prop(self.root, "_NET_SUPPORTING_WM_CHECK") is not None
@@ -702,13 +800,134 @@ class XServer:
         self.xtest.fake_input(self.d, self.X.ButtonPress if down else self.X.ButtonRelease, number)
         self.d.sync()
 
-    def key(self, keysym_name, down):
+    # ── keyboard, all through XTEST ──
+
+    def named_keysym(self, name):
         from Xlib import XK
-        code = self.d.keysym_to_keycode(XK.string_to_keysym(keysym_name))
+        sym = XK.string_to_keysym(name)
+        if not sym:
+            raise ProviderError("invalid_argument", "no keysym for %s" % name)
+        return sym
+
+    def fake_key(self, code, down):
+        self.xtest.fake_input(self.d, self.X.KeyPress if down else self.X.KeyRelease, code)
+
+    def key(self, keysym_name, down):
+        """One modifier or key held or let go, by keysym name."""
+        code = self.d.keysym_to_keycode(self.named_keysym(keysym_name))
         if not code:
             raise ProviderError("invalid_argument", "no keycode for %s" % keysym_name)
-        self.xtest.fake_input(self.d, self.X.KeyPress if down else self.X.KeyRelease, code)
+        self.fake_key(code, down)
         self.d.sync()
+
+    def unused_keycodes(self):
+        """(keysyms per keycode, keycodes with no keysym), read fresh: the
+        unused keycodes are where a character the layout lacks is bound."""
+        first = self.d.display.info.min_keycode
+        rows = self.d.get_keyboard_mapping(first, self.d.display.info.max_keycode - first + 1)
+        return (len(rows[0]) if rows else 2), [first + i for i, row in enumerate(rows) if not any(row)]
+
+    def code_for(self, sym):
+        """(keycode, needs shift) for a keysym on the layout, or None. Levels
+        past shift need AltGr or a group switch, so those are bound instead."""
+        best = None
+        for code, index in self.d.keysym_to_keycodes(sym):
+            if index == 0:
+                return code, False
+            if index == 1 and best is None:
+                best = (code, True)
+        return best
+
+    @contextlib.contextmanager
+    def clear_modifiers(self):
+        """Typed text and chords mean exactly what they say: modifiers held
+        and Caps Lock are let go for the input and restored after it."""
+        keys = self.d.query_keymap()
+        held = [code for codes in self.d.get_modifier_mapping() for code in codes
+                if code and keys[code // 8] & (1 << (code % 8))]
+        locked = bool(self.root.query_pointer().mask & self.X.LockMask)
+        caps = self.d.keysym_to_keycode(self.named_keysym("Caps_Lock")) if locked else None
+        for code in held:
+            self.fake_key(code, False)
+        if caps:
+            self.fake_key(caps, True)
+            self.fake_key(caps, False)
+        try:
+            yield
+        finally:
+            if caps:
+                self.fake_key(caps, True)
+                self.fake_key(caps, False)
+            for code in held:
+                self.fake_key(code, True)
+            self.d.sync()
+
+    def chord(self, names):
+        """Press keysym names in order and let them go in reverse."""
+        codes = []
+        for name in names:
+            code = self.d.keysym_to_keycode(self.named_keysym(name))
+            if not code:
+                raise ProviderError("invalid_argument", "no keycode for %s on this keyboard layout" % name)
+            codes.append(code)
+        with self.clear_modifiers():
+            for code in codes:
+                self.fake_key(code, True)
+            for code in reversed(codes):
+                self.fake_key(code, False)
+
+    def type_text(self, text):
+        """Type characters as key presses. A character the layout lacks is
+        bound for the duration to an unused keycode, the way xdotool does,
+        and every binding is undone at the end. X delivers a client's events
+        in order, so a press always reads the mapping that was current when
+        it was sent."""
+        shift = self.d.keysym_to_keycode(self.named_keysym("Shift_L"))
+        bound = {}
+        touched = set()
+        per, spare = None, None
+        try:
+            with self.clear_modifiers():
+                for ch in text:
+                    sym = char_keysym(ch)
+                    if sym in bound:
+                        hit = (bound[sym], False)
+                    else:
+                        hit = self.code_for(sym)
+                    if hit is None:
+                        if spare is None:
+                            per, spare = self.unused_keycodes()
+                        if not spare:
+                            # Every unused keycode holds a character typed
+                            # earlier: wait for those presses, then reuse.
+                            self.d.sync()
+                            time.sleep(TYPE_REBIND_PAUSE)
+                            spare = list(bound.values())
+                            bound.clear()
+                        if not spare:
+                            raise ProviderError("unsupported_capability", "the keyboard map has no unused keycode to type '%s' with" % ch)
+                        code = spare.pop(0)
+                        self.d.change_keyboard_mapping(code, [(sym,) * per])
+                        bound[sym] = code
+                        touched.add(code)
+                        hit = (code, False)
+                    code, needs_shift = hit
+                    if needs_shift:
+                        self.fake_key(shift, True)
+                    self.fake_key(code, True)
+                    self.fake_key(code, False)
+                    if needs_shift:
+                        self.fake_key(shift, False)
+                    self.d.flush()
+        finally:
+            if touched:
+                # The app reads a press with the mapping current when it reads
+                # it: let the last presses land before the keycodes go blank.
+                self.d.sync()
+                time.sleep(TYPE_REBIND_PAUSE)
+                for code in sorted(touched):
+                    self.d.change_keyboard_mapping(code, [(0,) * per])
+            self.d.sync()
 
     def raw(self, x, y, w, h):
         """The screen's BGRX bytes inside a rectangle, clipped to the screen."""
@@ -747,6 +966,24 @@ def pid_alive(pid):
         return True
 
 
+def seconds_since_boot():
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except Exception:
+        return None
+
+
+def process_start(pid):
+    """When a process started, in seconds since boot, or None."""
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        return int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except Exception:
+        return None
+
+
 def exe_name(pid):
     try:
         return os.path.basename(os.readlink("/proc/%d/exe" % pid))
@@ -756,6 +993,86 @@ def exe_name(pid):
                 return f.read().strip()
         except Exception:
             return None
+
+
+# What an app says when its tree changes. Each one bumps that app's count; an
+# equal count means nothing an index or a frame depends on has moved.
+EVENT_TYPES = ("object:children-changed", "object:state-changed", "object:property-change",
+               "object:text-changed", "object:text-caret-moved", "object:text-selection-changed",
+               "object:selection-changed", "object:active-descendant-changed", "object:value-changed",
+               "window:create", "window:destroy")
+# Events dispatched per pump at most, so an app flooding the bus cannot hold
+# the helper inside one.
+PUMP_LIMIT = 20000
+
+
+def bus_name(acc):
+    """The D-Bus name of the app an accessible lives in, read from the proxy
+    without a round trip (the pid costs one per call)."""
+    try:
+        return acc.app.bus_name if acc is not None and acc.app is not None else None
+    except Exception:
+        return None
+
+
+def app_round_trip(acc):
+    """One call the app answers itself (libatspi never caches attributes), so
+    it waits for the app's main loop to be free."""
+    try:
+        acc.get_attributes()
+        return True
+    except Exception:
+        return False
+
+
+class EventMonitor:
+    """Counts AT-SPI events per application.
+
+    libatspi delivers events only while the GLib main context runs, so every
+    read of a count first dispatches what has queued; the server loop pumps
+    between requests too, so the bus never backs up while the helper idles.
+    An event whose sender cannot be named counts for every app, which can only
+    cost an extra walk."""
+
+    def __init__(self, Atspi):
+        from gi.repository import GLib
+        self.ctx = GLib.MainContext.default()
+        self.counts = {}
+        self.unattributed = 0
+        self.listener = Atspi.EventListener.new(self._on_event)
+        self.ok = True
+        for kind in EVENT_TYPES:
+            try:
+                if not self.listener.register(kind):
+                    self.ok = False
+            except Exception:
+                self.ok = False
+
+    def _on_event(self, event):
+        bus = None
+        try:
+            bus = bus_name(event.source)
+        except Exception:
+            pass
+        if bus:
+            self.counts[bus] = self.counts.get(bus, 0) + 1
+        else:
+            self.unattributed += 1
+
+    def pump(self):
+        for _ in range(PUMP_LIMIT):
+            if not self.ctx.iteration(False):
+                break
+
+    def count(self, app):
+        """The app's event count so far, or None when it cannot be observed."""
+        if not self.ok or app is None:
+            return None
+        bus = bus_name(app.accessible)
+        if not bus:
+            return None
+        self.pump()
+        return self.counts.get(bus, 0) + self.unattributed
 
 
 CHROMIUM_HINTS = ("chrome", "chromium", "electron", "code", "slack", "discord", "brave", "msedge", "vivaldi", "opera", "obsidian", "notion", "signal", "teams", "spotify", "cursor")
@@ -804,8 +1121,13 @@ class Provider:
         self.entries = []
         self.pre_action_tree = None
         self.pre_pixels = None
+        self.settle_mark = None
+        # When this helper announced the bus on the display itself (seconds
+        # since boot): apps started there before then are not on it.
+        self.announced_bus = None
         self._x = None
         self._atspi = None
+        self.events = None
 
     # lazily, so `handshake` answers even on a box missing a dependency
     @property
@@ -823,7 +1145,8 @@ class Provider:
             address = resolve_a11y_bus()
             os.environ["AT_SPI_BUS_ADDRESS"] = address
             try:
-                self.x.publish_a11y_bus(address)
+                if self.x.publish_a11y_bus(address):
+                    self.announced_bus = seconds_since_boot()
             except ProviderError:
                 pass
             try:
@@ -841,7 +1164,19 @@ class Provider:
             except Exception:
                 pass
             self._atspi = Atspi
+            try:
+                self.events = EventMonitor(Atspi)
+            except Exception:
+                self.events = None
         return self._atspi
+
+    def event_count(self, app):
+        return self.events.count(app) if self.events is not None else None
+
+    def idle_pump(self):
+        """Between requests: dispatch queued events so the bus never backs up."""
+        if self.events is not None:
+            self.events.pump()
 
     def capabilities(self):
         return {
@@ -1047,13 +1382,22 @@ class Provider:
 
     def observe(self, params):
         query = params.get("app")
-        app = self.resolve_app(query)
-        win = self.pick_window(app, params)
+        with PHASES("resolve"):
+            app = self.resolve_app(query)
+            win = self.pick_window(app, params)
         if params.get("restoreWindow") is True:
             self.x.activate(win["win"])
             win = next((w for w in self.windows_for(app) if w["id"] == win["id"]), win)
-        frame = self.frame_for(app, win)
+        with PHASES("frame_for"):
+            frame = self.frame_for(app, win)
         if frame is None:
+            started = process_start(app.pid)
+            if self.announced_bus is not None and started is not None and started < self.announced_bus:
+                raise ProviderError(
+                    "accessibility_error",
+                    "'%s' started before display %s announced its accessibility bus (this command just did), so it is not "
+                    "on the bus. Restart it on this display and run the command again." % (app.name, os.environ.get("DISPLAY", "?")),
+                )
             if app.chromium_like():
                 raise ProviderError(
                     "accessibility_error",
@@ -1065,11 +1409,19 @@ class Provider:
                 "'%s' publishes no accessibility tree for window %d. GTK apps need the accessibility bridge (libatk-adaptor) and "
                 "Qt apps QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1; restart the app after installing or setting it." % (app.name, win["id"]),
             )
-        # Chromium switches its tree on the first time an assistive technology
-        # reads it, inside this very walk; the launch flag is only a fallback.
+        # Chromium publishes its page only once an assistive technology asks
+        # the window for its attributes, and may stop after a quiet spell; the
+        # launch flag is only a fallback. The call reaches the app whatever
+        # libatspi has cached, and the walk right after it reads the page.
+        app_round_trip(frame)
+        # Read before the walk: an event during it makes the snapshot stale.
+        event_mark = self.event_count(app)
         renderer = Renderer(self.atspi, win)
-        renderer.render(frame)
-        modal = self.modal_over(app, win, frame)
+        with PHASES("walk"):
+            renderer.render(frame)
+
+        with PHASES("modal"):
+            modal = self.modal_over(app, win, frame)
         if modal is not None:
             renderer.lines.insert(min(1, len(renderer.lines)), "\t" + blocked_note(*modal))
         if renderer.count <= 2 and app.chromium_like():
@@ -1097,7 +1449,7 @@ class Provider:
                 status = {"state": "failed", "code": "screenshot_failed", "message": "the window is off screen", "metadata": meta}
         snap = Snapshot(id=str(uuid.uuid4()).upper(), app=app, win=win, title=title, tree=tree,
                         records=renderer.records, focused=renderer.focused_id, truncated=renderer.truncated,
-                        depth_reached=renderer.depth_reached, shot=shot, status=status)
+                        depth_reached=renderer.depth_reached, shot=shot, status=status, event_mark=event_mark)
         self.remember(query, app, snap, params.get("windowIndex"))
         return snap
 
@@ -1169,11 +1521,18 @@ class Provider:
         return None
 
     def current(self, params):
-        """Re-observe before every action: cached frames go stale when a window
-        moves or a list scrolls."""
+        """The snapshot an action works from. The tree the agent read when the
+        app has posted no event since, else a fresh walk: cached frames go
+        stale when a window moves or a list scrolls."""
         cached = self.cached(params)
-        if cached is not None and not any(w["id"] == cached.win["id"] for w in self.windows_for(cached.app)):
-            raise ProviderError("window_stale", "window %d is no longer available; run get-app-state again to refresh the target window" % cached.win["id"])
+        if cached is not None:
+            live = next((w for w in self.windows_for(cached.app) if w["id"] == cached.win["id"]), None)
+            if live is None:
+                raise ProviderError("window_stale", "window %d is no longer available; run get-app-state again to refresh the target window" % cached.win["id"])
+            unchanged = self.unchanged_since(cached, live, params)
+            if unchanged is not None:
+                self.mark_before_action(unchanged, unchanged.event_mark)
+                return unchanged
         snap = self.observe(dict(params, noScreenshot=True))
         if params.get("elementIndex") is not None:
             index = int(params["elementIndex"])
@@ -1184,10 +1543,43 @@ class Provider:
                 raise ProviderError("element_not_found", "element %d is stale; run get-app-state again and use a fresh element index" % index)
             if expected.signature != actual.signature:
                 raise ProviderError("element_not_found", "element %d changed since the last snapshot; run get-app-state again and use a fresh element index" % index)
-        self.pre_action_tree = snap.tree
-        pixels = self.x.window_pixels(snap.win)
-        self.pre_pixels = (snap.win["id"], pixels) if pixels else None
+        self.mark_before_action(snap, self.event_count(snap.app))
         return snap
+
+    def mark_before_action(self, snap, count):
+        self.pre_action_tree = snap.tree
+        self.settle_mark = (snap.app, count)
+        with PHASES("pre_pixels"):
+            pixels = self.x.window_pixels(snap.win)
+        self.pre_pixels = (snap.win["id"], pixels) if pixels else None
+
+    def unchanged_since(self, cached, live, params):
+        """The cached snapshot, when its app has posted no event since it was
+        walked and its window has not moved: every element in it is still the
+        one the index named, so the action skips a second walk. Values an app
+        changes without an event can be stale here, which an action never
+        reads; the frames it may act at are read again."""
+        if params.get("restoreWindow") is True or getattr(cached, "event_mark", None) is None:
+            return None
+        if any(live[k] != cached.win[k] for k in ("x", "y", "width", "height")):
+            return None
+        if not pid_alive(cached.app.pid) or self.event_count(cached.app) != cached.event_mark:
+            return None
+        Atspi = self.atspi
+        for key in ("elementIndex", "toElementIndex"):
+            if params.get(key) is None:
+                continue
+            record = cached.records.get(int(params[key]))
+            if record is None:
+                continue
+            try:
+                ext = Atspi.Component.get_extents(record.acc, Atspi.CoordType.SCREEN)
+            except Exception:
+                return None
+            record.frame = (ext.x - live["x"], ext.y - live["y"], ext.width, ext.height) \
+                if ext.width > 0 and ext.height > 0 else None
+        cached.win = live
+        return cached
 
     def pixel_change(self, snap):
         """Where the window's pixels changed across the action, and, when they
@@ -1206,20 +1598,59 @@ class Provider:
             repainting = changed_rect(after, again) if again else None
         return {"changed": changed, "repainting": repainting}
 
+    def wait_for_settle(self, path, started=None):
+        """Wait for the app's events to go quiet, then make it prove it is
+        idle: a quiet spell can be the app busy inside a handler (building a
+        dialog), posting nothing until it returns. An AT-SPI call to the app
+        is answered from its main loop, so it returns only after that handler,
+        and the events the handler posted are queued ahead of the reply."""
+        app, before = self.settle_mark or (None, None)
+        started = started if started is not None else time.monotonic()
+        settle = ActionSettle(path, before, started)
+        while True:
+            while not settle.is_settled(self.event_count(app) if app is not None else None, time.monotonic()):
+                time.sleep(SETTLE_POLL)
+            if app is None or settle.last_count is None or time.monotonic() - started >= SETTLE_CEILING:
+                return
+            if not app_round_trip(app.accessible):
+                return
+            if self.event_count(app) == settle.last_count:
+                return
+
     def action_result(self, params, run):
         self.pre_action_tree = None
         self.pre_pixels = None
+        self.settle_mark = None
+        started = time.monotonic()
         action = run(params)
-        time.sleep(0.25 if action.get("path") in ("synthetic", "clipboard") else 0.12)
+        PHASES.spent["action_total"] = time.monotonic() - started
+        # An app updates its tree on its own main loop after the event lands;
+        # a read in the same instant reports the old state as "no change".
+        with PHASES("settle"):
+            self.wait_for_settle(action.get("path"), started)
         try:
             snap = self.observe(params)
+            # The app went on changing during the walk (a dialog arriving):
+            # settle again and read once more, inside the same ceiling.
+            mark = getattr(snap, "event_mark", None)
+            if mark is not None and time.monotonic() - started < SETTLE_CEILING \
+                    and self.event_count(snap.app) != mark:
+                self.settle_mark = (snap.app, mark)
+                self.wait_for_settle(action.get("path"))
+                snap = self.observe(params)
         except ProviderError as err:
             if err.code not in ("window_not_found", "window_stale") or (params.get("windowId") is None and params.get("windowIndex") is None):
                 raise
             snap = self.observe({k: v for k, v in params.items() if k not in ("windowId", "windowIndex")})
             action.setdefault("verification", {"state": "unverified", "reason": "window_changed"})
         result = self.render(snap)
-        change = None if action.get("verification", {}).get("reason") == "window_changed" else self.pixel_change(snap)
+        # Pixels say something only when the tree does not (a canvas, a
+        # terminal, an ignored input): the CLI reads them then and only then,
+        # so the captures and the repaint probe are paid only then.
+        change = None
+        if action.get("verification", {}).get("reason") != "window_changed" and self.pre_action_tree == snap.tree:
+            with PHASES("pixel_change"):
+                change = self.pixel_change(snap)
         if change is not None:
             result["pixelChange"] = change
         action["targetWindowId"] = snap.win["id"]
@@ -1266,14 +1697,6 @@ class Provider:
 
     def focused_record(self, snap):
         return snap.records.get(snap.focused) if snap.focused is not None else None
-
-    def xdotool(self, *args):
-        try:
-            done = subprocess.run(["xdotool"] + list(args), capture_output=True, text=True, timeout=30)
-        except FileNotFoundError:
-            raise ProviderError("unsupported_capability", "xdotool is not installed (apt install xdotool)")
-        if done.returncode != 0:
-            raise ProviderError("accessibility_error", "xdotool %s failed: %s" % (args[0], (done.stderr or "").strip()[:200]))
 
     def read_text(self, acc):
         Atspi = self.atspi
@@ -1339,7 +1762,7 @@ class Provider:
         number = {"left": 1, "middle": 2, "right": 3}[button]
         self.x.move(x, y)
         for m in mods:
-            self.x.key(m.capitalize() + "_L" if m in ("shift", "alt", "super") else "Control_L", True)
+            self.x.key(MODIFIER_KEYSYMS[m], True)
         try:
             for _ in range(count):
                 self.x.button(number, True)
@@ -1347,7 +1770,7 @@ class Provider:
                 time.sleep(0.04)
         finally:
             for m in reversed(mods):
-                self.x.key(m.capitalize() + "_L" if m in ("shift", "alt", "super") else "Control_L", False)
+                self.x.key(MODIFIER_KEYSYMS[m], False)
 
     # ── actions ──────────────────────────────────────────────────────────────
 
@@ -1425,11 +1848,11 @@ class Provider:
         except Exception:
             pass
         time.sleep(0.05)
-        self.xdotool("key", "--clearmodifiers", "ctrl+a")
+        self.x.chord(["Control_L", "a"])
         if expected == "":
-            self.xdotool("key", "--clearmodifiers", "BackSpace")
+            self.x.chord(["BackSpace"])
         else:
-            self.xdotool("type", "--clearmodifiers", "--delay", "4", "--", expected)
+            self.x.type_text(expected)
         return self.meta("synthetic", "typeValue", "valueNotSettable", verification=self.verification(record.acc, expected, secure=secure))
 
     def type_text(self, params):
@@ -1451,7 +1874,7 @@ class Provider:
             except Exception:
                 pass
         self.require_keyboard_focus(snap)
-        self.xdotool("type", "--clearmodifiers", "--delay", "4", "--", text)
+        self.x.type_text(text)
         if focused is not None and "Text" in focused.ifaces:
             v = self.verification(focused.acc, text, "focusedText", contains=True,
                                   secure=is_secure(focused.node.role, focused.node.name, focused.node.description, focused.node.placeholder))
@@ -1462,16 +1885,16 @@ class Provider:
     def press_key(self, params):
         snap = self.current(dict(params, noScreenshot=True))
         key = params.get("key") or ""
-        chord = xdotool_chord(key)
+        chord = chord_keysyms(key)
         self.require_keyboard_focus(snap)
-        self.xdotool("key", "--clearmodifiers", chord)
+        self.x.chord(chord)
         return self.meta("synthetic", "pressKey", verification={"state": "unverified", "reason": "synthetic_input"})
 
     def hotkey(self, params):
         Atspi = self.atspi
         snap = self.current(dict(params, noScreenshot=True))
         key = params.get("key") or ""
-        chord = xdotool_chord(key)
+        chord = chord_keysyms(key)
         focused = self.focused_record(snap)
         if is_select_all(key) and focused is not None and "Text" in focused.ifaces:
             try:
@@ -1492,7 +1915,7 @@ class Provider:
             except Exception:
                 pass
         self.require_keyboard_focus(snap)
-        self.xdotool("key", "--clearmodifiers", chord)
+        self.x.chord(chord)
         return self.meta("synthetic", "hotkey", verification={"state": "unverified", "reason": "synthetic_input"})
 
     def paste_text(self, params):
@@ -1522,7 +1945,7 @@ class Provider:
             previous = None
         set_clipboard(text.encode("utf-8"))
         time.sleep(0.05)
-        self.xdotool("key", "--clearmodifiers", "ctrl+v")
+        self.x.chord(["Control_L", "v"])
         time.sleep(0.2)
         if previous is not None:
             set_clipboard(previous)
@@ -1620,11 +2043,14 @@ class Renderer:
 
         name = acc.get_name() or None
         description = acc.get_description() or None
+        kind = role_info(role)[0]
         attrs = {}
-        try:
-            attrs = acc.get_attributes() or {}
-        except Exception:
-            pass
+        if kind in ("field", "textarea", "combo", "link"):
+            # The only attributes the tree shows: a placeholder and a link target.
+            try:
+                attrs = acc.get_attributes() or {}
+            except Exception:
+                pass
         placeholder = attrs.get("placeholder") or attrs.get("placeholder-text") or None
         actions = []
         if "Action" in ifaces:
@@ -1632,7 +2058,6 @@ class Renderer:
                 actions = [Atspi.Action.get_action_name(acc, i) or "" for i in range(Atspi.Action.get_n_actions(acc))]
             except Exception:
                 actions = []
-        kind = role_info(role)[0]
         text = None
         if "Text" in ifaces:
             try:
@@ -1672,8 +2097,12 @@ class Renderer:
             traits.append("disabled")
         if "EditableText" in ifaces or (has(S.EDITABLE) and kind in ("field", "textarea", "combo")):
             traits.append("settable")
+        try:
+            child_count = acc.get_child_count()
+        except Exception:
+            child_count = 0
         node = Node(role, name=name, description=description, value=value, placeholder=placeholder, url=url,
-                    traits=traits, actions=actions, text=text, child_count=acc.get_child_count())
+                    traits=traits, actions=actions, text=text, child_count=child_count)
         if node.kind == "textarea" and has(S.SINGLE_LINE):
             # GTK reports a one-line entry with the multi-line role.
             node.kind, node.role_text = "field", "text field"
@@ -1705,10 +2134,10 @@ class Renderer:
             return None
         return (ext.x - self.win["x"], ext.y - self.win["y"], ext.width, ext.height)
 
-    def children(self, acc):
+    def children(self, acc, n=None):
         out = []
         try:
-            n = acc.get_child_count()
+            n = acc.get_child_count() if n is None else n
         except Exception:
             return out
         for i in range(n):
@@ -1745,7 +2174,7 @@ class Renderer:
             return
         if not showing and depth > 0:
             return
-        kids = self.children(acc)
+        kids = self.children(acc, node.child_count)
         if should_elide(node):
             if node.kind != "separator":
                 for child in kids:
@@ -1891,7 +2320,10 @@ class Server:
         if request.get("method") == "terminate":
             return {"id": rid, "ok": True, "result": {"ok": True}}, True
         try:
-            result = self.provider.handle(request.get("method"), request.get("params") or {})
+            try:
+                result = self.provider.handle(request.get("method"), request.get("params") or {})
+            finally:
+                PHASES.flush(request.get("method"))
             return {"id": rid, "ok": True, "result": result}, True
         except ProviderError as err:
             return {"id": rid, "ok": False, "error": {"code": err.code, "message": err.message}}, True
@@ -1916,7 +2348,8 @@ class Server:
                 return
             if self.claimed and not self.authed and self.idle_since and now - self.idle_since > IDLE_DEADLINE:
                 return
-            readable, _, _ = select.select([listener] + list(buffers.keys()), [], [], 1.0)
+            readable, _, _ = select.select([listener] + list(buffers.keys()), [], [], IDLE_PUMP_SECONDS)
+            self.provider.idle_pump()
             for sock in readable:
                 if sock is listener:
                     conn, _ = listener.accept()
@@ -1997,9 +2430,9 @@ def permission_status(path):
         problems.append(err.message)
     except Exception as err:
         problems.append("the accessibility bus is not reachable: %s" % err)
-    for tool, package in (("xdotool", "xdotool"), ("xclip", "xclip")):
+    for tool, package in (("xclip", "xclip"),):
         if not any(os.access(os.path.join(d, tool), os.X_OK) for d in os.environ.get("PATH", "/usr/bin").split(":")):
-            problems.append("%s is not installed (apt install %s); keyboard and paste need it" % (tool, package))
+            problems.append("%s is not installed (apt install %s); paste needs it" % (tool, package))
             status["accessibility"] = "not-granted"
     status["detail"] = "; ".join(problems) or None
     write_private(path, json.dumps(status))
@@ -2025,14 +2458,30 @@ def self_test():
     check = Node("check box", name="Agree", value="1", actions=["click"])
     assert render_line(7, check) == "7 check box Agree, Value: 1"
     assert render_line(8, Node("scroll pane", actions=["scrollUp", "scrollDown"])) == "8 scroll area, Secondary Actions: scroll up, scroll down"
-    assert xdotool_chord("CmdOrCtrl+A") == "ctrl+a" and xdotool_chord("Shift+Tab") == "shift+Tab"
-    assert xdotool_chord("Return") == "Return" and xdotool_chord("+") == "plus" and xdotool_chord("Ctrl++") == "ctrl+plus"
+    assert chord_keysyms("CmdOrCtrl+A") == ["Control_L", "a"] and chord_keysyms("Shift+Tab") == ["Shift_L", "Tab"]
+    assert chord_keysyms("Return") == ["Return"] and chord_keysyms("+") == ["plus"] and chord_keysyms("Ctrl++") == ["Control_L", "plus"]
+    assert chord_keysyms("Cmd+Shift+Ctrl+Z") == ["Control_L", "Shift_L", "z"]
+    assert char_keysym("a") == 0x61 and char_keysym("\u00e9") == 0xE9 and char_keysym("\u2713") == 0x01002713
+    assert char_keysym("\n") == 0xFF0D and char_keysym("\U0001F600") == 0x0101F600
     assert is_select_all("Cmd+A") and not is_select_all("Cmd+Shift+A")
     try:
-        xdotool_chord("Ctrl+Shift")
+        chord_keysyms("Ctrl+Shift")
         raise AssertionError("a chord of modifiers only must fail")
     except ProviderError:
         pass
+    # Settle: the reaction window when nothing is observed or nothing arrives,
+    # a quiet spell after the last event, and the ceiling over both.
+    settle = ActionSettle("accessibility", None, 0.0)
+    assert not settle.is_settled(None, 0.11) and settle.is_settled(None, 0.12)
+    settle = ActionSettle("synthetic", 5, 0.0)
+    assert not settle.is_settled(5, 0.2) and settle.is_settled(5, 0.25)
+    settle = ActionSettle("accessibility", 5, 0.0)
+    assert not settle.is_settled(6, 0.01) and not settle.is_settled(6, 0.05) and settle.is_settled(6, 0.071)
+    settle = ActionSettle("accessibility", 0, 0.0)
+    for i in range(1, 100):
+        if settle.is_settled(i, i * 0.03):
+            break
+    assert abs(i * 0.03 - SETTLE_CEILING) < 0.031, "events that keep arriving stop at the ceiling"
     png = encode_png(2, 1, bgrx_to_rgb(bytes([0, 0, 255, 0, 255, 0, 0, 0]), 2, 1))
     assert png.startswith(b"\x89PNG") and zlib.decompress(png[png.index(b"IDAT") + 4:-16])[1:4] == b"\xff\x00\x00"
     blank = (4, 2, bytes(32))
@@ -2044,7 +2493,12 @@ def self_test():
     assert changed_rect(blank, (4, 2, bytes(dot))) == {"x": 0, "y": 0, "width": 3, "height": 2}
     assert changed_rect(blank, (5, 2, bytes(40))) == {"x": 0, "y": 0, "width": 5, "height": 2}
     assert window_match_score((0, 0, 100, 100), "Save", {"x": 0, "y": 0, "width": 100, "height": 100, "title": "Save"}) == 2.0
+    dialog = {"x": 25, "y": 25, "width": 50, "height": 50, "title": "Late dialog"}
+    assert window_match_score((25, 25, 50, 50), "Information", dialog) > window_match_score((0, 0, 100, 100), "Main", dialog), \
+        "a parent window that covers its dialog must not match the dialog"
     assert blocked_note("Save", 7).endswith("--window-id 7.")
+    if os.path.exists("/proc/self/stat"):
+        assert process_start(os.getpid()) <= seconds_since_boot()
     tree = tree_envelope("gedit", 42, "Doc", "Text Editor", ["0 standard window Doc"], None)
     assert tree.split("\n")[0] == "App=gedit (pid 42)" and tree.endswith("No UI element is currently focused.")
     print("self-test ok")

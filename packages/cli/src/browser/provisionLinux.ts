@@ -45,6 +45,7 @@ import { mintTokenForDevice } from "../remote/convexClient.js";
 import { readHostDeviceId } from "../cloud/prepare.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { cloudIdleProbeScript } from "../cloud/idleProbe.js";
+import announceA11yBusScript from "../computer/linux/announce-a11y-bus.py" with { type: "text" };
 import { SSHD_KEEPALIVE_SCRIPT } from "../cloud/reach.js";
 import { keychainSigningIdentity } from "../computer/helperApp.js";
 import { SCREEN_DISPLAY, SCREEN_SIZE, RTSP_PORT, HLS_PORT, VNC_PORT, NOVNC_PORT } from "./hostScreen.js";
@@ -65,6 +66,9 @@ const MEDIAMTX_VERSION = "v1.20.1";
  */
 export const IDLE_WATCHDOG_VERSION = 4;
 
+/** Where provisioning installs announce-a11y-bus.py, which cast-display.service runs as Xvfb starts. */
+export const A11Y_ANNOUNCE_PATH = "/usr/local/lib/codecast/announce-a11y-bus.py";
+
 /**
  * Everything that can be done with root and apt, in one shot. Idempotent:
  * every step checks before it acts, so re-running after a partial failure
@@ -82,11 +86,11 @@ NEED=""
 # the agent's screenshots, the browser view and VNC alike.
 # The rest after the fonts are cast computer's: AT-SPI and its GObject bindings
 # read an app's tree, libatk-adaptor bridges GTK3 apps onto the accessibility
-# bus, python3-xlib finds windows and takes screenshots, and xdotool and xclip
-# carry keyboard input and paste. sshfs mounts the laptop folders the human
-# approved with cast hosts reach.
+# bus, python3-xlib finds windows, carries pointer and keyboard input and takes
+# screenshots, and xclip carries paste. sshfs mounts the laptop folders the
+# human approved with cast hosts reach.
 for p in xvfb ffmpeg tmux git rsync curl jq fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
-  at-spi2-core libatk-adaptor python3-gi gir1.2-atspi-2.0 python3-xlib xdotool xclip sshfs; do dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"; done
+  at-spi2-core libatk-adaptor python3-gi gir1.2-atspi-2.0 python3-xlib xclip sshfs; do dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"; done
 if [ -n "$NEED" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq $NEED; fi
 # Google ships Chrome for x86_64 Linux only: an arm64 host (Graviton) runs
 # everything else, with no browser of its own.
@@ -107,12 +111,24 @@ if [ ! -f /swapfile ]; then
 fi
 
 echo "[3/6] display (Xvfb ${SCREEN_DISPLAY})"
+# Every time the display starts, announce the accessibility bus on it before
+# any app launches: an app started on it with nothing but DISPLAY finds the bus
+# only through the root window, and one that starts without it never joins.
+# The script waits for the user's session bus (lingering starts it at boot).
+# -noreset: Xvfb otherwise resets when its last client disconnects, which
+# wipes the root window's properties, the announcement included.
+sudo mkdir -p /usr/local/lib/codecast
+sudo tee ${A11Y_ANNOUNCE_PATH} >/dev/null <<'A11Y'
+${announceA11yBusScript}
+A11Y
+sudo chmod 644 ${A11Y_ANNOUNCE_PATH}
 sudo tee /etc/systemd/system/cast-display.service >/dev/null <<'UNIT'
 [Unit]
 Description=Virtual display for the codecast remote browser
 [Service]
 User=ubuntu
-ExecStart=/usr/bin/Xvfb ${SCREEN_DISPLAY} -screen 0 ${width}x${height}x24 -nolisten tcp
+ExecStart=/usr/bin/Xvfb ${SCREEN_DISPLAY} -screen 0 ${width}x${height}x24 -nolisten tcp -noreset
+ExecStartPost=-/usr/bin/python3 ${A11Y_ANNOUNCE_PATH} ${SCREEN_DISPLAY}
 Restart=always
 RestartSec=2
 [Install]
@@ -289,6 +305,9 @@ echo "[6/6] enable services"
 sudo systemctl daemon-reload
 sudo systemctl enable --now cast-display.service cast-stream.service cast-vnc.service cast-novnc.service cast-idle.timer
 sudo systemctl restart cast-vnc.service cast-novnc.service
+# A display already running (a reprovisioned host) never ran the hook above,
+# and restarting it would close every app on it: announce the bus directly.
+sudo -u ubuntu XDG_RUNTIME_DIR=/run/user/$(id -u ubuntu) /usr/bin/python3 ${A11Y_ANNOUNCE_PATH} ${SCREEN_DISPLAY} || true
 echo PROVISION-BASE-OK`;
   // Interpolation note: the \${...} constants above are filled in by THIS
   // template literal. The heredocs are quoted ('UNIT', 'MTX', 'IDLE') so the

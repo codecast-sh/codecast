@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { REACH_MIN_WATCHDOG } from "../cloud/reach.js";
 import { BROWSER_LINK_MIN_WATCHDOG } from "../cloud/browserLink.js";
-import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, pushCodecastConfig, DAEMON_CGROUP_TMUX_SCRIPT, DAEMON_KEEP_SESSIONS_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport, type PushCodecastConfigDeps, idleWatchdogScript } from "./provisionLinux.js";
+import { A11Y_ANNOUNCE_PATH, baseProvisionScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, pushCodecastConfig, DAEMON_CGROUP_TMUX_SCRIPT, DAEMON_KEEP_SESSIONS_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport, type PushCodecastConfigDeps, idleWatchdogScript } from "./provisionLinux.js";
 import { encryptToken } from "../tokenEncryption.js";
 import { DEVICE_BOUND_TOKEN_PREFIX } from "@platform/auth/cli";
 import * as remote from "./remote.js";
@@ -13,6 +13,14 @@ import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
 import { reachableRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost.js";
 import { remoteHome, type RemoteHost } from "../remote/session-move.js";
 import { needsMacHelper } from "../../scripts/build-with-native.js";
+
+function spawnSyncSafe(cmd: string, args: string[]): number | null {
+  try {
+    return childProcess.spawnSync(cmd, args).status;
+  } catch {
+    return null;
+  }
+}
 
 describe("baseProvisionScript", () => {
   const script = baseProvisionScript(20);
@@ -46,6 +54,37 @@ describe("baseProvisionScript", () => {
     expect(s).toContain(`echo "0" | sudo tee /etc/cast-idle-minutes`);
     // The check script exits when minutes <= 0.
     expect(s).toContain('[ "$MINUTES" -le 0 ] && exit 0');
+  });
+
+  test("the display announces the accessibility bus as it starts, before any app can launch on it", () => {
+    // An app started on a fresh host with nothing but DISPLAY finds the bus only
+    // through the root window; before this, the first e2e run on a new host failed 23 of 29.
+    const announcer = fs.readFileSync(path.join(import.meta.dir, "../computer/linux/announce-a11y-bus.py"), "utf-8");
+    expect(script).toContain(`sudo tee ${A11Y_ANNOUNCE_PATH} >/dev/null <<'A11Y'\n${announcer}\nA11Y`);
+    const unit = script.slice(script.indexOf("cast-display.service >/dev/null"), script.indexOf("UNIT", script.indexOf("cast-display.service >/dev/null") + 60));
+    expect(unit).toContain(`ExecStartPost=-/usr/bin/python3 ${A11Y_ANNOUNCE_PATH} ${SCREEN_DISPLAY}`);
+    // Xvfb resets when its last client leaves, and a reset wipes the root window's properties.
+    expect(unit).toMatch(/ExecStart=\/usr\/bin\/Xvfb .* -noreset$/m);
+    expect(script.indexOf(A11Y_ANNOUNCE_PATH)).toBeLessThan(script.indexOf("cast-display.service >/dev/null"));
+    // A display that was already running never runs the hook, and restarting it would close its apps.
+    const enable = script.indexOf("systemctl enable --now cast-display.service");
+    expect(script.indexOf(`/usr/bin/python3 ${A11Y_ANNOUNCE_PATH} ${SCREEN_DISPLAY} || true`)).toBeGreaterThan(enable);
+  });
+
+  test("no xdotool: the computer helper types through XTEST itself", () => {
+    expect(script).not.toContain("xdotool");
+  });
+
+  test.skipIf(spawnSyncSafe("python3", ["--version"]) !== 0)("the announcer gives up quietly when no display or bus appears", () => {
+    const file = path.join(import.meta.dir, "../computer/linux/announce-a11y-bus.py");
+    const started = Date.now();
+    const run = childProcess.spawnSync("python3", [file, ":4789", "0.3"], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", XDG_RUNTIME_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "cc-a11y-")) },
+    });
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain("cast computer announces the bus on first use");
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 
   test("daemon unit marks the box as a remote device, in the unit's environment and on disk", () => {
