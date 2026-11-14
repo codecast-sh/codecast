@@ -75,6 +75,18 @@ export type TeamDeployRow = {
 
 export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null };
 
+/** Who sent a deploy codecast did not start, by where it reports from. */
+export function sourceWord(d: Pick<TeamDeployRow, "source" | "url">): string {
+  const host = d.url ? (() => { try { return new URL(d.url!).hostname; } catch { return ""; } })() : "";
+  if (/railway\./.test(host)) return "Railway";
+  if (/expo\./.test(host)) return "EAS";
+  const src = d.source ?? "";
+  if (src.startsWith("github")) return "GitHub";
+  if (src.includes("ship mark") || src === "marker") return "deploy.sh";
+  if (src === "codecast") return "codecast";
+  return src;
+}
+
 /** A deploy's sessions as the server sent them: an older row lists conversation ids alone. */
 export const sessionsOf = (d: Pick<TeamDeployRow, "sessions">): DeploySession[] =>
   (d.sessions ?? []).map((x) => (typeof x === "string" ? { conversation_id: x } : x));
