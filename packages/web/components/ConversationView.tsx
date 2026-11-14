@@ -8,7 +8,7 @@ import { conversationTitle, hostedTitle } from "../lib/conversationTitle";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { knownPullRequestIds, madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
-import { useConversationCommits, useConversationPullRequests, useSyncConversationCommits, useSyncConversationPullRequests } from "../hooks/useSyncTimeline";
+import { useConversationCommits, useConversationPullRequests, useSyncConversationCommits, useSyncConversationPullRequestLinks, useSyncConversationPullRequests } from "../hooks/useSyncTimeline";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
 import { captureException } from "@sentry/react";
 import { RefreshCw as PaletteRestart, Copy as PaletteCopy, Search as PaletteSearch, MessageCircleQuestion as PaletteAsk, Eye as PaletteEye, Pin as PalettePin, GitBranch as PaletteBranch, Rows3 as PaletteRows } from "lucide-react";
@@ -32,6 +32,7 @@ import { getShareTokenScope, shareTokenArg } from "../lib/shareTokenScope";
 import { ReferenceScopeContext } from "../lib/entityDisplay";
 import { useRecordConversationOpen } from "../lib/accessLogOpen";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
+import { SessionCanvasToggle } from "./conversation/SessionCanvasToggle";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
@@ -97,6 +98,8 @@ import { useAttachCopy } from "../hooks/useAttachCopy";
 import { SessionDaemonChip, SessionHooksOffChip } from "./DaemonStatusChip";
 import { BrowserWatchSplit } from "./browser/BrowserWatchSplit";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
+import { PermissionProposals, TeamProposalContext, TeammatePermissions, type TeamProposalRole } from "./conversation/teamProposals";
+import { useSyncMyTeamSuggestions, useSyncPendingSuggestions } from "../hooks/useGuestSuggestions";
 import { SessionDecisionCard } from "./SessionDecisionCard";
 import { PreloadPublishedPage } from "./PublishedPageEmbed";
 import { HostedApprovalCard, HostedApprovalPending, HostedApprovalSettled } from "./conversation/HostedApprovalCard";
@@ -116,6 +119,7 @@ import { TaskContextPanel } from "./work/TaskContextPanel";
 import { ContextRail } from "./ContextRail";
 import { EntityIdPill } from "./EntityIdPill";
 import { ThreadStatePanel } from "./ThreadStatePanel";
+import { WhatItRanChip } from "./conversation/WhatItRanChip";
 import { HighlightContext } from "./HighlightContext";
 import { instancesFromMatches, planActivation, skipDeadHit, stepIndex, walkSearchPages, type MatchInstance, type PendingHit } from "../lib/conversationSearch";
 import { FilePathContext } from "../lib/filePathLinks";
@@ -646,6 +650,30 @@ const ConversationViewInner = (
   // by the runner's daemon: their controls are live only for the people the
   // server lets command it (commandsSession), never for a team viewer.
   const canAnswerSession = viewerCommandsSession(conversation as any, currentUser?._id);
+  // A teammate's press on a question or a permission becomes a proposal the
+  // owner submits; the owner sees those proposals on the same cards
+  // (components/conversation/teamProposals, convex teamSuggestions.ts).
+  const proposalConvId = conversation?._id && isConvexId(String(conversation._id)) ? String(conversation._id) : null;
+  const proposalRole = !proposalConvId
+    ? null
+    : canAnswerSession
+    ? "owner" as const
+    : ((conversation as any)?.access_level === "team" && !["summary", "minimal", "private"].includes((conversation as any)?.team_visibility))
+      || (conversation as any)?.access_level === "owner"
+    ? "teammate" as const
+    : null;
+  const proposalOwnerName = (conversation as any)?.user?.name || (conversation as any)?.user?.email?.split("@")[0] || "the owner";
+  const teamProposals = useMemo<TeamProposalRole>(
+    () => (proposalConvId && proposalRole ? { conversationId: proposalConvId, role: proposalRole, ownerName: proposalOwnerName } : null),
+    [proposalConvId, proposalRole, proposalOwnerName],
+  );
+  // Permission prompts are the runner's alone to answer; anyone else who
+  // sees them (a teammate, the owner of a session another account runs)
+  // proposes, and keeps their composer.
+  const isRunner = !!currentUser?._id && String((conversation as any)?.user_id) === String(currentUser._id);
+  const permissionRole = !proposalConvId || !currentUser?._id ? null : isRunner ? "runner" as const : "proposer" as const;
+  useSyncPendingSuggestions(proposalConvId ?? "", proposalRole === "owner", currentUser?._id ? String(currentUser._id) : null);
+  useSyncMyTeamSuggestions(proposalConvId ?? "", currentUser?._id ? String(currentUser._id) : null, !!proposalConvId && !isRunner);
   // Per-message sender attribution. A user message carries from_user_id when
   // someone other than the conversation owner sent it (team send into a
   // teammate's daemon, fork replies); resolve it against the cached team
@@ -997,8 +1025,12 @@ const ConversationViewInner = (
   const pendingPermissionsRaw = usePendingPermissions(
     conversation?._id && isConvexId(conversation._id) ? conversation._id : null,
     deferredQueriesEnabled,
+    permissionRole === "proposer",
   );
   const pendingPermissions = pendingPermissionsRaw?.filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name));
+  // A prompt takes the runner's composer's place until it is answered; a
+  // teammate cannot answer it, so their composer stays (and they propose).
+  const permissionsHoldComposer = !!(pendingPermissions && pendingPermissions.length > 0) && permissionRole !== "proposer";
   const hasAskUserQuestion = pendingPermissionsRaw?.some((p: any) => isAskTool(p.tool_name)) ?? false;
   // A `cast decide` ask renders as a card inside the pane: blocking owns the
   // pane, advisory docks above the composer (SessionDecisionCard). The queue
@@ -1061,6 +1093,7 @@ const ConversationViewInner = (
   const gitLinkConversationId = conversation?._id ? String(conversation._id) : undefined;
   useSyncConversationCommits(gitLinkConversationId);
   useSyncConversationPullRequests(gitLinkConversationId);
+  useSyncConversationPullRequestLinks(guest ? undefined : gitLinkConversationId);
   const linkedCommits = useConversationCommits(gitLinkConversationId);
   const linkedPullRequests = useConversationPullRequests(gitLinkConversationId);
   const transcriptOutcomes = useMemo(() => transcriptGitOutcomes(messages as any), [messages]);
@@ -3789,7 +3822,7 @@ const ConversationViewInner = (
           if (isHostedAgentType(conversation?.agent_type)) {
             return <UserPrompt key={msg._id} content={kind.body} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={conversation?.user?.name || conversation?.user?.email?.split("@")[0]} isHighlighted={highlightedMessageId === msg._id} />;
           }
-          return <SessionMessageBlock key={msg._id} variant={kind.variant === 'agent' ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} pendingReason={(msg as any)._serverPendingReason} pendingScreen={(msg as any)._serverPendingScreen} pendingMessageId={(msg as any)._serverPendingStatus ? msg._id : undefined} recipientConversationId={conversation?._id} linkToConversationId={kind.variant === 'agent' ? agentNameToChildMap?.[kind.from] : undefined} />;
+          return <SessionMessageBlock key={msg._id} variant={kind.variant === 'agent' ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} pendingReason={(msg as any)._serverPendingReason} pendingScreen={(msg as any)._serverPendingScreen} pendingMessageId={(msg as any)._serverPendingStatus ? msg._id : undefined} recipientConversationId={conversation?._id} linkToConversationId={kind.variant === 'agent' ? agentNameToChildMap?.[kind.from] : undefined} intent={kind.intent} />;
         case 'huddle_summary':
           return <HuddleSummaryBlock key={msg._id} huddle={kind.huddle} timestamp={msg.timestamp} />;
         case 'chat_wake':
@@ -4085,7 +4118,7 @@ const ConversationViewInner = (
     roleSend.setRecipient(null);
     toast.success(`Sent to ${r.name} · ${r.title}`, { action: { label: "Open", onClick: () => codeRouter.push(`/org/${r.role.short_id}`) } });
   }, [roleSend.wakeRole, roleSend.setRecipient]);
-  const ownerComposerMounted = !!(showMessageInput && conversation && !runLogEnded && !(pendingPermissions && pendingPermissions.length > 0) && effectiveIsOwner);
+  const ownerComposerMounted = !!(showMessageInput && conversation && !runLogEnded && !permissionsHoldComposer && effectiveIsOwner);
   // The session control (model, effort, agent, fork, hand off) sits on the
   // composer's status row whenever that composer is up; the header strip
   // keeps a readout and takes the control back only when the composer is gone.
@@ -4126,6 +4159,7 @@ const ConversationViewInner = (
     <HostedCardShownContext.Provider value={hostedOwnCard}>
     <ImageGalleryProvider conversationId={conversation?._id} onJumpToMessage={scrollToMessageById} quotable={showMessageInput && effectiveIsOwner}>
     <ReviewComposerContext.Provider value={reviewComposer}>
+    <TeamProposalContext.Provider value={teamProposals}>
     <main data-cc-conversation data-cc-context={showSessionContext ? "" : undefined} data-reveal-chrome={inRevealBand ? "band" : hostingReveal ? "host" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" style={commentRailW ? { paddingRight: commentRailW } : undefined} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && !isHostedAgentType(conversation?.agent_type) && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/95" style={{ animation: "fadeIn 150ms ease-out" }}>
@@ -4314,6 +4348,18 @@ const ConversationViewInner = (
                   );
                 })()}
 
+                {/* Every shell call it made, the risky ones named (lib/whatItRan). */}
+                {!guest && <WhatItRanChip
+                  key={String(conversation._id)}
+                  messages={messages}
+                  hasMoreAbove={hasMoreAbove}
+                  hasMoreBelow={hasMoreBelow}
+                  isLoadingOlder={isLoadingOlder}
+                  onLoadOlder={onLoadOlder}
+                  onJumpToEnd={onJumpToEnd}
+                  onJump={scrollToMessageById}
+                />}
+
                 {/* Run this session's change through a flow of the pool (flows.md FL4). */}
                 {!guest && isOwner && conversation?._id && (
                   <RunThroughFlow conversationId={String(conversation._id)} sessionTitle={conversation.title || "This session"} />
@@ -4434,6 +4480,7 @@ const ConversationViewInner = (
                 )}
 
                 {sessionGalleryItems.length > 0 && <SessionGalleryButton items={sessionGalleryItems} />}
+                {!guest && conversation?._id && <SessionCanvasToggle conversationId={String(conversation._id)} />}
 
 
                 {/* Copy link, send to chat, search, a huddle, density and the
@@ -5153,7 +5200,7 @@ const ConversationViewInner = (
           composer block below) so it matches the input's width and reads as one
           piece. This fixed fallback only covers the rare case where there is no
           composer to anchor to (owner with a permission prompt instead). */}
-      {conversation && treePopoverOpen && !(showMessageInput && !(pendingPermissions && pendingPermissions.length > 0)) && (
+      {conversation && treePopoverOpen && !(showMessageInput && !permissionsHoldComposer) && (
         <ForkMapFallback
           conversation={conversation}
           conversationId={conversation._id.toString()}
@@ -5188,7 +5235,7 @@ const ConversationViewInner = (
 
       {showMessageInput && conversation && runLogEnded && workflowRun && <RunLogEndedBar run={workflowRun as any} />}
 
-      {showMessageInput && conversation && !runLogEnded && !(pendingPermissions && pendingPermissions.length > 0) && (
+      {showMessageInput && conversation && !runLogEnded && !permissionsHoldComposer && (
         <div ref={messageInputRef} className="relative">
           {inRevealBand && !bandComposerOpen ? (
             <div className="flex justify-end px-4 pb-3 pt-1">
@@ -5238,7 +5285,7 @@ const ConversationViewInner = (
               ) : null}
               <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} sharedDraft={composerPresenceEnabled(conversation) && !onSendOverride && !newSessionPage} status={conversation.status} embedded={embedded} hero={newSessionPage} sessionControl={composerHostsControl && (
                 <HeaderModelControl variant="composer" conversationId={conversation._id} agentType={conversation.agent_type} model={conversation.model} effort={(conversation as any).effort} messageCount={conversation.message_count} canEdit open={sessionControlOpen} onOpenChange={setSessionControlOpen} />
-              )} composerFoot={newSessionPage ? <NewSessionFoot slotRef={setNewSessionFootSlot} dropRef={dropFilesRef} /> : undefined} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onSideQuestion={!guest && !newSessionPage && !onSendOverride ? handleSideQuestion : undefined} onEscapeClose={askOpen ? closeAskPanel : undefined} onGoalCommand={newSessionPage || onSendOverride ? undefined : handleGoalCommand} clearInputRef={clearComposerRef} onGateSend={onSendOverride ?? (newSessionPage && roleSend.recipient ? sendToRole : workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
+              )} composerFoot={newSessionPage ? <NewSessionFoot slotRef={setNewSessionFootSlot} dropRef={dropFilesRef} /> : undefined} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={permissionRole === "proposer" ? 0 : pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onSideQuestion={!guest && !newSessionPage && !onSendOverride ? handleSideQuestion : undefined} onEscapeClose={askOpen ? closeAskPanel : undefined} onGoalCommand={newSessionPage || onSendOverride ? undefined : handleGoalCommand} clearInputRef={clearComposerRef} onGateSend={onSendOverride ?? (newSessionPage && roleSend.recipient ? sendToRole : workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
                 {/* Who else is in this box (a teammate's live draft, or "is
                     here" for a share link guest with no face on the roster)
                     and who asks to send into it. Inside the composer, so they
@@ -5389,7 +5436,11 @@ const ConversationViewInner = (
 
       {pendingPermissions && pendingPermissions.length > 0 && (
         <div className={`border-t border-sol-border/40 shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
+          {/* The composer, and the suggestion cards above it, wait under a prompt; the cards do not. */}
+          {permissionRole === "runner" && <CollabRequestBanner conversationId={proposalConvId!} />}
           <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 py-1.5">
+            {permissionRole === "proposer" ? <TeammatePermissions permissions={pendingPermissions as any} /> : <>
+            <PermissionProposals permissions={pendingPermissions as any} />
             <PermissionStack
               permissions={pendingPermissions as any}
               onAllowAll={
@@ -5401,6 +5452,7 @@ const ConversationViewInner = (
                   : undefined
               }
             />
+            </>}
           </div>
         </div>
       )}
@@ -5486,6 +5538,7 @@ const ConversationViewInner = (
         </Suspense>
       )}
     </main>
+    </TeamProposalContext.Provider>
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
     </HostedCardShownContext.Provider>
