@@ -3182,7 +3182,7 @@ program
     // Queued messages die with the session (they would otherwise land later and
     // revive it), so say so — that's the user's content being dropped.
     const dropped = result.canceled_messages
-      ? `, canceled ${result.canceled_messages} queued message${result.canceled_messages === 1 ? "" : "s"}`
+      ? `, canceled ${result.canceled_messages} queued message${result.canceled_messages === 1 ? "" : "s"} (their text: cast read ${result.short_id} --queued)`
       : "";
     // Kill is a desired state, not an event: an already-killed session gets its
     // teardown re-enqueued (the server forces past the hide-flag transition), so
@@ -8694,7 +8694,8 @@ program
     "                                      #  then its start, naming any stretch left unread) and\n" +
     "                                      #  says when a later message revised the first answer\n" +
     "  cast read --ask \"what did the user ask for first?\"\n" +
-    "                                      # …about THIS session, past its own compactions"
+    "                                      # …about THIS session, past its own compactions\n" +
+    "  cast read jx70ntf --queued          # Messages not delivered yet, each in full"
   )
   .argument("[conversation-id]", "Conversation ID, or a share URL (a #msg-<id> anchor reads around that message); with --ask, omit it or pass `self` for this session")
   .argument("[range]", "Message range: 12:20, 12:, :20, 15, or counted from the end: -1, -5:, -20:-10")
@@ -8704,6 +8705,7 @@ program
   .option("-n, --tail <n>", "Read the last n messages (at most 500)", countOption)
   .option("--ack", "Also mark the session read: clears its unread dot in the web and mobile inbox")
   .option("--ask <question>", "Answer a question from this session, with line citations, checking whether later messages changed the answer")
+  .option("--queued", "Queued messages in full, then recently cancelled ones")
   .option("--json", "Machine-readable output (the messages, or with --ask the answer and its citations)")
   .option("--team <name|id>", "Not needed: a session id already names its workspace (taken and ignored)")
   .allowUnknownOption()
@@ -8715,6 +8717,7 @@ program
     }
     if (options.team) console.error(`${c.dim}--team is not needed: a session id names its own workspace${c.reset}`);
 
+    if (options.queued) return (await import("./sessionQueueFormat.js")).printSessionQueue(cliPost, conversationId, options.json);
     if (options.ask !== undefined) {
       if (range || options.tail !== undefined || options.context !== undefined || options.full || options.ack || options.grep !== undefined || command.args.length > 1) {
         console.error("Error: --ask reads the whole session; it takes no range, -n, -c, --grep, --full or --ack");

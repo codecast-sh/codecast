@@ -411,7 +411,9 @@ describe("command groups stay off the boot graph", () => {
     // 4666 on 2026-11-13: the doc read bases and stale-doc checks (docReads.ts
     // +4.2, index.ts +6.3) and search qualifiers in formatter.ts (+3.4), with
     // serverError.ts (+0.3); formatter.ts's split took some of it back.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4666);
+    // 4667 on 2026-11-14: `cast read --queued` (index.ts +0.4: the flag, its
+    // help line and the pointer in cast kill's output; the handler is lazy).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4667);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -599,8 +601,11 @@ describe("command groups stay off the boot graph", () => {
     // leaf castApi.ts reads on index.ts's graph. 593 after sessionSummaryExtract.ts,
     // split out of formatter.ts for its max-lines cap, no new code. 594 after
     // contracts/inboxMembership.ts, split out of contracts/inboxProjection.ts
-    // for its max-lines pin (2026-11-13), no new code.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(594);
+    // for its max-lines pin (2026-11-13), no new code. 595 after
+    // foreignSessionWriter.ts (2026-11-14, GitHub #88): the resume path's
+    // check for another program running the session; sessionProcessMatcher.ts,
+    // its natural home, sits at the max-lines cap.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(595);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

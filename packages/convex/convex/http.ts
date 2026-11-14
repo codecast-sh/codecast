@@ -5038,6 +5038,8 @@ cliRoute("/cli/goals/show", async (ctx, body) => ctx.runQuery(api.sessionGoals.c
 // the reader opens it beside the conversation.
 cliRoute("/cli/browser/pane-offer", async (ctx, body) => ctx.runMutation(api.conversations.offerBrowserPane, body));
 cliRoute("/cli/sessions/state/get", async (ctx, body) => ctx.runQuery(api.conversations.getThreadState, body));
+// `cast read <session> --queued`: the messages waiting to go into a session, whole.
+cliRoute("/cli/sessions/queue", async (ctx, body) => ctx.runQuery(api.pendingMessages.cliQueue, body));
 
 // Pull requests (cast pr): list, read, follow and steer a PR from a shell. Each
 // route takes the same locator: a reference the caller typed plus the

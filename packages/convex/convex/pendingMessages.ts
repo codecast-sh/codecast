@@ -1726,6 +1726,47 @@ const SHOWN_PENDING_STATUSES = new Set<string>(["pending", "injected", "failed",
 const RECENT_DELIVERY_MS = 60 * 60_000;
 const RECENT_DELIVERY_ROWS = 10;
 
+// How many messages a kill (or a person) cancelled `cast read --queued` still shows, newest first.
+const QUEUE_CANCELLED_SHOWN = 20;
+
+// `cast read <session> --queued`: every message waiting to go into a session,
+// in the order the session will take them, with its whole text, plus the most
+// recent cancelled ones. A kill cancels the queue, and the daemon log keeps
+// only a message's first line, so this is where their text is read back
+// (GitHub #88). Anyone who can read the session sees its queue, as on the web.
+export const cliQueue = query({
+  args: { session: v.string(), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, async (c) =>
+      (await checkConversationAccess(ctx, userId, c as any)) !== "denied");
+    if (!conv) throw new Error(`No session found for "${args.session}" (you can only read sessions you can see)`);
+    const rows = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+      .collect();
+    const names = new Map<string, string>();
+    for (const m of rows) {
+      const key = m.from_user_id.toString();
+      if (names.has(key)) continue;
+      const u: any = await ctx.db.get(m.from_user_id);
+      names.set(key, u?.name || u?.github_username || u?.email?.split("@")[0] || "Someone");
+    }
+    const shown = (m: (typeof rows)[number]) => ({
+      message_id: m._id, created_at: m.created_at, status: m.status as string, content: m.content,
+      hold_reason: m.delivery_disposition_reason ?? null, retry_count: m.retry_count ?? 0,
+      from_name: names.get(m.from_user_id.toString()) ?? null,
+    });
+    return {
+      short_id: conv.short_id ?? conv._id.toString().slice(0, 7),
+      title: conv.title ?? null,
+      queued: rows.filter((m) => SHOWN_PENDING_STATUSES.has(m.status) || m.status === "held").sort(byQueueOrder).map(shown),
+      cancelled: rows.filter((m) => m.status === "cancelled").sort((a, b) => b.created_at - a.created_at).slice(0, QUEUE_CANCELLED_SHOWN).map(shown),
+    };
+  },
+});
+
 export const getConversationPendingMessage = query({
   args: {
     conversation_id: v.id("conversations"),
