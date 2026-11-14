@@ -8,12 +8,13 @@ import AppKit
 // It never activates and orders its windows to the back: a benchmark that took
 // the front would measure the human's reaction as well.
 //
-//   fixture --status-file <path> [--barren]
+//   fixture --status-file <path> [--barren] [--hang]
 //
 // Windows: "Bench Form" (fields, a checkbox, a popup, three ways to open a
 // sheet), "Bench Table" (2000 rows) and "Bench Canvas" (text drawn as pixels,
 // with no accessibility element behind it). `--barren` opens the canvas alone,
-// which is an app whose tree offers nothing to act on.
+// which is an app whose tree offers nothing to act on. `--hang` blocks the
+// main thread for good once it is ready: an app that has stopped answering.
 
 final class CanvasView: NSView {
     var onClick: (() -> Void)?
@@ -83,6 +84,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
             windows.append(makeTableWindow())
         }
         windows.append(makeCanvasWindow())
+        if !barren { windows.append(makeLargeWindow()) }
         if !barren { windows.append(makeFloatWindow()) }
         for window in windows where window.level == .normal { window.orderBack(nil) }
         for window in windows where window.level == .floating { window.orderFrontRegardless() }
@@ -98,6 +100,14 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
         let ids = windows.map { "\($0.title)=\($0.windowNumber)" }.joined(separator: ",")
         print("READY pid=\(ProcessInfo.processInfo.processIdentifier) windows=\(ids)")
         fflush(stdout)
+        if CommandLine.arguments.contains("--hang") {
+            // A turn of the run loop later, so the launch itself completes.
+            DispatchQueue.main.async {
+                print("HUNG")
+                fflush(stdout)
+                while true { sleep(60) }
+            }
+        }
     }
 
     private func place(_ window: NSWindow, slot: Int) {
@@ -146,7 +156,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
         let submit = NSButton(title: "Submit", target: self, action: #selector(submitNow))
         let slow = NSButton(title: "Submit after 300ms", target: self, action: #selector(submitSoon))
         let slower = NSButton(title: "Submit after 800ms", target: self, action: #selector(submitLater))
-        let arm = NSButton(title: "Arm sheet in 400ms", target: self, action: #selector(submitArmed))
+        let arm = NSButton(title: "Arm sheet in 2s", target: self, action: #selector(submitArmed))
         let quiet = NSButton(title: "Count quietly", target: self, action: #selector(countQuietly))
 
         let stack = NSStackView(views: [
@@ -164,6 +174,32 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
         stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         window.contentView = stack
+        return window
+    }
+
+    /// A window the size of the screen, full of text at the sizes real apps
+    /// use: what a screenshot of Finder or a browser costs, which a 420 point
+    /// form does not show.
+    private func makeLargeWindow() -> NSWindow {
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let size = NSSize(width: min(1500, screen.width - 40), height: min(900, screen.height - 60))
+        let window = makeWindow(title: "Bench Large", size: size, slot: 3)
+        window.setFrameOrigin(NSPoint(x: screen.minX + 20, y: screen.minY + 20))
+        let text = NSTextView(frame: NSRect(origin: .zero, size: size))
+        text.isEditable = false
+        text.textContainerInset = NSSize(width: 24, height: 24)
+        let body = NSMutableAttributedString()
+        let colors: [NSColor] = [.labelColor, .systemBlue, .secondaryLabelColor, .systemRed, .systemGreen]
+        for line in 0..<80 {
+            let fontSize = CGFloat([10, 11, 12, 13, 15, 18][line % 6])
+            let words = (0..<14).map { "item\(line * 14 + $0)" }.joined(separator: " ")
+            body.append(NSAttributedString(
+                string: "Row \(line): \(words)\n",
+                attributes: [.font: NSFont.systemFont(ofSize: fontSize), .foregroundColor: colors[line % colors.count]]
+            ))
+        }
+        text.textStorage?.setAttributedString(body)
+        window.contentView = text
         return window
     }
 
@@ -248,7 +284,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
     @objc private func submitNow() { openSheet(after: 0) }
     @objc private func submitSoon() { openSheet(after: 0.3) }
     @objc private func submitLater() { openSheet(after: 0.8) }
-    @objc private func submitArmed() { openSheet(after: 0.4) }
+    @objc private func submitArmed() { openSheet(after: 2) }
 
     /// Changes a label through the control's own setter and nothing else, which
     /// is how an app updates text without thinking about accessibility.

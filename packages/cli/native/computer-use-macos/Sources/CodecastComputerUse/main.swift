@@ -65,10 +65,18 @@ enum JSONValue: Decodable {
 struct ProviderError: Error {
     let code: ComputerErrorCode
     let message: String
+    /// The action was sent and got no answer, so it may have landed.
+    let outcomeUnknown: Bool
 
-    init(_ code: ComputerErrorCode, _ message: String) {
+    init(_ code: ComputerErrorCode, _ message: String, outcomeUnknown: Bool = false) {
         self.code = code
         self.message = message
+        self.outcomeUnknown = outcomeUnknown
+    }
+
+    /// The action itself ran; only reading the window after it failed.
+    func afterAction() -> ProviderError {
+        ProviderError(code, "\(message) (the action itself was sent; read the window before acting again)", outcomeUnknown: true)
     }
 }
 
@@ -135,6 +143,10 @@ final class ElementRecord {
     /// Set for words read off the pixels with no element behind them. `element`
     /// is then the window, and an action on the index goes to the point.
     let visibleText: String?
+    /// Inside a web area (a browser page, an Electron app's content). A value
+    /// read back there is the page's accessibility mirror, which can echo a
+    /// write the page itself rejected or replaced.
+    let inWebContent: Bool
 
     init(
         index: Int,
@@ -143,8 +155,10 @@ final class ElementRecord {
         actions: [String],
         signature: String,
         unnamedPressable: Bool = false,
-        visibleText: String? = nil
+        visibleText: String? = nil,
+        inWebContent: Bool = false
     ) {
+        self.inWebContent = inWebContent
         self.index = index
         self.element = element
         self.localFrame = localFrame
@@ -232,6 +246,15 @@ final class Provider {
     private var settleMark: (pid: pid_t, count: Int?)?
     /// The target window's pixels just before the action, for `pixelChange`.
     private var prePixels: (pid: pid_t, windowId: CGWindowID, frame: PixelFrame)?
+    /// Milliseconds per phase of the action in flight, returned when asked for.
+    private var phases: [(String, Double)] = []
+    private var phaseStart = ProcessInfo.processInfo.systemUptime
+
+    private func phase(_ name: String) {
+        let now = ProcessInfo.processInfo.systemUptime
+        phases.append((name, ((now - phaseStart) * 10_000).rounded() / 10))
+        phaseStart = now
+    }
 
     func handle(method: String, params: [String: JSONValue]) throws -> Any {
         switch method {
@@ -246,11 +269,13 @@ final class Provider {
             try requireUsableScreen()
             // Read before observing, which replaces the cached entry.
             let previous = params["diff"]?.bool == true ? try cachedSnapshot(params: params)?.treeText : nil
+            let roundTripsBefore = AXRoundTrips.count
             var result = renderSnapshot(try observe(params: params))
             if let previous { result["baselineTreeText"] = previous }
+            if params["timings"]?.bool == true { result["walkRoundTrips"] = AXRoundTrips.count - roundTripsBefore }
             return result
         case "click":
-            return try actionResult(params: params) { try click(params: params) }
+            return try actionResult(params: params, awaitsLateReaction: true) { try click(params: params) }
         case "performSecondaryAction":
             return try actionResult(params: params) { try performSecondaryAction(params: params) }
         case "setValue":
@@ -274,19 +299,46 @@ final class Provider {
 
     /// Every action returns a fresh snapshot, so the agent never has to ask for
     /// state between two actions.
-    private func actionResult(params: [String: JSONValue], action runAction: () throws -> [String: Any]) throws -> [String: Any] {
+    ///
+    /// The pixels are compared only when the tree shows no change, the one case
+    /// the CLI reads them for. A click that changed neither (`awaitsLateReaction`)
+    /// keeps listening a while longer before it reads as ignored: a sheet that
+    /// opens after a moment's work used to be missing from the result.
+    private func actionResult(
+        params: [String: JSONValue],
+        awaitsLateReaction: Bool = false,
+        action runAction: () throws -> [String: Any]
+    ) throws -> [String: Any] {
         try requireUsableScreen()
         preActionTree = nil
         settleMark = nil
         prePixels = nil
+        phases = []
+        phaseStart = ProcessInfo.processInfo.systemUptime
+        let actedAt = phaseStart
         var action = try runAction()
+        phase("act")
         // An app updates its tree on its own run loop after the event lands; a
         // read in the same instant reports the old state as "no change".
         waitForSettle(path: action["path"] as? String)
+        phase("settle")
         do {
-            let snapshot = try observe(params: params)
+            let settledCount = settleMark.flatMap { AppEventMonitor.shared.count(pid: $0.pid) }
+            var snapshot = try observe(params: params)
+            phase("walk")
+            var pixels = treeUnchanged(snapshot) ? pixelChange(after: snapshot) : nil
+            phase("pixelsAfter")
+            if awaitsLateReaction, treeUnchanged(snapshot), !PixelChange.showsReaction(pixels),
+               let settledCount, awaitLateReaction(since: actedAt, countAfterSettle: settledCount) {
+                snapshot = try observe(params: params)
+                pixels = treeUnchanged(snapshot) ? pixelChange(after: snapshot) : nil
+                phase("lateReaction")
+            }
             var result = renderActionResult(action: action, snapshot: snapshot)
-            if let change = pixelChange(after: snapshot) { result["pixelChange"] = change }
+            if let pixels { result["pixelChange"] = pixels }
+            if params["timings"]?.bool == true {
+                result["timingsMs"] = Dictionary(phases, uniquingKeysWith: +)
+            }
             return result
         } catch let error as ProviderError
             where (error.code == .windowNotFound || error.code == .windowStale) && hasRequestedWindowSelector(params) {
@@ -296,15 +348,53 @@ final class Provider {
             if action["verification"] == nil {
                 action["verification"] = ["state": "unverified", "reason": "window_changed"]
             }
-            return renderActionResult(action: action, snapshot: try observe(params: fallbackParams))
+            do {
+                return renderActionResult(action: action, snapshot: try observe(params: fallbackParams))
+            } catch let error as ProviderError {
+                throw error.afterAction()
+            }
+        } catch let error as ProviderError {
+            throw error.afterAction()
         }
+    }
+
+    /// True when there is a pre-action tree and the CLI's diff would find
+    /// nothing in it to report.
+    private func treeUnchanged(_ snapshot: Snapshot) -> Bool {
+        guard let preActionTree else { return true }
+        return !TreeChange.bodyChanged(preActionTree, snapshot.treeText)
+    }
+
+    /// Waits, up to `ActionSettle.lateReactionCeiling` after the action, for
+    /// the app to post anything, then for it to go quiet. False when it stayed
+    /// silent or cannot be observed: the result stands as it was read.
+    private func awaitLateReaction(since actedAt: TimeInterval, countAfterSettle: Int) -> Bool {
+        guard let pid = settleMark?.pid else { return false }
+        let clock = { ProcessInfo.processInfo.systemUptime }
+        while AppEventMonitor.shared.count(pid: pid) == countAfterSettle {
+            guard clock() - actedAt < ActionSettle.lateReactionCeiling else { return false }
+            usleep(ActionSettle.pollMicroseconds)
+        }
+        var settle = ActionSettle(path: nil, countBeforeAction: countAfterSettle, now: clock())
+        while !settle.isSettled(
+            count: AppEventMonitor.shared.count(pid: pid),
+            lastEventAt: AppEventMonitor.shared.lastEvent(pid: pid),
+            now: clock()
+        ) {
+            usleep(ActionSettle.pollMicroseconds)
+        }
+        return true
     }
 
     private func waitForSettle(path: String?) {
         let pid = settleMark?.pid
         let clock = { ProcessInfo.processInfo.systemUptime }
         var settle = ActionSettle(path: path, countBeforeAction: settleMark?.count, now: clock())
-        while !settle.isSettled(count: pid.flatMap { AppEventMonitor.shared.count(pid: $0) }, now: clock()) {
+        while !settle.isSettled(
+            count: pid.flatMap { AppEventMonitor.shared.count(pid: $0) },
+            lastEventAt: pid.flatMap { AppEventMonitor.shared.lastEvent(pid: $0) },
+            now: clock()
+        ) {
             usleep(ActionSettle.pollMicroseconds)
         }
     }
@@ -384,8 +474,10 @@ final class Provider {
     }
 
     private func markBeforeAction(_ snapshot: Snapshot, eventCount: Int?) {
+        phase("preWalk")
         preActionTree = snapshot.treeText
         settleMark = (snapshot.app.pid, eventCount)
+        defer { phase("pixelsBefore") }
         prePixels = WindowCapture.pixels(pid: snapshot.app.pid, windowId: snapshot.windowId)
             .map { (snapshot.app.pid, snapshot.windowId, $0) }
     }
@@ -508,6 +600,13 @@ final class Provider {
         ]
     }
 
+    /// The pid a request targets, for picking its lane; nil when it names no
+    /// app or the name does not resolve, which the request itself reports.
+    func targetPid(params: [String: JSONValue]) -> pid_t? {
+        guard let query = params["app"]?.string else { return nil }
+        return try? resolveApp(query).pid
+    }
+
     private func resolveApp(_ query: String) throws -> AppDescriptor {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -591,9 +690,13 @@ final class Provider {
                 "Accessibility permission is required. Run `cast computer permissions --id accessibility`, grant Accessibility to codecast computer in System Settings, then retry."
             )
         }
+        let appElement = AXUIElementCreateApplication(app.pid)
+        var probe: CFTypeRef?
+        if AXUIElementCopyAttributeValue(appElement, kAXRoleAttribute as CFString, &probe) == .cannotComplete {
+            throw ProviderError(.actionTimeout, AppResponsiveness.notResponding(app: app.name))
+        }
         // Read before the walk, so a change during it marks the tree as old.
         let eventMark = AppEventMonitor.shared.count(pid: app.pid)
-        let appElement = AXUIElementCreateApplication(app.pid)
         enableManualAccessibilityIfNeeded(appElement, app: app)
         let windowCandidates = WindowCapture.candidates(pid: app.pid)
         let focused = try focusedWindow(
@@ -628,7 +731,7 @@ final class Provider {
         let focusedNow = focusedElement(appElement: appElement)
         var renderer = TreeRenderer(windowBounds: capture.bounds, focused: focusedNow, compactBrowserTabs: app.isKnownBrowser)
         renderer.render(window)
-        if renderer.truncated, !renderer.maxDepthReached {
+        if renderer.truncated, !renderer.maxDepthReached, !renderer.reader.stalled {
             let onScreen = TreeRenderer(
                 windowBounds: capture.bounds,
                 focused: focusedNow,
@@ -642,6 +745,7 @@ final class Provider {
         }
         var lines = renderer.lines
         var records = renderer.records
+        if renderer.reader.stalled { lines.append("\t" + AppResponsiveness.stalledNote) }
         if let modal = (copyArray(appElement, kAXWindowsAttribute as String) ?? []).first(where: {
             !CFEqual($0, window) && boolAttribute($0, "AXModal") == true
         }), let modalId = windowNumber(modal) {
@@ -794,7 +898,7 @@ final class Provider {
             }
             if !forceMouse, accessible {
                 let shown = pointAt(point, snapshot: snapshot, params: params)
-                if let actionName = performClickAction(element: record.element, mouseButton: button) {
+                if let actionName = try performClickAction(element: record.element, mouseButton: button) {
                     pressAt(shown)
                     return actionMetadata(path: "accessibility", actionName: actionName)
                 }
@@ -834,7 +938,7 @@ final class Provider {
         // point can often be pressed through accessibility instead.
         if accessible, !isTargetWindowFocused(snapshot), let hit = pressableElement(at: point, snapshot: snapshot, button: button) {
             let shown = pointAt(point, snapshot: snapshot, params: params)
-            if let actionName = performClickAction(element: hit, mouseButton: button) {
+            if let actionName = try performClickAction(element: hit, mouseButton: button) {
                 pressAt(shown)
                 return actionMetadata(path: "accessibility", actionName: actionName, fallbackReason: "backgroundPointHit")
             }
@@ -898,18 +1002,20 @@ final class Provider {
         params: [String: JSONValue],
         why: String
     ) throws -> InputRoute {
-        try requireMouseFocus(snapshot, verb: "click", why: why)
-        let shown = pointAt(point, snapshot: snapshot, params: params)
-        try Input.click(at: point, button: button, count: count, modifiers: modifiers, targetWindow: snapshot)
-        pressAt(shown)
+        try ForegroundInput.run {
+            try requireMouseFocus(snapshot, verb: "click", why: why)
+            let shown = pointAt(point, snapshot: snapshot, params: params)
+            try Input.click(at: point, button: button, count: count, modifiers: modifiers, targetWindow: snapshot)
+            pressAt(shown)
+        }
         return .hid
     }
 
-    private func performClickAction(element: AXUIElement, mouseButton: MouseButtonSelection) -> String? {
+    private func performClickAction(element: AXUIElement, mouseButton: MouseButtonSelection) throws -> String? {
         if mouseButton == .right {
-            return performAction(element, "AXShowMenu") ? "AXShowMenu" : nil
+            return try performAction(element, "AXShowMenu") ? "AXShowMenu" : nil
         }
-        for action in ["AXPress", "AXConfirm", "AXOpen"] where performAction(element, action) {
+        for action in ["AXPress", "AXConfirm", "AXOpen"] where try performAction(element, action) {
             return action
         }
         return nil
@@ -931,7 +1037,7 @@ final class Provider {
         }
         let point = center(record.localFrame, in: snapshot.windowBounds)
         let shown = pointAt(point, snapshot: snapshot, params: params)
-        guard performAction(record.element, action) else {
+        guard try performAction(record.element, action) else {
             throw ProviderError(.accessibilityError, "AXUIElementPerformAction(\(SnapshotRenderHeuristics.prettyAction(action))) failed")
         }
         pressAt(shown)
@@ -952,6 +1058,7 @@ final class Provider {
             existingValue: rawAttributeValue(record.element, kAXValueAttribute as String),
             requested: expected
         )
+        AXUIElementSetMessagingTimeout(record.element, AppResponsiveness.actionSeconds)
         let result: AXError
         switch coercion.writeValue {
         case .string:
@@ -962,6 +1069,9 @@ final class Provider {
             result = AXUIElementSetAttributeValue(record.element, kAXValueAttribute as CFString, NSNumber(value: value))
         case let .boolean(value):
             result = AXUIElementSetAttributeValue(record.element, kAXValueAttribute as CFString, value ? kCFBooleanTrue : kCFBooleanFalse)
+        }
+        if result == .cannotComplete {
+            throw ProviderError(.actionTimeout, AppResponsiveness.outcomeUnknown("The value write"), outcomeUnknown: true)
         }
         guard result == .success else {
             throw ProviderError(.accessibilityError, "AXUIElementSetAttributeValue failed with \(result.rawValue)")
@@ -975,17 +1085,20 @@ final class Provider {
         case .unsupported:
             verification = unverifiedAction(reason: "readback_unsupported", expected: expected)
         }
-        return actionMetadata(path: "accessibility", actionName: "AXSetValue", verification: verification)
+        return actionMetadata(path: "accessibility", actionName: "AXSetValue", verification: readBack(verification, on: record))
     }
 
     private func typeText(params: [String: JSONValue]) throws -> [String: Any] {
         let snapshot = try currentKeyboardSnapshot(params: params)
         let text = try requiredString(params, "text")
         if let focused = focusedRecord(snapshot), let verification = TextInput.replaceSelection(focused.element, with: text) {
-            return actionMetadata(path: "accessibility", actionName: "AXReplaceSelection", verification: verification)
+            return actionMetadata(path: "accessibility", actionName: "AXReplaceSelection", verification: readBack(verification, on: focused))
         }
-        let route = inputRoute(snapshot)
-        try Input.typeText(text, route: route)
+        let route = try ForegroundInput.run {
+            let route = inputRoute(snapshot)
+            try Input.typeText(text, route: route)
+            return route
+        }
         return actionMetadata(
             path: "synthetic",
             actionName: "typeText",
@@ -995,8 +1108,12 @@ final class Provider {
 
     private func pressKey(params: [String: JSONValue]) throws -> [String: Any] {
         let snapshot = try currentKeyboardSnapshot(params: params)
-        let route = inputRoute(snapshot)
-        try Input.pressChord(try requiredString(params, "key"), route: route)
+        let key = try requiredString(params, "key")
+        let route = try ForegroundInput.run {
+            let route = inputRoute(snapshot)
+            try Input.pressChord(key, route: route)
+            return route
+        }
         return actionMetadata(
             path: "synthetic",
             actionName: "pressKey",
@@ -1011,11 +1128,14 @@ final class Provider {
             return actionMetadata(
                 path: "accessibility",
                 actionName: "AXSelectAll",
-                verification: TextInput.selectionVerification(focused.element)
+                verification: readBack(TextInput.selectionVerification(focused.element), on: focused)
             )
         }
-        let route = inputRoute(snapshot)
-        try Input.pressChord(key, route: route)
+        let route = try ForegroundInput.run {
+            let route = inputRoute(snapshot)
+            try Input.pressChord(key, route: route)
+            return route
+        }
         return actionMetadata(
             path: "synthetic",
             actionName: "hotkey",
@@ -1030,10 +1150,9 @@ final class Provider {
             throw ProviderError(.invalidArgument, PasteSafety.tooLargeMessage)
         }
         if let focused = focusedRecord(snapshot), let verification = TextInput.replaceSelection(focused.element, with: text) {
-            return actionMetadata(path: "accessibility", actionName: "AXReplaceSelection", verification: verification)
+            return actionMetadata(path: "accessibility", actionName: "AXReplaceSelection", verification: readBack(verification, on: focused))
         }
-        let route = inputRoute(snapshot)
-        try Input.pasteText(text, route: route)
+        try ForegroundInput.run { try Input.pasteText(text, route: inputRoute(snapshot)) }
         return actionMetadata(
             path: "clipboard",
             actionName: "paste",
@@ -1053,18 +1172,18 @@ final class Provider {
                let pageCount = boundedInteger(pages, as: Int.self),
                record.actions.contains(action) {
                 for _ in 0..<max(1, pageCount) {
-                    _ = performAction(record.element, action)
+                    _ = try performAction(record.element, action)
                 }
                 return actionMetadata(path: "accessibility", actionName: action)
             }
             guard let point = center(record.localFrame, in: snapshot.windowBounds) else {
                 throw ProviderError(.elementNotClickable, "element \(record.index) has no scrollable frame")
             }
-            try Input.scroll(pid: snapshot.app.pid, at: point, direction: direction, pages: pages)
+            try ForegroundInput.run { try Input.scroll(pid: snapshot.app.pid, at: point, direction: direction, pages: pages) }
             return actionMetadata(path: "synthetic", fallbackReason: "actionUnsupported")
         }
         let point = try coordinatePoint(params: params, xKey: "x", yKey: "y", snapshot: snapshot)
-        try Input.scroll(pid: snapshot.app.pid, at: point, direction: direction, pages: pages)
+        try ForegroundInput.run { try Input.scroll(pid: snapshot.app.pid, at: point, direction: direction, pages: pages) }
         return actionMetadata(path: "synthetic")
     }
 
@@ -1091,11 +1210,13 @@ final class Provider {
         } else {
             to = try coordinatePoint(params: params, xKey: "toX", yKey: "toY", snapshot: snapshot)
         }
-        try requireMouseFocus(snapshot, verb: "drag", why: "a drag is a real press and move")
-        if pointAt(from, snapshot: snapshot, params: params) != nil {
-            AgentCursor.follow(to: to, over: Input.dragSeconds)
+        try ForegroundInput.run {
+            try requireMouseFocus(snapshot, verb: "drag", why: "a drag is a real press and move")
+            if pointAt(from, snapshot: snapshot, params: params) != nil {
+                AgentCursor.follow(to: to, over: Input.dragSeconds)
+            }
+            try Input.drag(from: from, to: to, targetWindow: snapshot)
         }
-        try Input.drag(from: from, to: to, targetWindow: snapshot)
         return actionMetadata(path: "synthetic", actionName: "drag", verification: syntheticVerification(.hid))
     }
 
@@ -1262,21 +1383,28 @@ private func focusedWindow(
     allowRecovery: Bool
 ) throws -> AXUIElement {
     let systemWide = AXUIElementCreateSystemWide()
-    if let window = lookupUsableWindow(systemWide: systemWide, appElement: appElement, app: app) {
+    if let window = try lookupUsableWindow(systemWide: systemWide, appElement: appElement, app: app) {
         return window
     }
     if allowRecovery {
         raiseWindow(app)
-        if let window = lookupUsableWindow(systemWide: systemWide, appElement: appElement, app: app) {
+        if let window = try lookupUsableWindow(systemWide: systemWide, appElement: appElement, app: app) {
             return window
         }
     }
     if visibleWindowCount > 0 {
         var settledWindow: AXUIElement?
+        var unanswered: Error?
         let outcome = PermissionTrustSettling.settle {
-            settledWindow = lookupUsableWindow(systemWide: systemWide, appElement: appElement, app: app)
+            do {
+                settledWindow = try lookupUsableWindow(systemWide: systemWide, appElement: appElement, app: app)
+            } catch {
+                unanswered = error
+                return true
+            }
             return settledWindow != nil
         }
+        if let unanswered { throw unanswered }
         if let window = settledWindow, outcome.settled {
             return window
         }
@@ -1302,14 +1430,23 @@ private func windowReadErrors(_ appElement: AXUIElement) -> [Int32] {
     }
 }
 
-private func lookupUsableWindow(systemWide: AXUIElement, appElement: AXUIElement, app: AppDescriptor) -> AXUIElement? {
+/// Throws when the app stops answering: retrying a read that timed out only
+/// spends another timeout.
+private func lookupUsableWindow(systemWide: AXUIElement, appElement: AXUIElement, app: AppDescriptor) throws -> AXUIElement? {
     if let window = focusedSystemWindow(systemWide: systemWide, app: app) {
         return window
     }
-    if let window = copyElement(appElement, kAXFocusedWindowAttribute as String), usableWindow(window) {
-        return window
+    func read(_ attribute: String) throws -> CFTypeRef? {
+        var value: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(appElement, attribute as CFString, &value)
+        if error == .cannotComplete { throw ProviderError(.actionTimeout, AppResponsiveness.notResponding(app: app.name)) }
+        return error == .success ? value : nil
     }
-    if let windows = copyArray(appElement, kAXWindowsAttribute as String) {
+    if let value = try read(kAXFocusedWindowAttribute as String), CFGetTypeID(value) == AXUIElementGetTypeID(),
+       usableWindow(value as! AXUIElement) {
+        return (value as! AXUIElement)
+    }
+    if let windows = try read(kAXWindowsAttribute as String) as? [AXUIElement] {
         return windows.first(where: usableWindow)
     }
     return nil
@@ -1574,6 +1711,10 @@ private func matchingWindow(
 
 /// The one raise in the feature, and only ever from `--restore-window`.
 private func raiseWindow(_ app: AppDescriptor, windowId: CGWindowID? = nil, windowBounds: CGRect? = nil) {
+    ForegroundInput.run { raiseWindowNow(app, windowId: windowId, windowBounds: windowBounds) }
+}
+
+private func raiseWindowNow(_ app: AppDescriptor, windowId: CGWindowID?, windowBounds: CGRect?) {
     _ = app.app.unhide()
     _ = app.app.activate(options: [.activateAllWindows])
     let appElement = AXUIElementCreateApplication(app.pid)
@@ -1756,9 +1897,30 @@ private func actions(_ element: AXUIElement) -> [String] {
     return value as? [String] ?? []
 }
 
-private func performAction(_ element: AXUIElement, _ action: String) -> Bool {
-    actions(element).contains { $0.caseInsensitiveCompare(action) == .orderedSame } &&
-        AXUIElementPerformAction(element, action as CFString) == .success
+/// False when the element does not offer the action or refused it. Throws
+/// when the app did not answer: before the action, nothing happened; during
+/// it, the action may have landed, so no other route may be tried after it.
+private func performAction(_ element: AXUIElement, _ action: String) throws -> Bool {
+    var names: CFArray?
+    let listed = AXUIElementCopyActionNames(element, &names)
+    if listed == .cannotComplete {
+        throw ProviderError(.actionTimeout, AppResponsiveness.notResponding(app: appName(of: element)))
+    }
+    guard listed == .success, (names as? [String] ?? []).contains(where: { $0.caseInsensitiveCompare(action) == .orderedSame }) else {
+        return false
+    }
+    AXUIElementSetMessagingTimeout(element, AppResponsiveness.actionSeconds)
+    let result = AXUIElementPerformAction(element, action as CFString)
+    if result == .cannotComplete {
+        throw ProviderError(.actionTimeout, AppResponsiveness.outcomeUnknown(SnapshotRenderHeuristics.prettyAction(action)), outcomeUnknown: true)
+    }
+    return result == .success
+}
+
+private func appName(of element: AXUIElement) -> String {
+    var pid: pid_t = 0
+    guard AXUIElementGetPid(element, &pid) == .success else { return "the app" }
+    return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
 }
 
 private func isSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
@@ -1938,8 +2100,10 @@ private final class AppEventMonitor: @unchecked Sendable {
 
     private let lock = NSLock()
     private var counts: [pid_t: Int] = [:]
+    private var lastEventAt: [pid_t: TimeInterval] = [:]
     private var observers: [pid_t: AXObserver] = [:]
     private var unobservable: Set<pid_t> = []
+    private var registering: Set<pid_t> = []
     private var runLoop: CFRunLoop?
 
     private init() {
@@ -1956,43 +2120,86 @@ private final class AppEventMonitor: @unchecked Sendable {
         ready.wait()
     }
 
+    /// Registering an observer is a round trip per notification to the app,
+    /// so it runs outside the lock: an app that does not answer delays only
+    /// the caller asking about it, never a count for another app.
     func count(pid: pid_t) -> Int? {
         lock.lock()
-        defer { lock.unlock() }
         guard pidIsLive(pid) else {
             observers.removeValue(forKey: pid)
+            lock.unlock()
             return nil
         }
-        if observers[pid] == nil, !unobservable.contains(pid) { observe(pid) }
-        return observers[pid] == nil ? nil : counts[pid, default: 0]
+        if observers[pid] != nil {
+            defer { lock.unlock() }
+            return counts[pid, default: 0]
+        }
+        guard !unobservable.contains(pid), !registering.contains(pid) else {
+            lock.unlock()
+            return nil
+        }
+        registering.insert(pid)
+        lock.unlock()
+        let registered = observe(pid)
+        lock.lock()
+        defer { lock.unlock() }
+        registering.remove(pid)
+        switch registered {
+        case let .observed(observer):
+            observers[pid] = observer
+            return counts[pid, default: 0]
+        case .unobservable:
+            unobservable.insert(pid)
+            return nil
+        case .unanswered:
+            return nil
+        }
+    }
+
+    /// When the latest notification from the app arrived, on the uptime clock.
+    func lastEvent(pid: pid_t) -> TimeInterval? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastEventAt[pid]
     }
 
     fileprivate func bump(_ pid: pid_t) {
         lock.lock()
         counts[pid, default: 0] += 1
+        lastEventAt[pid] = ProcessInfo.processInfo.systemUptime
         lock.unlock()
     }
 
-    private func observe(_ pid: pid_t) {
+    private enum Registration {
+        case observed(AXObserver)
+        case unobservable
+        /// The app did not answer; asked again next time, since it may recover.
+        case unanswered
+    }
+
+    private func observe(_ pid: pid_t) -> Registration {
         var created: AXObserver?
         let callback: AXObserverCallback = { _, _, _, refcon in
             guard let refcon else { return }
             AppEventMonitor.shared.bump(pid_t(Int(bitPattern: refcon)))
         }
         guard let runLoop, AXObserverCreate(pid, callback, &created) == .success, let observer = created else {
-            unobservable.insert(pid)
-            return
+            return .unobservable
         }
         let app = AXUIElementCreateApplication(pid)
         let refcon = UnsafeMutableRawPointer(bitPattern: Int(pid))
-        let added = Self.notifications.filter { AXObserverAddNotification(observer, app, $0 as CFString, refcon) == .success }
-        guard !added.isEmpty else {
-            unobservable.insert(pid)
-            return
+        var added = 0
+        for notification in Self.notifications {
+            switch AXObserverAddNotification(observer, app, notification as CFString, refcon) {
+            case .success: added += 1
+            case .cannotComplete: return .unanswered
+            default: continue
+            }
         }
+        guard added > 0 else { return .unobservable }
         CFRunLoopAddSource(runLoop, AXObserverGetRunLoopSource(observer), .defaultMode)
         CFRunLoopWakeUp(runLoop)
-        observers[pid] = observer
+        return .observed(observer)
     }
 }
 
@@ -2053,6 +2260,17 @@ private func verifiedAction(property: String, expected: String? = nil, actualPre
     ]
 }
 
+/// A read-back from web content proves only that the accessibility mirror
+/// took the write, so it cannot confirm the page applied it.
+private func readBack(_ verification: [String: Any], on record: ElementRecord) -> [String: Any] {
+    guard record.inWebContent, verification["state"] as? String == "verified" else { return verification }
+    var echoed = verification
+    echoed["state"] = "unverified"
+    echoed["reason"] = "web_content_echo"
+    echoed.removeValue(forKey: "property")
+    return echoed
+}
+
 private func unverifiedAction(reason: String, expected: String? = nil, actualPreview: String? = nil) -> [String: Any] {
     [
         "state": "unverified",
@@ -2098,6 +2316,10 @@ private final class TreeRenderer {
     }
 
     func render(_ element: AXUIElement, depth: Int = 0, ancestors: [AXUIElement] = [], region: CGRect? = nil) {
+        guard !reader.stalled else {
+            truncated = true
+            return
+        }
         guard nextIndex < SnapshotLimits.maxNodes else {
             truncated = true
             return
@@ -2200,7 +2422,8 @@ private final class TreeRenderer {
             localFrame: localFrame,
             actions: rawActions,
             signature: ElementSignature.of(node),
-            unnamedPressable: presses && name == nil && !VisibleText.isWindowControl(subrole)
+            unnamedPressable: presses && name == nil && !VisibleText.isWindowControl(subrole),
+            inWebContent: webAreaDepth != nil
         )
         if let focused, CFEqual(focused, element) {
             focusedElementId = index
@@ -2270,6 +2493,15 @@ private final class TreeRenderer {
     }
 }
 
+/// Accessibility requests a walk made, for measuring the walk itself: wall
+/// time on a real app is mostly that app's main thread, not the helper.
+enum AXRoundTrips {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var total = 0
+    static func add() { lock.lock(); total += 1; lock.unlock() }
+    static var count: Int { lock.lock(); defer { lock.unlock() }; return total }
+}
+
 private final class AXSnapshotReader {
     private enum CachedAttribute {
         case missing
@@ -2281,6 +2513,7 @@ private final class AXSnapshotReader {
         var loadedAttributeNames = false
         var advertisedAttributes: Set<String>?
         var attributes: [String: CachedAttribute] = [:]
+        var prefetched = false
         var actions: [String]?
         var settable: [String: Bool] = [:]
 
@@ -2290,6 +2523,15 @@ private final class AXSnapshotReader {
     }
 
     private var elementsByHash: [CFHashCode: [ElementCache]] = [:]
+    /// Set by the first request the app did not answer in time. Every read
+    /// after it answers nothing at once, so a hung app costs the walk one
+    /// timeout rather than one per element.
+    private(set) var stalled = false
+
+    private func answered(_ error: AXError) -> Bool {
+        if error == .cannotComplete { stalled = true }
+        return error == .success
+    }
 
     func stringAttribute(_ element: AXUIElement, _ attribute: String) -> String? {
         guard let value = copyAttribute(element, attribute) else { return nil }
@@ -2318,8 +2560,10 @@ private final class AXSnapshotReader {
     func actions(_ element: AXUIElement) -> [String] {
         let cache = cache(for: element)
         if let actions = cache.actions { return actions }
+        guard !stalled else { return [] }
         var value: CFArray?
-        let actions = AXUIElementCopyActionNames(element, &value) == .success ? value as? [String] ?? [] : []
+        AXRoundTrips.add()
+        let actions = answered(AXUIElementCopyActionNames(element, &value)) ? value as? [String] ?? [] : []
         cache.actions = actions
         return actions
     }
@@ -2327,8 +2571,10 @@ private final class AXSnapshotReader {
     func isSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
         let cache = cache(for: element)
         if let cached = cache.settable[attribute] { return cached }
+        guard !stalled else { return false }
         var settable = DarwinBoolean(false)
-        let value = AXUIElementIsAttributeSettable(element, attribute as CFString, &settable) == .success && settable.boolValue
+        AXRoundTrips.add()
+        let value = answered(AXUIElementIsAttributeSettable(element, attribute as CFString, &settable)) && settable.boolValue
         cache.settable[attribute] = value
         return value
     }
@@ -2464,10 +2710,50 @@ private final class AXSnapshotReader {
         return ancestors.count - index
     }
 
-    /// Asking for the advertised attribute names once and skipping the copies
-    /// that are not listed is what keeps the walk from being noticeably slow.
+    /// What the walk reads from nearly every element, fetched in one round trip
+    /// the first time the element is touched.
+    private static let prefetchedAttributes = [
+        kAXRoleAttribute, kAXSubroleAttribute, kAXRoleDescriptionAttribute, kAXTitleAttribute,
+        kAXDescriptionAttribute, kAXValueAttribute, kAXPositionAttribute, kAXSizeAttribute,
+        kAXEnabledAttribute, kAXSelectedAttribute, kAXExpandedAttribute, kAXURLAttribute,
+        "AXPlaceholderValue", "AXPlaceholder", kAXChildrenAttribute,
+    ] as [String]
+
+    /// The value of each trait attribute that adds no trait.
+    private static let traitDefaults: [String: Bool] = [
+        kAXEnabledAttribute as String: true, kAXSelectedAttribute as String: false, kAXExpandedAttribute as String: false,
+    ]
+
+    private func prefetch(_ cache: ElementCache) {
+        cache.prefetched = true
+        var values: CFArray?
+        AXRoundTrips.add()
+        guard answered(AXUIElementCopyMultipleAttributeValues(
+            cache.element, Self.prefetchedAttributes as CFArray, AXCopyMultipleAttributeOptions(), &values
+        )), let values = values as? [AnyObject], values.count == Self.prefetchedAttributes.count
+        else { return }
+        for (attribute, value) in zip(Self.prefetchedAttributes, values) {
+            if value is NSNull || (CFGetTypeID(value) == AXValueGetTypeID() && AXValueGetType(value as! AXValue) == .axError) {
+                cache.attributes[attribute] = .missing
+            } else if Self.traitDefaults[attribute].map({ value as? Bool != $0 }) ?? false {
+                // AppKit answers some of these for elements that do not
+                // advertise them (a splitter read as disabled), so a value
+                // that would add a trait goes through the advertised names.
+                continue
+            } else {
+                cache.attributes[attribute] = .found(value)
+            }
+        }
+    }
+
+    /// One batched read of the common attributes, then the advertised names
+    /// for anything else, skipping the copies that are not listed: per
+    /// attribute round trips are what made the walk slow.
     private func copyAttribute(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+        guard !stalled else { return nil }
         let cache = cache(for: element)
+        if !cache.prefetched { prefetch(cache) }
+        guard !stalled else { return nil }
         if let cached = cache.attributes[attribute] {
             switch cached {
             case .missing: return nil
@@ -2480,7 +2766,9 @@ private final class AXSnapshotReader {
             return nil
         }
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success, let value else {
+        AXRoundTrips.add()
+        guard answered(AXUIElementCopyAttributeValue(element, attribute as CFString, &value)), let value else {
+            if stalled { return nil }
             cache.attributes[attribute] = .missing
             return nil
         }
@@ -2491,8 +2779,10 @@ private final class AXSnapshotReader {
     private func advertisedAttributes(_ cache: ElementCache) -> Set<String>? {
         if cache.loadedAttributeNames { return cache.advertisedAttributes }
         cache.loadedAttributeNames = true
+        guard !stalled else { return nil }
         var value: CFArray?
-        guard AXUIElementCopyAttributeNames(cache.element, &value) == .success,
+        AXRoundTrips.add()
+        guard answered(AXUIElementCopyAttributeNames(cache.element, &value)),
               let attributes = value as? [String]
         else {
             return nil
@@ -2810,6 +3100,20 @@ private func resizePng(_ image: CGImage, scale: CGFloat) -> BoundedPNG? {
 /// inactive window unless the control accepts a first click, and Preview's
 /// page and toolbar both ignored pid-posted clicks and drags (measured, with
 /// the window-under-pointer fields and the window location set).
+/// The one input stream, the front app and the clipboard belong to the whole
+/// machine, so the sections that use them run one at a time across every
+/// app's lane. Recursive, because a section can call another (a raise inside a
+/// keyboard route).
+enum ForegroundInput {
+    private static let lock = NSRecursiveLock()
+
+    static func run<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
+}
+
 enum InputRoute {
     case hid
     case process(pid: pid_t)
@@ -3178,8 +3482,19 @@ private final class SocketListener: @unchecked Sendable {
     private let token: String
     private let onSessionClaimed: () -> Void
     private let onSessionDrained: () -> Void
-    private let provider = Provider()
-    private let providerLock = NSLock()
+    /// One provider per target app, each with its own lock, cache and action
+    /// state: a request waits only for others on the same app, so an app that
+    /// stopped answering stalls its own calls and nobody else's. Requests that
+    /// name no app share `unaddressed`. Machine-wide input (the HID stream,
+    /// window activation, the clipboard) is serialized by `ForegroundInput`.
+    private final class Lane: @unchecked Sendable {
+        let provider = Provider()
+        /// Serial, so one app's requests run in the order they arrived.
+        let queue = DispatchQueue(label: "codecast-computer-lane", qos: .userInitiated)
+    }
+    private let unaddressed = Lane()
+    private var lanes: [pid_t: Lane] = [:]
+    private let lanesLock = NSLock()
     private let sessionLock = NSLock()
     private var sessionOwnership = AgentSessionOwnership()
     private var lastConnectionID: UInt64 = 0
@@ -3304,6 +3619,16 @@ private final class SocketListener: @unchecked Sendable {
             }
             close(fd)
         }
+        // Requests on different apps answer as each finishes, so replies can
+        // leave out of order; the client matches them by id.
+        let writeLock = NSLock()
+        let inFlight = DispatchGroup()
+        defer { inFlight.wait() }
+        let reply = { (payload: Any) in
+            writeLock.lock()
+            writeJSON(payload, to: fd)
+            writeLock.unlock()
+        }
         let peer = peerProcessId(fd).map(describePeer)
         let decoder = JSONDecoder()
         while let line = readLine(from: fd) {
@@ -3338,7 +3663,17 @@ private final class SocketListener: @unchecked Sendable {
                     onSessionClaimed()
                 }
             }
-            writeJSON(respond(to: request, verdict: verdict), to: fd)
+            guard verdict == .authorized, request.method != "terminate" else {
+                reply(respond(to: request, verdict: verdict, provider: unaddressed.provider))
+                continue
+            }
+            let params = request.params ?? [:]
+            let lane = lane(for: unaddressed.provider.targetPid(params: params))
+            inFlight.enter()
+            lane.queue.async { [self] in
+                reply(respond(to: request, verdict: verdict, provider: lane.provider))
+                inFlight.leave()
+            }
         }
     }
 
@@ -3366,7 +3701,7 @@ private final class SocketListener: @unchecked Sendable {
         return verdict
     }
 
-    private func respond(to request: Request, verdict: SocketHandshake.Verdict) -> Any {
+    private func respond(to request: Request, verdict: SocketHandshake.Verdict, provider: Provider) -> Any {
         if let code = verdict.errorCode {
             return [
                 "id": request.id,
@@ -3379,12 +3714,12 @@ private final class SocketListener: @unchecked Sendable {
             return ["id": request.id, "ok": true, "result": ["ok": true]]
         }
         do {
-            providerLock.lock()
-            defer { providerLock.unlock() }
             let result = try provider.handle(method: request.method, params: request.params ?? [:])
             return ["id": request.id, "ok": true, "result": result]
         } catch let error as ProviderError {
-            return ["id": request.id, "ok": false, "error": ["code": error.code.rawValue, "message": error.message]]
+            var wire: [String: Any] = ["code": error.code.rawValue, "message": error.message]
+            if error.outcomeUnknown { wire["outcomeUnknown"] = true }
+            return ["id": request.id, "ok": false, "error": wire]
         } catch {
             return [
                 "id": request.id,
@@ -3392,6 +3727,17 @@ private final class SocketListener: @unchecked Sendable {
                 "error": ["code": ComputerErrorCode.accessibilityError.rawValue, "message": String(describing: error)],
             ]
         }
+    }
+
+    private func lane(for pid: pid_t?) -> Lane {
+        guard let pid else { return unaddressed }
+        lanesLock.lock()
+        defer { lanesLock.unlock() }
+        if let lane = lanes[pid] { return lane }
+        lanes = lanes.filter { pidIsLive($0.key) }
+        let lane = Lane()
+        lanes[pid] = lane
+        return lane
     }
 
     private func disconnectSession(_ connectionID: AgentSessionConnectionID) {
@@ -3665,6 +4011,7 @@ case "--agent":
         fputs("codecast-computer --agent requires a non-empty --token-file\n", stderr)
         exit(2)
     }
+    AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), AppResponsiveness.readSeconds)
     runAgent(socketPath: arguments[1], token: token)
 case "--permissions":
     runPermissionSetup(kinds: [.accessibility, .screenshots])
