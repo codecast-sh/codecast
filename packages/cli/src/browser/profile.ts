@@ -422,9 +422,4 @@ export function cloneProfile(opts: {
   return { dest, bytes: dirSize(dest), files, missing, cookiesFound, separate, ownLoginsKept };
 }
 
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n}B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)}K`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(0)}M`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(1)}G`;
-}
+export { formatBytes } from "./formatBytes.js";
