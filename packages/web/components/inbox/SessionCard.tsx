@@ -33,6 +33,7 @@ import { ModernSessionCardView } from "./ModernSessionCard";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { useInboxSelection } from "../../lib/inboxSelection";
 import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipState";
+import { sessionPullRequestsSig, titledSessionPullRequests } from "../../lib/sessionPullRequests";
 import { resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../lib/uiPrefDefaults";
 import { teamMembersOf } from "../../lib/activeTeam";
 
@@ -112,7 +113,7 @@ const paneDragStart = (sessionId: string) => (e: React.DragEvent, title: string)
 export type SessionCardProps = Pick<
   SessionCardViewProps,
   | "session" | "isActive" | "isParentActive" | "isSelected" | "isUnread" | "isFavorite" | "sessionLabel"
-  | "variant" | "sectionStatus" | "forkColorKey" | "subRow" | "roleSessions"
+  | "variant" | "sectionStatus" | "forkColorKey" | "subRow" | "roleSessions" | "hiddenRunningSubagents" | "foldedSubagentId"
   | "onSelect" | "onDismiss" | "onDefer" | "onRestore" | "onKill" | "onNavigateToSession" | "onCardContextMenu" | "onPickCharacter"
 > & {
   globalIndex: number;
@@ -183,6 +184,8 @@ export const SessionCard = memo(function SessionCard({
     (s) => liveCardTitle(s, cardId, hosted, session),
     // Where its work is on its way to production, as the chip's words.
     (s) => sessionShipSig(s as any, cardId),
+    // Every pull request the session links, as their states in one string.
+    (s) => sessionPullRequestsSig(s as any, cardId),
     // The project it works in, as one short string.
     (s) => workProjectSig(s as any, cardId),
     // Modern only: a pending `cast decide` on this session, so the card in
@@ -190,6 +193,9 @@ export const SessionCard = memo(function SessionCard({
     (s) => (modern && !hosted ? awaitingOkIds(s.sessionDecisions).has(cardId) : false),
   ]);
   const liveTitle = liveCardTitle(st, cardId, hosted, session);
+  const prSig = sessionPullRequestsSig(st as any, cardId);
+  // Titles off the rows at render: a rename alone need not wake the card.
+  const linkedPrs = useMemo(() => titledSessionPullRequests(st as any, cardId), [prSig, cardId]); // eslint-disable-line react-hooks/exhaustive-deps
   const meId = st.currentUser?._id?.toString?.() ?? null;
   const viewers = viewersOf(teamMembersOf(st), cardId, meId);
   const stoppedKind = hosted ? hostedStopOf(st.sessions[cardId] ?? session, st.messages[cardId]) : null;
@@ -372,6 +378,7 @@ export const SessionCard = memo(function SessionCard({
       identity={identity}
       viewers={viewers}
       ship={sessionShipFromSig(sessionShipSig(st as any, cardId))}
+      linkedPrs={linkedPrs}
       spawnedByTitle={spawnedByTitleOf(st, spawnedById)}
       anchorIdentity={anchorIdentity}
       runHost={runHost}
