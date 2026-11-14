@@ -6,7 +6,7 @@
 
 import type { AcmePart } from "./parts";
 import { ORG_TREE } from "./extras";
-import { DAY, MIN, PEOPLE, cid, session } from "./world";
+import { DAY, HOUR, MIN, PEOPLE, SESSIONS, cid, session } from "./world";
 
 export const WEBHOOKS_SEAT = { _id: cid("sseatwebhooks"), short_id: "jx7s3wl", title: "Webhooks lead", agent_type: "claude_code" } as const;
 
@@ -55,6 +55,18 @@ const withSeat = (tree: ReturnType<typeof ORG_TREE>, now: number) => ({
   ),
 });
 
+/** "Lately" on the role's Overview: what moved in its area, newest first. */
+const SCOPE_FEED = (now: number) => {
+  const alex = { name: PEOPLE.me.name, image: PEOPLE.me.image };
+  const maya = { name: PEOPLE.maya.name, image: PEOPLE.maya.image };
+  return [
+    { kind: "session", id: SESSIONS.lead._id, short_id: SESSIONS.lead.short_id, title: SESSIONS.lead.title, state: "working", actor: alex, updated_at: now - 20_000, href: `/conversation/${SESSIONS.lead._id}`, preview: "Retry queue is in, workers on the API and the dashboard" },
+    { kind: "decision", id: cid("feed410"), title: "A 410 Gone is final and never retries", actor: alex, updated_at: now - 40 * MIN, href: "/plans/pl-312" },
+    { kind: "task", id: "hero-t9", short_id: "ct-4188", title: "Retry button and attempt history", state: "in_progress", actor: maya, updated_at: now - 60 * MIN, href: "/tasks/ct-4188" },
+    { kind: "task", id: "hero-t13", short_id: "ct-4181", title: "Add exponential backoff to webhook retries", state: "done", actor: alex, updated_at: now - 5 * HOUR, href: "/tasks/ct-4181" },
+  ];
+};
+
 export const ORG_ROLES_PART: AcmePart = {
   name: "orgRoles",
   sessions: (now) => [
@@ -64,11 +76,14 @@ export const ORG_ROLES_PART: AcmePart = {
       project: "~/src/billing",
       messages: 4,
       state: "Overnight 502s all retried and landed\nStatus: 410s are final, change in review",
-      extra: { org_role_id: cid("rolewebhooks"), inbox_dismissed_at: now - 5 * MIN },
+      extra: { standing_role_id: cid("rolewebhooks"), inbox_dismissed_at: now - 5 * MIN },
     }),
   ],
   seed: (s, now) => s.applyTailMessages(WEBHOOKS_SEAT._id, 0, SEAT_TRANSCRIPT(now) as any, null),
   answers: {
     "org:tree": () => withSeat(ORG_TREE(Date.now()), Date.now()),
+    // The lighter feed the conversation page and the task page mount: the same tree.
+    "org:roles": () => withSeat(ORG_TREE(Date.now()), Date.now()),
+    "org:scopeFeed": () => ({ rows: SCOPE_FEED(Date.now()) }),
   },
 };
