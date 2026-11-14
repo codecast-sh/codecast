@@ -358,3 +358,31 @@ export const auditUsageDay = internalQuery({
     return { cursor: page.isDone ? null : page.continueCursor, rows };
   },
 });
+
+// Drop logged sends (user_sends) the current rule no longer counts as typed,
+// after the rule learns a new kind of relayed message. One person's log, or
+// everyone's without `user_id`. The day counters keep their old totals; a
+// send rebuild recounts those.
+// `packages/convex/run.sh sendBackfill:pruneLog '{"user_id":"…"}'`.
+const PRUNE_PAGE = 200;
+export const pruneLog = internalMutation({
+  args: { user_id: v.optional(v.id("users")), cursor: v.optional(v.string()), dropped: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    let dropped = args.dropped ?? 0;
+    const rows = args.user_id
+      ? ctx.db.query("user_sends").withIndex("by_user_timestamp", (q) => q.eq("user_id", args.user_id!))
+      : ctx.db.query("user_sends");
+    const page = await rows.paginate({ numItems: PRUNE_PAGE, cursor: args.cursor ?? null });
+    for (const row of page.page) {
+      const m = await ctx.db.get(row.message_id);
+      if (m && typedWords(m.content) !== null) continue;
+      await ctx.db.delete(row._id);
+      dropped++;
+    }
+    if (page.isDone) {
+      console.log(`[sendBackfill.pruneLog] ${args.user_id ?? "all"}: done, ${dropped} dropped`);
+      return;
+    }
+    await ctx.scheduler.runAfter(0, internal.sendBackfill.pruneLog, { user_id: args.user_id, cursor: page.continueCursor, dropped });
+  },
+});

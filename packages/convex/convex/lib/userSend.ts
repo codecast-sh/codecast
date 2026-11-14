@@ -7,6 +7,7 @@ import {
   isHuddleFeedNotice,
   isMachineDeliveredMessage,
   isTestArtifactPath,
+  parseTaskCommentMessage,
   parseDecisionAnswer,
   parseUserMessage,
   stripMentionContext,
@@ -57,6 +58,10 @@ export function isUserMessageNoise(content: string): boolean {
   // injections, team-chat anchor wakes. Agent coordination, not something the
   // human typed into this session — drop them from "what I wrote".
   if (isMachineDeliveredMessage(t)) return true;
+  // A task comment relayed into the session doing the task. Its words were
+  // written on the task, often by an agent posting in the person's name, and
+  // the relay only queues them in that person's name.
+  if (parseTaskCommentMessage(t)) return true;
   if (COMMAND_RE.test(t)) return true;
   if (SKILL_RE.test(t)) return true;
   if (t.startsWith("{") && t.includes("__cc_poll")) return true;

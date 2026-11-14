@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { formatTaskCommentMessage } from "@codecast/shared/contracts";
 import { isUserMessageNoise, sendText, stripMessageTags, turnOrigin, typedWords } from "./userSend";
 import { AGENT_SETUP_CONTINUE_MESSAGE, HUDDLE_FEED_DISREGARD, formatDecisionAnswer, formatScheduledTask, formatSessionMessage, formatUserMessage, huddleFeedBriefing, transcriptChunkHeader } from "@codecast/shared/contracts";
 import { addToFlowsMessage, runThroughMessage } from "../../../web/lib/line/flowMessages";
@@ -36,6 +37,7 @@ describe("isUserMessageNoise", () => {
 
   test("drops scheduled-task injections and chat anchor wakes", () => {
     expect(isUserMessageNoise('<scheduled-task title="Check CI">run the checks</scheduled-task>')).toBe(true);
+    expect(isUserMessageNoise(formatTaskCommentMessage({ task: "ct-1", title: "Fix it", from: "Ashot Petrosian", body: "Test DB is fixed." }))).toBe(true);
     expect(isUserMessageNoise("[codecast team chat — #general]\nSam mentioned you in a thread.")).toBe(true);
   });
 
