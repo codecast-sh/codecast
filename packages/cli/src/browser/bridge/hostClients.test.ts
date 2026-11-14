@@ -8,10 +8,10 @@ import { isolateCodecastDir } from "../../test-helpers/codecastDir.js";
 import { freePort } from "../instance.js";
 import { mintHostClientToken, readBridgeState, revokeHostClient, startBridgeHost, type RunningHost } from "./host.js";
 import { hashHostToken, matchHostClient, newHostClient, scopedSession, visibleSessions, type HostClients } from "./hostClients.js";
-import { lastLinkedLaptop, probeLaptopLink, readLaptopLinkClosed, revokedVerdict, switchNotice, type LaptopLink } from "./laptopLink.js";
+import { LINK_HOST_PORT_BASE, LINK_HOST_PORT_SPAN, lastLinkedLaptop, linkHostPort, pickLaptopLink, probeLaptopLink, readLaptopLink, readLaptopLinkClosed, readLaptopLinks, revokedVerdict, switchNotice, type LaptopLink } from "./laptopLink.js";
 import { CLOSE_BAD_TOKEN, targetIdOfTab } from "./protocol.js";
 import { dial, FakeExtension, TEST_TOKEN } from "./host.testutil.js";
-import { BROWSER_LINK_REMOTE, browserLinkArgs, browserLinkRefusal } from "../../cloud/browserLink.js";
+import { browserLinkArgs, browserLinkRefusal, browserLinkRemote } from "../../cloud/browserLink.js";
 
 const cleanups: Array<() => unknown> = [];
 afterEach(async () => {
@@ -206,49 +206,117 @@ describe("the host's view of its link", () => {
   });
 });
 
+describe("two laptops on one host", () => {
+  const link = (laptop: string, device: string | undefined, linkedAt: number, owner = "u1"): LaptopLink =>
+    ({ v: 1, port: device ? linkHostPort(device) : 41729, token: `tok-${laptop}`, hostId: "i-1", laptop, linkedAt, ...(device ? { device } : {}), owner });
+
+  test("each laptop forwards to its own host port, so the second link no longer fails on the first one's", () => {
+    const a = "3d5c7f9b6bd74d35", b = "8a1f02c4be9d7713";
+    expect(linkHostPort(a)).not.toBe(linkHostPort(b));
+    for (const d of [a, b]) {
+      const p = linkHostPort(d);
+      expect(p).toBeGreaterThanOrEqual(LINK_HOST_PORT_BASE);
+      expect(p).toBeLessThan(LINK_HOST_PORT_BASE + LINK_HOST_PORT_SPAN);
+      expect(linkHostPort(d)).toBe(p);
+    }
+  });
+
+  test("both links stay readable while both are held, and one closing leaves the other's file", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cast-link-two-"));
+    const browser = path.join(home, ".codecast/browser");
+    const run = (device: string) => spawn("bash", ["-c", browserLinkRemote(device)], { env: { ...process.env, HOME: home }, stdio: ["pipe", "ignore", "pipe"] });
+    const waitFor = async (f: string) => { const d = Date.now() + 20_000; while (!fs.existsSync(f) && Date.now() < d) await new Promise((r) => setTimeout(r, 20)); };
+    const la = link("mbp-2", "deva", 1), lb = link("mbp-182", "devb", 2);
+    const a = run("deva");
+    a.stdin.write(`${JSON.stringify(la)}\n`);
+    await waitFor(path.join(browser, "laptop-links/deva.json"));
+    const b = run("devb");
+    b.stdin.write(`${JSON.stringify(lb)}\n`);
+    await waitFor(path.join(browser, "laptop-links/devb.json"));
+    expect(readLaptopLinks(browser).map((l) => l.laptop)).toEqual(["mbp-182", "mbp-2"]);
+    a.stdin.end();
+    expect(await new Promise<number | null>((r) => a.once("exit", r))).toBe(0);
+    expect(readLaptopLinks(browser).map((l) => l.laptop)).toEqual(["mbp-182"]);
+    expect(readLaptopLink(browser, "u1")?.laptop).toBe("mbp-182");
+    b.stdin.end();
+    expect(await new Promise<number | null>((r) => b.once("exit", r))).toBe(0);
+    expect(readLaptopLinks(browser)).toEqual([]);
+  }, 45_000);
+
+  test("--on laptop is the one linked laptop; with two it names them, and a name or device prefix picks one", () => {
+    const one = [link("mbp-2", "3d5c7f9b6bd74d35", 1)];
+    expect("link" in pickLaptopLink(one, "laptop")).toBe(true);
+    const two = [link("mbp-182", "8a1f02c4be9d7713", 2), ...one];
+    const ambiguous = pickLaptopLink(two, "laptop");
+    expect("error" in ambiguous && ambiguous.error).toContain("2 laptops are linked to this host: mbp-182 (8a1f02c4), mbp-2 (3d5c7f9b)");
+    expect((pickLaptopLink(two, "MBP-2") as { link: LaptopLink }).link.device).toBe("3d5c7f9b6bd74d35");
+    expect((pickLaptopLink(two, "8a1f") as { link: LaptopLink }).link.laptop).toBe("mbp-182");
+    expect("error" in pickLaptopLink(two, "nose")).toBe(true);
+    expect((pickLaptopLink([], "laptop") as { error: string }).error).toContain("no laptop is linked");
+  });
+
+  test("only the session owner's laptops count, and a laptop too old for its own file still does through the legacy one", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cast-link-owner-"));
+    fs.mkdirSync(path.join(home, "laptop-links"), { recursive: true });
+    fs.writeFileSync(path.join(home, "laptop-links/deva.json"), JSON.stringify(link("mine", "deva", 1)));
+    fs.writeFileSync(path.join(home, "laptop-links/devb.json"), JSON.stringify(link("theirs", "devb", 3, "u2")));
+    fs.writeFileSync(path.join(home, "laptop-link.json"), JSON.stringify(link("old", undefined, 2)));
+    expect(readLaptopLinks(home, "u1").map((l) => l.laptop)).toEqual(["old", "mine"]);
+    // The legacy file repeating a laptop that has its own file is not a second laptop.
+    fs.writeFileSync(path.join(home, "laptop-link.json"), JSON.stringify(link("mine", "deva", 1)));
+    expect(readLaptopLinks(home, "u1").map((l) => l.laptop)).toEqual(["mine"]);
+  });
+});
+
 describe("the link connection", () => {
   test("its remote side writes the link file 0600 from stdin and removes it when the connection ends", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cast-link-home-"));
-    const child = spawn("bash", ["-c", BROWSER_LINK_REMOTE], { env: { ...process.env, HOME: home }, stdio: ["pipe", "ignore", "pipe"] });
-    const file = path.join(home, ".codecast/browser/laptop-link.json");
+    const child = spawn("bash", ["-c", browserLinkRemote("dev1")], { env: { ...process.env, HOME: home }, stdio: ["pipe", "ignore", "pipe"] });
+    const file = path.join(home, ".codecast/browser/laptop-links/dev1.json");
+    const legacy = path.join(home, ".codecast/browser/laptop-link.json");
     child.stdin.write('{"v":1}\n');
     const deadline = Date.now() + 20_000;
     while (!fs.existsSync(file) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
     expect(fs.readFileSync(file, "utf-8")).toBe('{"v":1}\n');
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(legacy, "utf-8")).toBe('{"v":1}\n');
     const exited = new Promise<number | null>((r) => child.once("exit", r));
     child.stdin.end();
     expect(await exited).toBe(0);
     expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(legacy)).toBe(false);
   }, 30_000);
 
   test("a line after the first is the laptop's closing reason, kept once the link file goes; a new link clears it", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cast-link-home-"));
     const dir = path.join(home, ".codecast/browser");
-    const run = () => spawn("bash", ["-c", BROWSER_LINK_REMOTE], { env: { ...process.env, HOME: home }, stdio: ["pipe", "ignore", "pipe"] });
+    const run = () => spawn("bash", ["-c", browserLinkRemote("dev1")], { env: { ...process.env, HOME: home }, stdio: ["pipe", "ignore", "pipe"] });
+    const own = path.join(dir, "laptop-links/dev1.json");
     const waitFor = async (f: string) => { const d = Date.now() + 20_000; while (!fs.existsSync(f) && Date.now() < d) await new Promise((r) => setTimeout(r, 20)); };
     const closed = { v: 1, reason: "revoked", laptop: "mbp", hostId: "i-1", at: 1 };
     const a = run();
     a.stdin.write('{"v":1}\n');
-    await waitFor(path.join(dir, "laptop-link.json"));
+    await waitFor(own);
     a.stdin.end(`${JSON.stringify(closed)}\n`);
     expect(await new Promise<number | null>((r) => a.once("exit", r))).toBe(0);
-    expect(fs.existsSync(path.join(dir, "laptop-link.json"))).toBe(false);
-    expect(readLaptopLinkClosed(path.join(dir, "laptop-link-closed.json"))).toEqual(closed as any);
-    expect(fs.readdirSync(dir).sort()).toEqual(["laptop-link-closed.json"]);
+    expect(fs.existsSync(own)).toBe(false);
+    expect(readLaptopLinkClosed(dir)).toEqual(closed as any);
+    expect(fs.readdirSync(path.join(dir, "laptop-links"))).toEqual(["dev1.closed.json"]);
 
     const b = run();
     b.stdin.write('{"v":1}\n');
-    await waitFor(path.join(dir, "laptop-link.json"));
-    expect(fs.existsSync(path.join(dir, "laptop-link-closed.json"))).toBe(false);
+    await waitFor(own);
+    expect(readLaptopLinkClosed(dir)).toBeNull();
     b.stdin.end();
     expect(await new Promise<number | null>((r) => b.once("exit", r))).toBe(0);
-    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(fs.readdirSync(path.join(dir, "laptop-links"))).toEqual([]);
+    expect(fs.existsSync(path.join(dir, "laptop-link.json"))).toBe(false);
   }, 45_000);
 
-  test("forwards the same port, fails on a taken one, and never links a shared host", () => {
-    const args = browserLinkArgs({ address: "h", user: "u", keyPath: "/k", remoteBaseDir: "/w" }, 41729);
-    expect(args).toContain("127.0.0.1:41729:127.0.0.1:41729");
+  test("forwards the bridge port to the laptop's own host port, fails on a taken one, and never links a shared host", () => {
+    const args = browserLinkArgs({ address: "h", user: "u", keyPath: "/k", remoteBaseDir: "/w" }, 41729, "dev1");
+    expect(args).toContain(`127.0.0.1:${linkHostPort("dev1")}:127.0.0.1:41729`);
+    expect(() => browserLinkRemote("a; rm -rf ~")).toThrow();
     expect(args).toContain("ExitOnForwardFailure=yes");
     expect(args.join(" ")).not.toContain(TEST_TOKEN);
     const bridge = { port: 1, token: "t", extensionSeenAt: 1 };
