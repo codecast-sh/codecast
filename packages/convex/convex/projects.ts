@@ -9,6 +9,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, explicitWorkspace } from "./data";
 import { isTeamMember } from "./privacy";
 import { projectCountsFor } from "./lib/projectTaskCounts";
+import { PROJECT_INSTRUCTIONS_MAX, utf8Bytes } from "@codecast/shared/contracts/projectContext";
+import { syncProjectTriggers } from "./lib/agentTaskRows";
 import {
   canAccessProject,
   canAccessTask,
@@ -133,12 +135,22 @@ async function projectMetricsPatch(ctx: { db: any }, project: { workspace?: stri
   return { metrics: cleaned.length ? cleaned : undefined };
 }
 
+/** The instructions every session in the project starts with (SP6); "" clears them. */
+function instructionsPatch(text: string | undefined): { instructions?: string | undefined } {
+  if (text === undefined) return {};
+  const trimmed = text.trim();
+  const bytes = utf8Bytes(trimmed);
+  if (bytes > PROJECT_INSTRUCTIONS_MAX) throw new Error(`Instructions are ${bytes} bytes; a project holds at most ${PROJECT_INSTRUCTIONS_MAX}`);
+  return { instructions: trimmed || undefined };
+}
+
 export const update = mutation({
   args: {
     api_token: v.string(),
     id: v.id("projects"),
     title: v.optional(v.string()),
     description: v.optional(v.string()),
+    instructions: v.optional(v.string()),
     status: v.optional(v.string()),
     // null clears the deadline; a Convex patch drops fields set to undefined.
     target_date: v.optional(v.union(v.number(), v.null())),
@@ -161,7 +173,7 @@ export const update = mutation({
     const project = await ctx.db.get(args.id);
     if (!project || !(await canAccessProject(ctx, auth.userId, project))) throw new Error("Project not found");
 
-    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, project, args, "projects")), ...(await projectMetricsPatch(ctx, project, args.metrics)) };
+    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, project, args, "projects")), ...(await projectMetricsPatch(ctx, project, args.metrics)), ...instructionsPatch(args.instructions) };
     if (args.title) updates.title = args.title;
     if (args.description !== undefined) updates.description = args.description;
     if (args.status) updates.status = args.status;
@@ -171,6 +183,8 @@ export const update = mutation({
     if (args.project_path !== undefined) updates.project_path = args.project_path?.trim() || undefined;
 
     await ctx.db.patch(args.id, updates);
+    // Pausing a project quiets everything it watches; resuming wakes what the pause quieted.
+    await syncProjectTriggers(ctx, project._id, project.status, updates.status ?? project.status);
     return { success: true };
   },
 });
@@ -348,6 +362,7 @@ export const webUpdate = mutation({
     id: v.id("projects"),
     title: v.optional(v.string()),
     description: v.optional(v.string()),
+    instructions: v.optional(v.string()),
     status: v.optional(v.string()),
     color: v.optional(v.string()),
     icon: v.optional(v.string()),
@@ -368,8 +383,8 @@ export const webUpdate = mutation({
     if (!project || !(await canAccessProject(ctx, userId, project))) throw new Error("Project not found");
 
     // The charter fields ride the same patch; `owner` is a ref, never stored.
-    const { id, goal, success_metrics, priority, owner, non_goals, risks, budget, metrics, ...fields } = args;
-    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, project, { goal, success_metrics, priority, owner, non_goals, risks, budget }, "projects")), ...(await projectMetricsPatch(ctx, project, metrics)) };
+    const { id, goal, success_metrics, priority, owner, non_goals, risks, budget, metrics, instructions, ...fields } = args;
+    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, project, { goal, success_metrics, priority, owner, non_goals, risks, budget }, "projects")), ...(await projectMetricsPatch(ctx, project, metrics)), ...instructionsPatch(instructions) };
     for (const [k, val] of Object.entries(fields)) {
       if (val !== undefined) updates[k] = val === null ? undefined : val;
     }
@@ -377,6 +392,7 @@ export const webUpdate = mutation({
     if (fields.title !== undefined && project.title_from_session) updates.title_from_session = undefined;
 
     await ctx.db.patch(args.id, updates);
+    await syncProjectTriggers(ctx, project._id, project.status, updates.status ?? project.status);
     return { success: true };
   },
 });

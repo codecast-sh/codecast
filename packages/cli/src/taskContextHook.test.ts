@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { TaskResumeContext } from "@codecast/shared/tasks";
-import { TASK_CONTEXT_HOOK, TASK_CONTEXT_HOOK_CODEX, taskContextFor } from "./taskContextHook.js";
+import { TASK_CONTEXT_HOOK, TASK_CONTEXT_HOOK_CODEX, projectContextFor, taskContextFor } from "./taskContextHook.js";
 
 let home: string;
 let bin: string;
@@ -140,4 +140,24 @@ describe("taskContextFor", () => {
     expect(block).toContain("run cast task context ct-6");
     expect(await taskContextFor({ session_id: "no-pulse", source: "compact" }, fail)).toBeNull();
   }));
+});
+
+describe("projectContextFor", () => {
+  const project = { id: "k1", short_id: "pj-t1", title: "Checkout", goal: "Ship", success_metrics: [], instructions: "Use bun.", memory: [], memory_more: 0, main_session: null, is_main: false };
+  test("a compacted or resumed session in a project gets its block back; a start, a failure or no project gets none", async () => {
+    const asked: any[] = [];
+    const read = async (body: any) => { asked.push(body); return project; };
+    expect(await projectContextFor({ session_id: "s-1", source: "compact" }, read)).toContain('project="pj-t1"');
+    expect(await projectContextFor({ session_id: "s-1", source: "resume" }, read)).toContain("Use bun.");
+    expect(asked[0]).toEqual({ session: "s-1" });
+    expect(await projectContextFor({ session_id: "s-1", source: "startup" }, read)).toBeNull();
+    expect(await projectContextFor({ session_id: "s-1", source: "compact" }, async () => null)).toBeNull();
+    expect(await projectContextFor({ session_id: "s-1", source: "compact" }, async () => { throw new Error("down"); })).toBeNull();
+  });
+  test("the block re-emitted on compaction keeps to the room the task block leaves", async () => {
+    const long = { ...project, instructions: "漢".repeat(5000) };
+    const block = (await projectContextFor({ session_id: "s-1", source: "compact" }, async () => long, async () => 2500))!;
+    expect(Buffer.byteLength(block)).toBeLessThanOrEqual(2500);
+    expect(block).toContain("The rest: cast project show pj-t1");
+  });
 });

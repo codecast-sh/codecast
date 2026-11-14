@@ -74,3 +74,55 @@ views (Tasks, Timeline, About, Flow, Expectations) sit in one menu in the
 header. In the inbox a project is a chip on the folder chip axis under the
 key `pj:<id>` (`store/workProjects.ts`): folder and project chips stay
 separate, and share include, exclude, shift-add and history.
+
+## SP6. Shared project context
+
+Every session in a project starts out knowing the project. Anything one
+session records for all of them reaches every one.
+
+- **Instructions.** `projects.instructions` is free text, capped at
+  16,000 UTF-8 bytes (`PROJECT_INSTRUCTIONS_MAX`), counted the way the hook budgets count. It is edited in the About
+  view and with `cast project update --instructions <text>` or
+  `--instructions-file <path|->`. Sessions get it word for word.
+- **Memory is the project's pinned docs.** There is no new table: a pinned
+  doc with the project's `project_id` is memory. `cast project remember
+  [<project>] "<fact>"` creates one through `docs.create` (`pinned: true`, in
+  the project's workspace). With no project named, it uses the calling
+  session's derived project. `cast project memory` lists the memory, and
+  `cast project forget <doc>` unpins a doc without deleting it. The About
+  view lists the memory: each doc opens whole and can be unpinned there. The
+  folder-keyed `project_memory` table is a different feature (automatic
+  corrections) and is not used here.
+- **The block.** `computeProjectContext` (`convex/projectContext.ts`) reads
+  the charter's goal and success metrics, the instructions, and the memory
+  index (pinned docs the reader may open: the first
+  `PROJECT_MEMORY_SHOWN` with a one-line gist, then a count). It also names
+  the main session (SP4) and whether the reader is it.
+  `projectContextBlock` (`packages/shared/contracts/projectContext.ts`)
+  renders all of this once. The block says, as principles, that the memory
+  is shared and is added to when every session should know something, and
+  that findings which change the project's direction go to the main session.
+- **Delivery.** `org.where` carries the context as `project_context`, for
+  the session's project: SP1's rule, else its task's plan's project. It
+  answers in a workspace with no roles too, as long as the session has a
+  project. Because it rides that read, the daemon's per-launch read
+  (`prepareLaunchStableContext`) brings it to a brand-new session on its
+  first turn: a web composer session born with `project_id`, or a `cast
+  spawn` worker inheriting through its parent. `stableContext.ts` prints it
+  after the org block. The cache filled for a new session
+  (`whereForNewSession`) drops it, because another session's project is not
+  this one's. The instructions in the block are cut to fit the hook's
+  9,000-byte budget (`fitProjectContextBlock`), and `cast project show` prints
+  them whole. After compaction or a resume, the task context hook prints the
+  block again from `/cli/projects/context` (`projectContext.forSession`), in
+  the room the task block leaves under the same budget, and stable context
+  leaves it out so it does not appear twice. `org.where` and `forSession`
+  read the project through one function (`projectContext.sessionProject`), so
+  they cannot name different projects for one session.
+- **Planning first.** When the project has no goal and the reader is its
+  main session, the block says the goal and the success checks are not set.
+  It tells the session to work them out with the person before building, and
+  to record them with `cast project update`.
+- **Working on.** The org block's "Working on" names the derived project, so
+  a session that joined a project, or inherited one through its parent,
+  shows it.

@@ -20,6 +20,7 @@ import { sessionWork } from "./lib/orgOwnership";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { activeTeamMembershipFor } from "./lib/access";
 import { personName } from "./lib/sessionTell";
+import { computeProjectContext, sessionProject } from "./projectContext";
 
 type Ref = OrgWhere["work"]["task"];
 
@@ -43,15 +44,19 @@ export const where = query({
 export async function computeOrgWhere(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams"> | undefined, conv: any): Promise<OrgWhere | null> {
   const org = await computeOrgRoles(ctx, userId, teamId, Date.now());
   const roles: any[] = org.roles.filter((r: any) => r.status !== "retired");
-  if (!roles.length) return null;
-  const byId = new Map(roles.map((r) => [String(r._id), r]));
-
   const work = conv ? await sessionWork(ctx, conv) : {};
   const bound = !!(work.project_id || work.plan_id);
-  const [task, plan, project]: any[] = await Promise.all([
+  // The project the session works in, read exactly as forSession reads it
+  // (projectContext.sessionProject). A workspace with no roles still hands a
+  // session in a project its project (SP6).
+  const project: any = await sessionProject(ctx, userId, conv);
+  const project_context = await computeProjectContext(ctx, userId, project, conv);
+  if (!roles.length && !project_context) return null;
+  const byId = new Map(roles.map((r) => [String(r._id), r]));
+
+  const [task, plan]: any[] = await Promise.all([
     conv?.active_task_id ? ctx.db.get(conv.active_task_id) : null,
     work.plan_id ? ctx.db.get(work.plan_id as any) : null,
-    work.project_id ? ctx.db.get(work.project_id as any) : null,
   ]);
 
   let how: OrgSeatHow = "none";
@@ -106,5 +111,6 @@ export async function computeOrgWhere(ctx: { db: any }, userId: Id<"users">, tea
       seat: seatIds.has(String(r._id)),
     }))),
     people: org.people.map((p: any) => ({ name: p.name, handle: p.handle, role: p.role, is_me: p.is_me })),
+    project_context,
   };
 }
