@@ -13,6 +13,7 @@ import { joinCall, startHuddle } from '@/lib/calls/callManager';
 export function openDmWith(router: Router, userId: string): void {
   void Haptics.selectionAsync();
   const channelId = useInboxStore.getState().openDmChannel([userId]);
+  if (!channelId) return;
   router.push({ pathname: '/chat/[id]', params: { id: channelId } } as never);
 }
 

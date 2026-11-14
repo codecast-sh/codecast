@@ -48,6 +48,7 @@ import { awaitUpload, deliverableAttachments, hasPendingUploads, releaseUpload }
 import type { PendingEntry } from "./syncProtocol";
 import { isConvexId } from "../lib/entityLinks";
 import { activeTeamIdOf } from "../lib/activeTeam";
+import { teamHasFeature } from "../lib/teamFeatureRule";
 import type { ChatChannelAgentRef } from "../components/chat/chatTypes";
 
 // ── Row shapes ──────────────────────────────────────────────────────────────
@@ -692,7 +693,7 @@ export type ChatSliceActions = {
   /** Open (or find) the DM with these teammates. Local-first: a room the store
    *  already holds returns its real id in the same tick; a new one returns a
    *  stub that the altKey supersede rekeys on echo. */
-  openDmChannel: (memberIds: string[], teamId?: string) => string;
+  openDmChannel: (memberIds: string[], teamId?: string) => string | null;
   dispatchOpenDm: (clientId: string, memberIds: string[], teamId?: string) => Promise<any>;
 };
 
@@ -1478,6 +1479,11 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       // The room may already be here — same tick, real id, no server wait.
       const existing = findDmChannelId(state.chatChannels, dmKey);
       if (existing) return existing;
+      // A team whose chat is off gets no room: chat.openDm refuses it for
+      // sure, so painting a stub and dispatching would only report that
+      // refusal. A team not loaded yet is not known to be off.
+      const teams = (state as any).teams;
+      if (teams?.some((t: any) => String(t._id) === teamId) && !teamHasFeature(teams, teamId, "chat")) return null;
       const clientId = newChatChannelClientId();
       const created = (get().dispatchOpenDm(clientId, memberIds, teamId) as Promise<any>).then(
         // The server names the room it opened or found. Kept beside the stub

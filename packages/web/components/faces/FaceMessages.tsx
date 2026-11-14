@@ -295,8 +295,10 @@ export function FaceMessages({
   const openChatAt = () => {
     const at = target ?? newestDm;
     if (at) return openRow(at);
+    const channelId = useInboxStore.getState().openDmChannel([memberId]);
+    if (!channelId) return;
     onLeave();
-    openChat(`/chat/${useInboxStore.getState().openDmChannel([memberId])}`);
+    openChat(`/chat/${channelId}`);
   };
 
   const send = () => {
@@ -305,7 +307,9 @@ export function FaceMessages({
     if (!input || !text) return;
     const st = useInboxStore.getState();
     if (toDm) {
-      st.sendChatMessage(dmId ?? st.openDmChannel([memberId]), text);
+      const channelId = dmId ?? st.openDmChannel([memberId]);
+      if (!channelId) return;
+      st.sendChatMessage(channelId, text);
     } else {
       st.sendChatMessage(target.channelId, text, target.threadRootId ? { threadRootId: target.threadRootId } : undefined);
     }

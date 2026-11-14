@@ -17,6 +17,8 @@ import { deadRecordingPress } from "./calls/recordingPress";
 import { storableActionArgs } from "./tabSafePath";
 import { getWriteLog, recordWrite } from "../store/writeLog";
 import { captureError } from "./analytics";
+import { featureOffMessage } from "@platform/flags";
+import { TEAM_FEATURE_CATALOG } from "./teamFeatureRule";
 
 /** The args of one `dispatch:dispatch` mutation call. */
 export type DispatchCallArgs = {
@@ -138,8 +140,11 @@ const CALLER_REPORTED_ACTIONS = new Set([
 // news to nobody: no toast, no failure mark, no error report.
 const QUIET_ACTIONS = new Set(["saveQuoteDrafts", "removeQuoteDrafts"]);
 
-// chat.markRead's refusal of a marker that was deleted or sits in another room.
+// chat.markRead's refusal of a marker that was deleted or sits in another
+// room, from servers deployed before markRead stopped refusing it.
 const STALE_READ_MARKER = "That message is not in this channel";
+// chat.openDm's refusal in a team whose chat is off (requireTeamFeature).
+const CHAT_OFF = featureOffMessage(TEAM_FEATURE_CATALOG, "chat");
 
 // Refusals the dispatch failure toast (providers.tsx DispatchFailureToast)
 // has already told the person about. The engine hands the caller the same
@@ -188,6 +193,15 @@ export function applyDispatchFailure(action: string, error: unknown, args?: unkn
       console.warn(`[sync] ${action} refused: stale marker`, error);
       return;
     }
+  }
+  // A DM open in a team whose chat is off asked for a room the server will
+  // never make. The surface that asked should not have drawn (an off feature
+  // has no UI), so the stub it painted goes and nothing is reported.
+  if (action === "dispatchOpenDm" && Array.isArray(args) && typeof args[0] === "string"
+    && humanizeConvexError(error, "") === CHAT_OFF) {
+    console.warn(`[sync] ${action} refused: chat off`, error);
+    useInboxStore.getState().retireChatChannel(args[0]);
+    return;
   }
   console.error(`[sync] dispatch failed after retries: ${action}`, error);
   // The write the person (or an effect) asked for never landed. Report it with
