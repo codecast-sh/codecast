@@ -14,7 +14,7 @@ Server data a surface renders lives in the store, and the surface reads the stor
 
 Why: copies drift the moment two feeders or two readers disagree about which one is current, and each drift then needs its own reconciler. A surface that waits on the network when the answer is already local feels slow in a product built to feel instant.
 
-Evidence: 5 corrections across 5 sessions [PR-code-1]: codecast/6faa44cb, codecast/jx74z5d, codecast/c26c9845, codecast/jx75vha, vello/d4dab4d0. Recorded in CLAUDE.md (Store: Local-first is the law).
+Evidence: 13 corrections across 13 sessions [PR-code-1]: codecast/6faa44cb, codecast/jx74z5d, codecast/c26c9845, codecast/jx75vha, vello/d4dab4d0, codecast/b795b31f, codecast/2f965f0d, codecast/ca8c862a, codecast/116ee3ec, codecast/62a49be8, codecast/7d29c234, codecast/733dcc00, codecast/f631eb0e. Recorded in CLAUDE.md (Store: Local-first is the law).
 
 ### CC-store-2 What a person does shows at once and is never lost
 
@@ -30,7 +30,7 @@ Two fields answer two questions and are never read for each other. `workspace` d
 
 Why: conflating the two leaked private rows into team views and made the personal workspace unreachable, a class of bug that one field per question removes.
 
-Evidence [PR-code-1, PR-product-6]: recorded in CLAUDE.md (Workspace access vs routing).
+Evidence [PR-code-1, PR-product-6]: 2 corrections across 1 session: codecast/219bd4c6; recorded in CLAUDE.md (Workspace access vs routing).
 
 ## Code
 
@@ -40,7 +40,7 @@ When a result keeps needing manual intervention or a workaround, change the syst
 
 Why: manual one-offs, silent spinners and fragile daemons push ongoing work and support back onto the owner.
 
-Evidence: 43 corrections across 36 sessions [PR-code-2]: codecast/446fdf0b, codecast/64995d35, codecast/9bb93b3f, codecast/fa0d609c, codecast/a13c6b2d, codecast/bc05fcae, codecast/906a0808, codecast/c760787a, codecast/1861a847, codecast/738de269, codecast/6d66a45e, codecast/0f33215d, codecast/204dc98c, codecast/c8c6771d, codecast/616fbff1, codecast/jx7162g, codecast/jx79098, codecast/jx7e9av, codecast/b7e8002b, codecast/jx73zke, codecast/c3f8856c, codecast/91cd1654, union-mobile-outreach/281e2ac7, bookmark/67e9d943, aurora/fc51b6ab, codecast/e6d9c003, codecast/0c1345c3, codecast/c35bef55, codecast/6fee4a65, codecast/ad386d76, codecast/ca17cd9c, codecast/a52e0a86, codecast/bb01e8f8, codecast/27e92264, codecast/d1c54572, codecast/8c983e64.
+Evidence: 52 corrections across 45 sessions [PR-code-2]: codecast/446fdf0b, codecast/64995d35, codecast/9bb93b3f, codecast/fa0d609c, codecast/a13c6b2d, codecast/bc05fcae, codecast/906a0808, codecast/c760787a, codecast/1861a847, codecast/738de269, codecast/6d66a45e, codecast/0f33215d, codecast/204dc98c, codecast/c8c6771d, codecast/616fbff1, codecast/jx7162g, codecast/jx79098, codecast/jx7e9av, codecast/b7e8002b, codecast/jx73zke, codecast/c3f8856c, codecast/91cd1654, union-mobile-outreach/281e2ac7, bookmark/67e9d943, aurora/fc51b6ab, codecast/e6d9c003, codecast/0c1345c3, codecast/c35bef55, codecast/6fee4a65, codecast/ad386d76, codecast/ca17cd9c, codecast/a52e0a86, codecast/bb01e8f8, codecast/27e92264, codecast/d1c54572, codecast/8c983e64, codecast/262eb4b2, codecast/2de89e01, codecast/184842c5, codecast/ace992a7, codecast/90b055ca, codecast/75ad7b70, codecast/8c5048dc, codecast/c9d6048e, codecast/fb8238be.
 
 ### CC-code-2 Cut load at its source
 
@@ -118,7 +118,7 @@ Each view has one scroll, the page's own: no scroll panes nested inside it and n
 
 Why: nested scrolls and permanent chrome fight the browser and waste the space the content needs.
 
-Evidence: 19 corrections across 16 sessions: codecast/7e53831c, codecast/743fc3d3, codecast/72d440bf, codecast/e264cab9, codecast/619d3d49, codecast/52563eab, codecast/05bc9938, codecast/jx77j0w, codecast/jx73063, codecast/jx74ybv, codecast/db1f2407, codecast/1fe7e745, codecast/a5d9cd23, codecast/56a4bba2, codecast/23b202ab, codecast/db2088f5.
+Evidence: 22 corrections across 19 sessions: codecast/7e53831c, codecast/743fc3d3, codecast/72d440bf, codecast/e264cab9, codecast/619d3d49, codecast/52563eab, codecast/05bc9938, codecast/jx77j0w, codecast/jx73063, codecast/jx74ybv, codecast/db1f2407, codecast/1fe7e745, codecast/a5d9cd23, codecast/56a4bba2, codecast/23b202ab, codecast/db2088f5, codecast/f3a3d81e, codecast/d9e1ce6c, codecast/38109b53.
 
 ### CC-design-3 One design language on every platform
 
@@ -128,6 +128,14 @@ Why: too many font styles, weights and loud colors made surfaces read as uncohes
 
 Evidence [PR-design-2, PR-design-4]: 29 of the 41 sessions behind PR-design-2 and 20 of the 26 behind PR-design-4 are codecast's, among them codecast/357dc99a, codecast/377c6024, codecast/c26c9845, codecast/be5f2068, codecast/58d03e78, codecast/9a39ebc7, codecast/0cc88547, codecast/2c03068a, codecast/04126458, codecast/1701d953. Recorded in CLAUDE.md (UI conventions).
 
+### CC-design-4 Acting on an item takes you to it and keeps your way back
+
+When a person acts on something from one surface (replies from a decision card, opens a notification, picks a search result, steps through a queue), the app opens that thing where it lives, selected and painted from the store at once, and keeps a plain way back to where they were. A step through many items stays beside the conversation it came from rather than dropping the person into a separate list with no return.
+
+Why: an action that makes its item vanish, leaves the old selection in place or strands the person in another view reads as broken, and they stop trusting that acting from a card or alert lands anywhere useful.
+
+Evidence [CC-design-1, CC-store-1]: 3 corrections across 3 sessions: codecast/55c400b3, codecast/7d29c234, codecast/76fe128d.
+
 ## Product
 
 ### CC-product-1 Defaults just work
@@ -136,7 +144,7 @@ Defaults make a feature work the first time and never lose what the user already
 
 Why: a feature that fails quietly or forgets the user's state looks broken, even when the code behind it is correct.
 
-Evidence: 8 corrections across 7 sessions: codecast/5cd65a63, codecast/c64919c4, codecast/106d22b7, codecast/f8e404e4, codecast/c8c6771d, codecast/36878dea, -Users-ashot/b22e7a56.
+Evidence: 12 corrections across 11 sessions: codecast/5cd65a63, codecast/c64919c4, codecast/106d22b7, codecast/f8e404e4, codecast/c8c6771d, codecast/36878dea, -Users-ashot/b22e7a56, codecast/2ec12812, codecast/c91f47c0, codecast/ec16e62c, codecast/b3c70aa8.
 
 ### CC-product-2 A message reaches the people it is for, once, and gets noticed
 
@@ -144,7 +152,7 @@ Every message and notification goes to exactly the audience it was addressed to,
 
 Why: a message that lands in the wrong room, arrives twice, names the wrong author or arrives silently makes people miss what matters, and then stop trusting the channel at all. An alert that never clears, or rings for work that was never theirs, teaches them to ignore every alert.
 
-Evidence: 19 corrections across 16 sessions: codecast/0f1ec09f, codecast/10f5a1df, codecast/148dc33b, codecast/44076792, codecast/6079b35f, codecast/8644250c, codecast/3dd04819, codecast/6f46e420, codecast/f53fa6df, codecast/3bf087ae, codecast/2e154d8a, codecast/1a972efd, codecast/24470faa, codecast/f9fc999c, codecast/09594a71, codecast/63452593.
+Evidence: 30 corrections across 26 sessions: codecast/0f1ec09f, codecast/10f5a1df, codecast/148dc33b, codecast/44076792, codecast/6079b35f, codecast/8644250c, codecast/3dd04819, codecast/6f46e420, codecast/f53fa6df, codecast/3bf087ae, codecast/2e154d8a, codecast/1a972efd, codecast/24470faa, codecast/f9fc999c, codecast/09594a71, codecast/63452593, codecast/bd06ec0e, codecast/57c83dab, codecast/c8381c08, codecast/9547fac0, codecast/eb4f2e4c, codecast/2e72a830, codecast/ae1cca4f, codecast/7da2df3f, codecast/657bcf6b, codecast/792a92da.
 
 ## Agents
 
@@ -154,7 +162,7 @@ Keep the human's attention for what only they can do. Work an agent delegates or
 
 Why: every row in the needs-input queue costs attention, and inbox noise and needless wakes buried the few asks that mattered and wasted tokens.
 
-Evidence: 35 corrections across 27 sessions: codecast/75340f90, codecast/eb7cdbed, codecast/ac950a1e, codecast/2622f9a4, codecast/b8189b1a, codecast/fb8e21ef, codecast/jx7csbd, codecast/jx76e8h, codecast/jx7bs90, codecast/jx7as3d, codecast/700edf11, codecast/jx7er8q, codecast/7064c786, codecast/c397f70d, codecast/ab9f99a3, codecast/jx72nyf, codecast/jx7ey9r, union-mobile/bb47b784, -Users-ashot-src/c71b7cc8, -Users-ashot-src/421e971d, union-mobile-outreach-backend/d98a708c, codecast/10c015f6, codecast/378a9c20, codecast/88b135ad, codecast/32ae8b13, codecast/0f3d4676, codecast/7bf7bf94.
+Evidence: 42 corrections across 33 sessions: codecast/75340f90, codecast/eb7cdbed, codecast/ac950a1e, codecast/2622f9a4, codecast/b8189b1a, codecast/fb8e21ef, codecast/jx7csbd, codecast/jx76e8h, codecast/jx7bs90, codecast/jx7as3d, codecast/700edf11, codecast/jx7er8q, codecast/7064c786, codecast/c397f70d, codecast/ab9f99a3, codecast/jx72nyf, codecast/jx7ey9r, union-mobile/bb47b784, -Users-ashot-src/c71b7cc8, -Users-ashot-src/421e971d, union-mobile-outreach-backend/d98a708c, codecast/10c015f6, codecast/378a9c20, codecast/88b135ad, codecast/32ae8b13, codecast/0f3d4676, codecast/7bf7bf94, codecast/f596c8b0, codecast/e6536ab5, codecast/4a7919d2, codecast/abe1ff02, codecast/c97da9d2, codecast/66f03e62.
 
 ### CC-agents-2 A decision card carries its own context
 
@@ -162,7 +170,7 @@ Before a direction that is costly to undo (a schema, a protocol, a migration), t
 
 Why: cards with bare ids and buried asks could not be decided without opening the session, which defeats the queue, and directions nobody examined wasted the build.
 
-Evidence [PR-agents-3]: codecast/894d8984, codecast/a5d62c59, codecast/30f7f14e, codecast/fb8e21ef, codecast/jx7fk24, codecast/7f143785, codecast/717f2b8e, codecast/378a9c20, codecast/45e09d37.
+Evidence [PR-agents-3]: codecast/894d8984, codecast/a5d62c59, codecast/30f7f14e, codecast/fb8e21ef, codecast/jx7fk24, codecast/7f143785, codecast/717f2b8e, codecast/378a9c20, codecast/45e09d37, codecast/aded396f, codecast/d4517ec3, codecast/84ba71e9, codecast/13a8a115, codecast/4ef5e6aa, codecast/cc3323ac.
 
 ### CC-agents-3 Strongest model decides, briefed in full
 
@@ -202,4 +210,4 @@ An agent with something a person in front of it needs says it without waiting to
 
 Why: agents that stayed silent or described instead of showing left the people they were meant to help without the answer that was one message away.
 
-Evidence: 2 corrections across 2 sessions: codecast/b986aae9, codecast/fb8e21ef. The same ask about huddle agents a week earlier is ct-70894.
+Evidence: 3 corrections across 3 sessions: codecast/b986aae9, codecast/fb8e21ef, codecast/f3a3d81e. The same ask about huddle agents a week earlier is ct-70894.
