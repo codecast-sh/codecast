@@ -39,7 +39,7 @@ import { isConvexId } from "../lib/entityLinks";
 import { activeWorkspaceKeyOf } from "../lib/workspaceScope";
 import { leadScopeChange, type LeadScopeChange } from "@codecast/shared/contracts/orgLead";
 import type { OrgLogEntry, OrgLogRow } from "@codecast/shared/contracts/orgChange";
-import type { RoleFailover } from "@codecast/shared/contracts/roleFailover";
+import { applyMoveBack, moveBackEchoed, moveBackIntent, revertMoveBack, type MoveBackIntent } from "./orgMoveBack";
 
 /** An optimistic edit awaiting the server's echo (see the header). The tree
  *  kinds reshape the tree (a move, a follow, a role's fields, a retire). The
@@ -59,9 +59,7 @@ export type OrgIntent =
   /** The role's line (the-line.md L2): the workflow slug its scope runs on.
    *  `from` is the slug the tree row held before, for a refusal to restore. */
   | { kind: "line"; id: string; role_id: string; slug: string; from?: string; at: number }
-  /** Move a failed-over role back (convex roleFailover.moveBack): the line
-   *  leaves the role at once; `from` is the failover, for a refusal to restore. */
-  | { kind: "moveBack"; id: string; role_id: string; handle: string; from: RoleFailover; at: number }
+  | MoveBackIntent
   | { kind: "decideChange"; id: string; change_id: string; proposal_id: string; from: OrgChangeStatus; to: OrgChangeStatus; line: string; /** The answer the reply stamps on the row beside the verdict (a rejection, an approval with words), and what the row held before, for a refusal to put back. */ reply?: OrgChangeReply; reply_from?: OrgChangeReply; at: number }
   /** A person's words on a change with no verdict (S39): the row keeps its
    *  status and gains the `reply` stamp. The server's own stamp (another
@@ -579,11 +577,7 @@ export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: R
       const role = tree.roles.find((r) => r._id === intent.role_id) as (OrgRole & { line_workflow_slug?: string }) | undefined;
       return !role || role.line_workflow_slug === intent.slug;
     }
-    case "moveBack": {
-      // Echoed once the tree carries no failover, or a newer one.
-      const role = tree.roles.find((r) => r._id === intent.role_id);
-      return !role || role.failover?.at !== intent.from.at;
-    }
+    case "moveBack": return moveBackEchoed(tree, intent);
     case "moveSession": {
       const parent = orgSessionParent(tree, intent.conversation_id);
       // A session beyond the target's top N cannot be seen in the snapshot at
@@ -645,11 +639,7 @@ export function applyOrgIntent(tree: OrgTree, intent: OrgIntent, row?: OrgSessio
       role.updated_at = Math.max(role.updated_at, intent.at);
       return;
     }
-    case "moveBack": {
-      const role = tree.roles.find((r) => r._id === intent.role_id);
-      if (role?.failover?.at === intent.from.at) delete role.failover;
-      return;
-    }
+    case "moveBack": return applyMoveBack(tree, intent);
     case "retireRole": {
       const i = tree.roles.findIndex((r) => r._id === intent.role_id);
       if (i < 0) return;
@@ -931,11 +921,7 @@ export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalCh
       else role.line_workflow_slug = intent.from;
       return;
     }
-    case "moveBack": {
-      const role = draft.orgTree?.roles.find((r) => r._id === intent.role_id);
-      if (role && !role.failover) role.failover = intent.from;
-      return;
-    }
+    case "moveBack": return revertMoveBack(draft.orgTree, intent);
     default:
       return;
   }
@@ -1586,17 +1572,13 @@ export function createOrgSlice(): OrgSliceImpl {
       this.orgFocusChangeId = changeId;
     }),
 
-    // The retire body lives in applyOrgIntent so a heartbeat push between the
-    // click and the echo replays it instead of bringing the role back.
     moveOrgRoleBack: action(function (this: OrgDraft, roleId: string) {
-      const tree = this.orgTree;
-      const role = tree?.roles.find((r) => r._id === roleId);
-      if (!tree || !role?.failover?.to) return;
-      const intent: OrgIntent = { kind: "moveBack", id: intentId(), role_id: roleId, handle: role.handle, from: JSON.parse(JSON.stringify(role.failover)), at: Date.now() };
-      applyOrgIntent(tree, intent);
-      pushIntent(this, intent);
+      const intent = this.orgTree && moveBackIntent(this.orgTree, roleId, intentId());
+      if (intent) { applyOrgIntent(this.orgTree!, intent); pushIntent(this, intent); }
     }),
 
+    // The retire body lives in applyOrgIntent so a heartbeat push between the
+    // click and the echo replays it instead of bringing the role back.
     retireOrgRole: action(function (this: OrgDraft, roleId: string, _standingSession?: "keep" | "retire") {
       const tree = this.orgTree;
       const role = tree?.roles.find((r) => r._id === roleId);

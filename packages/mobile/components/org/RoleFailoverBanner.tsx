@@ -9,6 +9,7 @@ import * as Haptics from 'expo-haptics';
 import { Text } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { windowOrgTree } from '@codecast/web/store/orgSlice';
 import type { OrgTree } from '@codecast/web/components/org/orgTypes';
 import { canEditRole } from '@codecast/web/lib/scopePage';
 import { ledgerLines, moveRoleBackLedger } from '@codecast/web/components/consequential/roleOnline';
@@ -18,13 +19,13 @@ import { appAlert } from '@/lib/popups';
 
 export function RoleFailoverBanner({ roleShortId }: { roleShortId: string | null | undefined }) {
   const Theme = useTheme();
-  const role = useInboxStore((s) => (roleShortId ? (s.orgTree as OrgTree | null)?.roles.find((r) => r.short_id === roleShortId) ?? null : null));
+  const role = useInboxStore((s) => (roleShortId ? (windowOrgTree(s) as OrgTree | null)?.roles.find((r) => r.short_id === roleShortId) ?? null : null));
   const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const f = role?.failover;
   // Same rule as the server: a host the viewer may start sessions on, and back online.
   const back = useRoleMoveBack(f);
   if (!role || !f) return null;
-  const tree = useInboxStore.getState().orgTree as OrgTree | null;
+  const tree = windowOrgTree(useInboxStore.getState()) as OrgTree | null;
   const nameOf = (id: string) => tree?.people.find((p) => p.user_id === id)?.name || 'a teammate';
   const stuck = !f.to;
   const tone = stuck ? Theme.red : Theme.orange;
