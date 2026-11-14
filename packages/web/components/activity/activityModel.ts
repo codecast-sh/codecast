@@ -11,6 +11,7 @@
 import type { Conversation } from "../../lib/conversationRow";
 import type { ExternalEventRecord } from "../../lib/externalEventRecord";
 import { prPath, shepherdStyle, type ExternalEventAccent } from "../../lib/externalEvents";
+import { PR_STATE_OF_KIND, SESSION_COMMIT_KINDS, SESSION_PUSH_KIND, prThreadKey as prKey, type PrStateWord } from "../../lib/externalEventOutcomes";
 import type { SessionStatus } from "../../lib/sessionStatus";
 import { extractWorkspace, formatDate } from "../feed/activityFeedFormat";
 
@@ -70,19 +71,6 @@ export type ActivityItem = {
 
 // ── outcomes ────────────────────────────────────────────────────────────────
 
-type PrStateWord = "open" | "merged" | "closed" | "draft";
-
-// The kinds that move a pull request's state. Every other PR kind (a review,
-// a check, a push to it) says the session touched it, not where it stands.
-const PR_STATE_OF_KIND: Record<string, PrStateWord> = {
-  pr_opened: "open",
-  pr_reopened: "open",
-  pr_ready_for_review: "open",
-  pr_draft: "draft",
-  pr_merged: "merged",
-  pr_closed: "closed",
-};
-
 const PR_STATE_LOOK: Record<PrStateWord, { label: string; accent: ExternalEventAccent }> = {
   open: { label: "open", accent: "green" },
   merged: { label: "merged", accent: "violet" },
@@ -102,8 +90,6 @@ export type PrThread = ActivityPr & {
   /** When its state last moved: the day a loose PR files under. */
   stateAt: number;
 };
-
-const prKey = (repository: string, number: number) => `${repository}#${number}`;
 
 /** The chip's fields of a thread, without the bookkeeping. */
 export function plainPr(pr: ActivityPr): ActivityPr {
@@ -212,9 +198,9 @@ export function indexOutcomes(src: {
   }
   for (const e of src.events) {
     if (!e.conversation_id) continue;
-    if (e.kind === "commit" || e.kind === "amend" || e.kind === "cherry_pick") {
+    if (SESSION_COMMIT_KINDS.has(e.kind ?? "")) {
       if (e.sha) slot(e.conversation_id).shas.add(e.sha);
-    } else if (e.kind === "push") {
+    } else if (e.kind === SESSION_PUSH_KIND) {
       slot(e.conversation_id).pushed += Number(e.meta?.commits_count) || 0;
     }
   }
