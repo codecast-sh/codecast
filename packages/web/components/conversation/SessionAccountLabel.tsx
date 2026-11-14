@@ -59,13 +59,15 @@ function useSessionAccount(conversationId: string | undefined): SessionAccountLa
   }));
 }
 
-/** Dim fact beside the agent and model, which already name the provider. */
+/** Dim fact beside the agent and model, which already name the provider.
+ *  The header shows only the address's local part; the hover and the
+ *  session menu carry the whole address. */
 export function SessionAccountFact({ conversationId }: { conversationId?: string }) {
   const account = useSessionAccount(conversationId);
   if (!account) return null;
   return (
-    <span className="max-w-[9rem] truncate" title={account.title} data-session-account={account.provider}>
-      {account.label}
+    <span className="max-w-[6rem] truncate text-sol-text-dim" title={account.title} data-session-account={account.provider}>
+      {account.label.split("@")[0]}
     </span>
   );
 }
