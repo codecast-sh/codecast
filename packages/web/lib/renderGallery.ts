@@ -10,6 +10,7 @@
 // follows them when they change. Pure and free of the `@/` alias: the phone's
 // bundle and tests import it.
 
+import { buildThreadHandoff } from "@codecast/convex/convex/chatWakePrompts";
 import { RUN_OPTION, runResultText } from "@codecast/shared/contracts/commandRun";
 import { formatGoalMessage } from "@codecast/shared/contracts/sessionGoal";
 import {
@@ -398,6 +399,8 @@ export function renderGalleryMessages(now: number): Row[] {
   user(formatUserMessage("Sarah Chen", "Sent from the dashboard by a teammate."));
   user(formatJointMessage([{ from: "Sarah Chen", body: "Ship it." }, { from: "Maya Ortiz", body: "After the e2e passes." }]));
   user(formatSessionMessage("jx7bm3n", "Parser cost on open is **under 2ms**; no action needed.", { name: "iOS perf" }));
+  user(formatSessionMessage("jx7bm3n", "Main is red from 9f8e7d, not your change.", { intent: "inform" }));
+  user(formatSessionMessage("jx7bm3n", "Auth half merged in 1a2b3c. Nothing left for you.", { intent: "done" }));
   user(`<agent-message from="critic-K-L">\nSweep done: no blocking findings.\n</agent-message>`);
   user(formatHuddleSummaryTag("t123", {
     title: "Auth rollout",
@@ -429,6 +432,12 @@ export function renderGalleryMessages(now: number): Row[] {
     '  cast chat send --channel hx7chan --thread j17root "<your reply>"',
     "</chat-mention>",
   ].join("\n"));
+  user(buildThreadHandoff({
+    channelName: "eng", channelKind: undefined, channelTopic: undefined, channelId: "hx7chan" as any, teamName: "Acme",
+    threadRootId: "j17root" as any, askerName: "Alice", handed: { name: "Alice", content: "the deploy test flakes on CI" },
+    entries: [{ name: "Alice", content: "the deploy test flakes on CI" }, { name: "Bob", content: "only on the cache step" }],
+    channelEntries: [], nonce: "0123456789ab",
+  }));
   user('<scheduled-task title="Nightly audit">Run the audit and post what changed.</scheduled-task>');
   user('<scheduled-task title="Nightly audit" trigger="tr-42">Run the audit and post what changed.</scheduled-task>');
   user(formatGoalMessage({ kind: "start", round: 0, of: 50, objective: "Make the failing billing tests pass (bun test packages/billing)" }));
