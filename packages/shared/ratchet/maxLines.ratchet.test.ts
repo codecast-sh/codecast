@@ -107,6 +107,7 @@ import { join } from "node:path";
 // sheets/delimited.ts, and buckets.test.ts its filter-list tests out. PIN 252.
 // 2026-11-12: the fix forward of 444a3f30c (Modern design pass) moved the
 // pinned rail out of Sidebar.tsx into sidebar/PinnedRail.tsx. PIN 251.
+// 2026-11-13: the CI fix-forward splits took it to 249. PIN 249.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -123,7 +124,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 251;
+const PIN = 249;
 
 const result = checkRatchet({
   name: "max lines",
