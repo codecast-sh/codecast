@@ -17,6 +17,8 @@ import Feather from '@expo/vector-icons/Feather';
 import { mixColor } from '@/lib/solColor';
 import { showNotice } from '@/lib/undoBar';
 import { copyToClipboard } from '@/lib/clipboard';
+import { useActiveTeamFeature } from '@/lib/teamFeatures';
+import { usePolicyRefusal } from '@codecast/web/lib/managedPolicy';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ConversationSkeleton } from '@/components/SkeletonLoader';
 import { MobileAgentSpeaker, MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
@@ -52,6 +54,9 @@ import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
 import { usePendingMessageStatus, usePendingPermissions } from '@codecast/web/hooks/useSyncPendingPermissions';
 import { pendingMessageHoldReason } from '@codecast/web/lib/pendingBanner';
 import { HeldSendRow } from '@/components/HeldSendRow';
+import { NeedsInputStrip } from '@/components/session/NeedsInputStrip';
+import { TerminalOfferBar } from '@/components/terminal/TerminalOfferBar';
+import { terminalAvailable } from '@/components/terminal/PaneTerminal';
 import { useConversationCommits, useConversationPullRequests, useSyncConversationCommits, useSyncConversationPullRequests } from '@codecast/web/hooks/useSyncTimeline';
 import { useForkTree, type FlatForkNode } from '@codecast/web/hooks/useForkTree';
 import { useConversationCommentsSync, useConversationCommentRows } from '@codecast/web/hooks/useConversationCommentsSync';
@@ -93,7 +98,7 @@ import { hostedConnectionWords } from '@codecast/web/components/conversation/Hos
 import { useLinkDown } from '@/hooks/useLinkDown';
 import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
-import { agentDisplayName, agentSupportsFork, contextWindowTokens, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, sessionEscalationCaption, stripPastedContent, stripCompactionProvenance, isPollResponsePayload, type VaultReadyMessage } from '@codecast/shared/contracts';
+import { agentDisplayName, agentSupportsFork, contextWindowTokens, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, policyTeamOf, sessionEscalationCaption, stripPastedContent, stripCompactionProvenance, isPollResponsePayload, type VaultReadyMessage } from '@codecast/shared/contracts';
 import { DELIVERY_FAILED_SUBTYPE, parseDeliveryFailedNotice } from '@codecast/shared/contracts/deliveryFailed';
 import { MarkdownContent, CodeBlockWithCopy, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { AnsiText } from '@/components/CodeText';
@@ -1293,8 +1298,12 @@ function TaskNotificationLine({ content, timestamp, childConversationMap }: { co
 // `variant: 'agent'` is a subagent's report to the session that launched it
 // (<agent-message from="…">) — the same card in violet, and a sender that is an
 // agent name rather than a session short id, so it stays a badge.
-function SessionMessageBlock({ from, name, body, timestamp, variant }: { from: string; name?: string; body: string; timestamp?: number; variant?: 'agent' }) {
+// What a `cast send --fyi` / `--done` asks back (web SESSION_INTENT_TAG).
+const SESSION_INTENT_LABEL: Record<string, string> = { inform: 'FYI', done: 'Done' };
+
+function SessionMessageBlock({ from, name, body, timestamp, variant, intent }: { from: string; name?: string; body: string; timestamp?: number; variant?: 'agent'; intent?: string }) {
   const Theme = useTheme();
+  const intentLabel = intent ? SESSION_INTENT_LABEL[intent] : undefined;
   const isAgentReport = variant === 'agent';
   const accent = isAgentReport ? Theme.violet : Theme.cyan;
   const hasRealSender = !isAgentReport && !!from && from !== 'unknown';
@@ -1310,6 +1319,13 @@ function SessionMessageBlock({ from, name, body, timestamp, variant }: { from: s
         ) : (
           <RNView style={[styles.sessionMessageBadge, isAgentReport && { borderColor: accent + '4d', backgroundColor: accent + '1a' }]}>
             <RNText style={[styles.sessionMessageBadgeText, isAgentReport && { color: accent }]}>{(isAgentReport ? from : name) || 'another session'}</RNText>
+          </RNView>
+        )}
+        {intentLabel && (
+          <RNView style={[styles.sessionMessageBadge, intent === 'done'
+            ? { borderColor: Theme.green + '4d', backgroundColor: Theme.green + '1a' }
+            : { borderColor: Theme.textDim + '4d', backgroundColor: 'transparent' }]}>
+            <RNText style={[styles.sessionMessageBadgeText, { color: intent === 'done' ? Theme.green : Theme.textDim }]}>{intentLabel}</RNText>
           </RNView>
         )}
         {timestamp != null && timestamp > 0 && (
@@ -3492,6 +3508,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   }, [conversation?.short_id, conversation?.session_id, conversation?.agent_type, showToast]);
 
   const generateShareLink = useMutation(api.conversations.generateShareLink);
+  const setShareLink = useInboxStore((s) => s.setShareLink);
+  const chatOn = useActiveTeamFeature('chat') === true;
+  const publicRefusal = usePolicyRefusal('public_sharing_disabled', conversation ? policyTeamOf('conversations', conversation) : null);
   const stashSession = useInboxStore((s) => s.stashSession);
   const toggleFavorite = useInboxStore((s) => s.toggleFavorite);
   const setPrivacy = useInboxStore((s) => s.setPrivacy);
@@ -3505,58 +3524,96 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     toggleFavorite(id);
   }, [id, toggleFavorite]);
 
-  const handleShareConversation = useCallback(async () => {
+  // The Sharing sheet: the same choices as web's share popover
+  // (ConversationSharePopover). The owner picks the team level and whether
+  // anyone with the link can open it; everyone gets the one link to copy,
+  // hand to another app through the system share sheet, or send to a chat.
+  // Opening the link to anyone asks first; closing it is one press.
+  const handleShareConversation = useCallback(() => {
     if (!conversation || !id) return;
     const convId = id as Id<"conversations">;
+    const isOwner = !!conversation.is_own;
     const isPrivate = conversation.is_private !== false;
     const hasTeam = !!conversation.team_id;
     const vis = conversation.team_visibility || 'summary';
+    const token = conversation.share_token ?? undefined;
+    const link = token ? conversationShareLink(token) : `${CODECAST_BASE_URL}/conversation/${convId}`;
 
-    const attempt = (fn: () => void | Promise<void>) => async () => {
-      try { await fn(); } catch { showToast('Failed to update sharing'); }
-    };
-    const items: SheetItem[] = [
-      {
+    const items: SheetItem[] = [];
+    if (isOwner) {
+      items.push({
         label: 'Private',
         icon: 'lock',
         selected: isPrivate,
-        // Local-first: optimistically flips is_private on the store row so
-        // re-opening the share sheet immediately reflects 'private'.
-        onPress: attempt(() => { if (!isPrivate) { setPrivacy(convId, true); showToast('Made private'); } }),
+        onPress: () => { if (!isPrivate) { setPrivacy(convId, true); showToast('Made private'); } },
+      });
+      if (hasTeam) {
+        items.push(
+          {
+            label: 'Team sees the summary',
+            icon: 'users',
+            selected: !isPrivate && vis === 'summary',
+            onPress: () => { setTeamVisibility(convId, 'summary'); showToast('Sharing summary with team'); },
+          },
+          {
+            label: 'Team sees everything',
+            icon: 'eye',
+            selected: !isPrivate && vis === 'full',
+            onPress: () => { setTeamVisibility(convId, 'full'); showToast('Sharing full conversation with team'); },
+          },
+        );
+      }
+      items.push({
+        label: 'Anyone with the link',
+        icon: 'globe',
+        selected: !!token,
+        onPress: () => {
+          if (token) {
+            setShareLink(convId, null);
+            showToast('Link closed to the public');
+            return;
+          }
+          if (publicRefusal) { appAlert('Public links are off', publicRefusal); return; }
+          appAlert('Open to anyone with the link?', 'They can read this session without signing in.', [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Make public',
+              // The server mints the token: Hermes has no secure random source
+              // (lib/polyfills.ts), and this token is the link's only secret.
+              onPress: () => {
+                void generateShareLink({ conversation_id: convId })
+                  .then((next) => { void copyToClipboard(conversationShareLink(next)); showToast('Public link copied'); })
+                  .catch(() => showToast("Couldn't make the link public"));
+              },
+            },
+          ]);
+        },
+      });
+    }
+    if (chatOn) {
+      items.push({
+        label: 'Send to chat',
+        icon: 'message-circle',
+        onPress: () => router.push({
+          pathname: '/chat/send',
+          params: { url: link, label: 'session', title: conversation.title || 'Session' },
+        } as never),
+      });
+    }
+    items.push(
+      {
+        label: 'Share…',
+        icon: 'share',
+        onPress: () => { void Share.share(Platform.OS === 'ios' ? { url: link } : { message: link }).catch(() => {}); },
       },
-    ];
-    if (hasTeam) {
-      items.push(
-        {
-          label: 'Team sees the summary',
-          icon: 'users',
-          selected: !isPrivate && vis === 'summary',
-          onPress: attempt(() => { setTeamVisibility(convId, 'summary'); showToast('Sharing summary with team'); }),
-        },
-        {
-          label: 'Team sees everything',
-          icon: 'eye',
-          selected: !isPrivate && vis === 'full',
-          onPress: attempt(() => { setTeamVisibility(convId, 'full'); showToast('Sharing full conversation with team'); }),
-        },
-      );
-    }
-    items.push({
-      label: 'Copy share link',
-      icon: 'link',
-      onPress: attempt(async () => {
-        const token = conversation.share_token ?? await generateShareLink({ conversation_id: convId });
-        if (!token) return;
-        void copyToClipboard(conversationShareLink(token));
-        showToast('Share link copied');
-      }),
-    });
-    if (conversation.share_token) {
-      const url = conversationShareLink(conversation.share_token);
-      items.push({ label: 'Share link via…', icon: 'share', onPress: attempt(async () => { await Share.share({ message: url, url }); }) });
-    }
+      {
+        label: 'Copy link',
+        icon: 'link',
+        onPress: () => { void copyToClipboard(link); showToast(token ? 'Public link copied' : 'Link copied'); },
+      },
+    );
     showActionSheet('Sharing', items);
-  }, [conversation, id, generateShareLink, setPrivacy, setTeamVisibility, showToast]);
+  }, [conversation, id, chatOn, publicRefusal, generateShareLink, setPrivacy, setTeamVisibility, setShareLink, showToast]);
 
   const searchLower = searchQuery.toLowerCase();
   const searchMatchList = useMemo(() => {
@@ -3925,7 +3982,28 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   );
   // The server's view of this conversation's queued sends, read while any wait: a held one says why under its bubble.
   const hasPendingSends = useInboxStore((s) => (s.pendingMessages[conversation?._id ?? ''] ?? []).length > 0);
-  const conversationPending = usePendingMessageStatus(conversation?._id && isConvexId(conversation._id) ? conversation._id : null, hasPendingSends);
+  const tmuxPane = useInboxStore((s) => (conversation?._id ? ((s.sessions[conversation._id] as any)?.tmux_session ?? (s.conversations[conversation._id] as any)?.tmux_session ?? null) : null) as string | null);
+  // Also read while a pane exists, not only while this phone has sends in
+  // flight: a message sent from the desktop and held for a dialog must offer
+  // the terminal here too.
+  const conversationPending = usePendingMessageStatus(conversation?._id && isConvexId(conversation._id) ? conversation._id : null, hasPendingSends || (!!tmuxPane && !!conversation?.is_own && conversation?.status !== 'completed'));
+  // The live terminal, for what the transcript cannot show. A stuck session
+  // writes no transcript, so this never waits on recent activity: a pane on
+  // a session of yours, in a binary that can draw it, not ended.
+  const terminalReachable = terminalAvailable && !!tmuxPane && !!conversation?.is_own && conversation?.status !== 'completed';
+  // Whether the pane's machine is one this person can relay from, as the offer
+  // bar (which owns that lookup) last heard; the Terminal row waits on it.
+  const [terminalMine, setTerminalMine] = useState(false);
+  const agentStatusNow = useManagedSessionFields(conversation?._id ? String(conversation._id) : null)?.agent_status;
+  // Mid-turn, or parked on a permission card that answers itself: a waiting
+  // send is expected there, not stuck.
+  const agentBusy = agentStatusNow === 'working' || agentStatusNow === 'thinking' || agentStatusNow === 'compacting' || agentStatusNow === 'permission_blocked';
+  const openTerminal = useCallback(() => {
+    if (!conversation?._id) return;
+    Keyboard.dismiss();
+    void Haptics.selectionAsync();
+    router.push(`/terminal/${conversation._id}` as never);
+  }, [conversation?._id, router]);
   const { restart: restartSession, isRestarting } = useSessionRestart({
     conversationId: conversation?._id ?? '',
     isLive: !!isActive,
@@ -4022,7 +4100,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     ],
     [
       ...(isRealConversation && internals ? [{ key: 'restart', label: isRestarting ? 'Restarting…' : 'Restart session', icon: 'rotate-cw' as const, onPress: () => { if (!isRestarting) restartSession(); } }] : []),
-      ...(conversation?.session_id && internals ? [{ key: 'resume', label: 'Copy resume command', icon: 'terminal' as const, onPress: handleCopyResume }] : []),
+      ...(terminalReachable && terminalMine ? [{ key: 'terminal', label: 'Terminal', icon: 'terminal' as const, onPress: openTerminal }] : []),
+      ...(conversation?.session_id && internals ? [{ key: 'resume', label: 'Copy resume command', icon: 'clipboard' as const, onPress: handleCopyResume }] : []),
     ],
     // A hosted conversation is set aside under the inbox row's own name,
     // Stash, which is undone from the list, so it is not drawn as a delete.
@@ -4414,7 +4493,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         );
       }
       case 'session_message':
-        return <SessionMessageBlock variant={kind.variant} from={kind.from} name={kind.name} body={kind.body} timestamp={item.timestamp} />;
+        return <SessionMessageBlock variant={kind.variant} from={kind.from} name={kind.name} body={kind.body} timestamp={item.timestamp} intent={kind.intent} />;
       case 'huddle_summary':
         return <SessionMessageBlock from="unknown" name={`Huddle — ${kind.huddle.title}`} body={kind.huddle.body} timestamp={item.timestamp} />;
       case 'chat_wake':
@@ -4578,6 +4657,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           {/* The prompt list, More, and the compose pencil that starts the
               next session from here. Huddle, images and the board live in
               More, where a live huddle is listed first. */}
+          <NeedsInputStrip currentId={String(conversation._id)} />
           {navigatorRows.length > 0 && (
             <MessageListButton count={promptCount} onPress={openNavigatorSheet} />
           )}
@@ -5028,6 +5108,16 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           <DecisionCard key={pendingDecisions[0].decisionId} decisionRef={pendingDecisions[0].decisionId} docked />
         ) : !hosted && runningPermission ? (
           <RNView style={{ marginHorizontal: 12 }}><PermissionRecordLine question={runningPermission.question} outcome="running" /></RNView>
+        ) : null}
+        {terminalReachable && conversation?._id ? (
+          <TerminalOfferBar
+            conversationId={String(conversation._id)}
+            isLive={conversation.status === 'active'}
+            agentBusy={agentBusy}
+            pending={conversationPending}
+            onOpen={openTerminal}
+            onReachable={setTerminalMine}
+          />
         ) : null}
         <RNView style={styles.composerLayer}>
           <MessageInput
