@@ -138,6 +138,9 @@ const CALLER_REPORTED_ACTIONS = new Set([
 // news to nobody: no toast, no failure mark, no error report.
 const QUIET_ACTIONS = new Set(["saveQuoteDrafts", "removeQuoteDrafts"]);
 
+// chat.markRead's refusal of a marker that was deleted or sits in another room.
+const STALE_READ_MARKER = "That message is not in this channel";
+
 // Refusals the dispatch failure toast (providers.tsx DispatchFailureToast)
 // has already told the person about. The engine hands the caller the same
 // error object it reported, so a caller's own catch can stay quiet instead of
@@ -169,6 +172,23 @@ export function applyDispatchFailure(action: string, error: unknown, args?: unkn
     console.warn(`[sync] ${action} not recorded`, error);
     return;
   }
+  // A read mark is bookkeeping nobody asked for, so its refusal is news
+  // about the cache, not about an action, and nothing to report. A room the
+  // server no longer shows this viewer (left, removed, the team's chat off)
+  // is retired locally; a marker that is gone or in another room just leaves
+  // the old mark standing. "Mark channel read didn't go through" names no
+  // action the user took.
+  if (action === "markChannelRead" && Array.isArray(args) && typeof args[0] === "string") {
+    if (isChatRoomRefusal(error)) {
+      console.warn(`[sync] ${action} refused: room gone`, error);
+      useInboxStore.getState().retireChatChannel(args[0]);
+      return;
+    }
+    if (humanizeConvexError(error, "") === STALE_READ_MARKER) {
+      console.warn(`[sync] ${action} refused: stale marker`, error);
+      return;
+    }
+  }
   console.error(`[sync] dispatch failed after retries: ${action}`, error);
   // The write the person (or an effect) asked for never landed. Report it with
   // the window's recent write trail, so the report names what led up to it.
@@ -185,15 +205,6 @@ export function applyDispatchFailure(action: string, error: unknown, args?: unkn
   // before mention expansion was recorded) got refused. Surfacing it would
   // toast "didn't go through" and mark a delivered bubble as failed.
   if (action === "sendMessage" && /COMMAND_ID_REUSED/.test(String((error as Error)?.message ?? error))) {
-    return;
-  }
-  // A read mark is bookkeeping nobody asked for, so its refusal is news
-  // about the cache, not about an action: the room it names is one the
-  // server no longer shows this viewer (left, removed, the team's chat
-  // off). Retire the room locally and say nothing: "Mark channel read
-  // didn't go through" names no action the user took.
-  if (action === "markChannelRead" && Array.isArray(args) && typeof args[0] === "string" && isChatRoomRefusal(error)) {
-    useInboxStore.getState().retireChatChannel(args[0]);
     return;
   }
   useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
