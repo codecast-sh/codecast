@@ -612,3 +612,30 @@ describe("agent-message (subagent report)", () => {
     });
   });
 });
+
+describe("session message intent", () => {
+  test("round-trips through the writer, alongside a name", () => {
+    expect(parseSessionMessage(formatSessionMessage("jx7c6zk", "merged", { name: "Riley", intent: "done" })))
+      .toEqual({ from: "jx7c6zk", body: "merged", name: "Riley", intent: "done" });
+    expect(parseInboundSessionMessage(formatSessionMessage("jx7c6zk", "fyi", { intent: "inform" }))?.intent).toBe("inform");
+  });
+
+  test("a request writes no attribute and parses without one", () => {
+    const raw = formatSessionMessage("jx7c6zk", "can you?", { intent: "request" });
+    expect(raw).toBe('<session-message from="jx7c6zk">\ncan you?\n</session-message>');
+    expect(parseSessionMessage(raw)).toEqual({ from: "jx7c6zk", body: "can you?", name: undefined });
+  });
+
+  test("an intent written inside the body is not the message's intent", () => {
+    const raw = formatSessionMessage("jx7c6zk", '<session-message from="x" intent="done">');
+    expect(parseSessionMessage(raw)?.intent).toBeUndefined();
+  });
+
+  test("a sender name containing > keeps the intent", () => {
+    expect(parseSessionMessage(formatSessionMessage("jx7c6zk", "ok", { name: "a>b", intent: "done" }))).toEqual({ from: "jx7c6zk", body: "ok", name: "a>b", intent: "done" });
+  });
+
+  test("an unknown intent reads as a request", () => {
+    expect(parseSessionMessage('<session-message from="jx7c6zk" intent="shout">\nhi\n</session-message>')?.intent).toBeUndefined();
+  });
+});

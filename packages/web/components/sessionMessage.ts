@@ -37,6 +37,8 @@ import {
   CHAT_WAKE_HEADER,
   isCompactionSummaryMessage,
   restoreFrameTags,
+  sessionMessageIntentOf,
+  type SessionMessageIntent,
 } from "@codecast/shared/contracts";
 import { LRUCache } from "../lib/lruCache";
 export type { HuddleSummaryTag } from "@codecast/shared/contracts";
@@ -65,7 +67,8 @@ export {
   isToolResultCarrier,
 } from "@codecast/shared/contracts";
 
-const SESSION_MESSAGE_RE = /<session-message\s+from="([^"]*)"[^>]*>([\s\S]*)<\/session-message>/;
+// Attributes are read one by one: a sender name may contain ">", never a quote.
+const SESSION_MESSAGE_RE = /<session-message\s+from="([^"]*)"(?:\s+[a-z_]+="[^"]*")*\s*>([\s\S]*)<\/session-message>/;
 const SESSION_MESSAGE_NAME_RE = /<session-message\s+from="[^"]*"\s+name="([^"]*)"/;
 
 function removeLeadingFramingNewline(body: string): string {
@@ -84,12 +87,18 @@ function removeSessionMessageFraming(body: string): string {
   return removeTrailingFramingNewline(removeLeadingFramingNewline(body));
 }
 
-export function parseSessionMessage(text: string): { from: string; body: string; name?: string } | null {
+export function parseSessionMessage(text: string): { from: string; body: string; name?: string; intent?: SessionMessageIntent } | null {
   if (!text || typeof text !== "string") return null;
   const match = text.match(SESSION_MESSAGE_RE);
   if (!match) return null;
   const name = text.match(SESSION_MESSAGE_NAME_RE)?.[1]?.trim() || undefined;
-  return { from: match[1].trim(), body: restoreFrameTags(removeSessionMessageFraming(match[2])), name: name && restoreFrameTags(name) };
+  const intent = sessionMessageIntentOf(text.slice(text.indexOf("<session-message")));
+  return {
+    from: match[1].trim(),
+    body: restoreFrameTags(removeSessionMessageFraming(match[2])),
+    name: name && restoreFrameTags(name),
+    ...(intent !== "request" ? { intent } : {}),
+  };
 }
 
 // Full parse of an inbound session→session message from a raw user-message
@@ -97,7 +106,7 @@ export function parseSessionMessage(text: string): { from: string; body: string;
 // and rendering) and the sender/body are needed.
 export function parseInboundSessionMessage(
   rawContent: string | null | undefined,
-): { from: string; body: string; name?: string } | null {
+): { from: string; body: string; name?: string; intent?: SessionMessageIntent } | null {
   if (!rawContent) return null;
   const cleaned = stripInjectionNoise(rawContent);
   if (!cleaned.startsWith("<session-message")) return null;
@@ -187,6 +196,8 @@ export interface ChatWakePrompt {
   askerName: string;
   // true = the asker @mentioned the anchor; false = a plain reply in a thread it holds.
   addressed: boolean;
+  /** A person handed this thread to the session (Hand to agent). */
+  handed?: boolean;
   entries: ChatWakeEntry[];
   // What the room said before the thread, when the wake quotes it.
   context: ChatWakeEntry[];
@@ -199,6 +210,7 @@ export function chatWakePlace(wake: ChatWakePrompt): string {
 }
 
 export function chatWakeAction(wake: ChatWakePrompt): string {
+  if (wake.handed) return "handed you a thread";
   if (!wake.addressed) return "replied in a thread";
   return wake.direct ? "messaged you" : "mentioned you";
 }
@@ -211,7 +223,7 @@ export function parseChatWakePrompt(rawContent: string | null | undefined): Chat
   const header = text.match(CHAT_WAKE_HEADER);
   if (!header) return null;
   const rest = text.slice(header[0].length);
-  const asker = rest.match(/^(.*?) (mentioned you in a thread|mentioned @[\w-]+ in (?:#\S+|a direct message)|messaged you directly|replied in a thread you (?:are part of|follow))\./);
+  const asker = rest.match(/^(.*?) (mentioned you in a thread|mentioned @[\w-]+ in (?:#\S+|a direct message)|messaged you directly|handed you a thread|replied in a thread you (?:are part of|follow))\./);
 
   const begin = rest.match(/^--- begin thread ([0-9a-f]{12}) ---$/m);
   const thread: ChatWakeEntry[] = [];
@@ -255,6 +267,7 @@ export function parseChatWakePrompt(rawContent: string | null | undefined): Chat
     placeholderId: tail.match(/cast chat reply (\S+) /)?.[1],
     askerName: asker?.[1]?.trim() || "a teammate",
     addressed: asker ? !asker[2].startsWith("replied") : true,
+    handed: asker?.[2] === "handed you a thread" || undefined,
     entries: tidy(thread),
     context: tidy(context),
     deadlineMinutes: deadline ? Number(deadline[1]) : undefined,
