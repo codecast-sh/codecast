@@ -36,6 +36,7 @@ import {
   describeTaskCadence,
   fmtClock,
   fmtDuration,
+  readableTimes,
   taskStateLabel,
   triggerEventLabel,
 } from "../../../components/triggerCadence";
@@ -487,7 +488,7 @@ export default function TriggerDetailPage() {
                 </div>
                 {t.last_run_summary && (
                   <p className="mt-1 text-meta leading-relaxed text-sol-text-muted">
-                    {t.last_run_summary}
+                    {readableTimes(t.last_run_summary, now)}
                   </p>
                 )}
               </div>

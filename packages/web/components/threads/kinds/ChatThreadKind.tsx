@@ -201,7 +201,7 @@ export function ChatExpanded({
 
   const send = useCallback(
     (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean }) => {
-      useInboxStore.getState().sendChatMessage(channelId, content, {
+      return useInboxStore.getState().sendChatMessage(channelId, content, {
         threadRootId: rootId,
         attachments,
         broadcast: opts?.broadcast,

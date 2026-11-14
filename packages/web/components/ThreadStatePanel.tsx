@@ -1,13 +1,15 @@
 "use client";
 
-import React, { memo, useLayoutEffect, useRef, useState } from "react";
+import React, { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Copy, X } from "lucide-react";
 import { toast } from "sonner";
 import { threadStateAskParts, type ThreadStateRow } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
 import { withoutUndo } from "../store/undoStack";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { PrStatusChip } from "./PrStatusChip";
+import { BELOW_SM, useMediaQuery } from "../hooks/useIsPhone";
+import { LinkedPrChips, PrStatusChip } from "./PrStatusChip";
+import { sessionPullRequestsSig, titledSessionPullRequests, type LinkedPr } from "../lib/sessionPullRequests";
 import { TextWithMentions } from "./EntityIdPill";
 import { threadStateView, THREAD_STATE_STATUS_META, type ThreadStateView } from "../lib/threadState";
 import { copyText } from "../lib/copyText";
@@ -58,6 +60,9 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   // is this session waiting on. The field only changes when the shepherd
   // rewrites it, so subscribing to it directly does not follow row churn.
   const prStatus = useInboxStore((s) => s.sessions[conversationId]?.pr_status ?? null);
+  // Every other pull request the session links, beside it.
+  const prSig = useInboxStore((s) => sessionPullRequestsSig(s as any, conversationId));
+  const linkedPrs = useMemo(() => titledSessionPullRequests(useInboxStore.getState() as any, conversationId), [prSig, conversationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = () =>
     useInboxStore.getState().updateClientUI({ thread_state_collapsed: !collapsed });
@@ -100,6 +105,7 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
       now={now}
       collapsed={collapsed}
       prStatus={prStatus}
+      linkedPrs={linkedPrs}
       onToggle={toggle}
       onClear={canClear ? clear : undefined}
     />
@@ -120,6 +126,7 @@ export function ThreadStatePanelView({
   now,
   collapsed,
   prStatus,
+  linkedPrs = [],
   onToggle,
   onClear,
 }: {
@@ -132,6 +139,7 @@ export function ThreadStatePanelView({
   now: number;
   collapsed: boolean;
   prStatus: React.ComponentProps<typeof PrStatusChip>["status"];
+  linkedPrs?: readonly LinkedPr[];
   onToggle: () => void;
   onClear?: (headline: string) => void;
 }) {
@@ -142,6 +150,7 @@ export function ThreadStatePanelView({
   // that collapses it back.
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
+  const narrow = useMediaQuery(BELOW_SM);
   const bodyRef = useRef<HTMLDivElement>(null);
   useWatchEffect(() => setExpanded(false), [conversationId]);
   useLayoutEffect(() => {
@@ -160,12 +169,16 @@ export function ThreadStatePanelView({
     messageCount ?? 0,
     now,
   );
+  const otherPrs = prStatus ? linkedPrs.filter((p) => p.id !== String(prStatus.pr_id)) : linkedPrs;
   if (!view) {
-    if (!prStatus) return null;
+    // Alone (no pinned state, no shepherd), the strip earns its place only
+    // when a pull request still moves or carries this session's own commits.
+    if (!prStatus && !otherPrs.some((p) => p.state === "open" || p.state === "draft" || p.tier === "committed")) return null;
     return (
       <div className="relative z-20 bg-sol-bg pt-1.5">
-        <div className="mx-auto conv-col px-2 sm:px-4 pb-1.5 flex items-center">
+        <div className="mx-auto conv-col px-2 sm:px-4 pb-1.5 flex items-center gap-1 flex-wrap">
           <PrStatusChip status={prStatus} size="panel" />
+          <LinkedPrChips prs={otherPrs} size="panel" max={4} inCard={false} />
         </div>
       </div>
     );
@@ -222,6 +235,8 @@ export function ThreadStatePanelView({
               )}
             </button>
             <PrStatusChip status={prStatus} size="panel" className="shrink-0" />
+            {/* A phone has room for the count, not the chips: it opens them. */}
+            <LinkedPrChips prs={otherPrs} size="panel" max={narrow ? (prStatus ? 0 : 1) : 2} className="shrink-0" inCard={false} />
             <div className="flex items-center shrink-0">
               {canClear && (
                 <button

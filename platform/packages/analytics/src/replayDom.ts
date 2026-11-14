@@ -11,6 +11,11 @@
 //   per burst (and every value is masked anyway).
 // - Canvas, fonts, inline images and cross-origin iframes: heavy, and none of
 //   them are what a person reproducing a bug looks at.
+// - Linked stylesheets' text. rrweb copies every <link rel=stylesheet> into
+//   each snapshot by default, which was three quarters of a snapshot (60 ms
+//   and 4.5 MB on the codecast inbox, 16 ms and 1.5 MB without). The link
+//   stays as an href and the recorder uploads each sheet once when the DOM
+//   ships (./replay uploadStyles); the player puts it back.
 //
 // What it hides: every input value is masked; the text of any rich text
 // editor is masked, since it is whatever the person typed (the semantic
@@ -46,6 +51,7 @@ export const DOM_RECORD_OPTIONS = {
     media: 800,
     input: "last",
   },
+  inlineStylesheet: false,
   recordCanvas: false,
   collectFonts: false,
   inlineImages: false,

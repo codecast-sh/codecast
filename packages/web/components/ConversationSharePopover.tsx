@@ -15,6 +15,7 @@ export function ConversationSharePopover({ conversation, canManage }: { conversa
   const { setPrivate, shareWithTeam } = useTeamShareActions(convId);
   const setShareLink = useInboxStore((s) => s.setShareLink);
   const setGuestSuggestions = useInboxStore((s) => s.setGuestSuggestions);
+  const setTeamSuggestions = useInboxStore((s) => s.setTeamSuggestions);
   const pageUrl = `${shareOrigin()}/conversation/${convId}`;
   const policyRefusal = usePolicyRefusal("public_sharing_disabled", policyTeamOf("conversations", conversation));
   // The link that works for anyone must PRESENT the token (?share=): a bare
@@ -45,6 +46,18 @@ export function ConversationSharePopover({ conversation, canManage }: { conversa
       sharedVia={conversation.auto_shared ? (conversation.git_root || conversation.project_path || null) : null}
       // Guests without an account can suggest messages; each one waits above
       // the owner's composer until they send it (convex guestSuggestions.ts).
+      // While you are in the session, a teammate's message waits for you to
+      // send it (convex teamSuggestions.ts); off, it goes straight in.
+      teamExtra={
+        <label className="flex items-center justify-between gap-3 pt-1 cursor-pointer">
+          <span className="text-xs text-sol-text-secondary">Teammates suggest while you're here</span>
+          <Switch
+            checked={conversation.team_suggestions !== false}
+            onCheckedChange={(on) => setTeamSuggestions(convId, on)}
+            aria-label="Teammates suggest while you're here"
+          />
+        </label>
+      }
       linkExtra={conversation.share_token ? (
         <label className="flex items-center justify-between gap-3 pt-1 cursor-pointer">
           <span className="text-xs text-sol-text-secondary">Guests can suggest messages</span>

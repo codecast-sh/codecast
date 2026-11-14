@@ -37,7 +37,7 @@ async function verifySlackComposer() {
   const { ChatComposer } = await import("./ChatComposer");
   const root = createRoot(document.getElementById("root")!);
   const render = (threadRootId?: string) => act(async () => root.render(<ChatComposer channelId="dm" teamId="team" threadRootId={threadRootId} placeholder="Message Samvit" onSend={(...args) => sent.push(args)} />));
-  const checkbox = () => document.querySelector<HTMLInputElement>('.ch-composer-choice input')!;
+  const checkbox = () => document.querySelector<HTMLInputElement>('.ch-composer-choice:not([data-hand-choice]) input')!;
   const button = () => document.querySelector<HTMLButtonElement>('.ch-slack-connect-button')!;
   try {
     await render("root");

@@ -5,7 +5,7 @@
 
 Every message costs the recipient a turn over its whole context. Read before you write: `cast read <id>` and `cast diff <id>` cost it nothing. Sessions found by search or the feed are history to read, not colleagues to ask; message an old session only when it still owns work that must change.
 
-After accepting work from another session, send one result: commit or artifact, verification, caveats, required action. Report earlier only for blockers or material changes. An inbound `<session-message from="…">` needs no reply unless it asks something; never send acknowledgment-only replies. A `<user-message from="…">` is a human: answer in this thread.
+After accepting work from another session, send one result: commit or artifact, verification, caveats, required action, with `--done` when nothing is asked back. Report earlier only for blockers or material changes. An inbound `<session-message from="…">` needs no reply unless it asks something; one with `intent="inform"` needs none, and one with `intent="done"` closes the exchange: never answer it. Never send acknowledgment-only replies. A `<user-message from="…">` is a human: answer in this thread.
 
 Check a session's diff before attributing changes to it, and its machine and checkout before assuming it explains your local tree. Multi-line bodies go through `cast send <id> - <<'EOF'`, never `"$(cat file)"`.
 

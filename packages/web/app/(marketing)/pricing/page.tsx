@@ -53,7 +53,7 @@ const TIERS: Tier[] = [
     accent: "#268bd2",
     features: [
       "Unlimited agent sessions",
-      "Every agent: Claude Code, Codex, Cursor, Gemini",
+      "Every agent: Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok",
       "Full real-time sync across every device",
       "Web, desktop, and mobile apps",
       "Search and memory across your own sessions",

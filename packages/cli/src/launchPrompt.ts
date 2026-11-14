@@ -12,7 +12,7 @@
 //
 // Pure helpers plus one file write: the daemon owns the start and the delivery.
 
-import { isPollResponsePayload } from "@codecast/shared/contracts";
+import { isPollResponsePayload, stampDeliveryId } from "@codecast/shared/contracts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PendingDeliveryHeldError } from "./pendingDeliveryAdmission.js";
@@ -58,7 +58,8 @@ export function pickLaunchPrompt<T extends LaunchPromptRow>(rows: readonly T[], 
     .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0))[0];
   if (!first) return null;
   const text = launchPromptText(first);
-  return text === null ? null : { row: first, text };
+  const stamped = text === null ? null : stampDeliveryId(text, first._id);
+  return stamped === null || Buffer.byteLength(stamped, "utf8") > LAUNCH_PROMPT_MAX_BYTES ? null : { row: first, text: stamped };
 }
 
 /** The text to launch with, or null for a message only the composer can take:

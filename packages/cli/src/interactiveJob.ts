@@ -13,12 +13,13 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "./proc.js";
+import { execFileAsync, spawnSync } from "./proc.js";
 import { LAUNCHD_LABEL_ENV, startLaunchdJob } from "./launchdJob.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
 import { acquireFileSlot } from "./lockFile.js";
 import { machineCap } from "./machineCaps.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { EXIT_CANCELLED, EXIT_INFRA, printHint } from "./infraExit.js";
 
 /** Priority a process gets when nothing clamps it (the Interactive band starts here). */
 const UNCLAMPED_PRIORITY = 31;
@@ -66,14 +67,16 @@ async function runJob(command: string[], opts: { cwd?: string; stdin?: string },
   fs.writeFileSync(logPath, "");
   const session = sessionIdFromEnv();
   const env = [`EXIT_FILE=${exitPath}`, `STDIN_FILE=${opts.stdin ?? "/dev/null"}`, ...(session ? [`CODECAST_SESSION_ID=${session}`] : [])];
-  const wrapped = ["/bin/bash", "-c", 'cd "$1" && shift && "$@" < "$STDIN_FILE"; echo $? > "$EXIT_FILE"', "interactive-job", opts.cwd ?? process.cwd(), ...command];
+  // A directory the job cannot enter is the tool's failure, not the command's: the command never ran.
+  // The exit code lands by rename, so the poll never reads a file the shell has truncated but not yet written.
+  const wrapped = ["/bin/bash", "-c", `cd "$1" || { echo "cast: the Interactive job could not enter $1" >&2; echo ${EXIT_INFRA} > "$EXIT_FILE.tmp"; mv "$EXIT_FILE.tmp" "$EXIT_FILE"; exit 0; }; shift; "$@" < "$STDIN_FILE"; echo $? > "$EXIT_FILE.tmp"; mv "$EXIT_FILE.tmp" "$EXIT_FILE"`, "interactive-job", opts.cwd ?? process.cwd(), ...command];
   if (!startLaunchdJob({ label, argv: ["/usr/bin/env", ...env, ...wrapped], plistPath: path.join(dir, "job.plist"), logPath })) {
     fs.rmSync(dir, { recursive: true, force: true });
     return runHere();
   }
   const uid = process.getuid!();
   const stop = () => { spawnSync("/bin/launchctl", ["bootout", `gui/${uid}/${label}`], { timeout: 10_000 }); };
-  const onSignal = () => { stop(); process.exit(130); };
+  const onSignal = () => { stop(); process.exit(EXIT_CANCELLED); };
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, onSignal);
   let offset = 0;
   const relay = () => {
@@ -87,18 +90,77 @@ async function runJob(command: string[], opts: { cwd?: string; stdin?: string },
     process.stdout.write(buf);
   };
   return new Promise((resolve) => {
-    const timer = setInterval(() => {
-      relay();
-      if (!fs.existsSync(exitPath)) return;
+    let lastProbe = Date.now();
+    let goneSince: number | null = null;
+    let probing = false;
+    let done = false;
+    const finish = (code: number, hint: string | null) => {
+      if (done) return;
+      done = true;
       clearInterval(timer);
       relay();
-      const code = Number(fs.readFileSync(exitPath, "utf8").trim());
       stop();
       for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.off(sig, onSignal);
       fs.rmSync(dir, { recursive: true, force: true });
-      resolve(Number.isFinite(code) ? code : 1);
+      if (hint) printHint(hint);
+      resolve(code);
+    };
+    const timer = setInterval(() => {
+      relay();
+      if (fs.existsSync(exitPath)) {
+        const raw = fs.readFileSync(exitPath, "utf8").trim();
+        const verdict = jobVerdict(raw ? Number(raw) : NaN, command);
+        return finish(verdict.code, verdict.hint);
+      }
+      // A job launchd no longer runs, with no exit written, was killed whole
+      // (its wrapper too): without this the caller would wait on it forever.
+      if (probing || done || Date.now() - lastProbe < JOB_PROBE_MS) return;
+      lastProbe = Date.now();
+      probing = true;
+      // Off the event loop, so relaying the job's output never waits on launchctl.
+      execFileAsync("/bin/launchctl", ["print", `gui/${uid}/${label}`], { encoding: "utf-8", timeout: 3_000 })
+        .then((r) => launchdJobState(0, String(r.stdout ?? "")), (err: { code?: unknown; stdout?: string }) => launchdJobState(typeof err.code === "number" ? err.code : null, String(err.stdout ?? "")))
+        .then((state) => {
+          if (done || state.running || fs.existsSync(exitPath)) return void (goneSince = null);
+          goneSince ??= Date.now();
+          if (Date.now() - goneSince < JOB_PROBE_MS) return;
+          process.stderr.write(`cast: the Interactive job for ${command.join(" ")} ended without reporting an exit code${state.detail ? ` (${state.detail})` : ""}\n`);
+          finish(EXIT_INFRA, `run it again; if it is killed again, free memory first (it may have been killed for memory)`);
+        })
+        .finally(() => { probing = false; });
     }, 250);
   });
+}
+
+const JOB_PROBE_MS = 5_000;
+const LAUNCHCTL_NO_SUCH_SERVICE = 113;
+
+/**
+ * Whether `launchctl print` says the job has ended, and how. Only an unloaded
+ * job or `state = not running` counts as ended: a job still being spawned on
+ * a loaded machine shows other states, and must not be failed for it.
+ */
+export function launchdJobState(status: number | null, text: string): { running: boolean; detail: string | null } {
+  // 113 is launchctl's "could not find service". A timeout (null) or any other failure says nothing.
+  if (status === LAUNCHCTL_NO_SUCH_SERVICE) return { running: false, detail: null };
+  if (status !== 0) return { running: true, detail: null };
+  if (!/^\s*state = not running\b/m.test(text)) return { running: true, detail: null };
+  const signal = /^\s*last terminating signal = (.+)$/m.exec(text)?.[1]?.trim();
+  const code = /^\s*last exit code = (.+)$/m.exec(text)?.[1]?.trim();
+  return { running: false, detail: signal ? `last signal: ${signal}` : code ? `last exit code ${code}` : null };
+}
+
+/**
+ * The code a finished job hands back, and a hint when it is not the
+ * command's own verdict. A SIGKILL (bash reports 137) is almost always the
+ * memory killer, and the command reached no verdict, so it is reported as the
+ * tool's failure (infraExit.ts).
+ */
+export function jobVerdict(code: number, command: readonly string[]): { code: number; hint: string | null } {
+  if (!Number.isFinite(code)) return { code: EXIT_INFRA, hint: `run \`${command.join(" ")}\` again; the Interactive job wrote no exit code` };
+  if (code === 137) return { code: EXIT_INFRA, hint: `free memory, then run it again: the command was killed (SIGKILL), most likely for memory` };
+  if (code === 127) return { code, hint: `a program the job runs was not found on its PATH (\`${command[0]}\` or one it calls); install it or use a full path` };
+  return { code, hint: null };
 }
 
 /**

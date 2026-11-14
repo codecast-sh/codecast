@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Window } from "happy-dom";
 import { sha256Hex, type CodecastErrorItem, type CodecastReplayManifest, type CodecastSink, type ReplayChunkSign, type ReplaySignResult } from "./codecast";
-import { cleanUrl, labelOf, startReplay, visibleOutline, DOM_CHECKOUT_MS, REPLAY_LIMITS, type DomEvent, type ReplayEvent, type ReplayRecorder, type StartDomRecording } from "./replay";
+import { absoluteCssUrls, cleanUrl, labelOf, siteOf, startReplay, visibleOutline, DOM_CHECKOUT_MS, DOM_IDLE_MS, REPLAY_LIMITS, type DomEvent, type ReplayEvent, type ReplayRecorder, type StartDomRecording } from "./replay";
 
 // A real DOM for the recorder, installed as the globals it reads.
 let win: Window;
@@ -44,13 +44,25 @@ function fakeSink(sign: (chunk: number) => ReplaySignResult | null = () => ({ up
 }
 
 const puts: Array<{ url: string; body: any; sha256: string; size: number; headers: unknown }> = [];
-const uploadFetch = (async (url: string, init: RequestInit) => {
+// Stylesheets the recorder reads back (GET through the same fetch it PUTs with).
+const sheets = new Map<string, string>();
+const uploadFetch = (async (url: string, init: RequestInit = {}) => {
+  if (init.method !== "PUT") {
+    const css = sheets.get(url);
+    return css === undefined ? new Response(null, { status: 404 }) : new Response(css, { status: 200 });
+  }
   const bytes = init.body as Uint8Array<ArrayBuffer>;
   const gz = bytes[0] === 0x1f && bytes[1] === 0x8b;
   const text = gz
     ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text()
     : new TextDecoder().decode(bytes);
-  puts.push({ url, body: JSON.parse(text), sha256: await sha256Hex(bytes), size: bytes.byteLength, headers: init.headers });
+  let body: unknown = text;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // a stylesheet
+  }
+  puts.push({ url, body, sha256: await sha256Hex(bytes), size: bytes.byteLength, headers: init.headers });
   return new Response(null, { status: 200 });
 }) as unknown as typeof fetch;
 
@@ -94,6 +106,7 @@ beforeEach(() => {
   clock = 1_000;
   timers.length = 0;
   puts.length = 0;
+  sheets.clear();
   pageAnswers = [];
   win.document.title = "Start";
   win.document.body.innerHTML = `
@@ -353,7 +366,7 @@ describe("startReplay", () => {
 // snapshot (2) open a segment; 3 is an incremental event.
 function fakeDom() {
   let emit: ((e: DomEvent, isCheckout: boolean) => void) | null = null;
-  const state = { loads: 0, stopped: false, checkouts: 0 };
+  const state = { loads: 0, stopped: false, checkouts: 0, starts: 0, running: false };
   let ts = 0;
   const snap = (checkout: boolean) => {
     emit!({ type: 4, timestamp: ++ts, data: { href: "https://app.test/meet/k3yk3y?token=abc", width: 800, height: 600 } }, checkout);
@@ -364,6 +377,8 @@ function fakeDom() {
     state.loads++;
     return (e) => {
       emit = e;
+      state.starts++;
+      state.running = true;
       snap(false);
       return {
         checkout: () => {
@@ -372,11 +387,13 @@ function fakeDom() {
         },
         stop: () => {
           state.stopped = true;
+          state.running = false;
         },
       };
     };
   };
-  return { load, snap, inc, state, started: () => emit !== null };
+  const raw = (e: DomEvent) => emit!(e, false);
+  return { load, snap, inc, raw, state, started: () => emit !== null };
 }
 
 const domPuts = (signs: ReplayChunkSign[]) => puts.filter((_, i) => signs[i]?.kind === "dom");
@@ -540,5 +557,166 @@ describe("DOM mode", () => {
     } finally {
       for (const k of added) delete (globalThis as any)[k];
     }
+  });
+});
+
+describe("DOM mode runs only while the page is attended", () => {
+  const idleTimer = () => timers.filter((t) => t.ms <= DOM_IDLE_MS && t.ms >= 1_000).at(-1)!;
+
+  it("stops once nobody touches the page, and starts again on the next input on a fresh snapshot", async () => {
+    const dom = fakeDom();
+    const { recorder: r } = start({ replayDom: "onError", loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    expect(dom.state.running).toBe(true);
+    dom.inc("while someone looks");
+    clock += DOM_IDLE_MS;
+    idleTimer().fn();
+    expect(dom.state.running).toBe(false);
+    win.document.dispatchEvent(new win.Event("pointermove") as unknown as Event);
+    expect(dom.state.starts).toBe(2);
+    expect(dom.state.running).toBe(true);
+    // The segment before the sleep is still held, and the new one opens on its snapshot.
+    expect(r.domEvents).toBe(5);
+  });
+
+  it("an input keeps it running: the idle check re-arms for what is left of the window", async () => {
+    const dom = fakeDom();
+    start({ replayDom: "onError", loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    clock += DOM_IDLE_MS - 1_000;
+    win.document.dispatchEvent(new win.Event("keydown") as unknown as Event);
+    idleTimer().fn();
+    expect(dom.state.running).toBe(true);
+  });
+
+  it("a hidden tab stops it at once", async () => {
+    const dom = fakeDom();
+    start({ replayDom: "onError", loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    Object.defineProperty(win.document, "visibilityState", { value: "hidden", configurable: true });
+    win.document.dispatchEvent(new win.Event("visibilitychange") as unknown as Event);
+    expect(dom.state.running).toBe(false);
+    // Inputs while hidden do not start it.
+    win.document.dispatchEvent(new win.Event("pointermove") as unknown as Event);
+    expect(dom.state.running).toBe(false);
+  });
+
+  it("an error while it sleeps starts it, so the page at the error ships", async () => {
+    const dom = fakeDom();
+    const { sink, signs } = start({ replayDom: "onError", loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    clock += REPLAY_LIMITS.ring_buffer_ms + DOM_IDLE_MS;
+    idleTimer().fn();
+    expect(dom.state.running).toBe(false);
+    sink.captureError(new Error("boom"));
+    expect(dom.state.starts).toBe(2);
+    await until(() => domPuts(signs).length === 1);
+    // The segment from before a sleep longer than the ring is dropped: only the page at the error ships.
+    expect((domPuts(signs)[0].body as DomEvent[]).map((e) => e.type)).toEqual([4, 2]);
+  });
+});
+
+describe("what keeps a recording", () => {
+  it("names why in the manifest, the sample first", async () => {
+    const { recorder: r, manifests } = start({ sampleRate: 1 });
+    r.keep("onboarding");
+    await until(() => manifests.length > 0);
+    expect(r.keptFor).toEqual(["sample", "onboarding"]);
+    expect(manifests.at(-1)!.kept_for).toEqual(["sample", "onboarding"]);
+  });
+
+  it("an app reason outside the pattern is ignored", () => {
+    const { recorder: r } = start();
+    r.keep("Not A Token!");
+    expect(r.kept).toBe(false);
+    expect(r.keptFor).toEqual([]);
+  });
+
+  it("a rage click: four clicks on one target inside the window", async () => {
+    const dom = fakeDom();
+    const { recorder: r, signs } = start({ replayDom: "onError", loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    const button = win.document.querySelector("button[type=submit]")!;
+    for (let i = 0; i < 3; i++) {
+      clock += 200;
+      button.dispatchEvent(new win.MouseEvent("click", { bubbles: true }) as unknown as Event);
+    }
+    expect(r.kept).toBe(false);
+    clock += 200;
+    button.dispatchEvent(new win.MouseEvent("click", { bubbles: true }) as unknown as Event);
+    expect(r.keptFor).toEqual(["rage_click"]);
+    await until(() => domPuts(signs).length === 1);
+  });
+
+  it("slow clicks on one target, or quick clicks on different ones, are not rage", () => {
+    const { recorder: r } = start();
+    const [a, b] = Array.from(win.document.querySelectorAll("button"));
+    for (let i = 0; i < 4; i++) {
+      clock += 1_000;
+      a.dispatchEvent(new win.MouseEvent("click", { bubbles: true }) as unknown as Event);
+    }
+    for (let i = 0; i < 4; i++) (i % 2 ? a : b).dispatchEvent(new win.MouseEvent("click", { bubbles: true }) as unknown as Event);
+    expect(r.kept).toBe(false);
+  });
+
+  it("a 5xx from the page's own site keeps it; a third party's does not", async () => {
+    const { recorder: r } = start();
+    pageAnswers = [{ status: 500 }, { status: 503 }];
+    await fetch("https://ads.other.test/pixel");
+    expect(r.kept).toBe(false);
+    await fetch("https://api.app.test/query");
+    expect(r.keptFor).toEqual(["server_error"]);
+  });
+
+  it("a slow request to the page's own site keeps it", async () => {
+    const { recorder: r } = start();
+    pageAnswers = [{ status: 200, delay: 9_000 }];
+    await fetch("/api/slow");
+    expect(r.keptFor).toEqual(["slow_request"]);
+  });
+
+  it("a 404 keeps nothing, and keepOn turns a trigger off", async () => {
+    const { recorder: r } = start({ keepOn: { serverError: false } });
+    pageAnswers = [{ status: 404 }, { status: 500 }];
+    await fetch("/api/missing");
+    await fetch("/api/broken");
+    expect(r.kept).toBe(false);
+  });
+});
+
+describe("stylesheets", () => {
+  it("ship once each, named by the href the capture holds, after the chunks that name them", async () => {
+    const dom = fakeDom();
+    sheets.set("https://app.test/assets/app.css", ".a { background: url(img/x.png) }");
+    const { sink, signs } = start({ replayDom: "onError", loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    const link = (href: string) => ({ type: 2, tagName: "link", attributes: { rel: "stylesheet", href }, childNodes: [] });
+    dom.raw({ type: 2, timestamp: 50, data: { node: { type: 0, childNodes: [link("https://app.test/assets/app.css"), link("https://app.test/assets/gone.css")] } } });
+    dom.raw({ type: 3, timestamp: 51, data: { source: 0, adds: [{ node: link("https://app.test/assets/app.css") }] } });
+    sink.captureError(new Error("boom"));
+    await until(() => puts.some((p) => typeof p.body === "string"));
+    // The sheet the page could read went up once, its relative url() made
+    // absolute; the one it could not is left to draw without.
+    expect(signs.filter((s) => s.kind === "style").map((s) => s.href)).toEqual(["https://app.test/assets/app.css"]);
+    expect(puts.filter((p) => typeof p.body === "string").map((p) => p.body)).toEqual([".a { background: url(https://app.test/assets/img/x.png) }"]);
+  });
+});
+
+describe("absoluteCssUrls", () => {
+  it("resolves relative url()s against the sheet and leaves the rest", () => {
+    const css = `a{b:url(x.png)} c{d:url('../f/y.woff2')} e{f:url("data:image/png;base64,AA")} g{h:url(https://cdn.test/z.png)} i{j:url(#m)} k{l:url(//cdn.test/q)}`;
+    expect(absoluteCssUrls(css, "https://app.test/assets/s.css")).toBe(
+      `a{b:url(https://app.test/assets/x.png)} c{d:url('https://app.test/f/y.woff2')} e{f:url("data:image/png;base64,AA")} g{h:url(https://cdn.test/z.png)} i{j:url(#m)} k{l:url(//cdn.test/q)}`,
+    );
+  });
+});
+
+describe("siteOf", () => {
+  it("folds a host to its site", () => {
+    expect(siteOf("convex.codecast.sh")).toBe("codecast.sh");
+    expect(siteOf("codecast.sh")).toBe("codecast.sh");
+    expect(siteOf("a.b.example.co.uk")).toBe("example.co.uk");
+    expect(siteOf("localhost")).toBe("localhost");
+    expect(siteOf("127.0.0.1")).toBe("127.0.0.1");
   });
 });

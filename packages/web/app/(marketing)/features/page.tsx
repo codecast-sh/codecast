@@ -105,7 +105,7 @@ export default function FeaturesPage() {
         </h1>
         <p className="text-lg sm:text-xl leading-relaxed max-w-2xl mx-auto mb-8" style={{ color: SOL.base00 }}>
           Inbox, chat, calls, tasks, docs, pull requests and decisions, on the web, the Mac app and
-          the phone. Claude Code, Codex, Cursor, Gemini, OpenCode and pi work in the same places,
+          the phone. Claude Code, Codex, Cursor, Gemini, OpenCode, pi and Grok work in the same places,
           so what they do shows up where you already look, linked to the session that did it.
         </p>
         <div className="flex flex-wrap gap-3 justify-center">

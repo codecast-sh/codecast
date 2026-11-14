@@ -67,7 +67,7 @@ export function DmExpanded({
 
   const send = useCallback(
     (content: string, attachments?: ChatAttachment[]) => {
-      useInboxStore.getState().sendChatMessage(channelId, content, { attachments });
+      return useInboxStore.getState().sendChatMessage(channelId, content, { attachments });
     },
     [channelId],
   );

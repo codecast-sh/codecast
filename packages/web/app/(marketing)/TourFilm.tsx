@@ -96,7 +96,7 @@ export function TourSection() {
   }, []);
 
   return (
-    <section id="tour" className="max-w-6xl mx-auto px-6 pb-20 scroll-mt-20">
+    <section id="tour" className="max-w-6xl mx-auto px-6 pt-16 pb-20 scroll-mt-20">
       <div className="max-w-2xl mb-10">
         <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono tracking-tight">
           The {Math.round(TOTAL / 60)}-minute tour

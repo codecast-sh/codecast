@@ -15,6 +15,7 @@ import { ShareControl } from "../../../components/ShareControl";
 import { WatchButton } from "../../../components/WatchButton";
 import { IssueLink } from "../../../components/tasks/IssueLink";
 import { CallListFeeder, TaskCallChip } from "../../../components/tasks/TaskCallChip";
+import { TaskCostFact, useTaskCost } from "../../../components/tasks/TaskCostFact";
 import { PageHeader } from "../../../components/ui/page-header";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { copyToClipboard } from "../../../lib/utils";
@@ -83,6 +84,7 @@ export type TaskTitleEdit = {
 
 /** Classic: the card header, id + badges + watch, with actions. */
 export function TaskHeadIdRow({ data, teamInfo, taskProject, taskTeamId, isInline, onOpen, close }: HeadFacts) {
+  const cost = useTaskCost(data.short_id, data.workspace);
   return (
           <div data-page-head className="flex items-center justify-between mb-3 gap-2">
             <div className="flex items-center gap-2 min-w-0 overflow-hidden text-xs text-sol-text-dim">
@@ -118,6 +120,7 @@ export function TaskHeadIdRow({ data, teamInfo, taskProject, taskTeamId, isInlin
               {data.source === "insight" && (
                 <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-meta whitespace-nowrap flex-shrink-0">mined</span>
               )}
+              {cost && <TaskCostFact cost={cost} className="px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 text-meta text-sol-text-muted whitespace-nowrap flex-shrink-0" />}
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
               {isInline && onOpen && (
@@ -194,7 +197,8 @@ const FACT = "inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-
 /** Modern: the shared page header, pinned above the task's body. */
 export function TaskModernHeader({ data, teamInfo, taskProject, taskTeamId, isInline, onOpen, close, status, edit }: HeadFacts & { status: TaskStatusLook; edit: TaskTitleEdit }) {
   const StatusIcon = status.icon;
-  const facts = data.external || teamInfo || taskProject || data.from_call || !taskTeamId || data.source === "insight";
+  const cost = useTaskCost(data.short_id, data.workspace);
+  const facts = data.external || teamInfo || taskProject || data.from_call || !taskTeamId || data.source === "insight" || cost;
   return (
     <PageHeader
       legacy={null}
@@ -262,6 +266,7 @@ export function TaskModernHeader({ data, teamInfo, taskProject, taskTeamId, isIn
           {data.from_call && <><TaskCallChip callId={data.from_call} size="head" /><CallListFeeder /></>}
           {!taskTeamId && <span className={`${FACT} bg-sol-bg-alt`}>Personal</span>}
           {data.source === "insight" && <span className={`${FACT} bg-sol-violet/10 text-sol-violet`}>mined</span>}
+          {cost && <TaskCostFact cost={cost} className={`${FACT} bg-sol-bg-alt text-sol-text-muted`} />}
         </div>
       ) : null}
     </PageHeader>

@@ -31,6 +31,7 @@ const COMPOSER_STRIPS = [
   "components/session/SlashCommandPills.tsx",
   "components/chat/MentionStrip.tsx",
   "components/session/MessageComposer.tsx",
+  "components/terminal/PaneTerminal.tsx", // the quick-key row sits on the keyboard
 ];
 
 // Files that draw transcript rows (session and chat).

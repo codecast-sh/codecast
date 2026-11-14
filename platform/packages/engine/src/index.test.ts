@@ -100,6 +100,19 @@ describe("public surface", () => {
     expect(store.getState().pending[`items:${SERVER_ID}:title`]).toBeUndefined();
   });
 
+  it("hands the dispatch function the lock ids its send planted", async () => {
+    const { platform } = makeStore();
+    const store = platform.useStore;
+    const metas: any[] = [];
+    store.getState()._setDispatch(async (_a, _args, _p, _r, _c, meta) => { metas.push(meta); return {}; });
+    store.getState().syncItems([{ _id: SERVER_ID, title: "start", updated_at: 1 }]);
+    store.getState().rename(SERVER_ID, "mine");
+    const lock = store.getState().pending[`items:${SERVER_ID}:title`]?.lock;
+    await new Promise((r) => setTimeout(r, 5));
+    expect(lock).toBeDefined();
+    expect(metas.at(-1)).toEqual({ locks: [{ key: `items:${SERVER_ID}:title`, lock }] });
+  });
+
   it("reports persistence as unavailable outside a browser", () => {
     const persistence = createPersistence(CONFIG, {
       getState: () => ({}),

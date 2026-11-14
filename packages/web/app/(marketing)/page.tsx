@@ -490,15 +490,15 @@ export default function LandingPage() {
               Your code stays yours
             </h2>
             <p className="text-lg leading-relaxed mb-6" style={{ color: BODY }}>
-              The CLI daemon runs locally. Code stays on your machine unless you share it. We never train AI
-              on your data, and you can self-host the whole thing.
+              Sessions sync to your workspace and stay private to you until you share a folder with your team.
+              Secrets are stripped on your machine first. We never train AI on your data, and you can self-host the whole thing.
             </p>
             <ArrowLink href="/security">How security works</ArrowLink>
           </div>
           <dl className="grid sm:grid-cols-2 gap-px rounded-lg overflow-hidden self-start" style={{ backgroundColor: RULE, border: `1px solid ${RULE}` }}>
             {[
               ["Private by default", "Conversations start private. You choose what to share."],
-              ["Metadata only", "Code content syncs only if you turn it on."],
+              ["Excluded folders", "Sessions under a folder you exclude never leave your machine."],
               ["Secret redaction", "API keys and tokens are stripped before sync."],
               ["Self-hostable", "Run the backend on your own infrastructure."],
               ["Open source", "Audit the code yourself. MIT license."],

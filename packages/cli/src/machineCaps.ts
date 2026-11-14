@@ -6,22 +6,17 @@
  * (shared/contracts/subagentFleet.ts), from the same config shape.
  */
 
-import * as os from "node:os";
 import { readLocalConfig } from "./config/readLocalConfig.js";
 
 /**
- * Typecheck watchers by memory: a watcher holds a whole program, 1 to 4 GB
- * (codecast's web, cli and convex measured 2 to 4 on 2026-10-09), so one per
- * 12 GB keeps them under about a fifth of the machine. A fixed count fit one
- * tree; with several trees sharing it, a cap smaller than the working set
- * rebuilds each program whole every few asks.
+ * Typecheck watchers are admitted by memory (watcherMemory.ts): their sizes
+ * run from under 100 MB to over 6 GB, so a count says little. The count stays
+ * as a backstop, and as the knob for a machine that wants fewer.
  */
-export function checkWatchersForMemory(totalBytes = os.totalmem()): number {
-  return Math.min(16, Math.max(2, Math.floor(totalBytes / 2 ** 30 / 12)));
-}
+export const CHECK_WATCHERS_BACKSTOP = 16;
 
 export const MACHINE_CAPS = {
-  check: { env: "CAST_CHECK_MAX_WATCHERS", fallback: checkWatchersForMemory(), what: "typecheck watchers" },
+  check: { env: "CAST_CHECK_MAX_WATCHERS", fallback: CHECK_WATCHERS_BACKSTOP, what: "typecheck watchers" },
   interactive_jobs: { env: "CAST_INTERACTIVE_JOBS_MAX", fallback: 8, what: "commands run as Interactive jobs" },
 } as const;
 

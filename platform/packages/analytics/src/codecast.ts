@@ -66,6 +66,8 @@ export type CodecastIngestItem =
       duration_ms?: number;
       chunks?: number;
       counts?: { clicks?: number; errors?: number; failed_requests?: number };
+      /** Why the recording was kept, first reason first (REPLAY_KEEP_REASONS, or an app's own from keep()). */
+      kept_for?: string[];
       at: number;
     };
 
@@ -199,8 +201,12 @@ export interface ReplayChunkSign {
   seq: number;
   sha256: string;
   size: number;
-  /** Which stream the chunk belongs to: the semantic events (absent) or the rrweb DOM capture. */
-  kind?: "events" | "dom";
+  /**
+   * Which stream the chunk belongs to: the semantic events (absent), the rrweb
+   * DOM capture, or one stylesheet the capture names by `href` (seq unused).
+   */
+  kind?: "events" | "dom" | "style";
+  href?: string;
 }
 
 /** Lowercase hex sha256, the form the door's chunk keys use. */

@@ -5,7 +5,9 @@
  * by the server, per session and per machine (shared/contracts/subagentFleet.ts).
  */
 
-import { listQueue, listWatchers } from "./check.js";
+import { listQueue } from "./check.js";
+import { watcherStatus } from "./checkStatus.js";
+import { fmtGb } from "./watcherMemory.js";
 import { INTERACTIVE_JOB_SLOTS_DIR } from "./interactiveJob.js";
 import { listFileSlots, type SlotEntry } from "./lockFile.js";
 import { machineCap } from "./machineCaps.js";
@@ -14,17 +16,19 @@ import { queueAhead, queuedLabel, type SlotRow } from "@codecast/shared/contract
 type WorkerRow = SlotRow & { title: string | null };
 
 export type QueueReport = {
-  check: { cap: number; running: Array<{ project: string; root: string; pid: number; checking: boolean; errors?: number }>; waiting: Array<{ project: string; root: string; pid: number; at: number }> };
+  check: { cap: number; memory?: { heldBytes: number; budgetBytes: number }; running: Array<{ project: string; root: string; pid: number; checking: boolean; errors?: number; holdBytes?: number }>; waiting: Array<{ project: string; root: string; pid: number; at: number }> };
   interactive_jobs: { cap: number; running: SlotEntry[]; waiting: SlotEntry[] };
   workers: { device: string; rows: Array<WorkerRow & { ahead: number | null }> } | { error: string };
 };
 
 export function localQueues(): Pick<QueueReport, "check" | "interactive_jobs"> {
   const jobs = listFileSlots(INTERACTIVE_JOB_SLOTS_DIR());
+  const status = watcherStatus();
   return {
     check: {
-      cap: machineCap("check"),
-      running: listWatchers().map((w) => ({ project: w.project, root: w.root, pid: w.pid, checking: w.inProgress, errors: w.errors })),
+      cap: status.maxWatchers,
+      memory: { heldBytes: status.heldBytes, budgetBytes: status.budgetBytes },
+      running: status.watchers.map((w) => ({ project: w.project, root: w.root, pid: w.pid, checking: w.checking, errors: w.errors, holdBytes: w.holdBytes })),
       waiting: listQueue().map((t) => ({ project: t.project, root: t.root, pid: t.pid, at: t.at })),
     },
     interactive_jobs: { cap: machineCap("interactive_jobs"), running: jobs.holding, waiting: jobs.waiting },
@@ -57,7 +61,8 @@ export function renderQueueReport(r: QueueReport, now = Date.now()): string {
     lines.push(`${name}  ${running}/${cap} running${waiting ? `, ${waiting} waiting` : ""}`);
 
   head("Typecheck watchers", r.check.running.length, String(r.check.cap), r.check.waiting.length);
-  for (const w of r.check.running) lines.push(`  ${w.project} @ ${w.root}  pid ${w.pid}  ${w.checking ? "checking" : `${w.errors ?? "?"} errors`}`);
+  if (r.check.memory) lines[lines.length - 1] += `; ${fmtGb(r.check.memory.heldBytes)} of ${fmtGb(r.check.memory.budgetBytes)} memory reserved`;
+  for (const w of r.check.running) lines.push(`  ${w.project} @ ${w.root}  pid ${w.pid}  ${w.checking ? "checking" : `${w.errors ?? "?"} errors`}${w.holdBytes ? `  ${fmtGb(w.holdBytes)}` : ""}`);
   for (const w of r.check.waiting) lines.push(`  waiting ${ago(w.at, now)}: ${w.project} @ ${w.root}  pid ${w.pid}`);
 
   head("Interactive jobs", r.interactive_jobs.running.length, String(r.interactive_jobs.cap), r.interactive_jobs.waiting.length);
@@ -80,7 +85,7 @@ export function renderQueueReport(r: QueueReport, now = Date.now()): string {
 
   lines.push(
     "",
-    "Limits: cast config check.per_machine <n> · interactive_jobs.per_machine <n> · subagents.per_session <n> · subagents.per_machine <n>",
+    "Limits: cast config check.reserve_gb <n> · check.per_machine <n> · interactive_jobs.per_machine <n> · subagents.per_session <n> · subagents.per_machine <n>",
     "A waiting worker starts when one ends; cast kill <id> drops one from the queue.",
   );
   return lines.join("\n");

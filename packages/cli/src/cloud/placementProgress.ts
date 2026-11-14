@@ -7,6 +7,9 @@
  * person watching, and must never slow or fail the placement itself.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { codecastPath } from "../codecastDir.js";
 import {
   CLOUD_PLACEMENT_LINE_CHARS,
   CLOUD_PLACEMENT_LINES_MAX,
@@ -28,6 +31,8 @@ export function placementReporter(
   token: string | undefined,
   send: (progress: CloudPlacementProgress) => Promise<unknown>,
   now = Date.now,
+  /** Keep each pushed record somewhere that outlives the placement (the server clears it on success). */
+  persist?: (progress: CloudPlacementProgress) => void,
 ): PlacementReporter {
   const started = now();
   let record: CloudPlacementProgress | null = null;
@@ -38,7 +43,7 @@ export function placementReporter(
 
   const push = () => {
     if (timer) { clearTimeout(timer); timer = null; }
-    if (!token || !record) return;
+    if (!record) return;
     record = {
       ...record,
       steps: [...record.steps, ...pendingSteps.splice(0)],
@@ -46,6 +51,8 @@ export function placementReporter(
       at: now(),
     };
     const snapshot = record;
+    try { persist?.(snapshot); } catch { /* a local copy must never fail the placement */ }
+    if (!token) return;
     inflight = inflight.then(() => send(snapshot).then(() => {}, () => {}));
   };
 
@@ -76,9 +83,47 @@ export function placementReporter(
       if (!timer && record) timer = setTimeout(push, LINE_FLUSH_MS);
     },
     async flush() {
-      if (pendingLines.length || pendingSteps.length) push();
+      // Always one last write, so the record ends when the placement did and the last step gets its real duration.
+      push();
       if (timer) { clearTimeout(timer); timer = null; }
       await inflight;
     },
   };
+}
+
+/** Where this machine keeps each conversation's last placement record: `cast remote timings` reads it. */
+export const placementTimingsDir = () => process.env.CAST_PLACEMENT_TIMINGS_DIR || codecastPath("cloud", "placements");
+
+export function savePlacementTimings(conversationId: string, record: CloudPlacementProgress): void {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(conversationId)) return;
+  const dir = placementTimingsDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${conversationId}.json`);
+  const { token: _token, ...kept } = record;
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ conversation_id: conversationId, ...kept }));
+  fs.renameSync(tmp, file);
+  // This machine keeps its newest 50 placements.
+  const all = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => ({ f, at: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => b.at - a.at);
+  for (const old of all.slice(50)) fs.rmSync(path.join(dir, old.f), { force: true });
+}
+
+export interface PlacementTimingRow { step: string; ms: number }
+
+/** Each step's duration: from its start to the next step's (the last runs to the record's last write). */
+export function placementDurations(record: Pick<CloudPlacementProgress, "steps" | "started_at" | "at">): { rows: PlacementTimingRow[]; totalMs: number } {
+  const rows = record.steps.map((s, i) => ({ step: s.step, ms: (record.steps[i + 1]?.at ?? record.at) - s.at }));
+  const lead = record.steps.length ? record.steps[0]!.at - record.started_at : 0;
+  return { rows: lead > 0 ? [{ step: "start up", ms: lead }, ...rows] : rows, totalMs: record.at - record.started_at };
+}
+
+export function readPlacementTimings(): Array<CloudPlacementProgress & { conversation_id: string }> {
+  const dir = placementTimingsDir();
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
+    try {
+      const r = JSON.parse(fs.readFileSync(path.join(dir, f), "utf-8"));
+      return Array.isArray(r?.steps) && typeof r.at === "number" && typeof r.started_at === "number" && typeof r.conversation_id === "string" ? [r] : [];
+    } catch { return []; }
+  }).sort((a, b) => b.at - a.at);
 }

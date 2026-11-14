@@ -10,7 +10,7 @@ export default function PrivacyPage() {
       {/* Content */}
       <article className="max-w-3xl mx-auto px-6 py-16">
         <h1 className="text-4xl font-bold text-stone-900 mb-4">Privacy Policy</h1>
-        <p className="text-stone-500 mb-12">Last updated: September 5, 2026</p>
+        <p className="text-stone-500 mb-12">Last updated: November 14, 2026</p>
 
         <div className="prose prose-stone max-w-none">
           <section className="mb-12">
@@ -33,16 +33,19 @@ export default function PrivacyPage() {
 
             <h3 className="text-lg font-semibold text-stone-800 mb-3">Conversation Data</h3>
             <p className="text-stone-600 leading-relaxed mb-4">
-              By default, Codecast syncs conversation metadata only (titles, timestamps, tool usage). The actual content of your AI conversations is stored locally on your device unless you explicitly enable content sync.
+              The Codecast CLI syncs the coding agent sessions on your machine to your Codecast account, so you can search and open them from any device. Secrets are redacted on your machine before anything is sent. Sessions under a folder you exclude (the <code>excluded_paths</code> setting) are never synced.
             </p>
             <ul className="list-disc pl-6 text-stone-600 mb-4 space-y-2">
-              <li><strong>Metadata (default):</strong> Session titles, timestamps, project identifiers (hashed), tool names</li>
-              <li><strong>Content (opt-in):</strong> Full conversation messages and code snippets</li>
+              <li><strong>Session details:</strong> titles, timestamps, the agent and model used, project paths and git information (repository, branch, commits)</li>
+              <li><strong>Session content:</strong> the full conversation, including messages, tool calls and their results, and the code the agent read or changed</li>
             </ul>
+            <p className="text-stone-600 leading-relaxed mb-4">
+              Synced sessions are private to you unless you share them with a team, either one at a time or by sharing a project folder.
+            </p>
 
             <h3 className="text-lg font-semibold text-stone-800 mb-3">Usage Data</h3>
             <p className="text-stone-600 leading-relaxed">
-              We collect basic usage statistics to improve our service, including feature usage patterns and error reports. This data is anonymized and cannot be used to identify individual users.
+              We collect usage statistics to improve our service, including which features are used and error reports. This data is linked to your account (your user ID, email address, name and GitHub username). When an error is reported, it may include a record of the app's activity in the minute before it.
             </p>
           </section>
 
@@ -53,7 +56,7 @@ export default function PrivacyPage() {
               <li>To authenticate your account and manage sessions</li>
               <li>To sync your conversation data across devices (based on your settings)</li>
               <li>To enable team collaboration features when you share conversations</li>
-              <li>To improve our service through anonymized analytics</li>
+              <li>To improve our service through usage analytics</li>
               <li>To communicate important updates about the service</li>
             </ul>
           </section>
@@ -74,11 +77,10 @@ export default function PrivacyPage() {
               We implement industry-standard security measures to protect your data:
             </p>
             <ul className="list-disc pl-6 text-stone-600 space-y-2">
-              <li>TLS 1.3 encryption for all data in transit</li>
-              <li>AES-256 encryption for data at rest</li>
-              <li>Optional client-side end-to-end encryption (AES-256-GCM)</li>
-              <li>Automatic secret redaction (API keys, tokens, passwords)</li>
-              <li>SOC 2 Type II compliant infrastructure (Convex)</li>
+              <li>TLS encryption for all data in transit</li>
+              <li>Automatic secret redaction on your machine before sync (API keys, tokens, passwords)</li>
+              <li>Folders you exclude are never synced</li>
+              <li>The CLI&apos;s sign-in token is encrypted at rest on your machine (AES-256-GCM)</li>
             </ul>
           </section>
 

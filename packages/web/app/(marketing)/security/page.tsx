@@ -26,22 +26,6 @@ function EyeOffIcon({ className }: { className?: string }) {
   );
 }
 
-function KeyIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-    </svg>
-  );
-}
-
-function HashIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
-    </svg>
-  );
-}
-
 function CodeIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -82,20 +66,6 @@ const SECURITY_FEATURES = [
     color: "red",
   },
   {
-    icon: KeyIcon,
-    title: "End-to-end encryption",
-    description: "Enable client-side AES-256-GCM encryption. Your data is encrypted before it leaves your machine.",
-    detail: "Enterprise feature",
-    color: "green",
-  },
-  {
-    icon: HashIcon,
-    title: "Path hashing",
-    description: "Project paths are hashed to prevent directory structure from being exposed.",
-    detail: "SHA-256 hashing",
-    color: "blue",
-  },
-  {
     icon: EyeOffIcon,
     title: "Activity hiding",
     description: "Make yourself invisible. Hide your activity from team dashboards and stats.",
@@ -124,16 +94,12 @@ const NEVER_DO = [
     title: "Access without permission",
     description: "No employee can view your sessions unless you explicitly grant support access.",
   },
-  {
-    title: "Store your encryption keys",
-    description: "When E2E encryption is enabled, keys are generated and stored only on your devices.",
-  },
 ];
 
 const FAQ = [
   {
     q: "Do you see my code?",
-    a: "Only if you enable code sharing. By default, we sync conversation metadata (titles, timestamps, tool names) but not the actual code content.",
+    a: "Your sessions sync to your own workspace, so codecast stores the transcript, including any code the agent read or wrote, after secrets are redacted on your machine. Sessions stay private to you unless you share their folder with a team, and sessions under a folder you exclude never sync.",
   },
   {
     q: "Will you train AI on my data?",
@@ -209,7 +175,7 @@ export default function SecurityPage() {
                 </div>
                 <div className="flex items-center gap-2 text-stone-600">
                   <CheckIcon className="w-4 h-4 text-green-500" />
-                  <span>E2E encryption</span>
+                  <span>Excluded folders never sync</span>
                 </div>
               </div>
             </div>
@@ -237,11 +203,7 @@ export default function SecurityPage() {
                 </div>
                 <div className="flex items-center gap-2 text-stone-600">
                   <CheckIcon className="w-4 h-4 text-green-500" />
-                  <span>Metadata only*</span>
-                </div>
-                <div className="flex items-center gap-2 text-stone-600">
-                  <CheckIcon className="w-4 h-4 text-green-500" />
-                  <span>Paths hashed</span>
+                  <span>Redacted before upload</span>
                 </div>
               </div>
             </div>
@@ -261,15 +223,11 @@ export default function SecurityPage() {
                 </svg>
               </div>
               <h3 className="font-semibold text-stone-900 mb-2">Storage</h3>
-              <p className="text-sm text-stone-500 mb-4">Convex database with SOC 2 Type II compliance</p>
+              <p className="text-sm text-stone-500 mb-4">Convex database, or your own when you self-host</p>
               <div className="space-y-2 text-xs font-mono">
                 <div className="flex items-center gap-2 text-stone-600">
                   <CheckIcon className="w-4 h-4 text-green-500" />
-                  <span>SOC 2 Type II</span>
-                </div>
-                <div className="flex items-center gap-2 text-stone-600">
-                  <CheckIcon className="w-4 h-4 text-green-500" />
-                  <span>Encrypted at rest</span>
+                  <span>Private until shared</span>
                 </div>
                 <div className="flex items-center gap-2 text-stone-600">
                   <CheckIcon className="w-4 h-4 text-green-500" />
@@ -279,9 +237,6 @@ export default function SecurityPage() {
             </div>
           </div>
 
-          <p className="text-xs text-stone-400 text-center mt-6">
-            * Full conversation content synced only if you enable it. Default: metadata only (titles, timestamps, tool names).
-          </p>
         </div>
       </section>
 
@@ -356,23 +311,19 @@ export default function SecurityPage() {
         <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
           <div className="grid md:grid-cols-2">
             <div className="p-8 border-b md:border-b-0 md:border-r border-stone-200">
-              <h3 className="font-semibold text-stone-900 mb-4">Encryption</h3>
+              <h3 className="font-semibold text-stone-900 mb-4">On your machine</h3>
               <dl className="space-y-3 text-sm">
                 <div>
-                  <dt className="text-stone-400 font-mono text-xs">Algorithm</dt>
-                  <dd className="text-stone-700">AES-256-GCM</dd>
+                  <dt className="text-stone-400 font-mono text-xs">Secret redaction</dt>
+                  <dd className="text-stone-700">Known token shapes, plus the exact values of local credentials</dd>
                 </div>
                 <div>
-                  <dt className="text-stone-400 font-mono text-xs">IV</dt>
-                  <dd className="text-stone-700">Random 12-byte per encryption</dd>
+                  <dt className="text-stone-400 font-mono text-xs">Excluded folders</dt>
+                  <dd className="text-stone-700"><code className="font-mono text-xs">cast config excluded_paths</code>, never synced</dd>
                 </div>
                 <div>
-                  <dt className="text-stone-400 font-mono text-xs">Key derivation</dt>
-                  <dd className="text-stone-700">HMAC-SHA512, BIP32-style hierarchy</dd>
-                </div>
-                <div>
-                  <dt className="text-stone-400 font-mono text-xs">Key size</dt>
-                  <dd className="text-stone-700">256-bit (32 bytes)</dd>
+                  <dt className="text-stone-400 font-mono text-xs">Auth token at rest</dt>
+                  <dd className="text-stone-700">AES-256-GCM, random 12-byte IV</dd>
                 </div>
               </dl>
             </div>
@@ -385,11 +336,7 @@ export default function SecurityPage() {
                 </div>
                 <div>
                   <dt className="text-stone-400 font-mono text-xs">Backend</dt>
-                  <dd className="text-stone-700">Convex (SOC 2 Type II)</dd>
-                </div>
-                <div>
-                  <dt className="text-stone-400 font-mono text-xs">Storage encryption</dt>
-                  <dd className="text-stone-700">AES-256 at rest</dd>
+                  <dd className="text-stone-700">Convex, or your own when you self-host</dd>
                 </div>
                 <div>
                   <dt className="text-stone-400 font-mono text-xs">Auth</dt>
@@ -399,15 +346,6 @@ export default function SecurityPage() {
             </div>
           </div>
 
-          <div className="border-t border-stone-200 p-6 bg-stone-50">
-            <p className="text-xs text-stone-500 font-mono mb-3">// Example: Client-side encryption flow</p>
-            <pre className="text-xs text-stone-700 font-mono overflow-x-auto">
-{`const masterKey = crypto.getRandomValues(new Uint8Array(32));
-const sessionKey = await deriveKey(masterKey, 'messages', [sessionId]);
-const encrypted = await encryptAESGCM(message, sessionKey);
-// Server only sees encrypted blob, never the plaintext`}
-            </pre>
-          </div>
         </div>
       </section>
 

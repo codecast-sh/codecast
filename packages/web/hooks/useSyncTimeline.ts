@@ -1,10 +1,15 @@
 // Timeline lanes (commits, pull requests) — store-fed delta overlays.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { normalizeRepository } from "@codecast/shared/contracts";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useSyncCollection, entityIdArgs } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useCoarseNow } from "./useCoarseNow";
+import { useWatchEffect } from "./useWatchEffect";
+import { activeWorkspaceKeyOf } from "../lib/workspaceScope";
+import { CARD_BUCKETS, cardBuckets, rankCardSessions, stableCardIds } from "../lib/sessionPullRequests";
+import { isFullPullRequest, overlayCardPullRequests } from "../lib/cardPullRequestRows";
 
 const api = _api as any;
 
@@ -21,8 +26,14 @@ export function useCommits(where?: (c: any) => boolean): any[] {
   return useCollectionRows<any>("commits", { where, sig: commitSig, sort: byTimestampDesc });
 }
 
+// A row only the inbox's chip feed has written lacks the body, files and
+// authorship the timeline and the PR page draw: they treat it as not loaded
+// rather than paint it half empty.
+const fullRow = (p: any) => isFullPullRequest(p);
+
 export function usePullRequests(where?: (p: any) => boolean): any[] {
-  return useCollectionRows<any>("pullRequests", { where, sig: prSig, sort: byUpdatedDesc });
+  const full = useMemo(() => (where ? (p: any) => fullRow(p) && where(p) : fullRow), [where]);
+  return useCollectionRows<any>("pullRequests", { where: full, sig: prSig, sort: byUpdatedDesc });
 }
 
 // One PR, fed into the same collection the timeline fills. The page reads the
@@ -52,7 +63,7 @@ const prDetailSig = (p: any) =>
 export function usePullRequest(repository: string, number: number): any | undefined {
   const canonicalRepository = normalizeRepository(repository);
   const where = useMemo(
-    () => (p: any) => normalizeRepository(p.repository) === canonicalRepository && p.number === number,
+    () => (p: any) => fullRow(p) && normalizeRepository(p.repository) === canonicalRepository && p.number === number,
     [canonicalRepository, number],
   );
   const rows = useCollectionRows<any>("pullRequests", { where, sig: prDetailSig });
@@ -117,6 +128,62 @@ export function useSyncConversationCommits(conversationId: string | undefined) {
     [conversationId],
   );
   return useSyncCollection("commits", api.commits.getCommitsForConversation, entityIdArgs("conversation_id", conversationId), { select });
+}
+
+const selectCardPRs = (d: any) => {
+  const state = useInboxStore.getState() as any;
+  return overlayCardPullRequests(d?.pull_requests, state.pullRequests, state.pending);
+};
+const selectCardLinks = (d: any) => d?.links;
+// Each answer names the sessions it is complete for; a cached link of one of
+// those that the answer lacks was removed, and only those prune.
+const answeredScope = (d: any) => {
+  const answered = new Set<string>((d?.answered ?? []).map(String));
+  return { pruneAbsentScope: (row: any) => answered.has(String(row.conversation_id)) };
+};
+export const LINK_OPTS = { select: selectCardLinks, syncOpts: answeredScope };
+export const CARD_PR_OPTS = { select: selectCardPRs };
+
+/**
+ * The sessions the inbox chip feed asks about, in CARD_BUCKETS stable groups
+ * by id: the inbox can list (pinned first, then newest; rankCardSessions),
+ * read on a coarse clock, when a session arrives and when the workspace
+ * changes. Each group is its own
+ * subscription, so a new session re-runs the small query of its group, not
+ * one over every card. A group keeps its array while its members do. A
+ * session that leaves keeps the links it last had: they stop refreshing
+ * rather than being tombstoned (each prune's exclude is a pending entry every
+ * sync reads), and it is the oldest sessions that leave. Mounted once, on the
+ * sync host.
+ */
+export function useSessionCardBuckets(): readonly (readonly string[])[] {
+  const now = useCoarseNow(20_000);
+  const sessionCount = useInboxStore((s) => { let n = 0; for (const _ in s.sessions) n++; return n; });
+  const workspace = useInboxStore((s) => activeWorkspaceKeyOf(s as any));
+  const [held, setHeld] = useState<{ ids: string[]; buckets: string[][] }>(NONE_HELD);
+  useWatchEffect(() => {
+    const ranked = rankCardSessions(useInboxStore.getState().sessions as any);
+    const next = stableCardIds(ranked, held.ids);
+    if (next === held.ids) return;
+    setHeld({ ids: next, buckets: cardBuckets(next, held.buckets, ranked) });
+  }, [now, sessionCount, workspace, held]);
+  return held.buckets;
+}
+
+/** Feeder: one bucket of the inbox chip feed. One query, two collections: Convex shares the subscription between the calls. */
+export function useSyncSessionCardBucket(ids: readonly string[]) {
+  const args = useMemo(() => (ids.length ? { conversation_ids: ids } : "skip"), [ids]);
+  useSyncCollection("pullRequests", api.pull_requests.sessionCardPRs, args as any, CARD_PR_OPTS);
+  useSyncCollection("pullRequestSessions", api.pull_requests.sessionCardPRs, args as any, LINK_OPTS);
+}
+
+const NONE_HELD = { ids: [] as string[], buckets: Array.from({ length: CARD_BUCKETS }, () => [] as string[]) };
+
+/** Feeder: the open conversation's pull request links, in any window, whatever the inbox list holds. */
+export function useSyncConversationPullRequestLinks(conversationId: string | undefined) {
+  const id = conversationId && isConvexId(conversationId) ? conversationId : null;
+  const args = useMemo(() => (id ? { conversation_ids: [id] } : "skip"), [id]);
+  useSyncCollection("pullRequestSessions", api.pull_requests.sessionCardPRs, args as any, LINK_OPTS);
 }
 
 export function useSyncConversationPullRequests(conversationId: string | undefined) {

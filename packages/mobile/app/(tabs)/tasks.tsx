@@ -196,7 +196,8 @@ export default function TasksScreen() {
   // the starting segment, and again when a new link arrives while the tab is
   // mounted. Tapping a segment afterwards is the person's own choice, and
   // drops the link's name from the address so the same link works again.
-  const linked = useLocalSearchParams<{ segment?: string }>().segment;
+  const linkParams = useLocalSearchParams<{ segment?: string; assignee?: string }>();
+  const linked = linkParams.segment;
   const linkedSegment = SEGMENTS.find((s) => s === linked) ?? null;
   const [segment, setSegment] = useState<Segment>(linkedSegment ?? "tasks");
   const [appliedLink, setAppliedLink] = useState(linkedSegment);
@@ -214,7 +215,15 @@ export default function TasksScreen() {
   const [sortBy, setSortBy] = useState<SortBy>("priority");
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "">("");
   const [priorityFilter, setPriorityFilter] = useState<string>("");
-  const [assigneeFilter, setAssigneeFilter] = useState<string>("");
+  const [assigneeFilter, setAssigneeFilter] = useState<string>(linkParams.assignee ?? "");
+  // A person's page links here with their user id (`?assignee=`): it opens the
+  // task list filtered to them, again whenever a new person's link arrives.
+  const linkedAssignee = linkParams.assignee ?? null;
+  const [appliedAssignee, setAppliedAssignee] = useState(linkedAssignee);
+  if (linkedAssignee !== appliedAssignee) {
+    setAppliedAssignee(linkedAssignee);
+    if (linkedAssignee) { setSegment("tasks"); setAssigneeFilter(linkedAssignee); }
+  }
   // Search folds behind its header icon; it stays open while it holds text.
   const [searchOpen, setSearchOpen] = useState(false);
   const router = useRouter();
@@ -399,9 +408,13 @@ export default function TasksScreen() {
     if (segment !== "tasks") return list;
     if (statusFilter) list.push({ key: "status", label: STATUS_CONFIG[statusFilter]?.label, clear: () => setStatusFilter("") });
     if (priorityFilter) list.push({ key: "priority", label: PRIORITY_CONFIG[priorityFilter as keyof typeof PRIORITY_CONFIG]?.label, clear: () => setPriorityFilter("") });
-    if (assigneeFilter) list.push({ key: "assignee", label: assigneeFilter === "_unassigned" ? "Unassigned" : assigneeFilter, clear: () => setAssigneeFilter("") });
+    if (assigneeFilter) {
+      // A linked filter holds a user id; the chip names the person.
+      const named = assigneeFilter === "_unassigned" ? "Unassigned" : tasksList.find((t) => t.assignee === assigneeFilter)?.assignee_info?.name ?? assigneeFilter;
+      list.push({ key: "assignee", label: named, clear: () => setAssigneeFilter("") });
+    }
     return list;
-  }, [segment, sourceFilter, statusFilter, priorityFilter, assigneeFilter]);
+  }, [segment, sourceFilter, statusFilter, priorityFilter, assigneeFilter, tasksList]);
 
   const openFilterMenu = useCallback(() => {
     const valueOf = <T,>(opts: { key: T; label: string }[], key: T) => opts.find((o) => o.key === key)?.label ?? "";

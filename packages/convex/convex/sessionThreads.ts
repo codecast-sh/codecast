@@ -18,7 +18,7 @@ import { stripInjectionNoise } from "@codecast/shared/contracts";
 // tolerating the injection noise the daemon can prepend (the shared
 // stripInjectionNoise, so this accepts exactly the rows the clients do).
 const SESSION_MESSAGE_RE =
-  /<session-message\s+from="([^"]*)"[^>]*>([\s\S]*)<\/session-message>/;
+  /<session-message\s+from="([^"]*)"(?:\s+[a-z_]+="[^"]*")*\s*>([\s\S]*)<\/session-message>/;
 
 function removeLeadingFramingNewline(body: string): string {
   if (body.startsWith("\r\n")) return body.slice(2);

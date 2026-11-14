@@ -173,7 +173,7 @@ function Room({
   // Each line names this session, so the room (on the chat page, on a phone)
   // reads which thread it was about.
   const send = useCallback((content: string, attachments?: ChatAttachment[]) => {
-    useInboxStore.getState().sendChatMessage(channelId, content, { attachments, contextSessionId: conversationId });
+    return useInboxStore.getState().sendChatMessage(channelId, content, { attachments, contextSessionId: conversationId });
   }, [channelId, conversationId]);
 
   return (

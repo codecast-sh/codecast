@@ -404,7 +404,7 @@ export default function ChangelogPage() {
                 Start capturing your sessions
               </div>
               <div className="text-sm mt-1" style={{ color: SOL.base1 }}>
-                One command. Works with Claude Code, Codex, Cursor, and Gemini.
+                One command. Works with Claude Code, Codex, Cursor, Gemini, OpenCode, pi and Grok.
               </div>
             </div>
             <div className="flex items-center gap-3">

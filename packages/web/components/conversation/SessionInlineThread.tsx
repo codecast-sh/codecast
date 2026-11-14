@@ -73,7 +73,7 @@ function toRows(messages: Message[], agentType?: string): SessionRow[] {
 function SessionUserRow({ row, conversationId }: { row: Extract<SessionRow, { role: "user" }>; conversationId: string }) {
   const { msg, kind } = row;
   if (kind.kind === "session_message") {
-    return <SessionMessageBlock variant={kind.variant === "agent" ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} />;
+    return <SessionMessageBlock variant={kind.variant === "agent" ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} intent={kind.intent} />;
   }
   const decision = kind.kind === "decision_answer" ? kind.decision : undefined;
   return (
