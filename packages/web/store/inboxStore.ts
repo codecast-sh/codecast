@@ -7,7 +7,7 @@ import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import type { CloudPlacementProgress, RewindFilesOp, RewindStagedMark } from "@codecast/shared/contracts";
 import type { RoleIcon } from "@codecast/shared/contracts/roleIcon";
-import { cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
+import { approvesSecretRead, cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
 import { withoutSecrets } from "@codecast/shared/contracts/secretShapes";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
@@ -1431,6 +1431,18 @@ export type SessionReadItem = {
   updated_at: number;
 };
 
+// How loudly the viewer hears one session (sessionWatch.listMine). No row is
+// the default: the ordinary rules, and the viewer's project, folder and
+// teammate mutes.
+export type SessionNotifyLevel = "all" | "needs_input" | "muted";
+export type SessionNotifyItem = {
+  _id: string;
+  conversation_id: string;
+  level: SessionNotifyLevel;
+  updated_at: number;
+};
+export const sessionNotifyKey = (conversationId: string) => `sn:${conversationId}`;
+
 // The decision queue: one explicit question an agent handed its human via
 // `cast decide` (session_decisions table). Answering is local-first — the
 // resolution fields flip on the draft and ride the generic patch rail; the
@@ -1489,6 +1501,8 @@ export type SessionDecisionItem = {
   card?: import("@codecast/shared/contracts/changeCard").ChangeCard;
   /** `cast decide --run`: the command the card runs on a person's Run, and how that went. */
   run?: import("@codecast/shared/contracts/commandRun").CommandRun;
+  /** An Ask first read of a Touch ID secret: its Approve confirms with a passkey. */
+  touch_id?: boolean;
   blocking: boolean;
   default_option?: number;
   /** A pointer card (a staffing proposal's): answering clears it and
@@ -4516,11 +4530,11 @@ export function visualOrderSessions(
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
-  // Same order the status view renders: questions, pinned, new, needs input,
+  // Same order the status view renders: pinned, questions, new, needs input,
   // done, working, dormant — the chokepoint's own sections, so the walk and
   // the render can never disagree.
   const sections: Array<[InboxSession[], string]> = [
-    [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
+    [placed.pinned, "pinned"], [placed.questions, "questions"], [placed.newSessions, "new"],
     [placed.needsInput, "needs_input"], [placed.done, "done"],
     [placed.working, "working"], [placed.dormant, "dormant"],
   ];
@@ -6793,6 +6807,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  count". Local only — a session's read state never dispatches. */
   markSessionSeen: (id: string) => void;
 
+  /** The viewer's per-session notify settings, keyed sn:<conversation id>. */
+  sessionNotify: Record<string, SessionNotifyItem>;
+  /** Subscribe to every message, to needs input, mute, or go back to default. */
+  setSessionNotify: (conversationId: string, level: SessionNotifyLevel | "default") => void;
+
   // -- Session unread (server-backed, per viewer) --
   /** The viewer's read marks, keyed by row id (sessionReads.listMine). Unread
    *  is derived from these against each session's updated_at, never stored. */
@@ -7064,6 +7083,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** `only: "requested"` is a decline: the server keeps a row filled since (secrets.remove). */
   removeSecret: (id: string, only?: "requested") => void;
   setSecretAskFirst: (id: string, askFirst: boolean, grant?: string) => void;
+  setSecretTouchId: (id: string, touchId: boolean, grant?: string) => void;
   stageSecret: (row: SecretMeta, hold?: readonly (keyof SecretMeta)[]) => void;
   /** A secret's Activity or Previous (`events:<id>`, `versions:<id>`) as a press shows it; undefined drops it. */
   stageSecretHistory: (key: string, rows: unknown[] | undefined) => void;
@@ -7115,7 +7135,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   restoreDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
-  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean }) => void;
+  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; muted_projects?: string[]; muted_folders?: string[]; machine_wide_presence?: boolean }) => void;
   setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
   setClaudeBackend: (backend: "sdk" | "tmux") => void;
   setAgentDefaultParams: (agent: string, params: Record<string, string>) => void;
@@ -10560,6 +10580,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this._seenUpToAt[id] = Date.now();
   }),
 
+  sessionNotify: {},
+  setSessionNotify: action(function (this: Draft, conversationId: string, level: SessionNotifyLevel | "default") {
+    const key = sessionNotifyKey(conversationId);
+    if (level === "default") delete this.sessionNotify[key];
+    else this.sessionNotify[key] = { _id: key, conversation_id: conversationId, level, updated_at: Date.now() };
+  }),
+
   // -- Session unread --
   sessionReads: {},
   // Plain, not an action: an action() always dispatches, and the ack fires on
@@ -13918,6 +13945,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!row) return;
     row.ask_first = askFirst;
   }),
+  setSecretTouchId: action(function (this: Draft, id: string, touchId: boolean, _grant?: string) {
+    const row = (this.secrets as any)[id];
+    if (!row) return;
+    row.touch_id = touchId;
+  }),
   // A row painted before the server has it: a create's stub, keyed by a stub id
   // and given its short_id when the create answers (registry altKey), or a
   // fill or value swap whose value went straight to its action. `hold` names
@@ -15700,12 +15732,27 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
   // its run consumes the answer as the open gate, or, when the run is past
   // it, the server sends the same message (settleClientResolution).
   if (content && !row.workflow_run_id && !runs) {
-    queueMicrotask(() => {
+    const deliver = () => {
       const s = useInboxStore.getState();
       const clientId = s.addOptimisticMessage(convId, content);
       s.sendMessage(convId, content, undefined, clientId);
-    });
+    };
+    // An Approve on an Ask first read reaches the agent only once the server
+    // took it: a refused one (no Touch ID, a spent grant) must not tell the
+    // agent it was approved. The dispatch binding releases it (releaseHeldAnswer).
+    if (approvesSecretRead(row, row.answer_index ?? -1)) heldAnswerDeliveries.set(decisionId, deliver);
+    else queueMicrotask(deliver);
   }
+}
+
+const heldAnswerDeliveries = new Map<string, () => void>();
+
+/** The answerDecision dispatch for `decisionId` settled: deliver its held answer when it landed, drop it when it was refused for good. */
+export function releaseHeldAnswer(decisionId: unknown, landed: boolean): void {
+  if (typeof decisionId !== "string") return;
+  const deliver = heldAnswerDeliveries.get(decisionId);
+  heldAnswerDeliveries.delete(decisionId);
+  if (landed) deliver?.();
 }
 
 /** Whom an escalation reaches, from the roster a client holds: the manager on the org tree, the members on the team roster. */
