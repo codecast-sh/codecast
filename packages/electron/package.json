@@ -53,6 +53,7 @@
       "shortcutSettings.js",
       "updaterNet.js",
       "updatePolicy.js",
+      "rendererLog.js",
       "preload.js",
       "native/notifications.node",
       "assets/icon.png",

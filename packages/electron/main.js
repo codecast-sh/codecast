@@ -54,6 +54,7 @@ for (const dir of ["downloads", "temp"]) {
 
 const { pickWindow, chooseLeader, BannerGate, notificationRoute } = require("./notificationRouter");
 const { createPaletteFace } = require("./paletteFace");
+const { createRendererLog } = require("./rendererLog");
 // The desktop's apps (Chat, Work): which routes live in a window of their own.
 // An ES module the web bundle imports too, so both sides read one table.
 const { appForRoute, placeRoute, isDesktopApp, DESKTOP_APPS } = require("./appWindows.mjs");
@@ -3683,11 +3684,19 @@ function registerShortcuts() {
   }
 }
 
-// Every window and pane gets the edit menu with spelling suggestions. DevTools
-// ("remote") draws its own.
+// The app's own windows keep their warnings and errors on disk
+// (~/Library/Logs/Codecast/renderer.log), so a window that reloads or dies
+// leaves its console behind. Pages on other origins are never logged.
+const rendererLog = createRendererLog({
+  dir: () => app.getPath("logs"),
+  appOrigin: () => { try { return new URL(currentBaseUrl).origin; } catch { return null; } },
+});
+// Every window and pane gets the edit menu with spelling suggestions, and the
+// renderer log above. DevTools ("remote") draws its own.
 app.on("web-contents-created", (_event, contents) => {
   if (contents.getType() !== "remote") attachSpellMenu(contents, Menu);
   editUndo.observe(contents);
+  if (contents.getType() !== "remote") rendererLog.attach(contents);
 });
 
 app.whenReady().then(() => {

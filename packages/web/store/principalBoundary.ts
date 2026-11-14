@@ -38,7 +38,7 @@ async function purgeAfterLeaving(previous: string): Promise<void> {
     if (durable === previous && authPrincipal.current() === null) return;
   }
   try {
-    await purgeLocalCache();
+    await purgeLocalCache({ reason: "left-account", detail: { previous } });
   } catch (error) {
     console.error("[auth] failed to purge the local cache after leaving an account", error);
   }

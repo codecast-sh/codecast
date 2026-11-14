@@ -16,6 +16,7 @@ import { partitionSessionRetention, COLLECTION_RETENTION, expireExcludeTombstone
 import { authPrincipal } from "../lib/authPrincipal";
 import { storableActionArgs } from "../lib/tabSafePath";
 import { DOCS_SHOTS } from "../lib/docsShots/flag";
+import { recordCacheEvent } from "./cacheEvents";
 
 export type OutboxEntry = {
   id: string;
@@ -102,6 +103,11 @@ const db = new CacheDB();
 // the user can end themselves, so the storage banner names it instead of
 // reporting a generic slowdown.
 let upgradeBlockedListener: ((blocked: boolean) => void) | null = null;
+// Event bookkeeping for the hooks below: a close this window caused, whether
+// it has read a populated cache, and whether its own purge is running.
+let closeExpected: "purge" | "versionchange" | null = null;
+let cacheServed = false;
+let purgeInProgress = false;
 export function setUpgradeBlockedListener(fn: ((blocked: boolean) => void) | null) {
   upgradeBlockedListener = fn;
 }
@@ -117,6 +123,32 @@ if (PERSISTENCE_AVAILABLE) {
   db.on("ready", () => { upgradeBlockedListener?.(false); }, true);
   // The other side (this tab is the holder) is Dexie's default versionchange
   // handler: it closes with auto-reopen so the upgrader can proceed.
+
+  // What happens to the database underneath this window, recorded so a lost
+  // or purged cache leaves a trace (store/cacheEvents.ts). Dexie fires
+  // `close` for every close, its own included, so the closes this window
+  // expects (a purge, a versionchange) are named and the rest are the
+  // browser force-closing the store.
+  db.on("versionchange", (ev: any) => {
+    closeExpected = "versionchange";
+    recordCacheEvent("db-versionchange", { oldVersion: ev?.oldVersion ?? null, newVersion: ev?.newVersion ?? null });
+  });
+  db.on("close", () => {
+    const expected = closeExpected;
+    closeExpected = null;
+    if (expected) return;
+    recordCacheEvent("db-closed", { servedCache: cacheServed });
+  });
+  // A database created from nothing. At first boot that is ordinary; after
+  // this window already read a populated cache, and outside its own purge,
+  // the store was lost under a running window.
+  db.on("populate", () => {
+    // The purge's own reopen is covered by its "purge" event. A first boot
+    // and a store lost before boot look the same here, so only a loss under
+    // a window that was already reading the cache is reported.
+    if (purgeInProgress) return;
+    recordCacheEvent("db-created", { servedCache: cacheServed }, { report: cacheServed });
+  });
 }
 
 const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = Object.fromEntries(
@@ -241,53 +273,101 @@ async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
 
 // -- Cache ownership --
 //
-// The cache belongs to ONE account: the one whose server-confirmed user row it
-// holds (meta.currentUser is only ever written from getCurrentUser results).
-// Hydration serves it to a window only when the stored JWT names that same
-// principal; a cache someone else owns, or nobody does (a legacy cache with no
-// user row, rows a sibling re-persisted after a sign-out), is purged before
-// any reader sees it. Writes are bound to the principal that resolved here and
-// refuse the moment the stored JWT names someone else, which closes the gap
-// between a sibling's sign-out and this window's storage event.
+// The cache belongs to ONE account. Two rows on disk say which:
+//   • the owner stamp (OWNER_STAMP_KEY), written straight through by the
+//     ownership check whenever it confirms or establishes an owner, and after
+//     every purge: the principal kept, or a signed-out tombstone (null) when
+//     the purge was leaving an account;
+//   • the server-confirmed user row (meta.currentUser), only ever written
+//     from getCurrentUser results.
+// Hydration serves the cache only when that evidence names the principal the
+// stored JWT names, and nothing names anyone else. Writes are bound to the
+// principal that resolved here and refuse the moment the stored JWT names
+// someone else, which closes the gap between a sibling's sign-out and this
+// window's storage event.
+//
+// A purge needs a reason the disk proves: another named owner, residue
+// written after a sign-out (the tombstone), nobody signed in, or rows that
+// name no owner at all. That last one survives because the dispatch outbox
+// holds server writes, and an outbox nobody can be shown to own must never be
+// replayed as the signed-in account; with the stamp written on every boot it
+// arises only from a store the browser lost or a cache from before stamps,
+// where little is left to lose. A disk that cannot be READ is never a reason:
+// it serves nothing and purges nothing (a transient read error once could
+// wipe a healthy cache). Every purge and every refusal is recorded
+// (store/cacheEvents.ts).
 let ownership: Promise<string | null> | null = null;
 let boundOwner: string | null = null;
 
-// Rows on disk that are not the principal's own pending input. Pending input
-// is keyed by its owner (pendingInputKey), so a principal's typed-but-unsent
-// messages are theirs whoever the rest of the cache belongs to, and a cache
-// holding nothing else is a fresh cache with their journal in it. One
-// transaction for both tables: two separate reads could straddle a pending
-// input write and count the same row as foreign.
-async function foreignRowCount(principal: string | null): Promise<number> {
+const OWNER_STAMP_KEY = "cacheOwner";
+type OwnerStamp = { principal: string | null; at: number; reason: string };
+
+// The owner rows, read in one transaction. `stamp` is undefined when there is
+// no stamp row and null for a signed-out tombstone.
+async function readOwnerEvidence(): Promise<{ stamp: string | null | undefined; user: string | null }> {
+  return db.transaction("r", db.meta, async () => {
+    const [stampRow, userRow] = await Promise.all([db.meta.get(OWNER_STAMP_KEY), db.meta.get("currentUser")]);
+    const stampValue = stampRow?.value as OwnerStamp | undefined;
+    const stamp = stampValue === undefined ? undefined
+      : typeof stampValue?.principal === "string" ? stampValue.principal : null;
+    const id = userRow?.value?._id;
+    return { stamp, user: typeof id === "string" ? id : null };
+  });
+}
+
+async function writeOwnerStamp(principal: string | null, reason: string): Promise<void> {
   try {
-    const sessions = COLLECTION_TABLES.sessions;
-    // Index-only counts (no row values are read; meta holds large blobs), in
-    // one read transaction so both see the same snapshot.
-    return await db.transaction("r", sessions ? [db.meta, sessions] : [db.meta], async () => {
-      const meta = await db.meta.count();
-      const own = principal ? await db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${principal}:`).count() : 0;
-      const rows = sessions ? await sessions.count() : 0;
-      return meta - own + rows;
-    });
-  } catch {
-    return 0;
+    await db.meta.put({ key: OWNER_STAMP_KEY, value: { principal, at: Date.now(), reason } satisfies OwnerStamp });
+  } catch (error) {
+    recordCacheEvent("ownership-unreadable", { step: "write-stamp", reason, error: String(error) });
   }
 }
 
-// Disk ownership is decided by the disk alone: the persisted user row. A
-// caller's own idea of who is signed in proves nothing about rows written
-// by an earlier account, so it is never consulted here.
+// Rows on disk that are not the principal's own pending input or the owner
+// stamp, or null when they cannot be counted. Pending input is keyed by its
+// owner (pendingInputKey), so a principal's typed-but-unsent messages are
+// theirs whoever the rest of the cache belongs to, and a cache holding
+// nothing else is a fresh cache with their journal in it. The outbox is not
+// counted (as before stamps): a window's own first write can land before its
+// ownership resolves. One transaction for every count: separate reads could
+// straddle a write and count a row twice.
+async function foreignRowCount(principal: string | null): Promise<number | null> {
+  try {
+    const sessions = COLLECTION_TABLES.sessions;
+    // Index-only counts (no row values are read; meta holds large blobs), in
+    // one read transaction so all of them see the same snapshot.
+    return await db.transaction("r", sessions ? [db.meta, sessions] : [db.meta], async () => {
+      const meta = await db.meta.count();
+      const own = principal ? await db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${principal}:`).count() : 0;
+      const stamp = await db.meta.where("key").equals(OWNER_STAMP_KEY).count();
+      const rows = sessions ? await sessions.count() : 0;
+      return meta - own - stamp + rows;
+    });
+  } catch {
+    return null;
+  }
+}
+
+// Disk ownership is decided by the disk alone. A caller's own idea of who is
+// signed in proves nothing about rows written by an earlier account, so it is
+// never consulted here.
 async function resolveCacheOwnership(): Promise<string | null> {
   const principal = await authPrincipal.resolve();
-  let owner: string | null = null;
-  try {
-    const id = (await db.meta.get("currentUser"))?.value?._id;
-    owner = typeof id === "string" ? id : null;
-  } catch {
-    owner = null;
-  }
   boundOwner = principal;
-  if (principal !== null && owner === principal) return principal;
+  let evidence: Awaited<ReturnType<typeof readOwnerEvidence>>;
+  try {
+    evidence = await readOwnerEvidence();
+  } catch (error) {
+    recordCacheEvent("ownership-unreadable", { step: "read-owner", principal, error: String(error) });
+    return null;
+  }
+  const named = [evidence.stamp, evidence.user].filter((p): p is string => typeof p === "string");
+  const others = named.filter((p) => p !== principal);
+  if (principal !== null && named.length > 0 && others.length === 0) {
+    if (evidence.stamp !== principal) await writeOwnerStamp(principal, "confirmed");
+    cacheServed = true;
+    return principal;
+  }
   // A stored token that does not parse, or a durable tier that could not be
   // read, is not a sign-out: the tracker keeps the account it last knew
   // (served above when it owns the cache), and with no account known nothing
@@ -298,7 +378,22 @@ async function resolveCacheOwnership(): Promise<string | null> {
     console.warn(`[cache] the stored token is ${tokenState}; keeping the cache as it is`);
     return null;
   }
-  if ((await foreignRowCount(principal)) > 0) await purgeLocalCache({ keepPendingInputFor: principal });
+  const foreign = await foreignRowCount(principal);
+  if (foreign === null) {
+    recordCacheEvent("ownership-unreadable", { step: "count-rows", principal });
+    return null;
+  }
+  if (foreign === 0) {
+    // Nothing on disk but the principal's own pending input: a fresh cache.
+    if (principal !== null) await writeOwnerStamp(principal, "fresh");
+    return null;
+  }
+  const reason = others.length > 0 ? "another-owner"
+    : principal === null ? "signed-out"
+    : evidence.stamp === null ? "signed-out-residue"
+    : "no-owner-recorded";
+  const detail = { reason, principal, stamp: evidence.stamp === undefined ? "absent" : evidence.stamp ?? "signed-out", user: evidence.user, foreignRows: foreign, tokenState };
+  await purgeLocalCache({ keepPendingInputFor: principal, reason, detail });
   return null;
 }
 
@@ -847,13 +942,29 @@ export async function flushPersistence(): Promise<void> {}
 // purges once more, awaited; concurrent callers share one delete.
 let purging: Promise<void> | null = null;
 
-export function purgeLocalCache(opts?: { keepPendingInputFor: string | null }): Promise<void> {
+export function purgeLocalCache(opts?: {
+  keepPendingInputFor?: string | null;
+  /** Why, for the record (store/cacheEvents.ts). */
+  reason?: string;
+  detail?: Record<string, unknown>;
+}): Promise<void> {
   if (purging) return purging;
-  purging = purgeLocalCacheNow(opts?.keepPendingInputFor ?? null).finally(() => { purging = null; });
+  const keep = opts?.keepPendingInputFor ?? null;
+  recordCacheEvent("purge", { reason: opts?.reason ?? "unspecified", keepPendingInputFor: keep, ...opts?.detail });
+  purging = purgeLocalCacheNow(keep).finally(() => { purging = null; });
   return purging;
 }
 
 async function purgeLocalCacheNow(keepPendingInputFor: string | null): Promise<void> {
+  purgeInProgress = true;
+  try {
+    await purgeLocalCacheSteps(keepPendingInputFor);
+  } finally {
+    purgeInProgress = false;
+  }
+}
+
+async function purgeLocalCacheSteps(keepPendingInputFor: string | null): Promise<void> {
   pendingJournalEpoch++;
   clearPendingMessageJournal(localStorage);
   await pendingJournalFlush;
@@ -868,14 +979,21 @@ async function purgeLocalCacheNow(keepPendingInputFor: string | null): Promise<v
   if (keepPendingInputFor) {
     try { kept = await db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${keepPendingInputFor}:`).toArray(); } catch { kept = []; }
   }
+  closeExpected = "purge";
   try {
     await db.delete();
   } finally {
+    closeExpected = null;
     // Dexie 4 does NOT reopen on its own after delete(): every later access
     // throws DatabaseClosedError. A signed-out page navigates away, but a
     // window that purged on an account boundary keeps running for the next
     // account, so reopen (an empty database with the current schema) now.
-    await db.open().catch(() => {});
+    await db.open().catch((error) => recordCacheEvent("db-open-failed", { step: "reopen-after-purge", error: String(error) }));
   }
   if (kept.length) await db.meta.bulkPut(kept);
+  // Stamp the emptied disk at once, so the next window to boot reads an owner
+  // instead of rows that name nobody and purging again: the principal it was
+  // purged for, or the signed-out tombstone, which makes anything a sibling
+  // re-persists for the account just left provably foreign.
+  await writeOwnerStamp(keepPendingInputFor, keepPendingInputFor ? "purged-for-principal" : "purged-leaving-account");
 }

@@ -32,14 +32,17 @@ if (scenario === "durable-read-fails") {
 }
 const cache = await import("../../idbCache");
 const { CACHE_SCHEMA_VERSION, loadCache, loadOutbox, _cacheOwnerForTests, enqueueDispatch, writePatchesToIDB } = cache;
+const { readCacheEvents } = await import("../../cacheEvents");
 const ROW = { _id: "a".repeat(32), session_id: "sess", updated_at: Date.now(), title: "cached row" };
 
 // Seed the disk BEFORE the cache module boots, with the schema it expects.
-async function seed(opts: { owner?: string | null; rows?: boolean; outbox?: boolean; pendingFor?: string }) {
+// `stamp`: the owner stamp row (null writes the signed-out tombstone).
+async function seed(opts: { owner?: string | null; stamp?: string | null; rows?: boolean; outbox?: boolean; pendingFor?: string }) {
   const db = new Dexie("codecast-store");
   db.version(CACHE_SCHEMA_VERSION).stores({ ...COLLECTION_INDEXES, meta: "key", conversationMessages: "convId, latestTimestamp", conversationUserMessages: "convId", dispatchOutbox: "id" });
   await db.open();
   if (opts.owner !== undefined) await db.table("meta").put({ key: "currentUser", value: opts.owner ? { _id: opts.owner, email: "x@y" } : null });
+  if (opts.stamp !== undefined) await db.table("meta").put({ key: "cacheOwner", value: { principal: opts.stamp, at: 1, reason: "seed" } });
   if (opts.rows) {
     await db.table("sessions").put(ROW);
     await db.table("meta").put({ key: "clientState", value: { ui: { theme: "dark" } } });
@@ -63,6 +66,7 @@ async function seedDurableToken(principalId: string, raw?: string) {
     req.onerror = () => reject(req.error);
   });
 }
+// Meta rows are counted without the owner stamp, which ownerStamp() reads.
 async function diskRows() {
   const db = new Dexie("codecast-store");
   // A purged cache is a deleted database, which is the strongest "zero rows".
@@ -71,12 +75,24 @@ async function diskRows() {
   const has = (name: string) => db.tables.some((t) => t.name === name);
   const out = {
     sessions: has("sessions") ? await db.table("sessions").count() : 0,
-    meta: has("meta") ? await db.table("meta").count() : 0,
+    meta: has("meta") ? await db.table("meta").filter((row: any) => row.key !== "cacheOwner").count() : 0,
     outbox: has("dispatchOutbox") ? await db.table("dispatchOutbox").count() : 0,
   };
   db.close();
   return out;
 }
+// The stamp's principal: undefined with no stamp row, null for the tombstone.
+async function ownerStamp(): Promise<string | null | undefined> {
+  if (!(await Dexie.exists("codecast-store"))) return undefined;
+  const db = new Dexie("codecast-store");
+  await db.open();
+  const row = db.tables.some((t) => t.name === "meta") ? await db.table("meta").get("cacheOwner") : undefined;
+  db.close();
+  return row === undefined ? undefined : row.value?.principal ?? null;
+}
+// Undoes the read failure a scenario injected, for its later checks.
+let restoreReads: (() => void) | null = null;
+const purges = () => readCacheEvents().filter((e) => e.kind === "purge").map((e) => e.detail.reason);
 
 if (scenario === "fresh") {
   // nothing on disk
@@ -105,6 +121,26 @@ if (scenario === "fresh") {
   await seedDurableToken("userA", "not.a.jwt");
 } else if (scenario === "durable-read-fails") {
   await seed({ owner: "userA", rows: true, outbox: true, pendingFor: "userA" });
+} else if (scenario === "stamp-names-principal") {
+  // The user row is gone (a store the browser lost and recovered in part),
+  // but the stamp still names the signed-in account: the cache is theirs.
+  await seed({ stamp: "userA", rows: true, outbox: true });
+} else if (scenario === "stamp-names-another") {
+  await seed({ stamp: "userB", rows: true, outbox: true, pendingFor: "userA" });
+} else if (scenario === "signed-out-tombstone-residue") {
+  // A sibling re-persisted rows after the sign-out purge stamped the
+  // tombstone: they belong to the account that left.
+  await seed({ stamp: null, rows: true, outbox: true });
+} else if (scenario === "owner-read-fails") {
+  // A healthy cache whose owner rows cannot be read on this boot.
+  await seed({ owner: "userA", stamp: "userA", rows: true, outbox: true });
+  const proto = (globalThis as any).IDBObjectStore.prototype;
+  const get = proto.get;
+  proto.get = function (this: any, key: unknown) {
+    if (key === "cacheOwner" || key === "currentUser") throw new DOMException("simulated read failure", "UnknownError");
+    return get.call(this, key);
+  };
+  restoreReads = () => { proto.get = get; };
 } else if (scenario === "pending-without-owner-row") {
   // A's typed message is on disk, keyed by owner; the user row has not
   // committed yet (a read right after sign-in). No purge, pending served.
@@ -126,6 +162,9 @@ switch (scenario) {
     expect(hydrated).toBeNull();
     expect(owner).toBe("userA");
     expect(await diskRows()).toEqual({ sessions: 0, meta: 0, outbox: 0 });
+    // A fresh disk is stamped for the signed-in account, and nothing purged.
+    expect(await ownerStamp()).toBe("userA");
+    expect(purges()).toEqual([]);
     // Writes for the signed-in account land.
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: { [ROW._id]: ROW } }] as any, { sessions: { [ROW._id]: ROW }, pending: {} });
     await new Promise((r) => setTimeout(r, 20));
@@ -138,23 +177,67 @@ switch (scenario) {
     expect(owner).toBe("userA");
     expect(outbox.map((o) => o.id)).toEqual(["o1"]);
     expect((await diskRows()).sessions).toBe(1);
+    // Confirmed through the user row, the owner is stamped for later boots.
+    expect(await ownerStamp()).toBe("userA");
+    expect(purges()).toEqual([]);
     break;
   case "legacy-unknown-owner":
   case "foreign-owner":
-    expect(hydrated).toBeNull();
+  case "stamp-names-another":
+  case "signed-out-tombstone-residue": {
+    // Rows nobody can show the signed-in account owns, with an outbox that
+    // must never be replayed as that account: purged, with the reason.
+    expect(hydrated?.sessions).toBeUndefined();
     expect(owner).toBe("userA");
     expect(outbox).toEqual([]);
-    expect(await diskRows()).toEqual({ sessions: 0, meta: 0, outbox: 0 });
+    const keptPending = scenario === "stamp-names-another" ? 1 : 0;
+    expect(await diskRows()).toEqual({ sessions: 0, meta: keptPending, outbox: 0 });
+    expect(purges()).toEqual([{
+      "legacy-unknown-owner": "no-owner-recorded",
+      "foreign-owner": "another-owner",
+      "stamp-names-another": "another-owner",
+      "signed-out-tombstone-residue": "signed-out-residue",
+    }[scenario]]);
+    // The emptied disk is stamped for the account it was purged for.
+    expect(await ownerStamp()).toBe("userA");
     // The window keeps running for the signed-in account: its writes land
     // in the purged (reopened) database.
     await enqueueDispatch({ id: "o2", action: "x", args: [], patches: [], result: null, ts: 2 });
     expect((await loadOutbox()).map((o) => o.id)).toEqual(["o2"]);
+    // The next window to boot reads the stamp, serves, and purges nothing.
+    await loadCache(["sessions"]);
+    expect(_cacheOwnerForTests()).toBe("userA");
+    expect(purges()).toHaveLength(1);
+    expect((await loadOutbox()).map((o) => o.id)).toEqual(["o2"]);
     break;
+  }
+  case "stamp-names-principal":
+    expect(hydrated?.sessions?.[ROW._id]?.title).toBe("cached row");
+    expect(owner).toBe("userA");
+    expect(outbox.map((o) => o.id)).toEqual(["o1"]);
+    expect(purges()).toEqual([]);
+    break;
+  case "owner-read-fails": {
+    // Nothing can be shown to be the account's, so nothing is served; a read
+    // error proves nothing about another owner, so nothing is purged.
+    expect(hydrated).toBeNull();
+    expect(purges()).toEqual([]);
+    expect(readCacheEvents().some((e) => e.kind === "ownership-unreadable")).toBe(true);
+    restoreReads?.();
+    expect(await diskRows()).toEqual({ sessions: 1, meta: 2, outbox: 1 });
+    // Once reads work again the same cache is served whole.
+    expect((await loadCache(["sessions"]))?.sessions?.[ROW._id]?.title).toBe("cached row");
+    expect(_cacheOwnerForTests()).toBe("userA");
+    break;
+  }
   case "signed-out-residue":
     expect(hydrated).toBeNull();
     expect(owner).toBeNull();
     expect(outbox).toEqual([]);
     expect(await diskRows()).toEqual({ sessions: 0, meta: 0, outbox: 0 });
+    // Purged leaving the account: the tombstone marks any later residue.
+    expect(purges()).toEqual(["another-owner"]);
+    expect(await ownerStamp()).toBeNull();
     // Nobody is signed in: nothing may be written either.
     await enqueueDispatch({ id: "o2", action: "x", args: [], patches: [], result: null, ts: 2 });
     expect((await diskRows()).outbox).toBe(0);

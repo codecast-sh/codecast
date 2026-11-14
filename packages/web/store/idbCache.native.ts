@@ -820,7 +820,7 @@ let purging: Promise<void> | null = null;
 /** Delete everything this module persisted. `keepPendingInputFor` keeps that
  *  principal's own typed-but-unsent messages (a purge from under a signed-in
  *  account); sign-out passes nothing and keeps nothing. */
-export function purgeLocalCache(opts?: { keepPendingInputFor: string | null }): Promise<void> {
+export function purgeLocalCache(opts?: { keepPendingInputFor?: string | null; reason?: string; detail?: Record<string, unknown> }): Promise<void> {
   if (purging) return purging;
   purging = purgeLocalCacheNow(opts?.keepPendingInputFor ?? null).finally(() => { purging = null; });
   return purging;

@@ -17,6 +17,10 @@ for (const scenario of [
   "pending-without-owner-row",
   "durable-read-fails",
   "durable-token-unparsable",
+  "stamp-names-principal",
+  "stamp-names-another",
+  "signed-out-tombstone-residue",
+  "owner-read-fails",
 ]) {
   it(`cache ownership: ${scenario}`, () => {
     const result = Bun.spawnSync([process.execPath, `${import.meta.dir}/fixtures/cacheOwnership.ts`], {
