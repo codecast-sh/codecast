@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { withoutDeliveryId } from "@codecast/shared/contracts";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { defaultConfigDir } from "./config/configDir.js";
@@ -86,7 +87,8 @@ export class TmuxDeliveryJournal {
    * 2026-11-11).
    */
   begin(identity: TmuxDeliveryIdentity, generation: string, payload: string, opts: { atPrompt?: boolean } = {}): { receipt: TmuxPasteReceipt; fresh: boolean } {
-    const payloadHash = createHash("sha256").update(payload).digest("hex");
+    // A daemon from before the delivery id typed this message without it; it is still the same payload.
+    const payloadHash = createHash("sha256").update(withoutDeliveryId(payload)).digest("hex");
     return this.db.transaction(() => {
       const prior = this.get(identity.messageId);
       if (prior) {

@@ -267,3 +267,11 @@ test("pendingMessageOutcome tells a stalled message from an open one; receipts s
   expect(await pendingMessageFinished(at("undeliverable"), "m")).toBe(false);
   expect(await pendingMessageFinished(at("delivered"), "m")).toBe(true);
 });
+
+test("a paste an older daemon typed without the delivery id is the same payload when the new one retries it stamped", () => {
+  const path = file();
+  const frame = '<session-message from="jx7abcd">\nrebase on main\n</session-message>';
+  expect(open(path).begin(identity, generation, frame).fresh).toBe(true);
+  const restarted = open(path);
+  expect(restarted.begin(identity, generation, frame.replace('">', '" delivery="message-a">')).fresh).toBe(false);
+});
