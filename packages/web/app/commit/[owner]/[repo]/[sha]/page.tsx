@@ -41,7 +41,7 @@ import { useAttributedSession, useLineComments } from "../../../../../hooks/useL
 import { useCoarseNow } from "../../../../../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../../../../../hooks/useQueryNoThrow";
 import { commitCarriesDiffs } from "@codecast/shared/contracts/commitDiffs";
-import { useEnsureCommitFiles } from "../../../../../hooks/useRepoBrowse";
+import { useEnsureCommitFiles } from "../../../../../hooks/useEnsureCommitFiles";
 import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import {
   useCommit,
