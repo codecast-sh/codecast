@@ -873,6 +873,22 @@ div.ch-reaction-tip {
   color: var(--sol-cyan);
 }
 
+.ch-composer-hand {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--sol-violet);
+}
+
+.ch-handed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: var(--fs-meta);
+  color: var(--sol-violet);
+}
+
 .ch-thread-link {
   display: inline-flex;
   align-items: center;
