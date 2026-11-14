@@ -95,7 +95,14 @@ export function applyFormat(cmd: FormatCommand, href?: string): "done" | "need-l
     } else document.execCommand("createLink", false, href);
     return "done";
   }
-  document.execCommand(cmd === "bold" ? "bold" : cmd === "italic" ? "italic" : "strikeThrough");
+  // A sticky's first line is drawn heavy as its title, and the browser's bold reads that weight as "already
+  // bold" and makes the words lighter. For the command, the title weight is off, so bold follows the marks.
+  ed.classList.add("is-formatting");
+  try {
+    document.execCommand(cmd === "bold" ? "bold" : cmd === "italic" ? "italic" : "strikeThrough");
+  } finally {
+    ed.classList.remove("is-formatting");
+  }
   return "done";
 }
 

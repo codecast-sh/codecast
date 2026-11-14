@@ -32,6 +32,8 @@ import {
   elementBounds,
   elementBox,
   intersects,
+  labelSpot,
+  textWidth,
   nextZ,
   readingOrder,
   unionBox,
@@ -373,6 +375,8 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     }
     const { ops, map } = cloneOps(els, dx, dy, nextZ({ elements: allEls() }), (k) => byKeyRef.current.has(k));
     live.apply(ops);
+    // A copy that landed past the edge of the view is brought into it, beside its original.
+    if (box) revealBox(unionBox([box, { x: box.x + dx, y: box.y + dy, w: box.w, h: box.h }])!);
     setSelection(selection.map((k) => map.get(k)).filter((k): k is string => !!k));
   };
   const viewCenter = (): Pt => {
@@ -466,10 +470,13 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   };
   /** Bring an element into view at the current zoom when it is off screen (Tab walking). */
   const reveal = (el: BoardEl) => {
+    const b = el.kind === "connector" ? connectorGeometry(el, (k) => byKeyRef.current.get(k))?.box : elementBounds(el);
+    if (b) revealBox(b);
+  };
+  /** The camera glides just enough to show `b`, when it is not already in view. */
+  const revealBox = (b: Box) => {
     const root = cam.rootRef.current;
     if (!root) return;
-    const b = el.kind === "connector" ? connectorGeometry(el, (k) => byKeyRef.current.get(k))?.box : elementBounds(el);
-    if (!b) return;
     const { x, y, z } = cam.cam.current;
     const s = { x: b.x * z + x, y: b.y * z + y, w: b.w * z, h: b.h * z };
     const W = root.clientWidth, H = root.clientHeight, m = 60;
@@ -657,11 +664,15 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     const boxes = selectedEls.flatMap((e) => {
       if (e.kind !== "connector") return [elementBounds(e)];
       const ends = [e.from, e.to].map((k) => (typeof k === "string" ? byKey.get(k) : undefined)).filter(Boolean).map((x) => elementBounds(x!));
-      const g = connectorGeometry(e, (k) => byKey.get(k));
-      return [...ends, ...(g ? [g.box] : [])];
+      // Routed as the canvas draws it (an elbow goes around obstacles), with its label's chip.
+      const g = connectorGeometry(e, (k) => byKey.get(k), e.curve === "elbow" ? obstacles : undefined);
+      const label = typeof e.label === "string" ? e.label : "";
+      const at = g && label ? labelSpot(g, label) : null;
+      const lw = textWidth(label, 15) + 16;
+      return [...ends, ...(g ? [g.box] : []), ...(at ? [{ x: at.x - lw / 2, y: at.y - 12, w: lw, h: 24 }] : [])];
     });
     return unionBox(boxes);
-  }, [selectedEls, byKey]);
+  }, [selectedEls, byKey, obstacles]);
   const barAt = useMemo(() => {
     if (!selBox || !cam.viewport.w) return null;
     const top = selBox.y * vcam.z + vcam.y, bottom = (selBox.y + selBox.h) * vcam.z + vcam.y;

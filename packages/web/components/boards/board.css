@@ -265,6 +265,7 @@ html.light .board-root {
 .board-bar-link:focus { border-color: var(--board-sel); }
 .board-rich-edit a { color: var(--sol-blue); text-decoration: underline; text-underline-offset: 0.15em; }
 .board-sticky .board-rich-edit > div:first-child:not(:only-child) { font-weight: 650; }
+.board-sticky .board-rich-edit.is-formatting > div:first-child { font-weight: inherit; }
 .board-sticky .board-rich-edit > div:not(:first-child) { color: color-mix(in srgb, var(--board-ink) 72%, transparent); }
 .board-text .board-edit { height: 100%; }
 .board-shape .board-edit { inset: 6px 12px; position: absolute; width: auto; text-align: center; align-content: center; }
