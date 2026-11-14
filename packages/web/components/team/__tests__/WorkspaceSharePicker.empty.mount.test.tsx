@@ -33,7 +33,7 @@ afterEach(async () => { await act(async () => root.unmount()); });
 test("a joiner with no synced machine is offered the one-step setup", async () => {
   await render();
   expect(text()).toContain("Connect this machine first");
-  expect(text()).toContain("Generate install command");
+  expect(text()).toContain("Show install command");
   expect(text()).not.toContain("cast auth");
 });
 
@@ -41,5 +41,5 @@ test("a machine that just connected waits for sessions instead of installing aga
   sessionStorage.setItem(CLI_CONNECTED_KEY, String(Date.now()));
   await render();
   expect(text()).toContain("Waiting for your first sessions");
-  expect(text()).not.toContain("Generate install command");
+  expect(text()).not.toContain("Show install command");
 });

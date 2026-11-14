@@ -6,7 +6,7 @@
  * `lib/links.ts` is the half that actually opens things.
  */
 
-import { entityRoute, isOrgObjectKind, parseEntityUrl, parseMessageRefUrl, parseRepoObjectId, parseSharedEntityUrl, parseSharePath, sharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
+import { entityRoute, flowSlugOf, isOrgObjectKind, parseProposalChangeRef, parseEntityUrl, parseMessageRefUrl, parseRepoObjectId, parseSharedEntityUrl, parseSharePath, sharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
 import { laneRedirectTarget, pageAliasTarget } from '@codecast/web/lib/laneRedirect';
 import { settingsPathFor } from '@codecast/web/lib/settingsSections';
 import { isMobileSettingsSection } from './settingsSections';
@@ -64,8 +64,16 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
   // A call opens on the recording screen, which reads any call's words.
   call: '/recording',
   pr: '/pr',
+  commit: '/commit',
+  deploy: '/deploy',
+  // A product source and a recording (`rp-12`, or a moment of one, `rp-12@1:23`).
+  source: '/source',
+  replay: '/replay',
   // The Vault is a settings page; a secret opens its detail there.
   secret: '/settings/vault',
+  // A flow of the pool by its slug (`flow:change`), and an org proposal (`op-55`, or one change of it, `op-55#3`).
+  flow: '/flow',
+  proposal: '/proposal',
 };
 
 /** The mobile route for an object id, or null when that type has no screen.
@@ -80,7 +88,21 @@ export function mobileEntityRoute(type: EntityType, id: string): string | null {
     const ref = parseRepoObjectId(id);
     return ref?.type === 'pr' ? `${base}/${ref.repository}/${ref.number}` : null;
   }
+  if (type === 'commit') {
+    const ref = parseRepoObjectId(id);
+    return ref?.type === 'commit' ? `${base}/${ref.repository}/${ref.sha}` : null;
+  }
   if (type === 'secret') return `${base}?s=${encodeURIComponent(id)}`;
+  if (type === 'flow') {
+    const slug = flowSlugOf(/^flow:/i.test(id) ? id : `flow:${id}`);
+    return slug ? `${base}/${slug}` : null;
+  }
+  if (type === 'proposal') {
+    const change = parseProposalChangeRef(id);
+    return change ? `${base}/${change.proposal}?focus=${change.seq}` : `${base}/${id.toLowerCase()}`;
+  }
+  // A source is named by its name (spaces and all) and a replay moment carries an `@`.
+  if (type === 'source' || type === 'replay') return `${base}/${encodeURIComponent(id)}`;
   if (type === 'call') {
     const web = entityRoute('call', id);
     if (web?.startsWith('/calls/')) return `${base}/${web.slice('/calls/'.length)}`;
@@ -172,8 +194,14 @@ export function mobileRouteForUrl(url: string): string | null {
     if (!org[1]) return '/org';
     return /[?&]tab=/.test(url) ? `/org/${org[1]}/board` : `/org/${org[1]}`;
   }
+  // The Flows library with one flow open (`/flows?view=flows&item=change`, entityRoute's form for `flow:change`).
+  const flowItem = /^\/flows\/?$/.test(path) ? /[?&]item=([^&#]+)/.exec(url)?.[1] : null;
+  if (flowItem) return mobileEntityRoute('flow', decodeURIComponent(flowItem));
   // The retired assistant lane's addresses (/simple/...) lead where the web
   // sends them (lib/laneRedirect), and from there to the phone's screen.
+  // An Ops issue (an event group, `/ops/issues/eg-12`) opens the phone's issue screen.
+  const issue = /^\/ops\/issues\/([^/]+)\/?$/.exec(path);
+  if (issue) return `/issue/${issue[1]}`;
   const moved = laneRedirectTarget(path);
   if (moved) return mobileRouteForUrl(moved);
   // The web's other names for its pages (/approvals, /plan, /mail, /routines)

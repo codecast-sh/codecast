@@ -9,7 +9,7 @@
 import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Layers } from "lucide-react";
-import { rankByHeadroom } from "@codecast/shared/contracts";
+import { accountDisplayName, rankByHeadroom } from "@codecast/shared/contracts";
 import { SettingsBadge, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { AccountUsageBars } from "../../../components/AccountUsageMeter";
 import { Button } from "../../../components/ui/button";
@@ -21,7 +21,7 @@ const PERSON_TONES = ["--sol-cyan", "--sol-violet", "--sol-yellow", "--sol-green
 
 const tokens = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${Math.round(n / 1e6)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
 const sum = (split: PoolAccount["split"]) => split.reduce((a, s) => a + s.tokens, 0);
-const accountName = (r: PoolAccount) => r.profile_name ?? r.email.split("@")[0];
+const accountName = (r: PoolAccount) => accountDisplayName({ name: r.profile_name }) ?? r.email.split("@")[0];
 
 /** One team's pool: who spent which account (people × accounts), then each account. */
 function TeamPool({ teamName, rows, showTeam }: { teamName: string; rows: PoolAccount[]; showTeam: boolean }) {
