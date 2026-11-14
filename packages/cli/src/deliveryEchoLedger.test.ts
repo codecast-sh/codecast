@@ -13,7 +13,8 @@ function ledger(): DeliveryEchoLedger {
 }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-const at = Date.parse("2026-11-07T18:42:00Z");
+// Relative to the real clock: the ledger prunes rows older than its retention on open.
+const at = Date.now() - 60_000;
 const user = (content: string, uuid: string, timestamp = at + 1000) => ({ messageUuid: uuid, role: "human", content, timestamp });
 const ids = (rows: ReadonlyArray<object>) => rows.map((r) => (r as { deliveryIds?: string[] }).deliveryIds ?? null);
 
