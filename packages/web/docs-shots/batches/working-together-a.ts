@@ -67,11 +67,20 @@ export const WORKING_TOGETHER_A: Shot[] = [
     out: "public/documentation/decisions/steer-dock.webp",
   },
 
+  {
+    name: "messaging/triage-menu",
+    route: conv(D.deadLetters._id),
+    viewport: { width: 1280, height: 820 },
+    rail: true,
+    steps: [{ rightClick: `[data-sv-rail] [data-session-id="${D.deadLetters._id}"]` }, { sleep: 700 }],
+    frame: "window",
+    out: "public/documentation/messaging/triage-menu.webp",
+  },
   /* ── Messaging ─────────────────────────────────────────────────────────── */
   {
     name: "messaging/message-from",
     route: conv(D.queue._id),
-    viewport: { width: 1100, height: 1000 },
+    viewport: { width: 1100, height: 1400 },
     steps: [FULL, { wait: "[data-sv-feed]", text: "Message to" }, { sleep: 1000 }],
     crop: { selector: "[data-sv-feed]", pad: 0 },
     frame: "element",
@@ -82,11 +91,13 @@ export const WORKING_TOGETHER_A: Shot[] = [
   {
     name: "forks-and-spawn/workers",
     route: conv(D.retries._id),
-    viewport: { width: 1100, height: 1000 },
+    viewport: { width: 1100, height: 1300 },
     steps: [
       FULL,
-      { js: "[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Read the thread'))?.click()" },
+      // Before the question: parked on its two workers, so the pane shows the thread.
+      { js: "__acmeScene.nest()" },
       { wait: "[data-sv-feed]", text: "Both workers are done" },
+      { js: "document.querySelector('[data-sv-feed]').scrollTo(0, 0)" },
       { sleep: 1200 },
     ],
     crop: { selector: "[data-sv-feed]", pad: 0 },
@@ -97,29 +108,12 @@ export const WORKING_TOGETHER_A: Shot[] = [
     name: "forks-and-spawn/branch-map",
     route: conv(FORK_SESSIONS.queue._id),
     viewport: { width: 1100, height: 820 },
-    steps: [{ wait: "[data-sv-feed]" }, { sleep: 600 }, { key: "t" }, { sleep: 900 }],
+    steps: [{ wait: "[data-sv-feed]" }, { click: "[data-sv-feed]" }, { sleep: 600 }, { key: "Control+b" }, { sleep: 1200 }],
     frame: "window",
     out: "public/documentation/forks-and-spawn/branch-map.webp",
   },
-  {
-    name: "messaging/triage-menu",
-    route: conv(D.deadLetters._id),
-    viewport: { width: 1280, height: 820 },
-    rail: true,
-    steps: [{ rightClick: `[data-sv-rail] [data-session-id="${D.deadLetters._id}"]` }, { sleep: 700 }],
-    frame: "window",
-    out: "public/documentation/messaging/triage-menu.webp",
-  },
-  {
-    name: "forks-and-spawn/inbox-nest",
-    route: conv(D.deadLetters._id),
-    viewport: { width: 1280, height: 860 },
-    rail: true,
-    steps: [{ js: "__acmeScene.nest()" }, { sleep: 1200 }],
-    crop: { selector: "[data-sv-rail]", pad: 0 },
-    frame: "element",
-    out: "public/documentation/forks-and-spawn/inbox-nest.webp",
-  },
+
+
   {
     name: "forks-and-spawn/fork-from-message",
     route: conv(FORK_SESSIONS.queue._id),
@@ -132,7 +126,7 @@ export const WORKING_TOGETHER_A: Shot[] = [
     name: "forks-and-spawn/move-menu",
     route: conv(FORK_SESSIONS.queue._id),
     viewport: { width: 1100, height: 760 },
-    steps: [{ wait: "[data-sv-feed]" }, { click: "[data-sv-convhead] [data-session-control-trigger]" }, { sleep: 800 }],
+    steps: [{ wait: "[data-sv-feed]" }, { click: "[data-session-control-trigger=composer]" }, { sleep: 800 }],
     frame: "window",
     out: "public/documentation/forks-and-spawn/move-menu.webp",
   },
@@ -221,6 +215,16 @@ export const WORKING_TOGETHER_A: Shot[] = [
     out: "public/documentation/team-chat/slack-mirror.webp",
   },
 
+  {
+    name: "forks-and-spawn/inbox-nest",
+    route: conv(D.retries._id),
+    viewport: { width: 1280, height: 860 },
+    rail: true,
+    steps: [{ js: "__acmeScene.nest()" }, { sleep: 1200 }],
+    crop: { selector: "[data-sv-rail]", pad: 0 },
+    frame: "element",
+    out: "public/documentation/forks-and-spawn/inbox-nest.webp",
+  },
   // The live #eng huddle, joined in this tab (__acmeScene.huddle in lib/acmeWorld/calls.ts).
   {
     name: "calls/in-call",
