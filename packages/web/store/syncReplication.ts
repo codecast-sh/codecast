@@ -16,6 +16,7 @@
 // the lock releasing (window closed, crashed) promotes the next eligible
 // window automatically.
 
+import { overlayReplicatedPullRequests } from "../lib/cardPullRequestRows";
 import {
   createReplicationFollower,
   createReplicationHost,
@@ -481,7 +482,11 @@ function applyUpdatesToStoreInner(updates: MutUpdate[], opts?: { optimistic?: bo
         if (entries.length) useInboxStore.getState().protectReplicatedWrite(u.key, entries);
       } else {
         state.releaseSettledFieldLocks(u.upserts.map((row: any) => String(row._id)));
-        state.syncTable(u.key, u.upserts, { isDelta: true, ...(u.key === "sessions" ? REPLICA_SESSIONS_OPTS : {}) });
+        // The host's chip feed sends a pull request with only what a chip
+        // draws when the host never cached the full row; over a full row this
+        // window holds (its PR page open), it lands as the same overlay.
+        const upserts = u.key === "pullRequests" ? overlayReplicatedPullRequests(u.upserts, (state as any).pullRequests, (state as any).pending) : u.upserts;
+        state.syncTable(u.key, upserts, { isDelta: true, ...(u.key === "sessions" ? REPLICA_SESSIONS_OPTS : {}) });
       }
     }
     if (u.removes?.length) state._applyReplicatedRemovals(u.key, u.removes);

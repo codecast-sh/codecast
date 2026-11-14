@@ -14,7 +14,8 @@ setHydrating(false);
 
 // A write persists the rows its patches name, at a cost of those rows: a
 // 400-cell batch into a sheet beside 80k other rows never walks the 80k. The
-// pending map is one blob, written once per quiet spell rather than per action.
+// pending map goes to disk with every action (its locks guard outbox rows that are already
+// on disk); other meta blobs are written once per quiet spell.
 const db = () => Dexie.connections.find((d) => d.name === "codecast-store") as any;
 const ID = (n: number) => `k17row${String(n).padStart(26, "a")}`;
 const settle = () => Bun.sleep(30);
@@ -45,15 +46,24 @@ describe("incremental persistence", () => {
     expect(await db().liveElements.count()).toBe(1999);
   });
 
-  it("writes the pending blob once for a run of actions, with its last value", async () => {
+  it("writes the pending blob with every action, so a page killed right after a write keeps its lock", async () => {
+    // The outbox row reaches disk at once; a lock that waited for the 250 ms
+    // quiet spell was lost with a page killed in between (no flush), and the
+    // reloaded page showed a stale push over its own parked write.
+    writePatchesToIDB([{ op: "replace", path: ["pending"], value: {} } as any], { pending: { "liveElements:k:v": { type: "field", value: 1 } } });
+    await settle();
+    expect((await db().meta.get("pending"))?.value).toEqual({ "liveElements:k:v": { type: "field", value: 1 } });
+  });
+
+  it("still writes other meta blobs once for a run of actions, with their last value", async () => {
     let puts = 0;
     const put = db().meta.put.bind(db().meta);
-    db().meta.put = (row: any) => { if (row.key === "pending") puts++; return put(row); };
-    for (let i = 0; i < 50; i++) writePatchesToIDB([{ op: "replace", path: ["pending"], value: {} } as any], { pending: { [`liveElements:${i}`]: { type: "field" } } });
+    db().meta.put = (row: any) => { if (row.key === "wallet") puts++; return put(row); };
+    for (let i = 0; i < 50; i++) writePatchesToIDB([{ op: "replace", path: ["wallet"], value: {} } as any], { wallet: { n: i } });
     expect(puts).toBe(0);
     await Bun.sleep(400);
     expect(puts).toBe(1);
-    expect(Object.keys((await db().meta.get("pending")).value)).toEqual(["liveElements:49"]);
+    expect((await db().meta.get("wallet")).value).toEqual({ n: 49 });
     db().meta.put = put;
   });
 });

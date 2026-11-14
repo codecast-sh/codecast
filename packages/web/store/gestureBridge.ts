@@ -104,7 +104,7 @@ export type GestureMessage =
   // replicated rows — and retire them at the same position the sender does,
   // instead of waiting for a value echo that a later remote write may never
   // deliver (a restore right after a kill).
-  | { kind: "ack"; patches: Record<string, unknown>; ack: Array<{ scope_key: string; position: number }>; sentAt: number; ts: number };
+  | { kind: "ack"; patches: Record<string, unknown>; ack: Array<{ scope_key: string; position: number }>; sentAt: number; ts: number; lockIds?: string[] };
 
 type Envelope = GestureMessage & {
   v: 1;

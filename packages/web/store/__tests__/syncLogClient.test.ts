@@ -61,6 +61,29 @@ describe("stampSyncAck", () => {
     expect((useInboxStore.getState().pending as any)[`conversations:${CID}:title`]).toBeUndefined();
   });
 
+  test("an older send of the same value never stamps a newer lock (true, false, true: tester seed 698)", () => {
+    // The third send's lock holds true, as the first send wrote. The first
+    // send's ack must not stamp it: the delivery past that position would
+    // retire it while the third send is still in flight.
+    useInboxStore.setState({
+      pending: { [`conversations:${CID}:title`]: { type: "field", value: "true", ts: 100, lock: "L3" } },
+    } as any);
+    useInboxStore.getState().stampSyncAck(
+      { conversations: { [CID]: { title: "true" } } },
+      [{ scope_key: "user:u1", position: 2 }],
+      200,
+      { local: true, lockIds: ["L1"] },
+    );
+    expect((useInboxStore.getState().pending as any)[`conversations:${CID}:title`].ack).toBeUndefined();
+    useInboxStore.getState().stampSyncAck(
+      { conversations: { [CID]: { title: "true" } } },
+      [{ scope_key: "user:u1", position: 4 }],
+      200,
+      { local: true, lockIds: ["L3"] },
+    );
+    expect((useInboxStore.getState().pending as any)[`conversations:${CID}:title`].ack).toEqual([{ s: "user:u1", p: 4 }]);
+  });
+
   test("ignores singleton buckets and unknown tables", () => {
     useInboxStore.setState({
       pending: { [`conversations:${CID}:title`]: { type: "field", value: "x", ts: 100 } },

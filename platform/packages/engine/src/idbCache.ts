@@ -123,9 +123,12 @@ export function createIdbCache(
           }
         }
       } else if (metaKeys.has(key)) {
-        // A meta value is one blob (the pending map holds a lock per field in flight): written once per
-        // quiet spell with its latest value, never once per action. Page hide flushes it.
-        metaWriter.write(key, state[key]);
+        // A meta value is one blob, written once per quiet spell with its latest value (page hide flushes
+        // it). The pending map is the exception: its locks protect writes the outbox puts on disk at once,
+        // so a page that died in the quiet spell would reload with parked writes no lock protects (a stale
+        // push shows the old value, an edit back to it sends nothing, the replay lands the older value).
+        if (key === "pending") metaTable.put({ key, value: state[key] }).catch(() => {});
+        else metaWriter.write(key, state[key]);
       }
     }
   }

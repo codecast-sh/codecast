@@ -3,7 +3,7 @@ export const DELIVERY_SCOPE_PREFIX = "outbox:";
 type Receipt = { id: string; revision: number; entity_type: string; entity_id: string };
 type Delivery = { id: string; revision?: number; scope_key?: string; position?: number; revoked?: boolean };
 
-export function stampDeliveryReceipts(store: any, patches: any, receipts: Receipt[], sentAt: number) {
+export function stampDeliveryReceipts(store: any, patches: any, receipts: Receipt[], sentAt: number, lockIds?: ReadonlySet<string>) {
   if (!patches || !Array.isArray(receipts)) return;
   const groups = new Map<string, Receipt[]>();
   for (const receipt of receipts) {
@@ -17,6 +17,7 @@ export function stampDeliveryReceipts(store: any, patches: any, receipts: Receip
     store.stampSyncAck(
       { [receipt.entity_type]: { [receipt.entity_id]: fields } },
       group.map((r) => ({ scope_key: DELIVERY_SCOPE_PREFIX + r.id, position: r.revision })), sentAt,
+      { lockIds },
     );
   }
 }
