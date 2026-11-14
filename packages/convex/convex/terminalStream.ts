@@ -46,6 +46,8 @@ import { resolveReachableRunnerDevice } from "./devices";
 import {
   PANE_COMMAND_DEBOUNCE_MS,
   PANE_LEASE_MS,
+  PANE_CLIPBOARD_TTL_MS,
+  PANE_MAX_CLIPBOARD_CHARS,
   PANE_MAX_FRAME_BYTES,
   PANE_INTERACTIVE_TTL_MS,
   PANE_MAX_PENDING_INPUT_BYTES,
@@ -82,6 +84,15 @@ export async function resolveQueueUser(
     )
     .first();
   return device ? userId : null;
+}
+
+async function findClipboard(ctx: any, userId: any, device_id: string, target: string) {
+  return await ctx.db
+    .query("terminal_clipboards")
+    .withIndex("by_user_device_target", (q: any) =>
+      q.eq("user_id", userId).eq("device_id", device_id).eq("target", target),
+    )
+    .first();
 }
 
 async function findRow(ctx: any, userId: any, device_id: string, target: string) {
@@ -152,12 +163,22 @@ export const watchPane = mutation({
       ? Math.max(row?.interactive_until ?? 0, now + PANE_INTERACTIVE_TTL_MS)
       : row?.interactive_until;
 
+    // A new lease after a lapsed one starts with no clipboard offer: the last
+    // viewer's copy is not this one's to take.
+    if (row && row.watch_until < now) {
+      const clip = await findClipboard(ctx, userId, args.device_id, args.target);
+      if (clip) await ctx.db.delete(clip._id);
+    }
+
     if (row) {
       await ctx.db.patch(row._id, {
         watch_until,
         interactive_until,
         updated_at: now,
         ...(dispatch ? { requested_at: now } : {}),
+        // A new lease after a lapsed one starts clean: the last stream's
+        // "pane is gone" is not this viewer's answer until a stream says so.
+        ...(row.watch_until < now && row.error !== undefined ? { error: undefined } : {}),
       });
     } else {
       await ctx.db.insert("terminal_frames", {
@@ -201,6 +222,57 @@ export const getPane = query({
       streamer_seen_at: row.streamer_seen_at ?? null,
       updated_at: row.updated_at,
     };
+  },
+});
+
+/**
+ * The pane's clipboard offer, on its own: a subscriber is sent a new result
+ * only when it changes, so the text crosses the wire once per offer rather
+ * than riding every frame of getPane.
+ */
+export const getPaneClipboard = query({
+  args: {
+    device_id: v.string(),
+    target: v.string(),
+    conversation_id: v.optional(v.id("conversations")),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const viewerId = await requireUserOrToken(ctx, args.api_token);
+    const userId = await resolveQueueUser(ctx, viewerId, args);
+    if (!userId) return null;
+    const clip = await findClipboard(ctx, userId, args.device_id, args.target);
+    // Stale offers are not read back, whatever is still stored.
+    if (!clip || Date.now() - clip.at > PANE_CLIPBOARD_TTL_MS) return null;
+    return { clipboard: clip.text, clipboard_at: clip.at };
+  },
+});
+
+/**
+ * Daemon push of a clipboard offer: text that reached a tmux paste buffer
+ * while the viewer was typing. Its own mutation rather than a field on
+ * cliPushFrame, so a daemon that sends it to a deployment without it loses the
+ * offer and nothing else. Only a pane someone is watching takes one.
+ */
+export const cliPushClipboard = mutation({
+  args: {
+    api_token: v.string(),
+    device_id: v.string(),
+    target: v.string(),
+    text: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    if (!isValidPaneTarget(args.target)) throw new Error("Invalid pane target");
+    const row = await findRow(ctx, userId, args.device_id, args.target);
+    const now = Date.now();
+    if (!row || row.watch_until < now || !args.text) return { ok: false as const };
+    let text = args.text.slice(0, PANE_MAX_CLIPBOARD_CHARS);
+    if (/[\ud800-\udbff]$/.test(text)) text = text.slice(0, -1);
+    const existing = await findClipboard(ctx, userId, args.device_id, args.target);
+    if (existing) await ctx.db.patch(existing._id, { text, at: now });
+    else await ctx.db.insert("terminal_clipboards", { user_id: userId, device_id: args.device_id, target: args.target, text, at: now });
+    return { ok: true as const };
   },
 });
 
@@ -341,6 +413,14 @@ export const pruneStaleFrames = internalMutation({
     for (const r of rows) {
       if (r.updated_at < cutoff) {
         await ctx.db.delete(r._id);
+        deleted++;
+      }
+    }
+    // Clipboard offers keep nothing past their TTL.
+    const clipCutoff = Date.now() - PANE_CLIPBOARD_TTL_MS;
+    for (const c of await ctx.db.query("terminal_clipboards").take(2000)) {
+      if (c.at < clipCutoff) {
+        await ctx.db.delete(c._id);
         deleted++;
       }
     }
