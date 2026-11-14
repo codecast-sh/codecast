@@ -1803,11 +1803,20 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
 // changes: who runs the role and in which folder are read from that session
 // (lib/seatPlace), and the destination daemon resolves the folder to its own
 // checkout of the same repo.
+// Any move clears the failover line (roleFailover.ts), since a person or the
+// sweep has now chosen where it runs.
 export async function performMoveRole(ctx: any, userId: Id<"users">, args: { role_id: string; device_id: string }): Promise<any> {
-  const role = await requireRole(ctx, userId, args.role_id, "admin");
+  return moveStandingSession(ctx, userId, await requireRole(ctx, userId, args.role_id, "admin"), args.device_id);
+}
+
+/** The move itself, for a caller already allowed to move this role: an admin
+ *  (performMoveRole), or the prior runner taking it back onto their own
+ *  machine after a failover (roleFailover.performMoveRoleBack). */
+export async function moveStandingSession(ctx: any, userId: Id<"users">, role: any, deviceId: string): Promise<any> {
   const standing = await standingConversationOf(ctx, role);
   if (!standing) throw new Error("This role has no standing session yet (cast role provision seats one)");
-  const moved = await performReparentSessionToDevice(ctx, userId, { session_id: String(standing._id), device_id: args.device_id });
+  const moved = await performReparentSessionToDevice(ctx, userId, { session_id: String(standing._id), device_id: deviceId });
+  if (role.failover) await ctx.db.patch(role._id, { failover: undefined });
   return { role_id: role._id, handle: role.handle, conversation_id: standing._id, label: moved.label, device_id: moved.device_id, cross_user: moved.cross_user };
 }
 

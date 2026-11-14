@@ -71,6 +71,8 @@ export const PREFERENCE_MAP: Record<string, string> = {
   team_join_approved: "mention",
   // A watch that names the person by hand alerting: addressed to them, a mention's class.
   metric_alert: "mention",
+  // A role the person answers for moved machines: addressed to them by name.
+  role_moved: "mention",
 };
 
 function isNotificationEnabled(

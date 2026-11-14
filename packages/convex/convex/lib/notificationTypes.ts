@@ -105,5 +105,7 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("weekly_card"),
   // A metric watch that names the recipient crossed its line, is still past
   // it, or recovered (metricAlerts.ts).
-  v.literal("metric_alert")
+  v.literal("metric_alert"),
+  // A role's standing session moved off a quiet host, or could not (roleFailover.ts).
+  v.literal("role_moved")
 );

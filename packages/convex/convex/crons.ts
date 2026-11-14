@@ -623,6 +623,11 @@ crons.interval(
   {}
 );
 
+// A role's standing session whose host went quiet or unhealthy with work
+// waiting moves to an always-on machine on its own (roleFailover.ts). Every
+// 5 minutes, so a move lands within the 1 hour threshold plus one tick.
+crons.interval("fail over standing sessions off dead hosts", { minutes: 5 }, (internal as any).roleFailover.sweep, {});
+
 // A role hired while its drawing failed (no model credit) gets drawn later.
 crons.interval("redraw recent roles without an icon", { hours: 6 }, internal.roleIcons.redrawMissing, {});
 

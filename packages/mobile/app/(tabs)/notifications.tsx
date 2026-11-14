@@ -111,6 +111,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "passkey_changed": return { name: "key", color: Theme.red };
     case "weekly_card": return { name: "bar-chart", color: Theme.accent };
     case "metric_alert": return { name: "line-chart", color: Theme.red };
+    case "role_moved": return { name: "exchange", color: Theme.orange };
     default: return { name: "bell", color: Theme.textMuted };
   }
 }

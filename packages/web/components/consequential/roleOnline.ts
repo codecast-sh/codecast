@@ -114,3 +114,21 @@ export function hireAssistantLedger(r: { name: string; reach: string; host: stri
     keep: "Not now",
   };
 }
+
+/** Moving a failed-over role back to the host it left (convex roleFailover.moveBack), when that changes the account it
+ *  runs and bills under. `runner` is who it runs under there, from the reader's side ("you" or a name). */
+export function moveRoleBackLedger(r: { handle: string; name: string; here: string; there: string; runner: string }): SwitchLedger {
+  return {
+    name: `Move @${r.handle} back`,
+    subject: r.name,
+    shift: [r.here, r.there],
+    figures: [{ value: "1", label: "session moves", tone: "warn" }],
+    rows: [
+      { k: "Runs on", v: r.there },
+      { k: "Runs and bills under", v: r.runner, tone: "warn" },
+      { k: "Undo", v: `cast role move @${r.handle} on ${r.here}` },
+    ],
+    confirm: "Move back",
+    keep: "Leave it",
+  };
+}

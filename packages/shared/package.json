@@ -117,6 +117,7 @@
     "./contracts/orgRoute": "./contracts/orgRoute.ts",
     "./contracts/initiative": "./contracts/initiative.ts",
     "./contracts/orgAssignee": "./contracts/orgAssignee.ts",
+    "./contracts/roleFailover": "./contracts/roleFailover.ts",
     "./contracts/cloudAgents": "./contracts/cloudAgents.ts",
     "./contracts/sessionCharacter": "./contracts/sessionCharacter.ts",
     "./contracts/browserPaneOffer": "./contracts/browserPaneOffer.ts",

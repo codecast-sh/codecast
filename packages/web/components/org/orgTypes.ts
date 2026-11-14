@@ -5,6 +5,7 @@
 import type { WorkState } from "@codecast/shared/contracts";
 import type { OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import type { RoleIcon } from "@codecast/shared/contracts/roleIcon";
+import type { RoleFailover } from "@codecast/shared/contracts/roleFailover";
 
 export type StateCounts = Record<WorkState, number>;
 
@@ -97,6 +98,9 @@ export type OrgRole = {
   /** Chat channels whose lines ride the role's next wake frame
    *  (docs/architecture/agent-channels.md C1). */
   follow_channel_ids?: string[];
+  /** The failover sweep moved its standing session off a dead host, or could
+   *  not (convex roleFailover.ts): the owner's line on the role page. */
+  failover?: RoleFailover;
   // The standing agent's documents, autonomy and spend
   // (docs/architecture/org-roles-standing.md T1 to T4); the row's own fields.
   charter_doc_id?: string;

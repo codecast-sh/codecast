@@ -622,6 +622,7 @@ import type * as resourceOffload from "../resourceOffload.js";
 import type * as resourceOffloadSchema from "../resourceOffloadSchema.js";
 import type * as reviewNotes from "../reviewNotes.js";
 import type * as reviews from "../reviews.js";
+import type * as roleFailover from "../roleFailover.js";
 import type * as roleIcons from "../roleIcons.js";
 import type * as savedViews from "../savedViews.js";
 import type * as searchCore from "../searchCore.js";
@@ -1363,6 +1364,7 @@ declare const fullApi: ApiFromModules<{
   resourceOffloadSchema: typeof resourceOffloadSchema;
   reviewNotes: typeof reviewNotes;
   reviews: typeof reviews;
+  roleFailover: typeof roleFailover;
   roleIcons: typeof roleIcons;
   savedViews: typeof savedViews;
   searchCore: typeof searchCore;

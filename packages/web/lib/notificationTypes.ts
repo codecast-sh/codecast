@@ -53,6 +53,8 @@ export const socialTypes = new Set([
   "weekly_card",
   // A metric watch that names the person by hand alerting (convex metricAlerts.ts).
   "metric_alert",
+  // A role the person answers for moved machines, or could not (convex roleFailover.ts).
+  "role_moved",
   "artifact_commented",
   "chat_mention",
   "chat_reply",
@@ -123,6 +125,7 @@ export const typeLabels: Record<string, string> = {
   passkey_changed: "changed your passkeys",
   weekly_card: "your week is ready",
   metric_alert: "metric alert",
+  role_moved: "moved machines",
 };
 
 export const typeColors: Record<string, string> = {
@@ -169,6 +172,7 @@ export const typeColors: Record<string, string> = {
   passkey_changed: "text-red-400",
   weekly_card: "text-sol-magenta",
   metric_alert: "text-red-400",
+  role_moved: "text-sol-orange",
 };
 
 /** Who a notification is FROM. A snapshot on the row (Slack person, anonymous

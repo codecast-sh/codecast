@@ -56,6 +56,7 @@ export const PUSH_TYPE_LABELS: Record<string, [string, string]> = {
   passkey_changed: ["passkey change", "passkey changes"],
   weekly_card: ["weekly card", "weekly cards"],
   metric_alert: ["metric alert", "metric alerts"],
+  role_moved: ["role moved machines", "roles moved machines"],
   [CALL_PUSH_TYPE_RING]: ["huddle invite", "huddle invites"],
   [CALL_PUSH_TYPE_MISSED]: ["missed huddle", "missed huddles"],
   [CALL_GUEST_WAITING_PUSH_TYPE]: ["guest waiting to join", "guests waiting to join"],

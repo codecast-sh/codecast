@@ -63,6 +63,7 @@ import { PermissionCard } from '@/components/PermissionCard';
 import { useComposerSuggestion } from '@codecast/web/hooks/useComposerSuggestion';
 import { SlashCommandPills } from '@/components/session/SlashCommandPills';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
+import { RoleFailoverBanner } from '@/components/org/RoleFailoverBanner';
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { appAlert, showActionSheet, type SheetItem } from '@/lib/popups';
@@ -4770,6 +4771,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           style={{ position: 'absolute', top: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight, left: 0, right: 0, zIndex: 55, transform: [{ translateY: stickyOffsetY }] }}
         >
           <AssignedToYouBanner conversationId={isConvexId(conversation._id) ? conversation._id : null} />
+          <RoleFailoverBanner roleShortId={seatIdentity?.kind === 'role' ? seatIdentity.role.short_id : null} />
         </Animated.View>
         {/* The wrap carries the far jump dim (listOpacity): the overlays and
             the tick rail stay at full opacity while the stale frame fades. */}

@@ -751,6 +751,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   provisionOrgRole: async (ctx, _userId, [roleId]: [string]) => {
     return await ctx.runMutation!((api as any).orgRoles.provision, { role_id: roleId });
   },
+  moveOrgRoleBack: async (ctx, _userId, [roleId]: [string]) => {
+    return await ctx.runMutation!((api as any).roleFailover.moveBack, { role_id: roleId });
+  },
   markOrgTemplateSetup: async (ctx, _userId, [instanceKey, id, status]: [string, string, "done" | "open" | "skipped"]) => {
     return await ctx.runMutation!((api as any).orgTemplates.setup, { instance_key: instanceKey, id, status });
   },

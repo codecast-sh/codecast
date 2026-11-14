@@ -1953,6 +1953,21 @@ export default defineSchema({
     // The UTC day a stalled goal notice last went to each reporting person
     // (keyed by user id), so a person hears about a stall once a day at most.
     goal_notices: v.optional(v.record(v.string(), v.string())),
+    // The last time the failover sweep acted on this role's standing session
+    // (roleFailover.ts): it moved it off a host that went quiet or unhealthy
+    // with work waiting, or found no always-on host to move it to. The role
+    // page draws this as the owner's line, with Move back while `from` is set
+    // and the session still sits on `to`. Cleared by a move back.
+    failover: v.optional(v.object({
+      at: v.number(),
+      reason: v.union(v.literal("offline"), v.literal("below_floor"), v.literal("freezing"), v.literal("pane_refused")),
+      owner_user_id: v.id("users"),
+      from: v.object({ device_id: v.string(), label: v.string(), user_id: v.id("users") }),
+      // Absent when no always-on host could take it.
+      to: v.optional(v.object({ device_id: v.string(), label: v.string(), user_id: v.id("users") })),
+      // The move changed the account it runs and bills under.
+      cross_user: v.optional(v.boolean()),
+    })),
     // When the hourly sweep first saw each goal in the brief (orgGoals.goalKey
     // to a time). A role rewrites its brief at every wake, so the brief's own
     // age says nothing about how long a goal has sat with nothing matched.
@@ -4870,7 +4885,10 @@ export default defineSchema({
       v.literal("weekly_card"),
       // A metric watch that names the recipient crossed its line, is still
       // past it, or recovered (metricAlerts.ts).
-      v.literal("metric_alert")
+      v.literal("metric_alert"),
+      // A role's standing session failed over off a quiet host, or could not
+      // (roleFailover.ts). Entity is the role: it opens the role's page.
+      v.literal("role_moved")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact

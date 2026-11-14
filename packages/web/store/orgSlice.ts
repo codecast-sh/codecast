@@ -39,6 +39,7 @@ import { isConvexId } from "../lib/entityLinks";
 import { activeWorkspaceKeyOf } from "../lib/workspaceScope";
 import { leadScopeChange, type LeadScopeChange } from "@codecast/shared/contracts/orgLead";
 import type { OrgLogEntry, OrgLogRow } from "@codecast/shared/contracts/orgChange";
+import type { RoleFailover } from "@codecast/shared/contracts/roleFailover";
 
 /** An optimistic edit awaiting the server's echo (see the header). The tree
  *  kinds reshape the tree (a move, a follow, a role's fields, a retire). The
@@ -58,6 +59,9 @@ export type OrgIntent =
   /** The role's line (the-line.md L2): the workflow slug its scope runs on.
    *  `from` is the slug the tree row held before, for a refusal to restore. */
   | { kind: "line"; id: string; role_id: string; slug: string; from?: string; at: number }
+  /** Move a failed-over role back (convex roleFailover.moveBack): the line
+   *  leaves the role at once; `from` is the failover, for a refusal to restore. */
+  | { kind: "moveBack"; id: string; role_id: string; handle: string; from: RoleFailover; at: number }
   | { kind: "decideChange"; id: string; change_id: string; proposal_id: string; from: OrgChangeStatus; to: OrgChangeStatus; line: string; /** The answer the reply stamps on the row beside the verdict (a rejection, an approval with words), and what the row held before, for a refusal to put back. */ reply?: OrgChangeReply; reply_from?: OrgChangeReply; at: number }
   /** A person's words on a change with no verdict (S39): the row keeps its
    *  status and gains the `reply` stamp. The server's own stamp (another
@@ -360,6 +364,8 @@ type OrgServerVerbs<R> = {
   resetOrg: (teamId?: string) => R;
   /** Bring an unseated role's agent online: orgRoles.provision. */
   provisionOrgRole: (roleId: string) => R;
+  /** Return a failed-over role to the host it left: roleFailover.moveBack. */
+  moveOrgRoleBack: (roleId: string) => void;
   /** A template role's setup item (H3): orgTemplates.setup. */
   markOrgTemplateSetup: (instanceKey: string, id: string, status: "done" | "open" | "skipped") => R;
   answerOrgTemplateInput: (instanceKey: string, key: string, value: string) => R;
@@ -573,6 +579,11 @@ export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: R
       const role = tree.roles.find((r) => r._id === intent.role_id) as (OrgRole & { line_workflow_slug?: string }) | undefined;
       return !role || role.line_workflow_slug === intent.slug;
     }
+    case "moveBack": {
+      // Echoed once the tree carries no failover, or a newer one.
+      const role = tree.roles.find((r) => r._id === intent.role_id);
+      return !role || role.failover?.at !== intent.from.at;
+    }
     case "moveSession": {
       const parent = orgSessionParent(tree, intent.conversation_id);
       // A session beyond the target's top N cannot be seen in the snapshot at
@@ -632,6 +643,11 @@ export function applyOrgIntent(tree: OrgTree, intent: OrgIntent, row?: OrgSessio
       if (!role) return;
       role.line_workflow_slug = intent.slug;
       role.updated_at = Math.max(role.updated_at, intent.at);
+      return;
+    }
+    case "moveBack": {
+      const role = tree.roles.find((r) => r._id === intent.role_id);
+      if (role?.failover?.at === intent.from.at) delete role.failover;
       return;
     }
     case "retireRole": {
@@ -915,6 +931,11 @@ export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalCh
       else role.line_workflow_slug = intent.from;
       return;
     }
+    case "moveBack": {
+      const role = draft.orgTree?.roles.find((r) => r._id === intent.role_id);
+      if (role && !role.failover) role.failover = intent.from;
+      return;
+    }
     default:
       return;
   }
@@ -962,6 +983,7 @@ export function orgIntentNoticeText(intent: OrgIntent, reason: "refused" | "expi
     // server's value either way).
     case "line": return reason === "refused" ? `Setting the line to ${intent.slug} ${tail}; put back.` : "";
     case "retireRole": return `Retiring @${intent.handle} ${tail}; the role is back.`;
+    case "moveBack": return `Moving @${intent.handle} back to ${intent.from.from.label} ${tail}.`;
     case "moveSession": return `Moving the session ${tail}; it is back where it was.`;
     case "moveRole": return `Moving the role ${tail}; it is back where it was.`;
     case "movePerson": return `Moving the person ${tail}; they are back where they were.`;
@@ -1075,6 +1097,7 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
     (action === "updateOrgRole" && i.kind === "roleFields" && i.role_id === args[0] && sameValue(roleFieldKeys(i.fields), roleFieldKeys((args[1] as OrgUpdateRoleInput | undefined) ?? {}))) ||
     (action === "setProjectLead" && i.kind === "roleFields" && i.role_id === args[1] && sameValue(roleFieldKeys(i.fields), ["scope"])) ||
     (action === "setRoleLine" && i.kind === "line" && i.role_id === args[0] && i.slug === args[1]) ||
+    (action === "moveOrgRoleBack" && i.kind === "moveBack" && i.role_id === args[0]) ||
     ((action === "undoOrgChange" || action === "redoOrgChange") && i.kind === "undoChange" && i.batch === args[0] && i.redo === (action === "redoOrgChange")));
   for (const i of reverts) { state.revertOrgIntent(i.id); notices.push(orgIntentNoticeText(i, "refused")); }
   const revised = orgVerdictRevisedNotice(error);
@@ -1173,6 +1196,7 @@ function pushIntent(draft: OrgDraft, intent: OrgIntent): void {
     : i.kind === "roleFields" ? `rf:${i.role_id}:${roleFieldKeys(i.fields).join(",")}`
     : i.kind === "retireRole" ? `x:${i.role_id}`
     : i.kind === "line" ? `l:${i.role_id}`
+    : i.kind === "moveBack" ? `mb:${i.role_id}`
     // One subject per stub, so hiring two roles in a row keeps both on the
     // chart rather than the second replacing the first.
     : i.kind === "createRole" ? `n:${i.stub.client_id}`
@@ -1564,6 +1588,15 @@ export function createOrgSlice(): OrgSliceImpl {
 
     // The retire body lives in applyOrgIntent so a heartbeat push between the
     // click and the echo replays it instead of bringing the role back.
+    moveOrgRoleBack: action(function (this: OrgDraft, roleId: string) {
+      const tree = this.orgTree;
+      const role = tree?.roles.find((r) => r._id === roleId);
+      if (!tree || !role?.failover?.to) return;
+      const intent: OrgIntent = { kind: "moveBack", id: intentId(), role_id: roleId, handle: role.handle, from: JSON.parse(JSON.stringify(role.failover)), at: Date.now() };
+      applyOrgIntent(tree, intent);
+      pushIntent(this, intent);
+    }),
+
     retireOrgRole: action(function (this: OrgDraft, roleId: string, _standingSession?: "keep" | "retire") {
       const tree = this.orgTree;
       const role = tree?.roles.find((r) => r._id === roleId);

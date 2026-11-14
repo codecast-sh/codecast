@@ -908,5 +908,6 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   // bringing a seat online or running the host step acts on a machine.
   resetOrg: { never: "machine control: a reset retires every role and its standing agents, which an undo cannot rewind" },
   provisionOrgRole: { never: "machine control: it starts the role's standing agent on a host" },
+  moveOrgRoleBack: { never: "machine control: it moves the role's standing agent to another machine" },
   requestOrgTemplateBind: { never: "machine control: the host's daemon runs the bind on a machine" },
 };
