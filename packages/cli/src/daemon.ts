@@ -15416,7 +15416,7 @@ async function findTmuxPaneForTty(tty: string, candidates: string[] = []): Promi
   return null;
 }
 
-import { autoDenyDeadline, COMPOSER_CARET_ROW, extractAssistantProseAbovePrompt, isComposerRow, isMenuFooterRow, limitDialogOnPane, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner, type InteractivePrompt } from "./interactivePrompt.js";
+import { autoDenyDeadline, COMPOSER_CARET_ROW, extractAssistantProseAbovePrompt, isComposerRow, isMenuFooterRow, isTitledRule, limitDialogOnPane, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner, type InteractivePrompt } from "./interactivePrompt.js";
 export { autoDenyDeadline, extractAssistantProseAbovePrompt, limitDialogOnPane, menuFooterBelowOptions, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner } from "./interactivePrompt.js";
 
 // A real AskUserQuestion's full tool_input (every question, header, option label AND
@@ -16126,7 +16126,7 @@ export function extractTmuxLiveRegion(paneContent: string): string {
       return tail.slice(working).join("\n");
     }
   }
-  const isSep = (line: string) => /^[─━]{20,}\s*$/.test(line) || CLAUDE_OVERPAINTED_RULE.test(line);
+  const isSep = (line: string) => /^[─━]{20,}\s*$/.test(line) || isTitledRule(line) || CLAUDE_OVERPAINTED_RULE.test(line);
   const sepIdx: number[] = [];
   for (let i = 0; i < tail.length; i++) {
     if (isSep(tail[i])) sepIdx.push(i);

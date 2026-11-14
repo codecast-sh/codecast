@@ -28,6 +28,19 @@ const HEADER_CHIP = /^[□☐☑☒▢▣◻◼◽◾■]\s*(.+)$/;
 const SEPARATOR_LINE = /^[─━═▔▁\-_]{5,}$/;
 const RULE_RUN_EDGE = /^[─━═▔▁\-_]{3,}\s*|\s*[─━═▔▁\-_]{3,}$/g;
 
+// A named Claude Code session (`claude -n`, /rename) writes its title into the
+// composer's top rule: "────…──── Fix the login bug ─". It is still the rule
+// that frames the box. Read as text, the composer had no top rule, the pane
+// classified "unknown", and every message to the session deferred for hours
+// (GitHub #88). The title is one run of non-rule text between rule runs that
+// together span a full rule, so a line of prose with a dash in it never counts.
+const TITLED_RULE = /^([─━]+)[^\S\n]+[^─━\s](?:[^─━\n]*[^─━\s])?[^\S\n]+([─━]+)$/;
+export function isTitledRule(line: string): boolean {
+  const m = TITLED_RULE.exec(line.trim());
+  return !!m && m[1].length + m[2].length >= 20;
+}
+const isSeparatorLine = (trimmed: string) => SEPARATOR_LINE.test(trimmed) || isTitledRule(trimmed);
+
 // A multiSelect AskUserQuestion renders a checkbox between the number and the
 // label — "1. [ ] Restart" / "2. [x] Redeploy" (or a unicode ballot box). It's a
 // selection-state glyph, not part of the label, so strip it off the front. Only a
@@ -82,7 +95,7 @@ export const COMPOSER_CARET_ROW = /^\s?❯(?!\s*\d+[.)]\s)(?!\s*(?:Chat about th
 // the rule and its options. Held messages for 7.5 hours behind their own
 // half-typed text on 2026-10-26.
 export function isComposerRow(lines: string[], idx: number): boolean {
-  return idx > 0 && /^\s?[❯›]/.test(lines[idx] ?? "") && SEPARATOR_LINE.test(lines[idx - 1].trim());
+  return idx > 0 && /^\s?[❯›]/.test(lines[idx] ?? "") && isSeparatorLine(lines[idx - 1].trim());
 }
 
 function structuralComposerBelow(lines: string[], fromIdx: number): boolean {
@@ -90,12 +103,12 @@ function structuralComposerBelow(lines: string[], fromIdx: number): boolean {
   const footerAfter = (idx: number) => lines.slice(idx + 1).some(line =>
     isMenuFooterRow(line) || /(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)/i.test(line));
   for (let top = 0; top < lines.length; top++) {
-    if (!SEPARATOR_LINE.test(lines[top].trim())) continue;
+    if (!isSeparatorLine(lines[top].trim())) continue;
     let prompt = top + 1;
     while (prompt < lines.length && !lines[prompt].trim()) prompt++;
     if (!caret.test(lines[prompt] ?? "") && !isComposerRow(lines, prompt)) continue;
     for (let bottom = lines.length - 1; bottom > Math.max(prompt, fromIdx); bottom--) {
-      if (SEPARATOR_LINE.test(lines[bottom].trim()) && !footerAfter(bottom)) return true;
+      if (isSeparatorLine(lines[bottom].trim()) && !footerAfter(bottom)) return true;
     }
   }
   return lines.slice(fromIdx + 1).some((line, offset) =>

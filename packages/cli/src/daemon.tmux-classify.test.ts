@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { isTitledRule } from "./interactivePrompt.js";
 import { autoContinueArmedOnPane, inputGuard, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, clearUnresolvablePane, extractTmuxLiveRegion, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
 import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isClaudeIdleResumeDialog, isClaudeRewindDialog, isGrokTrustDialog, isIdleResumeOptionRow } from "./tmuxPaneState.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
@@ -1239,5 +1240,50 @@ describe("Claude Code suggestion dialog (esc not now)", () => {
   test("a mid-row › in an unrecognised dialog does not read idle", () => {
     const unknownFooter = COMPACT_OFFER_PANE.replace("esc not now", "esc maybe later");
     expect(classifyTmuxLiveState(extractTmuxLiveRegion(unknownFooter))).not.toBe("idle");
+  });
+});
+
+// A named session (`claude -n 'Fix the login bug'`, Claude Code 2.1.325, 120
+// columns) writes its title into the composer's top rule. Captured live for
+// GitHub #88: the untitled-rule test rejected it, the region fell to the bottom
+// rule and footer, and every delivery logged "Unrecognized live UI" and deferred.
+const TITLED_RULE_TOP = `${"─".repeat(100)} Fix the login bug ─`;
+const TITLED_IDLE_PANE = [
+  "                                                                                                    ◐ medium · /effort",
+  TITLED_RULE_TOP,
+  `❯ Try "fix typecheck errors"`,
+  "─".repeat(120),
+  "",
+  "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+].join("\n");
+
+describe("composer whose top rule carries the session title (GitHub #88)", () => {
+  test("an idle titled composer classifies idle, not unknown", () => {
+    const region = extractTmuxLiveRegion(TITLED_IDLE_PANE);
+    expect(region).toContain("❯");
+    expect(classifyTmuxLiveState(region)).toBe("idle");
+  });
+
+  test("a running turn above a titled composer still reads busy", () => {
+    const pane = TITLED_IDLE_PANE.replace("◐ medium · /effort", "\n✶ Perambulating… (50s · ↓ 161 tokens)\n");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(pane))).toBe("busy");
+  });
+
+  test("a draft opening with a numbered line under a titled rule is the composer, not a menu", () => {
+    const pane = TITLED_IDLE_PANE.replace(`❯ Try "fix typecheck errors"`, "❯ 5) and then the rest of the draft");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(pane))).toBe("idle");
+  });
+
+  test("the title may sit anywhere in the rule; prose with dashes is never a rule", () => {
+    expect(isTitledRule(`── My session ${"─".repeat(60)}`)).toBe(true);
+    expect(isTitledRule(TITLED_RULE_TOP)).toBe(true);
+    expect(isTitledRule("── note ──")).toBe(false);
+    expect(isTitledRule(`${"─".repeat(30)}`)).toBe(false);
+    expect(isTitledRule("the build ── which failed ── is green now")).toBe(false);
+  });
+
+  test("the usage limit dialog in a titled session is still the limit park", () => {
+    const pane = [TITLED_RULE_TOP, ...LIMIT_DIALOG_PANE.split("\n")].join("\n");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(pane))).toBe("limit_dialog");
   });
 });
