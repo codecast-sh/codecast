@@ -2,6 +2,7 @@ import { ingestReceiptSignature } from "./ingestReceipt.js";
 import type { ParsedMessage, TranscriptEmission } from "../parser.js";
 import { detectPermissionPrompt } from "../permissionDetector.js";
 import { generateTitleFromMessage } from "./ingestMetadata.js";
+import { withoutDeliveryId } from "@codecast/shared/contracts";
 import { handoffParentSessionId } from "../planHandoff.js";
 import fs from 'node:fs';
 import path from 'node:path';
@@ -299,7 +300,7 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
     meta.permissionPrompt = lastAssistant ? detectPermissionPrompt(lastAssistant.content) : null;
   }
   result.handoffParents = result.messages.map(m => m.role === 'user' ? handoffParentSessionId(m.content, job.sessionId) : null);
-  result.messageTitles = result.messages.map(m => m.role === "user" ? generateTitleFromMessage(m.content) : null);
+  result.messageTitles = result.messages.map(m => m.role === "user" ? generateTitleFromMessage(withoutDeliveryId(m.content)) : null);
   result.signatures = result.messages.map(m => createHash('sha256').update(JSON.stringify(m)).digest('hex'));
   if (hasClockFreeReceipts(job)) result.receiptSignatures = result.messages.map(m => createHash('sha256').update(JSON.stringify({...m,timestamp:0})).digest('hex')); 
   if (job.client === 'claude' || job.client === 'gemini' || job.client === 'cursorDb') {
