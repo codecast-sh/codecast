@@ -13,6 +13,7 @@ import { MACHINES_SHOTS } from "./batches/machines";
 import { WORKING_TOGETHER_B } from "./batches/working-together-b";
 import { TRACKING } from "./batches/tracking";
 import { WORKING_TOGETHER_A } from "./batches/working-together-a";
+import { PHONE_SHOTS } from "./batches/phone";
 
 export type Step =
   /** An expression run in the page; may return a promise. */
@@ -72,4 +73,5 @@ export const SHOTS: Shot[] = [
   ...batch("tracking", TRACKING),
   ...batch("working-together-a", WORKING_TOGETHER_A),
   ...batch("recall-showing", RECALL_SHOWING),
+  ...batch("phone", PHONE_SHOTS),
 ];
