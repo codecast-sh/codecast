@@ -57,6 +57,22 @@ const connect = (client: any) => {
 };
 
 describe("remote pane input", () => {
+  test("onQueued runs once the relay accepted the send, and never on a refusal", async () => {
+    const f = fakeConvex();
+    const conn = connect(f.client);
+    let queued = 0;
+    conn.write("\x1b", () => queued++);
+    expect(queued).toBe(0);
+    await flushed();
+    expect(queued).toBe(1);
+    const refused = fakeConvex({ reply: { ok: false, reason: "no-streamer" } });
+    const conn2 = connect(refused.client);
+    let queued2 = 0;
+    conn2.write("\x1b", () => queued2++);
+    await flushed();
+    expect(queued2).toBe(0);
+  });
+
   test("keystrokes in one burst cost a single write", async () => {
     // Typing "ls" must not be two round-trips. At 250ms polling on the far side
     // there is nothing to gain from sending each key on its own.

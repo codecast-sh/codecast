@@ -146,3 +146,23 @@ export function hexToBytes(hex: string): number[] | null {
   for (let i = 0; i < hex.length; i += 2) out.push(parseInt(hex.slice(i, i + 2), 16));
   return out;
 }
+
+/** After keystrokes reach a pane, how long the capture loop watches tmux for a
+ *  new paste buffer to offer the viewer's clipboard: an app's OSC 52 copy
+ *  (Claude Code's /copy among them), which tmux keeps as a buffer while
+ *  set-clipboard is on. */
+export const PANE_CLIPBOARD_WINDOW_MS = 5_000;
+
+/** How often the capture loop re-checks the bridge's standing (is a terminal
+ *  attached here, which buffers exist), so a keystroke itself costs no tmux
+ *  call and an attach mid-stream turns the bridge off within this long. */
+export const PANE_CLIPBOARD_MAINTAIN_MS = 2_000;
+
+/** How often, inside that window, the loop asks tmux for its newest buffer. */
+export const PANE_CLIPBOARD_POLL_MS = 750;
+
+/** The most clipboard text one offer carries, in UTF-16 characters. */
+export const PANE_MAX_CLIPBOARD_CHARS = 32_000;
+
+/** How long a clipboard offer is read back; terminal_clipboards rows past it are pruned. */
+export const PANE_CLIPBOARD_TTL_MS = 60_000;
