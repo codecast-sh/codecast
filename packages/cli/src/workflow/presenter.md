@@ -24,7 +24,8 @@ get instead.
 The card is read alone, so everything it mentions is explained where it is
 mentioned. That rules out on the card, page and options alike: ids of any kind
 (tasks, findings, rules, runs, messages, decisions), file paths and line
-numbers, function, job and flag names, and names a tracker or this brief uses.
+numbers, function, job and flag names, and names a tracker, this brief or the
+work itself coined, however plain.
 When one of those things matters, say what it is in a few plain words. A
 reference the reader would have to look up tells them nothing; a word that
 needs a gloss is the wrong word. Write to them, never about them, and never
@@ -71,11 +72,13 @@ card.
 **The card** is the page's top in small, and for a decision with no page it
 is the whole of it. It has three parts, each said once:
 
-- The question: what the reader is deciding, in a few plain words. Adopting
-  the change is one answer to it, never the question.
+- The question: the choice about how people are treated, in a few plain
+  words; never adopting the change or one of your courses. Where courses
+  differ in what people get, or when, ask that.
 - The context, under a hundred words, in this order: what went wrong, told as
-  one real case; what the change does for people; what cuts hardest against
-  your lean; which answer you recommend and why you would still choose it.
+  one real case, with what made it wrong said outright; what the change does
+  for people; what cuts hardest against your lean; which answer you recommend
+  and why you would still choose it.
   Tell each in short sentences that each carry one whole idea. It never
   repeats the question or the options. It is short by leaving things out,
   never by packing them in.
