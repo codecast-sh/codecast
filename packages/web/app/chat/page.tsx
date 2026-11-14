@@ -325,7 +325,11 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   // its own. Silence when the line named nobody; the same toast the muted
   // channel notice already uses.
   const onSent = useCallback(
-    (content: string) => (res: { mention_wakes?: any } | undefined) => {
+    (content: string, threadRoot?: string) => (res: { mention_wakes?: any; session_relay?: { skipped?: string | null } } | undefined) => {
+      const skipped = res?.session_relay?.skipped;
+      const handed = !!threadRoot && !!(useInboxStore.getState().chatMessages[threadRoot] as { bound_session_id?: string } | undefined)?.bound_session_id;
+      if (handed && skipped === "no_access") toast("Not sent to the agent on this thread: its session isn't shared with you", { duration: 5000 });
+      if (handed && skipped === "session_ended") toast("Not sent to the agent on this thread: its session has ended", { duration: 5000 });
       const roles = new Set<string>(
         ((windowOrgTree(useInboxStore.getState())?.roles ?? []) as { handle: string }[]).map((r) => r.handle.toLowerCase()),
       );
@@ -338,7 +342,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   const send = useCallback(
     (content: string, attachments?: ChatAttachment[], opts?: { syncLocalOnly?: boolean }) => {
       if (!activeChannelId) return;
-      useInboxStore.getState().sendChatMessage(activeChannelId, content, {
+      return useInboxStore.getState().sendChatMessage(activeChannelId, content, {
         attachments,
         syncLocalOnly: opts?.syncLocalOnly,
         onSent: onSent(content),
@@ -350,11 +354,11 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   const sendReply = useCallback(
     (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean }) => {
       if (!activeChannelId || !threadRootId) return;
-      useInboxStore.getState().sendChatMessage(activeChannelId, content, {
+      return useInboxStore.getState().sendChatMessage(activeChannelId, content, {
         threadRootId,
         attachments,
         broadcast: opts?.broadcast,
-        onSent: onSent(content),
+        onSent: onSent(content, threadRootId),
       });
     },
     [activeChannelId, threadRootId, onSent],
