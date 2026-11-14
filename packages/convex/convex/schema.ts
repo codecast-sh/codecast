@@ -1068,10 +1068,12 @@ export default defineSchema({
     // so agents and humans can see WHERE a session actually works — including
     // a worktree path that project_path alone would hide.
     recent_files: v.optional(v.array(v.string())),
-    // Tool calls whose result came back as an error, counted at message write
-    // (messages.ts bumpFailedTools) as the delta between a row's old and new
-    // tool_results, so a re-synced row counts once. Search hits show it.
-    failed_tool_count: v.optional(v.number()),
+    // What the session did, counted at message write (messages.ts
+    // bumpSessionTallies) as the change between a row's old and new tool
+    // results, so a re-synced row counts once: results that came back as
+    // errors, and commits it made (a result printing git's new-commit line). Absent for a session that
+    // had messages before counting began. Search hits show it.
+    session_tallies: v.optional(v.object({ failed_tools: v.number(), commits: v.number() })),
     // What the agent is doing right now: a present tense line from the newest
     // assistant tool call ("editing chat.ts", "running npx tsc"), the raw
     // tool name, and the timestamp of the message that carried the call.

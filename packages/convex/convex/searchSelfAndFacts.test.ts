@@ -156,6 +156,48 @@ describe("partial coverage is announced before the rows", () => {
     for (const row of r.conversations) expect(row.missing_terms).toEqual(["quokka"]);
   });
 
+  test("a title lookup capped by sessions the caller cannot see proves nothing", async () => {
+    const { t, now, viewer, other } = await seed();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 55; i++) {
+        await ctx.db.insert("conversations", {
+          user_id: other, agent_type: "claude_code", status: "active", message_count: 0, is_private: true,
+          session_id: `fq${i}`, short_id: `fq${i}`, title: "quokka", subtitle: "", idle_summary: "", started_at: now, updated_at: now,
+        } as any);
+      }
+      await ctx.db.insert("conversations", {
+        user_id: viewer, agent_type: "claude_code", status: "active", message_count: 0, is_private: true,
+        session_id: "mine-q", short_id: "mineq01", title: "quokka", subtitle: "", idle_summary: "", started_at: now, updated_at: now - 99_999,
+      } as any);
+    });
+    const r = await search(t, { query: "zebra migration quokka" });
+    expect(r.partial?.missing_everywhere).toEqual([]);
+  });
+
+  test("a message lookup that comes back full claims no gap it could not check", async () => {
+    const { t, now, viewer } = await seed();
+    let deep: any;
+    await t.run(async (ctx) => {
+      deep = await ctx.db.insert("conversations", {
+        user_id: viewer, agent_type: "claude_code", status: "active", message_count: 0, is_private: true,
+        session_id: "deep", short_id: "deep001", title: "deep", subtitle: "", idle_summary: "", started_at: now, updated_at: now,
+      } as any);
+      for (let i = 0; i < 520; i++) {
+        await ctx.db.insert("messages", { conversation_id: deep, role: "assistant", content: `zebra migration step ${i}`, timestamp: now - 10_000 + i } as any);
+      }
+      await ctx.db.insert("messages", { conversation_id: deep, role: "assistant", content: "the quokka", timestamp: now } as any);
+    });
+    const r = await search(t, { query: "zebra migration quokka" });
+    // deep holds all three, past the pool's cap: no partial notice, no false gap.
+    expect(r.partial).toBeUndefined();
+    for (const row of r.conversations) expect(row.missing_terms).toBeUndefined();
+    // Operator searches look each session up with a small cap: same rule.
+    const op = await search(t, { query: "author:me zebra migration quokka" });
+    expect(op.conversations.map((c: any) => c.title)).toContain("deep");
+    expect(op.partial).toBeUndefined();
+    for (const row of op.conversations) expect(row.missing_terms).toBeUndefined();
+  });
+
   test("a word held by a visible session below the coverage bar is not called missing", async () => {
     const { t, now, viewer } = await seed();
     await t.run(async (ctx) => {
@@ -169,6 +211,22 @@ describe("partial coverage is announced before the rows", () => {
     // Only one of three words: below the half bar, so not a row, but it holds quokka.
     expect(titles(r)).not.toContain("animals");
     expect(r.partial).toEqual({ words: ["zebra", "migration", "quokka"], missing_everywhere: [] });
+  });
+
+  test("-u checks gaps in what the person wrote only", async () => {
+    const { t, now, viewer } = await seed();
+    await t.run(async (ctx) => {
+      const c = await ctx.db.insert("conversations", {
+        user_id: viewer, agent_type: "claude_code", status: "active", message_count: 2, is_private: true,
+        session_id: "uonly", short_id: "uonly01", title: "u", subtitle: "", idle_summary: "", started_at: now, updated_at: now,
+      } as any);
+      await ctx.db.insert("messages", { conversation_id: c, role: "user", content: "plan the zebra migration", timestamp: now } as any);
+      await ctx.db.insert("messages", { conversation_id: c, role: "assistant", content: "a quokka", timestamp: now + 1 } as any);
+    });
+    const r = await search(t, { query: "author:me zebra migration quokka", user_only: true });
+    const row = r.conversations.find((c: any) => c.id === "uonly01");
+    expect(row.missing_terms).toEqual(["quokka"]);
+    expect(r.partial).toBeDefined();
   });
 
   test("a word held only in a visible session's title is not called missing", async () => {
@@ -234,13 +292,43 @@ describe("partial coverage is announced before the rows", () => {
 });
 
 describe("hit facts: commits, pull requests, failed tools", () => {
+  test("a commit git made is counted once, re-sync or not; a refused commit is a failure", async () => {
+    const { t, viewer } = await seed();
+    const conv = await t.run((ctx) => ctx.db.insert("conversations", {
+      user_id: viewer, agent_type: "claude_code", status: "active", message_count: 0, is_private: true,
+      session_id: "committer", short_id: "commit1", title: "committer", subtitle: "", idle_summary: "", started_at: Date.now(), updated_at: Date.now(),
+    } as any));
+    let at = Date.now();
+    const call = (id: string, command: string) => ({
+      message_uuid: `call-${id}`, role: "assistant", timestamp: at++, content: "",
+      tool_calls: [{ id, name: "Bash", input: JSON.stringify({ command }) }],
+    });
+    const result = (id: string, content: string, is_error?: boolean) => ({
+      message_uuid: `res-${id}`, role: "user", timestamp: at++, tool_results: [{ tool_use_id: id, content, ...(is_error ? { is_error } : {}) }],
+    });
+    const send = (messages: any[]) => t.mutation(anyApi.messages.addMessages, { conversation_id: conv, api_token: token, messages });
+    await send([
+      call("r1", 'git commit -m "fix retry"'), result("r1", "[main 3f2a91c] fix retry\n 1 file changed, 2 insertions(+)"),
+      call("r2", 'git commit -m "init"'), result("r2", "[main (root-commit) 0a1b2c3] init\n 3 files changed"),
+      call("r3", 'git commit -m "again"'), result("r3", "On branch main\nnothing to commit, working tree clean", true),
+      // A commit whose call then failed on a later step keeps its commit.
+      call("r5", 'git commit -m "one"'),
+      result("r5", "[main 1111111] one\n 1 file changed\nerror: post-commit hook failed", true),
+      call("r6", 'git commit -m "detached"'), result("r6", "[detached HEAD 3333333] on a detached head\n 1 file changed"),
+      // Codex's envelope around a command's output.
+      call("r7", 'git commit -m "from codex"'), result("r7", JSON.stringify({ output: "[main 4444444] from codex\n 1 file changed", metadata: { exit_code: 0 } })),
+      // Reading an old log that holds commit lines made no commit.
+      call("r8", "cat /tmp/build.log"), result("r8", "[main 5555555] someone else's commit\n 1 file changed"),
+    ]);
+    await send([result("r1", "[main 3f2a91c] fix retry\n 1 file changed, 2 insertions(+)")]);
+    const row: any = await t.run((ctx) => ctx.db.get(conv as any));
+    expect(row.session_tallies).toEqual({ failed_tools: 2, commits: 5 });
+  });
+
   test("a row carries the commits, linked PRs and failed tool count of its session", async () => {
     const { t, unrelated, viewer } = await seed();
     await t.run(async (ctx) => {
       const now = Date.now();
-      for (const sha of ["a1", "b2", "b2"]) {
-        await ctx.db.insert("commits", { conversation_id: unrelated, sha, message: "m", author_name: "v", author_email: "v@x.com", timestamp: now, files_changed: 1, insertions: 1, deletions: 0 } as any);
-      }
       const team = await ctx.db.insert("teams", { name: "T", invite_code: "t", created_at: now } as any);
       await ctx.db.insert("team_memberships", { team_id: team, user_id: viewer, role: "member", joined_at: 0 } as any);
       const otherTeam = await ctx.db.insert("teams", { name: "U", invite_code: "u", created_at: now } as any);
@@ -254,7 +342,7 @@ describe("hit facts: commits, pull requests, failed tools", () => {
       }
       // A link row from before the stamp: skipped, never loads the heavy row.
       await ctx.db.insert("pull_request_sessions", { pull_request_id: await pr(999, team), conversation_id: unrelated } as any);
-      await ctx.db.patch(unrelated, { failed_tool_count: 4 } as any);
+      await ctx.db.patch(unrelated, { session_tallies: { failed_tools: 4, commits: 2 } } as any);
     });
     const r = await search(t, { query: "zebra migration" });
     const row = r.conversations.find((c: any) => c.title === "unrelated session");
@@ -270,7 +358,7 @@ describe("hit facts: commits, pull requests, failed tools", () => {
     expect([lead.commits, lead.prs, lead.failed_tools]).toEqual([undefined, undefined, undefined]);
   });
 
-  test("failed_tool_count counts each failed result once across re-syncs, rewrites and deletes", async () => {
+  test("session_tallies count each failure and commit once across re-syncs, rewrites and deletes", async () => {
     const { t, viewer } = await seed();
     // A session counted from its first message.
     const unrelated = await t.run((ctx) => ctx.db.insert("conversations", {
@@ -285,7 +373,7 @@ describe("hit facts: commits, pull requests, failed tools", () => {
         api_token: token,
         messages: [{ message_uuid, role, timestamp: Date.now(), tool_results }],
       });
-    const count = async () => ((await t.run((ctx) => ctx.db.get(unrelated as any))) as any).failed_tool_count ?? 0;
+    const count = async () => ((await t.run((ctx) => ctx.db.get(unrelated as any))) as any).session_tallies?.failed_tools ?? 0;
     await write("u1", [failed("t1"), ok("t2")]);
     expect(await count()).toBe(1);
     await write("u1", [failed("t1"), ok("t2")]);
@@ -313,7 +401,7 @@ describe("hit facts: commits, pull requests, failed tools", () => {
       messages: [{ message_uuid: "late", role: "user", timestamp: Date.now(), tool_results: [{ tool_use_id: "x", content: "boom", is_error: true }] }],
     });
     const conv: any = await t.run((ctx) => ctx.db.get(unrelated as any));
-    expect(conv.failed_tool_count).toBeUndefined();
+    expect(conv.session_tallies).toBeUndefined();
   });
 
   test("a fresh session with no failures reads failed=0, absent from the row", async () => {
@@ -327,6 +415,6 @@ describe("hit facts: commits, pull requests, failed tools", () => {
       messages: [{ message_uuid: "c1", role: "user", timestamp: Date.now(), content: "hello" }],
     });
     const conv: any = await t.run((ctx) => ctx.db.get(fresh as any));
-    expect(conv.failed_tool_count).toBe(0);
+    expect(conv.session_tallies).toEqual({ failed_tools: 0, commits: 0 });
   });
 });

@@ -23,15 +23,15 @@ describe("search qualifiers come before the rows", () => {
       conversations: [row({ missing_terms: ["quokka"] })],
       partial: { words: ["zebra", "migration", "quokka"], missing_everywhere: ["quokka"] },
     } as any));
-    const partialAt = out.indexOf('Partial: no session holds every word of "zebra migration quokka"; "quokka" found nowhere searched');
+    const partialAt = out.indexOf('Partial: no result holds every word of "zebra migration quokka"; "quokka" found nowhere searched');
     expect(partialAt).toBeGreaterThan(-1);
     expect(partialAt).toBeLessThan(out.indexOf("Found 1 match"));
-    expect(out).toContain("lacks quokka");
+    expect(out).toContain("not found: quokka");
   });
 
   test("partial with every word held somewhere points at the rows", () => {
     expect(strip(searchQualifiers({ partial: { words: ["a1", "b2", "c3"], missing_everywhere: [] } })[0]))
-      .toBe('Partial: no session holds every word of "a1 b2 c3"; each row names what it lacks');
+      .toBe('Partial: no result holds every word of "a1 b2 c3"; each row names the words not found in it');
   });
 
   test("excluded self is said even when no rows remain", () => {
@@ -52,7 +52,7 @@ describe("search qualifiers come before the rows", () => {
 describe("hit facts", () => {
   test("commits, PRs and failed tools in key=value form, omitted when zero", () => {
     expect(sessionFacts({ commits: 3, prs: [490, 482], failed_tools: 4 })).toBe("commits=3 pr=#490,#482 failed=4");
-    expect(sessionFacts({ commits: 100, commits_capped: true })).toBe("commits=100+");
+    expect(sessionFacts({ prs: [9], prs_capped: true })).toBe("pr=#9+");
     expect(sessionFacts({})).toBe("");
   });
 
