@@ -65,6 +65,14 @@ test("tools below daemon-owned Codex and detached tmux jobs are protected", asyn
   expect((await f.run())).toMatchObject({ active: true, pid: 12 });
 });
 
+test("a dormant agent of any registered client does not hold the host", async () => {
+  const f = fixture();
+  f.process(10, 1, ["tmux"], "tmux: server");
+  f.process(11, 10, ["-bash"]);
+  f.process(12, 11, ["pi"]);
+  expect((await f.run())).toMatchObject({ code: 0, active: false });
+});
+
 test("dormant agents, MCP servers, browser, daemon and zombies do not hold the host", async () => {
   const f = fixture();
   f.process(10, 1, ["tmux"], "tmux: server");

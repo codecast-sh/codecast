@@ -1,3 +1,9 @@
+import { LOCAL_AGENT_CLIENTS } from "@codecast/shared/contracts";
+
+/** Every agent CLI the daemon launches in a pane: a dormant one waits on its
+ *  person and must not hold the host awake. */
+const AGENT_BINARIES = [...new Set(Object.values(LOCAL_AGENT_CLIENTS).map((c) => c.binary))].sort();
+
 export const cloudIdleProbeScript = String.raw`#!/usr/bin/python3
 import json
 import os
@@ -35,9 +41,10 @@ def ancestors(rows, pid):
         yield pid
         pid = rows[pid]["ppid"]
 
+AGENTS = set(${JSON.stringify(AGENT_BINARIES)})
+
 def agent(row):
-    name = Path(row["argv"][0]).name
-    return row["name"] in {"claude", "codex"} or name in {"claude", "codex"}
+    return row["name"] in AGENTS or Path(row["argv"][0]).name in AGENTS
 
 def headless_agent(row):
     args = row["argv"][1:]
