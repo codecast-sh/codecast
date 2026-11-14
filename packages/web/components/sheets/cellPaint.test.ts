@@ -147,3 +147,21 @@ describe("which top row is a header", () => {
     expect(at([[{ input: "Name", b: true }, { input: "City", b: true }], [{ input: "Ana" }, { input: "Paris" }]])).toBe(true);
   });
 });
+
+describe("what a column-header sort covers", () => {
+  test("every block down the column, gaps included, each widened to its table", async () => {
+    const { columnTable } = await import("./sheetActions");
+    const { LiveSheet } = await import("./sheetCore");
+    const { foldOps, toElement } = await import("@codecast/shared/artifacts");
+    const ops: unknown[] = [{ k: "tab:S", put: { kind: "tab", name: "S", order: 0 } }];
+    const put = (a1: string, input: string) => ops.push({ k: `c:S!${a1}`, put: { kind: "cell", input } });
+    ["G1", "G2", "G3", "G4", "G20", "G21", "G22"].forEach((k, i) => put(k, `n${i}`));
+    ["H1", "H2", "H3", "H4"].forEach((k) => put(k, "1"));
+    ["H20", "H21", "H22", "I20", "I21", "I22"].forEach((k) => put(k, "x"));
+    const live = new LiveSheet();
+    live.update([...foldOps(new Map(), ops as never)].map(([k, st]) => toElement(k, st)) as never);
+    const tab = live.model.byId.get("S")!;
+    expect(columnTable(tab, 7)).toEqual({ c0: 7, c1: 9, r0: 1, r1: 22 });
+    expect(columnTable(tab, 1)).toBeNull();
+  });
+});

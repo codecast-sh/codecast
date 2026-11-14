@@ -5,7 +5,7 @@
 import { AskButton } from "../live/AskAgentControl";
 import { useAskDraft, useClaimAsk } from "../live/askAgent";
 import { SHEET_ASK_SLOT } from "./askSlot";
-import { useRef, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import {
   AlignCenter,
   AlignLeft,
@@ -39,7 +39,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 import { solVar, tint } from "./cellPaint";
-import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export type FormatAction =
@@ -237,21 +236,22 @@ export function FormatBar({
   const [asking, setAsking] = useState(!!autoAsk);
   // This bar is the page's Ask: the shell's header button steps aside.
   useClaimAsk();
-  const barRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const [tight, setTight] = useState(false);
-  useMountEffect(() => {
-    // Below ~760px of room the rarer controls fold into More.
-    const host = barRef.current?.parentElement;
+  // Measured from whenever the bar is drawn (it isn't while the sheet loads read-only), not from first mount.
+  const barRef = useCallback((bar: HTMLDivElement | null) => {
+    const host = bar?.parentElement;
     if (!host) return;
-    // Below ~520px Ask shrinks to its icon so it always fits beside the controls.
-    const ro = new ResizeObserver(() => {
+    // Below ~760px of room the rarer controls fold into More; below ~520px Ask shrinks to its icon.
+    const fit = () => {
       setCompact(host.clientWidth < 760);
       setTight(host.clientWidth < 520);
-    });
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
     ro.observe(host);
     return () => ro.disconnect();
-  });
+  }, []);
   const { text: prompt, setText: setPrompt } = useAskDraft(docId, SHEET_ASK_SLOT, () => setAsking(true));
   // A blank tab opens on the ask prompt; once it holds data (a paste, a typed cell) the toolbar comes back unless a prompt is being written.
   useWatchEffect(() => {
@@ -279,6 +279,24 @@ export function FormatBar({
     <div className="px-2 pt-1 pb-2">
       <Swatches fill onPick={(c) => onAction({ type: "table", color: c })} />
     </div>
+  );
+  const condItems = (
+    <>
+      <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "cond", rule: "sign" })}>
+        <span className="flex-1">Gains and losses</span>
+        <span style={{ color: solVar("green") }}>+4</span>
+        <span style={{ color: solVar("red") }}>-2</span>
+      </DropdownMenuItem>
+      {(["green", "blue", "red"] as const).map((c) => (
+        <DropdownMenuItem key={c} className={ITEM} onSelect={() => onAction({ type: "cond", rule: "scale", color: c })}>
+          <span className="flex-1">Color scale</span>
+          <span className="sheet-scale" style={{ background: `linear-gradient(90deg, ${tint(c, 6)}, ${tint(c, 45)})` }} />
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "cond", rule: "clear" })}><Eraser className="w-4 h-4" /> Clear rules here</DropdownMenuItem>
+      <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "rules" })}><Palette className="w-4 h-4" /> Manage rules</DropdownMenuItem>
+    </>
   );
   const AlignIcon = style.al === "center" ? AlignCenter : style.al === "right" ? AlignRight : AlignLeft;
   const nfLabel = style.nf === "percent" ? "%" : style.nf === "currency" || style.nf === "accounting" ? (style.cur ?? "$").trim() : style.nf === "scientific" ? "E" : style.nf === "custom" ? "#,0" : style.nf === "date" || style.nf === "datetime" ? "Date" : style.nf === "number" ? "1,0" : "123";
@@ -368,25 +386,10 @@ export function FormatBar({
               <span className="text-sol-text-dim">+10%</span>
             </DropdownMenuItem>
           </Menu>
-          <Btn title="Fewer decimals" onClick={() => onAction({ type: "decimals", delta: -1 })}><span className="sheet-dec">.0</span></Btn>
-          <Btn title="More decimals" onClick={() => onAction({ type: "decimals", delta: 1 })}><span className="sheet-dec">.00</span></Btn>
-          <span className="sheet-fsep" />
-          <Menu title="Conditional color" trigger={<Palette className="w-4 h-4" />}>
-            <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "cond", rule: "sign" })}>
-              <span className="flex-1">Gains and losses</span>
-              <span style={{ color: solVar("green") }}>+4</span>
-              <span style={{ color: solVar("red") }}>-2</span>
-            </DropdownMenuItem>
-            {(["green", "blue", "red"] as const).map((c) => (
-              <DropdownMenuItem key={c} className={ITEM} onSelect={() => onAction({ type: "cond", rule: "scale", color: c })}>
-                <span className="flex-1">Color scale</span>
-                <span className="sheet-scale" style={{ background: `linear-gradient(90deg, ${tint(c, 6)}, ${tint(c, 45)})` }} />
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "cond", rule: "clear" })}><Eraser className="w-4 h-4" /> Clear rules here</DropdownMenuItem>
-            <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "rules" })}><Palette className="w-4 h-4" /> Manage rules</DropdownMenuItem>
-          </Menu>
+          {!tight && <Btn title="Fewer decimals" onClick={() => onAction({ type: "decimals", delta: -1 })}><span className="sheet-dec">.0</span></Btn>}
+          {!tight && <Btn title="More decimals" onClick={() => onAction({ type: "decimals", delta: 1 })}><span className="sheet-dec">.00</span></Btn>}
+          {!tight && <span className="sheet-fsep" />}
+          {!tight && <Menu title="Conditional color" trigger={<Palette className="w-4 h-4" />}>{condItems}</Menu>}
           {!compact && <Menu title="Table style" trigger={<Table2 className="w-4 h-4" />}>{tableSwatches}</Menu>}
           <Menu title="More" trigger={<MoreHorizontal className="w-4 h-4" />}>
             {compact && (
@@ -404,6 +407,17 @@ export function FormatBar({
                   <DropdownMenuSubTrigger className={ITEM}><Table2 className="w-4 h-4" /> Table style</DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>{tableSwatches}</DropdownMenuSubContent>
                 </DropdownMenuSub>
+                {tight && (
+                  // Narrower still (a phone), decimals and conditional colors come in here too.
+                  <>
+                    <DropdownMenuItem className={ITEM} onSelect={(e) => { e.preventDefault(); onAction({ type: "decimals", delta: -1 }); }}><span className="sheet-dec w-4 shrink-0 whitespace-nowrap text-[10px] text-center">.0</span> Fewer decimals</DropdownMenuItem>
+                    <DropdownMenuItem className={ITEM} onSelect={(e) => { e.preventDefault(); onAction({ type: "decimals", delta: 1 }); }}><span className="sheet-dec w-4 shrink-0 whitespace-nowrap text-[10px] text-center">.00</span> More decimals</DropdownMenuItem>
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger className={ITEM}><Palette className="w-4 h-4" /> Conditional color</DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>{condItems}</DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  </>
+                )}
                 <DropdownMenuSeparator />
               </>
             )}

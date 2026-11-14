@@ -88,6 +88,23 @@ export function shiftFormulaSafe(input: string, dc: number, dr: number): string 
 }
 
 /** The contiguous block of data around a cell (Sheets' "current region"). */
+/**
+ * Every table a column runs through, as one rect: the blocks of filled cells down the column
+ * (gaps between them included), each widened to its table. What a column-header sort covers,
+ * as Excel and Google do; blank rows sort last.
+ */
+export function columnTable(tab: TabData, col: number): Rect | null {
+  const filled = (r: number) => { const el = tab.cells.get(cellNum(col, r)); return typeof el?.input === "string" && el.input !== ""; };
+  let out: Rect | null = null;
+  for (let r = 1; r <= tab.rows; r++) {
+    if (!filled(r)) continue;
+    const reg = dataRegion(tab, col, r);
+    out = out ? { c0: Math.min(out.c0, reg.c0), c1: Math.max(out.c1, reg.c1), r0: Math.min(out.r0, reg.r0), r1: Math.max(out.r1, reg.r1) } : reg;
+    r = Math.max(r, reg.r1);
+  }
+  return out;
+}
+
 export function dataRegion(tab: TabData, col: number, row: number): Rect {
   const has = (c: number, r: number) => {
     const el = tab.cells.get(cellNum(c, r));
@@ -259,8 +276,7 @@ export function formatSelection(a: FormatAction, c: SheetCtx) {
       case "sort": {
         // One cell, or a whole column from its header, sorts the table around it with whole rows moving; a drawn range sorts just itself.
         // A column from row 1 down past its table's last row is the whole column, even when rows arrived after it was selected.
-        const firstFilled = rect.r0 <= 1 && rect.c0 === rect.c1 ? range(1, Math.min(rect.r1, tab.rows)).find((r) => { const el = tab.cells.get(cellNum(sel.anchor.col, r)); return typeof el?.input === "string" && el.input !== ""; }) : undefined;
-        const table = firstFilled === undefined ? null : dataRegion(tab, sel.anchor.col, firstFilled);
+        const table = rect.r0 <= 1 && rect.c0 === rect.c1 ? columnTable(tab, sel.anchor.col) : null;
         const wholeCol = rect.r0 <= 1 && (rect.r1 >= tab.rows || (!!table && rect.r1 >= table.r1));
         if (wholeCol && !table) break;
         const region = wholeCol ? table! : rect.r0 === rect.r1 ? dataRegion(tab, rect.c0, rect.r0) : rect;
