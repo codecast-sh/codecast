@@ -190,9 +190,12 @@ export function connectorGeometry(el: ArtifactElement, lookup: (key: string) => 
   const bRef = toBox ? center(toBox) : freeB;
   if (!aRef || !bRef) return null;
   if (el.curve === "elbow") return elbowGeometry(fromBox ?? { ...aRef, w: 0, h: 0 }, toBox ?? { ...bRef, w: 0, h: 0 }, obstacles ?? [], el.label_at, { a: parseAnchor(el.from_at), b: parseAnchor(el.to_at) });
-  const a = fromBox ? anchorPoint(pad(fromBox, 4), rotated(fromEl!) ? "rect" : shapeOf(fromEl!), bRef) : aRef;
-  const b = toBox ? anchorPoint(pad(toBox, 4), rotated(toEl!) ? "rect" : shapeOf(toEl!), aRef) : bRef;
   const curved = el.curve === "curved";
+  // Between two boxes, a straight arrow joins the middles of the sides that face each other (FigJam's),
+  // so a diagonal pair never meets corner to corner and a resized box keeps the arrow at its side's middle.
+  const facing = !curved && fromBox && toBox && midAnchored(fromEl!) && midAnchored(toEl!) ? facingMiddles(pad(fromBox, 4), pad(toBox, 4)) : null;
+  const a = facing ? facing[0] : fromBox ? anchorPoint(pad(fromBox, 4), rotated(fromEl!) ? "rect" : shapeOf(fromEl!), bRef) : aRef;
+  const b = facing ? facing[1] : toBox ? anchorPoint(pad(toBox, 4), rotated(toEl!) ? "rect" : shapeOf(toEl!), aRef) : bRef;
   let d: string, mid: Pt, c1: Pt = a, c2: Pt = b;
   if (curved) {
     const dx = b.x - a.x, dy = b.y - a.y;
@@ -434,6 +437,25 @@ function elbowGeometry(A: Box, B: Box, obstacles: readonly Box[], labelAt: unkno
     angleStart: Math.atan2(a.y - pa.y, a.x - pa.x),
     points: pts,
   };
+}
+
+/** Shapes whose side middles lie on their outline (rectangles, pills, ellipses, diamonds, stickies, cards). */
+function midAnchored(el: ArtifactElement): boolean {
+  if (rotated(el)) return false;
+  const s = shapeOf(el);
+  return s === "rect" || s === "pill" || s === "ellipse" || s === "diamond";
+}
+
+/** The middles of the sides two boxes face each other with, along the axis they are further apart on; null when they overlap. */
+function facingMiddles(A: Box, B: Box): [Pt, Pt] | null {
+  const gx = Math.max(B.x - (A.x + A.w), A.x - (B.x + B.w)), gy = Math.max(B.y - (A.y + A.h), A.y - (B.y + B.h));
+  if (gx <= 0 && gy <= 0) return null;
+  if (gx >= gy) {
+    const right = B.x > A.x;
+    return [{ x: right ? A.x + A.w : A.x, y: A.y + A.h / 2 }, { x: right ? B.x : B.x + B.w, y: B.y + B.h / 2 }];
+  }
+  const down = B.y > A.y;
+  return [{ x: A.x + A.w / 2, y: down ? A.y + A.h : A.y }, { x: B.x + B.w / 2, y: down ? B.y : B.y + B.h }];
 }
 
 function rotated(el: ArtifactElement): boolean {

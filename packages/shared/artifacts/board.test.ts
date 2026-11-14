@@ -520,3 +520,15 @@ describe("tidy up", () => {
     expect(out.get("d")).toEqual({ x: 0, y: 98 });
   });
 });
+
+describe("straight arrows between boxes", () => {
+  test("join the middles of the facing sides, never corner to corner", () => {
+    const els = new Map<string, ArtifactElement>([
+      ["a", { key: "a", kind: "shape", rev: 1, shape: "rect", x: 0, y: 0, w: 180, h: 120 }],
+      ["b", { key: "b", kind: "shape", rev: 1, shape: "rect", x: 300, y: 200, w: 180, h: 120 }],
+    ]);
+    const g = connectorGeometry({ key: "c", kind: "connector", rev: 1, from: "a", to: "b" }, (k) => els.get(k))!;
+    expect(g.a).toEqual({ x: 184, y: 60 });
+    expect(g.b).toEqual({ x: 296, y: 260 });
+  });
+});
