@@ -13711,6 +13711,7 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
       ...(opts?.keepWorkspace ? { keep_workspace: true } : {}),
     }),
     created_at: Date.now(),
+    conversation_id: args.conversation_id,
   });
 
   let canceledSchedules = 0;

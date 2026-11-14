@@ -187,17 +187,17 @@ export async function enqueueKillSessionCommand(
   now: number = Date.now(),
   cause?: string,
 ): Promise<boolean> {
-  const dedupeWindowMs = 60 * 60 * 1000;
+  const conversationId = conv._id.toString();
   const pending = await ctx.db
     .query("daemon_commands")
-    .withIndex("by_user_pending", (q: any) =>
-      q.eq("user_id", conv.user_id).eq("executed_at", undefined).gte("_creationTime", now - dedupeWindowMs))
+    .withIndex("by_conversation_command", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("command", "kill_session").eq("executed_at", undefined))
     .collect();
-  const alreadyQueued = hasRecentPendingDaemonCommand(pending, {
-    conversationId: conv._id.toString(),
+  const alreadyQueued = hasRecentPendingDaemonCommand(pending.filter((c: any) => c.user_id === conv.user_id), {
+    conversationId,
     command: "kill_session",
     now,
-    dedupeWindowMs,
+    dedupeWindowMs: 60 * 60 * 1000,
   });
   if (alreadyQueued) return false;
   await ctx.db.insert("daemon_commands", {
@@ -207,6 +207,7 @@ export async function enqueueKillSessionCommand(
     // can still tear the backend down when its conversation mapping is gone.
     args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id, ...(cause ? { cause } : {}) }),
     created_at: now,
+    conversation_id: conversationId,
   });
   return true;
 }

@@ -185,7 +185,7 @@ describe("reapEmptyConversation", () => {
       conversations: [{ _id: "c4", user_id: "u1" }],
       managed_sessions: [{ _id: "m4", conversation_id: "c4", last_heartbeat: liveHb }],
       conversation_git_diffs: [],
-      daemon_commands: [{ _id: "cmdX", user_id: "u1", command: "kill_session", args: JSON.stringify({ conversation_id: "c4" }), created_at: liveHb, _creationTime: liveHb }],
+      daemon_commands: [{ _id: "cmdX", user_id: "u1", command: "kill_session", conversation_id: "c4", args: JSON.stringify({ conversation_id: "c4" }), created_at: liveHb, _creationTime: liveHb }],
     };
     const db = makeFakeDb(tables);
     expect(await reapEmptyConversation({ db }, { _id: "c4", user_id: "u1" })).toBe("kill_enqueued");
@@ -513,7 +513,7 @@ describe("applyHideTransition — explicit kill forces teardown", () => {
     const tables = mkTables();
     // An UNEXECUTED kill_session for this conversation is already on the queue.
     tables.daemon_commands.push({
-      _id: "cmdPending", user_id: "u1", command: "kill_session",
+      _id: "cmdPending", user_id: "u1", command: "kill_session", conversation_id: CONV,
       args: JSON.stringify({ conversation_id: CONV }), created_at: 111,
     });
     const db = makeFakeDb(tables);

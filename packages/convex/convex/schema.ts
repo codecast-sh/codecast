@@ -464,8 +464,12 @@ export default defineSchema({
     claimed_by: v.optional(v.string()),
     claimed_at: v.optional(v.number()),
     claimed_device: v.optional(v.string()),
+    // Stamped on kill_session rows so the kill dedupe reads this conversation's
+    // pending kills instead of the user's whole unexecuted backlog (ct-91233).
+    conversation_id: v.optional(v.string()),
   }).index("by_user_pending", ["user_id", "executed_at"])
-    .index("by_user_request", ["user_id", "request_id"]),
+    .index("by_user_request", ["user_id", "request_id"])
+    .index("by_conversation_command", ["conversation_id", "command", "executed_at"]),
 
   teams: defineTable({
     name: v.string(),

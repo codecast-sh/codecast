@@ -21,7 +21,8 @@ function fixtures(backlog: number) {
     managed_sessions: [], agent_tasks: [],
     daemon_commands: Array.from({ length: backlog }, (_, i) => ({
       _id: `daemon_commands_${i}`, user_id: USER, command: "send_message",
-      args: JSON.stringify({ conversation_id: `conversations_other${i}` }), created_at: 1_000 + i,
+      args: JSON.stringify({ conversation_id: `conversations_other${i}` }),
+      created_at: Date.now() - 60_000 + i, _creationTime: Date.now() - 60_000 + i,
     })),
   });
   return { db, ids: [LEAD, ...children.map((c) => c._id)] };
@@ -74,7 +75,7 @@ async function killReads(backlog: number) {
 }
 
 describe("a kill's daemon_commands reads do not grow with the user's unexecuted backlog", () => {
-  test("killing a lead and its children reads the same at 50 and 5,000 pending commands", async () => {
+  test("killing a lead and its children reads the same at 50 and 5,000 commands queued in the last minute", async () => {
     const small = await killReads(50);
     const big = await killReads(5_000);
     expect(big.kills).toBeGreaterThan(0);
