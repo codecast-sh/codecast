@@ -76,3 +76,74 @@ describe("tryReloadForStaleChunk", () => {
     expect(reloads).toBe(0);
   });
 });
+
+// A service worker may answer the reload itself: its precached shell is the
+// offline fallback, and the worker before 2026-11-12 answered every navigation
+// from it. Either way the reload boots the same stale build, whose lazy chunk
+// is still gone, and the one-reload budget is spent on nothing. That left
+// codecast.sh on "Couldn't load App" for a tab a day behind (MarketingLayout
+// 404). When the server is reachable and serves another build, the guard drops
+// the worker first, so the reload reaches the network.
+describe("tryReloadForStaleChunk with a service worker", () => {
+  let events: string[] = [];
+  let served: (() => Promise<unknown>) | null = null;
+
+  const flush = async () => {
+    for (let i = 0; i < 10 && !events.includes("reload"); i++) await new Promise((r) => setTimeout(r, 0));
+  };
+
+  beforeEach(() => {
+    events = [];
+    const store: Record<string, string> = {};
+    (globalThis as any).sessionStorage = {
+      getItem: (k: string) => (k in store ? store[k] : null),
+      setItem: (k: string, v: string) => { store[k] = v; },
+      removeItem: (k: string) => { delete store[k]; },
+    };
+    served = async () => ({ ok: true, json: async () => ({ sha: "new-build" }) });
+    (globalThis as any).window = {
+      __CODECAST_BUILD: { sha: "old-build" },
+      location: { reload: () => { events.push("reload"); } },
+      fetch: (url: string) => { events.push(`fetch ${url.split("?")[0]}`); return served!(); },
+      navigator: {
+        serviceWorker: {
+          controller: {},
+          getRegistration: async () => ({ unregister: async () => { events.push("unregister"); return true; } }),
+        },
+      },
+    };
+  });
+
+  test("drops the worker before reloading when the server serves a newer build", async () => {
+    expect(tryReloadForStaleChunk()).toBe(true);
+    await flush();
+    expect(events).toEqual(["fetch /version.json", "unregister", "reload"]);
+  });
+
+  test("keeps the worker offline: it holds the only shell there is", async () => {
+    served = async () => { throw new TypeError("Failed to fetch"); };
+    expect(tryReloadForStaleChunk()).toBe(true);
+    await flush();
+    expect(events).toEqual(["fetch /version.json", "reload"]);
+  });
+
+  test("keeps the worker when the server serves this same build", async () => {
+    served = async () => ({ ok: true, json: async () => ({ sha: "old-build" }) });
+    expect(tryReloadForStaleChunk()).toBe(true);
+    await flush();
+    expect(events).toEqual(["fetch /version.json", "reload"]);
+  });
+
+  test("still reloads when dropping the worker fails", async () => {
+    (globalThis as any).window.navigator.serviceWorker.getRegistration = async () => { throw new Error("InvalidStateError"); };
+    expect(tryReloadForStaleChunk()).toBe(true);
+    await flush();
+    expect(events).toEqual(["fetch /version.json", "reload"]);
+  });
+
+  test("a page no worker controls reloads at once, without asking the server", () => {
+    (globalThis as any).window.navigator.serviceWorker.controller = null;
+    expect(tryReloadForStaleChunk()).toBe(true);
+    expect(events).toEqual(["reload"]);
+  });
+});

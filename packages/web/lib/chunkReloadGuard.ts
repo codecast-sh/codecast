@@ -77,11 +77,48 @@ export function tryReloadForStaleChunk(): boolean {
     const count = Number(sessionStorage.getItem(RELOAD_COUNT_KEY) ?? "0");
     if (count >= MAX_AUTO_RELOADS) return false;
     sessionStorage.setItem(RELOAD_COUNT_KEY, String(count + 1));
-    window.location.reload();
-    return true;
   } catch {
     // sessionStorage unavailable (private mode quota etc.) — decline to reload
     // rather than risk an unbounded loop with no counter to stop it.
+    return false;
+  }
+  if (window.navigator?.serviceWorker?.controller) void reloadPastServiceWorker();
+  else window.location.reload();
+  return true;
+}
+
+// A service worker can answer the reload itself: its precached shell is the
+// offline fallback, and the worker shipped before 2026-11-12 answered every
+// navigation from it. Either way the reload boots the same stale build, its
+// lazy chunk is still gone, and the one reload is spent on nothing — the tab
+// lands on "Couldn't load App". So when the server is reachable and serves a
+// different build, unregister the worker first: a navigation is never routed
+// to an unregistered worker, so the reload reaches the network, and the fresh
+// boot registers the current one. Offline, or on the same build, the worker is
+// kept; it holds the only shell there is.
+async function reloadPastServiceWorker(): Promise<void> {
+  try {
+    if (await servedBuildDiffers()) {
+      const registration = await window.navigator.serviceWorker.getRegistration();
+      await registration?.unregister();
+    }
+  } catch {
+    // Reload regardless: a plain reload is what this path did before.
+  }
+  window.location.reload();
+}
+
+async function servedBuildDiffers(): Promise<boolean> {
+  try {
+    const res = await window.fetch(`/version.json?t=${Date.now()}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (!res.ok) return false;
+    const served = (await res.json()) as { sha?: string };
+    const running = (window as Window & { __CODECAST_BUILD?: { sha?: string } }).__CODECAST_BUILD?.sha;
+    return !!served.sha && served.sha !== running;
+  } catch {
     return false;
   }
 }
