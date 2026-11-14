@@ -359,7 +359,8 @@ describe("the row shape is INBOX_ROW_FIELDS plus the facts", () => {
     for (const [k, f] of Object.entries<any>((schema as any).tables.conversations.validator.fields)) every[k] = sample(f);
     const live = { status: "active", is_workflow_sub: false, is_workflow_primary: false, inbox_dismissed_at: undefined, inbox_stashed_at: undefined, inbox_killed_at: undefined, updated_at: EPOCH - GEN_HOUR, started_at: EPOCH - 2 * GEN_HOUR, message_count: 3 };
     const parent = { ...every, ...live, _id: "conversations_p", user_id: ME, is_subagent: false, parent_conversation_id: undefined, parent_message_uuid: undefined };
-    const child = { ...every, ...live, _id: "conversations_c", user_id: ME, is_subagent: true, parent_conversation_id: "conversations_p" };
+    // Not adopted, so it is written as a subagent child row under its parent.
+    const child = { ...every, ...live, _id: "conversations_c", user_id: ME, is_subagent: true, parent_conversation_id: "conversations_p", inbox_adopted_at: undefined };
     const foreign = { ...parent, _id: "conversations_f", user_id: THEM, owner_user_id: ME };
     const db = makeFakeDb({
       users: [{ _id: ME, name: "Me", email: "me@example.com" }, { _id: THEM, name: "Them", email: "them@example.com" }],
@@ -374,6 +375,15 @@ describe("the row shape is INBOX_ROW_FIELDS plus the facts", () => {
     const shape = new Set<string>([...INBOX_ROW_FIELDS, ...INBOX_FACT_FIELDS]);
     expect([...written].filter((k) => !shape.has(k)).sort()).toEqual([]);
     expect([...shape].filter((k) => !written.has(k)).sort()).toEqual([]);
+  });
+
+  test("the floor lists an adopted child once, as its own top-level row", async () => {
+    const live = { status: "active", message_count: 3, updated_at: EPOCH - GEN_HOUR, started_at: EPOCH - 2 * GEN_HOUR };
+    const parent = { _id: "conversations_p", user_id: ME, title: "parent", ...live };
+    const child = { _id: "conversations_c", user_id: ME, title: "station", is_subagent: true, parent_conversation_id: "conversations_p", inbox_adopted_at: EPOCH - GEN_HOUR, ...live };
+    const db = makeFakeDb({ users: [{ _id: ME, name: "Me" }], conversations: [parent, child], messages: [], managed_sessions: [], session_decisions: [], session_owners: [] });
+    const floor = await collectInboxSessionsPaginated({ db }, ME as any, { paginationOpts: { numItems: 10, cursor: null } });
+    expect(floor.page.map((r: any) => String(r._id)).sort()).toEqual(["conversations_c", "conversations_p"]);
   });
 });
 
