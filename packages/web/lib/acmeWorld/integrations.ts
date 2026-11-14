@@ -43,5 +43,15 @@ export const INTEGRATIONS_PART: AcmePart = {
   answers: {
     "appConnections:listConnections": () => connections(Date.now()),
     "issueSync:listSources": () => sources(Date.now()),
+    "githubApp:listInstallations": () => [
+      {
+        _id: cid("ghinstallacme"),
+        installation_id: 51_004_812,
+        account_login: "acme",
+        account_type: "Organization",
+        repository_selection: "selected",
+        repositories: ["acme-api", "web", "infra"].map((name, i) => ({ id: 801_000 + i, full_name: `acme/${name}` })),
+      },
+    ],
   },
 };

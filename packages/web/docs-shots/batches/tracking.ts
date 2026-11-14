@@ -21,6 +21,13 @@ const tab = (label: string) => [
   { sleep: 400 },
 ];
 const PR = `/pr/${REPO}/${PR_RETRY.number}`;
+/** Settings is a modal over the app (its legacy /settings/* paths open it and land home). */
+const SETTINGS_PANEL = { selector: "[role=dialog][aria-label=Settings] > div", pad: 0 };
+const SETTINGS_INTEGRATIONS = [
+  { js: "__inboxStore.getState().openSettingsModal('integrations')" },
+  { wait: "[role=dialog][aria-label=Settings]" },
+  { sleep: 1200 },
+];
 /** Agent features with one feature's How it works open. */
 const feature = (slug: string, doc: string): Shot => ({
   name: `${doc}/feature`,
@@ -149,12 +156,12 @@ export const TRACKING: Shot[] = [
     route: `${PR}/files`,
     viewport: { width: 1400, height: 900 },
     steps: [
-      { wait: "button", text: "Finish review" },
-      { click: "button", text: "Finish review" },
+      { wait: "button", text: "notes not sent yet" },
+      // The bar's own Finish review (it carries the R key cap); the thread rows have one each too.
+      { js: "[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Finish reviewR').click()" },
       { wait: "textarea[placeholder='Anything else for the author?']" },
       { click: "textarea[placeholder='Anything else for the author?']" },
       { type: "Two small things on the retry path, then it's good to go." },
-      { click: "[role=radio]", text: "Request changes" },
       { sleep: 600 },
     ],
     frame: "window",
@@ -228,23 +235,33 @@ export const TRACKING: Shot[] = [
   /* ── Integrations ────────────────────────────────────────────────────── */
   {
     name: "app/integrations",
-    route: "/settings/integrations",
-    viewport: { width: 1200, height: 900 },
-    frame: "window",
+    route: "/inbox",
+    viewport: { width: 1280, height: 960 },
+    steps: SETTINGS_INTEGRATIONS,
+    crop: SETTINGS_PANEL,
+    frame: "element",
     out: "public/docs/app/integrations.webp",
   },
   {
     name: "pull-requests/issues",
-    route: "/settings/integrations",
-    viewport: { width: 1200, height: 1100 },
-    frame: "window",
+    route: "/inbox",
+    viewport: { width: 1280, height: 960 },
+    steps: [
+      ...SETTINGS_INTEGRATIONS,
+      { wait: "[role=dialog][aria-label=Settings]", text: "acme/acme-api" },
+      // The GitHub card's issue import, centered in the panel.
+      { js: "[...document.querySelectorAll('[role=dialog][aria-label=Settings] *')].find((e) => e.children.length === 0 && e.textContent.trim() === 'acme/acme-api').scrollIntoView({ block: 'center' })" },
+      { sleep: 600 },
+    ],
+    crop: SETTINGS_PANEL,
+    frame: "element",
     out: "public/documentation/pull-requests/issues.webp",
   },
 
   /* ── Org roles ───────────────────────────────────────────────────────── */
   {
     name: "org-roles/hire-head-of-people",
-    route: "/org",
+    route: "/org?panel=open",
     viewport: { width: 1440, height: 900 },
     steps: [
       // The chart before anyone was hired: the same tree with no roles on it.

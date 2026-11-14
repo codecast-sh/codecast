@@ -83,15 +83,32 @@ async function press(tab: CastTab, chord: string) {
 const find = (selector: string, text?: string) =>
   `[...document.querySelectorAll(${JSON.stringify(selector)})].find((e) => ${text ? `e.textContent.includes(${JSON.stringify(text)})` : "true"})`;
 
+/**
+ * A mouse event that lands in a background tab. Chrome routes mouse input by
+ * hit-testing the tab's last drawn frame, and a background tab draws none, so
+ * a press is dropped; a one-pixel capture makes it draw (as cast browser's own
+ * click does, cli/src/browser/actions.ts paint).
+ */
+async function mouse(tab: CastTab, params: Record<string, unknown>) {
+  const sent = tab.send("Input.dispatchMouseEvent", params, 6000);
+  await tab.send("Page.captureScreenshot", { format: "jpeg", quality: 1, clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 } }, 5000).catch(() => {});
+  await sent;
+}
+
 /** A real pointer event at the element's center: hover cards, menus and context menus need one, not el.click(). */
 async function pointer(tab: CastTab, selector: string, text: string | undefined, kind: "hover" | "left" | "right") {
-  const at = await tab.evaluate<{ x: number; y: number } | null>(`(() => { const e = ${find(selector, text)}; if (!e) return null; e.scrollIntoView({ block: "nearest" }); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  // Measured after the scroll settles: a scroller that moves under the
+  // pointer makes the press land beside the element.
+  const at = await tab.evaluate<{ x: number; y: number } | null>(`(async () => { const e = ${find(selector, text)}; if (!e) return null; e.scrollIntoView({ block: "nearest" }); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 150))); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
   if (!at) throw new Error(`no element matches ${selector}${text ? ` containing "${text}"` : ""}`);
-  await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...at });
+  await mouse(tab, { type: "mouseMoved", ...at });
   if (kind === "hover") return;
+  // `buttons` says which button is held: without it a right press opens no
+  // context menu (React's handlers read the pointer event's buttons).
   const button = kind === "right" ? "right" : "left";
-  await tab.send("Input.dispatchMouseEvent", { type: "mousePressed", button, clickCount: 1, ...at });
-  await tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", button, clickCount: 1, ...at });
+  const buttons = kind === "right" ? 2 : 1;
+  await mouse(tab, { type: "mousePressed", button, buttons, clickCount: 1, ...at });
+  await mouse(tab, { type: "mouseReleased", button, buttons: 0, clickCount: 1, ...at });
 }
 
 async function runStep(tab: CastTab, step: Step) {
@@ -129,14 +146,23 @@ const boxOf = (selector: string | null, include?: string) => `(async () => {
 async function captureApp(tab: CastTab, shot: Shot): Promise<string> {
   const vp = shot.viewport ?? DEFAULT_VIEWPORT;
   const theme = shot.theme ?? "light";
-  // A dev server reload (an edit to the app) reboots the page between shots.
+  // A page with no app shell (a public /share page) or a dev server reload
+  // (an edit to the app) leaves no app to move inside: load it again.
+  if (!(await tab.evaluate<boolean>(`!!(${BOOTED})`).catch(() => false)) && !(await tab.evaluate<boolean>(`!!window.__docsShots`).catch(() => false))) {
+    await tab.send("Page.navigate", { url: `${origin}/inbox` });
+  }
   await until(tab, BOOTED, "the docs shots app to boot", 300_000);
   await tab.send("Emulation.setDeviceMetricsOverride", { width: vp.width, height: vp.height, deviceScaleFactor: 2, mobile: false });
   // Close whatever the last shot opened, then move inside the app: no reload.
+  // Focus leaves first, so the Escape never reaches a composer (where it
+  // interrupts the agent) and only closes menus, dialogs and popovers.
+  await tab.evaluate(`document.activeElement?.blur?.()`);
   await press(tab, "Escape");
   await tab.evaluate(`(async () => {
     const st = __inboxStore.getState();
     st.closePalette?.();
+    // Settings is a modal over the app; its Escape needs focus inside it, so close it outright.
+    st.closeSettingsModal?.();
     if (st.clientState.ui?.theme !== ${JSON.stringify(theme)}) st.updateClientUI({ theme: ${JSON.stringify(theme)} });
     // The session rail shows only where the shot asks for it.
     if (!${!!shot.rail}) st.closeSidePanel();
