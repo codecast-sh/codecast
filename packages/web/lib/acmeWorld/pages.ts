@@ -6,17 +6,18 @@
 import type { AcmePart } from "./parts";
 import { DAY, HOUR, MIN, PEOPLE, SESSIONS, WORKSPACE, cid, session, type Person } from "./world";
 
-export const REPORT_SLUG = "acme-webhook-retry-failures";
+/** Slugs are 8 to 24 letters and digits, as `cast publish` mints them: the app embeds nothing else. */
+export const REPORT_SLUG = "r7k2xq9wbmhp";
 
 type PageSeed = { slug: string; title: string; who: Person; ago: number; version: number; views: number; comments: number; kind?: string; session?: string; password?: boolean; expires?: number };
 
 const SEEDS: PageSeed[] = [
   { slug: REPORT_SLUG, title: "Webhook retry failures, last 7 days", who: PEOPLE.me, ago: 14 * MIN, version: 3, views: 42, comments: 2, session: SESSIONS.lead.short_id },
-  { slug: "acme-retry-dashboard", title: "Retry queue dashboard", who: PEOPLE.maya, ago: 2 * HOUR, version: 5, views: 118, comments: 1, session: "jx7r4dl" },
-  { slug: "acme-retry-history-mock", title: "Attempt history mockup", who: PEOPLE.sarah, ago: 5 * HOUR, version: 2, views: 23, comments: 3, session: "jx7s1hm" },
-  { slug: "acme-backoff-compare", title: "Backoff strategies compared", who: PEOPLE.maya, ago: 2 * DAY, version: 1, views: 61, comments: 0, session: "jx7p2mb" },
-  { slug: "acme-stripe-v14-diff", title: "Stripe v14 call site diff", who: PEOPLE.me, ago: 30 * MIN, version: 2, views: 9, comments: 0, session: SESSIONS.stripe.short_id, password: true },
-  { slug: "acme-ledger-incident", title: "Ledger restart incident review", who: PEOPLE.sarah, ago: 3 * DAY, version: 4, views: 87, comments: 0, kind: "markdown", expires: 27 * DAY },
+  { slug: "d4nq8vz2tlwc", title: "Retry queue dashboard", who: PEOPLE.maya, ago: 2 * HOUR, version: 5, views: 118, comments: 1, session: "jx7r4dl" },
+  { slug: "m9hc3pxr6ayk", title: "Attempt history mockup", who: PEOPLE.sarah, ago: 5 * HOUR, version: 2, views: 23, comments: 3, session: "jx7s1hm" },
+  { slug: "b2wf7kqn5jre", title: "Backoff strategies compared", who: PEOPLE.maya, ago: 2 * DAY, version: 1, views: 61, comments: 0, session: "jx7p2mb" },
+  { slug: "s8tz4mvd1ghq", title: "Stripe v14 call site diff", who: PEOPLE.me, ago: 30 * MIN, version: 2, views: 9, comments: 0, session: SESSIONS.stripe.short_id, password: true },
+  { slug: "l5yr9cbw3npx", title: "Ledger restart incident review", who: PEOPLE.sarah, ago: 3 * DAY, version: 4, views: 87, comments: 0, kind: "markdown", expires: 27 * DAY },
 ];
 
 export const PAGES = (now: number) =>

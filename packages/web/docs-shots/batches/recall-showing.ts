@@ -4,13 +4,25 @@
 import type { Shot, Step } from "../manifest";
 import { SESSIONS } from "../../lib/acmeWorld/world";
 import { RECALL_SESSION } from "../../lib/acmeWorld/recall";
+import { REPORT_SLUG } from "../../lib/acmeWorld/pages";
 import { RETRY_SPEC_ID } from "../../lib/acmeWorld/docs";
 import { CAP_SHA, CODE_FILE, CODE_REPO } from "../../lib/acmeWorld/code";
 
 const RECALL = `/conversation/${RECALL_SESSION._id}`;
 const BLOB = `/repo/${CODE_REPO}/blob/main?path=${encodeURIComponent(CODE_FILE)}`;
 /** Opens `path` from the inbox, so its back link reads Inbox whatever the shot before showed. */
-const from = (path: string): Step[] => [{ js: `history.pushState(null, "", ${JSON.stringify(path)}); dispatchEvent(new PopStateEvent("popstate"))` }, { sleep: 1500 }];
+const from = (path: string): Step[] => [
+  { js: `history.pushState(null, "", ${JSON.stringify(path)}); dispatchEvent(new PopStateEvent("popstate"))` },
+  { sleep: 1500 },
+  // closeSidePanel() can leave the session rail open; none of these shots wants it.
+  { js: `document.querySelector("[data-sv-rail]") && __inboxStore.getState().toggleSidePanel()` },
+  { sleep: 500 },
+];
+
+/** Tags the smallest element holding both texts (data-docs-crop, invisible) so a crop can name a block with no hook of its own. */
+const markAround = (first: string, last: string): Step => ({
+  js: `(() => { document.querySelectorAll("[data-docs-crop]").forEach((e) => e.removeAttribute("data-docs-crop")); const all = [...document.querySelectorAll("[data-sv-feed] *")].filter((e) => e.textContent.includes(${JSON.stringify(first)}) && e.textContent.includes(${JSON.stringify(last)})); all.at(-1)?.setAttribute("data-docs-crop", ""); })()`,
+});
 
 /** Blame set to Sessions, once the session strip has painted. */
 const SESSION_BLAME = [{ click: "[role=radio]", text: "Sessions" }, { wait: ".repo-session-chip" }, { sleep: 600 }];
@@ -35,8 +47,8 @@ export const RECALL_SHOWING: Shot[] = [
     name: "ambient-awareness/stable-context",
     route: "/inbox",
     viewport: { width: 1200, height: 800 },
-    steps: [...from(RECALL), { wait: "[data-sv-feed] button[aria-expanded]", text: "session pointers" }, { js: `document.querySelector("button[aria-expanded=false]:has(.lucide-layers)")?.click()` }, { wait: "button[aria-expanded=true]", text: "session pointers" }, { sleep: 600 }, { js: `document.querySelector("div.conv-col:has(> button[aria-expanded=true])").scrollIntoView({ block: "center" })` }, { sleep: 600 }],
-    crop: { selector: "div.conv-col:has(> button[aria-expanded=true])", pad: 16 },
+    steps: [...from(RECALL), { wait: "[data-sv-feed] button[aria-expanded]", text: "session pointers" }, { js: `document.querySelector("button[aria-expanded=false]:has(.lucide-layers)")?.click()` }, { wait: "button[aria-expanded=true]", text: "session pointers" }, { sleep: 600 }, { js: `document.querySelector("div.conv-col:has(> button[aria-expanded=true])").scrollIntoView({ block: "end" })` }, { sleep: 600 }],
+    crop: { selector: "div.conv-col:has(> button[aria-expanded=true])", pad: 8 },
     frame: "element",
     out: "public/documentation/ambient-awareness/stable-context.webp",
   },
@@ -51,11 +63,10 @@ export const RECALL_SHOWING: Shot[] = [
       { wait: "button", text: "Solo" },
       { js: `[...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Team").click()` },
       { wait: "button[title='Exclude from context']" },
-      { js: `document.querySelectorAll("button[title='Exclude from context']")[2].click()` },
-      { sleep: 800 },
+      { js: `document.querySelectorAll("button[title='Exclude from context']")[1].click()` },
+      { sleep: 2000 },
     ],
-    crop: { selector: "div:has(> div > button[aria-expanded=true] .lucide-layers)", pad: 16 },
-    frame: "element",
+    frame: "window",
     out: "public/documentation/ambient-awareness/new-session-context.webp",
   },
   {
@@ -108,7 +119,16 @@ export const RECALL_SHOWING: Shot[] = [
   {
     name: "search-sessions-across-machines/filters",
     route: "/search",
-    viewport: { width: 1200, height: 760 },
+    viewport: { width: 1200, height: 860 },
+    steps: [
+      { click: "input[placeholder*=phrases]" },
+      { type: "webhook retry" },
+      { wait: "[data-search-session]" },
+      { js: `document.activeElement?.blur()` },
+      { click: "button", text: "Any time" },
+      { wait: "button", text: "Past week" },
+      { sleep: 800 },
+    ],
     frame: "window",
     out: "public/documentation/search-sessions-across-machines/filters.webp",
   },
@@ -119,15 +139,17 @@ export const RECALL_SHOWING: Shot[] = [
     route: "/inbox",
     viewport: { width: 1280, height: 900 },
     steps: [...from(BLOB), ...SESSION_BLAME],
-    frame: "window",
+    crop: { selector: ".repo-page", pad: 0 },
+    frame: "element",
     out: "public/documentation/which-session-wrote-this-line/session-blame.webp",
   },
   {
     name: "which-session-wrote-this-line/chip-hover",
     route: "/inbox",
     viewport: { width: 1280, height: 900 },
-    steps: [...from(BLOB), ...SESSION_BLAME, { hover: ".repo-session-chip button", text: "Backoff" }, { sleep: 500 }],
-    frame: "window",
+    steps: [...from(BLOB), ...SESSION_BLAME, { hover: ".repo-session-chip button", text: "Backoff" }, { wait: ".repo-session-chip[data-active=true]" }, { sleep: 800 }],
+    crop: { selector: ".repo-page", pad: 0 },
+    frame: "element",
     out: "public/documentation/which-session-wrote-this-line/chip-hover.webp",
   },
   {
@@ -146,7 +168,7 @@ export const RECALL_SHOWING: Shot[] = [
     name: "publish/page",
     raw: "packages/web/docs-shots/raw/publish/page.png",
     frame: "window",
-    title: "codecast.sh/a/acme-webhook-retry-failures",
+    title: `codecast.sh/a/${REPORT_SLUG}`,
     out: "public/documentation/publish/page.webp",
   },
   {
@@ -165,7 +187,21 @@ export const RECALL_SHOWING: Shot[] = [
     name: "publish/pages-list",
     route: "/inbox",
     viewport: { width: 1280, height: 860 },
-    steps: from("/artifacts"),
+    // The previews frame the fixture origin: `bun docs-shots/published-pages.ts serve` must be running.
+    // A background tab never loads lazy frames: load them now.
+    steps: [
+      ...from("/artifacts"),
+      { wait: "iframe[title='Webhook retry failures, last 7 days']" },
+      {
+        js: `new Promise((done) => {
+          const frames = [...document.querySelectorAll("iframe[src*='preview=1']")];
+          let left = frames.length;
+          frames.forEach((f) => { f.addEventListener("load", () => --left || done(true)); f.loading = "eager"; });
+          setTimeout(done, 20000);
+        })`,
+      },
+      { sleep: 1500 },
+    ],
     frame: "window",
     out: "public/documentation/publish/pages-list.webp",
   },
@@ -184,8 +220,9 @@ export const RECALL_SHOWING: Shot[] = [
     name: "visual-canvas/conversation",
     route: "/inbox",
     viewport: { width: 1100, height: 900 },
-    steps: [...from(`/conversation/${SESSIONS.ui._id}`), { wait: "[data-sv-feed]", text: "I replayed last week" }, { sleep: 1500 }],
-    frame: "window",
+    steps: [...from(`/conversation/${SESSIONS.ui._id}`), { wait: "[data-sv-feed]", text: "I replayed last week" }, { sleep: 1500 }, markAround("Cursor", "five attempts at most"), { js: `document.querySelector("[data-docs-crop]")?.scrollIntoView({ block: "center" })` }, { sleep: 600 }],
+    crop: { selector: "[data-docs-crop]", pad: 20 },
+    frame: "element",
     out: "public/documentation/visual-canvas/conversation.webp",
   },
   {
