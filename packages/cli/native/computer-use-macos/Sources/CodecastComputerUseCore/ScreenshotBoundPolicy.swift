@@ -11,6 +11,21 @@ public enum ScreenshotBoundPolicy {
     public static let scaleStep = 0.85
     public static let minimumScale = 0.25
 
+    /// The largest picture a model reads without resizing it first: Anthropic
+    /// scales anything past a 1568 px long edge or about 1.15 megapixels. A
+    /// bigger capture costs bytes and time here and is shrunk there anyway, by
+    /// a factor the agent never sees, so the helper shrinks it once and the
+    /// reported scale is the true one.
+    public static let modelLongEdge: Double = 1568
+    public static let modelPixels: Double = 1_150_000
+
+    /// The factor that fits `width` x `height` inside the model's budget, 1 when it already fits.
+    public static func modelScale(width: Double, height: Double) -> Double {
+        let longEdge = max(width, height, 1)
+        let area = max(width * height, 1)
+        return min(1, modelLongEdge / longEdge, (modelPixels / area).squareRoot())
+    }
+
     public static func fits(_ byteCount: Int) -> Bool {
         byteCount <= maxBytes
     }

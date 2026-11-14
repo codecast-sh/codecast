@@ -29,12 +29,17 @@ public enum PrivateFileWrite {
     /// never a half written file. The rename carries the temporary's own mode,
     /// which is how a target left at 0644 by an older helper ends up 0600.
     public static func write(_ text: String, to path: String) throws {
+        try write(Data(text.utf8), to: path)
+    }
+
+    /// Write `data` to `path` at mode 0600, the same way.
+    public static func write(_ data: Data, to path: String) throws {
         let directory = (path as NSString).deletingLastPathComponent
         let temporary = (directory.isEmpty ? "." : directory)
             .appending("/.\(UUID().uuidString).tmp")
         guard FileManager.default.createFile(
             atPath: temporary,
-            contents: Data(text.utf8),
+            contents: data,
             attributes: [.posixPermissions: NSNumber(value: Int16(0o600))]
         ) else {
             throw Failure.couldNotCreate(temporary)

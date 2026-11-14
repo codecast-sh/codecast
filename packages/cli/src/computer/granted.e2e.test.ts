@@ -227,7 +227,7 @@ describe("the observe half", () => {
     expect(result.snapshot.window.width).toBeGreaterThan(0);
   });
 
-  granted("the screenshot lands in a 0600 file, never inline, and its scale maps pixels to points", async () => {
+  granted("the helper writes the screenshot to a 0600 file, never inline, and its scale maps pixels to points", async () => {
     if (!screenshotsGranted) {
       console.log("granted e2e: Screen Recording is not granted — capture assertions skipped");
       return;
@@ -238,8 +238,8 @@ describe("the observe half", () => {
     const shot = result.screenshot!;
 
     expect(shot.path).toBeTruthy();
-    expect(shot.data).toBeUndefined();
-    expect(shot.dataOmitted).toBe(true);
+    expect((shot as Record<string, unknown>).data).toBeUndefined();
+    expect(fs.statSync(shot.path).size).toBe(shot.bytes!);
     expect(fs.statSync(shot.path!).mode & 0o777).toBe(0o600);
     expect(fs.statSync(path.dirname(shot.path!)).mode & 0o777).toBe(0o700);
     expect(fs.statSync(shot.path!).size).toBeGreaterThan(0);
@@ -249,6 +249,20 @@ describe("the observe half", () => {
     expect(shot.scale).toBeGreaterThan(0);
     expect(shot.width / shot.scale).toBeCloseTo(result.snapshot.window.width, 0);
     expect(shot.height / shot.scale).toBeCloseTo(result.snapshot.window.height, 0);
+  });
+
+  granted("--crop returns one region at the display's full density", async () => {
+    if (!screenshotsGranted) return;
+    const whole = await snapshot();
+    const crop = { x: 10, y: 10, width: 120, height: 60 };
+    const zoom = await client.getAppState({ app: TEXTEDIT, noScreenshot: false, crop });
+    const shot = zoom.screenshot!;
+    expect(shot.crop).toEqual(crop);
+    // Full density: a retina window gives 2 pixels per point, more than the whole-window picture.
+    expect(shot.scale).toBeGreaterThanOrEqual(whole.screenshot!.scale);
+    expect(shot.width / shot.scale).toBeCloseTo(crop.width, 0);
+    expect(shot.height / shot.scale).toBeCloseTo(crop.height, 0);
+    await expect(client.getAppState({ app: TEXTEDIT, crop: { x: 100_000, y: 0, width: 10, height: 10 } })).rejects.toThrow(/outside the window/);
   });
 
   granted("an index from a stale tree is refused rather than acted on", async () => {
