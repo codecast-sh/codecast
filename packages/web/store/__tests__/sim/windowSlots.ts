@@ -107,6 +107,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/chatSlice.ts:railCacheKey": "memo",
   "store/chatSlice.ts:railCacheValue": "memo",
   "store/chatSlice.ts:dmOpensInFlight": { shared: "keyed by stub ids minted from the window's own seeded stream, so windows never collide" },
+  "store/chatSlice.ts:sentWaiters": { shared: "keyed by the client id a window mints for its own hand-off send, so windows never collide" },
+  "store/chatSlice.ts:settledSends": { shared: "keyed by the client id a window mints for its own hand-off send, so windows never collide" },
   "store/orgSlice.ts:intentSeq": { shared: "process-wide counter: ids stay unique across windows and no window reads another's value" },
   "store/orgSlice.ts:NO_REVERT_TREE_KINDS": CONSTANT,
   "store/pendingMessageJournal.ts:sequence": { shared: "process-wide counter: journal stamps stay unique across windows" },
