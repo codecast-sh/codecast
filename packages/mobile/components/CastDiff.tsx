@@ -96,29 +96,31 @@ export function DiffFileHeader({ path, status, additions, deletions, icon }: {
 /**
  * A diff card: header, the first rows inline, and the whole diff one tap away.
  * `fullRows` is what the sheet shows (every line of a full-context diff);
- * it defaults to the folded rows.
+ * it defaults to the folded rows. A `folded` card is its header alone, a row
+ * in a list of many files, and opens the same sheet.
  */
-export function DiffCard({ header, rows, fullRows, numbers = true }: {
+export function DiffCard({ header, rows, fullRows, numbers = true, folded = false }: {
   header: React.ReactNode;
   rows: DiffRow[];
   fullRows?: DiffRow[];
   numbers?: boolean;
+  folded?: boolean;
 }) {
   const Theme = useTheme();
   const [open, setOpen] = useState(false);
   const [whole, setWhole] = useState(false);
   const insets = useSafeAreaInsets();
-  const clipped = rows.length > INLINE_ROWS;
-  const canExpand = clipped || !!fullRows;
+  const clipped = !folded && rows.length > INLINE_ROWS;
+  const canExpand = folded ? rows.length > 0 : clipped || !!fullRows;
   return (
-    <RNView style={styles.card}>
+    <RNView style={folded ? styles.foldedRow : styles.card}>
       <TouchableOpacity activeOpacity={canExpand ? 0.7 : 1} disabled={!canExpand} onPress={() => setOpen(true)}>
-        <RNView style={styles.headerWrap}>
+        <RNView style={[styles.headerWrap, folded && styles.foldedHeader]}>
           <RNView style={{ flex: 1, minWidth: 0 }}>{header}</RNView>
-          {canExpand && <FontAwesome name="expand" size={11} color={Theme.textDim} style={{ marginLeft: 8 }} />}
+          {canExpand && <FontAwesome name={folded ? 'angle-right' : 'expand'} size={folded ? 14 : 11} color={Theme.textDim} style={{ marginLeft: 8 }} />}
         </RNView>
       </TouchableOpacity>
-      <DiffLines rows={clipped ? rows.slice(0, INLINE_ROWS) : rows} numbers={numbers} onGapPress={fullRows ? () => { setWhole(true); setOpen(true); } : undefined} />
+      {!folded && <DiffLines rows={clipped ? rows.slice(0, INLINE_ROWS) : rows} numbers={numbers} onGapPress={fullRows ? () => { setWhole(true); setOpen(true); } : undefined} />}
       {clipped && (
         <TouchableOpacity onPress={() => setOpen(true)} activeOpacity={0.6} style={styles.more}>
           <RNText style={[styles.moreText, { color: Theme.blue }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>
@@ -163,18 +165,21 @@ export type FileDiff = {
   numbers?: boolean;
 };
 
-/** A card per changed file. */
-export function FileDiffCards({ files }: { files: FileDiff[] }) {
+/**
+ * A card per changed file. `folded` draws one row per file instead, each
+ * opening its diff, for a change too big to read inline.
+ */
+export function FileDiffCards({ files, folded = false }: { files: FileDiff[]; folded?: boolean }) {
   return (
-    <RNView style={{ gap: 8 }}>
+    <RNView style={folded ? styles.foldedList : { gap: 8 }}>
       {files.map((f, i) => (
-        <FileDiffCard key={`${f.path}:${i}`} file={f} />
+        <FileDiffCard key={`${f.path}:${i}`} file={f} folded={folded} />
       ))}
     </RNView>
   );
 }
 
-function FileDiffCard({ file }: { file: FileDiff }) {
+function FileDiffCard({ file, folded }: { file: FileDiff; folded?: boolean }) {
   const rows = useMemo(() => diffRows(file.hunks), [file]);
   const fullRows = useMemo(() => (file.fullContext ? diffRows(file.hunks, Infinity) : undefined), [file]);
   const { additions, deletions } = diffStats(file.hunks);
@@ -184,6 +189,7 @@ function FileDiffCard({ file }: { file: FileDiff }) {
       rows={rows}
       fullRows={fullRows}
       numbers={file.numbers}
+      folded={folded}
     />
   );
 }
@@ -251,6 +257,21 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.border,
+  },
+  foldedList: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border,
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: Theme.bgAlt,
+  },
+  foldedRow: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.border,
+  },
+  foldedHeader: {
+    paddingVertical: 10,
+    borderBottomWidth: 0,
   },
   header: {
     flexDirection: 'row',

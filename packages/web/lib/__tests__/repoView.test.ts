@@ -37,6 +37,7 @@ import {
   toStandaloneHref,
   sortTreeEntries,
   splitCommitMessage,
+  unwrapCommitBody,
   startsBlameRange,
   type RepoBlameRange,
   type RepoTreeEntry,
@@ -135,6 +136,40 @@ describe("commit message", () => {
     });
     expect(splitCommitMessage("one liner")).toEqual({ subject: "one liner", body: "" });
     expect(splitCommitMessage(undefined)).toEqual({ subject: "", body: "" });
+  });
+
+  it("joins git's hard wrap inside a paragraph and keeps lines that start their own thing", () => {
+    const body = [
+      "A video lead parked a fleet until the reset while 15 of 16",
+      "pooled accounts had headroom.",
+      "",
+      "- first item that wraps",
+      "  onto a second line",
+      "- second item",
+      "",
+      "```",
+      "cast usage",
+      "--all",
+      "```",
+      "",
+      "Co-Authored-By: Someone <a@b.c>",
+      "Codecast-Session: jx7abc",
+    ].join("\n");
+    expect(unwrapCommitBody(body)).toBe([
+      "A video lead parked a fleet until the reset while 15 of 16 pooled accounts had headroom.",
+      "",
+      "- first item that wraps",
+      "  onto a second line",
+      "- second item",
+      "",
+      "```",
+      "cast usage",
+      "--all",
+      "```",
+      "",
+      "Co-Authored-By: Someone <a@b.c>",
+      "Codecast-Session: jx7abc",
+    ].join("\n"));
   });
 });
 

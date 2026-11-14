@@ -322,6 +322,28 @@ export function splitCommitMessage(message: string | undefined): { subject: stri
   return { subject: lines[0] ?? "", body: lines.slice(1).join("\n").trim() };
 }
 
+/**
+ * A commit body with git's hard wrap taken out, for a screen narrower than the
+ * 72 columns it was wrapped to: lines inside a paragraph join with a space.
+ * A line that starts its own thing keeps its break: a list item, a quote, an
+ * indented or fenced code line, a table row, or a trailer (`Co-Authored-By: x`).
+ */
+export function unwrapCommitBody(body: string): string {
+  const own = /^(\s|[-*+>|]\s|\d+[.)]\s|```|[A-Z][\w-]*-[\w-]+:\s)/;
+  const out: string[] = [];
+  let fenced = false;
+  let prev = "";
+  for (const line of body.split("\n")) {
+    const fence = line.trimStart().startsWith("```");
+    const joins = !fenced && !fence && prev.trim() !== "" && line.trim() !== "" && !own.test(line) && !/^(\s|```)/.test(prev);
+    if (joins) out[out.length - 1] += " " + line.trim();
+    else out.push(line);
+    if (fence) fenced = !fenced;
+    prev = line;
+  }
+  return out.join("\n");
+}
+
 /** Folders before files, each group by name — the order every file browser uses. */
 export function sortTreeEntries(entries: readonly RepoTreeEntry[]): RepoTreeEntry[] {
   return [...entries].sort((a, b) => {

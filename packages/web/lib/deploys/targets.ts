@@ -4,6 +4,7 @@
 // going out and its history are read from its deploys, never stored on it.
 // Pure: no store, no React.
 import type { CommitCiState, QueueGroup } from "@codecast/shared/contracts/deployTargets";
+import type { DeployView } from "@codecast/shared/contracts/deploys";
 import type { TargetState } from "../ship/journey";
 
 export type DeployTargetRow = {
@@ -75,9 +76,65 @@ export type TeamDeployRow = {
 
 export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null };
 
+/** Who sent a deploy codecast did not start, by where it reports from. */
+export function sourceWord(d: Pick<TeamDeployRow, "source" | "url">): string {
+  const host = d.url ? (() => { try { return new URL(d.url!).hostname; } catch { return ""; } })() : "";
+  if (/railway\./.test(host)) return "Railway";
+  if (/expo\./.test(host)) return "EAS";
+  const src = d.source ?? "";
+  if (src.startsWith("github")) return "GitHub";
+  if (src.includes("ship mark") || src === "marker") return "deploy.sh";
+  if (src === "codecast") return "codecast";
+  return src;
+}
+
 /** A deploy's sessions as the server sent them: an older row lists conversation ids alone. */
 export const sessionsOf = (d: Pick<TeamDeployRow, "sessions">): DeploySession[] =>
   (d.sessions ?? []).map((x) => (typeof x === "string" ? { conversation_id: x } : x));
+
+/**
+ * A live deploy that took nothing new out: it carried no commits and sent the
+ * sha already live. With no commits named but a new sha, its commits are only
+ * unrecorded (or none touched the target), so it is not called a rebuild.
+ */
+export function rebuiltOnly(d: Pick<TeamDeployRow, "status" | "action" | "commits" | "sha" | "previous_sha">): boolean {
+  return d.status === "live" && d.action === "deploy" && !d.commits && (!d.previous_sha || d.previous_sha === d.sha);
+}
+
+/**
+ * One deploy read alone (deploys.get) as the row the Deploys page lists, for a
+ * deploy older than the page's window. Its sessions come without titles.
+ */
+export function teamRowOfView(v: DeployView & { after?: TeamDeployRow["after"] }, workspace: string): TeamDeployRow {
+  const sessions = [...new Set(v.commits.flatMap((c) => (c.conversation_id ? [String(c.conversation_id)] : [])))];
+  return {
+    _id: v._id,
+    workspace,
+    target: v.target,
+    repository: v.repository ?? "",
+    short_id: v.short_id,
+    status: v.status,
+    trigger: v.trigger,
+    action: v.action ?? "deploy",
+    rollback_of: v.rollback_of ?? null,
+    sha: v.sha,
+    previous_sha: v.previous_sha,
+    version: v.version,
+    url: v.url,
+    source: v.source,
+    started_by: v.started_by?.name ?? null,
+    note: v.note,
+    commits: v.commits.length,
+    sessions: sessions.map((conversation_id) => ({ conversation_id })),
+    ...(v.steps ? { steps: v.steps.map(({ id, status }) => ({ id, status })) } : {}),
+    commit_rows: v.commits.map((c) => ({ sha: c.sha, subject: c.subject, ...(c.author ? { author: c.author } : {}), ...(c.conversation_id ? { conversation_id: String(c.conversation_id) } : {}) })),
+    tasks: v.carries.map((c) => ({ short_id: c.task_short_id, title: c.task_title })),
+    after: v.after ?? null,
+    created_at: v.created_at,
+    live_at: v.live_at,
+    finished_at: v.finished_at,
+  };
+}
 
 export const isOpen = (d: Pick<TeamDeployRow, "status">) => d.status === "requested" || d.status === "running";
 

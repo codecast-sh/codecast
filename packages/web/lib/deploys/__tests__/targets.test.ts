@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { orderTargets, rollbackTarget, sessionTargets, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow } from "../targets";
+import { orderTargets, rebuiltOnly, rollbackTarget, sessionTargets, targetNow, targetTone, teamRowOfView, type DeployTargetRow, type TeamDeployRow } from "../targets";
 
 const target = (name: string, over: Partial<DeployTargetRow> = {}, groups: DeployTargetRow["queue"]["groups"] = []): DeployTargetRow => ({
   _id: `r#${name}`, workspace: "team:t", team_id: "t", name, repository: "o/r", runs: "here", policy: "press", command: "x", rollback: null, paths: [],
@@ -57,5 +57,27 @@ describe("dp-N is a reference", () => {
     expect(entityTypeFromId("dp-12")).toBe("deploy");
     expect(entityTypeFromId("dp-x")).toBeNull();
     expect(entityRoute("deploy", "dp-12")).toBe("/deploys?deploy=dp-12");
+  });
+});
+
+describe("a deploy alone", () => {
+  const view = {
+    _id: "d1", short_id: "dp-28", project_id: null, target: "web", status: "live" as const, trigger: "manual" as any,
+    started_by: { kind: "person" as const, name: "Ada" }, source: "cast", repository: "acme/app", sha: "bbb", previous_sha: "aaa",
+    version: null, url: null, note: null, action: null, created_at: 1, live_at: 2, finished_at: 2,
+    commits: [{ sha: "c1", subject: "fix", conversation_id: "conv1" }, { sha: "c2", subject: "more", conversation_id: "conv1" }, { sha: "c3", subject: "by hand" }],
+    carries: [{ task_id: "t1", how: "merged" as any, task_short_id: "ct-1", task_title: "Fix it", decision_short_id: null }],
+  };
+  test("reads as the row the Deploys page lists", () => {
+    const row = teamRowOfView(view as any, "team:x");
+    expect(row).toMatchObject({ workspace: "team:x", short_id: "dp-28", action: "deploy", started_by: "Ada", commits: 3, sessions: [{ conversation_id: "conv1" }], tasks: [{ short_id: "ct-1", title: "Fix it" }] });
+    expect(row.commit_rows?.map((c) => c.sha)).toEqual(["c1", "c2", "c3"]);
+  });
+  test("is a rebuild only when it sent the sha already live", () => {
+    const base = { status: "live" as const, action: "deploy" as const, commits: 0 };
+    expect(rebuiltOnly({ ...base, sha: "a", previous_sha: "a" })).toBe(true);
+    expect(rebuiltOnly({ ...base, sha: "b", previous_sha: null })).toBe(true);
+    expect(rebuiltOnly({ ...base, sha: "b", previous_sha: "a" })).toBe(false);
+    expect(rebuiltOnly({ ...base, commits: 2, sha: "a", previous_sha: "a" })).toBe(false);
   });
 });
