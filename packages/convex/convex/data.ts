@@ -21,6 +21,11 @@ type Workspace =
 type DataContextOpts = {
   userId: Id<"users">;
   project_path?: string;
+  // false: project_path only picks the workspace (its directory mapping) and
+  // reads see the whole workspace. A path is one machine's checkout, so a
+  // listing narrowed by it hides every row filed from another checkout of the
+  // same repo (ct-93798).
+  narrowToProject?: boolean;
   workspace?: "personal" | "team";
   team_id?: Id<"teams">;
 };
@@ -330,7 +335,7 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
     },
 
     query(table: string) {
-      const applyProjectScope = SCOPED_TABLES.has(table) && projectPath;
+      const applyProjectScope = SCOPED_TABLES.has(table) && projectPath && opts.narrowToProject !== false;
       if (!SCOPED_TABLES.has(table)) return ctx.db.query(table);
       // by_workspace is the chokepoint index. Legacy rows (no stored key yet)
       // ride the old routing index for the team space / owner index for the

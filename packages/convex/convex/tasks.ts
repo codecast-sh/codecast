@@ -1838,9 +1838,15 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
   if (args.team) {
     teamIdForScope = (await activeTeamMembershipFor(ctx, auth.userId))?.teamId;
   }
+  // A listing (a plain list or a page) is the workspace's: the CLI's working
+  // directory picks the workspace through its mapping and narrows nothing,
+  // the same rows the search, assignee and project branches read. The ready
+  // frontier stays in this checkout, because `cast task ready --claim` and the
+  // claim frontier must not hand a session work filed from another repo.
   const db = await createDataContext(ctx, {
     userId: auth.userId,
     project_path: args.project_path,
+    narrowToProject: !!args.ready,
     ...explicitWorkspace(args, args.team && teamIdForScope ? { workspace: "team" as const, team_id: teamIdForScope } : {}),
   });
 
