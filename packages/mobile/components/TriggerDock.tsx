@@ -16,7 +16,8 @@ import { describeTaskCadence, fmtClock, fmtDuration, taskStateLabel } from '@cod
 // the inbox footer; the sessions those schedules quietly drive are absorbed
 // behind it (see partitionTriggerInbox). Collapsed, the line is the briefing:
 // how many are armed, when the next fires, how many outcomes landed unread, and
-// a red tint when one failed. Expanded, one row per schedule opens the
+// a red tint when one failed. Expanded, one row per schedule opens its
+// trigger screen (app/trigger/[id]); a long press holds its verbs and the
 // conversation behind it. CLOSING stamps the read watermark (schedules_seen_at)
 // — while open the per-row "new" pills stay visible, matching desktop.
 
@@ -51,11 +52,12 @@ export function TriggerDock({ rows, unreadCount, nextRunAt }: {
 
   // Long-press: the trigger's verbs, through the same store action as web
   // (the row flips locally, the dispatch runs the mutation).
-  const manage = (task: TaskRow) => {
+  const manage = ({ task, openId }: TriggerRow) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const act = useInboxStore.getState().triggerAction;
     const paused = task.status === 'paused';
     showActionSheet(taskDisplayTitle(task), [
+      ...(openId ? [{ label: 'Open session', onPress: () => router.push(`/session/${openId}`) }] : []),
       { label: 'Run now', onPress: () => act(task._id, 'runNow') },
       { label: paused ? 'Resume' : 'Pause', onPress: () => act(task._id, paused ? 'resume' : 'pause') },
       {
@@ -106,11 +108,9 @@ export function TriggerDock({ rows, unreadCount, nextRunAt }: {
               <TouchableOpacity
                 key={task._id}
                 style={styles.row}
-                activeOpacity={row.openId ? 0.6 : 1}
-                onPress={() => {
-                  if (row.openId) router.push(`/session/${row.openId}`);
-                }}
-                onLongPress={() => manage(task)}
+                activeOpacity={0.6}
+                onPress={() => router.push(`/trigger/${task.short_id ?? task._id}` as never)}
+                onLongPress={() => manage(row)}
                 delayLongPress={350}
               >
                 <RNView style={styles.rowMain}>

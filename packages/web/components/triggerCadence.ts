@@ -33,6 +33,22 @@ export function fmtClock(ts: number, anchor: number = Date.now()): string {
   return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
 }
 
+// Machine timestamps inside prose a person reads (a run summary saying
+// "resumes 2026-11-17T10:02:00.000Z"): each ISO-8601 instant becomes the
+// viewer's local clock, and with `now` how far off it is ("Nov 17 5:02 AM,
+// in 2d 22h"). Text without one comes back unchanged.
+const ISO_INSTANT_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})/g;
+export function readableTimes(text: string, now?: number): string {
+  return text.replace(ISO_INSTANT_RE, (iso) => {
+    const at = Date.parse(iso);
+    if (Number.isNaN(at)) return iso;
+    const clock = fmtClock(at, now);
+    if (now === undefined) return clock;
+    const gap = fmtDuration(Math.abs(at - now));
+    return at >= now ? `${clock}, in ${gap}` : `${clock}, ${gap} ago`;
+  });
+}
+
 const DURATION_RE = /^(\d+)\s*(s|sec|m|min|h|hr|hour|d|day)s?$/i;
 const DURATION_UNIT_NAMES: Record<string, string> = { s: "second", m: "minute", h: "hour", d: "day" };
 

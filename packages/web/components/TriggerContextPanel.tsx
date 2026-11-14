@@ -20,7 +20,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { describeTaskCadence, fmtClock, fmtDuration, isTaskOverdue, taskStateLabel } from "./triggerCadence";
+import { describeTaskCadence, fmtClock, fmtDuration, isTaskOverdue, readableTimes, taskStateLabel } from "./triggerCadence";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import {
   ARMED_STATUSES,
@@ -761,7 +761,7 @@ function TriggerDetail({
                   clampable ? "cursor-pointer hover:text-sol-text" : ""
                 } ${lastRunOpen ? "" : "line-clamp-2"}`}
               >
-                {primary.last_run_summary}
+                {readableTimes(primary.last_run_summary, now)}
               </p>
             );
             if (!clampable) return para;

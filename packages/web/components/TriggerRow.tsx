@@ -43,7 +43,7 @@ import { threadStateView } from "../lib/threadState";
 import { sessionCardTitle } from "../lib/sessionCard";
 import { getLabelColor } from "../lib/labelColors";
 import { copyToClipboard } from "../lib/utils";
-import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
+import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, readableTimes, taskStateLabel } from "./triggerCadence";
 import { triggerEndVerb, triggerEndWords, taskDisplayTitle, taskGist, lastRunHeadline, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, type TriggerRun } from "./TriggerRunHistory";
 import { isTriggerEditable } from "../lib/triggerEditable";
@@ -236,7 +236,7 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   // ── The outcome line ──
   const outcome = outcomeOf(task);
   const ago = task.last_run_at !== undefined ? `${fmtDuration(Math.max(0, now - task.last_run_at))} ago` : undefined;
-  const headline = lastRunHeadline(task);
+  const headline = lastRunHeadline(task, now);
   const skipped = task.last_precheck_skip_at !== undefined && task.last_precheck_skip_at > (task.last_run_at ?? 0);
   const retrying = (task.retry_count ?? 0) > 0 && (
     <ShortcutTooltip label="The last run errored; the daemon is retrying">
@@ -245,7 +245,7 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   );
   const runsLabel = task.run_count > 0 ? `${task.run_count} run${task.run_count === 1 ? "" : "s"}` : undefined;
   const outcomeTip = task.last_run_summary
-    ? { label: task.last_run_summary, hint: `last run ${outcome.word}${task.last_run_at ? ` at ${fmtClock(task.last_run_at)}` : ""}` }
+    ? { label: readableTimes(task.last_run_summary, now), hint: `last run ${outcome.word}${task.last_run_at ? ` at ${fmtClock(task.last_run_at)}` : ""}` }
     : undefined;
   const dot = "text-sol-text-dim/60";
   const sep = <span className={`shrink-0 ${dot}`}>·</span>;

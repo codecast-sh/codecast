@@ -51,7 +51,15 @@ export type ParsedRoomKey =
   // whole transcription pipeline — the ASR mint, segments, flush beats,
   // summaries, the calls page — is keyed by one, and reusing that is the
   // entire design.
-  | { kind: "rec"; recId: string };
+  | { kind: "rec"; recId: string }
+  // A meeting on another platform (Zoom, Google Meet, Teams, Webex, GoTo)
+  // that a Recall.ai bot attends for codecast. Like a recording it is not a
+  // room anybody walks into: there are no seats, no LiveKit room and no
+  // door. Unlike a recording it hears every speaker apart, by name, so its
+  // record names voices and its summary attributes them. The id is the
+  // meeting_bots row's own uuid; who owns the call is answered by the
+  // transcript it started (transcripts.canReadCall).
+  | { kind: "meet"; meetId: string };
 
 // A recording id is a uuid this client generated. The parser bounds the shape
 // so a key cannot smuggle separators or arbitrary length past it; who owns the
@@ -83,6 +91,9 @@ export function parseRoomKey(roomKey: string): ParsedRoomKey | null {
   if (parts[0] === "rec" && parts.length === 2 && REC_ID.test(parts[1])) {
     return { kind: "rec", recId: parts[1] };
   }
+  if (parts[0] === "meet" && parts.length === 2 && REC_ID.test(parts[1])) {
+    return { kind: "meet", meetId: parts[1] };
+  }
   return null;
 }
 
@@ -113,6 +124,11 @@ export function recRoomKey(recId: string): string {
   return `rec:${recId}`;
 }
 
+/** The key a meeting bot's call runs under (meeting_bots.meet_id). */
+export function meetRoomKey(meetId: string): string {
+  return `meet:${meetId}`;
+}
+
 /** The session a room BELONGS to, when it is a session's own room.
  *
  *  This is the one room with a listener who never takes a seat: its agent.
@@ -132,6 +148,22 @@ export function sessionRoomConversationId(roomKey: string | null | undefined): s
  *  of a telephone. */
 export function isRecRoomKey(roomKey: string | null | undefined): boolean {
   return !!roomKey && parseRoomKey(roomKey)?.kind === "rec";
+}
+
+/** Is this a meeting a bot attends on another platform? */
+export function isMeetRoomKey(roomKey: string | null | undefined): boolean {
+  return !!roomKey && parseRoomKey(roomKey)?.kind === "meet";
+}
+
+/** A call with no room behind it: a recording or a meeting bot's call. No
+ *  seats, no LiveKit room, no open door, no invite or knock, no room chat
+ *  claimed from before it began; its owner is the transcript's creator and
+ *  its liveness is its own lease (a recording's beat, a bot's status). The
+ *  question every "is there a room here" check asks; `isRecRoomKey` stays
+ *  the question "is this one microphone that names no voices". */
+export function isRoomlessKey(roomKey: string | null | undefined): boolean {
+  const kind = roomKey ? parseRoomKey(roomKey)?.kind : undefined;
+  return kind === "rec" || kind === "meet";
 }
 
 /** The names a call's room points at, as far as the reader is allowed to
@@ -164,6 +196,7 @@ const TITLE_PEOPLE_SHOWN = 3;
 function peopleTitle(
   participants: ReadonlyArray<{ id: string; name: string }> | undefined,
   viewerId: string | null | undefined,
+  word = "Huddle",
 ): string | null {
   const names = (participants ?? [])
     .filter((p) => !viewerId || String(p.id) !== String(viewerId))
@@ -172,7 +205,7 @@ function peopleTitle(
   if (!names.length) return null;
   const shown = names.slice(0, TITLE_PEOPLE_SHOWN).join(", ");
   const more = names.length - TITLE_PEOPLE_SHOWN;
-  return `Huddle with ${shown}${more > 0 ? ` and ${more} more` : ""}`;
+  return `${word} with ${shown}${more > 0 ? ` and ${more} more` : ""}`;
 }
 
 /** How long a call ran, on every surface that lists it (the web's history
@@ -199,6 +232,7 @@ export function callDisplayTitle(
   if (title) return title;
   const parsed = parseRoomKey(call.room_key);
   if (parsed?.kind === "rec") return "Untitled voice note";
+  if (parsed?.kind === "meet") return names.untitled ?? peopleTitle(call.participants, names.viewerId, "Meeting") ?? "Untitled meeting";
   if (names.peerName) return `Call with ${names.peerName}`;
   if (parsed?.kind === "session" && names.sessionTitle) return `Huddle in ${names.sessionTitle}`;
   if (parsed?.kind === "channel" && names.channelName) return `Huddle in #${names.channelName}`;

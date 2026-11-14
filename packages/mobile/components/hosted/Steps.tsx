@@ -85,11 +85,8 @@ function OpenStep({ call, conversationId }: { call: ToolCallLike; conversationId
   return <StepLine text={stepText(call, undefined, { asking: !running })} state={running ? 'running' : 'waiting'} />;
 }
 
-/** Where a made thing opens on the phone: a routine on the Tasks tab's
- *  routines segment (the phone has no routine screen), anything else on its
- *  own screen. */
+/** Where a made thing opens on the phone: its own screen. */
 function madeRoute(refId: string): string | null {
-  if (/^tr-/i.test(refId)) return '/(tabs)/tasks?segment=routines';
   if (/^doc:/i.test(refId)) return mobileEntityRoute('doc', refId.slice(4));
   const type = entityTypeFromId(refId);
   return type ? mobileEntityRoute(type, refId) : null;

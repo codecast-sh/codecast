@@ -151,7 +151,7 @@ export function routineLastRun(
   const when = whenSaid(t.last_run_at, now);
   if (isTriggerFailing(t)) return { trouble: true, text: `Didn't finish ${when}. Open it to see why.` };
   if (t.last_run_needs_attention) return { trouble: true, text: `Ran ${when} and has something for you. Open it to see.` };
-  const result = lastRunHeadline(t);
+  const result = lastRunHeadline(t, now);
   return result ? { trouble: false, text: `Last ran ${when}: ${result}` } : null;
 }
 

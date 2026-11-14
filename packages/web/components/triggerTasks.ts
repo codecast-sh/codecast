@@ -19,6 +19,7 @@
 import type { InboxSession } from "../store/inboxStore";
 import { classifySession, isSessionHardBlocked, isSessionHidden } from "../store/inboxStore";
 import { isMachineDeliveredMessage } from "./sessionMessage";
+import { readableTimes } from "./triggerCadence";
 import type { WallCadence } from "@platform/assistant/cadence";
 
 export const ARMED_STATUSES = new Set(["scheduled", "running", "paused"]);
@@ -200,8 +201,8 @@ export function splitResultSummary(text: string): { headline: string; detail: st
 // The last run's verdict in one line — the THIRD line of a trigger row. The
 // "Failed:" prefix the daemon stamps is dropped: the row's glyph and color
 // already say it.
-export function lastRunHeadline(t: Pick<TaskRow, "last_run_summary">): string | undefined {
-  const raw = t.last_run_summary?.trim();
+export function lastRunHeadline(t: Pick<TaskRow, "last_run_summary">, now?: number): string | undefined {
+  const raw = t.last_run_summary && readableTimes(t.last_run_summary, now).trim();
   if (!raw) return undefined;
   return cutLine(splitResultSummary(raw.replace(/^Failed:?\s*/i, "")).headline, 200);
 }

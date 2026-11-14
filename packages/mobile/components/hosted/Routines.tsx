@@ -2,12 +2,12 @@
 // armed one in the shared roster order
 // (compareTriggerRoster: running, then scheduled by next run, then paused), each
 // in a plain sentence with when it runs next and how its last run went, and
-// pause, open and cancel. The rows come from the store's trigger roster
+// pause, open and cancel. Tapping the row opens the trigger's own screen. The rows come from the store's trigger roster
 // (useTriggers), so a pause or a cancel shows before the server answers. An
 // armed row is cancelled, never deleted (triggerEndVerb), as the inbox dock
 // and the web triggers page do.
 import { useMemo, useState } from 'react';
-import { View } from 'react-native';
+import { TouchableOpacity, View } from 'react-native';
 import { router } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Text } from '@/components/Themed';
@@ -32,12 +32,17 @@ function RoutineRow({ routine, now, first }: { routine: TaskRow; now: number; fi
   const last = routineLastRun(routine, now);
   return (
     <View style={[{ paddingTop: 14, paddingBottom: 10, paddingHorizontal: 15 }, !first && s.rowRule]}>
-      <Text style={{ fontSize: 14.5, lineHeight: 20, fontWeight: '600', color: paused ? c.soft : c.ink }}>{taskDisplayTitle(routine)}</Text>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-        <Feather name="clock" size={12} color={c.soft} />
-        <Text style={{ flex: 1, fontSize: 12.5, color: c.soft }}>{routineSchedule(routine, now)}</Text>
-      </View>
-      {last ? <Text style={{ marginTop: 5, fontSize: 12.5, lineHeight: 18, color: last.trouble ? c.attention : c.soft }}>{last.text}</Text> : null}
+      <TouchableOpacity activeOpacity={0.6} onPress={() => router.push(`/trigger/${routine.short_id ?? routine._id}` as never)}>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
+          <Text style={{ flex: 1, fontSize: 14.5, lineHeight: 20, fontWeight: '600', color: paused ? c.soft : c.ink }}>{taskDisplayTitle(routine)}</Text>
+          <Feather name="chevron-right" size={15} color={c.soft} style={{ marginTop: 2 }} />
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+          <Feather name="clock" size={12} color={c.soft} />
+          <Text style={{ flex: 1, fontSize: 12.5, color: c.soft }}>{routineSchedule(routine, now)}</Text>
+        </View>
+        {last ? <Text style={{ marginTop: 5, fontSize: 12.5, lineHeight: 18, color: last.trouble ? c.attention : c.soft }}>{last.text}</Text> : null}
+      </TouchableOpacity>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 2, marginTop: 8, marginLeft: -10 }}>
         {confirming && ending ? (
           <>

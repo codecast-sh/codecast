@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseTriggerCadence, humanizeDurationToken, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
+import { parseTriggerCadence, humanizeDurationToken, describeTaskCadence, fmtClock, isTaskOverdue, readableTimes, taskStateLabel } from "./triggerCadence";
 
 describe("humanizeDurationToken", () => {
   test("expands unit abbreviations to words", () => {
@@ -128,5 +128,19 @@ describe("taskStateLabel", () => {
 
   test("no timed fire means event", () => {
     expect(taskStateLabel({ status: "scheduled" }, now)).toBe("event");
+  });
+});
+
+describe("readableTimes", () => {
+  const at = Date.parse("2026-11-17T10:02:00.000Z");
+  test("an ISO instant in a summary reads as local clock and distance", () => {
+    const now = at - (2 * 24 + 22) * 3_600_000;
+    expect(readableTimes("Parked at a usage limit; resumes 2026-11-17T10:02:00.000Z", now))
+      .toBe(`Parked at a usage limit; resumes ${fmtClock(at, now)}, in 2d 22h`);
+    expect(readableTimes("ended 2026-11-17T10:02:00Z", at + 3 * 3_600_000)).toBe(`ended ${fmtClock(at, at + 3 * 3_600_000)}, 3h ago`);
+  });
+  test("without now it gives the clock alone; text without an instant is unchanged", () => {
+    expect(readableTimes("resumes 2026-11-17T10:02:00+00:00")).toBe(`resumes ${fmtClock(at)}`);
+    expect(readableTimes("ran on 2026-11-17, all green")).toBe("ran on 2026-11-17, all green");
   });
 });
