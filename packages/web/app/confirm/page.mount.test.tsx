@@ -34,6 +34,10 @@ const convex = await import("convex/react");
 mock.module("convex/react", () => ({
   ...convex,
   useQueries: (queries: Record<string, unknown>) => Object.fromEntries(Object.keys(queries).map((k) => [k, challenge])),
+  useMutation: (ref: any) => async (args: any) => {
+    actions.push({ name: getFunctionName(ref), args });
+    return { sent: true };
+  },
   useConvex: () => ({
     action: async (ref: any, args: any) => {
       actions.push({ name: getFunctionName(ref), args });
@@ -92,6 +96,29 @@ describe("/confirm", () => {
     await m.unmount();
   });
 
+  test("the ceremony starts by itself once the tab has focus, once, and names the asking device", async () => {
+    challenge = { ...PENDING, from: "MacBook-Pro-2" };
+    const m = await mount();
+    expect(ceremonies).toEqual([]);
+    expect(m.container.querySelector("[data-confirm-sub]")!.textContent).toBe(`${PENDING.label} · from MacBook-Pro-2`);
+    await act(async () => void window.dispatchEvent(new window.Event("focus")));
+    await act(async () => void window.dispatchEvent(new window.Event("focus")));
+    expect(ceremonies).toEqual(["get"]);
+    expect(actions.map((a) => a.name)).toEqual(["passkeys:presenceFinish"]);
+    await m.unmount();
+  });
+
+  test("Send to my phone asks the person's phone to confirm the same challenge, once", async () => {
+    challenge = PENDING;
+    const m = await mount();
+    const phone = m.container.querySelector("[data-confirm-phone]") as HTMLButtonElement;
+    await act(async () => phone.click());
+    expect(actions).toEqual([{ name: "passkeys:askPhone", args: { challenge_id: "ch-7" } }]);
+    expect(phone.textContent).toBe("Sent: confirm on your phone");
+    expect(phone.disabled).toBe(true);
+    await m.unmount();
+  });
+
   test("an enrollment challenge creates the passkey and stores it", async () => {
     challenge = { ...PENDING, purpose: "register", action: undefined, label: undefined, options: { challenge: "Y2g", rp: { id: "codecast.sh", name: "Codecast" }, user: { id: "dQ", name: "a", displayName: "a" }, pubKeyCredParams: [{ type: "public-key", alg: -7 }] } };
     const m = await mount();
@@ -124,6 +151,7 @@ describe("/confirm", () => {
     expect(run.disabled).toBe(true);
     expect(run.textContent).toBe("A person confirms this");
     await act(async () => window.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter" })));
+    await act(async () => void window.dispatchEvent(new window.Event("focus")));
     expect(ceremonies).toEqual([]);
     await m.unmount();
   });

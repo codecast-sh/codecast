@@ -23,8 +23,8 @@ const MAP: FlowMap = {
 const at = (search: string) => pipelineStageOf(readLineSelection(new URLSearchParams(search)));
 
 describe("the pipeline nav", () => {
-  test("For you heads it; the rail holds the stages work moves through", () => {
-    expect(PIPELINE_LABELS.decisions).toBe("For you");
+  test("Decisions heads it; the rail holds the stages work moves through", () => {
+    expect(PIPELINE_LABELS.decisions).toBe("Decisions");
     expect(PIPELINE_RAIL).toEqual(["signals", "problems", "flows", "shipped"]);
   });
 

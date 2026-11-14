@@ -186,3 +186,14 @@ test("an image still mounted when the conversation id arrives stays clickable", 
   await clickSrc("a2");
   expect(counter()).toBe("2 / 2");
 });
+
+test("a markdown image outside any gallery still opens on click", async () => {
+  const { CollapsibleImage } = await import("../tools/MarkdownImages");
+  await mount(<CollapsibleImage src="/shot.png" alt="shot" />);
+  expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  await act(() => (container!.querySelector("span.cursor-pointer") as HTMLElement).click());
+  const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement;
+  expect(dialog?.querySelector("img")?.getAttribute("src")).toBe("/shot.png");
+  await act(() => dialog.click());
+  expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+});
