@@ -79,7 +79,8 @@ describe("found on the live process table", () => {
     try {
       await new Promise((r) => setTimeout(r, 300));
       const rows = parsePsRows(execFileSync("ps", PS_ROWS_ARGS, { encoding: "utf8" }));
-      expect(rows.find((r) => r.pid === pid)?.tty).toBe("??");
+      // No controlling terminal: "??" on macOS, "?" on Linux.
+      expect(rows.find((r) => r.pid === pid)?.tty).toMatch(/^\?\??$/);
       expect(foreignSessionWriter(rows, SID, process.pid)?.pid).toBe(pid);
     } finally {
       process.kill(pid, "SIGKILL");
