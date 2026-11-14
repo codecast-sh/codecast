@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   fallbackProfiles,
+  fleetModels,
   isUsageExhausted,
   rankByHeadroom,
   switchUsagePercent,
@@ -136,6 +137,19 @@ describe("model-scoped windows cap their model, not the account", () => {
 
   test("the meters still show the Fable window, and name it when it is the one pegged", () => {
     expect(peggedWindowLabel(fablePegged.usage, now)).toBe("Fable (7d)");
+  });
+});
+
+describe("fleetModels — the models a whole-fleet decision weighs", () => {
+  const opus = (n: number) => Array.from({ length: n }, () => "claude-opus-5-5");
+  test("a few sessions on another model do not count", () => {
+    expect(fleetModels([...opus(29), "claude-fable-5-2", "claude-fable-5-2"])).toEqual(["claude-opus-5-5"]);
+  });
+  test("versions of one model count together, and a model needs a strict majority", () => {
+    expect(fleetModels(["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5"])).toEqual(["claude-fable-5-2", "claude-fable-5-1"]);
+    expect(fleetModels(["claude-opus-5-5[1m]", "claude-opus-5-5"])).toEqual(["claude-opus-5-5[1m]", "claude-opus-5-5"]);
+    expect(fleetModels(["claude-fable-5-2", "claude-opus-5-5"])).toEqual([]);
+    expect(fleetModels([])).toEqual([]);
   });
 });
 

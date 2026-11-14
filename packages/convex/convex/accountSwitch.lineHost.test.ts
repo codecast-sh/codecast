@@ -106,11 +106,10 @@ describe("a line host on its own fleet store", () => {
     const cmd = f.tables.daemon_commands[0];
     expect(cmd.target_device_id).toBe("line-host");
     const args = JSON.parse(cmd.args);
-    // The host switches under its own profile name; the station follows the
-    // store and gets its continue, with no restart.
+    // The host switches under its own profile name and restarts the station
+    // onto the store, since its process holds the spent account.
     expect(args.profile).toBe("pool-b");
-    expect(args.follow_ids).toEqual(["conversations_station"]);
-    expect(args.conversation_ids).toEqual([]);
+    expect(args.conversation_ids).toEqual(["conversations_station"]);
     // The host's bookkeeping lives on the host, not on the laptop.
     expect(f.host.cc_auto_switch_state.last_action).toBe("switch:pool-b");
     expect(f.laptop.cc_auto_switch_state.last_action).toBeUndefined();

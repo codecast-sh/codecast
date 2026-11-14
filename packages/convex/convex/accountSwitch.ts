@@ -72,7 +72,7 @@ import { poolUsageOverlay } from "./accountPool";
 import { deliverSessionNotificationToParties } from "./lib/sessionNotify";
 import { canOwnerOrTeamAccess } from "./privacy";
 import { recoveryFleet } from "./lib/hostRecovery";
-import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode, CONTEXT_RECOVERY_DELAY_MS } from "@codecast/shared/contracts";
+import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode, CONTEXT_RECOVERY_DELAY_MS, fleetModels } from "@codecast/shared/contracts";
 import { spendCapsOf, withSpendCap } from "./lib/spendCaps";
 import { hasUndeliveredContinue, insertSwitchCommands } from "./lib/switchCommands";
 
@@ -194,11 +194,12 @@ function recoveryDecision(
 // the recovery: its park stamp and model are the worker's, and the continue
 // a switch sends goes to it. Without this, a fleet whose only parks are
 // workers (an orchestrator waiting on a workflow) never switched at all.
-// Fleet-store machines only: there the parent follows the switch without a
-// restart, while a legacy switch would restart it and kill its live workers.
+// Fleet-store machines only. The switch restarts the parent onto the store;
+// its workers share its process and the spent account it started on, so the
+// restart ends nothing that could still make a request.
 // A workflow station is the exception: it nests under its run's log, where no
-// agent runs, and is a process of its own that a continue reaches. It is
-// revived as itself, so its run survives the switch (jx73gnf, 2026-10-23).
+// agent runs, and is a process of its own. It is revived as itself, so its
+// run survives the switch (jx73gnf, 2026-10-23).
 async function workerParks(
   ctx: { db: any },
   primary: Doc<"devices"> | undefined,
@@ -1596,23 +1597,31 @@ export const setRecoveryMode = mutation({
 
 // Switch ahead: on a machine whose sessions run on the fleet store, move the
 // fleet off an account before it runs out rather than after sessions park on
-// it. A switch there costs the running sessions nothing (they follow the store
-// mid-turn), so the only thing waiting buys is Claude Code's grace window and
-// its "wrap up this turn" note reaching every session. Scheduled by the
+// it. A switch there restarts nothing: new launches land on the new account,
+// and a running session keeps its credential until it parks, when the
+// recovery loop restarts it onto the store. Scheduled by the
 // heartbeat whenever that machine reports new meters; auto recovery only, the
 // same opt-in that lets the loop switch accounts after a park.
-// The models this user's Claude sessions are running now: the ones a
-// model-scoped week ("Fable") can stop. Read from the sessions active in the
-// last half hour, which is the fleet a switch ahead moves.
+// The models a decision for this user's fleet weighs (fleetModels): the ones
+// most of their Claude sessions run, read from the sessions active in the last
+// half hour (the fleet a switch moves) plus any parked ones passed in, so a
+// model-scoped week ("Fable") moves the fleet only when most of it runs that model.
 const RUNNING_MODELS_WINDOW_MS = 30 * 60 * 1000;
 
-async function runningClaudeModels(ctx: { db: any }, userId: Id<"users">, now: number): Promise<string[]> {
+async function runningClaudeModels(
+  ctx: { db: any },
+  userId: Id<"users">,
+  now: number,
+  parked: readonly Doc<"conversations">[] = [],
+): Promise<string[]> {
   const recent: Doc<"conversations">[] = await ctx.db
     .query("conversations")
     .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId).gt("updated_at", now - RUNNING_MODELS_WINDOW_MS))
     .order("desc")
     .take(100);
-  return [...new Set(recent.flatMap((c) => (c.agent_type !== "codex" && c.model ? [c.model] : [])))];
+  const sessions = new Map<string, Doc<"conversations">>();
+  for (const c of [...recent, ...parked]) sessions.set(String(c._id), c);
+  return fleetModels([...sessions.values()].flatMap((c) => (c.agent_type !== "codex" && c.model ? [c.model] : [])));
 }
 
 export const switchAheadCheck = internalMutation({
@@ -1994,9 +2003,9 @@ export const autoSwitchCheck = internalMutation({
     const parksOnActive = targets.filter((c) =>
       parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary, now),
     );
-    // The models the parked sessions run: an account's model-scoped week
-    // spends only those (limitWindows).
-    const parkedModels = targets.flatMap((c) => (c.model ? [c.model] : []));
+    // The models the fleet mostly runs, parked sessions included: an
+    // account's model-scoped week counts only for those (fleetModels).
+    const fleetModelIds = await runningClaudeModels(ctx, args.user_id, now, targets);
     const decision = decideAutoSwitch({
       now,
       // No resetCredit: a Codex reset credit clears a CODEX account's windows
@@ -2013,7 +2022,7 @@ export const autoSwitchCheck = internalMutation({
       // A dead login (splitAuthParks) means "continue" can't help even the
       // limit-parked sessions until the machine has a live account.
       activeDead,
-      models: parkedModels,
+      models: fleetModelIds,
     });
 
     if (decision.action === "wait") {
@@ -2036,7 +2045,7 @@ export const autoSwitchCheck = internalMutation({
       now,
       fleetEmail: activeEmail,
       usage: activeProfiles.find((p) => p.email && p.email === activeEmail)?.usage,
-      models: parkedModels,
+      models: fleetModelIds,
       lastAction: state.last_action,
       lastActionAt: state.last_action_at,
       decision: state.last_decision,
@@ -2103,7 +2112,7 @@ export const autoSwitchCheck = internalMutation({
     // human approves through the same requestAccountSwitch the manual button
     // calls, so the ask path and the manual path are one codepath.
     if (askFirst) {
-      const best = fallbackProfiles(activeProfiles, activeEmail, now, parkedModels)[0];
+      const best = fallbackProfiles(activeProfiles, activeEmail, now, fleetModelIds)[0];
       if (best) {
         const proposal = buildDecision("propose", best);
         const already =

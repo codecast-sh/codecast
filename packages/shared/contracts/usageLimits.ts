@@ -64,6 +64,20 @@ export function limitWindows(usage: CcUsage, models?: readonly string[]): { perc
   return [usage.session, usage.weekly, ...scoped].filter((w): w is CcUsageWindow => !!w);
 }
 
+/** The models an account decision for a whole fleet weighs: the ones a strict
+ *  majority of its sessions run, counting versions of a model as one
+ *  ("claude-fable-5-2" and "claude-fable-5-1"). Every session on a fleet runs
+ *  on one account, so a model-scoped week moves the fleet only when most of
+ *  it runs that model. Counted for any session, two Fable sessions moved
+ *  thirty Opus ones off an account at 34% of its week onto one at 75%
+ *  (2026-11-14). `sessionModels` holds one entry per session. */
+export function fleetModels(sessionModels: readonly string[]): string[] {
+  const family = (m: string) => m.toLowerCase().replace(/\[[^\]]*\]$/, "").replace(/(-\d+)+$/, "");
+  const counts = new Map<string, number>();
+  for (const m of sessionModels) counts.set(family(m), (counts.get(family(m)) ?? 0) + 1);
+  return [...new Set(sessionModels.filter((m) => counts.get(family(m))! * 2 > sessionModels.length))];
+}
+
 /** Each limit window an account reports, the one listing every surface
  *  reads: `name`, what a meter row beside its bar says ("Session", "Week", a
  *  model-scoped week by its model, "Fable"), and `label`, the name with its

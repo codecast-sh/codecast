@@ -104,10 +104,10 @@ export const ccAccountsValidator = v.object({
   // or a fresh sign-in. Every "which account do sessions run on" read goes
   // through fleetAccount() so the pin, auto-continue and auto-switch agree.
   launch_profile: v.optional(v.string()),
-  // Sessions on that machine run on the fleet store, which carries
-  // launch_profile. A switch rewrites the store and every running session
-  // follows it without a restart (cli/ccAccounts.ts "Fleet store"), so no
-  // session is pinned and a switch restarts nothing that follows the store.
+  // Sessions on that machine launch on the fleet store, which carries
+  // launch_profile, so no session is pinned. A switch rewrites the store; a
+  // running session keeps the credential it started with, so the parked ones
+  // are restarted onto it (cli/ccAccounts.ts "Fleet store").
   fleet_store: v.optional(v.boolean()),
   profiles: v.array(
     v.object({
@@ -236,6 +236,22 @@ export function fleetAccount(
   return { email: accounts.active_email, viaToken: false };
 }
 
+/** True when this saved profile is the account the machine's sessions run on
+ *  (fleetAccount). Every surface that marks a machine's "current" account (the
+ *  header chip, the settings list, the phone, the blocked banner) asks this,
+ *  so they cannot disagree. A profile saved without an email matches the
+ *  login by its local part. */
+export function isFleetProfile(
+  profile: { name: string; email?: string | null },
+  accounts: FleetAccounts | undefined | null,
+  now: number,
+): boolean {
+  const fleet = fleetAccount(accounts, now);
+  if (fleet.profile) return profile.name === fleet.profile;
+  if (!fleet.email) return false;
+  return profile.email ? profile.email === fleet.email : profile.name === fleet.email.split("@")[0];
+}
+
 /** The pin for a NEW session: the profile covering the account the fleet
  * runs on (fleetAccount), if it has a launch credential. */
 export function activeTokenProfile(accounts: FleetAccounts | undefined | null, now: number): string | undefined {
@@ -282,7 +298,10 @@ export function continueTargetPin(device: ContinueDevice | undefined, now: numbe
  * (`cc_account`: the profile's credential store, read from the env at process
  * start). A session pinned to any account other than the one this device pins
  * to now would re-source the wrong store on a plain continue, and again on
- * every resume until the pin is corrected. */
+ * every resume until the pin is corrected. A usage-limit park on the fleet
+ * store restarts too: the store may have moved since the process read it
+ * (switch ahead moves it with nothing parked), and a running Claude Code keeps
+ * the credential it started with, so a message retries the spent account. */
 export function continueNeedsRestart(
   conv: { pending_api_error_kind?: string | null; cc_account?: string | null },
   device: ContinueDevice | undefined,
@@ -290,6 +309,7 @@ export function continueNeedsRestart(
 ): boolean {
   if (conv.pending_api_error_kind === "auth") return true;
   if (runsPushedLogin(device)) return false;
+  if (conv.pending_api_error_kind === "limit" && device?.cc_accounts?.fleet_store === true) return true;
   // An unpinned process runs on the keychain login. That is the fleet account
   // unless a token switch moved the fleet elsewhere, in which case a plain
   // continue would retry the same spent (or dead) login.

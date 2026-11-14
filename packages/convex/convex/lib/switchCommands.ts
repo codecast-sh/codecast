@@ -29,15 +29,6 @@ export async function hasUndeliveredContinue(ctx: { db: any }, conversationId: I
   return false;
 }
 
-// Claude Code re-reads the fleet store on its own interval. A continue that
-// arrives before that re-read resumes on the account the fleet just left.
-// The daemon waits this long (FLEET_REREAD_WAIT_MS in daemon.ts) and then
-// spaces the resumes. Its count is recorded before the enqueue, and that
-// enqueue dies with the handler's fire-and-forget, so the server sends the
-// same continues under the same client id. Whichever insert lands first wins;
-// the other is the client-id dedupe.
-const FLEET_REREAD_WAIT_MS = 40_000;
-
 // The switch/revive execution plan shared by the manual mutation and the
 // auto-switch loop: route each blocked conversation to its online owner device
 // (primary as fallback — it can reclaim sessions whose owner died, same rule
@@ -199,19 +190,16 @@ export async function insertSwitchCommands(
     }
     routed += convs.length;
     // A switch restarts every targeted blocked session because its process is
-    // bound to the old credential. A plain continue on the current account
-    // restarts only the sessions a message cannot reach: signed-out ones, and
-    // ones pinned to another account's setup-token — the rest get the message
-    // a hand-typed continue would send.
-    // On the fleet store a switch moves every session that follows the store,
-    // so only the ones bound at launch (signed out, or pinned) restart; the
-    // rest follow the store. Their continue waits out the re-read, then goes
-    // out from the daemon and, on the same client id, from the server.
-    const followsStore = switchRequested && !isRemote && device?.cc_accounts?.fleet_store === true;
-    const restart = switchRequested && !followsStore
-      ? convs
-      : convs.filter((c) => continueNeedsRestart(c, device, opts.now));
-    const follow = followsStore ? convs.filter((c) => !restart.includes(c)) : [];
+    // bound to the credential it read at launch. That holds on the fleet store
+    // too: a running Claude Code does not pick up a rewritten store, so a
+    // continue sent after the swap retries the account the fleet left
+    // (2026-11-14: sessions answered with claude2's spent week two and a half
+    // hours after the fleet moved off it). A plain continue on the current
+    // account restarts only the sessions a message cannot reach
+    // (continueNeedsRestart); the rest get the message a hand-typed continue
+    // would send.
+    const onFleetStore = !isRemote && device?.cc_accounts?.fleet_store === true;
+    const restart = switchRequested ? convs : convs.filter((c) => continueNeedsRestart(c, device, opts.now));
     if (!switchRequested && opts.continueBlocked) {
       for (const c of convs) if (!restart.includes(c)) await sendContinue(c);
     }
@@ -222,7 +210,7 @@ export async function insertSwitchCommands(
     // The daemon reads the pin from the row at resume, so it is corrected here,
     // before the kill command exists.
     if (!isRemote) {
-      const pin = switchRequested && !followsStore
+      const pin = switchRequested && !onFleetStore
         ? tokenBackedProfile(device?.cc_accounts, { profile: localProfile }, opts.now)
         : continueTargetPin(device, opts.now);
       for (const c of restart) {
@@ -231,7 +219,6 @@ export async function insertSwitchCommands(
     }
     if (restart.length === 0 && !(switchRequested && !isRemote)) continue;
     restarted += restart.length;
-    messaged += follow.length;
     commandIds.push(
       await ctx.db.insert("daemon_commands", {
         user_id: userId,
@@ -241,13 +228,12 @@ export async function insertSwitchCommands(
           // primary's push. They only recycle their blocked sessions.
           profile: isRemote ? undefined : localProfile,
           conversation_ids: restart.map((c) => c._id),
-          ...(follow.length > 0 && opts.continueBlocked ? { follow_ids: follow.map((c) => c._id) } : {}),
           session_ids: Object.fromEntries(restart.map((c) => [c._id, c.session_id])),
           continue_blocked: opts.continueBlocked,
           ...(opts.continueClientIds
             ? {
                 client_ids: Object.fromEntries(
-                  [...restart, ...follow]
+                  restart
                     .map((c) => [c._id, opts.continueClientIds![c._id]] as const)
                     .filter(([, clientId]) => !!clientId),
                 ),
@@ -262,14 +248,14 @@ export async function insertSwitchCommands(
     // after this handler has already returned. When that loop never lands, the
     // sessions stay parked on the account they were switched to. This chain
     // sends the same client id the daemon would, paced the same way.
-    const paced = opts.continueBlocked ? [...restart, ...follow] : [];
+    const paced = opts.continueBlocked ? restart : [];
     const commandId = commandIds[commandIds.length - 1];
     // Callers that drive this with a fake db (the recovery tests) pass no
     // scheduler. A present runAfter is the production mutation ctx.
     const runAfter = (ctx as { scheduler?: { runAfter?: (delayMs: number, fn: any, args: any) => Promise<unknown> } }).scheduler?.runAfter;
     if (paced.length > 0 && runAfter && switchRequested) {
       await runAfter(
-        follow.length > 0 ? FLEET_REREAD_WAIT_MS : 0,
+        0,
         internal.accountSwitch.enqueueSwitchContinue,
         {
           user_id: userId,

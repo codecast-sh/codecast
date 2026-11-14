@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { exhaustionBannerCopy, isAgentSpawnedConversation, isSubagentConversation, subagentLinkFields,
   fleetAccount,
+  isFleetProfile,
   continueTargetPin,
   continueNeedsRestart,
   parkedOnActiveAccount,
@@ -248,5 +249,26 @@ describe("token switch: the fleet account", () => {
     expect(parkedOnActiveAccount({}, device, now)).toBe(false);
     expect(parkedOnActiveAccount({ cc_account: "key" }, device, now)).toBe(false);
     expect(parkedOnActiveAccount({}, { ...device, is_remote: true }, now)).toBe(true);
+  });
+});
+
+describe("isFleetProfile", () => {
+  const now = 1_000_000;
+  const peter = { name: "peter", email: "peter@x.com" };
+  const tok = { name: "tok", email: "tok@x.com", setup_token: { stored_at: 0, expires_at: now + 1 } };
+  test("the fleet store's launch profile is current, by name", () => {
+    const d = { active_email: "fresh@x.com", launch_profile: "peter", fleet_store: true, profiles: [peter, { name: "fresh", email: "fresh@x.com" }] };
+    expect(isFleetProfile(peter, d, now)).toBe(true);
+    expect(isFleetProfile({ name: "fresh", email: "fresh@x.com" }, d, now)).toBe(false);
+  });
+  test("a launch profile whose token lapsed falls back to the keychain login", () => {
+    const d = { active_email: "peter@x.com", launch_profile: "tok", profiles: [peter, { ...tok, setup_token: { stored_at: 0, expires_at: now - 1 } }] };
+    expect(isFleetProfile(peter, d, now)).toBe(true);
+    expect(isFleetProfile(tok, d, now)).toBe(false);
+  });
+  test("a live token switch makes the launch profile current", () => {
+    const d = { active_email: "peter@x.com", launch_profile: "tok", profiles: [peter, tok] };
+    expect(isFleetProfile(tok, d, now)).toBe(true);
+    expect(isFleetProfile(peter, d, now)).toBe(false);
   });
 });

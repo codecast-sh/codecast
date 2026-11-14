@@ -1492,9 +1492,11 @@ export function launchProfileName(now = Date.now()): string | undefined {
   return launchRecordInEffect(undefined, now)?.profile;
 }
 
-// Fleet store: one credential store every codecast-launched session reads.
-// Claude Code re-reads it about every 30s, so a switch moves a running
-// session without a restart. The store carries a bearer only, never a refresh
+// Fleet store: one credential store every codecast-launched session reads at
+// launch. A running Claude Code keeps the credential it started with (on
+// 2026-11-14 sessions still answered with claude2's spent week hours after the
+// store moved off it), so a switch moves new launches and restarts; the server
+// restarts the parked sessions onto it. The store carries a bearer only, never a refresh
 // token. The launch record names the account; the keychain login stays put.
 
 /** A login access token with less than this left is not written to the store.
@@ -1655,8 +1657,8 @@ async function writeFleetStoreBlob(blob: string): Promise<void> {
   }
 }
 
-/** Put a profile on the fleet store. Every session launched on it moves to
- *  that account within Claude Code's re-read interval, without a restart.
+/** Put a profile on the fleet store. Every session launched or restarted on
+ *  it from now on runs on that account.
  *  Throws when the profile can carry nothing now. */
 export async function putFleetOn(name: string, now = Date.now()): Promise<FleetState> {
   assertValidProfileName(name);
@@ -3101,8 +3103,8 @@ export interface AccountsHeartbeatPayload {
   // The profile sessions launch on when it is not the keychain login (a token
   // switch; see "Launch profile"). Absent = the fleet follows the keychain.
   launch_profile?: string;
-  // Sessions run on the fleet store, which carries launch_profile: a switch
-  // moves every running session without a restart (see "Fleet store").
+  // Sessions launch on the fleet store, which carries launch_profile (see
+  // "Fleet store").
   fleet_store?: boolean;
   profiles: Array<{
     name: string;

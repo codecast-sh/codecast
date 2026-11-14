@@ -92,9 +92,10 @@ export function isNearUsageLimit(
 
 /**
  * Where the fleet should move BEFORE its account runs out, or null to stay.
- * Only for a machine on the fleet store, where a switch costs the running
- * sessions nothing. Reads the fleet account's meter (live statusLine readings
- * keep it within seconds) and ignores a reading taken before the fleet last
+ * Only for a machine on the fleet store, where a switch rewrites the store
+ * and needs no restart: new launches land on the new account, and a running
+ * session that later parks is restarted onto it. Reads the fleet account's
+ * meter (live statusLine readings keep it within seconds) and ignores a reading taken before the fleet last
  * moved, which describes the previous account's burn. The target is the
  * account with the most room that is not itself near a limit, not tried in
  * this window without fresh evidence (the same blackout decideAutoSwitch

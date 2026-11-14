@@ -48,8 +48,8 @@ describe("workers parked on a limit recover through their parent", () => {
     const f = fixture();
     expect(await f.run()).toMatchObject({ acted: "switch", profile: "roomy", conversations: 1 });
     const args = JSON.parse(f.tables.daemon_commands[0].args);
-    // The parent follows the store: no restart, a continue after the swap.
-    expect(args).toMatchObject({ profile: "roomy", conversation_ids: [], follow_ids: ["conversations_parent"] });
+    // The parent restarts onto the store: its process holds the spent account.
+    expect(args).toMatchObject({ profile: "roomy", conversation_ids: ["conversations_parent"] });
     // The workers leave the blocked set once acted on; the parent row is never marked parked.
     expect(f.row("conversations_w1").pending_api_error).toBe(false);
     expect(f.row("conversations_w2").pending_api_error).toBe(false);
@@ -67,7 +67,7 @@ describe("workers parked on a limit recover through their parent", () => {
     const f = fixture();
     Object.assign(f.row("conversations_parent"), { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: f.now - 20_000 });
     expect(await f.run()).toMatchObject({ acted: "switch", conversations: 1 });
-    expect(JSON.parse(f.tables.daemon_commands[0].args).follow_ids).toEqual(["conversations_parent"]);
+    expect(JSON.parse(f.tables.daemon_commands[0].args).conversation_ids).toEqual(["conversations_parent"]);
     expect(f.row("conversations_w1").pending_api_error).toBe(false);
   });
 
@@ -88,9 +88,9 @@ describe("a workflow run's log is never revived", () => {
     Object.assign(f.row("conversations_parent"), { is_workflow_primary: true, workflow_run_id: "workflow_runs_1", session_id: "wf-workflow_runs_1" });
     expect(await f.run()).toMatchObject({ acted: "switch", profile: "roomy", conversations: 2 });
     const args = JSON.parse(f.tables.daemon_commands[0].args);
-    // Each station is a process of its own: it follows the store and gets the continue.
-    expect(args).toMatchObject({ profile: "roomy", conversation_ids: [] });
-    expect([...args.follow_ids].sort()).toEqual(["conversations_w1", "conversations_w2"]);
+    // Each station is a process of its own: it restarts onto the store and gets the continue.
+    expect(args).toMatchObject({ profile: "roomy" });
+    expect([...args.conversation_ids].sort()).toEqual(["conversations_w1", "conversations_w2"]);
     expect(JSON.stringify(f.tables.daemon_commands)).not.toContain("conversations_parent");
     expect(f.tables.pending_messages).toHaveLength(0);
   });
@@ -112,6 +112,6 @@ describe("a workflow run's log is never revived", () => {
       is_workflow_primary: true, pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: f.now - 20_000,
     });
     expect(await f.run()).toMatchObject({ acted: "switch", conversations: 1 });
-    expect(JSON.parse(f.tables.daemon_commands[0].args).follow_ids).toEqual(["conversations_parent"]);
+    expect(JSON.parse(f.tables.daemon_commands[0].args).conversation_ids).toEqual(["conversations_parent"]);
   });
 });

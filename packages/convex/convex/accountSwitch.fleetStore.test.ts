@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { insertSwitchCommands } from "./accountSwitch";
 import { makeFakeDb } from "./testDb";
+import { fleetModels } from "@codecast/shared/contracts";
 import {
   activeTokenProfile,
   continueNeedsRestart,
@@ -12,7 +13,8 @@ import {
 import { awaitsManualTarget, decideSwitchAhead, dropLineHostRefused, fleetHostFollowsSwitch, holdsManualTarget, MANUAL_TARGET_HOLD_MS, SWITCH_AHEAD_COOLDOWN_MS } from "./ccSwitchAhead";
 
 // A machine whose sessions run on the fleet store (cli/ccAccounts.ts): the
-// store carries launch_profile and every running session follows a switch.
+// store carries launch_profile and every session launched on it reads it. A
+// running session keeps the credential it started with.
 const now = 10_000_000;
 const usage = (session: number, weekly = 10, fetched_at = now - 1000) => ({
   fetched_at,
@@ -39,8 +41,11 @@ describe("fleet store: the store is the account, nothing is pinned", () => {
     expect(activeTokenProfile(accounts, now)).toBeUndefined();
   });
 
-  test("an unpinned park is the fleet's own and a continue reaches it; an old pin restarts onto the store", () => {
-    expect(continueNeedsRestart({ pending_api_error_kind: "limit" }, device, now)).toBe(false);
+  test("a limit park restarts onto the store, since its process may hold an account the store left", () => {
+    // 2026-11-14: switch ahead moved the store off claude2 with nothing parked;
+    // sessions parked on claude2 hours later and a plain continue retried it.
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit" }, device, now)).toBe(true);
+    expect(continueNeedsRestart({ pending_api_error_kind: "connection" }, device, now)).toBe(false);
     expect(parkedOnActiveAccount({}, device, now)).toBe(true);
     expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: "roomy" }, device, now)).toBe(true);
     // An automatic pin is dropped at resume, so the session lands on the store.
@@ -92,6 +97,18 @@ describe("decideSwitchAhead", () => {
     const onFable = [{ name: "fleet", email: "fleet@x.com", usage: fable(usage(10, 50)) }, profiles[2]];
     expect(decideSwitchAhead({ ...base, profiles: onFable, models: ["claude-opus-5-5"] })).toBeNull();
     expect(decideSwitchAhead({ ...base, profiles: onFable, models: ["claude-fable-5-1"] })).toEqual({ profile: "busy" });
+  });
+
+  test("two Fable sessions do not move a mostly Opus fleet off an account with room", () => {
+    // 2026-11-14: mike at 9% of its session and 34% of its week, Fable week
+    // full on every account; switch ahead moved the fleet onto peter at 75%.
+    const fable = (u: ReturnType<typeof usage>) => ({ ...u, weekly_scoped: { percent: 100, resets_at: now + 86_400_000, label: "Fable" } });
+    const profiles = [
+      { name: "fleet", email: "fleet@x.com", usage: fable(usage(9, 34)) },
+      { name: "peter", email: "peter@x.com", usage: usage(16, 75) },
+    ];
+    const running = [...Array.from({ length: 29 }, () => "claude-opus-5-5"), "claude-fable-5-2", "claude-fable-5-2"];
+    expect(decideSwitchAhead({ ...base, profiles, models: fleetModels(running) })).toBeNull();
   });
 
   test("on its last call the fleet takes any account below the thresholds", () => {
@@ -149,8 +166,8 @@ describe("a manual switch holds the fleet on the account the person picked", () 
   });
 });
 
-describe("a switch on the fleet store restarts only what the store cannot move", () => {
-  test("followers get a continue after the swap, an old pin restarts without a new pin", async () => {
+describe("a switch on the fleet store restarts every blocked session onto the store", () => {
+  test("unpinned and pinned parks both restart, and neither keeps a pin", async () => {
     const userId = "user_1" as any;
     const dev = { _id: "device_1", user_id: userId, device_id: "mac", label: "Mac", last_seen: now, cc_accounts: accounts } as any;
     const follower = { _id: "c_follow", session_id: "s1", owner_device_id: "mac", pending_api_error_kind: "limit" } as any;
@@ -164,12 +181,13 @@ describe("a switch on the fleet store restarts only what the store cannot move",
       continueBlocked: true,
       now,
     });
-    expect(result.restarted).toBe(1);
+    expect(result.restarted).toBe(2);
     const args = JSON.parse(db._tables.daemon_commands[0].args);
     expect(args.profile).toBe("roomy");
-    expect(args.conversation_ids).toEqual(["c_pinned"]);
-    expect(args.follow_ids).toEqual(["c_follow"]);
+    expect(args.conversation_ids).toEqual(["c_follow", "c_pinned"]);
+    expect(args.follow_ids).toBeUndefined();
     expect(db._tables.conversations.find((c: any) => c._id === "c_pinned").cc_account).toBeUndefined();
+    expect(db._tables.conversations.find((c: any) => c._id === "c_follow").cc_account).toBeUndefined();
   });
 
   test("the server paces the same continues the daemon reports before it enqueues them", async () => {
@@ -192,8 +210,8 @@ describe("a switch on the fleet store restarts only what the store cannot move",
       continueClientIds: { c_follow: "painted-follow" },
     });
     expect(scheduled).toHaveLength(1);
-    expect(scheduled[0].delay).toBe(40_000);
-    expect(scheduled[0].args.conversation_ids).toEqual(["c_pinned", "c_follow"]);
+    expect(scheduled[0].delay).toBe(0);
+    expect(scheduled[0].args.conversation_ids).toEqual(["c_follow", "c_pinned"]);
     expect(scheduled[0].args.index).toBe(0);
     expect(scheduled[0].args.client_ids.c_follow).toBe("painted-follow");
   });
