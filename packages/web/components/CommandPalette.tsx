@@ -1550,6 +1550,19 @@ const MARKDOWN_RE = /\.(md|markdown)$/i;
 // keyed per show (app/palette). Its only prop (`standalone`) is stable, so memo
 // severs any parent cascade — combined with snapshotting session data at mount
 // (above), the palette re-renders only on its OWN state, not on session churn.
+// The recents pool is rebuilt on each open; reusing a row object across opens
+// keeps the per-row search haystacks (lib/instantSessionSearch) warm, so the
+// first typed key does not rebuild one for every cached session.
+const NO_OWNER = "";
+const mergedRows = new WeakMap<object, Map<unknown, any>>();
+function mergedRow(base: object, with_: unknown, make: () => any): any {
+  let byWith = mergedRows.get(base);
+  if (!byWith) mergedRows.set(base, (byWith = new Map()));
+  let row = byWith.get(with_);
+  if (!row) { byWith.clear(); byWith.set(with_, (row = make())); }
+  return row;
+}
+
 function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const [query, setQuery] = useState("");
   // The result groups rank against a deferred copy: the box shows each key at
@@ -1666,7 +1679,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     // rather than hiding a session someone may be reaching for by name.
     const state = useInboxStore.getState();
     for (const s of Object.values(filterInboxScopeFromState(state))) {
-      byId.set(s._id, { ...byId.get(s._id), ...(s as any) });
+      const prev = byId.get(s._id);
+      byId.set(s._id, prev ? mergedRow(prev, s, () => ({ ...prev, ...(s as any) })) : s);
     }
     // The session index (hooks/useSyncSessionIndex) holds every session the
     // viewer owns, past the month the sessions cache keeps, so one from
@@ -1675,7 +1689,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const meId = state.currentUser?._id;
     for (const row of Object.values(state.sessionIndex as Record<string, any>)) {
       const held = byId.get(row._id);
-      byId.set(row._id, held ? { ...held, first_prompt: held.first_prompt ?? row.first_prompt } : { ...row, user_id: meId });
+      byId.set(row._id, held
+        ? (held.first_prompt != null || row.first_prompt == null ? held : mergedRow(held, row, () => ({ ...held, first_prompt: row.first_prompt })))
+        : mergedRow(row, meId ?? NO_OWNER, () => ({ ...row, user_id: meId })));
     }
     setRecentSessions(Array.from(byId.values()).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)));
     // Server query has landed (undefined = still loading) → freeze.
@@ -1786,16 +1802,20 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     }
     return (c: any) => byId.get(String(c._id)) ?? sessionStanding(c, meId, null);
   }, [recentPool]);
+  // A typed query ranks favorites with everything else, by how well the
+  // words name them: a favorite is not a reason to outrank a title that
+  // starts with what was typed. The Favorites group is the empty palette's.
+  const typedPool = useMemo(
+    () => (favorites?.length ? withFavorites(recentPool, favorites, pick?.exclude) : recentPool),
+    [recentPool, favorites, pick],
+  );
   const recentMatches = useMemo(() => {
     const q = rankQuery.trim().toLowerCase();
-    // A typed query ranks favorites with everything else, by how well the
-    // words name them: a favorite is not a reason to outrank a title that
-    // starts with what was typed. The Favorites group is the empty palette's.
-    const pool = q && favorites?.length ? withFavorites(recentPool, favorites, pick?.exclude) : recentPool;
+    const pool = q ? typedPool : recentPool;
     // One ranking for every session search (lib/instantSessionSearch): how
     // directly the words name it, then where it stands and how recent it is.
     return rankSessions(pool, q, standingOf, q ? RECENT_RENDER_CAP : RECENT_IDLE_CAP);
-  }, [recentPool, rankQuery, standingOf, favorites, pick]);
+  }, [recentPool, typedPool, rankQuery, standingOf]);
   // The machine most recents run on goes unsaid; a row names its machine only
   // when it runs somewhere else (a cloud host, the other laptop).
   const machineRoster = useInboxStore((s) => (open ? s.machineRoster : EMPTY_ROSTER)) as Device[];
@@ -2549,6 +2569,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 conversationId={PALETTE_PICK_DRAFT}
                 bareComposer
                 chatMentionMode={chatTarget}
+                sessionReplies={chatTarget}
                 mentionTeamId={activeTeamId ? String(activeTeamId) : undefined}
                 composerPlaceholder={pick.notePlaceholder}
                 autoFocusInput

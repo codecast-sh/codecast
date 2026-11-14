@@ -63,3 +63,28 @@ describe("conversation header squeeze", () => {
     expect(row.attr()).toBeUndefined();
   });
 });
+
+describe("squeeze observer", () => {
+  const { mutationsAffectRow } = require("../useSqueezeToFit") as typeof import("../useSqueezeToFit");
+  const { JSDOM } = require("jsdom") as typeof import("jsdom");
+  const doc = new JSDOM(`<div id="row"><span id="chip">a</span><div id="host"><div id="panel" data-squeeze-skip><p id="hit">x</p></div></div></div>`).window.document;
+  const el = (id: string) => doc.getElementById(id)!;
+  const rec = (target: Node, added: Node[] = [], removed: Node[] = []) =>
+    ({ type: "childList", target, addedNodes: added, removedNodes: removed }) as unknown as MutationRecord;
+
+  test("results churning inside an out-of-flow panel measure nothing", () => {
+    expect(mutationsAffectRow([rec(el("panel"), [doc.createElement("p")]), rec(el("hit").firstChild!)])).toBe(false);
+  });
+
+  test("the panel mounting or unmounting measures nothing", () => {
+    const panel = doc.createElement("div");
+    panel.setAttribute("data-squeeze-skip", "");
+    expect(mutationsAffectRow([rec(el("host"), [panel])])).toBe(false);
+    expect(mutationsAffectRow([rec(el("host"), [], [panel])])).toBe(false);
+  });
+
+  test("a chip change in the row still measures", () => {
+    expect(mutationsAffectRow([rec(el("panel"), [doc.createElement("p")]), rec(el("chip"), [doc.createElement("b")])])).toBe(true);
+    expect(mutationsAffectRow([{ type: "characterData", target: el("chip").firstChild } as unknown as MutationRecord])).toBe(true);
+  });
+});

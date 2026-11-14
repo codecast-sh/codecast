@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useCallback, useContext, useMemo } from "react";
 import {
-  useNavigate,
+  UNSAFE_NavigationContext,
+  resolvePath,
   useLocation,
   useSearchParams as useRRSearchParams,
   useParams as useRRParams,
@@ -35,8 +36,23 @@ export function usePathname(): string {
   return routerPath;
 }
 
+// react-router's useNavigate reads the location (BrowserRouter is not a data
+// router), so every caller re-rendered on each URL change and got a new
+// navigate. The navigator itself never changes; a path that is not absolute
+// resolves against the current location, as useNavigate's does.
+function useStableNavigate() {
+  const { navigator } = useContext(UNSAFE_NavigationContext);
+  return useCallback((to: string | number, options?: { replace?: boolean; state?: unknown }) => {
+    if (typeof to === "number") { navigator.go(to); return; }
+    const from = (navigator as { location?: { pathname: string } }).location?.pathname ?? window.location.pathname;
+    const path = to.startsWith("/") ? to : resolvePath(to, from);
+    if (options?.replace) navigator.replace(path, options.state);
+    else navigator.push(path, options?.state);
+  }, [navigator]);
+}
+
 export function useRouter() {
-  const navigate = useNavigate();
+  const navigate = useStableNavigate();
   // The tab this component renders in, so a background (prewarm) pane's
   // navigations move its OWN tab instead of the one the user is looking at.
   const tabCtx = useTabContext();
