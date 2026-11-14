@@ -16,7 +16,8 @@ export type LiveFlow = {
   _id: string;
   workspace: string;
   team_id: string;
-  flow: { id: string; slug: string; label: string };
+  /** slug is null when the flow's workflow row has none (convex liveFlowView). */
+  flow: { id: string; slug: string | null; label: string };
   /** The sources it takes problems from; null for every source. */
   sources: string[] | null;
   on: boolean;

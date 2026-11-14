@@ -174,7 +174,9 @@ export function LiveFlowHead({ live, workspace, onOpenFlow, stalled = 0, onStall
         <span className="fll-live-k">Live</span>
         {flows && flows > 1
           ? <span className="fll-live-name" data-live-flow-count={flows}>{flows} flows</span>
-          : <button type="button" className="fll-live-name" onClick={() => onOpenFlow(live.flow.slug)} data-live-flow-open={live.flow.slug}>{live.flow.label}</button>}
+          : live.flow.slug
+            ? <button type="button" className="fll-live-name" onClick={() => onOpenFlow(live.flow.slug!)} data-live-flow-open={live.flow.slug}>{live.flow.label}</button>
+            : <span className="fll-live-name">{live.flow.label}</span>}
         {admin ? <ConsequentialSwitch
           on={live.on}
           ledger={liveFlowLedger(live, queue.length)}

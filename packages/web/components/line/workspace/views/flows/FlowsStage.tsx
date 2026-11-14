@@ -65,7 +65,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
   // The runs of every flow in the live family, for the activity rail, each named by its flow when the family has more than one.
   const laneLabel = useMemo(() => new Map((map?.lanes ?? []).map((l) => [l.key, l.label])), [map?.lanes]);
   const runs = useMemo(() => {
-    const keys = map?.lanes.length ? map.lanes.map((l) => l.key) : live ? [live.flow.slug] : [];
+    const keys = map?.lanes.length ? map.lanes.map((l) => l.key) : live?.flow.slug ? [live.flow.slug] : [];
     return keys.flatMap((k) => runsOf.get(k) ?? []);
   }, [map?.lanes, live, runsOf]);
   // The drawn flow's live runs by station, keyed by its graph's node ids (and by label, for a station the graph names
@@ -125,7 +125,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
     </>
   );
   return (
-    <div className="fs" data-flows-stage={live.flow.slug}>
+    <div className="fs" data-flows-stage={live.flow.slug ?? undefined}>
       <section className="fll-live fs-live" data-live-flow={live._id} data-on={live.on ? "" : undefined}>
         <LiveFlowHead live={live} workspace={workspace} stalled={stalled} onStalled={() => { setActivity("stalled"); pickView("flows"); }} flows={map?.lanes.length} onOpenFlow={(slug) => select({ view: "flows", item: slug, run: null })}>
           {/* The whole loop a change moves through, what moved through the line over a window, or the live flows one by one. */}

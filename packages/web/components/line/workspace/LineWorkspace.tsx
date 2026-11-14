@@ -130,7 +130,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   const [lastProcess, setLastProcess] = useState(readLastProcess);
   // The map draws the flow the address names, else the team's live flow, else the one last drawn on this device.
   const live = useLiveFlow(space?.key ?? null);
-  const liveKey = live ? processKeyOf(live.flow.slug) : null;
+  const liveKey = live?.flow.slug ? processKeyOf(live.flow.slug) : null;
   const ws = useLineWorkspace(projectId, address.graph ?? liveKey ?? lastProcess, address.case ?? runCase, { pinned: !!pinned, everySpace: true });
   const flowMap = useFlowMap(space?.key ?? null);
   const trialSpaces = useLineSpaceKeys();

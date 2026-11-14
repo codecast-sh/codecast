@@ -20,6 +20,16 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "one-question-per-change",
+    title: "One question per change",
+    dek: "When an agent finishes a change, Codecast's Change flow runs your project's checks on it, has a second agent review it, and sends whatever they find back to the agent that wrote it. What reaches you is one card: ship it, send it back with a note, or drop it.",
+    author: "the codecast team",
+    date: "2026-11-14",
+    dateLabel: "November 14, 2026",
+    readingMinutes: 7,
+    cover: { src: "/blog/one-question-per-change/ship-popover.png", alt: "The Ship popover on a Codecast session: the Change flow picked, with its steps Check, Review, Decide, Land, Deploy and Live, and who does each" },
+  },
+  {
     slug: "agents-in-your-own-chrome",
     title: "Your coding agent can check the page in your own Chrome",
     dek: "Codecast lets a coding agent open pages in the Chrome you already use, with your logins, in a background tab of its own. Its screenshots and the errors the page logged come back into the conversation, so you see what it saw without switching windows.",

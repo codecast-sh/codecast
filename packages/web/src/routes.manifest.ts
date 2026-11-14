@@ -116,6 +116,7 @@ const BlogClaudeSessions = lazy(() => import("@/app/(marketing)/blog/claude-code
 const BlogAgentsTogether = lazy(() => import("@/app/(marketing)/blog/claude-code-cursor-codex/page"));
 const BlogFromYourPhone = lazy(() => import("@/app/(marketing)/blog/claude-code-from-your-phone/page"));
 const BlogOwnChrome = lazy(() => import("@/app/(marketing)/blog/agents-in-your-own-chrome/page"));
+const BlogOneQuestion = lazy(() => import("@/app/(marketing)/blog/one-question-per-change/page"));
 const BlogHistoryOnDayOne = lazy(() => import("@/app/(marketing)/blog/claude-code-history-on-day-one/page"));
 const BlogChartReply = lazy(() => import("@/app/(marketing)/blog/the-chart-in-the-reply/page"));
 const BlogQuestions = lazy(() => import("@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page"));
@@ -330,6 +331,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/claude-code-sessions", component: cast(BlogClaudeSessions), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/claude-code-cursor-codex", component: cast(BlogAgentsTogether), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/agents-in-your-own-chrome", component: cast(BlogOwnChrome), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/one-question-per-change", component: cast(BlogOneQuestion), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/claude-code-history-on-day-one", component: cast(BlogHistoryOnDayOne), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/claude-code-from-your-phone", component: cast(BlogFromYourPhone), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-chart-in-the-reply", component: cast(BlogChartReply), layout: "marketing", guestOk: true, guestKind: "public" },
