@@ -5569,6 +5569,19 @@ export default defineSchema({
     created_at: v.number(),
   }).index("by_conversation_user", ["conversation_id", "user_id"]),
 
+  // One teammate the session's owner let read it by @mentioning them in a
+  // comment (Alex, 2026-11-14: "the mention shares it"). Read access only, the
+  // tier a share-link viewer gets; it holds while the grantee is still on the
+  // session's team (privacy.ts hasMentionReadGrant).
+  conversation_read_grants: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    granted_by: v.id("users"),
+    source: v.literal("mention"),
+    comment_id: v.optional(v.string()),
+    created_at: v.number(),
+  }).index("by_conversation_user", ["conversation_id", "user_id"]),
+
   collab_grants: defineTable({
     conversation_id: v.id("conversations"),
     grantee_user_id: v.id("users"),

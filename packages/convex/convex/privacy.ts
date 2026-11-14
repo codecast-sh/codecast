@@ -212,6 +212,26 @@ export async function canOwnerOrTeamAccess(
   return canTeamMemberAccess(ctx, viewerId, conversation);
 }
 
+// The owner @mentioned this viewer in a comment, which lets them read the
+// session (conversation_read_grants). It holds only while they are still on
+// the session's team: leaving the team ends it, as with every grant made
+// inside one.
+export async function hasMentionReadGrant(
+  ctx: DbCtx,
+  viewerId: Id<"users">,
+  conversation: ConversationForAccess
+): Promise<boolean> {
+  if (!conversation._id || !conversation.team_id) return false;
+  const grant = await ctx.db
+    .query("conversation_read_grants")
+    .withIndex("by_conversation_user", (q: any) =>
+      q.eq("conversation_id", conversation._id).eq("user_id", viewerId)
+    )
+    .first();
+  if (!grant) return false;
+  return isTeamMember(ctx, viewerId, conversation.team_id);
+}
+
 export async function checkConversationAccess(
   ctx: DbCtx,
   viewerId: Id<"users"> | null,
@@ -229,6 +249,7 @@ export async function checkConversationAccess(
     if ((conversation as any).owner_user_id?.toString() === viewerId.toString()) return "owner";
     if (conversation._id && (await isSessionOwner(ctx, conversation._id, viewerId))) return "owner";
     if (await canTeamMemberAccess(ctx, viewerId, conversation)) return "team";
+    if (conversation._id && (await hasMentionReadGrant(ctx, viewerId, conversation))) return "shared";
   }
   // "shared" means the viewer PRESENTED the share link — the token itself on
   // this call, or (signed in) a prior redemption of it recorded when they

@@ -3096,8 +3096,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   useEffect(() => {
     if (missingLookup.row) useInboxStore.getState().seedSession(missingLookup.row);
   }, [missingLookup.row]);
+  const currentUserEmail = useInboxStore((s) => s.currentUser?.email as string | undefined);
+  // null: the server will not hand it over (deleted, or private to someone
+  // else). A failed lookup is also settled: nothing is known about the row, so
+  // the screen says it couldn't load instead of spinning forever.
   const conversation = storeConv
-    ?? (missingLookup.row === null && !missingLookup.failed ? null : undefined);
+    ?? (missingLookup.row === null ? null : undefined);
   // Who this session is (its character, or its role): the header wears the
   // same face and name the inbox row does.
   const identityRow = useSessionIdentityRow(conversation?._id ? String(conversation._id) : null, conversation as any);
@@ -4351,7 +4355,19 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       <RNView style={styles.errorContainer}>
         {/* The one state with no title bar of its own: the nav header's back. */}
         <Stack.Screen options={{ headerShown: true }} />
-        <RNText style={styles.errorText}>Conversation not found</RNText>
+        {/* The server answers the same "denied" for a deleted session and
+            another person's private one (a mention on a teammate's private
+            session lands here), so the note names both, and the account:
+            the same words as web's ConversationUnavailable. */}
+        <RNText style={styles.errorText}>
+          {missingLookup.failed ? "This conversation couldn't be loaded" : "This conversation isn't available"}
+        </RNText>
+        <RNText style={styles.errorDetail}>
+          {missingLookup.failed
+            ? "The server didn't answer. Try again in a moment."
+            : "It was deleted, or it belongs to someone who hasn't shared it with you."}
+        </RNText>
+        {currentUserEmail ? <RNText style={styles.errorDetail}>Signed in as {currentUserEmail}</RNText> : null}
       </RNView>
     );
   }
@@ -5213,8 +5229,15 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   errorText: {
     fontSize: 15,
-    color: Theme.red,
+    color: Theme.text,
     textAlign: 'center',
+  },
+  errorDetail: {
+    marginTop: 6,
+    fontSize: 13,
+    color: Theme.textDim,
+    textAlign: 'center',
+    maxWidth: 320,
   },
   // Pinned compact title bar (back + title + actions). Sits above the
   // collapsing metadata strip and stays put while it scrolls away.

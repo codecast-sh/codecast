@@ -13,6 +13,7 @@ import {
   canAccessPullRequest,
 } from "./lib/access";
 import { requireUser } from "./lib/auth";
+import { hasMentionReadGrant, isConversationOwner } from "./privacy";
 import { commentAnchorKey, commentThreadRootKey } from "@codecast/shared/comments";
 import { touchThread } from "./threadReads";
 import {
@@ -204,17 +205,57 @@ function forbiddenConversation(conversationId: Id<"conversations">): CommentFail
   };
 }
 
+// Who may read and write a session's comments: its owners and the team that
+// reads its content, plus a teammate its owner @mentioned in a comment (the
+// mention shares the session and the discussion with them; privacy.ts
+// hasMentionReadGrant). Asking an agent in a thread runs the session, so it
+// keeps the owner-or-team gate.
+async function canDiscussConversation(
+  ctx: CommentReadCtx,
+  userId: Id<"users">,
+  conversation: Doc<"conversations">,
+): Promise<boolean> {
+  if (await canAccessConversation(ctx, userId, conversation)) return true;
+  return await hasMentionReadGrant(ctx, userId, conversation);
+}
+
 async function validateConversationAccess(
   ctx: CommentReadCtx,
   userId: Id<"users">,
   conversationId: Id<"conversations">,
+  gate: "discuss" | "run" = "discuss",
 ): Promise<Validation<Doc<"conversations">>> {
   const conversation = await ctx.db.get(conversationId);
   if (!conversation) return { ok: false, failure: missingConversation(conversationId) };
-  if (!(await canAccessConversation(ctx, userId, conversation))) {
+  const allowed = gate === "run"
+    ? await canAccessConversation(ctx, userId, conversation)
+    : await canDiscussConversation(ctx, userId, conversation);
+  if (!allowed) {
     return { ok: false, failure: forbiddenConversation(conversationId) };
   }
   return { ok: true, value: conversation };
+}
+
+async function grantMentionRead(
+  ctx: MutationCtx,
+  conversationId: Id<"conversations">,
+  userId: Id<"users">,
+  grantedBy: Id<"users">,
+  commentId: string,
+): Promise<void> {
+  const existing = await ctx.db
+    .query("conversation_read_grants")
+    .withIndex("by_conversation_user", (q) => q.eq("conversation_id", conversationId).eq("user_id", userId))
+    .first();
+  if (existing) return;
+  await ctx.db.insert("conversation_read_grants", {
+    conversation_id: conversationId,
+    user_id: userId,
+    granted_by: grantedBy,
+    source: "mention",
+    comment_id: commentId,
+    created_at: Date.now(),
+  });
 }
 
 type CreateCommentArgs = {
@@ -240,8 +281,9 @@ async function validateCreateComment(
   ctx: CommentReadCtx,
   userId: Id<"users">,
   args: CreateCommentArgs,
+  gate: "discuss" | "run" = "discuss",
 ): Promise<Validation<ValidatedCreate>> {
-  const access = await validateConversationAccess(ctx, userId, args.conversation_id);
+  const access = await validateConversationAccess(ctx, userId, args.conversation_id, gate);
   if (!access.ok) return access;
 
   let message: Doc<"messages"> | undefined;
@@ -365,7 +407,7 @@ export const getCommentsV2 = query({
 
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return missingView(identity, [grantKey]);
-    if (!(await canAccessConversation(ctx, userId, conversation))) {
+    if (!(await canDiscussConversation(ctx, userId, conversation))) {
       return forbiddenView(identity, [grantKey]);
     }
 
@@ -475,10 +517,19 @@ async function executeCreateComment(
         ctx.db.get(membership.user_id)),
     );
     const validMembers = teamMembers.filter((user): user is Doc<"users"> => user !== null);
+    const commenterOwns = await isConversationOwner(ctx, userId, validated.conversation);
     for (const mention of mentions) {
       const mentionedUser = validMembers.find((user) =>
         user.github_username === mention || user.name === mention);
       if (mentionedUser && String(mentionedUser._id) !== String(userId)) {
+        // A teammate who cannot read the session would get a notification that
+        // opens nothing. The owner's mention shares it with them (Alex,
+        // 2026-11-14); anyone else's is not delivered, since only an owner can
+        // share the session.
+        if (!(await canDiscussConversation(ctx, mentionedUser._id, validated.conversation))) {
+          if (!commenterOwns) continue;
+          await grantMentionRead(ctx, validated.conversation._id, mentionedUser._id, userId, String(commentId));
+        }
         mentionedIds.push(mentionedUser._id);
         await ctx.runMutation(internal.notificationRouter.ensureSubscribed, {
           user_id: mentionedUser._id,
@@ -656,7 +707,7 @@ export const getComments = query({
       return [];
     }
 
-    if (!(await canAccessConversation(ctx, userId, conversation))) return [];
+    if (!(await canDiscussConversation(ctx, userId, conversation))) return [];
 
     if (args.message_id) {
       const message = await ctx.db.get(args.message_id);
@@ -699,7 +750,7 @@ export const getCommentCount = query({
     const message = await ctx.db.get(args.message_id);
     if (!message) return 0;
     const conversation = await ctx.db.get(message.conversation_id);
-    if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) return 0;
+    if (!conversation || !(await canDiscussConversation(ctx, userId, conversation))) return 0;
 
     return (await listConversationComments(ctx, message.conversation_id))
       .filter((comment) => String(comment.message_id) === String(args.message_id))
@@ -799,7 +850,7 @@ export const updateComment = mutation({
       throw new Error("Unauthorized: can only edit your own comments");
     }
     const conversation = await ctx.db.get(comment.conversation_id);
-    if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) {
+    if (!conversation || !(await canDiscussConversation(ctx, userId, conversation))) {
       throw new Error("Unauthorized: conversation access revoked");
     }
 
@@ -828,7 +879,7 @@ export const deleteComment = mutation({
       throw new Error("Unauthorized: can only delete your own comments");
     }
     const conversation = await ctx.db.get(comment.conversation_id);
-    if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) {
+    if (!conversation || !(await canDiscussConversation(ctx, userId, conversation))) {
       throw new Error("Unauthorized: conversation access revoked");
     }
 
@@ -990,7 +1041,7 @@ export async function getConversationCommentSummaryRows(
   if (!userId) return [];
   const conversation = await ctx.db.get(conversationId);
   if (!conversation) return [];
-  if (!(await canAccessConversation(ctx, userId, conversation))) return [];
+  if (!(await canDiscussConversation(ctx, userId, conversation))) return [];
   return await commentSummaryRows(ctx, await listConversationComments(ctx, conversationId));
 }
 
@@ -1281,7 +1332,7 @@ export const askAgentInThread = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const validated = await validateCreateComment(ctx, userId, { ...args, content: "" });
+    const validated = await validateCreateComment(ctx, userId, { ...args, content: "" }, "run");
     if (!validated.ok) throwLegacyCommentFailure(validated.failure);
     const executed = await executeAskAgentInThread(ctx, userId, args, validated.value, "advance");
     if (!executed.ok) throw new Error(executed.failure.message);
@@ -1309,7 +1360,7 @@ export const askAgentInThreadV2 = mutation({
       },
     }, async () => {
       if (!args.client_id.trim()) return requiredClientIdFailure();
-      const validated = await validateCreateComment(ctx, userId, { ...args, content: "" });
+      const validated = await validateCreateComment(ctx, userId, { ...args, content: "" }, "run");
       if (!validated.ok) return validated.failure;
       const executed = await executeAskAgentInThread(ctx, userId, args, validated.value, "receipt");
       if (!executed.ok) return executed.failure;
