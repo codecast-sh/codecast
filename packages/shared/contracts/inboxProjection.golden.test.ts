@@ -108,6 +108,7 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   25: "820dddba656a01dc",
   // v26: a flow station the person adopted stands alone (adopted.json).
   26: "118ba0e91820a47d",
+  27: "118ba0e91820a47d",
 };
 
 type Expected = {

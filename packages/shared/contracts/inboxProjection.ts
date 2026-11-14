@@ -128,7 +128,10 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // station opened from its decision) stands alone: it is its own member
 // through the adopted window, files by its own facts and no longer rides its
 // parent.
-export const INBOX_PROJECTION_VERSION = 26 as const;
+// v27: a process that exits while a standing trigger or loop owns its next
+// wake files under dormant, not needs_input (isExitBeforeArmedWake): a
+// trigger-run session ends its turn this way and the trigger resumes it.
+export const INBOX_PROJECTION_VERSION = 27 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -337,6 +340,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // into the "work in flight" arm below and file it WORKING forever (found by
   // the two-replica simulation, 2026-09-01).
   if (isExitAfterDone(input)) return hasMsgs ? doneRest() : "idle";
+  if (isExitBeforeArmedWake(input)) return hasMsgs ? "dormant" : "idle";
   if (dead || isUnresponsive) return hasMsgs ? "needs_input" : "idle";
 
   // Settled with content: who acts next? A rest verdict names a machine (dormant)
@@ -394,17 +398,33 @@ export function isExitAfterDone(input: Pick<WorkStateInput, "agentStatus" | "dec
   );
 }
 
+// The process exited while a standing trigger or a live /loop owns the
+// session's next wake, with nothing queued and no declared block. A trigger
+// delivers into a stopped session by resuming it, so the exit ends a run, not
+// the session: the wake the system verified stands. A declared block still
+// claims the human, and queued work still needs a restart.
+export function isExitBeforeArmedWake(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus" | "hasPending" | "isUnresponsive" | "armedTriggerHome" | "armedLoopHome">): boolean {
+  return (
+    !!input.agentStatus &&
+    DEAD_AGENT_STATUSES.has(input.agentStatus) &&
+    !!(input.armedTriggerHome || input.armedLoopHome) &&
+    input.declaredStatus !== "blocked" &&
+    !input.hasPending &&
+    !input.isUnresponsive
+  );
+}
+
 // The machine cannot proceed, or is gone: an open ask, a permission prompt, an
 // unresolved API-error banner, a dead or unresponsive agent with output, or the
 // agent's own declared block. The one condition that surfaces an anchor row out
 // of `hidden`, and what keeps a standing trigger's home from collapsing under
 // its schedule row.
-export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pendingApiError" | "agentStatus" | "messageCount" | "isUnresponsive" | "declaredStatus" | "hasPending">): boolean {
+export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pendingApiError" | "agentStatus" | "messageCount" | "isUnresponsive" | "declaredStatus" | "hasPending" | "armedTriggerHome" | "armedLoopHome">): boolean {
   const hasMsgs = input.messageCount > 0;
   if (input.awaitingInput) return true;
   if (input.pendingApiError && hasMsgs) return true;
   if (input.agentStatus === "permission_blocked") return true;
-  if (!!input.agentStatus && DEAD_AGENT_STATUSES.has(input.agentStatus) && hasMsgs && !isExitAfterDone(input)) return true;
+  if (!!input.agentStatus && DEAD_AGENT_STATUSES.has(input.agentStatus) && hasMsgs && !isExitAfterDone(input) && !isExitBeforeArmedWake(input)) return true;
   if (isDeclaredBlocked(input) && hasMsgs) return true;
   return input.isUnresponsive;
 }
@@ -1423,12 +1443,30 @@ export function childAskingAt(row: { child_asking?: boolean | null; child_asking
   return !!row.child_asking && (row.child_asking_until == null || t < row.child_asking_until);
 }
 
+// The structural parks a row's facts stand behind: a standing or once trigger
+// that injects into it, or a fresh /loop wakeup. Each holds only while the
+// machine delivered the last turn, and a hosted conversation's routine never
+// parks it (its answers file like any turn).
+export function rowArmedHomes(
+  row: Pick<ProjectableInboxRow, "armed_trigger_kind" | "loop_state" | "agent_type" | "last_turn_allows_park" | "last_message_preview" | "last_user_message">,
+  epoch: number,
+): { armedTriggerHome: boolean; armedOnceTriggerHome: boolean; armedLoopHome: boolean } {
+  const park = rowLastTurnAllowsPark(row);
+  const kind = row.armed_trigger_kind ?? "none";
+  const hosted = isHostedAgentType(row.agent_type);
+  const loop = row.loop_state;
+  return {
+    armedTriggerHome: kind === "standing" && park && !hosted,
+    armedOnceTriggerHome: kind === "once" && park && !hosted,
+    armedLoopHome: !!loop && loop.status === "armed" && isLoopFresh(loop, epoch) && park,
+  };
+}
+
 export function placeProjectableRow(
   row: ProjectableInboxRow,
   asking: boolean,
   epoch: number,
 ): InboxPlacement {
-  const park = rowLastTurnAllowsPark(row);
   const loop = row.loop_state;
   // The wakes the system can stand behind. Trigger and loop homes are counted
   // raw here (not gated on `park`): a human who spoke last starts a turn that
@@ -1452,12 +1490,7 @@ export function placeProjectableRow(
     snoozed: !!row.inbox_snoozed_until && row.inbox_snoozed_until > epoch,
     snoozeDue: !!row.inbox_snoozed_until && row.inbox_snoozed_until <= epoch,
     userRest: userRestOf(row),
-    // A hosted conversation's routine delivers each run's answer into it, so
-    // the answer files like any finished turn (done, or the person's move
-    // when it asks them), never parked behind the next firing.
-    armedTriggerHome: (row.armed_trigger_kind ?? "none") === "standing" && park && !isHostedAgentType(row.agent_type),
-    armedLoopHome: !!loop && loop.status === "armed" && isLoopFresh(loop, epoch) && park,
-    armedOnceTriggerHome: (row.armed_trigger_kind ?? "none") === "once" && park && !isHostedAgentType(row.agent_type),
+    ...rowArmedHomes(row, epoch),
     childProducing: childProducingAt(row, epoch),
     settleVerdict: isSettleVerdictCurrent(row as { settle_verdict_at?: number | null; updated_at: number }) ? (row.settle_verdict ?? null) : null,
     declaredStatus: row.thread_state_status ?? null,

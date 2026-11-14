@@ -193,6 +193,29 @@ describe("classifyWorkState — an exit after a declared done", () => {
   });
 });
 
+// A trigger-run session ends each run by exiting, and the trigger resumes it
+// on the next firing: with that wake armed into it, the exit is not a death.
+describe("classifyWorkState — an exit with an armed wake", () => {
+  test("a stopped agent with a standing trigger or loop into it files dormant", () => {
+    for (const declaredStatus of [null, "working", "dormant"]) {
+      for (const armed of [{ armedTriggerHome: true }, { armedLoopHome: true }]) {
+        expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus, ...armed }))).toBe("dormant");
+        expect(isHardBlocked(input({ agentStatus: "stopped", declaredStatus, ...armed }))).toBe(false);
+      }
+    }
+  });
+
+  test("a declared block, queued work or an unresponsive agent still needs a human", () => {
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "blocked", armedTriggerHome: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "dormant", armedTriggerHome: true, hasPending: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "dormant", armedTriggerHome: true, isUnresponsive: true }))).toBe("needs_input");
+  });
+
+  test("a once trigger is not a standing wake", () => {
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "dormant", armedOnceTriggerHome: true }))).toBe("needs_input");
+  });
+});
+
 describe("placeInboxRow — bucket precedence", () => {
   test("dismissed outranks everything, stashed next", () => {
     expect(placeInboxRow(input({ dismissed: true, stashed: true, asking: true, pinned: true })).bucket).toBe("dismissed");
@@ -728,9 +751,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 26", () => {
+  test("the caps are the single source and the version is 27", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200, adopted: 100 });
-    expect(INBOX_PROJECTION_VERSION).toBe(26);
+    expect(INBOX_PROJECTION_VERSION).toBe(27);
   });
 });
 
