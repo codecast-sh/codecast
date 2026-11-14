@@ -66,6 +66,8 @@ export function hireLeewayLedger(r: { handle: string; name: string }): SwitchLed
 /** A ledger as short lines: the figures, then each row, then how to stop. */
 export function ledgerLines(l: SwitchLedger): string[] {
   return [
+    ...(l.alert ? [l.alert] : []),
+    ...(l.shift ? [`${l.shift[0]} → ${l.shift[1]}`] : []),
     ...l.figures.map((f) => `${f.value} ${f.label}`),
     ...l.rows.map((r) => `${r.k}: ${r.v}`),
     ...(l.stop ? [`To stop: ${l.stop}`] : []),

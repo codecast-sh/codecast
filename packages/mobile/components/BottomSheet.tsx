@@ -1,11 +1,15 @@
-import type { ReactNode } from 'react';
+import { useContext, useEffect, useRef, type ReactNode } from 'react';
+import { NavigationContext } from '@react-navigation/native';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { themedStyles } from '@/constants/Theme';
 
 // The slide-up sheet shell: dimmed backdrop that closes on tap, a rounded card
 // with a grabber, safe-area padding, and keyboard avoidance so a sheet holding
-// a text field rides above the keyboard. Content is the caller's.
+// a text field rides above the keyboard. Content is the caller's. A sheet
+// closes when its screen loses focus: a Modal draws above every screen, so a
+// link or a notification that pushes another screen would otherwise land
+// under it.
 export function BottomSheet({
   visible,
   onClose,
@@ -19,6 +23,10 @@ export function BottomSheet({
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
+  const nav = useContext(NavigationContext);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => (nav && visible ? nav.addListener('blur', () => close.current()) : undefined), [nav, visible]);
   return (
     <Modal
       visible={visible}

@@ -27,7 +27,7 @@ describe("a flow as a diagram", () => {
 
   test("a stage's findings go back to the session the change came from, said once; true stops still stop", () => {
     const routes = (i: number) => { const s = flowDiagram(change).steps[i]; return [...s.side, ...s.inner.flatMap((x) => x.side)].map((r) => [r.tone, r.outcome, r.leadsTo]); };
-    expect(routes(0)).toEqual([["back", "Checks failed", "this session"]]);
+    expect(routes(0)).toEqual([["back", "Checks failed", "this session"], ["stop", "Not checked here", null]]);
     expect(routes(1)).toEqual([["back", "Changes asked", "this session"], ["stop", "Rejected", null]]);
     expect(routes(2)).toEqual([["back", "Revise", "this session"], ["stop", "Dropped", null]]);
     expect(routes(4)).toEqual([["stop", "Deploy failed", null]]);
@@ -77,6 +77,9 @@ describe("a run in words", () => {
   test("a live run says where it is, a segment's step under the segment's name", () => {
     expect(flowRunState({ status: "running", current_node_id: "review__review" }, change).words).toBe("At Review");
     expect(flowRunState({ status: "running", current_node_id: "ship__rebase" }, change).words).toBe("At Land: Rebase");
+  });
+  test("a run stopped at a station waiting on a person names the step, never its id", () => {
+    expect(flowRunState({ status: "failed", current_node_id: "fix_check", fail_reason: "Stopped: fix_check is waiting on a person" }, change).why).toBe("Fix check is waiting on a person");
   });
 });
 

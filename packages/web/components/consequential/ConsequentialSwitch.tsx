@@ -94,7 +94,7 @@ export function ConsequentialSwitch({ on, ledger, onTurnOn, onTurnOff, trigger, 
 const CAPTURE = { capture: true };
 
 /** The review itself: controlled, for a site that opens it from somewhere other than a trigger of its own. */
-export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger: SwitchLedger; onClose: () => void; onConfirm: () => void; onPick?: (option: string) => void }) {
+export function SwitchReview({ ledger: l, onClose, onConfirm, onPick, children }: { ledger: SwitchLedger; onClose: () => void; onConfirm: () => void; onPick?: (option: string) => void; children?: ReactNode }) {
   const cancel = useRef<HTMLButtonElement>(null);
   const [typed, setTyped] = useState("");
   const unmatched = !!l.typed && typed.trim() !== l.typed.expect.trim();
@@ -173,6 +173,8 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger
             </span>
           </div>
         )}
+
+        {children}
 
         <dl className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-2 px-5 py-3.5 text-[12.5px] leading-snug" data-switch-rows data-switch-part>
           {rows.map((r) => (
