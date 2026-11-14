@@ -17,6 +17,7 @@ export function personEnv(env: NodeJS.ProcessEnv = process.env): Record<string, 
   return out;
 }
 
+/** The session stamp every `cast chat` send and read carries from inside a session: on a send it dresses the line and gives up waking the anchor; on a read it limits direct messages to the ones the session is part of. */
 export function chatSendOrigin(
   env: NodeJS.ProcessEnv = process.env,
 ): { origin?: "agent"; origin_session_id?: string } {
