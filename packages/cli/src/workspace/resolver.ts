@@ -93,8 +93,10 @@ export function mergeManifests(
 
   const host = override.host ?? base.host;
   const ship = override.ship ?? base.ship;
+  const run = override.run ?? base.run;
   return {
     ...(host ? { host } : {}),
+    ...(run ? { run } : {}),
     ...(ship ? { ship } : {}),
     // Detection never maps secrets, so the file's [vault] is the whole map.
     ...(override.vault ? { vault: override.vault } : {}),
