@@ -49,6 +49,8 @@ export const RETRIES_PLAN_PART: AcmePart = {
   answers: {
     // The task feed's bootstrap read: the world's tasks, so the list settles instead of syncing.
     "tasks:webList": () => ({ items: TASKS(Date.now()) }),
+    // The reconcile crawl's one page: everything, done, so no "syncing" badge stays up.
+    "tasks:webListPaginated": () => ({ page: TASKS(Date.now()), isDone: true, continueCursor: "" }),
     "tasks:webActiveSessions": () => ACTIVE_TASK_SESSIONS(Date.now()),
     "taskMining:webGetTaskDetail": detail,
   },

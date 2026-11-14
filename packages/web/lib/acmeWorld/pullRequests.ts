@@ -1,6 +1,6 @@
 // Acme's pull requests: the webhook retries PR the lead session opened
-// (acme/api#482, checks green, approved by Maya, shepherded by the lead), and
-// the HMAC signing PR (acme/api#485, one check red of ten, Maya's review
+// (acme/acme-api#482, checks green, approved by Maya, shepherded by the lead), and
+// the HMAC signing PR (acme/acme-api#485, one check red of ten, Maya's review
 // asking for changes, linked to Alex's API session). Rows are written into
 // the store's pullRequests collection (what the inbox, the phone and the
 // timeline read) and answered to the PR page's own queries.
@@ -9,7 +9,8 @@
 import type { AcmePart } from "./parts";
 import { HOUR, MIN, PEOPLE, SESSIONS, TEAM_ID, cid } from "./world";
 
-export const REPO = "acme/api";
+export { CODE_REPO as REPO } from "./code";
+import { CODE_REPO as REPO } from "./code";
 export const PR_RETRY = { _id: cid("prretry482"), number: 482 };
 export const PR_HMAC = { _id: cid("prhmac485"), number: 485 };
 

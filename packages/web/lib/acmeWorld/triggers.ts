@@ -114,7 +114,7 @@ export const TRIGGERS = (now: number): Array<Record<string, any>> => {
       _id: TRIGGER_IDS.prComments,
       short_id: "tr-4817",
       title: "Answer review comments on the webhook retries PR",
-      prompt: "A review comment landed on acme/api#482. Read it, make the change if it is right, push, and reply on the thread.",
+      prompt: "A review comment landed on acme/acme-api#482. Read it, make the change if it is right, push, and reply on the thread.",
       status: "scheduled",
       schedule_type: "event",
       event_filter: { event_type: "pull_request_review_comment", action: "created" },
@@ -206,10 +206,10 @@ export const SUMMARY_RUN_TRANSCRIPT = (now: number) => {
     {
       _id: "hero-run-m2",
       role: "assistant",
-      content: "Reading the open and recently merged PRs on acme/api.",
+      content: "Reading the open and recently merged PRs on acme/acme-api.",
       tool_calls: [
-        call("hero-run-tc1", "Bash", { command: "cast pr list --repo acme/api --label webhooks --state open" }),
-        call("hero-run-tc2", "Bash", { command: "cast pr list --repo acme/api --merged-since 1d" }),
+        call("hero-run-tc1", "Bash", { command: "cast pr list --repo acme/acme-api --label webhooks --state open" }),
+        call("hero-run-tc2", "Bash", { command: "cast pr list --repo acme/acme-api --merged-since 1d" }),
       ],
       tool_results: [
         result("hero-run-tc1", "#482  Retry failed webhooks with backoff  approved  checks 10/10\n#485  Sign webhook payloads with HMAC    changes requested  checks 9/10 (integration failed)"),
