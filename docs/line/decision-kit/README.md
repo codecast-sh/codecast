@@ -139,6 +139,40 @@ A case may hold a `<dk-msg>`, a `<dk-pair>`, a `<dk-gap>`, a `<dk-shot>` or `<dk
 </dk-facts>
 ```
 
+A number written as a count out of a whole (`57 of 300`) draws its share as a bar under it, so two counts with different wholes read at their real sizes. Where a count was drawn and over what window goes in a `<details>` inside the fact, folded under "How counted", so the label stays a glance.
+
+**The findings.** When a page carries more than one finding, a board under the header names each in a row: its count drawn, and what the change does about it (`state` is `fixed`, `open` for a finding this change does not fix, or `unchanged`; `label` words it otherwise). A row opens its section.
+
+```html
+<dk-board>
+  <dk-finding href="#late" count="41 of 41" state="fixed">Reminders arrive after the doors open<small>The 7:58 pm text</small></dk-finding>
+  <dk-finding href="#price" count="6 of 41" state="open">Reminders quote last season's price</dk-finding>
+</dk-board>
+```
+
+**When it happened.** Moments in a person's story placed by day, when the gaps between them are the point: how long someone waited, which side of a rule a message fell on. `rule` draws the line a policy or a check sets; a `<dk-span>` shades a stretch; the mark carrying `miss` is the moment at fault. A long stretch where nothing happens is cut short and marked, and on a phone the line stands upright with the moments in order.
+
+```html
+<dk-timeline unit="day" rule="90" rule-label="match step refuses">
+  <dk-span from="0" to="97">Brand silent</dk-span>
+  <dk-mark at="0" date="Jul 20">Brand writes to us, once</dk-mark>
+  <dk-mark at="86" date="Oct 14" miss>"We're working with" a brand</dk-mark>
+  <dk-mark at="94" date="Oct 22">He says yes</dk-mark>
+</dk-timeline>
+```
+
+**Many cases, compact.** When the change moves a few words in each case, `<dk-examples compact>` draws one row per case: its name and what was held, then the first mark on each side of its pair beside each other. Each row opens to the whole case, so the messages stay whole a click away. Mark the words the change moves on both sides.
+
+**Replayed counts.** Counts from running today's version and the change over the same inputs, read across: each row out of its own whole on one shared scale, today as a range when it was drawn more than once, the change as a dot. `effect` says what the change did to that row (`fixed`, `same`, `cost` or `worse`), so a cost reads at the same weight as the fix. An `<h3>` between rows starts a group.
+
+```html
+<dk-measures>
+  <h3>The claim</h3>
+  <dk-measure today="55-64" change="4" of="120">Emails that claimed it in production<small>60 emails, 2 draws each</small></dk-measure>
+  <dk-measure today="47-54" change="37" of="200" effect="cost">Offers to make the introduction</dk-measure>
+</dk-measures>
+```
+
 **A quote.** A person's own words, set apart: a customer, a reviewer. Text from a file (a prompt, a rule, a template, code) is not a quote: show it as it stands in `<pre>`, with `<mark>` on the words that matter, or in the diff.
 
 ```html

@@ -211,6 +211,8 @@
       if (shows.firstChild) ex.appendChild(shows);
       ex.setAttribute("data-dk", "");
     });
+    // Messages are drawn first, so a compact case reads its marks from their bodies.
+    if (group.hasAttribute("compact")) compactExamples(group);
     group.setAttribute("data-dk", "");
   }
 
@@ -657,6 +659,222 @@
     m.setAttribute("data-dk", "");
   }
 
+  // ── Counts drawn ──────────────────────────────────────────────────────────
+  // "41 of 300" read once, wherever a count is drawn: the count, the whole, and
+  // the share, or null when the text is not a count out of a whole.
+  function num(s) { return parseFloat(String(s).replace(/,/g, "")); }
+  function outOf(text) {
+    var m = /^\s*([\d,.]+)\s+of\s+([\d,.]+)/.exec(text || "");
+    if (!m) return null;
+    var n = num(m[1]), of = num(m[2]);
+    return of > 0 && n <= of ? { n: m[1], of: m[2], share: n / of } : null;
+  }
+  function bar(share, cls) {
+    var track = el("span", "dk-bar" + (cls ? " " + cls : "")), fill = el("i");
+    fill.style.width = (share * 100).toFixed(1) + "%";
+    if (!share) fill.setAttribute("data-zero", "");
+    track.appendChild(fill);
+    return track;
+  }
+
+  // A fact whose number is a count out of a whole draws its share under it, so
+  // "57 of 300" and "466 of 1,370" read at their real sizes, not as two big numbers.
+  function drawFact(f) {
+    if (f.hasAttribute("data-dk")) return;
+    var b = f.querySelector(":scope > :is(b, strong):first-child"), c = b && outOf(b.textContent);
+    if (c) {
+      b.textContent = c.n + " ";
+      b.appendChild(el("span", "dk-of", "of " + c.of));
+      b.parentNode.insertBefore(bar(c.share), b.nextSibling);
+    }
+    f.setAttribute("data-dk", "");
+  }
+
+  // The page's findings at a glance: one row each, its count drawn, and what
+  // the change does about it. A row opens its section.
+  var FINDING = { fixed: "Fixed by the change", open: "Not fixed here", unchanged: "Left as is" };
+  function drawBoard(board) {
+    if (board.hasAttribute("data-dk")) return;
+    [].forEach.call(board.querySelectorAll(":scope > dk-finding"), function (f, i) {
+      var row = el(f.getAttribute("href") ? "a" : "div", "dk-finding-row");
+      if (f.getAttribute("href")) row.href = f.getAttribute("href");
+      row.appendChild(el("span", "dk-finding-n", String(i + 1)));
+      var what = el("span", "dk-finding-what");
+      while (f.firstChild) what.appendChild(f.firstChild);
+      trimEdges(what);
+      row.appendChild(what);
+      var count = el("span", "dk-finding-count"), c = outOf(f.getAttribute("count"));
+      if (c) count.appendChild(bar(c.share));
+      if (f.getAttribute("count")) count.appendChild(el("span", null, f.getAttribute("count")));
+      row.appendChild(count);
+      var state = f.getAttribute("state") || "";
+      var tag = el("span", "dk-finding-state", f.getAttribute("label") || FINDING[state] || "");
+      tag.setAttribute("data-state", state);
+      row.appendChild(tag);
+      f.appendChild(row);
+    });
+    board.setAttribute("data-dk", "");
+  }
+
+  // Moments placed by when they happened, in days (or any unit), with the line
+  // a rule draws. A stretch where nothing happens is cut short and marked, so
+  // the moments that matter get the width.
+  function drawTimeline(t) {
+    if (t.hasAttribute("data-dk")) return;
+    var marks = [].slice.call(t.querySelectorAll(":scope > dk-mark")), spans = [].slice.call(t.querySelectorAll(":scope > dk-span"));
+    var pts = marks.map(function (m) { return num(m.getAttribute("at")); });
+    var rule = t.hasAttribute("rule") ? num(t.getAttribute("rule")) : null;
+    var all = pts.concat(rule == null ? [] : [rule]).filter(function (v) { return !isNaN(v); }).sort(function (a, b) { return a - b; });
+    if (!all.length) return;
+    var lo = all[0], hi = all[all.length - 1], span = hi - lo || 1;
+    // The widest gap between moments, when it holds most of the span, shrinks to a fixed share.
+    var cut = null;
+    for (var i = 1; i < all.length; i++) if (!cut || all[i] - all[i - 1] > cut.b - cut.a) cut = { a: all[i - 1], b: all[i] };
+    var squeeze = cut && (cut.b - cut.a) / span > 0.5 ? cut : null, GAP = 0.28;
+    function x(v) {
+      if (!squeeze) return (v - lo) / span;
+      var rest = span - (squeeze.b - squeeze.a), per = (1 - GAP) / (rest || 1);
+      if (v <= squeeze.a) return (v - lo) * per;
+      if (v >= squeeze.b) return (squeeze.a - lo) * per + GAP + (v - squeeze.b) * per;
+      return (squeeze.a - lo) * per + GAP * (v - squeeze.a) / (squeeze.b - squeeze.a);
+    }
+    function pct(v) { return (x(v) * 100).toFixed(2) + "%"; }
+    var axis = el("div", "dk-axis"), unit = t.getAttribute("unit") || "day";
+    spans.forEach(function (s) {
+      var band = el("span", "dk-tl-span");
+      var from = num(s.getAttribute("from")), to = num(s.getAttribute("to"));
+      band.style.left = pct(isNaN(from) ? lo : from);
+      band.style.width = "calc(" + pct(isNaN(to) ? hi : to) + " - " + band.style.left + ")";
+      band.title = s.textContent.trim();
+      axis.appendChild(band);
+      if (s.textContent.trim()) {
+        var lbl = el("span", "dk-tl-span-label", s.textContent.trim());
+        lbl.style.left = squeeze ? ((x(squeeze.a) + GAP / 2) * 100).toFixed(2) + "%" : "calc(" + band.style.left + " + 0.5rem)";
+        if (squeeze) lbl.setAttribute("data-mid", "");
+        axis.appendChild(lbl);
+      }
+    });
+    if (squeeze) { var brk = el("span", "dk-tl-break"); brk.style.left = ((x(squeeze.a) + GAP / 2) * 100).toFixed(2) + "%"; axis.appendChild(brk); }
+    if (rule != null) {
+      var r = el("span", "dk-tl-rule");
+      r.style.left = pct(rule);
+      var rl = el("span", null);
+      rl.appendChild(el("b", null, unit.charAt(0).toUpperCase() + unit.slice(1) + " " + t.getAttribute("rule")));
+      if (t.getAttribute("rule-label")) rl.appendChild(el("span", null, t.getAttribute("rule-label")));
+      r.appendChild(rl);
+      r.style.order = String(Math.round(rule * 1000));
+      axis.appendChild(r);
+    }
+    // Labels alternate above and below the line, so neighbours never collide.
+    marks.forEach(function (m, j) {
+      var at = num(m.getAttribute("at")), dot = el("span", "dk-tl-mark");
+      if (isNaN(at)) return;
+      dot.style.left = pct(at);
+      // On a phone the line stands upright and its moments read in order.
+      dot.style.order = String(Math.round(at * 1000));
+      if (m.hasAttribute("miss")) dot.setAttribute("data-miss", "");
+      dot.setAttribute("data-side", j % 2 ? "up" : "down");
+      if (j === 0) dot.setAttribute("data-edge", "start");
+      else if (j === marks.length - 1 && x(at) > 0.85) dot.setAttribute("data-edge", "end");
+      var label = el("span", "dk-tl-label"), when = el("b", null, (m.getAttribute("date") ? m.getAttribute("date") + " · " : "") + unit + " " + m.getAttribute("at"));
+      label.appendChild(when);
+      var words = el("span");
+      while (m.firstChild) words.appendChild(m.firstChild);
+      trimEdges(words);
+      label.appendChild(words);
+      dot.appendChild(label);
+      axis.appendChild(dot);
+    });
+    marks.concat(spans).forEach(function (n) { n.remove(); });
+    t.appendChild(axis);
+    t.setAttribute("data-dk", "");
+  }
+
+  // Cases read compact: one row each, the words the change moves (the first
+  // mark on each side) beside each other, the whole case one click away.
+  function snippet(side) {
+    var body = side && side.querySelector(".dk-body"), mk = body && body.querySelector("mark");
+    var q = el("q");
+    if (!mk) { q.textContent = body ? body.textContent.trim().split(/\s+/).slice(0, 10).join(" ") + "…" : ""; return q; }
+    var before = "", after = "", n = mk.previousSibling;
+    while (n) { before = n.textContent + before; n = n.previousSibling; }
+    for (n = mk.nextSibling; n; n = n.nextSibling) after += n.textContent;
+    if (/\S/.test(before.split("\n").pop())) q.appendChild(document.createTextNode("…"));
+    var m = el("mark", null, mk.textContent);
+    if (mk.closest("dk-msg[miss]")) m.setAttribute("data-miss", "");
+    q.appendChild(m);
+    var tail = after.split("\n")[0].trim().split(/\s+/).filter(Boolean);
+    if (tail.length) q.appendChild(document.createTextNode(" " + tail.slice(0, 4).join(" ") + "…"));
+    return q;
+  }
+  function compactExamples(group) {
+    var cases = group.querySelector(".dk-cases"), labels = null;
+    [].forEach.call(cases.querySelectorAll(":scope > dk-example"), function (ex) {
+      var sides = ex.querySelectorAll("dk-pair > dk-side");
+      if (sides.length !== 2) return;
+      if (!labels) labels = [sides[0].getAttribute("label") || "Before", sides[1].getAttribute("label") || "After"];
+      var says = ex.querySelector(".dk-says"), fold = el("details", "dk-case-fold"), sum = el("summary"), who = el("span", "dk-case-who");
+      while (says.firstChild) who.appendChild(says.firstChild);
+      sum.appendChild(who);
+      [0, 1].forEach(function (k) { var q = snippet(sides[k]); q.setAttribute("data-label", labels[k]); sum.appendChild(q); });
+      fold.appendChild(sum);
+      while (ex.firstChild) fold.appendChild(ex.firstChild);
+      says.remove();
+      ex.appendChild(fold);
+    });
+    if (labels) {
+      var head = el("div", "dk-cases-head");
+      ["", labels[0], labels[1]].forEach(function (l) { head.appendChild(el("span", null, l)); });
+      cases.insertBefore(head, cases.firstChild);
+    }
+  }
+
+  // Counts across many runs, today against the change, each row out of its
+  // own whole on one shared scale: a range for today when it was drawn more
+  // than once, a dot for the change, coloured by what the change did.
+  var EFFECT = { fixed: "Fixed", same: "About the same", cost: "The cost", worse: "Worse" };
+  function drawMeasures(g) {
+    if (g.hasAttribute("data-dk")) return;
+    var rows = [].slice.call(g.querySelectorAll(":scope > dk-measure")), max = 0, used = {};
+    var data = rows.map(function (r) {
+      var of = num(r.getAttribute("of")), t = (r.getAttribute("today") || "").split(/\s*(?:-|–|to)\s*/).map(num), c = num(r.getAttribute("change"));
+      var d = { lo: t[0] / of, hi: (t.length > 1 ? t[1] : t[0]) / of, c: c / of, raw: r.getAttribute("today"), cn: r.getAttribute("change"), of: r.getAttribute("of") };
+      max = Math.max(max, d.hi || 0, d.c || 0);
+      return d;
+    });
+    var scale = Math.min(1, Math.ceil((max * 1.08) * 10) / 10) || 1;
+    function pos(v) { return ((v / scale) * 100).toFixed(2) + "%"; }
+    var labels = (g.getAttribute("labels") || "Today|With the change").split("|");
+    rows.forEach(function (r, i) {
+      var d = data[i], effect = r.getAttribute("effect") || "fixed";
+      used[effect] = true;
+      var name = el("span", "dk-m-name");
+      while (r.firstChild) name.appendChild(r.firstChild);
+      trimEdges(name);
+      var plot = el("span", "dk-m-plot"), range = el("i", "dk-m-range"), dot = el("i", "dk-m-dot");
+      range.style.left = pos(d.lo); range.style.width = "calc(" + pos(d.hi) + " - " + pos(d.lo) + ")";
+      dot.style.left = pos(d.c); dot.setAttribute("data-effect", effect);
+      plot.title = labels[0] + ": " + d.raw + " of " + d.of + " · " + labels[1] + ": " + d.cn + " of " + d.of;
+      plot.appendChild(range); plot.appendChild(dot);
+      var n = el("span", "dk-m-n");
+      n.appendChild(document.createTextNode(d.raw.replace(/\s*(?:-|to)\s*/, "–") + " → "));
+      n.appendChild(el("b", null, d.cn));
+      n.appendChild(document.createTextNode(" of " + d.of));
+      r.appendChild(name); r.appendChild(plot); r.appendChild(n);
+    });
+    var legend = el("p", "dk-m-legend");
+    var k = el("span"); k.appendChild(el("i", "dk-m-range")); k.appendChild(document.createTextNode(labels[0])); legend.appendChild(k);
+    Object.keys(EFFECT).forEach(function (e) {
+      if (!used[e]) return;
+      var s = el("span"), i = el("i", "dk-m-dot"); i.setAttribute("data-effect", e);
+      s.appendChild(i); s.appendChild(document.createTextNode(labels[1] + (Object.keys(used).length > 1 ? ": " + EFFECT[e].toLowerCase() : "")));
+      legend.appendChild(s);
+    });
+    legend.appendChild(el("span", "dk-m-scale", "Scale 0 to " + Math.round(scale * 100) + "%"));
+    g.appendChild(legend);
+    g.setAttribute("data-dk", "");
+  }
+
   function draw() {
     try { if (window.self !== window.top) document.documentElement.classList.add("dk-framed"); } catch (e) { document.documentElement.classList.add("dk-framed"); }
     [].forEach.call(document.querySelectorAll("mark[note]"), drawMarkNote);
@@ -666,6 +884,10 @@
     [].forEach.call(document.querySelectorAll("dk-shot"), drawShot);
     [].forEach.call(document.querySelectorAll("dk-shots"), drawShots);
     [].forEach.call(document.querySelectorAll("dk-examples"), drawExamples);
+    [].forEach.call(document.querySelectorAll("dk-fact"), drawFact);
+    [].forEach.call(document.querySelectorAll("dk-board"), drawBoard);
+    [].forEach.call(document.querySelectorAll("dk-timeline"), drawTimeline);
+    [].forEach.call(document.querySelectorAll("dk-measures"), drawMeasures);
     [].forEach.call(document.querySelectorAll("dk-diff"), drawDiff);
     [].forEach.call(document.querySelectorAll("dk-view"), drawView);
     [].forEach.call(document.querySelectorAll("dk-tally"), drawTally);
@@ -740,5 +962,5 @@
     t.setAttribute("data-dk", "");
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", draw); else draw();
-  window.decisionKit = { draw: draw, parseUnified: parseUnified, wordDiff: wordDiff, segments: segments };
+  window.decisionKit = { draw: draw, parseUnified: parseUnified, wordDiff: wordDiff, segments: segments, outOf: outOf };
 })();

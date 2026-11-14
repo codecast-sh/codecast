@@ -135,3 +135,17 @@ describe("the kit reads a diff", () => {
     expect(small).toEqual([{ eq: "Doors open at " }, { del: "six", ins: "seven" }, { eq: " tonight." }]);
   });
 });
+
+describe("the kit reads a count out of a whole", () => {
+  const kit = loadKit();
+  test("a count and its whole give the share, separators and all", () => {
+    expect(kit.outOf("466 of 1,370")).toEqual({ n: "466", of: "1,370", share: 466 / 1370 });
+    expect(kit.outOf("0 of 400").share).toBe(0);
+  });
+  test("anything else is not a count, so no bar is drawn", () => {
+    expect(kit.outOf("0")).toBeNull();
+    expect(kit.outOf("45%")).toBeNull();
+    expect(kit.outOf("5 of 0")).toBeNull();
+    expect(kit.outOf("12 of 9")).toBeNull();
+  });
+});
