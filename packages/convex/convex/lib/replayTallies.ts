@@ -197,7 +197,7 @@ export async function writeTallySums(ctx: Db, owner: { workspace: string; source
  * floor, at none or the default. Any other filter is counted by the scan.
  */
 export function tallyAnswers(m: ReplayMatch): boolean {
-  if (m.q || m.person || m.has?.length || m.min_ms !== undefined || m.max_ms !== undefined || m.group || m.since !== undefined) return false;
+  if (m.q || m.person || m.has?.length || m.min_ms !== undefined || m.max_ms !== undefined || m.group || m.since !== undefined || m.until !== undefined || m.url || m.user || m.failing) return false;
   if (REPLAY_ENV_KEYS.some((k) => m[k])) return false;
   return !m.active_min_ms || m.active_min_ms === REPLAY_ACTIVE_DEFAULT_MS;
 }

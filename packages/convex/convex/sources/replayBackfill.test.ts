@@ -220,8 +220,10 @@ describe("savePage", () => {
 });
 
 test("the summary line names the window, the counts and why it stopped", () => {
-  expect(replayBackfillLine(fresh({ listed: 40, imported: 30, skipped: 10 }), 200)).toBe("importing the last 30d: 40 listed, 30 imported, 10 already here");
-  expect(replayBackfillLine(fresh({ status: "paused", window: "all", last_error: "Stopped" }), 200)).toBe("paused all retained recordings: 0 listed, 0 imported: Stopped");
+  expect(replayBackfillLine(fresh({ since: 1_000 - 30 * 86_400_000, listed: 40, imported: 30, skipped: 10 }), 200)).toBe("importing the last 30d: 40 listed, 30 imported, 10 already here");
+  // A follow-up run (tendImport) covers only what arrived since the last one, and says so.
+  expect(replayBackfillLine(fresh({ status: "done", window: "7d", since: Date.UTC(2026, 10, 14, 9), until: Date.UTC(2026, 10, 14, 11) }), 200)).toBe("imported recordings new since 2026-11-14 09:00 UTC: 0 listed, 0 imported");
+  expect(replayBackfillLine(fresh({ status: "paused", window: "all", since: undefined, last_error: "Stopped" }), 200)).toBe("paused all retained recordings: 0 listed, 0 imported: Stopped");
   expect(replayBackfillLine(fresh({ updated_at: 0 }), 60 * 60_000)).toMatch(/^stalled/);
 });
 

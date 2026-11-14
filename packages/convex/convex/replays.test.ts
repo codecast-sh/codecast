@@ -2,8 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { patchReplay } from "./lib/replayIndex";
 import { getFunctionName } from "convex/server";
 import { gunzipSync, gzipSync, strFromU8, strToU8 } from "fflate";
-import schema from "./schema";
-import { makeFakeDb, schemaIndexes } from "./testDb";
 import { sha256Hex } from "./lib/hash";
 import { replayChunkKey } from "./lib/r2";
 import { applyBatch, createSource } from "./ingest";
@@ -31,41 +29,11 @@ import { withCaptureLength } from "./lib/replayImport";
 import { REPLAY_BROWSE_SCAN_MAX, REPLAY_GROUP_SCAN_MAX, writeReplayTimeline } from "./lib/replayReads";
 import { readBodyCapped } from "./lib/tokenHttp";
 import { handleReplaySign, replaySignKey, validateReplaySign } from "./replaysHttp";
+import { h, teamSource, world } from "./replays.testkit";
 import { classifyStatus } from "@platform/analytics/codecast";
 import { REPLAY_LIMITS, type ReplayEvent } from "@codecast/shared/contracts/replay";
 
-const h = (fn: any) => fn._handler;
 const NOW = Date.now();
-
-function world() {
-  const scheduled: Array<{ name: string; args: any }> = [];
-  const db = makeFakeDb(
-    {
-      users: [{ _id: "u1", active_team_id: "team_1" }, { _id: "u2" }],
-      teams: [{ _id: "team_1", name: "Acme" }],
-      team_memberships: [{ _id: "m1", user_id: "u1", team_id: "team_1" }],
-      counters: [],
-      projects: [],
-      event_sources: [],
-      event_groups: [],
-      event_samples: [],
-      external_events: [],
-      agent_tasks: [],
-      conversations: [],
-      replays: [],
-      replay_timelines: [],
-    },
-    { indexes: schemaIndexes(schema as any) },
-  );
-  const scheduler = { runAfter: async (_ms: number, fn: any, args: any) => void scheduled.push({ name: getFunctionName(fn), args }) };
-  const as = (userId: string) => ({ auth: { getUserIdentity: async () => ({ subject: `${userId}|sess` }) }, db, scheduler }) as any;
-  return { db: db as any, scheduled, as, internalCtx: { db, scheduler } as any };
-}
-
-async function teamSource(w: ReturnType<typeof world>) {
-  const out = await h(createSource)(w.as("u1"), { workspace: "team", team_id: "team_1", name: "shop", provider: "sdk" });
-  return { source: w.db._tables.event_sources[0], key: out.ingest_key as string };
-}
 
 const SHA = (c: string) => c.repeat(64);
 const key = (source: any, seq: number, sha = SHA("a")) => replayChunkKey({ sourceId: String(source._id), replay: "r1", seq, sha256: sha });

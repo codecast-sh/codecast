@@ -8,7 +8,7 @@ import { gzipSync } from "node:zlib";
 import { SCOPE, useCliHarness } from "./externalDataCli.testHarness.js";
 import { VENDOR_CONVERTER_VERSION, needsVendorImport } from "@codecast/shared/contracts/replay";
 import { REPLAY_FRAME_LIMITS } from "@codecast/shared/contracts/replayPlayer";
-import { recordingJsonRow, decodeChunk, fetchReplayFrames, followReplayImport, formatReplayImport, parseEvery, readReplayEvents, reproBaseUrl, snapTimes, type ReplayDetail } from "./replayCommand.js";
+import { recordingJsonRow, recordingMatches, searchAllReplays, splitReplayRef, isOwnReplayRef, parseWhen, formatReplayImportStatus, formatSearchFooter, decodeChunk, fetchReplayFrames, followReplayImport, formatReplayImport, parseEvery, readReplayEvents, reproBaseUrl, snapTimes, type ReplayDetail } from "./replayCommand.js";
 
 const EVENTS = [
   { type: "nav", t: 0, url: "https://app.test/checkout", title: "Checkout" },
@@ -97,16 +97,39 @@ describe("cast replay on the wire", () => {
     expect(h.out()).toContain(out);
   });
 
-  test("ls on a PostHog source lists its recordings from PostHog", async () => {
-    h.answer = (p) => (p === "/cli/sources/get" ? { provider: "posthog" } : p === "/cli/replays/recordings" ? { recordings: [] } : { replays: [] });
-    await h.run("ls", "--source", "ph");
-    await h.run("ls");
-    expect(h.calls.map((c) => c.path)).toEqual(["/cli/sources/get", "/cli/replays/recordings", "/cli/replays/list"]);
+  test("ls reads the imported store, every page, and never asks the vendor unless --live", async () => {
+    let page = 0;
+    h.answer = (p) => (p === "/cli/replays/search" ? (++page === 1 ? { rows: [], scanned: 300, cursor: "c1", done: false } : { rows: [], scanned: 5, cursor: "c2", done: true }) : {});
+    await h.run("ls", "--source", "ph", "--url", "/book/intro", "--since", "30d");
+    expect(h.calls.map((c) => c.path)).toEqual(["/cli/replays/search", "/cli/replays/search"]);
+    expect(h.calls[0].body).toMatchObject({ source: "ph", url: "/book/intro", cursor: null });
+    expect(h.calls[1].body.cursor).toBe("c1");
+    expect(h.out()).toContain("0 matched among 305 stored recordings");
+  });
+
+  test("--live says plainly when the vendor refused, and still prints the store's matches", async () => {
+    h.answer = (p) =>
+      p === "/cli/replays/search"
+        ? { rows: [], scanned: 2, cursor: "", done: true }
+        : p === "/cli/replays/import-status"
+          ? { source: { name: "ph", provider: "posthog" }, stored: { count: 2, oldest_at: 1, newest_at: 2 } }
+          : new Response(JSON.stringify({ error: "PostHog answered 429: Request was throttled" }), { status: 429 });
+    await h.run("ls", "--source", "ph", "--live");
+    expect(h.out()).toContain("Asked PostHog live and it failed");
+    expect(h.out()).toContain("0 matched among 2 stored recordings");
+  });
+
+  test("show takes a vendor's recording id without --source", async () => {
+    h.answer = (p) => (p === "/cli/replays/resolve" ? { short_id: "rp-7", imported: true, source: "ph" } : p === "/cli/replays/get" ? { ...detail, chunk_urls: [], timeline_md: "t" } : {});
+    await h.run("show", "01a17e99-ffa6-7e01-bca5-ebf332217bc4");
+    expect(h.calls.map((c) => c.path).slice(0, 2)).toEqual(["/cli/replays/resolve", "/cli/replays/get"]);
+    expect(h.calls[0].body.recording).toBe("01a17e99-ffa6-7e01-bca5-ebf332217bc4");
+    expect(h.calls[1].body.replay).toBe("rp-7");
   });
 });
 
 describe("cast replay import", () => {
-  const state = (over: Record<string, unknown>) => ({ status: "running", window: "30d", since: 0, until: 1, listed: 0, imported: 0, skipped: 0, failed: 0, started_at: 1, updated_at: 1_000, ...over }) as any;
+  const state = (over: Record<string, unknown>) => ({ status: "running", window: "30d", since: 1 - 30 * 86_400_000, until: 1, listed: 0, imported: 0, skipped: 0, failed: 0, started_at: 1, updated_at: 1_000, ...over }) as any;
 
   test("--status names a source with no import and how to start one", () => {
     expect(formatReplayImport({ name: "posthog" })).toContain("cast replay import --source posthog");
@@ -224,5 +247,79 @@ describe("cast replay ls --json", () => {
     const fresh = recordingJsonRow({ id: "rec1", started_at: 10, duration_ms: 2000, url: "https://a.test/", email: "x@a.test", distinct_id: "d1", errors: 2, replay: null, imported: false });
     expect(fresh).toMatchObject({ short_id: null, external_id: "rec1", provider: "posthog", user: { id: "d1", email: "x@a.test" }, counts: { errors: 2 }, imported: false });
     expect(recordingJsonRow({ id: "rec2", started_at: null, duration_ms: null, url: null, email: null, distinct_id: null, errors: null, replay: "rp-4", imported: true })).toMatchObject({ short_id: "rp-4", user: null, counts: {} });
+  });
+});
+
+describe("ls over the store", () => {
+  test("reads pages until the store says done, keeping every match", async () => {
+    const seen: (string | null)[] = [];
+    const pages = [
+      { rows: [{ short_id: "rp-1" }], scanned: 300, cursor: "a", done: false },
+      { rows: [], scanned: 300, cursor: "b", done: false },
+      { rows: [{ short_id: "rp-9" }], scanned: 120, cursor: "c", done: true },
+    ];
+    const out = await searchAllReplays(async (cursor) => {
+      seen.push(cursor);
+      return pages[seen.length - 1] as any;
+    });
+    expect(seen).toEqual([null, "a", "b"]);
+    expect(out.rows.map((r) => r.short_id)).toEqual(["rp-1", "rp-9"]);
+    expect(out.scanned).toBe(720);
+  });
+
+  test("the footer names the total and how to see all of it", () => {
+    expect(formatSearchFooter(42, 42, 2804)).toBe("42 matched among 2804 stored recordings");
+    expect(formatSearchFooter(420, 100, 2804)).toContain("-n 0 lists all 420");
+  });
+
+  test("--since and --until take a span back or a date", () => {
+    expect(parseWhen("30d", 100 * 86_400_000)).toBe(70 * 86_400_000);
+    expect(parseWhen("2026-11-01")).toBe(Date.parse("2026-11-01"));
+    expect(() => parseWhen("soon")).toThrow(/neither/);
+  });
+
+  test("a live PostHog row is filtered the way the store is", () => {
+    const r = { id: "x", started_at: 10, duration_ms: 1, url: "https://u.com/book/intro/t", email: "A@b.com", distinct_id: "d1", errors: 0, replay: null, imported: false };
+    expect(recordingMatches(r, { url: "/book/intro" })).toBe(true);
+    expect(recordingMatches(r, { url: "/book/manage" })).toBe(false);
+    expect(recordingMatches(r, { user: "a@B.com" })).toBe(true);
+    expect(recordingMatches(r, { user: "d1" })).toBe(true);
+    expect(recordingMatches(r, { failing: true })).toBe(false);
+  });
+});
+
+describe("a vendor id stands for its replay", () => {
+  test("ours vs the vendor's, moment split off", () => {
+    expect(isOwnReplayRef("rp-12")).toBe(true);
+    expect(isOwnReplayRef("12")).toBe(true);
+    expect(isOwnReplayRef("01a17e99-ffa6-7e01-bca5-ebf332217bc4")).toBe(false);
+    expect(splitReplayRef("01a17e99-ffa6-7e01-bca5-ebf332217bc4@1:23")).toEqual({ id: "01a17e99-ffa6-7e01-bca5-ebf332217bc4", moment: "@1:23" });
+  });
+});
+
+describe("import --status", () => {
+  const base = { status: "done" as const, window: "7d" as const, listed: 0, imported: 0, skipped: 0, failed: 0 };
+  test("leads with what is stored, and says a follow-up run covers only what is new", () => {
+    const now = Date.UTC(2026, 10, 14, 12);
+    const text = formatReplayImportStatus(
+      { name: "union-posthog", replay_backfill: { ...base, since: now - 3 * 3600_000, until: now - 3600_000, started_at: now - 3600_000, updated_at: now - 3600_000, finished_at: now - 3600_000 } },
+      { count: 2804, oldest_at: Date.UTC(2026, 9, 15), newest_at: Date.UTC(2026, 10, 14) },
+      now,
+    );
+    expect(text).toContain("union-posthog: 2804 recordings stored, recorded 2026-10-15 to 2026-11-14");
+    expect(text).toContain("follow-up");
+    expect(text).toContain("recordings new since 2026-11-14 09:00 UTC");
+    expect(text).not.toContain("the last 7d");
+  });
+  test("names each failure with its reason", () => {
+    const now = Date.UTC(2026, 10, 14, 12);
+    const text = formatReplayImportStatus(
+      { name: "s", replay_backfill: { ...base, window: "30d", since: now - 30 * 86_400_000, until: now, listed: 2810, imported: 3, skipped: 2804, failed: 3, started_at: now, updated_at: now, failures: [{ id: "abc", error: "PostHog answered 404", url: "https://u.com/book/intro/t" }] } },
+      { count: 2807, oldest_at: now, newest_at: now },
+      now,
+    );
+    expect(text).toContain("the last 30d: 2810 listed, 3 imported, 2804 already here, 3 failed");
+    expect(text).toContain("the last 1 of 3 kept");
+    expect(text).toContain("abc  PostHog answered 404");
   });
 });

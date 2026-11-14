@@ -59,6 +59,8 @@ export {
   envLine,
   whereOf,
   rageClicksOf,
+  replayUrlMatches,
+  replayUserMatches,
   replayFacets,
   type ReplayEnvKey,
   type ReplayFacts,

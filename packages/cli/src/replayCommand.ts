@@ -2,11 +2,17 @@
 // what a person did before something broke, read as text and turned into a
 // repro.
 //
-//   cast replay ls [--source s] [--group eg-N]
-//   cast replay show rp-N | <recording id> --source <posthog source> [--at 1:23]
+//   cast replay ls [--url /book/intro] [--user a@b.c] [--since 30d] [--until 2026-11-01] [--errors] [--min-active 5] [--source s] [--group eg-N] [--live]
+//   cast replay show rp-N | <PostHog session id or Sentry replay id> [--at 1:23]
 //   cast replay snap rp-N@1:23 | rp-N@1:00-2:30 [--every 10s] [--out file.png]
 //   cast replay repro rp-N [--base-url https://app] [--out repro.spec.ts]
 //   cast replay import --source <posthog|sentry source> [--since 30d] [--status | --stop]
+//
+// `ls` reads the imported store page by page (/cli/replays/search) until every
+// recording in scope has been looked at, so its count of matches is exact;
+// only --live asks the vendor, for recordings the store does not hold yet.
+// A vendor's own recording id stands for its replay in show, snap and repro
+// (/cli/replays/resolve), imported on first use if the store lacks it.
 //
 // Routes: /cli/replays/* in http.ts. `show` prints the cached timeline; a
 // PostHog or Sentry recording is imported the first time it is read
@@ -39,12 +45,14 @@ import { commandGroup } from "./commandGroups.js";
 import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, postOrFail, scopedRead, scopedWrite, shortRef } from "./externalDataCli.js";
 import { fenceProductText } from "@codecast/shared/contracts";
 import { INGEST_SHORT_ID_PREFIX } from "@codecast/shared/contracts/ingest";
-import { REPLAY_BACKFILL_WINDOWS, isReplayBackfillWindow, needsVendorImport, replayBackfillLine, replayBackfillState, type ReplayBackfill, type ReplayEvent } from "@codecast/shared/contracts/replay";
-import { formatReplayMoment, parseReplayEvents, renderTimeline, replayClockDuration, replayClockStart, replayMoment, sortReplayEvents, toRepro } from "@codecast/shared/replay";
+import { REPLAY_BACKFILL_WINDOWS, isReplayBackfillWindow, needsVendorImport, replayBackfillFollows, replayBackfillLine, replayBackfillState, type ReplayBackfill, type ReplayEvent } from "@codecast/shared/contracts/replay";
+import { formatReplayMoment, parseReplayEvents, renderTimeline, replayClockDuration, replayClockStart, replayMoment, replayUrlMatches, replayUserMatches, sortReplayEvents, toRepro } from "@codecast/shared/replay";
 import { parseCallTime } from "@codecast/shared/contracts";
+import { parseDuration } from "@codecast/shared/time";
 import { REPLAY_FRAME_LIMITS, parseReplayRef, replayFrameTimes, replayRefId, type ReplayFrame, type ReplayFrameResponse, type ReplayPlayerLink } from "@codecast/shared/contracts/replayPlayer";
 import { agentTempPath, secureTempFile } from "./tempFiles.js";
 import { rememberCallFrames } from "./callFrameRefs.js";
+import { scopeFor } from "./lineScope.js";
 
 export interface ReplayRow {
   _id: string;
@@ -115,6 +123,87 @@ export function recordingJsonRow(r: RecordingRow): ReplayListJsonRow & { recordi
 
 const isReplayShortId = (ref: string) => ref.startsWith(`${INGEST_SHORT_ID_PREFIX.replay}-`);
 
+/** Whether a reference is ours (rp-N, or a bare N) rather than a vendor's recording id. */
+export const isOwnReplayRef = (ref: string): boolean => isReplayShortId(ref.trim().toLowerCase()) || /^\d+$/.test(ref.trim());
+
+/**
+ * A reference with its moment split off: `<id>@1:23` keeps `@1:23` apart so
+ * a vendor id can be resolved to rp-N and the moment put back. Vendor ids
+ * hold no `@`.
+ */
+export function splitReplayRef(text: string): { id: string; moment: string } {
+  const t = text.trim();
+  const at = t.indexOf("@");
+  return at < 0 ? { id: t, moment: "" } : { id: t.slice(0, at), moment: t.slice(at) };
+}
+
+/** --since/--until: a span back from now (30d, 12h) or a date (2026-11-01, an ISO time). */
+export function parseWhen(text: string, now: number = Date.now()): number {
+  const t = text.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) {
+    const at = Date.parse(t);
+    if (Number.isFinite(at)) return at;
+  }
+  try {
+    return now - parseDuration(t);
+  } catch {
+    throw new Error(`"${text}" is neither a span back from now (30d, 12h) nor a date (2026-11-01)`);
+  }
+}
+
+/** The store's search filter, as /cli/replays/search takes it. */
+export interface ReplaySearchArgs {
+  source?: string;
+  group_id?: string;
+  url?: string;
+  user?: string;
+  since?: number;
+  until?: number;
+  failing?: boolean;
+  active_min_ms?: number;
+}
+
+export interface ReplaySearchPage {
+  rows: ReplayRow[];
+  scanned: number;
+  cursor: string;
+  done: boolean;
+}
+
+/** Every match in the store: pages are read until the store says done, so nothing is left out. */
+export async function searchAllReplays(page: (cursor: string | null) => Promise<ReplaySearchPage>): Promise<{ rows: ReplayRow[]; scanned: number }> {
+  const rows: ReplayRow[] = [];
+  let scanned = 0;
+  let cursor: string | null = null;
+  for (;;) {
+    const res = await page(cursor);
+    rows.push(...res.rows);
+    scanned += res.scanned;
+    if (res.done || !res.cursor || res.cursor === cursor) break;
+    cursor = res.cursor;
+  }
+  return { rows, scanned };
+}
+
+/** A vendor's listed recording kept by the same --url and --user the store search applies. */
+export function recordingMatches(r: RecordingRow, f: Pick<ReplaySearchArgs, "url" | "user" | "since" | "until" | "failing">): boolean {
+  if (f.url && !replayUrlMatches({ url: r.url, shape: null }, f.url)) return false;
+  if (f.user && !replayUserMatches({ ...(r.email ? { email: r.email } : {}), ...(r.distinct_id ? { id: r.distinct_id } : {}) }, f.user)) return false;
+  if (f.since !== undefined && (r.started_at ?? 0) < f.since) return false;
+  if (f.until !== undefined && (r.started_at ?? 0) >= f.until) return false;
+  if (f.failing && !(r.errors && r.errors > 0)) return false;
+  return true;
+}
+
+/** How far before the newest stored recording `ls --live` asks the vendor from: recordings it lists late. */
+const LIVE_OVERLAP_MS = 2 * 3600_000;
+
+/** The count line under `cast replay ls`: how many matched, how many are shown, and what was looked through. */
+export function formatSearchFooter(total: number, shown: number, scanned: number): string {
+  const head = `${total} matched among ${scanned} stored recording${scanned === 1 ? "" : "s"}`;
+  return shown < total ? `${head}; showing the newest ${shown} (-n 0 lists all ${total})` : head;
+}
+
 function seconds(ms: number | null | undefined): string {
   return ms ? `${Math.round(ms / 1000)}s` : "?";
 }
@@ -176,11 +265,48 @@ export function formatReplayDetail(d: ReplayDetail, timeline: string | null, now
   return lines.join("\n");
 }
 
-/** A source's import as `cast replay import --status` prints it. */
+/** A source's import as `cast replay import` prints it while following. */
 export function formatReplayImport(source: { name: string; replay_backfill?: ReplayBackfill }, now: number = Date.now()): string {
   const b = source.replay_backfill;
   if (!b) return `${source.name}: no import yet. Recordings come over when opened; cast replay import --source ${source.name} brings them all.`;
   return `${source.name}: ${replayBackfillLine(b, now)}`;
+}
+
+export interface ReplayStored {
+  /** Null when the source's tallies are not counted yet. */
+  count: number | null;
+  oldest_at: number | null;
+  newest_at: number | null;
+}
+
+const day = (at: number) => new Date(at).toISOString().slice(0, 10);
+
+/**
+ * `cast replay import --status`: what the store holds (count and date
+ * range), what the last run did and over which span, and each recording it
+ * could not import with the vendor's reason.
+ */
+export function formatReplayImportStatus(source: { name: string; replay_backfill?: ReplayBackfill }, stored: ReplayStored, now: number = Date.now()): string {
+  const lines: string[] = [];
+  const count = stored.count === null ? "recordings (not counted yet)" : `${stored.count} recording${stored.count === 1 ? "" : "s"}`;
+  lines.push(stored.oldest_at === null ? `${source.name}: nothing stored yet` : `${source.name}: ${count} stored, recorded ${day(stored.oldest_at)} to ${day(stored.newest_at ?? stored.oldest_at)}`);
+  const b = source.replay_backfill;
+  if (!b) {
+    lines.push(`  no import yet; cast replay import --source ${source.name} brings every recording over`);
+    return lines.join("\n");
+  }
+  const when = b.finished_at ?? b.updated_at;
+  lines.push(`  last run (${replayBackfillFollows(b) ? "follow-up" : `started ${ago(b.started_at, now)}`}, ${replayBackfillState(b, now) === "running" ? "updated" : "ended"} ${ago(when, now)}): ${replayBackfillLine(b, now)}`);
+  if (b.failed) {
+    const kept = b.failures ?? [];
+    lines.push(`  failed${kept.length < b.failed ? ` (the last ${kept.length} of ${b.failed} kept)` : ""}:`);
+    for (const f of kept) {
+      const about = [f.at ? day(f.at) : "", f.person ?? "", f.url ?? ""].filter(Boolean).join("  ");
+      lines.push(`    ${f.id}  ${f.error.replace(/\s+/g, " ").trim()}${about ? fmt.muted(`  (${about})`) : ""}`);
+    }
+    lines.push(fmt.muted(`  a new run retries them: cast replay import --source ${source.name}`));
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -300,13 +426,22 @@ export function parseEvery(text: string | undefined): number | null {
 export function registerReplayCommand(program: Command, deps: PublishDeps): void {
   const replay = program.command("replay").description(commandGroup("replay").description);
 
+  /**
+   * rp-N for a reference: ours as it is, a vendor's recording id (a PostHog
+   * session id, a Sentry replay id) through the store, imported from the
+   * workspace's vendor sources the first time. With --source, that source only.
+   */
+  const resolveRef = async (ref: string, source: string | undefined, team: string | undefined): Promise<string> => {
+    if (isOwnReplayRef(ref)) return shortRef("rp", ref.trim().toLowerCase());
+    if (source) return (await scopedRead(deps, "/cli/replays/import", { source, recording: ref.trim() }, team)).short_id;
+    const res = await scopedRead(deps, "/cli/replays/resolve", { recording: ref.trim() }, team);
+    if (res.imported) console.error(fmt.muted(`Imported ${ref.trim()} from ${res.source} as ${res.short_id}.`));
+    return res.short_id;
+  };
+
   /** The replay's detail, importing a PostHog or Sentry recording the first time it is read. */
   const detailFor = async (ref: string, source: string | undefined, team: string | undefined): Promise<ReplayDetail> => {
-    let id = source ? ref.trim() : shortRef("rp", ref);
-    if (source && !isReplayShortId(id)) {
-      const imported = await scopedRead(deps, "/cli/replays/import", { source, recording: id }, team);
-      id = imported.short_id;
-    }
+    const id = await resolveRef(ref, source, team);
     let detail: ReplayDetail = await postOrFail(deps, "/cli/replays/get", { replay: id }, { read: true });
     if (needsVendorImport(detail)) {
       await apiPost(deps, "/cli/replays/import-linked", { replay: detail.short_id }, { read: true });
@@ -315,45 +450,111 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
     return detail;
   };
 
+  /** A moment reference with a vendor id resolved: `<session id>@1:23` reads as `rp-N@1:23`. */
+  const resolveMomentRef = async (text: string, source: string | undefined, team: string | undefined): Promise<string> => {
+    const { id, moment } = splitReplayRef(text);
+    if (isOwnReplayRef(id)) return text;
+    return `${await resolveRef(id, source, team)}${moment}`;
+  };
+
   replay
     .command("ls")
     .alias("list")
-    .description("Recordings, newest first; a PostHog source lists its recordings from PostHog")
+    .description("Imported recordings that match, newest first, with the total that matched: find a page's or a person's recordings here, then show and snap them")
+    .option("--url <text>", "Was on this page: a substring of the first URL or any visited path, or a glob with * (*/book/intro/*)")
+    .option("--user <email|id>", "One person: their email, or the vendor's distinct id")
+    .option("--since <when>", "Started after: a span back (30d, 12h) or a date (2026-11-01)")
+    .option("--until <when>", "Started before: a span back or a date")
+    .option("--errors", "Had a console error or a failed request")
+    .option("--min-active <s>", "At least this many seconds of activity", (v: string) => Number(v))
     .option("--source <name>", "Only this source")
     .option("--group <eg>", "Only the recordings linked to this group")
-    .option("-n, --limit <n>", "How many", (v: string) => parseInt(v, 10))
+    .option("--live", "Also ask the vendor (PostHog) for matching recordings the store does not hold yet; needs --source")
+    .option("-n, --limit <n>", "How many to print (default 100; 0 prints every match)", (v: string) => parseInt(v, 10))
     .option(...TEAM_OPTION)
     .option("--json", "Machine-readable output: [{short_id (null until imported), external_id, provider, url, user, started_at, duration_ms, counts, imported}]")
-    .action(async (o: { source?: string; group?: string; limit?: number; team?: string; json?: boolean }) => {
-      if (o.source) {
-        const source = await scopedRead(deps, "/cli/sources/get", { source: o.source }, o.team);
-        if (source.provider === "posthog") {
-          const res = await scopedRead(deps, "/cli/replays/recordings", { source: o.source, limit: o.limit }, o.team);
-          emit(o.json, (res.recordings as RecordingRow[]).map(recordingJsonRow), () => formatRecordingList(res.recordings));
-          return;
+    .action(async (o: { url?: string; user?: string; since?: string; until?: string; errors?: boolean; minActive?: number; source?: string; group?: string; live?: boolean; limit?: number; team?: string; json?: boolean }) => {
+      const now = Date.now();
+      let filter: ReplaySearchArgs;
+      try {
+        filter = {
+          ...(o.source ? { source: o.source } : {}),
+          ...(o.url?.trim() ? { url: o.url.trim() } : {}),
+          ...(o.user?.trim() ? { user: o.user.trim() } : {}),
+          ...(o.since ? { since: parseWhen(o.since, now) } : {}),
+          ...(o.until ? { until: parseWhen(o.until, now) } : {}),
+          ...(o.errors ? { failing: true } : {}),
+        };
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+      if (o.minActive !== undefined) {
+        if (!Number.isFinite(o.minActive) || o.minActive < 0) fail("--min-active takes seconds: 5, 30");
+        filter!.active_min_ms = Math.round(o.minActive * 1000);
+      }
+      if (o.limit !== undefined && (!Number.isInteger(o.limit) || o.limit < 0)) fail("-n takes a count, or 0 for every match");
+      if (o.live && !o.source) fail("--live asks one vendor source: name it with --source");
+      if (o.group) filter!.group_id = (await postOrFail(deps, "/cli/events/group", { group: shortRef("eg", o.group) }, { read: true })).group._id;
+
+      const found = await searchAllReplays((cursor) => scopedRead(deps, "/cli/replays/search", { ...filter, cursor }, o.team));
+      const limit = o.limit === undefined ? 100 : o.limit;
+      const shown = limit === 0 ? found.rows : found.rows.slice(0, limit);
+
+      // The vendor is asked only on --live, and only for what the store lacks.
+      let live: { rows: RecordingRow[]; note: string } | null = null;
+      if (o.live) {
+        const status = await scopedRead(deps, "/cli/replays/import-status", { source: o.source }, o.team);
+        if (status.source.provider !== "posthog") fail(`--live lists PostHog recordings; ${o.source} is a ${status.source.provider} source`);
+        // From a little before the newest stored recording: what the store holds is never asked for again.
+        const from = Math.max(filter!.since ?? 0, status.stored.newest_at ? status.stored.newest_at - LIVE_OVERLAP_MS : 0);
+        try {
+          const res = await apiPost(
+            deps,
+            "/cli/replays/recordings",
+            { source: o.source, limit: 100, ...(await scopeFor(deps, o.team, false)), ...(from ? { date_from: new Date(from).toISOString() } : {}), ...(filter!.until !== undefined ? { date_to: new Date(filter!.until).toISOString() } : {}) },
+            { read: true, exitOnError: false },
+          );
+          const missing = (res.recordings as RecordingRow[]).filter((r) => !r.imported && recordingMatches(r, filter!));
+          const span = from ? `since ${new Date(from).toISOString().slice(0, 16).replace("T", " ")} UTC` : "";
+          live = { rows: missing, note: `Asked PostHog live for recordings${span ? ` ${span}` : ""}: ${res.recordings.length} listed, ${missing.length} matching and not imported yet.` };
+        } catch (err) {
+          live = { rows: [], note: `Asked PostHog live and it failed: ${(err instanceof Error ? err.message : String(err)).replace(/\.+$/, "")}. The list above is the imported store alone.` };
         }
       }
-      let groupId: string | undefined;
-      if (o.group) groupId = (await postOrFail(deps, "/cli/events/group", { group: shortRef("eg", o.group) }, { read: true })).group._id;
-      const res = await scopedRead(deps, "/cli/replays/list", { source: o.source, limit: o.limit, ...(groupId ? { group_id: groupId } : {}) }, o.team);
-      emit(o.json, (res.replays as ReplayRow[]).map((r) => ({ ...r, imported: true })), () => formatReplayList(res.replays));
+
+      if (o.json) {
+        const rows = [...shown.map((r) => ({ ...r, imported: true })), ...(live?.rows.map(recordingJsonRow) ?? [])];
+        emit(true, rows, () => "");
+        console.error(formatSearchFooter(found.rows.length, shown.length, found.scanned) + (live ? `\n${live.note}` : ""));
+        return;
+      }
+      const out = [formatReplayList(shown, now), "", fmt.muted(formatSearchFooter(found.rows.length, shown.length, found.scanned))];
+      if (live) {
+        if (live.rows.length) out.push("", formatRecordingList(live.rows, now));
+        out.push(fmt.warning(live.note));
+        if (live.rows.length) out.push(fmt.muted("cast replay show <id> imports one of these and opens it."));
+      } else if (found.rows.length) {
+        out.push(fmt.muted(`Next: cast replay show ${found.rows[0].short_id}, then cast replay snap ${found.rows[0].short_id}@m:ss to see the page.`));
+      }
+      console.log(out.join("\n"));
     });
 
   replay
     .command("show")
     .description("The replay as a text timeline: navigation, clicks, typed fields (never values), errors, failed requests")
-    .argument("<replay>", "rp-N (rp-N@1:23 reads that moment), or a PostHog recording id with --source")
-    .option("--source <name>", "The PostHog source a recording id belongs to (imports it the first time)")
+    .argument("<replay>", "rp-N, or the vendor's recording id (PostHog session id, Sentry replay id); @1:23 reads that moment")
+    .option("--source <name>", "Look the recording id up in this source only (imported the first time)")
     .option("--at <time>", "Only the moment at this time (1:23, 83s): the page, its outline, what came before, console and network around it")
     .option(...TEAM_OPTION)
     .option(...JSON_OPTION)
-    .action(async (ref: string, o: { source?: string; at?: string; team?: string; json?: boolean }) => {
+    .action(async (refText: string, o: { source?: string; at?: string; team?: string; json?: boolean }) => {
+      const ref = await resolveMomentRef(refText, o.source, o.team);
       const parsed = parseReplayRef(ref);
       if (!parsed && ref.includes("@")) fail(`"${ref}" names no moment. Write rp-12@1:23 (minutes:seconds), or rp-12 with --at 83s`);
       if (o.at !== undefined || parsed?.at_ms !== undefined) {
         const atMs = o.at !== undefined ? parseCallTime(o.at) : parsed!.at_ms!;
         if (atMs === null) fail("--at takes a time into the replay: 1:23, 83s, 1:02:03");
-        const detail = await detailFor(parsed?.replay ?? ref, o.source, o.team);
+        const detail = await detailFor(parsed?.replay ?? ref, undefined, o.team);
         const events = detail.chunk_urls.length ? await readReplayEvents(detail.chunk_urls) : [];
         const moment = replayMoment(events, atMs!);
         const text = formatReplayMoment(moment, replayClockStart(events));
@@ -367,7 +568,7 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
         );
         return;
       }
-      const detail = await detailFor(parsed?.replay ?? ref, o.source, o.team);
+      const detail = await detailFor(parsed?.replay ?? ref, undefined, o.team);
       // An SDK replay whose timeline is not assembled yet still reads: render it here.
       const timeline = detail.timeline_md ?? (detail.chunk_urls.length ? renderTimeline(await readReplayEvents(detail.chunk_urls)) : null);
       const { chunk_urls: _urls, ...shown } = detail;
@@ -389,8 +590,8 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
       if (o.since !== undefined && !isReplayBackfillWindow(o.since)) fail(`--since takes ${REPLAY_BACKFILL_WINDOWS.join(", ")}`);
       const read = async () => scopedRead(deps, "/cli/sources/get", { source: o.source }, o.team);
       if (o.status) {
-        const source = await read();
-        emit(o.json, source.replay_backfill ?? null, () => formatReplayImport(source));
+        const res = await scopedRead(deps, "/cli/replays/import-status", { source: o.source }, o.team);
+        emit(o.json, { stored: res.stored, last_run: res.source.replay_backfill ?? null }, () => formatReplayImportStatus(res.source, res.stored));
         return;
       }
       if (o.stop) {
@@ -411,18 +612,20 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
       }
       console.log(fmt.muted("It runs on the server: leaving this (Ctrl-C) only stops watching."));
       await followReplayImport(read, (line) => console.log(line));
+      const done = await scopedRead(deps, "/cli/replays/import-status", { source: o.source }, o.team);
+      console.log(formatReplayImportStatus(done.source, done.stored));
     });
 
   replay
     .command("snap")
     .description("What the page looked like at a moment, rendered server side: a PNG to Read, plus the URL, visible text, what came before, console and network")
-    .argument("<moment>", "rp-N@1:23, or a stretch rp-N@1:00-2:30 (frames every --every)")
+    .argument("<moment>", "rp-N@1:23, or a stretch rp-N@1:00-2:30 (frames every --every); a vendor's recording id works in place of rp-N")
     .option("--every <time>", "A frame this often across the stretch, or across the whole replay when no stretch is named (10s, 30s, 1:00)")
     .option("-o, --out <file>", "Write the frame here instead of the scratch directory (one frame only)")
     .option(...TEAM_OPTION)
     .option(...JSON_OPTION)
     .action(async (refText: string, o: { every?: string; out?: string; team?: string; json?: boolean }) => {
-      const ref = parseReplayRef(refText);
+      const ref = parseReplayRef(await resolveMomentRef(refText, undefined, o.team));
       if (!ref) fail(`Name a moment of a replay: rp-12@1:23, or a stretch rp-12@1:00-2:30 with --every 10s`);
       let every: number | null;
       try {
@@ -505,8 +708,8 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
   replay
     .command("repro")
     .description("Write a Playwright test that replays the steps up to the failure and asserts it does not happen")
-    .argument("<replay>", "rp-N, or a PostHog recording id with --source")
-    .option("--source <name>", "The PostHog source a recording id belongs to")
+    .argument("<replay>", "rp-N, or the vendor's recording id (PostHog session id, Sentry replay id)")
+    .option("--source <name>", "Look the recording id up in this source only")
     .option("--base-url <url>", "Origin the test runs against (default: where the recording started)")
     .option("--out <file>", "Where to write it (default: repro-<rp-N>.spec.ts)")
     .option(...TEAM_OPTION)
