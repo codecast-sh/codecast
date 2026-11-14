@@ -3,6 +3,7 @@
 // the folders from lib/acmeWorld/sharing.ts, the team feed from
 // lib/acmeWorld/teamActivity.ts.
 import type { Shot, Step } from "../manifest";
+import { SESSIONS } from "../../lib/acmeWorld/world";
 import { CONVERSATIONS, SHARED_MESSAGE_TOKEN } from "../../lib/acmeWorld/conversations";
 
 const conversation = (c: { _id: string }) => `/conversation/${c._id}`;
@@ -121,13 +122,21 @@ export const WORKING_TOGETHER_B: Shot[] = [
   {
     name: "thread-state/inbox-card",
     route: BACKOFF,
-    viewport: { width: 1440, height: 1500 },
+    viewport: { width: 1440, height: 1000 },
     rail: true,
-    steps: [closeSheet, { wait: `[data-mc=card][data-session-id="${CONVERSATIONS.backoff._id}"]` }, { sleep: 600 }],
-    crop: { selector: "[data-sv-rail]" },
+    steps: [
+      closeSheet,
+      { wait: `[data-mc=card][data-session-id="${CONVERSATIONS.backoff._id}"]` },
+      // Fold Pinned and Done with their own section toggles, so the waiting card and the working one sit close.
+      { js: `for (const k of ["pinned", "done"]) { const b = document.querySelector('[data-inbox-section="' + k + '"]'); if (b && b.getAttribute("aria-expanded") === "true") b.click(); }` },
+      { wait: `[data-mc=card][data-session-id="${SESSIONS.lead._id}"]` },
+      { sleep: 800 },
+    ],
+    crop: { selector: `[data-mc=card][data-session-id="${CONVERSATIONS.backoff._id}"]`, include: `[data-mc=card][data-session-id="${SESSIONS.lead._id}"]`, pad: 10 },
     frame: "element",
     out: "public/documentation/thread-state/inbox-card.webp",
   },
+
   {
     name: "share-a-session/share-popover",
     route: BACKOFF,
@@ -266,7 +275,7 @@ export const WORKING_TOGETHER_B: Shot[] = [
       { wait: "[data-radix-popper-content-wrapper]", text: "Sync status" },
       { sleep: 600 },
     ],
-    crop: { selector: '[aria-label^="Sync status"]', include: "[data-radix-popper-content-wrapper]", pad: 16 },
+    crop: { selector: "[data-radix-popper-content-wrapper]", pad: 0 },
     frame: "element",
     out: "public/documentation/sync-engine/sync-status.webp",
   },
