@@ -4,14 +4,12 @@ import {
   ScrollView,
   TouchableOpacity,
   View as RNView,
-  ActivityIndicator,
 } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
-import { useLocalSearchParams, useRouter, Stack } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
-import { Mono, uiFace } from "@/constants/fonts";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { computePlanProgress } from "@codecast/web/lib/liveEntities";
 import { useQueryNoThrow } from "@codecast/web/hooks/useQueryNoThrow";
@@ -23,6 +21,7 @@ import { PLAN_STATUS_CONFIG } from "@/components/PlanItem";
 import { TaskItemRow, showTaskActions } from "@/components/TaskItem";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
 import { CollapsibleBody } from "@/components/CollapsibleBody";
+import { ObjectHeader, ObjectMissing } from "@/components/objects/ObjectParts";
 
 type PlanStatus = keyof typeof PLAN_STATUS_CONFIG;
 
@@ -92,29 +91,7 @@ export default function PlanDetailScreen() {
   const [showCompleted, setShowCompleted] = useState(false);
   const hasSynced = !plansLoading && planDetail !== undefined && (!share || storePlan || sharedPlan !== undefined);
 
-  if (!plan) {
-    return (
-      <>
-        <Stack.Screen options={{ title: id ?? "Plan" }} />
-        <RNView style={styles.loading}>
-          {hasSynced ? (
-            <>
-              <FontAwesome name="exclamation-circle" size={28} color={Theme.textMuted0} />
-              <RNText style={styles.loadingText}>Plan not found</RNText>
-              <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                <RNText style={styles.backBtnText}>Go back</RNText>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <ActivityIndicator size="small" color={Theme.textMuted} />
-              <RNText style={styles.loadingText}>Loading plan...</RNText>
-            </>
-          )}
-        </RNView>
-      </>
-    );
-  }
+  if (!plan) return <ObjectMissing what="Plan" id={id ?? undefined} loading={!hasSynced} />;
 
   const status = PLAN_STATUS_CONFIG[plan.status as PlanStatus] ?? PLAN_STATUS_CONFIG.draft;
   // Derive live from the (store-live) task list so a status flip on this screen
@@ -129,14 +106,7 @@ export default function PlanDetailScreen() {
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: plan.short_id,
-          headerStyle: { backgroundColor: Theme.bgAlt },
-          headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted },
-        }}
-      />
+      <ObjectHeader type="plan" shortId={plan.short_id} title={plan.title} />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         <RNText style={styles.title}>{plan.title}</RNText>
 
@@ -202,6 +172,7 @@ export default function PlanDetailScreen() {
                   task={t}
                   onPress={() => router.push(`/task/${t.short_id}` as any)}
                   onLongPress={() => showTaskActions(t, updateTask)}
+                  inPlan
                 />
               ))}
             </RNView>
@@ -221,6 +192,7 @@ export default function PlanDetailScreen() {
                   task={t}
                   onPress={() => router.push(`/task/${t.short_id}` as any)}
                   onLongPress={() => showTaskActions(t, updateTask)}
+                  inPlan
                 />
               ))}
             </RNView>}
@@ -243,24 +215,6 @@ export default function PlanDetailScreen() {
 const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   content: { padding: Spacing.lg },
-  loading: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: Theme.bg,
-  },
-  loadingText: { fontSize: 14, color: Theme.textMuted },
-  backBtn: {
-    marginTop: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-  },
-  backBtnText: { fontSize: 14, fontWeight: "500", color: Theme.accent },
   title: {
     fontSize: 20,
     fontWeight: "700",

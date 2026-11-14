@@ -4,12 +4,13 @@ import {
   useMemo,
   useRef,
   useEffect } from "react";
-import { StyleSheet, ScrollView, TouchableOpacity, View as RNView, ActivityIndicator, type TextInput as RNTextInput } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, View as RNView, type TextInput as RNTextInput } from 'react-native';
 import { Text as RNText, TextInput } from '@/components/Themed';
-import { useLocalSearchParams, useRouter, Stack } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
-import { Mono, uiFace } from "@/constants/fonts";
+import { Mono } from "@/constants/fonts";
+import { ObjectHeader, ObjectMissing } from "@/components/objects/ObjectParts";
 import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
 import { directChildren, isActiveTask, subtaskProgressOf, waitTone, type WaitTone } from "@codecast/shared/tasks";
 import { createTaskAndAdopt, openSubtasksOf } from "@codecast/web/lib/taskActions";
@@ -160,29 +161,7 @@ export default function TaskDetailScreen() {
   // then a row we have never cached is genuinely cold.
   const hasSynced = !listLoading && directData !== undefined;
 
-  if (!task) {
-    return (
-      <>
-        <Stack.Screen options={{ title: id ?? "Task" }} />
-        <RNView style={styles.loading}>
-          {hasSynced ? (
-            <>
-              <FontAwesome name="exclamation-circle" size={28} color={Theme.textMuted0} />
-              <RNText style={styles.loadingText}>Task not found</RNText>
-              <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                <RNText style={styles.backBtnText}>Go back</RNText>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <ActivityIndicator size="small" color={Theme.textMuted} />
-              <RNText style={styles.loadingText}>Loading task...</RNText>
-            </>
-          )}
-        </RNView>
-      </>
-    );
-  }
+  if (!task) return <ObjectMissing what="Task" id={id ?? undefined} loading={!hasSynced} />;
 
   const steps = task.steps ?? [];
   const criteria = task.acceptance_criteria ?? [];
@@ -197,14 +176,7 @@ export default function TaskDetailScreen() {
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: task.short_id,
-          headerStyle: { backgroundColor: Theme.bgAlt },
-          headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted },
-        }}
-      />
+      <ObjectHeader type="task" shortId={task.short_id} title={task.title} />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         {editingTitle ? (
           <TextInput
@@ -530,24 +502,6 @@ function TaskLinkRow({ icon, label, link, color }: { icon: IconName; label: stri
 const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   content: { padding: Spacing.lg },
-  loading: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: Theme.bg,
-  },
-  loadingText: { fontSize: 14, color: Theme.textMuted },
-  backBtn: {
-    marginTop: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-  },
-  backBtnText: { fontSize: 14, fontWeight: "500", color: Theme.accent },
   title: {
     fontSize: 20,
     fontWeight: "700",
