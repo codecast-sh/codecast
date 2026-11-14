@@ -42,20 +42,29 @@ const MAPPINGS = (now: number) =>
     created_at: now - f.firstDays * DAY,
   }));
 
+/** When each of a folder's sessions started: billing-api's are the rows the share review lists,
+ *  the rest spread evenly from the folder's first session to its last. */
+const startTimes = (f: Folder, now: number): number[] =>
+  f.path === "~/src/billing-api"
+    ? billingRows(now).map((r) => r.started_at)
+    : Array.from({ length: f.sessions }, (_, i) => now - f.lastAgo - ((f.firstDays * DAY - f.lastAgo) * i) / Math.max(1, f.sessions - 1));
+
 const IMPACT = (args: any) => {
   const now = Date.now();
+  const since: number = args?.since ?? 0;
+  const dayStart: number = args?.day_start ?? now;
   const out: Record<string, unknown> = {};
   for (const path of args?.path_prefixes ?? []) {
     const f = FOLDERS.find((x) => x.path === path);
     if (!f) continue;
+    const times = startTimes(f, now);
     out[path] = {
       count: f.sessions,
-      first_started_at: now - f.firstDays * DAY,
-      last_started_at: now - f.lastAgo,
+      first_started_at: Math.min(...times),
+      last_started_at: Math.max(...times),
       truncated: false,
-      older: 0,
-      // Everything but today's two sessions started before local midnight.
-      older_than_day: Math.max(0, f.sessions - 2),
+      older: since > 0 ? times.filter((t) => t < since).length : 0,
+      older_than_day: times.filter((t) => t < dayStart).length,
       hidden: 0,
       manually_shared: 0,
     };
@@ -80,18 +89,23 @@ const BILLING_TITLES = [
   "Billing API health checks",
 ];
 
-const SESSIONS_FOR_PATH = (args: any) => {
-  const now = Date.now();
-  const paths: string[] = args?.path_prefixes ?? [];
-  if (!paths.includes("~/src/billing-api")) return { rows: [], total: 0, truncated: false };
-  const rows = BILLING_TITLES.map((title, i) => ({
-    _id: cid(`billingapi${i}`),
+function billingRows(now: number) {
+  return BILLING_TITLES.map((title, i) => ({
+    // A letter per row: cid pads to 32 characters, so "billingapi1" and "billingapi10" would collide.
+    _id: cid(`billingapi${String.fromCharCode(97 + i)}`),
     title,
-    started_at: now - (i < 2 ? (i + 1) * HOUR : (i * 0.8 + 0.5) * DAY),
+    started_at: now - (i < 2 ? (i + 1) * 15 * MIN : (i * 0.8 + 0.5) * DAY),
     message_count: 12 + ((i * 7) % 40),
     is_private: false,
     team_visibility: null,
   }));
+}
+
+const SESSIONS_FOR_PATH = (args: any) => {
+  const now = Date.now();
+  const paths: string[] = args?.path_prefixes ?? [];
+  if (!paths.includes("~/src/billing-api")) return { rows: [], total: 0, truncated: false };
+  const rows = billingRows(now);
   return { rows, total: rows.length, truncated: false };
 };
 
