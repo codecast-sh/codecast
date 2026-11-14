@@ -64,6 +64,11 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
   // A call opens on the recording screen, which reads any call's words.
   call: '/recording',
   pr: '/pr',
+  commit: '/commit',
+  deploy: '/deploy',
+  // A product source and a recording (`rp-12`, or a moment of one, `rp-12@1:23`).
+  source: '/source',
+  replay: '/replay',
   // The Vault is a settings page; a secret opens its detail there.
   secret: '/settings/vault',
 };
@@ -80,7 +85,13 @@ export function mobileEntityRoute(type: EntityType, id: string): string | null {
     const ref = parseRepoObjectId(id);
     return ref?.type === 'pr' ? `${base}/${ref.repository}/${ref.number}` : null;
   }
+  if (type === 'commit') {
+    const ref = parseRepoObjectId(id);
+    return ref?.type === 'commit' ? `${base}/${ref.repository}/${ref.sha}` : null;
+  }
   if (type === 'secret') return `${base}?s=${encodeURIComponent(id)}`;
+  // A source is named by its name (spaces and all) and a replay moment carries an `@`.
+  if (type === 'source' || type === 'replay') return `${base}/${encodeURIComponent(id)}`;
   if (type === 'call') {
     const web = entityRoute('call', id);
     if (web?.startsWith('/calls/')) return `${base}/${web.slice('/calls/'.length)}`;
@@ -174,6 +185,9 @@ export function mobileRouteForUrl(url: string): string | null {
   }
   // The retired assistant lane's addresses (/simple/...) lead where the web
   // sends them (lib/laneRedirect), and from there to the phone's screen.
+  // An Ops issue (an event group, `/ops/issues/eg-12`) opens the phone's issue screen.
+  const issue = /^\/ops\/issues\/([^/]+)\/?$/.exec(path);
+  if (issue) return `/issue/${issue[1]}`;
   const moved = laneRedirectTarget(path);
   if (moved) return mobileRouteForUrl(moved);
   // The web's other names for its pages (/approvals, /plan, /mail, /routines)

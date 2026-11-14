@@ -231,3 +231,37 @@ describe('pull request links', () => {
     expect(mobileRouteForUrl('https://github.com/codecast-sh/codecast/pull/412')).toBe('/pr/codecast-sh/codecast/412');
   });
 });
+
+describe('commit and deploy links', () => {
+  test('a commit opens the phone commit screen from every form', () => {
+    expect(mobileEntityRoute('commit', 'codecast-sh/codecast@1a88ee73b')).toBe('/commit/codecast-sh/codecast/1a88ee73b');
+    expect(mobileRouteForUrl('https://codecast.sh/commit/codecast-sh/codecast/1a88ee73b26d677374d8bd80da2e95361981359b')).toBe('/commit/codecast-sh/codecast/1a88ee73b26d677374d8bd80da2e95361981359b');
+    expect(mobileRouteForUrl('https://github.com/Codecast-sh/codecast/commit/1A88EE73B')).toBe('/commit/codecast-sh/codecast/1a88ee73b');
+    expect(mobileEntityRoute('commit', 'not-a-ref')).toBeNull();
+  });
+
+  test('a deploy opens the phone deploy screen', () => {
+    expect(mobileEntityRoute('deploy', 'dp-1113')).toBe('/deploy/dp-1113');
+    expect(mobileRouteForUrl('https://codecast.sh/deploys?deploy=dp-1113')).toBe('/deploy/dp-1113');
+  });
+});
+
+describe('source, replay and Ops issue links', () => {
+  test('a source opens the phone source screen by short id or name', () => {
+    expect(mobileEntityRoute('source', 'src-13')).toBe('/source/src-13');
+    expect(mobileRouteForUrl('https://codecast.sh/ops?source=src-13')).toBe('/source/src-13');
+    expect(mobileRouteForUrl('https://codecast.sh/ops?source=codecast%20web')).toBe('/source/codecast%20web');
+  });
+
+  test('a replay opens the phone replay screen, keeping the moment a link names', () => {
+    expect(mobileEntityRoute('replay', 'rp-10706')).toBe('/replay/rp-10706');
+    expect(mobileRouteForUrl('https://codecast.sh/ops/replays/rp-10706')).toBe('/replay/rp-10706');
+    expect(mobileRouteForUrl('https://codecast.sh/ops/replays/rp-10706?t=83')).toBe('/replay/rp-10706%401%3A23');
+    expect(mobileEntityRoute('replay', 'rp-12@1:23')).toBe('/replay/rp-12%401%3A23');
+  });
+
+  test('an Ops issue page opens the phone issue screen', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/ops/issues/eg-2242')).toBe('/issue/eg-2242');
+    expect(mobileRouteForUrl('/ops/issues/eg-2242')).toBe('/issue/eg-2242');
+  });
+});

@@ -127,8 +127,9 @@ export function useToolResultMaps({ conversation, codeRepository, pullRequestIds
       pullRequestIds,
       gitRoot,
       knownPaths: knownPathsKey ? knownPathsKey.split("\n") : [],
+      conversationId: conversation?._id,
     }),
-    [filePathBase, home, codeRepository, pullRequestIds, gitRoot, knownPathsKey],
+    [filePathBase, home, codeRepository, pullRequestIds, gitRoot, knownPathsKey, conversation?._id],
   );
 
   return { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx };
