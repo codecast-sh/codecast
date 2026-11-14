@@ -37,6 +37,7 @@ import {
 import { api } from "@codecast/convex/convex/_generated/api";
 import { BACKFILL_WINDOWS, DIRECTION_ARROW, LINK_DEFAULTS, type BackfillWindow } from "@codecast/convex/convex/lib/slackMirror";
 import { SlackLogo } from "../SlackLogo";
+import { SlackWorkspacePicker } from "./SlackWorkspacePicker";
 import { SlackPeopleDialog } from "./SlackPeopleDialog";
 import { Switch } from "../ui/switch";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -79,6 +80,10 @@ export function SlackSyncDialog({ channelId, onClose }: { channelId: string; onC
   const channel = s.chatChannels[channelId];
   const teamId = channel?.team_id as string | undefined;
   const team = useQueryNoThrow(api.slackSync.getTeamSlack, teamId ? ({ team_id: teamId } as any) : "skip").data;
+  // The mirror's own workspace: a team may connect several.
+  const linkWorkspace = link
+    ? (team?.installations ?? []).find((i: { workspace_id: string }) => i.workspace_id === link.workspace_id)?.workspace_name ?? null
+    : null;
 
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -132,7 +137,7 @@ export function SlackSyncDialog({ channelId, onClose }: { channelId: string; onC
                       {link.slack_channel_name ?? link.slack_channel_id}
                     </>
                   )}
-                  {team?.installation?.workspace_name && <span className="ch-slack-ws"> · {team.installation.workspace_name}</span>}
+                  {linkWorkspace && <span className="ch-slack-ws"> · {linkWorkspace}</span>}
                 </>
               )}
             </div>
@@ -143,9 +148,9 @@ export function SlackSyncDialog({ channelId, onClose }: { channelId: string; onC
         {team === undefined && !link ? (
           <div className="ch-slack-body ch-slack-quiet">Checking the team's Slack connection.</div>
         ) : link ? (
-          <LinkedBody link={link} workspaceName={team?.installation?.workspace_name ?? null} onClose={onClose} />
+          <LinkedBody link={link} workspaceName={linkWorkspace} onClose={onClose} />
         ) : team?.installation ? (
-          <SetupBody channelId={channelId} teamId={teamId!} installation={team.installation} canManage={true} />
+          <SetupBody channelId={channelId} teamId={teamId!} installations={team.installations ?? [team.installation]} canManage={true} />
         ) : (
           <ConnectBody teamId={teamId} isAdmin={!!team?.is_admin} channelId={channelId} />
         )}
@@ -229,14 +234,16 @@ export type SlackChannelOption = {
 function SetupBody({
   channelId,
   teamId,
-  installation,
+  installations,
   canManage,
 }: {
   channelId: string;
   teamId: string;
-  installation: { workspace_name: string | null; workspace_id: string };
+  installations: Array<{ workspace_name: string | null; workspace_id: string }>;
   canManage: boolean;
 }) {
+  const [workspaceId, setWorkspaceId] = useState(installations[0].workspace_id);
+  const installation = installations.find((i) => i.workspace_id === workspaceId) ?? installations[0];
   const listChannels = useAction(api.slackSync.listSlackChannels);
   const linkChannel = useAction(api.slackSync.linkChannel);
   const [channels, setChannels] = useState<SlackChannelOption[] | null>(null);
@@ -251,7 +258,10 @@ function SetupBody({
 
   useWatchEffect(() => {
     let alive = true;
-    listChannels({ team_id: teamId } as any)
+    setChannels(null);
+    setLoadErr(null);
+    setPicked(null);
+    listChannels({ team_id: teamId, workspace_id: workspaceId } as any)
       .then((res: any) => {
         if (!alive) return;
         if (res?.ok) setChannels(res.channels ?? []);
@@ -261,7 +271,7 @@ function SetupBody({
     return () => {
       alive = false;
     };
-  }, [teamId, listChannels]);
+  }, [teamId, workspaceId, listChannels]);
 
   const chatName = useInboxStore((st) => st.chatChannels[channelId]?.name);
   const filtered = useMemo(() => {
@@ -283,6 +293,7 @@ function SetupBody({
     try {
       const res: any = await linkChannel({
         chat_channel_id: channelId,
+        workspace_id: workspaceId,
         slack_channel_id: picked.id,
         direction,
         options,
@@ -321,7 +332,15 @@ function SetupBody({
       <section className="ch-slack-section">
         <div className="ch-slack-label">
           Slack channel
-          <span className="ch-slack-ws">{installation.workspace_name ?? installation.workspace_id}</span>
+          <span className="ch-slack-ws">
+            <SlackWorkspacePicker
+              installations={installations}
+              current={workspaceId}
+              onPick={setWorkspaceId}
+              disabled={busy}
+              fallback={installation.workspace_name ?? installation.workspace_id}
+            />
+          </span>
         </div>
         <label className="ch-slack-search">
           <Search className="w-3.5 h-3.5" />

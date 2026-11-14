@@ -51,16 +51,33 @@ export async function slackLinkForChannel(
     .first();
 }
 
-/** The Slack workspace a team installed: one per team, serving its anchor and
- *  every channel mirror alike. */
+/** A link whose workspace removed the app. Connecting the workspace again
+ *  clears it (slack.storeInstallation). */
+export const APP_REMOVED_ERROR = "The Slack app was removed from the workspace";
+
+/** Every Slack workspace a team connected, newest first. A team may mirror
+ *  several (its own Slack and a partner's); each link names its own. */
+export async function installationsForTeam(
+  ctx: ReadCtx,
+  teamId: Id<"teams">,
+): Promise<Doc<"slack_installations">[]> {
+  const rows = await ctx.db
+    .query("slack_installations")
+    .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
+    .collect();
+  return rows.sort((a: Doc<"slack_installations">, b: Doc<"slack_installations">) => b.created_at - a.created_at);
+}
+
+/** One of a team's Slack workspaces: the one named, else the newest. A named
+ *  workspace the team never connected is null, never another workspace. */
 export async function installationForTeam(
   ctx: ReadCtx,
   teamId: Id<"teams">,
+  workspaceId?: string | null,
 ): Promise<Doc<"slack_installations"> | null> {
-  return await ctx.db
-    .query("slack_installations")
-    .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
-    .first();
+  const all = await installationsForTeam(ctx, teamId);
+  if (workspaceId) return all.find((i) => i.workspace_id === workspaceId) ?? null;
+  return all[0] ?? null;
 }
 
 // The direction questions are pure and the web asks them too (the composer's

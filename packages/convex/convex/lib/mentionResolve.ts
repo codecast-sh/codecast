@@ -22,6 +22,7 @@ import { liveRoleByHandle } from "./orgAccess";
 import { workspaceAnchorFor } from "../anchors";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
 import { canSendProductMessage } from "../pendingMessages";
+import { installationsForTeam } from "./slackOutbound";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 
@@ -162,18 +163,16 @@ export async function resolveChatMentions(
   const sessions: Doc<"conversations">[] = [];
   const slack: ChatMentions["slack"] = [];
   const seen = new Set<string>();
-  // The team's Slack workspace, looked up once and only if a handle misses
+  // The team's Slack workspaces, looked up once and only if a handle misses
   // everything codecast knows.
-  let workspaceId: string | null | undefined;
-  const slackWorkspace = async (): Promise<string | null> => {
-    if (workspaceId === undefined) {
-      const install = await ctx.db
-        .query("slack_installations")
-        .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
-        .first();
-      workspaceId = install?.workspace_id ?? null;
+  let workspaceIds: string[] | undefined;
+  const slackPersonFor = async (handle: string) => {
+    workspaceIds ??= (await installationsForTeam(ctx, teamId)).map((i) => i.workspace_id);
+    for (const workspace of workspaceIds) {
+      const hit = await slackPersonForHandle(ctx, workspace, handle);
+      if (hit) return hit;
     }
-    return workspaceId;
+    return null;
   };
   // The team's role, then the sender's personal one; never a retired seat.
   const roleByHandle = async (handle: string): Promise<Doc<"org_roles"> | null> =>
@@ -233,8 +232,7 @@ export async function resolveChatMentions(
       continue;
     }
     if (person) continue;
-    const workspace = await slackWorkspace();
-    const slackPerson = workspace ? await slackPersonForHandle(ctx, workspace, handle) : null;
+    const slackPerson = await slackPersonFor(handle);
     if (!slackPerson) continue;
     if (slackPerson.codecast_user_id) {
       // Matched to a teammate: address the teammate. Same membership gate as

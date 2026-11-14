@@ -34,7 +34,7 @@ export function SlackMirrorsSummary() {
   const [browsing, setBrowsing] = useState(false);
   const [people, setPeople] = useState(false);
   const team = useQueryNoThrow(api.slackSync.getTeamSlack, teamId ? ({ team_id: teamId } as any) : "skip").data as
-    | { missing_scopes?: string[]; is_admin?: boolean; you_missing_scopes?: string[] }
+    | { missing_scopes?: string[]; is_admin?: boolean; you_missing_scopes?: string[]; installations?: Array<{ workspace_id: string; workspace_name: string | null }> }
     | null
     | undefined;
   const [dmsOpen, setDmsOpen] = useState(false);
@@ -56,6 +56,10 @@ export function SlackMirrorsSummary() {
     })
     .sort((a, b) => a.name.localeCompare(b.name));
   const dmTrouble = dmLinks.filter((l) => !l.paused && l.last_error).length;
+  // Mirrors whose workspace is no longer connected carry nothing until an
+  // admin adds that workspace again.
+  const connected = new Set((team?.installations ?? []).map((i) => i.workspace_id));
+  const orphaned = team?.installations ? links.filter((l) => !connected.has(l.workspace_id)) : [];
 
   return (
     <div className="mt-3 border-t border-sol-border/40 pt-3">
@@ -72,6 +76,9 @@ export function SlackMirrorsSummary() {
           </span>
         )}
       </div>
+      {teamId && team?.installations && (
+        <SlackWorkspaces teamId={teamId} installations={team.installations} orphaned={orphaned.length} isAdmin={!!team.is_admin} />
+      )}
       {teamId && !!team?.missing_scopes?.length && (
         <SlackReconnect teamId={teamId} returnTo="/settings/integrations?slack=connected" isAdmin={!!team.is_admin} isPrivate={false} />
       )}
@@ -143,13 +150,47 @@ export function SlackMirrorsSummary() {
                     <Loader2 className="w-3 h-3 animate-spin" /> importing · {link.backfill.fetched.toLocaleString()} lines
                   </span>
                 )}
-                {link.paused && <span className="text-meta text-sol-text-dim">paused</span>}
-                {!link.paused && link.last_error && <span className="text-meta text-sol-orange">needs attention</span>}
+                {!connected.has(link.workspace_id) ? (
+                  <span className="text-meta text-sol-orange">workspace not connected</span>
+                ) : link.paused ? (
+                  <span className="text-meta text-sol-text-dim">paused</span>
+                ) : link.last_error ? (
+                  <span className="text-meta text-sol-orange">needs attention</span>
+                ) : null}
               </li>
             );
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+// The team's connected Slack workspaces, and the admin's way to add one (or
+// add back one whose mirrors lost it).
+function SlackWorkspaces({ teamId, installations, orphaned, isAdmin }: {
+  teamId: string;
+  installations: Array<{ workspace_id: string; workspace_name: string | null }>;
+  orphaned: number;
+  isAdmin: boolean;
+}) {
+  const conn = useSlackConnect(teamId, "/settings/integrations?slack=connected", "team");
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-meta">
+      {installations.map((i) => (
+        <span key={i.workspace_id} className="rounded border border-sol-border/50 px-1.5 py-0.5 text-sol-text-muted">
+          {i.workspace_name ?? i.workspace_id}
+        </span>
+      ))}
+      {orphaned > 0 && (
+        <span className="text-sol-orange">{orphaned} mirror{orphaned === 1 ? "" : "s"} on a disconnected workspace</span>
+      )}
+      {isAdmin && (
+        <button type="button" className="ch-roster-reconnect-btn" disabled={conn.busy} onClick={conn.connect}>
+          {conn.started ? "Opened Slack" : conn.busy ? "Opening" : orphaned > 0 ? "Connect workspace" : "Add workspace"}
+        </button>
+      )}
+      {conn.error && <span className="text-sol-orange">{conn.error}</span>}
     </div>
   );
 }

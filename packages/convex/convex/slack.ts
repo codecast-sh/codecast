@@ -1,12 +1,13 @@
 import { mutation, query, internalMutation, internalQuery, action } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { deliverToAnchor, userCanAccessAnchor, userCanAdminAnchor, visibleAnchorsForUser } from "./anchors";
 import { isTeamAdmin, isTeamMember } from "./privacy";
 import { activeTeamMembershipFor } from "./lib/access";
-import { installationForTeam } from "./lib/slackOutbound";
+import { APP_REMOVED_ERROR, installationForTeam } from "./lib/slackOutbound";
 import { allowedWebOrigin, signState, slackAuthorizeUrl, slackRedirectUri, tokenHasDmScopes, verifyState, webBaseUrl } from "./lib/slackOAuth";
 import { teamPolicyOf } from "./lib/teamPolicyGuard";
 import { slackMayCarryContent, slackSend } from "./lib/slackSend";
@@ -64,10 +65,11 @@ async function callerAnchor(
 }
 
 // The Slack workspace an anchor posts through: the installation bound to the
-// anchor's codecast scope (its team, or the user for a personal anchor).
-async function installationForAnchor(ctx: { db: any }, anchor: any): Promise<any | null> {
+// anchor's codecast scope (its team, or the user for a personal anchor). A team
+// may hold several; a channel's own workspace picks among them.
+async function installationForAnchor(ctx: { db: any }, anchor: any, workspaceId?: string | null): Promise<any | null> {
   if (!anchor) return null;
-  if (anchor.team_id) return await installationForTeam(ctx, anchor.team_id);
+  if (anchor.team_id) return await installationForTeam(ctx, anchor.team_id, workspaceId);
   if (anchor.scope_user_id) {
     return await ctx.db
       .query("slack_installations")
@@ -119,11 +121,7 @@ export const resolveInstallScope = internalQuery({
       const teamId = await callerTeam(ctx, userId, args.team_id);
       if (!teamId) return null;
       if (!(await isTeamMember(ctx, userId, teamId))) return null;
-      const install = await ctx.db
-        .query("slack_installations")
-        .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
-        .first();
-      if (!install) return null;
+      if (!(await installationForTeam(ctx, teamId))) return null;
       return { user_id: userId.toString(), team_id: teamId.toString() };
     }
     if (args.scope_type === "team") {
@@ -308,12 +306,9 @@ export const storeUserToken = internalMutation({
     const teamId = ctx.db.normalizeId("teams", args.team_id);
     const userId = ctx.db.normalizeId("users", args.user_id);
     if (!teamId || !userId) return { ok: false as const, error: "bad_ids" };
-    const install = await ctx.db
-      .query("slack_installations")
-      .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
-      .first();
-    if (!install) return { ok: false as const, error: "no_workspace" };
-    if (install.workspace_id !== args.workspace_id) return { ok: false as const, error: "wrong_workspace" };
+    if (!(await installationForTeam(ctx, teamId))) return { ok: false as const, error: "no_workspace" };
+    const install = await installationForTeam(ctx, teamId, args.workspace_id);
+    if (!install) return { ok: false as const, error: "wrong_workspace" };
     const now = Date.now();
     const existing = await ctx.db
       .query("slack_user_tokens")
@@ -335,6 +330,31 @@ export const storeUserToken = internalMutation({
     return { ok: true as const };
   },
 });
+
+// A workspace connected again after its install row went (removed from Slack,
+// or replaced) gets its team's mirrors and people's tokens back: the rows that
+// still name this workspace but point at an install that no longer exists.
+async function reattachWorkspace(ctx: MutationCtx, teamId: Id<"teams">, workspaceId: string, installId: Id<"slack_installations">) {
+  const now = Date.now();
+  const links = await ctx.db
+    .query("slack_channel_links")
+    .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
+    .collect();
+  for (const link of links) {
+    if (link.workspace_id !== workspaceId || (await ctx.db.get(link.installation_id))) continue;
+    const removed = link.last_error === APP_REMOVED_ERROR;
+    await ctx.db.patch(link._id, {
+      installation_id: installId,
+      updated_at: now,
+      ...(removed ? { paused: false, last_error: undefined } : {}),
+    });
+  }
+  const tokens = (await ctx.db.query("slack_user_tokens").collect()).filter((t) => t.workspace_id === workspaceId);
+  for (const token of tokens) {
+    if (token.installation_id === installId || (await ctx.db.get(token.installation_id))) continue;
+    await ctx.db.patch(token._id, { installation_id: installId, updated_at: now });
+  }
+}
 
 // storeInstallation — upsert the per-workspace bot token, bound to the codecast
 // scope resolved from the authenticated completer (completeSlackInstall).
@@ -384,29 +404,22 @@ export const storeInstallation = internalMutation({
       await ctx.db.patch(existing._id, fields);
       return { ok: true as const, id: existing._id };
     }
-    // One install per scope: if the scope already connected a DIFFERENT workspace,
-    // supersede it (delete the old row) so installationForAnchor's .first() is
-    // deterministic and duplicates can't stack. Connect is admin-gated, so this is
-    // a deliberate "move the anchor's Slack to a new workspace", not a hijack.
-    const priorForScope = teamId
-      ? await ctx.db
-          .query("slack_installations")
-          .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
-          .collect()
-      : scopeUserId
-        ? await ctx.db
-            .query("slack_installations")
-            .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", scopeUserId))
-            .collect()
-        : [];
-    for (const p of priorForScope) {
-      if (p.workspace_id !== args.workspace_id) await ctx.db.delete(p._id);
+    // A team keeps every workspace it connects: each mirror names its own. A
+    // personal anchor speaks through one, so a new personal workspace replaces
+    // the old.
+    if (!teamId && scopeUserId) {
+      const prior = await ctx.db
+        .query("slack_installations")
+        .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", scopeUserId))
+        .collect();
+      for (const p of prior) if (p.workspace_id !== args.workspace_id) await ctx.db.delete(p._id);
     }
     const id = await ctx.db.insert("slack_installations", {
       ...fields,
       installed_by_user_id: installedBy,
       created_at: now,
     });
+    if (teamId) await reattachWorkspace(ctx, teamId, args.workspace_id, id);
     return { ok: true as const, id };
   },
 });
@@ -698,7 +711,7 @@ export const resolvePostContext = internalQuery({
     const anchor = await ctx.db.get(row.anchor_id as Id<"anchors">);
     if (!anchor || anchor.status === "decommissioned") return { ok: false };
     if (!(await userCanAccessAnchor(ctx, userId, anchor))) return { ok: false };
-    const install = await installationForAnchor(ctx, anchor);
+    const install = await installationForAnchor(ctx, anchor, row.workspace_key);
     return { ok: true, bot_token: install?.bot_token, team_id: anchor.team_id };
   },
 });

@@ -33,6 +33,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { DirectionPicker, type SlackChannelOption } from "./SlackSyncDialog";
 import { SlackPeopleDialog } from "./SlackPeopleDialog";
 import { SlackDmSwitch } from "./SlackDmSwitch";
+import { SlackWorkspacePicker } from "./SlackWorkspacePicker";
 import "./chat.css";
 
 type RowState =
@@ -61,7 +62,9 @@ export function SlackChannelBrowser({
   onClose: () => void;
   onAdded?: (chatChannelId: string) => void;
 }) {
-  const team = useQueryNoThrow(api.slackSync.getTeamSlack, { team_id: teamId } as any).data;
+  // A team may connect several Slack workspaces; the browser reads one at a time.
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const team = useQueryNoThrow(api.slackSync.getTeamSlack, { team_id: teamId, ...(workspaceId ? { workspace_id: workspaceId } : {}) } as any).data;
   const listChannels = useAction(api.slackSync.listSlackChannels);
   const linkChannel = useAction(api.slackSync.linkChannel);
   const getInstallUrl = useAction(api.slack.getInstallUrl);
@@ -82,7 +85,10 @@ export function SlackChannelBrowser({
 
   useWatchEffect(() => {
     let alive = true;
-    listChannels({ team_id: teamId } as any)
+    setChannels(null);
+    setLoadErr(null);
+    setPicked(new Set());
+    listChannels({ team_id: teamId, ...(workspaceId ? { workspace_id: workspaceId } : {}) } as any)
       .then((res: any) => {
         if (!alive) return;
         if (res?.ok) {
@@ -94,7 +100,7 @@ export function SlackChannelBrowser({
     return () => {
       alive = false;
     };
-  }, [teamId, listChannels]);
+  }, [teamId, workspaceId, listChannels]);
 
   // The store's link rows are the live truth about what is mirrored and how
   // far each import has got: a channel added a moment ago shows its count
@@ -105,9 +111,12 @@ export function SlackChannelBrowser({
   ]);
   const linkBySlackId = useMemo(() => {
     const map = new Map<string, ChatSlackLinkRow>();
-    for (const l of Object.values(s.chatSlackLinks ?? {}) as ChatSlackLinkRow[]) map.set(l.slack_channel_id, l);
+    const ws = team?.installation?.workspace_id;
+    for (const l of Object.values(s.chatSlackLinks ?? {}) as ChatSlackLinkRow[]) {
+      if (!ws || l.workspace_id === ws) map.set(l.slack_channel_id, l);
+    }
     return map;
-  }, [s.chatSlackLinks]);
+  }, [s.chatSlackLinks, team?.installation?.workspace_id]);
   // A codecast channel that already carries a Slack channel's name becomes
   // that channel's mirror rather than a duplicate: the row says so up front.
   const existingByName = useMemo(() => {
@@ -195,7 +204,7 @@ export function SlackChannelBrowser({
     for (const c of pickedList) {
       setRows((r) => ({ ...r, [c.id]: { kind: "adding" } }));
       try {
-        const res: any = await linkChannel({ team_id: teamId, slack_channel_id: c.id, direction, backfill } as any);
+        const res: any = await linkChannel({ team_id: teamId, workspace_id: team?.installation?.workspace_id, slack_channel_id: c.id, direction, backfill } as any);
         if (res?.ok) {
           setRows((r) => ({ ...r, [c.id]: { kind: "added", chatChannelId: String(res.chat_channel_id) } }));
           first ??= String(res.chat_channel_id);
@@ -234,7 +243,13 @@ export function SlackChannelBrowser({
           <div className="min-w-0">
             <div className="ch-slack-title">Add channels from Slack</div>
             <div className="ch-slack-sub">
-              {workspace ?? "Slack"}
+              <SlackWorkspacePicker
+                installations={team?.installations ?? []}
+                current={team?.installation?.workspace_id ?? null}
+                onPick={setWorkspaceId}
+                disabled={running}
+                fallback={workspace ?? "Slack"}
+              />
               {channels && (
                 <span className="ch-slack-ws">
                   {" · "}
@@ -328,7 +343,7 @@ export function SlackChannelBrowser({
                 </button>
               </div>
             )}
-            {channels && canAddPrivate && <SlackDmSwitch teamId={teamId} />}
+            {channels && canAddPrivate && <SlackDmSwitch teamId={teamId} workspaceId={team?.installation?.workspace_id ?? null} />}
             {channels && canAddPrivate && sorted.open.some((c) => !addable(c)) && (
               <p className="ch-slack-fine">
                 A greyed private channel is one you are not in. Join it in Slack, or have a member run <code>/invite @Codecast</code> there.

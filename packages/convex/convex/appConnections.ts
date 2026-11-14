@@ -25,6 +25,7 @@ import { query } from "./functions";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { canRevokeInstallation } from "./githubApp";
 import { activeTeamMembershipFor } from "./lib/access";
+import { installationsForTeam } from "./lib/slackOutbound";
 import { assistantGoogleConnection } from "./googleOAuth";
 import {
   APP_DESCRIPTORS,
@@ -122,18 +123,16 @@ async function connectedAt(ctx: { db: any }, id: AppId, lens: Lens): Promise<Con
   }
 
   if (id === "slack") {
-    // A team install is the one the team's anchor speaks through; a personal
-    // install is what a personal anchor speaks through.
-    const install =
+    // A team may connect several workspaces (newest first); a personal
+    // anchor speaks through one.
+    const installs =
       scope === "team"
-        ? await ctx.db
-            .query("slack_installations")
-            .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
-            .first()
+        ? await installationsForTeam(ctx, teamId!)
         : await ctx.db
             .query("slack_installations")
             .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
-            .first();
+            .collect();
+    const install = installs[0];
     if (!install) return null;
     return {
       id,
@@ -142,7 +141,7 @@ async function connectedAt(ctx: { db: any }, id: AppId, lens: Lens): Promise<Con
       by: await installerName(ctx, install.installed_by_user_id),
       by_me: String(install.installed_by_user_id) === String(userId),
       at: install.created_at,
-      detail: install.workspace_name ?? undefined,
+      detail: installs.map((i: any) => i.workspace_name ?? i.workspace_id).join(", ") || undefined,
       // No Slack uninstall path exists server-side, so no disconnect_id —
       // the UI shows nothing rather than a dead button.
     };

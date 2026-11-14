@@ -17,8 +17,8 @@ import { useSlackConnect } from "../../hooks/useSlackConnect";
 import { Switch } from "../ui/switch";
 import "./chat.css";
 
-export function SlackDmSwitch({ teamId, compact }: { teamId: string; compact?: boolean }) {
-  const team = useQueryNoThrow(api.slackSync.getTeamSlack, { team_id: teamId } as any).data;
+export function SlackDmSwitch({ teamId, workspaceId, compact }: { teamId: string; workspaceId?: string | null; compact?: boolean }) {
+  const team = useQueryNoThrow(api.slackSync.getTeamSlack, { team_id: teamId, ...(workspaceId ? { workspace_id: workspaceId } : {}) } as any).data;
   const setDmSync = useMutation(api.slackSync.setDmSync);
   const slackConnect = useSlackConnect(teamId, "/settings/integrations?slack=connected");
   const [busy, setBusy] = useState(false);
@@ -34,7 +34,7 @@ export function SlackDmSwitch({ teamId, compact }: { teamId: string; compact?: b
     setBusy(true);
     setErr(null);
     try {
-      await setDmSync({ team_id: teamId, enabled: on, window } as any);
+      await setDmSync({ team_id: teamId, workspace_id: team.installation?.workspace_id, enabled: on, window } as any);
     } catch (e: any) {
       const msg = e?.data?.message ?? e?.message ?? "Couldn't change that";
       setErr(msg === "reconnect" ? "Slack needs to grant access to your direct messages first." : msg);

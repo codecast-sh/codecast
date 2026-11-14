@@ -60,7 +60,9 @@ import {
   type SlackInboundResolver,
 } from "./lib/slackText";
 import {
+  APP_REMOVED_ERROR,
   installationForTeam,
+  installationsForTeam,
   isAgentLine,
   linkReceivesInbound,
   linkSendsOutbound,
@@ -184,6 +186,15 @@ function safeInstall(install: Install) {
 
 // ── Lookups ──────────────────────────────────────────────────────────────────
 
+/** A Slack person in any of the team's workspaces. */
+async function teamSlackUserRow(ctx: ReadCtx, teamId: Id<"teams">, slackUserId: string): Promise<Doc<"slack_users"> | null> {
+  for (const install of await installationsForTeam(ctx, teamId)) {
+    const row = await slackUserRow(ctx, install.workspace_id, slackUserId);
+    if (row) return row;
+  }
+  return null;
+}
+
 async function linkByWorkspaceChannel(ctx: ReadCtx, workspace: string, channel: string): Promise<Link | null> {
   return await ctx.db
     .query("slack_channel_links")
@@ -302,13 +313,16 @@ function nowTs(): string {
 // ── Reading the state (settings surfaces) ───────────────────────────────────
 
 // Installation + links for a team the caller belongs to. The token never leaves.
+// `workspace_id` picks which of the team's workspaces the per-workspace fields
+// describe; without it, the newest.
 export const getTeamSlack = query({
-  args: { api_token: v.optional(v.string()), team_id: v.id("teams") },
+  args: { api_token: v.optional(v.string()), team_id: v.id("teams"), workspace_id: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
     if (!(await isTeamMember(ctx, userId, args.team_id))) return null;
-    const install = await installationForTeam(ctx, args.team_id);
+    const installs = await installationsForTeam(ctx, args.team_id);
+    const install = (args.workspace_id ? installs.find((i) => i.workspace_id === args.workspace_id) : null) ?? installs[0] ?? null;
     const myToken = install ? await userTokenFor(ctx, install._id, userId) : null;
     const links = await ctx.db
       .query("slack_channel_links")
@@ -321,6 +335,7 @@ export const getTeamSlack = query({
     }
     return {
       installation: install ? safeInstall(install) : null,
+      installations: installs.map(safeInstall),
       // What the app asks Slack for today that this install never granted
       // (it was added before the scope was): an admin re-adds the app to fix it.
       missing_scopes: install ? BOT_SCOPES.split(",").filter((sc) => !tokenHasScope(install.scopes, sc)) : [],
@@ -382,7 +397,7 @@ export const linkActivity = query({
 // ── Link management ──────────────────────────────────────────────────────────
 
 export const resolveLinkAuth = internalQuery({
-  args: { api_token: v.optional(v.string()), chat_channel_id: v.id("chat_channels") },
+  args: { api_token: v.optional(v.string()), chat_channel_id: v.id("chat_channels"), workspace_id: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return { ok: false as const, error: "Authentication failed" };
@@ -395,7 +410,7 @@ export const resolveLinkAuth = internalQuery({
     if (!(await mayManageChannel(ctx, userId, channel))) {
       return { ok: false as const, error: "Only the channel's creator or a team admin can set up a Slack mirror" };
     }
-    const install = await installationForTeam(ctx, channel.team_id);
+    const install = await installationForTeam(ctx, channel.team_id, args.workspace_id);
     if (!install) return { ok: false as const, error: "Connect a Slack workspace for this team first" };
     const existing = await slackLinkForChannel(ctx, channel._id);
     return {
@@ -422,12 +437,13 @@ export const commitLink = internalMutation({
     options: v.optional(optionsValidator),
     since_ts: v.string(),
     backfill_window: v.optional(backfillValidator),
+    workspace_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const channel = await loadChannel(ctx, userId, args.chat_channel_id);
     if (!(await mayManageChannel(ctx, userId, channel))) chatFail("FORBIDDEN", "Not allowed to manage this channel");
-    const install = await installationForTeam(ctx, channel.team_id);
+    const install = await installationForTeam(ctx, channel.team_id, args.workspace_id);
     if (!install) chatFail("INVALID", "Connect a Slack workspace for this team first");
     // Both uniqueness rules, inside the one transaction. A link whose
     // installation was removed (app uninstalled) is a leftover, not a mirror:
@@ -493,6 +509,8 @@ export const linkChannel = action({
     api_token: v.optional(v.string()),
     chat_channel_id: v.optional(v.id("chat_channels")),
     team_id: v.optional(v.id("teams")),
+    // Which of the team's Slack workspaces the channel is in; the newest when absent.
+    workspace_id: v.optional(v.string()),
     slack_channel_id: v.string(),
     direction: v.optional(directionValidator),
     options: v.optional(optionsValidator),
@@ -507,17 +525,19 @@ export const linkChannel = action({
     let token: string;
     let botUserId: string;
     let userToken: string | null;
+    let workspaceId: string;
     let chatChannelId = args.chat_channel_id;
     if (chatChannelId) {
-      const auth = await ctx.runQuery(internal.slackSync.resolveLinkAuth, { api_token: args.api_token, chat_channel_id: chatChannelId });
+      const auth = await ctx.runQuery(internal.slackSync.resolveLinkAuth, { api_token: args.api_token, chat_channel_id: chatChannelId, workspace_id: args.workspace_id });
       if (!auth.ok) return { ok: false, error: auth.error };
       if (auth.existing_link_id) return { ok: false, error: "This channel already mirrors a Slack channel" };
       token = auth.bot_token;
       botUserId = auth.bot_user_id;
       userToken = auth.user_token;
+      workspaceId = auth.workspace_id;
     } else {
       if (!args.team_id) return { ok: false, error: "Name the team the new channel belongs to" };
-      const team = await ctx.runQuery(internal.slackSync.teamSlackContext, { api_token: args.api_token, team_id: args.team_id });
+      const team = await ctx.runQuery(internal.slackSync.teamSlackContext, { api_token: args.api_token, team_id: args.team_id, workspace_id: args.workspace_id });
       if (!team.ok) return { ok: false, error: team.error };
       if (team.links.some((l: { slack_channel_id: string }) => l.slack_channel_id === args.slack_channel_id)) {
         return { ok: false, error: "That Slack channel is already mirrored" };
@@ -525,6 +545,7 @@ export const linkChannel = action({
       token = team.bot_token;
       botUserId = team.bot_user_id;
       userToken = team.user_token;
+      workspaceId = team.workspace_id;
     }
 
     // Probe as the app; a private channel the app is not in answers
@@ -612,6 +633,7 @@ export const linkChannel = action({
         options: args.options,
         since_ts: sinceTs,
         backfill_window: backfill,
+        workspace_id: workspaceId,
       });
     } catch (error: any) {
       return { ok: false, error: error?.data?.message ?? error?.message ?? "Could not save the link" };
@@ -757,7 +779,7 @@ export const shareMessageToSlack = mutation({
 // The Slack channels the app can see in a team's workspace, marked with which
 // ones are already mirrored, for the picker.
 export const listSlackChannels = action({
-  args: { api_token: v.optional(v.string()), team_id: v.id("teams") },
+  args: { api_token: v.optional(v.string()), team_id: v.id("teams"), workspace_id: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ ok: boolean; error?: string; can_add_private?: boolean; channels?: Array<{
     id: string; name: string; is_private: boolean; is_member: boolean; is_general: boolean; num_members: number | null;
     // The CALLER is in this private channel (seen through their own token), so
@@ -766,7 +788,7 @@ export const listSlackChannels = action({
     created: number | null; // Slack's creation time, ms; the browser turns it into "since <month year>"
     topic: string | null; purpose: string | null; linked_chat_channel_id: string | null; linked_chat_channel_name: string | null;
   }> }> => {
-    const ctxRow = await ctx.runQuery(internal.slackSync.teamSlackContext, { api_token: args.api_token, team_id: args.team_id });
+    const ctxRow = await ctx.runQuery(internal.slackSync.teamSlackContext, { api_token: args.api_token, team_id: args.team_id, workspace_id: args.workspace_id });
     if (!ctxRow.ok) return { ok: false, error: ctxRow.error };
     const byId = new Map<string, any>();
     const row = (c: any, youAreIn: boolean) => {
@@ -822,17 +844,17 @@ export const listSlackChannels = action({
 });
 
 export const teamSlackContext = internalQuery({
-  args: { api_token: v.optional(v.string()), team_id: v.id("teams") },
+  args: { api_token: v.optional(v.string()), team_id: v.id("teams"), workspace_id: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return { ok: false as const, error: "Authentication failed" };
     if (!(await isTeamMember(ctx, userId, args.team_id))) return { ok: false as const, error: "Not a member of this team" };
-    const install = await installationForTeam(ctx, args.team_id);
+    const install = await installationForTeam(ctx, args.team_id, args.workspace_id);
     if (!install) return { ok: false as const, error: "Connect a Slack workspace for this team first" };
-    const links = await ctx.db
+    const links = (await ctx.db
       .query("slack_channel_links")
       .withIndex("by_team", (q: any) => q.eq("team_id", args.team_id))
-      .collect();
+      .collect()).filter((l) => l.workspace_id === install.workspace_id);
     const withNames: Array<{ slack_channel_id: string; chat_channel_id: string; chat_channel_name: string }> = [];
     for (const l of links) {
       const c = await ctx.db.get(l.chat_channel_id);
@@ -937,7 +959,7 @@ export const ingestEvent = internalMutation({
           .withIndex("by_installation", (q: any) => q.eq("installation_id", install._id))
           .collect();
         for (const l of links) {
-          await ctx.db.patch(l._id, { paused: true, last_error: "The Slack app was removed from the workspace", last_error_at: Date.now(), updated_at: Date.now() });
+          await ctx.db.patch(l._id, { paused: true, last_error: APP_REMOVED_ERROR, last_error_at: Date.now(), updated_at: Date.now() });
         }
         if (type === "app_uninstalled") await ctx.db.delete(install._id);
       }
@@ -1079,13 +1101,14 @@ export const setDmSync = mutation({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.id("teams"),
+    workspace_id: v.optional(v.string()),
     enabled: v.boolean(),
     window: v.optional(backfillValidator),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     if (!(await isTeamMember(ctx, userId, args.team_id))) chatFail("FORBIDDEN", "Not a member of this team");
-    const install = await installationForTeam(ctx, args.team_id);
+    const install = await installationForTeam(ctx, args.team_id, args.workspace_id);
     if (!install) chatFail("INVALID", "Connect a Slack workspace for this team first");
     const token = await userTokenFor(ctx, install._id, userId);
     if (!token) chatFail("INVALID", "Connect your Slack account first");
@@ -1099,7 +1122,7 @@ export const setDmSync = mutation({
       updated_at: now,
     });
     const mine = (await ctx.db.query("slack_channel_links").withIndex("by_team", (q: any) => q.eq("team_id", args.team_id)).collect())
-      .filter((l) => l.kind === "dm" && l.owner_user_id?.toString() === userId.toString());
+      .filter((l) => l.kind === "dm" && l.owner_user_id?.toString() === userId.toString() && l.workspace_id === install.workspace_id);
     for (const l of mine) await ctx.db.patch(l._id, { paused: !args.enabled, updated_at: now });
     if (args.enabled) await ctx.scheduler.runAfter(0, internal.slackSync.scanDms, { token_id: token._id });
     return { ok: true, enabled: args.enabled, window };
@@ -1554,12 +1577,15 @@ export const listSlackPeople = query({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
     if (!(await isTeamMember(ctx, userId, args.team_id))) return null;
-    const install = await installationForTeam(ctx, args.team_id);
-    if (!install) return { people: [], is_admin: false };
-    const rows = await ctx.db
-      .query("slack_users")
-      .withIndex("by_workspace_user", (q: any) => q.eq("workspace_id", install.workspace_id))
-      .collect();
+    const installs = await installationsForTeam(ctx, args.team_id);
+    if (installs.length === 0) return { people: [], is_admin: false };
+    const rows = [];
+    for (const install of installs) {
+      rows.push(...await ctx.db
+        .query("slack_users")
+        .withIndex("by_workspace_user", (q: any) => q.eq("workspace_id", install.workspace_id))
+        .collect());
+    }
     const people = [];
     for (const r of rows) {
       if (r.is_bot || r.deleted) continue;
@@ -1595,10 +1621,10 @@ export const mapSlackPerson = mutation({
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     if (!(await isTeamMember(ctx, userId, args.team_id))) chatFail("FORBIDDEN", "Not a member of this team");
-    const install = await installationForTeam(ctx, args.team_id);
-    if (!install) chatFail("INVALID", "Connect a Slack workspace for this team first");
-    const row = await slackUserRow(ctx, install.workspace_id, args.slack_user_id);
+    if ((await installationsForTeam(ctx, args.team_id)).length === 0) chatFail("INVALID", "Connect a Slack workspace for this team first");
+    const row = await teamSlackUserRow(ctx, args.team_id, args.slack_user_id);
     if (!row) chatFail("NOT_FOUND", "That Slack person has not been seen yet");
+    const install = (await installationForTeam(ctx, args.team_id, row.workspace_id))!;
     if (args.teammate_ref !== undefined) {
       const ref = args.teammate_ref.replace(/^@/, "").trim().toLowerCase();
       if (!ref || ref === "none") args = { ...args, codecast_user_id: null };
@@ -1650,7 +1676,7 @@ async function assignSlackPerson(
   ctx: MutationCtx,
   opts: { teamId: Id<"teams">; row: Doc<"slack_users">; codecastUserId: Id<"users"> | null },
 ): Promise<void> {
-  const install = await installationForTeam(ctx, opts.teamId);
+  const install = await installationForTeam(ctx, opts.teamId, opts.row.workspace_id);
   const before: Id<"users"> | null = opts.row.codecast_user_id ?? opts.row.shadow_user_id ?? null;
   await ctx.db.patch(opts.row._id, { codecast_user_id: opts.codecastUserId ?? undefined, mapped_by: "manual" });
   // Their DM rooms follow the identity: to the teammate, or back to a shadow.
@@ -1676,18 +1702,18 @@ export const claimSlackPeopleByEmail = internalMutation({
     let claimed = 0;
     for (const m of memberships) {
       if ((await teammateByEmail(ctx, m.team_id, email))?.toString() !== args.user_id.toString()) continue;
-      const install = await installationForTeam(ctx, m.team_id);
-      if (!install) continue;
-      const rows = await ctx.db
-        .query("slack_users")
-        .withIndex("by_workspace_user", (q: any) => q.eq("workspace_id", install.workspace_id))
-        .collect();
-      for (const row of rows) {
-        if ((row.email ?? "").toLowerCase() !== email) continue;
-        if (row.mapped_by === "manual") continue;
-        if (row.codecast_user_id?.toString() === args.user_id.toString()) continue;
-        await assignSlackPerson(ctx, { teamId: m.team_id, row, codecastUserId: args.user_id });
-        claimed++;
+      for (const install of await installationsForTeam(ctx, m.team_id)) {
+        const rows = await ctx.db
+          .query("slack_users")
+          .withIndex("by_workspace_user", (q: any) => q.eq("workspace_id", install.workspace_id))
+          .collect();
+        for (const row of rows) {
+          if ((row.email ?? "").toLowerCase() !== email) continue;
+          if (row.mapped_by === "manual") continue;
+          if (row.codecast_user_id?.toString() === args.user_id.toString()) continue;
+          await assignSlackPerson(ctx, { teamId: m.team_id, row, codecastUserId: args.user_id });
+          claimed++;
+        }
       }
     }
     return { claimed };
@@ -1741,10 +1767,10 @@ export const reattributeSlackPerson = internalMutation({
     reactions: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<void> => {
-    const install = await installationForTeam(ctx, args.team_id);
-    if (!install) return;
-    const row = await slackUserRow(ctx, install.workspace_id, args.slack_user_id);
+    const row = await teamSlackUserRow(ctx, args.team_id, args.slack_user_id);
     if (!row) return;
+    const install = await installationForTeam(ctx, args.team_id, row.workspace_id);
+    if (!install) return;
     const links = await ctx.db
       .query("slack_channel_links")
       .withIndex("by_team", (q: any) => q.eq("team_id", args.team_id))

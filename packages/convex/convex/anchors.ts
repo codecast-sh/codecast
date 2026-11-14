@@ -13,6 +13,7 @@ import { standingReportsToFields } from "./lib/standingSeat";
 import { stampSeatOwners } from "./sessionOwners";
 import { seatPlace } from "./lib/seatPlace";
 import { DECISION_DISCUSSION_GUIDANCE, bootstrapMessage, roleBootstrapOf, type RoleBootstrap } from "./lib/anchorBootstrap";
+import { installationForTeam } from "./lib/slackOutbound";
 
 // An Anchor is codecast's standing agent member: one per team (shared) and one
 // per user (personal). It owns a long-lived `persistent` conversation that is
@@ -755,12 +756,7 @@ export async function decommissionAnchorRow(ctx: any, anchor: any): Promise<void
 // The Slack workspace installation bound to an anchor's scope (inline lookup to
 // avoid importing slack.ts, which imports this module).
 async function installForAnchor(ctx: any, anchor: any): Promise<any | null> {
-  if (anchor.team_id) {
-    return await ctx.db
-      .query("slack_installations")
-      .withIndex("by_team", (q: any) => q.eq("team_id", anchor.team_id))
-      .first();
-  }
+  if (anchor.team_id) return await installationForTeam(ctx, anchor.team_id);
   if (anchor.scope_user_id) {
     return await ctx.db
       .query("slack_installations")
