@@ -121,7 +121,12 @@ All messages carry `{hostId, seq}`. Followers track `lastSeq`; a gap or a new
 
 Follower boot: hydrate from IDB read-only, subscribe and buffer, `hello`,
 apply snapshot batches, replay buffered updates past the snapshot seq, then
-publish that the follower is synced. Snapshot progress refreshes the retry
+publish that the follower is synced. Read-only holds from the moment
+replication starts: until the role is settled a window persists only its
+per-window keys, so neither its own feeders (it boots as host) nor the
+host's snapshot rewrite the shared slice. A window that ends up host, by
+election or the solo fallback, then writes the shared keys it skipped once,
+diffed against disk. Snapshot progress refreshes the retry
 deadline; stopping the runtime cancels outstanding send timers.
 
 ## Election
@@ -163,12 +168,18 @@ when one was entered. The auth subtree remounts per principal epoch
 (`lib/authRoot.tsx`), so the provider re-reads storage. A token rotated for
 the same user is not a boundary: nothing above runs.
 
-The disk cache (`codecast-store`) belongs to one account: the one whose
-server-confirmed user row it holds (`meta.currentUser`). Hydration serves it
-only to a window whose stored JWT names that same principal; a cache someone
-else owns, or nobody does, is purged before any reader sees it. Write-through
-and outbox writes refuse the moment the stored JWT names someone else, which
-covers the gap between a sibling's sign-out and this window's storage event.
+The disk cache (`codecast-store`) belongs to one account, named on disk by an
+owner stamp (`meta.cacheOwner`, written when a window confirms the owner and
+right after every purge, a signed-out tombstone when the purge left an
+account) and by the server-confirmed user row (`meta.currentUser`). Hydration
+serves it only to a window whose stored JWT names that principal and where
+nothing names anyone else; a cache someone else owns, residue after a
+sign-out, or rows naming nobody are purged before any reader sees it. A disk
+that cannot be read serves nothing and purges nothing. Every purge is
+recorded with its reason (`store/cacheEvents.ts`, `__cacheEvents()`).
+Write-through and outbox writes refuse the moment the stored JWT names someone
+else, which covers the gap between a sibling's sign-out and this window's
+storage event.
 
 Promotion (a follower wins the lock): flip `syncRole` to host in the store.
 The feeder gate is reactive, so subscriptions mount; wire `_setIDBWrite` and

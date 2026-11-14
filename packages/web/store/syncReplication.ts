@@ -527,6 +527,34 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
   let holdsLock = false;
   const lockAbort = new AbortController();
 
+  // Until this window knows its role it persists only its per-window keys,
+  // as a follower does. A window booting beside a living host would
+  // otherwise write everything its feeders and the host's snapshot hand it
+  // (fresh objects, so every row diffs as changed): on 2026-11-14 each new
+  // desktop window rewrote the whole cache (100 to 220 MB a burst), and
+  // outbox writes queued behind those bursts tripped the storage banner.
+  // The shared keys skipped meanwhile are remembered; a window that ends up
+  // host writes them once (a follower's host already has).
+  let skippedBeforeRole: Set<string> | null = new Set();
+  const followerWrite = (patches: any[], state: any) => {
+    const local = followerPersistencePatches(patches);
+    if (local.length) return writePatchesToIDB(local, state);
+  };
+  const bootWrite = (patches: any[], state: any) => {
+    for (const patch of patches) skippedBeforeRole?.add(String(patch.path[0]));
+    return followerWrite(patches, state);
+  };
+  // Host from here on: persist what was skipped while the role was open. Each
+  // key goes as a whole-collection replace, so the write diffs against what is
+  // on disk and puts only the rows that differ.
+  const persistSkipped = () => {
+    const keys = skippedBeforeRole;
+    skippedBeforeRole = null;
+    if (!keys?.size) return;
+    const state = useInboxStore.getState() as any;
+    writePatchesToIDB([...keys].map((key) => ({ op: "replace", path: [key], value: state[key] })) as any, state);
+  };
+
   const armSoloFallback = () => {
     if (soloTimer) clearTimeout(soloTimer);
     soloTimer = setTimeout(() => {
@@ -537,21 +565,22 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
         const internals = useInboxStore.getState() as any;
         setActionTee(null);
         internals._setIDBWrite(writePatchesToIDB);
+        persistSkipped();
         setRole("host");
       }
     }, SOLO_FALLBACK_MS);
   };
 
   const startFollower = () => {
+    (useInboxStore.getState() as any)._setIDBWrite(bootWrite);
     follower = replicationFollowerFor(selfId, channel, (synced) => {
       if (stopped || elected) return;
       if (synced) {
         if (soloTimer) clearTimeout(soloTimer);
         setRole("follower");
-        (useInboxStore.getState() as any)._setIDBWrite((patches: any[], state: any) => {
-          const local = followerPersistencePatches(patches);
-          if (local.length) return writePatchesToIDB(local, state);
-        });
+        // The host persists the shared slice; nothing skipped is owed.
+        skippedBeforeRole = null;
+        (useInboxStore.getState() as any)._setIDBWrite(followerWrite);
         setActionTee(followerActionTee(channel, selfId));
       } else {
         armSoloFallback();
@@ -573,6 +602,8 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
       host?.tee(patches, state);
       return persisted;
     });
+    // Straight to disk, not through the tee: followers already have the data.
+    persistSkipped();
   };
 
   startFollower();
