@@ -210,7 +210,7 @@ function CloudAgentSignInRow({ spec, deviceId }: { spec: CloudAgentProviderSpec;
   const { connected, problem } = useCloudAgentStatus(spec, deviceId);
   const { connectName, signIn } = cloudAgentUi(spec);
   return (
-    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-4 py-3.5 sm:flex-nowrap sm:px-5">
+    <div data-cloud-agent-row={spec.id} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-4 py-3.5 sm:flex-nowrap sm:px-5">
       <div className="min-w-0">
         <span className="text-sm text-sol-text">{spec.label}</span>
         <p className="mt-0.5 text-xs text-sol-text-muted">{signIn}</p>

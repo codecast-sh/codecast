@@ -446,8 +446,8 @@ export const CAPTIONS = (now: number) => ({
   started_by: PEOPLE.sarah._id,
   tail: [
     { seq: 1, speaker_id: PEOPLE.sarah._id, speaker_name: PEOPLE.sarah.name, text: "Five attempts over how long, worst case?", at: now - 14_000 },
-    { seq: 2, speaker_id: PEOPLE.me._id, speaker_name: PEOPLE.me.name, text: "About thirty minutes. Two, four, eight, then sixteen, with jitter.", at: now - 8_000 },
-    { seq: 3, speaker_id: PEOPLE.sarah._id, speaker_name: PEOPLE.sarah.name, text: "That covers the ledger restarts. Ship it once the checks are green.", at: now - 2_000 },
+    { seq: 2, speaker_id: PEOPLE.me._id, speaker_name: PEOPLE.me.name, text: "About thirty seconds. Two, four, eight, then sixteen, with jitter.", at: now - 8_000 },
+    { seq: 3, speaker_id: PEOPLE.sarah._id, speaker_name: PEOPLE.sarah.name, text: "That covers a blip like last night's, and dead letters catch the rest. Ship it once the checks are green.", at: now - 2_000 },
   ],
 });
 

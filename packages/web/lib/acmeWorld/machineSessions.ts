@@ -10,6 +10,7 @@
 import { LIMIT_BANNER_PREFIX, agentSetupMarker } from "@codecast/shared/contracts";
 import { inboxCrawlWsKey, syncMetaKey } from "../../hooks/syncMetaKeys";
 import { useInboxStore } from "../../store/inboxStore";
+import { DECISIONS_PART } from "./decisions";
 import type { AcmePart } from "./parts";
 import { LAPTOP_ID, LINUX_ID, MACHINE_ROSTER } from "./machines";
 import { DAY, HOUR, MIN, PEOPLE, SESSIONS, TEAM_ID, WORKSPACE, cid, session } from "./world";
@@ -296,6 +297,9 @@ const VAULT = (now: number): Msg[] => {
 };
 
 const LIVE_LIMIT_AGO = 2 * MIN;
+/** When the world was seeded: the live limit banner's time, which the session's
+ *  pending_api_error_at must match (to the second) for the card to read live. */
+let seededAt = 0;
 const LIMIT = (now: number): Msg[] => {
   const t = at(now);
   return [
@@ -370,7 +374,7 @@ const MACHINE_SESSIONS_RAW = (now: number) => [
     project: "~/src/billing",
     messages: 6,
     state: "Parked on the session limit\nNext: resumes when the window resets",
-    extra: { ...onLaptop, cc_account: "work", pending_api_error: true, pending_api_error_at: now - LIVE_LIMIT_AGO },
+    extra: { ...onLaptop, cc_account: "work", pending_api_error: true, pending_api_error_at: (seededAt || now) - LIVE_LIMIT_AGO },
   }),
   session(now, MS.codexNew, { ago: 0, waiting: "done", project: "~/src/webhooks", messages: 0, extra: { ...onLaptop, model: "cloud:x3" } }),
   session(now, MS.codexCloud, { ago: 12 * MIN, waiting: "done", project: "~/src/webhooks", messages: 2, state: "Jitter added to webhook retries\nStatus: 3 of 3 attempts agree", extra: { ...onLaptop, session_id: "task_e_68a1acme7jitter", model: "cloud:x3" } }),
@@ -409,7 +413,7 @@ export const SECRETS = (now: number) => {
     { ...base, _id: SECRET.stagingDb, short_id: "sec-412", name: "staging-db", kind: "key", status: "ready", env: ["DATABASE_URL"], fingerprint: "postg…c9a1", use_count: 41, last_used_at: now - 2 * HOUR, last_used_by_conversation: SESSIONS.lead._id, version_count: 1 },
     { ...base, _id: SECRET.prodDb, short_id: "sec-413", name: "prod-db", kind: "key", status: "ready", env: ["DATABASE_URL"], fingerprint: "postg…7e02", ask_first: true, use_count: 4, last_used_at: now - 3 * DAY, last_used_by_conversation: SESSIONS.api._id },
     { ...base, _id: SECRET.githubApp, short_id: "sec-415", name: "github-app", kind: "key", status: "ready", env: ["GITHUB_APP_PRIVATE_KEY"], fingerprint: "-----…KEY-", ask_first: true, use_count: 7, last_used_at: now - DAY, last_used_by_conversation: SESSIONS.stripe._id },
-    { ...base, _id: SECRET.vercel, short_id: "sec-418", name: "vercel.com", kind: "signin", status: "ready", sites: ["vercel.com"], signin_expires_at: now + 2 * DAY, use_count: 12, last_used_at: now - 3 * HOUR, last_used_by_conversation: SESSIONS.ui._id },
+    { ...base, _id: SECRET.vercel, short_id: "sec-418", name: "vercel.com", kind: "signin", status: "ready", sites: ["vercel.com"], signin_expires_at: now + 2 * DAY + 3 * HOUR, use_count: 12, last_used_at: now - 3 * HOUR, last_used_by_conversation: SESSIONS.ui._id },
     { ...base, workspace: `user:${PEOPLE.me._id}`, team_id: undefined, _id: SECRET.openai, short_id: "sec-421", name: "openai-alex", kind: "key", status: "ready", env: ["OPENAI_API_KEY"], fingerprint: "sk-pr…x7Qa", use_count: 9, last_used_at: now - 5 * HOUR, last_used_by_conversation: SESSIONS.rate._id },
   ];
 };
@@ -435,7 +439,7 @@ const SECRET_EVENTS = (ref: string, now: number) =>
     : [];
 
 const SECRET_VERSIONS = (ref: string, now: number) =>
-  ref === SECRET.stagingDb ? [{ _id: cid("verstagingdb1"), rotated_at: now - 2 * DAY, rotated_by_name: PEOPLE.sarah.name, fingerprint: "postg…41be", expires_at: now + 5 * DAY }] : [];
+  ref === SECRET.stagingDb ? [{ _id: cid("verstagingdb1"), rotated_at: now - 2 * DAY - 3 * HOUR, rotated_by_name: PEOPLE.sarah.name, fingerprint: "postg…41be", expires_at: now + 5 * DAY }] : [];
 
 /* ── Accounts, skills, decisions ─────────────────────────────────────────── */
 
@@ -540,6 +544,11 @@ function installScenes() {
         runDaemonSetup: async () => ({ ok: true }),
       };
     },
+    /** No stripe-test in the Vault yet (the request answered elsewhere), so a pasted
+     *  Stripe test key is offered as a new stripe-test. */
+    noStripeTest() {
+      st().dropRows("secrets", [SECRET.request]);
+    },
     /** One of these sessions as an inbox row: the conversation pane draws a
      *  transcript only for a session the inbox holds. */
     open(id: string) {
@@ -558,14 +567,36 @@ export const MACHINE_SESSIONS_PART: AcmePart = {
       const row = (useInboxStore.getState() as any).conversations?.[String(args?.id)];
       return row ? { access_level: row.user_id === PEOPLE.me._id ? "owner" : "team", conversation_id: row._id } : undefined;
     },
+    // The Ask first decision's page; every other decision's comes from ./decisions.
+    "sessionDecisions:getWithDoc": (args) => {
+      const row = ASK_FIRST_DECISION(Date.now());
+      if (args?.decision_id === row._id || args?.decision_id === row.short_id) {
+        const me = { _id: PEOPLE.me._id, name: PEOPLE.me.name, image: PEOPLE.me.image };
+        return { decision: row, doc: null, task: null, stack: null, ladder: [], asked_users: [me], holder_role: null, grant_offer: null, grant: null, superseded: null };
+      }
+      return DECISIONS_PART.answers?.["sessionDecisions:getWithDoc"]?.(args) ?? null;
+    },
     "secrets:list": () => SECRETS(Date.now()),
     "secrets:events": (args) => SECRET_EVENTS(String(args?.ref), Date.now()),
     "secrets:versions": (args) => SECRET_VERSIONS(String(args?.ref), Date.now()),
     "accountSwitch:listAccountProfiles": () => ACCOUNT_PROFILES(Date.now()),
     "accountPool:listPool": () => [],
+    // Choosing a recovery mode: the laptop's flags change the way the server's next push carries them.
+    "accountSwitch:setRecoveryMode": (args) => {
+      const st = ((globalThis as any).__inboxStore ?? useInboxStore).getState() as any;
+      const key = Object.keys(st.settingsData ?? {}).find((k) => k.endsWith("accountProfiles"));
+      const value = key ? st.settingsData[key]?.value : undefined;
+      if (!key || !value) return null;
+      const mode = String(args?.mode);
+      const flags = { ask_first: mode === "ask", auto_switch: mode === "auto", auto_continue: mode !== "off" };
+      const devices = value.devices.map((d: any) => (d.device_id === args?.device_id ? { ...d, ...flags } : d));
+      st.syncRecord("settingsData", key, { _id: key, value: { ...value, devices } });
+      return null;
+    },
     "users:getMySkills": () => ({ skills: SKILL_CATALOG }),
   },
   seed: (s, now) => {
+    seededAt = now;
     installScenes();
     // This window runs on Alex's laptop, the way the desktop app's local daemon reports it.
     useInboxStore.setState({ localDevice: { viewer: PEOPLE.me._id, deviceId: LAPTOP_ID } });

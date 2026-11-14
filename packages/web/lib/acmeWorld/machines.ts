@@ -23,7 +23,7 @@ const LAPTOP_SNIPPETS = Object.fromEntries(
 export const MACHINE_ROSTER = (now: number) => {
   const [laptop, linux] = MACHINES(now) as any[];
   return [
-    { ...laptop, cli_version: "1.1.240", settings: { snippets: LAPTOP_SNIPPETS, stable_mode: "team", stable_global: false, hooks_enabled: true, auto_update: true } },
+    { ...laptop, cli_version: "1.1.240", provider_key_pubkey: "acme-fixture-pubkey-not-a-real-key", managed_provider_ids: [], settings: { snippets: LAPTOP_SNIPPETS, stable_mode: "team", stable_global: false, hooks_enabled: true, auto_update: true } },
     {
       ...linux,
       cli_version: "1.1.240",

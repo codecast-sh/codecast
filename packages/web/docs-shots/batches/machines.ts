@@ -3,7 +3,6 @@
 // and the parts beside it.
 import type { Shot } from "../manifest";
 import { MS } from "../../lib/acmeWorld/machineSessions";
-import { SESSIONS } from "../../lib/acmeWorld/world";
 
 const card = (slug: string) => ({ selector: `[data-feature-card="${slug}"]`, pad: 12 });
 const dialog = { selector: "[role=dialog][data-state=open]", pad: 0 };
@@ -20,12 +19,33 @@ const open = (id: string) =>
   scene(`open(${JSON.stringify(id)}), history.pushState(null, "", "/inbox?s=${id}"), dispatchEvent(new PopStateEvent("popstate"))`);
 /** The Stripe test key a person pastes: built here so no whole key literal sits in the source. */
 const FAKE_KEY = ["sk", "test", "51AcmeFixtureOnlyNotARealKey00"].join("_");
+/** A person pasting one `ENV=value` line into the Add to Vault value field: a real paste event, which the form splits. */
+const PASTE_ENV_LINE = `(() => {
+  const field = document.querySelector('[role=dialog] [placeholder="Paste the key"]');
+  field.focus();
+  const data = new DataTransfer();
+  data.setData("text", "STRIPE_SECRET_KEY=${FAKE_KEY}");
+  field.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+})()`;
+/** The Add a cloud machine form filled the way a person would, field by field (fixture AWS ids). */
+const FILL_AWS = `(() => {
+  const values = { "dev-linux": "acme-linux-2", "ami-…": "ami-0acme7c1d2e3f4a5b6", "dev-key": "acme-dev", "subnet-…": "subnet-0acme4b5c6d", "sg-…": "sg-0acme8e9f0a", "us-west-2": "us-east-1", "~/.ssh/dev-key.pem": "~/.ssh/acme-dev.pem", "default": "acme" };
+  const dialog = [...document.querySelectorAll("[role=dialog][data-state=open]")].pop();
+  const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  for (const input of dialog.querySelectorAll("input")) {
+    const value = values[input.placeholder];
+    if (value === undefined) continue;
+    set.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+})()`;
 /** A transcript shot: the conversation's feed column, once its rows painted. */
 const transcript = (name: string, id: string, waitText: string, out: string, extra: Partial<Shot> = {}): Shot => ({
   name,
   route: conv(id),
   viewport: { width: 1100, height: 1000 },
-  steps: [open(id), { wait: "[data-sv-feed]", text: waitText }, { sleep: 1200 }],
+  // The pointer rests on the header, so no row shows its hover toolbar.
+  steps: [open(id), { wait: "[data-sv-feed]", text: waitText }, { hover: "[data-sv-convhead]" }, { sleep: 1200 }],
   crop: feed,
   frame: "element",
   out,
@@ -78,7 +98,7 @@ export const MACHINES_SHOTS: Shot[] = [
 
   /* ── Transcripts ── */
   transcript("browser/conversation", MS.browser._id, "Retries are on for the Stripe endpoint", "public/documentation/browser/conversation.webp", { viewport: { width: 1100, height: 760 } }),
-  transcript("browser/setup-card", MS.browserSetup._id, "Pair", "public/documentation/browser/setup-card.webp", { viewport: { width: 1100, height: 800 } }),
+  transcript("browser/setup-card", MS.browserSetup._id, "Pair", "public/documentation/browser/setup-card.webp", { viewport: { width: 1100, height: 900 } }),
   {
     name: "browser/watch-live",
     route: conv(MS.watch._id),
@@ -88,25 +108,18 @@ export const MACHINES_SHOTS: Shot[] = [
     out: "public/documentation/browser/watch-live.webp",
   },
   transcript("computer/conversation", MS.computer._id, "nothing else was changed", "public/documentation/computer/conversation.webp", { viewport: { width: 1100, height: 820 } }),
-  transcript("skills/conversation", MS.skills._id, "judgment calls", "public/documentation/skills/conversation.webp", { viewport: { width: 1100, height: 1040 } }),
+  transcript("skills/conversation", MS.skills._id, "judgment calls", "public/documentation/skills/conversation.webp", { viewport: { width: 1100, height: 1130 } }),
   transcript("typecheck/conversation", MS.check._id, "typechecks clean", "public/documentation/typecheck/conversation.webp", { viewport: { width: 1100, height: 940 } }),
-  transcript("vault/request-card", MS.vault._id, "stripe-test", "public/documentation/vault/request-card.webp", { crop: { selector: "[data-vault-request-card]", pad: 6 } }),
+  transcript("vault/request-card", MS.vault._id, "stripe-test", "public/documentation/vault/request-card.webp", { crop: { selector: "[data-vault-request-card]", pad: 3 } }),
   transcript("usage-limits/limit-card", MS.limit._id, "resolved", "public/documentation/usage-limits/limit-card.webp"),
-  {
-    name: "vault/composer-catch",
-    route: conv(MS.check._id),
-    viewport: { width: 1100, height: 900 },
-    steps: [open(MS.check._id), { wait: "[data-composer-field]" }, { click: "[data-composer-field]" }, { type: `Here's the Stripe test key for the retry tests: ${FAKE_KEY}` }, { key: "Enter" }, { wait: "body", text: "Save to Vault and send" }, { sleep: 800 }],
-    crop: { selector: "[data-composer-shell]", pad: 16 },
-    frame: "element",
-    out: "public/documentation/vault/composer-catch.webp",
-  },
+
   {
     name: "skills/slash-menu",
-    route: `/conversation/${SESSIONS.lead._id}`,
-    viewport: { width: 1100, height: 900 },
-    steps: [{ wait: "[data-composer-field]" }, { click: "[data-composer-field]" }, { type: "/cast-" }, { wait: "body", text: "cast-second-opinion" }, { sleep: 800 }],
-    crop: { selector: "[data-composer-shell]", pad: 16 },
+    route: "/inbox",
+    viewport: { width: 1100, height: 760 },
+    steps: [open(MS.browser._id), { wait: "[data-composer-field]" }, { click: "[data-composer-field]" }, { type: "/cast-" }, { wait: "[role=listbox]", text: "cast-second-opinion" }, { sleep: 800 }],
+    // The conversation pane's box: the menu is a portal, but a clip takes whatever is painted there.
+    crop: { selector: "[data-cc-conversation]", pad: 0 },
     frame: "element",
     out: "public/documentation/skills/slash-menu.webp",
   },
@@ -115,7 +128,7 @@ export const MACHINES_SHOTS: Shot[] = [
   {
     name: "vault/vault-page",
     route: "/vault",
-    viewport: { width: 1440, height: 900 },
+    viewport: { width: 1600, height: 900 },
     steps: [{ wait: "body", text: "staging-db" }, { sleep: 1000 }],
     frame: "window",
     out: "public/documentation/vault/vault-page.webp",
@@ -124,7 +137,7 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "vault/secret-detail",
     route: "/vault?s=sec-412",
     viewport: { width: 1440, height: 900 },
-    steps: [{ wait: "body", text: "Activity" }, { sleep: 1000 }],
+    steps: [{ wait: "body", text: "Activity" }, { click: "button", text: "1 kept" }, { wait: "body", text: "Restore" }, { sleep: 1000 }],
     frame: "window",
     out: "public/documentation/vault/secret-detail.webp",
   },
@@ -132,7 +145,7 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "vault/add-secret",
     route: "/vault",
     viewport: { width: 1280, height: 900 },
-    steps: [{ click: "[data-vault-add-menu]" }, { click: "[role=menuitem]", text: "Key" }, { wait: "[role=dialog]" }, { sleep: 600 }],
+    steps: [scene("noStripeTest()"), { click: "[data-vault-add-menu]" }, { wait: "[role=menuitem]" }, { click: "[role=menuitem]", text: "Key" }, { wait: "[role=dialog]" }, { js: PASTE_ENV_LINE }, { sleep: 800 }, { js: `[...document.querySelectorAll("[role=dialog] input")].find((i) => i.value === "stripe-secret-key")?.select()` }, { type: "stripe-test" }, { sleep: 2500 }],
     crop: dialog,
     frame: "element",
     out: "public/documentation/vault/add-secret.webp",
@@ -141,28 +154,39 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "vault/save-signin",
     route: "/vault",
     viewport: { width: 1280, height: 900 },
-    steps: [{ click: "[data-vault-add-menu]" }, { click: "[role=menuitem]", text: "Browser sign-in" }, { wait: "[role=dialog]" }, { sleep: 600 }],
+    steps: [{ click: "[data-vault-add-menu]" }, { wait: "[role=menuitem]" }, { click: "[role=menuitem]", text: "Browser sign-in" }, { wait: "[role=dialog]" }, { click: '[role=dialog][data-state=open] input[placeholder="vercel.com"]' }, { type: "vercel.com" }, { sleep: 900 }],
     crop: dialog,
     frame: "element",
     out: "public/documentation/vault/save-signin.webp",
   },
   {
     name: "vault/ask-first-decision",
-    route: "/decisions/sd-4120",
+    route: "/decisions",
     viewport: { width: 1280, height: 900 },
-    steps: [scene("askFirst()"), { wait: "body", text: "Approve for this session" }, { sleep: 1000 }],
-    crop: { selector: "[data-decision-card]", pad: 16 },
+    steps: [scene(`askFirst(), history.pushState(null, "", "/decisions/sd-4120"), dispatchEvent(new PopStateEvent("popstate"))`), { wait: "body", text: "Approve for this session" }, { sleep: 1000 }],
+    crop: { selector: ".decision-doc .max-w-4xl", pad: 8 },
     frame: "element",
     out: "public/documentation/vault/ask-first-decision.webp",
   },
 
+  // After the Vault shots: it clears the stripe-test request for the rest of the page.
+  {
+    name: "vault/composer-catch",
+    route: conv(MS.check._id),
+    viewport: { width: 1100, height: 900 },
+    steps: [scene("noStripeTest()"), open(MS.check._id), { wait: "[data-composer-field]" }, { click: "[data-composer-field]" }, { type: `Here's the Stripe test key for the retry tests: ${FAKE_KEY}` }, { key: "Enter" }, { wait: "body", text: "Save to Vault and send" }, { sleep: 800 }],
+    crop: { selector: "[data-cc-composer-stack]", pad: 0 },
+    frame: "element",
+    out: "public/documentation/vault/composer-catch.webp",
+  },
   /* ── Codex Cloud ── */
   {
     name: "codex-cloud/provider-row",
     route: "/settings/provider-keys",
     viewport: { width: 1280, height: 900 },
-    steps: [{ wait: "button", text: "Codex connected" }, { sleep: 800 }],
-    frame: "window",
+    steps: [{ wait: "button", text: "Codex connected" }, { js: `document.querySelector('[data-cloud-agent-row="codex"]').scrollIntoView({ block: "center" })` }, { sleep: 800 }],
+    crop: { selector: '[data-cloud-agent-row="codex"]', pad: 8 },
+    frame: "element",
     out: "public/documentation/codex-cloud/provider-row.webp",
   },
   {
@@ -179,7 +203,7 @@ export const MACHINES_SHOTS: Shot[] = [
     route: conv(MS.codexNew._id),
     viewport: { width: 1100, height: 900 },
     steps: [open(MS.codexNew._id), { wait: "[data-composer-field]" }, { click: "[data-composer-field]" }, { type: "Add jitter to webhook retries in acme/webhooks so a burst of failures doesn't retry in lockstep." }, { sleep: 800 }],
-    crop: { selector: "[data-composer-shell]", pad: 16 },
+    crop: { selector: "[data-cc-composer-stack]", pad: 0 },
     frame: "element",
     out: "public/documentation/codex-cloud/composer.webp",
   },
@@ -214,7 +238,7 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "remote-and-cloud-sessions/machine-menu",
     route: conv(MS.check._id),
     viewport: { width: 1280, height: 800 },
-    steps: [open(MS.check._id), scene("machinesAwake()"), { wait: "[data-sv-convhead]" }, { sleep: 1500 }, { click: "button[data-runner-device]" }, { wait: "[role=menu]", text: "acme-mac" }, { sleep: 600 }],
+    steps: [open(MS.limit._id), scene("machinesAwake()"), { wait: "[data-sv-convhead]" }, { sleep: 1500 }, { click: "button[data-runner-device]" }, { wait: "[role=menu]", text: "acme-mac" }, { sleep: 600 }],
     frame: "window",
     out: "public/documentation/remote-and-cloud-sessions/machine-menu.webp",
   },
@@ -231,17 +255,19 @@ export const MACHINES_SHOTS: Shot[] = [
   {
     name: "usage-limits/accounts",
     route: "/settings/claude-accounts",
-    viewport: { width: 1280, height: 900 },
-    steps: [{ wait: "body", text: "personal" }, { sleep: 800 }],
-    frame: "window",
+    viewport: { width: 1280, height: 1700 },
+    steps: [{ wait: "body", text: "personal" }, { js: `document.querySelector("[data-cc-settings] section .rounded-xl").scrollIntoView({ block: "start" })` }, { sleep: 800 }],
+    crop: { selector: "[data-cc-settings] section .rounded-xl", pad: 0 },
+    frame: "element",
     out: "public/documentation/usage-limits/accounts.webp",
   },
   {
     name: "usage-limits/recovery-mode",
     route: "/settings/claude-accounts",
-    viewport: { width: 1280, height: 900 },
-    steps: [{ wait: "body", text: "ask before switching" }, { sleep: 800 }],
-    frame: "window",
+    viewport: { width: 1280, height: 1300 },
+    steps: [{ wait: "body", text: "ask before switching" }, { click: "label, button, [role=radio]", text: "Continue, and ask before switching accounts" }, { sleep: 1200 }],
+    crop: { selector: "[data-cc-settings] section .rounded-xl > div:first-child", pad: 8 },
+    frame: "element",
     out: "public/documentation/usage-limits/recovery-mode.webp",
   },
 
@@ -250,16 +276,25 @@ export const MACHINES_SHOTS: Shot[] = [
     name: "remote-and-cloud-sessions/devices",
     route: "/settings/devices",
     viewport: { width: 1280, height: 1000 },
-    steps: [scene("linuxAsleep()"), { wait: "body", text: "Asleep" }, { sleep: 800 }],
-    frame: "window",
+    steps: [scene("linuxAsleep()"), { wait: "[data-cloud-host]", text: "Asleep" }, { js: `document.querySelector("[data-cloud-host]").scrollIntoView({ block: "center" })` }, { sleep: 800 }],
+    crop: { selector: "[role=dialog] > div:has([data-cc-settings])", pad: 0 },
+    frame: "element",
     out: "public/documentation/remote-and-cloud-sessions/devices.webp",
   },
   {
     name: "remote-and-cloud-sessions/add-cloud-machine",
     route: "/settings/devices",
     viewport: { width: 1280, height: 1000 },
-    steps: [{ click: "button", text: "Add a cloud machine" }, { sleep: 800 }],
-    frame: "window",
+    steps: [
+      { click: "button", text: "Add a cloud machine" },
+      { wait: "[role=dialog][data-state=open] button", text: "Create new" },
+      { js: `[...[...document.querySelectorAll("[role=dialog][data-state=open]")].pop().querySelectorAll("button")].find((b) => b.textContent.trim() === "Create new").click()` },
+      { sleep: 600 },
+      { js: FILL_AWS },
+      { sleep: 900 },
+    ],
+    crop: { selector: "[role=dialog][data-state=open]:has(input[placeholder=\"ami-…\"])", pad: 0 },
+    frame: "element",
     out: "public/documentation/remote-and-cloud-sessions/add-cloud-machine.webp",
   },
   // Very last: the main page's setup card. It empties the inbox for the rest of the page's life: a fresh account in the Mac app (__acmeScene.fresh empties the inbox and stands in for the shell).
