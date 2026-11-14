@@ -51,8 +51,11 @@ export function TaskItemRow({
   progress,
   hiddenDescendantCount = 0,
   parentChip,
+  inPlan = false,
 }: {
   task: TaskItemType;
+  /** Drawn on its own plan's page, where naming the plan again says nothing. */
+  inPlan?: boolean;
   onPress: () => void;
   onLongPress?: () => void;
   /** Nesting depth, already clamped to the emphasised top levels by buildTaskTree. */
@@ -121,7 +124,7 @@ export function TaskItemRow({
       <RNView style={styles.metaLine}>
         <RNText style={[styles.shortId, codeFont]}>{task.short_id}</RNText>
 
-        {task.plan && (
+        {task.plan && !inPlan && (
           <>
             <RNText style={styles.sep}>·</RNText>
             <FontAwesome name="map" size={9} color={Theme.cyan} style={{ marginRight: 3 }} />

@@ -57,10 +57,12 @@ export const ObjectHit = memo(function ObjectHit({ hit, highlight, onPress }: { 
   const look = lookOf(hit, Theme);
   const done = hit.kind === 'task' && (hit.entity?.status === 'done' || hit.entity?.status === 'dropped');
   const terms = parseQueryTerms(highlight);
-  const title = hit.title.length > TITLE_WINDOW ? snippetAround(hit.title, terms, TITLE_WINDOW) : hit.title;
+  const spans = termSpans(hit.title, terms);
+  // A hit inside the title's first stretch keeps the title's own start.
+  const title = hit.title.length > TITLE_WINDOW && spans.length > 0 && spans[0][1] > TITLE_WINDOW ? snippetAround(hit.title, terms, TITLE_WINDOW) : hit.title;
   // Found by what it is for, not what it is called (a plan's goal, a
   // routine's instruction): the stretch that matched shows under the title.
-  const body: string | undefined = termSpans(hit.title, terms).length === 0 ? hit.entity?.goal || hit.entity?.prompt : undefined;
+  const body: string | undefined = spans.length === 0 ? hit.entity?.goal || hit.entity?.prompt : undefined;
   const why = body && termSpans(body, terms).length > 0 ? snippetAround(body.replace(/\s+/g, ' '), terms, 90) : undefined;
   return (
     <Pressable onPress={() => onPress(hit)} style={({ pressed }) => [styles.row, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel={hit.title}>
