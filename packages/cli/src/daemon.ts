@@ -241,6 +241,7 @@ import {
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { claudeBannerText, extractCwd, extractGrokCwd, extractMuseCwd, extractSummaryTitle, extractTeamInfo, isGrokInternalSession, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
 import { extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCodexProgramLaunch } from "./codexSessionMeta.js";
+import { headlessRunStaysOutOfInbox, inheritedConversationOfHeadless, repairLeakedHeadlessCodexRuns } from "./headlessRuns.js";
 import {
   CodexAppServer,
   threadForkTimeoutMsForBytes,
@@ -11815,7 +11816,20 @@ async function trackTmuxSpawns(
 // the conversation is created on a later pass. So the walk remembers every
 // spawner it names, keyed by the child session, and any later pass maps those
 // names to a conversation after the process is gone.
-type SpawnerCandidate = { conversationId: string } | { sessionId: string };
+type SpawnerCandidate = { conversationId: string } | { sessionId: string } | { inheritedConversationId: string };
+
+// The conversation a headless run's process inherited from the session whose
+// Bash started it. This is the one route that names the spawner of a detached
+// run (`nohup codex exec … &`): its parent process is init, so the ancestor
+// walk below ends at once, and codex has no session hook to declare a parent.
+async function inheritedConversationOfPid(pid: number): Promise<string | null> {
+  try {
+    const { stdout } = await _execFileAsync("ps", ["eww", "-o", "command=", "-p", String(pid)], { timeout: 5_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024, env: SAFE_ENV });
+    return inheritedConversationOfHeadless(String(stdout).trim());
+  } catch {
+    return null; // the process exited between the lookup and the read
+  }
+}
 const spawnerCandidates = new Map<string, SpawnerCandidate[]>();
 
 async function walkSpawnerCandidates(
@@ -11849,6 +11863,8 @@ async function walkSpawnerCandidates(
     const openTranscripts = await ancestorTranscriptSessionIds(ancestors);
     const openSessionId = resolveSpawnerSessionId(ancestors, (p) => openTranscripts.get(p) ?? null, sessionId);
     if (openSessionId) candidates.push({ sessionId: openSessionId });
+    const inherited = await inheritedConversationOfPid(pid);
+    if (inherited) candidates.push({ inheritedConversationId: inherited });
     if (candidates.length) break;
   }
   return candidates;
@@ -11875,7 +11891,10 @@ export async function resolveSpawnerConversation(
     if (candidates.length) spawnerCandidates.set(sessionId, candidates);
   }
   for (const candidate of candidates) {
-    const conversationId = "conversationId" in candidate ? candidate.conversationId : conversationCache[candidate.sessionId];
+    // An inherited id comes from an env var, so only one of this machine's own conversations counts.
+    const conversationId = "conversationId" in candidate ? candidate.conversationId
+      : "sessionId" in candidate ? conversationCache[candidate.sessionId]
+      : Object.values(conversationCache).includes(candidate.inheritedConversationId) ? candidate.inheritedConversationId : undefined;
     if (conversationId && conversationId !== own) return conversationId;
   }
   // The conversation the run inherited (session-register hook) comes after the
@@ -12480,6 +12499,7 @@ async function processSessionFilePass(
           } catch {}
           if (!parentConversationId) spawnLinkAttempts.set(sessionId, 1);
         }
+        const agentTaskId = triggerRunTaskId(sessionId);
         createParams = {
           userId,
           teamId,
@@ -12496,8 +12516,15 @@ async function processSessionFilePass(
           subagentDescription,
           // Path-derived: true even when the parent conversation isn't cached
           // yet, so the server never briefly sees this as a top-level session.
-          isSubagent: subagentTranscript || undefined,
-          agentTaskId: triggerRunTaskId(sessionId),
+          // A headless run (`claude -p`) whose spawner nobody could name is
+          // still no inbox card (headlessRuns.ts); a later pass can link it.
+          isSubagent: subagentTranscript || headlessRunStaysOutOfInbox({
+            headless: !!cliFlags?.includes("--print"),
+            triggerRun: !!agentTaskId,
+            forkOrHandoff: !!parentMessageUuid || isPlanHandoff,
+            teammate: !!teamInfo,
+          }) || undefined,
+          agentTaskId,
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
         };
@@ -13521,19 +13548,23 @@ async function processCodexSessionPass(
           }
 
           const finishCreate = captureTranscriptMapping(sessionId,conversationCache,lineageKeys);
+          const agentTaskId = triggerRunTaskId(sessionId, firstUserMessage?.content);
           createParams = {
             userId,
             teamId,
             sessionId,
             agentType: "codex",
-            agentTaskId: triggerRunTaskId(sessionId, firstUserMessage?.content),
+            agentTaskId,
             projectPath,
             slug: undefined,
             title,
             startedAt: firstMessageTimestamp,
             parentMessageUuid: undefined,
             parentConversationId,
-            isSubagent: !!nativeParentSessionId || !!parentConversationId || undefined,
+            // A headless run (`codex exec`) whose spawner nobody could name is
+            // still no inbox card (headlessRuns.ts); a later pass can link it.
+            isSubagent: !!nativeParentSessionId || !!parentConversationId
+              || headlessRunStaysOutOfInbox({ headless: isCodexProgramLaunch(codexMetadata), triggerRun: !!agentTaskId }) || undefined,
             // The mark the claude path stamps for `claude -p`.
             cliFlags: isCodexProgramLaunch(codexMetadata) ? "--print" : undefined,
             // Same stamp as the claude path: without it every codex session
@@ -31085,6 +31116,25 @@ async function main(): Promise<void> {
   repairProjectPaths(syncService).catch(err => {
     log(`Failed to repair project paths: ${err instanceof Error ? err.message : String(err)}`);
   });
+
+  // Once per machine: the `codex exec` runs that became inbox cards before a
+  // headless run was created outside the inbox (headlessRuns.ts).
+  if (config.user_id) {
+    const repairUserId = config.user_id;
+    repairLeakedHeadlessCodexRuns({
+      sessionsDir: path.join(process.env.HOME || "", ".codex", "sessions"),
+      markerFile: path.join(CONFIG_DIR, "repairs", "headless-codex-runs.json"),
+      conversations: readConversationCache(),
+      readHead: (file) => readFileHeadLines(file, 1),
+      mark: async (sessionId) => {
+        await syncService.createConversation({ userId: repairUserId, teamId: config.team_id, sessionId, agentType: "codex", isSubagent: true });
+      },
+    }).then((marked) => {
+      if (marked) log(`Marked ${marked} headless Codex run(s) that had surfaced as inbox cards`);
+    }).catch((err) => {
+      log(`Failed to repair headless Codex runs: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
 
   // Backfill plan_mode plans from JSONL files that the daemon missed (e.g., sessions completed before daemon started)
   backfillPlanModeFromJSONL(syncService).catch(err => {

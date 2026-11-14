@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { resolveSpawnerConversation } from "./daemon.js";
 import { declareSpawnParent } from "./spawnParents.js";
 import { TmuxSpawnRegistry } from "./tmuxSpawns.js";
+import { pollUntil } from "./test-helpers/pollUntil.js";
 
 // A detached headless run has no process path back to its spawner (the walk
 // finds nothing for a transcript no live process holds), so the inherited
@@ -40,3 +41,42 @@ test("a cast exec declaration names the caller's conversation", async () => {
   declareSpawnParent(dir, "child-d", "caller-sess");
   expect(await resolve("child-d", { "caller-sess": "jx7caller" })).toBe("jx7caller");
 });
+
+// A detached `codex exec` (`nohup … &`) has init for a parent and no session
+// hook, so the conversation its own process inherited is the only thing that
+// names its spawner. The stand-in is a script named `codex` run with `exec`,
+// holding the transcript open the way the real run does.
+// lsof and ps over a real process: seconds on a loaded machine.
+const DETACHED_RUN_TIMEOUT_MS = 30_000;
+async function detachedHeadlessRun(name: string, inheritedConversation: string): Promise<{ transcript: string; stop: () => void }> {
+  const bin = path.join(dir, `${name}-bin`);
+  fs.mkdirSync(bin, { recursive: true });
+  const script = path.join(bin, "codex");
+  // Run by bun, not /bin/sh: macOS hides the environment of a system binary from ps.
+  fs.writeFileSync(script, 'const fs = require("node:fs");\nconst fd = fs.openSync(process.argv[3], "a");\nfs.writeSync(fd, "ready\\n");\nsetTimeout(() => {}, 60000);\n');
+  const transcript = path.join(dir, `${name}.jsonl`);
+  const child = Bun.spawn([process.execPath, script, "exec", transcript], {
+    env: { PATH: process.env.PATH ?? "", CODECAST_CONVERSATION_ID: inheritedConversation },
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  await pollUntil(() => fs.existsSync(transcript) && fs.statSync(transcript).size > 0, "the stand-in run to open its transcript");
+  return { transcript, stop: () => child.kill() };
+}
+
+test("a detached headless run nests under the conversation its process inherited", async () => {
+  const run = await detachedHeadlessRun("child-e", "jx7spawner");
+  try {
+    expect(await resolveSpawnerConversation(run.transcript, "child-e", "codex", { "spawner-sess": "jx7spawner" }, noSpawns, dir)).toBe("jx7spawner");
+  } finally {
+    run.stop();
+  }
+}, DETACHED_RUN_TIMEOUT_MS);
+
+test("an inherited conversation this machine does not know nests nothing", async () => {
+  const run = await detachedHeadlessRun("child-f", "jx7elsewhere");
+  try {
+    expect(await resolveSpawnerConversation(run.transcript, "child-f", "codex", { "spawner-sess": "jx7spawner" }, noSpawns, dir)).toBeNull();
+  } finally {
+    run.stop();
+  }
+}, DETACHED_RUN_TIMEOUT_MS);
