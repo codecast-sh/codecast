@@ -24,7 +24,8 @@ export type ComputerErrorCode =
   | "action_timeout"
   | "screenshot_failed"
   | "accessibility_error"
-  | "screen_locked";
+  | "screen_locked"
+  | "remote_refused";
 
 export type ComputerAppInfo = { name: string; bundleId: string | null; pid: number };
 
@@ -58,15 +59,18 @@ export type ComputerSnapshotData = {
 export type ComputerElementFrame = { index: number; x: number; y: number; width: number; height: number };
 
 export type ComputerScreenshotData = {
-  /** base64 png on the wire; the CLI replaces it with `path` in --json. */
-  data?: string;
+  /** The file the helper wrote (0600, swept by the CLI after a day), on the
+   *  machine the helper runs on. */
+  path: string;
   format: "png";
+  bytes?: number;
   width: number;
   height: number;
-  /** Screenshot pixels per window point: action_x = pixel_x / scale. */
+  /** Screenshot pixels per window point: action_x = crop.x + pixel_x / scale. */
   scale: number;
-  path?: string;
-  dataOmitted?: boolean;
+  /** `--crop`: the window region the picture shows, in window points. */
+  crop?: ComputerRect;
+  /** `--json` only: when the sweep may delete the file. */
   expiresAt?: string;
 };
 
@@ -87,7 +91,8 @@ export type ComputerActionVerification =
         | "provider_unavailable"
         | "readback_unsupported"
         | "window_changed"
-        | "value_mismatch";
+        | "value_mismatch"
+        | "web_content_echo";
       expected?: string | null;
       actualPreview?: string | null;
     };

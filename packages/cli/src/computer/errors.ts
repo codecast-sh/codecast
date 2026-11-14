@@ -11,19 +11,28 @@
  * raises the same class, so a caller has one shape to catch.
  */
 
-import { agentSetupLines } from "@codecast/shared/contracts";
+import { agentSetupLines } from "@codecast/shared/contracts/agentToolSetup";
 import type { ComputerErrorCode } from "./types.js";
 
 export class ComputerError extends Error {
   readonly code: ComputerErrorCode;
-  constructor(code: ComputerErrorCode, message: string) {
+  /** An action was sent and never answered, so it may have landed. */
+  readonly outcomeUnknown: boolean;
+  constructor(code: ComputerErrorCode, message: string, opts: { outcomeUnknown?: boolean } = {}) {
     super(message);
     this.name = "ComputerError";
     this.code = code;
+    this.outcomeUnknown = opts.outcomeUnknown === true;
   }
   /** The flat `--json` envelope, `ok` first, matching the `cast app` convention. */
-  toJSON(): { ok: false; code: ComputerErrorCode; message: string; recovery: string[] } {
-    return { ok: false, code: this.code, message: this.message, recovery: recoveryFor(this.code) };
+  toJSON(): { ok: false; code: ComputerErrorCode; message: string; recovery: string[]; outcomeUnknown?: true } {
+    return {
+      ok: false,
+      code: this.code,
+      message: this.message,
+      recovery: recoveryFor(this.code),
+      ...(this.outcomeUnknown ? { outcomeUnknown: true as const } : {}),
+    };
   }
 }
 
@@ -40,9 +49,9 @@ const RECOVERY: Record<ComputerErrorCode, string[]> = {
     "cast computer does not launch closed apps.",
   ],
   window_not_focused: [
-    "Mouse input reaches only a window in front; keys and typing reach a background one.",
-    "Look for a route that needs no mouse: a keyboard shortcut, a menu item, a Secondary Action, or set-value.",
-    "If only the mouse will do, pass --restore-window, which takes the human's screen; if the message says presses were already delivered, run `get-app-state` first.",
+    "Another window took the front while the press was going in, so it stopped.",
+    "If the message says presses were already delivered, run `get-app-state` and check before retrying.",
+    "Retry the click: a window in the back takes the press without coming forward.",
   ],
   window_stale: [
     "Run `cast computer list-windows --app <app>` and choose a current selector.",
@@ -94,6 +103,11 @@ const RECOVERY: Record<ComputerErrorCode, string[]> = {
     "If it names the helper app, run `cast doctor`.",
     "Do not loop while availability is unchanged.",
   ],
+  remote_refused: [
+    "The laptop is not yours to drive from here until your person allows it: the message names the one missing step.",
+    "When it prints a Yes card (`cast decide ... --on laptop`), raise exactly that card; never grant it yourself.",
+    "Without `--on`, this command drives this machine's own desktop.",
+  ],
   screen_locked: [
     "Only the human can fix this: tell them the Mac must be unlocked, and declare `cast state --status blocked` naming it.",
     "Retry once they say it is unlocked. Do not touch the grants or open System Settings; they are fine.",
@@ -131,13 +145,13 @@ export function isComputerErrorCode(value: unknown): value is ComputerErrorCode 
  * what we expect", which is exactly what it is.
  */
 export function computerErrorFromWire(error: unknown): ComputerError {
-  const raw = (error ?? {}) as { code?: unknown; message?: unknown };
+  const raw = (error ?? {}) as { code?: unknown; message?: unknown; outcomeUnknown?: unknown };
   const message = typeof raw.message === "string" && raw.message ? raw.message : "the computer helper failed without a message";
   if (!isComputerErrorCode(raw.code)) {
     const named = typeof raw.code === "string" && raw.code ? ` (helper reported an unknown code '${raw.code}')` : "";
     return new ComputerError("accessibility_error", `${message}${named}`);
   }
-  return new ComputerError(raw.code, message);
+  return new ComputerError(raw.code, message, { outcomeUnknown: raw.outcomeUnknown === true });
 }
 
 /** Anything thrown on the client side, as a ComputerError. */
