@@ -57,8 +57,12 @@ export function useUniversalSearch(query: string, filters: SearchFilters, opts: 
   const sinceBase = useMemo(() => Date.now(), [range]);
   const since = range === "all" ? undefined : sinceBase - SEARCH_RANGE_MS[range];
 
+  // Every workspace the viewer belongs to, as the header search does: a
+  // person's own sessions are findable from any workspace, the way their
+  // routines and the rest of the viewer's objects already are. Each row from
+  // a team carries its name.
   const remote = useRemoteSearch(query, {
-    enabled: true, limit, userOnly, mineOnly, since, sort, debounceMs: 300,
+    enabled: true, limit, userOnly, mineOnly, since, sort, debounceMs: 300, allTeams: true,
     chatTeamId, chatLimit,
   });
   const { debouncedQuery, contentData: freshData, titleData, searchError } = remote;

@@ -63,12 +63,13 @@ export const SessionHit = memo(function SessionHit({ row, highlight, maxMatches 
           <MobileSessionIdentityLine row={identity} title={cleanTitle(row.title) || 'Untitled'} style={styles.title} highlight={highlight} />
           <RNText style={sessionStyles.timeText} maxFontSizeMultiplier={CHROME_FONT_CAP}>{formatRelativeTime(row.updatedAt)}</RNText>
         </RNView>
-        {(project || !row.isOwn || !!row.messageCount) && (
+        {(project || !row.isOwn || !!row.messageCount || !!row.teamName) && (
           <RNView style={styles.meta}>
             {project && (
               <ProjectTag name={project} maxFontSizeMultiplier={CHROME_FONT_CAP} />
             )}
             {!row.isOwn && !!row.authorName && <RNText style={sessionStyles.authorText} maxFontSizeMultiplier={CHROME_FONT_CAP}>{row.authorName.split(' ')[0]}</RNText>}
+            {!!row.teamName && <RNText style={styles.dim} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{row.teamName}</RNText>}
             {!!row.messageCount && <RNText style={styles.dim} maxFontSizeMultiplier={CHROME_FONT_CAP}>{row.messageCount} msgs</RNText>}
           </RNView>
         )}

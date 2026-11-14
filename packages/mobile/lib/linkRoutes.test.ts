@@ -122,6 +122,32 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://example.com/org/or-12')).toBeNull();
   });
 
+  test('a role reference opens its screen; a person opens the person screen by handle', () => {
+    expect(mobileEntityRoute('role', 'or-12')).toBe('/org/or-12');
+    expect(mobileEntityRoute('person', 'samvit')).toBe('/person/samvit');
+    expect(mobileEntityRoute('person', '@samvit')).toBe('/person/samvit');
+    expect(mobileEntityRoute('person', ' ')).toBeNull();
+    expect(mobileRouteForUrl('https://codecast.sh/org/@samvit')).toBe('/person/samvit');
+    expect(mobileRouteForUrl('/org/%40samvit')).toBe('/person/samvit');
+    expect(mobileRouteForUrl('https://codecast.sh/team/samvit')).toBe('/person/samvit');
+    expect(mobileRouteForUrl('https://codecast.sh/team/activity')).toBe('/(tabs)/chat?segment=activity');
+    expect(mobileRouteForUrl('https://codecast.sh/team/charts')).toBeNull();
+  });
+
+  test('a project and a goal open their own screens from every address', () => {
+    expect(mobileEntityRoute('project', 'pj-mf3k2a')).toBe('/project/pj-mf3k2a');
+    expect(mobileEntityRoute('initiative', 'in-2')).toBe('/goal/in-2');
+    expect(mobileRouteForUrl('https://codecast.sh/projects/pj-mf3k2a')).toBe('/project/pj-mf3k2a');
+    expect(mobileRouteForUrl('https://codecast.sh/projects/pj-mf3k2a?tab=tasks')).toBe('/project/pj-mf3k2a');
+    expect(mobileRouteForUrl('/goals/in-2')).toBe('/goal/in-2');
+    expect(mobileRouteForUrl('https://codecast.sh/initiatives/in-2')).toBe('/goal/in-2');
+    expect(mobileRouteForUrl('https://codecast.sh/org/in-2')).toBe('/goal/in-2');
+    expect(mobileRouteForUrl('https://codecast.sh/org/pj-mf3k2a')).toBe('/project/pj-mf3k2a');
+    // A task opened inside its project is the task.
+    expect(mobileRouteForUrl('https://codecast.sh/projects/pj-mf3k2a/ct-12')).toBe('/task/ct-12');
+    expect(mobileRouteForUrl('https://codecast.sh/projects')).toBeNull();
+  });
+
   test('app pages that are not objects stay external', () => {
     // A published artifact is a web page, not a mobile screen — sending it to a
     // route would 404 inside the app.
@@ -146,9 +172,11 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/calls/cl-117?t=150')?.startsWith('/recording/cl-117?t=150')).toBe(true);
   });
 
-  test('triggers have no mobile screen yet, so they stay external', () => {
-    expect(mobileEntityRoute('trigger', 'tr-42')).toBeNull();
-    expect(mobileRouteForUrl('https://codecast.sh/triggers?task=tr-42')).toBeNull();
+  test('a trigger opens its own screen, by short id or Convex id', () => {
+    expect(mobileEntityRoute('trigger', 'tr-42')).toBe('/trigger/tr-42');
+    expect(mobileRouteForUrl('https://codecast.sh/triggers/tr-42')).toBe('/trigger/tr-42');
+    expect(mobileRouteForUrl('https://codecast.sh/triggers?task=tr-42')).toBe('/trigger/tr-42');
+    expect(mobileRouteForUrl('https://codecast.sh/triggers')).toBe('/(tabs)/tasks?segment=routines');
   });
 });
 
@@ -229,5 +257,56 @@ describe('pull request links', () => {
     expect(mobileRouteForUrl('https://codecast.sh/pr/codecast-sh/codecast/412')).toBe('/pr/codecast-sh/codecast/412');
     expect(mobileRouteForUrl('https://codecast.sh/r/codecast-sh/codecast/pull/412')).toBe('/pr/codecast-sh/codecast/412');
     expect(mobileRouteForUrl('https://github.com/codecast-sh/codecast/pull/412')).toBe('/pr/codecast-sh/codecast/412');
+  });
+});
+
+describe('commit and deploy links', () => {
+  test('a commit opens the phone commit screen from every form', () => {
+    expect(mobileEntityRoute('commit', 'codecast-sh/codecast@1a88ee73b')).toBe('/commit/codecast-sh/codecast/1a88ee73b');
+    expect(mobileRouteForUrl('https://codecast.sh/commit/codecast-sh/codecast/1a88ee73b26d677374d8bd80da2e95361981359b')).toBe('/commit/codecast-sh/codecast/1a88ee73b26d677374d8bd80da2e95361981359b');
+    expect(mobileRouteForUrl('https://github.com/Codecast-sh/codecast/commit/1A88EE73B')).toBe('/commit/codecast-sh/codecast/1a88ee73b');
+    expect(mobileEntityRoute('commit', 'not-a-ref')).toBeNull();
+  });
+
+  test('a deploy opens the phone deploy screen', () => {
+    expect(mobileEntityRoute('deploy', 'dp-1113')).toBe('/deploy/dp-1113');
+    expect(mobileRouteForUrl('https://codecast.sh/deploys?deploy=dp-1113')).toBe('/deploy/dp-1113');
+  });
+});
+
+describe('flow and proposal links', () => {
+  test('a flow opens the phone flow screen by its slug, from the reference and the library link', () => {
+    expect(mobileEntityRoute('flow', 'flow:change')).toBe('/flow/change');
+    expect(mobileEntityRoute('flow', 'Flow:Quick-Change')).toBe('/flow/quick-change');
+    expect(mobileRouteForUrl('https://codecast.sh/flows?view=flows&item=quick-change')).toBe('/flow/quick-change');
+    expect(mobileRouteForUrl('/flows?item=change')).toBe('/flow/change');
+    expect(mobileEntityRoute('flow', 'flow:-bad')).toBeNull();
+  });
+
+  test('a proposal opens the phone proposal screen, one change of it in focus', () => {
+    expect(mobileEntityRoute('proposal', 'op-55')).toBe('/proposal/op-55');
+    expect(mobileEntityRoute('proposal', 'OP-55#3')).toBe('/proposal/op-55?focus=3');
+    expect(mobileRouteForUrl('https://codecast.sh/org?proposal=op-55')).toBe('/proposal/op-55');
+    expect(mobileRouteForUrl('https://codecast.sh/org?proposal=op-55&focus=3')).toBe('/proposal/op-55?focus=3');
+  });
+});
+
+describe('source, replay and Ops issue links', () => {
+  test('a source opens the phone source screen by short id or name', () => {
+    expect(mobileEntityRoute('source', 'src-13')).toBe('/source/src-13');
+    expect(mobileRouteForUrl('https://codecast.sh/ops?source=src-13')).toBe('/source/src-13');
+    expect(mobileRouteForUrl('https://codecast.sh/ops?source=codecast%20web')).toBe('/source/codecast%20web');
+  });
+
+  test('a replay opens the phone replay screen, keeping the moment a link names', () => {
+    expect(mobileEntityRoute('replay', 'rp-10706')).toBe('/replay/rp-10706');
+    expect(mobileRouteForUrl('https://codecast.sh/ops/replays/rp-10706')).toBe('/replay/rp-10706');
+    expect(mobileRouteForUrl('https://codecast.sh/ops/replays/rp-10706?t=83')).toBe('/replay/rp-10706%401%3A23');
+    expect(mobileEntityRoute('replay', 'rp-12@1:23')).toBe('/replay/rp-12%401%3A23');
+  });
+
+  test('an Ops issue page opens the phone issue screen', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/ops/issues/eg-2242')).toBe('/issue/eg-2242');
+    expect(mobileRouteForUrl('/ops/issues/eg-2242')).toBe('/issue/eg-2242');
   });
 });

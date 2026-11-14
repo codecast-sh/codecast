@@ -216,16 +216,15 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   // the lines it names, not at the top of the call.
   const targetId = isSession || type === 'doc'
     ? entity?._id ?? (looksConvex ? rawId : null)
-    : type === 'call'
+    : type === 'call' || type === 'proposal' || type === 'replay'
       ? rawId
       : entity?.short_id ?? rawId;
-  // No trigger screen on mobile yet — that pill still names the trigger and
-  // reads inline, it just isn't tappable. The type → screen table is shared
-  // with the link opener and the deep-link handler (lib/links).
+  // The type → screen table is shared with the link opener and the deep-link
+  // handler (lib/links).
   const route = targetId ? mobileEntityRoute(type, targetId) : null;
-  // A replay has no screen on the phone: it opens the web replay page, at the
-  // moment it names, in the in-app browser (the player needs a real page).
-  // A deploy (`dp-N`) and a flow (`flow:change`) have none either: each opens its web page.
+  // A replay pill keeps its moment (`rp-12@1:23`) and a proposal pill its
+  // change (`op-55#3`), which their screens open at. An id the phone cannot
+  // route (no screen for it) opens the web page in the in-app browser.
   const webPage = !route && type === 'replay' && entity ? entityRoute('replay', rawId) : !route && (type === 'deploy' || type === 'flow') ? entityRoute(type, rawId) : null;
 
   return (

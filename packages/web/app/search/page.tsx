@@ -494,7 +494,7 @@ export default function SearchPage() {
             <div className="space-y-3 py-16 text-center">
               <Search className="mx-auto h-8 w-8 text-sol-text-dim/40" />
               <p className="text-sm text-sol-text-dim">
-                Sessions, tasks, plans, docs, routines, people and chat across {mineOnly ? "your" : "your team's"} workspace.
+                Sessions, tasks, plans, docs, routines, people and chat across {mineOnly ? "your own work" : "every workspace you're in"}.
               </p>
               <p className="text-meta text-sol-text-dim/70">
                 Open this page from anywhere with{" "}

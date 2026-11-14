@@ -12,7 +12,7 @@ import {
   type TeamPolicy,
 } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
-import type { Device } from "../components/DeviceBadge";
+import type { Device } from "./deviceRow";
 
 export type { RestrictionKey };
 
