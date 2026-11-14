@@ -258,10 +258,18 @@ export const ANSWERED_TAIL = (now: number) => [
   },
 ];
 
+/** Sessions a shot opens that are not inbox cards, by id: what conversations:getConversation answers. */
+const OPENABLE = new Map<string, Record<string, any>>();
+
 /** A session a shot opens that is not an inbox card: its conversation record
- *  only (machineSessions.ts resolves such a record when its address is opened). */
+ *  (machineSessions.ts resolves the address), and the conversation the pane
+ *  asks for to seed a session it does not hold (useMissingSessionLookup),
+ *  the way it opens a teammate's session. */
 export function openableOnly(s: any, rows: Record<string, any>[]) {
-  for (const row of rows) s.syncRecord("conversations", row._id, row);
+  for (const row of rows) {
+    OPENABLE.set(row._id, row);
+    s.syncRecord("conversations", row._id, row);
+  }
 }
 
 /** Scenes a docs shot moves the world into from a step (`__acmeScene.answered()`): real store writes, the same ones a live answer makes. */
@@ -305,6 +313,10 @@ export const DECISIONS_PART: AcmePart = {
   sessions,
   answers: {
     "sessionDecisions:listForUser": () => DECISIONS(Date.now()),
+    "conversations:getConversation": (a) => {
+      const row = OPENABLE.get(String(a?.conversation_id));
+      return row ? { ...row, user: { name: row.author_name } } : undefined;
+    },
     // The Decisions page's Team view: the same open questions, stamped with the workspace they were read from.
     "sessionDecisions:getWithDoc": (a) => detailOf(String(a?.decision_id ?? "")),
     "sessionDecisions:getWithDocMany": (a) => ((a?.decision_ids ?? []) as string[]).map(detailOf).filter(Boolean),

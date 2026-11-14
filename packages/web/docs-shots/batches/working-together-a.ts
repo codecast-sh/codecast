@@ -7,6 +7,8 @@ import { CALL_ID, RECAP_SESSION } from "../../lib/acmeWorld/calls";
 
 const D = DECISION_SESSIONS;
 const conv = (id: string) => `/conversation/${id}`;
+/** Full density: every tool call as its own card (a `cast send` as its Message to card), not folded into a receipt. */
+const FULL = { js: "__inboxStore.getState().updateClientUI({ simple_view: false })" };
 
 export const WORKING_TOGETHER_A: Shot[] = [
   /* ── Decisions ─────────────────────────────────────────────────────────── */
@@ -69,7 +71,8 @@ export const WORKING_TOGETHER_A: Shot[] = [
   {
     name: "messaging/message-from",
     route: conv(D.queue._id),
-    viewport: { width: 1100, height: 900 },
+    viewport: { width: 1100, height: 1000 },
+    steps: [FULL, { wait: "[data-sv-feed]", text: "Message to" }, { sleep: 1000 }],
     crop: { selector: "[data-sv-feed]", pad: 0 },
     frame: "element",
     out: "public/documentation/messaging/message-from.webp",
@@ -80,7 +83,12 @@ export const WORKING_TOGETHER_A: Shot[] = [
     name: "forks-and-spawn/workers",
     route: conv(D.retries._id),
     viewport: { width: 1100, height: 1000 },
-    steps: [{ click: "button", text: "Read the thread" }, { wait: "[data-sv-feed]" }, { sleep: 1200 }],
+    steps: [
+      FULL,
+      { js: "[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Read the thread'))?.click()" },
+      { wait: "[data-sv-feed]", text: "Both workers are done" },
+      { sleep: 1200 },
+    ],
     crop: { selector: "[data-sv-feed]", pad: 0 },
     frame: "element",
     out: "public/documentation/forks-and-spawn/workers.webp",
@@ -195,12 +203,68 @@ export const WORKING_TOGETHER_A: Shot[] = [
     out: "public/documentation/team-chat/session-thread.webp",
   },
 
+  {
+    name: "team-chat/slack-mirror",
+    route: "/chat",
+    viewport: { width: 1200, height: 1000 },
+    ready: "button[data-nav-subrow][title=eng]",
+    steps: [
+      { rightClick: "button[data-nav-subrow][title=eng]" },
+      { click: "[role=menuitem]", text: "Mirror with Slack" },
+      { wait: ".ch-slack-dialog button.ch-slack-row", text: "eng" },
+      { click: ".ch-slack-dialog button.ch-slack-row", text: "eng" },
+      { click: ".ch-slack-dialog button", text: "Last week" },
+      { sleep: 500 },
+    ],
+    crop: { selector: ".ch-slack-dialog", pad: 0 },
+    frame: "element",
+    out: "public/documentation/team-chat/slack-mirror.webp",
+  },
+
+  // The live #eng huddle, joined in this tab (__acmeScene.huddle in lib/acmeWorld/calls.ts).
+  {
+    name: "calls/in-call",
+    route: "/chat",
+    viewport: { width: 1280, height: 820 },
+    steps: [
+      { js: "__acmeScene.huddle()" },
+      { wait: "[data-open-call]" },
+      { click: "[data-open-call]" },
+      { wait: ".call-stage" },
+      { click: ".call-stage button[aria-label^='Open the thread']" },
+      { wait: ".call-stage aside", text: "Two tests on the one-hour cap" },
+      { sleep: 900 },
+    ],
+    frame: "window",
+    out: "public/documentation/calls/in-call.webp",
+  },
+  {
+    name: "calls/huddle-agent",
+    route: "/chat",
+    viewport: { width: 1280, height: 820 },
+    steps: [
+      { js: "__acmeScene.huddle()" },
+      { wait: "[data-open-call]" },
+      { js: "document.querySelector('.call-stage') || document.querySelector('[data-open-call]').click()" },
+      { wait: ".call-stage" },
+      { js: "document.querySelector('.call-stage aside') || document.querySelector(\".call-stage button[aria-label^='Open the thread']\").click()" },
+      { wait: ".call-stage aside", text: "Two tests on the one-hour cap" },
+      { sleep: 900 },
+    ],
+    crop: { selector: ".call-stage aside", pad: 0 },
+    frame: "element",
+    out: "public/documentation/calls/huddle-agent.webp",
+  },
+
   // Last: it splits the tab's stage, which later shots on the same tab would inherit.
   {
     name: "shots/session-messages",
     route: conv(D.queue._id),
     viewport: { width: 1440, height: 900 },
     steps: [
+      // Hang up the huddle the call shots joined, so no call chrome rides along.
+      { js: "__inboxStore.getState().setCallState({ phase: 'idle', roomKey: null })" },
+      FULL,
       { wait: "[data-sv-feed]" },
       { js: `__inboxStore.getState().stageInsertLeaf("root", "right", "${conv(D.hooksApi._id)}", { focus: false })` },
       { sleep: 2500 },

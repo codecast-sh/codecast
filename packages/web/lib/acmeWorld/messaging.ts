@@ -45,7 +45,7 @@ export const QUEUE_TRANSCRIPT = (now: number) => [
   {
     _id: "hero-q-m5",
     role: "assistant",
-    content: "",
+    content: "18 tests green. Telling the API session it's fixed.",
     tool_calls: [call("hero-q-tc4", "Bash", { command: `cast send ${API.short_id} "${THANKS}"` })],
     tool_results: [result("hero-q-tc4", `sent to ${API.short_id}`)],
     timestamp: t(now, 5),

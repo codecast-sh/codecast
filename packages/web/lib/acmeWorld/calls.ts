@@ -7,7 +7,7 @@
 
 import type { AcmePart } from "./parts";
 import { DECISION_SESSIONS, openableOnly } from "./decisions";
-import { HOUR, MIN, PEOPLE, TEAM_ID, cid, session } from "./world";
+import { CAPTIONS, HOUR, HUDDLE_ROOM, MIN, PEOPLE, TEAM_ID, cid, session } from "./world";
 
 export const CALL_ID = cid("callbackoff");
 export const CALL_SHORT = "cl-218";
@@ -126,16 +126,81 @@ const RECAP_TRANSCRIPT = (now: number) => [
   },
 ];
 
+/* ── The live #eng huddle (the core's LIVE_ROOMS), joined from this window ── */
+
+export const LIVE_ID = cid("calllive");
+const LIVE_STARTED = 6 * MIN;
+
+/** The live words so far, oldest first, ending on the core's captions. */
+const liveSegments = (now: number) => {
+  const start = now - LIVE_STARTED;
+  const early: [Who, number, string][] = [
+    ["maya", 20, "The replay numbers are in. Exponential backoff gets 96% of failed webhooks delivered by the fifth try."],
+    ["me", 34, "Good. The retry queue is in review, I'll ask the session what's left."],
+  ];
+  const head = early.map(([w, s, text], i) => ({ seq: i + 1, speaker_id: who[w]._id, speaker_name: who[w].name, text, t0: s * 1000, t1: (s + 9) * 1000, at: start + s * 1000 }));
+  const tail = CAPTIONS(now).tail.map((c, i) => ({ seq: head.length + i + 1, speaker_id: c.speaker_id, speaker_name: c.speaker_name, text: c.text, t0: c.at - start, t1: c.at - start + 5000, at: c.at }));
+  return [...head, ...tail];
+};
+
+const liveRoutes = [{ kind: "session", target: RETRIES._id, mode: "live", added_by: PEOPLE.me._id }];
+
+const liveDetail = (now: number) => ({
+  ...row(now),
+  _id: LIVE_ID,
+  short_id: "cl-219",
+  room_key: HUDDLE_ROOM,
+  status: "live",
+  started_at: now - LIVE_STARTED,
+  ended_at: null,
+  title: null,
+  summary: null,
+  action_items: [],
+  summary_status: null,
+  started_by: PEOPLE.sarah._id,
+  share_token: null,
+  can_share_link: true,
+  recording_url: null,
+  routes: liveRoutes,
+  sessions: [],
+  guests: [],
+  segments: liveSegments(now),
+});
+
+/** The live room's thread: Alex asks the Webhook retries session, it answers as an agent. */
+const liveThread = (now: number) =>
+  [
+    { _id: cid("livechat1"), user_id: PEOPLE.me._id, user_name: PEOPLE.me.name, user_image: PEOPLE.me.image, text: `@${RETRIES.short_id} what's left before the retry queue can ship?`, at: now - 3 * MIN, mine: true, agent: null },
+    { _id: cid("livechat2"), user_id: PEOPLE.me._id, user_name: AGENT.name, text: "Two tests on the one-hour cap, then review. PR #482 is up; I'll post in #eng when it merges.", at: now - 2 * MIN - 30_000, mine: false, agent: AGENT },
+  ].map((r) => ({ ...r, transcript_id: LIVE_ID, attachments: undefined, event: null, event_reason: null, event_guest_name: null, event_run_id: null, event_span: null }));
+
+const seat = (p: { _id: string; name: string; image: string }, joinedAgo: number, now: number) => ({ user_id: p._id, user_name: p.name, user_image: p.image, muted: false, joined_at: now - joinedAgo });
+
 export const CALLS_PART: AcmePart = {
   name: "calls",
   seed: (s, now) => {
+    (globalThis as any).__acmeScene = {
+      ...(globalThis as any).__acmeScene,
+      /** Alex in the live #eng huddle with Sarah and Maya: the seats, and this window's call connected. */
+      huddle() {
+        const st = (globalThis as any).__inboxStore?.getState?.() ?? s;
+        const t = Date.now();
+        st.syncTable("callOccupancy", { [HUDDLE_ROOM]: [seat(PEOPLE.sarah, LIVE_STARTED, t), seat(PEOPLE.me, 4 * MIN, t), seat(PEOPLE.maya, 5 * MIN, t)] });
+        st.setCallState({ phase: "connected", roomKey: HUDDLE_ROOM, muted: false, micDenied: false });
+      },
+    };
     openableOnly(s, [session(now, RECAP_SESSION, { ago: 2 * MIN, waiting: "done", project: "~/src/billing", messages: 2, state: "Answered what the retry huddle agreed" })]);
     s.applyTailMessages(RECAP_SESSION._id, 0, RECAP_TRANSCRIPT(now) as any, null);
   },
   answers: {
     "transcripts:webListCalls": () => [row(Date.now())],
-    "transcripts:webGetCall": (a) => (a?.transcript_id === CALL_ID ? detail(Date.now()) : null),
+    "transcripts:webGetCall": (a) => (a?.transcript_id === CALL_ID ? detail(Date.now()) : a?.transcript_id === LIVE_ID ? liveDetail(Date.now()) : null),
     "transcripts:webGetCallRef": callRef,
-    "callChat:list": (a) => (a?.transcript_id === CALL_ID ? thread(Date.now()) : []),
+    "callChat:list": (a) => (a?.transcript_id === CALL_ID ? thread(Date.now()) : a?.room_key === HUDDLE_ROOM ? liveThread(Date.now()) : []),
+    // The live huddle's words, its transcript and the session it hears (the core's captions, with the room's ids).
+    "transcripts:getLive": () => {
+      const now = Date.now();
+      return { ...CAPTIONS(now), transcript_id: LIVE_ID, started_at: now - LIVE_STARTED, team_id: TEAM_ID, routes: liveRoutes };
+    },
   },
 };
