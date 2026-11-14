@@ -2,6 +2,7 @@ import { SeatKillDialog } from "./org/SeatKillDialog";
 import { PendingAgentFeatures } from "./onboarding/usePendingAgentFeatures";
 import { LiveRunsCheck } from "../hooks/useLiveRunsCheck";
 import { useSyncMetricSeries } from "../hooks/useMetricSeries";
+import { useSessionCardBuckets, useSyncSessionCardBucket } from "../hooks/useSyncTimeline";
 import { useSyncOpsSources } from "../hooks/useSyncOps";
 import { useSyncSessionIndex } from "../hooks/useSyncSessionIndex";
 import { HuddleStartHost } from "./calls/HuddleStartHost";
@@ -541,8 +542,22 @@ function HostFeeders() {
   // Every run the store holds as live, checked against the server's live runs, so no surface shows an ended run as
   // live; a leaf of its own, so its wakes re-render nothing here.
   // Machine resource reports (one feeder per device): the pressure notice and /resources read them.
-  return <><LiveRunsCheck /><PendingAgentFeatures /><MachineResourceFeeders /></>;
+  return <><LiveRunsCheck /><PendingAgentFeatures /><MachineResourceFeeders /><SessionCardPullRequestsFeeder /></>;
 }
+
+// The pull requests every session card draws as chips (lib/sessionPullRequests):
+// a leaf of its own, so its clock re-renders nothing else, and one feeder per
+// bucket of sessions, so a bucket whose members did not change keeps its
+// subscription untouched.
+function SessionCardPullRequestsFeeder() {
+  const buckets = useSessionCardBuckets();
+  return <>{buckets.map((ids, i) => <SessionCardBucketFeeder key={i} ids={ids} />)}</>;
+}
+
+const SessionCardBucketFeeder = memo(function SessionCardBucketFeeder({ ids }: { ids: readonly string[] }) {
+  useSyncSessionCardBucket(ids);
+  return null;
+});
 
 /** The store's feeders and write wiring for one window. An embedded pane
  *  (PANE_EMBED) skips the window-only effects: call rings, chat toasts and
