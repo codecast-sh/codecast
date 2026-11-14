@@ -145,6 +145,24 @@ describe("live artifact store", () => {
     await whenLiveSent(DOC, 1000);
   });
 
+  it("a claimed write reports how it ended, so its undo entry can follow it", async () => {
+    let refuse = true;
+    let rev = 40;
+    s()._clearDispatch(owner);
+    s()._setDispatch(async (action: string) => {
+      if (action !== "applyLiveOps" && action !== "liveSendOps") return null;
+      if (refuse) throw new Error("Uncaught ConvexError: This range changed since you started; do it again");
+      return { rev: ++rev, keys: [] };
+    }, { owner });
+    const ops = (n: number, tag: string) => Array.from({ length: n }, (_, i) => ({ k: `el_${tag}${i}`, put: { kind: "sticky", x: i } }));
+    const refused = await new Promise((done) => sendLiveOps(DOC, "main", ops(5, "a"), { claim: { scope: "tab:t1", base: 1 }, done }));
+    expect(refused).toEqual({ outcome: "refused" });
+    refuse = false;
+    // Landed in three batches: the outcome names the last revision, the base an undo of it claims from.
+    const landed = await new Promise((done) => sendLiveOps(DOC, "main", ops(900, "b"), { claim: { scope: "tab:t1", base: 1 }, done }));
+    expect(landed).toEqual({ outcome: "sent", rev: 43 });
+  });
+
   it("a write that clears a field shows the field gone while it waits behind another send", async () => {
     const { layerElements } = await import("../../components/live/useLiveArtifact");
     const { applyOp, fromElement } = await import("@codecast/shared/artifacts");

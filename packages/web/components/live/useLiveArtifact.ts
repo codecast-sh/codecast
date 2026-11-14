@@ -16,7 +16,7 @@
 //
 // Undo is a stack of inverse ops per tab. An undo is an ordinary write, so it
 // syncs and converges like any edit.
-import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useAction, useMutation } from "convex/react";
 import { nanoid } from "nanoid";
@@ -328,7 +328,9 @@ export function useLiveComments(docId: string): ArtifactElement[] {
 // coalesced, in order, when the send ahead of them resolves.
 /** A whole-range rewrite's claim, as a caller names it (lib/liveArtifactWrite claimsAfter on the server). */
 export type LiveClaim = { scope: string; base?: number };
-type Queued = { layer: LiveLayer; ops: ArtifactOp[]; claim?: LiveClaim; batchClaims?: LiveBatchClaim[] };
+/** How a whole write ended: landed (at `rev`), parked for a later send, or refused by the server. */
+export type LiveWriteOutcome = { outcome: "sent"; rev: number } | { outcome: "parked" } | { outcome: "refused" };
+type Queued = { layer: LiveLayer; ops: ArtifactOp[]; claim?: LiveClaim; batchClaims?: LiveBatchClaim[]; done?: (o: LiveWriteOutcome) => void };
 // `staged`: the rest of a write too big for one server batch (a sort of a 10k-row sheet), painted from the
 // queued overlay at once and handed to the store one batch per task, so no frame holds the whole write.
 type SendQueue = { inflight: boolean; pending: Queued[]; staged: Queued[] };
@@ -464,7 +466,7 @@ export function useLiveUnsettled(docId: string): number {
   );
 }
 
-function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[], claim?: LiveClaim) {
+function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[], claim?: LiveClaim, done?: (o: LiveWriteOutcome) => void) {
   const q = sendQueues.get(docId)!;
   q.inflight = true;
   const batches = chunkOps(coalesceOps(ops));
@@ -473,8 +475,16 @@ function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[], claim?:
   const claimFor = (i: number): LiveBatchClaim | undefined => (claim ? { scope: claim.scope, write, base: claim.base ?? 0, first: i === 0, last: i === batches.length - 1 } : undefined);
   const [first, ...rest] = batches;
   const firstSend = sendBatch(docId, layer, first, false, claimFor(0));
-  const sends: Promise<unknown>[] = [firstSend];
+  const sends: Promise<LiveWriteOutcome>[] = [firstSend];
+  let reported = false;
+  const report = (o: LiveWriteOutcome) => { if (!reported) { reported = true; done?.(o); } };
   const finish = () => {
+    // The write's outcome: refused if any batch was, parked if any waits, else landed at its last revision.
+    void Promise.all(sends).then((all) => {
+      if (all.some((o) => o.outcome === "refused")) return report({ outcome: "refused" });
+      if (all.some((o) => o.outcome === "parked")) return report({ outcome: "parked" });
+      report({ outcome: "sent", rev: Math.max(0, ...all.map((o) => (o.outcome === "sent" ? o.rev : 0))) });
+    });
     const stall = new Promise((r) => setTimeout(r, SEND_STALL_MS));
     void Promise.race([Promise.allSettled(sends), stall]).then(() => {
       q.inflight = false;
@@ -507,7 +517,7 @@ function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[], claim?:
   };
   // A rewrite holds its scope only once its first batch is in: the rest goes after that answer, and a
   // refused first batch takes the rest of the write with it (nothing sent, nothing said twice).
-  if (claim) void firstSend.then((outcome) => (outcome === "refused" ? dropStaged() : nextTask(pump)));
+  if (claim) void firstSend.then((o) => (o.outcome === "refused" ? dropStaged() : nextTask(pump)));
   else nextTask(pump);
 }
 
@@ -523,7 +533,7 @@ function nextTask(fn: () => void) {
  * One server batch: painted in the store now, sent, and settled (or parked, or refused) when it answers.
  * `held`: a staged batch the page reads from its overlay (heldRows), painted with no pending locks.
  */
-function sendBatch(docId: string, layer: LiveLayer, batch: ArtifactOp[], held = false, claim?: LiveBatchClaim): Promise<"sent" | "parked" | "refused"> {
+function sendBatch(docId: string, layer: LiveLayer, batch: ArtifactOp[], held = false, claim?: LiveBatchClaim): Promise<LiveWriteOutcome> {
   const store = useInboxStore.getState() as any;
   const clientId = nanoid(10);
   let pending: unknown;
@@ -537,15 +547,15 @@ function sendBatch(docId: string, layer: LiveLayer, batch: ArtifactOp[], held = 
   const rowIds = batch.map((op) => liveRowId(docId, layer, op.k));
   countUnsettled(docId, 1);
   return Promise.resolve(pending)
-    .then((res: any): "sent" => {
+    .then((res: any): LiveWriteOutcome => {
       if (res && typeof res.rev === "number") settleAfter(docId, res.rev, rowIds, before);
       refused.delete(docId);
-      return "sent";
+      return { outcome: "sent", rev: typeof res?.rev === "number" ? res.rev : 0 };
     })
-    .catch((e: any): "parked" | "refused" => {
+    .catch((e: any): LiveWriteOutcome => {
       if (!isRefusedDispatchError(e)) {
         park(docId, rowIds);
-        return "parked";
+        return { outcome: "parked" };
       }
       // The store already put the rows back (a held batch has no locks to undo: the server's rows go back over it);
       // say so once, and keep it on the save state.
@@ -553,7 +563,7 @@ function sendBatch(docId: string, layer: LiveLayer, batch: ArtifactOp[], held = 
       const why = refusalText(e);
       if (refused.get(docId) !== why) toast.error(`Not saved: ${why}`);
       refused.set(docId, why);
-      return "refused";
+      return { outcome: "refused" };
     })
     .finally(() => countUnsettled(docId, -1));
 }
@@ -583,7 +593,7 @@ function drainQueue(docId: string) {
   const first = q.pending[0];
   if (first.claim) {
     q.pending.shift();
-    dispatchNow(docId, first.layer, first.ops, first.claim);
+    dispatchNow(docId, first.layer, first.ops, first.claim, first.done);
     rebuildQueuedOverlay(docId);
     return;
   }
@@ -626,7 +636,7 @@ function claimReady(docId: string, claim: LiveClaim): boolean {
 }
 
 /** Send a batch for a doc, in order behind any send still in flight. */
-export function sendLiveOps(docId: string, layer: LiveLayer, ops: ArtifactOp[], opts?: { claim?: LiveClaim }) {
+export function sendLiveOps(docId: string, layer: LiveLayer, ops: ArtifactOp[], opts?: { claim?: LiveClaim; done?: (o: LiveWriteOutcome) => void }) {
   if (ops.length === 0) return;
   let q = sendQueues.get(docId);
   if (!q) sendQueues.set(docId, (q = { inflight: false, pending: [], staged: [] }));
@@ -635,10 +645,10 @@ export function sendLiveOps(docId: string, layer: LiveLayer, ops: ArtifactOp[], 
   const claim = opts?.claim ? { scope: opts.claim.scope, base: opts.claim.base ?? liveReadThrough(docId) } : undefined;
   if (opts?.claim && !claimReady(docId, opts.claim)) return;
   if (!q.inflight) {
-    dispatchNow(docId, layer, ops, claim);
+    dispatchNow(docId, layer, ops, claim, opts?.done);
     return;
   }
-  q.pending.push({ layer, ops, ...(claim ? { claim } : {}) });
+  q.pending.push({ layer, ops, ...(claim ? { claim } : {}), ...(opts?.done ? { done: opts.done } : {}) });
   rebuildQueuedOverlay(docId);
   countUnsettled(docId, 0);
 }
@@ -703,9 +713,13 @@ export function useLiveArtifact(docId: string): LiveHandle {
   const stateAt = useAction(api.liveArtifacts.stateAt);
   const restoreAction = useAction(api.liveArtifacts.restore);
 
-  // Undo/redo stacks of inverse batches, with the layer each was written to.
-  const undoRef = useRef<Array<{ layer: LiveLayer; ops: ArtifactOp[] }>>([]);
-  const redoRef = useRef<Array<{ layer: LiveLayer; ops: ArtifactOp[] }>>([]);
+  // Undo/redo stacks of inverse batches, with the layer each was written to. An entry for a whole-range
+  // rewrite carries its claim scope and, once the write landed, the revision it landed at: taking it back
+  // claims the same scope from that revision, so it is refused if someone rewrote the range since,
+  // rather than mixing their rows with these. A write the server refused never happened: its entry goes.
+  type UndoEntry = { layer: LiveLayer; ops: ArtifactOp[]; scope?: string; landed?: number };
+  const undoRef = useRef<UndoEntry[]>([]);
+  const redoRef = useRef<UndoEntry[]>([]);
   const [stackTick, setStackTick] = useState(0);
 
   // The open gesture: ops not yet sent, and the before-state of every key it touched.
@@ -719,22 +733,40 @@ export function useLiveArtifact(docId: string): LiveHandle {
 
   const send = useCallback((layer: LiveLayer, ops: ArtifactOp[]) => sendLiveOps(docId, layer, ops), [docId]);
 
-  const pushUndo = useCallback((layer: LiveLayer, inverse: ArtifactOp[]) => {
-    if (inverse.length === 0) return;
-    undoRef.current.push({ layer, ops: inverse });
+  const pushUndo = useCallback((layer: LiveLayer, inverse: ArtifactOp[], scope?: string): UndoEntry | undefined => {
+    if (inverse.length === 0) return undefined;
+    const entry: UndoEntry = { layer, ops: inverse, ...(scope ? { scope } : {}) };
+    undoRef.current.push(entry);
     if (undoRef.current.length > UNDO_MAX) undoRef.current.shift();
     redoRef.current = [];
     setStackTick((t) => t + 1);
+    return entry;
   }, []);
+
+  /** Where a claimed write's taking-back entry learns how it ended: landed (at a revision) or refused (gone). */
+  const followEntry = useCallback((stack: MutableRefObject<UndoEntry[]>, entry: UndoEntry | undefined) => (o: LiveWriteOutcome) => {
+    if (!entry) return;
+    if (o.outcome === "sent") entry.landed = o.rev;
+    else if (o.outcome === "refused") {
+      stack.current = stack.current.filter((e) => e !== entry);
+      setStackTick((t) => t + 1);
+    }
+  }, []);
+
+  /** Send a taking-back entry: a claimed one claims its scope from the revision its write landed at. */
+  const sendEntry = useCallback((entry: UndoEntry, follow?: (o: LiveWriteOutcome) => void) => {
+    if (entry.scope) sendLiveOps(docId, entry.layer, entry.ops, { claim: { scope: entry.scope, base: entry.landed ?? 0 }, done: follow });
+    else send(entry.layer, entry.ops);
+  }, [docId, send]);
 
   const apply = useCallback<LiveHandle["apply"]>((ops, opts) => {
     if (ops.length === 0) return;
     const layer = writeLayer(opts?.layer);
     if (opts?.claim && !claimReady(docId, opts.claim)) return;
-    if (opts?.undoable !== false && layer !== "comments") pushUndo(layer, invertOps(stateOf, ops));
-    if (opts?.claim) sendLiveOps(docId, layer, ops, { claim: opts.claim });
+    const entry = opts?.undoable !== false && layer !== "comments" ? pushUndo(layer, invertOps(stateOf, ops), opts?.claim?.scope) : undefined;
+    if (opts?.claim) sendLiveOps(docId, layer, ops, { claim: opts.claim, done: followEntry(undoRef, entry) });
     else send(layer, ops);
-  }, [docId, writeLayer, pushUndo, send, stateOf]);
+  }, [docId, writeLayer, pushUndo, send, stateOf, followEntry]);
 
   const flushGesture = useCallback((close: boolean) => {
     const g = gesture.current;
@@ -776,22 +808,33 @@ export function useLiveArtifact(docId: string): LiveHandle {
 
   const commit = useCallback(() => flushGesture(true), [flushGesture]);
 
+  // A claimed write still on its way has no landed revision to take back from: it waits until it lands.
+  const stillSaving = (entry: UndoEntry) => {
+    if (!entry.scope || entry.landed !== undefined) return false;
+    toast("Still saving: undo once it's saved");
+    return true;
+  };
+
   const undo = useCallback(() => {
     flushGesture(true);
-    const entry = undoRef.current.pop();
-    if (!entry) return;
-    redoRef.current.push({ layer: entry.layer, ops: invertOps(stateOf, entry.ops) });
-    send(entry.layer, entry.ops);
+    const entry = undoRef.current[undoRef.current.length - 1];
+    if (!entry || stillSaving(entry)) return;
+    undoRef.current.pop();
+    const back: UndoEntry = { layer: entry.layer, ops: invertOps(stateOf, entry.ops), ...(entry.scope ? { scope: entry.scope } : {}) };
+    redoRef.current.push(back);
+    sendEntry(entry, followEntry(redoRef, back));
     setStackTick((t) => t + 1);
-  }, [flushGesture, stateOf, send]);
+  }, [flushGesture, stateOf, sendEntry, followEntry]);
 
   const redo = useCallback(() => {
-    const entry = redoRef.current.pop();
-    if (!entry) return;
-    undoRef.current.push({ layer: entry.layer, ops: invertOps(stateOf, entry.ops) });
-    send(entry.layer, entry.ops);
+    const entry = redoRef.current[redoRef.current.length - 1];
+    if (!entry || stillSaving(entry)) return;
+    redoRef.current.pop();
+    const back: UndoEntry = { layer: entry.layer, ops: invertOps(stateOf, entry.ops), ...(entry.scope ? { scope: entry.scope } : {}) };
+    undoRef.current.push(back);
+    sendEntry(entry, followEntry(undoRef, back));
     setStackTick((t) => t + 1);
-  }, [stateOf, send]);
+  }, [stateOf, sendEntry, followEntry]);
 
   // Presence: throttled sends, a beat while the tab is open, leave on unmount.
   const presenceRef = useRef<{ last: any; timer: any; sentAt: number }>({ last: {}, timer: null, sentAt: 0 });
