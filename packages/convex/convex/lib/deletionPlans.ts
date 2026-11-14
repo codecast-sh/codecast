@@ -104,6 +104,7 @@ function plans() {
     under("org_role_tokens", "by_conversation_day", "conversation_id"),
     under("change_story_inputs", "by_conversation", "conversation_id"),
     under("chat_channel_agents", "by_conversation", "conversation_id"),
+    under("chat_session_rooms", "by_conversation_channel", "conversation_id"),
     under("authority_events", "by_conversation_created", "conversation_id"),
     // Pages published from the session carry its content.
     { ...artifactBase, table: "artifacts", index: "by_session_conversation", field: "session_conversation_id", value: idOf },
@@ -178,6 +179,7 @@ function plans() {
     under("chat_channel_members", "by_channel", "channel_id"),
     under("chat_typing", "by_channel_updated", "channel_id"),
     under("thread_reads", "by_channel", "channel_id"),
+    under("chat_session_rooms", "by_channel", "channel_id"),
   ];
   const modRows = [
     under("mod_versions", "by_mod_version", "mod_id"),
