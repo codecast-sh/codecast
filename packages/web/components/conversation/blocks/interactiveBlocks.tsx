@@ -25,7 +25,8 @@ import { useIsModernStyle } from "../../../hooks/useVisualStyle";
 import { ModernImage } from "./ModernImage";
 import { ModernMonitorRow, ModernThinking } from "./ModernEventRows";
 import { ModernPlanMode } from "./ModernPlanMode";
-import { ModernAskUserQuestion } from "./ModernAskUserQuestion";
+import { ModernAskUserQuestion, forgetModernAskSent, markModernAskSent } from "./ModernAskUserQuestion";
+import { AnswerProposals, MyProposalStatus, newProposalKey, proposeOrExplain, useMyName, useMyProposalFor, useTeamProposalRole } from "../teamProposals";
 
 // Live status badge + latest event for a Monitor or background-Bash block,
 // derived from the conversation's message window (monitorRowsFor — one
@@ -258,12 +259,62 @@ type AskUserQuestionProps = { tool: ToolCall; result?: ToolResult; onSendMessage
 type AskUserQuestionInput = { questions?: Array<{ question: string; header?: string; detail?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; multi_select?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string>; deniesAt?: number };
 
 export function AskUserQuestionBlock(props: AskUserQuestionProps) {
+  const proposals = useTeamProposalRole();
+  if (proposals?.role === "teammate" && !props.onSendMessage && !props.result) return <TeammateAskUserQuestion {...props} />;
+  if (proposals?.role === "owner" && props.onSendMessage && !props.result) return <OwnerAskUserQuestion {...props} />;
+  return <AskUserQuestionInner {...props} />;
+}
+
+// The owner's open question with the teammates' proposed answers under it.
+// Sending one answers the question, so the card closes as if pressed: a
+// second answer before the transcript catches up would land in whatever the
+// terminal shows next.
+function OwnerAskUserQuestion(props: AskUserQuestionProps) {
+  const [rev, setRev] = useState(0);
+  const [answered, setAnswered] = useState(false);
+  const closeCard = () => { markModernAskSent(props.tool.id); _askUserSentState.set(props.tool.id, {}); setAnswered(true); setRev((r) => r + 1); };
+  const reopenCard = () => { forgetModernAskSent(props.tool.id); _askUserSentState.delete(props.tool.id); setAnswered(false); setRev((r) => r + 1); };
+  // Answering on the card itself takes the proposals away with it.
+  const answerOnCard = (content: string) => { setAnswered(true); props.onSendMessage?.(content); };
+  return (
+    <>
+      <AskUserQuestionInner key={rev} {...props} onSendMessage={answerOnCard} />
+      {!answered && <AnswerProposals toolUseId={props.tool.id} onSending={closeCard} onNotSent={reopenCard} />}
+    </>
+  );
+}
+
+function AskUserQuestionInner(props: AskUserQuestionProps) {
   let parsedInput: AskUserQuestionInput = {};
   try { parsedInput = JSON.parse(props.tool.input); } catch {}
   // Only a terminal dialog still counting down holds a ticking clock.
   return typeof parsedInput.deniesAt === "number" && !props.result
     ? <TimedAskUserQuestion {...props} parsedInput={parsedInput} deniesAt={parsedInput.deniesAt} />
     : <AskUserQuestionCard {...props} parsedInput={parsedInput} />;
+}
+
+// A teammate's press on an open question proposes that answer to the owner
+// (convex teamSuggestions.proposeAnswerFor). The card stays open, so another
+// pick replaces the proposal until the owner answers.
+function TeammateAskUserQuestion(props: AskUserQuestionProps) {
+  const ctx = useTeamProposalRole()!;
+  const [rev, setRev] = useState(0);
+  const propose = useInboxStore((s) => s.proposeAnswer);
+  const withdraw = useInboxStore((s) => s.withdrawTeamSuggestion);
+  const me = useMyName();
+  const mine = useMyProposalFor((r) => r.kind === "answer" && r.tool_use_id === props.tool.id);
+  const reopen = () => { forgetModernAskSent(props.tool.id); _askUserSentState.delete(props.tool.id); setRev((r) => r + 1); };
+  const onPropose = (payload: string) => {
+    const key = newProposalKey();
+    proposeOrExplain(propose(ctx.conversationId, props.tool.id, payload, key, me), key, ctx.conversationId);
+    reopen();
+  };
+  return (
+    <>
+      <AskUserQuestionInner key={rev} {...props} onSendMessage={onPropose} />
+      <MyProposalStatus row={mine} onWithdraw={mine ? () => withdraw(mine._id, ctx.conversationId) : undefined} />
+    </>
+  );
 }
 
 function TimedAskUserQuestion({ deniesAt, ...props }: AskUserQuestionProps & { parsedInput: AskUserQuestionInput; deniesAt: number }) {
