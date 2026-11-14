@@ -659,14 +659,38 @@ describe("unread state", () => {
     expect(ctx.db._tables.chat_reads[0].last_read_at).toBe(at);
   });
 
-  test("a message from another channel cannot move this channel's mark", async () => {
-    const ctx = context(ALICE);
-    const elsewhere = await call(sendMessage, ctx, {
+  test("a message from another channel cannot move this channel's mark, and is not refused", async () => {
+    const ctx = context(BOB);
+    const alice = as(ctx, ALICE);
+    await call(sendMessage, alice, { channel_id: CHANNEL, content: "here" });
+    messagesIn(ctx)[0].created_at = 1_000;
+    await call(markRead, ctx, { channel_id: CHANNEL });
+    const before = { ...ctx.db._tables.chat_reads[0] };
+    const elsewhere = await call(sendMessage, alice, {
       channel_id: OTHER_CHANNEL, content: "over here",
     });
-    await expect(call(markRead, ctx, {
+    const result = await call(markRead, ctx, {
       channel_id: CHANNEL, last_read_message_id: elsewhere.message_id,
-    })).rejects.toThrow("not in this channel");
+    });
+    const after = ctx.db._tables.chat_reads.find((r: any) => r.channel_id === CHANNEL);
+    expect(after.last_read_at).toBe(before.last_read_at);
+    expect(after.last_read_message_id).toBe(before.last_read_message_id);
+    expect(result.last_read_at).toBe(before.last_read_at);
+  });
+
+  test("a marker deleted since the client painted it marks read like the no-marker call", async () => {
+    const ctx = context(BOB);
+    const alice = as(ctx, ALICE);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "joins the channel" });
+    const gone = await call(sendMessage, alice, { channel_id: CHANNEL, content: "purged" });
+    await call(sendMessage, alice, { channel_id: CHANNEL, content: "newest" });
+    stampTimeline(ctx, 1_000);
+    await ctx.db.delete(gone.message_id);
+    expect((await railFor(ctx)).unread).toBe(1);
+
+    await call(markRead, ctx, { channel_id: CHANNEL, last_read_message_id: gone.message_id });
+    expect((await railFor(ctx)).unread).toBe(0);
+    expect(ctx.db._tables.chat_reads[0].last_read_message_id).not.toBe(gone.message_id);
   });
 });
 

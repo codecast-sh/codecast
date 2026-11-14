@@ -17,7 +17,7 @@ export function useOpenDm(): (memberIds: string[]) => void {
   return useCallback(
     (memberIds: string[]) => {
       const channelId = useInboxStore.getState().openDmChannel(memberIds);
-      openChat(`/chat/${channelId}`);
+      if (channelId) openChat(`/chat/${channelId}`);
     },
     [openChat],
   );

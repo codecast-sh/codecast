@@ -60,6 +60,7 @@ export default function NewMessageScreen() {
       return;
     }
     const channelId = useInboxStore.getState().openDmChannel(ids);
+    if (!channelId) return;
     router.replace({ pathname: '/chat/[id]', params: { id: channelId } } as never);
   };
 

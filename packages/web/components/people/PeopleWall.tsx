@@ -139,6 +139,7 @@ export function WallFaceButton({
   // wall of twenty faces must not create twenty conversations.
   const openDm = useCallback(() => {
     const channelId = useInboxStore.getState().openDmChannel([id]);
+    if (!channelId) return;
     const path = `/chat/${channelId}`;
     // The panel never navigates itself. It hands the path to the window that
     // holds the work, and only moves when there is no such window.

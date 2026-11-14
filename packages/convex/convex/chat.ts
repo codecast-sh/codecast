@@ -2013,9 +2013,33 @@ export const markRead = mutation({
     const userId = await requireCaller(ctx, args.api_token);
     const channel = await loadChannel(ctx, userId, args.channel_id);
 
-    const now = Date.now();
-    let readAt = now;
-    if (!args.last_read_message_id) {
+    // A marker can be gone (deleted since the client painted it) or name a row
+    // in another room (a stale cache). Gone reads as "everything up to now";
+    // another room's row must not move this mark, so that call changes nothing.
+    // Neither throws: a read mark is bookkeeping, and refusing it only reports
+    // the client's cache back to it as a failed write.
+    const marker = args.last_read_message_id ? await ctx.db.get(args.last_read_message_id) : null;
+    if (marker && marker.channel_id.toString() !== channel._id.toString()) {
+      const existing = await ctx.db
+        .query("chat_reads")
+        .withIndex("by_user_channel", (q: any) => q.eq("user_id", userId).eq("channel_id", channel._id))
+        .first();
+      return {
+        channel_id: channel._id,
+        last_read_at: existing?.last_read_at ?? 0,
+        notifications_cleared: 0,
+        pushes_cancelled: 0,
+      };
+    }
+    let readAt = Date.now();
+    if (marker) {
+      // The marker's own stamp, unclamped. Stamps are server-written and
+      // strictly monotonic per channel, which puts a same-millisecond send up
+      // to a few ms in the FUTURE of Date.now() — clamping to now would leave
+      // that row eternally unread. A client cannot forge the stamp: it can only
+      // name a row, and only one in this channel.
+      readAt = marker.created_at;
+    } else {
       // "Everything up to now" includes a line sent this same millisecond,
       // whose stamp the per-channel monotonic clock may have pushed a few ms
       // past Date.now(); a mark at `now` would leave it unread for good.
@@ -2026,21 +2050,8 @@ export const markRead = mutation({
         .first();
       if (newest && newest.created_at > readAt) readAt = newest.created_at;
     }
-    if (args.last_read_message_id) {
-      const marker = await ctx.db.get(args.last_read_message_id);
-      // A message from another channel must not be able to move this mark.
-      if (!marker || marker.channel_id.toString() !== channel._id.toString()) {
-        chatFail("INVALID", "That message is not in this channel");
-      }
-      // The marker's own stamp, unclamped. Stamps are server-written and
-      // strictly monotonic per channel, which puts a same-millisecond send up
-      // to a few ms in the FUTURE of Date.now() — clamping to now would leave
-      // that row eternally unread. A client cannot forge the stamp: it can only
-      // name a row, and only one in this channel.
-      readAt = marker.created_at;
-    }
     await upsertRead(
-      ctx, userId, channel.team_id, channel._id, readAt, args.last_read_message_id, undefined,
+      ctx, userId, channel.team_id, channel._id, readAt, marker?._id, undefined,
     );
 
     const { cleared, pushes } = await cancelChatPushes(ctx, userId, channel._id, readAt);

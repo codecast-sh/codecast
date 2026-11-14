@@ -670,6 +670,7 @@ function RosterRow({
   // holds the work. Only when there is no such window does this one move.
   const message = useCallback(() => {
     const channelId = useInboxStore.getState().openDmChannel([id]);
+    if (!channelId) return;
     const path = `/chat/${channelId}`;
     if (!navigateMainWindow(path)) window.location.href = path;
   }, [id]);

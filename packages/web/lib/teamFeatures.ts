@@ -17,21 +17,10 @@
 import { createContext, useContext } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { activeTeamIdOf } from "./activeTeam";
-import { featureVendorBlock, TEAM_FEATURES, workspaceFeatureEnabled, workspaceFeatureState, type FeatureState, type TeamFeatureKey } from "@codecast/shared/contracts";
-import { defineFeatures, holderHasFeature } from "@platform/flags";
+import { workspaceFeatureEnabled, workspaceFeatureState, type FeatureState, type TeamFeatureKey } from "@codecast/shared/contracts";
+import { TEAM_FEATURE_CATALOG, teamHasFeature } from "./teamFeatureRule";
 
-/** codecast's catalog as a @platform/flags catalog. Shared with the off-feature
- *  landing (TeamFeatureOff), so the toggle, the gate and the copy agree. */
-export const TEAM_FEATURE_CATALOG = defineFeatures(TEAM_FEATURES);
-
-/** Is `key` on for the team with id `teamId`, out of the store's teams list?
- *  A regulated team's feature whose vendor has no BAA yet is off however it
- *  is set (featureVendorBlock); the server refuses it the same way. */
-export function teamHasFeature(teams: any[], teamId: string | null | undefined, key: TeamFeatureKey): boolean {
-  if (!teamId) return false;
-  const team = (teams || []).find((t: any) => String(t._id) === String(teamId));
-  return holderHasFeature(TEAM_FEATURE_CATALOG, team, key) && !featureVendorBlock(team, key);
-}
+export { TEAM_FEATURE_CATALOG, teamHasFeature };
 
 /** A fixed answer for every feature, in place of the viewer's teams: the
  *  marketing hero renders the same views whatever team the visitor is in. */
