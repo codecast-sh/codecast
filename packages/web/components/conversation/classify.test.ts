@@ -66,3 +66,18 @@ describe("a compaction summary that opens with a provenance note", () => {
     expect(isStickyWorthy(classifyUserMessage({ _id: "m", role: "user", content, timestamp: 2 } as any))).toBe(false);
   });
 });
+
+describe("session message intent", () => {
+  const kindOf = (content: string) => classifyUserMessage({ _id: "m", role: "user", content, timestamp: 1 } as any);
+  test("a --done message carries its intent onto the row", () => {
+    expect(kindOf('<session-message from="jx7c6zk" intent="done">\nmerged\n</session-message>'))
+      .toMatchObject({ kind: "session_message", from: "jx7c6zk", body: "merged", intent: "done" });
+  });
+  test("a preview sliced before the close tag keeps it", () => {
+    expect(kindOf('<session-message from="jx7c6zk" intent="inform">\nmain is re'))
+      .toMatchObject({ kind: "session_message", intent: "inform" });
+  });
+  test("a plain message has none", () => {
+    expect((kindOf('<session-message from="jx7c6zk">\nq?\n</session-message>') as any).intent).toBeUndefined();
+  });
+});
