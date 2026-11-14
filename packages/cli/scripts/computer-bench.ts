@@ -20,17 +20,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
-import { ComputerClient } from "../src/computer/client.js";
 import { helperExecutablePath } from "../src/computer/helperApp.js";
 import { readInstance } from "../src/computer/instance.js";
 import { resolveElement } from "../src/computer/tree.js";
-import { disclaimedHelperLaunch } from "../src/test-helpers/computerPermissionProbe.js";
+import { flag, launchFixture, makeClient, sleep, status, until, WORK } from "./computer-fixture.js";
 import type { ComputerActionMethod, ComputerActionResult, ComputerSnapshotResult } from "../src/computer/types.js";
-
-const FIXTURE_SOURCE = path.join(import.meta.dir, "computer-bench-fixture.swift");
-const WORK = path.join(os.tmpdir(), "cc-bench");
 
 type Row = {
   name: string;
@@ -45,83 +40,15 @@ type Row = {
 
 type Report = { label: string; at: string; load: number; helper: string; rows: Row[] };
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const median = (values: number[]) => {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted.length ? sorted[Math.floor(sorted.length / 2)]! : NaN;
 };
 
-function flag(args: string[], name: string): string | undefined {
-  const i = args.indexOf(`--${name}`);
-  return i >= 0 ? args[i + 1] : undefined;
-}
-
 async function timed<T>(fn: () => Promise<T>): Promise<{ ms: number; value: T }> {
   const started = performance.now();
   const value = await fn();
   return { ms: performance.now() - started, value };
-}
-
-function buildFixture(): string {
-  fs.mkdirSync(WORK, { recursive: true });
-  const binary = path.join(WORK, "fixture");
-  const fresh = fs.existsSync(binary) && fs.statSync(binary).mtimeMs > fs.statSync(FIXTURE_SOURCE).mtimeMs;
-  if (!fresh) {
-    const built = spawnSync("swiftc", ["-O", FIXTURE_SOURCE, "-o", binary], { stdio: "inherit" });
-    if (built.status !== 0) throw new Error("the fixture did not compile");
-  }
-  return binary;
-}
-
-type Fixture = { child: ChildProcess; pid: number; windows: Record<string, number>; statusFile: string };
-
-async function launchFixture(extra: string[] = []): Promise<Fixture> {
-  const statusFile = path.join(WORK, `status-${process.pid}-${Date.now()}.json`);
-  const child = spawn(buildFixture(), ["--status-file", statusFile, ...extra], { stdio: ["ignore", "pipe", "inherit"] });
-  const ready = await new Promise<string>((resolve, reject) => {
-    let seen = "";
-    const timer = setTimeout(() => reject(new Error("the fixture never said READY")), 60_000);
-    child.stdout!.on("data", (chunk: Buffer) => {
-      seen += chunk.toString();
-      const line = seen.split("\n").find((l) => l.startsWith("READY"));
-      if (line) {
-        clearTimeout(timer);
-        resolve(line);
-      }
-    });
-    child.on("exit", () => reject(new Error("the fixture exited before READY")));
-  });
-  const pid = Number(/pid=(\d+)/.exec(ready)?.[1]);
-  const windows: Record<string, number> = {};
-  for (const pair of (/windows=(.*)$/.exec(ready)?.[1] ?? "").split(",")) {
-    const [title, id] = pair.split("=");
-    if (title && id) windows[title] = Number(id);
-  }
-  return { child, pid, windows, statusFile };
-}
-
-function status(fixture: Fixture): Record<string, unknown> {
-  try {
-    return JSON.parse(fs.readFileSync(fixture.statusFile, "utf8")) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-async function until(check: () => boolean, timeoutMs = 5_000): Promise<boolean> {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (check()) return true;
-    await sleep(25);
-  }
-  return check();
-}
-
-function makeClient(): ComputerClient {
-  return new ComputerClient({
-    helperLaunch: (socketPath, tokenPath) =>
-      disclaimedHelperLaunch(helperExecutablePath(), ["--agent", socketPath, "--token-file", tokenPath]),
-  });
 }
 
 async function run(args: string[]): Promise<void> {
@@ -131,7 +58,7 @@ async function run(args: string[]): Promise<void> {
   const rows: Row[] = [];
   const client = makeClient();
   const fixture = await launchFixture();
-  const barren = await launchFixture(["--barren"]);
+  const barren = await launchFixture(undefined, ["--barren"]);
   const app = `pid:${fixture.pid}`;
   const form = { app, windowId: fixture.windows["Bench Form"], noScreenshot: true };
   const table = { app, windowId: fixture.windows["Bench Table"], noScreenshot: true };

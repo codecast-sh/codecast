@@ -898,11 +898,17 @@ final class Provider {
         params: [String: JSONValue],
         why: String
     ) throws -> InputRoute {
-        try requireMouseFocus(snapshot, verb: "click", why: why)
         let shown = pointAt(point, snapshot: snapshot, params: params)
-        try Input.click(at: point, button: button, count: count, modifiers: modifiers, targetWindow: snapshot)
+        if isTargetWindowFocused(snapshot) {
+            try Input.click(at: point, button: button, count: count, modifiers: modifiers, targetWindow: snapshot)
+            pressAt(shown)
+            return .hid
+        }
+        let target = try BackgroundMouse.target(snapshot: snapshot, params: params)
+        let flags = modifiers.reduce(into: CGEventFlags()) { $0.insert($1.flag) }
+        try BackgroundMouse.click(target, at: point, button: button, count: count, flags: flags)
         pressAt(shown)
-        return .hid
+        return .process(pid: snapshot.app.pid)
     }
 
     private func performClickAction(element: AXUIElement, mouseButton: MouseButtonSelection) -> String? {
@@ -1060,11 +1066,11 @@ final class Provider {
             guard let point = center(record.localFrame, in: snapshot.windowBounds) else {
                 throw ProviderError(.elementNotClickable, "element \(record.index) has no scrollable frame")
             }
-            try Input.scroll(pid: snapshot.app.pid, at: point, direction: direction, pages: pages)
+            try Input.scroll(try BackgroundMouse.target(snapshot: snapshot, params: params), at: point, direction: direction, pages: pages)
             return actionMetadata(path: "synthetic", fallbackReason: "actionUnsupported")
         }
         let point = try coordinatePoint(params: params, xKey: "x", yKey: "y", snapshot: snapshot)
-        try Input.scroll(pid: snapshot.app.pid, at: point, direction: direction, pages: pages)
+        try Input.scroll(try BackgroundMouse.target(snapshot: snapshot, params: params), at: point, direction: direction, pages: pages)
         return actionMetadata(path: "synthetic")
     }
 
@@ -1091,12 +1097,16 @@ final class Provider {
         } else {
             to = try coordinatePoint(params: params, xKey: "toX", yKey: "toY", snapshot: snapshot)
         }
-        try requireMouseFocus(snapshot, verb: "drag", why: "a drag is a real press and move")
         if pointAt(from, snapshot: snapshot, params: params) != nil {
             AgentCursor.follow(to: to, over: Input.dragSeconds)
         }
-        try Input.drag(from: from, to: to, targetWindow: snapshot)
-        return actionMetadata(path: "synthetic", actionName: "drag", verification: syntheticVerification(.hid))
+        if isTargetWindowFocused(snapshot) {
+            try Input.drag(from: from, to: to, targetWindow: snapshot)
+            return actionMetadata(path: "synthetic", actionName: "drag", verification: syntheticVerification(.hid))
+        }
+        let target = try BackgroundMouse.target(snapshot: snapshot, params: params)
+        try BackgroundMouse.drag(target, from: from, to: to, steps: Input.dragSteps, stepMicroseconds: Input.dragStepMicroseconds)
+        return actionMetadata(path: "synthetic", actionName: "drag", verification: syntheticVerification(.process(pid: snapshot.app.pid)))
     }
 
     /// Accessibility text replacement and select all post no global input, so
@@ -1506,18 +1516,6 @@ private func inputRoute(_ snapshot: Snapshot) -> InputRoute {
     if isTargetWindowFocused(snapshot) { return .hid }
     makeMainWithinApp(snapshot)
     return .process(pid: snapshot.app.pid)
-}
-
-/// Mouse input reaches only a focused window (see InputRoute). `why` says
-/// how this action ended up needing the mouse, so the alternatives offered are
-/// ones the agent has not already tried.
-private func requireMouseFocus(_ snapshot: Snapshot, verb: String, why: String? = nil) throws {
-    guard !isTargetWindowFocused(snapshot) else { return }
-    let reason = why.map { "\($0), so this " } ?? "a "
-    throw ProviderError(
-        .windowNotFocused,
-        "\(reason)mouse \(verb) needs the \(snapshot.app.name) window in front: macOS drops a press on a background window. Look for another way that needs no mouse (a keyboard shortcut, a menu item, a Secondary Action, set-value), or pass --restore-window to bring it forward, which takes the human's screen"
-    )
 }
 
 private func makeMainWithinApp(_ snapshot: Snapshot) {
@@ -2941,24 +2939,13 @@ private enum Input {
         }
     }
 
-    static func scroll(pid: pid_t, at point: CGPoint, direction: String, pages: Double) throws {
+    static func scroll(_ target: BackgroundMouseTarget, at point: CGPoint, direction: String, pages: Double) throws {
         guard let delta = boundedInteger(max(1, (12 * pages).rounded()), as: Int32.self) else {
             throw ProviderError(.invalidArgument, "pages is out of range")
         }
         let wheel1: Int32 = direction == "up" ? delta : direction == "down" ? -delta : 0
         let wheel2: Int32 = direction == "left" ? delta : direction == "right" ? -delta : 0
-        guard let event = CGEvent(
-            scrollWheelEvent2Source: nil,
-            units: .line,
-            wheelCount: 2,
-            wheel1: wheel1,
-            wheel2: wheel2,
-            wheel3: 0
-        ) else {
-            throw ProviderError(.accessibilityError, "failed to create scroll event")
-        }
-        event.location = point
-        event.postToPid(pid)
+        try BackgroundMouse.scroll(target, at: point, wheel1: wheel1, wheel2: wheel2, ticks: 1)
     }
 
     static func typeText(_ text: String, route: InputRoute) throws {
