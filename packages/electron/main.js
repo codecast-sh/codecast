@@ -2841,7 +2841,7 @@ function openFullSessionInMain() {
   );
 }
 
-// Cmd+N: the focused window pops its current view out into a window of its
+// Cmd+Shift+N: the focused window pops its current view out into a window of its
 // own — the same move as the tab strip's "Open in new window". The renderer
 // owns the answer to "what is the current view" (the active tab, or the page
 // of a detached window), so the shell only asks; the detach itself comes back
@@ -3035,15 +3035,18 @@ function buildAppMenu() {
     {
       label: "File",
       submenu: [
-        {
-          label: "New Window",
-          accelerator: "CommandOrControl+N",
-          click: (_item, win) => detachFocusedView(win),
-        },
+        // Cmd+N starts a session: it is the app's one frequent "new" thing, so
+        // it takes the key a Mac person reaches for first. Popping the current
+        // view out into its own window is rarer and takes Cmd+Shift+N.
         {
           label: "New Session",
-          accelerator: menuKeys.accelerator("session.create", "CommandOrControl+Shift+N"),
+          accelerator: menuKeys.accelerator("session.create", "CommandOrControl+N"),
           click: () => openFullSessionInMain(),
+        },
+        {
+          label: "New Window",
+          accelerator: "CommandOrControl+Shift+N",
+          click: (_item, win) => detachFocusedView(win),
         },
         // No accelerators here: these mirror native windows the global
         // shortcuts already open (newSession / togglePalette), and binding the

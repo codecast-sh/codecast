@@ -72,7 +72,7 @@ export function routeOwner(path: string): "here" | "main" | DesktopApp {
   if (!isElectron() || isNonTabRoute(path)) return "here";
   const here = desktopAppWindow();
   // On a shell with app windows, a plain breakout never shows an app's
-  // routes: a Cmd+N window that wandered into chat would be a second chat
+  // routes: a Cmd+Shift+N window that wandered into chat would be a second chat
   // window the moment the real one opened. The shell opens or raises the
   // app's window for it instead (routeToWindow does the same from its side).
   if (here === null && isDetachedTabWindow() && canOpenDesktopApp()) {

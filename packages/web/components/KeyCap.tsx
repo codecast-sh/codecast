@@ -9,7 +9,7 @@ const KEYCAP_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, s
  *  usual cap would read as a grey hole in it. `glass` and `onLight` are for
  *  surfaces that keep their own neutral look whatever the app theme (the
  *  agent dock floating over the desktop): a key on dark glass, and a key on a
- *  white button. */
+ *  white button. `ink` takes the colour of the label it sits in. */
 const KEYCAP_TONES = {
   // Modern: muted ink on the full hairline, with a 1px hairline under it for
   // the key's edge, and 5px corners.
@@ -17,6 +17,9 @@ const KEYCAP_TONES = {
   onAccent: "text-white bg-white/15 border border-white/30",
   glass: "text-white/55 bg-white/[0.08] border border-white/15",
   onLight: "text-black/50 bg-black/[0.06] border border-black/15",
+  // A key on a filled button whose label colour is worked out from its tint
+  // (Modern's primary can be dark ink or white): the cap follows the label.
+  ink: "text-current bg-[color:color-mix(in_srgb,currentColor_14%,transparent)] border border-[color:color-mix(in_srgb,currentColor_35%,transparent)]",
 } as const;
 
 export function KeyCap({ children, size = "sm", tone = "default" }: { children: React.ReactNode; size?: "sm" | "xs"; tone?: keyof typeof KEYCAP_TONES }) {

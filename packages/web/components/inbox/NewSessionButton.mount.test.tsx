@@ -25,6 +25,7 @@ const { createRoot } = await import("react-dom/client");
 const { ThemeContext } = await import("../ThemeProvider");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { ListHeadNewSession, NewSessionButton } = await import("./NewSessionButton");
+const { formatAcceleratorParts, formatShortcutParts, getShortcutsForAction } = await import("../../shortcuts");
 
 const host = document.createElement("div");
 document.body.append(host);
@@ -69,9 +70,27 @@ describe("the New session button", () => {
     }
   });
 
-  test("the rail's row says what it does in words", async () => {
+  test("the rail's row says what it does in words, and shows its key on its face", async () => {
     await mount("modern", <NewSessionButton variant="row" />);
     const button = host.querySelector<HTMLButtonElement>('button[data-new-session="row"]')!;
-    expect(button.textContent).toBe("New session");
+    const caps = [...button.querySelectorAll("kbd")].map((k) => k.textContent);
+    expect(button.textContent).toBe(`New session${caps.join("")}`);
+    // In a browser the page's own binding: Cmd+N belongs to the browser.
+    expect(caps).toEqual(formatShortcutParts(getShortcutsForAction("session.compose")[0]));
+    // The keys sit beside the label, not in its name.
+    expect(button.querySelector("kbd")!.closest("[aria-hidden]")).not.toBeNull();
+  });
+
+  test("in the desktop app the row shows Cmd+N, File › New Session's key", async () => {
+    const ua = Object.getOwnPropertyDescriptor(window.navigator, "userAgent");
+    Object.defineProperty(window.navigator, "userAgent", { configurable: true, value: "Mozilla/5.0 Codecast/1.1.226 Electron/38.0.0" });
+    try {
+      await mount("modern", <NewSessionButton variant="row" />);
+      const caps = [...host.querySelectorAll('button[data-new-session="row"] kbd')].map((k) => k.textContent);
+      expect(caps).toEqual(formatAcceleratorParts("CommandOrControl+N"));
+    } finally {
+      if (ua) Object.defineProperty(window.navigator, "userAgent", ua);
+      else delete (window.navigator as { userAgent?: string }).userAgent;
+    }
   });
 });

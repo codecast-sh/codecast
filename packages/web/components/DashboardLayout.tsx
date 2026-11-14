@@ -1010,7 +1010,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     const open = () => newFullSessionRef.current();
     (window as any).__CODECAST_NEW_SESSION = open;
     window.addEventListener(NEW_SESSION_EVENT, open);
-    // File › New Window (Cmd+N): the shell asks this window to pop its current
+    // File › New Window (Cmd+Shift+N): the shell asks this window to pop its current
     // view out; the answer to "which view" lives here, not in the shell.
     (window as any).__CODECAST_DETACH_VIEW = detachCurrentView;
     return () => {

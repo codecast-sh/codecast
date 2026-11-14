@@ -239,7 +239,7 @@ export function detachTab(tab: { id: string; path: string }): boolean {
   return true;
 }
 
-/** Pop the current view out (Cmd+N / File › New Window): the active tab in a
+/** Pop the current view out (Cmd+Shift+N / File › New Window): the active tab in a
  *  windowed shell, or the page itself in a detached window, which has no strip. */
 export function detachCurrentView(): boolean {
   if (isDetachedTabWindow()) {

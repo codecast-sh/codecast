@@ -156,7 +156,7 @@ export function TabBar() {
     state.openTab({ path: tab.path, title: tab.title, makeActive: true });
   }, []);
   // Desktop: break the tab out into its own OS window (lib/openIntent
-  // detachTab, shared with Cmd+N). Available only when the shell knows the verb.
+  // detachTab, shared with Cmd+Shift+N). Available only when the shell knows the verb.
   const canDetach = isDesktop() && !!bridge("detachTab");
 
   // The strip is a drop target: a pane, session or section dropped here opens

@@ -126,7 +126,7 @@ export function ModernNavView({
           {workspaceHeader}
         </div>
       )}
-      <div data-rail-new-session="" className={`${isNarrow ? "mx-1 flex justify-center" : "mx-2"} mb-2`}>
+      <div data-rail-new-session="" className={`${isNarrow ? "mx-1 flex justify-center" : "mx-2"} mb-3`}>
         <NewSessionButton variant={isNarrow ? "icon" : "row"} />
       </div>
       {RAIL_GROUPS.map(({ group: name, heading }) => group(name, heading))}
