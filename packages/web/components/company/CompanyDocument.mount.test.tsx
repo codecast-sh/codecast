@@ -339,6 +339,26 @@ async function verifyCompany() {
   await rerender();
   assert.deepEqual(qa("[data-company-section='projects'] [data-line-ref='pr-12']").map((l) => l.getAttribute("aria-expanded")), ["true", "false"], "keyed by where it is drawn, not by the project alone");
 
+  // A goal's done projects fold under its active ones, closed until opened.
+  const group = q("[data-company-project-group='in-2']")!;
+  const doneId = group.querySelector("[data-line='project']")!.getAttribute("data-line-id")!;
+  const before = collections.projects;
+  collections.projects = before.map((p: any) => (p._id === doneId ? { ...p, status: "done" } : p));
+  await show({ filter: "projects" });
+  const fold = q("[data-company-project-group='in-2'] [data-company-done-fold]");
+  assert.equal(fold?.getAttribute("data-company-done-fold"), "closed");
+  assert.match(fold!.textContent!, /^1 done$/);
+  none(q(`[data-company-project-group='in-2'] [data-line-id='${doneId}']`), "a done project is folded away");
+  await click(fold);
+  await rerender();
+  assert.equal(q("[data-company-project-group='in-2'] [data-company-done-fold]")!.getAttribute("data-company-done-fold"), "open");
+  const lines = qa("[data-company-project-group='in-2'] [data-line='project']");
+  assert.equal(lines.at(-1)!.getAttribute("data-line-id"), doneId, "below the active ones");
+  // Every real project line carries its pin, off until pinned.
+  assert.ok(lines.every((l) => l.querySelector("[data-project-pin='off']")));
+  collections.projects = before;
+  state.clientState.ui.org_expanded = [];
+
   // ── before the org tree arrives: the plain outline under the team's name ──
   env.tree = null;
   await show();

@@ -47,6 +47,24 @@ test("a sample whose process list timed out still offers its sessions, with usag
   args.source.snapshot!.sample.processCount = 1;
   expect(buildOffloadPlan(args)!.notOffered[0].reason).toBe("No process found");
 });
+test("a live session the candidate feed has not named yet is still offered, from its fleet row", () => {
+  const args = input();
+  args.candidates = [];
+  args.sessions[0].agentType = "claude_code";
+  const plan = buildOffloadPlan(args)!;
+  expect(plan.notOffered).toEqual([]);
+  expect(plan.candidates[0].perDestination.linux.readiness).toBe("preflight_required");
+  args.sessions[0].agentType = "codex";
+  expect(buildOffloadPlan(args)!.notOffered[0].reason).toBe("Not Claude Code");
+  args.sessions[0].conversationId = undefined;
+  expect(buildOffloadPlan(args)!.notOffered[0].reason).toBe("No conversation");
+});
+test("a pending rehearsal past the runner's deadline reads as unanswered, though the feed still says pending", () => {
+  const plan = buildOffloadPlan(input())!;
+  const row = { _id: "r", session_id: "s", destination_id: "linux", status: "pending" as const, created_at: 0, error: null, result: null };
+  expect(applyRehearsals(plan, [row], 60_000).candidates[0].perDestination.linux.rehearsal).toEqual({ status: "pending" });
+  expect(applyRehearsals(plan, [row], 5 * 60_000 + 1).candidates[0].perDestination.linux.rehearsal).toEqual({ status: "failed", error: "The machine holding the session did not answer" });
+});
 test("Apple-only tooling cannot be recommended to Linux", () => {
   const args = input();
   args.source.snapshot!.processes[0].name = "xcodebuild";
@@ -168,11 +186,11 @@ test("a rehearsal rides on its destination: the newest wins, what would fail the
     result: status === "done" ? { session_id: "s", destination_id: "linux", at, blockers, transfer: { method: "git" as const }, missing: [], services: [], tools: { missing: [], installs: [] }, machine: [] } : null,
   });
   const ready = plan.candidates[0].perDestination.linux.readiness;
-  expect(applyRehearsals(plan, [row("pending", 1)]).candidates[0].perDestination.linux.rehearsal).toEqual({ status: "pending" });
-  expect(applyRehearsals(plan, [row("pending", 1)]).candidates[0].perDestination.linux.readiness).toBe(ready);
-  const blocked = applyRehearsals(plan, [row("pending", 1), row("done", 2, ["both changed a.ts"])]).candidates[0].perDestination.linux;
+  expect(applyRehearsals(plan, [row("pending", 1)], 2).candidates[0].perDestination.linux.rehearsal).toEqual({ status: "pending" });
+  expect(applyRehearsals(plan, [row("pending", 1)], 2).candidates[0].perDestination.linux.readiness).toBe(ready);
+  const blocked = applyRehearsals(plan, [row("pending", 1), row("done", 2, ["both changed a.ts"])], 2).candidates[0].perDestination.linux;
   expect(blocked.readiness).toBe("blocked");
   expect(blocked.blockers).toContain("both changed a.ts");
-  expect(applyRehearsals(plan, [row("done", 2, ["x"]), row("failed", 3)]).candidates[0].perDestination.linux.rehearsal).toEqual({ status: "failed", error: "no answer" });
-  expect(applyRehearsals(plan, [])).toBe(plan);
+  expect(applyRehearsals(plan, [row("done", 2, ["x"]), row("failed", 3)], 2).candidates[0].perDestination.linux.rehearsal).toEqual({ status: "failed", error: "no answer" });
+  expect(applyRehearsals(plan, [], 2)).toBe(plan);
 });
