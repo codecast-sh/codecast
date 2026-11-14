@@ -1,7 +1,7 @@
 // A message that names several decisions gets one bar under it: every open
 // one it names counts, whoever it is asked of, the bar says how many wait on
-// the viewer, and its button opens the first one as a full page with the
-// message's whole set to flip through, in the order the message names them.
+// the viewer, and its button walks through them in place under the message,
+// in the order the message names them, without leaving the conversation.
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import React, { act } from "react";
 import { JSDOM } from "jsdom";
@@ -58,13 +58,39 @@ async function mount(content: string) {
 }
 const button = (host: Element, text: string) => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === text);
 
-test("counts every named open decision and opens the set full page, in the message's order", async () => {
+const pager = (host: Element) => host.querySelector("[data-decision-pager]")?.getAttribute("data-decision-pager");
+const aria = (host: Element, label: string) => host.querySelector(`[aria-label="${label}"]`) as HTMLButtonElement;
+const key = (k: string) => act(async () => { window.dispatchEvent(new window.KeyboardEvent("keydown", { key: k, bubbles: true })); });
+
+test("counts every named open decision and walks them in place, in the message's order", async () => {
   const { host, unmount } = await mount("Fix cards: sd-4, @[Question 3 sd-3], sd-5, sd-1 and sd-2. Then sd-1 again; ct-9 is a task.");
   expect(host.textContent).toContain("4 open decisions");
   expect(host.textContent).toContain("3 asked of you");
   expect(host.textContent).toContain("1 answered");
   await act(async () => { button(host, "Go through them")!.click(); });
-  expect(pushed).toEqual(["/decisions/sd-3?set=sd-4,sd-3,sd-5,sd-1,sd-2"]);
+  expect(pushed).toEqual([]);
+  // Starts on the first one asked of the viewer, in the message's order.
+  expect(pager(host)).toBe("2/5");
+  expect(host.textContent).toContain("Question 3?");
+  await act(async () => { aria(host, "Previous decision").click(); });
+  expect(host.textContent).toContain("Question 4?");
+  await key("ArrowRight");
+  await key("ArrowRight");
+  expect(pager(host)).toBe("3/5");
+  expect(host.textContent).toContain("Question 5?");
+  await key("Escape");
+  expect(host.querySelector("[data-message-decision-review='open']")).toBeNull();
+  expect(button(host, "Go through them")).toBeTruthy();
+  await unmount();
+});
+
+test("answering the one on screen moves on to the next open one", async () => {
+  const { host, unmount } = await mount("Fix cards: sd-1, sd-5 and sd-2.");
+  await act(async () => { button(host, "Go through them")!.click(); });
+  expect(pager(host)).toBe("1/3");
+  await act(async () => { useInboxStore.setState((s: any) => ({ sessionDecisions: { ...s.sessionDecisions, d1: dec(1, { status: "answered" }) } })); });
+  expect(pager(host)).toBe("3/3");
+  expect(host.textContent).toContain("Question 2?");
   await unmount();
 });
 
@@ -74,7 +100,8 @@ test("decisions all asked of someone else still get the bar", async () => {
   expect(host.textContent).toContain("2 open decisions");
   expect(host.textContent).toContain("0 asked of you");
   await act(async () => { button(host, "Go through them")!.click(); });
-  expect(pushed).toEqual(["/decisions/sd-6?set=sd-6,sd-7"]);
+  expect(pager(host)).toBe("1/2");
+  expect(host.textContent).toContain("Question 6?");
   await unmount();
 });
 
@@ -91,6 +118,7 @@ test("a named decision outside the viewer's queue counts once its page row arriv
   await act(async () => { useInboxStore.setState({ decisionDetails: { d9: { _id: "d9", decision: dec(9) } } } as any); });
   expect(host.textContent).toContain("2 open decisions");
   await act(async () => { button(host, "Go through them")!.click(); });
-  expect(pushed).toEqual(["/decisions/sd-9?set=sd-9,sd-8"]);
+  expect(pager(host)).toBe("1/2");
+  expect(host.textContent).toContain("Question 9?");
   await unmount();
 });
