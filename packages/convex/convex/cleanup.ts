@@ -187,15 +187,17 @@ export async function enqueueKillSessionCommand(
   now: number = Date.now(),
   cause?: string,
 ): Promise<boolean> {
+  const dedupeWindowMs = 60 * 60 * 1000;
   const pending = await ctx.db
     .query("daemon_commands")
-    .withIndex("by_user_pending", (q: any) => q.eq("user_id", conv.user_id).eq("executed_at", undefined))
+    .withIndex("by_user_pending", (q: any) =>
+      q.eq("user_id", conv.user_id).eq("executed_at", undefined).gte("_creationTime", now - dedupeWindowMs))
     .collect();
   const alreadyQueued = hasRecentPendingDaemonCommand(pending, {
     conversationId: conv._id.toString(),
     command: "kill_session",
     now,
-    dedupeWindowMs: 60 * 60 * 1000,
+    dedupeWindowMs,
   });
   if (alreadyQueued) return false;
   await ctx.db.insert("daemon_commands", {
