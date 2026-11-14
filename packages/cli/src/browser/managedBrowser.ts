@@ -25,7 +25,7 @@ import {
 import { sharesGoogleSession } from "./credentials.js";
 import { recordedRemoteHost, startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
 import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
-import { readHosts, ensureUp, toRemoteHost } from "./cloudHost.js";
+import { readHosts, ensureUp, isEc2Host, toRemoteHost } from "./cloudHost.js";
 import { fmt, icons } from "../colors.js";
 import { isReachable } from "./recovery.js";
 import { hostHasNoHumanChrome } from "./bridge/real.js";
@@ -245,7 +245,7 @@ export async function resolveRemote(name: string | boolean): Promise<{ host: Rem
   const picked =
     hosts.find((h) => h.id === wanted) ??
     hosts.find((h) => h.provider === (wanted === "linux" ? "aws" : wanted)) ??
-    hosts.find((h) => h.provider === "aws") ??
+    hosts.find((h) => isEc2Host(h)) ??
     hosts[0];
   if (!picked) {
     die(

@@ -127,9 +127,25 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     policy: { key: "cloud_hosts_disabled" },
   },
   {
+    token: "run",
+    args: ["[args...]"],
+    description: `Run one command on a cloud host against this checkout and get its output and exit code back, without moving the session
+
+  cast run -- bun test src/foo.test.ts     snapshot, send, run, stream, copy back outputs
+  cast run --host i-0abc -- cast check cli
+  cast run wait <id>                       follow a run again after this process died`,
+    load: () => import("./run/cli.js").then((m) => m.registerRunCommand),
+    policy: { key: "cloud_hosts_disabled" },
+  },
+  {
     token: "cloud",
-    hidden: true,
-    description: `Cloud host plumbing used by the daemon`,
+    hasOptions: true,
+    description: `Move this laptop's environment to a cloud machine and report what made it
+
+  cast cloud                    carry repos, uncommitted work, tools, agent config and logins to
+                                your machine on codecast's account, then list what did not make it and why
+  cast cloud --dry-run          what would carry and what would stay, changing nothing
+  cast cloud --host <id>        the same, to a host of your own`,
     load: () => import("./cloud/cli.js").then((m) => m.registerCloudCommand),
   },
   {

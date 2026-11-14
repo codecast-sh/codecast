@@ -24,7 +24,7 @@ export const cloudHostReportValidator = v.object({
   managed_by: v.string(),
   instance_id: v.string(),
   name: v.optional(v.string()),
-  provider: v.union(v.literal("aws"), v.literal("scaleway-mac")),
+  provider: v.union(v.literal("aws"), v.literal("scaleway-mac"), v.literal("codecast")),
   region: v.optional(v.string()),
   instance_type: v.optional(v.string()),
   state: v.union(v.literal("running"), v.literal("stopped"), v.literal("pending"), v.literal("stopping"), v.literal("missing"), v.literal("unknown")),

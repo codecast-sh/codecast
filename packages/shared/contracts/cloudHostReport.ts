@@ -62,7 +62,7 @@ export interface CloudHostReport {
   instance_id: string;
   /** The instance's own name (its AWS Name tag): what tells hosts apart in a picker. */
   name?: string;
-  provider: "aws" | "scaleway-mac";
+  provider: "aws" | "scaleway-mac" | "codecast";
   region?: string;
   instance_type?: string;
   state: "running" | "stopped" | "pending" | "stopping" | "missing" | "unknown";

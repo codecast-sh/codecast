@@ -28,6 +28,7 @@
  * same act whether the machine happens to be awake.
  */
 
+import { codecastMachine } from "./codecastMachine.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -44,7 +45,8 @@ export type HostState = "running" | "stopped" | "pending" | "missing";
 export interface CloudHost {
   /** Stable id: an EC2 instance id, or a Scaleway server uuid. */
   id: string;
-  provider: "aws" | "scaleway-mac";
+  /** codecast: an EC2 machine in codecast's own account (`cast cloud`), woken and stopped through the backend. */
+  provider: "aws" | "scaleway-mac" | "codecast";
   region: string;
   profile?: string;
   platform?: "linux" | "darwin";
@@ -95,6 +97,10 @@ export interface CloudHost {
    *  up (cloud/browserLink.ts). Missing = on; `cast browser extension revoke
    *  --host` sets false, `cast browser extension link --host` sets true. */
   laptopBrowser?: boolean;
+  /** Sessions on this host may drive this laptop's apps through `cast
+   *  computer --on laptop` (computer/remoteGrant.ts). Missing = off; only the
+   *  person grants it, on the laptop (`cast computer remote grant`). */
+  laptopComputer?: import("../computer/remoteGrant.js").ComputerHostGrant;
 }
 
 export interface HostGitAccessRecord {
@@ -115,7 +121,7 @@ export function resolveCloudHost(hostArg?: string): CloudHost {
   const hosts = readHosts();
   const pick = hostArg
     ? hosts.find((h) => h.id === hostArg)
-    : hosts.find((h) => h.provider === "aws" && h.platform !== "darwin") ?? hosts[0];
+    : hosts.find((h) => isEc2Host(h) && h.platform !== "darwin") ?? hosts[0];
   if (!pick) {
     throw new Error(
       hostArg
@@ -134,6 +140,9 @@ export function hostForDevice(deviceId: string): CloudHost | undefined {
 function registryPath(): string {
   return codecastPath("browser", "hosts.json");
 }
+
+/** Where the host registry lives, for a reader that re-reads it only when it changed. */
+export const registryFile = registryPath;
 
 /** The lock every field-level registry write takes (patchHost). Exported for tests. */
 export function registryLockPath(): string {
@@ -252,8 +261,15 @@ function aws(args: string[], region: string, profile?: string): any {
   }
 }
 
+/** An EC2 machine, in the person's account or codecast's: it has a state, sleeps and wakes. */
+export function isEc2Host(host: Pick<CloudHost, "provider">): boolean {
+  return host.provider === "aws" || host.provider === "codecast";
+}
+
 export function describeInstance(host: CloudHost): any {
-  const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region, host.profile);
+  const r = host.provider === "codecast"
+    ? codecastMachine("describe")
+    : aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region, host.profile);
   return r?.Reservations?.[0]?.Instances?.[0];
 }
 
@@ -267,7 +283,7 @@ export function describeInstance(host: CloudHost): any {
  * had the user delete a perfectly good registration.
  */
 export function hostState(host: CloudHost): { state: HostState; address?: string } {
-  if (host.provider !== "aws") return { state: "running", address: host.address };
+  if (!isEc2Host(host)) return { state: "running", address: host.address };
   const inst = describeInstance(host);
   return inst ? instanceFacts(inst) : { state: "missing" };
 }
@@ -306,11 +322,11 @@ export function inspectHost(host: CloudHost): {
   platform?: "linux" | "darwin";
   volumeGiB?: number;
 } {
-  if (host.provider !== "aws") return { state: "running", address: host.address };
+  if (!isEc2Host(host)) return { state: "running", address: host.address };
   const inst = describeInstance(host);
   if (!inst) return { state: "missing" };
   let volumeGiB: number | undefined;
-  try {
+  if (host.provider === "aws") try {
     const vols = aws(
       ["ec2", "describe-volumes", "--filters", `Name=attachment.instance-id,Values=${host.id}`],
       host.region, host.profile,
@@ -404,7 +420,7 @@ export async function ensureUp(
   // waiting on this host shows each one as it passes.
   onPhase: (phase: WakePhase) => void = () => {},
 ): Promise<CloudHost> {
-  if (host.provider !== "aws") return host;
+  if (!isEc2Host(host)) return host;
 
   let inst = describeInstance(host);
   let { state, address } = inst ? instanceFacts(inst) : { state: "missing" as HostState, address: undefined };
@@ -413,7 +429,8 @@ export async function ensureUp(
 
   if (state === "stopped") {
     onProgress(`starting ${host.id}`);
-    aws(["ec2", "start-instances", "--instance-ids", host.id], host.region, host.profile);
+    if (host.provider === "codecast") codecastMachine("start");
+    else aws(["ec2", "start-instances", "--instance-ids", host.id], host.region, host.profile);
     state = "pending";
     onPhase("booting");
   }
@@ -523,6 +540,7 @@ function learnHostTailnet(host: CloudHost, dial: string, socket: string): Tailne
 
 /** Put a host to sleep. This is what makes idle cost nothing. */
 export function stopHost(host: CloudHost): void {
+  if (host.provider === "codecast") { codecastMachine("stop"); return; }
   if (host.provider !== "aws") {
     throw new Error(
       `${host.id} is an Apple silicon Mac and cannot be stopped — Apple's licensing has a 24-hour ` +

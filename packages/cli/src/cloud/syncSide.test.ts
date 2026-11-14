@@ -44,6 +44,32 @@ const files = (cwd: string, tree: string) => git(cwd, "ls-tree", "-r", "--name-o
 const snap = (cwd: string, extra: object = {}) => runSide<SnapshotResult>({ op: "snapshot", cwd, ...extra });
 
 describe("what travels", () => {
+  test("a Python virtualenv under any name is rebuilt, not carried", async () => {
+    const d = repo();
+    write(d, "server/env/pyvenv.cfg", "home = /usr/bin\n");
+    write(d, "server/env/lib/site.py", "x\n");
+    write(d, "server/app.py", "y\n");
+    const s = await snap(d);
+    expect(s.skipped).toContainEqual({ path: "server/env/", reason: "rebuilt" });
+    expect(files(d, s.tree)).toContain("server/app.py");
+    expect(files(d, s.tree)).not.toContain("server/env/lib/site.py");
+  });
+
+  test("listOnly reports what stays and what would travel without writing a tree; skippedLimit lifts the 200 cap", async () => {
+    const d = repo();
+    for (let i = 0; i < 230; i++) write(d, `media/clip${i}.mp4`, "v");
+    write(d, ".env", "SECRET=1\n");
+    write(d, ".claude/settings.local.json", "{}");
+    const capped = await snap(d, { listOnly: true });
+    expect(capped.tree).toBe("");
+    expect(capped.skipped).toHaveLength(200);
+    expect(capped.skippedCount).toBe(231); // the clips and the fixture's dist/
+    const all = await snap(d, { listOnly: true, skippedLimit: 1_000_000, agentPaths: true });
+    expect(all.skipped).toHaveLength(231);
+    expect(all.untrackedCount).toBe(1);
+    expect(all.agentPaths).toEqual([".claude"]);
+  });
+
   test("gitignored files travel; dependency folders, oversized files, process files and nested repos stay", async () => {
     const d = repo();
     write(d, ".env", "SECRET=1\n");

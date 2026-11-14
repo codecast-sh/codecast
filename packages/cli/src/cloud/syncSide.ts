@@ -90,10 +90,15 @@ export interface SnapshotResult {
   branch: string;
   skipped: Skipped[];
   skippedCount: number;
+  /** With `agentPaths`: the untracked agent config the snapshot leaves to the home mirror. */
+  agentPaths?: string[];
+  /** With `listOnly`: the untracked files that would travel (tree is then empty). */
+  untrackedCount?: number;
+  untrackedBytes?: number;
 }
 
 export type SideRequest =
-  | { op: "snapshot"; cwd: string; scope?: SyncScope; commit?: boolean; ref?: string }
+  | { op: "snapshot"; cwd: string; scope?: SyncScope; commit?: boolean; ref?: string; skippedLimit?: number; agentPaths?: boolean; listOnly?: boolean }
   | { op: "land"; cwd: string; scope?: SyncScope; sha: string; expectTree: string; moveHead?: string; backupPrefix?: string }
   | { op: "ls"; cwd: string; paths: string[] };
 
@@ -187,7 +192,8 @@ async function snapshotOnce(commit, ref) {
       if (e.isDirectory() && !lifted && AGENT_ROOTS.has(e.name)) { silent.push(r); continue; }
       if (!e.isDirectory() && !lifted && !indexed.has(r) && (INSTRUCTION_RE.test(e.name) || e.name === ".mcp.json")) { silent.push(r); continue; }
       if (e.isDirectory()) {
-        const rebuilt = !lifted && (REBUILT.has(e.name) || /^dist-/.test(e.name));
+        // A Python virtualenv under any name (env/, .env-py/) is rebuilt like .venv.
+        const rebuilt = !lifted && (REBUILT.has(e.name) || /^dist-/.test(e.name) || fs.existsSync(path.join(cwd, r, "pyvenv.cfg")));
         if (rebuilt && !alwaysInside(r)) { skipped.push({ path: r + "/", reason: "rebuilt" }); continue; }
         if (fs.existsSync(path.join(cwd, r, ".git")) && !lifted) { skipped.push({ path: r + "/", reason: "repo" }); continue; }
         await walk(r, inRebuilt || rebuilt);
@@ -218,6 +224,11 @@ async function snapshotOnce(commit, ref) {
       skipped.push({ path: f.path, reason: "total", bytes: f.bytes });
     }
   }
+  // listOnly: what would travel and what stays, without hashing a byte (a dry run).
+  if (req.listOnly) {
+    const kept = untracked.filter((f) => !f.drop);
+    return { tree: "", head, branch, skipped: skipped.slice(0, req.skippedLimit || 200), skippedCount: skipped.length, untrackedCount: kept.length, untrackedBytes: kept.reduce((n, f) => n + f.bytes, 0), ...(req.agentPaths ? { agentPaths: silent } : {}) };
+  }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-sync-"));
   try {
     const idx = path.join(tmp, "index");
@@ -244,7 +255,8 @@ async function snapshotOnce(commit, ref) {
       await git(["add", "-u", "--pathspec-from-file=" + list, "--pathspec-file-nul"], { env });
     }
     const tree = await out(["write-tree"], { env });
-    const res = { tree, head, branch, skipped: skipped.slice(0, 200), skippedCount: skipped.length };
+    const res = { tree, head, branch, skipped: skipped.slice(0, req.skippedLimit || 200), skippedCount: skipped.length };
+    if (req.agentPaths) res.agentPaths = silent;
     if (commit) {
       const date = (await out(["log", "-1", "--format=%cI", head])) || "1970-01-01T00:00:00Z";
       const id = { GIT_AUTHOR_NAME: "codecast", GIT_AUTHOR_EMAIL: "codecast@localhost", GIT_COMMITTER_NAME: "codecast", GIT_COMMITTER_EMAIL: "codecast@localhost", GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date };

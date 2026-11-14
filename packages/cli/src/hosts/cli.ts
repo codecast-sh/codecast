@@ -26,7 +26,7 @@ import type { Command } from "commander";
 import { fmt, icons } from "../colors.js";
 import { formatAgeShort } from "../publishCommand.js";
 import {
-  dialRemoteHost, ensureUp, hostState, inspectHost, patchHost, probedRemoteHost, readHosts, stopHost, toRemoteHost, upsertHost, writeHosts,
+  dialRemoteHost, ensureUp, hostState, inspectHost, isEc2Host, patchHost, probedRemoteHost, readHosts, stopHost, toRemoteHost, upsertHost, writeHosts,
   type CloudHost, type HostState,
 } from "../browser/cloudHost.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
@@ -922,7 +922,7 @@ async function awaitReachSettled(hostId: string, folder: string, since: number, 
 /** The registered host an id names, or the default Linux one. */
 function pick(id: string | undefined, what: string): CloudHost {
   const rows = readHosts();
-  const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws" && r.platform !== "darwin") ?? rows[0];
+  const h = id ? rows.find((r) => r.id === id) : rows.find((r) => isEc2Host(r) && r.platform !== "darwin") ?? rows[0];
   if (!h) die(id ? `no host ${id}` : what, "`cast hosts add <instance-id> --key <pem>` first");
   return h;
 }

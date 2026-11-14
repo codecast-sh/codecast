@@ -27,7 +27,7 @@ import {
 } from "./session-move.js";
 import { reorientationNotice, type ReorientationFacts } from "../sessionMoveNotice.js";
 import { deviceInfo, deviceId } from "./device.js";
-import { ensureUp, hostState, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
+import { ensureUp, hostState, isEc2Host, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
 import { sshTmuxAttachCommand } from "@codecast/shared/contracts";
 import { learnHostDeviceId } from "../cloud/prepare.js";
 import { commandGroup } from "../commandGroups.js";
@@ -45,7 +45,7 @@ import { defaultConfigDir } from "../config/configDir.js";
  */
 async function resolveTransferHost(hostId?: string): Promise<{ host: RemoteHost; cloudId?: string; deviceId?: string }> {
   const cloud = readCloudHosts();
-  const pick = hostId ? cloud.find((h) => h.id === hostId) : cloud.find((h) => h.provider === "aws");
+  const pick = hostId ? cloud.find((h) => h.id === hostId) : cloud.find((h) => isEc2Host(h));
   if (pick) {
     const up = await ensureUp(pick, (m) => console.log(`  ${m}`));
     const host = toRemoteHost(up);
@@ -182,6 +182,33 @@ export function registerRemoteCommand(program: Command): void {
   const remote = program
     .command("remote")
     .description(commandGroup("remote").description);
+
+  remote
+    .command("timings [conversation]")
+    .description("Where a cloud placement's time went, step by step (this machine's placements; a short id is enough)")
+    .action(async (conversation?: string) => {
+      const { readPlacementTimings, placementDurations } = await import("../cloud/placementProgress.js");
+      const all = readPlacementTimings();
+      const fmt = (ms: number) => (ms >= 10_000 ? `${Math.round(ms / 1000)}s` : `${(ms / 1000).toFixed(1)}s`);
+      if (!conversation) {
+        if (!all.length) { console.log("no placements recorded on this machine yet"); return; }
+        for (const r of all.slice(0, 15)) {
+          const { totalMs } = placementDurations(r);
+          console.log(`${r.conversation_id.slice(0, 7)}  ${new Date(r.started_at).toISOString().replace("T", " ").slice(0, 16)}  ${fmt(totalMs).padStart(5)}  ${r.host_id ?? "-"}  last step ${r.steps.at(-1)?.step ?? "-"}`);
+        }
+        return;
+      }
+      const matches = all.filter((x) => x.conversation_id.startsWith(conversation));
+      if (matches.length > 1 && !matches.some((x) => x.conversation_id === conversation)) {
+        console.error(`${conversation} matches ${matches.length} placements: ${matches.map((x) => x.conversation_id.slice(0, 10)).join(", ")}`);
+        process.exit(1);
+      }
+      const r = matches.find((x) => x.conversation_id === conversation) ?? matches[0];
+      if (!r) { console.error(`no placement of ${conversation} recorded on this machine (cast remote timings lists them)`); process.exit(1); }
+      const { rows, totalMs } = placementDurations(r);
+      console.log(`${r.conversation_id.slice(0, 7)} on ${r.host_id ?? "an unknown host"}${r.moved_from ? ` (moved from ${r.moved_from.host_id}: ${r.moved_from.why})` : ""}, ${fmt(totalMs)} in all`);
+      for (const row of rows) console.log(`  ${row.step.padEnd(10)} ${fmt(row.ms).padStart(6)}  ${"#".repeat(Math.max(1, Math.round((row.ms / Math.max(totalMs, 1)) * 40)))}`);
+    });
 
   remote
     .command("hosts")

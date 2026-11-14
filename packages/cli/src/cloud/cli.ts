@@ -32,6 +32,7 @@ import {
 } from "./prepare.js";
 import { commandGroup } from "../commandGroups.js";
 import { hostAccessPath, repoOrigin } from "./hostGit.js";
+import { registerCloudEnvAction } from "./env/command.js";
 
 /**
  * The argv the daemon's cloud_spawn handler runs, from the command's args
@@ -117,7 +118,8 @@ export function cloudStartHostArg(
 }
 
 export function registerCloudCommand(program: Command): void {
-  const cloud = program.command("cloud", { hidden: true }).description(commandGroup("cloud").description);
+  const cloud = program.command("cloud").description(commandGroup("cloud").description);
+  registerCloudEnvAction(cloud);
 
   cloud
     .command("browser-sync <hostDeviceId>")
@@ -146,6 +148,46 @@ export function registerCloudCommand(program: Command): void {
       }
       console.log(carrySummaryLine(outcome));
       process.exit(outcome.ok ? 0 : 1);
+    });
+
+  cloud
+    .command("seed")
+    .description("Show what a cloud session started from this checkout would carry to the host, and what it would leave behind")
+    .option("--dry-run", "Report only; the default and only mode (a real seed travels with cast spawn --cloud)")
+    .option("--json", "Machine-readable")
+    .action(async (opts: { dryRun?: boolean; json?: boolean }) => {
+      const path = await import("node:path");
+      const { resolveSeedRoots } = await import("./prepare.js");
+      const { planLaptopSeed, cloudCopyFiles } = await import("./transfer.js");
+      const { manifestCopyEntries } = await import("../workspace/copyFiles.js");
+      const { estimateUpload, fmtBytes } = await import("../run/client.js");
+      const { seedCwd } = resolveSeedRoots(process.cwd());
+      let seed: Awaited<ReturnType<typeof planLaptopSeed>>;
+      try { seed = await planLaptopSeed(seedCwd); } catch (e) { console.error(`cast: ${(e as Error).message}`); process.exit(1); }
+      if (!seed.snapshot) { console.error(`cast: ${seedCwd} has nothing to seed from`); process.exit(1); }
+      const est = estimateUpload(seedCwd, seed.snapshot);
+      const entries = manifestCopyEntries(seedCwd);
+      const copied = cloudCopyFiles(seedCwd);
+      const missing = entries.filter((e) => !/[*?[]/.test(e) && !fs.existsSync(path.join(seedCwd, e)));
+      const report = { checkout: seedCwd, snapshot: seed.snapshot, base: seed.base, branch: seed.branch ?? null, dirty: !!seed.dirty, upload: est, copy: { files: copied, missing }, left_behind: seed.skipped ?? [] };
+      if (opts.json) { console.log(JSON.stringify(report, null, 2)); return; }
+      console.log(`checkout  ${seedCwd}${seed.branch ? ` on ${seed.branch}` : ""}`);
+      console.log(`snapshot  ${seed.snapshot?.slice(0, 10)} on ${seed.base.slice(0, 10)}${seed.dirty ? ", with uncommitted work" : ", clean"}`);
+      console.log(`upload    ${fmtBytes(est.bytes)} in ${est.objects} objects beyond origin`);
+      for (const d of est.top) console.log(`          ${fmtBytes(d.bytes).padStart(9)}  ${d.dir}`);
+      console.log(`copied    ${copied.length} setup file${copied.length === 1 ? "" : "s"} ([setup] copy and agent config)`);
+      for (const f of copied.slice(0, 20)) console.log(`            ${f}`);
+      if (copied.length > 20) console.log(`            and ${copied.length - 20} more`);
+      if (missing.length) {
+        console.log(`missing   ${missing.length} [setup] copy entr${missing.length === 1 ? "y" : "ies"} not on this machine, so the host will not have ${missing.length === 1 ? "it" : "them"}:`);
+        for (const m of missing) console.log(`            ${m}`);
+      }
+      const left = seed.skipped ?? [];
+      if (left.length) {
+        console.log(`stays     ${left.length} path${left.length === 1 ? "" : "s"} left on this machine:`);
+        for (const sk of left.slice(0, 15)) console.log(`            ${sk.path}  (${sk.reason}${sk.bytes ? `, ${fmtBytes(sk.bytes)}` : ""})`);
+        if (left.length > 15) console.log(`            and ${left.length - 15} more`);
+      }
     });
 
   cloud
@@ -287,9 +329,10 @@ export function registerCloudCommand(program: Command): void {
         process.exit(1);
       }
 
-      const { placementReporter } = await import("./placementProgress.js");
+      const { placementReporter, savePlacementTimings } = await import("./placementProgress.js");
       const progress = placementReporter(target.cloud_placement_token ?? undefined, (record) =>
-        client.mutation(api.cloud.reportPlacementProgress, { api_token: token, conversation_id: conversationId, progress: record }));
+        client.mutation(api.cloud.reportPlacementProgress, { api_token: token, conversation_id: conversationId, progress: record }), Date.now,
+        (record) => savePlacementTimings(conversationId, record));
       const say = (m: string) => { console.log(`  ${m}`); progress.line(m); };
       const mode: CloudWorkspaceMode = normalizeCloudWorkspace(opts.workspace ?? target.cloud_workspace);
       // A shared checkout never seeds from a laptop tree: the host's main

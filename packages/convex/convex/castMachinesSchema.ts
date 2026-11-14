@@ -35,4 +35,18 @@ export const castMachineTables = {
     .index("by_voucher_hash", ["voucher_hash"])
     .index("by_proxy_key_hash", ["proxy_key_hash"])
     .index("by_device", ["user_id", "device_id"]),
+  // `cast cloud` machines: a laptop's whole environment moved to a machine in
+  // codecast's account. The laptop reaches it over SSH with the key it sent
+  // at launch, and wakes or stops it through this backend (castCloudEnv.ts),
+  // since it holds no AWS keys for the account.
+  cast_env_machines: defineTable({
+    user_id: v.id("users"),
+    region: v.string(),
+    instance_id: v.optional(v.string()),
+    /** The laptop key the first boot authorizes for the ubuntu login. */
+    ssh_public_key: v.string(),
+    error: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  }).index("by_user", ["user_id"]),
 };
