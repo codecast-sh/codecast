@@ -20,11 +20,21 @@ import { ComputerError } from "./errors.js";
 import type { ComputerClientLike, ComputerPermissionApi } from "./run.js";
 import type { ComputerActionResult, ComputerSnapshotResult } from "./types.js";
 
-/** A 1x1 png, so writeShotFile has real bytes to measure and no downscale to do. */
+/** A 1x1 png, so the shot report has real bytes to measure and no downscale to do. */
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
-function snapshotResult(): ComputerSnapshotResult {
+/** What a helper does with a capture: writes it to the directory the request
+ *  named (os.tmpdir() is the per-test TMPDIR) and answers with the path. */
+function helperWrittenShot(): string {
+  const dir = path.join(os.tmpdir(), "codecast-computer");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, "snap-1-screenshot.png");
+  fs.writeFileSync(file, Buffer.from(PNG, "base64"), { mode: 0o600 });
+  return file;
+}
+
+function snapshotResult(opts: { shot?: boolean } = {}): ComputerSnapshotResult {
   return {
     snapshot: {
       id: "snap-1",
@@ -35,7 +45,7 @@ function snapshotResult(): ComputerSnapshotResult {
       elementCount: 61,
       focusedElementId: 12,
     },
-    screenshot: { data: PNG, format: "png", width: 1800, height: 1400, scale: 2 },
+    screenshot: opts.shot === false ? null : { path: helperWrittenShot(), format: "png", bytes: 68, width: 1800, height: 1400, scale: 2 },
     screenshotStatus: { state: "captured", metadata: { engine: "cgWindowList", windowId: 812 } },
   };
 }
@@ -170,9 +180,31 @@ describe("argv becomes exactly one helper request", () => {
     expect(r.params).toEqual({ app: "com.apple.TextEdit", windowId: 812, noScreenshot: true, restoreWindow: true });
   });
 
-  test("an ordinary snapshot asks for no raise and no skip", async () => {
+  test("an ordinary snapshot asks for no raise and no skip, and names where the helper writes the picture", async () => {
     const r = await run(["get-app-state", "--app", "TextEdit"]);
-    expect(r.params).toEqual({ app: "TextEdit" });
+    expect(r.params).toEqual({ app: "TextEdit", screenshotDir: path.join(tmp, "codecast-computer") });
+  });
+
+  test("--crop sends the region in window points", async () => {
+    const r = await run(["get-app-state", "--app", "TextEdit", "--crop", "10, 20.5,300,40"]);
+    expect(r.params).toEqual({
+      app: "TextEdit",
+      screenshotDir: path.join(tmp, "codecast-computer"),
+      crop: { x: 10, y: 20.5, width: 300, height: 40 },
+    });
+  });
+
+  test("--crop is refused when it is malformed or there is no screenshot to shape", async () => {
+    for (const argv of [
+      ["--crop", "10,20,300"],
+      ["--crop", "10,20,0,40"],
+      ["--crop", "a,b,c,d"],
+      ["--crop", "0,0,10,10", "--no-screenshot"],
+    ]) {
+      const r = await run(["get-app-state", "--app", "A", ...argv]);
+      expect(r.exit).toBe(1);
+      expect(r.clientsCreated).toBe(0);
+    }
   });
 
   test("click maps every flag mechanically, index route", async () => {
@@ -386,6 +418,24 @@ describe("human output", () => {
     expect(stdout()).toContain("Click attempted, unverified (verification metadata unavailable)");
   });
 
+  test("every action result ends its sentence with an explicit verdict", async () => {
+    const result = actionResult({ path: "accessibility", actionName: "AXPress" });
+    result.baselineTreeText = result.snapshot.treeText;
+    await run(["click", "--app", "A", "--element-index", "1"], { answers: { result } });
+    expect(stdout()).toContain("Verdict: suspected no-op, nothing in the tree changed.");
+  });
+
+  test("an action that was sent and never answered says the outcome is unknown; one refused says nothing was done", async () => {
+    await run(["click", "--app", "A", "--element-index", "1"], {
+      answers: { error: new ComputerError("action_timeout", "Press got no answer", { outcomeUnknown: true }) },
+    });
+    expect(stderr()).toContain("Verdict: outcome unknown, it was sent and never answered.");
+    await run(["click", "--app", "A", "--element-index", "42", "--json"], {
+      answers: { error: new ComputerError("element_not_found", "element 42 is stale") },
+    });
+    expect(JSON.parse(stdout()).verdict.state).toBe("refused");
+  });
+
   test("an error prints the message and its recovery, and exits 1", async () => {
     const r = await run(["click", "--app", "A", "--element-index", "42"], {
       answers: { error: new ComputerError("element_not_found", "element 42 is stale; run get-app-state again") },
@@ -398,20 +448,24 @@ describe("human output", () => {
 });
 
 describe("--json", () => {
-  test("the screenshot is a 0600 path in a 0700 directory, never base64", async () => {
+  test("the screenshot is the helper's path, never base64", async () => {
     await run(["get-app-state", "--app", "A", "--json"]);
     const payload = JSON.parse(stdout());
     expect(payload.ok).toBe(true);
     expect(payload.screenshot.data).toBeUndefined();
-    expect(payload.screenshot.dataOmitted).toBe(true);
     expect(payload.screenshot.path).toBe(path.join(tmp, "codecast-computer", "snap-1-screenshot.png"));
     expect(payload.screenshot.scale).toBe(2);
     expect(fs.readFileSync(payload.screenshot.path).length).toBe(Buffer.from(PNG, "base64").length);
-    expect(fs.statSync(payload.screenshot.path).mode & 0o777).toBe(0o600);
-    expect(fs.statSync(path.dirname(payload.screenshot.path)).mode & 0o777).toBe(0o700);
     // Nothing about the tree changes on the way through.
     expect(payload.snapshot.treeText).toContain("App=com.apple.TextEdit");
     expect(stdout()).not.toContain("cast:image");
+  });
+
+  test("an action's --json carries its verdict", async () => {
+    const result = actionResult({ path: "accessibility" });
+    result.baselineTreeText = result.snapshot.treeText.replace("0 window Untitled", "0 window Old");
+    await run(["click", "--app", "A", "--element-index", "1", "--json"], { answers: { result } });
+    expect(JSON.parse(stdout()).verdict).toEqual({ state: "confirmed", why: "the window changed" });
   });
 
   test("the capture expires in a day, so a stale path is readable as stale", async () => {
@@ -424,7 +478,7 @@ describe("--json", () => {
 
   test("a skipped capture stays skipped and writes nothing", async () => {
     await run(["get-app-state", "--app", "A", "--no-screenshot", "--json"], {
-      answers: { result: { ...snapshotResult(), screenshot: null, screenshotStatus: { state: "skipped", reason: "no_screenshot_flag" } } },
+      answers: { result: { ...snapshotResult({ shot: false }), screenshotStatus: { state: "skipped", reason: "no_screenshot_flag" } } },
     });
     const payload = JSON.parse(stdout());
     expect(payload.screenshot).toBeNull();

@@ -45,4 +45,12 @@ final class PixelChangeTests: XCTestCase {
     func testResizedWindowChangesEverywhere() {
         XCTAssertEqual(PixelChange.changedRect(frame(20, 10), frame(30, 10)), CGRect(x: 0, y: 0, width: 30, height: 10))
     }
+
+    func testOnlyAChangeThatHeldStillShowsAReaction() {
+        let rect = PixelChange.json(CGRect(x: 1, y: 2, width: 3, height: 4))
+        XCTAssertTrue(PixelChange.showsReaction(["changed": rect, "repainting": NSNull()]))
+        XCTAssertFalse(PixelChange.showsReaction(["changed": rect, "repainting": rect]))
+        XCTAssertFalse(PixelChange.showsReaction(["changed": NSNull(), "repainting": NSNull()]))
+        XCTAssertFalse(PixelChange.showsReaction(nil))
+    }
 }

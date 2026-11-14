@@ -90,6 +90,14 @@ public enum PixelChange {
         return CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
     }
 
+    /// Whether a `pixelChange` result shows the window reacting: it changed and
+    /// held still afterwards. Nil (no capture), no change, and a window that
+    /// repaints on its own all say nothing about the action.
+    public static func showsReaction(_ change: [String: Any]?) -> Bool {
+        guard let change, change["changed"] is [String: Int] else { return false }
+        return change["repainting"] is NSNull
+    }
+
     public static func json(_ rect: CGRect?) -> Any {
         guard let rect else { return NSNull() }
         return ["x": Int(rect.minX), "y": Int(rect.minY), "width": Int(rect.width), "height": Int(rect.height)]

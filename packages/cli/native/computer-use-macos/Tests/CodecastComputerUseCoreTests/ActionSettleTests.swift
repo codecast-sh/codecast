@@ -46,4 +46,18 @@ final class ActionSettleTests: XCTestCase {
         }
         XCTAssertTrue(settle.isSettled(count: count + 1, now: ActionSettle.ceiling))
     }
+
+    /// Notifications posted inside the press's own handler started the quiet
+    /// spell when they arrived, not when the wait first looked.
+    func testTheQuietSpellCountsFromWhenTheLastNotificationArrived() {
+        var settle = ActionSettle(path: "accessibility", countBeforeAction: 4, now: 0.1)
+        XCTAssertFalse(settle.isSettled(count: 6, lastEventAt: 0.05, now: 0.1))
+        XCTAssertTrue(settle.isSettled(count: 6, lastEventAt: 0.05, now: 0.111))
+    }
+
+    func testANotificationTimeFromTheFutureIsReadAsNow() {
+        var settle = ActionSettle(path: "accessibility", countBeforeAction: 0, now: 0)
+        XCTAssertFalse(settle.isSettled(count: 1, lastEventAt: 5, now: 0.01))
+        XCTAssertTrue(settle.isSettled(count: 1, lastEventAt: 5, now: 0.07))
+    }
 }

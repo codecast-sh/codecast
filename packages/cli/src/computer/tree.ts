@@ -138,6 +138,12 @@ export function diffTrees(beforeText: string, afterText: string): TreeDiff {
 /** Past this many changed lines a diff is harder to read than the tree itself. */
 export const DIFF_LINE_LIMIT = 60;
 
+/** Compared by index: a focused field whose value changed is already a changed line. */
+export function focusChanged(diff: TreeDiff): boolean {
+  const focusIndex = (f: string | null) => /is (\d+) /.exec(f ?? "")?.[1] ?? f;
+  return focusIndex(diff.focusBefore) !== focusIndex(diff.focusAfter);
+}
+
 /**
  * The diff as the agent reads it. `null` means the change was too large to be
  * worth a diff (a navigation, a new document): print the whole tree instead.
@@ -147,9 +153,7 @@ export function formatDiff(
   opts: { synthetic?: boolean; background?: boolean; pixels?: PixelVerdict } = {},
 ): string | null {
   const changed = diff.added.length + diff.removed.length;
-  // Compared by index: a focused field whose value changed is already a line above.
-  const focusIndex = (f: string | null) => /is (\d+) /.exec(f ?? "")?.[1] ?? f;
-  const focusMoved = focusIndex(diff.focusBefore) !== focusIndex(diff.focusAfter);
+  const focusMoved = focusChanged(diff);
   if (changed === 0) {
     if (focusMoved && diff.focusAfter) return `Only the focus changed. ${diff.focusAfter}`;
     return unchangedTreeNote(opts);

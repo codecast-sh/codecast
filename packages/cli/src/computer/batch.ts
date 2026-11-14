@@ -22,7 +22,7 @@
  *   find "Created"               print matches; a bare click next acts on it
  *   wait "Created"               until it appears (--gone, --change, --timeout)
  *   snapshot                     the tree (takes --find, --under)
- *   shot                         a screenshot for the conversation
+ *   shot                         a screenshot for the conversation (--crop x,y,w,h zooms)
  *   sleep 500                    milliseconds
  *
  * Any step also takes the single command's flags (`--element-index 12`,
@@ -32,6 +32,7 @@
 
 import { ComputerError } from "./errors.js";
 import {
+  computerTarget,
   createComputerClient,
   execute,
   validateVerb,
@@ -43,6 +44,7 @@ import {
 import { printStepResults, readStepPlan, runSteps, type StepResult } from "../stepBatch.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { asComputerError, grantSetupLines } from "./errors.js";
+import { failedActionVerdict, verdictLine } from "./verdict.js";
 
 const ALIASES: Record<string, ComputerVerb> = {
   snapshot: "get-app-state",
@@ -71,7 +73,7 @@ const ALIASES: Record<string, ComputerVerb> = {
 const VALUE_FLAGS = new Set([
   "app", "window-id", "window-index", "element-index", "element", "nth", "x", "y", "click-count",
   "mouse-button", "modifiers", "action", "direction", "pages", "text", "key", "value", "find", "under", "timeout",
-  "to-x", "to-y", "to-element", "to-element-index",
+  "to-x", "to-y", "to-element", "to-element-index", "crop",
 ]);
 
 const camel = (flag: string) => flag.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -200,7 +202,7 @@ export async function runComputerBatch(
 ): Promise<{ results: StepResult[]; images: string[] }> {
   const ctx: ComputerBatchContext = { defaults };
   const images: string[] = [];
-  const client = await createComputerClient(deps);
+  const client = await createComputerClient(deps, computerTarget(defaults));
   try {
     const results = await runSteps(
       plan,
@@ -208,7 +210,8 @@ export async function runComputerBatch(
         runStep(args).catch((err: unknown) => {
           // A step failure reads like the single command's: message, then its recovery.
           const error = asComputerError(err);
-          throw new Error([error.message, ...error.toJSON().recovery, ...grantSetupLines(error)].join("\n"));
+          const unknown = error.outcomeUnknown ? [verdictLine(failedActionVerdict(error))] : [];
+          throw new Error([error.message, ...unknown, ...error.toJSON().recovery, ...grantSetupLines(error)].join("\n"));
         }),
       { keepGoing: opts.keepGoing },
     );

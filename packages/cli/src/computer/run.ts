@@ -28,8 +28,9 @@ import { fmt, icons } from "../colors.js";
 import { readStdinBody } from "../sendBody.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { writeShotFile } from "../browser/shotFile.js";
-import { agentSetupLines } from "@codecast/shared/contracts";
+import { agentSetupLines } from "@codecast/shared/contracts/agentToolSetup";
 import { asComputerError, ComputerError, grantSetupLines } from "./errors.js";
+import { actionVerdict, failedActionVerdict, verdictLine } from "./verdict.js";
 import { formatAction, formatApps, formatCapabilities, formatSnapshot, formatWindows, jsonChanges } from "./format.js";
 import { diffTrees, filterTree, formatDiff, resolveElement, type TreeFilter } from "./tree.js";
 import { ensureScreenshotDir, rewriteScreenshotForJson, screenshotFileName, sweepScreenshots } from "./screenshotFile.js";
@@ -79,6 +80,8 @@ const ACTION_METHOD: Record<string, ComputerActionMethod> = {
 
 /** Commander's parsed flags, all still strings — parsing them is this file's job. */
 export interface ComputerOptions {
+  /** `--on laptop` (or a laptop's name or device id): from a cloud host, the person's laptop. */
+  on?: string;
   app?: string;
   windowId?: string;
   windowIndex?: string;
@@ -460,10 +463,11 @@ function emitScreenshot(result: ComputerSnapshotResult, o: ComputerOptions, sink
 
 /** The `--json` body: the screenshot as a path, and what changed in place of
  *  the raw tree it was compared against. */
-function jsonBody(result: ComputerSnapshotResult | ComputerActionResult): Record<string, unknown> {
+function jsonBody(result: ComputerSnapshotResult | ComputerActionResult, action = false): Record<string, unknown> {
   const { baselineTreeText: _baseline, pixelChange: _pixels, ...rest } = rewriteScreenshotForJson(result) as ComputerActionResult;
   const changes = jsonChanges(result);
-  return (changes ? { ...rest, changes } : rest) as unknown as Record<string, unknown>;
+  const verdict = action ? { verdict: actionVerdict(result) } : {};
+  return (changes ? { ...rest, changes, ...verdict } : { ...rest, ...verdict }) as unknown as Record<string, unknown>;
 }
 
 function emitSnapshot(result: ComputerSnapshotResult, o: ComputerOptions, sink: ComputerSink): void {
@@ -473,7 +477,7 @@ function emitSnapshot(result: ComputerSnapshotResult, o: ComputerOptions, sink: 
 }
 
 function emitAction(verb: ComputerVerb, result: ComputerActionResult, o: ComputerOptions, sink: ComputerSink): void {
-  if (o.json) return printJson(sink, jsonBody(result));
+  if (o.json) return printJson(sink, jsonBody(result, true));
   sink.log(formatAction(ACTION_METHOD[verb], o.app ?? "", result, treeFilter(o)));
   emitScreenshot(result, o, sink);
 }
@@ -486,11 +490,13 @@ function emitAction(verb: ComputerVerb, result: ComputerActionResult, o: Compute
  * recovery text, not the exit status — sixteen exit codes would be a second
  * vocabulary saying less than the first.
  */
-function fail(err: unknown, o: ComputerOptions, deps: ComputerRunDeps): never {
+function fail(err: unknown, o: ComputerOptions, deps: ComputerRunDeps, verb?: ComputerVerb): never {
   const error = asComputerError(err);
-  if (o.json) console.log(JSON.stringify(error.toJSON(), null, 2));
+  const verdict = verb && verb in ACTION_METHOD ? failedActionVerdict(error) : undefined;
+  if (o.json) console.log(JSON.stringify({ ...error.toJSON(), ...(verdict ? { verdict } : {}) }, null, 2));
   else {
     console.error(`${fmt.error(icons.cross)} ${error.message}`);
+    if (verdict) console.error(`  ${verdictLine(verdict)}`);
     for (const line of error.toJSON().recovery) console.error(`  ${fmt.muted(line)}`);
   }
   // On stderr either way, so a --json reader's stdout stays one document.
@@ -513,14 +519,25 @@ async function defaultClient(): Promise<ComputerClientLike> {
   // real compatibility gate, and it stays unconditional.
   const [{ ComputerClient }, { getVersion }, { helperIsEmbedded }] = await Promise.all([
     import("./client.js"),
-    import("../update.js"),
+    import("../cliVersion.js"),
     import("./helperPayload.js"),
   ]);
   return new ComputerClient({ version: helperIsEmbedded() ? getVersion() : undefined });
 }
 
-export async function createComputerClient(deps: ComputerRunDeps): Promise<ComputerClientLike> {
-  return deps.createClient ? deps.createClient() : await defaultClient();
+/** Where a verb runs: `--on`, else CAST_COMPUTER_ON, else this machine (undefined). */
+export function computerTarget(o: Pick<ComputerOptions, "on">, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return (o.on ?? env.CAST_COMPUTER_ON)?.trim() || undefined;
+}
+
+export async function createComputerClient(deps: ComputerRunDeps, on?: string): Promise<ComputerClientLike> {
+  if (deps.createClient) return deps.createClient();
+  if (!on) return await defaultClient();
+  const [{ isRemoteDevice }, { RemoteComputerClient }, { sessionIdFromEnv }] = await Promise.all([
+    import("../remote/device.js"), import("./remoteClient.js"), import("../sessionIdentity.js"),
+  ]);
+  if (!isRemoteDevice()) throw invalid(`--on ${on} is for a session on a cloud host reaching its person's laptop; this machine is not a cloud host, so drop --on`);
+  return new RemoteComputerClient({ on, session: sessionIdFromEnv() });
 }
 
 async function defaultPermissions(): Promise<ComputerPermissionApi> {
@@ -620,19 +637,21 @@ export async function runComputerVerb(verb: ComputerVerb, o: ComputerOptions, ra
   const read = rawDeps.readStdin ?? readStdinBody;
   const deps: ComputerRunDeps = { ...rawDeps, readStdin: () => (body ??= read()) };
   try {
+    const on = computerTarget(o);
+    if (on && (verb === "permissions" || verb === "setup")) throw invalid(`${verb} is the laptop person's, on the laptop: from here, \`cast devices setup <laptop> computer --start\` puts it on their screen`);
     if (verb === "permissions") return await runPermissions(o, deps);
     if (verb === "setup") return await runSetup(o, deps);
     // Flags are validated first, so a bad chord or an out-of-range number costs
     // neither a helper launch nor the client module it would be launched from.
     validateVerb(verb, o, deps);
-    const client = await createComputerClient(deps);
+    const client = await createComputerClient(deps, on);
     try {
       await execute(verb, o, client, deps, consoleSink);
     } finally {
       client.shutdown();
     }
   } catch (err) {
-    fail(err, o, deps);
+    fail(err, o, deps, verb);
   }
 }
 

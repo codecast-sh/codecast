@@ -169,6 +169,44 @@ describe("ComputerClient", () => {
     expect(fs.readFileSync(log, "utf-8").trim().split("\n")).toHaveLength(1);
   });
 
+  helperTest("a second client answers from the helper's cached handshake instead of asking again", async () => {
+    // Every `cast computer` step is a new process. The helper's answer cannot
+    // change while it lives, so asking again cost a round trip per step for
+    // nothing. FAKE_REQUIRE_HANDSHAKE proves the skip is safe: the helper
+    // remembers the first handshake for its whole life, as the real one does.
+    const home = isolatedHome();
+    const shakes = path.join(home, "handshakes.log");
+    withEnv({ FAKE_HANDSHAKE_LOG: shakes, FAKE_REQUIRE_HANDSHAKE: "1" });
+
+    const first = makeClient();
+    await first.capabilities();
+    first.shutdown();
+
+    const second = makeClient();
+    const caps = await second.capabilities();
+    expect(caps.providerVersion).toBe("1.0.0");
+    const result = (await second.listApps()) as unknown as { helperPid: number };
+    expect(result.helperPid).toBe(readInstance()!.pid);
+    expect(fs.readFileSync(shakes, "utf-8").trim().split("\n")).toHaveLength(1);
+  });
+
+  helperTest("cached caps from another release do not stand in for the handshake", async () => {
+    // A CLI with no version claim adopts and caches a 0.9.0 helper; a CLI of
+    // this release must still see the mismatch and relaunch, exactly as it
+    // would with no cache at all.
+    const home = isolatedHome();
+    const log = path.join(home, "launches.log");
+    withEnv({ FAKE_LAUNCH_LOG: log, FAKE_VERSION_SEQUENCE: "0.9.0,1.0.0" });
+
+    const unclaimed = makeClient({ version: undefined });
+    expect((await unclaimed.capabilities()).providerVersion).toBe("0.9.0");
+    unclaimed.shutdown();
+
+    const current = makeClient();
+    expect((await current.capabilities()).providerVersion).toBe("1.0.0");
+    expect(fs.readFileSync(log, "utf-8").trim().split("\n")).toHaveLength(2);
+  });
+
   helperTest("a helper that dies mid-session is re-handshaken, not talked to as a stranger", async () => {
     // Found by A7's granted e2e on a real Mac (ct-49523). The helper's identity
     // check lives in the handshake: it learns which binary may drive it from
@@ -291,22 +329,20 @@ describe("ComputerClient", () => {
     expect(err.message).toContain("token");
   });
 
-  helperTest("a timed-out request invalidates the queue behind it", async () => {
+  helperTest("a request that times out fails alone; one beside it is still answered", async () => {
     isolatedHome();
-    withEnv({ FAKE_HANG_METHODS: "listApps" });
+    withEnv({ FAKE_HANG_METHODS: "listApps,click" });
     const client = makeClient({ requestTimeoutMs: 400 });
 
     const failure = (p: Promise<unknown>) => p.then(() => null, (e) => e as ComputerError);
-    const [a, b] = await Promise.all([failure(client.listApps()), failure(client.listWindows({ app: "x" }))]);
-    expect(a).not.toBeNull();
-    expect(b).not.toBeNull();
+    const [hung, answered] = await Promise.all([failure(client.listApps()), client.listWindows({ app: "x" })]);
+    expect(hung!.code).toBe("action_timeout");
+    expect((answered as unknown as { method: string }).method).toBe("listWindows");
 
-    expect(a!.code).toBe("action_timeout");
-    // The second request was enqueued against a helper the timeout shut down.
-    // Answering it from a replacement is the bug the generation counter
-    // exists to prevent, so it is refused with a retryable message.
-    expect(b!.code).toBe("accessibility_error");
-    expect(b!.message).toContain("invalidated");
+    // A mutation that got no answer may have landed, and the error says so.
+    const click = (await failure(client.action("click", { app: "x", elementIndex: 1 })))!;
+    expect(click.code).toBe("action_timeout");
+    expect(click.message).toContain("whether it took effect is unknown");
   });
 
   helperTest("a busy helper is reported busy, never killed", async () => {
