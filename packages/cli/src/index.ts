@@ -2956,10 +2956,14 @@ program
   .addHelpText("after",
     "\nExamples:\n" +
     "  cast auth                # open the browser sign-in page and link this machine\n" +
-    "  cast auth status         # signed in or not, and the daemon's state\n" +
+    "  cast auth status         # signed in or not, and the daemon's state; exits 1 when not signed in\n" +
     "  cast login -             # no browser here: paste a setup token from codecast.sh/cli")
   .action(async (action?: string) => {
-    if (action === "status") return showStatus({ network: false });
+    if (action === "status") {
+      await showStatus({ network: false });
+      if (!readConfig()?.auth_token || readDaemonState()?.authExpired) process.exitCode = 1;
+      return;
+    }
     if (action) {
       console.error(`Unknown auth action "${action}". Run ${fmt.cmd("cast auth")} to sign in or ${fmt.cmd("cast auth status")} to check.`);
       process.exit(1);
@@ -18401,6 +18405,14 @@ projectCmd
     if (p.description) console.log(`\n  ${p.description}`);
     if (p.labels?.length) console.log(`  ${c.dim}Labels: ${p.labels.join(", ")}${c.reset}`);
     if (p.project_path) console.log(`  ${c.dim}Path: ${p.project_path}${c.reset}`);
+    if (p.goal) console.log(`\n  ${c.bold}Goal${c.reset} ${p.goal}`);
+    for (const m of p.success_metrics ?? []) console.log(`  ${c.dim}-${c.reset} ${m}`);
+    if (p.instructions) console.log(`\n  ${c.bold}Instructions${c.reset}\n${String(p.instructions).split("\n").map((l: string) => `  ${l}`).join("\n")}`);
+    const memory = await tryCliPost("/cli/docs/list", { project_id: id, pinned: true, limit: 50 });
+    if (Array.isArray(memory) && memory.length) {
+      console.log(`\n  ${c.bold}Memory (${memory.length})${c.reset}`);
+      for (const d of memory) console.log(`  ${c.cyan}${d._id}${c.reset} ${d.title}`);
+    }
     if (p.tasks?.length) {
       console.log(`\n  ${c.bold}Tasks (${p.tasks.length}${p.tasks_truncated ? "+, open work first" : ""})${c.reset}`);
       for (const t of p.tasks) {
@@ -18464,6 +18476,8 @@ projectCmd
   .argument("<id>", "Project short id (pj-...), id, or title substring")
   .option("--title <text>", stdinText("New title"))
   .option("--description <text>", stdinText("New description"))
+  .option("--instructions <text>", stdinText("Instructions every session in the project starts with, verbatim ('none' clears)"))
+  .option("--instructions-file <path>", "Read the instructions from a file ('-' for stdin)")
   .option("--status <status>", "New status: planning, active, paused, done", choiceOption(PROJECT_STATUSES))
   .option("--labels <labels>", "Comma-separated labels (replaces existing)")
   .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears); drives the burndown deadline")
@@ -18474,13 +18488,15 @@ charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true
     const body: Record<string, any> = { id: await resolveProjectId(ref), ...charterBody(options) };
     if (options.title) body.title = options.title;
     if (options.description !== undefined) body.description = options.description;
+    if (options.instructionsFile) body.instructions = options.instructionsFile === "-" ? readStdinBody() : fs.readFileSync(options.instructionsFile, "utf-8");
+    else if (options.instructions !== undefined) body.instructions = NONE(options.instructions) ? "" : options.instructions;
     if (options.status) body.status = options.status;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     if (options.deadline) body.target_date = parseDeadlineDate(options.deadline);
     if (options.path !== undefined) body.project_path = NONE(options.path) ? null : path.resolve(options.path);
     if (options.number?.length) body.metrics = initiativeMetricsArg(options.number, "--number");
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update: pass --title, --description, --status, --labels, --deadline, --path, --number, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens, --horizon)");
+      console.error("Nothing to update: pass --title, --description, --instructions, --status, --labels, --deadline, --path, --number, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens, --horizon)");
       process.exit(1);
     }
     await cliPost("/cli/projects/update", body);
@@ -18516,6 +18532,74 @@ projectCmd
   .argument("[session]", "Session id or short id (default: this session)")
   .action(async (session: string | undefined) => {
     await setSessionProject(session, null);
+  });
+
+// A project's memory is its pinned docs (session-projects.md SP6): every
+// session in the project starts with their index. Remember files one, forget
+// unpins it (the doc stays, editable through cast doc).
+async function memoryProject(ref: string | undefined): Promise<{ id: string; label: string }> {
+  if (ref) {
+    const id = await resolveProjectId(ref);
+    const p = await cliPost("/cli/projects/get", { id });
+    if (!p) exitNotFound("project", ref, "cast project ls");
+    return { id: p._id, label: p.short_id ?? p._id };
+  }
+  const session = callingSession() || detectCurrentSessionId();
+  const context = session ? await tryCliPost("/cli/projects/context", { session }) : null;
+  if (!context?.id) {
+    console.error("This session is in no project: name one (cast project ls), or put the session in one (cast project join <project>)");
+    process.exit(1);
+  }
+  return { id: context.id, label: context.short_id ?? context.id };
+}
+
+projectCmd
+  .command("remember")
+  .description("Record a fact every session in a project should know: a pinned note in the project, listed at every session's start")
+  .argument("<project-or-fact>", stdinText("The project (short id, id or title substring) when a fact follows; else the fact"))
+  .argument("[fact]", stdinText("The fact (markdown), when the project is named first"))
+  .option("--title <text>", "The note's title (default: the fact's opening words)")
+  .action(async (first: string, second: string | undefined, options: any) => {
+    const ref = second === undefined ? undefined : first;
+    const text = (second ?? first).trim();
+    if (!text) { console.error("Nothing to remember: the fact is empty"); process.exit(1); }
+    const project = await memoryProject(ref);
+    const row = await cliPost("/cli/projects/get", { id: project.id });
+    const firstLine = text.split("\n")[0].replace(/^#+\s*/, "").trim();
+    const title = options.title?.trim() || (firstLine.length > 80 ? `${firstLine.slice(0, 77).trimEnd()}...` : firstLine);
+    const result = await cliPost("/cli/docs/create", {
+      title,
+      content: text,
+      doc_type: "note",
+      project_id: project.id,
+      pinned: true,
+      ...(row?.team_id ? { workspace: "team", team_id: row.team_id } : { workspace: "personal" }),
+    });
+    console.log(`${c.green}ok${c.reset} Remembered in ${c.cyan}${project.label}${c.reset} as ${c.cyan}${result.id}${c.reset}: ${title}`);
+  });
+
+projectCmd
+  .command("memory")
+  .description("List a project's memory: its pinned docs")
+  .argument("[project]", "Project short id, id or title substring (default: this session's project)")
+  .option("--json", "Output as JSON (the doc rows)")
+  .action(async (ref: string | undefined, options: any) => {
+    const project = await memoryProject(ref);
+    const docs = await cliPost("/cli/docs/list", { project_id: project.id, pinned: true, limit: 100 });
+    const rows = Array.isArray(docs) ? docs : [];
+    if (options.json) { printJson(rows); return; }
+    if (!rows.length) { console.log(fmt.muted(`No memory in ${project.label} yet: cast project remember "<fact>"`)); return; }
+    for (const d of rows) console.log(`  ${c.cyan}${d._id}${c.reset} ${d.title} ${c.dim}${formatRelativeTime(d.updated_at)}${c.reset}`);
+    console.log(fmt.muted(`\n  ${rows.length} in ${project.label}; cast doc show <id> opens one, cast project forget <id> unpins it`));
+  });
+
+projectCmd
+  .command("forget")
+  .description("Take a doc out of its project's memory (unpins it; the doc stays)")
+  .argument("<doc>", "Doc id")
+  .action(async (docId: string) => {
+    await cliPost("/cli/docs/update", { id: docId, pinned: false });
+    console.log(`${c.green}ok${c.reset} ${c.cyan}${docId}${c.reset} is out of the project's memory; the doc stays (cast doc show ${docId})`);
   });
 
 // "2026-09-26" → ms at local end-of-day, so a deadline includes its own day.
@@ -18690,6 +18774,55 @@ projectCmd
     if (events.length === body.limit) {
       console.log(fmt.muted(`  … showing the ${events.length} most recent (raise -n for more)`));
     }
+  });
+
+const OUTPUT_PR_GROUPS: Array<[string, string]> = [["attention", "Needs attention"], ["review", "In review"], ["done", "Merged or closed"]];
+
+function outputRefs(o: any): string {
+  const refs = [o.session ? (o.session.short_id ?? o.session.id) : null, o.task?.short_id].filter(Boolean).join(" ");
+  return `${c.dim}${refs ? `${refs} · ` : ""}${formatRelativeTime(o.updated_at)}${c.reset}`;
+}
+
+projectCmd
+  .command("outputs")
+  .description("What a project produced: its pull requests by what they need, then its pages, docs and images, each with the session and task that made it")
+  .argument("<id>", "Project short id (pj-...), id, or title substring")
+  .option("--all", "List merged and closed pull requests too")
+  .option("--json", "Output as JSON")
+  .action(async (ref: string, options: any) => {
+    const id = await resolveProjectId(ref);
+    const out = await cliPost("/cli/projects/outputs", { id });
+    if (!out) exitNotFound("project", ref, "cast project ls");
+    if (options.json) { printJson(out); return; }
+    console.log(`\n  ${c.bold}${out.project.title}${c.reset} ${c.cyan}${out.project.short_id ?? out.project.id}${c.reset}`);
+    const empty = !out.prs.length && !out.pages.length && !out.docs.length && !out.images.length;
+    if (empty) console.log(fmt.muted("\n  No outputs yet."));
+    for (const [group, label] of OUTPUT_PR_GROUPS) {
+      const rows = out.prs.filter((p: any) => p.group === group);
+      if (!rows.length) continue;
+      console.log(`\n  ${c.bold}${label} (${rows.length})${c.reset}`);
+      if (group === "done" && !options.all) { console.log(fmt.muted("    --all lists them")); continue; }
+      for (const p of rows) {
+        const status = `${p.draft ? "draft · " : ""}${p.status.replace(/_/g, " ")}`;
+        console.log(`    ${c.cyan}${p.repository}#${p.number}${c.reset} ${p.title} ${c.yellow}${status}${c.reset} ${outputRefs(p)}`);
+        console.log(`      ${c.dim}${p.github_url}${c.reset}`);
+      }
+    }
+    const sections: Array<[string, any[], (o: any) => string]> = [
+      ["Pages", out.pages, (o) => `https://codecast.sh${o.href}`],
+      ["Docs", out.docs, (o) => `${WEB_URL}${o.href}`],
+      ["Images", out.images, (o) => o.url],
+    ];
+    for (const [label, rows, link] of sections) {
+      if (!rows.length) continue;
+      console.log(`\n  ${c.bold}${label} (${rows.length})${c.reset}`);
+      for (const o of rows) {
+        console.log(`    ${o.title} ${outputRefs(o)}`);
+        console.log(`      ${c.dim}${link(o)}${c.reset}`);
+      }
+    }
+    if (out.truncated) console.log(fmt.muted("\n  Older outputs exist past what was read."));
+    console.log();
   });
 
 // --- Goals ---

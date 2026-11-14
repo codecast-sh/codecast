@@ -442,6 +442,16 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["doc", "versions", "proposals", "usage", "sources", "routine", "project"] },
     feeds: ["expectations.forProject"],
   },
+  // A project's outputs (ct-94262): projectOutputs.get's pull requests, pages,
+  // docs and images, one row per project viewed, keyed by the project's Convex
+  // id. Delta: each project page feeds its own row. Everything on the row is
+  // a nested list, compared by content.
+  projectOutputs: {
+    persistence: { kind: "collection", key: "projectOutputs" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["project", "prs", "pages", "docs", "images"] },
+    feeds: ["projectOutputs.get"],
+  },
   // Every project's expectations in a workspace, one summary row each
   // (expectations.overview): the /expectations page. Snapshot: the query is
   // the workspace's complete set. Rows carry the workspace key.
@@ -654,6 +664,16 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, altKey: "conversation_id" },
     indexes: "_id, conversation_id",
     feeds: ["sessionReads.listMine"],
+  },
+  // How loudly the viewer hears each session they set one for
+  // (sessionWatch.listMine): every message, needs input, or muted. Keyed
+  // `sn:<conversation id>` on the server row and the optimistic one alike, so
+  // a set paints at once and the echo lands on the same row. A snapshot: the
+  // query returns every setting, so a cleared one drops out.
+  sessionNotify: {
+    persistence: { kind: "collection", key: "sessionNotify" },
+    localFirst: true,
+    feeds: ["sessionWatch.listMine"],
   },
   // The server's own per-channel unread numbers (chat.listChannels' rail). A
   // small array, so a meta blob: it is the only honest count for a channel whose
@@ -1979,6 +1999,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sideAnswers: "shared",
   taskEvidence: "shared",
   projectExpectations: "shared",
+  projectOutputs: "shared",
   expectationsOverview: "shared",
   trialCards: "shared",
   trialProjects: "shared",
@@ -2009,6 +2030,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   // The viewer's read marks are the same in every window of theirs, and the
   // ack that clears a card must clear it everywhere at once.
   sessionReads: "shared",
+  sessionNotify: "shared",
   chatRail: "shared",
   threadInbox: "shared",
   threadUnread: "shared",
