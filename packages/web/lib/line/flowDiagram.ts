@@ -209,8 +209,10 @@ export const SESSION_WORDS = "this session";
 /** Whether an edge out of a segment's exit is taken on that exit: its condition names no exit, or names this one
  *  (`review__changes.json.exit = changes`). The parser writes the same route from every stop of the segment. */
 function takesOwnExit(e: FlowEdgeIn): boolean {
-  const named = e.condition?.match(/\.exit\s*=\s*([\w-]+)/)?.[1];
-  return !named || e.from.endsWith(`${SEGMENT_SEP}${named}`) || e.from === named;
+  const m = e.condition?.match(/\.exit\s*(!?=)\s*([\w-]+)/);
+  if (!m) return true;
+  const isNamed = e.from.endsWith(`${SEGMENT_SEP}${m[2]}`) || e.from === m[2];
+  return m[1] === "!=" ? !isNamed : isNamed;
 }
 
 /** A segment's own steps: its nodes with the segment's name taken off, its entry as their start, its exits as ends. */

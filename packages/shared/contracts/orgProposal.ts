@@ -658,7 +658,7 @@ export function isOrgChangeApprovable(status: string): boolean {
 
 /** The author's thread bound to a proposal: the head of people's standing
  *  session, or the session that ran the review. The pane embeds it. */
-export type OrgProposalThread = { conversation_id: string; short_id?: string };
+export type OrgProposalThread = { conversation_id: string; short_id?: string; title?: string };
 
 /** What `orgProposals.revise` did to a change (S18). A removed change keeps
  *  its row with `status: "removed"`, struck through with the note; an

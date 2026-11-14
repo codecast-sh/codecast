@@ -73,7 +73,8 @@ export function ProposalCard({ refId }: { refId: string }) {
   );
 }
 
-function ProposalBody({ proposal, changes }: { proposal: OrgProposalListRow; changes: readonly OrgProposalChange[] }) {
+/** `bare`: the screen above already says the progress and the author. `readonlyWords`: what a viewer with no batch is told, in place of the thread line. */
+export function ProposalBody({ proposal, changes, bare, readonlyWords }: { proposal: OrgProposalListRow; changes: readonly OrgProposalChange[]; bare?: boolean; readonlyWords?: string }) {
   const Theme = useTheme();
   const entries = useProposalEntries(proposal, changes);
   const batch = useBatch();
@@ -94,15 +95,18 @@ function ProposalBody({ proposal, changes }: { proposal: OrgProposalListRow; cha
   const send = batchSendWords(mine);
   const decided = list.some((e) => e.waiting === 0);
   const restLabel = rest.answers.length === 0 && !decided ? `${ORG_REPLY_WORDS.approve.act} all ${rest.rest.length}` : `${ORG_REPLY_WORDS.approve.act} the rest`;
-  const outcome = proposal.status === 'withdrawn' ? 'Withdrawn' : waiting === 0 ? proposalProgressWords(entries.cards, entries.records ? changes : undefined) || 'Nothing to decide' : null;
+  // `bare`: the screen's own status chips already say the outcome.
+  const outcome = bare ? null : proposal.status === 'withdrawn' ? 'Withdrawn' : waiting === 0 ? proposalProgressWords(entries.cards, entries.records ? changes : undefined) || 'Nothing to decide' : null;
   const lone = entries.cards.length === 1;
 
   return (
     <View>
-      <Text style={styles.meta}>
-        {progress.split(' · ').join('  ·  ')}
-        {proposal.author?.name ? <Text style={styles.metaDim}>{`  ·  from ${proposal.author.name}`}</Text> : null}
-      </Text>
+      {bare ? null : (
+        <Text style={styles.meta}>
+          {progress.split(' · ').join('  ·  ')}
+          {proposal.author?.name ? <Text style={styles.metaDim}>{`  ·  from ${proposal.author.name}`}</Text> : null}
+        </Text>
+      )}
       {summary ? (
         <View style={{ marginTop: 8 }}>
           <CollapsibleBody fadeColor={Theme.card} height={84} labels={['Read the rest', 'Show less']}>
@@ -117,7 +121,7 @@ function ProposalBody({ proposal, changes }: { proposal: OrgProposalListRow; cha
           : entries.cards.map((card, i) => <SubjectEntry key={card.key} proposal={proposal} batch={batch} card={card} ordinal={lone ? undefined : i + 1} review={review} why={!(lone && summary)} />)}
       </View>
       {!batch.key && open && waiting > 0 ? (
-        <Text style={[styles.metaDim, { marginTop: 8 }]}>Open this in {proposal.author?.name ? `${proposal.author.name}'s` : "the author's"} thread to answer.</Text>
+        <Text style={[styles.metaDim, { marginTop: 8 }]}>{readonlyWords ?? `Open this in ${proposal.author?.name ? `${proposal.author.name}'s` : "the author's"} thread to answer.`}</Text>
       ) : null}
       {(answerable && list.length > 1 && (rest.rest.length > 0 || rest.pressed)) || outcome ? (
         <View style={styles.foot}>
@@ -154,8 +158,8 @@ function SubjectEntry({ proposal, batch, card, ordinal, review, why }: { proposa
       ordinal={ordinal}
       sentence={card.sentence}
       span={card.subjectSpan}
-      settled={card.waiting === 0}
-      state={subjectStatusWords(card)}
+      settled={card.waiting === 0 || proposal.status === 'withdrawn'}
+      state={proposal.status === 'withdrawn' && card.waiting > 0 ? 'Not decided' : subjectStatusWords(card)}
       revised={revised}
       canAccept={members.some((c) => isOrgChangeApprovable(c.status))}
       answer={answer}
