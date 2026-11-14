@@ -5499,11 +5499,11 @@ function logNewHarnessChanges(changes: HarnessChange[]): void {
 let updateAvailable: string | null = null;
 let updateChecked = false;
 let updateCheckInFlight = false;
-async function refreshUpdateAvailable(): Promise<void> {
+async function refreshUpdateAvailable(force = false): Promise<void> {
   if (updateCheckInFlight || isDevMode()) return;
   updateCheckInFlight = true;
   try {
-    updateAvailable = await checkForUpdates();
+    updateAvailable = await checkForUpdates(force);
     updateChecked = true;
   } catch {
     // Keep the last answer; the next beat asks again.
@@ -5517,6 +5517,8 @@ async function refreshUpdateAvailable(): Promise<void> {
 // request this run answers, so the server takes this run's outcome for that
 // request only and an old failure never overwrites a newer press.
 let updateRun: { state: "installing" | "failed"; error?: string; at?: number } | null = null;
+// The update request whose manifest check already ran (see the heartbeat).
+let updateAskChecked: number | undefined;
 async function runSelfUpdate(why: string, at?: number): Promise<void> {
   if (updateRun?.state === "installing") return;
   const currentVersion = daemonVersion || "unknown";
@@ -5842,9 +5844,19 @@ async function sendHeartbeat(): Promise<void> {
     // The device row asks for an update (Settings > Daemon). Taken only when
     // this daemon's own check says a newer release exists, so a daemon that
     // just restarted on the new version never reinstalls it before the row clears.
+    // The cached check is up to a day old, so each new request asks the
+    // manifest once: a hotfix published after the last check was otherwise
+    // invisible to the request until the next day (MacBook-Pro-2, 2026-11-14).
     const ask = data.update_request as { at?: number } | undefined;
-    if (typeof ask?.at === "number" && updateAvailable && updateRun?.at !== ask.at) {
-      void runSelfUpdate("update requested on the device page", ask.at);
+    if (typeof ask?.at === "number" && updateRun?.at !== ask.at) {
+      const at = ask.at;
+      if (updateAvailable) void runSelfUpdate("update requested on the device page", at);
+      else if (updateAskChecked !== at) {
+        updateAskChecked = at;
+        void refreshUpdateAvailable(true).then(() => {
+          if (updateAvailable && updateRun?.at !== at) void runSelfUpdate("update requested on the device page", at);
+        });
+      }
     }
     if (data.commands && data.commands.length > 0) {
       log(`Received ${data.commands.length} remote command(s)`);
