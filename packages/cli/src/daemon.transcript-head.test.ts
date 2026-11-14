@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { readFileHeadLines } from "./daemon.js";
+import { readFileHeadLines, transcriptStartedAt } from "./daemon.js";
 import { extractCodexCwd } from "./codexSessionMeta.js";
 
 // Codex 0.153 writes session_meta with the full base_instructions text inline:
@@ -63,5 +63,27 @@ describe("readFileHeadLines", () => {
     const file = rolloutWithLongMeta(10);
     const head = readFileHeadLines(file, 8);
     expect(head).toBe(fs.readFileSync(file, "utf-8"));
+  });
+});
+
+// Claude Code 2.1.325 opens a transcript with untimed metadata lines and a
+// ~25KB SessionStart hook attachment whose timestamp sits after its content
+// (16301 bytes in, observed 2026-11-14). A 512-byte prefix read NaN, and the
+// tmux spawn registry dropped the parent of every agent-spawn.sh child.
+describe("transcriptStartedAt", () => {
+  test("finds the first top-level timestamp past untimed metadata and a long hook line", () => {
+    const file = path.join(os.tmpdir(), `claude-head-${process.pid}-${Math.random().toString(36).slice(2)}.jsonl`);
+    const sid = "69d51bf1-e194-41ce-ae3a-b1e81a66d93d";
+    const lines = [
+      { type: "last-prompt", leafUuid: "556d6970", sessionId: sid },
+      { type: "mode", mode: "normal", sessionId: sid },
+      { type: "permission-mode", permissionMode: "bypassPermissions", sessionId: sid },
+      { type: "tools-used", tools: ["ReadMcpResourceTool"], sessionId: sid },
+      { parentUuid: null, attachment: { type: "hook_success", content: `x "timestamp": "1999-01-01T00:00:00Z" ${"y".repeat(24_000)}` }, timestamp: "2026-11-14T22:12:03.336Z" },
+      { type: "user", timestamp: "2026-11-14T22:12:40.000Z" },
+    ];
+    fs.writeFileSync(file, lines.map(l => JSON.stringify(l)).join("\n") + "\n");
+    tmpFiles.push(file);
+    expect(transcriptStartedAt(file)).toBe(Date.parse("2026-11-14T22:12:03.336Z"));
   });
 });
