@@ -112,6 +112,10 @@ function fakeClient(answers: Record<string, (args: any) => any>) {
       calls.push({ name, args });
       return answers[name]!(args);
     },
+    mutation: async (ref: any, args: any) => {
+      calls.push({ name: getFunctionName(ref), args });
+      return { sent: true };
+    },
     watchQuery: () => ({
       localQueryResult: () => state,
       onUpdate: (cb: () => void) => {
@@ -149,12 +153,27 @@ describe("confirmPresence", () => {
     expect(ceremonies).toEqual(["get"]);
   });
 
-  test("a cancelled prompt answers null quietly and finishes nothing", async () => {
+  test("a cancelled prompt offers the phone; declining answers null quietly and finishes nothing", async () => {
     setCredentials({ get: async () => Promise.reject(Object.assign(new Error("The operation either timed out or was not allowed."), { name: "NotAllowedError" })) });
+    promptAnswer = "cancel";
     const client = fakeClient({ "passkeys:presenceBegin": () => begun, "passkeys:presenceFinish": () => granted });
     expect(await confirmPresence(client as any, "reveal", "sec-1")).toBeNull();
     expect(client.calls.map((c) => c.name)).toEqual(["passkeys:presenceBegin"]);
-    expect(toasts.filter((t) => t.title.startsWith("error:"))).toEqual([]);
+    expect(toasts.map((t) => t.title)).toEqual(["No passkey on this computer?"]);
+    expect(toasts[0].opts.duration).toBeLessThanOrEqual(10_000);
+  });
+
+  test("with no passkey on this computer, Use phone sends the same challenge to the phone and goes on once it is granted", async () => {
+    setCredentials({ get: async () => Promise.reject(Object.assign(new Error("not allowed"), { name: "NotAllowedError" })) });
+    const client = fakeClient({ "passkeys:presenceBegin": () => begun, "passkeys:presenceFinish": () => granted });
+    const done = confirmPresence(client as any, "approve", "d-1");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(client.calls.map((c) => c.name)).toEqual(["passkeys:presenceBegin", "passkeys:askPhone"]);
+    expect(client.calls[1].args).toEqual({ challenge_id: "ch-1" });
+    expect(toasts.at(-1)?.title).toBe("Confirm on your phone");
+    expect(opened).toEqual([]);
+    client.push({ purpose: "presence", status: "granted", action: "approve", expires_at: begun.expires_at });
+    expect(await done).toBe(GRANT);
   });
 
   test("a refusal from the server is said and answers null", async () => {
@@ -209,7 +228,8 @@ describe("confirmPresence", () => {
     const done = confirmPresence(client as any, "approve", "d-1");
     await new Promise((r) => setTimeout(r, 0));
     expect(opened).toEqual([`https://codecast.sh${confirmPath("ch-1")}`]);
-    expect(toasts.at(-1)?.title).toBe("Confirm in your browser");
+    expect(toasts.at(-1)?.title).toBe("Confirm in your browser or on your phone");
+    expect(client.calls.map((c) => c.name)).toEqual(["passkeys:presenceBegin", "passkeys:askPhone"]);
     client.push({ purpose: "presence", status: "pending", action: "approve", expires_at: begun.expires_at });
     client.push({ purpose: "presence", status: "granted", action: "approve", expires_at: begun.expires_at });
     // The grant string came from the begin, kept in memory while the browser confirmed.
@@ -264,18 +284,22 @@ describe("withPresence", () => {
 });
 
 describe("useApproveGate", () => {
-  test("Approve of an Ask first read confirms before it sends; Deny sends at once", async () => {
+  test("Approve of an Ask first read of a Touch ID secret confirms before it sends; Deny sends at once", async () => {
     const client = fakeClient({ "passkeys:presenceBegin": () => begun, "passkeys:presenceFinish": () => granted });
-    const decision = { _id: "d-9", category: "access", options: [{ label: APPROVE_FOR_SESSION }, { label: DENY }] };
+    const decision = { _id: "d-9", category: "access", touch_id: true, options: [{ label: APPROVE_FOR_SESSION }, { label: DENY }] };
     let gate: any;
+    let plain: any;
     function Probe() {
       gate = useApproveGate(decision);
+      plain = useApproveGate({ ...decision, touch_id: undefined });
       return null;
     }
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(() => root.render(<ConvexProvider client={client as any}><Probe /></ConvexProvider>));
     expect([gate.gated(0), gate.gated(1)]).toEqual([true, false]);
+    // Ask first without Touch ID: Approve is one press.
+    expect([plain.gated(0), plain.gated(1)]).toEqual([false, false]);
 
     const sent: number[] = [];
     const presences: (string | undefined)[] = [];
@@ -291,6 +315,7 @@ describe("useApproveGate", () => {
     expect(client.calls[0].args.target).toBe("d-9");
 
     setCredentials({ get: async () => Promise.reject(Object.assign(new Error("cancelled"), { name: "NotAllowedError" })) });
+    promptAnswer = "cancel";
     expect(await gate.answer(0, () => sent.push(0))).toBe(NOT_CONFIRMED);
     expect(sent).toEqual([1, 0]);
     await act(() => root.unmount());
@@ -334,6 +359,7 @@ describe("useReveal of an Ask first secret", () => {
 
   test("cancelled, nothing is fetched", async () => {
     setCredentials({ get: async () => Promise.reject(Object.assign(new Error("cancelled"), { name: "NotAllowedError" })) });
+    promptAnswer = "cancel";
     const r = await reveal(true, []);
     expect(r.names).toEqual(["passkeys:presenceBegin"]);
     expect(r.got).toBeNull();
@@ -343,6 +369,7 @@ describe("useReveal of an Ask first secret", () => {
 test("a new passkey is named for the device it was made on", () => {
   expect(deviceName("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15")).toBe("Safari on Mac");
   expect(deviceName("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/604.1")).toBe("Safari on iPhone");
+  expect(deviceName("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/140.0 Safari/537.36", "MacBook-Pro-2")).toBe("Chrome on MacBook-Pro-2");
   expect(deviceName("Mozilla/5.0 (Windows NT 10.0) Chrome/140.0 Safari/537.36 Edg/140.0")).toBe("Edge on Windows");
   expect(deviceName("")).toBe("Passkey");
 });
