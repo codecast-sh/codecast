@@ -1,6 +1,14 @@
 import type { Doc, Id } from "../_generated/dataModel";
 
 type PR = Doc<"pull_requests">;
+
+/** How many sessions the inbox's pull request feed (pull_requests.sessionCardPRs) answers for at once. */
+export const SESSION_CARD_MAX_SESSIONS = 120;
+
+/** The pull request fields an inbox chip draws: all the feed sends of a row. */
+// Only what is drawn: a patch to anything else (updated_at moves on every
+// webhook) then answers the feed with the same result, and nothing is sent.
+export const SESSION_CARD_PR_FIELDS = ["_id", "team_id", "repository", "number", "title", "state", "draft", "checks_state"] as const;
 export type PrLinkTier = "observed" | "committed";
 const TIER_RANK: Record<PrLinkTier, number> = { observed: 0, committed: 1 };
 const tierOf = (row: { tier?: PrLinkTier }): PrLinkTier => row.tier ?? "observed";
