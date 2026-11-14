@@ -1,5 +1,5 @@
 import { memo, useCallback, useRef, useState } from "react";
-import { Headphones, MoreHorizontal } from "lucide-react";
+import { Bot, Headphones, MoreHorizontal } from "lucide-react";
 import { SlackLogo } from "../SlackLogo";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { WalkiePttButton } from "../calls/WalkiePtt";
@@ -10,11 +10,14 @@ import { useTypingMembers, useTypingReporter } from "../../hooks/useChatTyping";
 import { TypingIndicator } from "./TypingIndicator";
 import { slackComposerDelivery } from "../../lib/slackDelivery";
 import { useSlackConnect } from "../../hooks/useSlackConnect";
-import { useTrackedStore } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useChannelSlackLink } from "../../hooks/useChannelSlackLink";
 import { SlackConnectPrompt } from "./SlackConnectPrompt";
 import type { ChatAttachment } from "../../store/chatSlice";
 import { chatDraftKey } from "../../lib/chatDraftKey";
+import { sentChatMessageId } from "../../store/chatSlice";
+import { isConvexId } from "../../lib/entityLinks";
+import { HandToAgentReview } from "./HandToAgent";
 import "./chat.css";
 
 // The chat composer.
@@ -64,7 +67,7 @@ export const ChatComposer = memo(function ChatComposer({
   /** Names the "Also send to #channel" checkbox — offered only in a thread
    *  (Slack's broadcast). Absent = no checkbox. */
   channelName?: string;
-  onSend: (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean; syncLocalOnly?: boolean }) => void;
+  onSend: (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean; syncLocalOnly?: boolean }) => string | void;
   autoFocus?: boolean;
   /** The thread panel is narrower and sits under its own scroll region. */
   compact?: boolean;
@@ -95,6 +98,14 @@ export const ChatComposer = memo(function ChatComposer({
   // Per line, like broadcast: the mirror is the channel's rule, and this is
   // one person deciding that ONE line stays home. Resets after the send.
   const [localOnly, setLocalOnly] = useState(false);
+  const [handTo, setHandTo] = useState(false);
+  const [handing, setHanding] = useState<{ clientId: string; message: Promise<string>; content: string } | null>(null);
+  const threadHeld = useInboxStore((st) => {
+    const root = threadRootId ? (st.chatMessages[threadRootId] as { bound_session_id?: string; origin?: string; origin_session_id?: string } | undefined) : undefined;
+    const bound = root?.bound_session_id;
+    return !!root && ((!!bound && (isConvexId(bound) || !!(st.sessions as Record<string, unknown>)[bound])) || (root.origin === "agent" && !!root.origin_session_id));
+  });
+  const offerHand = !threadHeld;
   const slackLink = useChannelSlackLink(channelId);
   const s = useTrackedStore([(state) => state.currentUser?._id]);
   const slack = slackComposerDelivery(slackLink, s.currentUser?._id, !!threadRootId);
@@ -142,13 +153,19 @@ export const ChatComposer = memo(function ChatComposer({
           const sendOpts: { broadcast?: boolean; syncLocalOnly?: boolean } = {};
           if (offerBroadcast && broadcast) sendOpts.broadcast = true;
           if (offerSlack && onlyHere) sendOpts.syncLocalOnly = true;
-          onSend(
+          const clientId = onSend(
             content,
             attachments.length ? attachments : undefined,
             Object.keys(sendOpts).length > 0 ? sendOpts : undefined,
           );
+          if (handTo && offerHand && clientId) {
+            const message = sentChatMessageId(clientId);
+            message.catch(() => {});
+            setHanding({ clientId, message, content });
+          }
           setBroadcast(false);
           setLocalOnly(false);
+          setHandTo(false);
         }}
         composerFoot={<>
           <ComposerAttachButton dropRef={dropRef} />
@@ -171,28 +188,32 @@ export const ChatComposer = memo(function ChatComposer({
                 {offerSlack && <SlackLogo className="w-3 h-3" muted={!canSendSlack || localOnly} />}
                 {onlyHere && <span>Only in Codecast</span>}
                 {broadcast && <span>Also in #{channelName}</span>}
+                {handTo && offerHand && <span className="ch-composer-hand"><Bot className="w-3 h-3" />Agent</span>}
                 <MoreHorizontal className="w-4 h-4" />
               </button>
             </PopoverTrigger>
             <PopoverContent side="top" align="end" sideOffset={8} className="ch-composer-menu" aria-label="Message options">
-              {(offerSlack || offerBroadcast) && (
-                <div className="ch-composer-delivery">
-                  <span className="ch-composer-menu-heading">This message</span>
-                  {offerSlack && (
-                    <label className="ch-composer-choice">
-                      <input type="checkbox" checked={canSendSlack && !localOnly} disabled={!canSendSlack} onChange={(e) => setLocalOnly(!e.target.checked)} />
-                      <SlackLogo className="w-3.5 h-3.5" muted={!canSendSlack || localOnly} />
-                      <span>Also send to {slack?.destination}</span>
-                    </label>
-                  )}
-                  {offerBroadcast && (
-                    <label className="ch-composer-choice">
-                      <input type="checkbox" checked={broadcast} onChange={(e) => setBroadcast(e.target.checked)} />
-                      <span>Also send to #{channelName}</span>
-                    </label>
-                  )}
-                </div>
-              )}
+              {(offerHand || offerSlack || offerBroadcast) && <div className="ch-composer-delivery">
+                <span className="ch-composer-menu-heading">This message</span>
+                {offerSlack && (
+                  <label className="ch-composer-choice">
+                    <input type="checkbox" checked={canSendSlack && !localOnly} disabled={!canSendSlack} onChange={(e) => setLocalOnly(!e.target.checked)} />
+                    <SlackLogo className="w-3.5 h-3.5" muted={!canSendSlack || localOnly} />
+                    <span>Also send to {slack?.destination}</span>
+                  </label>
+                )}
+                {offerBroadcast && (
+                  <label className="ch-composer-choice">
+                    <input type="checkbox" checked={broadcast} onChange={(e) => setBroadcast(e.target.checked)} />
+                    <span>Also send to #{channelName}</span>
+                  </label>
+                )}
+                {offerHand && <label className="ch-composer-choice" data-hand-choice>
+                  <input type="checkbox" checked={handTo} onChange={(e) => setHandTo(e.target.checked)} />
+                  <Bot className="w-3.5 h-3.5" />
+                  <span>Hand to agent</span>
+                </label>}
+              </div>}
               <div className="ch-composer-shortcuts">
                 <span className="ch-composer-menu-heading">Keyboard shortcuts</span>
                 <div><span>Send message</span><span><KeyCap size="xs">Enter</KeyCap></span></div>
@@ -204,6 +225,15 @@ export const ChatComposer = memo(function ChatComposer({
           </Popover>
         </>}
       />
+      {handing && (
+        <HandToAgentReview
+          channelId={channelId}
+          rootKey={threadRootId ?? handing.clientId}
+          message={handing.message}
+          preview={threadRootId ? handing.content : undefined}
+          onClose={() => setHanding(null)}
+        />
+      )}
     </div>
   );
 });
