@@ -7,7 +7,7 @@ import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import type { CloudPlacementProgress, RewindFilesOp, RewindStagedMark } from "@codecast/shared/contracts";
 import type { RoleIcon } from "@codecast/shared/contracts/roleIcon";
-import { cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
+import { approvesSecretRead, cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
 import { withoutSecrets } from "@codecast/shared/contracts/secretShapes";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
@@ -589,6 +589,8 @@ export type ProjectItem = {
   client_key?: string;
   title: string;
   description?: string;
+  /** Standing instructions every session in the project starts with (session-projects.md SP6). */
+  instructions?: string;
   status: string;
   /** Workspace truth (server row field): set = team project, absent = personal. */
   team_id?: string | null;
@@ -1431,6 +1433,18 @@ export type SessionReadItem = {
   updated_at: number;
 };
 
+// How loudly the viewer hears one session (sessionWatch.listMine). No row is
+// the default: the ordinary rules, and the viewer's project, folder and
+// teammate mutes.
+export type SessionNotifyLevel = "all" | "needs_input" | "muted";
+export type SessionNotifyItem = {
+  _id: string;
+  conversation_id: string;
+  level: SessionNotifyLevel;
+  updated_at: number;
+};
+export const sessionNotifyKey = (conversationId: string) => `sn:${conversationId}`;
+
 // The decision queue: one explicit question an agent handed its human via
 // `cast decide` (session_decisions table). Answering is local-first — the
 // resolution fields flip on the draft and ride the generic patch rail; the
@@ -1489,6 +1503,8 @@ export type SessionDecisionItem = {
   card?: import("@codecast/shared/contracts/changeCard").ChangeCard;
   /** `cast decide --run`: the command the card runs on a person's Run, and how that went. */
   run?: import("@codecast/shared/contracts/commandRun").CommandRun;
+  /** An Ask first read of a Touch ID secret: its Approve confirms with a passkey. */
+  touch_id?: boolean;
   blocking: boolean;
   default_option?: number;
   /** A pointer card (a staffing proposal's): answering clears it and
@@ -1824,6 +1840,9 @@ export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "sessio
 
 export type ClientUI = {
   theme?: "light" | "dark";
+  // Sessions whose canvas is on (lib/sessionCanvas): conversation id → the
+  // page the person pinned, null for "the latest page". Absent is off.
+  session_canvas?: Record<string, { pin: string | null; at: number }>;
   // Personal sheet filters, by "<docId>:<tabId>" (components/sheets/useSheetFilter):
   // a person's own view of a tab's rows, hidden from nobody else.
   sheet_filters?: Record<string, unknown>;
@@ -4516,11 +4535,11 @@ export function visualOrderSessions(
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
-  // Same order the status view renders: questions, pinned, new, needs input,
+  // Same order the status view renders: pinned, questions, new, needs input,
   // done, working, dormant — the chokepoint's own sections, so the walk and
   // the render can never disagree.
   const sections: Array<[InboxSession[], string]> = [
-    [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
+    [placed.pinned, "pinned"], [placed.questions, "questions"], [placed.newSessions, "new"],
     [placed.needsInput, "needs_input"], [placed.done, "done"],
     [placed.working, "working"], [placed.dormant, "dormant"],
   ];
@@ -6632,6 +6651,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
     focus?: string,
   ) => void;
   deleteTrigger: (taskId: string) => void;
+  /** Attach a source to a project (projectSources.webAddSource): a channel, or an event by name. Paints a stub keyed by `clientKey`. */
+  addProjectSource: (projectId: string, source: { channel_id?: string; event?: string; title: string }, clientKey: string) => void;
   /** A hosted conversation's Stop: the row settles at once, and the engine
    *  ends its running turn (dispatch stopHostedTurn). */
   stopHostedTurn: (conversationId: string) => void;
@@ -6792,6 +6813,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** The Threads page's session read mark: "seen up to the current message
    *  count". Local only — a session's read state never dispatches. */
   markSessionSeen: (id: string) => void;
+
+  /** The viewer's per-session notify settings, keyed sn:<conversation id>. */
+  sessionNotify: Record<string, SessionNotifyItem>;
+  /** Subscribe to every message, to needs input, mute, or go back to default. */
+  setSessionNotify: (conversationId: string, level: SessionNotifyLevel | "default") => void;
 
   // -- Session unread (server-backed, per viewer) --
   /** The viewer's read marks, keyed by row id (sessionReads.listMine). Unread
@@ -7046,7 +7072,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   updatePlan: (shortId: string, fields: { title?: string; project_id?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }>; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[] }) => void;
   /** Name (or clear) a project's lead; adds the project to the role's scope when it is missing. */
   setProjectLead: (projectId: string, roleId: string | null, opts?: { leave_sessions?: boolean }) => Promise<{ scope?: string; took_over?: string } | null | undefined>;
-  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null; project_path?: string | null; metrics?: InitiativeMetric[] }) => void;
+  updateProject: (id: string, fields: { title?: string; description?: string; instructions?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null; project_path?: string | null; metrics?: InitiativeMetric[] }) => void;
 
   // -- Issue sync sources (docs/architecture/issue-sync.md S1.3) --
   addIssueSyncSource: (opts: { provider: "linear" | "github"; kind: "linear_project" | "linear_team" | "github_repo"; external_id: string; external_key?: string; name: string; url?: string; project_id?: string; project_name?: string }) => Promise<any>;
@@ -7064,6 +7090,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** `only: "requested"` is a decline: the server keeps a row filled since (secrets.remove). */
   removeSecret: (id: string, only?: "requested") => void;
   setSecretAskFirst: (id: string, askFirst: boolean, grant?: string) => void;
+  setSecretTouchId: (id: string, touchId: boolean, grant?: string) => void;
   stageSecret: (row: SecretMeta, hold?: readonly (keyof SecretMeta)[]) => void;
   /** A secret's Activity or Previous (`events:<id>`, `versions:<id>`) as a press shows it; undefined drops it. */
   stageSecretHistory: (key: string, rows: unknown[] | undefined) => void;
@@ -7115,7 +7142,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   restoreDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
-  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean }) => void;
+  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; muted_projects?: string[]; muted_folders?: string[]; machine_wide_presence?: boolean }) => void;
   setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
   setClaudeBackend: (backend: "sdk" | "tmux") => void;
   setAgentDefaultParams: (agent: string, params: Record<string, string>) => void;
@@ -8736,7 +8763,7 @@ function hideSessionInDraft(
 ): HideResult {
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const stashHiddenValue = mode === "stash" && stashHidden ? true : null;
-  const sessionValues = Object.values(draft.sessions) as InboxSession[];
+  const sessionValues = Object.values(baseOf(draft).sessions) as InboxSession[];
   // The removed set must match what the card visually contains, so the sweep
   // uses the SAME nesting definition the renderer does (nestParentIdOf): Task
   // subagents (parent_conversation_id) AND agent-team teammates (spawned_by +
@@ -8833,8 +8860,28 @@ function hideSessionInDraft(
 // mode, same as j/k), not the default grouped layout's order.
 function sessionPastRemoved(draft: any, removedIds: string[]): string | null {
   if (!draft.currentSessionId || !removedIds.includes(draft.currentSessionId)) return draft.currentSessionId;
-  const next = nextSessionPastRemoved(computeVisualOrder(draft), draft.currentSessionId, new Set(removedIds));
-  return next?._id ?? null;
+  // Ordered on the state before this action: placement memoizes on its
+  // inputs, and a draft's proxies are new inputs, so ordering the draft placed
+  // every row again (most of a stash's cost). A row an earlier write in the
+  // same action hid (killSessions' loop) is skipped like a removed one.
+  const base = baseOf(draft);
+  const removed = new Set(removedIds);
+  const gone = (s: InboxSession) => {
+    if (removed.has(s._id)) return true;
+    const now = draft.sessions[s._id];
+    return !now || HIDE_STAMPS.some((f) => now[f] !== (s as any)[f]);
+  };
+  const ordered = computeVisualOrder(base);
+  const idx = ordered.findIndex((s) => s._id === draft.currentSessionId);
+  return (ordered.slice(idx + 1).find((s) => !gone(s)) ?? ordered.find((s) => !gone(s)))?._id ?? null;
+}
+
+const HIDE_STAMPS = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_snoozed_until", "inbox_killed_at"] as const;
+
+/** The state an action started from: a plain object, so reads allocate no
+ *  child drafts and memoized derivations see the inputs they cached. */
+function baseOf<T>(draft: T): T {
+  return (isDraft(draft) ? original(draft as object) : draft) as T;
 }
 
 // Move the selection after a user removed rows (stash, kill, dismiss, delete):
@@ -10071,6 +10118,24 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete (this.agentTasks as any)[taskId];
     delete (this.foreignTriggers as any)[taskId];
   }),
+  // The stub the server row supersedes through the agentTasks altKey (client_key).
+  addProjectSource: action(function (this: Draft, projectId: string, source: { channel_id?: string; event?: string; title: string }, clientKey: string) {
+    const event_type = source.channel_id ? "chat_message" : source.event!;
+    (this.agentTasks as any)[clientKey] = {
+      _id: clientKey,
+      client_key: clientKey,
+      project_id: projectId,
+      title: source.title,
+      prompt: "",
+      schedule_type: "event",
+      event_filter: { event_type, ...(source.channel_id ? { channel_id: source.channel_id } : {}) },
+      status: "scheduled",
+      mode: "apply",
+      retry_count: 0,
+      run_count: 0,
+      created_at: Date.now(),
+    };
+  }),
   stopHostedTurn: action(function (this: Draft, conversationId: string) {
     const row = (this.sessions as any)[conversationId];
     if (row) row.agent_status = "idle";
@@ -10558,6 +10623,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const count = this.conversations[id]?.message_count ?? this.sessions[id]?.message_count;
     if (typeof count === "number") this._seenMessageCount[id] = count;
     this._seenUpToAt[id] = Date.now();
+  }),
+
+  sessionNotify: {},
+  setSessionNotify: action(function (this: Draft, conversationId: string, level: SessionNotifyLevel | "default") {
+    const key = sessionNotifyKey(conversationId);
+    if (level === "default") delete this.sessionNotify[key];
+    else this.sessionNotify[key] = { _id: key, conversation_id: conversationId, level, updated_at: Date.now() };
   }),
 
   // -- Session unread --
@@ -11093,8 +11165,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   snoozeSession: action(function (this: Draft, id: string, until: number) {
-    const ids = [id, ...Object.values(this.sessions).filter((row) => nestParentIdOf(row) === id).map((row) => row._id)];
-    const next = nextSessionPastRemoved(computeVisualOrder(this), id, new Set(ids));
+    const base = baseOf(this);
+    const ids = [id, ...Object.values(base.sessions).filter((row) => nestParentIdOf(row) === id).map((row) => row._id)];
+    const next = ids.includes(base.currentSessionId ?? "") || ids.includes(base.sidePanelSessionId ?? "") ? nextSessionPastRemoved(computeVisualOrder(base), id, new Set(ids)) : undefined;
     if (!setSessionSnoozeInDraft(this, id, until)) return;
     for (const sid of ids.slice(1)) setSessionSnoozeInDraft(this, sid, until);
     if (ids.includes(this.currentSessionId ?? "")) {
@@ -12942,7 +13015,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   markKilling: action(function (this: Draft, id: string) {
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId === id) {
-      const next = nextSessionPastRemoved(computeVisualOrder(this), id, new Set([id]));
+      const next = nextSessionPastRemoved(computeVisualOrder(baseOf(this)), id, new Set([id]));
       newSessionId = next?._id ?? null;
     }
     delete this.sessions[id];
@@ -13917,6 +13990,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const row = (this.secrets as any)[id];
     if (!row) return;
     row.ask_first = askFirst;
+  }),
+  setSecretTouchId: action(function (this: Draft, id: string, touchId: boolean, _grant?: string) {
+    const row = (this.secrets as any)[id];
+    if (!row) return;
+    row.touch_id = touchId;
   }),
   // A row painted before the server has it: a create's stub, keyed by a stub id
   // and given its short_id when the create answers (registry altKey), or a
@@ -15700,12 +15778,27 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
   // its run consumes the answer as the open gate, or, when the run is past
   // it, the server sends the same message (settleClientResolution).
   if (content && !row.workflow_run_id && !runs) {
-    queueMicrotask(() => {
+    const deliver = () => {
       const s = useInboxStore.getState();
       const clientId = s.addOptimisticMessage(convId, content);
       s.sendMessage(convId, content, undefined, clientId);
-    });
+    };
+    // An Approve on an Ask first read reaches the agent only once the server
+    // took it: a refused one (no Touch ID, a spent grant) must not tell the
+    // agent it was approved. The dispatch binding releases it (releaseHeldAnswer).
+    if (approvesSecretRead(row, row.answer_index ?? -1)) heldAnswerDeliveries.set(decisionId, deliver);
+    else queueMicrotask(deliver);
   }
+}
+
+const heldAnswerDeliveries = new Map<string, () => void>();
+
+/** The answerDecision dispatch for `decisionId` settled: deliver its held answer when it landed, drop it when it was refused for good. */
+export function releaseHeldAnswer(decisionId: unknown, landed: boolean): void {
+  if (typeof decisionId !== "string") return;
+  const deliver = heldAnswerDeliveries.get(decisionId);
+  heldAnswerDeliveries.delete(decisionId);
+  if (landed) deliver?.();
 }
 
 /** Whom an escalation reaches, from the roster a client holds: the manager on the org tree, the members on the team roster. */
@@ -15829,6 +15922,7 @@ export function resolveTrackedStoreSnapshot<S>(
     for (let i = 0; i < deps.length; i++) {
       const value = deps[i](state);
       if (!Object.is(value, prev.deps[i])) {
+        { const g = globalThis as any; const k = "dep:" + String(deps[i]).replace(/\s+/g, " ").slice(0, 90); if (g.__why) g.__why[k] = (g.__why[k] ?? 0) + 1; }
         const next = prev.deps.slice();
         next[i] = value;
         for (let j = i + 1; j < deps.length; j++) next[j] = deps[j](state);
