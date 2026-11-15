@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from "react";
+import { useInboxAnswered } from "../lib/bootPhase";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, type SessionDecisionItem } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
@@ -28,9 +29,10 @@ export function useSyncSessionDecisions() {
   // decision inbox for good. Only this table's prunes tombstone it, and a cleared one brings a row back only when a
   // feed sends it again, so clearing them is safe; afterwards each prune's exclude carries `pruned` and needs none.
   useWatchEffect(() => { useInboxStore.getState().clearTombstones("sessionDecisions"); }, []);
-  const { data: result } = useQueryNoThrow(api.sessionDecisions.listForUser, {});
+  const answered = useInboxAnswered();
+  const { data: result } = useQueryNoThrow(api.sessionDecisions.listForUser, answered ? {} : "skip");
   // The viewer's decision threads with their unread (decisionThread.myThreads), so a decision's row shows its news.
-  useSyncCollection("threadInbox", api.decisionThread.myThreads, {});
+  useSyncCollection("threadInbox", api.decisionThread.myThreads, answered ? {} : "skip");
   const syncTable = useInboxStore((s) => s.syncTable);
 
   useConvexSync(result, useCallback((data: any) => {
