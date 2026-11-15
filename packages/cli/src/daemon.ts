@@ -7,14 +7,14 @@ import { stepTimer } from "./stepTimer.js";
 import { BackendSwitchHoldError, backendSwitchHeld, cancelBackendSwitch, switchClaudeBackend } from "./claudeSdk/switchBackend.js";
 import type { SdkLaunchSpec } from "./claudeSdk/options.js";
 import type { SdkPermissionAnswer } from "./claudeSdk/protocol.js";
-import { DeliveryEchoLedger, deliveryEchoLedger, deliveryRecordUuid, echoCandidatesOf } from "./deliveryEchoLedger.js";
+import { DeliveryEchoLedger, deliveryEchoLedger, deliveryRecordUuid, echoCandidatesOf, transcriptRecordsSend } from "./deliveryEchoLedger.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { handoffParentSessionId, linkPlanHandoffChild, planHandoffTarget } from "./planHandoff.js";
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isValidBrowserStreamKey, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
-import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath } from "@codecast/shared/contracts";
+import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
@@ -11154,9 +11154,10 @@ function mapRole(role: string): "human" | "assistant" | "system" {
   return role === "user" ? "human" : role === "system" ? "system" : "assistant";
 }
 
-function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; files?: any; subtype?: string; model?: string; usage?: ParsedMessage["usage"]; apiMessageId?: string } {
+function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; files?: any; subtype?: string; model?: string; usage?: ParsedMessage["usage"]; apiMessageId?: string; sourceUuid?: string } {
   return {
     messageUuid: msg.uuid,
+    sourceUuid: (msg as ParsedMessage).sourceUuid,
     role: mapRole(msg.role),
     content: redactSecrets(msg.content),
     timestamp: msg.timestamp,
@@ -17797,8 +17798,10 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
 
     // Mid-turn: inject into the live type-ahead box instead of waiting for idle.
     // The caller skips the leading Escape on this signal so the turn isn't
-    // interrupted; Claude Code queues the pasted message and submits it when the
-    // turn ends. verifyTmuxSubmitAfterPaste confirms it reached the queue.
+    // interrupted; Claude Code queues the pasted message and hands it to the
+    // model with the next tool result (a queued_command attachment), or when
+    // the turn ends if no tool call comes. verifyTmuxSubmitAfterPaste confirms
+    // it reached the queue.
     if (state === "busy") return { busy: true };
 
     // A dialog only a person can answer: no key of ours is safe, and a paste
@@ -18866,7 +18869,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     ? (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-80"]).catch(() => ({ stdout: "" }))).stdout : "";
   const held = menuPane ? parseInteractivePrompt(menuPane, true) : null;
   const menu = held && (parseInteractivePrompt(menuPane) ?? held);
-  const reply = menu && !promptIsOwnText(menu, sanitized) ? typedMenuReply(menu, content) : null;
+  const reply = menu && !promptIsOwnText(menu, sanitized) ? typedMenuReply(menu, withoutDeliveryId(content)) : null;
   if (reply) {
     log(`Answering "${menu!.question}" in ${target} with the person's message`);
     return injectViaTmuxInner(target, reply, agentType, opts);
@@ -27601,7 +27604,7 @@ async function deliverMessageIntoSession(
     // If there's an active poll and the message is plain text (not already a poll response),
     // check if it matches one of the poll options and convert to a poll response
     if (pendingPrompt && !parsePollMessage(content)) {
-      const answer = typedPollAnswer(pendingPrompt, content);
+      const answer = typedPollAnswer(pendingPrompt, withoutDeliveryId(content));
       if (answer) {
         content = answer;
         logDelivery(`Converted plain text to poll ${answer} for session=${(sessionId || conversationId).slice(0, 8)}`);
@@ -32635,8 +32638,8 @@ async function main(): Promise<void> {
       if (!file) return false;
       try {
         // The tail, read off the loop: the message was sent minutes ago at most, and a whole
-        // transcript can run to hundreds of MB. Claude records the line under the uuid it was sent with.
-        return (await readFileTailAsync(file, 4 * 1024 * 1024)).includes(`"uuid":"${uuid}"`);
+        // transcript can run to hundreds of MB.
+        return transcriptRecordsSend(await readFileTailAsync(file, 4 * 1024 * 1024), uuid);
       } catch {
         return false;
       }
@@ -33879,7 +33882,7 @@ async function main(): Promise<void> {
           messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id, ttlMs: timeoutMs + IN_FLIGHT_GRACE_MS, owner });
           attempt = deliverMessage(
             msg.conversation_id,
-            messageContent,
+            stampDeliveryId(messageContent, msg._id),
             conversationCache,
             syncService,
             msg._id,
