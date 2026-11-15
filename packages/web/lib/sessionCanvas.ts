@@ -34,6 +34,25 @@ export function withoutCanvas(state: CanvasState | undefined, conversationId: st
   return rest;
 }
 
+/** Off because one window's pane closed: a window opening the session later
+ *  starts with it off, and a window that has it docked keeps its pane. */
+export function withClosedCanvas(state: CanvasState | undefined, conversationId: string, now = Date.now()): CanvasState {
+  if (!state?.[conversationId]) return state ?? {};
+  return { ...state, [conversationId]: { pin: null, at: now, closed: true } };
+}
+
+/** Whether the stored preference has the canvas on. */
+export function canvasEntryOn(entry: CanvasState[string] | undefined): boolean {
+  return !!entry && !entry.closed;
+}
+
+// Canvases this window keeps docked after another window closed its pane.
+// Window-local on purpose: the preference syncs, a pane belongs to its window.
+const keptHere = new Set<string>();
+export function keepCanvasHere(conversationId: string) { keptHere.add(conversationId); }
+export function dropCanvasKeep(conversationId: string) { keptHere.delete(conversationId); }
+export function canvasKeptHere(conversationId: string): boolean { return keptHere.has(conversationId); }
+
 /** The page the canvas shows: the pinned one while it exists, else the newest
  *  page that still exists. Null until the pages are known. */
 export function canvasTarget(pages: CanvasPage[], pin: string | null, info: (slug: string) => CanvasPageInfo | undefined): string | null {
@@ -150,10 +169,16 @@ export function applyCanvasStep(step: CanvasStep, path: string | null, owner: { 
   return true;
 }
 
-export function setSessionCanvas(conversationId: string, on: boolean, pin: string | null = null) {
+/** Turn a session's canvas on or off. The header control's off (`pane`
+ *  false) turns it off in every window. A pane closing on its own (its X, the
+ *  person pointing it elsewhere, no room) passes `pane`: other windows keep the
+ *  pane they have docked. Either way this window stops keeping one. */
+export function setSessionCanvas(conversationId: string, on: boolean, pin: string | null = null, opts: { pane?: boolean } = {}) {
+  keptHere.delete(conversationId);
   const st = useInboxStore.getState();
   const current = st.clientState.ui?.session_canvas;
-  st.updateClientUI({ session_canvas: on ? withCanvas(current, conversationId, pin) : withoutCanvas(current, conversationId) });
+  const next = on ? withCanvas(current, conversationId, pin) : opts.pane ? withClosedCanvas(current, conversationId) : withoutCanvas(current, conversationId);
+  st.updateClientUI({ session_canvas: next });
 }
 
 /** True while the person is working inside the docked page (typing a comment,

@@ -15,8 +15,10 @@ Every reader derives a session's project with one rule,
 `sessionProjectId` in `packages/shared/contracts/sessionProject.ts`:
 
 1. the session's own `project_id`;
-2. the project of the task (`active_task_id`), else the plan
-   (`active_plan_id`), it is bound to;
+2. the project of the task it is bound to (`active_task_id`): the task's
+   own `project_id`, else the project of the plan the task is filed under
+   (`plan_id`); else the project of the plan it is bound to
+   (`active_plan_id`);
 3. its parent's project, by the same rule: `parent_conversation_id` (a worker,
    a fork), else `spawned_by_conversation_id` (any `cast spawn`).
 
@@ -38,7 +40,9 @@ Folder chips and project chips stay separate filters in the inbox.
 ## SP3. Readers
 
 - Server: `effectiveSessionProjectId(ctx, conv)` (`convex/sessionProjects.ts`)
-  loads the parent chain and its tasks and plans, then applies the rule.
+  loads the parent chain, its tasks, and their plans, then applies the rule.
+- Web: `workProjectsBySession` (`store/workProjects.ts`) for the inbox chips,
+  the project page, the counts and the org lenses.
 - Scope feed: `sessionsInScope` (`convex/org.ts`) counts a session in scope
   when its project is a scope project, over the org scan, so a parent costs no
   read.
@@ -103,7 +107,7 @@ session records for all of them reaches every one.
   is shared and is added to when every session should know something, and
   that findings which change the project's direction go to the main session.
 - **Delivery.** `org.where` carries the context as `project_context`, for
-  the session's project: SP1's rule, else its task's plan's project. It
+  the session's project by SP1's rule. It
   answers in a workspace with no roles too, as long as the session has a
   project. Because it rides that read, the daemon's per-launch read
   (`prepareLaunchStableContext`) brings it to a brand-new session on its
@@ -117,8 +121,9 @@ session records for all of them reaches every one.
   block again from `/cli/projects/context` (`projectContext.forSession`), in
   the room the task block leaves under the same budget, and stable context
   leaves it out so it does not appear twice. `org.where` and `forSession`
-  read the project through one function (`projectContext.sessionProject`), so
-  they cannot name different projects for one session.
+  read the project through `projectContext.sessionProject`, which applies
+  SP1 and nothing else, so the block, the inbox chips, the project page,
+  Outputs and the counts all name the same project for a session.
 - **Planning first.** When the project has no goal and the reader is its
   main session, the block says the goal and the success checks are not set.
   It tells the session to work them out with the person before building, and

@@ -4,6 +4,7 @@ import type { InboxSession, InboxViewMode, PlanItem, ProjectItem, TaskItem } fro
 import { byPinThenActivity, groupSessionsBy, resolveInboxViewMode } from "./inboxStore";
 import { makeCollectionSig } from "./wakeSig";
 import { windowOrgTree } from "./orgSlice";
+import { workProjectOfRow } from "./workProjects";
 
 // The org lenses: "By project", "By goal" and "By reports" regroup the same
 // active set the label and plan lenses do, on the same skeleton
@@ -24,7 +25,7 @@ type LensRole = {
 };
 type LensPerson = { user_id: string; name: string; image?: string; reports_to_user_id?: string };
 export type OrgLensSources = {
-  tasks: Record<string, Pick<TaskItem, "project_id">>;
+  tasks: Record<string, Pick<TaskItem, "project_id" | "plan_id">>;
   plans: Record<string, Pick<PlanItem, "project_id">>;
   projects: Record<string, Pick<ProjectItem, "_id" | "title">>;
   initiatives: Record<string, { _id: string; title: string; status: string; priority?: string; project_ids: string[]; parent_initiative_id?: string }>;
@@ -66,10 +67,10 @@ export function orgLensSourcesOf(state: Partial<OrgLensState> & { sessions: Reco
   };
 }
 
-// The real Project a session's work is filed under: its task's, else its
-// plan's. Only a project the store holds counts, so every group has a name.
-export function sessionProjectId(s: InboxSession, src: Pick<OrgLensSources, "tasks" | "plans" | "projects">): string | null {
-  const id = (s.active_task && src.tasks[s.active_task._id]?.project_id) || (s.active_plan && src.plans[s.active_plan._id]?.project_id) || null;
+// The real Project a session works in, by the one rule (workProjects, SP1).
+// Only a project the store holds counts, so every group has a name.
+export function sessionProjectId(s: InboxSession, src: Pick<OrgLensSources, "tasks" | "plans" | "projects" | "sessions">): string | null {
+  const id = workProjectOfRow({ sessions: src.sessions, tasks: src.tasks, plans: src.plans }, s);
   return id && src.projects[id] ? id : null;
 }
 
@@ -211,7 +212,7 @@ export function groupSessionsForOrgLens(
 // fact a lens groups by changes, never on the rest of a task's churn. The
 // task and goal collections only count while a lens is up; the roles always
 // do (the menu offers "By reports" off them).
-const lensTaskSig = makeCollectionSig((t: { project_id?: string }) => t.project_id ?? "");
+const lensTaskSig = makeCollectionSig((t: { project_id?: string; plan_id?: string }) => `${t.project_id ?? ""}|${t.plan_id ?? ""}`);
 const lensProjectSig = makeCollectionSig((p: { title?: string }) => p.title ?? "");
 const lensGoalSig = makeCollectionSig((g: OrgLensSources["initiatives"][string]) =>
   `${g.title}|${g.status}|${g.priority ?? ""}|${g.parent_initiative_id ?? ""}|${g.project_ids.join(",")}`);

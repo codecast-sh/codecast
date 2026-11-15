@@ -10,23 +10,22 @@ import { verifyApiToken } from "./apiTokens";
 import { canAccessDoc, canAccessProject } from "./lib/access";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { effectiveSessionProjectId, projectDefaultSessionId } from "./sessionProjects";
-import { sessionWork } from "./lib/orgOwnership";
 import { memoryGist, PROJECT_MEMORY_SHOWN, type ProjectContext } from "@codecast/shared/contracts/projectContext";
 
 type Ctx = { db: any };
 
-/** How many of a project's docs are read to find its pinned ones. */
-const MEMORY_SCAN = 500;
+/** How many pinned docs are read: the shown ones and enough beyond to count. */
+const MEMORY_SCAN = 60;
 
 /** The project's context as `userId` may read it, for `conv` (or no session). Null when unreadable. */
 export async function computeProjectContext(ctx: Ctx, userId: Id<"users">, project: Doc<"projects"> | null, conv: any | null): Promise<ProjectContext | null> {
   if (!project || !(await canAccessProject(ctx as any, userId, project))) return null;
   const memory: ProjectContext["memory"] = [];
   let more = 0;
-  let scanned = 0;
-  for await (const d of ctx.db.query("docs").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).order("desc")) {
-    if (++scanned > MEMORY_SCAN) break;
-    if (!d.pinned || d.archived_at) continue;
+  // Only the pinned docs, through their index: the project's other docs are never read.
+  const pinned = await ctx.db.query("docs").withIndex("by_project_pinned", (q: any) => q.eq("project_id", project._id).eq("pinned", true)).order("desc").take(MEMORY_SCAN);
+  for (const d of pinned) {
+    if (d.archived_at) continue;
     if (!(await canAccessDoc(ctx as any, userId, d))) continue;
     if (memory.length < PROJECT_MEMORY_SHOWN) memory.push({ id: String(d._id), title: d.title ?? "", gist: memoryGist(d.content ?? "", d.title ?? "") });
     else more++;
@@ -47,12 +46,11 @@ export async function computeProjectContext(ctx: Ctx, userId: Id<"users">, proje
   };
 }
 
-/** The project a session works in, when the reader may open it: SP1's rule,
- *  else its task's plan's project (a task filed only under a plan). The one
- *  reading behind both org.where and forSession, so the two cannot disagree. */
+/** The project a session works in (SP1's rule), when the reader may open it.
+ *  The one reading behind both org.where and forSession. */
 export async function sessionProject(ctx: Ctx, userId: Id<"users">, conv: any | null): Promise<Doc<"projects"> | null> {
   if (!conv) return null;
-  const id = (await effectiveSessionProjectId(ctx as any, conv)) ?? ((await sessionWork(ctx, conv)).project_id as Id<"projects"> | undefined) ?? null;
+  const id = await effectiveSessionProjectId(ctx as any, conv);
   const project: Doc<"projects"> | null = id ? await ctx.db.get(id) : null;
   return project && (await canAccessProject(ctx as any, userId, project)) ? project : null;
 }

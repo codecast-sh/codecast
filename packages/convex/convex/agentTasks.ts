@@ -17,6 +17,7 @@ import { eventFilterValidator, type EventFilter, type PendingEvent } from "./lib
 import { PENDING_EVENTS_CAP, sourceFilterAdmits } from "@codecast/shared/contracts/ingest";
 import { canAccessConversation, canAccessProject, workspaceGrantsAccess } from "./lib/access";
 import { canAccessChannel } from "./chatAccess";
+import { projectChannelRefusal } from "@codecast/shared/contracts";
 import { mainSessionFor, mainSessionRefusal } from "./lib/projectMainSession";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
@@ -32,7 +33,7 @@ import { performSetThreadState } from "./conversations";
 import { createDataContext } from "./data";
 import { triggerSourceName } from "./ingest";
 import { canReadCall } from "./transcripts";
-import { armedTriggers } from "./lib/triggerMatch";
+import { armedTriggers, channelTriggers } from "./lib/triggerMatch";
 import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, hostedWallCadence, type HostedRoutine } from "./assistant/routines";
 import { nextCadenceRun } from "@platform/assistant/cadence";
 import { startHostedConversationFor } from "./assistant/start";
@@ -530,9 +531,11 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
   const event_filter = await storedEventFilter(ctx, userId, args.project_path, args.event_filter);
   const project = args.project_id ? await ctx.db.get(args.project_id) : null;
   if (args.project_id && !(project && (await canAccessProject(ctx as any, userId, project)))) throw new Error("Project not found");
+  if (project) await requireProjectMayWatch(ctx, project, event_filter);
   // A project trigger's inline runs are found at each firing, so it binds no session.
   const projectInline = !!project && !args.project_spawn;
   if (project && projectInline) {
+    if (args.mode === "propose") throw new Error("A project trigger's runs are turns in its main session, with that session's permissions, so it cannot be read-only: use --spawn for read-only runs");
     const refusal = mainSessionRefusal(await mainSessionFor(ctx, project), userId);
     if (refusal) throw new Error(`${refusal}. Its runner can add this source, or --spawn runs fresh sessions instead`);
   }
@@ -2502,6 +2505,7 @@ export async function applyTaskUpdate(
     patch.summary_for_person = undefined;
   }
   if (args.mode !== undefined) patch.mode = args.mode === "apply" ? "apply" : "propose";
+  if (patch.mode === "propose" && projectRunsInline(task)) throw new Error("A project trigger's runs are turns in its main session, with that session's permissions, so it cannot be read-only");
   if (args.agent_type !== undefined) patch.agent_type = args.agent_type || "claude";
   // "" or "default" clears the pin — the run goes back to the agent's saved default.
   if (args.model !== undefined) patch.model = args.model && args.model !== "default" ? args.model : undefined;
@@ -2552,7 +2556,10 @@ export async function applyTaskUpdate(
     } else if (args.schedule_type === "event") {
       if (!args.event_filter) throw new Error("event_filter required for event tasks");
       const project_path = args.project_path !== undefined ? args.project_path || undefined : task.project_path;
-      patch.event_filter = await storedEventFilter(ctx, task.user_id, project_path, args.event_filter);
+      const event_filter = await storedEventFilter(ctx, task.user_id, project_path, args.event_filter);
+      const project = task.project_id ? await ctx.db.get(task.project_id) : null;
+      if (project) await requireProjectMayWatch(ctx, project, event_filter);
+      patch.event_filter = event_filter;
       patch.run_at = undefined;
       patch.interval_ms = undefined;
     } else {
@@ -2793,6 +2800,13 @@ export async function storedEventFilter(ctx: TaskCtx, userId: Id<"users">, proje
   return { ...filter, source: await triggerSourceName(ctx, userId, workspaceKey, filter.source) };
 }
 
+async function requireProjectMayWatch(ctx: TaskCtx, project: Doc<"projects">, filter: EventFilter | undefined): Promise<void> {
+  const id = filter?.channel_id ? ctx.db.normalizeId("chat_channels", filter.channel_id) : null;
+  const channel = id ? await ctx.db.get(id) : null;
+  const refusal = channel ? projectChannelRefusal(project, channel) : null;
+  if (refusal) throw new Error(refusal);
+}
+
 /**
  * The team channel a chat_message trigger watches, from an id or "#name" (in
  * any team the owner is on; a name two of them hold must be given by id).
@@ -2872,7 +2886,11 @@ export const matchTaskTriggers = internalMutation({
     // scheduled trigger of every user. A running one is read too when the
     // firing carries an event: its run never sees it, so it is held for the
     // run after (nextArmingAfterRun) rather than lost.
-    const armed = (status: "scheduled" | "running"): Promise<Doc<"agent_tasks">[]> => armedTriggers(ctx, status, args.event_type).collect();
+    // A chat line reads only the triggers watching its channel.
+    const armed = async (status: "scheduled" | "running"): Promise<Doc<"agent_tasks">[]> =>
+      args.channel_id
+        ? ((await channelTriggers(ctx, status, String(args.channel_id)).collect()) as Doc<"agent_tasks">[]).filter((t) => t.event_filter?.event_type === args.event_type)
+        : armedTriggers(ctx, status, args.event_type).collect();
     const tasks = [...(await armed("scheduled")), ...(args.event_ref ? await armed("running") : [])];
 
     // A call event whose call is gone wakes nobody.
@@ -2926,7 +2944,10 @@ export const matchTaskTriggers = internalMutation({
         patch.pending_events = [...(task.pending_events ?? []), event].slice(-PENDING_EVENTS_CAP);
       }
       await ctx.db.patch(task._id, patch);
-      if (!running && !windowOpen) await scheduleProjectFire(ctx, task, runAt);
+      // A window already past its end means its firing never took the events
+      // (it threw and rolled back): this line wakes it again rather than
+      // joining a window nothing will close.
+      if (!running && (!windowOpen || runAt <= now)) await scheduleProjectFire(ctx, task, Math.max(runAt, now));
       matched++;
     }
 

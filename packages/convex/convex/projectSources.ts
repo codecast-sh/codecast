@@ -10,8 +10,9 @@
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalMutation, mutation } from "./functions";
-import { canAccessProject } from "./lib/access";
+import { internalMutation, mutation, query } from "./functions";
+import { canAccessConversation, canAccessProject } from "./lib/access";
+import { canAccessChannel } from "./chatAccess";
 import { mainSessionFor, mainSessionRefusal } from "./lib/projectMainSession";
 import { deliverTriggerRun, failTriggerFiring, insertTask, nextArmingAfterRun } from "./agentTasks";
 import { patchTask, projectQuiet, projectRunsInline } from "./lib/agentTaskRows";
@@ -91,6 +92,53 @@ export const webAddSource = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
     return await addProjectSource(ctx, userId, args);
+  },
+});
+
+/** A project holds a handful of live sources; finished one-shot triggers pile
+ *  up beside them, so the read walks newest first and stops at either cap. */
+const PROJECT_SOURCES_SHOWN = 50;
+const PROJECT_SOURCES_SCAN = 500;
+
+/** The project's sources its teammates armed, for anyone who may read the
+ *  project: the Sources panel lists every source, the viewer's own from their
+ *  trigger list (agentTasks.webList) and these beside them. Read only: the
+ *  verbs stay with each trigger's owner. A source on a channel the viewer
+ *  cannot open is left out, and its last run is named only when the viewer
+ *  may open that session. */
+export const teammateSources = query({
+  args: { project_id: v.id("projects") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const project = await ctx.db.get(args.project_id);
+    if (!project || !(await canAccessProject(ctx, userId, project))) return [];
+    const names = new Map<string, string>();
+    const out = [];
+    let scanned = 0;
+    for await (const t of ctx.db.query("agent_tasks").withIndex("by_project", (q: any) => q.eq("project_id", project._id)).order("desc")) {
+      if (++scanned > PROJECT_SOURCES_SCAN || out.length >= PROJECT_SOURCES_SHOWN) break;
+      if (String(t.user_id) === String(userId) || t.status === "completed" || t.status === "cancelled") continue;
+      const channelId = t.event_filter?.channel_id ? ctx.db.normalizeId("chat_channels", t.event_filter.channel_id) : null;
+      const channel = channelId ? await ctx.db.get(channelId) : null;
+      if (t.event_filter?.channel_id && !(channel && (await canAccessChannel(ctx as any, userId, channel)))) continue;
+      const run = t.last_run_conversation_id ? await ctx.db.get(t.last_run_conversation_id) : null;
+      if (!names.has(String(t.user_id))) names.set(String(t.user_id), ((await ctx.db.get(t.user_id)) as any)?.name ?? "A teammate");
+      out.push({
+        _id: t._id,
+        project_id: t.project_id,
+        title: t.title,
+        status: t.status,
+        event_filter: t.event_filter ? { event_type: t.event_filter.event_type, ...(t.event_filter.channel_id ? { channel_id: t.event_filter.channel_id } : {}) } : undefined,
+        paused_by_project_id: t.paused_by_project_id,
+        last_run_at: t.last_run_at,
+        last_run_failed: t.last_run_failed,
+        last_run_conversation_id: run && (await canAccessConversation(ctx as any, userId, run as any)) ? t.last_run_conversation_id : undefined,
+        run_count: t.run_count ?? 0,
+        owner_name: names.get(String(t.user_id))!,
+      });
+    }
+    return out;
   },
 });
 

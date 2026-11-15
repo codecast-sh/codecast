@@ -3,6 +3,7 @@
 // (session-projects.md SP5): the project's own chip on the folder chip axis,
 // pressed from here. Pressed again it clears; the inbox chip row shows the
 // same chip lit, so both places tell the same state.
+import { useMemo } from "react";
 import { Filter } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { clickProjectChip } from "../../store/chipFilterClicks";
@@ -15,7 +16,8 @@ export function ProjectInboxFilter({ projectId, hasMain }: { projectId: string; 
   const on = useInboxStore((s) => s.activeProjectFilter === key && !s.chipFilterExclude && !(s.extraProjectFilters?.length));
   // How many sessions the filter shows: the number on the button.
   // The page already shows the main session, so the number is the others.
-  const counts = useProjectSessionCounts().get(projectId);
+  const only = useMemo(() => [projectId], [projectId]);
+  const counts = useProjectSessionCounts(only).get(projectId);
   const all = counts ? Object.values(counts).reduce((a, b) => a + b, 0) : 0;
   const total = Math.max(0, all - (hasMain ? 1 : 0));
   return (

@@ -25,14 +25,20 @@ type Ctx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 export type SessionProjectCache = {
   sessions: Map<string, Doc<"conversations"> | null>;
   taskProjects: Map<string, string | null>;
+  taskPlans: Map<string, string | null>;
   planProjects: Map<string, string | null>;
 };
-export const sessionProjectCache = (): SessionProjectCache => ({ sessions: new Map(), taskProjects: new Map(), planProjects: new Map() });
+export const sessionProjectCache = (): SessionProjectCache => ({ sessions: new Map(), taskProjects: new Map(), taskPlans: new Map(), planProjects: new Map() });
 
 /** The project a stored session works in: loads its parent chain and the tasks
  *  and plans the chain is bound to, then applies the shared rule. */
 export async function effectiveSessionProjectId(ctx: Ctx, conv: Doc<"conversations">, cache: SessionProjectCache = sessionProjectCache()): Promise<Id<"projects"> | null> {
-  const { sessions, taskProjects, planProjects } = cache;
+  const { sessions, taskProjects, taskPlans, planProjects } = cache;
+  const loadPlan = async (planId: Id<"plans">) => {
+    if (planProjects.has(planId.toString())) return;
+    const plan = await ctx.db.get(planId);
+    planProjects.set(planId.toString(), plan?.project_id?.toString() ?? null);
+  };
   const seen = new Set<string>();
   let cur: Doc<"conversations"> | null = conv;
   while (cur && !seen.has(cur._id.toString()) && seen.size < SESSION_PROJECT_MAX_DEPTH) {
@@ -42,11 +48,10 @@ export async function effectiveSessionProjectId(ctx: Ctx, conv: Doc<"conversatio
     if (cur.active_task_id && !taskProjects.has(cur.active_task_id.toString())) {
       const task = await ctx.db.get(cur.active_task_id);
       taskProjects.set(cur.active_task_id.toString(), task?.project_id?.toString() ?? null);
+      taskPlans.set(cur.active_task_id.toString(), task?.plan_id?.toString() ?? null);
+      if (task && !task.project_id && task.plan_id) await loadPlan(task.plan_id);
     }
-    if (cur.active_plan_id && !planProjects.has(cur.active_plan_id.toString())) {
-      const plan = await ctx.db.get(cur.active_plan_id);
-      planProjects.set(cur.active_plan_id.toString(), plan?.project_id?.toString() ?? null);
-    }
+    if (cur.active_plan_id) await loadPlan(cur.active_plan_id);
     const parentId = projectParentIdOf(cur);
     const parentKey = parentId ? ctx.db.normalizeId("conversations", parentId) : null;
     if (!parentKey) break;
@@ -56,6 +61,7 @@ export async function effectiveSessionProjectId(ctx: Ctx, conv: Doc<"conversatio
   const id = sessionProjectId(conv, {
     session: (sid) => sessions.get(sid),
     taskProject: (tid) => taskProjects.get(tid),
+    taskPlan: (tid) => taskPlans.get(tid),
     planProject: (pid) => planProjects.get(pid),
   });
   return id ? ctx.db.normalizeId("projects", id) : null;

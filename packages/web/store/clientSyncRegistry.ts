@@ -251,7 +251,9 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "docs" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    sync: { isDelta: true },
+    // A board, sheet or dashboard opens at once from a placeholder row keyed by its client_key
+    // (lib/createLiveArtifact); the server's row carries the same key and supersedes it.
+    sync: { isDelta: true, altKey: "client_key" },
     // An archived doc arrives through the sync log with archived_at set; it
     // stays held (undo, its own page) but leaves every docs list.
     listed: (row: any) => !row?.archived_at,
@@ -438,15 +440,16 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["doc", "versions", "proposals", "usage", "sources", "routine", "project"] },
     feeds: ["expectations.forProject"],
   },
-  // A project's outputs (ct-94262): projectOutputs.get's pull requests, pages,
-  // docs and images, one row per project viewed, keyed by the project's Convex
-  // id. Delta: each project page feeds its own row. Everything on the row is
-  // a nested list, compared by content.
+  // A project's outputs (ct-94262), two rows per project viewed: the members
+  // part (projectOutputs.members: sessions, tasks, images) keyed by the
+  // project's Convex id, and the items part (projectOutputs.items: pull
+  // requests, pages, docs) keyed `<id>:items`. Delta: each project page feeds
+  // its own rows. Everything on a row is a nested list, compared by content.
   projectOutputs: {
     persistence: { kind: "collection", key: "projectOutputs" },
     hydration: { phase: "deferred" },
-    sync: { isDelta: true, deepFields: ["project", "prs", "pages", "docs", "images"] },
-    feeds: ["projectOutputs.get"],
+    sync: { isDelta: true, deepFields: ["project", "sessions", "tasks", "plan_ids", "prs", "pages", "docs", "images"] },
+    feeds: ["projectOutputs.members", "projectOutputs.items"],
   },
   // Every project's expectations in a workspace, one summary row each
   // (expectations.overview): the /expectations page. Snapshot: the query is
@@ -736,6 +739,16 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     sync: {},
     feeds: ["agentTasks.webListForConversations"],
+  },
+  // A project's sources armed by teammates (projectSources.teammateSources):
+  // the Sources panel lists them beside the viewer's own, which stay in
+  // agentTasks. Delta: each project page feeds its project's rows, and drops
+  // the ones of that project the answer no longer holds.
+  projectTeammateSources: {
+    persistence: { kind: "collection", key: "projectTeammateSources" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["event_filter"] },
+    feeds: ["projectSources.teammateSources"],
   },
   // Issue sync sources (issue_sync_sources, docs/architecture/issue-sync.md
   // S1.3): the Linear teams/projects and GitHub repos a workspace imports,
@@ -2064,6 +2077,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   pageThreads: "shared",
   agentTasks: "shared",
   foreignTriggers: "shared",
+  projectTeammateSources: "shared",
   agentTaskRuns: "shared",
   issueSyncSources: "shared",
   agentDefinitions: "shared",

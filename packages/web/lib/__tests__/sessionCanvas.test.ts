@@ -16,6 +16,10 @@ import {
   planCanvas,
   setSessionCanvas,
   withCanvas,
+  withClosedCanvas,
+  canvasEntryOn,
+  canvasKeptHere,
+  keepCanvasHere,
 } from "../sessionCanvas";
 
 const pages = [
@@ -111,6 +115,25 @@ describe("withCanvas", () => {
     expect(Object.keys(s)).toHaveLength(CANVAS_STATE_CAP);
     expect(s).not.toHaveProperty("c0");
     expect(s).toHaveProperty(`c${CANVAS_STATE_CAP}`);
+  });
+});
+
+describe("canvas across windows", () => {
+  it("a pane closing leaves a closed entry; the header's off removes the entry", () => {
+    const on = withCanvas(undefined, "c1", "aaa111", 5);
+    const closed = withClosedCanvas(on, "c1", 6);
+    expect(canvasEntryOn(on.c1)).toBe(true);
+    expect(canvasEntryOn(closed.c1)).toBe(false);
+    expect(closed.c1).toEqual({ pin: null, at: 6, closed: true });
+    expect(withClosedCanvas(undefined, "c1")).toEqual({});
+    expect(canvasEntryOn(withCanvas(closed, "c1", null).c1)).toBe(true);
+  });
+
+  it("any write from this window stops it keeping another window's closed canvas", () => {
+    keepCanvasHere("c9");
+    expect(canvasKeptHere("c9")).toBe(true);
+    setSessionCanvas("c9", false, null, { pane: true });
+    expect(canvasKeptHere("c9")).toBe(false);
   });
 });
 

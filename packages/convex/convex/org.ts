@@ -755,10 +755,12 @@ export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: nu
   // workers included, resolved over the scan so a parent costs no read.
   const projectIds = new Set(resolved.projects.map((p) => p._id.toString()));
   const taskProject = new Map(resolved.tasks.map((t) => [t._id.toString(), t.project_id?.toString() ?? null]));
+  const taskPlan = new Map(resolved.tasks.map((t) => [t._id.toString(), t.plan_id?.toString() ?? null]));
   const planProject = new Map(resolved.plans.map((p) => [p._id.toString(), p.project_id?.toString() ?? null]));
   const projectLookup = {
     session: (id: string) => scan.sessions.get(id)?.raw,
     taskProject: (id: string) => taskProject.get(id),
+    taskPlan: (id: string) => taskPlan.get(id),
     planProject: (id: string) => planProject.get(id),
   };
   const out: Array<{ session: OrgSession; raw: any }> = [];

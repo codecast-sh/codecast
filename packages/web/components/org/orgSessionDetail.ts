@@ -13,6 +13,7 @@ import { projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import type { InboxSession, Message } from "../../store/inboxStore";
 import type { OrgSessionDetail, RoleOpenDetail } from "./orgCardModel";
 import type { OrgRole } from "./orgTypes";
+import { workProjectsBySession } from "../../store/workProjects";
 
 export type { OrgSessionDetail };
 
@@ -60,16 +61,12 @@ export function sessionDetailsOf(ids: readonly string[], sessions: Record<string
   return out;
 }
 
-type ProjectOf = { project_id?: string | null };
-
-/** Which project each session works on: its bound task's project, else its plan's. */
-export function sessionProjectsOf(ids: readonly string[], sessions: Record<string, DetailRow>, tasks: Record<string, unknown>, plans: Record<string, unknown>): Record<string, string> {
+/** Which project each session works in, by the one rule (store/workProjects, SP1). */
+export function sessionProjectsOf(ids: readonly string[], sessions: Record<string, any>, tasks: Record<string, any>, plans: Record<string, any>): Record<string, string> {
+  const by = workProjectsBySession({ sessions, tasks, plans });
   const out: Record<string, string> = {};
   for (const id of ids) {
-    const r = sessions[id];
-    const viaTask = r?.active_task?._id ? (tasks[r.active_task._id] as ProjectOf | undefined)?.project_id : undefined;
-    const viaPlan = r?.active_plan?._id ? (plans[r.active_plan._id] as ProjectOf | undefined)?.project_id : undefined;
-    const pid = viaTask || viaPlan;
+    const pid = by.get(id);
     if (pid) out[id] = pid;
   }
   return out;

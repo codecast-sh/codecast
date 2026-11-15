@@ -6,7 +6,8 @@
 // reader (the inbox filter, the project page, the scope rules):
 //
 //   1. the session's own project_id;
-//   2. the project of the task or plan it is bound to;
+//   2. the project of the task it is bound to (the task's own, else the
+//      task's plan's), else of the plan it is bound to;
 //   3. its parent's project: the session that started it (a worker, a spawn,
 //      a fork), resolved by the same rule, so a project's workers and their
 //      workers belong to it and follow it when the parent moves.
@@ -28,7 +29,19 @@ export interface SessionProjectLookup<R extends SessionProjectRow> {
   session(id: string): R | null | undefined;
   /** The project of a task, or null when it has none or is unknown here. */
   taskProject(id: string): string | null | undefined;
+  /** The plan a task is filed under, or null. */
+  taskPlan(id: string): string | null | undefined;
   planProject(id: string): string | null | undefined;
+}
+
+type TaskPlanLookup = Pick<SessionProjectLookup<SessionProjectRow>, "taskProject" | "taskPlan" | "planProject">;
+
+/** A task's project: its own, else its plan's (a task filed only under a plan). */
+export function taskProjectId(taskId: string, lookup: TaskPlanLookup): string | null {
+  const own = lookup.taskProject(taskId);
+  if (own) return own;
+  const plan = lookup.taskPlan(taskId);
+  return (plan && lookup.planProject(plan)) || null;
 }
 
 /** The session this one inherits its project from: the parent link a worker
@@ -40,18 +53,14 @@ export function projectParentIdOf(conv: SessionProjectRow): string | null {
 }
 
 /** Rules 1 and 2: the project a session names for itself, without its parents. */
-export function ownSessionProjectId(
-  conv: SessionProjectRow,
-  taskProject: (id: string) => string | null | undefined,
-  planProject: (id: string) => string | null | undefined,
-): string | null {
+export function ownSessionProjectId(conv: SessionProjectRow, lookup: TaskPlanLookup): string | null {
   if (conv.project_id) return conv.project_id.toString();
   if (conv.active_task_id) {
-    const p = taskProject(conv.active_task_id.toString());
+    const p = taskProjectId(conv.active_task_id.toString(), lookup);
     if (p) return p;
   }
   if (conv.active_plan_id) {
-    const p = planProject(conv.active_plan_id.toString());
+    const p = lookup.planProject(conv.active_plan_id.toString());
     if (p) return p;
   }
   return null;
@@ -69,7 +78,7 @@ export function sessionProjectId<R extends SessionProjectRow>(conv: R, lookup: S
     const id = cur._id.toString();
     if (seen.has(id)) return null;
     seen.add(id);
-    const own = ownSessionProjectId(cur, lookup.taskProject, lookup.planProject);
+    const own = ownSessionProjectId(cur, lookup);
     if (own) return own;
     const parentId = projectParentIdOf(cur);
     cur = parentId ? lookup.session(parentId) : null;

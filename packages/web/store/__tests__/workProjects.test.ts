@@ -33,6 +33,12 @@ describe("workProjectsBySession", () => {
     expect(byId.get(taskBound._id)).toBe("projB");
     expect(byId.get(loose._id)).toBeNull();
   });
+
+  it("takes a plan-only task's plan's project", () => {
+    const planTask = row("plantask", { active_task: { _id: "t2" } as any });
+    const byId = workProjectsBySession({ sessions: { [planTask._id]: planTask }, tasks: { t2: { plan_id: "pl1" } }, plans: { pl1: { project_id: "projC" } } });
+    expect(byId.get(planTask._id)).toBe("projC");
+  });
 });
 
 describe("project chips", () => {

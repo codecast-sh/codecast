@@ -2613,7 +2613,11 @@ export async function postChatMessage(
 
   // A project watching this channel hears the line (trigger event
   // chat_message). History is not news, and a DM room is nobody's source.
-  if (!opts.history && channel.kind !== "dm") {
+  // Sources bring people's input to a project, so a line an agent wrote (a
+  // session, an anchor, a role's voice) wakes no project: two projects
+  // watching one channel would otherwise wake each other back and forth.
+  const agentWrote = !!opts.agent || opts.origin === "agent" || !!originSession || voiced;
+  if (!opts.history && channel.kind !== "dm" && !agentWrote) {
     await scheduleTriggerMatch(ctx, {
       event_type: "chat_message",
       team_id: channel.team_id,

@@ -8,6 +8,7 @@ import schema from "./schema";
 import { hashToken } from "./apiTokens";
 import { allModules } from "./testModules.testkit";
 import { prGroupOf } from "./projectOutputs";
+import { joinProjectOutputs, outputItemArgs } from "@codecast/shared/contracts/projectOutputs";
 
 const ANA = "a".repeat(64);
 const BEN = "b".repeat(64);
@@ -166,6 +167,33 @@ describe("project outputs", () => {
     expect(await outputs(CY, String(ids.perf))).toBeNull();
     expect(await outputs(CY, "pj-perf")).toBeNull();
     expect((await outputs(BEN, "pj-perf")).project.id).toBe(String(ids.perf));
+  });
+
+  test("the view's two parts join to the same outputs, and a new message re-reads only the members", async () => {
+    const { t, ids, outputs } = await setup();
+    const whole = await outputs(BEN, String(ids.perf));
+    const members = await t.query(api.projectOutputs.members, { api_token: BEN, project_id: String(ids.perf) });
+    const args = outputItemArgs(members);
+    const items = await t.query(api.projectOutputs.items, { api_token: BEN, project_id: String(ids.perf), ...args });
+    expect(joinProjectOutputs(members, items)).toEqual(whole);
+    // A session's churn (a message, a heartbeat) leaves membership as it was,
+    // so the items part is asked again with the same arguments.
+    await t.run((ctx) => ctx.db.patch(ids.lead, { message_count: 7, updated_at: NOW + 1 } as any));
+    const again = await t.query(api.projectOutputs.members, { api_token: BEN, project_id: String(ids.perf) });
+    expect(outputItemArgs(again)).toEqual(args);
+  });
+
+  test("the items part is asked by ids newest created first", async () => {
+    const { t, ids } = await setup();
+    const members = await t.query(api.projectOutputs.members, { api_token: BEN, project_id: String(ids.perf) });
+    const created = await t.run(async (ctx) => Promise.all(members.sessions.filter((s: any) => s.in_project).map(async (s: any) => (await ctx.db.get(s.id as any))!._creationTime)));
+    expect(created).toEqual([...created].sort((a, b) => b - a));
+  });
+
+  test("the items part gives a stranger nothing", async () => {
+    const { t, ids } = await setup();
+    const members = await t.query(api.projectOutputs.members, { api_token: BEN, project_id: String(ids.perf) });
+    expect(await t.query(api.projectOutputs.items, { api_token: CY, project_id: String(ids.perf), ...outputItemArgs(members) })).toBeNull();
   });
 
   test("groups follow the shepherd fold", () => {

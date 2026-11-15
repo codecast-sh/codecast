@@ -6,6 +6,13 @@
 // project, so a worker bound to a task in another project brings nothing
 // here but the pull requests that name one of this project's tasks.
 //
+// Two parts (shared/contracts/projectOutputs.ts). `members` reads the
+// sessions, tasks and images and re-runs as those sessions change. `items`
+// reads pull requests, pages and docs by the member ids it is handed, so a
+// session's heartbeat or new message never re-runs it, and it reads pull
+// request and doc rows (patches, bodies) under a byte budget well inside the
+// 16 MiB read cap.
+//
 // Access: every output passes its own check (a pull request its team, a page
 // the gallery rule, a doc its workspace key, an image its session), and a
 // session or task is named only when the viewer may open it.
@@ -13,11 +20,25 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { accessJudgeFor, canAccessConversation, canAccessProject, canAccessPullRequest } from "./lib/access";
+import { accessJudgeFor, canAccessConversation, canAccessProject, isTeamMember } from "./lib/access";
 import { viewerSeesPage } from "./artifacts";
 import { effectiveSessionProjectId, sessionProjectCache } from "./sessionProjects";
 import { sessionImages } from "./lib/sessionMedia";
 import { codecastPrPath, foldShepherdState } from "@codecast/shared/contracts";
+import {
+  joinProjectOutputs,
+  outputItemArgs,
+  prGroupOf,
+  type MemberSession,
+  type OutputImage,
+  type OutputTask,
+  type ProjectOutputItems,
+  type ProjectOutputMembers,
+  type ProjectOutputs,
+} from "@codecast/shared/contracts/projectOutputs";
+
+export type { OutputDoc, OutputImage, OutputPage, OutputPr, OutputSession, OutputTask, PrGroup, ProjectOutputs } from "@codecast/shared/contracts/projectOutputs";
+export { prGroupOf };
 
 type Ctx = { db: any; storage?: any };
 
@@ -32,10 +53,14 @@ const TASKS_PER_STATE = 200;
 const TASKS_PER_PLAN = 100;
 /** The newest tasks whose attached pages are read one index range each. */
 const TASK_PAGE_READS = 100;
-/** Docs read per session: a session writes a few. */
+/** Docs read per session (a session writes a few), for the newest sessions. */
 const DOCS_PER_SESSION = 5;
-/** Pull request rows carry files and patches (up to 1 MB), so few are read:
- *  PRS_MAX shown, PR_READS_MAX read (some are another team's, or not ours). */
+const DOC_SESSIONS = 40;
+/** Pull request rows carry files and patches (up to 1 MB), doc rows their
+ *  bodies: each kind stops reading at its byte budget, together well under
+ *  the 16 MiB read cap with room for the one row that crosses it. */
+const PR_BYTES = 5 * 1024 * 1024;
+const DOC_BYTES = 4 * 1024 * 1024;
 const PRS_MAX = 40;
 const PR_READS_MAX = 60;
 const PAGES_MAX = 80;
@@ -43,57 +68,8 @@ const DOCS_MAX = 80;
 const IMAGES_MAX = 24;
 /** The newest sessions whose images are read. */
 const IMAGE_SESSIONS = 20;
-
-export type OutputSession = { id: string; short_id: string | null; title: string };
-export type OutputTask = { id: string; short_id: string; title: string };
-export type PrGroup = "attention" | "review" | "done";
-
-type OutputBase = {
-  id: string;
-  title: string;
-  href: string;
-  updated_at: number;
-  session: OutputSession | null;
-  task: OutputTask | null;
-};
-
-export type OutputPr = OutputBase & {
-  kind: "pr";
-  repository: string;
-  number: number;
-  github_url: string;
-  state: "open" | "closed" | "merged";
-  draft: boolean;
-  /** foldShepherdState: the one word the shepherd card shows. */
-  status: string;
-  group: PrGroup;
-  review_decision: string | null;
-  checks_state: string | null;
-  behind_by: number | null;
-  unresolved_review_count: number | null;
-};
-export type OutputPage = OutputBase & { kind: "page"; slug: string; version: number; page_kind: string };
-export type OutputDoc = OutputBase & { kind: "doc"; doc_type: string };
-export type OutputImage = OutputBase & { kind: "image"; url: string; message_id: string };
-
-export type ProjectOutputs = {
-  project: { id: string; short_id: string | null; title: string };
-  prs: OutputPr[];
-  pages: OutputPage[];
-  docs: OutputDoc[];
-  images: OutputImage[];
-  /** A cap cut the read short: older outputs exist past what is shown. */
-  truncated: boolean;
-};
-
-/** Which group a pull request sits in: what only the author can clear needs
- *  attention, waiting on CI or reviewers is in review, merged and closed are
- *  done. The same fold the shepherd card reads, so the two never disagree. */
-export function prGroupOf(status: string): PrGroup {
-  if (status === "merged" || status === "closed") return "done";
-  if (status === "conflicts" || status === "behind" || status === "ci_red" || status === "changes_requested") return "attention";
-  return "review";
-}
+/** Ids the items part accepts per list: what members can return, with room. */
+const ITEM_ARG_MAX = 600;
 
 /** A project by Convex id or pj- short id. */
 export async function findProjectByRef(ctx: Ctx, ref: string): Promise<Doc<"projects"> | null> {
@@ -102,13 +78,14 @@ export async function findProjectByRef(ctx: Ctx, ref: string): Promise<Doc<"proj
   return (await ctx.db.query("projects").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first()) ?? null;
 }
 
-export async function computeProjectOutputs(ctx: Ctx, viewerId: Id<"users">, project: Doc<"projects">): Promise<ProjectOutputs> {
+export async function computeProjectMembers(ctx: Ctx, viewerId: Id<"users">, project: Doc<"projects">): Promise<ProjectOutputMembers> {
   const projectKey = String(project._id);
   const mayRead = await accessJudgeFor(ctx as any, viewerId);
   let truncated = false;
 
   // Tasks: the project's, by triage state so filed suggestions are never read
-  // (org.resolveScope's rule), plus its plans' tasks that name no other project.
+  // (org.resolveScope's rule), plus its plans' tasks that name no project
+  // (SP1: a task with no project of its own is in its plan's).
   const plans: Doc<"plans">[] = await ctx.db.query("plans").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
   const tasks = new Map<string, Doc<"tasks">>();
   const admitTasks = (rows: Doc<"tasks">[]) => {
@@ -131,7 +108,11 @@ export async function computeProjectOutputs(ctx: Ctx, viewerId: Id<"users">, pro
   // Sessions: filed under the project, listed by its tasks and plans, then
   // their workers breadth first. Each row read once.
   const cache = sessionProjectCache();
-  for (const t of tasks.values()) cache.taskProjects.set(String(t._id), t.project_id ? String(t.project_id) : null);
+  for (const p of plans) cache.planProjects.set(String(p._id), projectKey);
+  for (const t of tasks.values()) {
+    cache.taskProjects.set(String(t._id), t.project_id ? String(t.project_id) : null);
+    cache.taskPlans.set(String(t._id), t.plan_id ? String(t.plan_id) : null);
+  }
   const candidates = new Map<string, Doc<"conversations">>();
   const queue: Doc<"conversations">[] = [];
   const consider = (c: Doc<"conversations"> | null) => {
@@ -166,49 +147,111 @@ export async function computeProjectOutputs(ctx: Ctx, viewerId: Id<"users">, pro
   }
 
   // In the project by SP1, or reached but working elsewhere (a worker bound to
-  // another project's task, a session a task lists that has moved on): the
-  // latter bring only pull requests that name a project task (below).
-  const inProject = new Map<string, Doc<"conversations">>();
-  const elsewhere = new Map<string, Doc<"conversations">>();
+  // another project's task, a session a task lists that has moved on).
+  const inProject: Doc<"conversations">[] = [];
+  const elsewhere: Doc<"conversations">[] = [];
   for (const c of candidates.values()) {
     if (!(await canAccessConversation(ctx as any, viewerId, c as any))) continue;
     const pid = await effectiveSessionProjectId(ctx, c, cache);
-    if (pid && String(pid) === projectKey) inProject.set(String(c._id), c);
-    else elsewhere.set(String(c._id), c);
+    (pid && String(pid) === projectKey ? inProject : elsewhere).push(c);
   }
-  const sessionRef = (id: any): OutputSession | null => {
-    const c = id ? inProject.get(String(id)) ?? elsewhere.get(String(id)) : undefined;
-    return c ? { id: String(c._id), short_id: c.short_id ?? null, title: c.title || "(untitled)" } : null;
-  };
-  const sessionTask = (id: any): OutputTask | null => {
-    const c = id ? inProject.get(String(id)) ?? elsewhere.get(String(id)) : undefined;
-    return c?.active_task_id ? taskRef.get(String(c.active_task_id)) ?? null : null;
-  };
-  const sessionsNewest = [...inProject.values()].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-  const reached = [...sessionsNewest, ...elsewhere.values()];
+  // Newest created first: the order the items part's caps keep, and one that
+  // never moves, so its arguments change only with membership.
+  const created = (a: { _creationTime: number }, b: { _creationTime: number }) => b._creationTime - a._creationTime;
+  inProject.sort(created);
+  elsewhere.sort(created);
+  const member = (c: Doc<"conversations">, in_project: boolean): MemberSession => ({
+    id: String(c._id),
+    short_id: c.short_id ?? null,
+    title: c.title || "(untitled)",
+    task_id: c.active_task_id && taskRef.has(String(c.active_task_id)) ? String(c.active_task_id) : null,
+    in_project,
+  });
+  const sessions = [...inProject.map((c) => member(c, true)), ...elsewhere.map((c) => member(c, false))];
 
-  // Pull requests: every link row of the sessions reached, newest session first.
-  const links = new Map<string, { sessions: Array<{ id: string; committed: boolean }> }>();
-  const linkRows = await Promise.all(reached.map((c) => ctx.db.query("pull_request_sessions").withIndex("by_conversation", (q: any) => q.eq("conversation_id", c._id)).collect()));
+  // Images: what the newest sessions in the project posted.
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const recentlyActive = [...inProject].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  const found = (await Promise.all(recentlyActive.slice(0, IMAGE_SESSIONS).map((c) => sessionImages(ctx, c._id, { since: 0, max: IMAGES_MAX })))).flat();
+  found.sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq);
+  const images: OutputImage[] = found.slice(0, IMAGES_MAX).map((img) => {
+    const s = byId.get(String(img.conversation_id))!;
+    return {
+      kind: "image",
+      id: `${img.message_id}:${img.seq}`,
+      title: s.title,
+      href: `/conversation/${s.id}#msg-${img.message_id}`,
+      updated_at: img.timestamp,
+      session: { id: s.id, short_id: s.short_id, title: s.title },
+      task: s.task_id ? taskRef.get(s.task_id) ?? null : null,
+      url: img.url,
+      message_id: String(img.message_id),
+    };
+  });
+
+  return {
+    project: { id: projectKey, short_id: project.short_id ?? null, title: project.title },
+    sessions,
+    tasks: [...tasks.values()].sort(created).flatMap((t) => taskRef.get(String(t._id)) ?? []),
+    plan_ids: [...plans].sort(created).map((p) => String(p._id)),
+    images,
+    truncated,
+  };
+}
+
+type ItemArgs = { session_ids: string[]; elsewhere_ids: string[]; task_ids: string[]; plan_ids: string[] };
+
+/** A pull request row's weight, near enough to budget reads by. */
+const prBytes = (pr: any) => (pr.body?.length ?? 0) + (pr.files ?? []).reduce((n: number, f: any) => n + (f.patch?.length ?? 0) + (f.filename?.length ?? 0) + 64, 0) + 4096;
+const docBytes = (d: any) => (d.content?.length ?? 0) + 2048;
+
+/** The pull requests, pages and docs of the sessions, tasks and plans named,
+ *  each passing its own access check. Sessions and tasks come back by id. */
+export async function computeProjectItems(ctx: Ctx, viewerId: Id<"users">, project: Doc<"projects">, args: ItemArgs): Promise<ProjectOutputItems> {
+  const mayRead = await accessJudgeFor(ctx as any, viewerId);
+  let truncated = false;
+  const norm = <T extends "conversations" | "tasks" | "plans">(table: T, ids: string[]): Id<T>[] =>
+    ids.slice(0, ITEM_ARG_MAX).map((id) => ctx.db.normalizeId(table, id)).filter(Boolean) as Id<T>[];
+  const sessionIds = norm("conversations", args.session_ids);
+  const elsewhereIds = norm("conversations", args.elsewhere_ids);
+  const taskIds = norm("tasks", args.task_ids);
+  const planIds = norm("plans", args.plan_ids);
+  const inProject = new Set(sessionIds.map(String));
+  const reached = new Set([...inProject, ...elsewhereIds.map(String)]);
+  const taskSet = new Set(taskIds.map(String));
+
+  // Pull requests: every link row of the sessions, in-project sessions first.
+  // A link row carries the team, so a pull request the viewer may not see is
+  // never loaded, and one only an elsewhere session links is loaded only to
+  // learn whether it names a project task.
+  const links = new Map<string, { sessions: Array<{ id: string; committed: boolean }>; team: string | null }>();
+  const linkRows = await Promise.all([...sessionIds, ...elsewhereIds].map((id) => ctx.db.query("pull_request_sessions").withIndex("by_conversation", (q: any) => q.eq("conversation_id", id)).collect()));
   for (const rows of linkRows) {
     for (const row of rows) {
       const key = String(row.pull_request_id);
-      const entry = links.get(key) ?? { sessions: [] };
+      const entry = links.get(key) ?? { sessions: [], team: row.team_id ? String(row.team_id) : null };
       entry.sessions.push({ id: String(row.conversation_id), committed: row.tier === "committed" });
       links.set(key, entry);
     }
   }
-  if (links.size > PR_READS_MAX) truncated = true;
   const teamMember = new Map<string, boolean>();
-  const prs: OutputPr[] = [];
-  for (const [prId, link] of [...links].slice(0, PR_READS_MAX)) {
-    if (prs.length >= PRS_MAX) { truncated = true; break; }
+  const mayTeam = async (team: string) => {
+    if (!teamMember.has(team)) teamMember.set(team, await isTeamMember(ctx as any, viewerId, team as Id<"teams">));
+    return teamMember.get(team)!;
+  };
+  const ordered = [...links].sort(([, a], [, b]) => Number(b.sessions.some((s) => inProject.has(s.id))) - Number(a.sessions.some((s) => inProject.has(s.id))));
+  let prBudget = PR_BYTES;
+  let prReads = 0;
+  const prs: ProjectOutputItems["prs"] = [];
+  for (const [prId, link] of ordered) {
+    if (prs.length >= PRS_MAX || prReads >= PR_READS_MAX || prBudget <= 0) { truncated = true; break; }
+    if (link.team && !(await mayTeam(link.team))) continue;
+    prReads++;
     const pr: Doc<"pull_requests"> | null = await ctx.db.get(prId as Id<"pull_requests">);
     if (!pr) continue;
-    const teamKey = String(pr.team_id);
-    if (!teamMember.has(teamKey)) teamMember.set(teamKey, await canAccessPullRequest(ctx as any, viewerId, pr));
-    if (!teamMember.get(teamKey)) continue;
-    const namedTask = (pr.task_ids ?? []).map((id) => taskRef.get(String(id))).find(Boolean) ?? null;
+    prBudget -= prBytes(pr);
+    if (!(await mayTeam(String(pr.team_id)))) continue;
+    const namedTask = (pr.task_ids ?? []).map(String).find((id) => taskSet.has(id)) ?? null;
     const ours = link.sessions.filter((s) => inProject.has(s.id));
     if (!ours.length && !namedTask) continue;
     const maker = ours.find((s) => s.committed) ?? (pr.shepherd_conversation_id && inProject.has(String(pr.shepherd_conversation_id)) ? { id: String(pr.shepherd_conversation_id) } : null) ?? ours[0] ?? link.sessions[0];
@@ -220,8 +263,8 @@ export async function computeProjectOutputs(ctx: Ctx, viewerId: Id<"users">, pro
       href: codecastPrPath(pr.repository, pr.number),
       github_url: `https://github.com/${pr.repository}/pull/${pr.number}`,
       updated_at: pr.updated_at,
-      session: sessionRef(maker?.id),
-      task: namedTask ?? sessionTask(maker?.id),
+      session_id: maker?.id ?? null,
+      task_id: namedTask,
       repository: pr.repository,
       number: pr.number,
       state: pr.state,
@@ -239,91 +282,112 @@ export async function computeProjectOutputs(ctx: Ctx, viewerId: Id<"users">, pro
   // Pages: published by a session in the project, or attached to its tasks or plans.
   const pageRows = new Map<string, Doc<"artifacts">>();
   const addPages = (rows: Doc<"artifacts">[]) => { for (const a of rows) pageRows.set(String(a._id), a); };
-  for (const rows of await Promise.all(sessionsNewest.map((c) => ctx.db.query("artifacts").withIndex("by_session_conversation", (q: any) => q.eq("session_conversation_id", c._id)).collect()))) addPages(rows);
-  const taskPageReads = tasksNewest.filter((t) => taskRef.has(String(t._id))).slice(0, TASK_PAGE_READS).map((t) => t._id);
-  for (const rows of await Promise.all(taskPageReads.map((id) => ctx.db.query("artifacts").withIndex("by_task", (q: any) => q.eq("task_id", id)).collect()))) addPages(rows);
-  for (const rows of await Promise.all(plans.map((p) => ctx.db.query("artifacts").withIndex("by_plan", (q: any) => q.eq("plan_id", p._id)).collect()))) addPages(rows);
+  for (const rows of await Promise.all(sessionIds.map((id) => ctx.db.query("artifacts").withIndex("by_session_conversation", (q: any) => q.eq("session_conversation_id", id)).collect()))) addPages(rows);
+  for (const rows of await Promise.all(taskIds.slice(0, TASK_PAGE_READS).map((id) => ctx.db.query("artifacts").withIndex("by_task", (q: any) => q.eq("task_id", id)).collect()))) addPages(rows);
+  for (const rows of await Promise.all(planIds.map((id) => ctx.db.query("artifacts").withIndex("by_plan", (q: any) => q.eq("plan_id", id)).collect()))) addPages(rows);
   const pagesSorted = [...pageRows.values()].sort((a, b) => b.updated_at - a.updated_at);
   if (pagesSorted.length > PAGES_MAX) truncated = true;
-  const pages: OutputPage[] = [];
+  const pages: ProjectOutputItems["pages"] = [];
   for (const a of pagesSorted.slice(0, PAGES_MAX)) {
     if (a.expires_at && a.expires_at < Date.now() && a.user_id !== viewerId) continue;
     if (!(await viewerSeesPage(ctx as any, viewerId, a))) continue;
+    const sid = a.session_conversation_id ? String(a.session_conversation_id) : null;
     pages.push({
       kind: "page",
       id: String(a._id),
       title: a.title,
       href: `/a/${a.slug}`,
       updated_at: a.updated_at,
-      session: sessionRef(a.session_conversation_id),
-      task: (a.task_id ? taskRef.get(String(a.task_id)) : null) ?? sessionTask(a.session_conversation_id),
+      session_id: sid && reached.has(sid) ? sid : null,
+      task_id: a.task_id && taskSet.has(String(a.task_id)) ? String(a.task_id) : null,
       slug: a.slug,
       version: a.version,
       page_kind: a.kind ?? "html",
     });
   }
 
-  // Docs: filed under the project or its plans, or written by its sessions.
+  // Docs: filed under the project or its plans, or written by its newest
+  // sessions, read newest first until the byte budget runs out.
   const docRows = new Map<string, Doc<"docs">>();
-  const addDocs = (rows: Doc<"docs">[]) => { for (const d of rows) docRows.set(String(d._id), d); };
-  addDocs(await ctx.db.query("docs").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).order("desc").take(DOCS_MAX * 2));
-  for (const rows of await Promise.all(plans.map((p) => ctx.db.query("docs").withIndex("by_plan_id", (q: any) => q.eq("plan_id", p._id)).take(DOCS_MAX)))) addDocs(rows);
-  for (const rows of await Promise.all(sessionsNewest.map((c) => ctx.db.query("docs").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id)).order("desc").take(DOCS_PER_SESSION)))) addDocs(rows);
+  let docBudget = DOC_BYTES;
+  const addDocs = async (q: AsyncIterable<Doc<"docs">>, max: number) => {
+    let n = 0;
+    for await (const d of q) {
+      if (docBudget <= 0) { truncated = true; return; }
+      if (n++ >= max) return;
+      docBudget -= docBytes(d);
+      docRows.set(String(d._id), d);
+    }
+  };
+  // Twice the shown count: archived docs are read and then left out.
+  await addDocs(ctx.db.query("docs").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).order("desc"), DOCS_MAX * 2);
+  for (const id of planIds) await addDocs(ctx.db.query("docs").withIndex("by_plan_id", (q: any) => q.eq("plan_id", id)).order("desc"), DOCS_MAX);
+  for (const id of sessionIds.slice(0, DOC_SESSIONS)) await addDocs(ctx.db.query("docs").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", id)).order("desc"), DOCS_PER_SESSION);
   const docsSorted = [...docRows.values()].filter((d) => !d.archived_at).sort((a, b) => b.updated_at - a.updated_at);
   if (docsSorted.length > DOCS_MAX) truncated = true;
-  const docs: OutputDoc[] = [];
+  const docs: ProjectOutputItems["docs"] = [];
   for (const d of docsSorted.slice(0, DOCS_MAX)) {
     if (!(await mayRead("docs", d))) continue;
-    const namedTask = (d.task_ids ?? []).map((id) => taskRef.get(String(id))).find(Boolean) ?? null;
+    const sid = d.conversation_id ? String(d.conversation_id) : null;
     docs.push({
       kind: "doc",
       id: String(d._id),
       title: (d as any).display_title ?? d.title,
       href: `/docs/${d._id}`,
       updated_at: d.updated_at,
-      session: sessionRef(d.conversation_id),
-      task: namedTask ?? sessionTask(d.conversation_id),
+      session_id: sid && reached.has(sid) ? sid : null,
+      task_id: (d.task_ids ?? []).map(String).find((id) => taskSet.has(id)) ?? null,
       doc_type: d.doc_type,
     });
   }
 
-  // Images: what the newest sessions in the project posted.
-  const found = (await Promise.all(sessionsNewest.slice(0, IMAGE_SESSIONS).map((c) => sessionImages(ctx, c._id, { since: 0, max: IMAGES_MAX })))).flat();
-  found.sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq);
-  const images: OutputImage[] = found.slice(0, IMAGES_MAX).map((img) => {
-    const c = inProject.get(String(img.conversation_id))!;
-    return {
-      kind: "image",
-      id: `${img.message_id}:${img.seq}`,
-      title: c.title || "(untitled)",
-      href: `/conversation/${c._id}#msg-${img.message_id}`,
-      updated_at: img.timestamp,
-      session: sessionRef(img.conversation_id),
-      task: sessionTask(img.conversation_id),
-      url: img.url,
-      message_id: String(img.message_id),
-    };
-  });
-
-  return {
-    project: { id: projectKey, short_id: project.short_id ?? null, title: project.title },
-    prs,
-    pages,
-    docs,
-    images,
-    truncated,
-  };
+  return { project_id: String(project._id), prs, pages, docs, truncated };
 }
 
-// The project page's Outputs view and `cast project outputs`. A caller who
-// cannot read the project gets null, never a hint that it exists.
+/** Both parts in one read, for the CLI. */
+export async function computeProjectOutputs(ctx: Ctx, viewerId: Id<"users">, project: Doc<"projects">): Promise<ProjectOutputs> {
+  const members = await computeProjectMembers(ctx, viewerId, project);
+  return joinProjectOutputs(members, await computeProjectItems(ctx, viewerId, project, outputItemArgs(members)));
+}
+
+async function readableProject(ctx: any, apiToken: string | undefined, ref: string) {
+  const userId = await getAuthenticatedUserId(ctx, apiToken);
+  if (!userId) return null;
+  const project = await findProjectByRef(ctx, ref);
+  return project && (await canAccessProject(ctx, userId, project)) ? { userId, project } : null;
+}
+
+// `cast project outputs`. A caller who cannot read the project gets null,
+// never a hint that it exists.
 export const get = query({
   args: { api_token: v.optional(v.string()), project_id: v.string() },
   handler: async (ctx, args): Promise<ProjectOutputs | null> => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) return null;
-    const project = await findProjectByRef(ctx, args.project_id);
-    if (!project || !(await canAccessProject(ctx, userId, project))) return null;
-    return computeProjectOutputs(ctx, userId, project);
+    const r = await readableProject(ctx, args.api_token, args.project_id);
+    return r ? computeProjectOutputs(ctx, r.userId, r.project) : null;
+  },
+});
+
+// The project page's Outputs view, part one: sessions, tasks and images.
+export const members = query({
+  args: { api_token: v.optional(v.string()), project_id: v.string() },
+  handler: async (ctx, args): Promise<ProjectOutputMembers | null> => {
+    const r = await readableProject(ctx, args.api_token, args.project_id);
+    return r ? computeProjectMembers(ctx, r.userId, r.project) : null;
+  },
+});
+
+// Part two: pull requests, pages and docs, by the ids part one returned.
+export const items = query({
+  args: {
+    api_token: v.optional(v.string()),
+    project_id: v.string(),
+    session_ids: v.array(v.string()),
+    elsewhere_ids: v.array(v.string()),
+    task_ids: v.array(v.string()),
+    plan_ids: v.array(v.string()),
+  },
+  handler: async (ctx, args): Promise<ProjectOutputItems | null> => {
+    const r = await readableProject(ctx, args.api_token, args.project_id);
+    return r ? computeProjectItems(ctx, r.userId, r.project, args) : null;
   },
 });

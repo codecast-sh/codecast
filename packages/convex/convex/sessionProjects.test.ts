@@ -65,6 +65,17 @@ describe("session projects", () => {
     expect(await effective(ids.bound)).toBe(ids.web);
   });
 
+  test("a task filed only under a plan puts its session in the plan's project", async () => {
+    const { t, ids, effective } = await setup();
+    const conv = await t.run(async (ctx) => {
+      const lead = await ctx.db.get(ids.lead);
+      const plan = await ctx.db.insert("plans", { user_id: lead!.user_id, workspace: `user:${lead!.user_id}`, title: "Plan", status: "active", project_id: ids.mobile, created_at: 0, updated_at: 0 } as any);
+      const task = await ctx.db.insert("tasks", { user_id: lead!.user_id, workspace: `user:${lead!.user_id}`, title: "Loose", status: "open", plan_id: plan, created_at: 0, updated_at: 0 } as any);
+      return ctx.db.insert("conversations", { user_id: lead!.user_id, agent_type: "claude_code", session_id: "plantask", started_at: 0, updated_at: 0, message_count: 0, status: "active", is_private: true, active_task_id: task } as any);
+    });
+    expect(await effective(conv)).toBe(ids.mobile);
+  });
+
   test("a short id or the agent's session uuid names the session", async () => {
     const { t, ids, effective } = await setup();
     await t.mutation(api.sessionProjects.setSessionProject, { session: "worker", project_id: ids.mobile, api_token: TOKEN });

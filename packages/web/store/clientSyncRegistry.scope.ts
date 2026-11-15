@@ -89,6 +89,7 @@ export const DATA_SCOPE = {
   pageThreads: "viewer",
   agentTasks: "viewer",
   foreignTriggers: "entity",
+  projectTeammateSources: "entity",
   agentDefinitions: "workspace",
   secrets: "workspace",
   secretHistory: "entity",

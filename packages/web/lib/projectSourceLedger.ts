@@ -11,7 +11,7 @@ export function sourceLedger(r: { source: string; project: string; mainSession: 
     rows: [
       { k: "Watches", v: r.source },
       { k: "Runs in", v: r.mainSession ?? "New main session" },
-      ...(r.channel ? [{ k: "A run gets", v: "Every line since the last" }, { k: "Skips", v: "Lines the session wrote" }] : []),
+      ...(r.channel ? [{ k: "A run gets", v: "Every line since the last" }, { k: "Skips", v: "Lines agents wrote" }] : []),
       { k: "Paused", v: "With the project", tone: "ok" as const },
     ],
     stop: "Pause or remove",

@@ -9,7 +9,9 @@ import { useTabContext } from "../lib/tabParams";
 import { stageHasRoom } from "../lib/stage";
 import {
   applyCanvasStep,
+  canvasEntryOn,
   canvasHasFocus,
+  canvasKeptHere,
   canvasLeafPath,
   canvasOwner,
   canvasPanePath,
@@ -17,6 +19,8 @@ import {
   canvasPageUrl,
   canvasTarget,
   claimCanvas,
+  dropCanvasKeep,
+  keepCanvasHere,
   planCanvas,
   setSessionCanvas,
   subscribeCanvasOwner,
@@ -51,7 +55,10 @@ export function useSessionCanvas(conversationId: string | null) {
     (st) => canvasLeafPath(st.tabs.find((t) => t.id === tabId) ?? null),
   ]);
   const entry = conversationId ? s.clientState.ui?.session_canvas?.[conversationId] : undefined;
-  const on = !!entry;
+  // Another window's pane closing leaves this window's docked pane where it is
+  // (keptHere); the header control's off reaches every window.
+  const [keptTick, setKeptTick] = useState(0);
+  const on = canvasEntryOn(entry) || (!!entry?.closed && !!conversationId && canvasKeptHere(conversationId));
   const pages: CanvasPage[] = (conversationId ? (s as any).conversationPages?.[conversationId]?.pages : undefined) ?? NO_PAGES;
   const infoOf = (slug: string): PageInfo | undefined => (s as any).pageEmbeds?.[slug];
   const target = canvasTarget(pages, entry?.pin ?? null, infoOf);
@@ -95,16 +102,33 @@ export function useSessionCanvas(conversationId: string | null) {
   useWatchEffect(() => {
     if (!drives || !s.clientStateInitialized) return;
     const id = conversationId!;
-    if (seen.current.id !== id) seen.current = { id, docked: false };
+    if (seen.current.id !== id) {
+      // A keep holds only the pane it kept: once this pane moves to another
+      // session, coming back starts from the stored preference.
+      if (seen.current.id) dropCanvasKeep(seen.current.id);
+      seen.current = { id, docked: false };
+    }
+    // A keep this pane never docked (a remount, a reload) holds nothing.
+    if (canvasKeptHere(id) && !seen.current.docked) {
+      dropCanvasKeep(id);
+      setKeptTick((n) => n + 1);
+      return;
+    }
+    // Another window closed its pane while this one has it docked: keep it.
+    if (!on && entry?.closed && seen.current.docked && leafPath && canvasPathSession(leafPath) === id) {
+      keepCanvasHere(id);
+      setKeptTick((n) => n + 1);
+      return;
+    }
     if (on && seen.current.docked && !leafPath) {
       seen.current.docked = false;
-      setSessionCanvas(id, false);
+      setSessionCanvas(id, false, null, { pane: true });
       return;
     }
     const step = planCanvas({ on, conversationId: id, leafPath, wantPath, pending, docked: seen.current.docked });
     if (step === "release") {
       seen.current.docked = false;
-      setSessionCanvas(id, false);
+      setSessionCanvas(id, false, null, { pane: true });
       return;
     }
     if (step === "set" && canvasHasFocus(tabId!)) return setHeld(true);
@@ -114,12 +138,12 @@ export function useSessionCanvas(conversationId: string | null) {
       // says so and turns it off rather than show "on" with nothing docked.
       if (!narrow) {
         toast.error(CANVAS_NO_ROOM);
-        setSessionCanvas(id, false);
+        setSessionCanvas(id, false, null, { pane: true });
       }
       return;
     }
     seen.current.docked = on && (step === "insert" || step === "set" || (step === "none" && !!leafPath && !!canvasPathSession(leafPath)));
-  }, [drives, s.clientStateInitialized, on, leafPath, wantPath, pending, retry, narrow]);
+  }, [drives, s.clientStateInitialized, on, !!entry?.closed, keptTick, leafPath, wantPath, pending, retry, narrow]);
 
   const claim = () => { if (tabId && conversationId) claimCanvas(tabId, conversationId); };
   return { on, pin, target, title: info?.title, pages, drives, claim };

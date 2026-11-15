@@ -7,9 +7,10 @@
 import Link from "next/link";
 import { Hash, Pause, Play, Trash2, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
-import { CHAT_TRIGGER_EVENTS, TRIGGER_EVENT_NAMES, triggerEventLabel } from "@codecast/shared/contracts";
+import { CHAT_TRIGGER_EVENTS, TRIGGER_EVENT_NAMES, projectChannelRefusal, triggerEventLabel } from "@codecast/shared/contracts";
 import { useInboxStore, isConvexId } from "../../store/inboxStore";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
+import { useSyncProjectTeammateSources } from "../../hooks/useSyncProjectTeammateSources";
 import { RecordSection } from "../initiatives/InitiativeRecord";
 import { SelectBox } from "../ui/select-box";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
@@ -30,22 +31,29 @@ type SourceRow = {
   last_run_summary?: string;
   last_run_conversation_id?: string;
   run_count: number;
+  /** Set on a teammate's source: the panel shows it, the verbs stay with its owner. */
+  owner_name?: string;
 };
 
 const GONE = new Set(["completed", "cancelled"]);
 const sourceSig = (t: SourceRow) => `${t.project_id ?? ""}|${t.status}|${t.title}|${t.last_run_at ?? 0}|${t.last_run_failed ? 1 : 0}|${t.run_count}|${t.paused_by_project_id ?? ""}|${t.event_filter?.channel_id ?? ""}`;
+const teammateSig = (t: SourceRow) => `${sourceSig(t)}|${t.owner_name ?? ""}`;
 const channelSig = (c: any) => `${c.name}|${c.kind ?? ""}|${c.archived_at ? 1 : 0}`;
 const EVENTS = TRIGGER_EVENT_NAMES.filter((n) => !CHAT_TRIGGER_EVENTS.includes(n));
 
 export function ProjectSources({ project }: { project: ProjectRow & { _id: string; title: string } }) {
   const where = useMemo(() => (t: SourceRow) => t.project_id === project._id && !GONE.has(t.status), [project._id]);
-  const sources = useCollectionRows<SourceRow>("agentTasks", { where, sig: sourceSig });
+  const own = useCollectionRows<SourceRow>("agentTasks", { where, sig: sourceSig });
+  useSyncProjectTeammateSources(isConvexId(project._id) ? project._id : null);
+  const theirs = useCollectionRows<SourceRow>("projectTeammateSources", { where, sig: teammateSig });
+  const sources = useMemo(() => [...own, ...theirs], [own, theirs]);
   // The project's team's channels (a personal project offers the active team's).
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id ?? null);
   const teamId = (project as { team_id?: string }).team_id ?? activeTeamId;
   const inTeam = useMemo(() => (c: any) => !!teamId && String(c.team_id) === String(teamId), [teamId]);
   const channelRows = useCollectionRows<any>("chatChannels", { where: inTeam, sig: channelSig });
-  const channels = useMemo(() => channelRows.filter((c) => c.kind !== "dm" && !c.archived_at).sort((a, b) => a.name.localeCompare(b.name)), [channelRows]);
+  const workspace = (project as { workspace?: string }).workspace ?? null;
+  const channels = useMemo(() => channelRows.filter((c) => c.kind !== "dm" && !c.archived_at && !projectChannelRefusal({ workspace }, c)).sort((a, b) => a.name.localeCompare(b.name)), [channelRows, workspace]);
   const channelName = useMemo(() => new Map(channelRows.map((c) => [String(c._id), c.name as string])), [channelRows]);
   const mainId = useInboxStore((s) => projectDefaultSessionOf(project, s.sessions, windowOrgTree(s)?.roles as RoleSeat[] | undefined));
   const mainTitle = useInboxStore((s) => (mainId ? s.sessions[mainId]?.title || mainId.slice(0, 7) : null));
@@ -91,6 +99,9 @@ export function ProjectSources({ project }: { project: ProjectRow & { _id: strin
                 {t.last_run_conversation_id && fired ? <Link href={`/conversation/${t.last_run_conversation_id}`} className="hover:text-sol-cyan">{fired}</Link> : fired ?? "Never fired"}
               </span>
               <span className="w-10 shrink-0 text-right text-meta tabular-nums text-sol-text-dim" title="Runs">{t.run_count}×</span>
+              {t.owner_name ? (
+                <span className="w-[8.5rem] shrink-0 truncate text-right text-meta text-sol-text-dim" data-source-owner>{t.owner_name}</span>
+              ) : (<>
               <button
                 type="button"
                 disabled={stub || (paused && projectQuiet)}
@@ -112,6 +123,7 @@ export function ProjectSources({ project }: { project: ProjectRow & { _id: strin
               >
                 <Trash2 className="h-3 w-3" />Remove
               </button>
+              </>)}
             </li>
           );
         })}

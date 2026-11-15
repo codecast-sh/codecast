@@ -3,11 +3,12 @@ import { projectParentIdOf, sessionProjectId, type SessionProjectRow } from "./s
 
 type Row = SessionProjectRow & { _id: string };
 
-function lookupOf(rows: Row[], tasks: Record<string, string> = {}, plans: Record<string, string> = {}) {
+function lookupOf(rows: Row[], tasks: Record<string, string> = {}, plans: Record<string, string> = {}, taskPlans: Record<string, string> = {}) {
   const byId = new Map(rows.map((r) => [r._id, r]));
   return {
     session: (id: string) => byId.get(id),
     taskProject: (id: string) => tasks[id] ?? null,
+    taskPlan: (id: string) => taskPlans[id] ?? null,
     planProject: (id: string) => plans[id] ?? null,
   };
 }
@@ -28,6 +29,22 @@ describe("sessionProjectId", () => {
   test("a bound plan names the project when the task has none", () => {
     const s: Row = { _id: "s", active_task_id: "t-loose", active_plan_id: "pl1" };
     expect(sessionProjectId(s, lookupOf([s], {}, { pl1: "proj-plan" }))).toBe("proj-plan");
+  });
+
+  test("a task with no project of its own takes its plan's project", () => {
+    const s: Row = { _id: "s", active_task_id: "t1" };
+    expect(sessionProjectId(s, lookupOf([s], {}, { pl1: "proj-plan" }, { t1: "pl1" }))).toBe("proj-plan");
+  });
+
+  test("a task's own project wins over its plan's and over the bound plan's", () => {
+    const s: Row = { _id: "s", active_task_id: "t1", active_plan_id: "pl2" };
+    expect(sessionProjectId(s, lookupOf([s], { t1: "proj-task" }, { pl1: "proj-plan", pl2: "proj-other" }, { t1: "pl1" }))).toBe("proj-task");
+  });
+
+  test("a worker under a project lead, bound to a plan-only task, works in the task's plan's project", () => {
+    const lead: Row = { _id: "lead", project_id: "proj-lead" };
+    const w: Row = { _id: "w", parent_conversation_id: "lead", active_task_id: "t1" };
+    expect(sessionProjectId(w, lookupOf([lead, w], {}, { pl1: "proj-plan" }, { t1: "pl1" }))).toBe("proj-plan");
   });
 
   test("workers of workers inherit the project of the session at the top", () => {
