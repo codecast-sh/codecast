@@ -371,7 +371,7 @@ export function InterruptStatusLine({ label = "user interrupted", tone = "sky" }
 // A bare nudge ("continue") as one compact line. `recovery` marks the one
 // account recovery sent after a usage limit: it carries the recovery's mark
 // instead of the person's face, because they did not type it.
-export function NudgeLine({ messageId, text, count, timestamp, userName, avatarUrl, recovery = false, pending = false }: { messageId: string; text: string; count: number; timestamp: number; userName?: string; avatarUrl?: string | null; recovery?: boolean; pending?: boolean }) {
+export const NudgeLine = memo(function NudgeLine({ messageId, text, count, timestamp, userName, avatarUrl, recovery = false, pending = false }: { messageId: string; text: string; count: number; timestamp: number; userName?: string; avatarUrl?: string | null; recovery?: boolean; pending?: boolean }) {
   const title = recovery
     ? `Sent by account recovery after the usage limit · ${formatFullTimestamp(timestamp)}`
     : count > 1 ? `${userName ?? "You"} sent "${text}" ${count} times in a row · last at ${formatFullTimestamp(timestamp)}` : `${userName ?? "You"} · ${formatFullTimestamp(timestamp)}`;
@@ -395,7 +395,7 @@ export function NudgeLine({ messageId, text, count, timestamp, userName, avatarU
       <span className="text-meta text-sol-text-dim">{pending ? "sending…" : formatRelativeTime(timestamp)}</span>
     </div>
   );
-}
+});
 
 // One captioned rule for a machine move the thread records in place: an agent
 // or machine switch, or a session moving between its role and the person

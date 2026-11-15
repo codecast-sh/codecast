@@ -166,7 +166,7 @@ if ($wslHome -match '^/[A-Za-z0-9._/-]+$') {
 Write-Host ""
 Write-Host "codecast is installed inside WSL." -ForegroundColor Green
 Write-Host "Open a new WSL terminal (run: wsl) and use 'cast' from there."
-& wsl.exe -e sh -c 'test -f ~/.codecast/config.json'
+& wsl.exe -e sh -c 'grep -q auth_token ~/.codecast/config.json 2>/dev/null && ~/.local/bin/codecast auth status >/dev/null 2>&1'
 if (-not $setupToken -and $LASTEXITCODE -ne 0) {
     Write-Host "Then run 'cast auth' to authenticate and start syncing."
 }
