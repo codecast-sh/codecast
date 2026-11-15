@@ -3,6 +3,7 @@ import { ConvexError } from "convex/values";
 import { unsubscribeResponse } from "@platform/email";
 import { httpAction } from "./_generated/server";
 import { CAST_MODEL_PROXY_PATH, castModelProxy } from "./castMachineProxy";
+import { CAST_ENV_PATH, envMachineRoute } from "./castCloudEnv";
 import { sha256Hex } from "./lib/awsSigV4";
 import { BRAND } from "./emails/render";
 import { auth } from "./auth";
@@ -17,7 +18,7 @@ import { SHARED_CALL_AUDIO_PATH, sharedCallAudio, sharedCallVideo } from "./lib/
 import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMirror";
 import { ipRateLimited } from "./lib/httpRateLimit";
 import { cliAuthRequest } from "./cliAuthHttp";
-import { cliErrorReply } from "./lib/cliErrorStatus";
+import { registerCliRoute, type CliRouteOptions } from "./lib/cliRoute";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
@@ -29,6 +30,8 @@ import { handleFaceRequest } from "./callFace";
 import { sentryWebhook, setEventGroupStatus } from "./lib/sentryHttp";
 import { slackWebhook } from "./lib/slackHttp";
 import { STRIPE_WEBHOOK_PATH, stripeWebhook } from "./billing";
+import { realtimeWebhook as recallRealtimeWebhook, statusWebhook as recallStatusWebhook } from "./meetingBotsHttp";
+import { RECALL_REALTIME_PATH, RECALL_STATUS_PATH } from "./lib/recall";
 import { claimFrontier } from "./lib/claimFrontier";
 import { heartbeatTailnetArg } from "./lib/heartbeatTailnet";
 import {
@@ -38,6 +41,8 @@ import {
 } from "./repoPublicHttp";
 
 const http = httpRouter();
+// A `cast` route on this router: POST + OPTIONS, the device-binding gate and the CLI error shape (lib/cliRoute.ts).
+const cliRoute = (path: string, handler: (ctx: any, body: any) => Promise<any>, opts?: CliRouteOptions) => registerCliRoute(http, path, handler, opts);
 
 auth.addHttpRoutes(http);
 
@@ -139,6 +144,7 @@ http.route({
 
 // pi on a cast machine reaches the model through here, with its machine's key.
 http.route({ pathPrefix: CAST_MODEL_PROXY_PATH + "/", method: "POST", handler: castModelProxy });
+http.route({ path: CAST_ENV_PATH, method: "POST", handler: envMachineRoute });
 
 // `cast auth` registers its sign-in request (cliAuthHttp.cliAuthRequest).
 http.route({ path: "/cli/auth-request", method: "POST", handler: cliAuthRequest });
@@ -357,6 +363,10 @@ http.route({
 http.route({ path: "/api/webhooks/sentry", method: "POST", handler: sentryWebhook });
 // Stripe: plans, top-ups and renewals onto the wallet (billing.ts).
 http.route({ path: STRIPE_WEBHOOK_PATH, method: "POST", handler: stripeWebhook });
+// Recall.ai meeting bots: status changes on the account webhook, transcript
+// lines on each bot's real-time endpoint. Both verified in meetingBots.ts.
+http.route({ path: RECALL_STATUS_PATH, method: "POST", handler: recallStatusWebhook });
+http.route({ path: RECALL_REALTIME_PATH, method: "POST", handler: recallRealtimeWebhook });
 
 // Linear webhooks (issue sync, docs/architecture/issue-sync.md S6). Same shape
 // as the GitHub App route above: verify the raw body, refuse anything we cannot
@@ -3815,86 +3825,6 @@ http.route({
 // ── Slack webhook (Anchor inbound) ───────────────────────────────────────────
 // Verified, deduped and routed in lib/slackHttp.ts.
 http.route({ path: "/api/webhooks/slack", method: "POST", handler: slackWebhook });
-
-
-
-function cliRoute(
-  path: string,
-  handler: (ctx: any, body: any) => Promise<any>,
-  // forwardDeviceId: this route's own function takes device_id as a real
-  // argument (cast pull's destination, a terminal pane's machine, …), so the
-  // field must survive into the body instead of being stripped. It is only
-  // ever an argument: the device a token is presented FROM rides inside
-  // api_token itself (@platform/auth tokenFormat), so a route whose argument
-  // names a different machine than the caller's is fine.
-  opts?: { forwardDeviceId?: boolean },
-) {
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  };
-  http.route({
-    path,
-    method: "POST",
-    handler: httpAction(async (ctx, request) => {
-      try {
-        const body = await request.json();
-        // Device binding, asked here ahead of the handler so a request from the
-        // wrong machine gets a 403 that names the fix. The handler's own
-        // verifyApiToken enforces the same rule on api_token as it arrived, so
-        // this is the better error, not the only check: a direct Convex call
-        // that never passes through here is refused just the same.
-        if (typeof body?.api_token === "string") {
-          const allowed = await ctx.runQuery(internal.apiTokens.deviceBindingAllows, {
-            api_token: body.api_token,
-          });
-          if (!allowed) {
-            return new Response(
-              JSON.stringify({
-                error:
-                  "This token is bound to a different machine. Run `cast auth` on this machine to mint its own.",
-                code: "FORBIDDEN",
-              }),
-              { status: 403, headers: { "Content-Type": "application/json", ...corsHeaders } },
-            );
-          }
-        }
-        // A device_id body field is only forwarded on routes that declare it
-        // (forwardDeviceId). Most cliRoute handlers pass the body straight
-        // into a mutation whose validator is a closed `v.object`, so an
-        // unrecognised field is a hard rejection — but for routes whose own
-        // function REQUIRES device_id, deleting it is an equally hard rejection
-        // the other way (this broke cast pull, vault mirror, and terminal
-        // streaming: ct-44344 follow-up).
-        if (!opts?.forwardDeviceId && body && typeof body === "object" && "device_id" in body) {
-          delete body.device_id;
-        }
-        const result = await handler(ctx, body);
-        return new Response(JSON.stringify(result), {
-          status: 200,
-          headers: { "Content-Type": "application/json", ...corsHeaders },
-        });
-      } catch (error) {
-        const reply = cliErrorReply(error, path);
-        return new Response(JSON.stringify(reply.body), {
-          status: reply.status,
-          headers: { "Content-Type": "application/json", ...corsHeaders },
-        });
-      }
-    }),
-  });
-  http.route({
-    path,
-    method: "OPTIONS",
-    handler: httpAction(async () => {
-      return new Response(null, {
-        status: 204,
-        headers: { ...corsHeaders },
-      });
-    }),
-  });
-}
 
 // Projects
 // ── Capability library (cast cap …) ──

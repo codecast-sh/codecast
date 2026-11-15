@@ -531,6 +531,7 @@ import type * as managedDevicesSchema from "../managedDevicesSchema.js";
 import type * as managedSessions from "../managedSessions.js";
 import type * as managedSessionsList from "../managedSessionsList.js";
 import type * as meetingBots from "../meetingBots.js";
+import type * as meetingBotsHttp from "../meetingBotsHttp.js";
 import type * as meetingCalendar from "../meetingCalendar.js";
 import type * as messageFeed from "../messageFeed.js";
 import type * as messageViewContracts from "../messageViewContracts.js";
@@ -1288,6 +1289,7 @@ declare const fullApi: ApiFromModules<{
   managedSessions: typeof managedSessions;
   managedSessionsList: typeof managedSessionsList;
   meetingBots: typeof meetingBots;
+  meetingBotsHttp: typeof meetingBotsHttp;
   meetingCalendar: typeof meetingCalendar;
   messageFeed: typeof messageFeed;
   messageViewContracts: typeof messageViewContracts;
