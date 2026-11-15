@@ -15,6 +15,7 @@ import { inHuddle } from "../lib/calls/huddlePresence";
 import "../store/undoActions";
 import { recordUndoOnlyWhereReachable } from "../hooks/useUndoUnreachable";
 import { stashSlackReturn } from "../lib/slackReturn";
+import { preloadPage } from "../lib/tabLazyPages";
 
 // Before anything mounts: a Slack OAuth return carries ?code=, which the auth
 // provider would otherwise redeem as its own and sign the person out.
@@ -78,7 +79,8 @@ ReactDOM.createRoot(document.getElementById("root")!, {
 
 const entryPath = window.location.pathname;
 if (hasStoredAuthToken() && (entryPath === "/inbox" || entryPath.startsWith("/conversation/"))) {
-  setTimeout(() => { void import("@/app/inbox/page"); }, 0);
+  preloadPage("@/app/inbox/page");
+  if (entryPath.startsWith("/conversation/")) preloadPage("@/app/conversation/[id]/page");
 }
 
 // Defer non-critical work until after first paint. The timeout is load-bearing:

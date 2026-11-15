@@ -6,11 +6,11 @@
 // insist until it claims again. Ephemeral: the arrangement underneath is never
 // rewritten. Outside a tab (a test, a bare route) nothing is claimed.
 import { useInboxStore } from "../store/inboxStore";
-import { useTabContext } from "../lib/tabParams";
+import { useTabPane } from "../lib/tabParams";
 import { useWatchEffect } from "./useWatchEffect";
 
 export function useStageWide(on: boolean): void {
-  const tab = useTabContext();
+  const tab = useTabPane();
   const tabId = on && tab ? tab.tabId : null;
   const leafId = tab?.leafId ?? null;
   useWatchEffect(() => {

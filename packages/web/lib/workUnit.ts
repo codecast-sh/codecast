@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { sessionPanePath, stageNavigateLeaf } from "./stage";
 import { leavesOf } from "../store/stageSplit";
 import { useInboxStore } from "../store/inboxStore";
-import { useTabContext } from "./tabParams";
+import { useTabPane } from "./tabParams";
 import { sessionLiveAt } from "./liveness";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 
@@ -19,7 +19,7 @@ export function taskFacePath(task: { _id: string; short_id?: string | null }): s
 /** Re-point the pane this face renders in; a plain tab navigates. */
 export function useSwitchFace(): (path: string) => void {
   const router = useRouter();
-  const ctx = useTabContext();
+  const ctx = useTabPane();
   return (path: string) => {
     if (ctx?.leafId) stageNavigateLeaf(ctx.leafId, path, "replace");
     else router.push(path);
