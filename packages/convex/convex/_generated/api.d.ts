@@ -389,6 +389,7 @@ import type * as lib_permissionRuleRequest from "../lib/permissionRuleRequest.js
 import type * as lib_permissionRules from "../lib/permissionRules.js";
 import type * as lib_personLabel from "../lib/personLabel.js";
 import type * as lib_planProgress from "../lib/planProgress.js";
+import type * as lib_prGuidePrompt from "../lib/prGuidePrompt.js";
 import type * as lib_prSessions from "../lib/prSessions.js";
 import type * as lib_prWakePrompt from "../lib/prWakePrompt.js";
 import type * as lib_presence from "../lib/presence.js";
@@ -607,6 +608,7 @@ import type * as planTemplates from "../planTemplates.js";
 import type * as plans from "../plans.js";
 import type * as prCli from "../prCli.js";
 import type * as prDetails from "../prDetails.js";
+import type * as prGuides from "../prGuides.js";
 import type * as prShepherd from "../prShepherd.js";
 import type * as presencePolicy from "../presencePolicy.js";
 import type * as presenceState from "../presenceState.js";
@@ -1154,6 +1156,7 @@ declare const fullApi: ApiFromModules<{
   "lib/permissionRules": typeof lib_permissionRules;
   "lib/personLabel": typeof lib_personLabel;
   "lib/planProgress": typeof lib_planProgress;
+  "lib/prGuidePrompt": typeof lib_prGuidePrompt;
   "lib/prSessions": typeof lib_prSessions;
   "lib/prWakePrompt": typeof lib_prWakePrompt;
   "lib/presence": typeof lib_presence;
@@ -1372,6 +1375,7 @@ declare const fullApi: ApiFromModules<{
   plans: typeof plans;
   prCli: typeof prCli;
   prDetails: typeof prDetails;
+  prGuides: typeof prGuides;
   prShepherd: typeof prShepherd;
   presencePolicy: typeof presencePolicy;
   presenceState: typeof presenceState;

@@ -86,7 +86,7 @@
   "publish": {
     "config": {
       "publish_enabled": true,
-      "publish_version": "6"
+      "publish_version": "7"
     },
     "stdout": "* Publish — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
