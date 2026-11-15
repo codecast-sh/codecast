@@ -1,5 +1,5 @@
 import { FolderGit2, Map as MapIcon, Clock, Waypoints, Cpu, Link as LinkIcon, ListTodo, Newspaper, Radar, Network, KeyRound, Rocket } from "lucide-react";
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import { Command as CommandPrimitive } from "cmdk";
 import { SessionGlyph, SessionIdentityLine } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
@@ -187,13 +187,15 @@ function ProjectChip({ directory }: { directory?: string | null }) {
 /** A "Recent Sessions" row: face (state on its corner), identity line, label,
  *  where it is when that is news (set aside, another machine), project,
  *  whose, age. */
-export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: {
-  conv: PaletteSessionRowConv;
+// Memoized with a stable onSelect that takes the row: a palette keystroke
+// re-renders the palette, and an inline closure re-rendered every recent row.
+function PaletteSessionRowView<C extends PaletteSessionRowConv>({ conv, bucket, standing, device, onSelect }: {
+  conv: C;
   bucket: { name: string } | null;
   standing?: SessionStanding;
   /** The machine it runs on, only when that differs from the usual one. */
   device?: Device;
-  onSelect: () => void;
+  onSelect: (conv: C) => void;
 }) {
   const isTeam = conv.isOwn === false;
   const shelved = !!standing?.shelf;
@@ -206,7 +208,7 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
     <CommandPrimitive.Item
       data-palette-type="session" data-palette-id={conv._id} data-palette-title={conv.title} data-palette-short-id={conv.short_id}
       value={paletteSessionValue(conv)}
-      onSelect={onSelect}
+      onSelect={() => onSelect(conv)}
       className={`${itemClass} group`}
     >
       {/* Who the session is (session-characters.md S3): its face,
@@ -247,6 +249,7 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
     </CommandPrimitive.Item>
   );
 }
+export const PaletteSessionRow = memo(PaletteSessionRowView) as typeof PaletteSessionRowView;
 
 export type PaletteSearchResult = {
   conversationId: string;

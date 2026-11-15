@@ -9,7 +9,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useRecentProjectsFeed } from "./useRecentProjectsFeed";
-import { mergeRecentProjectPaths, recentProjectPathsFromSessionKeys, recentProjectSessionKey, type RecentProject } from "../lib/recentProjectPaths";
+import { mergeRecentProjectPaths, recentProjectPathsFromSessionKeys, recentProjectSessionKeys, type RecentProject } from "../lib/recentProjectPaths";
 import { resolveScopedProjects, type MachineCandidate } from "../lib/machinePicker";
 
 const NO_KEYS: string[] = [];
@@ -35,7 +35,7 @@ export function useScopedRecentProjects(opts: {
   const currentUserId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   // Stable primitive keys, not session objects (replaced on heartbeats).
   const loadedSessionProjectKeys = useInboxStore(useShallow((s) =>
-    active ? Object.values(s.sessions).map(recentProjectSessionKey) : NO_KEYS,
+    active ? recentProjectSessionKeys(s.sessions) : NO_KEYS,
   ));
   const ownSessionProjects = useMemo(
     () => recentProjectPathsFromSessionKeys(loadedSessionProjectKeys, currentUserId),

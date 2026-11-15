@@ -6,6 +6,7 @@ import { useInboxStore, InboxSession, classifySession, claimsViewer, isSub, isCo
 import { agentStatusAt } from "../lib/liveness";
 import { WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
 import { startWarmLoop } from "./inboxWarm";
+import { useInboxAnswered } from "../lib/bootPhase";
 import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
@@ -300,7 +301,8 @@ export function useSyncInboxSessions() {
   // whole payload re-sends each time, so a second subscriber doubled the
   // desktop's largest stream (34 MB in 90s per window, 2026-10-08).
   const isSyncHost = useIsSyncHost();
-  const favorites = useQueryNoThrow(api.conversations.listFavoriteSessions, isSyncHost ? { include_liveness: false } : "skip");
+  const inboxAnswered = useInboxAnswered();
+  const favorites = useQueryNoThrow(api.conversations.listFavoriteSessions, isSyncHost && inboxAnswered ? { include_liveness: false } : "skip");
   useFeederError("conversations.listFavoriteSessions", favorites.error);
   const favoriteSessions = favorites.data;
   const liveness = useSplitQueryNoThrow(api.conversations.sessionsLiveness, isSyncHost ? {} : "skip", "liveness");
