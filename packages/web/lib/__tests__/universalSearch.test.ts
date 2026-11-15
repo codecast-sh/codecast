@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { kindOfQuery, matchEntities, matchGoals, matchMentionGroups, matchProjects, matchRoles, matchRoutines, matchRows } from "../universalSearch";
+import { kindOfQuery, matchEntities, matchGoals, matchMentionGroups, matchProjects, matchRoles, matchRoutines, matchRows, searchIndexOf } from "../universalSearch";
 
 const index = {
   tasks: {
@@ -80,5 +80,24 @@ describe("matching every word in any order", () => {
   test("a stronger match leads, then the newer row", () => {
     const rows = [{ t: "calling pages", at: 9 }, { t: "call page", at: 0 }, { t: "call page now", at: 5 }];
     expect(matchRows(rows, "call page", (r) => [r.t], 5, (r) => r.at).map((r) => r.t)).toEqual(["call page now", "call page", "calling pages"]);
+  });
+});
+
+describe("searchIndexOf cache", () => {
+  test("reuses a part while its collections hold, rebuilds the one that moved", () => {
+    const state = {
+      mentionIndex: { tasks: {}, docs: {}, plans: {} },
+      tasks: { t1: { _id: "t1", title: "A", status: "open" } },
+      docs: { d1: { _id: "d1", title: "Doc" } },
+      plans: {},
+    };
+    const first = searchIndexOf(state as any);
+    const again = searchIndexOf({ ...state } as any);
+    expect(again.tasks).toBe(first.tasks);
+    expect(again.docs).toBe(first.docs);
+    const moved = searchIndexOf({ ...state, docs: { d1: { _id: "d1", title: "Doc 2" } } } as any);
+    expect(moved.tasks).toBe(first.tasks);
+    expect(moved.docs).not.toBe(first.docs);
+    expect((moved.docs.d1 as any).title).toBe("Doc 2");
   });
 });

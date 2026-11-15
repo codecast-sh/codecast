@@ -84,15 +84,29 @@ export function searchIndexOf(s: {
   mentionIndex?: { tasks: Record<string, any>; docs: Record<string, any>; plans: Record<string, any> } | null;
   tasks?: Record<string, any>; docs?: Record<string, any>; plans?: Record<string, any>;
 }): { tasks: Record<string, MentionRecord>; docs: Record<string, MentionRecord>; plans: Record<string, MentionRecord> } {
-  const byId = (rows: any[]) => Object.fromEntries(rows.map((r) => [String(r._id), r]));
   const idx = s.mentionIndex ?? { tasks: {}, docs: {}, plans: {} };
   return {
     // Only real work: no suggestion waiting on triage, no unpromoted insight
     // (the store holds both; the boards never show them).
-    tasks: byId(mergeEntityRows(idx.tasks, s.tasks).filter((t: any) => isActiveTask(t))),
-    docs: byId(mergeEntityRows(idx.docs, s.docs)),
-    plans: byId(mergeEntityRows(idx.plans, s.plans)),
+    tasks: indexPart(idx.tasks, s.tasks, (t: any) => isActiveTask(t)),
+    docs: indexPart(idx.docs, s.docs),
+    plans: indexPart(idx.plans, s.plans),
   };
+}
+
+// One part of the index, rebuilt only when its index rows or its store
+// collection changed: the palette builds the whole index on every open, and
+// the task part alone walks every cached task.
+const NO_ROWS: Record<string, any> = {};
+const partCache = new WeakMap<object, { indexRows: unknown; out: Record<string, MentionRecord> }>();
+function indexPart(indexRows: Record<string, any> | undefined, storeRows: Record<string, any> | undefined, keep?: (row: any) => boolean): Record<string, MentionRecord> {
+  const key = storeRows ?? NO_ROWS;
+  const hit = partCache.get(key);
+  if (hit && hit.indexRows === indexRows) return hit.out;
+  const rows = mergeEntityRows(indexRows, storeRows);
+  const out = Object.fromEntries((keep ? rows.filter(keep) : rows).map((r) => [String(r._id), r]));
+  partCache.set(key, { indexRows, out });
+  return out;
 }
 
 /** The search index as the everyday surfaces see it: every scope's notes and

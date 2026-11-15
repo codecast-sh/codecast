@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
+import { useIsFocused } from '@react-navigation/native';
 import {
-  useInboxStore, placeInboxRows, sessionsWakeSig, pendingSendWakeSig, resolveShowOld,
+  useInboxStore, placeInboxRows, sessionsWakeSig, pendingSendWakeSig, resolveShowOld, type PlacedInbox,
 } from '@codecast/web/store/inboxStore';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 
@@ -14,7 +15,11 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
  *  about once a second on an idle phone. The structural signatures stand in
  *  for them, and placement reads the latest store state on each recompute.
  *  The trust-TTL adaptation (stale "working" → needs-input) and relative
- *  times are time-driven, so a coarse clock re-runs it too. */
+ *  times are time-driven, so a coarse clock re-runs it too.
+ *
+ *  A screen under another (the inbox tab beneath an open conversation) holds
+ *  its last placement and places again when it is back on top: re-placing
+ *  every row on each live delta was the largest cost of an idle conversation. */
 export function useInboxPlacement() {
   const sessionsSig = useInboxStore((s) => sessionsWakeSig(s.sessions));
   const pendingSendSig = useInboxStore((s) => pendingSendWakeSig(s.pendingMessages));
@@ -31,10 +36,13 @@ export function useInboxPlacement() {
   const teamInboxIds = useInboxStore((s) => s.teamInboxIds);
   const meId = useInboxStore((s) => s.currentUser?._id?.toString?.() ?? null);
   const livenessHeldAt = useInboxStore((s) => s.livenessHeldAt);
+  const onTop = useIsFocused();
+  const held = useRef<PlacedInbox | null>(null);
   const placed = useMemo(
-    () => placeInboxRows(useInboxStore.getState(), { focusedId: currentSessionId, now: coarseNow }),
+    () => (!onTop && held.current) || placeInboxRows(useInboxStore.getState(), { focusedId: currentSessionId, now: coarseNow }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig/pendingSendSig stand in for the churny refs; coarseNow drives the deadline signature
-    [sessionsSig, pendingSendSig, inboxScope, meId, teamInboxIds, showOld, currentSessionId, pendingSessionCreates, sessionsWithQueuedMessages, coarseNow, livenessHeldAt],
+    [onTop, sessionsSig, pendingSendSig, inboxScope, meId, teamInboxIds, showOld, currentSessionId, pendingSessionCreates, sessionsWithQueuedMessages, coarseNow, livenessHeldAt],
   );
+  held.current = placed;
   return { placed, sessionsSig, pendingSendSig, coarseNow, currentSessionId, sessionsWithQueuedMessages };
 }
