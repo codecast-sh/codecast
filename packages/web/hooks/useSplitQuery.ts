@@ -192,9 +192,25 @@ export function useSplitQueryNoThrow<Q extends FunctionReference<"query">>(
   const name = getFunctionName(query);
   const convex = useConvex();
   const [, rerender] = useState(0);
-  const splitOn = args !== "skip" && !unsupported.has(name);
+  // With nothing held (every web launch: only the native app persists held
+  // rows), a split value cannot be rebuilt, and the feeder had to fetch the
+  // whole result in a second round trip; on a cold boot the inbox waited ~2s
+  // for it behind the rest of the boot's queries. So the first subscription
+  // asks for the whole result, seeds the held rows from it, and only then
+  // moves to the split form.
+  const [seeded, setSeeded] = useState(() => persistence !== null || cacheFor(name).size > 0);
+  const splitOn = args !== "skip" && !unsupported.has(name) && seeded;
   const sub = useQueryNoThrow(query, args === "skip" ? "skip" : splitOn ? ({ ...args, split: true } as any) : (args as any));
   const [data, setData] = useState<any>(undefined);
+
+  useWatchEffect(() => {
+    if (seeded || args === "skip" || unsupported.has(name) || sub.data === undefined) return;
+    seedSplitCache(kind, sub.data, cacheFor(name));
+    noteHeldChanged(name);
+    setData(sub.data);
+    setSeeded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seeded, sub.data, kind, name]);
 
   useWatchEffect(() => {
     if (splitOn && sub.error && rejectsSplit(sub.error)) {
@@ -205,7 +221,7 @@ export function useSplitQueryNoThrow<Q extends FunctionReference<"query">>(
 
   useWatchEffect(() => {
     const value = sub.data;
-    if (value === undefined || args === "skip") return;
+    if (value === undefined || args === "skip" || !splitOn) return;
     const cache = cacheFor(name);
     const rebuilt = rebuildSplitPayload(kind, value, cache);
     if (rebuilt) {
@@ -222,7 +238,7 @@ export function useSplitQueryNoThrow<Q extends FunctionReference<"query">>(
     };
     // `args` is a constant per caller; its JSON is what the subscription keys on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sub.data, kind, name, convex]);
+  }, [sub.data, kind, name, convex, splitOn]);
 
-  return { data: args === "skip" ? undefined : splitOn ? data : sub.data, error: splitOn && sub.error && rejectsSplit(sub.error) ? undefined : sub.error };
+  return { data: args === "skip" ? undefined : splitOn ? data : seeded ? sub.data : (sub.data ?? data), error: splitOn && sub.error && rejectsSplit(sub.error) ? undefined : sub.error };
 }

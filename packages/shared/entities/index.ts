@@ -157,6 +157,7 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
   call: "call",
   ops: "source",
   vault: "secret",
+  deploys: "deploy",
 };
 
 /**
@@ -167,10 +168,10 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
  * `?task=<id>`, and those links are still live in old messages — so new
  * trigger links always use the path route (`/triggers/<id>`).
  */
-const QUERY_PARAM: Partial<Record<EntityType, string>> = { trigger: "task", proposal: "proposal", source: "source", secret: "s" };
+const QUERY_PARAM: Partial<Record<EntityType, string>> = { trigger: "task", proposal: "proposal", source: "source", secret: "s", deploy: "deploy" };
 /** Types whose page is the query form alone: a path under their route is
  *  another object's page (`/org/<or-N>` is a role), never one of theirs. */
-const QUERY_ONLY: ReadonlySet<EntityType> = new Set(["proposal", "source", "secret"]);
+const QUERY_ONLY: ReadonlySet<EntityType> = new Set(["proposal", "source", "secret", "deploy"]);
 /** Path segments under a type's route that are other pages, never an id of
  *  that type: `/decisions/stacks/<ds-N>` is a decision stack. */
 const NOT_AN_ID: Partial<Record<EntityType, ReadonlySet<string>>> = { decision: new Set(["stacks"]) };

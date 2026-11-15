@@ -1,10 +1,11 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, afterEach } from "bun:test";
 import {
   COMPUTER_PERMISSION_KINDS,
   OS_PERMISSIONS,
   OS_PERMISSION_KINDS,
   browserPermissionToReadiness,
   getComputerPermissions,
+  getOsPermissions,
   isPermissionActionable,
   permissionActionLabel,
   permissionHint,
@@ -93,5 +94,33 @@ describe("the codecast computer grants", () => {
 
   test("a browser has no helper, so it reports nothing to set up", async () => {
     expect(await getComputerPermissions()).toEqual({ computerAccessibility: "n/a", computerScreen: "n/a" });
+  });
+});
+
+describe("getOsPermissions in a browser", () => {
+  const g = globalThis as any;
+  const hadNavigator = Object.getOwnPropertyDescriptor(g, "navigator");
+  const hadNotification = Object.getOwnPropertyDescriptor(g, "Notification");
+  afterEach(() => {
+    if (hadNavigator) Object.defineProperty(g, "navigator", hadNavigator); else delete g.navigator;
+    if (hadNotification) Object.defineProperty(g, "Notification", hadNotification); else delete g.Notification;
+  });
+  const install = (states: Record<string, PermissionState | Error>, getter: () => string) => {
+    Object.defineProperty(g, "navigator", { configurable: true, value: { permissions: { query: async ({ name }: { name: string }) => {
+      const st = states[name];
+      if (st instanceof Error || st === undefined) throw st ?? new Error("unsupported");
+      return { state: st };
+    } } } });
+    Object.defineProperty(g, "Notification", { configurable: true, value: { get permission() { return getter(); } } });
+  };
+
+  test("notifications come from the Permissions API, never the blocking getter", async () => {
+    install({ notifications: "granted", microphone: "prompt", camera: "denied" }, () => { throw new Error("read Notification.permission"); });
+    expect(await getOsPermissions()).toEqual({ notifications: "granted", microphone: "ask", camera: "off", screen: "n/a" });
+  });
+
+  test("the getter answers when the query cannot", async () => {
+    install({ notifications: new Error("unsupported"), microphone: "granted", camera: "granted" }, () => "denied");
+    expect((await getOsPermissions()).notifications).toBe("off");
   });
 });

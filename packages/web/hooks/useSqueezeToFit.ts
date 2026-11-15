@@ -38,6 +38,25 @@ export function applySqueeze(row: HTMLElement, maxLevel: number): number {
   return maxLevel;
 }
 
+/** Marks an out-of-flow descendant (a dropdown, a results panel) whose
+ *  content cannot change what fits the row, so its churn measures nothing. */
+export const SQUEEZE_SKIP_ATTR = "data-squeeze-skip";
+
+const inSkipped = (node: Node | null): boolean => {
+  const el = node && (node.nodeType === 1 ? (node as Element) : node.parentElement);
+  return !!el?.closest(`[${SQUEEZE_SKIP_ATTR}]`);
+};
+
+/** Whether a batch of mutations may change what fits the row. */
+export function mutationsAffectRow(records: readonly MutationRecord[]): boolean {
+  return records.some((r) => {
+    if (inSkipped(r.target)) return false;
+    if (r.type !== "childList") return true;
+    const nodes = [...Array.from(r.addedNodes), ...Array.from(r.removedNodes)];
+    return !nodes.length || !nodes.every((n) => n.nodeType === 1 && (n as Element).hasAttribute(SQUEEZE_SKIP_ATTR));
+  });
+}
+
 export function useSqueezeToFit(
   rowRef: RefObject<HTMLElement | null>,
   maxLevel: number,
@@ -66,7 +85,7 @@ export function useSqueezeToFit(
       schedule();
     });
     ro.observe(row);
-    const mo = typeof MutationObserver === "undefined" ? null : new MutationObserver(schedule);
+    const mo = typeof MutationObserver === "undefined" ? null : new MutationObserver((records) => { if (mutationsAffectRow(records)) schedule(); });
     mo?.observe(row, { childList: true, subtree: true, characterData: true });
     // A style or theme switch (a class on <html>: Modern's larger title and
     // pills) restyles the row without touching it or its width, so the root's
