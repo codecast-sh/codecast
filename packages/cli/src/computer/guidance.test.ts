@@ -125,19 +125,18 @@ describe("the Computer section describes the binary that ships with it", () => {
 
   test("the permission rows teach the raise, not just the read", () => {
     // Bare `permissions` reads and shows nothing since the read was split from
-    // the raise (ct-49667). A row that stops at the read leaves an agent
-    // reading `not-granted` forever, so each of the three failures a missing
-    // grant produces has to name the flag that opens the pane.
+    // the raise (ct-49667), and agents never raise it themselves: the setup card
+    // under the failing command walks the human through the grant (9c70cd97a).
+    // A row that stops at the read leaves an agent reading `not-granted`
+    // forever, so each of the three failures a missing grant produces has to
+    // send the agent to that card.
     for (const code of ["permission_denied", "screenshot_failed", "accessibility_error"]) {
       const row = BODY.match(new RegExp(`^\\| \`${code}\` \\| (.+) \\|$`, "m"))?.[1] ?? "";
-      expect(`${code} names --open-settings: ${row.includes("--open-settings")}`).toBe(
-        `${code} names --open-settings: true`,
-      );
-      expect(`${code} says to ask the human: ${/ask the human/.test(row)}`).toBe(
-        `${code} says to ask the human: true`,
-      );
+      expect(`${code} names the setup card: ${row.includes("setup card")}`).toBe(`${code} names the setup card: true`);
+      expect(`${code} says the human grants it: ${/the human/.test(row)}`).toBe(`${code} says the human grants it: true`);
     }
   });
+
 
   test("teaches the rules whose cost lands on the human, not on a retry", () => {
     // Each is a decision the design made that an agent cannot infer from the

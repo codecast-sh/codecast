@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShallow } from "zustand/react/shallow";
 import {
   AGENT_MODEL_CONFIG,
@@ -117,7 +118,7 @@ export function ModelEffortRows({
     const next = cfg && stepEffortLevel(cfg.efforts, effort, dir);
     if (next) onSelect({ effort: next });
   };
-  useEffect(() => {
+  useWatchEffect(() => {
     const menu = stepsEffort ? rowsRef.current?.closest<HTMLElement>("[role=menu]") : null;
     if (!menu) return;
     const onKey = (e: KeyboardEvent) => {
@@ -269,12 +270,13 @@ export function ModelEffortRows({
 function useRecent(at: number | undefined, ms: number): boolean {
   const [, tick] = useState(0);
   const left = at ? at + ms - Date.now() : 0;
-  useEffect(() => {
-    if (left <= 0) return;
+  const recent = left > 0;
+  useWatchEffect(() => {
+    if (!recent) return;
     const t = setTimeout(() => tick((n) => n + 1), left);
     return () => clearTimeout(t);
-  }, [at, left > 0]);
-  return left > 0;
+  }, [at, recent]);
+  return recent;
 }
 
 /**

@@ -189,7 +189,7 @@ describe("nobody at the keyboard", () => {
     const r = await run(["setup"], { isTty: false, confirm: true, grants: [NONE] });
     expect(r.harness.calls).toEqual(["materialize", "read"]);
     expect(r.text).toContain("This is not a terminal");
-    expect(r.text).toContain("pass --yes");
+    expect(r.text).toContain("Pass --yes");
   });
 
   test("--yes opens without asking, which is the only thing it changes", async () => {
