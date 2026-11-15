@@ -70,7 +70,7 @@ beforeAll(async () => {
     useConvex: () => ({ action: (ref: unknown, args: Record<string, unknown>) => { calls.actions.push([ref, args]); return Promise.resolve({ session: { conversation_id: "newconv", short_id: "jx7new1", agent_type: args.agent_type } }); } }),
   }));
   mock.module("../../hooks/useDynamicModels", () => ({ useDynamicModels: () => ({ dynamic: false, featured: [], all: [] }) }));
-  mock.module("../../hooks/useLiveSessionMeta", () => ({ useLiveSessionMeta: () => liveMeta }));
+  mock.module("../../hooks/useLiveSessionMeta", () => ({ useLiveSessionMeta: () => liveMeta, liveSessionMetaOf: () => liveMeta }));
   mock.module("../../hooks/useSyncAgentDefinitions", () => ({ useAgentDefinitions: () => [] }));
   mock.module("../../lib/conversationProcessor", () => ({ formatModel: (m: string) => m }));
   const realAgentActions = await import("../../lib/sessionAgentActions");

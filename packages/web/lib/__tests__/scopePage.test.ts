@@ -123,9 +123,9 @@ describe("the panel answers who acts next (F4.3)", () => {
   test("the group order is the inbox's rendered order", () => {
     // GlobalSessionPanel renders its status sections top down as "who acts
     // next"; the panel must not restate that order differently.
-    // The status branch runs from Questions to the empty state.
+    // The status branch runs from the decision queue to the empty state.
     const file = readFileSync(join(import.meta.dir, "../../components/GlobalSessionPanel.tsx"), "utf8");
-    const src = file.slice(file.indexOf('renderSection("Decisions"'), file.indexOf("sortedSessions.length === 0"));
+    const src = file.slice(file.indexOf("<InboxDecisionQueue"), file.indexOf("sortedSessions.length === 0"));
     const STATE: Record<string, string> = { NeedsYou: "needs_input", Done: "done", Working: "working", Dormant: "dormant" };
     const rendered = [...src.matchAll(/renderSection\("(Needs You|Done|Working|Dormant)"/g)]
       .map((m) => STATE[m[1].replace(" ", "")]);
