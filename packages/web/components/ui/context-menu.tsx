@@ -96,15 +96,20 @@ export function ContextMenu<T>({
   // virtualized row) would otherwise become the anchor's containing block —
   // position:fixed goes ancestor-relative under transform — and drag the menu
   // hundreds of pixels off the cursor.
+  // Not modal: a modal menu locks <body> scroll and hides the rest of the page
+  // from assistive tech on open and undoes both on close, and each of those
+  // attribute writes restyles the whole page (two full recalcs on every close).
+  // A non-modal menu lets the click that dismisses it through to whatever was
+  // under the pointer; that click only closes the menu, as it did before.
   return createPortal(
-    <DropdownMenu open onOpenChange={(o) => !o && close()}>
+    <DropdownMenu open modal={false} onOpenChange={(o) => !o && close()}>
       <DropdownMenuTrigger asChild>
         <span
           aria-hidden
           style={{ position: "fixed", left: menu.x, top: menu.y, width: 1, height: 1, pointerEvents: "none" }}
         />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" sideOffset={2} collisionPadding={8} className={SURFACE}>
+      <DropdownMenuContent align="start" sideOffset={2} collisionPadding={8} className={SURFACE} onPointerDownOutside={swallowDismissingClick}>
         {children(menu.payload)}
       </DropdownMenuContent>
     </DropdownMenu>,

@@ -7,7 +7,7 @@ import { ActivityIndicator, StyleSheet, TouchableOpacity, View as RNView } from 
 import { Stack } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { formatCountdown, peggedWindow, worstUsagePercent } from '@codecast/shared/contracts';
+import { accountDisplayName, formatCountdown, peggedWindow, worstUsagePercent } from '@codecast/shared/contracts';
 import { profileHasSetupToken, profileNeedsSignIn } from '@codecast/convex/convex/ccAccountsShared';
 import { machineSwitchBlock, profileIsFleetAccount } from '@codecast/web/lib/machineAccountSwitch';
 import { useMachineSwitchState } from '@codecast/web/hooks/useMachineSwitchState';
@@ -79,7 +79,7 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
     });
     const items = [];
     if (!blocked && saved) {
-      items.push({ label: `Switch ${machine} to ${p.name}`, onPress: () => void sw.request(p.name, p.email) });
+      items.push({ label: `Switch ${machine} to ${accountDisplayName(p)}`, onPress: () => void sw.request(p.name, p.email) });
     }
     if (usable) {
       // The current login signs in on the machine's own keychain; any other
@@ -87,10 +87,10 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
       items.push({ label: 'Sign in again', onPress: () => void startSignIn(current && !p.login_expired_at ? undefined : p.name) });
     }
     if (items.length === 0) {
-      appAlert(p.name, blocked?.label ?? `${machine} is offline.`);
+      appAlert(accountDisplayName(p)!, blocked?.label ?? `${machine} is offline.`);
       return;
     }
-    showActionSheet(p.email ?? p.name, items);
+    showActionSheet(accountDisplayName(p)!, items);
   };
 
   const codex = device.codex_accounts?.profiles?.[0];
@@ -100,7 +100,7 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
         {rows.map((p) => (
           <AccountRow
             key={p.name}
-            label={p.email ?? p.name}
+            label={accountDisplayName(p)!}
             usage={p.usage}
             now={now}
             current={profileIsFleetAccount(p, fleet)}

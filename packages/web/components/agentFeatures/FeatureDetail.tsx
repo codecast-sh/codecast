@@ -24,15 +24,15 @@ export function FeatureDialog({
   slug,
   feature,
   control,
-  setup,
+  path,
   onClose,
 }: {
   slug: string | null;
   /** The catalog entry; null for Stable context, which is not one. */
   feature: SnippetDescriptor | null;
   control: React.ReactNode;
-  /** The one-time step on the machine a feature needs before agents can use it. */
-  setup?: React.ReactNode;
+  /** The steps through the feature (FeaturePath); when present the explainer folds under it. */
+  path?: React.ReactNode;
   onClose: () => void;
 }) {
   const e = slug ? FEATURE_EXPLAINERS[slug] : undefined;
@@ -62,22 +62,25 @@ export function FeatureDialog({
         </div>
 
         <div className="scrollbar-auto min-h-0 flex-1 overflow-y-auto">
-          <FeatureVignette slug={slug} className="h-[210px] rounded-none border-0 border-b border-sol-border/50 text-meta" />
+          {path && <div className="border-b border-sol-border/50 px-6 py-6">{path}</div>}
 
-          {setup && <div className="border-b border-sol-border/50 px-6 py-5">{setup}</div>}
+          <Explainer folded={!!path}>
+          <FeatureVignette slug={slug} className={`h-[210px] rounded-none border-0 border-b border-sol-border/50 text-meta ${path ? "border-t" : ""}`} />
 
           <div className="grid gap-x-8 gap-y-6 px-6 py-6 sm:grid-cols-2">
             <ExplainList title="What you'll see" items={e.youSee} dot={tone.dot} />
             <ExplainList title="When agents use it" items={e.agentsUse} dot={tone.dot} />
           </div>
 
-          <div className="mx-6 rounded-lg border border-sol-border/70 bg-sol-bg-alt/50 px-4 py-3">
-            <div className="text-meta text-sol-text-dim">Try asking</div>
-            <p className="mt-1 text-[13.5px] text-sol-text">&ldquo;{e.tryIt}&rdquo;</p>
-          </div>
+          {!path && (
+            <div className="mx-6 rounded-lg border border-sol-border/70 bg-sol-bg-alt/50 px-4 py-3">
+              <div className="text-meta text-sol-text-dim">Try asking</div>
+              <p className="mt-1 text-[13.5px] text-sol-text">&ldquo;{e.tryIt}&rdquo;</p>
+            </div>
+          )}
 
           {(e.surface || deep) && (
-            <div className="flex flex-wrap gap-x-5 gap-y-2 px-6 pt-5 text-xs">
+            <div className={`flex flex-wrap gap-x-5 gap-y-2 px-6 text-xs ${path ? "" : "pt-5"}`}>
               {e.surface && (
                 <button
                   type="button"
@@ -121,9 +124,23 @@ export function FeatureDialog({
             </details>
           )}
           {!feature?.section && <div className="h-6" />}
+          </Explainer>
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** What the feature is, in full: open on its own, folded under the steps when there are some. */
+function Explainer({ folded, children }: { folded: boolean; children: React.ReactNode }) {
+  if (!folded) return <>{children}</>;
+  return (
+    <details className="group/how">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-6 py-4 text-xs font-medium text-sol-text-muted hover:text-sol-text">
+        <span className="inline-block transition-transform group-open/how:rotate-90">›</span> How it works
+      </summary>
+      {children}
+    </details>
   );
 }
 

@@ -32,8 +32,17 @@ const CALM_FRAMES = 6;
 const CAP_MS = 5000;
 
 export function probeTouchEnd(e: GestureResponderEvent) {
-  const t0 = e.nativeEvent.timestamp;
-  const seen = performance.now();
+  watchFrames(e.nativeEvent.timestamp, performance.now());
+}
+
+/** The same line for a gesture the root never sees as a touch end (a
+ *  gesture-handler swipe claims its touch): call it where the gesture commits. */
+export function probeGesture() {
+  const now = performance.now();
+  watchFrames(now, now);
+}
+
+function watchFrames(t0: number, seen: number) {
   const id = ++seq;
   const from = route;
   for (const k in renders) delete renders[k];

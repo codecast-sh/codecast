@@ -10,7 +10,10 @@ const SKIN_TONE_RE = /::skin-tone-[2-6]$/;
 const SKIN_TONE_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/gu;
 const VARIATION_SELECTOR_RE = /️/g;
 
-const NAME_BY_EMOJI: Record<string, string> = (() => {
+// Built on first use: the table is only read when a reaction goes out to
+// Slack, and building it at import cost every app boot ~10ms.
+let nameByEmoji: Record<string, string> | null = null;
+const namesByEmoji = (): Record<string, string> => nameByEmoji ??= (() => {
   const out: Record<string, string> = {};
   // First name wins, so the canonical Slack names (listed first per glyph) are
   // what outbound reactions carry.
@@ -34,6 +37,7 @@ export function shortcodeToEmoji(name: string): string | null {
  *  has no name we know for it. Skin tones and variation selectors are dropped
  *  first so 👍🏽 reacts as +1. */
 export function emojiToShortcode(emoji: string): string | null {
+  const NAME_BY_EMOJI = namesByEmoji();
   const direct = NAME_BY_EMOJI[emoji];
   if (direct) return direct;
   const stripped = emoji.replace(SKIN_TONE_MODIFIER_RE, "").replace(VARIATION_SELECTOR_RE, "");
