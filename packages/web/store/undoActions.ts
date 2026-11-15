@@ -17,6 +17,37 @@ export { USER_REST_LABEL, undoAsOne };
 
 // How long a restored row may take to mount before its entrance is dropped.
 const ENTER_WAIT_MS = 1000;
+// The sessionEnter / sessionDismiss durations in globals.css.
+const ENTER_MS = 250;
+const EXIT_MS = 200;
+
+/**
+ * Glide the rows after each of `rows` that are on screen from `shift` px off
+ * their place back onto it, in step with the row's own clip (same duration and
+ * easing as its keyframe). The rows' heights change at once, so the list lays
+ * out once, and the glide is a transform the compositor runs without
+ * repainting a row; animating a row's height moved every row below it on
+ * every frame, and each of them repainted. A row below several of `rows`
+ * glides by their sum. Reads every box before writing anything.
+ */
+function glideFollowers(rows: { row: HTMLElement; shift: number }[], duration: number): Animation[] {
+  const live = rows.filter((r) => r.shift && typeof r.row.animate === "function");
+  if (live.length === 0 || matchMedia("(prefers-reduced-motion: reduce)").matches) return [];
+  let scroller: Element | null = live[0]!.row.parentElement;
+  while (scroller && scroller !== document.body && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+  const bottom = (scroller ?? document.documentElement).getBoundingClientRect().bottom;
+  const reach = live.reduce((sum, r) => sum + Math.abs(r.shift), 0);
+  const shifts = new Map<Element, number>();
+  for (const { row, shift } of live) {
+    for (let n: Element | null = row; n && n !== scroller && n !== document.body; n = n.parentElement) {
+      for (let s = n.nextElementSibling; s; s = s.nextElementSibling) {
+        if (s.getBoundingClientRect().top - reach > bottom) break;
+        if (!/^(absolute|fixed)$/.test(getComputedStyle(s).position)) shifts.set(s, (shifts.get(s) ?? 0) + shift);
+      }
+    }
+  }
+  return [...shifts].map(([el, shift]) => el.animate([{ transform: `translateY(${shift}px)` }, { transform: "none" }], { duration, easing: "ease-out" }));
+}
 
 /**
  * Play the enter animation on a session's row when it next mounts. Call it
@@ -41,14 +72,11 @@ export function animateSessionEnter(id: string, leaving?: Element | null) {
     if (!card) return;
     stop();
     const target = (card.parentElement ?? card) as HTMLElement;
-    // Drive the keyframe off the row's real height (it may hold a parent card
-    // plus subagent cards) so it never coasts on a short row or clips a tall one.
-    target.style.setProperty("--row-h", `${target.offsetHeight}px`);
+    // The row takes its full height at once and is unclipped top down; the
+    // rows below start where they were and glide down to make room.
+    glideFollowers([{ row: target, shift: -target.offsetHeight }], ENTER_MS);
     target.classList.add("session-entering");
-    target.addEventListener("animationend", () => {
-      target.classList.remove("session-entering");
-      target.style.removeProperty("--row-h");
-    }, { once: true });
+    target.addEventListener("animationend", () => target.classList.remove("session-entering"), { once: true });
   });
   const timer = setTimeout(() => stop(), ENTER_WAIT_MS);
   function stop() {
@@ -64,36 +92,42 @@ export type HideSessionOpts = { hidden?: boolean };
 
 type SessionExit = { card: Element | null; done: Promise<void>; cutShort: () => void };
 
-/** Collapse a session card out of its list. Done at once when the card is not
- *  on screen. `cutShort` stops a collapse still running and shows the card
- *  whole again (the write it waited for ran early). */
-function startSessionExit(id: string): SessionExit {
-  const card = typeof document === "undefined" ? null : document.querySelector(`[data-session-id="${id}"]`);
-  const wrapper = card?.parentElement as HTMLElement | null | undefined;
-  if (!wrapper) return { card: null, done: Promise.resolve(), cutShort: () => {} };
-  // Measure the real height (parent + any subagent rows) so the collapse
-  // animates the whole stack, not just the first 80px the old cap allowed.
-  wrapper.style.setProperty('--row-h', `${wrapper.offsetHeight}px`);
-  wrapper.classList.add('session-dismissing');
-  let finished = false;
-  const done = new Promise<void>((resolve) => {
-    const finish = () => {
-      finished = true;
-      resolve();
-    };
-    wrapper.addEventListener('animationend', finish, { once: true });
-    setTimeout(finish, 250);
+/** Collapse session cards out of their list, all in one frame. Done at once
+ *  for a card not on screen. `cutShort` stops a collapse still running and
+ *  shows the card whole again (the write it waited for ran early). */
+function startSessionExit(ids: string[]): SessionExit[] {
+  const cards = ids.map((id) => (typeof document === "undefined" ? null : document.querySelector(`[data-session-id="${id}"]`)));
+  // The real height (parent + any subagent rows): the row gives it back to the
+  // list at once (a negative margin) and the rows below glide up into it.
+  const rows = cards.flatMap((card) => {
+    const row = card?.parentElement as HTMLElement | null | undefined;
+    return row ? [{ row, shift: row.offsetHeight }] : [];
   });
-  return {
-    card,
-    done,
-    cutShort: () => {
-      if (finished) return;
-      finished = true;
-      wrapper.classList.remove('session-dismissing');
-      wrapper.style.removeProperty('--row-h');
-    },
+  const glides = glideFollowers(rows, EXIT_MS);
+  let finished = false;
+  const cutShort = () => {
+    if (finished) return;
+    finished = true;
+    for (const glide of glides) glide.cancel();
+    for (const { row } of rows) {
+      row.classList.remove("session-dismissing");
+      row.style.removeProperty("--row-h");
+    }
   };
+  return cards.map((card) => {
+    const row = rows.find((r) => r.row === card?.parentElement);
+    if (!row) return { card: null, done: Promise.resolve(), cutShort: () => {} };
+    row.row.style.setProperty("--row-h", `${row.shift}px`);
+    row.row.classList.add("session-dismissing");
+    const done = new Promise<void>((resolve) => {
+      row.row.addEventListener("animationend", () => resolve(), { once: true });
+      // Only for a collapse that never plays (the row left the page): a busy
+      // first frame starts the keyframe late, and a timer this short would
+      // commit the write, and remove the row, in the middle of it.
+      setTimeout(resolve, EXIT_MS + 400);
+    });
+    return { card, done: done.then(() => { finished = true; }), cutShort };
+  });
 }
 
 /**
@@ -105,7 +139,7 @@ function startSessionExit(id: string): SessionExit {
  * entry and letting this one land over its redo.
  */
 function afterSessionExits(ids: string[], commit: (leaving: Map<string, Element | null>) => void): Promise<void> {
-  const exits = ids.map((id) => [id, startSessionExit(id)] as const);
+  const exits = startSessionExit(ids).map((exit, i) => [ids[i]!, exit] as const);
   const leaving = new Map(exits.map(([id, exit]) => [id, exit.card]));
   const run = deferUndoGesture(() => {
     for (const [, exit] of exits) exit.cutShort();
