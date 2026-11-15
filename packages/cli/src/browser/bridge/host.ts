@@ -2282,7 +2282,7 @@ function hostClientsReader(): () => HostClients | undefined {
  */
 async function remoteComputerFace(log: (line: string) => void): Promise<Pick<Parameters<typeof startBridgeHost>[0], "hostAllowsBrowser" | "computer">> {
   const [{ readHosts, registryFile }, { serveComputerSocket }, { noticeDue }, { createComputerClient }, os, { execFile }] = await Promise.all([
-    import("../cloudHost.js"), import("../../computer/remoteServe.js"), import("../../computer/remoteGrant.js"), import("../../computer/run.js"), import("node:os"), import("node:child_process"),
+    import("../cloudHost.js"), import("../../computer/remoteServe.js"), import("../../computer/remoteGrant.js"), import("../../computer/run.js"), import("node:os"), import("../../proc.js"),
   ]);
   const hosts = fileReader(registryFile(), () => readHosts());
   const entry = (id: string) => hosts()?.find((h) => h.id === id);

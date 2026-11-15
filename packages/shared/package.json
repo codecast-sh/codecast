@@ -138,6 +138,7 @@
     "./render/typeScale": "./render/typeScale.ts",
     "./render/codeRuns": "./render/codeRuns.ts",
     "./tasks": "./tasks/index.ts",
+    "./tasks/resumeSources": "./tasks/resumeSources.ts",
     "./docs": "./docs/index.ts",
     "./docs/drafting": "./docs/drafting.ts",
     "./artifacts": "./artifacts/index.ts",

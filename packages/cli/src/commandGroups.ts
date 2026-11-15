@@ -139,7 +139,6 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
   },
   {
     token: "cloud",
-    hasOptions: true,
     description: `Move this laptop's environment to a cloud machine and report what made it
 
   cast cloud                    carry repos, uncommitted work, tools, agent config and logins to

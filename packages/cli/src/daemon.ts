@@ -11786,9 +11786,22 @@ async function ancestorTranscriptSessionIds(pids: number[]): Promise<Map<number,
   return byPid;
 }
 
-function transcriptStartedAt(filePath: string): number {
-  const timestamp = readFileHead(filePath, 512).match(/"timestamp"\s*:\s*"([^"]+)"/)?.[1];
-  return timestamp ? Date.parse(timestamp) : NaN;
+/** The first top-level `timestamp` in a transcript. Claude Code opens with
+ *  untimed metadata lines and can put a SessionStart hook attachment of tens
+ *  of kilobytes before the first timed record, so this parses whole lines
+ *  rather than matching a fixed prefix (which also sees timestamps quoted
+ *  inside content). */
+export function transcriptStartedAt(filePath: string): number {
+  for (const line of readFileHeadLines(filePath, 16).split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const timestamp = (JSON.parse(line) as { timestamp?: unknown }).timestamp;
+      if (typeof timestamp === "string") return Date.parse(timestamp);
+    } catch {
+      // A torn last line: keep looking at the ones before it.
+    }
+  }
+  return NaN;
 }
 
 async function trackTmuxSpawns(
@@ -31200,16 +31213,6 @@ async function main(): Promise<void> {
     shouldRun: () => !isRemoteDevice() && isCloudMirrorEnabled(readConfig()),
     log: (m) => log(`[MIRROR] ${m}`),
   });
-  // The laptop Chrome link (cloud/browserLink.ts): every managed cloud host
-  // that is up reaches this laptop's bridge, so its sessions drive the
-  // human's Chrome; a host that goes away ends its link and its token.
-  if (!isRemoteDevice()) {
-    void import("./cloud/browserLink.js").then(({ BrowserLinks, BROWSER_LINK_TICK_MS }) => {
-      const links = new BrowserLinks({ log: (m, level) => log(m, level) });
-      setTimeout(() => { void links.tick(); }, 68_000 * bootPacing.fanoutOffsetScale);
-      setInterval(() => { void links.tick(); }, BROWSER_LINK_TICK_MS);
-    }).catch((err) => log(`[BROWSER-LINK] did not start: ${err instanceof Error ? err.message : String(err)}`));
-  }
   // The opt-in SSH agent bridge (cloud/agentBridge.ts), on the same tick.
   setTimeout(() => { maintainAgentBridges().catch(() => {}); }, 66_000 * bootPacing.fanoutOffsetScale);
   setInterval(() => { maintainAgentBridges().catch(() => {}); }, AGENT_BRIDGE_TICK_MS);

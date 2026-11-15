@@ -16,7 +16,7 @@
  */
 
 import * as fs from "node:fs";
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess } from "../proc.js";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, spawnSync } from "../proc.js";

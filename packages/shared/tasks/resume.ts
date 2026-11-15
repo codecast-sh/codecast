@@ -9,12 +9,7 @@ import { escapeForeignControlChars, fenceForeignText, fenceNonce, inlineForeignT
 import { formatRelative } from "../time";
 import { blockerLabel, blockerWaitingLabel, failedWaitAdvice, isFailedWait, taskBlockerLine, taskRefLine, type Blocker, type WaitLabelOptions } from "./graph";
 
-/** The SessionStart sources that lose the conversation the task lived in. */
-const TASK_RESUME_SOURCES = ["compact", "resume"] as const;
-
-export function restoresTaskContext(source: unknown): boolean {
-  return (TASK_RESUME_SOURCES as readonly unknown[]).includes(source);
-}
+export { restoresTaskContext } from "./resumeSources";
 
 type TaskRef = { short_id: string; title: string; status: string };
 

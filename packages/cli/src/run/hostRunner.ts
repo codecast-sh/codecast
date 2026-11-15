@@ -20,7 +20,7 @@
  * Ideas from pandora (MIT): pandora/engine/runner.py, pandora/executor/incus.py.
  */
 
-import { runnerSlots, type SlotMeta } from "./runnerSlots.js";
+import { runnerSlots, type SlotMeta, type SlotsCtx } from "./runnerSlots.js";
 
 export type RunPhase = "queued" | "preparing" | "running" | "collecting" | "done";
 
@@ -96,14 +96,16 @@ export async function hostRunnerMain(args: string[], parts: { slots: typeof runn
   const fs = gbm("node:fs") as typeof import("node:fs");
   const path = gbm("node:path") as typeof import("node:path");
   const os = gbm("node:os") as typeof import("node:os");
-  const cp = gbm("node:child_process") as typeof import("node:child_process");
+  const cp = gbm("node:child_process") as SlotsCtx["cp"];
   const crypto = gbm("node:crypto") as typeof import("node:crypto");
 
   // The platform comes from os, never from the process object: `bun build --compile` bakes the laptop's values into this source,
   // so a runner shipped from a Mac would think every Linux host is a Mac. os answers at run time, on the host.
   const PLATFORM = os.platform();
   const ARCH = os.arch();
-  const ROOT = process.env.CAST_RUN_ROOT || path.join(os.homedir(), ".codecast", "run");
+  // The CLI's state directory, resolved here because this body cannot import codecastDir().
+  const STATE_DIR = process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  const ROOT = process.env.CAST_RUN_ROOT || path.join(STATE_DIR, "run");
   const RUNS = path.join(ROOT, "runs");
   const ID_RE = /^r[a-z0-9]{6,24}$/;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -354,7 +356,7 @@ export async function hostRunnerMain(args: string[], parts: { slots: typeof runn
     });
   };
 
-  const leaseFile = (id: string) => path.join(os.homedir(), ".codecast", "host-keepalive", `cast-run-${id}`);
+  const leaseFile = (id: string) => path.join(STATE_DIR, "host-keepalive", `cast-run-${id}`);
   /** Long synchronous steps (an install) block the renew timer, so they take a lease long enough to cover themselves first. */
   const renewLease = (id: string, seconds = 300) => {
     try {

@@ -33,6 +33,8 @@ const NOT_INSTRUCTIONS: Record<string, readonly string[]> = {
   "org-roles-standing.md": ["role wakes"],
   // An open proposal: commands that do not exist yet.
   "agent-comms.md": ["hold", "claim"],
+  // The project memory commands are written in the pl-1033 integration and not on main yet; the entry goes when they land.
+  "session-projects.md": ["project remember", "project memory", "project forget"],
   // The team vault's CLI is still being built (pl-941); the entry goes when `cast vault` lands.
   "vault.md": ["vault"],
 };

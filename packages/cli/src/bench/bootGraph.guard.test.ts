@@ -301,8 +301,14 @@ describe("command groups stay off the boot graph", () => {
     // 359 the same day: sessionSummaryExtract.ts, split out of formatter.ts for
     // its max-lines cap, no new code. 360 the same day: contracts/inboxMembership.ts,
     // the membership identity rules split out of contracts/inboxProjection.ts
-    // for its max-lines pin, no new code.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(360);
+    // for its max-lines pin, no new code. 363 on 2026-11-14: imageDownscale.ts,
+    // the image size cap split out of syncService.ts so screenshot writers stop
+    // loading the sync client; contracts/projectContext.ts, the project block
+    // every session start renders (pl-1033); tasks/resumeSources.ts, the one
+    // predicate the start hook needs, split out of the task graph. 365 the same
+    // day: museTranscript.ts (out of parser.ts) and contracts/sendArrival.ts
+    // (out of contracts/machineMessages.ts), both for max-lines, no new code.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(365);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -417,7 +423,11 @@ describe("command groups stay off the boot graph", () => {
     // time against fc5339c41: send receipts +10 (arrival states, intent, the
     // messaging snippet), cast run +9 (the [run] manifest table, the run group),
     // check-exit +3 (exit codes, hint line), delivery ids +2, source_uuid +1.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4700);
+    // 4712 (2026-11-14): the 122-commit deploy after b398c827c, mostly shared
+    // contracts the CLI already loaded: machineMessages +7, projectContext +7
+    // (pl-1033), session send +5, the workspace manifest +4, snippets +3,
+    // replay +5; offset by index.ts and others shrinking.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4712);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -611,7 +621,14 @@ describe("command groups stay off the boot graph", () => {
     // its natural home, sits at the max-lines cap. 596 after headlessRuns.ts
     // (2026-11-14): the one rule that keeps headless agent runs out of the
     // inbox, read by the daemon's create paths and its repair of leaked rows.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(596);
+    // 601 on 2026-11-14: imageDownscale.ts and browser/formatBytes.ts, leaves
+    // split out so screenshot writers load less, no new code;
+    // browser/codecastMachine.ts, describe/start/stop for a host on codecast's
+    // account (`cast cloud`); contracts/projectContext.ts and
+    // tasks/resumeSources.ts, read by stable context (the leaf keeps the task
+    // graph's 12 files off this graph). 603 the same day: museTranscript.ts and
+    // contracts/sendArrival.ts, max-lines splits, no new code.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(603);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

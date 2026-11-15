@@ -18,8 +18,9 @@ import { codeLines } from "./test-helpers/sourceRegion.js";
 const THIS_FILE = fileURLToPath(import.meta.url);
 const SRC = path.resolve(path.dirname(THIS_FILE));
 
-/** The resolver itself, and the test helper that names the real directory on purpose. */
-const EXEMPT = new Set(["codecastDir.ts", path.join("test-helpers", "codecastDir.ts")]);
+/** The resolver itself, the test helper that names the real directory on purpose,
+ *  and the `cast run` host runner, which ships as source and cannot import it. */
+const EXEMPT = new Set(["codecastDir.ts", path.join("test-helpers", "codecastDir.ts"), path.join("run", "hostRunner.ts")]);
 
 const HOME = String.raw`(?:process\.env\.HOME(?:\s*\|\|\s*"[^"]*")?|os\.homedir\(\)|homedir\(\)|homeDir\(\))`;
 

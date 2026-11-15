@@ -13,7 +13,7 @@ export interface SlotMeta { owner?: string; ownerPid?: number; ownerStart?: stri
 export interface SlotsCtx {
   fs: typeof import("node:fs");
   path: typeof import("node:path");
-  cp: typeof import("node:child_process");
+  cp: Pick<typeof import("../proc.js"), "spawn" | "spawnSync">;
   crypto: typeof import("node:crypto");
   sh: (cmd: string, argv: string[], opts?: { cwd?: string; input?: string; timeoutMs?: number }) => { ok: boolean; status: number | null; out: string; err: string };
   must: (cmd: string, argv: string[], what: string, cwd?: string) => string;

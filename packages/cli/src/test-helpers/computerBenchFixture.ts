@@ -8,7 +8,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "../proc.js";
+import { isolateCodecastDir } from "./codecastDir.js";
 
 import { ComputerClient } from "../computer/client.js";
 import { helperExecutablePath } from "../computer/helperApp.js";
@@ -77,10 +78,7 @@ export function fixtureStatus(fixture: Fixture): Record<string, unknown> {
  * installed helper's instance.
  */
 export function fixtureClient(helper?: string): ComputerClient {
-  if (helper) {
-    fs.mkdirSync(WORK, { recursive: true });
-    process.env.CODECAST_DIR = fs.mkdtempSync(path.join(WORK, "dev-home-"));
-  }
+  if (helper) isolateCodecastDir("cc-bench-dev-home-");
   return new ComputerClient({
     helperLaunch: (socketPath, tokenPath) =>
       helper
