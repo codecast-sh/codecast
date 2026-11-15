@@ -24,6 +24,14 @@ export function ladderRecommendation(d: Pick<SessionDecisionItem, "hops">): numb
   return undefined;
 }
 
+// How many roles on the ladder recommend each option, so an option can say so
+// where it is picked.
+export function ladderRecommenders(d: Pick<SessionDecisionItem, "hops">): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (const h of d.hops ?? []) if (h.recommendation !== undefined) counts.set(h.recommendation, (counts.get(h.recommendation) ?? 0) + 1);
+  return counts;
+}
+
 // The options a recorded answer names, in order: several for a multi or a
 // rank (answer_json), one for a single, none for a typed or form answer.
 export function chosenOptions(d: Pick<SessionDecisionItem, "answer_json" | "answer_index">): number[] {

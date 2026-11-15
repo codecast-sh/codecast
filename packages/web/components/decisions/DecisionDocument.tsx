@@ -13,7 +13,7 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls } from "./DecisionAnswerControls";
 import { RunFallbackLine } from "./RunFallbackLine";
-import { DecisionOptionList } from "./DecisionOptionList";
+import { DecisionOptionList, RecommendedMark } from "./DecisionOptionList";
 import { DecisionDiscussion } from "./DecisionDiscussion";
 import { DecisionBody, DecisionFacts, DecisionLadder, DecisionReport, LeadRecommendation } from "./DecisionSections";
 import { GateRunChip } from "./DecisionCompactCard";
@@ -25,7 +25,7 @@ import { DecisionPager } from "./DecisionPager";
 import { HandoffNote } from "./DecisionParties";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
-import { decisionWaitLabel, waitsOnViewer } from "../../lib/decisionLinks";
+import { decisionWaitLabel, ladderRecommenders, waitsOnViewer } from "../../lib/decisionLinks";
 import { DecisionAnswerPanel, restatesCard, useDecisionAnswering, useDecisionPage } from "./DecisionAnswering";
 import "./decisions.css";
 import { Button } from "../ui/button";
@@ -227,7 +227,7 @@ function DocumentBody({ decision, detail, answerable, pager }: { decision: Sessi
                 ) : undefined}
                 tags={(i) => (
                   <>
-                    {rec === i && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">a lead recommends</span>}
+                    {rec === i && <RecommendedMark count={ladderRecommenders(decision).get(i)} />}
                     {decision.default_option === i && !decision.blocking && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">the agent's default</span>}
                   </>
                 )}

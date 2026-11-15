@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { REPO_ROOT } from '../../paths';
-import { briefVars, findingLines, renderBrief, renderCard, TEMPLATE, verdictOfCommand } from './index';
+import { briefVars, expectedVerdict, findingLines, openFindings, renderBrief, renderCard, TEMPLATE, verdictOfCommand } from './index';
 
 const template = readFileSync(join(REPO_ROOT, TEMPLATE), 'utf8');
 
@@ -45,9 +45,17 @@ describe('reading the verdict', () => {
   });
 });
 
-test('the card is decide.cast Ship card: the first line of the note asks, the rest is its document', () => {
-  const card = renderCard({ task_title: 'X works', branch: 'b' }, 'Ship the fix that makes X work?\nX works now.\nnit a.ts:1 y -> rejected');
-  expect(card).toStartWith('Question: Ship the fix that makes X work?\nIt passed its checks and review.\n\nAnswers:\n1. Ship (Land the change)');
-  expect(card).toEndWith('Document:\nX works now.\nnit a.ts:1 y -> rejected');
-  expect(findingLines(card)).toBe(1);
+test('the card is decide.cast Ship card: the first line of the note asks, the part before --- is its document', () => {
+  const card = renderCard({ task_title: 'X works', branch: 'b' }, 'Ship the fix that makes X work?\nX works now.\n---\nnit a.ts:1 y -> rejected');
+  expect(card).toStartWith('Question: Ship the fix that makes X work?\n\nAnswers:\n1. Ship (Lands it on the main branch)');
+  expect(card).toEndWith('Document:\nX works now.');
+  expect(findingLines(card)).toBe(0);
+});
+
+test('an approve that holds a finding against the branch should have asked for changes', () => {
+  const v = (verdict: 'approve' | 'changes', note: string) => ({ task: 'ct-1', verdict, note });
+  expect(openFindings('Q?\nlow a.ts:1 x\nnit b.ts:2 y -> rejected\nlow c.ts:3 z -> deferred owner=@a due=7d')).toBe(1);
+  expect(expectedVerdict(v('approve', 'Q?\nlow a.ts:1 x'))).toBe('changes');
+  expect(expectedVerdict(v('approve', 'Q?\nlow a.ts:1 x -> fixed'))).toBe('approve');
+  expect(expectedVerdict(v('changes', 'Q?\nlow a.ts:1 x'))).toBe('changes');
 });

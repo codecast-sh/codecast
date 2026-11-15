@@ -4,13 +4,13 @@ digraph decide {
   graph [kind="segment", label="Decide", description="The person who answers for the change says ship, revise or drop", takes="task"]
   start [shape=Mdiamond]
   decide [label="Decide", shape=hexagon, category=review,
-    prompt="$review_question\nIt passed its checks and review.",
+    prompt="$review_question",
     doc="$review_body"]
   ship    [shape=Msquare, label="Ship"]
   revise  [shape=Msquare, label="Revise", stop="Sent back for revision. $human_message"]
   dropped [shape=Msquare, label="Dropped", stop="Dropped at the gate. $human_message"]
   start -> decide
-  decide -> ship    [label="[S] Ship :: Land the change"]
-  decide -> revise  [label="[R] Revise :: Your note goes back to the session that made it"]
-  decide -> dropped [label="[D] Drop :: Leave the change unshipped"]
+  decide -> ship    [label="[S] Ship :: Lands it on the main branch"]
+  decide -> revise  [label="[R] Revise :: Your note goes to the session that made it; the change comes back through review"]
+  decide -> dropped [label="[D] Drop :: Closes it unlanded; the session hears your reason"]
 }

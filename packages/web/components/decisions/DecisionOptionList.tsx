@@ -20,6 +20,11 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 // whose reason sits at its end (an agent's tab: lib/agentTabGuard); a `gated`
 // row carries a fingerprint, since picking it asks for Touch ID first
 // (lib/passkeyPresence useApproveGate).
+/** The ladder's word on an option: "recommended", or how many leads recommend it when more than one does. */
+export function RecommendedMark({ count = 1 }: { count?: number }) {
+  return <span className="text-meta px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan" data-option-recommended={count}>{count > 1 ? `${count} leads recommend` : "recommended"}</span>;
+}
+
 export type OptionTone = "primary" | "picked" | "plain";
 
 /** The asker's own "recommended" mark at the end of an option's label. */

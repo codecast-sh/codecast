@@ -10,11 +10,11 @@ import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { keyScopeHasFocus, keysOwnedElsewhere } from "../shortcuts/keyOwnership";
 import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, decisionDraftKey, type QueueItem } from "../lib/decisionQueue";
 import { isOnThreadRoute } from "../lib/openSessionAtMessage";
-import { decisionHref } from "../lib/decisionLinks";
+import { decisionHref, ladderRecommendation, ladderRecommenders } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { RunFallbackLine } from "./decisions/RunFallbackLine";
 import { DecisionPlace } from "./decisions/DecisionPlace";
-import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
+import { DecisionOptionList, RecommendedMark, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
 import { DecisionDiscussion } from "./decisions/DecisionDiscussion";
@@ -539,6 +539,17 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
     </div>
   );
 
+  // What the leads said, read beside the options they recommend between; a
+  // change card's options sit in its bar, so there the ladder reads in the body.
+  const ladderBlock = detail && detailDecision && detail.ladder.length > 0 ? (
+    <div data-decision-ladder>
+      <div className="decision-kicker">The ladder</div>
+      <DecisionLadder decision={detailDecision} detail={detail} now={now} />
+    </div>
+  ) : null;
+  const recommenders = decisionRow ? ladderRecommenders(decisionRow) : new Map<number, number>();
+  const recommended = decisionRow ? ladderRecommendation(decisionRow) : undefined;
+
   // The reasoning, in the page's body type: the authored context of a
   // `cast decide`, or the detail an AskUserQuestion carries.
   const body = detail && detailDecision && hasDecisionBody(detailDecision, detail) ? <DecisionBody decision={detailDecision} detail={detail} /> : null;
@@ -581,12 +592,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
       {body}
       {card && facts}
       {item.reportSlug && !card && !detail && <PublishedPageEmbed slug={item.reportSlug} decision={decideId} />}
-      {detail && detailDecision && detail.ladder.length > 0 && (
-        <div>
-          <div className="decision-kicker">The ladder</div>
-          <DecisionLadder decision={detailDecision} detail={detail} now={now} />
-        </div>
-      )}
+      {cardBar && ladderBlock}
       {showUnreadable && (
         <div className="text-sm text-sol-text-dim">
           This session is waiting on you, but its question is only visible in its terminal so far.
@@ -629,11 +635,17 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
             keys
             onPick={(n) => { const opt = options[n]; if (opt) answer(opt.index); }}
             // A hosted conversation marks no option before the person picks one.
-            tone={(n) => (n === 0 && !hosted && !held(options[n]?.index ?? -1) ? "primary" : "plain")}
+            // The ladder's pick, else the first, reads as the primary row.
+            tone={(n) => (options[n]?.index === (recommended ?? options[0]?.index) && !hosted && !held(options[n]?.index ?? -1) ? "primary" : "plain")}
             held={(n) => held(options[n]?.index ?? -1)}
             gated={(n) => gated(options[n]?.index ?? -1)}
-            tags={(n) => item.defaultOption === options[n]?.index && (
-              <span className="text-meta px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">proceeding with this</span>
+            tags={(n) => (
+              <>
+                {recommenders.has(options[n]?.index ?? -1) && <RecommendedMark count={recommenders.get(options[n]!.index)} />}
+                {item.defaultOption === options[n]?.index && (
+                  <span className="text-meta px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">proceeding with this</span>
+                )}
+              </>
             )}
           />}
           {/* A permission prompt is answered by Approve/Deny only; an infra
@@ -661,6 +673,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
         </div>
       )}
       {!cardBar && escapeHatch}
+      {!cardBar && ladderBlock && <div className="mt-6">{ladderBlock}</div>}
     </div>
   );
 

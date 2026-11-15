@@ -5,10 +5,10 @@ import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp, Check, Square, CheckSquare } from "lucide-react";
 import type { SessionDecisionItem, DecisionAnswerInput } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { DecisionOptionList, TypeAnswerButton } from "./DecisionOptionList";
+import { DecisionOptionList, RecommendedMark, TypeAnswerButton } from "./DecisionOptionList";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useDecisionDraft, useDecisionDraftText } from "../../hooks/useDecisionDraft";
-import { chosenOptions } from "../../lib/decisionLinks";
+import { chosenOptions, ladderRecommenders } from "../../lib/decisionLinks";
 import { ANSWER_WORDS, answerView, buildDecisionAnswer, moveInOrder, togglePicked, type AnswerDraft } from "../../lib/decisionAnswer";
 import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeCardView";
 import { PassDecision } from "./PassDecision";
@@ -67,6 +67,7 @@ function GenericAnswerControls({
   const setOtherOpen = useCallback((open: boolean) => patchDraft({ otherOpen: open }), [patchDraft]);
   const otherRef = useRef<HTMLTextAreaElement>(null);
   const view = useMemo(() => answerView(decision, draft), [decision, draft]);
+  const recommenders = ladderRecommenders(decision);
   const { picked, order, values } = view;
   const setValue = useCallback((key: string, fn: (v: any) => any) => patchDraft((cur) => ({ values: { ...cur.values, [key]: fn(cur.values?.[key] ?? values[key]) } })), [patchDraft, values]);
   const togglePick = useCallback((n: number) => patchDraft((cur) => togglePicked(cur, n)), [patchDraft]);
@@ -151,7 +152,7 @@ function GenericAnswerControls({
   // is already proceeding with on an advisory ask.
   const tags = (i: number) => (
     <>
-      {recommendation === i && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">recommended</span>}
+      {recommendation === i && <RecommendedMark count={recommenders.get(i)} />}
       {decision.default_option === i && !decision.blocking && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">{ANSWER_WORDS.proceeding}</span>}
     </>
   );

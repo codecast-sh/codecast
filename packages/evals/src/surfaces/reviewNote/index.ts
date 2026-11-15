@@ -115,8 +115,17 @@ export function renderCard(snap: Pick<ReviewNoteSnap, 'task_title' | 'branch'>, 
   return [`Question: ${question}`, ...context, '', 'Answers:', ...answers, '', 'Document:', review_body || '(empty)'].join('\n');
 }
 
-const FINDING = /^(blocker|high|medium|low|nit)\s+\S+:\d+/gm;
+/** What the verdict puts in front of someone: an approve is the Ship card its person answers; any other verdict is the note the implementer gets back. */
+export const replyOf = (snap: Pick<ReviewNoteSnap, 'task_title' | 'branch'>, v: Verdict): string =>
+  v.verdict === 'approve' ? renderCard(snap, v.note) : `Verdict: ${v.verdict}, sent back to the implementer with this note:\n\n${v.note}`;
+
+const FINDING = /^(blocker|high|medium|low|nit)\s+\S+:\d+.*$/gm;
 export const findingLines = (note: string): number => note.match(FINDING)?.length ?? 0;
+/** Finding lines the review still holds against the branch: none fixed, rejected or deferred. */
+export const openFindings = (note: string): number => (note.match(FINDING) ?? []).filter((l) => !/->\s*(fixed|rejected|deferred)\b/.test(l)).length;
+/** The verdict the review should reach: an approve that held a finding against the branch should have asked for changes. */
+export const expectedVerdict = (production: Verdict): Verdict['verdict'] =>
+  production.verdict === 'approve' && openFindings(production.note) > 0 ? 'changes' : production.verdict;
 
 /** The session as the reviewer had it, its brief rendered from `template`. */
 export function sessionRows(snap: ReviewNoteSnap, template: string): Row[] {
@@ -181,7 +190,7 @@ interface Parsed {
 
 const graderRequest = (prompt: string): SurfaceRequest => ({ model: JUDGE_MODEL, prompt, max_tokens: 8000 });
 
-const CONTEXT = '(An AI reviewer has just approved a change, and its note is about to become the document of the Ship card its person answers in their decision queue. The person runs the product and knows its features, agents, team and customers, but not its code, and never opened the session that made the change. The reply is the card they will see; the review session behind it is not shown, because the person does not see it either.)';
+const CONTEXT = '(An AI reviewer has just given its verdict on a change. On approve, its note becomes the Ship card its person answers in their decision queue: the person runs the product and knows its features, agents, team and customers, but not its code, and never opened the session that made the change, so the reply shown is the card they will see. On changes, the note goes back to the implementer instead, and the reply shown is that note. The review session behind it is not shown.)';
 
 const impl: SurfaceImpl = {
   refForms: REF_FORMS,
@@ -222,14 +231,15 @@ const impl: SurfaceImpl = {
     const r = await ctx.call(reviewRequest(snap, ctx.model ?? meta.model, template), { label: 'review' });
     const verdict = verdictOfCommand(bashBlock(r.text));
     const parsed: Parsed = { verdict, cold: null, unsupported: null };
-    if (verdict) {
+    // Only an approve reaches a person as a card, so only an approve is read as one.
+    if (verdict?.verdict === 'approve') {
       // One after the other: a harness call numbers its run dir when it starts, so two at once share one.
       const cold = await ctx.call(graderRequest(COLD_READ(renderCard(snap, verdict.note))), { label: 'cold-read', grader: true });
       const faithful = await ctx.call(graderRequest(FAITHFUL(sessionText(sessionRows(snap, template)), verdict.note)), { label: 'faithful', grader: true });
       parsed.cold = parseJsonBlock(cold.text) as ColdRead | null;
       parsed.unsupported = (parseJsonBlock(faithful.text) as { unsupported?: string[] } | null)?.unsupported ?? null;
     }
-    return { reply: verdict ? renderCard(snap, verdict.note) : r.text, parsed };
+    return { reply: verdict ? replyOf(snap, verdict) : r.text, parsed };
   },
 
   gates(_snap: ReviewNoteSnap, out) {
@@ -252,7 +262,8 @@ const impl: SurfaceImpl = {
       checks.push({ id: 'faithful', ask: 'every claim in the note is borne out by the session', weight: 1, score: Math.max(0, 1 - n / 8), evidence: n ? p.unsupported.join(' | ').slice(0, 600) : 'none' });
     }
     // Guards: writing for the person must not change what the review decides or drop what it found.
-    checks.push({ id: 'same-verdict', ask: 'the verdict is the one the review reached', weight: 0.5, score: p.verdict.verdict === snap.production.verdict ? 1 : 0, evidence: `${p.verdict.verdict} (production: ${snap.production.verdict})` });
+    const expected = expectedVerdict(snap.production);
+    checks.push({ id: 'same-verdict', ask: 'the verdict is the one the review reached, and an approve holds no finding against the branch', weight: expected === snap.production.verdict ? 0.5 : 1, score: p.verdict.verdict === expected && !(p.verdict.verdict === 'approve' && openFindings(p.verdict.note) > 0) ? 1 : 0, evidence: `${p.verdict.verdict}, ${openFindings(p.verdict.note)} open findings (expected: ${expected}; production: ${snap.production.verdict})` });
     const had = findingLines(snap.production.note);
     const has = findingLines(p.verdict.note);
     checks.push({ id: 'findings-kept', ask: 'the finding lines the review recorded are still recorded', weight: 0.5, score: had ? Math.min(1, has / had) : 1, evidence: `${has} finding lines (production: ${had})` });
@@ -265,7 +276,7 @@ const impl: SurfaceImpl = {
   judgeMoment: (snap: ReviewNoteSnap): ConvoMessage[] => describeTurn(CONTEXT, snap.captured_at, 'queue'),
 
   productionReply(snap: ReviewNoteSnap): ProductionReply | null {
-    return { messages: [{ n: 1, id: 'production-card', at: snap.captured_at, channel: 'session', isGroup: false, direction: 'out', from: 'assistant', text: renderCard(snap, snap.production.note) }] };
+    return { messages: [{ n: 1, id: 'production-card', at: snap.captured_at, channel: 'session', isGroup: false, direction: 'out', from: 'assistant', text: replyOf(snap, snap.production) }] };
   },
 };
 

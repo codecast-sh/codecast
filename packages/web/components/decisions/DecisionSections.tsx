@@ -86,25 +86,20 @@ export function hasDecisionBody(decision: SessionDecisionItem, detail: DecisionD
   return !!(gateDoc(detail.doc?.content ?? "") || decision.context_md || (decision.report_slug && !decision.card));
 }
 
-/** The attached document, the short context and the report. `report={false}`
- *  leaves the report to the caller, for a page that draws the team's comments
- *  between the words and the report. */
+/** The short context, then the attached document, then the report: the
+ *  reader meets the short version first and reads on for the rest.
+ *  `report={false}` leaves the report to the caller, for a page that draws
+ *  the team's comments between the words and the report. */
 export function DecisionBody({ decision, detail, report = true }: { decision: SessionDecisionItem; detail: DecisionDetailItem; report?: boolean }) {
   const doc = gateDoc(detail.doc?.content ?? "") || undefined;
   if (!hasDecisionBody(decision, detail)) return null;
   return (
     <>
-      {doc && (
-        <div className="decision-body text-sol-text" data-decision-doc><MarkdownRenderer content={doc} /></div>
-      )}
-      {!doc && decision.context_md && (
+      {decision.context_md && (
         <div className="decision-body text-sol-text" data-decision-context><MarkdownRenderer content={decision.context_md} /></div>
       )}
-      {doc && decision.context_md && (
-        <details className="mt-3 text-sm text-sol-text-dim">
-          <summary className="cursor-pointer hover:text-sol-text">The short context</summary>
-          <div className="mt-2 border-l-2 border-sol-border pl-4" data-decision-context><MarkdownRenderer content={decision.context_md} /></div>
-        </details>
+      {doc && (
+        <div className={`decision-body text-sol-text ${decision.context_md ? "mt-4 border-t border-sol-border/70 pt-4" : ""}`} data-decision-doc><MarkdownRenderer content={doc} /></div>
       )}
       {report && <DecisionReport decision={decision} className="mt-4" />}
     </>

@@ -14,5 +14,5 @@ export const meta: SurfaceMeta = {
   // Reruns when its prompt changes, not nightly.
   standingRuns: false,
   criteria:
-    'a person who runs this product but never opened the session that made the change can answer the Ship card from the card alone: it opens by saying in plain words what the change does for the people it reaches and what the review found, before any review detail, with no term, name, path or id that only the code or the session explains; and the review itself (the verdict, every finding line and what was checked) is still there below for whoever needs it',
+    'when the verdict is approve, the reply is the Ship card a person answers, and that person runs this product but never opened the session that made the change: its question is short and plain, and the card says in plain words what the change does for the people it reaches, what the review saw for itself and what rests on someone else\'s word or went unchecked, with no term, name, path, id or rubric code that only the code or the session explains, and no list of code findings or checked ids on it; when the verdict is changes, the reply is the note the implementer gets, and it says plainly what must change before the branch can ship',
 };
