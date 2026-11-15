@@ -16,8 +16,7 @@
  * previews the reduced-motion version and `?hero-mobile=1` the phone framing.
  */
 
-import { useRef, useState, type CSSProperties, type RefObject } from "react";
-import { useMountEffect } from "@/hooks/useMountEffect";
+import { useRef, useState, type CSSProperties } from "react";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { useHeroChapters } from "./heroFly/chapters";
 import { createFilmClock, FilmClockContext, POSTER_FRAME } from "./heroFly/filmClock";
@@ -25,7 +24,7 @@ import { STAGE_SIZE as STAGE } from "./heroFly/project";
 import { HeroSandbox } from "./heroFly/sandbox";
 import { frame, warm, wrapT } from "./heroFly/timeline";
 import { World } from "./heroFly/surfaces";
-import { DURATION, POSTER_T, SCENES, STILLS } from "./heroFly/world";
+import { ACTS, DURATION, POSTER_T, SCENES, STILLS, actOf } from "./heroFly/world";
 
 const REDUCED_STEP_MS = 5000;
 
@@ -71,17 +70,6 @@ const BLEED: CSSProperties = {
   overflow: "visible",
 };
 
-/** Room a chapter takes beside its name: the dot, the gap after it, the button's padding, and the gap between chapters (px). */
-const CHAPTER_CHROME = 6 + 4 + 8 + 4;
-/** A chapter's room inside its own box: the chrome less the gap between chapters. */
-const CHAPTER_INNER = CHAPTER_CHROME - 4;
-/** A dot's own room: the dot and the button's padding. */
-const CHAPTER_DOT = 6 + 8;
-/** The bar's width (px) from which every name fits whole, before the names are measured: their characters at the 11px mono's advance, with each chapter's chrome. */
-const CHAPTER_NAMES_FIT = Math.ceil(SCENES.reduce((n, s) => n + s.name.length * 6.7 + CHAPTER_CHROME, 0));
-/** How a chapter's room eases as the current chapter changes or the bar resizes. */
-const CHAPTER_EASE = "300ms cubic-bezier(0.25, 0.5, 0.3, 1)";
-
 /**
  * Prerender scale for the stage: the film box's own width over the stage's
  * (tan(atan2()) divides two lengths), so the poster fits before the driver
@@ -95,8 +83,6 @@ const FALLBACK_SCALE_CSS = [
   "@keyframes hf-cap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}",
   "@keyframes hf-cap-fade{from{opacity:0}to{opacity:1}}",
   "@media (prefers-reduced-motion:reduce){.hf-cap{animation-name:hf-cap-fade!important}}",
-  // Reduced motion: the chapter bar's room and names change at once, without the eased slide.
-  "@media (prefers-reduced-motion:reduce){.hf-chaps li,.hf-chaps [data-name]{transition:none!important}}",
   // A region whose views arrive after the prerender (the poster's conversation pane) fades in rather than popping.
   "@keyframes hf-in{from{opacity:0}}.hf-in{animation:hf-in 300ms ease}",
   // Inside the film every change is film time's (FilmSwap, FilmGrow, beats): a view's own wall-clock transition would replay a change the film already made, or stall in a background tab.
@@ -105,48 +91,9 @@ const FALLBACK_SCALE_CSS = [
   ".hf-stage [data-hero-live],.hf-stage [data-hero-live] *{transition:color 150ms,background-color 150ms,border-color 150ms!important}",
   // A region's box lets clicks through to the regions under it; the views placed in it take them (heroFly/surfaces.tsx RegionSlot).
   "[data-region]>*{pointer-events:auto}",
-  // The chapter bar before it has measured its names (useChapterNamesFit): the current chapter named and dots for the rest, every name once the bar is wide enough for all of them (CHAPTER_NAMES_FIT, about what the measure finds), so the first paint is the measured layout.
-  ".hf-chaps{container-type:inline-size}",
-  ".hf-chaps:not([data-measured])>li{flex:1 1 0px}",
-  ".hf-chaps:not([data-measured])>li[data-on]{flex:0 0 auto}",
-  ".hf-chaps:not([data-measured])>li:not([data-on]) [data-name]{max-width:0;opacity:0}",
-  `@container (min-width:${CHAPTER_NAMES_FIT}px){.hf-chaps:not([data-measured])>li{flex:1 0 auto!important}.hf-chaps:not([data-measured])>li [data-name]{max-width:none!important;opacity:1!important}}`,
 ].join("");
 
 
-/**
- * Whether the chapter bar fits every name whole, from the names' own widths
- * and the bar's, kept as the bar resizes and once the font has loaded; with
- * each name's width, so a name opening or closing eases to its exact size.
- */
-type NamesFit = { all: boolean; widths: number[]; ease: boolean };
-
-/**
- * Null until measured, when the bar lays itself out by CSS alone (a
- * container query at CHAPTER_NAMES_FIT). `ease` turns on a frame after the
- * first measure, so the measured layout takes over without animating and
- * only later changes (a chapter turning, the bar resizing) ease.
- */
-function useChapterNamesFit(ref: RefObject<HTMLOListElement | null>): NamesFit | null {
-  const [fit, setFit] = useState<NamesFit | null>(null);
-  useMountEffect(() => {
-    const ol = ref.current;
-    if (!ol) return;
-    const measure = () => {
-      const widths = [...ol.querySelectorAll<HTMLElement>("[data-name]")].map((n) => Math.ceil(n.scrollWidth));
-      const need = widths.reduce((a, w) => a + w + CHAPTER_CHROME, 0);
-      const all = need <= ol.clientWidth;
-      setFit((f) => (f && f.all === all && f.widths.join() === widths.join() ? f : { all, widths, ease: f?.ease ?? false }));
-      requestAnimationFrame(() => setFit((f) => (f && !f.ease ? { ...f, ease: true } : f)));
-    };
-    measure();
-    void document.fonts?.ready.then(measure);
-    const ro = new ResizeObserver(measure);
-    ro.observe(ol);
-    return () => ro.disconnect();
-  });
-  return fit;
-}
 
 export function HeroFlythrough() {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -154,8 +101,6 @@ export function HeroFlythrough() {
   const stageRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const barsRef = useRef<(HTMLSpanElement | null)[]>([]);
-  const scrubRef = useRef<HTMLOListElement>(null);
-  const names = useChapterNamesFit(scrubRef);
   const ctl = useRef<{ toggle(): void; jump(i: number): void } | null>(null);
   const [scene, setScene] = useState(POSTER_SCENE);
   const [playing, setPlaying] = useState(true);
@@ -257,10 +202,13 @@ export function HeroFlythrough() {
         st.scene = k;
         setScene(k);
       }
+      const ak = actOf(k);
       barsRef.current.forEach((b, i) => {
         if (!b) return;
-        const sc = SCENES[i];
-        const p = i === k ? (reduced ? 1 : (st.t - sc.start) / (sc.end - sc.start)) : 0;
+        const a = ACTS[i];
+        const t0 = SCENES[a.first].start;
+        const t1 = SCENES[a.last].end;
+        const p = i === ak ? (reduced ? (k - a.first + 1) / (a.last - a.first + 1) : (st.t - t0) / (t1 - t0)) : 0;
         put(b, "t", (v) => (b.style.transform = v), `scaleX(${p.toFixed(3)})`);
       });
     };
@@ -339,7 +287,8 @@ export function HeroFlythrough() {
     window.__heroFly = api;
     ctl.current = {
       toggle: () => setPlay(!st.playing),
-      jump: (i: number) => {
+      jump: (act: number) => {
+        const i = ACTS[act].first;
         if (reduced) showStill(i, true);
         else api.seek(SCENES[i].hold);
       },
@@ -455,48 +404,32 @@ export function HeroFlythrough() {
             <svg className="ml-0.5 h-2.5 w-2.5" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
           )}
         </button>
-        <ol ref={scrubRef} className="hf-chaps flex min-w-0 flex-1 gap-1" data-measured={names ? "" : undefined}>
-          {SCENES.map((s, i) => {
-            // Every name whole when the bar fits them all; otherwise the current chapter's name and dots for the rest. Never an ellipsis.
-            // Each chapter's room is a basis that eases (never a switch of flex classes), so the dots part and close smoothly around the name that opens.
-            const named = !names || names.all || i === scene;
-            const nameW = names?.widths[i];
-            const room: CSSProperties | undefined = names
-              ? {
-                  flexBasis: named && nameW !== undefined ? nameW + CHAPTER_INNER : CHAPTER_DOT,
-                  flexGrow: names.all || !named ? 1 : 0,
-                  flexShrink: named ? 0 : 1,
-                  transition: names.ease ? `flex-basis ${CHAPTER_EASE}, flex-grow ${CHAPTER_EASE}` : undefined,
-                }
-              : undefined;
+        <ol className="flex min-w-0 flex-1 gap-1">
+          {ACTS.map((a, i) => {
+            const on = actOf(scene) === i;
+            const t0 = SCENES[a.first].start;
+            const t1 = SCENES[a.last].end;
             return (
-            <li key={s.name} className="min-w-0" style={room} data-on={i === scene ? "" : undefined}>
-              <button
-                type="button"
-                onClick={() => ctl.current?.jump(i)}
-                aria-current={i === scene ? "step" : undefined}
-                aria-label={`Chapter ${i + 1}: ${s.name}`}
-                className="group relative flex min-h-6 w-full items-center gap-1 overflow-hidden rounded-md px-1 py-2.5 text-left transition-colors hover:bg-[#eee8d5]/70 sm:py-1.5"
-              >
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: i === scene ? "#002b36" : "#c9c2ad" }} />
-                <span
-                  data-name
-                  className={`overflow-hidden whitespace-nowrap text-meta ${i === scene ? "text-[#002b36]" : "text-[#93a1a1] group-hover:text-[#586e75]"}`}
-                  style={names ? { maxWidth: named ? (nameW ?? "none") : 0, opacity: named ? 1 : 0, transition: names.ease ? `max-width ${CHAPTER_EASE}, opacity ${CHAPTER_EASE}, color 150ms` : undefined } : undefined}
+              <li key={a.name} className="min-w-0 flex-1" style={{ flexGrow: t1 - t0 }}>
+                <button
+                  type="button"
+                  onClick={() => ctl.current?.jump(i)}
+                  aria-current={on ? "step" : undefined}
+                  aria-label={`Part ${i + 1}: ${a.name}`}
+                  className="group relative flex min-h-6 w-full items-center overflow-hidden rounded-md px-1 py-2.5 text-left transition-colors hover:bg-[#eee8d5]/70 sm:py-1.5"
                 >
-                  {s.name}
-                </span>
-                <span className="absolute inset-x-1 bottom-0 h-[2px] rounded-full" style={{ backgroundColor: "#eee8d5" }} />
-                <span
-                  ref={(b) => {
-                    barsRef.current[i] = b;
-                  }}
-                  className="absolute inset-x-1 bottom-0 h-[2px] origin-left rounded-full"
-                  // Constant after mount (the poster's scene, not `scene`), so React never overwrites what the driver wrote.
-                  style={{ backgroundColor: "#002b36", transform: `scaleX(${i === POSTER_SCENE ? ((POSTER_T - s.start) / (s.end - s.start)).toFixed(3) : 0})` }}
-                />
-              </button>
-            </li>
+                  <span className={`truncate text-meta ${on ? "text-[#002b36]" : "text-[#93a1a1] group-hover:text-[#586e75]"}`}>{a.name}</span>
+                  <span className="absolute inset-x-1 bottom-0 h-[2px] rounded-full" style={{ backgroundColor: "#eee8d5" }} />
+                  <span
+                    ref={(b) => {
+                      barsRef.current[i] = b;
+                    }}
+                    className="absolute inset-x-1 bottom-0 h-[2px] origin-left rounded-full"
+                    // Constant after mount (the poster's act, not `scene`), so React never overwrites what the driver wrote.
+                    style={{ backgroundColor: "#002b36", transform: `scaleX(${i === actOf(POSTER_SCENE) ? ((POSTER_T - t0) / (t1 - t0)).toFixed(3) : 0})` }}
+                  />
+                </button>
+              </li>
             );
           })}
         </ol>
