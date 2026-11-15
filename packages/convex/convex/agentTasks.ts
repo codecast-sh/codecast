@@ -715,12 +715,39 @@ export const createTask = mutation({
     if (created_by_session_ref) {
       const conv = await findConversationByAnyRef(ctx, created_by_session_ref, auth.userId);
       if (conv) taskArgs.created_by_conversation_id = conv._id.toString();
-      // Not synced yet: keep the raw uuid so the read path can resolve it
-      // once the conversation row exists. Dropping it here is how a spawn
-      // trigger lost its parent for good.
+      // A codecast id (`--parent jx7c4n2`) names a session that must exist.
+      else if (/^jx[a-z0-9]+$/.test(created_by_session_ref)) throw new Error(`No session of yours matches "${created_by_session_ref}"`);
+      // An agent's own session id not synced yet: keep it raw so the read
+      // path can resolve it once the conversation row exists. Dropping it
+      // here is how a spawn trigger lost its parent for good.
       else taskArgs.created_by_session_uuid = created_by_session_ref;
     }
     return await insertTask(ctx, auth.userId, taskArgs);
+  },
+});
+
+// Repair for triggers re-created by a script (no calling session, so no
+// parent): the copy carries its original's prompt word for word, and the
+// original knows its session. Each named copy without a parent takes the
+// session of the newest earlier trigger of the same user with the same prompt.
+export const adminRestoreCopiedParents = internalMutation({
+  args: { short_ids: v.array(v.string()), dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const out: Array<{ short_id: string; parent?: string; from?: string; note?: string }> = [];
+    for (const short_id of args.short_ids) {
+      const copy = await ctx.db.query("agent_tasks").withIndex("by_short_id", (q) => q.eq("short_id", short_id)).first();
+      if (!copy) { out.push({ short_id, note: "not found" }); continue; }
+      if (copy.created_by_conversation_id || copy.created_by_session_uuid) { out.push({ short_id, note: "has a parent" }); continue; }
+      const originals = (await ctx.db.query("agent_tasks").withIndex("by_user_status", (q) => q.eq("user_id", copy.user_id)).collect())
+        .filter((t) => t._id !== copy._id && t.created_at < copy.created_at && t.prompt === copy.prompt && (t.originating_conversation_id || t.created_by_conversation_id))
+        .sort((a, b) => b.created_at - a.created_at);
+      const original = originals[0];
+      const parent = original?.originating_conversation_id ?? original?.created_by_conversation_id;
+      if (!parent) { out.push({ short_id, note: "no original with a session" }); continue; }
+      out.push({ short_id, parent: (await ctx.db.get(parent))?.short_id ?? parent, from: original.short_id });
+      if (!args.dry_run) await ctx.db.patch(copy._id, { created_by_conversation_id: parent });
+    }
+    return out;
   },
 });
 
@@ -2410,6 +2437,8 @@ type TaskUpdateArgs = {
   // null clears the field: originating_conversation_id null IS `--spawn`.
   originating_conversation_id?: Id<"conversations"> | null;
   target_conversation_id?: Id<"conversations"> | null;
+  // The parent link (`cast trigger update --parent`): attribution only.
+  created_by_conversation_id?: Id<"conversations">;
   wake_creator?: boolean;
 };
 
@@ -2435,6 +2464,7 @@ const EDITABLE_FIELDS = [
   "tune_why",
   "originating_conversation_id",
   "target_conversation_id",
+  "created_by_conversation_id",
   "wake_creator",
 ] as const;
 
@@ -2459,6 +2489,7 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
     tune_why: task.tune_why,
     originating_conversation_id: task.originating_conversation_id,
     target_conversation_id: task.target_conversation_id,
+    created_by_conversation_id: task.created_by_conversation_id,
     wake_creator: task.wake_creator,
   };
 }
@@ -2540,6 +2571,14 @@ export async function applyTaskUpdate(
   // home this edit is moving the trigger TO.
   if (args.originating_conversation_id !== undefined) {
     patch.originating_conversation_id = args.originating_conversation_id ?? undefined;
+  }
+  // Every trigger keeps its parent. The session a trigger was bound to is the
+  // one it reports to, so unbinding it (--spawn) keeps that session as the
+  // parent when the row has none of its own.
+  if (args.created_by_conversation_id) {
+    patch.created_by_conversation_id = args.created_by_conversation_id;
+  } else if (args.originating_conversation_id === null && !task.created_by_conversation_id && task.originating_conversation_id) {
+    patch.created_by_conversation_id = task.originating_conversation_id;
   }
   if (args.target_conversation_id !== undefined) {
     patch.target_conversation_id = args.target_conversation_id ?? undefined;
@@ -2667,13 +2706,15 @@ export const updateTask = mutation({
     // `--for` means the same thing on add and on update.
     originating_session_ref: v.optional(v.string()),
     target_session_ref: v.optional(v.string()),
+    // `--parent <session>`: the session this trigger reports to.
+    created_by_session_ref: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
     const task = await getManageableTask(ctx, args.task_id, auth.userId);
     if (!task) return { ok: false, changed: [] };
-    const { api_token: _token, task_id: _id, originating_session_ref, target_session_ref, ...rest } = args;
+    const { api_token: _token, task_id: _id, originating_session_ref, target_session_ref, created_by_session_ref, ...rest } = args;
     const update: TaskUpdateArgs = { ...rest };
     await requireTriggerConversations(ctx, auth.userId, rest);
     if (originating_session_ref) {
@@ -2685,6 +2726,11 @@ export const updateTask = mutation({
       const conv = await findConversationByAnyRef(ctx, target_session_ref, auth.userId);
       if (!conv) throw new Error(`No session of yours matches "${target_session_ref}"`);
       update.target_conversation_id = conv._id;
+    }
+    if (created_by_session_ref) {
+      const conv = await findConversationByAnyRef(ctx, created_by_session_ref, auth.userId);
+      if (!conv) throw new Error(`No session of yours matches "${created_by_session_ref}"`);
+      update.created_by_conversation_id = conv._id;
     }
     return await applyTaskUpdate(ctx, task, update, { userId: auth.userId, source: "cli" });
   },

@@ -241,14 +241,15 @@ describe("applyTaskUpdate", () => {
     const OTHER = "conv2";
     const other = () => ({ _id: OTHER, user_id: USER });
 
-    test("unbinding turns an inject trigger into a spawn trigger", async () => {
+    test("unbinding turns an inject trigger into a spawn trigger that keeps its home as parent", async () => {
       const task = editable();
       const { db, rows } = fakeDb([task, home()]);
 
       const result = await applyTaskUpdate({ db } as any, task as any, { originating_conversation_id: null }, ACTOR);
 
-      expect(result).toEqual({ ok: true, changed: ["originating_conversation_id"] });
+      expect(result).toEqual({ ok: true, changed: ["originating_conversation_id", "created_by_conversation_id"] });
       expect(task.originating_conversation_id).toBeUndefined();
+      expect((task as any).created_by_conversation_id).toBe(CONV);
       expect(revisionsOf(rows)[0].before.originating_conversation_id).toBe(CONV);
     });
 
