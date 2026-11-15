@@ -113,7 +113,8 @@ function AnalyticsIdentify() {
       github_username: user!.github_username,
     });
     // A person's first week is where the product loses them: every one of those sessions is worth watching.
-    if (Date.now() - user!._creationTime < NEW_USER_REPLAY_MS) keepReplay("new_user");
+    const createdAt = user!._creationTime as number | undefined;
+    if (typeof createdAt === "number" && Date.now() - createdAt < NEW_USER_REPLAY_MS) keepReplay("new_user");
   } else if (!id && lastId.current) {
     lastId.current = null;
     resetUser();
