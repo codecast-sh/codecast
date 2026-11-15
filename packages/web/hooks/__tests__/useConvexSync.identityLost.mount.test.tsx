@@ -20,6 +20,8 @@ mock.restore();
 
 let authenticated = true;
 let teamsAnswer: any[] | undefined;
+let teamsV2Answer: unknown;
+const { getFunctionName } = await import("convex/server");
 const switched: Array<string | null> = [];
 
 const convexReact = await import("convex/react");
@@ -28,7 +30,8 @@ mock.module("convex/react", () => ({
   useConvexAuth: () => ({ isAuthenticated: authenticated, isLoading: false }),
   useQuery: (_q: unknown, args: unknown) => (args === "skip" ? undefined : teamsAnswer),
   // useQueryNoThrow's transport (useSyncTeams subscribes through it).
-  useQueries: (queries: Record<string, unknown>) => Object.fromEntries(Object.keys(queries).map((k) => [k, teamsAnswer])),
+  useQueries: (queries: Record<string, { query: any }>) =>
+    Object.fromEntries(Object.entries(queries).map(([k, q]) => [k, getFunctionName(q.query).endsWith("getUserTeamsV2") ? teamsV2Answer : teamsAnswer])),
   useMutation: () => async () => {},
 }));
 const realSwitch = await import("../useSwitchWorkspace");
@@ -132,5 +135,57 @@ describe("useSyncTeams while the server identity is lost", () => {
     expect(useInboxStore.getState().teams.map((t: any) => t._id)).toEqual([TEAM]);
     expect(switched).toEqual([]);
     await act(async () => root.unmount());
+  });
+});
+
+describe("useSyncTeams repair on an answer that cannot tell a stranger from no teams", () => {
+  const TEAM = "k97cc9y1a48swe3kfnwcs44a857wmxj2";
+  const OTHER = "k97cxdv2nqef5wfm26jvrxf6fd84a30y";
+  const run = async (v2: unknown) => {
+    switched.length = 0;
+    useInboxStore.setState((s: any) => ({ clientState: { ...s.clientState, ui: { ...s.clientState.ui, active_team_id: TEAM } } }));
+    function Probe() {
+      useSyncTeams();
+      return null;
+    }
+    const armed = new Map<number, () => void>();
+    let nextId = 1e6;
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    (globalThis as any).setTimeout = (fn: () => void, ms?: number, ...rest: unknown[]) => {
+      if ((ms ?? 0) >= 5000) { armed.set(++nextId, fn); return nextId; }
+      return (realSetTimeout as any)(fn, ms, ...rest);
+    };
+    (globalThis as any).clearTimeout = (id: any) => (armed.delete(id) ? undefined : realClearTimeout(id));
+    try {
+      authenticated = true;
+      teamsAnswer = [{ _id: TEAM, name: "Union" }];
+      teamsV2Answer = undefined;
+      await act(async () => root.render(<Probe />));
+      // The socket now answers as nobody while the client still counts itself
+      // signed in (a rotated token): v1 says [], the v2 view says who it is.
+      teamsAnswer = [];
+      teamsV2Answer = v2;
+      await act(async () => root.render(<Probe />));
+      await act(async () => root.render(<Probe />));
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+      globalThis.clearTimeout = realClearTimeout;
+    }
+    for (const fn of armed.values()) fn();
+    await act(async () => root.unmount());
+    return switched.slice();
+  };
+
+  test("an anonymous v2 view never moves the account's workspace", async () => {
+    expect(await run({ access: "unauthenticated" })).toEqual([]);
+  });
+
+  test("before the v2 view answers, nothing moves", async () => {
+    expect(await run(undefined)).toEqual([]);
+  });
+
+  test("a granted view without the team still repoints to a surviving one", async () => {
+    expect(await run({ access: "granted", teams: [{ _id: OTHER }] })).toEqual([OTHER]);
   });
 });
