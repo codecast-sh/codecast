@@ -47,7 +47,9 @@ export function makeDispatchBinding(
   call: (args: DispatchCallArgs) => Promise<any>,
   state: DispatchAckState = newDispatchAckState(),
 ): DispatchFn {
-  return (action, raw, patches, result) => {
+  return (action, raw, patches, result, _commandId, meta) => {
+    // The lock ids the send planted: its acknowledgement is stamped on exactly those.
+    const lockIds = meta?.locks ? new Set(meta.locks.map((l) => l.lock)) : undefined;
     // A tab address leaves the browser in its storable form, as the outbox row keeps it (lib/tabSafePath).
     const args = storableActionArgs(action, raw);
     // A Record or Stop press that is no longer a moment never leaves the
@@ -56,13 +58,13 @@ export function makeDispatchBinding(
     const dead = deadRecordingPress(action, args);
     if (dead) return Promise.reject(dead);
     const settle = recordWrite(action, args, patches);
-    return send(action, args, patches, result).then(
+    return send(action, args, patches, result, lockIds).then(
       (res) => { settle({ ok: true }); return res; },
       (err) => { settle({ err }); throw err; },
     );
   };
 
-  function send(action: string, args: any, patches: any, result: any): Promise<any> {
+  function send(action: string, args: any, patches: any, result: any, lockIds?: ReadonlySet<string>): Promise<any> {
     // Sync-log write acks (docs/architecture/sync-log-migration.md D8).
     // The flag is a binding concern added at call time, so outbox rows
     // persisted by older bundles get it on redrive too. The envelope is
@@ -72,7 +74,7 @@ export function makeDispatchBinding(
     const unwrap = (res: any) => {
       if (res && typeof res === "object" && "__syncAckV1" in res) {
         if (Array.isArray(res.__syncAckV2)) {
-          stampDeliveryReceipts(useInboxStore.getState(), patches, res.__syncAckV2, sentAt);
+          stampDeliveryReceipts(useInboxStore.getState(), patches, res.__syncAckV2, sentAt, lockIds);
         }
         const ack = res.__syncAckV1;
         // Every window stamps its own locks, the host and a follower alike:
@@ -80,7 +82,7 @@ export function makeDispatchBinding(
         // host, docs/architecture/sync-host.md), and the replicated cursor
         // advancing is what retires its acked locks (syncReplication).
         if (Array.isArray(ack) && ack.length && patches) {
-          useInboxStore.getState().stampSyncAck(patches, ack, sentAt);
+          useInboxStore.getState().stampSyncAck(patches, ack, sentAt, { lockIds });
         }
         return res.result;
       }

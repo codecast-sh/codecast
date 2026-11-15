@@ -13,15 +13,24 @@
 //
 // DOM mode (replayDom, off by default) adds the page itself, as rrweb records
 // it, so the replay plays visually in codecast's player. It is the one part
-// that observes DOM changes, so it costs what rrweb costs and an app turns it
-// on knowing that (./replayDom has the settings and what they leave out). The
-// semantic stream is unchanged by it and stays what agents read.
+// that observes DOM changes, so it costs what rrweb costs (about 2.5 ms per
+// burst of changes, a ~16 ms snapshot to start), and it runs only while a
+// person is there to see the page: the tab visible and an input in the last
+// DOM_IDLE_MS. A page left open, ticking clocks and streaming rows to nobody,
+// costs nothing; the next pointer move, key or wheel starts it again on a
+// fresh snapshot, and so does an error. ./replayDom has the settings and what
+// they leave out. The semantic stream is unchanged by it and stays what
+// agents read.
 //
-// The recorder keeps the last 60 seconds in a ring buffer. An error (any item
-// the sink captures) always uploads the buffer and keeps the recording going;
-// a sampled share of sessions (sampleRate) records from the start. Chunks are
-// gzipped JSON PUT to a presigned URL from the door's replay-sign endpoint,
-// then a replay manifest item goes through the sink.
+// The recorder keeps the last 60 seconds in a ring buffer. Something worth
+// seeing keeps the recording: it uploads the buffer and records on from
+// there, naming why (kept_for, REPLAY_KEEP_REASONS): an error the sink
+// captures, a rage click, a request to the page's own site that failed on the
+// server or took past slowRequestMs, the page freezing past freezeMs, or the
+// app's own keep(reason). A sampled share of sessions (sampleRate) records
+// from the start. Chunks are gzipped JSON PUT to a presigned URL from the
+// door's replay-sign endpoint, then a replay manifest item goes through the
+// sink.
 
 import { gzipText, sha256Hex, type CodecastErrorItem, type CodecastSink, type ReplayDomMode } from "./codecast";
 
@@ -83,6 +92,30 @@ export const REPLAY_DOM_LIMITS = {
   max_chunks_per_replay: 60,
 } as const;
 
+/**
+ * Why a recording was kept. An app may keep one for its own reason too
+ * (keep(reason)), a short token like these.
+ */
+export const REPLAY_KEEP_REASONS = ["sample", "error", "rage_click", "server_error", "slow_request", "freeze"] as const;
+export type ReplayKeepReason = (typeof REPLAY_KEEP_REASONS)[number];
+/** An app's own keep reason: lowercase letters, digits, _ : and -, at most 40 characters. */
+export const REPLAY_KEEP_REASON_PATTERN = /^[a-z0-9_:-]{1,40}$/;
+/** Reasons one recording names, at most. */
+export const REPLAY_KEEP_REASONS_MAX = 8;
+
+/** What keeps a recording besides errors and the sample (ReplayOptions.keepOn), by default. */
+export const REPLAY_KEEP_DEFAULTS = {
+  /** This many clicks on one target inside rageClickMs. */
+  rageClicks: 4,
+  rageClickMs: 1_500,
+  /** A request to the page's own site answering 5xx. */
+  serverError: true,
+  /** A request to the page's own site taking at least this long; false never keeps for it. */
+  slowRequestMs: 8_000 as number | false,
+  /** The page unresponsive this long in one frame (long-animation-frame, else longtask); false never keeps for it. */
+  freezeMs: 1_000 as number | false,
+};
+
 /** One rrweb event. The recorder reads only its type, its time and a meta event's href. */
 export interface DomEvent {
   type: number;
@@ -99,8 +132,41 @@ const yieldToPage = () =>
     if (sched?.yield) sched.yield().then(resolve, resolve);
     else globalThis.setTimeout(resolve, 0);
   });
+/** Stylesheets one recording uploads, and one sheet's gzipped size (codecast REPLAY_STYLE_LIMITS). */
+export const REPLAY_STYLE_MAX = 100;
+export const REPLAY_STYLE_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * A stylesheet's relative url()s made absolute against the sheet's own
+ * address, as rrweb writes a sheet it inlines: the player draws the text
+ * inside another document, where a relative path would point nowhere.
+ */
+export function absoluteCssUrls(css: string, sheetHref: string): string {
+  return css.replace(/url\(\s*(['"]?)([^'")]*)\1\s*\)/gi, (whole, quote: string, path: string) => {
+    if (!path || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(path)) return whole;
+    try {
+      return `url(${quote}${new URL(path, sheetHref).href}${quote})`;
+    } catch {
+      return whole;
+    }
+  });
+}
+
 /** A shipping recording uploads early once this many DOM events wait, rather than at the next tick. */
 const DOM_UPLOAD_EVENTS = 20_000;
+/**
+ * The DOM recording stops once nobody has touched the page for this long (or
+ * the tab is hidden) and starts again on the next input. Long enough that a
+ * person reading never sees it stop; short enough that a page left open
+ * spends nothing.
+ */
+export const DOM_IDLE_MS = 15_000;
+/** Run fn when the page is next idle, or after at most `timeout` ms; at once where the browser cannot say. */
+const whenIdle = (fn: () => void, timeout: number) => {
+  const ric = (globalThis as { requestIdleCallback?: (cb: () => void, o: { timeout: number }) => unknown }).requestIdleCallback;
+  if (ric) ric(fn, { timeout });
+  else fn();
+};
 
 /**
  * How often the recorder takes a checkout (a fresh full snapshot). Unshipped,
@@ -152,12 +218,16 @@ export interface ReplayOptions {
   clearTimeout?: (handle: unknown) => void;
   /** Loads the DOM recorder. Default: ./replayDom (rrweb record), imported on demand. */
   loadDomRecorder?: () => Promise<StartDomRecording>;
+  /** What keeps a recording besides errors and the sample; each defaults to REPLAY_KEEP_DEFAULTS. */
+  keepOn?: Partial<typeof REPLAY_KEEP_DEFAULTS>;
 }
 
 export interface ReplayRecorder {
   readonly replayId: string;
-  /** True once an error or the sample kept this recording; it then uploads as it goes. */
+  /** True once something kept this recording (keptFor says what); it then uploads as it goes. */
   readonly kept: boolean;
+  /** Why the recording was kept, first reason first; empty while it is only a ring. */
+  readonly keptFor: readonly string[];
   /** Events still held locally (the ring buffer, or what waits for the next chunk). */
   readonly events: readonly ReplayEvent[];
   /** rrweb events held locally (DOM mode); 0 with it off. */
@@ -166,6 +236,11 @@ export interface ReplayRecorder {
   mark(name: string, data?: Record<string, unknown>): void;
   /** Keep the recording and upload what is held now. */
   upload(): Promise<void>;
+  /**
+   * Keep the recording for the app's own reason (REPLAY_KEEP_REASON_PATTERN),
+   * page capture included: the moment is worth seeing, not only reading.
+   */
+  keep(reason: string): void;
   stop(): void;
 }
 
@@ -343,6 +418,19 @@ export function visibleOutline(root: Element | null, max: number = REPLAY_LIMITS
   return lines.join("\n");
 }
 
+/**
+ * A hostname's site, roughly: its last two labels (three when the second to
+ * last is a short public suffix part like co.uk), so codecast.sh and
+ * convex.codecast.sh are one site. Good enough to tell an app's own requests
+ * from a third party's; never used for security.
+ */
+export function siteOf(hostname: string): string {
+  const parts = hostname.toLowerCase().split(".").filter(Boolean);
+  if (parts.length <= 2 || /^\d+$/.test(parts[parts.length - 1])) return parts.join(".");
+  const n = parts[parts.length - 2].length <= 3 && parts[parts.length - 1].length === 2 ? 3 : 2;
+  return parts.slice(-n).join(".");
+}
+
 /** Query values can carry tokens; keep the keys, drop the values. */
 export function cleanUrl(raw: string, base?: string): string {
   try {
@@ -408,6 +496,8 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
 
   let events: ReplayEvent[] = [];
   let kept = (options.sampleRate ?? 0) > 0 && random() < (options.sampleRate ?? 0);
+  const keptFor: string[] = kept ? ["sample"] : [];
+  const keepOn = { ...REPLAY_KEEP_DEFAULTS, ...options.keepOn };
   let stopped = false;
   let chunks = 0;
   let chunkTimer: unknown = null;
@@ -473,7 +563,11 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     if (!baseFetch) return false;
     const bytes = (await gzipText(text)) ?? new TextEncoder().encode(text);
     if (kind === "dom" && bytes.byteLength > REPLAY_DOM_LIMITS.chunk_max_bytes) return "too_big";
-    const signed = await sink.signReplayChunk({ replay_id: replayId, seq, sha256: await sha256Hex(bytes), size: bytes.byteLength, ...(kind === "dom" ? { kind } : {}) });
+    return putSigned(bytes, { seq, ...(kind === "dom" ? { kind } : {}) });
+  };
+  const putSigned = async (bytes: Uint8Array<ArrayBuffer>, sign: { seq: number; kind?: "dom" | "style"; href?: string }): Promise<boolean> => {
+    if (!baseFetch) return false;
+    const signed = await sink.signReplayChunk({ replay_id: replayId, sha256: await sha256Hex(bytes), size: bytes.byteLength, ...sign });
     if (!signed) return false;
     if ("exists" in signed) return true;
     uploadUrls.add(signed.upload_url);
@@ -500,29 +594,49 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
   };
   const full = () => chunks >= REPLAY_LIMITS.max_chunks_per_replay;
 
-  // DOM mode. rrweb events live in segments, each opening on a checkout (a
-  // full snapshot). Until the DOM ships, only the current segment and the one
-  // before are kept, so memory is bounded by two checkout periods and the
-  // oldest event held is always a snapshot the player can start from.
+  // DOM mode. rrweb events live in segments, each opening on a full snapshot
+  // (a checkout, or rrweb starting). Until the DOM ships, only the current
+  // segment and the one before are kept, so memory is bounded by two
+  // checkout periods and the oldest event held is always a snapshot the
+  // player can start from.
+  //
+  // rrweb runs only while the page is attended (the header): `domStart` is
+  // the loaded recorder, `domRecording` the running one, null while asleep.
   const domMode: ReplayDomMode = options.replayDom ?? "off";
   let domSegments: DomEvent[][] = [[]];
   let domHeld = 0;
   let domChunks = 0;
-  let domSawError = false;
+  let domWanted = false;
+  let domStart: StartDomRecording | null = null;
   let domRecording: DomRecording | null = null;
-  // "onError" ships the DOM once an error kept the recording; "sampled" also
-  // ships it when the sample kept the recording from the start.
-  const domShips = () => kept && domRecording !== null && (domMode === "sampled" || domSawError);
+  let domLastEventAt = -Infinity;
+  let domDead = false;
+  // "onError" ships the DOM once something kept the recording for a reason
+  // worth seeing; "sampled" also ships it when the sample kept it.
+  const domShips = () => kept && domStart !== null && !domDead && (domMode === "sampled" || domWanted);
 
-  // Timed checkouts, at the ring's pace until the DOM ships and rarely after.
+  // Timed checkouts, at the ring's pace until the DOM ships and rarely after,
+  // each when the page is next idle so it never lands inside an interaction.
   let domCheckoutTimer: unknown = null;
   const scheduleDomCheckout = () => {
     if (stopped || !domRecording) return;
+    if (domCheckoutTimer !== null) clearTimer(domCheckoutTimer);
     domCheckoutTimer = setTimer(() => {
       domCheckoutTimer = null;
-      domRecording?.checkout();
-      scheduleDomCheckout();
+      whenIdle(() => {
+        if (!domRecording) return;
+        domRecording.checkout();
+        scheduleDomCheckout();
+      }, 2_000);
     }, domShips() ? DOM_CHECKOUT_MS.shipping : DOM_CHECKOUT_MS.ring);
+  };
+
+  // A new segment, unless the DOM ships (then the stream runs on: the player
+  // starts a new page at each full snapshot) or the current one is empty.
+  const openSegment = () => {
+    if (domShips() || domSegments[domSegments.length - 1].length === 0) return;
+    domSegments.push([]);
+    while (domSegments.length > 2) domHeld -= domSegments.shift()!.length;
   };
 
   const onDomEvent = (event: DomEvent, isCheckout: boolean) => {
@@ -533,32 +647,109 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     }
     // A checkout emits its meta event and its full snapshot both flagged; the
     // segment opens on the meta, which comes first.
-    if (isCheckout && event.type === DOM_META && !domShips()) {
-      domSegments.push([]);
-      while (domSegments.length > 2) domHeld -= domSegments.shift()!.length;
-    }
+    if (isCheckout && event.type === DOM_META) openSegment();
     domSegments[domSegments.length - 1].push(event);
+    domLastEventAt = now();
     if (++domHeld >= DOM_UPLOAD_EVENTS && domShips()) void upload();
+  };
+
+  // Attention. The DOM recording runs while the tab is visible and someone
+  // touched the page in the last DOM_IDLE_MS; inputs only stamp the time
+  // (one assignment per event), and a timer stops rrweb once they stop.
+  let lastInputAt = now();
+  let domIdleTimer: unknown = null;
+  const visible = () => !doc || doc.visibilityState !== "hidden";
+  const armDomIdle = () => {
+    if (domIdleTimer !== null || !domRecording) return;
+    domIdleTimer = setTimer(() => {
+      domIdleTimer = null;
+      if (!visible() || now() - lastInputAt >= DOM_IDLE_MS) domSleep();
+      else armDomIdle();
+    }, Math.max(1_000, DOM_IDLE_MS - (now() - lastInputAt)));
+  };
+  function domWake() {
+    if (stopped || domDead || !domStart || domRecording) return;
+    // A ring segment from before a long sleep is no context for what comes next.
+    if (!domShips() && now() - domLastEventAt > REPLAY_LIMITS.ring_buffer_ms) {
+      domSegments = [[]];
+      domHeld = 0;
+    } else openSegment();
+    domRecording = domStart(onDomEvent);
+    if (!domRecording) {
+      domDead = true;
+      return;
+    }
+    scheduleDomCheckout();
+    armDomIdle();
+  }
+  function domSleep() {
+    if (domCheckoutTimer !== null) clearTimer(domCheckoutTimer);
+    if (domIdleTimer !== null) clearTimer(domIdleTimer);
+    domCheckoutTimer = domIdleTimer = null;
+    domRecording?.stop();
+    domRecording = null;
+  }
+  const noteInput = () => {
+    lastInputAt = now();
+    if (!domRecording && domStart && visible()) domWake();
   };
 
   // Back to a ring that starts on a fresh snapshot, since events after a gap
   // in the shipped stream cannot be played from what came before.
   function domToRing() {
-    if (!domRecording) return;
     domSegments = [[]];
     domHeld = 0;
-    domSawError = false;
-    domRecording.checkout();
+    domWanted = false;
+    domRecording?.checkout();
   }
 
   const stopDom = () => {
-    if (domCheckoutTimer !== null) clearTimer(domCheckoutTimer);
-    domCheckoutTimer = null;
-    domRecording?.stop();
-    domRecording = null;
+    domSleep();
+    domDead = true;
     domSegments = [[]];
     domHeld = 0;
   };
+
+  // Linked stylesheets the shipped capture names (replayDom leaves their text
+  // out): each uploaded once per recording, after the chunks that name it.
+  // The raw href is what the page fetches; the scrubbed one is what the
+  // capture holds, so it is the name the player looks the text up by.
+  const stylesNamed = new Map<string, string>();
+  const stylesDone = new Set<string>();
+  const noteStyleNode = (value: unknown) => {
+    const n = value as { tagName?: unknown; attributes?: { rel?: unknown; href?: unknown } };
+    if (n.tagName !== "link" || typeof n.attributes?.href !== "string" || !/\bstylesheet\b/i.test(String(n.attributes.rel ?? ""))) return;
+    const raw = n.attributes.href;
+    if (!stylesDone.has(raw) && !stylesNamed.has(raw)) stylesNamed.set(raw, raw.includes("/") ? sink.scrubUrl(raw) : raw);
+  };
+  async function uploadStyles(): Promise<void> {
+    for (const [raw, href] of Array.from(stylesNamed)) {
+      if (!domStart || domDead) return;
+      stylesNamed.delete(raw);
+      stylesDone.add(raw);
+      if (stylesDone.size > REPLAY_STYLE_MAX) return;
+      const text = await readStylesheet(raw);
+      if (text === null) continue;
+      const bytes = (await gzipText(text)) ?? new TextEncoder().encode(text);
+      if (bytes.byteLength > REPLAY_STYLE_MAX_BYTES) continue;
+      // A sheet that did not go is not retried: the replay draws without it.
+      await putSigned(bytes, { seq: 0, kind: "style", href });
+    }
+  }
+  // The sheet's text as served (the browser's cache usually has it), its
+  // relative url()s made absolute against the sheet, the way rrweb's own
+  // inlining writes them. Null for a sheet the page cannot read (another
+  // origin without CORS), which the replay draws without, as rrweb would.
+  async function readStylesheet(href: string): Promise<string | null> {
+    if (!baseFetch) return null;
+    try {
+      const res = await baseFetch(href, { credentials: "same-origin", cache: "force-cache" });
+      if (!res.ok) return null;
+      return absoluteCssUrls(await res.text(), href);
+    } catch {
+      return null;
+    }
+  }
 
   // Ship everything held as chunks of about chunk_target_raw_bytes of JSON.
   // Each event is serialized once, its strings through the app's URL rewrite
@@ -570,7 +761,11 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
   // MB with the rewrite called on every string, at the moment the page is in
   // error. It yields to the page every DOM_SERIALIZE_SLICE_MS of that work, so
   // no single task holds the main thread for the whole of it.
-  const scrubString = (_key: string, value: unknown) => (typeof value === "string" && value.includes("/") ? sink.scrubUrl(value) : value);
+  const scrubString = (_key: string, value: unknown) => {
+    if (typeof value === "string") return value.includes("/") ? sink.scrubUrl(value) : value;
+    if (value !== null && typeof value === "object") noteStyleNode(value);
+    return value;
+  };
   async function uploadDom(): Promise<void> {
     if (!domShips()) return;
     const held = domSegments.flat();
@@ -578,7 +773,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     domHeld = 0;
     let i = 0;
     let sliceStart = perfNow();
-    while (i < held.length && domRecording) {
+    while (i < held.length && !domDead) {
       if (domChunks >= REPLAY_DOM_LIMITS.max_chunks_per_replay) return stopDom();
       const parts: string[] = [];
       let size = 2;
@@ -589,7 +784,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
         if (perfNow() - sliceStart >= DOM_SERIALIZE_SLICE_MS) {
           await yieldToPage();
           sliceStart = perfNow();
-          if (!domRecording) return;
+          if (domDead) return;
         }
       }
       const result = await putChunk(`[${parts.join(",")}]`, domChunks, "dom");
@@ -603,6 +798,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
       }
       domChunks++;
     }
+    await uploadStyles();
   }
 
   if (domMode !== "off" && doc) {
@@ -610,9 +806,9 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     void load()
       .then((startDom) => {
         if (stopped) return;
-        domRecording = startDom(onDomEvent);
-        scheduleDomCheckout();
-        if (domRecording && domShips()) scheduleChunks();
+        domStart = startDom;
+        if (visible()) domWake();
+        if (domShips()) scheduleChunks();
       })
       .catch(() => {
         // no rrweb in this build: the semantic recording carries on alone
@@ -648,6 +844,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
           duration_ms: now() - startedAt,
           chunks,
           counts: { ...counts },
+          kept_for: [...keptFor],
         });
       }
       if (failures === 0) await uploadDom();
@@ -658,6 +855,18 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     if (full()) dropToRing();
     if (kept) scheduleChunks();
   }
+
+  // Something worth seeing happened: keep the recording, page capture
+  // included, and name why. The first time a reason fires is what counts; a
+  // recording already kept only adds the reason to its list.
+  const keep = (reason: string) => {
+    if (stopped) return;
+    if (!keptFor.includes(reason) && keptFor.length < REPLAY_KEEP_REASONS_MAX) keptFor.push(reason);
+    domWanted = true;
+    // The page as it is now: an error or a freeze can land while rrweb sleeps.
+    domWake();
+    void upload();
+  };
 
   const listen = <K extends keyof DocumentEventMap>(type: K, fn: (e: DocumentEventMap[K]) => void) => {
     if (!doc) return;
@@ -680,6 +889,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     const text = readableText(el);
     const label = labelOf(el);
     const role = roleOf(el);
+    noteRage(el, t());
     push({
       type: "click",
       t: t(),
@@ -689,6 +899,24 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
       ...(text && text !== label ? { text: clip(text, REPLAY_LIMITS.label_max_chars) } : {}),
     });
   });
+
+  // A rage click: rageClicks clicks on one target inside rageClickMs, the
+  // shape of a person hammering something that does not answer.
+  let rageTarget: Element | null = null;
+  let rageTimes: number[] = [];
+  function noteRage(el: Element, at: number) {
+    if (!keepOn.rageClicks) return;
+    if (el !== rageTarget) {
+      rageTarget = el;
+      rageTimes = [];
+    }
+    rageTimes.push(at);
+    rageTimes = rageTimes.filter((x) => at - x <= keepOn.rageClickMs);
+    if (rageTimes.length >= keepOn.rageClicks) {
+      rageTimes = [];
+      keep("rage_click");
+    }
+  }
 
   const fieldNames = new WeakMap<Element, { label: string; selector: string }>();
   // Typing becomes one event per field and burst: the newest keystroke
@@ -719,8 +947,18 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
   });
 
   listen("keydown", (e) => {
+    noteInput();
     if ((REPLAY_KEYS as readonly string[]).includes(e.key)) push({ type: "key", t: t(), key: e.key as ReplayKey });
   });
+
+  // Attention for the DOM recording: a stamp per input, nothing else.
+  if (domMode !== "off") {
+    for (const type of ["pointermove", "pointerdown", "wheel", "touchstart", "focusin"] as const) listen(type, noteInput);
+    listen("visibilitychange", () => {
+      if (visible()) noteInput();
+      else domSleep();
+    });
+  }
 
   if (win) {
     const onScroll = () => {
@@ -784,7 +1022,45 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     if (!failed && ms < REPLAY_LIMITS.network_slow_ms) return;
     if (failed) counts.failed_requests++;
     push({ type: "network", t: t(), method: method.toUpperCase(), url: keepUrl(url, win?.location.href), status, ms: Math.round(ms) });
+    // Only the page's own site keeps a recording: a blocked ad pixel or a
+    // third party's outage says nothing about the app.
+    if (!ownSite(url)) return;
+    if (keepOn.serverError && status >= 500) keep("server_error");
+    else if (keepOn.slowRequestMs !== false && ms >= keepOn.slowRequestMs) keep("slow_request");
   };
+  const pageSite = win ? siteOf(win.location.hostname) : null;
+  const ownSite = (url: string) => {
+    if (!pageSite) return false;
+    try {
+      return siteOf(new URL(url, win!.location.href).hostname) === pageSite;
+    } catch {
+      return false;
+    }
+  };
+
+  // A frozen page: one frame (or task) that held the main thread past
+  // freezeMs. Long-animation-frame where the browser has it, else longtask.
+  if (keepOn.freezeMs !== false && typeof PerformanceObserver !== "undefined") {
+    const freezeMs = keepOn.freezeMs;
+    const types = PerformanceObserver.supportedEntryTypes ?? [];
+    const type = types.includes("long-animation-frame") ? "long-animation-frame" : types.includes("longtask") ? "longtask" : null;
+    if (type) {
+      try {
+        const observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if (entry.duration < freezeMs) continue;
+            push({ type: "mark", t: t(), name: "freeze", data: { ms: Math.round(entry.duration) } });
+            keep("freeze");
+            break;
+          }
+        });
+        observer.observe({ type, buffered: false });
+        cleanups.push(() => observer.disconnect());
+      } catch {
+        // no observer of that kind here
+      }
+    }
+  }
 
   if (typeof globalThis.fetch === "function") {
     const original = globalThis.fetch;
@@ -841,8 +1117,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
         message: clip(item.message, REPLAY_LIMITS.console_message_max_chars),
         ...(item.stack ? { stack: clip(item.stack, REPLAY_LIMITS.error_stack_max_chars) } : {}),
       });
-      domSawError = true;
-      void upload();
+      keep("error");
     }),
   );
   sink.setReplayId(replayId);
@@ -855,6 +1130,9 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     replayId,
     get kept() {
       return kept;
+    },
+    get keptFor() {
+      return keptFor;
     },
     get events() {
       return events;
@@ -874,6 +1152,9 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
       push({ type: "mark", t: t(), name: clip(name, REPLAY_LIMITS.label_max_chars), ...(bounded ? { data: bounded } : {}) });
     },
     upload,
+    keep(reason) {
+      if (REPLAY_KEEP_REASON_PATTERN.test(reason)) keep(reason);
+    },
     stop() {
       if (stopped) return;
       stopped = true;

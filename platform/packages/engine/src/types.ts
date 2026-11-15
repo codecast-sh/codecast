@@ -518,6 +518,12 @@ export type DispatchFn = (
   patches?: any,
   result?: any,
   commandId?: string,
+  /**
+   * The locks this send planted (key and lock id). An app that retires locks
+   * through its own acknowledgements stamps the acknowledgement on exactly
+   * these: a value match alone also takes in a newer write of the same value.
+   */
+  meta?: { locks: ReadonlyArray<{ key: string; lock: string }> },
 ) => Promise<any>;
 export type MaybePromise<T> = T | Promise<T>;
 export type IDBWriteFn = (patches: any[], state: any) => MaybePromise<void>;

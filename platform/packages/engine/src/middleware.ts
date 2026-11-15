@@ -574,7 +574,12 @@ async function dispatchWithRetry(
   // Asked before every attempt: the row patches to send now (a later send may
   // own some of them by then), or NOTHING_LEFT when no cell is left to send.
   patchesNow?: () => any,
+  // The locks the send planted, handed to the dispatch function (DispatchFn meta).
+  locks?: readonly ActionFieldLock[],
 ): Promise<any> {
+  const meta = locks?.length
+    ? { locks: locks.filter((l) => l.lock !== undefined).map((l) => ({ key: l.key, lock: l.lock! })) }
+    : undefined;
   const safeArgs = sanitizeForTransport(args);
   let safeGrouped = grouped !== undefined ? sanitizeForTransport(grouped) : undefined;
   const safeResult = result === undefined ? null : sanitizeForTransport(result);
@@ -591,7 +596,7 @@ async function dispatchWithRetry(
       safeGrouped = now !== undefined ? sanitizeForTransport(now) : undefined;
     }
     try {
-      const response = await fn(action, safeArgs, safeGrouped, safeResult, commandId);
+      const response = await fn(action, safeArgs, safeGrouped, safeResult, commandId, meta);
       assertCurrent();
       return response;
     } catch (e) {
@@ -1573,6 +1578,7 @@ export function mutativeMiddleware(
                 const now = patchesNow();
                 return now === NOTHING_LEFT ? now : transformReplayPatches(now);
               },
+              entry.locks,
             );
             assertDispatchCurrent(captured);
             if (isReceiptActionEnvelope(entry.result)) {
@@ -1784,6 +1790,7 @@ export function mutativeMiddleware(
             return true;
           },
           patchesNowFor(key, outboxId, entry.ts, grouped, fieldLocks),
+          fieldLocks,
         );
         // Live sends are not ordered by themselves: a write retrying after a
         // transient error can land after a later call's send. A call that

@@ -334,9 +334,11 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
         }
       }
     } else if (META_KEYS.has(key)) {
-      // One blob per key (the pending map holds a lock per field in flight): its latest value is
-      // written once per quiet spell, never once per action. Page hide flushes it.
-      metaWriter.write(key, state[key]);
+      // One blob per key, written once per quiet spell with its latest value (page hide flushes it).
+      // The pending map is the exception: its locks protect writes the outbox puts on disk at once,
+      // so a page that died in the quiet spell would reload with parked writes no lock protects.
+      if (key === "pending") db.meta.put({ key, value: state[key] }).catch(() => {});
+      else metaWriter.write(key, state[key]);
     }
   }
 }
