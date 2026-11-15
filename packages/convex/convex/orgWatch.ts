@@ -19,7 +19,7 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { AREA_STATUS_ATTENTION, areaChangeLine, type AreaChange, type AreaStatus } from "@codecast/shared/contracts/orgAreas";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
-import { computeOrgHealth, HEALTH_CAPS, HEALTH_WINDOW_7D_MS, healthMembersAndRoles, readHealthDecisions, readWorkTasks, slimWorkTasks, type HealthDecisions, type WorkTasks } from "./orgHealth";
+import { answerHealthDecisionSlice, computeOrgHealth, fanHealthDecisions, HEALTH_CAPS, HEALTH_WINDOW_7D_MS, healthDecisionSliceArg, healthMembersAndRoles, readWorkTasks, slimWorkTasks, type HealthDecisions, type HealthDecisionSliceResult, type WorkTasks } from "./orgHealth";
 import { fireRoleEvent } from "./agentTasks";
 import { HEAD_AREA_CHANGE_SPEC } from "./lib/orgRoutine";
 import { UNPLACED_CAPS, type OrgUnplaced } from "./lib/orgCoverage";
@@ -130,12 +130,14 @@ export const listWatched = internalQuery({
 
 // The health read fanned as healthReport fans it, without a caller: the
 // decision ladder and the open task set in their own budgets, then the core.
+export const membersPart = internalQuery({
+  args: { user_id: v.id("users"), team_id: v.optional(v.id("teams")) },
+  handler: async (ctx, args): Promise<Id<"users">[]> => (await healthMembersAndRoles(ctx, args.user_id, args.team_id)).memberIds,
+});
+
 export const decisionsPart = internalQuery({
-  args: { user_id: v.id("users"), team_id: v.optional(v.id("teams")), now: v.number() },
-  handler: async (ctx, args): Promise<HealthDecisions> => {
-    const { memberIds, roleIds } = await healthMembersAndRoles(ctx, args.user_id, args.team_id);
-    return readHealthDecisions(ctx, args.team_id, memberIds, roleIds, args.now);
-  },
+  args: { user_id: v.id("users"), team_id: v.optional(v.id("teams")), now: v.number(), slice: healthDecisionSliceArg },
+  handler: async (ctx, args): Promise<HealthDecisionSliceResult> => answerHealthDecisionSlice(ctx, args.user_id, args.team_id, args.now, args.slice),
 });
 
 export const workPart = internalQuery({
@@ -194,8 +196,9 @@ export const sweep = internalAction({
     for (const w of watched) {
       const now = Date.now();
       try {
+        const memberIds = await ctx.runQuery(internal.orgWatch.membersPart, { user_id: w.user_id, team_id: w.team_id });
         const [decisions, work, unplaced] = await Promise.all([
-          ctx.runQuery(internal.orgWatch.decisionsPart, { user_id: w.user_id, team_id: w.team_id, now }),
+          fanHealthDecisions(memberIds, (slice) => ctx.runQuery(internal.orgWatch.decisionsPart, { user_id: w.user_id, team_id: w.team_id, now, slice })),
           ctx.runQuery(internal.orgWatch.workPart, { user_id: w.user_id, team_id: w.team_id, now }),
           // A failed unplaced read leaves those kinds untold this pass; the rest still runs.
           ctx.runQuery(internal.orgUnplaced.internalPart, { user_id: w.user_id, team_id: w.team_id, now }).catch((e: unknown) => { console.warn("org_area_watch_unplaced_failed", { error: e instanceof Error ? e.message : String(e) }); return null; }),

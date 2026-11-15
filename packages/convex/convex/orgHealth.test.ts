@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
-import { HEALTH_CAPS, HEALTH_TASK_FIELDS, NAV_PROMPT_LIVE_SINCE, computeOrgHealth, healthMembersAndRoles, readHealthDecisions, readTurnsSince, readWorkTasks, roleActivity, slimWorkTasks } from "./orgHealth";
+import { HEALTH_CAPS, HEALTH_DECISION_PAGE, HEALTH_TASK_FIELDS, NAV_PROMPT_LIVE_SINCE, answerHealthDecisionSlice, computeOrgHealth, fanHealthDecisions, healthMembersAndRoles, readHealthDecisions, type HealthDecisionSliceResult, readTurnsSince, readWorkTasks, roleActivity, slimWorkTasks } from "./orgHealth";
 import { collectOrgSessions } from "./org";
 import { reachedSentence } from "@codecast/shared/contracts/orgAreas";
 
@@ -644,19 +644,48 @@ describe("org.health decisions part on a large workspace (ct-73207)", () => {
     }, { indexes: schemaIndexes(schema as any) });
   }
 
-  test("reads within one query's budget and counts every decision of the week", async () => {
-    const { db, used } = meter(bigWorkspace());
-    const ctx = { db } as any;
-    const { memberIds, roleIds } = await healthMembersAndRoles(ctx, ME as any, TEAM);
-    const dec = await readHealthDecisions(ctx, TEAM, memberIds, roleIds, NOW);
+  test("each fanned query reads within one query's budget and the week counts whole", async () => {
+    const base = bigWorkspace();
+    const { memberIds } = await healthMembersAndRoles({ db: base } as any, ME as any, TEAM);
+    const worst = { docs: 0, bytes: 0, calls: 0 };
+    let queries = 0;
+    const dec = (await fanHealthDecisions(memberIds, async (slice) => {
+      const { db, used } = meter(base);
+      const out = await answerHealthDecisionSlice({ db } as any, ME as any, TEAM, NOW, slice);
+      queries++;
+      for (const k of ["docs", "bytes", "calls"] as const) worst[k] = Math.max(worst[k], used[k]);
+      return out;
+    }))!;
 
     expect(dec.decisionsOf[GROWTH]).toBe(ANSWERED + PENDING);
     expect(dec.latency[GROWTH]).toHaveLength(ANSWERED + PENDING);
     expect(dec.decisionsTruncated).toBe(false);
     expect(dec.peopleWaiting[ME]).toEqual({ n: INBOX, oldest_min: 5 * 24 * 60 });
+    const whole = await readHealthDecisions({ db: base } as any, TEAM, memberIds, [GROWTH], NOW);
+    expect({ ...dec, latency: { [GROWTH]: [...dec.latency[GROWTH]!].sort() } }).toEqual({ ...whole, latency: { [GROWTH]: [...whole.latency[GROWTH]!].sort() } });
 
-    expect(used.docs).toBeLessThanOrEqual(BUDGET.docs);
-    expect(used.calls).toBeLessThanOrEqual(BUDGET.calls);
-    expect(used.bytes).toBeLessThanOrEqual(BUDGET.bytes);
+    expect(queries).toBeGreaterThan(MEMBERS);
+    expect(worst.docs).toBeLessThanOrEqual(BUDGET.docs);
+    expect(worst.calls).toBeLessThanOrEqual(BUDGET.calls);
+    expect(worst.bytes).toBeLessThanOrEqual(BUDGET.bytes);
+  });
+
+  test("a ladder past the cap reads as truncated, and a non-member slice reads nothing", async () => {
+    const base = bigWorkspace();
+    const empty = await answerHealthDecisionSlice({ db: base } as any, ME as any, TEAM, NOW, { member_id: "users_stranger" as any, status: "answered", cursor: null, num_items: 200 });
+    expect(empty).toEqual({ part: { decisionsOf: {}, decisionsByDay: {}, latency: {}, decisionsTruncated: false, peopleWaiting: {} }, read: 0, next: null });
+    const pages: HealthDecisionSliceResult[] = [];
+    const dec = (await fanHealthDecisions([ME as any], async (slice) => {
+      const r = await answerHealthDecisionSlice({ db: base } as any, ME as any, TEAM, NOW, slice);
+      if ("member_id" in slice && slice.status === "answered") pages.push(r);
+      return r;
+    }))!;
+    expect(pages.every((p) => p.read <= HEALTH_DECISION_PAGE)).toBe(true);
+    expect(dec.decisionsOf[GROWTH]).toBe(ANSWERED + PENDING);
+    expect(await fanHealthDecisions([ME as any], async () => null)).toBeNull();
+    let calls = 0;
+    const endless = await fanHealthDecisions([ME as any], async (slice) => { if ("member_id" in slice) calls++; return { part: { decisionsOf: {}, latency: {}, decisionsTruncated: false, peopleWaiting: {} }, read: slice.num_items ?? 0, next: "more" }; });
+    expect(endless!.decisionsTruncated).toBe(true);
+    expect(calls).toBe(2 * Math.ceil(HEALTH_CAPS.decisions / HEALTH_DECISION_PAGE));
   });
 });
