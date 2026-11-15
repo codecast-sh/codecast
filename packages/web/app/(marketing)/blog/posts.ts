@@ -20,15 +20,16 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
-    slug: "one-question-per-change",
-    title: "One question per change",
-    dek: "When an agent finishes a change, Codecast's Change flow runs your project's checks on it, has a second agent review it, and sends whatever they find back to the agent that wrote it. What reaches you is one card: ship it, send it back with a note, or drop it.",
+    slug: "the-software-factory",
+    title: "The software factory",
+    dek: "Codecast turns what your product reports, from errors and analytics to failing checks and evals, into a small set of problems, has a flow your team owns prove and fix each one, and brings you one card per change. Shipped fixes are watched, and anything that comes back reopens. Here is the whole loop on our own product, with one change from error to card.",
     author: "the codecast team",
-    date: "2026-11-14",
-    dateLabel: "November 14, 2026",
-    readingMinutes: 7,
-    cover: { src: "/blog/one-question-per-change/ship-popover.png", alt: "The Ship popover on a Codecast session: the Change flow picked, with its steps Check, Review, Decide, Land, Deploy and Live, and who does each" },
+    date: "2026-11-15",
+    dateLabel: "November 15, 2026",
+    readingMinutes: 11,
+    cover: { src: "/blog/the-software-factory/factory-loop.png", alt: "The Loop view of Codecast's Flows page: sources feeding signals, triage, build, the same checks for every change, and ship and watch, with the way back to signals underneath" },
   },
+
   {
     slug: "agents-in-your-own-chrome",
     title: "Your coding agent can check the page in your own Chrome",
