@@ -132,6 +132,39 @@ describe("runReconcileCrawl — mid-crawl resume", () => {
     expect(meta?.backfilledAt).toBeGreaterThan(0);
   });
 
+  it("lands each flush's page, progress and checkpoint in one subscriber visit", async () => {
+    const ns = "foldNs";
+    const key = syncMetaKey(ns, "ws1");
+    const visits: { meta: boolean; progress: boolean; page: boolean }[] = [];
+    const off = useInboxStore.subscribe((s, prev) => {
+      visits.push({
+        meta: s.syncMeta[key] !== prev.syncMeta[key],
+        progress: s.syncProgress[ns] !== prev.syncProgress[ns],
+        page: (s as any).sessionDecisions !== (prev as any).sessionDecisions,
+      });
+    });
+    const rows = (p: string) => Array.from({ length: 200 }, (_, i) => ({ _id: `${p}${i}` }));
+    runReconcileCrawl({
+      namespace: ns,
+      wsKey: "ws1",
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 10,
+      fetchPage: pagedFetcher({
+        start: { rows: rows("a"), next: "c2" },
+        c2: { rows: rows("b"), next: "c3" },
+        c3: { rows: [], next: null },
+      }, []),
+      onPage: () => useInboxStore.setState({ sessionDecisions: { ...(useInboxStore.getState() as any).sessionDecisions } } as any),
+      onComplete: () => {},
+    });
+    await delay(200);
+    off();
+    // No checkpoint publishes on its own.
+    expect(visits.filter((v) => v.meta && !v.page).length).toBe(0);
+    expect(visits.filter((v) => v.page).every((v) => v.progress && v.meta)).toBe(true);
+  });
+
   it("ignores a stale checkpoint and reports complete=true from a full walk", async () => {
     const ns = "resumeStaleNs";
     const key = syncMetaKey(ns, "ws1");

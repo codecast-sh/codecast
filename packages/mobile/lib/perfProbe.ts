@@ -57,7 +57,10 @@ export function probeTouchEnd(e: GestureResponderEvent) {
     if (calm >= CALM_FRAMES || t - t0 > CAP_MS || id !== seq) {
       const r = (n: number) => Math.round(n - t0);
       console.log(
-        `[tap] #${id} at=${Math.round(t0)} lag=${r(seen)} first=${r(first)} settle=${r(calm >= CALM_FRAMES ? calmSince : t)} gap=${Math.round(maxGap)} ${from} -> ${route} listeners=${readStoreListenerCount()} renders=${JSON.stringify(renders)}`,
+        `[tap] #${id} at=${Math.round(t0)} lag=${r(seen)} first=${r(first)} settle=${r(calm >= CALM_FRAMES ? calmSince : t)} gap=${Math.round(maxGap)} ${from} -> ${route} listeners=${readStoreListenerCount()} renders=${JSON.stringify(renders)} why=${JSON.stringify((globalThis as any).__ssWhy ?? {})}`,
+      );
+      (globalThis as any).__ssWhy = {};
+      void (0
       );
       return;
     }

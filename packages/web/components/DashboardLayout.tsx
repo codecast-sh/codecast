@@ -559,7 +559,9 @@ function HostFeeders() {
 /** The store's feeders and write wiring for one window. An embedded pane
  *  (PANE_EMBED) skips the window-only effects: call rings, chat toasts and
  *  mods belong to the full app's window. */
-export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEffects?: boolean } = {}) {
+// Memo: it takes no props from the layout, so a layout render (every
+// navigation) does not re-run every feeder below it.
+export const DashboardSyncEffects = memo(function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEffects?: boolean } = {}) {
   // Cross-window replication: elect a sync host, follow one, or run solo.
   // Everything below the feeder gate still runs in every window — toasts,
   // calls and badges READ the store, which replication keeps fed.
@@ -584,7 +586,7 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
     {isSyncHost ? <HostFeeders /> : null}
     {isSyncHost ? <ChatPrefetchFeeder /> : null}
   </>;
-}
+});
 
 /** Settles this window's daemon commands (restart, move, switch, hibernate)
  *  wherever they were asked from. The collection is per-window, so every
