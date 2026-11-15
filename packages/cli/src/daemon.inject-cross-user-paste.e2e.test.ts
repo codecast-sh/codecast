@@ -70,8 +70,8 @@ function world(sessionId: string) {
     users: [{ _id: "uAda", name: "Ada" }, { _id: "uBo", name: "Bo" }],
     teams: [{ _id: "tA" }],
     team_memberships: [
-      { _id: "mAda", user_id: "uAda", team_id: "tA", visibility: "summary" },
-      { _id: "mBo", user_id: "uBo", team_id: "tA", visibility: "summary" },
+      { _id: "mAda", user_id: "uAda", team_id: "tA", visibility: "full" },
+      { _id: "mBo", user_id: "uBo", team_id: "tA", visibility: "full" },
     ],
     conversations: [{
       _id: "convAda", user_id: "uAda", team_id: "tA", short_id: "jxada01", session_id: sessionId,
