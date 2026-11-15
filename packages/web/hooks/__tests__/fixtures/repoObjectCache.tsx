@@ -43,7 +43,7 @@ const client: any = {
     return new Promise((resolve, reject) => requests.push({ args, resolve, reject }));
   },
 };
-const pr = { _id: "pr1", repository: "union-ai/union-mobile", number: 3591, title: "Call scoring baseline", state: "merged", updated_at: 1,
+const pr = { _id: "pr1", repository: "union-ai/union-mobile", number: 3591, title: "Call scoring baseline", body: "", state: "merged", updated_at: 1,
   files: [{ filename: "score.ts", patch: "@@ -1 +1 @@\n-old\n+new" }] };
 const commit = { _id: "commit1", repository: "union-ai/union-mobile", sha: "abcdef1234567890", message: "Cache visited objects", timestamp: 1 };
 

@@ -24,7 +24,7 @@ const client: any = { action(ref: any, args: any) {
   return new Promise<void>((resolve, reject) => requests.push({ args, resolve, reject }));
 } };
 const store = () => useInboxStore.getState();
-const seed = { _id: "pr1", repository: "acme/repo", number: 42, title: "PR", head_sha: "head", commits_count: 2 };
+const seed = { _id: "pr1", repository: "acme/repo", number: 42, title: "PR", body: "", head_sha: "head", commits_count: 2 };
 const commits = [{ sha: "head", message: "Fix the missing details", author_name: "Ada" }];
 const checks = [{ name: "Tests", status: "in_progress", external_id: "1", updated_at: 1 }];
 

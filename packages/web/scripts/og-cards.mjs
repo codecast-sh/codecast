@@ -1,10 +1,12 @@
 /**
- * Social card images for the marketing routes: one 1200x630 PNG per SEO route,
- * in the site's Solarized-light palette. A route with a picture (a feature
- * page's hero, captured by scripts/capture-og-art.ts into scripts/og-art; a
- * blog post's cover; the landing hero) shows it on a panel in the route's
- * color beside its name; any other route gets its heading set large. Called by scripts/prerender.mjs, which points og:image at each
- * card it managed to write (lib/seoRoutes.ts cardImagePath).
+ * Social card images for the marketing routes: one 1200x630 PNG per SEO route
+ * in the site's Solarized-light palette, each in one accent color with the
+ * one-color codecast mark. A route with a picture (a feature page's hero,
+ * captured by scripts/capture-og-art.ts into scripts/og-art; a blog cover; the
+ * landing hero) shows it on a panel of that color beside its name; any other
+ * route sets its heading large beside the mark, drawn huge in that color.
+ * Called by scripts/prerender.mjs, which points og:image at each card it
+ * managed to write (lib/seoRoutes.ts cardImagePath).
  *
  * satori lays the card out to SVG and resvg rasterises it (wasm, so the build
  * needs no native binary). Fonts are committed static TTFs of JetBrains Mono,
@@ -43,15 +45,14 @@ const SOL = {
 };
 
 const SECTIONS = [
-  ["/blog/", "blog", "#cb4b16"],
-  ["/documentation/", "docs", "#268bd2"],
-  ["/compare/", "compare", "#2aa198"],
-  ["/features/", "feature", "#6c71c4"],
+  ["/blog/", "blog"],
+  ["/documentation/", "docs"],
+  ["/compare/", "compare"],
+  ["/features/", "feature"],
 ];
 
 function sectionOf(path) {
-  const hit = SECTIONS.find(([prefix]) => path.startsWith(prefix));
-  return hit ? { label: hit[1], color: hit[2] } : null;
+  return SECTIONS.find(([prefix]) => path.startsWith(prefix))?.[1] ?? null;
 }
 
 /** `color` mixed with `into` at `amount` of `color` (0..1); satori has no color-mix. */
@@ -110,28 +111,51 @@ const GRID = {
   backgroundSize: "36px 36px",
 };
 
-function brand(logo) {
+/** The one-color codecast mark, `width` wide. */
+function markSvg(mark, width, color) {
+  const [, , w, hgt] = mark.viewBox.split(" ").map(Number);
+  return {
+    type: "svg",
+    props: {
+      width,
+      height: Math.round((width * hgt) / w),
+      viewBox: mark.viewBox,
+      fill: color,
+      children: mark.paths.map((d) => ({ type: "path", props: { d } })),
+    },
+  };
+}
+
+function brand(mark) {
   return h(
     "div",
     { display: "flex", alignItems: "center", gap: 14 },
-    { type: "img", props: { src: logo, width: 44, height: 44, style: { borderRadius: 10 } } },
-    h("div", { fontSize: 26, fontWeight: 700, color: SOL.base03 }, "codecast"),
+    markSvg(mark, 40, SOL.base03),
+    h("div", { fontSize: 30, fontWeight: 700, color: SOL.base03, letterSpacing: "-0.02em" }, "codecast"),
   );
 }
 
 function chip(label, color) {
   return h(
     "div",
-    { display: "flex", alignItems: "center", gap: 10, fontSize: 20, color, padding: "5px 14px 5px 10px", borderRadius: 8, backgroundColor: tint(color, 0.12) },
+    { display: "flex", alignItems: "center", gap: 10, fontSize: 20, fontWeight: 700, color: shade(color, 0.15), padding: "5px 14px 5px 10px", borderRadius: 8, backgroundColor: tint(color, 0.16) },
     h("div", { width: 12, height: 12, borderRadius: 3, backgroundColor: color }),
     label,
   );
 }
 
-const urlOf = (path) => `codecast.sh${path === "/" ? "" : path}`;
+/** The page address as a dark key, the way the site's buttons look. */
+function urlKey(path, color, maxWidth) {
+  return h(
+    "div",
+    { display: "flex", alignItems: "center", gap: 12, maxWidth, fontSize: 20, color: SOL.base3, backgroundColor: SOL.base03, padding: "10px 18px", borderRadius: 10, boxShadow: `0 4px 0 ${shade(SOL.base03, 0.5)}` },
+    h("div", { display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, `codecast.sh${path === "/" ? "" : path}`),
+    h("div", { color, flexShrink: 0 }, "→"),
+  );
+}
 
 /** A route with a picture: words on the left, the picture on a panel in the route's color. */
-function artCard({ path, heading, logo, art, color, section }) {
+function artCard({ path, heading, mark, art, color, section }) {
   const { name, rest } = splitHeading(heading);
   const PANEL_X = 486;
   // A wide picture grows past the right edge so its detail stays legible.
@@ -144,42 +168,86 @@ function artCard({ path, heading, logo, art, color, section }) {
   return h(
     "div",
     { width: CARD_WIDTH, height: CARD_HEIGHT, display: "flex", position: "relative", backgroundColor: SOL.base3, fontFamily: "JetBrains Mono", ...GRID },
-    h("div", { position: "absolute", left: PANEL_X, top: 0, width: CARD_WIDTH - PANEL_X, height: CARD_HEIGHT, backgroundColor: tint(color, 0.2), borderLeft: `3px solid ${color}` }),
+    h("div", { position: "absolute", left: PANEL_X, top: 0, width: CARD_WIDTH - PANEL_X, height: CARD_HEIGHT, backgroundColor: color }),
     h(
       "div",
-      { position: "absolute", left: FRAME.left, top, width: FRAME.width, height: fitHeight, display: "flex", borderRadius: 14, overflow: "hidden", border: `1px solid ${tint(color, 0.45)}`, boxShadow: `0 24px 48px -20px ${tint(SOL.base03, 0.55)}`, backgroundColor: SOL.base3 },
+      { position: "absolute", left: FRAME.left, top, width: FRAME.width, height: fitHeight, display: "flex", borderRadius: 14, overflow: "hidden", border: `3px solid ${SOL.base03}`, boxShadow: `16px 16px 0 ${SOL.base03}`, backgroundColor: SOL.base3 },
       { type: "img", props: { src: art.src, width: FRAME.width, height: fitHeight, style: { objectFit: "cover" } } },
     ),
     h(
       "div",
       { position: "absolute", left: 0, top: 0, width: PANEL_X, height: CARD_HEIGHT, display: "flex", flexDirection: "column", padding: "48px 40px 44px 56px" },
-      brand(logo),
+      brand(mark),
       h(
         "div",
         { display: "flex", flexDirection: "column", flexGrow: 1, justifyContent: "center", gap: 18 },
-        section ? h("div", { display: "flex" }, chip(section.label, color)) : h("div", { display: "flex" }),
-        h("div", { display: "block", fontSize: rest || name.length <= 16 ? Math.max(44, Math.min(96, Math.floor(388 / (name.length * 0.62)))) : sizeFor(name, [[44, 42], [70, 36], [999, 31]]), fontWeight: 700, color: SOL.base03, lineHeight: 1.08, letterSpacing: "-0.03em", lineClamp: rest ? 2 : 6 }, name),
+        section ? h("div", { display: "flex" }, chip(section, color)) : h("div", { display: "flex" }),
+        h("div", { display: "block", fontSize: rest || name.length <= 16 ? Math.max(44, Math.min(96, Math.floor(388 / (name.length * 0.62)))) : sizeFor(name, [[30, 48], [50, 42], [70, 37], [999, 33]]), fontWeight: 700, color: SOL.base03, lineHeight: 1.08, letterSpacing: "-0.03em", lineClamp: rest ? 2 : 6 }, name),
         rest ? h("div", { display: "block", fontSize: sizeFor(rest, [[34, 32], [52, 28], [999, 25]]), fontWeight: 700, color: shade(color, 0.3), lineHeight: 1.25, lineClamp: 4 }, rest) : null,
       ),
-      h("div", { display: "block", fontSize: 19, color: SOL.base01, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, urlOf(path)),
+      h("div", { display: "flex" }, urlKey(path, color, PANEL_X - 96)),
     ),
   );
 }
 
-/** A route with no picture: the heading set large on grid paper. */
-function textCard({ path, heading, description, logo, color, section }) {
+/** "Codecast vs Paradev (formerly Superset)" -> { rival: "Paradev", aside: "formerly Superset" }. */
+function rivalOf(heading) {
+  const m = heading.match(/^Codecast vs (.+?)(?: \((.+)\))?$/);
+  return m && { rival: m[1], aside: m[2] ?? null };
+}
+
+/**
+ * A route with no picture: the heading set large beside the mark, drawn huge
+ * in the route's color over an offset print of itself, running off the edge.
+ */
+function textCard({ path, heading, description, mark, color, section }) {
+  const vs = rivalOf(heading);
+  const MARK = { left: 752, top: 92, width: 600 };
+  const { name, rest } = splitHeading(heading);
+  const words = vs
+    ? h(
+        "div",
+        { display: "flex", flexDirection: "column", gap: 6 },
+        h("div", { display: "flex", alignItems: "center", gap: 22 },
+          h("div", { fontSize: 64, fontWeight: 700, color: SOL.base03, letterSpacing: "-0.04em" }, "Codecast"),
+          h("div", { fontSize: 30, fontWeight: 700, color: SOL.base3, backgroundColor: color, padding: "2px 16px 6px", borderRadius: 10 }, "vs"),
+        ),
+        h("div", { display: "block", fontSize: sizeFor(vs.rival, [[10, 92], [16, 76], [24, 60], [999, 50]]), fontWeight: 700, color: shade(color, 0.2), letterSpacing: "-0.04em", lineHeight: 1.05, lineClamp: 2 }, vs.rival),
+        vs.aside ? h("div", { fontSize: 24, color: SOL.base01, marginTop: 6 }, vs.aside) : null,
+      )
+    : h(
+        "div",
+        { display: "flex", flexDirection: "column", gap: 14 },
+        h("div", { display: "block", fontSize: sizeFor(name, [[12, 100], [22, 80], [34, 66], [48, 56], [999, 48]]), fontWeight: 700, color: SOL.base03, lineHeight: 1.04, letterSpacing: "-0.04em", lineClamp: 4 }, name),
+        rest ? h("div", { display: "block", fontSize: sizeFor(rest, [[30, 38], [50, 32], [999, 28]]), fontWeight: 700, color: shade(color, 0.2), lineHeight: 1.2, letterSpacing: "-0.02em", lineClamp: 2 }, rest) : null,
+      );
   return h(
     "div",
-    { width: CARD_WIDTH, height: CARD_HEIGHT, display: "flex", flexDirection: "column", backgroundColor: SOL.base3, padding: "48px 64px 48px 64px", fontFamily: "JetBrains Mono", borderLeft: `14px solid ${color}`, ...GRID },
-    h("div", { display: "flex", alignItems: "center", justifyContent: "space-between" }, brand(logo), section ? chip(section.label, color) : h("div", {})),
+    { width: CARD_WIDTH, height: CARD_HEIGHT, display: "flex", position: "relative", backgroundColor: SOL.base3, fontFamily: "JetBrains Mono", ...GRID },
+    h("div", { position: "absolute", left: MARK.left + 18, top: MARK.top + 18, display: "flex" }, markSvg(mark, MARK.width, SOL.base03)),
+    h("div", { position: "absolute", left: MARK.left, top: MARK.top, display: "flex" }, markSvg(mark, MARK.width, color)),
     h(
       "div",
-      { display: "flex", flexDirection: "column", flexGrow: 1, justifyContent: "center", gap: 24 },
-      h("div", { display: "block", fontSize: sizeFor(heading, [[26, 72], [44, 62], [70, 52], [999, 44]]), fontWeight: 700, color: SOL.base03, lineHeight: 1.1, letterSpacing: "-0.03em", lineClamp: 3 }, heading),
-      h("div", { display: "block", fontSize: 25, color: SOL.base01, lineHeight: 1.45, lineClamp: 3, maxWidth: 1000 }, description),
+      { position: "absolute", left: 0, top: 0, width: CARD_WIDTH, height: CARD_HEIGHT, display: "flex", flexDirection: "column", padding: "52px 64px 52px 64px" },
+      brand(mark),
+      h(
+        "div",
+        { display: "flex", flexDirection: "column", flexGrow: 1, justifyContent: "center", gap: 22, maxWidth: 640 },
+        section ? h("div", { display: "flex" }, chip(section, color)) : null,
+        words,
+        vs || rest || name.length > 40 ? null : h("div", { display: "block", fontSize: 23, color: SOL.base01, lineHeight: 1.45, lineClamp: 2 }, description),
+      ),
+      h("div", { display: "flex" }, urlKey(path, color, 620)),
     ),
-    h("div", { display: "flex", fontSize: 21, color }, urlOf(path)),
   );
+}
+
+/** A text card's color when the route names none: one Solarized accent per path, so neighbours differ. */
+const ACCENTS = ["blue", "violet", "magenta", "orange", "cyan", "red", "green", "yellow"];
+function accentFor(path) {
+  let n = 0;
+  for (const c of path) n = (n * 31 + c.charCodeAt(0)) >>> 0;
+  return SOL[ACCENTS[n % ACCENTS.length]];
 }
 
 function card(props) {
@@ -193,7 +261,7 @@ let wasmReady = null;
  * Writes <outDir><cardImagePath(path)> for every entry and returns the set of
  * paths that got a card. A route whose card fails keeps the site default image.
  */
-export async function renderCards({ entries, cardHeading, cardImagePath, outDir, logoPath }) {
+export async function renderCards({ entries, cardHeading, cardImagePath, outDir, mark }) {
   wasmReady ??= initWasm(readFileSync(require.resolve("@resvg/resvg-wasm/index_bg.wasm")));
   await wasmReady;
   const fonts = [400, 700].map((weight) => ({
@@ -202,7 +270,6 @@ export async function renderCards({ entries, cardHeading, cardImagePath, outDir,
     style: "normal",
     data: readFileSync(join(HERE, "og-fonts", `JetBrainsMono-${weight}.ttf`)),
   }));
-  const logo = `data:image/png;base64,${readFileSync(logoPath).toString("base64")}`;
   const written = new Set();
   for (const entry of entries) {
     try {
@@ -211,10 +278,10 @@ export async function renderCards({ entries, cardHeading, cardImagePath, outDir,
           path: entry.path,
           heading: cardHeading(entry),
           description: entry.description,
-          logo,
+          mark,
           art: loadArt(entry.card?.art),
           section: sectionOf(entry.path),
-          color: SOL[entry.card?.color] ?? entry.card?.color ?? sectionOf(entry.path)?.color ?? SOL.cyan,
+          color: SOL[entry.card?.color] ?? entry.card?.color ?? accentFor(entry.path),
         }),
         { width: CARD_WIDTH, height: CARD_HEIGHT, fonts },
       );

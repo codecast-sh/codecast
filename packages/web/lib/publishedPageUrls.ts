@@ -7,25 +7,25 @@ import { DOCS_SHOTS, DOCS_SHOTS_PAGES_ORIGIN } from "./docsShots/flag";
 
 // The origin that serves pages: the deployment, or the docs shots mode's
 // fixture origin, so the docs images frame fixture pages and never prod.
-const PAGES_ORIGIN = DOCS_SHOTS ? DOCS_SHOTS_PAGES_ORIGIN : CONVEX_URL;
+const pagesOrigin = () => (DOCS_SHOTS ? DOCS_SHOTS_PAGES_ORIGIN : CONVEX_URL);
 
 // The serving host frames the page: it arrives under its own sandbox CSP,
 // so an iframe or a stage pane needs no second sanitizer and the share
 // page's chrome does not wrap it twice. In production that host is the edge
 // cache, so a frame does not wait on the origin.
 export function pageFrameSrc(slug: string): string {
-  return `${pageServingOrigin(PAGES_ORIGIN)}/cli/a/${slug}`;
+  return `${pageServingOrigin(pagesOrigin())}/cli/a/${slug}`;
 }
 
 // The address an embed frames a page at (shared contracts pageEmbedUrl).
 export function pageEmbedSrc(slug: string, theme: string, keys = "", version?: number): string {
-  return pageEmbedUrl(PAGES_ORIGIN, slug, theme, keys, version);
+  return pageEmbedUrl(pagesOrigin(), slug, theme, keys, version);
 }
 
 // The page's live state (version, comments, its agent), read from the origin:
 // it is never cached, and the app's connect-src names only the origin.
 export function pageMetaUrl(slug: string): string {
-  return `${PAGES_ORIGIN}/cli/a/${slug}?meta=1`;
+  return `${pagesOrigin()}/cli/a/${slug}?meta=1`;
 }
 
 // The public share page: what "open in full" and "copy link" hand out.
