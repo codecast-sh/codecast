@@ -225,6 +225,7 @@ function plans() {
     byTeam("decision_stacks", "by_team"),
     byTeam("commits", "by_team_timestamp"),
     byTeam("pull_requests", "by_team_id"),
+    byTeam("pr_guides", "by_team_created"),
     byTeam("team_activity_events", "by_team_id"),
     byTeam("chat_channels", "by_team_name", { children: channelRows }),
     byTeam("external_events", "by_team_created"),

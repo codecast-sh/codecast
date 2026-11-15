@@ -39,7 +39,7 @@ export function writeGuideLedger(pr: PrGuideLedgerPr, rewrite: boolean): SwitchL
       { k: "Model", v: prettifyModelId(GUIDE_MODEL) },
       { k: "Reads", v: "Title, description, diff" },
       { k: "Visible to", v: "Your team" },
-      { k: "Team cap", v: `${usd(DAILY_CAP_USD)} a day` },
+      { k: "Team spend", v: `up to ${usd(DAILY_CAP_USD)} a day` },
     ],
     confirm: rewrite ? "Rewrite guide" : "Write guide",
   };

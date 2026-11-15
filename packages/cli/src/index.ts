@@ -18755,7 +18755,7 @@ projectCmd
   .description("Record a fact every session in a project should know: a pinned note in the project, listed at every session's start")
   .argument("<project-or-fact>", stdinText("The project (short id, id or title substring) when a fact follows; else the fact"))
   .argument("[fact]", stdinText("The fact (markdown), when the project is named first"))
-  .option("--title <text>", "The note's title (default: the fact's opening words)")
+  .option("--title <text>", stdinText("The note's title (default: the fact's opening words)"))
   .action(async (first: string, second: string | undefined, options: any) => {
     const ref = second === undefined ? undefined : first;
     const text = (second ?? first).trim();

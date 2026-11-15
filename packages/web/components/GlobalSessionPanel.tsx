@@ -66,7 +66,7 @@ import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsRight, ChevronRight, ChevronDown, Star, Workflow, Play, Pause, Settings2, ArrowUpRight, Zap, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { InboxViewPicker } from "./InboxViewPicker";
 import { ContinueAccountPicker } from "./ContinueAccountPicker";
-import { useLocalDeviceId } from "../hooks/useLocalDeviceId";
+import { localDeviceIdOf } from "../hooks/useLocalDeviceId";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
 import { CardWorkersLine } from "./inbox/SessionCardParts";
 import { foldedRunning } from "../lib/foldedSubagents";
@@ -303,7 +303,8 @@ function BlockedSessionsBanner({
   // Read for any blocked session, not just fleets of two: a single parked
   // session can be the one the machine is asking about.
   const accountData = useQuery(api.accountSwitch.listAccountProfiles, blocked.length > 0 ? {} : "skip");
-  const localDeviceId = useLocalDeviceId(blocked.length > 0);
+  // The window probes once (LocalDeviceProbe); the banner reads that answer.
+  const localDeviceId = useInboxStore(localDeviceIdOf);
   // How many tokens one percent of a usage window is worth, fitted across the
   // fleet (convex/usageCalibration.ts). Enrichment, so it goes through
   // useQueryNoThrow: without it the banner still names the tokens, it just

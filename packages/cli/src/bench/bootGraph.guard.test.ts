@@ -431,8 +431,11 @@ describe("command groups stay off the boot graph", () => {
     // stays under its 9000-byte hook budget. 4715 (2026-11-15): the deploy of
     // 411ff8710, measured one commit at a time: pl-1033 project contracts +1,
     // the pool prefix +1 and the members chart's shared types +1, offset by
-    // rounding; no new module on the graph.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4715);
+    // rounding; no new module on the graph. 4737 (2026-11-15): the deploy of
+    // 66afd981a, all index.ts (+351/-74 lines): project remember, memory, forget
+    // and outputs, the check watcher listing, chat and trigger flags; no new
+    // module on the graph.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4737);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

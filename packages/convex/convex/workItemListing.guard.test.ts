@@ -35,6 +35,7 @@ const ALLOWED: Record<string, string> = {
   "chat.ts::createChannel": "name-uniqueness lookup inside the caller's team; returns no other channel",
   "chat.ts::listChannels": "chat's access rule is channel membership: restricted rooms are filtered by chat_channel_members",
   "orgChannels.ts::resolveChannel": "by-name lookup; the channel then goes through loadChannel's access check",
+  "orgWhere.ts::chatRoomsFor": "finds the team's default rooms to name to a session of that team; returns room names only, each re-checked against the team",
   "slackSync.ts::adoptSlackName": "name-collision check while syncing a channel's Slack name; returns no row",
 };
 

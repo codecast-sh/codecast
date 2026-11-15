@@ -7,8 +7,8 @@ import { useDecisionDraftText } from "../hooks/useDecisionDraft";
 import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
-import { keyScopeHasFocus, keysOwnedElsewhere } from "../shortcuts/keyOwnership";
-import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, decisionDraftKey, type QueueItem } from "../lib/decisionQueue";
+import { useDecisionCardKeys } from "./decisionCardKeys";
+import { queueTier, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, decisionDraftKey, type QueueItem } from "../lib/decisionQueue";
 import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref, ladderRecommendation, ladderRecommenders } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
@@ -28,7 +28,6 @@ import { formatTimeAgo } from "../lib/messageNavigator";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
 import { useHeldOption } from "../lib/agentTabGuard";
 import { NOT_CONFIRMED } from "@codecast/shared/contracts/secrets";
@@ -342,62 +341,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   }, [threadAsks, threadIndex, onPick, size]);
   const onSkip = stepper?.onSkip ?? (threadAsks ? () => stepThread(1) : undefined);
   const onPrev = stepper ? stepper.onPrev : threadAsks ? () => stepThread(-1) : undefined;
-  useWatchEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // The pass menu owns the keys while it is open: its search and Escape.
-      if (passOpen) return;
-      const target = e.target as HTMLElement | null;
-      const action = routeQueueKey(e, {
-        modalOpen: hasOpenModal(),
-        ownedElsewhere: keysOwnedElsewhere(target, rootRef.current),
-        editing: !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable),
-        inOwnFreeTextBox: !!target && target === otherRef.current,
-        isPermissionCard,
-        // An infra dialog's options commit money — no digit may reach them;
-        // a multi, rank or form takes its own digits in its controls.
-        optionCount: isInfraDialog || richControls ? 0 : options.length,
-        sheet: full ? "full" : "peek",
-      });
-      if (!action) return;
-      // Outside the queue, a folded card must not claim the thread's keys:
-      // j/k/digits belong to the conversation until the card owns the pane.
-      // Only a blocking ask comes back on a key: an advisory one never
-      // interrupts, and raising it on the thread's own j would put its
-      // answers one digit away from a reader who never opened it.
-      // Stepping is the queue's: with nothing to step to, the arrows stay the page's.
-      if ((action.kind === "skip" || action.kind === "prev") && !((stepper?.total ?? 0) > 1) && !(threadAsks && !stepper)) return;
-      if (!stepper && !full && action.kind !== "commit-free-text" && action.kind !== "close-free-text") {
-        if (action.kind !== "full" || !item.blocking) return;
-      }
-      // An answer, a dismissal or a typed answer is the card's only while it
-      // is the thing in focus: a digit typed into anything else in this
-      // window (another pane, a tab an agent drives) never answers it.
-      if ((action.kind === "answer" || action.kind === "dismiss" || action.kind === "pass" || action.kind === "open-free-text") && !keyScopeHasFocus(rootRef.current)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      switch (action.kind) {
-        case "commit-free-text": answerFreeText(otherText); break;
-        case "close-free-text": setOtherOpen(false); break;
-        case "answer": { const opt = options[action.option]; if (opt) answer(opt.index); break; }
-        case "open-session": if (stepper) openSession(); break;
-        case "skip": onSkip?.(); break;
-        case "prev": onPrev?.(); break;
-        case "dismiss": if (!hosted) dismiss(); break;
-        case "pass": if (canPass) setPassOpen(true); break;
-        case "open-free-text": if (!isPermissionCard && !isInfraDialog && !richControls) { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); } break;
-        case "peek": shrink(); break;
-        case "full": grow(); break;
-        case "restore-question": grow(); break;
-        // Escape from the full card: leave the queue, or — in a plain session
-        // view — hand the pane back to the thread.
-        case "exit-queue": if (onExit) onExit(); else shrink(); break;
-      }
-    };
-    // CAPTURE phase: the global shortcut layer claims arrows and digits for
-    // list navigation and would eat them first.
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, onPrev, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted, passOpen, canPass, threadAsks]);
+  useDecisionCardKeys({ options, answer, answerFreeText, otherText, openSession, onSkip, onPrev, dismiss, onExit, full, stepper, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted, passOpen, canPass, threadAsks, setOtherOpen, setPassOpen, otherRef, rootRef, blocking: item.blocking });
 
   const answerRich = useCallback((input: Parameters<typeof answerDecision>[1]) => {
     if (!item.decisionId) return;

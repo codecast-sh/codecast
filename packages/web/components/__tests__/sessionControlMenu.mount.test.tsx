@@ -262,7 +262,7 @@ test("a live tmux Claude session offers the Agent SDK as a plain switch", async 
     const rows = qa("[data-backend-row]");
     expect(rows.map((r) => r.getAttribute("data-backend-row"))).toEqual(["tmux", "sdk"]);
     expect(q('[data-backend-row="tmux"]')!.getAttribute("data-current")).toBe("true");
-    expect(q('[data-backend-row="sdk"]')!.textContent).toContain("never parked");
+    expect(q('[data-backend-row="sdk"]')!.textContent).toContain("Never parked");
     pressBackend("sdk");
     await flush();
     expect(calls.backendSwitches).toEqual([["conv1", "sdk", false]]);
@@ -277,7 +277,7 @@ test("an SDK session mid-turn names the interrupt on the terminal row, and its f
   try {
     mount();
     expect(q('[data-backend-row="sdk"]')!.getAttribute("data-current")).toBe("true");
-    expect(q('[data-backend-row="tmux"]')!.textContent).toContain("Stop the turn, move to the terminal");
+    expect(q('[data-backend-row="tmux"]')!.textContent).toContain("Stop the turn, run in a terminal");
     pressBackend("tmux");
     await flush();
     expect(calls.backendSwitches).toEqual([["conv1", "tmux", true]]);

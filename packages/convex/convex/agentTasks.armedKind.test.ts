@@ -221,6 +221,7 @@ describe("every agent_tasks writer restamps the home (exhaustive)", () => {
       "args.task_id",       // created_by backlink repair + display summary (inert fields)
       "conv._id",           // conversation rows: agent_task_id backlink / un-stash
       "conversationId",     // refreshArmedTriggerKind's own conversation stamp
+      "copy._id",           // re-created trigger copies get their parent session back (created_by backlink, inert)
       "existing._id",       // notifyRunAttention re-arms an unread notifications row (not a task row)
       "prev._id",           // superseded run fold (conversation row)
       "runConv._id",        // run conversation fold (conversation row)
