@@ -10,6 +10,7 @@ import {
   resolveMachineSwitch,
   type MachineSwitchPhase,
 } from "../lib/machineAccountSwitch";
+import { accountDisplayName } from "@codecast/shared/contracts";
 import { DISPATCH_REFUSED, latestSessionCommand, requestAccountSwitchCommand, type SessionCommandRow } from "../lib/sessionCommands";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "./useCoarseNow";
@@ -62,7 +63,7 @@ export function useMachineSwitchState(opts: { deviceId?: string } & MachineSwitc
     !row || pending ? null
     : resolved.phase === "failed" ? { kind: "error", profile, message: resolved.error ?? "Switch failed" }
     : resolved.phase === "succeeded" && profileIsFleetAccount({ name: profile, email: row.email }, fleet)
-      ? { kind: "success", profile, email: row.email, message: `Now using ${profile}` }
+      ? { kind: "success", profile, email: row.email, message: `Now using ${accountDisplayName({ name: profile, email: row.email })}` }
       : null;
 
   /** Queue the switch; `onQueued` runs just before it goes out. "busy": one is already in flight; "already": the machine is on it. */
