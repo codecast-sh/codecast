@@ -2,12 +2,13 @@
 // (convex meetingCalendar.ts), store-fed like their bots (useMeetingBots):
 // the feeders file each answer, the calls page reads the store. Mounted only
 // while the calls page shows the calendar list.
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { useCoarseNow } from "./useCoarseNow";
+import { useWatchEffect } from "./useWatchEffect";
 import { MEETING_BOT_SETTINGS_ID, type CalendarMeeting, type MeetingBotSettings } from "../store/meetingBotsSlice";
 
 const meetingSig = (m: CalendarMeeting) => `${m.title}|${m.starts_at}|${m.ends_at}|${m.platform}|${m.choice ?? ""}|${m.meet_id ?? ""}`;
@@ -27,7 +28,7 @@ export function useCalendarMeetings(connected: boolean): CalendarMeeting[] {
   useSyncCollection("meetingCalendarEvents", api.meetingCalendar.listUpcoming, {});
   const refresh = useAction(api.meetingCalendar.refreshMine);
   const asked = useRef(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!connected || asked.current) return;
     asked.current = true;
     void refresh({}).catch(() => {});
