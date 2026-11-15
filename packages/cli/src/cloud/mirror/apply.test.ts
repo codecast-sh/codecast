@@ -1,16 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { REFERENCES_SNIPPET, SNIPPET_CATALOG } from "@codecast/shared/contracts";
-import { findOwnedSections } from "@platform/snippets";
-import {
-  GITCONFIG_BLOCK_END, GITCONFIG_BLOCK_START, MIRROR_LOCK_REL, MIRROR_RECEIVER_CAPABILITIES, MIRROR_STAMP_REL, applyMirrorBundle, applyStagingBundle,
-  adoptFeatureSwitches, composeInstructionFile, featureSwitches, mergeClaudeSettings, mergeCodexHooks, mergeCodexToml, mergeGitconfig, mirrorUntouchedInCheckoutScript, readStamp, stripGitconfigBlock, verifyMirrorStamp, withMirrorLock,
-} from "./apply";
+import { SNIPPET_CATALOG } from "@codecast/shared/contracts";
+import { GITCONFIG_BLOCK_END, GITCONFIG_BLOCK_START, MIRROR_LOCK_REL, MIRROR_RECEIVER_CAPABILITIES, MIRROR_STAMP_REL, applyMirrorBundle, applyStagingBundle, adoptFeatureSwitches, composeInstructionFile, featureSwitches, mergeClaudeSettings, mergeCodexHooks, mergeCodexToml, mergeGitconfig, mirrorUntouchedInCheckoutScript, readStamp, stripGitconfigBlock, verifyMirrorStamp, withMirrorLock } from "./apply";
 import { buildMirrorBundle, parseMirrorBundle, sha256, type BundleInput } from "./bundle";
-import { ownedSectionSpecs, stripOwnedSections } from "./transform";
+import { stripOwnedSections } from "./transform";
 
 import { HOST_CODEX_HOOKS, HOST_CODEX_TOML, HOST_SETTINGS, apply, bundleOf, home, hostClaudeMd, laptopEntries, laptopUserMd, modeOf, ownedCount, read, refresh, refreshRuns, seedHost, source, write, useHostHome } from "./apply.testkit";
 

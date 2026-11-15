@@ -32,7 +32,7 @@ type Props = {
   onAct?: () => void;
 };
 
-export const STEP_CTA: Record<SetupStep["key"], string> = {
+const STEP_CTA: Record<SetupStep["key"], string> = {
   connect: "Connect",
   team: "Start a team",
   invite: "Invite",

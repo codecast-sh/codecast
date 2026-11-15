@@ -428,8 +428,11 @@ describe("command groups stay off the boot graph", () => {
     // (pl-1033), session send +5, the workspace manifest +4, snippets +3,
     // replay +5; offset by index.ts and others shrinking. 4713 the same day:
     // fitProjectContextBlock gives up memory lines so the session start block
-    // stays under its 9000-byte hook budget.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4713);
+    // stays under its 9000-byte hook budget. 4715 (2026-11-15): the deploy of
+    // 411ff8710, measured one commit at a time: pl-1033 project contracts +1,
+    // the pool prefix +1 and the members chart's shared types +1, offset by
+    // rounding; no new module on the graph.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4715);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
