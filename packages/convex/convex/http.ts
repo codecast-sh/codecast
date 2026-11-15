@@ -582,7 +582,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name, mine_only, label, titles_only, all_teams, self_conversation_id, self_session_id, include_self } = body;
+      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name, mine_only, label, titles_only, self_conversation_id, self_session_id, include_self } = body;
 
       if (!api_token || !query) {
         return new Response(JSON.stringify({ error: "Missing api_token or query" }), {
@@ -615,7 +615,6 @@ http.route({
         mine_only,
         label,
         titles_only,
-        all_teams: all_teams === true ? true : undefined,
         self_conversation_id: typeof self_conversation_id === "string" ? self_conversation_id : undefined,
         self_session_id: typeof self_session_id === "string" ? self_session_id : undefined,
         include_self: include_self === true ? true : undefined,
@@ -3243,6 +3242,7 @@ http.route({
       const result = await ctx.runQuery(api.agentTasks.listTasks, {
         api_token: body.api_token,
         status: body.status,
+        ...(body.project_id ? { project_id: body.project_id } : {}),
       });
       return new Response(JSON.stringify(result), {
         status: 200,
@@ -3745,6 +3745,7 @@ http.route({
         wake_creator: body.wake_creator,
         originating_session_ref: body.originating_session_ref,
         target_session_ref: body.target_session_ref,
+        created_by_session_ref: body.created_by_session_ref,
       });
       return new Response(JSON.stringify({ success: result.ok, changed: result.changed }), {
         status: 200,
@@ -3939,10 +3940,14 @@ cliRoute("/cli/projects/comment-update", async (ctx, body) => {
 cliRoute("/cli/projects/timeline", async (ctx, body) => {
   return await ctx.runQuery(api.projectUpdates.timeline, body);
 });
+// A session's project as it reads it (session-projects.md SP6): its charter, instructions and memory.
+cliRoute("/cli/projects/context", async (ctx, body) => ctx.runQuery((api as any).projectContext.forSession, body));
 // A session in a project (session-projects.md): `cast project join`.
 cliRoute("/cli/projects/set-session", async (ctx, body) => {
   return await ctx.runMutation(api.sessionProjects.setSessionProject, body);
 });
+// What a project produced (ct-94262): `cast project outputs`.
+cliRoute("/cli/projects/outputs", async (ctx, body) => ctx.runQuery((api as any).projectOutputs.get, { api_token: body.api_token, project_id: body.id }));
 
 // Initiatives (initiatives-projects-role-page.md I1): `cast initiative`.
 for (const [verb, fn] of [
@@ -4501,6 +4506,17 @@ cliRoute("/cli/calls/frame-share", async (ctx, body) => {
 cliRoute("/cli/calls/hold", async (ctx, body) => {
   return await ctx.runMutation(api.transcripts.cliHoldCall, body);
 });
+// `cast call join <link>` / `cast call leave`: a Recall bot to a meeting on
+// another platform (meetingBots.ts).
+cliRoute("/cli/calls/bots/send", async (ctx, body) => {
+  return await ctx.runMutation(api.meetingBots.cliSend, body);
+});
+cliRoute("/cli/calls/bots/list", async (ctx, body) => {
+  return await ctx.runQuery(api.meetingBots.cliListMine, body);
+});
+cliRoute("/cli/calls/bots/cancel", async (ctx, body) => {
+  return await ctx.runMutation(api.meetingBots.cliCancel, body);
+});
 cliRoute("/cli/work/list", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.list, body);
 });
@@ -4893,6 +4909,7 @@ cliRoute("/cli/workflow-runs/cancel", async (ctx, body) => ctx.runMutation(api.w
 
 // Session-to-session messaging
 cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
+cliRoute("/cli/messages/status", async (ctx, body) => ctx.runQuery(api.pendingMessages.sendStatus, body));
 
 // Session labels (personal filing). List the catalog, file/unfile a session,
 // and manage the label catalog itself.
@@ -5187,6 +5204,7 @@ http.route({ path: "/cli/player.js", method: "GET", handler: artifactPlayerJs })
 // The data itself is served under the page (/cli/a/<slug>/_data), past its gates.
 http.route({ path: "/cli/data.js", method: "GET", handler: artifactDataJs });
 cliRoute("/cli/artifacts/data", async (ctx, body) => ctx.runAction(api.pageData.forCli, body));
+cliRoute("/cli/artifacts/state", async (ctx, body) => ctx.runAction(api.pageState.forCli, body));
 // The motion player HyperFrames composition pages load (see lib/castMotion.ts).
 http.route({ path: "/cli/motion.js", method: "GET", handler: artifactMotionJs });
 
@@ -5208,6 +5226,7 @@ http.route({ path: VAULT_BODY_UPLOAD_PATH, method: "POST", handler: vaultUploadB
 // reply carries that lease, so the capture loop learns when to stop from the
 // request it was already making.
 cliRoute("/cli/terminal/frame", async (ctx, body) => ctx.runMutation(api.terminalStream.cliPushFrame, body), { forwardDeviceId: true });
+cliRoute("/cli/terminal/clipboard", async (ctx, body) => ctx.runMutation(api.terminalStream.cliPushClipboard, body), { forwardDeviceId: true });
 // The viewer half, for callers with a token instead of a browser session.
 cliRoute("/cli/terminal/watch", async (ctx, body) => ctx.runMutation(api.terminalStream.watchPane, body), { forwardDeviceId: true });
 cliRoute("/cli/terminal/pane", async (ctx, body) => ctx.runQuery(api.terminalStream.getPane, body), { forwardDeviceId: true });
@@ -5225,6 +5244,9 @@ cliRoute("/cli/images/url", async (ctx, body) => ({ url: await ctx.runQuery(api.
 // `cast replay ls|show|repro` (external-data.md X5). Show carries chunk URLs
 // signed at request time, never keys, the way /cli/calls/recordings does.
 cliRoute("/cli/replays/list", async (ctx, body) => ({ replays: await ctx.runQuery(api.replays.list, body) }));
+cliRoute("/cli/replays/search", async (ctx, body) => ctx.runQuery(api.replaysSearch.search, body));
+cliRoute("/cli/replays/import-status", async (ctx, body) => ctx.runQuery(api.replaysSearch.importStatus, body));
+cliRoute("/cli/replays/resolve", async (ctx, body) => ctx.runAction(api.sources.replayResolve.resolve, body));
 cliRoute("/cli/replays/get", async (ctx, body) => signReplayChunks(await ctx.runQuery(internal.replays.cliGet, body)));
 cliRoute("/cli/replays/recordings", async (ctx, body) => ctx.runAction(api.sources.posthog.listRecordings, body));
 cliRoute("/cli/replays/import", async (ctx, body) => ctx.runAction(api.sources.posthog.importRecording, body));

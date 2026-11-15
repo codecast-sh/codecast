@@ -4614,7 +4614,7 @@ accountsCmd
     }
     const result = await cliPost("/cli/accounts/continue-blocked", reviveArgs);
     const restartNote = (result.restarted ?? 0) > 0
-      ? ` (${result.restarted} restarted first: signed out, or pinned to another account's token)`
+      ? ` (${result.restarted} restarted first so they run on the current account)`
       : "";
     console.log(`${c.green}✓${c.reset} queued 'continue' to ${result.continued} blocked session(s)${restartNote}${subNote}`);
   });
@@ -5635,7 +5635,12 @@ tree and re-checks only what changed, so an answer takes seconds.
   cast check cli web                    two projects by name
   cast check cli --fresh                restart the watcher first (it reports errors not on disk)
   cast check --changed-since origin/main
-  cast check-status                     the watchers running on this machine`,
+  cast check-status                     the watchers on this machine and their learned sizes
+
+Exit codes: 0 clean, 1 type errors, 2 unknown project. The rest mean the tool failed and the
+code has no verdict yet: 70 a watcher died, ran out of memory or did not start; 75 the queue
+stayed full or the watcher's answer was stale; 124 the pass outlived the wait and keeps running.
+Whenever a failure has a next action, the last stderr line is "cast: hint: <next action>".`,
   )
   .option("--fresh", "Restart the watcher before asking (the escape hatch for a watcher that lost track)")
   .option("--changed-since <ref>", "Only the projects whose program holds a file changed since <ref> (committed or not)")
@@ -5662,8 +5667,11 @@ tree and re-checks only what changed, so an answer takes seconds.
       console.error(`${fmt.error("✗")} ${(err as Error).message}`);
       process.exit(2);
     }
-    let failed = 0;
+    const { CheckFailure, summarize } = await import("./checkOutcome.js");
+    const { printHint } = await import("./infraExit.js");
     const results = [];
+    const outcomes: import("./checkOutcome.js").ProjectOutcome[] = [];
+    const phantomExamples: string[] = [];
     // This run needs all of these programs: making room for one never stops another.
     const protect = new Set(wanted.map((t) => watchDir(root, t.name)));
     for (const target of wanted) {
@@ -5671,20 +5679,28 @@ tree and re-checks only what changed, so an answer takes seconds.
       try {
         const r = await checkProject(target, root, { fresh: o.fresh, protect, note: (line) => { if (!o.json) console.error(fmt.muted(`  ${line}`)); } });
         results.push(r);
-        if (r.errors > 0) failed++;
+        // A watcher's first pass (whoever started it) was built from the tree as it is, so errors
+        // that look phantom there are real: suggesting --fresh again would only restart it in a loop.
+        const phantomCount = r.started || o.fresh || r.firstPass ? 0 : r.phantom;
+        outcomes.push({ project, errors: r.errors, phantom: phantomCount, globalTsc: r.globalTsc });
+        if (phantomCount) phantomExamples.push(...r.phantomExamples);
         if (!o.json) {
           if (r.diagnostics.trim()) console.log(r.diagnostics.trimEnd());
           const age = r.passAgeMs < 60_000 ? `${Math.round(r.passAgeMs / 1000)}s` : `${Math.round(r.passAgeMs / 60_000)}m`;
-          console.log(`${r.errors === 0 ? fmt.success("✓") : fmt.error("✗")} ${project}: ${r.errors} error${r.errors === 1 ? "" : "s"} ${fmt.muted(`(pass ${age} old${r.started ? ", watcher started by this call" : ""})`)}`);
+          const phantom = phantomCount ? `, ${phantomCount} name${phantomCount === 1 ? "s" : ""} what exists on disk` : "";
+          console.log(`${r.errors === 0 ? fmt.success("✓") : fmt.error("✗")} ${project}: ${r.errors} error${r.errors === 1 ? "" : "s"} ${fmt.muted(`(pass ${age} old${r.started ? ", watcher started by this call" : ""}${phantom})`)}`);
         }
       } catch (err) {
-        failed++;
-        if (o.json) results.push({ project, error: (err as Error).message });
-        else console.error(`${fmt.error("✗")} ${project}: ${(err as Error).message}`);
+        const failure = err instanceof CheckFailure ? err : new CheckFailure((err as Error).message, "infra");
+        outcomes.push({ project, failure });
+        if (o.json) results.push({ project, error: failure.message, kind: failure.kind });
+        else console.error(`${fmt.error("✗")} ${project}: ${failure.message}`);
       }
     }
+    const { exit, hint } = summarize(outcomes, phantomExamples);
     if (o.json) console.log(JSON.stringify(results, null, 2));
-    process.exit(failed ? 1 : 0);
+    if (hint) printHint(hint);
+    process.exit(exit);
   });
 
 program
@@ -5706,19 +5722,23 @@ program
 
 program
   .command("check-status")
-  .description("The typecheck watchers on this machine: tree, project, pid, last pass")
+  .description("The typecheck watchers on this machine: their memory against the budget that admits them, last pass, and each project's learned size")
   .option("--stop", "Stop every watcher")
-  .action(async (o: { stop?: boolean }) => {
-    const { listWatchers } = await import("./check.js");
-    const all = listWatchers();
-    if (!all.length) return console.log("no typecheck watchers running");
-    for (const w of all) {
-      if (o.stop) {
+  .option("--json", "Machine-readable")
+  .action(async (o: { stop?: boolean; json?: boolean }) => {
+    if (o.stop) {
+      const { listWatchers } = await import("./check.js");
+      const all = listWatchers();
+      if (!all.length) return console.log("no typecheck watchers running");
+      for (const w of all) {
         try { process.kill(w.pid, "SIGTERM"); } catch {}
+        console.log(`stopped ${w.project} @ ${w.root}  pid ${w.pid}`);
       }
-      const age = w.finishedAt ? `${Math.round((Date.now() - w.finishedAt) / 60_000)}m ago` : "no pass yet";
-      console.log(`${o.stop ? "stopped " : ""}${w.project} @ ${w.root}  pid ${w.pid}  ${w.inProgress ? "checking" : `${w.errors ?? "?"} errors, ${age}`}`);
+      return;
     }
+    const { renderWatcherStatus, watcherStatus } = await import("./checkStatus.js");
+    const status = watcherStatus();
+    console.log(o.json ? JSON.stringify(status, null, 2) : renderWatcherStatus(status));
   });
 
 program
@@ -5890,7 +5910,7 @@ registerSyncVerbs(syncCommand);
 // ones with their own setter below. The help and the unknown-key error both
 // read this list, so they cannot disagree.
 const CONFIG_SETTABLE_KEYS = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"] as const;
-const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "interactive_jobs.per_machine", "agent"];
+const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "check.reserve_gb", "interactive_jobs.per_machine", "agent"];
 
 program
   .command("config")
@@ -5902,7 +5922,8 @@ program
     "  cast config excluded_paths \"**/node_modules/**\"  # Set value\n" +
     "  cast config set subagents.per_session 6   # workers one session runs at once (default 0: no limit)\n" +
     "  cast config set subagents.per_machine 30  # workers this machine runs at once (default 24)\n" +
-    "  cast config set check.per_machine 8       # typecheck watchers this machine keeps (default: one per 12 GB of RAM)\n" +
+    "  cast config set check.reserve_gb 24       # memory typecheck watchers leave for everything else (default 8 GB or 20% of RAM, whichever is more)\n" +
+    "  cast config set check.per_machine 8       # at most this many typecheck watchers (default 16; one per 12 GB always run)\n" +
     "  cast config set interactive_jobs.per_machine 4  # commands run as Interactive jobs at once (default 8)"
   )
   .argument("[key]", `Configuration key (${CONFIG_ALL_KEYS.join(", ")}); "set" or "get" before it is optional`)
@@ -6096,6 +6117,28 @@ program
       next[group] = { ...(next[group] ?? {}), [field]: n };
       writeConfig(next);
       console.log(`Updated ${key}: ${n}`);
+      return;
+    }
+
+    // The memory typecheck watchers leave for everything else (watcherMemory.ts); cast check-status shows the budget it makes.
+    if (key === "check.reserve_gb") {
+      const { budgetBytes, fmtGb, reserveBytes, RESERVE_ENV } = await import("./watcherMemory.js");
+      const overridden = process.env[RESERVE_ENV] !== undefined ? ` (${RESERVE_ENV}=${process.env[RESERVE_ENV]} overrides it in this shell)` : "";
+      if (value === undefined) {
+        console.log(`check.reserve_gb: ${config?.check?.reserve_gb ?? `(not set: ${fmtGb(reserveBytes())}, 8 GB or a fifth of this machine)`}; watchers share ${fmtGb(budgetBytes())}${overridden}`);
+        return;
+      }
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0) {
+        console.error("check.reserve_gb takes a number of GB, 0 or more");
+        process.exit(1);
+      }
+      const next: Config = config || {};
+      next.check = { ...(next.check ?? {}), reserve_gb: n };
+      writeConfig(next);
+      const left = budgetBytes();
+      console.log(`Updated check.reserve_gb: ${n} (watchers share ${fmtGb(left)})${overridden}`);
+      if (left === 0) console.error("That leaves typecheck watchers no memory: one runs at a time, whatever its size.");
       return;
     }
 
@@ -6969,7 +7012,6 @@ program
         member_name: options.member,
         mine_only: options.mine || undefined,
         label: options.label,
-        ...(options.global ? { all_teams: true } : {}),
         ...searchSelfRef(options.includeSelf),
       });
 
@@ -10548,15 +10590,21 @@ program
     "  https://codecast.sh/calls/<id>?part=action-<n>     # action item n (from 1)\n\n" +
     "cast call hold <duration>|off   # from a session a live huddle feeds: hold\n" +
     "                                # the room's words for a stretch of work\n\n" +
+    "cast call join <meeting link>   # send a bot to a Zoom, Meet, Teams, Webex or\n" +
+    "                                # GoTo meeting; it becomes a call, fed to this\n" +
+    "                                # session live (--at 15m to schedule, --no-feed)\n" +
+    "cast call leave [bot]           # take the bot out of its meeting\n\n" +
     "A recorded call has video, and snap pulls a frame of it as a PNG you can open\n" +
     "(`cast call snap --help` for this part alone):\n" +
     CALL_SNAP_EXAMPLES +
     CALL_SNAP_ABOUT)
-  .argument("<id>", "Call short id (cl-42), id or unique prefix from `cast calls`; or the verb `hold` or `snap`")
+  .argument("<id>", "Call short id (cl-42), id or unique prefix from `cast calls`; or the verb `hold`, `snap`, `join` or `leave`")
   .argument("[arg]", "Lines to print (15:25, 15-25 or 15); after `hold`: 3m, 90s, 1h or `off`; after `snap`: the moment (cl-42:15, cl-42@12:34, cl-42 15)")
   .option("--transcript", "Print the full attributed transcript")
   .option("--json", "Machine-readable output (a call always includes segments; a snap gives frames, or {error, code, try})")
-  .option("--for <session>", "With `hold`: the fed session (default: the current one)")
+  .option("--for <session>", "With `hold` or `join`: the fed session (default: the current one)")
+  .option("--at <time>", "With `join`: when the bot joins (15m, 2h or an ISO time; default now)")
+  .option("--no-feed", "With `join`: do not feed the meeting's words to this session")
   .option("--screen", "With `snap`: only a shared screen will do; refuse (code no_screen) where none was recorded")
   .option("--composite", "With `snap`: prefer the room view (faces and the share as everyone saw it)")
   .option("-o, --out <path>", "With `snap`: a .png/.jpg file, or a directory (default: a private scratch directory)")
@@ -10569,7 +10617,7 @@ program
   })
   .action(async (ref: string, duration: string | undefined, options: any, command: Command) => {
     // The verb goes first. `cast call cl-42 snap` reads as lines named "snap".
-    if (ref !== "snap" && ref !== "hold" && (duration === "snap" || duration === "hold")) {
+    if (!["snap", "hold", "join", "leave"].includes(ref) && (duration === "snap" || duration === "hold")) {
       const rest = command.args.slice(2).join(" ");
       console.error(`The verb comes first: cast call ${duration} ${duration === "snap" ? ref : rest || "3m"}${duration === "snap" && rest ? ` ${rest}` : ""}`);
       process.exit(1);
@@ -10577,7 +10625,8 @@ program
     if (ref === "snap") {
       // An option snap does not read is refused, the way a snap option
       // without snap is below, rather than silently ignored.
-      const foreign = command.options.find((o) => !snapOption(o) && options[o.attributeName()] !== undefined);
+      // Typed on the command line, not a default (`--no-feed` defaults feed to true).
+      const foreign = command.options.find((o) => !snapOption(o) && command.getOptionValueSource(o.attributeName()) === "cli");
       if (foreign) {
         console.error(`${foreign.long} does not work with \`cast call snap\`; \`cast call snap --help\` lists what does`);
         process.exit(1);
@@ -10602,12 +10651,28 @@ program
     }
     // The video options mean nothing to the words: say where they go
     // rather than print words as if they had been honored.
-    const snapOnly = command.options.find((o) => o.description.startsWith(SNAP_OPTION_PREFIX) && options[o.attributeName()] !== undefined);
+    const snapOnly = command.options.find((o) => o.description.startsWith(SNAP_OPTION_PREFIX) && command.getOptionValueSource(o.attributeName()) === "cli");
     if (snapOnly) {
       const flag = snapOnly.short ?? snapOnly.long!;
       const arg = snapOnly.flags.match(/<[^>]+>/)?.[0];
       console.error(`${flag} works with \`cast call snap\`: cast call snap ${ref === "hold" ? "cl-42@12:34" : ref} ${flag}${arg ? ` ${arg}` : ""}`);
       process.exit(1);
+    }
+    if (ref === "join" || ref === "leave") {
+      const { runCallJoin, runCallLeave } = await import("./callBots.js");
+      const deps = {
+        post: (route: string, body: Record<string, unknown>) => cliPost(route, body, { throwOnError: true }),
+        session: options.for || callingSession(),
+        json: !!options.json,
+      };
+      try {
+        if (ref === "join") await runCallJoin(duration, { at: options.at, noFeed: options.feed === false }, deps);
+        else await runCallLeave(duration, deps);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(1);
+      }
+      return;
     }
     if (ref === "hold") {
       // The agent asks its huddle for time. The words keep flowing into the
@@ -13192,7 +13257,6 @@ Question: ${query}`,
           context_before: paddingLines,
           context_after: paddingLines,
           project_path: projectPath,
-          ...(projectPath ? {} : { all_teams: true }),
           ...searchSelfRef(options.includeSelf),
         });
       };
@@ -13468,7 +13532,6 @@ program
           project_path: projectPath,
           member_name: options.member,
           mine_only: options.mine || undefined,
-          ...(options.global ? { all_teams: true } : {}),
           ...selfRef,
         });
 
@@ -14601,8 +14664,13 @@ const briefCmd = program
     const brief = await cliPost("/cli/brief/get", { role_id, from_session: callingSession() });
     noteDocRevisions(docLedgerSession(), "/cli/brief/get", { role_id }, brief);
     if (!brief) { console.error("Role not found"); process.exit(1); }
-    if (options.json) { console.log(JSON.stringify(brief, null, 2)); return; }
     if (options.narrative) { process.stdout.write(String(brief.narrative ?? "").replace(/\s*$/, "\n")); return; }
+    // The rooms the role follows, read since the same clock as `changed`.
+    const follows: string[] = brief.role?.follow_channel_ids ?? [];
+    if (follows.length) {
+      brief.chat = await chatReadPost("/cli/chat/lines-since", { channel_ids: follows, since: brief.facts.changed_since, limit: 20 }).catch(() => null);
+    }
+    if (options.json) { console.log(JSON.stringify(brief, null, 2)); return; }
     for (const line of briefTextLines(brief, Date.now())) console.log(line);
   });
 
@@ -14984,7 +15052,7 @@ chat
     // the web app answer "which workspace" from the same canonical pointer.
     const ws = await readWorkspace(options.team);
     await requireWorkspaceFeature(ws, "chat");
-    const result = await cliPost("/cli/chat/channels", workspaceArgs(ws));
+    const result = await chatReadPost("/cli/chat/channels", workspaceArgs(ws));
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
       return;
@@ -14996,6 +15064,12 @@ chat
     const rail = new Map<string, any>(
       (result.rail ?? []).map((r: any) => [String(r.channel_id), r]),
     );
+    // Lines posted in these rooms also land in Slack (and Slack's come in).
+    const slackMirrors = new Map<string, string>(
+      (result.slack_links ?? [])
+        .filter((l: any) => l.kind !== "dm" && l.direction !== "slack_to_codecast")
+        .map((l: any) => [String(l.chat_channel_id), l.slack_channel_name ?? l.slack_channel_id]),
+    );
     for (const channel of result.channels) {
       const row = rail.get(String(channel._id));
       const unread = row?.unread
@@ -15004,7 +15078,16 @@ chat
       const mentions = row?.unread_mentions ? ` ${c.red}@${row.unread_mentions}${c.reset}` : "";
       const muted = row?.notify_level === "none" ? ` ${c.dim}(muted)${c.reset}` : "";
       const agents = row?.agents?.length ? ` ${c.magenta}${row.agents.map((a: any) => a.short_id).join(" ")}${c.reset}` : "";
-      console.log(`  ${c.bold}#${channel.name}${c.reset}${unread}${mentions}${muted}${agents} ${c.dim}${channel._id}${c.reset}`);
+      const kind = channel.kind && channel.kind !== "public" ? ` ${c.dim}(${channel.kind === "dm" ? "direct" : channel.kind})${c.reset}` : "";
+      const slack = slackMirrors.has(String(channel._id)) ? ` ${c.cyan}↔ Slack #${slackMirrors.get(String(channel._id))}${c.reset}` : "";
+      const name = channel.kind === "dm" ? channel.name || "direct message" : `#${channel.name}`;
+      console.log(`  ${c.bold}${name}${c.reset}${kind}${slack}${unread}${mentions}${muted}${agents} ${c.dim}${channel._id}${c.reset}`);
+      // What the room is for, then what it is saying: the topic when it has
+      // one, and its newest line with its age, so a quiet room reads as quiet.
+      if (channel.topic) console.log(`    ${String(channel.topic).replace(/\s+/g, " ").slice(0, 120)}`);
+      const last = row?.last_message;
+      if (last) console.log(`    ${c.dim}${formatDateSmart(last.created_at, Date.now())}: ${String(last.preview ?? "").replace(/\s+/g, " ").slice(0, 100)}${c.reset}`);
+      else console.log(`    ${c.dim}no lines yet${c.reset}`);
     }
   });
 
@@ -15109,7 +15192,16 @@ chat
       console.error("Name what to read: cast chat read --channel <#name|@person|id>, or cast chat read --thread <root_id> for one thread");
       process.exit(1);
     }
-    options.channel = await resolveChatChannelId(options.channel, workspaceArgs(await readWorkspace(options.team)).team_id);
+    const teamId = workspaceArgs(await readWorkspace(options.team)).team_id;
+    if (options.channel.startsWith("@")) {
+      // From inside a session, @person opens the session's own room with them,
+      // not the person's DM: say so, or an empty room reads as "no messages".
+      const room = await openChatDm(options.channel, teamId);
+      if (room.room_of === "session" && !options.json) console.log(`${c.dim}this session's own conversation with ${room.with.join(", ")}, not your person's direct message${c.reset}`);
+      options.channel = String(room.channel_id);
+    } else {
+      options.channel = await resolveChatChannelId(options.channel, teamId);
+    }
     // The compact view a role's wake frame embeds: threads and replies alike,
     // oldest first, text cut to one short line.
     if (options.since) {
@@ -15121,7 +15213,7 @@ chat
         console.error(`--since wants a timestamp, an ISO date or an age like 30m, 2h, 1d (got ${options.since})`);
         process.exit(1);
       }
-      const result = await cliPost("/cli/chat/lines-since", {
+      const result = await chatReadPost("/cli/chat/lines-since", {
         channel_ids: [options.channel],
         since,
         limit: options.limit ? parseInt(options.limit, 10) : 20,
@@ -15145,7 +15237,7 @@ chat
       if (root) console.log(`${c.dim}  a whole thread: cast chat thread ${String(root).slice(0, 7)}${c.reset}`);
       return;
     }
-    const result = await cliPost("/cli/chat/read", {
+    const result = await chatReadPost("/cli/chat/read", {
       channel_id: options.channel,
       limit: options.limit ? parseInt(options.limit, 10) : 30,
       cursor: options.cursor,
@@ -15176,7 +15268,7 @@ chat
   .action((rootId: string, options: any) => readChatThread(rootId, options));
 
 async function readChatThread(rootId: string, options: { cursor?: string; json?: boolean }) {
-  const result = await cliPost("/cli/chat/thread", {
+  const result = await chatReadPost("/cli/chat/thread", {
     root_id: rootId, cursor: options.cursor,
   });
   if (options.json) {
@@ -15196,7 +15288,7 @@ async function readChatThread(rootId: string, options: { cursor?: string; json?:
 
 // Post one line and say what it reached: the mentions it woke, the session a
 // thread reply went back into, the workspace agent. `send` and `dm` both end here.
-async function sendChatLine(channelId: string, content: string, options: { thread?: string; json?: boolean }) {
+async function sendChatLine(channelId: string, content: string, options: { thread?: string; json?: boolean; localOnly?: boolean }) {
   if (!content.trim()) {
     console.error("The message text is empty. Pass it as an argument: cast chat send --channel <name> \"<text>\"");
     process.exit(1);
@@ -15205,6 +15297,7 @@ async function sendChatLine(channelId: string, content: string, options: { threa
     channel_id: channelId,
     content,
     thread_root_id: options.thread,
+    ...(options.localOnly ? { sync_local_only: true } : {}),
     ...chatSendOrigin(),
   });
   if (options.json) {
@@ -15218,7 +15311,7 @@ async function sendChatLine(channelId: string, content: string, options: { threa
     const parts: string[] = [];
     if (wakes.roles) parts.push(`woke ${wakes.roles} role${wakes.roles === 1 ? "" : "s"}`);
     if (wakes.sessions) parts.push(`delivered to ${wakes.sessions} session${wakes.sessions === 1 ? "" : "s"}`);
-    if (wakes.folded) parts.push(`${wakes.folded} folded (over the hourly mention cap; read on next wake)`);
+    if (wakes.folded) parts.push(`${wakes.folded} not woken (over the hourly mention cap; the line stays in the thread)`);
     for (const reason of wakes.skipped ?? []) parts.push(`skipped: ${reason}`);
     console.log(`${c.dim}  mentions: ${parts.join(" · ")}${c.reset}`);
   }
@@ -15235,6 +15328,9 @@ async function sendChatLine(channelId: string, content: string, options: { threa
   } else if (result.session_relay?.skipped && result.session_relay.skipped !== "agent_authored") {
     console.log(`${c.yellow}•${c.reset} not relayed to the thread's session: ${result.session_relay.skipped}`);
   }
+  if (result.thread_relays?.length) {
+    console.log(`${c.dim}  also delivered to ${result.thread_relays.join(", ")}, which posted in this thread${c.reset}`);
+  }
   if (result.anchor_thinking_message_id && result.anchor_listening) {
     console.log(`${c.dim}  the workspace's agent follows this thread and is reading — it answers only if the line was for it${c.reset}`);
   } else if (result.anchor_thinking_message_id) {
@@ -15250,6 +15346,7 @@ chat
   .argument("<text>", stdinText("Message text"))
   .requiredOption("--channel <ref>", "#name, @person (comma-separate for a group), or a channel id")
   .option("--thread <root_id>", "Reply on this thread instead of the channel")
+  .option("--local-only", "Keep this line out of the channel's Slack mirror")
   .option("--team <name|id>", "Team whose #names and people resolve (default: your active team)")
   .option("--json", "Machine-readable output")
   .action(async (text: string, options: any) => {
@@ -15350,7 +15447,7 @@ chat
     // whatever the server happens to think your active team is.
     const ws = await readWorkspace(options.team);
     await requireWorkspaceFeature(ws, "chat");
-    const result = await cliPost("/cli/chat/search", {
+    const result = await chatReadPost("/cli/chat/search", {
       q: query,
       channel_id: options.channel,
       ...workspaceArgs(ws),
@@ -15889,12 +15986,14 @@ trigger
   .option("--repo <owner/name>", "Only fire for this repository (pull request events default to the checkout's origin; pass \"\" for every repository)")
   .option("--pr <number>", "Only fire for this pull request")
   .option("--source <name|src-N>", "Only fire for this source (with --on and an event a source reports: error_new, job_failed, check_failed, ...; see cast sources ls). Checked when saved")
+  .option("--channel <#name|id>", "The team channel a chat_message trigger watches (required with --on chat_message; cast chat channels lists them). Checked when saved")
   .option("--title <title>", stdinText("Short title (defaults to first 60 chars of prompt)"))
   // Accepted so old snippets still parse; it captures nothing.
   .addOption(new Option("--context <mode>").hideHelp())
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked. A run that continues an existing session inherits that session's rules instead.")
   .option("--mode <mode>", "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.")
-  .option("--project <path>", "Project path for agent cwd")
+  .option("--project <ref>", "A codecast project this trigger feeds (short id, id or title substring): each run is a turn in the project's main session, found at the firing, and pausing the project pauses it. With --spawn, runs start fresh sessions instead. A path here is read as --project-path")
+  .option("--project-path <path>", "Project path for agent cwd")
   .option("--device <name>", "Machine whose daemon runs this trigger (device id prefix, label or hostname, e.g. studio). Default: this machine. Runs wait while it is offline")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--as <definition>", "Spawned runs launch as this agent definition (cast agent ls): model, effort, tools and prompt")
@@ -15903,6 +16002,7 @@ trigger
   .option("--precheck <command>", "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers and manual runs ignore it.")
   .option("--precheck-mode <mode>", "How --precheck is read. exit (default): exit 0 runs. changes: runs when its output differs from the last firing's, and its new output goes into the run; the first firing records it and skips, so it needs --every. state: it gets the previous state as JSON in $CAST_PRECHECK_STATE (null at first) and prints {\"wake\": true|false, \"state\": ..., \"message\": \"...\"}; the state is kept for the next firing, the message goes into the run it wakes.")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
+  .option("--parent <session>", "The session this trigger reports to (short id, conversation id, or Claude session uuid). Defaults to the calling session; required when no calling session can be detected (a script, ssh, tmux)")
   .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Every run nests under this session and is read there rather than as an inbox card, and this session is woken if a run fails, dies, or asks for attention. A trigger that fires once also posts its clean result back here; a repeating one does not, since a line per firing would bury the thread.")
   .option("--thread", "Post each run's result into the current conversation as a message, without waking it. Works with --spawn; a --spawn trigger that fires once does this on its own.")
   .option("--wake", "With --spawn on a trigger that fires once: wake this session with the run's report even when it completes cleanly, so this session acts on it. Costs a turn over this session's whole context; without it a clean report is posted here without a wake.")
@@ -15954,6 +16054,14 @@ Examples:
       console.error("--spawn conflicts with --for: a --spawn run starts a fresh session, a --for run injects into that session. Pick one.");
       process.exit(1);
     }
+    if (options.for && options.project) {
+      console.error("--project conflicts with --for: a project trigger's runs land in the project's main session. Pick one.");
+      process.exit(1);
+    }
+    if (options.project && !options.spawn && options.precheck) {
+      console.error("--precheck runs on a daemon before a spawned run; a --project trigger's runs are turns in its main session and skip it. Add --spawn, or drop --precheck.");
+      process.exit(1);
+    }
     // --repo, --pr and --source narrow an event filter, so they mean nothing
     // without one. Silently ignoring them would arm a trigger far wider than
     // the caller asked.
@@ -15968,6 +16076,12 @@ Examples:
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+    // --project once took the run's folder; a path-shaped value still means that.
+    if (options.project && !options.projectPath && (/^[.~]|\//.test(options.project) || fs.existsSync(options.project))) {
+      options.projectPath = options.project;
+      options.project = undefined;
+    }
+    const projectId = options.project ? await resolveProjectId(options.project) : undefined;
 
     // The trigger runs only on the device it is bound to (TaskScheduler.canServeTask):
     // --device names one of yours; else a spawning trigger goes to your saved
@@ -15982,7 +16096,7 @@ Examples:
         runDeviceId = (await pickOwnDevice(devices, options.device, "--device", () => client.query(api.devices.listAgentBoxes, { api_token: token }))).device_id;
       } else {
         // A backend without the query answers an error: keep this machine.
-        const saved = await client.query(api.newSessionDefaults.defaultDevice, { api_token: token, project_path: options.project || getRealCwd() }).catch(() => null);
+        const saved = await client.query(api.newSessionDefaults.defaultDevice, { api_token: token, project_path: options.projectPath || getRealCwd() }).catch(() => null);
         if (saved) runDeviceId = saved;
       }
     }
@@ -16021,19 +16135,28 @@ Examples:
     let originating_conversation_id: string | undefined;
     let target_conversation_id: string | undefined;
 
-    // The current session is captured for two separate purposes:
-    //   • creatorSessionUuid — pure attribution (created_by_conversation_id):
-    //     which conversation armed this trigger. Sent ALWAYS, --spawn included,
-    //     so spawn triggers and their runs still trace back to their parent.
+    // Two separate session links:
+    //   • parentRef — attribution (created_by_conversation_id): the session
+    //     this trigger reports to. Required on every trigger, --spawn
+    //     included, so a run always traces back to its parent: --parent, else
+    //     the --for session, else the calling session.
     //   • sessionId — the inject binding (originating_conversation_id): its
     //     presence makes runs inject into that session. --for overrides
     //     detection (resolved server-side, own sessions only); --spawn skips
     //     the binding so each run spawns a fresh agent, linked back to the
     //     trigger via agent_task_id (the strip at the top of the session).
-    const creatorSessionUuid = ownSessionId(getRealCwd());
-    const sessionId = options.for || options.spawn ? null : creatorSessionUuid;
+    const detectedSessionUuid = ownSessionId(getRealCwd());
+    const parentRef = options.parent || options.for || detectedSessionUuid;
+    if (!parentRef) {
+      console.error(
+        "Could not detect the session creating this trigger (a script, ssh or tmux hides it). Pass --parent <session>: the session its runs report to."
+      );
+      process.exit(1);
+    }
+    // A project trigger's runs land in the project's main session, never this one.
+    const sessionId = options.for || options.spawn || projectId ? null : detectedSessionUuid;
     // --spawn --thread resolves the creator for the post target alone.
-    const lookupSessionId = sessionId ?? (options.thread ? creatorSessionUuid : null);
+    const lookupSessionId = sessionId ?? (options.thread ? detectedSessionUuid : null);
     if (lookupSessionId) {
       try {
         const resp = await cliFetchRead(`${siteUrl}/cli/sessions`, {
@@ -16061,28 +16184,23 @@ Examples:
     // session. Requested via --spawn that's the point — confirm it. Otherwise
     // it's a silent behavior fork, so say it out loud — an agent creating a
     // loop for its own session must see when the link didn't take.
-    if (options.wake && !(options.spawn && schedule_type === "once" && creatorSessionUuid)) {
-      console.error("--wake needs --spawn, a trigger that fires once (--in), and a calling session to wake; it is ignored here");
+    if (options.wake && !(options.spawn && schedule_type === "once")) {
+      console.error("--wake needs --spawn and a trigger that fires once (--in); it is ignored here");
     }
-    if (options.spawn) {
+    if (projectId && !options.spawn) {
+      console.error("runs will be turns in the project's main session (started on the first firing if it has none)");
+    } else if (options.spawn) {
       console.error(
         "runs will spawn fresh sessions (no history) in " +
-          (options.project || getRealCwd()) +
-          ", each linked back to this trigger" +
-          (creatorSessionUuid ? " and to this session as its creator" : "")
+          (options.projectPath || getRealCwd()) +
+          ", each linked back to this trigger and to " +
+          (options.parent ? options.parent : "this session") +
+          " as its parent"
       );
-      // Creator detection walks process ancestry to the agent binary; a
-      // command sent through tmux ancestors to the tmux server instead. Say
-      // so — the run's page can't link home, and nothing else will surface it.
-      if (!creatorSessionUuid) {
-        console.error(
-          "warning: could not detect the session creating this trigger, so runs will not link back to it. Run `cast trigger add` from the agent's own shell, not through tmux."
-        );
-      }
     } else if (!originating_conversation_id && !options.for) {
       console.error(
         "note: could not link this trigger to a session, so runs will spawn fresh agents in " +
-          (options.project || getRealCwd()) +
+          (options.projectPath || getRealCwd()) +
           " (use --for <session> to bind one, or pass --spawn to make this explicit)"
       );
     }
@@ -16098,9 +16216,9 @@ Examples:
           context_summary,
           originating_conversation_id,
           originating_session_ref: options.for,
-          created_by_session_ref: creatorSessionUuid ?? undefined,
+          created_by_session_ref: parentRef,
           target_conversation_id,
-          project_path: options.project || getRealCwd(),
+          project_path: options.projectPath || getRealCwd(),
           agent_type: options.agent,
           model: options.model,
           agent_definition: options.as || undefined,
@@ -16117,6 +16235,7 @@ Examples:
           // "exit" is the default, stored as absent.
           precheck_mode: precheckMode === "exit" ? undefined : precheckMode,
           wake_creator: options.wake || undefined,
+          ...(projectId ? { project_id: projectId, ...(options.spawn ? { project_spawn: true } : {}) } : {}),
         }),
       });
 
@@ -16152,7 +16271,7 @@ const TRIGGER_STATUSES = ["scheduled", "running", "paused", "completed", "failed
 
 /** When a trigger fires next, as ls and show print it. */
 function triggerScheduleText(t: any): string {
-  if (t.schedule_type === "event") return t.event_filter ? describeEventScope(t.event_filter) : "on event";
+  if (t.schedule_type === "event") return t.event_filter ? describeEventScope({ ...t.event_filter, channel_name: t.channel_name }) : "on event";
   // A paused trigger has no next run until it is resumed.
   const next = t.run_at && t.status === "scheduled" ? formatRunAt(t.run_at) : "";
   if (t.schedule_type === "recurring") return `every ${formatMs(t.interval_ms)}${next ? `, next ${next}` : ""}`;
@@ -16161,6 +16280,7 @@ function triggerScheduleText(t: any): string {
 
 /** Where a trigger's runs go: into its bound session, or a fresh agent on its model. */
 function triggerRunsIn(t: any): string {
+  if (t.project_id && !t.project_spawn) return "project main session";
   return t.originating_conversation_id ? "inline" : `${t.agent_type || "claude"}/${t.model || "default"}`;
 }
 
@@ -16171,6 +16291,7 @@ trigger
   .option("-a, --all", "Include completed, failed and cancelled triggers")
   .option("-q, --query <text>", "Only triggers whose title or prompt contains this text")
   .option("-l, --long", "Add each trigger's gist and its last run's summary")
+  .option("--project <ref>", "The triggers feeding this project (short id, id or title substring), whoever armed them, that you may manage")
   .option("--json", "Machine-readable output (full trigger rows)")
   .action(async (options) => {
     const config = readConfig();
@@ -16183,6 +16304,7 @@ trigger
     try {
       const body: any = { api_token: config.auth_token };
       if (options.status) body.status = options.status;
+      if (options.project) body.project_id = await resolveProjectId(options.project);
 
       const response = await cliFetchRead(`${siteUrl}/cli/tasks/list`, {
         method: "POST",
@@ -16268,7 +16390,9 @@ trigger
     console.log(`  ${fmt.muted("when")}      ${schedule}`);
     const runs = t.originating_conversation_id
       ? `into ${String(t.originating_conversation_id).slice(0, 7)}${t.originating_conversation_title ? ` (${t.originating_conversation_title})` : ""}`
-      : `a fresh ${triggerRunsIn(t)} session per run${t.mode === "propose" ? ", read-only" : ""}`;
+      : t.project_id && !t.project_spawn
+        ? "into the project's main session"
+        : `a fresh ${triggerRunsIn(t)} session per run${t.mode === "propose" ? ", read-only" : ""}`;
     console.log(`  ${fmt.muted("runs")}      ${runs}`);
     if (t.project_path) console.log(`  ${fmt.muted("project")}   ${t.project_path.replace(process.env.HOME || "~", "~")}`);
     if (t.precheck) console.log(`  ${fmt.muted("precheck")}  ${t.precheck}${t.precheck_mode && t.precheck_mode !== "exit" ? ` (${t.precheck_mode})` : ""}`);
@@ -16407,14 +16531,16 @@ trigger
   .option("--source <name|src-N>", "Only fire for this source (with --on and an event a source reports). Checked when saved")
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked")
   .option("--mode <mode>", "Agent mode: apply (can act) or propose (read-only). Prefer --safe.")
-  .option("--project <path>", "Project path for agent cwd")
+  .option("--project-path <path>", "Project path for agent cwd")
+  .addOption(new Option("--project <path>").hideHelp())
   .option("--agent <type>", "Agent type: claude or codex")
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id); 'default' clears the pin")
   .option("--max-runtime <duration>", "Max runtime (e.g., 10m)")
   .option("--precheck <command>", "Shell gate run before each scheduled or recurring run; exit 0 runs the trigger. Pass \"\" to remove the gate.")
   .option("--precheck-mode <mode>", "How the precheck is read: exit, changes or state (see cast trigger add --help). Changing the gate or its mode starts its state over.")
   .option("--for <session>", "Rebind: runs inject into this session (short id, conversation id, or Claude session uuid) instead of spawning fresh agents.")
-  .option("--spawn", "Unbind: each run starts a fresh session again instead of injecting into a bound one.")
+  .option("--spawn", "Unbind: each run starts a fresh session again instead of injecting into a bound one. The session it was bound to stays its parent.")
+  .option("--parent <session>", "The session this trigger reports to (short id, conversation id, or Claude session uuid)")
   .option("--thread <session>", "Post each run's result into this conversation. Pass \"\" to stop posting.")
   .option("--wake", "With --spawn on a trigger that fires once: wake the creating session even on a clean report.")
   .option("--no-wake", "Clear --wake: a clean report is posted without a wake.")
@@ -16475,7 +16601,7 @@ trigger
     }
     if (options.safe) body.mode = "propose";
     else if (options.mode !== undefined) body.mode = options.mode;
-    if (options.project !== undefined) body.project_path = options.project;
+    if ((options.projectPath ?? options.project) !== undefined) body.project_path = options.projectPath ?? options.project;
     if (options.agent !== undefined) body.agent_type = options.agent;
     if (options.model !== undefined) body.model = options.model;
     if (options.maxRuntime !== undefined) body.max_runtime_ms = parseDurationFlag("--max-runtime", options.maxRuntime);
@@ -16485,6 +16611,7 @@ trigger
     // "keep"); --for names the new one and the server resolves it.
     if (options.spawn) body.originating_conversation_id = null;
     if (options.for) body.originating_session_ref = options.for;
+    if (options.parent) body.created_by_session_ref = options.parent;
     if (options.thread !== undefined) {
       if (options.thread) body.target_session_ref = options.thread;
       else body.target_conversation_id = null;
@@ -16494,7 +16621,7 @@ trigger
     if (options.wake !== undefined) body.wake_creator = options.wake;
 
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--at/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime/--precheck/--precheck-mode/--for/--spawn/--thread/--wake.");
+      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--at/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime/--precheck/--precheck-mode/--for/--spawn/--parent/--thread/--wake.");
       process.exit(1);
     }
 
@@ -16908,14 +17035,31 @@ async function writeWorkspace(
 
 // A codecast chat channel by id or "#name" (name lookup goes through the
 // caller's channel list, in the named team or their active one).
+// A chat read from inside a session carries the session stamp, so the server
+// opens only the direct messages the session is part of (convex chatAccess).
+// A backend from before that check refuses the unknown field: the read is
+// retried unstamped rather than failed, until the newer backend is deployed.
+async function chatReadPost(urlPath: string, body: Record<string, any>): Promise<any> {
+  const origin = chatSendOrigin();
+  if (!origin.origin) return cliPost(urlPath, body);
+  try {
+    return await cliPost(urlPath, { ...body, ...origin }, { throwOnError: true });
+  } catch (err) {
+    const message = (err as Error).message;
+    if (/(extra field|Unexpected field) `origin/.test(message)) return cliPost(urlPath, body);
+    console.error(`Error: ${message}`);
+    process.exit(1);
+  }
+}
+
 async function listChatChannels(teamId?: string): Promise<any[]> {
-  const result = await cliPost("/cli/chat/channels", { team_id: teamId });
+  const result = await chatReadPost("/cli/chat/channels", { team_id: teamId });
   return result?.channels ?? [];
 }
 
 // The direct message room with these people ("@a,@b" or "a,b"), found or
 // opened. Returns the room id and the names of the others in it.
-async function openChatDm(people: string, teamId?: string): Promise<{ channel_id: string; with: string[] }> {
+async function openChatDm(people: string, teamId?: string): Promise<{ channel_id: string; with: string[]; room_of?: "session" | "role" | "person" }> {
   const handles = people.split(",").map((h) => h.trim().replace(/^@/, "")).filter(Boolean);
   return await cliPost("/cli/chat/open-dm", { team_id: teamId, handles, ...chatSendOrigin() });
 }
@@ -18458,6 +18602,14 @@ projectCmd
     if (p.description) console.log(`\n  ${p.description}`);
     if (p.labels?.length) console.log(`  ${c.dim}Labels: ${p.labels.join(", ")}${c.reset}`);
     if (p.project_path) console.log(`  ${c.dim}Path: ${p.project_path}${c.reset}`);
+    if (p.goal) console.log(`\n  ${c.bold}Goal${c.reset} ${p.goal}`);
+    for (const m of p.success_metrics ?? []) console.log(`  ${c.dim}-${c.reset} ${m}`);
+    if (p.instructions) console.log(`\n  ${c.bold}Instructions${c.reset}\n${String(p.instructions).split("\n").map((l: string) => `  ${l}`).join("\n")}`);
+    const memory = await tryCliPost("/cli/docs/list", { project_id: id, pinned: true, limit: 50 });
+    if (Array.isArray(memory) && memory.length) {
+      console.log(`\n  ${c.bold}Memory (${memory.length})${c.reset}`);
+      for (const d of memory) console.log(`  ${c.cyan}${d._id}${c.reset} ${d.title}`);
+    }
     if (p.tasks?.length) {
       console.log(`\n  ${c.bold}Tasks (${p.tasks.length}${p.tasks_truncated ? "+, open work first" : ""})${c.reset}`);
       for (const t of p.tasks) {
@@ -18521,6 +18673,8 @@ projectCmd
   .argument("<id>", "Project short id (pj-...), id, or title substring")
   .option("--title <text>", stdinText("New title"))
   .option("--description <text>", stdinText("New description"))
+  .option("--instructions <text>", stdinText("Instructions every session in the project starts with, verbatim ('none' clears)"))
+  .option("--instructions-file <path>", "Read the instructions from a file ('-' for stdin)")
   .option("--status <status>", "New status: planning, active, paused, done", choiceOption(PROJECT_STATUSES))
   .option("--labels <labels>", "Comma-separated labels (replaces existing)")
   .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears); drives the burndown deadline")
@@ -18531,13 +18685,15 @@ charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true
     const body: Record<string, any> = { id: await resolveProjectId(ref), ...charterBody(options) };
     if (options.title) body.title = options.title;
     if (options.description !== undefined) body.description = options.description;
+    if (options.instructionsFile) body.instructions = options.instructionsFile === "-" ? readStdinBody() : fs.readFileSync(options.instructionsFile, "utf-8");
+    else if (options.instructions !== undefined) body.instructions = NONE(options.instructions) ? "" : options.instructions;
     if (options.status) body.status = options.status;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     if (options.deadline) body.target_date = parseDeadlineDate(options.deadline);
     if (options.path !== undefined) body.project_path = NONE(options.path) ? null : path.resolve(options.path);
     if (options.number?.length) body.metrics = initiativeMetricsArg(options.number, "--number");
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update: pass --title, --description, --status, --labels, --deadline, --path, --number, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens, --horizon)");
+      console.error("Nothing to update: pass --title, --description, --instructions, --status, --labels, --deadline, --path, --number, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens, --horizon)");
       process.exit(1);
     }
     await cliPost("/cli/projects/update", body);
@@ -18573,6 +18729,75 @@ projectCmd
   .argument("[session]", "Session id or short id (default: this session)")
   .action(async (session: string | undefined) => {
     await setSessionProject(session, null);
+  });
+
+// A project's memory is its pinned docs (session-projects.md SP6): every
+// session in the project starts with their index. Remember files one, forget
+// unpins it (the doc stays, editable through cast doc).
+async function memoryProject(ref: string | undefined): Promise<{ id: string; label: string }> {
+  if (ref) {
+    const id = await resolveProjectId(ref);
+    const p = await cliPost("/cli/projects/get", { id });
+    if (!p) exitNotFound("project", ref, "cast project ls");
+    return { id: p._id, label: p.short_id ?? p._id };
+  }
+  const session = callingSession() || detectCurrentSessionId();
+  const context = session ? await tryCliPost("/cli/projects/context", { session }) : null;
+  if (!context?.id) {
+    console.error("This session is in no project: name one (cast project ls), or put the session in one (cast project join <project>)");
+    process.exit(1);
+  }
+  return { id: context.id, label: context.short_id ?? context.id };
+}
+
+projectCmd
+  .command("remember")
+  .description("Record a fact every session in a project should know: a pinned note in the project, listed at every session's start")
+  .argument("<project-or-fact>", stdinText("The project (short id, id or title substring) when a fact follows; else the fact"))
+  .argument("[fact]", stdinText("The fact (markdown), when the project is named first"))
+  .option("--title <text>", "The note's title (default: the fact's opening words)")
+  .action(async (first: string, second: string | undefined, options: any) => {
+    const ref = second === undefined ? undefined : first;
+    const text = (second ?? first).trim();
+    if (!text) { console.error("Nothing to remember: the fact is empty"); process.exit(1); }
+    const project = await memoryProject(ref);
+    const row = await cliPost("/cli/projects/get", { id: project.id });
+    const firstLine = text.split("\n")[0].replace(/^#+\s*/, "").trim();
+    const title = options.title?.trim() || (firstLine.length > 80 ? `${firstLine.slice(0, 77).trimEnd()}...` : firstLine);
+    const result = await cliPost("/cli/docs/create", {
+      title,
+      content: text,
+      doc_type: "note",
+      project_id: project.id,
+      pinned: true,
+      // The project's access key, not its routing team: a team project private to its owner keeps its notes personal.
+      ...(row?.team_id && (row.workspace ?? `team:${row.team_id}`).startsWith("team:") ? { workspace: "team", team_id: row.team_id } : { workspace: "personal" }),
+    });
+    console.log(`${c.green}ok${c.reset} Remembered in ${c.cyan}${project.label}${c.reset} as ${c.cyan}${result.id}${c.reset}: ${title}`);
+  });
+
+projectCmd
+  .command("memory")
+  .description("List a project's memory: its pinned docs")
+  .argument("[project]", "Project short id, id or title substring (default: this session's project)")
+  .option("--json", "Output as JSON (the doc rows)")
+  .action(async (ref: string | undefined, options: any) => {
+    const project = await memoryProject(ref);
+    const docs = await cliPost("/cli/docs/list", { project_id: project.id, pinned: true, limit: 100 });
+    const rows = Array.isArray(docs) ? docs : [];
+    if (options.json) { printJson(rows); return; }
+    if (!rows.length) { console.log(fmt.muted(`No memory in ${project.label} yet: cast project remember "<fact>"`)); return; }
+    for (const d of rows) console.log(`  ${c.cyan}${d._id}${c.reset} ${d.title} ${c.dim}${formatRelativeTime(d.updated_at)}${c.reset}`);
+    console.log(fmt.muted(`\n  ${rows.length} in ${project.label}; cast doc show <id> opens one, cast project forget <id> unpins it`));
+  });
+
+projectCmd
+  .command("forget")
+  .description("Take a doc out of its project's memory (unpins it; the doc stays)")
+  .argument("<doc>", "Doc id")
+  .action(async (docId: string) => {
+    await cliPost("/cli/docs/update", { id: docId, pinned: false });
+    console.log(`${c.green}ok${c.reset} ${c.cyan}${docId}${c.reset} is out of the project's memory; the doc stays (cast doc show ${docId})`);
   });
 
 // "2026-09-26" → ms at local end-of-day, so a deadline includes its own day.
@@ -18747,6 +18972,55 @@ projectCmd
     if (events.length === body.limit) {
       console.log(fmt.muted(`  … showing the ${events.length} most recent (raise -n for more)`));
     }
+  });
+
+const OUTPUT_PR_GROUPS: Array<[string, string]> = [["attention", "Needs attention"], ["review", "In review"], ["done", "Merged or closed"]];
+
+function outputRefs(o: any): string {
+  const refs = [o.session ? (o.session.short_id ?? o.session.id) : null, o.task?.short_id].filter(Boolean).join(" ");
+  return `${c.dim}${refs ? `${refs} · ` : ""}${formatRelativeTime(o.updated_at)}${c.reset}`;
+}
+
+projectCmd
+  .command("outputs")
+  .description("What a project produced: its pull requests by what they need, then its pages, docs and images, each with the session and task that made it")
+  .argument("<id>", "Project short id (pj-...), id, or title substring")
+  .option("--all", "List merged and closed pull requests too")
+  .option("--json", "Output as JSON")
+  .action(async (ref: string, options: any) => {
+    const id = await resolveProjectId(ref);
+    const out = await cliPost("/cli/projects/outputs", { id });
+    if (!out) exitNotFound("project", ref, "cast project ls");
+    if (options.json) { printJson(out); return; }
+    console.log(`\n  ${c.bold}${out.project.title}${c.reset} ${c.cyan}${out.project.short_id ?? out.project.id}${c.reset}`);
+    const empty = !out.prs.length && !out.pages.length && !out.docs.length && !out.images.length;
+    if (empty) console.log(fmt.muted("\n  No outputs yet."));
+    for (const [group, label] of OUTPUT_PR_GROUPS) {
+      const rows = out.prs.filter((p: any) => p.group === group);
+      if (!rows.length) continue;
+      console.log(`\n  ${c.bold}${label} (${rows.length})${c.reset}`);
+      if (group === "done" && !options.all) { console.log(fmt.muted("    --all lists them")); continue; }
+      for (const p of rows) {
+        const status = `${p.draft ? "draft · " : ""}${p.status.replace(/_/g, " ")}`;
+        console.log(`    ${c.cyan}${p.repository}#${p.number}${c.reset} ${p.title} ${c.yellow}${status}${c.reset} ${outputRefs(p)}`);
+        console.log(`      ${c.dim}${p.github_url}${c.reset}`);
+      }
+    }
+    const sections: Array<[string, any[], (o: any) => string]> = [
+      ["Pages", out.pages, (o) => `https://codecast.sh${o.href}`],
+      ["Docs", out.docs, (o) => `${WEB_URL}${o.href}`],
+      ["Images", out.images, (o) => o.url],
+    ];
+    for (const [label, rows, link] of sections) {
+      if (!rows.length) continue;
+      console.log(`\n  ${c.bold}${label} (${rows.length})${c.reset}`);
+      for (const o of rows) {
+        console.log(`    ${o.title} ${outputRefs(o)}`);
+        console.log(`      ${c.dim}${link(o)}${c.reset}`);
+      }
+    }
+    if (out.truncated) console.log(fmt.muted("\n  Older outputs exist past what was read."));
+    console.log();
   });
 
 // --- Goals ---
@@ -22694,7 +22968,9 @@ program.hook('preAction', (thisCommand, actionCommand) => {
     process.exit(1);
   }
   const cmdName = actionCommand.name();
-  const args = actionCommand.args?.join(' ') || '';
+  // `cast run --env KEY=VALUE` carries values meant for one host, never for the command log.
+  const rawArgs: string[] = actionCommand.args ?? [];
+  const args = (cmdName === 'run' ? rawArgs.map((a, i) => (rawArgs[i - 1] === '--env' || a.startsWith('--env=') ? a.replace(/^((?:--env=)?[A-Za-z_][A-Za-z0-9_]*)=.*$/s, '$1=…') : a)) : rawArgs).join(' ') || '';
   if (process.env.DEBUG_CLI) {
     console.error(`[DEBUG] preAction hook: cmd=${cmdName} args=${args}`);
   }
