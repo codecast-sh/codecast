@@ -1,5 +1,6 @@
 // SessionStart -> the bound task, back in front of an agent after compaction
-// or a resume (docs/architecture/task-graph.md TG10). Installed to
+// or a resume (docs/architecture/task-graph.md TG10), with the project the
+// session works in (session-projects.md SP6). Installed to
 // ~/.claude/hooks/task-context.sh and, for Codex, ~/.codecast/hooks/
 // task-context-codex.sh when Codex hooks are on. Part of Tasks & Plans in
 // Agent Features, and independent of stable mode.
@@ -14,6 +15,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatTaskResume, formatTaskResumeUnavailable, restoresTaskContext, type TaskResumeContext } from "@codecast/shared/tasks";
+import { projectContextBlock, type ProjectContext } from "@codecast/shared/contracts/projectContext";
 import { readTaskPulseFor } from "./taskPulse.js";
 import { checkoutWords } from "./checkoutWords.js";
 import { codecastHooksDir, installCodexSessionStartHook, removeCodexSessionStartHook, wrapForClient, type StableHookClient, type StableContextConfig } from "./stableContext.js";
@@ -118,6 +120,20 @@ export async function taskContextFor(
   }
 }
 
+/** The project block for a compacted or resumed session in a project, or null.
+ *  A failed read prints nothing: the project is not in the pulse. */
+export async function projectContextFor(payload: HookPayload, read: (body: { session: string }) => Promise<ProjectContext | null>): Promise<string | null> {
+  if (payload.cursor_version || !restoresTaskContext(payload.source)) return null;
+  const session = payload.session_id || payload.sessionId;
+  if (!session) return null;
+  try {
+    const context = await read({ session });
+    return context ? projectContextBlock(context) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** One line per failure, so a hook that never prints can be diagnosed. */
 export function logFailure(sessionId: string | undefined, reason: string): void {
   try {
@@ -141,18 +157,29 @@ export async function runTaskContextHook(config: StableContextConfig | null, cli
     return logFailure(undefined, "unreadable hook payload");
   }
   const sessionId = payload.session_id || payload.sessionId;
-  const block = await taskContextFor(payload, async (body) => {
+  const post = async (route: string, body: Record<string, unknown>) => {
+    if (!config?.auth_token || !config.convex_url) throw new Error(unreadable ?? "not signed in");
+    const response = await fetch(`${config.convex_url.replace(".cloud", ".site")}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, ...body }),
+      signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`server answered ${response.status}`);
+    return response.json();
+  };
+  const project = projectContextFor(payload, async (body) => {
+    try {
+      return (await post("/cli/projects/context", body)) as ProjectContext | null;
+    } catch (err) {
+      logFailure(sessionId, `project context: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
+  });
+  const task = taskContextFor(payload, async (body) => {
     const label = body.short_id ?? "no pulse task";
     try {
-      if (!config?.auth_token || !config.convex_url) throw new Error(unreadable ?? "not signed in");
-      const response = await fetch(`${config.convex_url.replace(".cloud", ".site")}/cli/work/resume`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_token: config.auth_token, ...body }),
-        signal: AbortSignal.timeout(READ_TIMEOUT_MS),
-      });
-      if (!response.ok) throw new Error(`server answered ${response.status}`);
-      const context = (await response.json()) as TaskResumeContext | null;
+      const context = (await post("/cli/work/resume", body)) as TaskResumeContext | null;
       if (!context && body.short_id) logFailure(sessionId, `${label}: nothing to restore (not found, not readable, or a closed task it only filed)`);
       return context;
     } catch (err) {
@@ -161,5 +188,6 @@ export async function runTaskContextHook(config: StableContextConfig | null, cli
       throw err;
     }
   });
-  if (block) process.stdout.write(wrapForClient(client, block));
+  const blocks = (await Promise.all([task, project])).filter(Boolean);
+  if (blocks.length) process.stdout.write(wrapForClient(client, blocks.join("\n\n")));
 }

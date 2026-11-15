@@ -2,6 +2,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, isConvexId, ensureHydrated, visualOrderViewSig, inboxMemberRows, sessionRowFromConversation, type InboxSession } from "../store/inboxStore";
 import { whenInputQuiet } from "../lib/inputQuiet";
+import { afterBootIdle } from "../lib/bootIdle";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 
@@ -436,8 +437,9 @@ function runWarmLoop(convex: ConvexClient): () => void {
   const unsubscribe = useInboxStore.subscribe((st, prev) => {
     if (warmInputsChanged(st, prev) || visualOrderViewSig(st) !== visualOrderViewSig(prev)) schedule();
   });
-  warmVisibleSessions(convex);
+  const cancelBoot = afterBootIdle(() => warmVisibleSessions(convex));
   return () => {
+    cancelBoot();
     unsubscribe();
     if (timer !== null) clearTimeout(timer);
     cancelQuiet?.();

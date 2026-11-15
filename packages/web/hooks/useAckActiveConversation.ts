@@ -14,6 +14,7 @@
 // watched) — and NOT when the read mark itself changes. That is what lets
 // "mark unread" survive: the gesture flips manual_unread without touching
 // either dependency, so nothing re-acks until you leave and come back.
+import { memo } from "react";
 import { sessionActivityAt, shouldAcknowledge } from "@codecast/shared/contracts";
 import { sessionActivityFacts, useInboxStore } from "../store/inboxStore";
 import { usePagePresence } from "./usePagePresence";
@@ -40,3 +41,11 @@ export function useAckActiveConversation(conversationId: string | null | undefin
     useInboxStore.getState().ackSessionRead(conversationId!, updatedAt);
   }, [conversationId, isCurrent, present, updatedAt]);
 }
+
+// Mounted as a leaf so the selectors above wake only this: leaving the session,
+// a new turn landing, or the window losing focus otherwise re-rendered the
+// whole ConversationView that hosts it.
+export const AckActiveConversation = memo(function AckActiveConversation({ conversationId }: { conversationId: string | null | undefined }) {
+  useAckActiveConversation(conversationId);
+  return null;
+});
