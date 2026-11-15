@@ -1,11 +1,12 @@
-import { useMemo } from "react";
+import { useCallback, useContext, useMemo } from "react";
 import {
-  useNavigate,
+  UNSAFE_NavigationContext,
+  resolvePath,
   useLocation,
   useSearchParams as useRRSearchParams,
   useParams as useRRParams,
 } from "react-router";
-import { useTabContext } from "@/lib/tabParams";
+import { useTabContext, useTabPane } from "@/lib/tabParams";
 import { useInboxStore } from "@/store/inboxStore";
 import { borrowsTabShell } from "@/lib/desktop";
 import { interceptSettingsNav, shouldUseTabRouting, tabNavigate } from "./tabRouting";
@@ -35,11 +36,26 @@ export function usePathname(): string {
   return routerPath;
 }
 
+// react-router's useNavigate reads the location (BrowserRouter is not a data
+// router), so every caller re-rendered on each URL change and got a new
+// navigate. The navigator itself never changes; a path that is not absolute
+// resolves against the current location, as useNavigate's does.
+function useStableNavigate() {
+  const { navigator } = useContext(UNSAFE_NavigationContext);
+  return useCallback((to: string | number, options?: { replace?: boolean; state?: unknown }) => {
+    if (typeof to === "number") { navigator.go(to); return; }
+    const from = (navigator as { location?: { pathname: string } }).location?.pathname ?? window.location.pathname;
+    const path = to.startsWith("/") ? to : resolvePath(to, from);
+    if (options?.replace) navigator.replace(path, options.state);
+    else navigator.push(path, options?.state);
+  }, [navigator]);
+}
+
 export function useRouter() {
-  const navigate = useNavigate();
+  const navigate = useStableNavigate();
   // The tab this component renders in, so a background (prewarm) pane's
   // navigations move its OWN tab instead of the one the user is looking at.
-  const tabCtx = useTabContext();
+  const tabCtx = useTabPane();
   const tabId = tabCtx?.tabId;
   // A pane-hosted page (lib/tabParams `navigate`) routes within its pane.
   const paneNavigate = tabCtx?.navigate;
@@ -89,6 +105,20 @@ export function useRouter() {
     }),
     [navigate, tabId, paneNavigate],
   );
+}
+
+/** usePathname's answer, read when the returned function is called: for
+ *  handlers that need the path without re-rendering on every navigation. */
+export function useReadPathname(): () => string {
+  const pane = useTabPane();
+  return useCallback(() => {
+    if (pane) return pane.getPath ? pane.getPath() : (pane as { pathname?: string }).pathname ?? window.location.pathname;
+    const s = useInboxStore.getState();
+    const tab = s.tabs.length > 0 && s.activeTabId ? s.tabs.find((t) => t.id === s.activeTabId) : null;
+    const tabPath = tab?.path?.split("?")[0].split("#")[0];
+    if (tabPath && !borrowsTabShell()) return tabPath;
+    return window.location.pathname;
+  }, [pane]);
 }
 
 export function useSearchParams(): URLSearchParams {

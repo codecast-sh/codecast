@@ -673,6 +673,10 @@ export function splitShellSegments(source: string): string[] {
 export function parseCastCommandString(rawCommand: string): ParsedCastCommand | null {
   const raw = rawCommand.trim();
   const line = unwrapShellCommand(raw);
+  // No segment can start with `cast` unless the line holds the word: skip the
+  // quote-aware scan for every other command (most of a transcript's shell
+  // calls, long heredocs included), which a cold transcript paid on first render.
+  if (!line.includes("cast")) return null;
   for (const segment of splitShellSegments(line)) {
     const cmd = stripCommandPrefixes(segment);
     // A browser target flag can sit between the category and the verb
