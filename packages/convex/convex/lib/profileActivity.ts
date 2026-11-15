@@ -1,4 +1,5 @@
 import type { Id } from "../_generated/dataModel";
+import type { Attendance } from "@codecast/shared/contracts";
 import { getProfileVisibilityPredicate, isTeamMember } from "../privacy";
 import { dayStartUtc } from "./userSend";
 import {
@@ -6,13 +7,14 @@ import {
   activityLiveFrom,
   collectIntervalsInWindow,
   fetchUserActivityDays,
+  matchesAttendance,
   type ActivityDayRow,
   type ActivityScope,
   type ScopedInterval,
 } from "./activityDaily";
 
 // ── Profile activity: rolled-up days + a live window ──
-// `user_activity_daily` holds one small row per (user, team, UTC day), so a
+// `user_activity_daily` holds small rows per (user, team, UTC day), so a
 // year of activity is ~370 rows instead of the tens of thousands of session
 // rows it is derived from (that read blew Convex's system-operation ceiling and
 // the profile heatmap failed outright). Only today and yesterday are still
@@ -22,7 +24,7 @@ import {
 // totals; a teammate reads its `shared_*` counters, the same team-visibility
 // rule `getProfileVisibilityPredicate` applies to the live window. Someone who
 // is not the owner and not scoped to a team they share sees nothing.
-export type ActivityRequest = { user_id: Id<"users">; team_id?: Id<"teams">; days?: number };
+export type ActivityRequest = { user_id: Id<"users">; team_id?: Id<"teams">; days?: number; who?: Attendance };
 
 export async function loadUserActivity(
   ctx: any,
@@ -43,7 +45,7 @@ export async function loadUserActivity(
     return { days: [], live: [] };
   const scope: ActivityScope = unrestricted ? "total" : "shared";
 
-  const days = await fetchUserActivityDays(ctx, args.user_id, args.team_id, from, liveFrom, scope);
+  const days = await fetchUserActivityDays(ctx, args.user_id, args.team_id, from, liveFrom, scope, args.who);
   const raw = await collectIntervalsInWindow(ctx, args.user_id, liveFrom, now + 1);
   const isVisible = unrestricted
     ? () => true
@@ -52,6 +54,7 @@ export async function loadUserActivity(
     .filter(
       (iv) =>
         (!args.team_id || String(iv.team_id) === String(args.team_id)) &&
+        matchesAttendance(args.who, iv.unattended) &&
         // An event/insight interval carries no privacy facts (its conversation
         // is gone): it counts for a teammate only as part of a team, exactly as
         // the shared day counters treat it.

@@ -2,6 +2,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { dayStartUtc } from "./userSend";
 import { createTeamFeedFilter } from "../privacy";
 import type { ActivityInterval } from "./activityPunchcard";
+import { isUnattendedConversation, type Attendance } from "@codecast/shared/contracts";
 
 // Per-day session-activity counters: the profile contribution graph, the hour
 // punchcard and the team charts all read these rows.
@@ -14,8 +15,11 @@ import type { ActivityInterval } from "./activityPunchcard";
 // system-operation ceiling: the profile heatmap failed outright ("too many
 // system operations") and took ~18s when it did answer.
 //
-// So a day is rolled up once into one small row per (user, team, UTC day), and
-// read as a row after that. Only the live window (today and yesterday) is
+// So a day is rolled up once into one small row per (user, team, UTC day,
+// attendance), and read as a row after that. Attendance splits the sessions
+// the person was at from the ones running with nobody watching (a line
+// station, a role's hand, a schedule run, a worker), so a chart can show a
+// person's own hours apart from the agents running under their account. Only the live window (today and yesterday) is
 // still computed from the raw rows, where one day of sessions is a few hundred
 // documents.
 
@@ -48,9 +52,16 @@ export type IntervalConversation = {
 /** An interval plus the routing team it files under and its privacy facts. */
 export type ScopedInterval = ActivityInterval & {
   team_id?: Id<"teams">;
+  /** Nobody was watching the session. An event or insight carries no such
+   *  fact (its conversation is gone), so it counts as attended. */
+  unattended: boolean;
   /** Absent when the source was an event or insight (the conversation is gone). */
   conv?: IntervalConversation;
 };
+
+/** Does an interval or day row fall under `who`? No filter takes everything. */
+export const matchesAttendance = (who: Attendance | undefined, unattended: boolean | undefined) =>
+  !who || (who === "unattended") === !!unattended;
 
 export type ActivityDayRow = {
   day_start: number;
@@ -107,6 +118,7 @@ export async function collectIntervalsInWindow(
       msgs: c.message_count ?? 0,
       project: basenameOf(c.git_root || c.project_path),
       team_id: c.team_id,
+      unattended: isUnattendedConversation(c),
       conv: {
         user_id: c.user_id,
         team_id: c.team_id,
@@ -153,6 +165,7 @@ export async function collectIntervalsInWindow(
         hours: durMs ? Math.min(durMs, CAP) / HOUR : 0.5,
         msgs: (e.metadata as any)?.message_count ?? 0,
         team_id: e.team_id,
+        unattended: false,
       });
     }
   }
@@ -174,6 +187,7 @@ export async function collectIntervalsInWindow(
       hours: 0.5,
       msgs: 0,
       team_id: ins.team_id,
+      unattended: false,
     });
   }
 
@@ -263,12 +277,14 @@ export async function rollupActivityDay(
     return f;
   };
 
-  type Slot = { team_id?: Id<"teams">; total: DayAcc; shared: DayAcc };
+  type Slot = { team_id?: Id<"teams">; unattended: boolean; total: DayAcc; shared: DayAcc };
+  const keyOf = (teamId: Id<"teams"> | undefined, unattended: boolean | undefined) =>
+    `${teamId ? String(teamId) : ""}|${unattended ? "u" : "a"}`;
   const slots = new Map<string, Slot>();
   for (const iv of intervals) {
     if (dayStartUtc(iv.end) !== dayStart) continue;
-    const key = iv.team_id ? String(iv.team_id) : "";
-    const slot = slots.get(key) ?? { team_id: iv.team_id, total: emptyAcc(), shared: emptyAcc() };
+    const key = keyOf(iv.team_id, iv.unattended);
+    const slot = slots.get(key) ?? { team_id: iv.team_id, unattended: iv.unattended, total: emptyAcc(), shared: emptyAcc() };
     slots.set(key, slot);
     addInterval(slot.total, iv, dayStart);
     const isShared = iv.conv ? (await sharedFor(iv.team_id))(iv.conv) : !!iv.team_id;
@@ -279,7 +295,7 @@ export async function rollupActivityDay(
     .query("user_activity_daily")
     .withIndex("by_user_day", (q: any) => q.eq("user_id", userId).eq("day_start", dayStart))
     .collect();
-  const byKey = new Map<string, any>(existing.map((r: any) => [r.team_id ? String(r.team_id) : "", r]));
+  const byKey = new Map<string, any>(existing.map((r: any) => [keyOf(r.team_id, r.unattended), r]));
 
   let sessions = 0;
   for (const [key, slot] of slots) {
@@ -292,6 +308,7 @@ export async function rollupActivityDay(
         user_id: userId,
         team_id: slot.team_id,
         day_start: dayStart,
+        ...(slot.unattended ? { unattended: true } : {}),
         ...fields,
       });
   }
@@ -306,9 +323,9 @@ export async function rollupActivityDay(
 export type ActivityScope = "total" | "shared";
 
 /**
- * One user's rolled-up days over [from, to), optionally scoped to one team. An
- * unscoped read sums every team's row for a day — the same rule the send and
- * usage counters follow.
+ * One user's rolled-up days over [from, to), optionally scoped to one team and
+ * to attended or unattended sessions. An unscoped read sums every team's row
+ * for a day — the same rule the send and usage counters follow.
  */
 export async function fetchUserActivityDays(
   ctx: { db: any },
@@ -317,6 +334,7 @@ export async function fetchUserActivityDays(
   from: number,
   to: number,
   scope: ActivityScope = "total",
+  who?: Attendance,
 ): Promise<ActivityDayRow[]> {
   const rows: any[] = teamId
     ? await ctx.db
@@ -353,6 +371,7 @@ export async function fetchUserActivityDays(
 
   const byDay = new Map<number, ActivityDayRow>();
   for (const raw of rows) {
+    if (!matchesAttendance(who, raw.unattended)) continue;
     const r = pick(raw);
     const acc =
       byDay.get(r.day_start) ??

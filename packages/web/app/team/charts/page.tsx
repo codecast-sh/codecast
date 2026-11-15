@@ -4,6 +4,8 @@ import { useQuery, useQueries } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
+import { Bot, User } from "lucide-react";
+import type { Attendance } from "@codecast/shared/contracts";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { AvatarImg } from "../../../lib/avatarCache";
@@ -51,6 +53,14 @@ type MemberInfo = { _id: string; name?: string; github_username?: string; github
 const LINE_COLORS = ["#268bd2", "#859900", "#cb4b16", "#6c71c4", "#2aa198", "#b58900", "#d33682", "#dc322f"];
 
 const zeros24 = () => new Array(24).fill(0);
+
+// Which sessions every chart on the page counts: all of them, the ones a
+// person was at, or the ones running unattended under their account.
+const WHO_ITEMS = [
+  { key: "all", label: "All", title: "Every session" },
+  { key: "attended", icon: User, label: "Attended", title: "Sessions someone was at" },
+  { key: "unattended", icon: Bot, label: "Unattended", title: "Sessions nobody was watching: line stations, roles, routines, workers" },
+];
 const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
 
 function TeamChartsContent() {
@@ -62,6 +72,7 @@ function TeamChartsContent() {
   const teamId = (pickedTeam ?? (defaultTeamId ? String(defaultTeamId) : null)) as Id<"teams"> | null;
 
   const tzOffset = useMemo(() => new Date().getTimezoneOffset(), []);
+  const [who, setWho] = useState<"all" | Attendance>("all");
   const members = useQuery(api.users.getTeamMembers, teamId ? { team_id: teamId } : "skip") as
     | MemberInfo[]
     | undefined;
@@ -74,16 +85,22 @@ function TeamChartsContent() {
       for (const m of members) {
         q[String(m._id)] = {
           query: api.users.getUserActivityPunchcard,
-          args: { user_id: m._id as Id<"users">, team_id: teamId, days: 371, tz_offset_minutes: tzOffset },
+          args: { user_id: m._id as Id<"users">, team_id: teamId, days: 371, tz_offset_minutes: tzOffset, ...(who === "all" ? {} : { who }) },
         };
       }
     }
     return q;
-  }, [teamId, members, tzOffset]);
-  const punchResults = useQueries(punchQueries) as Record<string, PunchRow[] | undefined>;
-
-  const allLoaded =
-    !!members && members.length > 0 && members.every((m) => punchResults[String(m._id)] !== undefined);
+  }, [teamId, members, tzOffset, who]);
+  const fresh = useQueries(punchQueries) as Record<string, PunchRow[] | undefined>;
+  const freshLoaded =
+    !!members && members.length > 0 && members.every((m) => fresh[String(m._id)] !== undefined);
+  // Switching which sessions count re-subscribes every member: keep drawing
+  // the last complete answer until the new one is whole, instead of a skeleton.
+  const lastLoaded = useRef<{ teamId: string | null; rows: Record<string, PunchRow[] | undefined> } | null>(null);
+  if (freshLoaded) lastLoaded.current = { teamId, rows: fresh };
+  const held = !freshLoaded && lastLoaded.current?.teamId === teamId ? lastLoaded.current.rows : null;
+  const punchResults = held ?? fresh;
+  const allLoaded = freshLoaded || !!held;
 
   // Merge member punchcards cell-by-cell into the team-wide grid.
   const rows = useMemo(() => {
@@ -147,6 +164,9 @@ function TeamChartsContent() {
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <div className="scale-[0.82] origin-right">
+            <SegmentedToggle value={who} onChange={(k) => setWho(k as "all" | Attendance)} items={WHO_ITEMS} />
+          </div>
           {rows && (
             <div className="scale-[0.82] origin-right">
               <RangeControl value={range} onChange={setRange} days={days} />

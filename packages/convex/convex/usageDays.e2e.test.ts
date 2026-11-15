@@ -57,6 +57,21 @@ test("a fork counts only turns after it was created, and an unpriced model adds 
   expect(turnCost("claude-fable-5-1", { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1_000_000 })).toBeCloseTo(0.25, 9);
 });
 
+test("an unattended session's usage folds into its own row, read apart from the person's", async () => {
+  const mine = { _id: "conversations_m", user_id: "users_owner", team_id: "teams_t", _creationTime: T - DAY };
+  const station = { _id: "conversations_w", user_id: "users_owner", team_id: "teams_t", _creationTime: T - DAY, is_workflow_sub: true };
+  const { db, ctx, scheduled } = setup([mine, station]);
+  await rollUpUsage(ctx, mine, [turn("a1", T)], {}, Date.now());
+  await rollUpUsage(ctx, station, [turn("w1", T), turn("w2", T + 1000)], {}, Date.now());
+  for (const job of scheduled) await (fold as any)._handler({ db }, job.args);
+  expect(db._tables.user_usage_daily).toHaveLength(2);
+  const total = async (who?: "attended" | "unattended") =>
+    (await fetchUserUsageDays({ db }, "users_owner" as any, "teams_t" as any, 30, who))[0].token_hours.reduce((a, b) => a + b, 0);
+  expect(await total()).toBe(3 * 1_011_010);
+  expect(await total("attended")).toBe(1_011_010);
+  expect(await total("unattended")).toBe(2 * 1_011_010);
+});
+
 test("the punchcard shows usage in the viewer's clock, alongside sends", async () => {
   const { bucketPunchcardRows } = await import("./lib/activityPunchcard");
   const day = Date.UTC(2026, 9, 5);

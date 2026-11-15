@@ -8,7 +8,9 @@
 //   - the live window (today, yesterday) still comes from the raw rows, and a
 //     day is never counted twice across the two halves;
 //   - a teammate reads the shared counters, the owner the totals;
-//   - re-rolling a day is idempotent and corrects it.
+//   - re-rolling a day is idempotent and corrects it;
+//   - attended and unattended sessions roll into separate rows, so a chart can
+//     count a person's own sessions apart from the agents under their account.
 import { afterAll, beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
@@ -250,5 +252,46 @@ describe("rolled-up activity days", () => {
     expect(day.day_sessions).toBe(1);
     expect(day.hours[9]).toBeCloseTo(1, 2);
     expect(day.hours.reduce((a: number, b: number) => a + b, 0)).toBeCloseTo(1, 2);
+  });
+
+  test("attended and unattended sessions are counted apart, rolled up and live", async () => {
+    const t = tables(
+      [
+        session("c_mine", OLD + 9 * HOUR, OLD + 10 * HOUR),
+        session("c_station", OLD + 9 * HOUR, OLD + 12 * HOUR, { is_workflow_sub: true }),
+        session("c_role", TODAY + 9 * HOUR, TODAY + 13 * HOUR, { unattended: true }),
+        session("c_today", TODAY + 9 * HOUR, TODAY + 11 * HOUR),
+      ],
+      {
+        user_usage_daily: [
+          { _id: "uu_a", _creationTime: 1, user_id: OWNER, team_id: TEAM, day_start: OLD, token_hours: [5], spend_hours: [1], updated_at: 1 },
+          { _id: "uu_u", _creationTime: 2, user_id: OWNER, team_id: TEAM, day_start: OLD, unattended: true, token_hours: [70], spend_hours: [9], updated_at: 2 },
+        ],
+      },
+    );
+    await rollupActivityDay({ db: db(t) }, OWNER, OLD);
+    // One row per attendance, and a re-roll keeps them apart.
+    await rollupActivityDay({ db: db(t) }, OWNER, OLD);
+    expect(t.user_activity_daily.map((r: any) => !!r.unattended).sort()).toEqual([false, true]);
+
+    const read = async (who?: string) => {
+      const rows = await (getUserActivityPunchcard as any)._handler(ctx(OWNER, t), {
+        user_id: OWNER,
+        team_id: TEAM,
+        days: 371,
+        tz_offset_minutes: 0,
+        ...(who ? { who } : {}),
+      });
+      const total = (date: string, f: string) =>
+        (rows.find((r: any) => r.date === date)?.[f] ?? []).reduce((a: number, b: number) => a + b, 0);
+      return {
+        old: total(utcDate(OLD), "hours"),
+        today: total(utcDate(TODAY), "hours"),
+        tokens: total(utcDate(OLD), "tokens"),
+      };
+    };
+    expect(await read()).toEqual({ old: 4, today: 6, tokens: 75 });
+    expect(await read("attended")).toEqual({ old: 1, today: 2, tokens: 5 });
+    expect(await read("unattended")).toEqual({ old: 3, today: 4, tokens: 70 });
   });
 });

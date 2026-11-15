@@ -1931,6 +1931,10 @@ export const getUserActivityPunchcard = query({
     team_id: v.optional(v.id("teams")),
     days: v.optional(v.number()),
     tz_offset_minutes: v.optional(v.number()),
+    // Only the sessions the person was at, or only the ones running with
+    // nobody watching; absent counts both. Typed messages and words are the
+    // person's own either way, so they drop out of the unattended view.
+    who: v.optional(v.union(v.literal("attended"), v.literal("unattended"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1947,8 +1951,8 @@ export const getUserActivityPunchcard = query({
 
     const [{ days, live }, sendDays, usageDays] = await Promise.all([
       loadUserActivity(ctx, userId, args),
-      fetchUserSendDays(ctx, args.user_id, args.team_id, args.days ?? 365),
-      seesSpend ? fetchUserUsageDays(ctx, args.user_id, args.team_id, args.days ?? 365) : undefined,
+      args.who === "unattended" ? undefined : fetchUserSendDays(ctx, args.user_id, args.team_id, args.days ?? 365),
+      seesSpend ? fetchUserUsageDays(ctx, args.user_id, args.team_id, args.days ?? 365, args.who) : undefined,
     ]);
     return bucketPunchcardRows(live, args.tz_offset_minutes ?? 0, sendDays, usageDays, days);
   },

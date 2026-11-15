@@ -37,3 +37,10 @@ export function isUnattendedConversation(conv: {
 } | null | undefined): boolean {
   return !!conv && !!(conv.unattended || conv.is_subagent || conv.is_workflow_sub || conv.agent_task_id || conv.anchor_id);
 }
+
+/**
+ * Which of a person's sessions an activity count covers: the ones they were
+ * at (attended) or the ones running with nobody watching
+ * (isUnattendedConversation). Absent means both.
+ */
+export type Attendance = "attended" | "unattended";

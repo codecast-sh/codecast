@@ -4,6 +4,7 @@ import { overrideFor, usageCost } from "@platform/agent/meter";
 import { dayStartUtc, resolveCounterTeam } from "./userSend";
 import { teamHasFeature } from "./teamFeatureGuard";
 import { accountOfSession } from "./sessionAccount";
+import { isUnattendedConversation, type Attendance } from "@codecast/shared/contracts";
 
 // Per-day token and spend counters behind the "Tokens" and "Spend" chart
 // metrics. conversations.usage_totals is a lifetime total per session, so it
@@ -99,7 +100,10 @@ export async function recordUsageDays(
   }
 }
 
-// Move a session's pending usage into its owner's day rows.
+// Move a session's pending usage into its owner's day rows. A person's day has
+// one row for the sessions they were at and one for the sessions running with
+// nobody watching, so the charts can show either (rows written before the
+// split carry no flag and read as attended).
 export async function foldUsage(ctx: { db: any }, conversationId: Id<"conversations">): Promise<void> {
   const pending = await ctx.db
     .query("usage_pending")
@@ -109,18 +113,20 @@ export async function foldUsage(ctx: { db: any }, conversationId: Id<"conversati
   const conversation: Doc<"conversations"> | null = await ctx.db.get(conversationId);
   if (conversation) {
     const teamId = await resolveCounterTeam(ctx, conversation);
+    const unattended = isUnattendedConversation(conversation);
     for (const p of pending) {
-      const existing = await ctx.db
+      const sameDay = await ctx.db
         .query("user_usage_daily")
         .withIndex("by_user_team_day", (q: any) =>
           q.eq("user_id", conversation.user_id).eq("team_id", teamId).eq("day_start", p.day_start),
         )
-        .first();
+        .collect();
+      const existing = sameDay.find((r: any) => !!r.unattended === unattended);
       const token_hours = addHours(existing?.token_hours ?? zeros24(), p.token_hours);
       const spend_hours = addHours(existing?.spend_hours ?? zeros24(), p.spend_hours);
       const row = { token_hours, spend_hours, updated_at: Date.now() };
       if (existing) await ctx.db.patch(existing._id, row);
-      else await ctx.db.insert("user_usage_daily", { user_id: conversation.user_id, team_id: teamId, day_start: p.day_start, ...row });
+      else await ctx.db.insert("user_usage_daily", { user_id: conversation.user_id, team_id: teamId, day_start: p.day_start, ...(unattended ? { unattended: true } : {}), ...row });
       if (p.account) await addAccountDay(ctx, p.account, conversation.user_id, p.day_start, p.token_hours.reduce((a: number, b: number) => a + b, 0));
     }
   }
@@ -141,12 +147,14 @@ async function addAccountDay(ctx: { db: any }, email: string, userId: Id<"users"
 export type UsageDayRow = DayHours;
 
 // A user's usage counters over a trailing window, optionally scoped to one
-// team. Unscoped reads sum every team's row for a day.
+// team and to attended or unattended sessions. Unscoped reads sum every
+// team's row for a day.
 export async function fetchUserUsageDays(
   ctx: { db: any },
   userId: Id<"users">,
   teamId: Id<"teams"> | undefined,
   days: number,
+  who?: Attendance,
 ): Promise<UsageDayRow[]> {
   const cutoff = dayStartUtc(Date.now() - days * 24 * HOUR);
   const rows: UsageDayRow[] = teamId
@@ -159,7 +167,8 @@ export async function fetchUserUsageDays(
         .withIndex("by_user_day", (q: any) => q.eq("user_id", userId).gte("day_start", cutoff))
         .collect();
   const byDay = new Map<number, UsageDayRow>();
-  for (const r of rows) {
+  for (const r of rows as any[]) {
+    if (who && (who === "unattended") !== !!r.unattended) continue;
     const acc = byDay.get(r.day_start) ?? { day_start: r.day_start, token_hours: zeros24(), spend_hours: zeros24() };
     byDay.set(r.day_start, { day_start: r.day_start, token_hours: addHours(acc.token_hours, r.token_hours), spend_hours: addHours(acc.spend_hours, r.spend_hours) });
   }
