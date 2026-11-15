@@ -243,6 +243,14 @@ export function createSampleVault(now = Date.now()) {
       changed();
     },
 
+    setTouchId(id: string, on: boolean) {
+      const row = state.rows[id];
+      if (!row) return;
+      putRow({ ...row, touch_id: on || undefined, updated_at: Date.now() });
+      logEvent(id, on ? "touch_id_on" : "touch_id_off");
+      changed();
+    },
+
     updateMeta(id: string, fields: SecretMetaEdit) {
       const row = state.rows[id];
       if (!row) return;

@@ -1,5 +1,5 @@
 import { StyleSheet, TouchableOpacity, View as RNView, Animated as RNAnimated, PanResponder, Image, Pressable } from 'react-native';
-import { probeRender, PERF_PROBE } from '@/lib/perfProbe';
+import { probeGesture, probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { Text as RNText } from '@/components/Themed';
 import { createContext, memo, useContext, useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
@@ -391,6 +391,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
         duration: 200,
         useNativeDriver: true,
       }).start(() => {
+        if (PERF_PROBE) probeGesture();
         cb.current.onDismiss();
         // A stashed row usually leaves the list and unmounts. One that stays (a
         // question still open keeps it under Decisions) slides back rather than
