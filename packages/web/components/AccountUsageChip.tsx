@@ -402,7 +402,7 @@ export function AccountUsageChip() {
             tone={claudeTone}
             title={
               sw.switching
-                ? machineSwitchPendingCopy(sw.phase, sw.switching, device.label)
+                ? machineSwitchPendingCopy(sw.phase, sw.label, device.label)
                 : !claudeUsed
                   ? `Claude "${resolved.claudeLabel}" — no usage this week`
                   : `Claude "${resolved.claudeLabel}" — worst limit window at ${worst != null ? Math.round(worst) : "?"}%`
@@ -434,7 +434,7 @@ export function AccountUsageChip() {
           <span
             className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-current/30 border-t-current"
             style={{ color: tone }}
-            aria-label={machineSwitchPendingCopy(sw.phase, sw.switching, device.label)}
+            aria-label={machineSwitchPendingCopy(sw.phase, sw.label, device.label)}
           />
         ) : autoOn ? (
           // Auto-switch on is the default and needs no mark at rest; the bolt
@@ -487,7 +487,7 @@ export function AccountUsageChip() {
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-2 w-2 shrink-0 animate-spin rounded-full border-2 border-current/30 border-t-current" aria-hidden />
                 <span className="min-w-0 flex-1">
-                  {machineSwitchPendingCopy(sw.phase, sw.switching, device.label)}
+                  {machineSwitchPendingCopy(sw.phase, sw.label, device.label)}
                 </span>
               </span>
             ) : sw.outcome?.kind === "error" ? (

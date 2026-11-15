@@ -24,13 +24,15 @@ const announced = new Set<string>();
 export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?: string; launchProfile?: string }): {
   switchTo: (profile: string, email?: string) => Promise<void>;
   switching: string | null;
+  /** The account being switched to, as a person reads it (its email). */
+  label: string;
   phase: MachineSwitchPhase;
   outcome: MachineSwitchOutcome | null;
   clearOutcome: () => void;
 } {
   const deviceId = opts.deviceId ?? "";
   const state = useMachineSwitchState(opts);
-  const { row, resolved, pending, profile } = state;
+  const { row, resolved, pending, label } = state;
   const toastId = `acct-switch-${deviceId}`;
 
   useWatchEffect(() => {
@@ -40,7 +42,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
       const key = `${row._id}:${resolved.phase}`;
       if (announced.has(key)) return;
       announced.add(key);
-      toast.message(machineSwitchPendingCopy(resolved.phase, profile), { id: toastId, ...persistentToast });
+      toast.message(machineSwitchPendingCopy(resolved.phase, label), { id: toastId, ...persistentToast });
       return;
     }
     if (resolved.phase === "succeeded") {
@@ -50,7 +52,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
       if (announced.has(`${row._id}:done`)) return;
       announced.add(`${row._id}:done`);
       if (row.confirmed_at) return;
-      const copy = machineSwitchSuccessCopy(profile, opts.launchProfile === profile);
+      const copy = machineSwitchSuccessCopy(label);
       toast.success(copy.title, { id: toastId, description: copy.description });
       return;
     }
@@ -71,13 +73,14 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
       return;
     }
     const res = await state.request(target, email, () =>
-      toast.message(machineSwitchPendingCopy("waiting", target), { id: toastId, ...persistentToast }));
-    if (res === "already") toast.success(`Already on "${target}"`);
+      toast.message(machineSwitchPendingCopy("waiting", email || target), { id: toastId, ...persistentToast }));
+    if (res === "already") toast.success(`Already on ${email || target}`);
   };
 
   return {
     switchTo,
     switching: state.switching,
+    label,
     phase: state.phase,
     outcome: state.outcome,
     clearOutcome: state.clearOutcome,

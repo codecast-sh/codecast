@@ -114,23 +114,15 @@ export function humanizeSwitchError(msg: string): string {
   return stripped;
 }
 
-export function machineSwitchPendingCopy(phase: MachineSwitchPhase, profile: string, deviceLabel?: string): string {
+/** `account` is what a person reads: the email, never the daemon's profile id
+ *  (an account-pool share is saved as `pool-<local part>`). */
+export function machineSwitchPendingCopy(phase: MachineSwitchPhase, account: string, deviceLabel?: string): string {
   const where = deviceLabel ? ` on ${deviceLabel}` : "";
-  if (phase === "confirming") return `Confirming the active account${where} is "${profile}"…`;
-  if (phase === "slow") return `Still waiting${where} to switch to "${profile}"…`;
-  return `Switching this machine to "${profile}"…`;
+  if (phase === "confirming") return `Confirming${where}: ${account}…`;
+  if (phase === "slow") return `Still switching${where} to ${account}…`;
+  return `Switching to ${account}…`;
 }
 
-export function machineSwitchSuccessCopy(profile: string, viaToken = false): { title: string; description: string } {
-  if (viaToken) {
-    return {
-      title: `Sessions now run on "${profile}"`,
-      description:
-        "On its minted token: new and resumed sessions use it, running ones keep the account they started on. The machine's login stays until you sign in again on this account.",
-    };
-  }
-  return {
-    title: `This machine is now "${profile}"`,
-    description: "New and resumed sessions will use it. Running sessions keep the account they started on.",
-  };
+export function machineSwitchSuccessCopy(account: string): { title: string; description: string } {
+  return { title: `Now on ${account}`, description: "New and resumed sessions use it" };
 }

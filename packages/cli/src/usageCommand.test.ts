@@ -209,6 +209,19 @@ describe("cast usage --all", () => {
     const text = renderAccountUsage(rows, now, c);
     expect(text.split("\n")[0]).toContain("Session (5h) 70% 2h");
     expect(text).toContain("2 of 6 accounts are auto-switch targets");
+    expect(text).toContain("continue now on work, the account in use");
+    expect(text).toContain("cast accounts continue --yes --include-subagents");
+    expect(text).not.toContain("cast accounts use spare");
+  });
+
+  test("names another account only when the one in use is spent", () => {
+    const usage = (session: number) => ({ fetched_at: now - 60_000, session: { percent: session, resets_at: now + 2 * H }, weekly: { percent: 20, resets_at: now + 30 * H } });
+    const rows = buildAccountUsage([
+      { name: "work", email: "w@x.com", active: true, usage: usage(100) },
+      { name: "spare", email: "s@x.com", usage: usage(0) },
+    ], now);
+    const text = renderAccountUsage(rows, now, c);
+    expect(text).toContain("work is spent");
     expect(text).toContain("cast accounts use spare --continue --yes --include-subagents");
   });
 });

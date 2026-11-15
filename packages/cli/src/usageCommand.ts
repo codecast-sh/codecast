@@ -225,6 +225,8 @@ export interface AccountUsageRow {
   status: "active" | "reserved" | "login expired" | "access refused" | "exhausted" | "no data" | "headroom";
   /** Whether auto-switch would pick it (fallbackProfiles), the same set `cast usage` counts. */
   switch_target: boolean;
+  /** No window is pegged right now, so a parked session continued here can run. */
+  has_room: boolean;
   worst: number | null;
   windows: UsageWindowLine[];
   fetched_at?: number;
@@ -250,6 +252,7 @@ export function buildAccountUsage(profiles: UsageProfile[], now: number): Accoun
       active: !!p.active,
       status,
       switch_target: targets.has(p.name),
+      has_room: !isUsageExhausted(p.usage, now),
       worst: worstUsagePercent(p.usage, now),
       windows: (p.usage ? labeledUsageWindows(p.usage) : []).map((w) => ({ label: w.label, percent: livePercent(w, now), resets_at: w.resets_at, rolled: isWindowRolled(w, now) })),
       fetched_at: p.usage?.fetched_at,
@@ -275,7 +278,12 @@ export function renderAccountUsage(rows: AccountUsageRow[], now: number, c: Reco
   });
   const targets = rows.filter((r) => r.switch_target);
   lines.push(`${c.dim}${targets.length} of ${rows.length} accounts are auto-switch targets now (headroom, reachable, not reserved)${c.reset}`);
+  // The account in use comes first: a person may have just chosen it, and a
+  // continue restarts parked sessions onto it. Naming another account here
+  // moves every machine off that choice.
+  const active = rows.find((r) => r.active);
   const best = [...targets].sort((a, b) => (a.worst ?? 100) - (b.worst ?? 100))[0];
-  if (best) lines.push(`${c.dim}Sessions parked on a limit continue now on ${best.name}, workers included:${c.reset} cast accounts use ${best.name} --continue --yes --include-subagents`);
+  if (active?.has_room) lines.push(`${c.dim}Sessions parked on a limit continue now on ${active.name}, the account in use, workers included:${c.reset} cast accounts continue --yes --include-subagents`);
+  else if (best) lines.push(`${c.dim}${active ? `${active.name} is spent; s` : "S"}essions parked on a limit continue now on ${best.name}, workers included:${c.reset} cast accounts use ${best.name} --continue --yes --include-subagents`);
   return lines.join("\n");
 }

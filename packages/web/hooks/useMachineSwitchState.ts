@@ -57,12 +57,13 @@ export function useMachineSwitchState(opts: { deviceId?: string } & MachineSwitc
   const resolved = machineSwitchStatus(row, fleet, now);
   const pending = !!row && isPendingPhase(resolved.phase);
   const profile = row?.profile ?? row?.email ?? "";
+  const label = row?.email || profile;
 
   const outcome: MachineSwitchOutcome | null =
     !row || pending ? null
     : resolved.phase === "failed" ? { kind: "error", profile, message: resolved.error ?? "Switch failed" }
     : resolved.phase === "succeeded" && profileIsFleetAccount({ name: profile, email: row.email }, fleet)
-      ? { kind: "success", profile, email: row.email, message: `Now using ${profile}` }
+      ? { kind: "success", profile, email: row.email, message: `Now using ${label}` }
       : null;
 
   /** Queue the switch; `onQueued` runs just before it goes out. "busy": one is already in flight; "already": the machine is on it. */
@@ -84,6 +85,7 @@ export function useMachineSwitchState(opts: { deviceId?: string } & MachineSwitc
     resolved,
     pending,
     profile,
+    label,
     outcome,
     request,
     switching: pending ? profile : null,

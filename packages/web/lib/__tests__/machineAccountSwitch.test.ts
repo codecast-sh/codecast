@@ -140,12 +140,8 @@ test("humanizeSwitchError keeps a missing-profile error", () => {
 });
 
 test("pending copy distinguishes a slow wait", () => {
-  expect(machineSwitchPendingCopy("waiting", "petrosianasho")).toBe(
-    'Switching this machine to "petrosianasho"…',
-  );
-  expect(machineSwitchPendingCopy("slow", "petrosianasho", "ashot-mbp")).toBe(
-    'Still waiting on ashot-mbp to switch to "petrosianasho"…',
-  );
+  expect(machineSwitchPendingCopy("waiting", "a@x.com")).toBe("Switching to a@x.com…");
+  expect(machineSwitchPendingCopy("slow", "a@x.com", "ashot-mbp")).toBe("Still switching on ashot-mbp to a@x.com…");
 });
 
 describe("token switch", () => {
@@ -168,7 +164,6 @@ describe("token switch", () => {
     const pending = { profile: "tok", email: "tok@x.com", startedAt: 0 };
     expect(resolveMachineSwitch({ pending, activeEmail: "key@x.com", now: 1_000 }).phase).toBe("waiting");
     expect(resolveMachineSwitch({ pending, activeEmail: "key@x.com", launchProfile: "tok", now: 1_000 }).phase).toBe("succeeded");
-    expect(machineSwitchSuccessCopy("tok", true).title).toMatch(/sessions now run on/i);
-    expect(machineSwitchSuccessCopy("tok").title).toMatch(/this machine is now/i);
+    expect(machineSwitchSuccessCopy("tok@x.com").title).toBe("Now on tok@x.com");
   });
 });
