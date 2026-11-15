@@ -21,6 +21,8 @@ import { formatFeedResults } from "./formatter.js";
 import type { PushedPoolRow } from "./workflow/flowPool.js";
 import { fetchMappedProjects, teamForDirectory } from "./directoryTeam.js";
 import { orgContextBlock, type OrgWhere } from "@codecast/shared/contracts/orgWhere";
+import { projectContextBlock } from "@codecast/shared/contracts/projectContext";
+import { restoresTaskContext } from "@codecast/shared/tasks";
 import { formatModGuide } from "./mods/guide.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { resolveCastInvocation } from "./castInvocation.js";
@@ -144,6 +146,7 @@ export function whereForNewSession(base: OrgWhere, session?: string): OrgWhere {
     card: null,
     chain: [],
     roles: base.roles.map((r) => ({ ...r, seat: false })),
+    project_context: null,
   };
 }
 
@@ -362,6 +365,8 @@ export async function prepareLaunchStableContext(config: StableContextConfig | n
  * mod's and the org's instructions, which came last.
  */
 export const STABLE_CONTEXT_BUDGET = 9_000; // bytes
+/** Room kept for the feed's frame and the project instructions' own tags when the instructions are cut to fit. */
+const PROJECT_FEED_RESERVE = 1_000;
 
 /**
  * Render the org, mods and flows lead and the <stable-context> feed block.
@@ -406,7 +411,19 @@ export async function buildStableContext(
     // What agents must act on (the org, the mods' objects and blocks) leads;
     // the feed is background and gives up its oldest conversations to fit.
     const orgBlock = reads.where?.roles?.length ? `\n\n${orgContextBlock(reads.where)}` : "";
-    const lead = `${orgBlock}${reads.mods ?? ""}${!reads.pool || reads.pool.flowsOn === false ? "" : await flowsLine(opts.cwd, reads.pool.rows)}`.trim();
+    // The session's project (session-projects.md SP6). After compaction or a
+    // resume the task context hook brings it back, so it is not printed twice.
+    // Its instructions give way to fit the budget beside the org, mods and
+    // flows; the whole text stays one command away (cast project show).
+    const project = reads.where?.project_context;
+    const rest = `${reads.mods ?? ""}${!reads.pool || reads.pool.flowsOn === false ? "" : await flowsLine(opts.cwd, reads.pool.rows)}`;
+    let projectBlock = "";
+    if (project && !restoresTaskContext(opts.start?.source)) {
+      const bare = projectContextBlock({ ...project, instructions: null });
+      const room = STABLE_CONTEXT_BUDGET - PROJECT_FEED_RESERVE - Buffer.byteLength(orgBlock + rest + bare);
+      projectBlock = `\n\n${projectContextBlock(project, { instructionsChars: room })}`;
+    }
+    const lead = `${orgBlock}${projectBlock}${rest}`.trim();
     const result = reads.feed;
     if (!result && !lead) return undefined;
 

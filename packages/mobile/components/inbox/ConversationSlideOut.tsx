@@ -37,7 +37,7 @@ export function ConversationSlideOut({ id, children }: { id: string; children: R
     router.setParams({ id: conversationId, message: messageId, focus: undefined } as never);
   }, [router]);
 
-  const exit = useCallback(() => router.navigate('/(tabs)/inbox' as never), [router]);
+  const exit = useCallback(() => router.dismissTo('/(tabs)/inbox' as never), [router]);
 
   const drawer = useMemo(() => ({ open: () => setOpen(true) }), [setOpen]);
 

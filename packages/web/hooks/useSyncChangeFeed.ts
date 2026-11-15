@@ -8,6 +8,7 @@ import { track } from "../lib/analytics";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { onSyncWake } from "./syncWake";
 import { beginSyncInflight } from "../store/syncActivity";
+import { syncTransaction } from "../store/syncTransaction";
 
 // Sync-log client applier — the single catch-up path.
 // Design: docs/architecture/sync-log-migration.md (pl-399, D7).
@@ -296,7 +297,9 @@ async function applyLogPage(
     }
     entityActions.push(a);
   }
-  store.retireAckedPending(scopeKey, upTo);
+  // The page's writes (acks here, seeds, cargo, stats and, with nothing to
+  // refetch, the cursor below) fold into one subscriber visit.
+  syncTransaction(() => store.retireAckedPending(scopeKey, upTo));
   // Cargo first (E6): actions that carry their fields apply directly through
   // the store's pending-aware merge; everything else — deletes (authorized
   // absence, E5), rows with no base, partial cargo, and enrichment triggers —
@@ -348,21 +351,25 @@ async function applyLogPage(
     const plan = planCargoApply(coll, a, existing);
     merges.push({ action: a, refetch: !!plan.refetch, item: { coll, id: a.entity_id, fields: plan.fields, unset: plan.unset } });
   }
-  for (const [coll, rows] of seeds) {
-    state.clearFeedExcludes(coll, rows.map((r) => r._id));
-    state.syncTable(coll, rows as any, { isDelta: true } as any);
-  }
-  if (merges.length) {
-    const applied = state.applyCargoBatch(merges.map((m) => m.item));
-    merges.forEach((m, i) => {
-      if (!applied[i]) { byIds.push(m.action); return; }
-      direct++;
-      if (m.refetch) byIds.push(m.action);
-    });
-  }
-  state.noteSyncLogApply(direct, byIds.length);
+  syncTransaction(() => {
+    for (const [coll, rows] of seeds) {
+      state.clearFeedExcludes(coll, rows.map((r) => r._id));
+      state.syncTable(coll, rows as any, { isDelta: true } as any);
+    }
+    if (merges.length) {
+      const applied = state.applyCargoBatch(merges.map((m) => m.item));
+      merges.forEach((m, i) => {
+        if (!applied[i]) { byIds.push(m.action); return; }
+        direct++;
+        if (m.refetch) byIds.push(m.action);
+      });
+    }
+    state.noteSyncLogApply(direct, byIds.length);
+    if (!byIds.length) store.recordSyncMeta(scopeMetaKey(scopeKey), { cursor: upTo });
+  });
   tallyApply(direct, byIds.length);
-  if (byIds.length) await applyEntityIds(convex, planFeedApply(byIds), { fromLog: true });
+  if (!byIds.length) return;
+  await applyEntityIds(convex, planFeedApply(byIds), { fromLog: true });
   store.recordSyncMeta(scopeMetaKey(scopeKey), { cursor: upTo });
 }
 
