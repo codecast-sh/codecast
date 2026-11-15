@@ -426,6 +426,15 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["taskEvidence.get"],
   },
+  // The newest model-written change guide per pull request (prGuides.forPr),
+  // keyed by the pull request's Convex id. Delta: each PR page feeds its own
+  // row and must not evict the others.
+  prGuides: {
+    persistence: { kind: "collection", key: "prGuides" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["prGuides.forPr"],
+  },
   // A project's expectations (the-line-model.md LM5; line-map.md LX3): the
   // forProject view (the current document, its history, the open proposals
   // with their changes, whether the viewer is the project's person), one row
@@ -2038,6 +2047,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   decisionComments: "shared",
   sideAnswers: "shared",
   taskEvidence: "shared",
+  prGuides: "shared",
   projectExpectations: "shared",
   projectOutputs: "shared",
   expectationsOverview: "shared",

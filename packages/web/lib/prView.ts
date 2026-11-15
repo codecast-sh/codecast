@@ -465,9 +465,9 @@ export function dayLabel(ts: number, now: number = Date.now()): string {
 // fragment. The fragment is readable on purpose (`#diff-src/a.ts:R12-R20`), in
 // GitHub's letters: R is the new side of the diff, L the old one.
 
-export type PrView = "conversation" | "files" | "commits" | "checks";
+export type PrView = "conversation" | "guide" | "files" | "commits" | "checks";
 
-export const PR_VIEWS: readonly PrView[] = ["conversation", "files", "commits", "checks"];
+export const PR_VIEWS: readonly PrView[] = ["conversation", "guide", "files", "commits", "checks"];
 
 /** The view a PR page path names: its last segment, or the conversation. */
 export function prViewOf(pathname: string): PrView {

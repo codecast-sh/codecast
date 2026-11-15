@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Route } from "lucide-react";
 import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 import { stepLocation } from "@codecast/shared/contracts/changeGuide";
@@ -15,28 +16,45 @@ import { cn } from "../../lib/utils";
 // The author's prose: inline code as a quiet chip, not backtick glyphs.
 const PROSE = "prose-sm prose-invert max-w-none prose-p:my-1 prose-code:rounded prose-code:bg-sol-bg-alt prose-code:px-1 prose-code:py-px prose-code:text-[12px] prose-code:font-normal prose-code:text-sol-text";
 
-function StepLocation({ step }: { step: ChangeGuide["steps"][number] }) {
+type Step = ChangeGuide["steps"][number];
+
+function StepLocation({ step, href }: { step: Step; href?: string }) {
   const parts = step.file.split("/");
   const name = parts.pop();
   const dir = parts.join("/");
   const range = stepLocation(step).slice(step.file.length);
-  return (
-    <span className="inline-flex items-baseline min-w-0 max-w-full font-mono text-meta leading-5" title={stepLocation(step)}>
+  const label = (
+    <>
       {dir && <span className="text-sol-text-dim truncate">{dir}/</span>}
       <span className="text-sol-text-muted shrink-0">{name}</span>
       {range && <span className="text-sol-cyan shrink-0">{range}</span>}
-    </span>
+    </>
   );
+  const cls = "inline-flex items-baseline min-w-0 max-w-full font-mono text-meta leading-5";
+  return href
+    ? <Link href={href} className={cn(cls, "hover:underline decoration-sol-text-dim")} title={`Open ${stepLocation(step)} in the diff`}>{label}</Link>
+    : <span className={cls} title={stepLocation(step)}>{label}</span>;
 }
 
-export function ChangeGuideWalkthrough({ guide, className, compact = false }: { guide: ChangeGuide; className?: string; compact?: boolean }) {
+/**
+ * `source` says whose order the steps are in: the author's (written at
+ * handoff) or a model's (written from the diff on the PR page). `stepHref`
+ * makes each location open the step in the full diff.
+ */
+export function ChangeGuideWalkthrough({ guide, className, compact = false, source = "the author's order", stepHref }: {
+  guide: ChangeGuide;
+  className?: string;
+  compact?: boolean;
+  source?: string;
+  stepHref?: (step: Step) => string | undefined;
+}) {
   const steps = guide.steps;
   return (
     <section className={cn("min-w-0", className)} data-change-guide={steps.length}>
       <div className="flex items-center gap-1.5 text-xs font-medium text-sol-text-dim mb-2">
         <Route className="w-3.5 h-3.5" />
         Change guide
-        <span className="text-sol-text-dim/60 font-normal">· {steps.length} {steps.length === 1 ? "step" : "steps"}, in the author's order</span>
+        <span className="text-sol-text-dim/60 font-normal">· {steps.length} {steps.length === 1 ? "step" : "steps"}, in {source}</span>
       </div>
       {guide.summary && (
         <MarkdownRenderer content={guide.summary} className={cn("text-sm text-sol-text mb-3", PROSE)} />
@@ -55,7 +73,7 @@ export function ChangeGuideWalkthrough({ guide, className, compact = false }: { 
               </div>
               <div className={cn("min-w-0", last ? "pb-1" : "pb-5")}>
                 <h3 className="text-sm font-medium text-sol-text leading-6">{step.title}</h3>
-                <StepLocation step={step} />
+                <StepLocation step={step} href={stepHref?.(step)} />
                 {step.why && (
                   <MarkdownRenderer content={step.why} className={cn("mt-1.5 text-sm text-sol-text-muted", PROSE)} />
                 )}
@@ -67,7 +85,7 @@ export function ChangeGuideWalkthrough({ guide, className, compact = false }: { 
                     )}
                   </div>
                 ) : (
-                  <div className="mt-1.5 text-meta text-sol-text-dim">No diff for this range at handoff.</div>
+                  <div className="mt-1.5 text-meta text-sol-text-dim">No diff captured for this range.</div>
                 )}
               </div>
             </li>

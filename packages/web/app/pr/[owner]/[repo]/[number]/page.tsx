@@ -14,6 +14,7 @@ import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { Button } from "../../../../../components/ui/button";
 import { PRChecks } from "../../../../../components/pr/PRChecks";
 import { PRCommits } from "../../../../../components/pr/PRCommits";
+import { PRGuide } from "../../../../../components/pr/PRGuide";
 import { PRHeader } from "../../../../../components/pr/PRHeader";
 import { MergeMenu, MoreMenu, ReviewMenu } from "../../../../../components/pr/PRActions";
 import { ShipControl } from "../../../../../components/ShipControl";
@@ -599,6 +600,7 @@ export function PRContent({
                 }
               />
             ))}
+          {tab === "guide" && <PRGuide pr={pr} stepHref={filesHref} authed={isAuthenticated} />}
           {tab === "commits" && <PRCommits repository={repository} commits={pr.commits} total={pr.commits_count} read={details} />}
           {tab === "checks" && <PRChecks checks={pr.checks} read={details} pr={isAuthenticated && pr.state === "open" ? pr : undefined} sessionChoices={sessionChoices} />}
         </div>
