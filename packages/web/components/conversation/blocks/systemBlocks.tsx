@@ -771,7 +771,7 @@ function recipientStatusOf(row: Parameters<typeof agentStatusAt>[0] | undefined)
 }
 
 // What a `cast send --fyi` / `--done` asks back, on the card's header.
-export const SESSION_INTENT_TAG: Record<string, { label: string; tip: string }> = {
+const SESSION_INTENT_TAG: Record<string, { label: string; tip: string }> = {
   inform: { label: "FYI", tip: "Sent for information: needs no reply" },
   done: { label: "Done", tip: "Closes the exchange: not to be answered" },
 };

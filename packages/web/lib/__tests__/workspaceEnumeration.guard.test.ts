@@ -166,6 +166,7 @@ const ROWS_ALLOWED = new Map<string, string>([
   ["hooks/useSyncPrompts.ts", "where names the team"],
   ["hooks/useSyncChanges.ts", "every where names the team"],
   ["hooks/useSyncExternalEvents.ts", "useExternalEvents: the reader; each caller's where names its entity or the active team"],
+  ["components/projects/ProjectSources.tsx", "chat channels: where names the project's team"],
 ]);
 
 // Object.values over a TEAM collection: the files that filter by team or

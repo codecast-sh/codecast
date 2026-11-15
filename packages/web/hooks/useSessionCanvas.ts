@@ -6,6 +6,7 @@ import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useWatchEffect } from "./useWatchEffect";
 import { usePageEmbedFeed, type PageInfo } from "./usePageInfo";
 import { useTabContext } from "../lib/tabParams";
+import { stageHasRoom } from "../lib/stage";
 import {
   applyCanvasStep,
   canvasHasFocus,
@@ -122,4 +123,15 @@ export function useSessionCanvas(conversationId: string | null) {
 
   const claim = () => { if (tabId && conversationId) claimCanvas(tabId, conversationId); };
   return { on, pin, target, title: info?.title, pages, drives, claim };
+}
+
+/** Dock one page and hold it there until the person picks another or closes
+ *  the canvas: the gallery's "keep beside". */
+export function dockSessionPage(conversationId: string, slug: string): boolean {
+  if (!canvasLeafPath() && !stageHasRoom()) {
+    toast.error(CANVAS_NO_ROOM);
+    return false;
+  }
+  setSessionCanvas(conversationId, true, slug);
+  return true;
 }

@@ -17,7 +17,7 @@ import { usePageInfoRow } from "../hooks/usePageInfo";
 import { galleryItemKey, isGalleryPage, type GalleryImage, type GalleryItem } from "../lib/galleryItems";
 import { pageThumbUrl } from "../lib/publishedPageUrls";
 import { PageFavicon, PublishedPageEmbed } from "./PublishedPageEmbed";
-import { dockSessionPage } from "./conversation/SessionCanvasToggle";
+import { dockSessionPage } from "../hooks/useSessionCanvas";
 import { canOpenBeside } from "../lib/stage";
 import { hasStoredAuthToken } from "../lib/localAuth";
 

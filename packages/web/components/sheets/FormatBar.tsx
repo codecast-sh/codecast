@@ -410,8 +410,8 @@ export function FormatBar({
                 {tight && (
                   // Narrower still (a phone), decimals and conditional colors come in here too.
                   <>
-                    <DropdownMenuItem className={ITEM} onSelect={(e) => { e.preventDefault(); onAction({ type: "decimals", delta: -1 }); }}><span className="sheet-dec w-4 shrink-0 whitespace-nowrap text-[10px] text-center">.0</span> Fewer decimals</DropdownMenuItem>
-                    <DropdownMenuItem className={ITEM} onSelect={(e) => { e.preventDefault(); onAction({ type: "decimals", delta: 1 }); }}><span className="sheet-dec w-4 shrink-0 whitespace-nowrap text-[10px] text-center">.00</span> More decimals</DropdownMenuItem>
+                    <DropdownMenuItem className={ITEM} onSelect={(e) => { e.preventDefault(); onAction({ type: "decimals", delta: -1 }); }}><span className="sheet-dec w-4 shrink-0 whitespace-nowrap text-mark text-center">.0</span> Fewer decimals</DropdownMenuItem>
+                    <DropdownMenuItem className={ITEM} onSelect={(e) => { e.preventDefault(); onAction({ type: "decimals", delta: 1 }); }}><span className="sheet-dec w-4 shrink-0 whitespace-nowrap text-mark text-center">.00</span> More decimals</DropdownMenuItem>
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger className={ITEM}><Palette className="w-4 h-4" /> Conditional color</DropdownMenuSubTrigger>
                       <DropdownMenuSubContent>{condItems}</DropdownMenuSubContent>

@@ -37,14 +37,3 @@ export function SessionCanvasToggle({ conversationId }: { conversationId: string
     </ShortcutTooltip>
   );
 }
-
-/** Dock one page and hold it there until the person picks another or closes
- *  the canvas: the gallery's "keep beside". */
-export function dockSessionPage(conversationId: string, slug: string): boolean {
-  if (!canvasLeafPath() && !stageHasRoom()) {
-    toast.error(CANVAS_NO_ROOM);
-    return false;
-  }
-  setSessionCanvas(conversationId, true, slug);
-  return true;
-}

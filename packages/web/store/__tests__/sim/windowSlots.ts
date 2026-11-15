@@ -104,8 +104,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/syncTransaction.ts:timer": "transient",
   "store/syncReplication.ts:running": { shared: "the sim never calls startSyncReplication; devices wire the runtime directly" },
   "hooks/useQueryNoThrow.ts:remembered": "memo",
-  "store/chatSlice.ts:railCacheKey": "memo",
-  "store/chatSlice.ts:railCacheValue": "memo",
+  "store/chatSelectors.ts:railCacheKey": "memo",
+  "store/chatSelectors.ts:railCacheValue": "memo",
   "store/chatSlice.ts:dmOpensInFlight": { shared: "keyed by stub ids minted from the window's own seeded stream, so windows never collide" },
   "store/chatSlice.ts:sentWaiters": { shared: "keyed by the client id a window mints for its own hand-off send, so windows never collide" },
   "store/chatSlice.ts:settledSends": { shared: "keyed by the client id a window mints for its own hand-off send, so windows never collide" },
@@ -135,6 +135,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/idbCollectionDiff.ts:persistedCollections": CONSTANT,
   "store/clientSyncRegistry.ts:REPLICATED_COLLECTION_SET": CONSTANT,
   "store/clientSyncRegistry.ts:REPLICATED_TABLE_SET": CONSTANT,
+  "store/meetingBotsSlice.ts:MEETING_BOT_FINAL": CONSTANT,
   "store/mutativeMiddleware.ts:MUST_DELIVER_ACTIONS": CONSTANT,
   "store/mutativeMiddleware.ts:LEGACY_RECEIPT_ACTIONS": CONSTANT,
   "store/mutativeMiddleware.ts:UNDO_IGNORE_KEYS": CONSTANT,
@@ -390,7 +391,7 @@ const SEAMS: Record<string, () => SlotSeam> = {
 
 // Memo bindings, by file: each entry loads its module and returns the existing reset that drops them.
 const MEMO_RESETS: Record<string, () => () => void> = {
-  "store/chatSlice.ts": () => load<typeof import("../../chatSlice")>("../../chatSlice")._resetChatRailMemo,
+  "store/chatSelectors.ts": () => load<typeof import("../../chatSelectors")>("../../chatSelectors")._resetChatRailMemo,
   "hooks/useQueryNoThrow.ts": () => load<typeof import("../../../hooks/useQueryNoThrow")>("../../../hooks/useQueryNoThrow")._resetRememberedResults,
 };
 

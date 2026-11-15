@@ -6,6 +6,7 @@ import { OptionPreview } from "../../tools/AskUserQuestionToolView";
 import { buildPollPayload, pollCardAnswers, pollClosedLabel, pollKeyForOption, POLL_TIMED_OUT, SYNTHETIC_POLL_OPTION, type PollQuestion, type PollSelection, type PollSelections } from "../../../lib/pollPayload";
 import { ModernAnsweredRow, ModernAskCard } from "../ModernAsk";
 import type { ToolCall, ToolResult } from "../types";
+import { sentByCall } from "../../../lib/modernAskSent";
 
 // An agent's AskUserQuestion in the Modern style (interactiveBlocks branches
 // here). Open, it is the loud card: the question, the options as Buttons (the
@@ -15,12 +16,6 @@ import type { ToolCall, ToolResult } from "../types";
 // with the choice at its right. The wire format is lib/pollPayload's, the
 // same one the Classic card and the decision queue send.
 
-// What this tab already sent for a question card, so a remount does not offer it again.
-const sentByCall = new Map<string, PollSelections>();
-/** Reopen a card whose press became a proposal rather than an answer. */
-export const forgetModernAskSent = (toolId: string) => { sentByCall.delete(toolId); };
-/** Close a card whose answer was sent from elsewhere (a teammate's proposal). */
-export const markModernAskSent = (toolId: string) => { if (!sentByCall.has(toolId)) sentByCall.set(toolId, {}); };
 
 const RECOMMENDED = " (Recommended)";
 const clean = (label: string) => label.replace(RECOMMENDED, "");

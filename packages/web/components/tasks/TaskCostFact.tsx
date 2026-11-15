@@ -3,13 +3,10 @@
 // list price, tokens and sessions, with the billed and subscription split in
 // its hover card. Hidden until at least one of its sessions reported tokens.
 
-import { api } from "@codecast/convex/convex/_generated/api";
 import type { TaskCost } from "@codecast/convex/convex/taskCost";
-import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { HoverCard } from "../ui/HoverCard";
 import { usd } from "../../lib/line/flowStages";
 import { formatTokens } from "../charter/charterMeta";
-import { scopeArgsOf } from "../../lib/workspaceScope";
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
@@ -20,12 +17,6 @@ function Row({ label, value, tone }: { label: string; value: string; tone?: stri
       <span className={`text-right font-mono tabular-nums ${tone ?? "text-sol-text"}`}>{value}</span>
     </>
   );
-}
-
-/** The task's cost, or null while unknown and when none of its sessions reported tokens. */
-export function useTaskCost(shortId: string, workspace?: string | null): TaskCost | null {
-  const { data } = useQueryNoThrow(api.taskCost.cost, workspace ? { ...scopeArgsOf(workspace), task: shortId } : "skip");
-  return data && data.sessions > 0 ? data : null;
 }
 
 export function TaskCostFact({ cost, className }: { cost: TaskCost; className: string }) {

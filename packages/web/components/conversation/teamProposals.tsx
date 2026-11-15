@@ -2,37 +2,12 @@
 // (convex teamSuggestions.ts). A teammate's press on a question card or a
 // permission row becomes a proposal; the owner sees each one on that card and
 // submits it in one press. The view says which side of that it is on.
-import { createContext, useContext } from "react";
 import { Check, Lightbulb, Send, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
-import { useSessionSuggestions } from "../../hooks/useGuestSuggestions";
+import { proposeOrExplain, useMyName, useMyProposalFor, useTeamProposalRole, useProposalsFor, newProposalKey } from "../../hooks/useTeamProposals";
 import { proposalText } from "../../lib/steering";
 import { AvatarImg } from "../../lib/avatarCache";
-import { toast } from "sonner";
-import { serverErrorText } from "../../lib/errorCause";
 import { teamMembersOf } from "../../lib/activeTeam";
-
-export type TeamProposalRole = { conversationId: string; role: "owner" | "teammate"; ownerName: string } | null;
-
-export const TeamProposalContext = createContext<TeamProposalRole>(null);
-export const useTeamProposalRole = () => useContext(TeamProposalContext);
-
-/** Send a proposal; a refusal takes the painted row back and says why. */
-export function proposeOrExplain(pending: Promise<unknown>, clientKey: string, conversationId: string) {
-  pending.catch((e) => {
-    useInboxStore.getState().withdrawTeamSuggestion(clientKey, conversationId);
-    toast.error(serverErrorText(e));
-  });
-}
-
-export const newProposalKey = () => `prop_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
-
-export function useMyName(): string {
-  return useInboxStore((s) => {
-    const u: any = s.currentUser;
-    return u?.name || u?.github_username || u?.email?.split("@")[0] || "A teammate";
-  });
-}
 
 const firstName = (n: string) => n.split(/\s+/)[0] || n;
 
@@ -50,22 +25,6 @@ function AuthorFace({ authorId, name }: { authorId?: string | null; name: string
       fallback={<div className="w-5 h-5 rounded-full shrink-0 grid place-items-center bg-sol-violet/20 text-sol-violet text-meta font-semibold">{(name || "?").charAt(0).toUpperCase()}</div>}
     />
   );
-}
-
-/** Owner: the teammates' waiting proposals for one row (a question or a permission). */
-export function useProposalsFor(match: (r: any) => boolean): any[] {
-  const ctx = useTeamProposalRole();
-  const rows = useSessionSuggestions(ctx?.conversationId ?? "", null);
-  return ctx?.role === "owner" ? rows.filter((r) => r.status === "pending" && match(r)) : [];
-}
-
-/** My latest proposal on one row, in whatever state it is in. */
-export function useMyProposalFor(match: (r: any) => boolean): any | null {
-  const ctx = useTeamProposalRole();
-  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
-  const rows = useSessionSuggestions(ctx?.conversationId ?? "", meId);
-  const mine = rows.filter(match);
-  return mine[mine.length - 1] ?? null;
 }
 
 /** Owner: proposed answers under an open question card, each one press to send. */

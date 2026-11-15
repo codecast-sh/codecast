@@ -341,6 +341,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setLiveFlowOn: never("machine control: the switch starts or stops the team's flow runs; the same switch is the way back"),
   startLiveFlow: CREATE,
   sendMeetingBot: CREATE,
+  addProjectSource: CREATE,
   setCalendarMeetingChoice: never("machine control: switching a meeting on schedules a paid bot; the same switch takes it back"),
   setMeetingBotJoinAll: never("machine control: join-all schedules paid bots for every meeting; the same switch takes them back"),
   cancelMeetingBot: never("machine control: the bot leaves the meeting at once; sending a new bot is the way back"),

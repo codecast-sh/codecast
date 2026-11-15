@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { sourceLedger } from "./ProjectSources";
+import { sourceLedger } from "../../lib/projectSourceLedger";
 
 describe("sourceLedger", () => {
   test("a channel source names where its runs land and what each run reads", () => {

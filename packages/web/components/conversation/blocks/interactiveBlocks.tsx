@@ -25,8 +25,10 @@ import { useIsModernStyle } from "../../../hooks/useVisualStyle";
 import { ModernImage } from "./ModernImage";
 import { ModernMonitorRow, ModernThinking } from "./ModernEventRows";
 import { ModernPlanMode } from "./ModernPlanMode";
-import { ModernAskUserQuestion, forgetModernAskSent, markModernAskSent } from "./ModernAskUserQuestion";
-import { AnswerProposals, MyProposalStatus, newProposalKey, proposeOrExplain, useMyName, useMyProposalFor, useTeamProposalRole } from "../teamProposals";
+import { ModernAskUserQuestion } from "./ModernAskUserQuestion";
+import { forgetModernAskSent, markModernAskSent } from "../../../lib/modernAskSent";
+import { AnswerProposals, MyProposalStatus } from "../teamProposals";
+import { newProposalKey, proposeOrExplain, useMyName, useMyProposalFor, useTeamProposalRole } from "../../../hooks/useTeamProposals";
 
 // Live status badge + latest event for a Monitor or background-Bash block,
 // derived from the conversation's message window (monitorRowsFor — one

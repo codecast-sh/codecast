@@ -12,8 +12,10 @@ import { useInboxStore, isConvexId } from "../../store/inboxStore";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { RecordSection } from "../initiatives/InitiativeRecord";
 import { SelectBox } from "../ui/select-box";
-import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { sourceLedger } from "../../lib/projectSourceLedger";
 import { relativeTime } from "../../lib/entityDisplay";
+import { windowOrgTree } from "../../store/orgSlice";
 import { projectDefaultSessionOf, type ProjectRow, type RoleSeat } from "../../lib/projectDefaultSession";
 
 type SourceRow = {
@@ -35,32 +37,17 @@ const sourceSig = (t: SourceRow) => `${t.project_id ?? ""}|${t.status}|${t.title
 const channelSig = (c: any) => `${c.name}|${c.kind ?? ""}|${c.archived_at ? 1 : 0}`;
 const EVENTS = TRIGGER_EVENT_NAMES.filter((n) => !CHAT_TRIGGER_EVENTS.includes(n));
 
-/** The review an add opens: what it watches, where runs land, what each run gets. */
-export function sourceLedger(r: { source: string; project: string; mainSession: string | null; channel: boolean; othersSession?: boolean }): SwitchLedger {
-  return {
-    ...(r.othersSession ? { blocked: "Main session is a teammate's" } : {}),
-    name: "Add source",
-    subject: r.project,
-    shift: null,
-    figures: [{ value: "1", label: r.channel ? "run per burst" : "run per event", tone: "warn" }],
-    rows: [
-      { k: "Watches", v: r.source },
-      { k: "Runs in", v: r.mainSession ?? "New main session" },
-      ...(r.channel ? [{ k: "A run gets", v: "Every line since the last" }, { k: "Skips", v: "Lines the session wrote" }] : []),
-      { k: "Paused", v: "With the project", tone: "ok" as const },
-    ],
-    stop: "Pause or remove",
-    confirm: `Watch ${r.source}`,
-  };
-}
-
 export function ProjectSources({ project }: { project: ProjectRow & { _id: string; title: string } }) {
   const where = useMemo(() => (t: SourceRow) => t.project_id === project._id && !GONE.has(t.status), [project._id]);
   const sources = useCollectionRows<SourceRow>("agentTasks", { where, sig: sourceSig });
-  const channelRows = useCollectionRows<any>("chatChannels", { sig: channelSig });
+  // The project's team's channels (a personal project offers the active team's).
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id ?? null);
+  const teamId = (project as { team_id?: string }).team_id ?? activeTeamId;
+  const inTeam = useMemo(() => (c: any) => !!teamId && String(c.team_id) === String(teamId), [teamId]);
+  const channelRows = useCollectionRows<any>("chatChannels", { where: inTeam, sig: channelSig });
   const channels = useMemo(() => channelRows.filter((c) => c.kind !== "dm" && !c.archived_at).sort((a, b) => a.name.localeCompare(b.name)), [channelRows]);
   const channelName = useMemo(() => new Map(channelRows.map((c) => [String(c._id), c.name as string])), [channelRows]);
-  const mainId = useInboxStore((s) => projectDefaultSessionOf(project, s.sessions, s.orgTree?.roles as RoleSeat[] | undefined));
+  const mainId = useInboxStore((s) => projectDefaultSessionOf(project, s.sessions, windowOrgTree(s)?.roles as RoleSeat[] | undefined));
   const mainTitle = useInboxStore((s) => (mainId ? s.sessions[mainId]?.title || mainId.slice(0, 7) : null));
   // Runs land only in a session the source's owner runs; the server refuses the rest.
   const othersSession = useInboxStore((s) => {
