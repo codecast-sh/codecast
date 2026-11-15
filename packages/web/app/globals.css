@@ -1489,18 +1489,22 @@ diffs-container {
   --diffs-bg-deletion-emphasis-override: color-mix(in srgb, var(--sol-red) 25%, transparent);
 }
 
-/* --row-h is set from JS (undoActions.ts) to the row's measured height just
-   before the class is applied, so the collapse spans the real content — a single
-   card or a parent plus its subagent rows — instead of a hardcoded cap. */
+/* A row entering or leaving the session list never animates its height: that
+   moved every row below it each frame and each of them repainted. The row
+   takes or gives back its height at once (--row-h, measured in undoActions.ts,
+   is the leaving row's height, returned as a negative margin), the rows below
+   glide by a transform the compositor runs (slideFollowers), and the row
+   itself is clipped from the bottom in step with them, which draws what the
+   height collapse drew. */
 @keyframes sessionEnter {
   from {
     opacity: 0;
-    height: 0;
+    clip-path: inset(0 0 100% 0);
     transform: translateY(-6px);
   }
   to {
     opacity: 1;
-    height: var(--row-h, 80px);
+    clip-path: inset(0);
     transform: translateY(0);
   }
 }
@@ -1508,23 +1512,22 @@ diffs-container {
 @keyframes sessionDismiss {
   from {
     opacity: 1;
-    height: var(--row-h, 80px);
+    clip-path: inset(0);
   }
   to {
     opacity: 0;
-    height: 0;
+    clip-path: inset(0 0 100% 0);
     transform: translateY(-6px);
   }
 }
 
 .session-entering {
   animation: sessionEnter 250ms ease-out;
-  overflow: hidden;
 }
 
 .session-dismissing {
   animation: sessionDismiss 200ms ease-out forwards;
-  overflow: hidden;
+  margin-bottom: calc(-1 * var(--row-h, 0px));
   pointer-events: none;
 }
 

@@ -37,7 +37,7 @@ import {
 } from "../../../components/AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge, type MintFlow } from "../../../components/MintTokenDialog";
 import { profileHasSetupToken } from "@codecast/convex/convex/ccAccountsShared";
-import { formatAgo, planTypeLabel, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
+import { accountAlias, accountDisplayName, formatAgo, planTypeLabel, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
 import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/RecoveryModeSelect";
@@ -300,7 +300,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       // behind it, and its next heartbeat confirms — or resurrects the row
       // if the deletion failed.
       await removeProfile({ name: profile, device_id: device.device_id });
-      toast.success(`Removed "${profile}"`, { description: "Log into that account again anytime to re-add it." });
+      toast.success(`Removed "${accountDisplayName(undefined, profile)}"`, { description: "Log into that account again anytime to re-add it." });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Remove failed");
     } finally {
@@ -358,8 +358,8 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                   On one line they ran past the card, which clips. */}
               <div className="flex items-center gap-2.5">
                 <span className={`h-2 w-2 shrink-0 rounded-full ${isActive ? "bg-sol-green" : "bg-sol-border"}`} />
-                <span className="min-w-0 truncate text-sm font-medium text-sol-text" title={p.name}>{p.name}</span>
-                <span className="min-w-0 flex-1 truncate text-xs text-sol-text-muted" title={p.email}>{p.email}</span>
+                <span className="min-w-0 truncate text-sm font-medium text-sol-text">{accountDisplayName(p)}</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-sol-text-muted">{accountAlias(p)}</span>
                 {sw.switching === p.name ? (
                   <span className="inline-flex shrink-0 items-center gap-1.5 text-meta font-medium text-sol-cyan">
                     <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-sol-cyan/30 border-t-sol-cyan" aria-hidden />
@@ -411,8 +411,8 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                           title={
                             blocked?.label ??
                             (tokenSwitch
-                              ? `Move this machine's sessions to "${p.name}" on its minted token. The saved login stays expired and the machine's own login stays put; running sessions keep the account they started on.`
-                              : `Switch this machine to "${p.name}". Running sessions keep the account they started on.`)
+                              ? `Move this machine's sessions to "${accountDisplayName(p)}" on its minted token. The saved login stays expired and the machine's own login stays put; running sessions keep the account they started on.`
+                              : `Switch this machine to "${accountDisplayName(p)}". Running sessions keep the account they started on.`)
                           }
                           className="h-6 shrink-0 px-2 text-meta"
                         >
@@ -500,7 +500,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
               )}
               {sw.outcome?.kind === "success" && sw.outcome.profile === p.name && (
                 <div className="mt-1.5 pl-[18px] text-meta text-sol-green">
-                  Now using {p.name}. Running sessions keep the account they started on.
+                  Now using {accountDisplayName(p)}. Running sessions keep the account they started on.
                 </div>
               )}
               <div className="mt-2 pl-[18px]">
