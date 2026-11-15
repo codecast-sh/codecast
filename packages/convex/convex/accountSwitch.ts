@@ -196,28 +196,29 @@ function recoveryDecision(
 // workers (an orchestrator waiting on a workflow) never switched at all.
 // Fleet-store machines only. The switch restarts the parent onto the store;
 // its workers share its process and the spent account it started on, so the
-// restart ends nothing that could still make a request.
-// A workflow station is the exception: it nests under its run's log, where no
-// agent runs, and is a process of its own. It is revived as itself, so its
-// run survives the switch (jx73gnf, 2026-10-23).
+// restart ends nothing that could still make a request. A Codex worker spent
+// its own Codex login's window, which says nothing about its parent's Claude
+// account, so it never routes.
+// A workflow station is the exception (isLiveStation): it is revived as
+// itself on any machine, whatever agent it runs.
 async function workerParks(
   ctx: { db: any },
   primary: Doc<"devices"> | undefined,
   skipped: Doc<"conversations">[],
   blocked: Doc<"conversations">[],
 ): Promise<{ workers: Doc<"conversations">[]; parents: Doc<"conversations">[]; stations: Doc<"conversations">[] }> {
+  const fetched = await parentsOf(ctx, skipped);
+  const stations = skipped.filter((c) => c.pending_api_error_kind === "limit" && isLiveStation(c, fetched));
   const workers: Doc<"conversations">[] = [];
-  const stations: Doc<"conversations">[] = [];
   const parents = new Map<string, Doc<"conversations"> | null>(blocked.map((c) => [c._id, null]));
-  const runLogs = new Set<string>();
   if (!primary?.cc_accounts?.fleet_store || !autoRecoveryEnabled(primary)) return { workers, parents: [], stations };
   for (const worker of skipped) {
     const parentId = worker.parent_conversation_id;
-    if (worker.pending_api_error_kind !== "limit" || worker.agent_type === "codex" || !parentId) continue;
-    if (!parents.has(parentId) && !runLogs.has(parentId)) {
-      const parent: Doc<"conversations"> | null = await ctx.db.get(parentId);
-      if (parent && isWorkflowRunLog(parent)) runLogs.add(parentId);
-      else parents.set(parentId, parent && !isSubagentConversation(parent) && !parent.inbox_dismissed_at
+    const parent = parentId ? fetched.get(parentId) ?? null : null;
+    // A run's log has no agent to take a station's place.
+    if (worker.pending_api_error_kind !== "limit" || worker.agent_type === "codex" || !parentId || (parent && isWorkflowRunLog(parent))) continue;
+    if (!parents.has(parentId)) {
+      parents.set(parentId, parent && !isSubagentConversation(parent) && !parent.inbox_dismissed_at
         ? {
             ...parent,
             pending_api_error: true,
@@ -227,14 +228,35 @@ async function workerParks(
           }
         : null);
     }
-    if (runLogs.has(parentId)) {
-      if (!worker.inbox_dismissed_at) stations.push(worker);
-      continue;
-    }
     // A parent parked on its own already carries the recovery.
     if (parents.get(parentId)) workers.push(worker);
   }
   return { workers, parents: [...parents.values()].filter((p): p is Doc<"conversations"> => !!p), stations };
+}
+
+// Each conversation's parent, read once.
+async function parentsOf(
+  ctx: { db: any },
+  convs: Doc<"conversations">[],
+): Promise<Map<string, Doc<"conversations"> | null>> {
+  const parents = new Map<string, Doc<"conversations"> | null>();
+  for (const conv of convs) {
+    const parentId = conv.parent_conversation_id;
+    if (parentId && !parents.has(parentId)) parents.set(parentId, await ctx.db.get(parentId));
+  }
+  return parents;
+}
+
+// A workflow station nests under its run's log (lib/runLog.ts), where no agent
+// runs, and is a process of its own: it is revived as itself (jx73gnf,
+// 2026-10-23) and never dismissed with the workers. Its run waits on the park,
+// so a cleared flag reads a hand stopped on its limit as one that finished:
+// eleven onefix correctness reviews passed on nothing but Codex's limit reply,
+// and their changes went to a person to approve (2026-11-14). A station whose
+// row was dismissed or killed has left its run.
+function isLiveStation(conv: Doc<"conversations">, parents: Map<string, Doc<"conversations"> | null>): boolean {
+  const parent = conv.parent_conversation_id ? parents.get(conv.parent_conversation_id) : null;
+  return !!parent && isWorkflowRunLog(parent) && !conv.inbox_dismissed_at && !conv.inbox_killed_at;
 }
 
 async function dismissSkippedWorkersAutomatically(
@@ -246,9 +268,16 @@ async function dismissSkippedWorkersAutomatically(
   return dismissSkippedWorkers(ctx, skipped);
 }
 
+// The workers a revive that leaves them out dismisses: all but the live stations.
+async function dismissibleWorkers(ctx: { db: any }, skipped: Doc<"conversations">[]): Promise<Doc<"conversations">[]> {
+  const parents = await parentsOf(ctx, skipped);
+  return skipped.filter((c) => !isLiveStation(c, parents));
+}
+
 async function dismissSkippedWorkers(ctx: { db: any }, skipped: Doc<"conversations">[]): Promise<number> {
-  for (const conv of skipped) await ctx.db.patch(conv._id, BLOCKED_FLAG_CLEAR);
-  return skipped.length;
+  const leaving = await dismissibleWorkers(ctx, skipped);
+  for (const conv of leaving) await ctx.db.patch(conv._id, BLOCKED_FLAG_CLEAR);
+  return leaving.length;
 }
 
 // Send "continue" to every session parked on a usage-limit or dropped
@@ -285,7 +314,7 @@ export const continueAllBlocked = mutation({
       return {
         continued: 0,
         would_continue: blocked.length,
-        would_dismiss: skipped.length,
+        would_dismiss: (await dismissibleWorkers(ctx, skipped)).length,
         top_level: topLevelCount,
         subagents: subagentCount,
         total_blocked: totalBlocked,
@@ -386,7 +415,7 @@ export const requestAccountSwitch = mutation({
       return {
         devices: 0,
         conversations: blocked.length,
-        would_dismiss: skipped.length,
+        would_dismiss: (await dismissibleWorkers(ctx, skipped)).length,
         top_level: topLevelCount,
         subagents: subagentCount,
         total_blocked: totalBlocked,

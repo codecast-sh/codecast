@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { autoSwitchCheck } from "./accountSwitch";
+import { autoSwitchCheck, throttleContinueCheck } from "./accountSwitch";
 import { makeFakeDb } from "./testDb";
 
 // An orchestrator waiting on a workflow: its workers run inside its process
@@ -40,7 +40,7 @@ function fixture(opts: { fleetStore?: boolean } = {}) {
   const db = makeFakeDb(tables);
   const scheduler = { async runAt() {}, async runAfter() {} };
   const run = () => (autoSwitchCheck as any)._handler({ db, scheduler }, { user_id: "users_owner" });
-  return { now, device, tables, run, row: (id: string) => tables.conversations.find((c) => c._id === id) };
+  return { now, device, tables, db, run, row: (id: string) => tables.conversations.find((c) => c._id === id) };
 }
 
 describe("workers parked on a limit recover through their parent", () => {
@@ -113,5 +113,54 @@ describe("a workflow run's log is never revived", () => {
     });
     expect(await f.run()).toMatchObject({ acted: "switch", conversations: 1 });
     expect(JSON.parse(f.tables.daemon_commands[0].args).conversation_ids).toEqual(["conversations_parent"]);
+  });
+});
+
+// A pass that leaves a parked station out must not clear its park: the run waits on the flag, and a cleared flag
+// read the hand stopped on its limit as one that finished. Eleven onefix correctness reviews on Codex passed on
+// nothing but Codex's limit reply, and their changes went to a person to approve (2026-11-14).
+describe("a parked workflow station keeps its park until it is revived as itself", () => {
+  const asRunLog = (f: ReturnType<typeof fixture>) =>
+    Object.assign(f.row("conversations_parent"), { is_workflow_primary: true, workflow_run_id: "workflow_runs_1", session_id: "wf-workflow_runs_1" });
+
+  test("a Codex station parked on its limit stays parked for the Codex pass", async () => {
+    const f = fixture();
+    asRunLog(f);
+    for (const id of ["conversations_w1", "conversations_w2"]) Object.assign(f.row(id), { agent_type: "codex", model: "gpt-5.5" });
+    // No Codex inventory here, so the Codex pass books its re-check at Codex's own reset.
+    expect(await f.run()).toMatchObject({ acted: "exhausted" });
+    expect(f.row("conversations_w1").pending_api_error).toBe(true);
+    expect(f.row("conversations_w2").pending_api_error).toBe(true);
+    expect(JSON.stringify(f.tables.daemon_commands)).not.toContain("conversations_parent");
+  });
+
+  test("the throttle check leaves a parked station alone and dismisses a plain worker", async () => {
+    const f = fixture();
+    asRunLog(f);
+    const other = { _id: "conversations_lead", user_id: "users_owner", session_id: "s-lead", agent_type: "claude_code", owner_device_id: "mac", updated_at: f.now - 60_000 };
+    const worker = { ...f.row("conversations_w2"), _id: "conversations_plain", session_id: "s-plain", parent_conversation_id: other._id };
+    f.tables.conversations.push(other, worker);
+    const result = await (throttleContinueCheck as any)._handler({ db: f.db, scheduler: { async runAt() {}, async runAfter() {} } }, { user_id: "users_owner" });
+    expect(result).toMatchObject({ dismissed: 1 });
+    expect(f.row("conversations_w1").pending_api_error).toBe(true);
+    expect(f.row("conversations_w2").pending_api_error).toBe(true);
+    expect(f.row("conversations_plain").pending_api_error).toBe(false);
+  });
+
+  test("off the fleet store a station is still revived as itself", async () => {
+    const f = fixture({ fleetStore: false });
+    asRunLog(f);
+    expect(await f.run()).toMatchObject({ acted: "switch", profile: "roomy", conversations: 2 });
+    expect([...JSON.parse(f.tables.daemon_commands[0].args).conversation_ids].sort()).toEqual(["conversations_w1", "conversations_w2"]);
+    expect(f.row("conversations_w1").pending_api_error).toBe(true);
+  });
+
+  test("a station killed with its run is dismissed, never revived", async () => {
+    const f = fixture();
+    asRunLog(f);
+    Object.assign(f.row("conversations_w1"), { inbox_killed_at: f.now - 10_000 });
+    expect(await f.run()).toMatchObject({ acted: "switch", conversations: 1 });
+    expect(JSON.parse(f.tables.daemon_commands[0].args).conversation_ids).toEqual(["conversations_w2"]);
+    expect(f.row("conversations_w1").pending_api_error).toBe(false);
   });
 });
