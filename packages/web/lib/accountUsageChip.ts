@@ -4,7 +4,7 @@
 // the primary, so they never win the pick.
 
 import type { CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { cloudAgentProviderOfConversation } from "@codecast/shared/contracts";
+import { accountDisplayName, cloudAgentProviderOfConversation } from "@codecast/shared/contracts";
 import { profileIsCurrentLogin, profileIsFleetAccount } from "./machineAccountSwitch";
 
 export type AccountChipProfile = {
@@ -48,7 +48,7 @@ export function claudeChipLabel(
   activeEmail?: string,
   profiles: AccountChipProfile[] = [],
 ): string {
-  if (active?.name) return active.name;
+  if (active?.name) return accountDisplayName({ name: active.name })!;
   if (activeEmail) {
     const local = activeEmail.split("@")[0];
     return local || activeEmail;

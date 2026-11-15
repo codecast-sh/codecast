@@ -9,6 +9,7 @@
 
 import { toast } from "sonner";
 import { persistentToast } from "../lib/persistentToast";
+import { accountDisplayName } from "@codecast/shared/contracts";
 import { machineSwitchPendingCopy, machineSwitchSuccessCopy, type MachineSwitchPhase } from "../lib/machineAccountSwitch";
 import { DISPATCH_REFUSED } from "../lib/sessionCommands";
 import { useInboxStore } from "../store/inboxStore";
@@ -40,7 +41,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
       const key = `${row._id}:${resolved.phase}`;
       if (announced.has(key)) return;
       announced.add(key);
-      toast.message(machineSwitchPendingCopy(resolved.phase, profile), { id: toastId, ...persistentToast });
+      toast.message(machineSwitchPendingCopy(resolved.phase, row.email ?? profile), { id: toastId, ...persistentToast });
       return;
     }
     if (resolved.phase === "succeeded") {
@@ -50,7 +51,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
       if (announced.has(`${row._id}:done`)) return;
       announced.add(`${row._id}:done`);
       if (row.confirmed_at) return;
-      const copy = machineSwitchSuccessCopy(profile, opts.launchProfile === profile);
+      const copy = machineSwitchSuccessCopy(row.email ?? profile, opts.launchProfile === profile);
       toast.success(copy.title, { id: toastId, description: copy.description });
       return;
     }
@@ -71,8 +72,8 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
       return;
     }
     const res = await state.request(target, email, () =>
-      toast.message(machineSwitchPendingCopy("waiting", target), { id: toastId, ...persistentToast }));
-    if (res === "already") toast.success(`Already on "${target}"`);
+      toast.message(machineSwitchPendingCopy("waiting", email ?? target), { id: toastId, ...persistentToast }));
+    if (res === "already") toast.success(`Already on "${email ?? accountDisplayName(undefined, target)}"`);
   };
 
   return {

@@ -82,6 +82,27 @@ const SURFACE = cn(
   "text-sol-text",
 );
 
+// The click, middle click or right-click menu that ends a press which only
+// closed a menu. A prevented pointerdown already suppresses the mouse events
+// in between; the gesture ends with one of these, or a new press.
+const PRESS_ENDS = ["click", "auxclick", "contextmenu"] as const;
+function swallowRestOfPress() {
+  const swallow = (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+    end();
+  };
+  const end = () => {
+    for (const type of PRESS_ENDS) window.removeEventListener(type, swallow, true);
+    window.removeEventListener("pointerdown", end, true);
+    clearTimeout(timer);
+  };
+  for (const type of PRESS_ENDS) window.addEventListener(type, swallow, true);
+  // Registered after this press finishes dispatching, so it ends at the next one.
+  setTimeout(() => window.addEventListener("pointerdown", end, true), 0);
+  const timer = setTimeout(end, 5000);
+}
+
 /** Render at the list/page root; rows call `state.open(e, payload)`. */
 export function ContextMenu<T>({
   state,
@@ -91,13 +112,30 @@ export function ContextMenu<T>({
   children: (payload: T) => React.ReactNode;
 }) {
   const { menu, close } = state;
+  // Not modal: a modal menu locks <body> scroll and hides the rest of the page
+  // from assistive tech on open and undoes both on close, and each of those
+  // writes restyles the whole page (two full recalcs on every close). What
+  // modal gave for free is kept here: a press outside the menu only closes it,
+  // never also lands on what was under the pointer.
+  React.useEffect(() => {
+    if (!menu) return;
+    const onPress = (e: PointerEvent) => {
+      if (e.target instanceof Element && e.target.closest("[data-radix-popper-content-wrapper]")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      swallowRestOfPress();
+      close();
+    };
+    window.addEventListener("pointerdown", onPress, true);
+    return () => window.removeEventListener("pointerdown", onPress, true);
+  }, [menu, close]);
   if (!menu) return null;
   // The whole subtree portals to document.body: a transformed ancestor (any
   // virtualized row) would otherwise become the anchor's containing block —
   // position:fixed goes ancestor-relative under transform — and drag the menu
   // hundreds of pixels off the cursor.
   return createPortal(
-    <DropdownMenu open onOpenChange={(o) => !o && close()}>
+    <DropdownMenu open modal={false} onOpenChange={(o) => !o && close()}>
       <DropdownMenuTrigger asChild>
         <span
           aria-hidden
