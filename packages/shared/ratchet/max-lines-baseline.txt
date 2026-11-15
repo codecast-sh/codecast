@@ -48,7 +48,7 @@ packages/cli/src/judgeFixCommand.ts 850
 packages/cli/src/orgTemplate.test.ts 1200
 packages/cli/src/orgTemplateRun.ts 1100
 packages/cli/src/parser.test.ts 1350
-packages/cli/src/parser.ts 2350
+packages/cli/src/parser.ts 2100
 packages/cli/src/prCommand.ts 1250
 packages/cli/src/publish.ts 1000
 packages/cli/src/remote/session-move.ts 1500
@@ -158,7 +158,6 @@ packages/mobile/app/(tabs)/inbox.tsx 1050
 packages/mobile/app/(tabs)/tasks.tsx 1250
 packages/mobile/app/call.tsx 950
 packages/mobile/app/session/[id].tsx 6600
-packages/mobile/app/task/[id].tsx 850
 packages/mobile/components/MarkdownRenderer.tsx 950
 packages/mobile/components/session/NewSessionSheet.tsx 850
 packages/shared/contracts/agentClients.ts 1500

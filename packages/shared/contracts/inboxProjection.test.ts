@@ -193,8 +193,7 @@ describe("classifyWorkState — an exit after a declared done", () => {
   });
 });
 
-// A trigger-run session ends each run by exiting, and the trigger resumes it
-// on the next firing: with that wake armed into it, the exit is not a death.
+// A trigger-run session exits after each run and is resumed on the next firing, so that exit is not a death.
 describe("classifyWorkState — an exit with an armed wake", () => {
   test("a stopped agent with a standing trigger or loop into it files dormant", () => {
     for (const declaredStatus of [null, "working", "dormant"]) {

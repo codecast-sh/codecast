@@ -205,7 +205,7 @@ Each names what is missing and the one step that fixes it. All refusals carry th
 
 Round 3, 2026-11-14: cloud host codecast-linux-mbp2-offload-2 (us-west-2) to
 MacBook-Pro-2's helper, TextEdit at the back, one socket held, n=20 per verb
-(`scripts/computer-remote-bench.ts`). Network RTT laptop to host: TCP connect
+(`packages/cli/scripts/computer-remote-bench.ts`). Network RTT laptop to host: TCP connect
 p50 138 ms. The laptop's load average was 18 to 40 during the runs, so the
 p95s carry its noise. A background text area takes no click (macOS drops a
 press on a background window, and the remote path never raises), so the
@@ -238,7 +238,7 @@ be a Convex change landed from the main tree.
 - `browser/bridge/host.ts`: the `/computer` upgrade, `hostAllowsBrowser`, and the wiring in `runBridgeHost`.
 - `browser/bridge/laptopLink.ts`, `cloud/browserLink.ts`: per-laptop link files and ports, `proveLaptopBridge`.
 - `browser/bridge/transport.ts`: binary frames on request.
-- `scripts/computer-remote-bench.ts`: the round-trip measure.
+- `packages/cli/scripts/computer-remote-bench.ts`: the round-trip measure.
 
 ## Tests
 
