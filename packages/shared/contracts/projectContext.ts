@@ -119,16 +119,26 @@ export function projectContextBlock(p: ProjectContext, opts: { nonce?: string; i
   return lines.join("\n");
 }
 
-/** The block in at most `roomBytes` UTF-8 bytes where it can be: its instructions
- *  give way first, down to a floor; the rest of the block is always whole. */
+/** The block in at most `roomBytes` UTF-8 bytes where it can be: its
+ *  instructions give way first, down to a floor, then its memory list from the
+ *  oldest (counted under "+N more"). The charter and the rules always print. */
 export function fitProjectContextBlock(p: ProjectContext, roomBytes: number, opts: { nonce?: string } = {}): string {
   const nonce = opts.nonce ?? fenceNonce();
-  const full = projectContextBlock(p, { nonce });
-  if (!p.instructions?.trim() || utf8Bytes(full) <= roomBytes) return full;
-  let lo = INSTRUCTIONS_FLOOR, hi = PROJECT_INSTRUCTIONS_SHOWN;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (utf8Bytes(projectContextBlock(p, { nonce, instructionsBytes: mid })) <= roomBytes) lo = mid; else hi = mid - 1;
+  const fits = (block: string) => utf8Bytes(block) <= roomBytes;
+  const withInstructions = (q: ProjectContext): string => {
+    const full = projectContextBlock(q, { nonce });
+    if (!q.instructions?.trim() || fits(full)) return full;
+    let lo = INSTRUCTIONS_FLOOR, hi = PROJECT_INSTRUCTIONS_SHOWN;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (fits(projectContextBlock(q, { nonce, instructionsBytes: mid }))) lo = mid; else hi = mid - 1;
+    }
+    return projectContextBlock(q, { nonce, instructionsBytes: lo });
+  };
+  let q = p;
+  for (;;) {
+    const block = withInstructions(q);
+    if (fits(block) || q.memory.length === 0) return block;
+    q = { ...q, memory: q.memory.slice(0, -1), memory_more: q.memory_more + 1 };
   }
-  return projectContextBlock(p, { nonce, instructionsBytes: lo });
 }

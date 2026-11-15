@@ -86,6 +86,15 @@ outputs = ["out/**", "gen.txt"]
 
 afterAll(() => {
   delete process.env.CAST_RUN_LOCAL_DIR;
+  // Where sudo needs no password (CI), slots get the golden's node_modules as
+  // overlayfs mounts, and their root-owned work dirs refuse an rm until the
+  // mounts are gone; a hardlinked golden is sealed read-only. Release both.
+  if (process.platform === "linux") {
+    const mounts = fs.readFileSync("/proc/self/mounts", "utf-8").split("\n").map((l) => l.split(" ")[1]).filter((m) => m?.startsWith(root));
+    for (const m of mounts.reverse()) spawnSync("sudo", ["-n", "umount", "-l", m]);
+    spawnSync("sudo", ["-n", "rm", "-rf", root]);
+  }
+  spawnSync("chmod", ["-R", "u+w", root]);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
