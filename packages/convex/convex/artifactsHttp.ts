@@ -34,7 +34,7 @@ import { CAST_PLAYER_JS } from "./lib/castPlayer";
 import { CAST_MOTION_JS } from "./lib/castMotion";
 import { CAST_DATA_JS } from "./lib/castData";
 import { pageUsesData } from "@codecast/shared/contracts/pageData";
-import { servePageData, type ValidatedQuery } from "./pageData";
+import { servePageData, type PageDataSet } from "./pageData";
 import { HYPERFRAMES_RUNTIME, pageHasHyperframesRuntime, pageIsMotion, pageServingOrigin, pageUsesPlayer } from "@codecast/shared/contracts";
 import { injectPageTheme } from "@codecast/shared/render";
 import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
@@ -331,9 +331,14 @@ export const dataJs = httpAction(async () =>
 );
 
 /** Pages that read live data get the data runtime first in <head>, so window.cast exists before the page's own scripts; it carries the page's data URL, gate tokens included. */
-export function injectData(html: string, dataUrl: string, apiBase: string): string {
+export function injectData(html: string, dataUrl: string, apiBase: string, slug?: string): string {
   if (!pageUsesData(html) || /\/cli\/data\.js/.test(html)) return html;
-  const tag = `<script src="${pageServingOrigin(apiBase)}/cli/data.js" data-endpoint="${dataUrl.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"></script>`;
+  const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  // Page state dials the deployment's client origin, which differs from the
+  // HTTP actions' origin on a dev backend (3210 vs 3211).
+  const convexUrl = process.env.CONVEX_CLOUD_ORIGIN || process.env.CONVEX_CLOUD_URL || apiBase;
+  const state = slug ? ` data-slug="${attr(slug)}" data-convex="${attr(convexUrl)}"` : "";
+  const tag = `<script src="${pageServingOrigin(apiBase)}/cli/data.js" data-endpoint="${attr(dataUrl)}"${state}></script>`;
   const head = html.match(/<head[^>]*>/i);
   if (!head) return tag + html;
   const at = html.indexOf(head[0]) + head[0].length;
@@ -513,7 +518,7 @@ export const publish = httpAction(async (ctx, request) => {
     // publisher's access before anything is stored, and part of the content
     // hash, so a changed declaration is a new version and an unchanged one
     // stays on the fast path.
-    let dataSet: { workspace: string; queries: ValidatedQuery[] } | null = null;
+    let dataSet: PageDataSet | null = null;
     if (data !== undefined && data !== null) {
       const checked = await ctx.runQuery(internal.pageData.validateDeclaration, {
         owner: who.user_id,
@@ -523,7 +528,7 @@ export const publish = httpAction(async (ctx, request) => {
         project_path: typeof source_path === "string" && source_path ? source_path : undefined,
       });
       if (!checked.ok) return json({ error: `cast-data.json: ${checked.error}` }, 400);
-      dataSet = { workspace: checked.workspace, queries: checked.queries };
+      dataSet = { workspace: checked.workspace, queries: checked.queries, ...(checked.state ? { state: checked.state } : {}) };
       contentHash = await withDataHash(contentHash, JSON.stringify(dataSet));
     }
 
@@ -587,7 +592,7 @@ export const publish = httpAction(async (ctx, request) => {
         updated: true,
         unchanged: true,
         manage_url: ownerKey ? `${url}#o=${ownerKey}` : url,
-        ...(dataSet ? { data: { workspace: dataSet.workspace, queries: dataSet.queries.length } } : {}),
+        ...(dataSet ? { data: { workspace: dataSet.workspace, queries: dataSet.queries.length, state: dataSet.state?.map((c) => c.id) ?? [] } } : {}),
       });
     }
 
@@ -647,7 +652,7 @@ export const publish = httpAction(async (ctx, request) => {
     });
     return json({
       ...result,
-      ...(dataSet ? { data: { workspace: dataSet.workspace, queries: dataSet.queries.length } } : {}),
+      ...(dataSet ? { data: { workspace: dataSet.workspace, queries: dataSet.queries.length, state: dataSet.state?.map((c) => c.id) ?? [] } } : {}),
       manage_url: result.owner_key ? `${result.url}#o=${result.owner_key}` : result.url,
       ...(binding.task_id || binding.plan_id
         ? { evidence: { task: binding.task_short_id ?? null, plan: binding.plan_short_id ?? null, station: binding.station ?? null } }
@@ -1401,7 +1406,7 @@ export const serve = httpAction(async (ctx, request) => {
     if (kToken) gate.set("k", kToken);
     if (artifact.email_gate && q.get("e")) gate.set("e", q.get("e")!);
     const qs = gate.toString();
-    html = injectData(html, `${apiBase}/cli/a/${artifact.slug}/_data${qs ? `?${qs}` : ""}`, apiBase);
+    html = injectData(html, `${apiBase}/cli/a/${artifact.slug}/_data${qs ? `?${qs}` : ""}`, apiBase, artifact.slug);
   }
   // A card's live thumbnail: the page alone. No bar means no view beacon and
   // no comment polling, so a gallery of previews counts nothing as a view.

@@ -5,6 +5,10 @@
 //
 //   window.cast.data(id)          -> Promise<{columns, rows, refreshed_at, query_text, stale, error?}>
 //   window.cast.subscribe(id, cb) -> unsubscribe; cb runs now (once loaded) and on every new answer
+//   window.cast.state(id)         -> a declared state collection, live over Convex's socket:
+//     .list() .subscribe(cb, onError) .get(key) .watch(key, cb, onError)
+//     .set(key, v) .insert(v[, key]) .patch(key, partial) .remove(key) .clear()
+//   window.cast.me()              -> who this viewer is and what each collection lets them do
 //
 //   <cast-chart query="done" type="line|area|bar|table" x="day" y="done" series="group" title="…" height="220">
 //   <cast-stat query="spend" field="spend" agg="last|sum|avg|min|max|count" format="number|usd|percent" label="…">
@@ -100,6 +104,93 @@ const CAST_DATA = String.raw`(function () {
   window.cast.data = data;
   window.cast.subscribe = subscribe;
   window.cast.__data = true;
+
+  // ── page state: live collections over Convex's own socket ──
+  //
+  // cast.state(id) is a declared collection (cast-data.json "state"). Reads
+  // subscribe, so every write reaches every open copy of the page. Each call
+  // presents the gates this document cleared (in the endpoint's query string)
+  // and the keys its fragment carries (#o= owner, #ed= edit link, #i= signed
+  // in), which the server re-checks: these functions are public.
+  var convexUrl = script.getAttribute("data-convex");
+  var slug = script.getAttribute("data-slug");
+  var CONVEX_JS = "https://cdn.jsdelivr.net/npm/convex@1.36.1/dist/browser.bundle.js";
+  var CONVEX_SRI = "sha384-ami9RY6lL2Ux7D6FR+smBDqPeNesTPpJy3rD/4SEba97WQ0RLY3xAwyh6ZXne4il";
+  var clientReady = null;
+  function client() {
+    if (clientReady) return clientReady;
+    clientReady = new Promise(function (resolve, reject) {
+      if (!convexUrl || !slug) { reject(new Error("This page has no state")); return; }
+      function make() { resolve(new window.convex.ConvexClient(convexUrl, { unsavedChangesWarning: false })); }
+      if (window.convex && window.convex.ConvexClient) { make(); return; }
+      var tag = document.createElement("script");
+      tag.src = CONVEX_JS;
+      tag.integrity = CONVEX_SRI;
+      tag.crossOrigin = "anonymous";
+      tag.onload = make;
+      tag.onerror = function () { clientReady = null; reject(new Error("Could not load the live data client")); };
+      document.head.appendChild(tag);
+    });
+    return clientReady;
+  }
+  function presented(extra) {
+    var gates = new URLSearchParams(endpoint.split("?")[1] || "");
+    var frag = new URLSearchParams(location.hash.replace(/^#/, ""));
+    var a = { slug: slug };
+    [["k", gates.get("k")], ["e", gates.get("e")], ["m", gates.get("m")], ["owner_key", frag.get("o")], ["edit_key", frag.get("ed")], ["identity_token", frag.get("i")]]
+      .forEach(function (p) { if (p[1]) a[p[0]] = p[1]; });
+    for (var key in extra) if (extra[key] !== undefined) a[key] = extra[key];
+    return a;
+  }
+  function fn(name) { return window.convex.anyApi.pageState[name]; }
+  function rowOut(r) {
+    var value; try { value = JSON.parse(r.value_json); } catch (e) { value = null; }
+    return { key: r.key, value: value, by: r.by, mine: r.mine, created_at: r.created_at, updated_at: r.updated_at };
+  }
+  function unwrap(ans) {
+    if (ans && ans.error) throw new Error(ans.error);
+    return ans;
+  }
+  // A live subscription: cb on every answer, onError (or the console) on a refusal.
+  function live(name, args, map, cb, onError) {
+    var stop = null, dead = false;
+    function fail(e) { if (onError) safe(onError, e); else setTimeout(function () { throw e; }); }
+    client().then(function (c) {
+      if (dead) return;
+      stop = c.onUpdate(fn(name), presented(args), function (ans) {
+        if (ans && ans.error) fail(new Error(ans.error)); else safe(cb, map(ans));
+      }, fail);
+    }, fail);
+    return function () { dead = true; if (stop) stop(); };
+  }
+  function once(name, args) {
+    return client().then(function (c) { return c.query(fn(name), presented(args)); }).then(unwrap);
+  }
+  function write(collection, op, key, value) {
+    var args = { collection: collection, op: op, key: key };
+    if (value !== undefined) args.value_json = JSON.stringify(value);
+    return client().then(function (c) { return c.mutation(fn("write"), presented(args)); }).then(unwrap);
+  }
+  function listRows(ans) { return ans.rows.map(rowOut); }
+  function oneValue(ans) { return ans.row ? rowOut(ans.row).value : undefined; }
+  function state(id) {
+    return {
+      list: function () { return once("list", { collection: id }).then(listRows); },
+      subscribe: function (cb, onError) { return live("list", { collection: id }, listRows, cb, onError); },
+      get: function (key) { return once("get", { collection: id, key: String(key) }).then(oneValue); },
+      watch: function (key, cb, onError) {
+        return live("get", { collection: id, key: String(key) }, function (ans) { return ans.row ? rowOut(ans.row) : null; },
+          function (row) { cb(row ? row.value : undefined, row); }, onError);
+      },
+      set: function (key, value) { return write(id, "set", String(key), value).then(function (r) { return r.key; }); },
+      insert: function (value, key) { return write(id, "insert", key === undefined ? undefined : String(key), value).then(function (r) { return r.key; }); },
+      patch: function (key, partial) { return write(id, "patch", String(key), partial).then(function (r) { return r.key; }); },
+      remove: function (key) { return write(id, "delete", String(key)).then(function () {}); },
+      clear: function () { return write(id, "clear").then(function (r) { return r.cleared; }); }
+    };
+  }
+  window.cast.state = state;
+  window.cast.me = function () { return once("me", {}); };
 
   // ── shared bits for the two elements ──
 

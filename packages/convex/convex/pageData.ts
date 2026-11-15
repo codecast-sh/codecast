@@ -15,6 +15,7 @@ import {
   capResult,
   parsePageDataDeclaration,
   type PageDataResult,
+  type PageStateCollection,
 } from "@codecast/shared/contracts/pageData";
 import { PAGE_READERS, queryText, type ReaderScope, type FetchDeps, type Table } from "./lib/pageReaders";
 import { parseWorkspaceKey, workspaceGrantsAccess } from "./lib/accessKeys";
@@ -36,6 +37,21 @@ export type ValidatedQuery = {
   refresh_ms: number;
 };
 
+/** What a publish stores for a page's cast-data.json: its queries and its state collections. */
+export type PageDataSet = { workspace: string; queries: ValidatedQuery[]; state?: PageStateCollection[] };
+
+/** The page's state declaration follows its set; a set without state leaves no config (its rows stay for a rollback). */
+async function applyStateConfig(ctx: any, artifactId: Id<"artifacts">, set: PageDataSet) {
+  const prev = await ctx.db.query("page_state_config").withIndex("by_artifact", (q: any) => q.eq("artifact_id", artifactId)).first();
+  if (!set.state?.length) {
+    if (prev) await ctx.db.delete(prev._id);
+    return;
+  }
+  const fields = { collections_json: JSON.stringify(set.state), workspace: set.workspace, updated_at: Date.now() };
+  if (!prev) await ctx.db.insert("page_state_config", { artifact_id: artifactId, ...fields });
+  else if (prev.collections_json !== fields.collections_json || prev.workspace !== fields.workspace) await ctx.db.patch(prev._id, fields);
+}
+
 /** Whether `owner` may read `workspace`: their own personal key, or a team they belong to. */
 async function ownerHolds(ctx: { db: any }, owner: Id<"users">, workspace: string): Promise<boolean> {
   return await workspaceGrantsAccess(ctx, owner, workspace);
@@ -56,7 +72,7 @@ export const validateDeclaration = internalQuery({
     conversation_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ ok: true; workspace: string; queries: ValidatedQuery[] } | { ok: false; error: string }> => {
+  handler: async (ctx, args): Promise<{ ok: true; workspace: string; queries: ValidatedQuery[]; state?: PageStateCollection[] } | { ok: false; error: string }> => {
     const parsed = parsePageDataDeclaration(args.declaration);
     if (!parsed.ok) return parsed;
     const order = args.order ?? [];
@@ -89,7 +105,7 @@ export const validateDeclaration = internalQuery({
         refresh_ms: q.refresh_ms,
       });
     }
-    return { ok: true, workspace, queries };
+    return { ok: true, workspace, queries, ...(parsed.state ? { state: parsed.state } : {}) };
   },
 });
 
@@ -155,7 +171,8 @@ export const restoreSet = internalMutation({
 /** Make the page's live rows match a set: drop what it lacks, keep the cache of what it keeps unchanged, start the rest. */
 async function applySet(ctx: any, artifactId: Id<"artifacts">, owner: Id<"users">, setJson: string) {
   const now = Date.now();
-  const set: { workspace: string; queries: ValidatedQuery[] } = setJson ? JSON.parse(setJson) : { workspace: "", queries: [] };
+  const set: PageDataSet = setJson ? JSON.parse(setJson) : { workspace: "", queries: [] };
+  await applyStateConfig(ctx, artifactId, set);
   const args = { owner, workspace: set.workspace, queries: set.queries };
   const existing: Doc<"page_queries">[] = await ctx.db.query("page_queries").withIndex("by_artifact", (q: any) => q.eq("artifact_id", artifactId)).collect();
   const byId = new Map(existing.map((r) => [r.query_id, r]));

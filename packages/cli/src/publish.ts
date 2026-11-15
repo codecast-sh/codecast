@@ -43,7 +43,7 @@ import { CAST_PLAYER_GUIDE, describePageAnchor, pageEmbedUrl, pageIsMotion, page
 import { commandGroup } from "./commandGroups.js";
 import { addVerbHelp, type VerbHelpSpec } from "./verbHelp.js";
 import { verbTypoNextStep } from "./commandSuggestion.js";
-import { readPageData, runPublishData } from "./publishData.js";
+import { jsonText, parseKeyValue, readInlinePageData, readPageData, runPublishData, runPublishState, type StateWrite } from "./publishData.js";
 import { PAGE_DATA_FILE } from "@codecast/shared/contracts/pageData";
 import { captureMotionThumb, renderMotion, splitMotionOutputs, staleRenderNote } from "./publishMotion.js";
 
@@ -210,11 +210,14 @@ export function buildPublishPayload(absPath: string, titleOverride?: string): Pu
       : "";
     throw new Error(`Can't publish ${path.basename(absPath)} — publish an .html or .md file, or a directory bundle${hint}`);
   }
+  // A single file declares its live queries and state inline.
+  const data = readInlinePageData(content);
   return {
     title: resolveArtifactTitle(content, absPath, titleOverride),
     source_path: absPath,
     // A page built from the decision kit carries the kit inline (decisionKit.ts).
     content: inlineDecisionKit(content),
+    ...(data ? { data } : {}),
     entryHtmlPath: absPath,
   };
 }
@@ -835,8 +838,8 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
 
 // ── registration ─────────────────────────────────────────────────────────────
 
-const PUBLISH_VERBS = ["ls", "rm", "rollback", "open", "versions", "comments", "viewers", "links", "set", "data", "video"];
-const PUBLISH_USAGE = "Usage: cast publish <file.html|file.md|dir> [--title T] [--task ct-N]; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | video (each takes <slug|path>; cast publish --help)";
+const PUBLISH_VERBS = ["ls", "rm", "rollback", "open", "versions", "comments", "viewers", "links", "set", "data", "state", "video"];
+const PUBLISH_USAGE = "Usage: cast publish <file.html|file.md|dir> [--title T] [--task ct-N]; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | state | video (each takes <slug|path>; cast publish --help)";
 
 const GATE_FLAGS = ["--password", "--password-stdin", "--no-password", "--email-gate", "--no-email-gate", "--expires", "--edit-mode", "--session", "--no-session", "--comments", "--no-comments"];
 
@@ -852,6 +855,11 @@ export const PUBLISH_VERB_HELP: Record<string, VerbHelpSpec> = {
   links: { usage: "cast publish links <slug|path> [--json]", summary: "A page's share, manage (owner, keep private), edit, source and live links", flags: ["--json"] },
   set: { usage: "cast publish set <slug|path> [gates]", summary: "Change a page's gates and settings without republishing", flags: [...GATE_FLAGS, "--json"] },
   data: { usage: "cast publish data <slug|path> [query-id] [--refresh] [--json]", summary: "A page's live queries and their latest rows", flags: ["--refresh", "--json"] },
+  state: {
+    usage: "cast publish state <slug|path> [collection] [--set key=<json> | --insert <json> | --patch key=<json> | --delete key | --clear] [--json]",
+    summary: "A page's state collections and their rows; one write first when a write flag is given (as the owner)",
+    flags: ["--set", "--insert", "--patch", "--delete", "--clear", "--json"],
+  },
   video: { usage: "cast publish video", summary: "How a page plays video in the cast player: chapters, styling, and hosting", note: "Run it bare to print the guide. A page with a <video> or <cast-player> publishes like any other." },
 };
 
@@ -884,6 +892,11 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     .option("--resolve <id>", "comments: mark one comment resolved")
     .option("--resolve-all", "comments: mark every open comment resolved")
     .option("--refresh", "data: run the page's queries now and wait for the rows")
+    .option("--set <key=json>", "state: write one row's whole value")
+    .option("--insert <json>", "state: add a row under a fresh key")
+    .option("--patch <key=json>", "state: merge an object into a row")
+    .option("--delete <key>", "state: delete one row")
+    .option("--clear", "state: delete every row of the collection")
     .action(async (target: string | undefined, args: string[], options: PublishOptions) => {
       const json = !!options.json;
       if (!target) {
@@ -930,6 +943,34 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
           process.exit(1);
         }
         return runPublishData(deps, args[0], args[1], { refresh: !!(options as { refresh?: boolean }).refresh, json });
+      }
+      if (target === "state" && !fs.existsSync(target)) {
+        if (!args[0]) {
+          console.error(fmt.error(`Usage: ${PUBLISH_VERB_HELP.state.usage}`));
+          process.exit(1);
+        }
+        const o = options as { set?: string; insert?: string; patch?: string; delete?: string; clear?: boolean };
+        const given = [o.set, o.insert, o.patch, o.delete, o.clear].filter((x) => x !== undefined && x !== false);
+        if (given.length > 1) {
+          console.error(fmt.error("One write at a time: --set, --insert, --patch, --delete or --clear"));
+          process.exit(1);
+        }
+        let write: StateWrite | null = null;
+        try {
+          if (o.set) write = { op: "set", ...parseKeyValue(o.set, "--set") };
+          else if (o.patch) write = { op: "patch", ...parseKeyValue(o.patch, "--patch") };
+          else if (o.insert) write = { op: "insert", value_json: jsonText(o.insert, "--insert") };
+          else if (o.delete) write = { op: "delete", key: o.delete };
+          else if (o.clear) write = { op: "clear" };
+        } catch (e) {
+          console.error(fmt.error(e instanceof Error ? e.message : String(e)));
+          process.exit(1);
+        }
+        if (write && !args[1]) {
+          console.error(fmt.error("A write names its collection: cast publish state <slug|path> <collection> --set key=<json>"));
+          process.exit(1);
+        }
+        return runPublishState(deps, args[0], args[1], write, { json });
       }
       if (target === "open" && !fs.existsSync(target)) {
         if (!args[0]) {

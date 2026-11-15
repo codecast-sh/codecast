@@ -85,11 +85,11 @@ export interface NormalizedPageQuery {
  * refresh intervals and sizes. Each reader's own args are the registry's to
  * check (convex/lib/pageReaders.ts), because only the server knows them.
  */
-export function parsePageDataDeclaration(raw: unknown): { ok: true; workspace?: string; queries: NormalizedPageQuery[] } | { ok: false; error: string } {
+export function parsePageDataDeclaration(raw: unknown): { ok: true; workspace?: string; queries: NormalizedPageQuery[]; state?: PageStateCollection[] } | { ok: false; error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: `${PAGE_DATA_FILE} must be a JSON object with "queries"` };
   const decl = raw as Record<string, unknown>;
-  const queries = decl.queries;
-  if (!queries || typeof queries !== "object" || Array.isArray(queries)) return { ok: false, error: `${PAGE_DATA_FILE} needs a "queries" object keyed by query id` };
+  const queries = decl.queries ?? (decl.state !== undefined ? {} : undefined);
+  if (!queries || typeof queries !== "object" || Array.isArray(queries)) return { ok: false, error: `${PAGE_DATA_FILE} needs a "queries" object keyed by query id, or a "state" object` };
   const entries = Object.entries(queries as Record<string, unknown>);
   if (entries.length > PAGE_DATA_LIMITS.queries) return { ok: false, error: `a page can declare at most ${PAGE_DATA_LIMITS.queries} queries (this one has ${entries.length})` };
   let workspace: string | undefined;
@@ -122,12 +122,14 @@ export function parsePageDataDeclaration(raw: unknown): { ok: true; workspace?: 
       ...(q.title ? { title: (q.title as string).slice(0, PAGE_DATA_LIMITS.title_chars) } : {}),
     });
   }
-  return { ok: true, ...(workspace ? { workspace } : {}), queries: out };
+  const state = parsePageStateDeclaration(decl.state);
+  if (!state.ok) return state;
+  return { ok: true, ...(workspace ? { workspace } : {}), queries: out, ...(state.collections.length ? { state: state.collections } : {}) };
 }
 
-/** A page that reads live data gets the data runtime: the two elements, the API, or a motion page's data-cast-data bindings. */
+/** A page that reads live data or state gets the data runtime: the two elements, the API, or a motion page's data-cast-data bindings. */
 export function pageUsesData(html: string): boolean {
-  return /<cast-(chart|stat)[\s>]|\bcast\.(data|subscribe)\s*\(|\bdata-cast-data\s*=/i.test(html);
+  return /<cast-(chart|stat)[\s>]|\bcast\.(data|subscribe|state|me)\s*\(|\bdata-cast-data\s*=/i.test(html);
 }
 
 /**
@@ -148,4 +150,73 @@ export function capResult(columns: string[], rows: unknown[][], maxBytes: number
     kept = kept.slice(0, lo);
   }
   return { columns, rows: kept, truncated: kept.length < rows.length };
+}
+
+// ── Page state: collections a page reads and writes, live ──
+//
+// Declared under "state" in the same file. Each collection says who may read
+// it and who may write it; the server stamps every row's author and enforces
+// both on every call (convex/pageState.ts). Rows outlive republish and
+// rollback: they are the page's data, not its content.
+
+/** Who may read: anyone the page's gates admit, its editors, or its owner alone. */
+export const PAGE_STATE_READ = ["viewers", "editors", "owner"] as const;
+/** Who may write: anyone the gates admit, a signed-in account, editors, or the owner alone. */
+export const PAGE_STATE_WRITE = ["anyone", "signed-in", "editors", "owner"] as const;
+export type PageStateRead = (typeof PAGE_STATE_READ)[number];
+export type PageStateWrite = (typeof PAGE_STATE_WRITE)[number];
+
+export const PAGE_STATE_LIMITS = {
+  collections: 16,
+  /** One row's value as JSON. */
+  row_bytes: 4_096,
+  /** A collection's values together: also the most one list answer carries. */
+  collection_bytes: 1_048_576,
+  rows: 2_000,
+  key_chars: 128,
+  /** Writes a minute across the whole page; the page is the unit, because client addresses rotate behind the proxy. */
+  writes_per_minute: 120,
+} as const;
+
+export interface PageStateCollection {
+  id: string;
+  read: PageStateRead;
+  write: PageStateWrite;
+  /** Writers below editor may change and delete only rows they wrote (signed-in authors; anonymous rows are nobody's). */
+  own: boolean;
+}
+
+export function parsePageStateDeclaration(raw: unknown): { ok: true; collections: PageStateCollection[] } | { ok: false; error: string } {
+  if (raw === undefined) return { ok: true, collections: [] };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: `"state" must be an object keyed by collection id` };
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > PAGE_STATE_LIMITS.collections) return { ok: false, error: `a page can declare at most ${PAGE_STATE_LIMITS.collections} state collections` };
+  const out: PageStateCollection[] = [];
+  for (const [id, value] of entries) {
+    const where = `state "${id}"`;
+    if (!QUERY_ID.test(id)) return { ok: false, error: `${where}: ids are lowercase letters, digits, _ and -, starting with a letter` };
+    const c = (value ?? {}) as Record<string, unknown>;
+    if (typeof c !== "object" || Array.isArray(c)) return { ok: false, error: `${where} must be an object` };
+    const read = c.read ?? "viewers";
+    const write = c.write ?? "editors";
+    if (!(PAGE_STATE_READ as readonly unknown[]).includes(read)) return { ok: false, error: `${where}: "read" is one of ${PAGE_STATE_READ.join(", ")}` };
+    if (!(PAGE_STATE_WRITE as readonly unknown[]).includes(write)) return { ok: false, error: `${where}: "write" is one of ${PAGE_STATE_WRITE.join(", ")}` };
+    if (c.own !== undefined && typeof c.own !== "boolean") return { ok: false, error: `${where}: "own" is true or false` };
+    out.push({ id, read: read as PageStateRead, write: write as PageStateWrite, own: c.own === true });
+  }
+  return { ok: true, collections: out };
+}
+
+/** A value as stored: JSON within the row cap, or the reason it is refused. */
+export function encodeStateValue(value: unknown): { json: string } | { error: string } {
+  if (value === undefined) return { error: "a row needs a value" };
+  let json: string;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    return { error: "the value is not JSON" };
+  }
+  if (json === undefined) return { error: "the value is not JSON" };
+  if (json.length > PAGE_STATE_LIMITS.row_bytes) return { error: `a row is at most ${PAGE_STATE_LIMITS.row_bytes} bytes of JSON (this one is ${json.length})` };
+  return { json };
 }

@@ -23,6 +23,21 @@ export function readPageData(dir: string): unknown | null {
   return raw;
 }
 
+/** A single-file page's declaration: the same JSON as cast-data.json, in a <script type="application/cast-data+json"> the browser never runs. */
+export function readInlinePageData(html: string): unknown | null {
+  const m = html.match(/<script[^>]*\btype\s*=\s*["']application\/cast-data\+json["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (!m) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(m[1]);
+  } catch (e) {
+    throw new Error(`The page's cast-data script is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const parsed = parsePageDataDeclaration(raw);
+  if (!parsed.ok) throw new Error(`The page's cast-data script: ${parsed.error}`);
+  return raw;
+}
+
 function ago(ms: number): string {
   if (!ms) return "never";
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -65,5 +80,53 @@ export async function runPublishData(deps: PublishDeps, target: string, queryId:
     if (q.call) console.log(fmt.muted(`  call: ${q.call.reader} ${JSON.stringify(q.call.args)} in ${q.call.workspace}`));
     if (q.cost) console.log(fmt.muted(`  read: ${q.cost.pages} page${q.cost.pages === 1 ? "" : "s"}, ${q.cost.scanned} documents, ${q.cost.ms} ms`));
     if (q.columns.length) for (const l of formatRows(q.columns, q.rows)) console.log(`  ${l}`);
+  }
+}
+
+export type StateWrite = { op: "set" | "insert" | "patch" | "delete" | "clear"; key?: string; value_json?: string };
+
+/** "key=<json>" → key and JSON text, the JSON checked here so a typo fails before the network. */
+export function parseKeyValue(arg: string, flag: string): { key: string; value_json: string } {
+  const at = arg.indexOf("=");
+  if (at <= 0) throw new Error(`${flag} takes key=<json>, e.g. ${flag} total=42`);
+  return { key: arg.slice(0, at), value_json: jsonText(arg.slice(at + 1), flag) };
+}
+
+export function jsonText(text: string, flag: string): string {
+  try {
+    JSON.parse(text);
+  } catch {
+    throw new Error(`${flag}: ${JSON.stringify(text)} is not JSON (quote strings: '"hello"')`);
+  }
+  return text;
+}
+
+/** `cast publish state <target> [collection]`: the page's collections and their rows, after one optional write. */
+export async function runPublishState(deps: PublishDeps, target: string, collection: string | undefined, write: StateWrite | null, opts: { json: boolean }): Promise<void> {
+  const abs = fs.existsSync(target) ? path.resolve(target) : target;
+  const result = await apiPost(deps, "/cli/artifacts/state", {
+    target: abs,
+    ...(collection ? { collection } : {}),
+    ...(write ?? {}),
+  });
+  if (opts.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const collections: any[] = result.collections ?? [];
+  console.log(`${fmt.highlight(result.title)} ${fmt.muted(`(${result.slug})`)}`);
+  if (result.wrote) console.log(fmt.muted(`  wrote ${result.wrote.cleared !== undefined ? `${result.wrote.cleared} rows cleared` : result.wrote.key}`));
+  if (!collections.length) {
+    console.log(fmt.muted(`  No state. Declare collections under "state" in ${PAGE_DATA_FILE} (cast guide publish, Page state).`));
+    return;
+  }
+  for (const c of collections) {
+    console.log(`\n${fmt.accent(c.id)}  ${fmt.muted(`read ${c.read} · write ${c.write}${c.own ? " · own rows" : ""} · ${c.rows.length} rows · ${Math.round(c.bytes / 1024)} KB`)}`);
+    const shown = c.rows.slice(-15);
+    for (const r of shown) {
+      const value = r.value_json.length > 100 ? `${r.value_json.slice(0, 100)}…` : r.value_json;
+      console.log(`  ${r.key}  ${value}  ${fmt.muted(r.by ? r.by.name : "anonymous")}`);
+    }
+    if (c.rows.length > shown.length) console.log(fmt.muted(`  … ${c.rows.length - shown.length} earlier rows (--json for all)`));
   }
 }

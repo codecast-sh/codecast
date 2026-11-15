@@ -1172,6 +1172,58 @@ async function resolveCommentIdentity(
   return { user, name: commenterDisplayName(user), avatar: commenterAvatar(user) };
 }
 
+export type PageAdmission = {
+  /** Who is acting, when they proved it: an identity token for this page, or the app's own sign-in. */
+  identity: CommentIdentity | null;
+  /** The owner (owner_key, or their account) or a teammate who sees the page in the app. */
+  role: SteerRole | undefined;
+  /** May change the page: the owner, the edit link's holder, or a teammate in team edit mode. */
+  editor: boolean;
+  /** Null when the caller is admitted, else the gate that refuses them. */
+  blocked: string | null;
+};
+
+/**
+ * Who a caller is on a page and whether its gates admit them, for every
+ * public function a page reaches without the serve route (comments, state).
+ * The page's own gates are checked here because those functions are
+ * reachable without the page. Two principals stand behind the wall rather
+ * than in front of it: the owner_key holder, and a signed-in account that can
+ * already open this page in the app. An identity token alone is neither: any
+ * signed-in user can mint one for any slug, and it attests authorship, not
+ * admission.
+ */
+export async function pageAdmission(
+  ctx: { db: QueryCtx["db"]; auth: QueryCtx["auth"] },
+  artifact: Doc<"artifacts">,
+  presented: { owner_key?: string; edit_key?: string; identity_token?: string; k?: string; e?: string; m?: string },
+): Promise<PageAdmission> {
+  const isOwner = !!artifact.owner_key && presented.owner_key === artifact.owner_key;
+  let identity = await resolveCommentIdentity(ctx, artifact._id, presented.identity_token);
+  if (!identity && !presented.identity_token) {
+    const userId = await getAuthUserId(ctx as never).catch(() => null);
+    const user = userId ? await ctx.db.get(userId) : null;
+    if (user) identity = { user, name: commenterDisplayName(user), avatar: commenterAvatar(user) };
+  }
+  const role: SteerRole | undefined =
+    isOwner || identity?.user._id === artifact.user_id
+      ? "owner"
+      : identity && (await teammatesWhoCanSee(ctx, artifact)).has(identity.user._id.toString())
+        ? "teammate"
+        : undefined;
+  // A team gate admits the owner and that team's members, never every
+  // teammate the owner has elsewhere.
+  const behindWall = role === "owner"
+    || (role === "teammate" && (!artifact.team_gate || (await isTeamMember(ctx, identity!.user._id, artifact.team_gate))));
+  const blocked = behindWall
+    ? null
+    : await gateFailure(artifact, { k: presented.k, e: presented.e, m: presented.m }, (h) => teamGateAdmitsHolder(ctx, artifact, h));
+  const editor = role === "owner"
+    || (artifact.edit_mode === "link" && !!artifact.edit_key && presented.edit_key === artifact.edit_key)
+    || (artifact.edit_mode === "team" && role === "teammate" && behindWall);
+  return { identity, role, editor, blocked };
+}
+
 // Called by the web app's /pages/auth relay (real session auth). Idempotent:
 // one stable token per (user, artifact), so re-signing in never invalidates
 // the fragment an earlier tab still carries.
@@ -1372,31 +1424,8 @@ export const submitComments = mutation({
         : null;
     if (!artifact) return { error: "Not found" };
     if (artifact.comments_disabled) return { error: "Comments are off on this page" };
-    const isOwner = !!artifact.owner_key && args.owner_key === artifact.owner_key;
-    let identity = await resolveCommentIdentity(ctx, artifact._id, args.identity_token);
-    if (!identity && !args.identity_token) {
-      const userId = await getAuthUserId(ctx).catch(() => null);
-      const user = userId ? await ctx.db.get(userId) : null;
-      if (user) identity = { user, name: commenterDisplayName(user), avatar: commenterAvatar(user) };
-    }
-    // The page's own gates, checked here because this mutation is reachable
-    // without the page. Two principals stand behind the wall rather than in
-    // front of it: the owner_key holder, and a signed-in account that can
-    // already open this page in the app. An identity token alone is neither —
-    // any signed-in user can mint one for any slug, and it attests authorship,
-    // not admission.
-    const role: SteerRole | undefined =
-      isOwner || identity?.user._id === artifact.user_id
-        ? "owner"
-        : identity && (await teammatesWhoCanSee(ctx, artifact)).has(identity.user._id.toString())
-          ? "teammate"
-          : undefined;
-    // A team gate admits the owner and that team's members, never every
-    // teammate the owner has elsewhere.
-    const behindWall = role === "owner"
-      || (role === "teammate" && (!artifact.team_gate || (await isTeamMember(ctx, identity!.user._id, artifact.team_gate))));
-    const blocked = await gateFailure(artifact, { k: args.k, e: args.e, m: args.m }, (h) => teamGateAdmitsHolder(ctx, artifact, h));
-    if (blocked && !behindWall) return { error: blocked };
+    const { identity, role, blocked } = await pageAdmission(ctx, artifact, args);
+    if (blocked) return { error: blocked };
     if (args.client_id) {
       const dupe = await ctx.db
         .query("artifact_comments")
