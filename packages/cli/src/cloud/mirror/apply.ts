@@ -460,6 +460,17 @@ function hashIfRegular(abs: string): string | null {
   } finally { fs.closeSync(fd); }
 }
 
+/**
+ * Whether a file's mode is the one the stamp expects. A file the mirror wrote
+ * has exactly its mode. A project file the mirror only found already in place
+ * (a satisfied alias) is the checkout's: git sets its mode and the host's umask
+ * decides read and write (0664 on Ubuntu), so only the executable bit counts.
+ */
+function stampModeMatches(info: Pick<StampFile, "mode" | "satisfied_alias">, actual: number): boolean {
+  const want = Number.parseInt(info.mode, 8);
+  return info.satisfied_alias ? ((actual & 0o100) !== 0) === ((want & 0o100) !== 0) : (actual & 0o777) === want;
+}
+
 function checkDestination(home: string, rel: string): void {
   assertSafePath(rel);
   let dir = home;
@@ -546,8 +557,7 @@ export function verifyMirrorStamp(home: string): MirrorStamp | null {
       const hash = info.kind === "claude-mcp" && info.mcp_fields
         ? claudeMcpWritten(fs.readFileSync(path.join(home, dest)), info)
         : hashIfRegular(path.join(home, dest));
-      const mode = fs.statSync(path.join(home, dest)).mode & 0o777;
-      if (info.host_edited || hash !== info.written || mode !== Number.parseInt(info.mode, 8)) complete = false;
+      if (info.host_edited || hash !== info.written || !stampModeMatches(info, fs.statSync(path.join(home, dest)).mode)) complete = false;
     } catch {
       complete = false;
     }
@@ -916,7 +926,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
           continue;
         }
         const abs = path.join(home, target);
-        if (hashIfRegular(abs) !== file.sha256 || (fs.statSync(abs).mode & 0o777) !== Number.parseInt(file.mode, 8)) throw new Error("project alias target bytes or mode differ from mirror");
+        if (hashIfRegular(abs) !== file.sha256 || !stampModeMatches({ mode: file.mode, satisfied_alias: { project, target } }, fs.statSync(abs).mode)) throw new Error("project alias target bytes or executable bit differ from mirror");
         stampFiles[file.path] = { sha: file.sha256, written: file.sha256, kind: file.kind, mode: file.mode, satisfied_alias: { project, target } };
         result.unchanged++;
         continue;
@@ -1055,7 +1065,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
           const target = projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target);
           const targetAbs = path.join(home, target);
           if (!(stampFiles[target]?.removed && !fs.lstatSync(targetAbs, { throwIfNoEntry: false }))
-            && (hashIfRegular(targetAbs) !== info.written || (fs.statSync(targetAbs).mode & 0o777) !== Number.parseInt(info.mode, 8))) {
+            && (hashIfRegular(targetAbs) !== info.written || !stampModeMatches(info, fs.statSync(targetAbs).mode))) {
             stampFiles[rel] = info; result.host_edited.push(rel); continue;
           }
           fs.unlinkSync(abs);
@@ -1154,7 +1164,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
     if (info.host_edited || info.removed) continue;
     try {
       const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind, projectRoots);
-      if ((fs.statSync(path.join(home, dest)).mode & 0o777) !== Number.parseInt(info.mode, 8)) throw new Error("mode changed during refresh");
+      if (!stampModeMatches(info, fs.statSync(path.join(home, dest)).mode)) throw new Error("mode changed during refresh");
       if (VERBATIM_KINDS.includes(info.kind ?? "verbatim")) {
         if (hashIfRegular(path.join(home, dest)) !== info.written) throw new Error("file changed during refresh");
         continue;

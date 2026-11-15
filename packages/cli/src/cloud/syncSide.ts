@@ -190,7 +190,8 @@ async function snapshotOnce(commit, ref) {
       if (inRebuilt && !lifted && !alwaysInside(r)) { if (!indexed.has(r)) skipped.push({ path: e.isDirectory() ? r + "/" : r, reason: "rebuilt" }); continue; }
       if (!lifted && matches(never, r)) { if (!indexed.has(r)) skipped.push({ path: e.isDirectory() ? r + "/" : r, reason: "never" }); continue; }
       if (e.isDirectory() && !lifted && AGENT_ROOTS.has(e.name)) { silent.push(r); continue; }
-      if (!e.isDirectory() && !lifted && !indexed.has(r) && (INSTRUCTION_RE.test(e.name) || e.name === ".mcp.json")) { silent.push(r); continue; }
+      // Left to the home mirror, except under .codecast/, which the mirror treats as codecast's own and never carries: those travel here.
+      if (!e.isDirectory() && !lifted && !indexed.has(r) && !r.startsWith(".codecast/") && (INSTRUCTION_RE.test(e.name) || e.name === ".mcp.json")) { silent.push(r); continue; }
       if (e.isDirectory()) {
         // A Python virtualenv under any name (env/, .env-py/) is rebuilt like .venv.
         const rebuilt = !lifted && (REBUILT.has(e.name) || /^dist-/.test(e.name) || fs.existsSync(path.join(cwd, r, "pyvenv.cfg")));

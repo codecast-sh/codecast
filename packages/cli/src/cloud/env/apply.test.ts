@@ -25,7 +25,7 @@ function plan(ledger: ParityLedger): EnvPlan {
   ledger.plan("env", "OPENAI_API_KEY");
   ledger.plan("env", "STRIPE_KEY");
   return {
-    repos: [repo("~/src/good", "T-good"), repo("~/src/moved", "T-moved"), repo("~/src/broken", "T-broken")],
+    repos: [repo("~/src/good", "T-good"), repo("~/src/moved", "T-moved"), repo("~/src/broken", "T-broken"), repo("~/src/gone", "T-gone")],
     folders: [{ key: ledger.plan("folder", "~/notes"), path: "/Users/me/notes" }],
     extraTools: [{ tool: "psql", install: { brew: "postgresql@16" } }, { tool: "createdb", install: { brew: "libpq" } }, { tool: "gt", install: { brew: "graphite" } }], required: { node: { minMajor: 22, install: "", source: "" }, clients: {}, tools: [], unsupported: [] },
     mirror: { entries: [
@@ -43,8 +43,9 @@ describe("applyEnvironment", () => {
     const p = plan(ledger);
     let probed: ProbeInput | undefined;
     let apt: string[] = [];
+    let reconnects = 0;
     const deps: ApplyDeps = {
-      host, cloudId: "i-test", home: "/Users/me", log: () => {},
+      host, cloudId: "i-test", home: "/Users/me", log: () => {}, exists: (p) => p !== "/Users/me/src/gone",
       readyHome: async () => ({
         mirror: "mirrored",
         logins: { pushed: true, skipped: [], envSkipped: [], kept: [], claude: { pushed: true }, shipped: "gh", receiver: { pushed: true, kept: [] } },
@@ -59,6 +60,9 @@ describe("applyEnvironment", () => {
       },
       carryFolder: async () => ({ remote: "/home/ubuntu/notes" }),
       projectContext: async () => {},
+      reconnect: async () => { reconnects++; },
+      pushMirror: async () => { throw new Error("config mirror failed: src/moved/.agents/x.md: destination is a symlink; src/good/.agents/y.md: destination is a symlink; .codex/rules/z.md: unsafe path; src/old/.agents/a.md: bytes differ; src/old/.agents/b.md: bytes differ; src/old/.agents/c.md: bytes differ"); },
+      sameBytes: (rels) => new Set(rels.filter((r) => r !== "src/old/.agents/c.md")),
       hostSetup: () => ({ ok: true, line: "" }),
       aptInstall: (pkgs) => { apt = pkgs; return { ok: true }; },
       hasCommands: (names) => new Set(names.filter((n) => n !== "createdb")),
@@ -75,10 +79,17 @@ describe("applyEnvironment", () => {
     expect(get("repo", "~/src/good: branches")?.status).toBe("carried");
     expect(get("repo", "~/src/moved")).toMatchObject({ status: "failed", reason: expect.stringContaining("differs") });
     expect(get("repo", "~/src/moved: branches")).toMatchObject({ status: "skipped", reason: expect.stringContaining("feature") });
+    // A dropped connection is retried once after reconnecting, then reported as it failed.
     expect(get("repo", "~/src/broken")).toMatchObject({ status: "failed", reason: "ssh: connection reset" });
+    expect(reconnects).toBe(1);
     expect(get("files", "~/src/broken: agent config")?.status).toBe("failed");
-    expect(get("files", "~/src/good: agent config")?.status).toBe("carried");
-    expect(get("files", "~/src/moved: agent config")?.status).toBe("failed");
+    // A refusal in one repository says nothing about another: good's files are on the host, so it carried.
+    expect(get("files", "~/src/good: agent config")).toMatchObject({ status: "carried", detail: expect.stringContaining("1 file the mirror would not rewrite") });
+    expect(get("files", "~/src/moved: agent config")).toMatchObject({ status: "failed", reason: expect.stringContaining(".agents/x.md (destination is a symlink)") });
+    // Outside the carried repositories: grouped per project and reason, and judged by the bytes on both machines.
+    expect(get("config", "~/src/old: agent config the mirror refused")).toMatchObject({ status: "present", paths: ["~/src/old/.agents/a.md", "~/src/old/.agents/b.md"] });
+    expect(get("config", "~/src/old: agent config the mirror refused (bytes differ)")).toMatchObject({ status: "failed", paths: ["~/src/old/.agents/c.md"] });
+    expect(get("config", "~/.codex/rules: agent config the mirror refused")?.status).toBe("present");
     expect(get("config", "~/.claude")?.status).toBe("carried");
     expect(get("config", "~/.codex")).toMatchObject({ status: "failed", reason: expect.stringContaining(".codex/AGENTS.md") });
     expect(get("login", "claude")?.status).toBe("carried");
@@ -95,6 +106,7 @@ describe("applyEnvironment", () => {
     expect(get("env", "OPENAI_API_KEY")?.status).toBe("present");
     expect(get("env", "STRIPE_KEY")).toMatchObject({ status: "failed", reason: expect.stringContaining("not in the host's") });
     expect(get("folder", "~/notes")?.status).toBe("carried");
+    expect(get("repo", "~/src/gone")).toMatchObject({ status: "failed", reason: expect.stringContaining("no longer exists here") });
     expect(r.items.filter((i) => i.status === "planned")).toEqual([]);
     // The probe was asked about every file it should verify.
     expect(probed?.files).toEqual(expect.arrayContaining([".claude/CLAUDE.md", ".codex/AGENTS.md", ".config/gh/hosts.yml"]));

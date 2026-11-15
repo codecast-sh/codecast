@@ -16,11 +16,13 @@
  *      carried only when the host's answer matches this laptop.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "../../proc.js";
 import { ensureRemoteRepo, gitEnv, gitSshUrl, pushPath, remoteHome, remoteRepoPath, shq, ssh, sshBase, type RemoteHost } from "../../remote/session-move.js";
 import { readyHostHome, type ReadyHostHomeReport } from "../prepare.js";
+import { refreshRemoteCheckout } from "../transfer.js";
 import { describeHostSetup, runHostSetup, resolveHostSpec } from "../hostSetup.js";
 import { sshHostSide } from "../liveSync.js";
 import { registerProjectContext } from "../mirror/projectRefresh.js";
@@ -42,6 +44,15 @@ export interface ApplyDeps {
   probe?: (input: ProbeInput) => ProbeOutput;
   aptInstall?: (packages: string[]) => { ok: boolean; error?: string };
   hasCommands?: (names: string[]) => Set<string>;
+  exists?: (p: string) => boolean;
+  /** Which home-relative files have the same bytes here and on the host. */
+  sameBytes?: (rels: string[]) => Set<string>;
+  /** The config mirror push that carries each repository's project context. */
+  pushMirror?: () => Promise<unknown>;
+  /** Re-establish the ssh connection after a transport failure. */
+  reconnect?: () => Promise<void>;
+  /** Called after each step, so the report on disk is never behind by more than one step. */
+  checkpoint?: () => void;
 }
 
 export interface RepoCarry {
@@ -60,6 +71,54 @@ export interface RepoCarry {
 
 const BACKUP_PREFIX = "refs/codecast/backup/cloud-env";
 
+/** The project an agent config path belongs to: everything before its first agent folder. */
+export function projectOfAgentPath(rel: string): string {
+  const m = /^(.*?)\/(\.agents|\.claude|\.codex|\.cursor|\.gemini|\.grok|\.pi|\.opencode)(\/|$)/.exec(rel);
+  return m?.[1] || rel.split("/").slice(0, -1).join("/") || rel;
+}
+
+/** Which of these home-relative files have the same sha256 here and on the host. */
+export function sameBytesOnHost(host: RemoteHost, home: string, rels: string[]): Set<string> {
+  const local = new Map<string, string>();
+  for (const r of rels) {
+    try { local.set(r, createHash("sha256").update(fs.readFileSync(path.join(home, r))).digest("hex")); } catch { /* gone here */ }
+  }
+  if (!local.size) return new Set();
+  const hostHome = remoteHome(host);
+  const out = execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, "xargs -0 sha256sum 2>/dev/null; true"],
+    { input: [...local.keys()].map((r) => path.posix.join(hostHome, r)).join("\0"), encoding: "utf-8", maxBuffer: 64 * 1024 * 1024, timeout: 300_000 });
+  const same = new Set<string>();
+  for (const line of out.split("\n")) {
+    const m = /^([0-9a-f]{64})\s+(.+)$/.exec(line.trim());
+    if (!m) continue;
+    const rel = m[2]!.startsWith(`${hostHome}/`) ? m[2]!.slice(hostHome.length + 1) : m[2]!;
+    if (local.get(rel) === m[1]) same.add(rel);
+  }
+  return same;
+}
+
+/** `config mirror failed: a: why; b: why` as path → why. */
+export function parseMirrorErrors(message: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const body = message.replace(/^(config mirror failed: )+/, "");
+  for (const part of body.split("; ")) {
+    const m = /^([^\s:][^:]*): (.+)$/.exec(part.trim());
+    if (m && !m[1]!.includes(" ")) out.set(m[1]!, m[2]!);
+  }
+  return out;
+}
+
+/** An ssh transport failure (the shared connection dropped), worth one retry after reconnecting. */
+export const SSH_TRANSPORT_ERROR = /mux_client|control socket|Connection closed|Connection reset|Broken pipe|kex_exchange_identification|Connection timed out|ssh: connect to host/i;
+
+/** The repository has an origin with a main branch the host can clone instead of taking the laptop's history. */
+function hasOriginMain(root: string): boolean {
+  try {
+    execFileSync("git", ["-C", root, "rev-parse", "-q", "--verify", "refs/remotes/origin/main"], { stdio: "pipe" });
+    return !!execFileSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  } catch { return false; }
+}
+
 /** Branches of `laptop` the host lacks or holds at another commit, from `git for-each-ref` output there. */
 export function missingBranches(laptop: Record<string, string>, hostRefs: string): string[] {
   const host = new Map(hostRefs.split("\n").map((l) => l.trim().split(" ")).filter((p) => p.length === 2).map(([b, s]) => [b!, s!]));
@@ -76,8 +135,19 @@ export function missingBranches(laptop: Record<string, string>, hostRefs: string
  */
 export async function carryRepoToHost(host: RemoteHost, repo: RepoPlan, log: (l: string) => void): Promise<RepoCarry> {
   const remote = remoteRepoPath(host, repo.root);
-  // A linked worktree's checkout is cloned from its main's on the host, sharing its objects.
-  ensureRemoteRepo(host, repo.root, remote, repo.worktreeOf ? remoteRepoPath(host, repo.worktreeOf) : undefined);
+  if (repo.worktreeOf) {
+    // A linked worktree's checkout is cloned from its main's on the host, sharing its objects.
+    ensureRemoteRepo(host, repo.root, remote, remoteRepoPath(host, repo.worktreeOf));
+  } else if (hasOriginMain(repo.root)) {
+    // The host clones main from origin itself (GitHub to the cloud is fast, and
+    // a laptop's whole history can be tens of GB); only what this laptop alone
+    // has crosses from here, with the snapshot and the branches below.
+    refreshRemoteCheckout(host, repo.root, remote, (l) => log(`  ${l}`));
+    // Every origin branch too, so the branch push below sends only commits that exist nowhere but here.
+    ssh(host, `cd ${shq(remote)} && git config receive.denyCurrentBranch updateInstead && { GIT_TERMINAL_PROMPT=0 git fetch -q --no-tags origin '+refs/heads/*:refs/remotes/origin/*' || true; }`, 1_800_000);
+  } else {
+    ensureRemoteRepo(host, repo.root, remote);
+  }
   const side = sshHostSide(host, remote, "cloud-env", repo.root, repo.scope, log);
   const snap = repo.snapshot;
   if (!snap.sha) throw new Error("no snapshot commit to carry");
@@ -176,27 +246,61 @@ export function whereSet(home: string, name: string): string | undefined {
 export async function applyEnvironment(ledger: ParityLedger, plan: EnvPlan, deps: ApplyDeps): Promise<void> {
   const { host, log } = deps;
 
+  // The mirror's per-file refusals. Recorded here, item by item, instead of
+  // failing the push: a refused file says nothing about the thousands beside
+  // it, nor about the logins and tools set up in the same step.
+  const mirrorErrors = new Map<string, string>();
+  const mirror = async (h: RemoteHost, o: Parameters<typeof import("../mirror/push.js").mirrorHomeToHost>[1]) => {
+    const { mirrorHomeToHost } = await import("../mirror/push.js");
+    const r = await mirrorHomeToHost(h, o);
+    const errors = r.result?.errors ?? [];
+    for (const e of errors) mirrorErrors.set(e.path, e.error);
+    return errors.length ? { ...r, pushed: true, result: { ...r.result!, errors: [] } } : r;
+  };
+
   // 1. The host home.
   log("setting up the host: cast, logins, tools, git, agent config");
   let home: ReadyHostHomeReport | undefined;
   try {
     home = await (deps.readyHome ?? (() => readyHostHome(host, {
       cloudId: deps.cloudId, force: true, extraTools: plan.extraTools, onProgress: (l) => log(`  ${l}`),
-      toolsDeps: { required: () => plan.required },
+      toolsDeps: { required: () => plan.required }, mirrorDeps: mirror,
     })))();
   } catch (e) {
     const reason = `the host setup stopped: ${(e as Error).message}`;
     ledger.settleWhere((i) => i.area === "config" || i.area === "login" || i.area === "tool" || i.area === "mcp", "failed", { reason });
   }
   if (home) settleHome(ledger, plan, home, deps.cloudId);
+  deps.checkpoint?.();
   if (home?.tools) installAptTools(ledger, plan, home.tools.missing.map((m) => m.tool), deps);
 
   // 2. Repositories.
   const landed: Array<{ repo: RepoPlan; remote: string }> = [];
   for (const repo of plan.repos) {
     log(`carrying ${repo.name}`);
+    if (!(deps.exists ?? fs.existsSync)(repo.root)) {
+      ledger.settle(repo.key, "failed", { reason: "no longer exists here: it was removed while this run was going" });
+      if (repo.branchesKey) ledger.settle(repo.branchesKey, "failed", { reason: "the repository is gone" });
+      if (repo.agentKey) ledger.settle(repo.agentKey, "failed", { reason: "the repository is gone" });
+      continue;
+    }
+    const t0 = Date.now();
     try {
-      const c = await (deps.carryRepo ?? ((r) => carryRepoToHost(host, r, log)))(repo);
+      const carry = deps.carryRepo ?? ((r: RepoPlan) => carryRepoToHost(host, r, log));
+      const c = await carry(repo).catch(async (e: Error) => {
+        if (!SSH_TRANSPORT_ERROR.test(e.message)) throw e;
+        log(`  the connection dropped (${e.message.split("\n").pop()}); reconnecting and trying once more`);
+        await (deps.reconnect ?? (async () => {
+          // The shared connection can still answer a quick check while refusing
+          // new sessions (after a long transfer): close it, then open a fresh one.
+          try { execFileSync("ssh", [...sshBase(host), "-O", "exit", `${host.user}@${host.address}`], { stdio: "ignore", timeout: 10_000 }); } catch { /* no shared connection open */ }
+          const { ensureUp, resolveCloudHost } = await import("../../browser/cloudHost.js");
+          await ensureUp(resolveCloudHost(deps.cloudId));
+        }))();
+        return carry(repo);
+      });
+      log(`  done in ${Math.round((Date.now() - t0) / 1000)}s`);
+      deps.checkpoint?.();
       landed.push({ repo, remote: c.remote });
       if (c.tree === repo.snapshot.tree) ledger.settle(repo.key, "carried", { detail: `${ledger.get(repo.key)?.detail ?? ""} → ${c.remote}`.replace(/^ → /, "") });
       else ledger.settle(repo.key, "failed", { reason: "after landing, the host folder differs from this laptop's snapshot (something on the host wrote to it meanwhile)", fix: "run cast cloud again" });
@@ -222,6 +326,7 @@ export async function applyEnvironment(ledger: ParityLedger, plan: EnvPlan, deps
     const r = await (deps.carryFolder ?? (async (p) => pushPath(host, p)))(f.path);
     if (r.error) ledger.settle(f.key, "failed", { reason: r.error });
     else ledger.settle(f.key, "carried", { detail: r.remote });
+    deps.checkpoint?.();
   }
 
   // 4. Project context, then each repo's own setup.
@@ -232,11 +337,13 @@ export async function applyEnvironment(ledger: ParityLedger, plan: EnvPlan, deps
       if (repo.agentKey) ledger.settle(repo.agentKey, "failed", { reason: (e as Error).message });
     }
   }
-  if (landed.length && !deps.projectContext) {
+  // Refusals inside a repository are attributed to it when the host is checked below.
+  if (landed.length) {
     try {
-      await readyHostHome(host, { cloudId: deps.cloudId, skipLogins: true, skipGit: true, onProgress: (l) => log(`  ${l}`) });
+      await (deps.pushMirror ?? (() => readyHostHome(host, { cloudId: deps.cloudId, skipLogins: true, skipGit: true, onProgress: (l) => log(`  ${l}`), mirrorDeps: mirror })))();
     } catch (e) {
-      for (const { repo } of landed) if (repo.agentKey) ledger.settle(repo.agentKey, "failed", { reason: `the config mirror failed: ${(e as Error).message}` });
+      for (const [p, err] of parseMirrorErrors((e as Error).message)) mirrorErrors.set(p, err);
+      if (!mirrorErrors.size) ledger.scope.push(`the config mirror stopped: ${(e as Error).message}`);
     }
   }
   for (const { repo, remote } of landed) {
@@ -258,7 +365,7 @@ export async function applyEnvironment(ledger: ParityLedger, plan: EnvPlan, deps
 
   // 5. Verification.
   log("checking what the host has");
-  verify(ledger, plan, landed, deps);
+  verify(ledger, plan, landed, deps, mirrorErrors);
 }
 
 /**
@@ -287,6 +394,11 @@ export const BREW_TO_APT: Array<[RegExp, string]> = [
   [/^gnu-sed$/, "sed"],
   [/^yq$/, "yq"],
 ];
+
+/** Commands Ubuntu's package spells differently, with what to do about it. */
+const APT_RENAMED: Record<string, { reason: string; fix: string }> = {
+  magick: { reason: "Ubuntu ships ImageMagick 6, which names the command convert; magick is ImageMagick 7's name", fix: "call convert on the host, or install ImageMagick 7 (its AppImage) under [host] run in ~/.codecast/host.toml" },
+};
 
 /** Server commands a client package does not carry: postgres itself. */
 const APT_FOR_COMMAND: Record<string, string> = { postgres: "postgresql", pg_ctl: "postgresql", initdb: "postgresql" };
@@ -320,6 +432,7 @@ function installAptTools(ledger: ParityLedger, plan: EnvPlan, missing: string[],
   for (const [tool, pkg] of wanted) {
     const key = parityKey("tool", tool);
     if (found.has(tool)) ledger.settle(key, "installed", { detail: `apt ${pkg}` });
+    else if (!error && APT_RENAMED[tool]) ledger.settle(key, "failed", { reason: APT_RENAMED[tool]!.reason, fix: APT_RENAMED[tool]!.fix });
     else ledger.settle(key, "failed", { reason: error ? `apt install of ${pkg} failed: ${error.split("\n").pop()}` : `apt installed ${pkg}, but ${tool} is still not on the host's PATH` });
   }
 }
@@ -377,7 +490,7 @@ function settleHome(ledger: ParityLedger, plan: EnvPlan, home: ReadyHostHomeRepo
   }
 }
 
-function verify(ledger: ParityLedger, plan: EnvPlan, landed: Array<{ repo: RepoPlan; remote: string }>, deps: ApplyDeps): void {
+function verify(ledger: ParityLedger, plan: EnvPlan, landed: Array<{ repo: RepoPlan; remote: string }>, deps: ApplyDeps, mirrorErrors = new Map<string, string>()): void {
   const configFiles = plan.mirror.entries.map((e) => e.path);
   const loginFiles = Object.keys(plan.loginPaths).map((p) => p.replace(/^~\//, ""));
   const agentPaths = landed.flatMap(({ repo, remote }) => (repo.agentKey ? (repo.snapshot.agentPaths ?? []).map((p) => path.posix.join(remote, p)) : []));
@@ -400,11 +513,41 @@ function verify(ledger: ParityLedger, plan: EnvPlan, landed: Array<{ repo: RepoP
     const key = parityKey("login", id);
     if (probe.missing.has(remotePath.replace(/^~\//, "")) && ledger.get(key)?.status === "carried") ledger.settle(key, "failed", { reason: `${remotePath} is not on the host` });
   }
+  const hostHome = remoteHome(deps.host);
+  const claimed = new Set<string>();
   for (const { repo, remote } of landed) {
+    const rel = path.posix.relative(hostHome, remote);
+    const refused = [...mirrorErrors].filter(([p]) => p === rel || p.startsWith(`${rel}/`));
+    for (const [p] of refused) claimed.add(p);
     if (!repo.agentKey || ledger.get(repo.agentKey)?.status !== "planned") continue;
     const gone = (repo.snapshot.agentPaths ?? []).filter((p) => probe.missing.has(path.posix.join(remote, p)));
-    if (gone.length) ledger.settle(repo.agentKey, "failed", { reason: `not on the host after the mirror: ${gone.join(", ")}` });
-    else ledger.settle(repo.agentKey, "carried");
+    const why = refused.slice(0, 3).map(([p, err]) => `${p.slice(rel.length + 1)} (${err})`).join("; ");
+    if (gone.length) ledger.settle(repo.agentKey, "failed", { reason: `not on the host: ${gone.join(", ")}${why ? `; the mirror refused ${refused.length} file${refused.length === 1 ? "" : "s"}: ${why}` : ""}` });
+    else ledger.settle(repo.agentKey, "carried", refused.length ? { detail: `${ledger.get(repo.agentKey)?.detail ?? ""}; ${refused.length} file${refused.length === 1 ? "" : "s"} the mirror would not rewrite were already on the host with the repository`.replace(/^; /, "") } : {});
+  }
+  // A refusal outside every repository this run carried: often a project an
+  // earlier run registered, whose files the host already holds from git. Each
+  // is checked by its bytes on both machines, then reported per project and reason.
+  const unclaimed = [...mirrorErrors].filter(([p]) => !claimed.has(p));
+  if (unclaimed.length) {
+    const same = (deps.sameBytes ?? ((paths) => sameBytesOnHost(deps.host, deps.home, paths)))(unclaimed.map(([p]) => p));
+    const groups = new Map<string, { project: string; err: string; ok: boolean; paths: string[] }>();
+    for (const [p, err] of unclaimed) {
+      const project = projectOfAgentPath(p);
+      const ok = same.has(p);
+      const key = `${project}\0${err}\0${ok}`;
+      const g = groups.get(key) ?? { project, err, ok, paths: [] };
+      g.paths.push(`~/${p}`);
+      groups.set(key, g);
+    }
+    for (const g of groups.values()) {
+      const name = `~/${g.project}: agent config the mirror refused${g.ok ? "" : ` (${g.err})`}`;
+      const detail = `${g.paths.length} file${g.paths.length === 1 ? "" : "s"}`;
+      if (g.ok) ledger.settle(parityKey("config", name), "present", { detail: `${detail}; the same bytes are already on the host (the mirror there refused them: ${g.err})` });
+      else ledger.settle(parityKey("config", name), "failed", { detail, reason: `the config mirror would not write them, and the host's copies differ: ${g.err}`, fix: `cast hosts update ${deps.cloudId}, then cast cloud again` });
+      const item = ledger.get(parityKey("config", name));
+      if (item) item.paths = g.paths;
+    }
   }
   for (const f of plan.folders) {
     const item = ledger.get(f.key);

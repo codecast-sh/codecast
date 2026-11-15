@@ -119,6 +119,10 @@ describe("readLaptopEnvironment", () => {
     claudeSession(home, app);
     claudeSession(home, wt);
     claudeSession(home, cleanWt);
+    // A session started in ~/src: a folder of projects, never copied whole.
+    claudeSession(home, path.join(home, "src"));
+    fs.mkdirSync(path.join(home, "big"), { recursive: true });
+    claudeSession(home, path.join(home, "big"));
     const scratch = path.join(tmp, "scratchpad");
     fs.mkdirSync(scratch, { recursive: true });
     claudeSession(home, scratch);
@@ -136,6 +140,7 @@ describe("readLaptopEnvironment", () => {
         { command: "CommCenter", port: "5060", pid: "3" }, { command: "tmphelper", port: "51432", pid: "4" }],
       exePath: (pid) => ({ "1": "/opt/homebrew/bin/postgres", "2": "/Applications/Slack.app/Contents/MacOS/Slack", "3": "/System/Library/PrivateFrameworks/CommCenter", "4": "/Users/me/bin/tmphelper" })[pid] ?? "",
       containers: () => ["redis (redis:7)"],
+      folderBytes: (d) => (d.endsWith("/big") ? 5 * 1024 ** 3 : 10),
     });
     const items = ledger.all();
     for (const i of items) {
@@ -164,6 +169,9 @@ describe("readLaptopEnvironment", () => {
     expect(byName("tmphelper")).toBeUndefined();
     expect(ledger.scope.join("\n")).toContain("3 listening sockets left out");
     expect(byName("container redis (redis:7)")?.status).toBe("skipped");
+    expect(byName("~/src")).toMatchObject({ status: "skipped", paths: expect.arrayContaining(["~/src/app", "~/src/app-wt"]) });
+    expect(byName("~/big")).toMatchObject({ status: "skipped", detail: "5.0 GB" });
+    expect(plan.folders).toEqual([]);
     expect(byName("com.me.worker")?.status).toBe("skipped");
     expect(byName("~/.ssh/id_ed25519")?.status).toBe("skipped");
     expect(byName("~/.claude")?.status).toBe("planned");

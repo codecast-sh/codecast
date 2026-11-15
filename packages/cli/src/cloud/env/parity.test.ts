@@ -12,6 +12,22 @@ describe("parity ledger", () => {
     expect(r.counts).toMatchObject({ carried: 1, failed: 1, planned: 0 });
   });
 
+  test("a run stopped partway names why the rest never happened", () => {
+    const l = new ParityLedger();
+    l.plan("repo", "~/src/a");
+    const r = l.finish({ laptop: "mac", target: "i-1", unsettled: "the run stopped (SIGINT) before reaching it" });
+    expect(r.items[0]).toMatchObject({ status: "failed", reason: "the run stopped (SIGINT) before reaching it" });
+  });
+
+  test("a snapshot reports the run so far without changing the ledger", () => {
+    const l = new ParityLedger();
+    const k = l.plan("repo", "~/src/a");
+    expect(l.snapshot({ laptop: "mac", target: "i-1", unsettled: "not reached yet" }).items[0]).toMatchObject({ status: "failed", reason: "not reached yet" });
+    expect(l.get(k)?.status).toBe("planned");
+    l.settle(k, "carried");
+    expect(l.finish({ laptop: "mac", target: "i-1" }).counts.carried).toBe(1);
+  });
+
   test("a dry run keeps planned items as planned", () => {
     const l = new ParityLedger();
     l.plan("repo", "~/src/a");

@@ -31,6 +31,32 @@ import type { Config } from "../../config/types.js";
 import { ParityLedger, parityKey } from "./parity.js";
 
 export const DEFAULT_DAYS = 14;
+/** Above this a folder (not a repository) is reported instead of copied, unless named with --only. */
+export const FOLDER_MAX_BYTES = 2 * 1024 ** 3;
+
+/** Repositories directly in `dir` or one level down: the mark of a folder of projects. */
+export function projectsInside(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string, depth: number) => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name === "node_modules" || e.name === ".git") continue;
+      const sub = path.join(d, e.name);
+      if (fs.existsSync(path.join(sub, ".git"))) out.push(sub);
+      else if (depth < 1) walk(sub, depth + 1);
+    }
+  };
+  walk(dir, 0);
+  return out.sort();
+}
+
+/** A folder's size, by du with a time limit; undefined when it could not be read in time. */
+export function folderBytes(dir: string): number | undefined {
+  const r = spawnSync("du", ["-sk", dir], { encoding: "utf-8", timeout: 60_000, stdio: ["ignore", "pipe", "ignore"] });
+  const kb = Number((r.stdout ?? "").split(/\s/)[0]);
+  return r.status === 0 && Number.isFinite(kb) ? kb * 1024 : undefined;
+}
 /** Transcript bytes read for the tools and services sessions used, newest first. */
 export const FOOTPRINT_BYTES = 256 * 1024 * 1024;
 /** The ref a repo's snapshot is kept under until the host has it. */
@@ -88,6 +114,7 @@ export interface InventoryDeps {
   listening?: () => Array<{ command: string; port: string; pid: string }>;
   containers?: () => string[];
   exePath?: (pid: string) => string;
+  folderBytes?: (dir: string) => number | undefined;
   log?: (line: string) => void;
 }
 
@@ -165,18 +192,23 @@ export function recentSessionFolders(home: string, cutoff: number): SessionFolde
 
 /** Folders under the home that hold the machine's or its agents' own state. */
 const STATE_DIRS = [".claude", ".codex", ".codecast", ".gemini", ".grok", ".cursor", ".pi", ".config", ".local", ".cache", "Library"];
+/** macOS media libraries: Photos and Music keep databases rsync cannot read, and the folders are rarely a session's work. */
+const MEDIA_LIBRARIES = ["Pictures", "Movies", "Music"];
 
 export type FolderKind =
   | { kind: "repo"; root: string }
   | { kind: "worktree"; root: string; main: string }
   | { kind: "folder"; path: string }
-  | { kind: "skip"; path: string; reason: string };
+  | { kind: "skip"; path: string; reason: string; fix?: string };
 
 /** What one session folder is, and so how it travels. */
 export function classifyFolder(cwd: string, home: string, run = defaultRun): FolderKind {
   const rel = path.relative(home, cwd);
   if (rel.startsWith("..") || path.isAbsolute(rel)) return { kind: "skip", path: cwd, reason: "outside your home folder (scratch space)" };
   if (!rel) return { kind: "skip", path: cwd, reason: "your home folder itself: its agent config travels with the config mirror, its projects one by one" };
+  if (MEDIA_LIBRARIES.some((d) => rel === d || rel.startsWith(`${d}/`))) {
+    return { kind: "skip", path: path.join(home, rel.split("/")[0]!), reason: "a macOS media library (Photos and Music keep databases only their apps can read)", fix: "copy the files a session needs into a project, or name a subfolder with --only" };
+  }
   if (STATE_DIRS.some((d) => rel === d || rel.startsWith(`${d}/`))) {
     const top = run("git", ["rev-parse", "--show-toplevel"], { cwd });
     if (top.status !== 0) return { kind: "skip", path: path.join(home, rel.split("/")[0]!), reason: "agent or machine state, not a project (the config mirror carries agent config)" };
@@ -436,7 +468,7 @@ export async function readLaptopEnvironment(ledger: ParityLedger, deps: Inventor
       if (dirty) repos.set(c.root, c.main);
       else if (!repos.has(c.root)) cleanWorktrees.set(c.main, [...new Set([...(cleanWorktrees.get(c.main) ?? []), tilde(c.root, home)])]);
     } else if (c.kind === "folder") folders.add(c.path);
-    else ledger.skip("folder", tilde(c.path, home), c.reason);
+    else ledger.skip("folder", tilde(c.path, home), c.reason, c.fix ? { fix: c.fix } : {});
   };
   for (const cwd of sessions.folders.keys()) consider(cwd);
   for (const area of footprint.areas) consider(area.path);
@@ -483,7 +515,26 @@ export async function readLaptopEnvironment(ledger: ParityLedger, deps: Inventor
     repoPlans.push({ key, root, name, snapshot: snap, scope, branches, branchesKey, agentKey, ...(worktreeOf ? { worktreeOf } : {}) });
   }
 
-  const folderPlans: FolderPlan[] = [...folders].sort().map((p) => ({ key: ledger.plan("folder", tilde(p, home)), path: p }));
+  const folderPlans: FolderPlan[] = [];
+  for (const p of [...folders].sort()) {
+    const name = tilde(p, home);
+    const explicit = !!only?.some((o) => o === p);
+    // A folder holding repositories is a folder of projects, not one: copying it
+    // whole would carry every project in it. The ones sessions used travel one by one.
+    const projects = projectsInside(p);
+    if (projects.length) {
+      ledger.skip("folder", name, `a folder of ${projects.length} project${projects.length === 1 ? "" : "s"}; the ones sessions worked in travel one by one as repositories`, {
+        paths: projects.map((r) => tilde(r, home)), fix: "name a project with --only to carry it",
+      });
+      continue;
+    }
+    const bytes = (deps.folderBytes ?? folderBytes)(p);
+    if (!explicit && bytes !== undefined && bytes > FOLDER_MAX_BYTES) {
+      ledger.skip("folder", name, `larger than ${formatBytes(FOLDER_MAX_BYTES)}, too big to copy as a folder`, { detail: formatBytes(bytes), fix: `cast cloud --only ${name} carries it anyway` });
+      continue;
+    }
+    folderPlans.push({ key: ledger.plan("folder", name, bytes === undefined ? {} : { detail: formatBytes(bytes) }), path: p });
+  }
 
   // Tools: what the mirrored home and each repo need, plus what sessions ran.
   const extraTools: HostToolRequirement[] = [];

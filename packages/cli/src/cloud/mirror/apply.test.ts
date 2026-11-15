@@ -892,11 +892,11 @@ test("identical project documentation aliases are satisfied without writes and r
   expect((await apply(await make())).errors).toEqual([]);
   write(target, "host edit\n");
   expect(verifyMirrorStamp(home)?.complete).toBe(false);
-  expect((await apply(await make())).errors.some((error) => /bytes or mode/.test(error.error))).toBe(true);
+  expect((await apply(await make())).errors.some((error) => /bytes or executable bit/.test(error.error))).toBe(true);
   expect(read(target)).toBe("host edit\n");
   write(target, "# context\n");
   fs.chmodSync(path.join(home, target), 0o700);
-  expect((await apply(await make())).errors.some((error) => /bytes or mode/.test(error.error))).toBe(true);
+  expect((await apply(await make())).errors.some((error) => /bytes or executable bit/.test(error.error))).toBe(true);
   expect(modeOf(target)).toBe(0o700);
   fs.chmodSync(path.join(home, target), 0o600);
   expect((await apply(await make())).errors).toEqual([]);
@@ -916,6 +916,25 @@ test("identical project documentation aliases are satisfied without writes and r
   expect(verifyMirrorStamp(home)?.complete).toBe(true);
 });
 
+test("a project alias satisfied by a git checkout: the host's umask mode counts as the same file", async () => {
+  const root = "work/app";
+  // As git checks it out on an Ubuntu host: 0664, not the mirror's 0600.
+  const target = `${root}/backend/skills/x/SKILL.md`;
+  write(target, "# skill\n");
+  fs.chmodSync(path.join(home, target), 0o664);
+  // .agents/skills -> ../backend/skills: a linked folder, the file behind it.
+  fs.mkdirSync(path.join(home, root, ".agents"), { recursive: true });
+  fs.symlinkSync("../backend/skills", path.join(home, root, ".agents", "skills"));
+  const make = () => parseMirrorBundle(buildMirrorBundle([
+    { path: `${root}/.agents/skills/x/SKILL.md`, kind: "verbatim", mode: "0600", bytes: Buffer.from("# skill\n") },
+  ], { source: source(), target_home: home, managed_roots: [root], project_roots: [root] }).bytes);
+  const r = await apply(await make());
+  expect(r.errors).toEqual([]);
+  expect(r.applied).toEqual([]);
+  expect(modeOf(target)).toBe(0o664);
+  expect(read(target)).toBe("# skill\n");
+});
+
 test("project directory aliases are verified without writing or pruning their targets", async () => {
   const root = "work/app";
   const target = `${root}/packages/convex/README.md`;
@@ -927,7 +946,7 @@ test("project directory aliases are verified without writing or pruning their ta
   expect(verifyMirrorStamp(home)?.complete).toBe(true);
   write(target, "changed");
   expect(verifyMirrorStamp(home)?.complete).toBe(false);
-  expect((await apply(await make())).errors.some((error) => /bytes or mode/.test(error.error))).toBe(true);
+  expect((await apply(await make())).errors.some((error) => /bytes or executable bit/.test(error.error))).toBe(true);
   expect(read(target)).toBe("changed");
   write(target, "same");
   expect((await apply(await make(false))).errors).toEqual([]);

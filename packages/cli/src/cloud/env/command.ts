@@ -47,7 +47,7 @@ export function saveReport(report: ParityReport, dir = reportDir()): { json: str
   return { json, html };
 }
 
-export async function runCloudEnv(opts: CloudEnvOptions): Promise<ParityReport> {
+export async function runCloudEnv(opts: CloudEnvOptions, ledger = new ParityLedger(), onTarget: (target: string) => void = () => {}): Promise<ParityReport> {
   const days = opts.days ? Number(opts.days) : DEFAULT_DAYS;
   if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("--days must be a whole number from 1 to 365");
   const home = process.env.HOME || os.homedir();
@@ -64,9 +64,9 @@ export async function runCloudEnv(opts: CloudEnvOptions): Promise<ParityReport> 
     log(`waking ${cloud.id}`);
     const up = await ensureUp(cloud, (l: string) => log(`  ${l}`));
     target = { cloudId: up.id, host: toRemoteHost(up) };
+    onTarget(up.id);
   }
 
-  const ledger = new ParityLedger();
   const plan = await readLaptopEnvironment(ledger, {
     home, now: Date.now(), days, config, dryRun: opts.dryRun,
     ...(opts.only ? { only: opts.only.split(",").map((p) => p.trim().replace(/^~(?=\/|$)/, home)).filter(Boolean) } : {}),
@@ -75,7 +75,9 @@ export async function runCloudEnv(opts: CloudEnvOptions): Promise<ParityReport> 
   });
   if (target) {
     const { applyEnvironment } = await import("./apply.js");
-    await applyEnvironment(ledger, plan, { host: target.host, cloudId: target.cloudId, home, log });
+    // The report on disk follows the run step by step: even a run killed outright leaves one.
+    const checkpoint = () => { try { saveReport(ledger.snapshot({ laptop: os.hostname().replace(/\.local$/, ""), target: target!.cloudId, unsettled: "not reached yet: the run was still going, or was stopped, when this was written" })); } catch { /* a report write never stops the carry */ } };
+    await applyEnvironment(ledger, plan, { host: target.host, cloudId: target.cloudId, home, log, checkpoint });
   }
   return ledger.finish({ laptop: os.hostname().replace(/\.local$/, ""), target: target?.cloudId ?? "dry run", dryRun: opts.dryRun });
 }
@@ -112,13 +114,29 @@ export function registerCloudEnvAction(cloud: Command): void {
       try { opts = parseCloudEnvArgs(cmd.args); } catch (e) { console.error((e as Error).message); process.exit(2); }
       const { exitIfPolicyBlocks } = await import("../../config/managedPolicy.js");
       exitIfPolicyBlocks("cloud_hosts_disabled");
+      const ledger = new ParityLedger();
+      let target = opts.dryRun ? "dry run" : opts.host ?? "your codecast machine";
+      const laptop = os.hostname().replace(/\.local$/, "");
+      // Stopped partway (Ctrl-C, a timeout, a closed terminal): what was found
+      // still gets a report, with everything not yet reached marked so.
+      const stop = (signal: NodeJS.Signals) => {
+        if (ledger.all().length) {
+          const saved = saveReport(ledger.finish({ laptop, target, dryRun: opts.dryRun, unsettled: `the run stopped (${signal}) before reaching it` }));
+          console.error(`\nStopped. Report so far: ${saved.html}`);
+        }
+        process.exit(130);
+      };
+      const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+      for (const sig of signals) process.once(sig, stop);
       let report: ParityReport;
       try {
-        report = await runCloudEnv(opts);
+        report = await runCloudEnv(opts, ledger, (t) => { target = t; });
       } catch (e) {
         console.error((e as Error).message);
+        if (ledger.all().length && !opts.dryRun) console.error(`Report so far: ${saveReport(ledger.finish({ laptop, target, unsettled: `the run failed before reaching it: ${(e as Error).message}` })).html}`);
         process.exit(1);
       }
+      for (const sig of signals) process.removeListener(sig, stop);
       const saved = saveReport(report);
       if (opts.json) console.log(JSON.stringify(report, null, 2));
       else {

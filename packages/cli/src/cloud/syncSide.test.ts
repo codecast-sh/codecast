@@ -44,6 +44,16 @@ const files = (cwd: string, tree: string) => git(cwd, "ls-tree", "-r", "--name-o
 const snap = (cwd: string, extra: object = {}) => runSide<SnapshotResult>({ op: "snapshot", cwd, ...extra });
 
 describe("what travels", () => {
+  test("an instruction file under .codecast/ travels here, since the home mirror never carries that folder", async () => {
+    const d = repo();
+    write(d, ".codecast/judges/review/CLAUDE.md", "judge\n");
+    write(d, "docs/CLAUDE.md", "left to the mirror\n");
+    const s = await snap(d, { agentPaths: true });
+    expect(files(d, s.tree)).toContain(".codecast/judges/review/CLAUDE.md");
+    expect(files(d, s.tree)).not.toContain("docs/CLAUDE.md");
+    expect(s.agentPaths).toContain("docs/CLAUDE.md");
+  });
+
   test("a Python virtualenv under any name is rebuilt, not carried", async () => {
     const d = repo();
     write(d, "server/env/pyvenv.cfg", "home = /usr/bin\n");

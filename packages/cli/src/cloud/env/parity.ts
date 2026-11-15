@@ -120,10 +120,18 @@ export class ParityLedger {
    * The report. Outside a dry run, an item still planned is a failure: some
    * step was meant to report on it and did not.
    */
-  finish(meta: { laptop: string; target: string; dryRun?: boolean; now?: Date }): ParityReport {
+  /** The report as it would read if the run ended now, leaving the ledger itself untouched. */
+  snapshot(meta: { laptop: string; target: string; unsettled: string; now?: Date }): ParityReport {
+    const copy = new ParityLedger();
+    for (const i of this.items.values()) copy.items.set(i.key, { ...i });
+    copy.scope.push(...this.scope);
+    return copy.finish(meta);
+  }
+
+  finish(meta: { laptop: string; target: string; dryRun?: boolean; now?: Date; unsettled?: string }): ParityReport {
     if (!meta.dryRun) {
       for (const item of this.items.values()) {
-        if (item.status === "planned") this.set({ ...item, status: "failed", reason: "no step reported what happened to it" });
+        if (item.status === "planned") this.set({ ...item, status: "failed", reason: meta.unsettled ?? "no step reported what happened to it" });
       }
     }
     const items = this.all().sort((a, b) =>
