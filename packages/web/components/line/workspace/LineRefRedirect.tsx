@@ -70,7 +70,6 @@ export function LineRefRedirect({ refParam }: { refParam: string }) {
       {missing ? (
         <div className="lw-empty">
           <b>No flow holds {ref ? <span className="modern:font-mono">{ref}</span> : "that ref"}</b>
-          A problem (ct-N), a finding (sg-N), a run or a card (sd-N) opens its place in its flow.
           {" "}<Link href="/flows" className="lw-link">Flows</Link>
         </div>
       ) : (

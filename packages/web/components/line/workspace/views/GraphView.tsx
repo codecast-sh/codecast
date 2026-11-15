@@ -440,7 +440,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
   }, [active, help, runsOpen, drawerStep, selection.stage, run, focus, mode, moveFocus, open, pickRun, setMode, settle, stepRun, pz]);
 
   if (!model.graph.nodes.length) {
-    return <div className="lw-empty" data-line-view="graph"><b>No steps to draw yet</b>This graph names no steps codecast can read. Its first run fills it in.</div>;
+    return <div className="lw-empty" data-line-view="graph"><b>No steps to draw yet</b>Its first run fills it in</div>;
   }
   return (
     <div className="lw-graph-col">

@@ -195,7 +195,7 @@ export function briefStart(text: string): number {
 function Told({ sessionId, runId }: { sessionId: string; runId: string }) {
   const brief = useStationInput(sessionId, runId);
   if (brief === undefined) return <p className="lrun-note"><span className="lw-spin" aria-hidden /> Reading</p>;
-  if (!brief?.found) return <p className="lrun-note">Its session cannot be read from here. <a className="lw-link" href={`/conversation/${sessionId}`} target="_blank" rel="noreferrer">Open the session</a></p>;
+  if (!brief?.found) return <p className="lrun-note">Session unreadable here · <a className="lw-link" href={`/conversation/${sessionId}`} target="_blank" rel="noreferrer">Open the session</a></p>;
   return <Fold text={brief.text.slice(briefStart(brief.text))} lines={60} />;
 }
 

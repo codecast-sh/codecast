@@ -152,11 +152,11 @@ function Plate({ lp, gate }: { lp: PublishedLineProfile; gate: LineWriteGate }) 
       </div>
       <p className="lset-plate-says" data-lset-gate={gate.writable ? "writable" : "read-only"}>
         {!gate.writable
-          ? <>Read only. {gate.reason}</>
+          ? <>Read only: {gate.reason}</>
           : gate.first
-            ? <>These are the defaults: nothing has been uploaded for this flow yet. Your first change writes the file on <b>{gate.device}</b> and uploads it.</>
+            ? <>Defaults; your first change writes the file on <b>{gate.device}</b></>
           : gate.away
-            ? <><b>{gate.device}</b> has not checked in for a few minutes. An edit waits for it up to {Math.round(DAEMON_COMMAND_TTL_MS / 60_000)} minutes, then is dropped with nothing written.</>
+            ? <><b>{gate.device}</b> is away; an edit waits {Math.round(DAEMON_COMMAND_TTL_MS / 60_000)} min for it, then drops</>
             : <>Edits are written into the file on <b>{gate.device}</b>, comments and order kept, then republished here.</>}
       </p>
       {(lp.warnings ?? []).map((w) => <p key={w} className="lset-plate-warn">{w}</p>)}
@@ -171,7 +171,7 @@ const UNPUBLISHED: PublishedLineProfile = { finders: [], changed_at: 0 };
 function Unset({ titled }: { titled?: string }) {
   return (
     <div className="flex-1 min-h-0 px-4 sm:px-6 pt-6">
-      <p className="lset-empty max-w-[60ch]" data-lset-unset>{`${titled ?? "This project"}'s flow settings have not been uploaded, and codecast does not know which folder holds the project. Run one session in the project's folder on your machine: its settings then show here, and your first change writes them into the repository.`}</p>
+      <p className="lset-empty max-w-[60ch]" data-lset-unset>{`${titled ?? "This project"}'s settings aren't uploaded; run a session in its folder`}</p>
     </div>
   );
 }

@@ -8,7 +8,7 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { modernButton } from "../ui/modernLook";
 
-const WHAT_IT_DOES = "A flow listens to a project's sources, like its error tracker and its evals, and groups what they report into problems. For each one it proves the problem, builds and checks a fix, and brings it to you to ship, revise or drop. After a ship it watches for the problem to come back.";
+const WHAT_IT_DOES = "Sources report problems; the flow proves each, builds a fix, and asks you to ship";
 
 /** `title` names the project ("Set up a flow for <title>"); `children`
  *  replaces the single action, for a list of projects to start from. */
@@ -18,7 +18,7 @@ export function LineSetup({ title, heading, profiled = false, href, children }: 
       <h2 className="text-[15px] font-semibold text-sol-text">{heading ?? (profiled ? "Nothing in this flow yet" : `Set up a flow for ${title}`)}</h2>
       <p className="mt-1.5 text-[13px] leading-relaxed text-sol-text-muted">
         {profiled
-          ? "The flow is set up and no source has filed anything. When one does, its problem shows here with every step the flow takes on it."
+          ? "No source has filed a problem yet"
           : WHAT_IT_DOES}
       </p>
       {children ?? (href && (

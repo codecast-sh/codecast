@@ -110,7 +110,7 @@ function StallLead({ s, of }: { s: Stall; of: number }) {
       <b>One stall, not separate failures.</b>{" "}
       <span className="lw-num">{s.n}</span>{s.n < of ? <> of these <span className="lw-num">{of}</span></> : ""} runs hit the limit between <span className="lw-num">{clock(s.from)}</span> and <span className="lw-num">{clock(s.to)}</span>{day ? ` ${day}` : ""}
       {s.machines > 1 ? <>, on <span className="lw-num">{s.machines}</span> machines</> : ", on one machine"}
-      {s.empty === s.n ? ". None of their sessions ran a turn." : s.empty ? <>. <span className="lw-num">{s.empty}</span> of their sessions never ran a turn.</> : "."}
+      {s.empty === s.n ? ", and none of their sessions ran a turn." : s.empty ? <>. <span className="lw-num">{s.empty}</span> of their sessions never ran a turn.</> : "."}
     </p>
   );
 }

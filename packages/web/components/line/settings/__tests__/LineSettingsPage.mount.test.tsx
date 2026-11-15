@@ -193,7 +193,7 @@ test("a quiet machine still takes edits, and says how long one waits for it", as
   const { host, unmount } = await mount();
   expect(host.querySelector("[data-lset-gate]")!.getAttribute("data-lset-gate")).toBe("writable");
   expect(host.querySelector("[data-lset-plate]")!.getAttribute("data-away")).toBe("true");
-  expect(host.querySelector("[data-lset-plate]")!.textContent).toMatch(/Studio has not checked in.*up to 5 minutes/);
+  expect(host.querySelector("[data-lset-plate]")!.textContent).toMatch(/Studio is away; an edit waits 5 min/);
   await unmount();
 });
 

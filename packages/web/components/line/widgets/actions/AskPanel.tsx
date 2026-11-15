@@ -119,8 +119,8 @@ export function AskPanel({ model, step, draft, projects }: AskSlotProps) {
       <div className="lw-ask-goes">
         {cases.length > 0
           ? <span>Goes with {caseCount} {caseCount === 1 ? "case" : "cases"}{[back ? `${back} ${back === 1 ? "close" : "closes"} that came back, presumed wrong` : null, wrong ? `${wrong} marked wrong` : null].filter(Boolean).map((x) => `, ${x}`).join("")}: the agent checks its change against each.</span>
-          : all.length > 0 ? <span>No cases go with the ask. Add one back below.</span>
-          : <span>No labeled cases yet. Mark decisions right or wrong and they go with the ask as examples.</span>}
+          : all.length > 0 ? <span>No cases go with the ask; add one back below</span>
+          : <span>No cases yet; mark decisions right or wrong to add them</span>}
         {draft && <span>Your unsaved edit goes as the change you propose.</span>}
       </div>
       {all.length > 0 && (

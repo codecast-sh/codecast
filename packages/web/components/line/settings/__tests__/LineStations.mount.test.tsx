@@ -89,7 +89,7 @@ test("no Customize while the server has not said; once it says none, Customize s
   fork = null;
   await m.render();
   expect(headline(m.host)).toBe("This project runs the Standard steps.");
-  expect(m.host.textContent).toMatch(/roles keep the Standard steps until you switch them/);
+  expect(m.host.querySelector("[data-customize-line]")!.getAttribute("title")).toMatch(/stops following the Standard steps/);
   await act(async () => { m.host.querySelector<HTMLButtonElement>("[data-customize-line]")!.click(); });
   expect(calls).toHaveLength(1);
   const [action, [wf, opts]] = calls[0] as [string, [any, any]];
@@ -104,7 +104,7 @@ test("a copy no role runs says so; a role on it is counted; saved is said only a
   roles = [role()];
   const m = await mount();
   expect(m.host.querySelector("[data-customize-line]")).toBeNull();
-  expect(headline(m.host)).toBe(`Your customized copy, ${SLUG}. No role runs it yet.`);
+  expect(headline(m.host)).toBe(`Customized copy ${SLUG}, run by no role`);
 
   // Open a station: before any edit it shows how to edit, never "saved".
   await act(async () => { m.host.querySelector<HTMLButtonElement>('[data-node="ground"]')!.click(); });
@@ -124,7 +124,7 @@ test("a copy no role runs says so; a role on it is counted; saved is said only a
   // The store paints the saved graph (saveLineWorkflow); the panel follows it.
   fork = { ...fork, nodes: (calls.at(-1)![1][0] as any).nodes };
   await m.render();
-  expect(state()).toBe("Saved to the copy. No role runs it yet, so no run reads it.");
+  expect(state()).toBe("Saved to the copy; no role runs it");
 
   roles = [role({ line_workflow_slug: SLUG })];
   await m.render();
@@ -176,7 +176,7 @@ test("a published project edits its repo's line through the profile's edit path"
   } as any);
   const m = await mount();
   expect(m.host.querySelector("[data-line-stations]")!.getAttribute("data-line-home")).toBe("repo");
-  expect(headline(m.host)).toBe("This project's repo has no steps of its own yet, so its runs use their owner's steps or the Standard ones.");
+  expect(headline(m.host)).toBe("No steps in this repo; runs use the owner's or the Standard steps");
   expect(m.host.querySelector("[data-customize-line]")).toBeNull();
 
   await act(async () => { m.host.querySelector<HTMLButtonElement>("[data-node='prove']")!.click(); });
