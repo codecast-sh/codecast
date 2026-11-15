@@ -1,4 +1,5 @@
 import { labelsOf, noteOrgChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
+import { syncProjectTriggers } from "./lib/agentTaskRows";
 import { applyFile, applyFileSession, looseSessionsOf } from "./lib/orgSessionFiling";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
@@ -1704,6 +1705,7 @@ export async function applyProjectStatus(ctx: Ctx, _userId: Id<"users">, boundar
   if (!project) throw new Error(`No project "${p.project}" in this workspace`);
   if (project.status === p.status) return { status: "applied", note: `"${project.title}" is already ${p.status}` };
   await ctx.db.patch(project._id, { status: p.status, updated_at: Date.now() });
+  await syncProjectTriggers(ctx, project._id, project.status, p.status);
   await noteOrgChange(ctx, _userId, whereOfRecord(project), { kind: "project_status", subject: recordSubject("project", project), before: { status: project.status }, after: { status: p.status } });
   return { status: "applied", note: `project "${project.title}": ${project.status} → ${p.status}` };
 }
