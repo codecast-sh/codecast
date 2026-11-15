@@ -123,6 +123,11 @@ export type ClientDismissed = {
   // "New agent features" upsell — one stamp per snippet slug the user enabled
   // or dismissed from the intro (timestamp; cross-device via per-key LWW).
   [k: `snippet_intro_${string}`]: number | undefined;
+  // Setup nudge strip (lib/setupProgress): per step, when it was last
+  // dismissed and how many times, so each dismiss holds longer.
+  [k: `setup_nudge_${string}`]: number | undefined;
+  // The sidebar's setup meter closed: hidden for a week.
+  setup_meter?: number;
 };
 
 export type ClientTips = {

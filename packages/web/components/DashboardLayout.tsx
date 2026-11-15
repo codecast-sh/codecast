@@ -42,6 +42,7 @@ import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
 import { ThemeIntroAnywhere } from "./theme/ThemeIntroAnywhere";
 import { NativeAppBanner } from "./NativeAppBanner";
+import { SetupNudgeBanner } from "./setup/SetupNudgeBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { MachineResourceFeeders } from "./resources/MachineResourceFeeders";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
@@ -284,8 +285,9 @@ const ShellBanners = memo(function ShellBanners() {
           renders shows (globals.css [data-nudge-slot]), and dismissing it
           brings up the next. Stacked, a new account met four at once. */}
       <div data-nudge-slot>
-        <NativeAppBanner />
         <TeamDomainBanner />
+        <SetupNudgeBanner />
+        <NativeAppBanner />
         <NotificationNudgeBanner />
         <SharingSetupBanner />
         <TeamSharingNudgeBanner />

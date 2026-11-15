@@ -18,7 +18,7 @@ import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
-import { useOwnedDecisionCount } from "../hooks/useDecisionRows";
+import { useDecisionQueue } from "../hooks/useDecisionQueue";
 import { useThreadUnread } from "../hooks/useThreadsSync";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import { conversationProjectRoot, foldCheckoutsByRepository, knownCheckoutRoots, type ProjectTally } from "@codecast/convex/convex/projectPaths";
@@ -31,6 +31,7 @@ import { activeViewId, currentViewId, VIEW_ID_KEY } from "../lib/savedViews";
 import { toast } from "sonner";
 import { Layers, Users, UserMinus, Pin, PinOff, Monitor, Smartphone } from "lucide-react";
 import { NATIVE_APP_COPY, NATIVE_APP_LINKS, nativeAppOffer, trackNativeAppClick } from "../lib/nativeApps";
+import { SetupMeter } from "./setup/SetupMeter";
 import { useSyncTeams } from "../hooks/useSyncTeams";
 import { AppPopOutButton } from "./desktop/AppPopOutButton";
 import { WorkbenchSection } from "./WorkbenchSection";
@@ -102,9 +103,9 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
   isNarrow: boolean;
   onMobileClose?: () => void;
 }) {
-  // The open decisions the viewer owns, as Mine lists them. A session parked
-  // on a terminal question counts on the inbox's Needs You instead.
-  const pending = useOwnedDecisionCount();
+  // The decisions waiting on you: the queue the stepper walks and the inbox
+  // panel lists, so all three say the same number.
+  const pending = useDecisionQueue().length;
   return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} />;
 });
 
@@ -598,7 +599,10 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
       ))}
     </div>
   );
-  const appFooter = offerNativeApp && nativeApp && !isNarrow && (
+  const appFooter = !isNarrow && (
+    <>
+    <SetupMeter />
+    {offerNativeApp && nativeApp && (
     <a
       href={NATIVE_APP_LINKS[nativeApp]}
       target={nativeApp === "ios" ? "_blank" : undefined}
@@ -609,6 +613,8 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
       {nativeApp === "mac" ? <Monitor className="w-4 h-4 flex-shrink-0" /> : <Smartphone className="w-4 h-4 flex-shrink-0" />}
       <span>{NATIVE_APP_COPY[nativeApp].cta}</span>
     </a>
+    )}
+    </>
   );
 
   const sidebarContent = (

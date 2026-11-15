@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Check, ChevronRight } from "lucide-react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -15,6 +15,7 @@ import { copyToClipboard } from "../../lib/utils";
 import { formatInviteExpiry } from "../../lib/team/inviteExpiry";
 import { SeatPlanRow } from "./SeatPlan";
 import { useSeatState } from "../../hooks/useSeatState";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import "./teamFlow.css";
 
 export interface InvitePanelProps {
@@ -92,6 +93,15 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
       setIsRegenerating(false);
     }
   };
+
+  // An expired link is nothing to copy: an admin opening the panel gets a
+  // fresh one at once instead of a red notice and a second press.
+  const renewed = useRef(false);
+  useWatchEffect(() => {
+    if (!isExpired || !isAdmin || renewed.current) return;
+    renewed.current = true;
+    void handleRegenerate();
+  }, [isExpired, isAdmin]);
 
   const handleSendEmail = async (e: React.FormEvent) => {
     e.preventDefault();
