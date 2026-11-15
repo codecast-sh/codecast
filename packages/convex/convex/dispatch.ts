@@ -192,6 +192,17 @@ export function isDispatchAction(action: string): boolean {
   return Object.prototype.hasOwnProperty.call(SIDE_EFFECTS, action) || PATCH_ONLY_ACTIONS.has(action);
 }
 
+/**
+ * A doc id as a client sent it: the doc's own id, or the placeholder a new board, sheet or dashboard was
+ * opened under before the create answered (docs.client_key). The outbox sends a window's writes in order, so
+ * by the time a write made under the placeholder runs, the create has made the doc.
+ */
+async function docFor(ctx: any, docId: string): Promise<any | null> {
+  const id = ctx.db.normalizeId("docs", docId);
+  if (id) return await ctx.db.get(id);
+  return await ctx.db.query("docs").withIndex("by_client_key", (q: any) => q.eq("client_key", docId)).first();
+}
+
 export const dispatch = mutation({
   args: {
     action: v.string(),
@@ -1688,7 +1699,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
 
   archiveDoc: async (ctx, userId, [docId]: [string]) => {
-    const doc = await ctx.db.get(docId as Id<"docs">);
+    const doc = await docFor(ctx, docId);
     if (!doc) throw new Error("Doc not found");
     // The doc's own workspace rule, as pinDoc: team_id is routing, never access.
     if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Not authorized");
@@ -1731,11 +1742,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return await (ctx as any).runMutation(api.liveArtifacts.askToEdit, { doc_id: docId });
   },
   liveCheckpoint: async (ctx, _userId, [docId, label]: [string, string | undefined]) => {
-    if (!ctx.db.normalizeId("docs", docId)) return null;
-    return await (ctx as any).runMutation(api.liveArtifacts.checkpoint, { doc_id: docId, ...(label ? { label } : {}) });
+    const doc = await docFor(ctx, docId);
+    if (!doc) return null;
+    return await (ctx as any).runMutation(api.liveArtifacts.checkpoint, { doc_id: doc._id, ...(label ? { label } : {}) });
   },
   updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }]) => {
-    const doc = await ctx.db.get(docId as Id<"docs">);
+    const doc = await docFor(ctx, docId);
     if (!doc) throw new Error("Doc not found");
     if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
     await requireArtifactEditor(ctx, doc, userId);
