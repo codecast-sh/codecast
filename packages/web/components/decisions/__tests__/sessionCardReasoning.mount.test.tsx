@@ -215,3 +215,138 @@ test("scrolling up off the top of the sheet folds it and puts the thread on the 
   unmount();
   useInboxStore.setState({ messages: before } as any);
 });
+
+test("a thread with several open asks steps between them from the sheet's header, without answering", async () => {
+  const second = { ...item(true), key: "decide:d2", decisionId: "d2", question: "Who may use the credential?" };
+  const picked: Array<[string, string]> = [];
+  const { pane, unmount } = await mount(<SessionDecisionCard item={item(true)} stepper={null} asks={[item(true), second]} onPick={(key, size) => picked.push([key, size])} />);
+  const place = pane.querySelector("[data-decision-place]")!;
+  expect(place.textContent).toContain("1 of 2");
+  await act(() => { (place.querySelector('[aria-label="Next decision in this thread"]') as HTMLElement).click(); });
+  await act(() => { (place.querySelector('[aria-label="Previous decision in this thread"]') as HTMLElement).click(); });
+  // Either way from the first of two lands on the second, at the size being read.
+  expect(picked).toEqual([["decide:d2", "full"], ["decide:d2", "full"]]);
+  unmount();
+});
+
+test("an ask picked from the card opens at the size it was picked at, whatever it would open at by itself", async () => {
+  const { pane, unmount } = await mount(<SessionDecisionCard item={item(true)} stepper={null} startSize="line" />);
+  expect(pane.firstElementChild!.classList.contains("decision-fold")).toBe(true);
+  unmount();
+});
+
+// The thread's card as the conversation view mounts it: one pane that outlives the thread it shows.
+const { ThemeContext } = await import("../../ThemeProvider");
+const { ThreadDecisionCard } = await import("../../SessionDecisionCard");
+const Thread = ({ conversationId, asks }: { conversationId: string; asks: any[] }) => <ThreadDecisionCard conversationId={conversationId} asks={asks} stepper={null} />;
+const modern = (ui: React.ReactNode) => (
+  <ThemeContext.Provider value={{ theme: "light", toggleTheme: () => {}, visualStyle: "modern", setVisualStyle: () => {} } as any}>{ui}</ThemeContext.Provider>
+);
+const ask = (n: number, blocking = false): any => ({ ...item(blocking), key: `decide:d${n}`, decisionId: `d${n}`, question: `Question ${n}?` });
+const press = (el: Element | null) => act(() => { (el as HTMLElement).click(); });
+
+test("in the Modern style a thread's other asks are rows on the docked card: pressing one brings it up, and once it is answered the card is back on the first", async () => {
+  const pane = document.createElement("div");
+  document.body.appendChild(pane);
+  const root = createRoot(pane);
+  const draw = (asks: any[]) => act(() => root.render(<MemoryRouter>{modern(<Thread conversationId="c1" asks={asks} />)}</MemoryRouter>));
+  const question = () => pane.querySelector("[data-cc-ask-question]")?.textContent;
+  const rows = () => [...pane.querySelectorAll("[data-decision-other]")].map((b) => b.getAttribute("data-decision-other"));
+
+  await draw([ask(1), ask(2), ask(3)]);
+  expect(question()).toBe("Question 1?");
+  expect(rows()).toEqual(["decide:d2", "decide:d3"]);
+  // The agent's default on each of these is the second option.
+  expect(pane.querySelector("[data-decision-options] [data-decision-proceeding]")?.textContent).toBe("proceeding with this");
+
+  await press(pane.querySelector('[data-decision-other="decide:d3"]'));
+  expect(question()).toBe("Question 3?");
+  expect(rows()).toEqual(["decide:d1", "decide:d2"]);
+  // Picked from the dock, it stays docked.
+  expect(pane.querySelector("[data-session-decision]")!.classList.contains("decision-fold")).toBe(true);
+
+  // Answered: it leaves the thread's asks and the first is shown again.
+  await draw([ask(1), ask(2)]);
+  expect(question()).toBe("Question 1?");
+  expect(rows()).toEqual(["decide:d2"]);
+  await act(() => root.unmount());
+});
+
+test("what is typed as an answer is still there after stepping to another ask and back", async () => {
+  const pane = document.createElement("div");
+  document.body.appendChild(pane);
+  const root = createRoot(pane);
+  await act(() => root.render(<MemoryRouter>{modern(<Thread conversationId="c1" asks={[ask(1), ask(2)]} />)}</MemoryRouter>));
+  const box = () => pane.querySelector<HTMLInputElement>('input[aria-label="Answer in your own words"]')!;
+  const setValue = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")!.set!;
+  await act(() => { setValue.call(box(), "neither, pause it at night"); box().dispatchEvent(new dom.window.Event("input", { bubbles: true })); });
+  expect(box().value).toBe("neither, pause it at night");
+  await press(pane.querySelector('[data-decision-other="decide:d2"]'));
+  expect(box().value).toBe("");
+  await press(pane.querySelector('[data-decision-other="decide:d1"]'));
+  expect(box().value).toBe("neither, pause it at night");
+  await act(() => root.unmount());
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  useInboxStore.getState().clearDraft("decision:d1");
+});
+
+test("an advisory ask stepped to in the sheet, then folded, stays folded when the person leaves the thread and comes back", async () => {
+  const pane = document.createElement("div");
+  document.body.appendChild(pane);
+  const root = createRoot(pane);
+  const draw = (conversationId: string, asks: any[]) => act(() => root.render(<MemoryRouter><Thread conversationId={conversationId} asks={asks} /></MemoryRouter>));
+  const card = () => pane.querySelector("[data-session-decision]");
+  const asks = [ask(1, true), ask(2)];
+
+  await draw("c1", asks);
+  // The blocking ask opens as the sheet; stepping from its header brings the advisory one up as the sheet too.
+  expect(card()!.classList.contains("decision-sheet")).toBe(true);
+  await press(pane.querySelector('[aria-label="Next decision in this thread"]'));
+  expect(pane.querySelector("h1.decision-question")!.textContent).toBe("Question 2?");
+  expect(card()!.classList.contains("decision-sheet")).toBe(true);
+
+  // Another thread, then back: the pick was this visit's, so the thread opens on its first ask, as it always has.
+  await draw("c2", []);
+  expect(card()).toBeNull();
+  await draw("c1", asks);
+  expect(pane.querySelector("h1.decision-question")!.textContent).toBe("Question 1?");
+
+  // And the size is spent once: the same ask drawn again (its card remounted) opens the way it opens by itself.
+  await press(pane.querySelector('[aria-label="Next decision in this thread"]'));
+  expect(card()!.classList.contains("decision-sheet")).toBe(true);
+  await draw("c1", []);
+  await draw("c1", [ask(2)]);
+  expect(card()!.classList.contains("decision-fold")).toBe(true);
+  await act(() => root.unmount());
+});
+
+test("a permission ask behind an ordinary one is never a row or a step: it waits for its own card in the transcript", async () => {
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  const before = useInboxStore.getState().sessionDecisions;
+  useInboxStore.setState({ sessionDecisions: { ...before, d2: { _id: "d2", conversation_id: "c1", status: "pending", question: "Question 2?", options: [], run: { id: "r1" } } } } as any);
+  const pane = document.createElement("div");
+  document.body.appendChild(pane);
+  const root = createRoot(pane);
+  await act(() => root.render(<MemoryRouter>{modern(<Thread conversationId="c1" asks={[ask(1), ask(2), ask(3)]} />)}</MemoryRouter>));
+  expect(pane.querySelector("[data-cc-ask-question]")!.textContent).toBe("Question 1?");
+  expect([...pane.querySelectorAll("[data-decision-other]")].map((b) => b.getAttribute("data-decision-other"))).toEqual(["decide:d3"]);
+  // Counted among the asks the card steps through: two, not three.
+  expect(pane.querySelector("[data-cc-ask]")!.textContent).toContain("1 of 2");
+  await act(() => root.unmount());
+  useInboxStore.setState({ sessionDecisions: before } as any);
+});
+
+test("the rows opened past the first few stay open from one ask to the next", async () => {
+  const pane = document.createElement("div");
+  document.body.appendChild(pane);
+  const root = createRoot(pane);
+  await act(() => root.render(<MemoryRouter>{modern(<Thread conversationId="c1" asks={[1, 2, 3, 4, 5, 6].map((n) => ask(n))} />)}</MemoryRouter>));
+  const rows = () => pane.querySelectorAll("[data-decision-other]").length;
+  expect(rows()).toBe(3);
+  await press(pane.querySelector("[data-decision-others-more]"));
+  expect(rows()).toBe(5);
+  await press(pane.querySelector('[data-decision-other="decide:d6"]'));
+  expect(pane.querySelector("[data-cc-ask-question]")!.textContent).toBe("Question 6?");
+  expect(rows()).toBe(5);
+  await act(() => root.unmount());
+});

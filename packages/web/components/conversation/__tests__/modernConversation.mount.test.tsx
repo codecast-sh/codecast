@@ -488,12 +488,48 @@ describe("Modern asks: the one loud card", () => {
 
   test("a docked decision shows its question and options as Buttons, the default primary", () => {
     const card = draw(
-      <ModernDecisionDock question="Ship the renderer behind a flag?" options={[{ label: "Ship now", index: 0 }, { label: "Flag it", index: 1 }]} recommended={1} held={() => false} onAnswer={noop} onAnswerText={noop} onOpen={noop} answerable />,
+      <ModernDecisionDock question="Ship the renderer behind a flag?" options={[{ label: "Ship now", index: 0 }, { label: "Flag it", index: 1 }]} recommended={1} held={() => false} onAnswer={noop} text="" onText={noop} onAnswerText={noop} onOpen={noop} answerable />,
       "modern",
     ).querySelector("[data-cc-ask]")!;
     const options = [...card.querySelectorAll("[data-decision-options] button")];
     expect(options.map((b) => [text(b), b.className.includes("cc-btn-primary")])).toEqual([["Ship now", false], ["Flag it", true]]);
     expect(card.querySelector("[data-decision-open]")).not.toBeNull();
+    // Nothing else is open on the thread, and no agent went ahead: no rows, no mark.
+    expect(card.querySelector("[data-decision-others]")).toBeNull();
+    expect(card.querySelector("[data-decision-proceeding]")).toBeNull();
+  });
+
+  test("the option an agent is going ahead with says so in the sheet's words, so it does not read as an answer given", () => {
+    const card = draw(
+      <ModernDecisionDock question="Run all week or only while in use?" options={[{ label: "Always on", index: 0 }, { label: "Paused when idle", index: 1 }]} recommended={1} proceedingWith={1} proceedingLabel="Paused when idle" held={() => false} onAnswer={noop} text="" onText={noop} onAnswerText={noop} onOpen={noop} answerable />,
+      "modern",
+    ).querySelector("[data-cc-ask]")!;
+    const options = [...card.querySelectorAll("[data-decision-options] button")];
+    expect(options.map((b) => text(b.querySelector("[data-decision-proceeding]")))).toEqual([null, "proceeding with this"]);
+    // Said once: on the option, not again beside Open.
+    expect(card.querySelectorAll("[data-decision-proceeding]")).toHaveLength(1);
+  });
+
+  test("an ask the dock cannot answer in place still names the option the agent is going ahead with", () => {
+    const card = draw(
+      <ModernDecisionDock question="Which of these ship?" options={[{ label: "Sync", index: 0 }, { label: "Search", index: 1 }]} proceedingWith={1} proceedingLabel="Search" held={() => false} onAnswer={noop} text="" onText={noop} onOpen={noop} answerable={false} />,
+      "modern",
+    ).querySelector("[data-cc-ask]")!;
+    expect(card.querySelector("[data-decision-options]")).toBeNull();
+    expect(text(card.querySelector("[data-decision-proceeding]"))).toBe("proceeding with Search");
+  });
+
+  test("a thread's other open asks are rows under the docked one, each with its place and its question; past three, the rest open in place", () => {
+    const others = [2, 3, 4, 5, 6].map((n) => ({ key: `decide:d${n}`, position: n, question: `Question ${n}?` }));
+    const card = draw(
+      <ModernDecisionDock question="Run all week or only while in use?" aside="1 of 6" options={[{ label: "Always on", index: 0 }]} held={() => false} onAnswer={noop} text="" onText={noop} onOpen={noop} answerable others={others} onPick={noop} />,
+      "modern",
+    ).querySelector("[data-cc-ask]")!;
+    const list = card.querySelector("[data-decision-others]")!;
+    expect([...list.querySelectorAll("[data-decision-other]")].map((b) => [b.getAttribute("data-decision-other"), text(b)])).toEqual([["decide:d2", "2Question 2?"], ["decide:d3", "3Question 3?"], ["decide:d4", "4Question 4?"]]);
+    expect(text(list.querySelector("[data-decision-others-more]"))).toBe("2 more");
+    // The card grows; it never scrolls inside itself.
+    expect(list.className).not.toContain("overflow");
   });
 });
 

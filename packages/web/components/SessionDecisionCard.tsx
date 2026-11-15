@@ -3,11 +3,12 @@
 import { approvalButtonLabel } from "@codecast/shared/contracts/assistant";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useDecisionAnswer } from "../hooks/useDecisionAnswer";
+import { useDecisionDraftText } from "../hooks/useDecisionDraft";
 import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { keyScopeHasFocus, keysOwnedElsewhere } from "../shortcuts/keyOwnership";
-import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, decisionDraftKey, type QueueItem } from "../lib/decisionQueue";
 import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
@@ -84,7 +85,9 @@ import { ModernDecisionDock } from "./conversation/ModernDecisionDock";
 
 // A session can hold several open asks. Its card shows them one at a time:
 // an answer brings up the next, already open, so a run of them is one digit
-// each. `more` is how many wait behind this one.
+// each. `asks` is all of them in the order they are answered, this one
+// included, and `onPick` brings another up without answering this one: the
+// sheet steps through them from its header, the dock lists them as rows.
 type Size = "full" | "line";
 
 // The last conversation whose ask was settled from its open sheet, and when:
@@ -98,10 +101,59 @@ const CONTINUE_MS = 5_000;
 const JUMP_FRESH_MS = 10_000;
 const jumpedHere = (targetNonce: number | undefined) => targetNonce !== undefined && Date.now() - targetNonce < JUMP_FRESH_MS;
 
-export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scrollToMessage }: {
+/**
+ * A thread's card: the ask picked from it while that ask is still open, else
+ * the first of the thread's asks (blocking before advisory), else the one the
+ * queue hands in for a terminal question. Picking brings an ask up at the
+ * size the person was reading, once: the size is spent as soon as the card
+ * has drawn with it, so a card drawn again later (the person folded it, left
+ * and came back) opens the way that ask opens by itself. The pick belongs to
+ * the visit it was made in: the pane outlives the thread it shows, so leaving
+ * the thread drops it and a return starts from the first ask, as ever.
+ *
+ * A permission ask (`cast decide --run`) is never one of the asks stepped to
+ * here: in a thread it is its own card in the transcript, with the command it
+ * runs, and it comes up there once the asks ahead of it are answered.
+ */
+export function ThreadDecisionCard({ conversationId, asks, fallback, stepper, targetNonce, scrollToMessage }: {
+  conversationId: string;
+  /** The thread's open `cast decide` asks, in the order they are answered. */
+  asks: readonly QueueItem[];
+  /** The queue's own item, shown when the thread has no authored ask. */
+  fallback?: QueueItem | null;
+  stepper: DecisionStepper | null;
+  targetNonce?: number;
+  scrollToMessage?: (messageId: string) => void;
+}) {
+  const [picked, setPicked] = useState<{ key: string; size?: Size } | null>(null);
+  // The rows past the first few, once opened, stay open while the person moves between the thread's asks.
+  const [allRows, setAllRows] = useState(false);
+  useWatchEffect(() => { setPicked(null); setAllRows(false); }, [conversationId]);
+  useWatchEffect(() => { if (picked?.size) setPicked({ key: picked.key }); }, [picked]);
+  const pick = useCallback((key: string, size: Size) => setPicked({ key, size }), []);
+  const showAllRows = useCallback(() => setAllRows(true), []);
+  const runKeys = useInboxStore((s) => asks.filter((a) => !!a.decisionId && !!s.sessionDecisions[a.decisionId]?.run).map((a) => a.key).join("\u0001"));
+  const steppable = useMemo(() => { const run = new Set(runKeys.split("\u0001")); return asks.filter((a) => !run.has(a.key)); }, [asks, runKeys]);
+  const shown = steppable.find((a) => a.key === picked?.key) ?? asks[0] ?? fallback ?? null;
+  if (!shown) return null;
+  return (
+    <SessionDecisionCard key={shown.key} item={shown} stepper={stepper} asks={steppable.some((a) => a.key === shown.key) ? steppable : undefined} onPick={pick}
+      startSize={picked?.key === shown.key ? picked.size : undefined} allRows={allRows} onAllRows={showAllRows} targetNonce={targetNonce} scrollToMessage={scrollToMessage} />
+  );
+}
+
+export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, allRows, onAllRows, targetNonce, scrollToMessage }: {
   item: QueueItem;
   stepper: DecisionStepper | null;
-  more?: number;
+  /** The thread's open asks in order, this one among them. */
+  asks?: readonly QueueItem[];
+  /** Bring another of the thread's asks up, at the size this one is shown. */
+  onPick?: (key: string, size: Size) => void;
+  /** The size an ask picked from the card opens at: the one the person was reading. */
+  startSize?: Size;
+  /** The dock lists every other ask, not the first few, and the press that asks for that. */
+  allRows?: boolean;
+  onAllRows?: () => void;
   /** When the pane was last asked to open at a message, if it was. */
   targetNonce?: number;
   /** Scrolls this pane's thread to a loaded message. */
@@ -120,6 +172,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
   const modern = useIsModernStyle();
 
   const [size, setSize] = useState<Size>(() => {
+    if (startSize) return startSize;
     const continuing = settledFromSheet?.conversationId === item.conversationId && Date.now() - settledFromSheet.at < CONTINUE_MS;
     if (!stepper && jumpedHere(targetNonce)) return "line";
     return item.blocking || stepper || continuing ? "full" : "line";
@@ -128,9 +181,20 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
     if (!stepper && jumpedHere(targetNonce)) setSize("line");
   }, [targetNonce]);
   const full = size === "full";
-  const [otherOpen, setOtherOpen] = useState(false);
+  // A typed answer left on this ask (before stepping to another, or on its
+  // page) comes back open in the sheet rather than behind the button.
+  const [otherOpen, setOtherOpen] = useState(() => item.source === "decide" && !!item.decisionId && (item.kind ?? "single") === "single"
+    && !!useInboxStore.getState().drafts[decisionDraftKey(item.decisionId)]?.otherText);
   const [passOpen, setPassOpen] = useState(false);
-  const [otherText, setOtherText] = useState("");
+  // What is typed as an answer. A `cast decide` ask keeps it in the store's
+  // draft, as its page does, so stepping to another of the thread's asks,
+  // folding the card or leaving the thread never loses it; a terminal ask has
+  // no row to keep it under.
+  const [draftText, setDraftText] = useDecisionDraftText(item.source === "decide" ? (item.decisionId ?? "") : "", "otherText");
+  const [typedText, setTypedText] = useState("");
+  const drafted = item.source === "decide" && !!item.decisionId;
+  const otherText = drafted ? draftText : typedText;
+  const setOtherText = drafted ? setDraftText : setTypedText;
   const otherRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -309,8 +373,16 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
     return () => feed.removeEventListener("wheel", onWheel);
   }, [full, grow]);
 
-  const onSkip = stepper?.onSkip;
-  const onPrev = stepper?.onPrev;
+  // The thread's own asks, stepped where no queue is being walked.
+  const threadIndex = asks ? asks.findIndex((a) => a.key === item.key) : -1;
+  const threadAsks = asks && asks.length > 1 && threadIndex >= 0 && onPick ? asks : null;
+  const stepThread = useCallback((delta: number) => {
+    if (!threadAsks || !onPick) return;
+    const next = threadAsks[(threadIndex + delta + threadAsks.length) % threadAsks.length];
+    if (next) onPick(next.key, size);
+  }, [threadAsks, threadIndex, onPick, size]);
+  const onSkip = stepper?.onSkip ?? (threadAsks ? () => stepThread(1) : undefined);
+  const onPrev = stepper ? stepper.onPrev : threadAsks ? () => stepThread(-1) : undefined;
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // The pass menu owns the keys while it is open: its search and Escape.
@@ -334,7 +406,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
       // interrupts, and raising it on the thread's own j would put its
       // answers one digit away from a reader who never opened it.
       // Stepping is the queue's: with nothing to step to, the arrows stay the page's.
-      if ((action.kind === "skip" || action.kind === "prev") && !((stepper?.total ?? 0) > 1)) return;
+      if ((action.kind === "skip" || action.kind === "prev") && !((stepper?.total ?? 0) > 1) && !(threadAsks && !stepper)) return;
       if (!stepper && !full && action.kind !== "commit-free-text" && action.kind !== "close-free-text") {
         if (action.kind !== "full" || !item.blocking) return;
       }
@@ -366,7 +438,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
     // list navigation and would eat them first.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, onPrev, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted, passOpen, canPass]);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, onPrev, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted, passOpen, canPass, threadAsks]);
 
   const answerRich = useCallback((input: Parameters<typeof answerDecision>[1]) => {
     if (!item.decisionId) return;
@@ -376,7 +448,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
 
   // Where this ask sits: in the queue being stepped, else among its own
   // session's open asks when there are several.
-  const place = stepper ?? (more > 0 ? { position: 1, total: more + 1 } : null);
+  const place = stepper ?? (asks && asks.length > 1 && threadIndex >= 0 ? { position: threadIndex + 1, total: asks.length } : null);
   const tier = queueTier(item);
   const session = item.session;
   const project = session?.project_path ? getProjectName(session.project_path) : undefined;
@@ -678,6 +750,20 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
                   </button>
                 )}
               </span>
+            ) : place && threadAsks ? (
+              // The thread's own asks: step either way without answering this one.
+              <span className="shrink-0 flex items-center rounded-full border border-sol-border text-meta text-sol-text-muted tabular-nums" data-decision-place>
+                <button onClick={() => stepThread(-1)} className="pl-1.5 pr-0.5 py-0.5 rounded-l-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Previous decision in this thread" aria-label="Previous decision in this thread">
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <span className="px-1.5 py-0.5">
+                  <span className="decision-head-wide">decision {place.position} of {place.total}</span>
+                  <span className="decision-head-short">{place.position}/{place.total}</span>
+                </span>
+                <button onClick={() => stepThread(1)} className="pl-0.5 pr-1.5 py-0.5 rounded-r-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Next decision in this thread" aria-label="Next decision in this thread">
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </span>
             ) : place && (
               <span className="shrink-0 text-meta text-sol-text-dim tabular-nums" data-decision-place>
                 <span className="decision-head-wide">decision {place.position} of {place.total}</span>
@@ -755,7 +841,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
   // Modern docks the ask itself (ModernDecisionDock): the question and its options as Buttons, Open for the sheet.
   if (modern) return (
     <div ref={rootRef} tabIndex={-1} data-session-decision={item.conversationId} className="decision-card decision-fold relative z-20 shrink-0 conv-col mx-auto w-full px-2 sm:px-3 md:px-4 outline-none" onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}>
-      <ModernDecisionDock question={question} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : defaultLabel ? `proceeding with ${defaultLabel}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} />
+      <ModernDecisionDock question={question} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} />
     </div>
   );
   return (
