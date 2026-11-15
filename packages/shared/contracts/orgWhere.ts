@@ -24,7 +24,13 @@ export type OrgWhere = {
   people: Array<{ name: string; handle?: string; role: string; is_me: boolean }>;
   /** The session's project (session-projects.md SP6), rendered by projectContextBlock. */
   project_context?: ProjectContext | null;
+  /** Team chat as it touches this session; null when the team has chat off. */
+  chat?: { rooms: OrgChatRoom[]; handle: string | null } | null;
 };
+
+/** A room that touches the session: the team's default room, one it sits in
+ *  (`own` is its own room with its person), or one its role follows or sits in. */
+export type OrgChatRoom = { name: string; own: boolean; why: "default" | "member" | "role"; slack: boolean };
 
 export const ORG_WHERE_ROLES_MAX = 20;
 const SCOPE_TITLES_MAX = 4;
@@ -67,8 +73,25 @@ export function orgWhereLines(w: OrgWhere): string[] {
     out.push(`  @${r.handle} ${r.name}${r.reports_to ? ` · reports to ${r.reports_to}` : ""} · ${scope}${r.seat ? " · yours" : ""}`);
   }
   if (w.roles.length > ORG_WHERE_ROLES_MAX) out.push(`  +${w.roles.length - ORG_WHERE_ROLES_MAX} more: cast org ls`);
+  if (w.chat) out.push(...orgChatLines(w.chat));
   if (w.people.length) out.push(`People: ${w.people.map((p) => `${p.name}${p.handle ? ` @${p.handle}` : ""}${p.role !== "member" || p.is_me ? ` (${[p.role !== "member" ? p.role : "", p.is_me ? "your person" : ""].filter(Boolean).join(", ")})` : ""}`).join(", ")}`);
   return out;
+}
+
+/** Team chat in two lines: the rooms that touch this session, and what in
+ *  chat reaches it as a turn (everything else it reads when it needs to). */
+export function orgChatLines(chat: NonNullable<OrgWhere["chat"]>): string[] {
+  const note = (r: OrgChatRoom) => [r.why === "member" && !r.own ? "you are a member" : r.why === "role" ? "your role's room" : "", r.slack ? "mirrored to Slack" : ""].filter(Boolean).join(", ");
+  const rooms = chat.rooms.map((r) => {
+    const name = r.own ? "your own room, where people message you" : `#${r.name}`;
+    const n = note(r);
+    return n ? `${name} (${n})` : name;
+  });
+  const you = chat.handle ? ` (@${chat.handle})` : "";
+  return [
+    `Team chat: ${rooms.length ? rooms.join(" · ") : "no room is tied to this work"}.`,
+    `A chat line reaches you as a turn only when it names you${you}, is a person's line in a room you are a member of, or replies in a thread you posted in. For the rest, cast chat channels shows every room with its topic and latest line, and cast chat search finds past talk.`,
+  ];
 }
 
 /** How a session uses where it sits. Read with the facts above it. */

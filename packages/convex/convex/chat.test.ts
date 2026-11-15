@@ -1370,6 +1370,39 @@ describe("the anchor in a thread", () => {
     expect(ctx.db._tables.pending_messages.length).toBe(2);
   });
 
+  test("a person's reply reaches a session that answered mid-thread, not only the thread's starter", async () => {
+    const seed = anchorTeamSeed({
+      conversations: [
+        { _id: CONV, user_id: BOB, title: "Anchor", status: "active", updated_at: 1 },
+        { _id: "conv-alice", user_id: ALICE, session_id: "sess-alice", short_id: "jx7alice", title: "Alice's build", agent_type: "claude_code", status: "active", updated_at: 1, is_private: true },
+      ],
+      session_owners: [{ _id: "so-1", conversation_id: "conv-alice", user_id: ALICE, added_at: 1 }],
+    });
+    const ctx = context(ALICE, seed);
+    // A person starts the thread; the session answers in it.
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "who owns the deploy?" });
+    const answer = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "I do, it is green", thread_root_id: root.message_id, origin: "agent", origin_session_id: "sess-alice",
+    });
+    expect(answer.thread_relays).toEqual([]);
+    expect(ctx.db._tables.pending_messages.length).toBe(0);
+
+    // The person follows up under it: the session hears it.
+    const followUp = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "then ship it", thread_root_id: root.message_id });
+    expect(followUp.session_relay.delivered).toBe(false);
+    expect(followUp.thread_relays).toEqual(["jx7alice"]);
+    const queued = ctx.db._tables.pending_messages;
+    expect(queued.length).toBe(1);
+    expect(String(queued[0].conversation_id)).toBe("conv-alice");
+    expect(queued[0].content).toContain("This session posted in this thread earlier.");
+    expect(queued[0].content).toContain("Alice: then ship it");
+
+    // A teammate who may not drive the private session: the line stays in the thread.
+    const outsider = await call(sendMessage, as(ctx, BOB), { channel_id: CHANNEL, content: "+1", thread_root_id: root.message_id });
+    expect(outsider.thread_relays).toEqual([]);
+    expect(ctx.db._tables.pending_messages.length).toBe(1);
+  });
+
   test("an anchor with no session yet keeps the message and reports why", async () => {
     const seed = anchorTeamSeed();
     delete (seed.anchors[0] as any).conversation_id;
@@ -4250,8 +4283,10 @@ describe("session thinking rows", () => {
     expect(closed.deleted_at).toBeTruthy();
     const after = await call(getThread, ctx, { root_id: root.message_id });
     expect(after.replies.slice(0, 3).map((r: any) => r._id)).toEqual([reply.message_id, row._id, answer.message_id]);
-    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "thanks both", thread_root_id: root.message_id });
-    const wake = ctx.db._tables.pending_messages.at(-1).content;
+    const thanks = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "thanks both", thread_root_id: root.message_id });
+    // Bob's session posted in the thread too, so the reply reaches it as well.
+    expect(thanks.thread_relays).toEqual(["jx7bobb"]);
+    const wake = ctx.db._tables.pending_messages.find((p: any) => p.client_id === `chat-relay:${thanks.message_id}` && String(p.conversation_id) === "conv-alice").content;
     expect(wake).toContain("You (earlier): staging is green");
     expect(wake).toContain("Bob's session, session conv-bo via Bob: bob's session here");
   });

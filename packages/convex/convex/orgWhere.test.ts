@@ -145,4 +145,25 @@ describe("org.where", () => {
     expect(w.project_context?.is_main).toBe(false);
     expect(await computeOrgWhere(ctx, ME as any, undefined, null)).toBeNull();
   });
+
+  test("team chat names the rooms that touch the session and what reaches it", async () => {
+    const ctx = { db: db() };
+    await ctx.db.patch(TEAM, { features: { chat: true } });
+    const chan = (over: any) => ({ team_id: TEAM, created_by: ME, created_at: 1, updated_at: 1, kind: "public", ...over });
+    await ctx.db.insert("chat_channels", chan({ _id: "chat_channels_general", name: "general", is_default: true }));
+    await ctx.db.insert("chat_channels", chan({ _id: "chat_channels_seo", name: "seo" }));
+    await ctx.db.insert("chat_channels", chan({ _id: "chat_channels_sitemap", name: "sitemap", kind: "private" }));
+    await ctx.db.insert("chat_channels", chan({ _id: "chat_channels_old", name: "old", archived_at: 5 }));
+    await ctx.db.patch(SEO as any, { follow_channel_ids: ["chat_channels_seo", "chat_channels_old"] });
+    await ctx.db.insert("chat_channel_agents", { channel_id: "chat_channels_sitemap", conversation_id: "conversations_bound", short_id: "jx1", added_by: ME, added_at: 1 });
+    await ctx.db.insert("slack_channel_links", { team_id: TEAM, chat_channel_id: "chat_channels_seo", kind: "channel", direction: "both", slack_channel_id: "C1", options: {} });
+    const w = (await computeOrgWhere(ctx, ME as any, TEAM, await ctx.db.get("conversations_bound" as any)))!;
+    expect(w.chat?.rooms.map((r) => r.name)).toEqual(["sitemap", "seo", "general"]);
+    const block = orgContextBlock(w);
+    expect(block).toContain("Team chat: #sitemap (you are a member) · #seo (your role's room, mirrored to Slack) · #general.");
+    expect(block).toContain("names you (@jx1)");
+
+    await ctx.db.patch(TEAM, { features: { chat: false } });
+    expect((await computeOrgWhere(ctx, ME as any, TEAM, await ctx.db.get("conversations_bound" as any)))!.chat).toBeNull();
+  });
 });

@@ -11,7 +11,7 @@ import { AGENT_STATUSES, DAEMON_COMMANDS, TEAM_FEATURE_KEYS, type TeamFeatureKey
 import { SECRET_EVENT_KINDS } from "@codecast/shared/contracts/secrets";
 import { cloudAutoscaleValidator, cloudHostReportValidator, cloudPlacementProgressValidator, hostReadinessValidator, localMirrorValidator } from "./lib/cloudHostValidators";
 import { openTaskValidator } from "./lib/openTasksValidator";
-import { changeGuideValidator } from "./lib/changeGuideValidator";
+import { changeGuideStepValidator, changeGuideValidator } from "./lib/changeGuideValidator";
 import { followViewValidator } from "./lib/followView";
 import { TASK_EFFORTS, TASK_PRIORITIES, TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { taskWaitValidator } from "./lib/taskWaitValidator";
@@ -3832,6 +3832,31 @@ export default defineSchema({
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     // A team's pull requests touched in a trailing window (page data readers).
     .index("by_team_updated", ["team_id", "updated_at"]),
+
+  // A change guide a model wrote for a pull request whose author wrote none
+  // (prGuides.ts, the PR page's Guide tab). One row per write, the newest
+  // read; head_sha is the commit it describes, so a later push marks it stale.
+  // Readable by whoever can read the pull request. Kept off the pull request
+  // row, which every PR view subscribes to.
+  pr_guides: defineTable({
+    pr_id: v.id("pull_requests"),
+    team_id: v.id("teams"),
+    head_sha: v.optional(v.string()),
+    status: v.union(v.literal("writing"), v.literal("ready"), v.literal("failed")),
+    summary: v.optional(v.string()),
+    steps: v.optional(v.array(changeGuideStepValidator)),
+    error: v.optional(v.string()),
+    model: v.string(),
+    prompt_version: v.string(),
+    input_tokens: v.optional(v.number()),
+    output_tokens: v.optional(v.number()),
+    cost_usd: v.optional(v.number()),
+    requested_by: v.id("users"),
+    created_at: v.number(),
+    finished_at: v.optional(v.number()),
+  })
+    .index("by_pr_created", ["pr_id", "created_at"])
+    .index("by_team_created", ["team_id", "created_at"]),
 
   // linked_session_ids as an index (lib/prSessions.ts): written only there,
   // read to find the pull requests a session links. `tier` is how strong the
@@ -9101,7 +9126,7 @@ export default defineSchema({
     ))),
     // A role or session this line named was NOT woken: the sender or the target
     // was over its hourly mention cap (agent-channels.md C2). The mention still
-    // renders as a pill; the party reads it on its next wake instead.
+    // renders as a pill and the line stays in the thread; nothing redelivers it.
     mention_folded: v.optional(v.boolean()),
     // "here" notifies the members who are actually present (user_presence).
     // `@channel` is deliberately absent in v1 — on a team small enough to share

@@ -12,9 +12,13 @@ for rooms that hold several agents.
 - Bot users are already team members (anchors and roles), so they can read
   public channels and post through their standing session. A role follows the
   channels in `org_roles.follow_channel_ids`; `cast role follow <h> #channel`
-  and the role page settings edit it. Creating a role from a project that has
-  a channel bound to it (`anchor_channels` with `role_id`, W1) follows that
-  channel automatically.
+  and the role page settings edit it. `org.brief` returns the list, and
+  `cast brief` (which a role runs at every wake) reads the lines those rooms
+  carried since its last read, marking the ones that name the role.
+- At session start every session reads its rooms in the org context
+  (`org.where` chat, `orgChatLines`): the team's default rooms, the rooms it
+  is a member of, the rooms its role follows or sits in, which of them mirror
+  to Slack, and the three ways a chat line reaches it as a turn.
 
 ## C2. Delivery modes
 
@@ -49,7 +53,11 @@ for rooms that hold several agents.
    are reserved before the relay's per-minute limit and spent after it, so a
    relay refused by either spends neither. Without this, one mention each way
    would license an unbounded loop of replies. A person's reply on a session's
-   thread is not a mention reply and spends none of these caps.
+   thread is not a mention reply and spends none of these caps. A person's
+   reply also reaches up to three other sessions that posted in the thread
+   (`threadPosters`), under the same send-grant check, so a session that
+   answered mid-thread hears the follow-up; a room that takes turns is left to
+   its round. A folded mention is not redelivered: it stays in the thread.
 3. Digest. A role's routine can post a daily digest of a channel or of its
    scope into a channel (project updates already do this for projects); the
    routine is a trigger the role owns.

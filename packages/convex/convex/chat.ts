@@ -2422,6 +2422,27 @@ export const sendMessage = mutation({
       }
     }
 
+    // A person's reply also reaches the other sessions that posted in this
+    // thread: one that answered mid-thread is waiting on it as much as the
+    // starter is. Never in a room that takes turns (its round carries the
+    // thread), and never to a session this line already reached.
+    const threadRelays: string[] = [];
+    if (message && root && personLine && !takesTurns) {
+      const reached = new Set<string>([
+        ...[relay.conversation_id, root.bound_session_id, root.origin_session_id, message.origin_session_id].filter((id): id is string => !!id),
+        ...sessions.map((c) => String(c._id)),
+        ...memberIds,
+      ]);
+      for (const participant of await threadPosters(ctx, root, reached)) {
+        try {
+          const r = await maybeRelayToOriginSession(ctx, { channel, message, root, senderId: userId, senderName: actorName, participant });
+          if (r.delivered && r.session_short_id) threadRelays.push(r.session_short_id);
+        } catch {
+          // A failed relay never costs the message.
+        }
+      }
+    }
+
     return {
       message_id: messageId,
       client_id: args.client_id,
@@ -2433,6 +2454,8 @@ export const sendMessage = mutation({
       // A reply on a thread a session started: whether it was injected into
       // that session, and why not when it was not.
       session_relay: relay,
+      // Other sessions that posted in the thread and were handed this reply.
+      thread_relays: threadRelays,
       // The room's agent members taking turns on this line's thread: who has
       // the floor and how many wait. Null in a room without agent members.
       round,
@@ -3802,11 +3825,15 @@ async function maybeRelayToOriginSession(
     root: Doc<"chat_messages"> | null;
     senderId: Id<"users">;
     senderName: string;
+    /** A session that posted in this thread without starting it: a person's
+     *  reply reaches it too (threadPosters), as a participant. */
+    participant?: string;
   },
 ): Promise<RelayResult> {
   const no = (skipped: string | null) => ({ delivered: false, skipped, session_short_id: null, conversation_id: null });
   const root = opts.root;
   if (!root) return no(null);
+  const participant = opts.participant ?? null;
   // Who hears this reply. A person's reply goes to the session that started
   // the thread. A SESSION's reply goes to the session that @mentioned it in
   // this thread from another session (agent-channels.md C2): the mention asked
@@ -3814,7 +3841,9 @@ async function maybeRelayToOriginSession(
   // machines exchange turns, and it needs an explicit mention to start.
   let targetRef: string | null = null;
   let mentionReply = false;
-  if (opts.message.origin === "agent" && opts.message.origin_session_id) {
+  if (participant) {
+    targetRef = participant;
+  } else if (opts.message.origin === "agent" && opts.message.origin_session_id) {
     targetRef = await mentioningSessionIn(ctx, root, opts.message);
     mentionReply = true;
     if (!targetRef) return no("agent_authored");
@@ -3832,11 +3861,11 @@ async function maybeRelayToOriginSession(
   // session id, and the shared resolver accepts either. Access is decided
   // below, so any conversation is accepted here.
   let conversation = await findConversationByAnyRefWhere(ctx, targetRef, () => true);
-  if ((!conversation || conversation.inbox_killed_at) && !mentionReply && root.bound_session_id && root.origin_session_id) {
+  if ((!conversation || conversation.inbox_killed_at) && !mentionReply && !participant && root.bound_session_id && root.origin_session_id) {
     conversation = (await findConversationByAnyRefWhere(ctx, root.origin_session_id, () => true)) ?? conversation;
   }
   if (!conversation) return no("session_not_found");
-  if (conversation.inbox_killed_at && root.bound_session_id === String(conversation._id)) return no("session_ended");
+  if (conversation.inbox_killed_at && (participant || root.bound_session_id === String(conversation._id))) return no("session_ended");
   // A member of a room that takes turns hears this thread through its round.
   const roomRows = await channelAgentRows(ctx, opts.channel._id);
   if (roomTakesTurns(opts.channel, roomRows) && roomRows.some((row) => String(row.conversation_id) === String(conversation._id))) {
@@ -3909,6 +3938,7 @@ async function maybeRelayToOriginSession(
       channelEntries: roomOpen ? channelEntries : [],
       nonce,
       mentionReply,
+      participant: !!participant,
       handed: !mentionReply && root.bound_session_id === String(conversation._id),
       fromOutsider: !mentionReply && root.bound_session_id === String(conversation._id) && !mayHandTo(opts.senderId, conversation),
       roomOpen,
@@ -3925,6 +3955,26 @@ async function maybeRelayToOriginSession(
     session_short_id: shortId,
     conversation_id: conversation._id.toString(),
   };
+}
+
+// The sessions that posted in a thread (its root and replies), newest first,
+// minus the ones in `exclude`. At most THREAD_POSTERS_MAX: a long thread
+// between many agents is a room, and a room's members are reached as members.
+const THREAD_POSTERS_MAX = 3;
+async function threadPosters(ctx: MutationCtx, root: Doc<"chat_messages">, exclude: Set<string>): Promise<string[]> {
+  const replies = await ctx.db
+    .query("chat_messages")
+    .withIndex("by_thread_created", (q: any) => q.eq("thread_root_id", root._id))
+    .order("desc")
+    .take(200);
+  const out: string[] = [];
+  for (const row of [...replies, root]) {
+    const id = row.origin === "agent" && !row.deleted_at ? row.origin_session_id : undefined;
+    if (!id || exclude.has(id) || out.includes(id)) continue;
+    out.push(id);
+    if (out.length >= THREAD_POSTERS_MAX) break;
+  }
+  return out;
 }
 
 type RelayResult = {
@@ -4596,6 +4646,7 @@ export async function collectLinesSince(
         is_root: !row.thread_root_id,
         created_at: row.created_at,
         text: oneLine(plainPreview(row.content) || row.content, 200),
+        mentioned: mentionedAgents(row),
       });
     }
   }
@@ -4616,7 +4667,14 @@ export type ChatLineSince = {
   is_root: boolean;
   created_at: number;
   text: string;
+  /** Role handles and session short ids the line named. */
+  mentioned: string[];
 };
+
+function mentionedAgents(row: Doc<"chat_messages">): string[] {
+  return (row.mentions ?? []).flatMap((m: any) =>
+    m?.kind === "role" ? [m.handle] : m?.kind === "session" ? [m.short_id] : []);
+}
 
 export const linesSince = query({
   args: {

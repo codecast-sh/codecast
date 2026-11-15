@@ -1631,6 +1631,9 @@ export const brief = query({
         authority: role.authority ?? [],
         standing_short_id: standing?.short_id ?? null, standing_conversation_id: standing?._id ?? null,
         checked_at: role.checked_at ?? null,
+        // The rooms it follows (agent-channels.md C1): `cast brief` reads
+        // their lines since `facts.changed_since` into the brief.
+        follow_channel_ids: (role.follow_channel_ids ?? []).map(String),
         // `wake` is how the check runs as the role may tune it (S38): cadence, gate, focus, and why it last changed.
         routine: routine ? { _id: routine._id, short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, interval_ms: routine.interval_ms ?? null, wake: roleWakeOf(routine) } : null,
       },

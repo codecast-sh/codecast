@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { authorityLine, briefCharterLines, briefHandLine, briefInitiativeLines, briefProjectNumberLines, briefServesNumbers, standingSessionLine, wakeLine, patchBriefNarrative } from "./briefLines";
+import { authorityLine, briefCharterLines, briefChatLines, briefHandLine, briefInitiativeLines, briefProjectNumberLines, briefServesNumbers, standingSessionLine, wakeLine, patchBriefNarrative } from "./briefLines";
 import { stripAnsi } from "@platform/cli-kit/render";
 
 // The brief's hand line reads the server's BriefHand shape: `state`, not
@@ -101,5 +101,23 @@ describe("patchBriefNarrative", () => {
     expect(patchBriefNarrative(brief, "Rule three", "x")).toMatchObject({ error: expect.stringContaining("cast brief --narrative") });
     expect(patchBriefNarrative(brief, "- Rule", "- Law")).toMatchObject({ error: expect.stringContaining("2 times") });
     expect(patchBriefNarrative(brief, "- Rule", "- Law", true)).toMatchObject({ replaced: 2, content: expect.stringContaining("- Law two") });
+  });
+});
+
+describe("briefChatLines", () => {
+  test("lists the followed rooms' new lines and marks the ones naming the role", () => {
+    const lines = briefChatLines({
+      lines: [
+        { message_id: "m1", channel_name: "eng", author_name: "Sam", is_root: true, text: "who owns deploys?", mentioned: ["eng"] },
+        { message_id: "m2", channel_name: "eng", author_name: "Ana", is_root: false, thread_root_id: "m1", text: "not me", mentioned: [] },
+      ],
+    }, "eng").map(stripAnsi);
+    expect(lines).toEqual([
+      "  chat in the rooms it follows:",
+      "    #eng Sam @eng: who owns deploys? root m1",
+      "    #eng Ana: not me in m1",
+    ]);
+    expect(briefChatLines({ lines: [] }, "eng")).toEqual(["  chat in the rooms it follows: nothing new"]);
+    expect(briefChatLines(null, "eng")).toEqual([]);
   });
 });

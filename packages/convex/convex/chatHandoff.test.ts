@@ -77,7 +77,7 @@ const rows = (db: any) => db._tables.chat_messages as any[];
 const convFor = (db: any, sessionId: string) => db._tables.conversations.find((c: any) => c.session_id === sessionId);
 
 describe("hand a chat thread to a new agent", () => {
-  test("before: a session that only posts a reply in a person's thread never hears the replies", async () => {
+  test("a session that only posts a reply in a person's thread hears the replies after it", async () => {
     const db = seed({
       conversations: [{ _id: "conv-hand", user_id: ALICE, session_id: "sess-hand", short_id: "jx7hand", status: "active", updated_at: 1, agent_type: "claude_code" }],
     });
@@ -87,7 +87,8 @@ describe("hand a chat thread to a new agent", () => {
     });
     const reply = await call(sendMessage, ctxAs(db, ALICE), { channel_id: CHANNEL, content: "it is the cache step", thread_root_id: root.message_id });
     expect(reply.session_relay).toMatchObject({ delivered: false, skipped: null });
-    expect(db._tables.pending_messages.length).toBe(0);
+    expect(reply.thread_relays).toEqual(["jx7hand"]);
+    expect(db._tables.pending_messages.map((p: any) => String(p.conversation_id))).toEqual(["conv-hand"]);
   });
 
   test("the create binds the thread, briefs the session with it, and shows it thinking there", async () => {

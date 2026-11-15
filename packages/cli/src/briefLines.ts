@@ -176,6 +176,7 @@ export function briefTextLines(brief: any, now: number): string[] {
     // What moved since the role last read this (S25): the section its scheduled check acts on.
     `  changed since ${formatDateSmart(f.changed_since, now)}:${f.changed.length ? "" : " nothing"}`,
     ...f.changed.map((ch: any) => `    ${ch.kind} ${ch.short_id ?? ""} ${ch.title} → ${ch.status}`),
+    ...briefChatLines(brief.chat, brief.role.handle),
     `  today: ${usedOf(u.wakes, u.caps.wakes_per_day)} wakes · ${usedOf(u.hands, u.caps.hands_per_day)} sessions started · ${usedOf(u.tokens, u.caps.tokens_per_day)} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`,
     ...(f.hands.length ? [`  sessions under it:`, ...f.hands.map(briefHandLine)] : []),
     ...(f.people?.length ? [`  people who report to it:`, ...briefPeopleLines(f.people, now)] : []),
@@ -187,6 +188,22 @@ export function briefTextLines(brief: any, now: number): string[] {
     ...String(brief.narrative || "(no narrative yet: cast brief edit -)").split("\n").map((line) => `  ${line}`),
     // The playbook (S38): how full the brief is, and the shape of what it lacks.
     ...playbookGuideLines(brief.narrative).map((line, i) => `${i === 0 ? "\n" : ""}  ${c.dim}${line}${c.reset}`),
+  ];
+}
+
+/** The rooms the role follows, since the brief's clock: one short line each,
+ *  the ones naming the role marked. Nothing when it follows no room. */
+export function briefChatLines(chat: { lines?: any[]; truncated?: boolean } | null | undefined, handle: string): string[] {
+  if (!chat) return [];
+  const lines = chat.lines ?? [];
+  if (!lines.length) return [`  chat in the rooms it follows: nothing new`];
+  return [
+    `  chat in the rooms it follows${chat.truncated ? " (latest 20)" : ""}:`,
+    ...lines.map((l) => {
+      const thread = l.is_root ? `root ${String(l.message_id)}` : `in ${String(l.thread_root_id)}`;
+      const forYou = (l.mentioned ?? []).includes(handle) ? ` ${c.yellow}@${handle}${c.reset}` : "";
+      return `    #${l.channel_name} ${l.author_name}${forYou}: ${l.text} ${c.dim}${thread}${c.reset}`;
+    }),
   ];
 }
 

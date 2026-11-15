@@ -12,7 +12,7 @@ import { v } from "convex/values";
 import { query } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { isWholeWorkspaceRole, ownerOf } from "@codecast/shared/contracts/orgLead";
-import type { OrgSeatHow, OrgWhere } from "@codecast/shared/contracts/orgWhere";
+import type { OrgChatRoom, OrgSeatHow, OrgWhere } from "@codecast/shared/contracts/orgWhere";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { computeOrgRoles, requireWorkspaceCaller } from "./org";
 import { roleCardOf } from "./agentTasks";
@@ -21,6 +21,7 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { activeTeamMembershipFor } from "./lib/access";
 import { personName } from "./lib/sessionTell";
 import { computeProjectContext, sessionProject } from "./projectContext";
+import { teamHasFeature } from "./lib/teamFeatureGuard";
 
 type Ref = OrgWhere["work"]["task"];
 
@@ -51,7 +52,6 @@ export async function computeOrgWhere(ctx: { db: any }, userId: Id<"users">, tea
   // session in a project its project (SP6).
   const project: any = await sessionProject(ctx, userId, conv);
   const project_context = await computeProjectContext(ctx, userId, project, conv);
-  if (!roles.length && !project_context) return null;
   const byId = new Map(roles.map((r) => [String(r._id), r]));
 
   const [task, plan]: any[] = await Promise.all([
@@ -92,6 +92,8 @@ export async function computeOrgWhere(ctx: { db: any }, userId: Id<"users">, tea
   const person: any = conv ? await ctx.db.get(conv.owner_user_id ?? conv.user_id) : null;
   const ref = (row: any): Ref => (row ? { short_id: row.short_id ?? null, title: row.title ?? "" } : null);
   const seatIds = new Set(seatRoles.map((r) => String(r._id)));
+  const chat = await chatRoomsFor(ctx, teamId, conv, seatRoles.length === 1 ? seatRoles[0] : null);
+  if (!roles.length && !project_context && !chat) return null;
 
   return {
     workspace: org.workspace,
@@ -112,5 +114,40 @@ export async function computeOrgWhere(ctx: { db: any }, userId: Id<"users">, tea
     }))),
     people: org.people.map((p: any) => ({ name: p.name, handle: p.handle, role: p.role, is_me: p.is_me })),
     project_context,
+    chat,
   };
+}
+
+const CHAT_ROOMS_MAX = 6;
+
+/** The team chat rooms that touch this session: the team's default rooms, the
+ *  rooms it sits in as a member, and the rooms its role follows or sits in.
+ *  Null when the team has chat off; the whole picture stays a few names. */
+async function chatRoomsFor(ctx: { db: any }, teamId: Id<"teams"> | undefined, conv: any, seat: any): Promise<OrgWhere["chat"]> {
+  if (!teamId || !(await teamHasFeature(ctx, teamId, "chat"))) return null;
+  const why = new Map<string, OrgChatRoom["why"]>();
+  const add = (id: unknown, w: OrgChatRoom["why"]) => { if (id && !why.has(String(id))) why.set(String(id), w); };
+  if (conv) {
+    for (const row of await ctx.db.query("chat_channel_agents").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conv._id)).take(20)) add(row.channel_id, "member");
+  }
+  if (seat) {
+    for (const row of await ctx.db.query("chat_channel_agents").withIndex("by_role", (q: any) => q.eq("role_id", seat._id)).take(20)) add(row.channel_id, "role");
+    for (const id of seat.follow_channel_ids ?? []) add(id, "role");
+  }
+  const team: any[] = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", teamId)).take(200);
+  for (const c of team) if (c.is_default) add(c._id, "default");
+  const rooms: OrgChatRoom[] = [];
+  for (const [id, w] of why) {
+    const c: any = await ctx.db.get(id as Id<"chat_channels">);
+    if (!c || c.archived_at || String(c.team_id) !== String(teamId)) continue;
+    const link: any = await ctx.db.query("slack_channel_links").withIndex("by_chat_channel", (q: any) => q.eq("chat_channel_id", c._id)).first();
+    rooms.push({
+      name: c.kind === "dm" ? "" : c.name,
+      own: c.kind === "dm",
+      why: w,
+      slack: !!link && link.kind !== "dm" && link.direction !== "slack_to_codecast",
+    });
+    if (rooms.length >= CHAT_ROOMS_MAX) break;
+  }
+  return { rooms, handle: conv?.short_id ?? null };
 }
