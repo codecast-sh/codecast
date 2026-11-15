@@ -32,8 +32,17 @@ const CALM_FRAMES = 6;
 const CAP_MS = 5000;
 
 export function probeTouchEnd(e: GestureResponderEvent) {
-  const t0 = e.nativeEvent.timestamp;
-  const seen = performance.now();
+  watchFrames(e.nativeEvent.timestamp, performance.now());
+}
+
+/** The same line for a gesture the root never sees as a touch end (a
+ *  gesture-handler swipe claims its touch): call it where the gesture commits. */
+export function probeGesture() {
+  const now = performance.now();
+  watchFrames(now, now);
+}
+
+function watchFrames(t0: number, seen: number) {
   const id = ++seq;
   const from = route;
   for (const k in renders) delete renders[k];
@@ -64,4 +73,40 @@ export function probeTouchEnd(e: GestureResponderEvent) {
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
+}
+
+// TEMP why-probe
+if (PERF_PROBE) {
+  const g = globalThis as any;
+  const hook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  const counts: Record<string, number> = {};
+  g.__why = counts;
+  const preview = (v: any) => { try { const s = typeof v === 'object' && v !== null ? (Array.isArray(v) ? `arr${v.length}` : `obj{${Object.keys(v).slice(0, 4).join(',')}}`) : String(v); return s.slice(0, 40); } catch { return '?'; } };
+  const scan = (root: any) => {
+    const stack = [root.current];
+    while (stack.length) {
+      const f = stack.pop();
+      if (!f) continue;
+      if (f.type && f.type.name === 'SessionScreen' && f.alternate) {
+        const last: any[] = g.__lastHooks ?? []; const now: any[] = []; let a = f.memoizedState, i = 0; let changed = false;
+        while (a) {
+          now.push(a.memoizedState);
+          if (a.queue && last.length && last[i] !== a.memoizedState) { changed = true; const k = `h${i}:${preview(a.memoizedState)}`; counts[k] = (counts[k] ?? 0) + 1; }
+          a = a.next; i++;
+        }
+        if (changed) counts.renders = (counts.renders ?? 0) + 1;
+        g.__lastHooks = now;
+        if (f.memoizedProps !== f.alternate.memoizedProps) counts.props = (counts.props ?? 0) + 1;
+        if (!g.__dumped) { g.__dumped = 1; let h = f.memoizedState, j = 0; const out: string[] = []; while (h) { if (j < 32) out.push(`${j}:${h.queue ? (h.queue.getSnapshot ? 'sync' : 'state') : (Array.isArray(h.memoizedState) ? 'memo' : h.memoizedState && typeof h.memoizedState === 'object' && 'current' in h.memoizedState ? 'ref' : 'other')}=${preview(h.memoizedState)}`); h = h.next; j++; } console.log('[hooks] total=' + j + ' ' + out.join(' | ')); }
+        continue;
+      }
+      if (f.sibling) stack.push(f.sibling);
+      if (f.child) stack.push(f.child);
+    }
+  };
+  if (hook) {
+    const orig = hook.onCommitFiberRoot;
+    hook.onCommitFiberRoot = function (id: any, root: any, ...rest: any[]) { try { scan(root); } catch {} return orig?.call(this, id, root, ...rest); };
+  }
+  setInterval(() => { console.log('[why]', JSON.stringify(Object.entries(counts).sort((x, y) => y[1] - x[1]).slice(0, 12))); for (const k in counts) delete counts[k]; }, 10000);
 }
