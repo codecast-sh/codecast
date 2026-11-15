@@ -426,8 +426,10 @@ describe("command groups stay off the boot graph", () => {
     // 4712 (2026-11-14): the 122-commit deploy after b398c827c, mostly shared
     // contracts the CLI already loaded: machineMessages +7, projectContext +7
     // (pl-1033), session send +5, the workspace manifest +4, snippets +3,
-    // replay +5; offset by index.ts and others shrinking.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4712);
+    // replay +5; offset by index.ts and others shrinking. 4713 the same day:
+    // fitProjectContextBlock gives up memory lines so the session start block
+    // stays under its 9000-byte hook budget.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4713);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
