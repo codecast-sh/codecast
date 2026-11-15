@@ -22,7 +22,6 @@ packages/cli/src/ccAccounts.test.ts 2450
 packages/cli/src/ccAccounts.ts 3300
 packages/cli/src/check.ts 1100
 packages/cli/src/cloud/hostTools.ts 1200
-packages/cli/src/cloud/mirror/apply.test.ts 1100
 packages/cli/src/cloud/mirror/apply.ts 1300
 packages/cli/src/cloud/mirror/transform.ts 850
 packages/cli/src/cloud/prepare.ts

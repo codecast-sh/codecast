@@ -111,6 +111,8 @@ import { join } from "node:path";
 // 2026-11-14: the fix forward of the 122-commit deploy split replays.ts under
 // the cap (its write helpers moved to lib/replayWrites.ts), with another split
 // that landed beside it. PIN 247.
+// 2026-11-15: the fix forward of the deploy that grew cloud/mirror/apply.test.ts
+// split it (MCP tests to apply.mcp.test.ts, fixtures to apply.testkit.ts). PIN 246.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -127,7 +129,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 247;
+const PIN = 246;
 
 const result = checkRatchet({
   name: "max lines",
