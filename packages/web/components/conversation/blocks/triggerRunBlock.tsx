@@ -1,7 +1,7 @@
 // A trigger run as the conversation draws it (org-staffing.md S25): the
 // scheduled-task frame an inject run arrives in, the prompt header a spawned
 // run opens with, and a role's run with its card, folded to one line.
-import { useState } from "react";
+import { useState, memo } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, CornerDownLeft, Zap } from "lucide-react";
 import { WORKER_SETTLE_WORDS, parseScheduledTask, roleCardInitiativeLine, withoutStashedRunNote, type ScheduledTaskFrame, type WaitingSession } from "@codecast/shared/contracts";
@@ -190,7 +190,7 @@ function HostedRoutineRunLine({ frame, timestamp }: { frame: ScheduledTaskFrame;
   );
 }
 
-export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = false, unanswered = false }: { content: string; timestamp: number; hosted?: boolean; unanswered?: boolean }) {
+export const ScheduledTaskBlock = memo(function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = false, unanswered = false }: { content: string; timestamp: number; hosted?: boolean; unanswered?: boolean }) {
   const [showPlumbing, setShowPlumbing] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
@@ -267,4 +267,4 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = fa
       )}
     </div>
   );
-}
+});
