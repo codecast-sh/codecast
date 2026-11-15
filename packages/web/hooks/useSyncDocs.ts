@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { isStubDoc } from "../components/live/liveStub";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useBootstrapCollection } from "./useBootstrapCollection";
@@ -254,7 +255,8 @@ const CACHED_AT_GRAIN_MS = 6 * 60 * 60 * 1000;
 export function useSyncDocDetail(id?: string) {
   const data = useQueryNoThrow(
     api.taskMining.webGetDocDetail,
-    id ? { id: id as any } : "skip"
+    // A placeholder doc (a new artifact the server hasn't made yet) has no detail to ask for.
+    id && !isStubDoc(id) ? { id: id as any } : "skip"
   ).data;
   const syncRecord = useInboxStore((s) => s.syncRecord);
 

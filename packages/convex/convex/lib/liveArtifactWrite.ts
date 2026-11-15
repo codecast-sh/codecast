@@ -150,6 +150,11 @@ type BatchInput = {
   claim?: BatchClaim;
 };
 
+/** What a claim's scope is to a person: a sheet's "tab:<id>" is a tab; anything else a range. */
+export function scopeNoun(scope: string): string {
+  return scope.startsWith("tab:") ? "tab" : "range";
+}
+
 export type BatchClaim = { scope: string; write: string; base: number; first?: boolean; last?: boolean };
 
 /** How long a rewrite holds its scope after its last batch arrived (a client that died lets go). */
@@ -179,14 +184,14 @@ function claimsAfter(
   if (claim) {
     const held = claims[claim.scope];
     if (held && held.write !== claim.write) {
-      throw new ConvexError(`${held.name} is rewriting this range; try again when it's saved`);
+      throw new ConvexError(`${held.name} is rewriting this ${scopeNoun(claim.scope)}; try again when it's saved`);
     }
     // A later batch whose write no longer holds the scope (its first was refused, or it sat idle past
     // CLAIM_IDLE_MS) never starts the rewrite over halfway through.
     if (!held && claim.first === false) throw new ConvexError("This rewrite stopped partway; do it again");
     if (!held) {
       const last = scopeWrites[claim.scope];
-      if (last && last.rev > claim.base && last.actor !== caller.actor) throw new ConvexError("This range changed since you started; do it again");
+      if (last && last.rev > claim.base && last.actor !== caller.actor) throw new ConvexError(`This ${scopeNoun(claim.scope)} changed since you started; do it again`);
     }
     if (claim.last) delete claims[claim.scope];
     // An agent is named as one: its session title alone ("Live artifacts") reads as a person or a thing.
@@ -195,7 +200,7 @@ function claimsAfter(
   } else {
     for (const scope of scopes) {
       const held = claims[scope];
-      if (held && held.actor !== caller.actor) throw new ConvexError(`${held.name} is rewriting this range; try again when it's saved`);
+      if (held && held.actor !== caller.actor) throw new ConvexError(`${held.name} is rewriting this ${scopeNoun(scope)}; try again when it's saved`);
     }
   }
   for (const scope of scopes) scopeWrites[scope] = { rev, actor: caller.actor };

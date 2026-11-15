@@ -255,8 +255,8 @@ describe("live artifacts", () => {
     const claim = { scope: "tab:t1", write: "w1", base: head };
     await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!A2", "b")], claim: { ...claim, first: true } });
     // Mid-rewrite: someone else's edit into the tab, and another rewrite, are refused; the writer's own edit is not.
-    await expect(as(dev).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!B1", "x")] })).rejects.toThrow(/rewriting this range/);
-    await expect(as(dev).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!B2", "y")], claim: { scope: "tab:t1", write: "w2", base: head, first: true } })).rejects.toThrow(/rewriting this range/);
+    await expect(as(dev).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!B1", "x")] })).rejects.toThrow(/rewriting this tab/);
+    await expect(as(dev).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!B2", "y")], claim: { scope: "tab:t1", write: "w2", base: head, first: true } })).rejects.toThrow(/rewriting this tab/);
     await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!C1", "own")] });
     await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!A3", "c")], claim: { ...claim, first: false, last: true } });
     // Done: others write again. A rewrite computed before that write is refused; a later batch of a write that holds nothing too.
@@ -277,6 +277,20 @@ describe("live artifacts", () => {
     await as(rosa).mutation(api.liveArtifacts.checkpoint, { doc_id: doc, label: "before anchors 2" });
     const again = (await as(rosa).query(api.liveArtifacts.versions, { doc_id: doc }))!.versions.filter((v: any) => v.rev === head).map((v: any) => v.label).sort();
     expect(again).toEqual(['Restored "v1"', "before anchors 2"]);
+  });
+
+  test("a new artifact made under a placeholder id: the create keeps the key, and doc writes sent under it land on the real doc", async () => {
+    const { t, rosa, as } = await setup();
+    const stub = "docstub-abc123xyz";
+    const made = await as(rosa).mutation(api.docs.webCreate, { title: "Untitled board", content: "", doc_type: "board", workspace: "personal", client_key: stub });
+    const id = (made as any).id;
+    expect((await t.run((ctx: any) => ctx.db.get(id))).client_key).toBe(stub);
+    // A rename made before the create answered went out under the placeholder.
+    await as(rosa).mutation(api.dispatch.dispatch, { action: "updateDoc", args: [stub, { title: "Launch plan" }] });
+    expect((await t.run((ctx: any) => ctx.db.get(id))).title).toBe("Launch plan");
+    await as(rosa).mutation(api.dispatch.dispatch, { action: "liveCheckpoint", args: [stub, "first"] });
+    const labels = (await as(rosa).query(api.liveArtifacts.versions, { doc_id: id }))!.versions.map((v: any) => v.label);
+    expect(labels).toContain("first");
   });
 
   test("a batch delivered again lands once, so a replayed put never takes back a later edit", async () => {

@@ -284,6 +284,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   liveSetEditAccess: never("access setting: the owner sets it back with the same control, and an undo would silently re-open or re-lock editing for others"),
   settleLiveRows: INTERNAL,
   livePaintHeld: INTERNAL,
+  liveDropStub: INTERNAL,
   setOpsGroupStatus: never("triage: resolve, ignore and reopen sit on the same status control"),
   setOpsGroupTask: never("link: re-pointing or unlinking a problem task is done again by hand on the same Fix card"),
   setOpsGroupFix: never("record: the fix session it names is already running; undoing the record would not stop it"),

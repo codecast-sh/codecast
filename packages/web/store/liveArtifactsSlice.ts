@@ -67,6 +67,8 @@ export type LiveArtifactsSliceActions = {
    * action copies), then sent as liveSendOps. The page reads the write from its overlay meanwhile.
    */
   livePaintHeld: (docId: string, layer: LiveLayer, ops: ArtifactOp[]) => void;
+  /** A placeholder doc's rows go once its elements were sent under the real doc (components/live/liveStubDocs.ts). */
+  liveDropStub: (stubId: string) => void;
   liveSendOps: (docId: string, layer: LiveLayer, ops: ArtifactOp[], clientId?: string, claim?: LiveBatchClaim) => Promise<{ rev: number; keys: string[] } | null>;
   /** Start, save or discard the doc's draft. Save resolves to the revision it wrote. */
   /** `draftAt` names the draft being closed, so a retried close never hits a newer draft. */
@@ -98,6 +100,14 @@ type LiveSliceImpl = Omit<LiveArtifactsSliceActions, "applyLiveOps" | "liveSendO
 
 export function createLiveArtifactsSlice(): LiveArtifactsSliceActions {
   const impl: LiveSliceImpl = {
+    liveDropStub: sync(function (this: LiveDraft & { docs: Record<string, any>; pending: Record<string, any> }, stubId: string) {
+      const prefix = `${stubId}|`;
+      for (const id of Object.keys(this.liveElements)) if (id.startsWith(prefix)) delete this.liveElements[id];
+      delete this.liveHeads[stubId];
+      delete this.docs[stubId];
+      for (const key of Object.keys(this.pending)) if (key === `docs:${stubId}` || key.startsWith(`docs:${stubId}:`)) delete this.pending[key];
+    }),
+
     livePaintHeld: sync(function (this: LiveDraft, docId: string, layer: LiveLayer, ops: ArtifactOp[]) {
       const me = this.currentUser?._id;
       applyOpsToRows(this.liveElements, docId, layer, ops, me ? `u:${me}` : undefined);

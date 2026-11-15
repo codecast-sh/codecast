@@ -257,18 +257,21 @@ export function useLiveVersions(docId: string): LiveVersion[] {
     const rows = (useInboxStore.getState() as any).liveVersions;
     const stubs = new Map<number, LiveVersion>();
     for (const id in rows ?? {}) if (rows[id]?.doc_id === docId && rows[id].stub) stubs.set(rows[id].rev, rows[id]);
-    // A stub (a version just saved here) stands until the server's row for its revision arrives;
-    // a save that renames the row already at this revision shows the new name until the echo carries it.
-    const out: LiveVersion[] = [];
-    const now = Date.now();
-    for (const id in rows ?? {}) {
-      const r = rows[id];
-      if (r?.doc_id !== docId || r.stub) continue;
-      const stub = stubs.get(r.rev);
-      stubs.delete(r.rev);
-      out.push(stub && stub.label !== r.label && now - stub.at < 60_000 ? { ...r, label: stub.label } : r);
+    const real: LiveVersion[] = [];
+    for (const id in rows ?? {}) if (rows[id]?.doc_id === docId && !rows[id].stub) real.push(rows[id]);
+    // A stub (a version just saved here) stands until the server's row with its name arrives. A save at a
+    // revision that already has a version renames it only as the server does (an autosave, or this person's
+    // own named version); a restore or someone else's version keeps its name and the stub shows beside it.
+    const me = (useInboxStore.getState() as any).currentUser?._id;
+    const mine = me ? `u:${me}` : "";
+    const out: LiveVersion[] = [...real];
+    for (const [rev, stub] of stubs) {
+      const atRev = out.filter((v) => v.rev === rev);
+      if (atRev.some((v) => v.label === stub.label)) continue;
+      const renamed = atRev.find((v: any) => v.reason === "auto" || (v.reason === "manual" && v.by === mine));
+      if (renamed && Date.now() - stub.at < 60_000) out[out.indexOf(renamed)] = { ...renamed, label: stub.label };
+      else if (!renamed) out.push(stub);
     }
-    out.push(...stubs.values());
     return out.sort((a, b) => b.rev - a.rev || b.at - a.at);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sig is this doc's rows
   }, [sig, docId]);

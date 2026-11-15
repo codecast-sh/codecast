@@ -36,6 +36,7 @@ import {
 } from "@codecast/shared/artifacts";
 import { useInboxStore } from "../../store/inboxStore";
 import { loadOutbox } from "../../store/idbCache";
+import { isStubDoc } from "./liveStub";
 import { isRefusedDispatchError } from "../../store/mutativeMiddleware";
 export { applyElementsPayload, settleAfter, storeRowOf } from "../../hooks/useSyncLiveArtifact";
 import { onLiveRowsArrived, rowArrivedAt } from "../../hooks/useSyncLiveArtifact";
@@ -327,7 +328,7 @@ function sendBatch(docId: string, layer: LiveLayer, batch: ArtifactOp[], held = 
       if (held) restoreServerRows(rowIds);
       const reason = refusalText(e);
       const why = claim && undoWrites.has(claim.write)
-        ? /changed since|rewriting/.test(reason) ? "Can't undo: someone changed this range since" : `Can't undo: ${reason}`
+        ? /changed since|rewriting/.test(reason) ? `Can't undo: someone changed this ${claim.scope.startsWith("tab:") ? "tab" : "range"} since` : `Can't undo: ${reason}`
         : `Not saved: ${reason}`;
       if (refused.get(docId) !== why) toast.error(why);
       // A refused undo left nothing unsaved (the edit it would have taken back stands): the toast says it, the
@@ -414,6 +415,13 @@ function claimReady(docId: string, claim: LiveClaim): boolean {
 /** Send a batch for a doc, in order behind any send still in flight. */
 export function sendLiveOps(docId: string, layer: LiveLayer, ops: ArtifactOp[], opts?: { claim?: LiveClaim; done?: (o: LiveWriteOutcome) => void }) {
   if (ops.length === 0) return;
+  // A doc the server hasn't made yet: the write paints here and waits in the store; once the real id is
+  // known, promoteStubDoc sends the doc's elements under it (components/live/liveStubDocs.ts).
+  if (isStubDoc(docId)) {
+    (useInboxStore.getState() as any).livePaintHeld(docId, layer, ops);
+    opts?.done?.({ outcome: "sent", rev: 0 });
+    return;
+  }
   let q = sendQueues.get(docId);
   if (!q) sendQueues.set(docId, (q = { inflight: false, pending: [], staged: [] }));
   // A rewrite is computed from what this tab has read: its base is the revision the tab holds the whole
@@ -601,7 +609,7 @@ export function useLiveArtifact(docId: string): LiveHandle {
     const mine = me?._id ? `u:${me._id}` : "";
     for (const row of docRows(docId).main.values()) {
       if (Number(row.rev) > entry.landed && row.by && row.by !== mine && scopeOf(row.key, row) === entry.scope) {
-        toast.error("Can't undo: someone changed this range since");
+        toast.error(`Can't undo: someone changed this ${entry.scope.startsWith("tab:") ? "tab" : "range"} since`);
         return true;
       }
     }
@@ -637,7 +645,7 @@ export function useLiveArtifact(docId: string): LiveHandle {
     const p = presenceRef.current;
     p.timer = null;
     p.sentAt = Date.now();
-    void setPresenceMut({ doc_id: docId as any, tab: LIVE_TAB_ID, ...p.last }).catch(() => {});
+    if (!isStubDoc(docId)) void setPresenceMut({ doc_id: docId as any, tab: LIVE_TAB_ID, ...p.last }).catch(() => {});
   }, [docId, setPresenceMut]);
   const setPresence = useCallback<LiveHandle["setPresence"]>((next) => {
     const p = presenceRef.current;
@@ -653,7 +661,7 @@ export function useLiveArtifact(docId: string): LiveHandle {
     return () => {
       clearInterval(beat);
       if (presenceRef.current.timer) clearTimeout(presenceRef.current.timer);
-      void leaveMut({ doc_id: docId as any, tab: LIVE_TAB_ID }).catch(() => {});
+      if (!isStubDoc(docId)) void leaveMut({ doc_id: docId as any, tab: LIVE_TAB_ID }).catch(() => {});
     };
   }, [docId, sendPresence, leaveMut]);
 

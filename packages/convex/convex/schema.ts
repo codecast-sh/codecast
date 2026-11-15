@@ -46,6 +46,7 @@ import { managedDeviceTables, teamPolicyValidator } from "./managedDevicesSchema
 import { externalEventDataValidator, ingestTables } from "./ingestSchema";
 import { momentsTables } from "./momentsSchema";
 import { liveArtifactTables } from "./liveArtifactsSchema";
+import { pageStateTables } from "./pageStateSchema";
 import { dataQueryTables } from "./dataQueriesSchema";
 import { deployTables } from "./deploySchema";
 import { lineTrialTables } from "./lineTrialSchema";
@@ -143,6 +144,7 @@ export default defineSchema({
   ...ingestTables,
   ...momentsTables,
   ...liveArtifactTables,
+  ...pageStateTables,
   ...dataQueryTables,
   ...deployTables,
   ...lineTrialTables,
@@ -4424,6 +4426,9 @@ export default defineSchema({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
     day_start: v.number(),
+    // Set on the row holding sessions nobody was watching
+    // (isUnattendedConversation); a day has one row of each.
+    unattended: v.optional(v.boolean()),
     token_hours: v.array(v.number()),
     spend_hours: v.array(v.number()),
     updated_at: v.number(),
@@ -4467,8 +4472,8 @@ export default defineSchema({
   }).index("by_conversation_day", ["conversation_id", "day_start"]),
 
   // Per-day session-activity counters behind the profile contribution graph,
-  // the hour punchcard and the team charts. One row per (user, team, UTC day);
-  // each counter holds 24 UTC-hour buckets. The raw sources (a year of
+  // the hour punchcard and the team charts. One row per (user, team, UTC day,
+  // attended or not); each counter holds 24 UTC-hour buckets. The raw sources (a year of
   // `team_activity_events`, `session_insights` and `conversations`) are one row
   // per session — tens of thousands for an active account, which blew the
   // per-transaction system-operation ceiling and made the profile fail. A day
@@ -4483,6 +4488,9 @@ export default defineSchema({
     // activity that carried no team.
     team_id: v.optional(v.id("teams")),
     day_start: v.number(),
+    // Set on the row holding sessions nobody was watching
+    // (isUnattendedConversation); a day has one row of each.
+    unattended: v.optional(v.boolean()),
     hours: v.array(v.number()),
     msgs: v.array(v.number()),
     sessions: v.array(v.number()),
@@ -5971,6 +5979,8 @@ export default defineSchema({
     .index("by_hosted_status_run_at", ["hosted_home", "status", "run_at"])
     // A firing reads only the triggers armed on its name (matchTaskTriggers).
     .index("by_status_event_type", ["status", "event_filter.event_type"])
+    // A chat line asks only for the triggers watching its channel (lib/triggerMatch).
+    .index("by_channel_status", ["event_filter.channel_id", "status"])
     .index("by_short_id", ["short_id"])
     // Anchor lookups for conversation-scoped visibility (webListForConversation):
     // a trigger armed from a session is findable from that session even when a
@@ -7423,6 +7433,9 @@ export default defineSchema({
   docs: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // The id a client painted the doc under before the server made it (a board opened at once from a
+    // placeholder): the synced row supersedes that placeholder through the docs altKey.
+    client_key: v.optional(v.string()),
     // ACCESS axis — see tasks.workspace.
     workspace: v.optional(v.string()),
     title: v.string(),
@@ -7503,8 +7516,12 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
+    // A doc-level write a client made under the placeholder id (a rename before the create answered).
+    .index("by_client_key", ["client_key"])
     .index("by_parent_id", ["parent_id"])
     .index("by_project_id", ["project_id"])
+    // A project's memory is its pinned docs (session-projects.md SP6).
+    .index("by_project_pinned", ["project_id", "pinned"])
     // Sparse: docs attached to a plan, for the org scope feed (F2).
     .index("by_plan_id", ["plan_id"])
     .index("by_team_id", ["team_id"])

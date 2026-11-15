@@ -2159,6 +2159,9 @@ const webCreateArgs = {
   parent_id: v.optional(v.id("docs")),
   workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   team_id: v.optional(v.id("teams")),
+  // The placeholder id the web painted the doc under (lib/createLiveArtifact): stored so the synced row
+  // supersedes the placeholder.
+  client_key: v.optional(v.string()),
 };
 
 export const webCreate = mutation({
@@ -2205,6 +2208,7 @@ export async function createDocAs(ctx: MutationCtx, userId: Id<"users">, args: O
     doc_type: (args.doc_type || "note") as any,
     source: "human" as any,
     labels: args.labels,
+    ...(args.client_key ? { client_key: args.client_key } : {}),
     parent_id: args.parent_id,
     sort_order,
   });

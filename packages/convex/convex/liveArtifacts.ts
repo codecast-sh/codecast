@@ -620,8 +620,11 @@ async function restoreTo(ctx: any, docId: Id<"docs">, rev: number, caller: Resto
 
 /** How History names a restore: after the version restored, by its name, else by when it was taken. */
 async function restoredLabel(ctx: any, docId: Id<"docs">, rev: number): Promise<string> {
-  const v = await ctx.db.query("live_versions").withIndex("by_doc_rev", (q: any) => q.eq("doc_id", docId).eq("rev", rev)).first();
-  // The restored version's own name; History shows when it was taken beside it, in the reader's time.
+  const atRev = await ctx.db.query("live_versions").withIndex("by_doc_rev", (q: any) => q.eq("doc_id", docId).eq("rev", rev)).take(10);
+  // The restored version's own name: the newest name a person gave that point (a restore's own record, or an
+  // autosave, says less than "before anchors"); History shows when it was taken beside it, in the reader's time.
+  const rank = (x: any) => (x.reason === "manual" ? 2 : x.reason === "draft_saved" ? 1 : 0);
+  const v = [...atRev].sort((a: any, b: any) => rank(b) - rank(a) || b.at - a.at)[0];
   return v ? `Restored "${v.label}"` : "Restored an earlier version";
 }
 

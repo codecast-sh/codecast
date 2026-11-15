@@ -1412,6 +1412,8 @@ export type TaskItem = {
   project_path?: string;
   /** The Project the task is filed under (server row field). */
   project_id?: string;
+  /** The plan the task is filed under (server row field). */
+  plan_id?: string;
   external?: TaskExternal;
 };
 
@@ -1844,7 +1846,9 @@ export type ClientUI = {
   theme?: "light" | "dark";
   // Sessions whose canvas is on (lib/sessionCanvas): conversation id → the
   // page the person pinned, null for "the latest page". Absent is off.
-  session_canvas?: Record<string, { pin: string | null; at: number }>;
+  // `closed`: a window closed its pane (lib/sessionCanvas setSessionCanvas);
+  // other windows keep a pane they have docked.
+  session_canvas?: Record<string, { pin: string | null; at: number; closed?: true }>;
   // Personal sheet filters, by "<docId>:<tabId>" (components/sheets/useSheetFilter):
   // a person's own view of a tab's rows, hidden from nobody else.
   sheet_filters?: Record<string, unknown>;
@@ -14202,17 +14206,35 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // Creates route through the single dispatch path (no direct useMutation) and
   // delegate to the existing webCreate mutation, which returns the real id.
-  // Docs and plans paint no stub: their callers navigate to the new record's
-  // own page, and their delta-synced lists have no altKey to retire a stub.
-  // A project carries one (see createProject below). receiptAsyncAction keeps
-  // its Promise pending across an unwired window and resolves it from the exact
+  // A doc create that names a `client_key` paints a placeholder row under it at once (a board, sheet or
+  // dashboard opens on it before the server answers); the server stores the key and the synced row
+  // supersedes the placeholder (the docs altKey). Without a key nothing is painted, as for plans.
+  // receiptAsyncAction keeps its Promise pending across an unwired window and resolves it from the exact
   // durable command receipt, preserving the caller's navigation continuation.
   createDoc: receiptAsyncAction(function (
     this: Draft,
-    _opts: Record<string, any>,
+    opts: Record<string, any>,
     continuation?: DurableCreateContinuation,
   ) {
-    return continuation ? { continuation } : undefined;
+    const stubId = typeof opts?.client_key === "string" ? opts.client_key : undefined;
+    const me = String(this.currentUser?._id ?? "");
+    const team = opts?.workspace === "team" && opts.team_id ? String(opts.team_id) : undefined;
+    if (stubId && me && !(this.docs as any)[stubId]) {
+      const now = Date.now();
+      (this.docs as any)[stubId] = {
+        _id: stubId,
+        client_key: stubId,
+        user_id: me,
+        title: String(opts.title ?? ""),
+        doc_type: opts.doc_type ?? "note",
+        source: "human",
+        ...(team ? { team_id: team } : {}),
+        workspace: team ? `team:${team}` : `user:${me}`,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+    return continuation ? { continuation, ...(stubId ? { stubId } : {}) } : stubId ? { stubId } : undefined;
   }),
   createPlan: receiptAsyncAction(function (
     this: Draft,

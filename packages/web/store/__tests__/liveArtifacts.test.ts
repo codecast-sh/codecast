@@ -163,6 +163,31 @@ describe("live artifact store", () => {
     expect(landed).toEqual({ outcome: "sent", rev: 43 });
   });
 
+  it("a new artifact's writes wait under its placeholder and go out under the real doc once it exists", async () => {
+    const calls: any[][] = [];
+    s()._clearDispatch(owner);
+    s()._setDispatch(async (action: string, args: any[]) => {
+      if (action === "applyLiveOps" || action === "liveSendOps") calls.push(args);
+      return { rev: 1, keys: [] };
+    }, { owner });
+    const { promoteStubDoc } = await import("../../components/live/liveStubDocs");
+    const STUB = "docstub-test12345";
+    sendLiveOps(STUB, "main", [{ k: "tab:t1", put: { kind: "tab", name: "Sheet1" } }, { k: "c:t1!A1", put: { kind: "cell", input: "Revenue" } }]);
+    sendLiveOps(STUB, "main", [{ k: "c:t1!A1", set: { input: "Revenue (net)" } }]);
+    // Painted here, nothing sent: the server has no doc to write to yet.
+    expect(calls).toHaveLength(0);
+    expect(s().liveElements[liveRowId(STUB, "main", "c:t1!A1")].input).toBe("Revenue (net)");
+    promoteStubDoc(STUB, DOC);
+    await Bun.sleep(20);
+    // The doc's elements went out under the real id, as they stand now; the placeholder is gone.
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe(DOC);
+    expect(calls[0][2]).toEqual(expect.arrayContaining([{ k: "c:t1!A1", put: { kind: "cell", input: "Revenue (net)" } }]));
+    expect(s().liveElements[liveRowId(STUB, "main", "c:t1!A1")]).toBeUndefined();
+    expect(s().liveElements[liveRowId(DOC, "main", "c:t1!A1")].input).toBe("Revenue (net)");
+    await whenLiveSent(DOC, 1000);
+  });
+
   it("a write that clears a field shows the field gone while it waits behind another send", async () => {
     const { layerElements } = await import("../../components/live/useLiveArtifact");
     const { applyOp, fromElement } = await import("@codecast/shared/artifacts");
