@@ -101,7 +101,6 @@ export const WhatItRanChip = memo(function WhatItRanChip({
   const allFailed = failedFlagged === flaggedCalls.length;
   // The colour comes from what ran cleanly when anything did.
   const worst = worstOf(flaggedCalls.some((c) => !c.failed) ? flaggedCalls.filter((c) => !c.failed) : flaggedCalls);
-  const tone = allFailed ? "" : worst === "danger" ? "border-sol-red/40 modern:border-sol-red/40" : "border-sol-orange/40 modern:border-sol-orange/40";
   const lead = notable.reduce((best, g) => (RISK_RANK[worstOf(risky(g))] > RISK_RANK[worstOf(risky(best))] ? g : best), notable[0]);
   const ran = summary.calls.filter((c) => !c.denied).length;
   const label = `${notable.map((g) => `${GROUP_TOKEN[g]} ${risky(g).length}`).join(", ")}${failedFlagged ? ` (${failedFlagged} of them failed)` : ""} of ${ran} shell ${ran === 1 ? "command" : "commands"} run${partial ? " in the loaded part of the session" : ""}`;
@@ -114,17 +113,14 @@ export const WhatItRanChip = memo(function WhatItRanChip({
           data-what-it-ran={worst}
           aria-label={`What it ran: ${label}`}
           title={`What it ran: ${label}`}
-          className={`${HEADER_CHIP} ${tone} ${open ? "bg-sol-bg-alt text-sol-text" : ""} flex-shrink-0`}
+          className={`${HEADER_CHIP} ${open ? "bg-sol-bg-alt text-sol-text" : ""} flex-shrink-0`}
         >
+          {/* The header family's quiet ink; only the icon carries the risk
+              color, and only the riskiest group is named (the list has the rest). */}
           <SquareTerminal className={`w-3 h-3 ${allFailed ? "" : RISK_TEXT[worst]}`} aria-hidden />
-
-          {/* The riskiest token stays when the header squeezes; the rest go first. */}
-          {notable.map((g) => (
-            <span key={g} data-ran-token={g} className={`${g === lead ? "" : "cq-sq2 "}tabular-nums font-semibold ${risky(g).every((c) => c.failed) ? "text-sol-text-dim line-through decoration-1" : RISK_TEXT[worstOf(risky(g))]}`}>
-              {GROUP_TOKEN[g]} {risky(g).length}
-            </span>
-          ))}
-          {partial && <span aria-hidden className="-ml-0.5 text-sol-text-dim">+</span>}
+          <span data-ran-token={lead} className={`tabular-nums ${risky(lead).every((c) => c.failed) ? "line-through decoration-1" : ""}`}>
+            {GROUP_TOKEN[lead]} {risky(lead).length}
+          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[min(30rem,calc(100vw-1.5rem))] p-0 overflow-hidden">
