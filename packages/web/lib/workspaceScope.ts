@@ -21,6 +21,7 @@
 // client) have no `workspace`; for them the predicate falls back to the raw
 // team tag, which the server backfill makes equivalent for un-linked rows.
 
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 export type WorkspaceKey = string;
 
 type WorkspaceScoped = { workspace?: string | null; team_id?: string | null };
@@ -103,4 +104,9 @@ export function workspaceKeyOfRow(row: WorkspaceScoped): WorkspaceKey | null {
 export function workspaceRefOf(row: WorkspaceScoped): { kind: "team" | "user"; id: string } | null {
   const m = workspaceKeyOfRow(row)?.match(/^(team|user):(.+)$/);
   return m ? { kind: m[1] as "team" | "user", id: m[2] } : null;
+}
+
+/** A workspace key as the args a scoped Convex query takes: a team's id, or personal. */
+export function scopeArgsOf(workspace: string | null | undefined): { workspace: "team"; team_id: Id<"teams"> } | { workspace: "personal" } {
+  return workspace?.startsWith("team:") ? { workspace: "team", team_id: workspace.slice(5) as Id<"teams"> } : { workspace: "personal" };
 }

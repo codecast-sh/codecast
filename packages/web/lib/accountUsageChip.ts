@@ -3,9 +3,9 @@
 // the daemon is quiet or offline (switch stays blocked there). Remotes mirror
 // the primary, so they never win the pick.
 
-import type { CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { isFleetProfile, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { cloudAgentProviderOfConversation } from "@codecast/shared/contracts";
-import { profileIsCurrentLogin, profileIsFleetAccount } from "./machineAccountSwitch";
+import { profileIsCurrentLogin } from "./machineAccountSwitch";
 
 export type AccountChipProfile = {
   name: string;
@@ -93,6 +93,7 @@ export function resolveAccountChip<T extends AccountChipDevice>(opts: {
   localDeviceId: string | null;
   currentAgentType: string | null;
   lastShown: "claude" | "codex" | null;
+  now: number;
 }): {
   device: T;
   active: T["profiles"][number] | undefined;
@@ -105,9 +106,7 @@ export function resolveAccountChip<T extends AccountChipDevice>(opts: {
   const profiles = device.profiles ?? [];
   // The row that is "on": the account sessions run on, which after a token
   // switch is the launch profile rather than the keychain login.
-  const active = profiles.find((p) =>
-    profileIsFleetAccount(p, { activeEmail: device.active_email, launchProfile: device.launch_profile }),
-  );
+  const active = profiles.find((p) => isFleetProfile(p, device, opts.now));
   const codexProfiles = device.codex_accounts?.profiles ?? [];
   const activeCodex =
     matchProfile(codexProfiles, device.codex_accounts?.active_email) ?? codexProfiles[0];
