@@ -19,9 +19,10 @@
  * `cast check-watch` process wrapping tsc's watch mode; it records each
  * pass in a state file (in progress, finished at, error count, the
  * diagnostics) that `cast check` reads. A watcher nobody has asked for in
- * a while exits on its own, and the machine keeps at most machineCap("check")
- * alive: each holds a program in memory, and a fleet of worktrees could
- * otherwise recreate the pile this replaces.
+ * a while exits on its own, and a new one starts only when the memory it is
+ * likely to take fits beside the live ones (watcherMemory.ts): each holds a
+ * program in memory, and a fleet of worktrees could otherwise recreate the
+ * pile this replaces.
  *
  * Slots are a queue, not a refusal. An ask that needs a new watcher while
  * every slot is taken waits its turn, oldest ask first, and starts when a
@@ -40,6 +41,7 @@
 import { codecastPath } from "./codecastDir.js";
 import { CHECK_CONFIG_REL_PATH } from "./checkConfigPath.js";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -50,6 +52,8 @@ import { startLaunchdJob, unloadOwnLaunchdJob } from "./launchdJob.js";
 import { machineCap } from "./machineCaps.js";
 import { memoryDeath, oomKillCount, thisMachineTooSmall } from "./repoNeed.js";
 import { CHECK_HEAP_ENV, TSC_HEAP_MB, heapCapMb, heapDeath, isHeapFatal, isNativeFrame, tscNodeOptions } from "./checkHeap.js";
+import { CheckFailure, deathKind, phantomErrors, type ModuleResolver } from "./checkOutcome.js";
+import { coldReservationBytes, countFloorWatchers, expectedBytes, learnedSizes, watcherCeilingBytes, budgetBytes, fitsBudget, fmtGb, holdBytes, peakOfPids, procTable, readPeaks, recordPeak, reservationBytes, treeRssBytes, type Peak, type ProcTable } from "./watcherMemory.js";
 
 /** One program to check: its name (a path segment of the state dir) and its tsconfig, relative to the tree root. */
 export interface CheckProject {
@@ -411,6 +415,10 @@ export interface WatchState {
   firstFinishedAt?: number;
   /** The compiler this watcher runs. Absent means the tree had none and PATH's tsc is in use. */
   tsc?: string;
+  /** The repository the tree checks out (its main checkout), which learned sizes are kept under. Absent from watchers older than memory admission. */
+  repo?: string;
+  /** The most memory the watcher and its tsc have held, as of its last pass. */
+  peakRssBytes?: number;
 }
 
 export const IDLE_EXIT_MS = 45 * 60_000;
@@ -538,6 +546,83 @@ export function seedBuildInfo(root: string, project: string): boolean {
   return true;
 }
 
+/**
+ * Remove the state file only while it is still `pid`'s. A watcher stopped to
+ * make way for a new one (--fresh) can get to its cleanup after the new one
+ * has written its state, and removing that made the ask report a healthy new
+ * watcher as gone (seen at load 240, 2026-11-13).
+ */
+export function removeOwnState(dir: string, pid: number): void {
+  const s = readWatchState(dir);
+  if (!s || s.pid === pid) fs.rmSync(statePath(dir), { force: true });
+}
+
+/** What makes a process a watcher: its command line runs `cast check-watch`. Tests that stand in for a watcher with their own pid widen it. */
+export const watcherIdentity = { matches: (command: string, _pid: number): boolean => /\bcheck-watch\b/.test(command) };
+
+/** Which of `pids` run `cast check-watch`, from one ps; null when ps cannot say (then every pid is taken at its word). */
+function watcherPids(pids: number[]): Set<number> | null {
+  if (!pids.length) return new Set();
+  const r = spawnSync("ps", ["-o", "pid=,command=", "-p", pids.join(",")], { encoding: "utf-8", timeout: 5_000 });
+  if (r.error || (r.status !== 0 && r.status !== 1)) return null;
+  const out = new Set<number>();
+  for (const line of String(r.stdout ?? "").split("\n")) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (m && watcherIdentity.matches(m[2]!, Number(m[1]))) out.add(Number(m[1]));
+  }
+  return out;
+}
+
+/** The pid runs `cast check-watch`, not some program that inherited a dead watcher's pid. */
+function isWatcherProcess(pid: number): boolean {
+  const r = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf-8", timeout: 5_000 });
+  // ps itself failing (timed out, not run) says nothing either way, so the pid is still treated as the watcher.
+  if (r.error || (r.status !== 0 && r.status !== 1)) return true;
+  const command = String(r.stdout ?? "").trim();
+  return !!command && watcherIdentity.matches(command, pid);
+}
+
+/** The launchd label a tree's watcher for one project runs under. */
+export const watcherLabel = (dir: string): string => `sh.codecast.check.${path.basename(path.dirname(dir))}.${path.basename(dir)}`.replace(/[^A-Za-z0-9._-]/g, "_");
+
+/** launchd still runs or holds `label`: a job its old process is unloading would kill or block a successor under the same label. */
+function launchdHolds(label: string): "running" | "loaded" | "gone" {
+  if (process.platform !== "darwin" || process.getuid === undefined) return "gone";
+  const r = spawnSync("/bin/launchctl", ["print", `gui/${process.getuid()}/${label}`], { encoding: "utf-8", timeout: 5_000 });
+  if (r.status !== 0) return "gone";
+  return /\bstate = running\b/.test(String(r.stdout ?? "")) ? "running" : "loaded";
+}
+
+/**
+ * Stop a watcher and wait until it and its launchd job are gone, so neither
+ * its cleanup nor its job's unload can land on the successor: the successor
+ * reuses the label, and launchd leaves a running job alone and lets a late
+ * unload kill the new one. Bounded: what outlives the wait is left to finish
+ * on its own.
+ */
+export async function stopWatcher(dir: string, pid: number, kill: (pid: number) => void, waitMs = 10_000): Promise<void> {
+  // A state file can outlive its watcher (killed outright, a reboot) and name a pid another program now has.
+  if (!isPidAlive(pid) || !isWatcherProcess(pid)) return removeOwnState(dir, pid);
+  try {
+    kill(pid);
+  } catch {}
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline && isPidAlive(pid)) await new Promise((r) => setTimeout(r, 100));
+  // A pid the system has since given to another program is not this watcher, and nobody should be told to kill it.
+  if (isPidAlive(pid)) {
+    // Its process group holds its tsc too: killing the watcher alone would orphan a tsc no admission can see.
+    const pgid = Number(spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf-8", timeout: 5_000 }).stdout?.trim()) || undefined;
+    throw new CheckFailure(`the old ${path.basename(dir)} watcher (pid ${pid}) did not stop within ${Math.round(waitMs / 1000)}s`, "stuck", { pid, pgid });
+  }
+  // A watcher unloads its own job on the way out with a detached launchctl call; until that lands, a successor under
+  // the same label would be left alone (still running) or killed by it (bootstrapped first). Bounded, for a watcher
+  // killed outright, which never unloads: the start reloads a job left loaded.
+  const label = watcherLabel(dir);
+  const settle = Date.now() + 5_000;
+  while (Date.now() < settle && launchdHolds(label) !== "gone") await new Promise((r) => setTimeout(r, 250));
+  removeOwnState(dir, pid);
+}
+
 export function readWatchState(dir: string): WatchState | null {
   try {
     return JSON.parse(fs.readFileSync(statePath(dir), "utf-8")) as WatchState;
@@ -606,7 +691,7 @@ export function classifyWatchLine(line: string): WatchEvent {
  * of the pass in flight collect in `buffer` and land in the output file
  * when the pass ends, so a reader never sees half a pass.
  */
-export function watchReducer(dir: string, state: WatchState) {
+export function watchReducer(dir: string, state: WatchState, hooks: { onStart?: () => void; onDone?: () => void } = {}) {
   let buffer: string[] = [];
   return (line: string): void => {
     const ev = classifyWatchLine(line);
@@ -614,6 +699,7 @@ export function watchReducer(dir: string, state: WatchState) {
       buffer = [];
       state.inProgress = true;
       state.passStartedAt = Date.now();
+      hooks.onStart?.();
       writeWatchState(dir, state);
       return;
     }
@@ -624,6 +710,7 @@ export function watchReducer(dir: string, state: WatchState) {
       state.finishedAt = Date.now();
       state.firstFinishedAt ??= state.finishedAt;
       state.errors = ev.errors;
+      hooks.onDone?.();
       writeWatchState(dir, state);
       return;
     }
@@ -639,9 +726,29 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   const dir = watchDir(root, project);
   fs.mkdirSync(dir, { recursive: true });
   const own = tscInTree(root, tsconfig);
-  const state: WatchState = { pid: process.pid, project, tsconfig, root, startedAt: Date.now(), inProgress: true, askedAt: Date.now(), ...(own ? { tsc: own } : {}) };
+  const repo = repoOf(root);
+  const state: WatchState = { pid: process.pid, project, tsconfig, root, repo, startedAt: Date.now(), inProgress: true, askedAt: Date.now(), ...(own ? { tsc: own } : {}) };
+  // Marks where this watcher's log begins, so an ask never reads an earlier watcher's last words as this one's.
+  console.log(`watcher ${process.pid} started (${new Date(state.startedAt).toISOString()})`);
   writeWatchState(dir, state);
-  const reduce = watchReducer(dir, state);
+  // Peak memory of each pass, sampled while it runs, recorded when it ends (watcherMemory.ts).
+  let passPeak = 0;
+  let tscPid = 0;
+  const sample = (): number => {
+    passPeak = Math.max(passPeak, peakOfPids([process.pid, tscPid]));
+    return passPeak;
+  };
+  const reduce = watchReducer(dir, state, {
+    onStart: () => { passPeak = 0; },
+    onDone: () => {
+      state.peakRssBytes = Math.max(state.peakRssBytes ?? 0, sample());
+      // The watcher's peak so far, not this pass's: an incremental pass after a full build (RSS off macOS can fall
+      // between them) must not teach admission a size smaller than the build it will face again.
+      recordPeak(repo, project, { at: Date.now(), bytes: state.peakRssBytes, outcome: "clean", root });
+    },
+  });
+  // footprint's figure is a lifetime peak, so a sparse sample misses nothing; RSS (off macOS) is sampled the same way.
+  const sampler = setInterval(() => { if (state.inProgress) sample(); }, 5_000);
   if (seedBuildInfo(root, project)) console.log(`seeded the first pass from ${mainCheckoutOf(root)}`);
   // Incremental: a restarted watcher (the slot cap stops idle ones) and a
   // seeded worktree re-check only what changed since the recorded pass.
@@ -660,6 +767,7 @@ export async function runWatcher(root: string, project: string, tsconfig: string
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, NODE_OPTIONS: nodeOptions },
   });
+  tscPid = child.pid ?? 0;
   let rest = "";
   // The last lines tsc printed, so a tsc that dies (out of heap, killed) says why in watch.log.
   // Native stack frames stay out of it: V8 prints dozens after a fatal error,
@@ -690,7 +798,7 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   const stop = (): void => {
     child.kill("SIGTERM");
     try {
-      fs.rmSync(statePath(dir), { force: true });
+      removeOwnState(dir, process.pid);
     } catch {}
     unloadOwnLaunchdJob();
     process.exit(0);
@@ -704,6 +812,9 @@ export async function runWatcher(root: string, project: string, tsconfig: string
       const killed = memoryDeath({ what: `the ${project} typecheck (tsc)`, killed: signal === "SIGKILL", oomBefore, oomAfter: oomKillCount(), repoRoot: root });
       const heap = heapDeath({ project, signal, fatal, nodeOptions });
       if (killed ?? heap) console.log(killed ?? heap);
+      // A death by memory starts the learning over: the next watcher reserves the whole ceiling. A full heap is tsc's
+      // own cap, not the machine's memory: recorded, but it neither resets the learning nor asks for the ceiling.
+      if (killed ?? heap) recordPeak(repo, project, { at: Date.now(), bytes: Math.max(passPeak, state.peakRssBytes ?? 0, 1), outcome: killed ? "oom" : "heap", root });
       resolve();
     });
     // A tsc that never starts (none in the tree and none on PATH) emits only
@@ -718,8 +829,9 @@ export async function runWatcher(root: string, project: string, tsconfig: string
     });
   });
   clearInterval(idle);
+  clearInterval(sampler);
   try {
-    fs.rmSync(statePath(dir), { force: true });
+    removeOwnState(dir, process.pid);
   } catch {}
   unloadOwnLaunchdJob();
 }
@@ -735,6 +847,13 @@ export interface CheckResult {
   /** How old the pass is, and whether this call started the watcher. */
   passAgeMs: number;
   started: boolean;
+  /** The answer is the watcher's first pass, built from the files on disk: nothing in it is left from a half-written tree. */
+  firstPass: boolean;
+  /** Errors that name an export or module present on disk (checkOutcome.ts), and two of them. */
+  phantom: number;
+  phantomExamples: string[];
+  /** The tsc on PATH checked it: the tree installs none. */
+  globalTsc: boolean;
 }
 
 export type WatcherStarter = (root: string, project: CheckProject) => void;
@@ -750,7 +869,7 @@ export const startDetachedWatcher: WatcherStarter = (root, { name, tsconfig }) =
   const base = path.basename(process.execPath).toLowerCase();
   const viaRuntime = base.includes("bun") || base.includes("node");
   const args = viaRuntime ? [process.argv[1], "check-watch", root, name, tsconfig] : ["check-watch", root, name, tsconfig];
-  const label = `sh.codecast.check.${path.basename(path.dirname(dir))}.${name}`.replace(/[^A-Za-z0-9._-]/g, "_");
+  const label = watcherLabel(dir);
   // A cap the asker raised in NODE_OPTIONS reaches the watcher under launchd only by this name.
   const asked = heapCapMb(process.env.NODE_OPTIONS);
   if (asked && asked > TSC_HEAP_MB) process.env[CHECK_HEAP_ENV] = String(asked);
@@ -776,7 +895,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export async function checkProject(
   target: CheckProject,
   root: string,
-  opts: { start?: WatcherStarter; budgetMs?: number; fresh?: boolean; note?: (line: string) => void; maxWatchers?: number; kill?: (pid: number) => void; protect?: ReadonlySet<string>; unseenGraceMs?: number } = {},
+  opts: { start?: WatcherStarter; budgetMs?: number; fresh?: boolean; note?: (line: string) => void; maxWatchers?: number; kill?: (pid: number) => void; protect?: ReadonlySet<string>; unseenGraceMs?: number; queueWaitMs?: number } = {},
 ): Promise<CheckResult> {
   const project = target.name;
   const dir = watchDir(root, project);
@@ -786,32 +905,32 @@ export async function checkProject(
   const deadline = Date.now() + budget;
   let started = false;
   let state: WatchState | null;
-  const release = await acquireFileLock(path.join(dir, "start.lock"), { describe: `cast check ${project}` });
+  const release = await lockFor(path.join(dir, "start.lock"), { describe: `cast check ${project}` });
   try {
     state = readWatchState(dir);
+    // A state file that outlived its watcher can name a pid another program now has; waiting on that would never end.
+    if (state && isPidAlive(state.pid) && !isWatcherProcess(state.pid)) {
+      removeOwnState(dir, state.pid);
+      state = null;
+    }
     // The tree's config now names a different tsconfig for this project than
     // the running watcher was built on (an entry corrected in
     // .codecast/check.toml). The old program would keep answering, so it is
     // replaced rather than trusted.
     if (state && state.tsconfig !== target.tsconfig) {
       note(`the ${project} project now names ${target.tsconfig}, not ${state.tsconfig}; restarting its watcher`);
-      try {
-        kill(state.pid);
-      } catch {}
-      fs.rmSync(statePath(dir), { force: true });
+      await stopWatcher(dir, state.pid, kill);
       state = null;
-      await sleep(300);
     }
     if (state && opts.fresh) {
-      try {
-        kill(state.pid);
-      } catch {}
+      await stopWatcher(dir, state.pid, kill);
       state = null;
-      await sleep(300);
     }
   } finally {
     release();
   }
+  // A death is told by what the log gains from here: an earlier watcher's last words are not this one's.
+  const logFrom = (() => { try { return fs.statSync(logPath(dir)).size; } catch { return 0; } })();
   if (!state || !isPidAlive(state.pid)) started = await startWhenSlotFrees(target, root, { ...opts, start: opts.start ?? startDetachedWatcher, note, kill, deadline });
   // Mark the ask, which keeps the watcher alive.
   const askedAt = Date.now();
@@ -824,13 +943,13 @@ export async function checkProject(
   let behind = null as { finishedAt: number; since: number } | null;
   for (;;) {
     const s = readWatchState(dir);
-    if (!s) throw new Error(`the ${project} typecheck watcher went away: ${lastLogLine(dir) ?? "it left no log"} (${logPath(dir)})`);
+    if (!s) throw watcherDeath(project, dir, "went away", logFrom);
     // A watcher killed outright leaves its state behind, marked mid-pass. Its
     // pid can also change while it starts (it relaunches itself under
     // launchd), so only a pid that stays dead counts as gone.
     if (isPidAlive(s.pid)) deadSince = null;
     else if (!deadSince || deadSince.pid !== s.pid) deadSince = { pid: s.pid, at: Date.now() };
-    else if (Date.now() - deadSince.at > DEAD_GRACE_MS) throw new Error(`the ${project} typecheck watcher died: ${lastLogLine(dir) ?? "it left no log"} (${logPath(dir)})`);
+    else if (Date.now() - deadSince.at > DEAD_GRACE_MS) throw watcherDeath(project, dir, "died", logFrom);
     // Keep the pass wanted while this ask waits on it, so the queue never takes its slot.
     if (Date.now() - beat >= ASK_HEARTBEAT_MS) {
       beat = Date.now();
@@ -847,7 +966,7 @@ export async function checkProject(
       if (behind?.finishedAt !== s.finishedAt) behind = { finishedAt: s.finishedAt, since: Date.now() };
       else if (Date.now() - behind.since > grace) {
         const named = notAsChecked.slice(0, 3).map((f) => path.relative(root, f)).join(", ") + (notAsChecked.length > 3 ? ` and ${notAsChecked.length - 3} more` : "");
-        throw new Error(`the ${project} typecheck watcher has not checked ${named} as it is on disk, and tsc started no pass in ${Math.round(grace / 1000)}s; run \`cast check --fresh ${project}\``);
+        throw new CheckFailure(`the ${project} typecheck watcher has not checked ${named} as it is on disk, and tsc started no pass in ${Math.round(grace / 1000)}s`, "stale");
       }
     }
     if (!s.inProgress && s.finishedAt && !notAsChecked.length) {
@@ -856,12 +975,12 @@ export async function checkProject(
       // the project's. Say so rather than let a wall of them read as real. The
       // tree is asked now rather than trusting the state file, which a watcher
       // started by an older CLI wrote without this field.
-      if ((s.errors ?? 0) > 0 && !tscInTree(root, target.tsconfig)) {
-        note(`${project} was checked by the tsc on PATH: this tree installs none above ${s.tsconfig}, and a different compiler reports different errors. Install the project's dependencies, then \`cast check --fresh ${project}\`.`);
-      }
-      return { project, errors: s.errors ?? 0, diagnostics, passAgeMs: Date.now() - s.finishedAt, started };
+      const globalTsc = (s.errors ?? 0) > 0 && !tscInTree(root, target.tsconfig);
+      if (globalTsc) note(`${project} was checked by the tsc on PATH: this tree installs none above ${s.tsconfig}, and a different compiler reports different errors`);
+      const { phantom, examples } = (s.errors ?? 0) > 0 ? phantomErrors(diagnostics, path.dirname(path.join(root, target.tsconfig)), moduleResolver(root, target.tsconfig)) : { phantom: 0, examples: [] };
+      return { project, errors: s.errors ?? 0, diagnostics, passAgeMs: Date.now() - s.finishedAt, started, firstPass: !s.firstFinishedAt || s.finishedAt === s.firstFinishedAt, phantom, phantomExamples: examples, globalTsc };
     }
-    if (Date.now() > deadline) throw new Error(`the ${project} typecheck is still running after ${Math.round(budget / 60_000)} min; the machine is loaded. Ask again, or read ${logPath(dir)}`);
+    if (Date.now() > deadline) throw new CheckFailure(`the ${project} typecheck is still running after ${Math.round(budget / 60_000)} min; the machine is loaded (${logPath(dir)})`, "wait-elapsed");
     if (!noted && Date.now() - askedAt > 5_000) {
       noted = true;
       note(`waiting for the ${project} typecheck pass to finish… (a first pass on a big program takes minutes; if this call is cut off, the pass keeps running and the next ask picks it up)`);
@@ -870,14 +989,46 @@ export async function checkProject(
   }
 }
 
+/** Module resolution as the project's own tsc does it (paths aliases, index files, .d.ts); undefined when the tree's TypeScript cannot be loaded. */
+function moduleResolver(root: string, tsconfig: string): ModuleResolver | undefined {
+  const ts = treeTypeScript(root, tsconfig);
+  if (!ts) return undefined;
+  const parsed = ts.getParsedCommandLineOfConfigFile(path.join(root, tsconfig), undefined, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} });
+  if (!parsed) return undefined;
+  return (spec, fromFile) => ts.resolveModuleName(spec, fromFile, parsed.options, ts.sys).resolvedModule?.resolvedFileName ?? null;
+}
+
+/**
+ * A lock `cast check` waits on, its timeout told apart: another live ask
+ * holding it is contention (busy, ask again), a lock nobody can reclaim is
+ * the tool's own failure.
+ */
+async function lockFor(file: string, opts: Parameters<typeof acquireFileLock>[1]): Promise<() => void> {
+  try {
+    return await acquireFileLock(file, opts);
+  } catch (err) {
+    const message = (err as Error).message;
+    throw new CheckFailure(message, /\bhas held\b|\bwas still taking\b/.test(message) ? "locked" : "infra", { lock: file });
+  }
+}
+
+/** A watcher that stopped without an answer, named by the reason it logged last. */
+function watcherDeath(project: string, dir: string, how: string, fromByte = 0): CheckFailure {
+  const logged = lastLogLine(dir, fromByte);
+  // The watcher's own start lines say nothing about why it stopped.
+  const last = logged && /^(watcher \d+ started \(|seeded the first pass from )/.test(logged) ? null : logged;
+  const command = /NODE_OPTIONS=--max-old-space-size=\d+ cast check --fresh \S+/.exec(last ?? "")?.[0];
+  return new CheckFailure(`the ${project} typecheck watcher ${how}: ${last ?? (logged || fromByte > 0 ? "it logged no reason" : "it left no log")} (${logPath(dir)})`, deathKind(last), { log: logPath(dir), command });
+}
+
 /**
  * The last thing a watcher wrote to its log, which names why it stopped.
  * Native stack frames are skipped: a log from an older watcher ends in dozens
  * of them after V8 aborts, and the last one (a dyld frame) said nothing.
  */
-export function lastLogLine(dir: string): string | null {
+export function lastLogLine(dir: string, fromByte = 0): string | null {
   try {
-    const line = fs.readFileSync(logPath(dir), "utf-8").trim().split("\n").filter((l) => l.trim() && !isNativeFrame(l)).pop();
+    const line = fs.readFileSync(logPath(dir)).subarray(fromByte).toString("utf-8").trim().split("\n").filter((l) => l.trim() && !isNativeFrame(l)).pop();
     return line?.replace(/; its last lines:$/, "") ?? null;
   } catch {
     return null;
@@ -897,13 +1048,22 @@ export function listWatchers(): Array<WatchState & { dir: string }> {
       const s = readWatchState(dir);
       if (!s) continue;
       if (!isPidAlive(s.pid)) {
-        fs.rmSync(statePath(dir), { force: true });
+        removeOwnState(dir, s.pid);
         continue;
       }
       out.push({ ...s, dir });
     }
   }
-  return out;
+  // A state file that outlived its watcher (a reboot, a kill -9) can name a pid another program now has:
+  // that is no watcher to measure, count or stop.
+  const programs = watcherPids(out.map((w) => w.pid));
+  if (!programs) return out;
+  const kept: Array<WatchState & { dir: string }> = [];
+  for (const w of out) {
+    if (programs.has(w.pid)) kept.push(w);
+    else removeOwnState(w.dir, w.pid);
+  }
+  return kept;
 }
 
 /**
@@ -939,32 +1099,140 @@ export function logWatcherEvent(event: "start" | "evict" | "stop" | "idle-exit",
   } catch {}
 }
 
+/** The line an evicted watcher's log ends with, so an asker still on it is told to ask again (75) rather than of a death (70). */
+export const EVICTED_LINE = "stopped to make room for another watcher";
+
 /**
- * Stop the least recently asked watchers until one more fits under `max`:
- * watchers between passes first, then passes nobody waits on. Watchers in
- * `protect` (the programs the same `cast check` run already asked for) go
- * last: stopping one only to rebuild it on that run's next ask is pure waste.
- * Returns what was stopped, or null when every slot holds a wanted pass
- * (nothing is stopped then). A watcher's state file goes with it, so a later
- * ask for that project starts a fresh one.
+ * What a new watcher must fit within: a count (machineCap("check"), 16 unless
+ * set), and, when `budgetBytes` is set, memory: every live watcher's hold
+ * plus `needBytes` (watcherMemory.ts). A bare number is a count alone.
  */
-export function makeRoom(max: number, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM"), now = Date.now(), protect: ReadonlySet<string> = new Set()): Array<WatchState & { dir: string }> | null {
+export interface Capacity {
+  maxWatchers: number;
+  /** This many always fit, whatever memory says: the count rule memory admission replaced never admits fewer. */
+  minWatchers?: number;
+  /** Fit by memory even on an empty machine: for an ask behind the first, which gets no "one always runs" pass. */
+  strict?: boolean;
+  budgetBytes?: number;
+  needBytes?: number;
+  holdOf?: (w: WatchState & { dir: string }) => number;
+}
+
+/** The repository a tree checks out: its main checkout, else itself. */
+const repos = new Map<string, string>();
+export function repoOf(root: string): string {
+  if (!repos.has(root)) repos.set(root, mainCheckoutOf(root) ?? root);
+  return repos.get(root)!;
+}
+
+export type MachineCapacity = Capacity & { ceilingBytes: number; coldBytes: number; minWatchers: number; budgetBytes: number };
+
+/**
+ * The capacity rule, from its inputs: the machine's memory, the count limits,
+ * what each project has been measured to reach, and what each live watcher
+ * measures now (null when that cannot be read). Pure, so a scenario can be
+ * run with another machine's numbers.
+ */
+export function capacityFor(input: {
+  totalBytes: number;
+  maxWatchers: number;
+  env?: NodeJS.ProcessEnv;
+  /** Peaks of the project asking for a watcher. */
+  needPeaks: () => Peak[];
+  /** Peaks of a live watcher's project. */
+  peaksOf: (w: WatchState & { dir: string }) => Peak[];
+  /** p95 of every project measured on this machine, for the estimate of one that is not. */
+  learnedP95s: number[];
+  measure: (w: WatchState & { dir: string }) => number | null;
+}): MachineCapacity {
+  const env = input.env ?? process.env;
+  const budget = budgetBytes(input.totalBytes, env);
+  // A need above the whole budget means "alone" either way; capping it there keeps one project that died of memory
+  // from holding every ask queued behind it to a reservation the machine can never offer.
+  const ceiling = Math.min(watcherCeilingBytes(env), Math.max(budget, 1));
+  const cold = coldReservationBytes(budget, input.learnedP95s, env);
+  return {
+    maxWatchers: input.maxWatchers,
+    minWatchers: Math.min(input.maxWatchers, countFloorWatchers(input.totalBytes)),
+    budgetBytes: budget,
+    // Lazy: status readers need the budget and holds, not a reservation for a project they are not asking about.
+    get needBytes() { return reservationBytes(input.needPeaks(), ceiling, cold); },
+    holdOf: (w) => {
+      const known = input.peaksOf(w);
+      const measured = input.measure(w);
+      // Its size unreadable (ps failed or timed out under load) is unknown, not zero: it holds what its project reaches.
+      if (measured === null) return Math.max(w.peakRssBytes ?? 0, expectedBytes(known, ceiling, cold));
+      return holdBytes(w, measured, known, ceiling, cold);
+    },
+    ceilingBytes: ceiling,
+    coldBytes: cold,
+  };
+}
+
+/** This machine's capacity for one more watcher of `project` in `root`, measured now. */
+export function machineCapacity(root: string, project: string, maxWatchers = machineCap("check"), table?: ProcTable): MachineCapacity {
+  const peaksOf = new Map<string, Peak[]>();
+  const peaks = (repo: string, p: string) => {
+    const key = `${repo}\0${p}`;
+    if (!peaksOf.has(key)) peaksOf.set(key, readPeaks(repo, p));
+    return peaksOf.get(key)!;
+  };
+  return capacityFor({
+    totalBytes: os.totalmem(),
+    maxWatchers,
+    needPeaks: () => peaks(repoOf(root), project),
+    peaksOf: (w) => peaks(w.repo ?? repoOf(w.root), w.project),
+    learnedP95s: learnedSizes().flatMap((l) => (l.warm && l.p95Bytes ? [l.p95Bytes] : [])),
+    measure: (w) => {
+      table ??= procTable();
+      return table.size ? treeRssBytes(w.pid, table) : null;
+    },
+  });
+}
+
+/**
+ * Stop the least recently asked watchers until one more fits: watchers
+ * between passes first, then passes nobody waits on. Watchers in `protect`
+ * (the programs the same `cast check` run already asked for) go last:
+ * stopping one only to rebuild it on that run's next ask is pure waste.
+ * Returns what was stopped, or null when it cannot fit without stopping a
+ * wanted pass (nothing is stopped then). A watcher's state file goes with it,
+ * so a later ask for that project starts a fresh one.
+ */
+export function makeRoom(capacity: number | Capacity, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM"), now = Date.now(), protect: ReadonlySet<string> = new Set(), evict = true): Array<WatchState & { dir: string }> | null {
+  const cap: Capacity = typeof capacity === "number" ? { maxWatchers: capacity } : capacity;
   const byAsk = (a: WatchState, b: WatchState) => (a.askedAt ?? a.startedAt) - (b.askedAt ?? b.startedAt);
   const live = listWatchers();
-  const needed = Math.max(0, live.length - max + 1);
+  const holds = new Map(live.map((w) => [w.dir, cap.budgetBytes === undefined ? 0 : cap.holdOf?.(w) ?? 0]));
+  const fits = (rest: Array<WatchState & { dir: string }>) =>
+    rest.length < cap.maxWatchers && (cap.budgetBytes === undefined || rest.length < (cap.minWatchers ?? 0) || (cap.strict
+      ? rest.reduce((a, w) => a + holds.get(w.dir)!, 0) + (cap.needBytes ?? 0) <= cap.budgetBytes
+      : fitsBudget(rest.map((w) => holds.get(w.dir)!), cap.needBytes ?? 0, cap.budgetBytes)));
   const stoppable = (ws: Array<WatchState & { dir: string }>) => [...ws.filter((w) => !w.inProgress).sort(byAsk), ...ws.filter((w) => w.inProgress && !isWanted(w, now)).sort(byAsk)];
   const eligible = [...stoppable(live.filter((w) => !protect.has(w.dir))), ...stoppable(live.filter((w) => protect.has(w.dir)))];
-  if (eligible.length < needed) return null;
-  const evicted: Array<WatchState & { dir: string }> = [];
-  for (const victim of eligible.slice(0, needed)) {
+  const victims: Array<WatchState & { dir: string }> = [];
+  let rest = live;
+  while (!fits(rest)) {
+    const next = evict ? eligible[victims.length] : undefined;
+    if (!next) return null;
+    victims.push(next);
+    rest = rest.filter((w) => w !== next);
+  }
+  const held = [...holds.values()].reduce((a, b) => a + b, 0);
+  const why = cap.budgetBytes === undefined ? `cap ${cap.maxWatchers}` : `cap ${cap.maxWatchers}, ${fmtGb(held)} reserved of ${fmtGb(cap.budgetBytes)}, need ${fmtGb(cap.needBytes ?? 0)}`;
+  // A successor may already hold a victim's dir (a --fresh restart): then the room counted is not there, and nothing is stopped.
+  if (victims.some((v) => readWatchState(v.dir)?.pid !== v.pid)) return null;
+  for (const victim of victims) {
+    try {
+      fs.appendFileSync(logPath(victim.dir), `${EVICTED_LINE} (${why})\n`);
+    } catch {}
     try {
       kill(victim.pid);
     } catch {}
-    fs.rmSync(statePath(victim.dir), { force: true });
-    logWatcherEvent("evict", victim, `asked ${Math.round((now - (victim.askedAt ?? victim.startedAt)) / 60_000)}m ago, ${live.length} live, cap ${max}`);
-    evicted.push(victim);
+    removeOwnState(victim.dir, victim.pid);
+    logWatcherEvent("evict", victim, `asked ${Math.round((now - (victim.askedAt ?? victim.startedAt)) / 60_000)}m ago, ${live.length} live, ${why}${cap.budgetBytes === undefined ? "" : `, frees ${fmtGb(holds.get(victim.dir)!)}`}`);
   }
-  return evicted;
+  return victims;
 }
 
 // ---------------------------------------------------------------------------
@@ -972,6 +1240,14 @@ export function makeRoom(max: number, kill: (pid: number) => void = (pid) => pro
 // ---------------------------------------------------------------------------
 
 export const queueDir = (): string => path.join(checkHome(), "queue");
+const BEHIND_CHECK_MS = 5_000;
+/** The longest an ask waits in the queue before it exits 75 (ask again; it keeps its place for QUEUE_PLACE_MS). */
+export const QUEUE_WAIT_MS = 3 * 60_000;
+
+/** A capacity that also sets aside room for the ask first in line: its memory and its watcher slot. */
+function withHeadNeed(cap: Capacity, headNeed: number): Capacity {
+  return { maxWatchers: cap.maxWatchers - 1, minWatchers: cap.minWatchers === undefined ? undefined : cap.minWatchers - 1, budgetBytes: cap.budgetBytes, needBytes: (cap.needBytes ?? 0) + headNeed, holdOf: cap.holdOf, strict: true };
+}
 
 interface QueueTicket {
   pid: number;
@@ -1020,35 +1296,61 @@ function queuePlace(dir: string, now = Date.now()): number {
 async function startWhenSlotFrees(
   target: CheckProject,
   root: string,
-  opts: { start: WatcherStarter; note: (line: string) => void; kill: (pid: number) => void; maxWatchers?: number; deadline: number; protect?: ReadonlySet<string> },
+  opts: { start: WatcherStarter; note: (line: string) => void; kill: (pid: number) => void; maxWatchers?: number; deadline: number; protect?: ReadonlySet<string>; queueWaitMs?: number },
 ): Promise<boolean> {
   const project = target.name;
   const dir = watchDir(root, project);
-  const max = opts.maxWatchers ?? machineCap("check");
+  // A caller's own count (tests) is a count alone; otherwise memory admits, under the machine's count.
+  const capacity = (): Capacity => (opts.maxWatchers !== undefined ? { maxWatchers: opts.maxWatchers } : machineCapacity(root, project));
+  // A queued ask answers within a few minutes, as 75 with a hint, rather than outlive the caller's own timeout.
+  const queueDeadline = Math.min(opts.deadline, Date.now() + (opts.queueWaitMs ?? QUEUE_WAIT_MS));
+  let cap: Capacity | null = null;
   fs.mkdirSync(queueDir(), { recursive: true });
   fs.mkdirSync(dir, { recursive: true });
   const at = queuePlace(dir);
   const file = path.join(queueDir(), `${process.pid}-${Math.random().toString(36).slice(2, 8)}.json`);
   fs.writeFileSync(file, JSON.stringify({ pid: process.pid, root, project, at }));
   let lastAhead = -1;
+  let lastBehindCheck = 0;
+  const queuedSince = Date.now();
   try {
     for (;;) {
-      const release = await acquireFileLock(path.join(dir, "start.lock"), { describe: `cast check ${project}` });
+      // Every wait inside the queue is bounded by the queue's own deadline, so it answers on time.
+      const left = () => Math.max(1_000, queueDeadline - Date.now());
+      const release = await lockFor(path.join(dir, "start.lock"), { describe: `cast check ${project}`, waitMs: left() });
       try {
         const state = readWatchState(dir);
         if (state && isPidAlive(state.pid)) {
           fs.rmSync(queuedAtPath(dir), { force: true });
           return false;
         }
-        const ahead = listQueue().findIndex((t) => t.file === file);
-        if (ahead === 0) {
-          const releaseCapacity = await acquireFileLock(path.join(checkHome(), "capacity.lock"), { describe: "cast check watcher start", waitMs: 60_000 });
+        const queue = listQueue();
+        const ahead = queue.findIndex((t) => t.file === file);
+        // The first in line may stop idle watchers to make room. One further back starts only if it fits as things are
+        // with the first's need also set aside, so a big program waiting on a busy machine neither holds up a small one
+        // that fits now nor is starved by them. It checks without a lock, every few seconds, and locks only to start.
+        const fitsBehind = (): boolean => {
+          if (Date.now() - lastBehindCheck < BEHIND_CHECK_MS) return false;
+          lastBehindCheck = Date.now();
+          const head = queue[0];
+          if (!head || opts.maxWatchers !== undefined) return false;
+          return makeRoom(withHeadNeed(capacity(), machineCapacity(head.root, head.project).needBytes ?? 0), () => {}, Date.now(), opts.protect, false) !== null;
+        };
+        if (ahead === 0 || (ahead > 0 && fitsBehind())) {
+          const releaseCapacity = await lockFor(path.join(checkHome(), "capacity.lock"), { describe: "cast check watcher start", waitMs: Math.min(60_000, left()) });
           try {
-            const evicted = makeRoom(max, opts.kill, Date.now(), opts.protect);
+            cap = capacity();
+            const evicted = makeRoom(ahead === 0 ? cap : withHeadNeed(cap, machineCapacity(queue[0]!.root, queue[0]!.project).needBytes ?? 0), opts.kill, Date.now(), opts.protect, ahead === 0);
             if (evicted) {
-              for (const w of evicted) opts.note(`stopped the ${w.project} watcher for ${w.root} (${w.inProgress ? "a pass nobody waits on" : "idle longest"}) to stay under ${max} watchers on this machine`);
+              const limit = cap.budgetBytes === undefined ? `under ${cap.maxWatchers} watchers` : `within the ${fmtGb(cap.budgetBytes)} typecheck watchers share`;
+              for (const w of evicted) opts.note(`stopped the ${w.project} watcher for ${w.root} (${w.inProgress ? "a pass nobody waits on" : "idle longest"}) to stay ${limit} on this machine`);
               const small = thisMachineTooSmall(root);
               if (small) opts.note(small);
+              const logFrom = (() => { try { return fs.statSync(logPath(dir)).size; } catch { return 0; } })();
+              // A job still running under this label (a watcher just evicted, still on its way out) would make launchd
+              // leave the start alone, and the ask would wait for a watcher that never comes.
+              const label = watcherLabel(dir);
+              for (const settle = Date.now() + 5_000; Date.now() < settle && launchdHolds(label) === "running"; ) await sleep(250);
               opts.start(root, target);
               logWatcherEvent("start", { project, root });
               fs.rmSync(queuedAtPath(dir), { force: true });
@@ -1056,7 +1358,7 @@ async function startWhenSlotFrees(
               const deadline = Date.now() + 30_000;
               const live = () => { const s = readWatchState(dir); return !!s && isPidAlive(s.pid); };
               while (Date.now() < deadline && !live()) await sleep(200);
-              if (!live()) throw new Error(`the ${project} typecheck watcher did not start: ${lastLogLine(dir) ?? "it left no log"} (${logPath(dir)})`);
+              if (!live()) throw watcherDeath(project, dir, "did not start", logFrom);
               return true;
             }
           } finally {
@@ -1065,15 +1367,20 @@ async function startWhenSlotFrees(
         }
         if (ahead !== lastAhead) {
           lastAhead = ahead;
-          const busy = listWatchers().map((w) => w.project).join(", ");
+          const live = listWatchers();
+          const busy = live.map((w) => w.project).join(", ");
+          if (ahead !== 0) cap = capacity();
+          cap ??= capacity();
+          // Name what actually blocks it: every slot taken, or memory past the count rule's number.
+          const room = cap.budgetBytes === undefined || live.length >= cap.maxWatchers ? `the ${cap.maxWatchers} typecheck slot${cap.maxWatchers === 1 ? "" : "s"}` : `typecheck memory (needs ${fmtGb(cap.needBytes ?? 0)} of ${fmtGb(cap.budgetBytes)})`;
           opts.note(ahead === 0
-            ? `queued: all ${max} typecheck slots hold passes someone is waiting on (${busy}); starting when one finishes (cast queue lists them)`
-            : `queued: ${ahead} ask${ahead === 1 ? "" : "s"} ahead for the ${max} typecheck slots (${busy}; cast queue lists them)`);
+            ? `queued for ${room}: the live watchers hold passes someone is waiting on (${busy}); starting when one finishes (cast queue lists them)`
+            : `queued: ${ahead} ask${ahead === 1 ? "" : "s"} ahead for ${room} (${busy ? `${busy}; ` : ""}cast queue lists them)`);
         }
       } finally {
         release();
       }
-      if (Date.now() > opts.deadline) throw new Error(`the ${project} typecheck is still queued for a slot; every one of the ${max} slots holds a pass someone is waiting on. Ask again later; do not restart them with --fresh`);
+      if (Date.now() > queueDeadline) throw new CheckFailure(`the ${project} typecheck is still queued after ${Math.round((Date.now() - queuedSince) / 1000)}s: the live watchers hold passes someone is waiting on`, "busy");
       await sleep(1_000);
     }
   } finally {
