@@ -235,7 +235,7 @@ describe("computeVisualOrder lifts questions", () => {
   });
 });
 
-// Ctrl+I / queue advance walk computeVisualOrder(state, { yourMove: true }) —
+// Ctrl+I / queue advance walk computeVisualOrder(state, { walk: "yourMove" }) —
 // the questions / NEEDS YOU / DONE cards in render order, taken from the same
 // chokepoint verdicts the panel renders with. Regression: the handler used to
 // re-classify each row (classifySession().waiting), which is blind to the
@@ -245,7 +245,7 @@ describe("computeVisualOrder lifts questions", () => {
 describe("computeVisualOrder yourMove mirrors the panel's your-move sections", () => {
   const DAY = 24 * 60 * 60 * 1000;
   const yourMove = (state: Parameters<typeof computeVisualOrder>[0]) =>
-    computeVisualOrder(state, { yourMove: true }).map(tag);
+    computeVisualOrder(state, { walk: "yourMove" }).map(tag);
   // stale: claims "working" but went quiet two days ago → the net files it in
   // NEEDS YOU above the fresh idle row (queues sort oldest first).
   // The status stamp goes back with the row's activity: the queue orders by when
@@ -283,5 +283,31 @@ describe("computeVisualOrder yourMove mirrors the panel's your-move sections", (
     expect(yourMove(withStale)).toEqual(["stale", "idle"]);
     // Hidden: it is not rendered, so it is not the target.
     expect(yourMove({ ...withStale, clientState: { ui: { inbox_show_old: false } } })).toEqual(["idle"]);
+  });
+});
+
+// Ctrl+I walks NEEDS YOU only; decisions and DONE have their own jumps.
+describe("computeVisualOrder section walks", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const idle = session("idle", { is_idle: true, updated_at: Date.now() - DAY, agent_status_updated_at: Date.now() - DAY });
+  const asking = session("ask", { is_idle: true, updated_at: Date.now() - 2 * DAY, agent_status_updated_at: Date.now() - 2 * DAY });
+  const decide = {
+    _id: "d1", conversation_id: cid("ask"), session_id: "session-ask",
+    question: "q", options: [{ label: "a" }, { label: "b" }],
+    blocking: true, status: "pending" as const, created_at: Date.now(),
+  };
+  const state = { ...baseState, sessions: byId([idle, asking]), sessionDecisions: { d1: decide } };
+  const walk = (w: "decisions" | "needsYou" | "yourMove") => computeVisualOrder(state, { walk: w }).map(tag);
+
+  it("needsYou skips a session with a pending decision", () => {
+    expect(walk("needsYou")).toEqual(["idle"]);
+  });
+
+  it("decisions walks only the questions", () => {
+    expect(walk("decisions")).toEqual(["ask"]);
+  });
+
+  it("yourMove still walks both, questions first", () => {
+    expect(walk("yourMove")).toEqual(["ask", "idle"]);
   });
 });

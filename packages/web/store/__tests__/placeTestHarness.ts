@@ -22,6 +22,7 @@ import {
   isConvexId,
   __resetInboxPlacementCacheForTests,
   type InboxSession,
+  type InboxWalk,
   type PlacedInbox,
   type ProjectFilterTerm,
 } from "../inboxStore";
@@ -188,7 +189,7 @@ export function orderSections(
     bucketFilters?: readonly any[];
     bucketByConv?: Record<string, string | undefined>;
     collapsedSections?: Record<string, boolean>;
-    yourMove?: boolean;
+    walk?: InboxWalk;
   } = {},
 ): InboxSession[] {
   const placed = placeSections(sessions, queued, pendingSendIds, opts);
@@ -196,6 +197,6 @@ export function orderSections(
     bucketFilters: opts.bucketFilters,
     bucketByConv: opts.bucketByConv,
     collapsedSections: opts.collapsedSections,
-    yourMove: opts.yourMove,
+    walk: opts.walk,
   });
 }

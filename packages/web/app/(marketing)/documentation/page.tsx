@@ -152,6 +152,8 @@ const INBOX_GROUPS: [string, string, string][] = [
 const SHORTCUTS: [string, string][] = [
   ["Ctrl+J / Ctrl+K", "Next / previous session"],
   ["Ctrl+I", "Jump to the first session that needs you"],
+  ["Ctrl+Shift+D", "Jump to the first decision"],
+  ["Ctrl+Shift+O", "Jump to the first Done session"],
   ["Ctrl+Backspace", "Stash the session (the agent keeps running)"],
   ["Shift+Backspace", "Defer it and move to the next"],
   ["Option+Z", "Snooze until a time you pick"],

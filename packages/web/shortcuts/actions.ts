@@ -11,7 +11,7 @@ import { useOpenSession } from "../hooks/useOpenSession";
 import { goBackInTrail } from "../hooks/useNavTrail";
 import { isModernStyle } from "../lib/visualStyle";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
+import { useInboxStore, selectCommentRailOpen, selectNavCollapsed, type InboxWalk } from "../store/inboxStore";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { isInboxRoute, isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
@@ -120,25 +120,23 @@ export function useGlobalShortcutActions() {
     }
   }, [isOnInboxPage]));
 
-  useShortcutAction('session.jumpIdle', useCallback(() => {
-    // Ctrl+I: top of the your-move stack — Questions first, then Needs You,
-    // then Done (which reads as its extension); never Dormant, a machine wakes
-    // those. The store hands back exactly the cards the panel files in those
-    // sections, in render order (yourMoveOrder), so the target is always the
-    // first such card the user can see — whatever view mode or old-session
-    // toggle is up. Re-deriving membership here from a per-row classify is
-    // what drifted: it missed the staleness net that files a quiet "working"
-    // row under NEEDS YOU and the in-flight send that lifts one out.
-    const store = useInboxStore.getState();
-    const first = store.yourMoveOrder()[0];
+  // Jump to the first visible card of one inbox section, in render order
+  // (walkOrder): the store hands back exactly the cards the panel files there,
+  // whatever view mode or old-session toggle is up. Ctrl+I is NEEDS YOU only;
+  // decisions and DONE have their own keys.
+  const jumpTo = useCallback((walk: InboxWalk) => {
+    const first = useInboxStore.getState().walkOrder(walk)[0];
     if (first) openSession(first._id);
-  }, [openSession]));
+  }, [openSession]);
+  useShortcutAction('session.jumpIdle', useCallback(() => jumpTo("needsYou"), [jumpTo]));
+  useShortcutAction('session.jumpDecision', useCallback(() => jumpTo("decisions"), [jumpTo]));
+  useShortcutAction('session.jumpDone', useCallback(() => jumpTo("done"), [jumpTo]));
 
   // The session whose prompt has waited longest, among the cards the panel
-  // shows as waiting on you (the same yourMoveOrder Ctrl+I reads).
+  // shows as waiting on you.
   useShortcutAction('permission.jumpOldest', useCallback(() => {
     const store = useInboxStore.getState();
-    const oldest = oldestBlocked(store.yourMoveOrder());
+    const oldest = oldestBlocked(store.walkOrder("yourMove"));
     if (oldest) openSession(oldest._id);
   }, [openSession]));
 

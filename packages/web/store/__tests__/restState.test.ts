@@ -257,7 +257,7 @@ describe("ct-47520: a staleness-swept row keeps its rest verdict at the chokepoi
   });
 
   it("the walk order agrees with the section: the row is a DONE target, never a needs-input one", () => {
-    const yourMove = orderSections({ cameron }, new Set(), null, undefined, { yourMove: true });
+    const yourMove = orderSections({ cameron }, new Set(), null, undefined, { walk: "yourMove" });
     expect(ids(yourMove)).toEqual(["cameron"]);
     const placed = placeSections({ cameron, fresh: mk("fresh") }, new Set());
     // needs-input (fresh) walks before done (cameron): rank and section agree.

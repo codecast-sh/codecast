@@ -9,6 +9,8 @@ export type ShortcutAction =
   | 'session.prev'
   | 'session.jumpIdle'
   | 'session.jumpPinned'
+  | 'session.jumpDecision'
+  | 'session.jumpDone'
   | 'session.pin'
   | 'session.markUnread'
   | 'session.moveToBucket'
@@ -193,7 +195,9 @@ export interface ShortcutDef<A extends string = ShortcutAction> {
 export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+j', action: 'session.next', skipInputCheck: true, description: 'Next session' },
   { key: 'ctrl+k', action: 'session.prev', skipInputCheck: true, description: 'Previous session' },
-  { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to top needs-input session' },
+  { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to the top Needs You session' },
+  { key: 'ctrl+shift+d', action: 'session.jumpDecision', skipInputCheck: true, description: 'Jump to the top decision' },
+  { key: 'ctrl+shift+o', action: 'session.jumpDone', skipInputCheck: true, description: 'Jump to the top Done session' },
   // Y is approve inside a conversation; with Ctrl+Shift it finds the prompt
   // that has waited longest anywhere.
   { key: 'ctrl+shift+y', action: 'permission.jumpOldest', skipInputCheck: true, description: 'Jump to the oldest pending permission' },
@@ -408,11 +412,13 @@ export const SHORTCUTS: ShortcutDef[] = [
   // which wins at the capture listener.
   { key: 'meta+shift+e', action: 'compose.richToggle', when: 'conversation', skipInputCheck: true, fixed: true, description: 'Toggle rich compose editor' },
 
-  // Codex's effort keys: one level up or down for the session in view, from
-  // the composer too. A blank session relaunches with the new level, a live
-  // one gets a single `/effort` once the presses settle (lib/effortStep).
-  { key: 'alt+.', action: 'conv.effortUp', when: 'conversation', skipInputCheck: true, description: 'Raise effort' },
-  { key: 'alt+,', action: 'conv.effortDown', when: 'conversation', skipInputCheck: true, description: 'Lower effort' },
+  // Codex's effort keys: one level up or down for the session the focused
+  // composer belongs to, the conversation's or a compose popup's (modal) or
+  // dock's (web/hooks/useEffortKeys). No context: the desktop compose window
+  // has no conversation. A blank session relaunches with the new level, a
+  // live one gets a single `/effort` once the presses settle.
+  { key: 'alt+.', action: 'conv.effortUp', skipInputCheck: true, worksInModal: true, description: 'Raise effort' },
+  { key: 'alt+,', action: 'conv.effortDown', skipInputCheck: true, worksInModal: true, description: 'Lower effort' },
 
   { key: 'escape', action: 'msg.clearSelection', when: 'conversation', skipInputCheck: true, description: 'Clear selection' },
   { key: 'alt+j', action: 'msg.next', when: 'conversation', description: 'Next user message' },
