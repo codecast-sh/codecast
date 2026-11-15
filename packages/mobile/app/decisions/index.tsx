@@ -5,7 +5,6 @@ import { Text } from '@/components/Themed';
 import { Spacing, BorderRadius, themedStyles, useTheme } from '@/constants/Theme';
 import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
 import { waitingOnPerson, type QueueItem } from '@codecast/web/lib/decisionQueue';
-import { useOwnedDecisionCount } from '@codecast/web/hooks/useDecisionRows';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { QueueChip, askingSessionLine } from '@/components/decisions/QueueMeta';
 import { TeamDecisionList } from '@/components/decisions/TeamDecisionList';
@@ -21,8 +20,8 @@ export default function DecisionsScreen() {
   const router = useRouter();
   const queue = useDecisionQueue();
   const now = useCoarseNow(60_000);
-  // Yours as the web counts them (useOwnedDecisionCount); the queue also lists terminal prompts and asks a lead holds.
-  const mine = useOwnedDecisionCount();
+  // The queue's length, the number web's sidebar, inbox panel and pager show.
+  const mine = queue.length;
   const withLead = queue.length - waitingOnPerson(queue).length;
   const firstDecide = useMemo(() => queue.find((i) => i.source === 'decide' && !i.heldByRole), [queue]);
   const [view, setView] = useState<'mine' | 'team'>('mine');

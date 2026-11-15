@@ -48,7 +48,7 @@ export function SetupMeter() {
             <span className="font-mono text-xs tabular-nums text-sol-cyan">{done}/{total}</span>
           </span>
           {next && (
-            <span className="flex w-full items-center gap-1.5 text-[11px] text-sol-text-muted group-hover:text-sol-text">
+            <span className="flex w-full items-center gap-1.5 text-meta text-sol-text-muted group-hover:text-sol-text">
               <span className="truncate">{next.label}</span>
               <ChevronRight className="h-3 w-3 flex-shrink-0 text-sol-cyan" />
             </span>
@@ -110,13 +110,13 @@ export function SetupChecklist({ steps, team, done, total, onHide }: {
             {s.done ? (
               <span className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
                 <span className="truncate text-xs text-sol-text-dim">{s.label}</span>
-                <span className="flex-shrink-0 truncate font-mono text-[11px] text-sol-text-dim/70">{s.state}</span>
+                <span className="flex-shrink-0 truncate font-mono text-meta text-sol-text-dim/70">{s.state}</span>
               </span>
             ) : (
               <>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[13px] text-sol-text">{s.label}</span>
-                  <span className="block truncate font-mono text-[11px] text-sol-text-dim">{s.state}</span>
+                  <span className="block truncate font-mono text-meta text-sol-text-dim">{s.state}</span>
                 </span>
                 <span className="flex-shrink-0">
                   {stepReady(steps, s) && <SetupStepAction step={s} team={team} look={s.key === next ? "strip" : "row"} />}
@@ -128,7 +128,7 @@ export function SetupChecklist({ steps, team, done, total, onHide }: {
       </ol>
       {onHide && (
         <div className="flex justify-end border-t border-sol-border/40 px-2 py-1.5">
-          <button type="button" onClick={onHide} className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] text-sol-text-dim hover:text-sol-text">
+          <button type="button" onClick={onHide} className="inline-flex items-center gap-1 rounded px-2 py-1 text-meta text-sol-text-dim hover:text-sol-text">
             <X className="h-3 w-3" /> Hide for a week
           </button>
         </div>

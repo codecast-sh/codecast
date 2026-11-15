@@ -1,5 +1,5 @@
 import { cliNeverConnected } from "../lib/cliConnected";
-import { InboxDecisionsAll, InboxDecisionsHeader } from "./decisions/InboxDecisions";
+import { InboxDecisionQueue } from "./decisions/InboxDecisionQueue";
 import { forkTreeRootId } from "../lib/forkTreeRoot";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -3620,14 +3620,13 @@ function SessionListPanelImpl({
             before anything else, pinned or not. One move: clicking a card
             opens the full-width answer view anchored on that question, and
             answering advances to the next — same flow for one or many. */}
-        {renderSection("Decisions", statusQuestions, "text-sol-violet", undefined, undefined, {
-          key: "questions",
-          floor: true,
-          count: countOf(statusQuestions, placedQuestions, placed.counts.questions),
-          onSelect: handleQuestionSelect,
-          headerAction: <InboxDecisionsAll cards={statusQuestions.length} />,
-        })}
-        <InboxDecisionsHeader cards={statusQuestions.length} />
+        <InboxDecisionQueue
+          collapsed={!!s.collapsedSections.questions}
+          onToggle={() => s.toggleCollapsedSection("questions")}
+          activeSessionId={activeSessionId}
+          extraSessions={placedQuestions}
+          onSelectSession={handleQuestionSelect}
+        />
         {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, placed.counts.pinned) })}
         {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", floor: true, count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
         {/* Needs You, Done and Dormant take a dragged card: the drop is the

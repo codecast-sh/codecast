@@ -106,7 +106,7 @@ export function InboxDecisionQueue({
                   data-decision-queue-row={n}
                   className={`flex items-baseline gap-2 min-w-0 py-0.5 text-[12.5px] no-underline ${here ? "text-sol-text" : "text-sol-text-muted hover:text-sol-text"}`}
                 >
-                  <span className={`w-5 shrink-0 text-right tabular-nums font-mono text-[11px] ${here ? "text-sol-yellow" : "text-sol-text-dim"}`}>{n}</span>
+                  <span className={`w-5 shrink-0 text-right tabular-nums font-mono text-mark ${here ? "text-sol-yellow" : "text-sol-text-dim"}`}>{n}</span>
                   <span className="truncate">{item.source === "permission" ? `Permission: ${item.question}` : item.question}</span>
                   {item.heldByRole && <span className="shrink-0 text-meta text-sol-text-dim">lead</span>}
                 </Link>
@@ -143,7 +143,7 @@ export function InboxDecisionQueue({
           className="mt-1 flex items-center justify-between rounded-lg border border-dashed border-sol-border/60 px-2.5 py-1.5 text-[12px] text-sol-text-dim hover:text-sol-text no-underline"
         >
           <span>Going ahead on a default</span>
-          <span className="flex items-center gap-0.5 font-mono text-[11px] tabular-nums">{advisory}<ChevronRight className="w-3 h-3" /></span>
+          <span className="flex items-center gap-0.5 font-mono text-mark tabular-nums">{advisory}<ChevronRight className="w-3 h-3" /></span>
         </Link>
       )}
     </div>}
