@@ -66,7 +66,10 @@ export function localDeployment() {
     throw new Error(`refusing: ${envFile} names ${convexUrl} ${deployment}, not a local anonymous deployment`);
   }
   const name = deployment.slice("anonymous:".length);
-  const config = JSON.parse(readFileSync(join(ANON_STATE, name, "config.json"), "utf8"));
+  // Newer Convex CLIs keep a local deployment's state in the project
+  // (.convex/local/default); older ones under ~/.convex.
+  const projectConfig = join(SCRATCH, "packages/convex/.convex/local/default/config.json");
+  const config = JSON.parse(readFileSync(existsSync(projectConfig) ? projectConfig : join(ANON_STATE, name, "config.json"), "utf8"));
   const siteUrl = `http://127.0.0.1:${config.ports?.site ?? Number(new URL(convexUrl).port) + 1}`;
   return { kind: "local", name, convexUrl, siteUrl, adminKey: config.adminKey, appUrl: `http://localhost:${WEB_PORT}` };
 }

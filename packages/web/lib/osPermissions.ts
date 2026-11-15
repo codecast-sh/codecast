@@ -139,18 +139,23 @@ export async function getOsPermissions(): Promise<PermissionMap> {
       return UNKNOWN_PERMISSIONS;
     }
   }
+  // Notifications through the Permissions API too: Chrome answers the
+  // Notification.permission getter with a synchronous IPC to the browser
+  // process, which blocked boot's main thread for 30-40ms under load. The
+  // getter stays as the fallback where the query cannot answer.
+  const [queried, microphone, camera] = await Promise.all([
+    queryBrowserPermission("notifications"),
+    queryBrowserPermission("microphone"),
+    queryBrowserPermission("camera"),
+  ]);
   const notifications: PermissionReadiness =
-    typeof Notification === "undefined"
-      ? "unknown"
+    queried !== "unknown" || typeof Notification === "undefined"
+      ? queried
       : Notification.permission === "granted"
         ? "granted"
         : Notification.permission === "denied"
           ? "off"
           : "ask";
-  const [microphone, camera] = await Promise.all([
-    queryBrowserPermission("microphone"),
-    queryBrowserPermission("camera"),
-  ]);
   return { notifications, microphone, camera, screen: "n/a" };
 }
 

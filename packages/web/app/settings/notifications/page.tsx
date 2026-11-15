@@ -12,6 +12,7 @@ import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from
 import { useOsPermission } from "../../../hooks/useOsPermissions";
 import { PermissionRow } from "../../../components/permissions/PermissionRow";
 import { peopleOf } from "@codecast/shared/team/memberKind";
+import { SessionNotifySettings } from "../../../components/settings/SessionNotifySettings";
 
 /* This device's OS-level permission (System Settings / browser site
  * permission) — a separate axis from the in-app prefs below: with it off,
@@ -198,6 +199,8 @@ export default function NotificationsSettingsPage() {
               options={AGENT_COMMENT_LEVELS}
             />
           </SettingsSection>
+
+          <SessionNotifySettings />
 
           {/* Per-member muting */}
           {otherMembers && otherMembers.length > 0 && (
