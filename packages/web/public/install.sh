@@ -299,8 +299,8 @@ if [ -n "${TOKEN}" ]; then
     "${INSTALL_DIR}/codecast" login "${TOKEN}" < /dev/null
   fi
 else
-  if [ -f "${HOME}/.codecast/config.json" ]; then
-    # Already authenticated (fresh install or update) — make sure the daemon runs
+  if grep -q '"auth_token"' "${HOME}/.codecast/config.json" 2>/dev/null \
+    && "${INSTALL_DIR}/codecast" auth status < /dev/null > /dev/null 2>&1; then
     echo "Existing login found. Starting daemon..."
     "${INSTALL_DIR}/codecast" start 2>/dev/null || true
   elif [ -n "${INSTALL_TTY}" ]; then

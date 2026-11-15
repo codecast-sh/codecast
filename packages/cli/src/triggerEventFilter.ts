@@ -12,6 +12,7 @@ import {
   TRIGGER_EVENT_NAMES,
   TRIGGER_EVENT_SHORTHANDS,
   isCallTriggerEvent,
+  isChatTriggerEvent,
   isIngestTriggerEvent,
   isPrTriggerEvent,
   type TriggerScopeFilter,
@@ -22,6 +23,7 @@ export interface EventFilterFlags {
   repo?: string;
   pr?: string;
   source?: string;
+  channel?: string;
 }
 
 function refuse(message: string): never {
@@ -55,6 +57,14 @@ export async function buildEventFilter(
     if (opts.source.trim()) filter.source = opts.source.trim();
   }
 
+  // A chat event is about one channel, and must name it; the server resolves
+  // "#name" or an id and refuses a channel the caller cannot read.
+  if (opts.channel !== undefined && !isChatTriggerEvent(eventName)) refuse(`--channel only narrows a chat event, and ${eventName} is not one.`);
+  if (isChatTriggerEvent(eventName)) {
+    if (!opts.channel?.trim()) refuse(`${eventName} watches one channel: name it with --channel <#name|id> (cast chat channels lists them).`);
+    filter.channel_id = opts.channel.trim();
+  }
+
   if (opts.pr !== undefined) {
     if (!isPrTriggerEvent(eventName)) refuse(`--pr only narrows a pull request event, and ${eventName} is not one.`);
     const number = Number(opts.pr);
@@ -62,6 +72,7 @@ export async function buildEventFilter(
     filter.pr_number = number;
   }
 
+  if (opts.repo && isChatTriggerEvent(eventName)) refuse(`--repo does not narrow ${eventName}: --channel does.`);
   if (opts.repo && isCallTriggerEvent(eventName)) refuse(`--repo does not narrow ${eventName}: it fires for every call you can read.`);
 
   const repository = opts.repo !== undefined ? opts.repo : isPrTriggerEvent(eventName) ? await checkoutRepository() : undefined;
@@ -79,5 +90,5 @@ export function unknownEventMessage(eventName: string): string {
 /** The narrowing flag passed without --on, if any: it would be dropped. */
 export function narrowingWithoutOn(opts: EventFilterFlags & { on?: string }): string | undefined {
   if (opts.on) return undefined;
-  return opts.repo !== undefined ? "--repo" : opts.pr !== undefined ? "--pr" : opts.source !== undefined ? "--source" : undefined;
+  return opts.repo !== undefined ? "--repo" : opts.pr !== undefined ? "--pr" : opts.source !== undefined ? "--source" : opts.channel !== undefined ? "--channel" : undefined;
 }
