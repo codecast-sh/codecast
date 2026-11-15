@@ -2,14 +2,14 @@ import { StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Text } from '@/components/Themed';
 import { useTheme, CHROME_FONT_CAP } from '@/constants/Theme';
-import { useOwnedDecisionCount } from '@codecast/web/hooks/useDecisionRows';
+import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
 
-// The open decisions you own, beside the inbox title: the same count web's
-// sidebar shows (useOwnedDecisionCount). Nothing renders at zero.
+// The decisions waiting on you, beside the inbox title: the same queue count
+// web's sidebar, inbox panel and pager show. Nothing renders at zero.
 export function DecisionsBadge() {
   const Theme = useTheme();
   const router = useRouter();
-  const count = useOwnedDecisionCount();
+  const count = useDecisionQueue().length;
   if (count === 0) return null;
   return (
     <TouchableOpacity

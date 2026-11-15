@@ -12,6 +12,7 @@ import { KeyCap } from "./KeyboardShortcutsHelp";
 import { PreloadPublishedPage } from "./PublishedPageEmbed";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { setDecisionQueueCursor } from "../lib/decisionQueueCursor";
 // One decision at a time, full width, keyboard driven: answer and it advances;
 // when the queue empties, say so and get out of the way. Ranking (which
 // decision is "current") lives in lib/decisionQueue.
@@ -24,7 +25,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 // by key, never by index: a live re-sort (a session's tier flipping, a new
 // ask arriving) can reorder the array under you, and an index would silently
 // swap the question mid-read.
-export function DecisionQueue({ onExit, initialConversationId }: { onExit?: () => void; initialConversationId?: string | null }) {
+export function DecisionQueue({ onExit, initialConversationId, initialKey }: { onExit?: () => void; initialConversationId?: string | null; initialKey?: string | null }) {
   const queue = useDecisionQueue();
   const [anchorKey, setAnchorKey] = useState<string | null>(null);
   // How many were resolved in this visit — only for the empty screen's copy.
@@ -36,7 +37,9 @@ export function DecisionQueue({ onExit, initialConversationId }: { onExit?: () =
   // the position, so a resolved entry question can't drag us back to it.
   const anchorIdx = anchorKey
     ? queue.findIndex((i) => i.key === anchorKey)
-    : initialConversationId
+    : initialKey && queue.some((i) => i.key === initialKey)
+      ? queue.findIndex((i) => i.key === initialKey)
+      : initialConversationId
       ? queue.findIndex((i) => i.conversationId === initialConversationId)
       : -1;
   const position = anchorIdx >= 0 ? anchorIdx : 0;
@@ -80,6 +83,12 @@ export function DecisionQueue({ onExit, initialConversationId }: { onExit?: () =
   // leave-the-inbox carry-over stands down for this page (pageOwnsRailHighlight)
   // so its default cannot land on top of this write in the same commit.
   const currentId = current?.conversationId;
+  // The inbox panel lights the row this pager names.
+  const currentKey = current?.key ?? null;
+  useWatchEffect(() => {
+    setDecisionQueueCursor(currentKey);
+  }, [currentKey]);
+  useWatchEffect(() => () => setDecisionQueueCursor(null), []);
   useWatchEffect(() => {
     if (!currentId) return;
     const store = useInboxStore.getState();

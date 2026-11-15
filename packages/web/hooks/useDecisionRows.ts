@@ -3,10 +3,9 @@
 // whole collection (an answer anywhere would repaint it). `workspace` is the
 // active workspace's: what the Team view's feed and the line feed brought for
 // it. `mine` adds the viewer's own queue from every workspace, which is what
-// Mine and the sidebar's count read, as the queue always has.
+// Mine reads.
 import { useMemo } from "react";
-import { useInboxStore, type SessionDecisionItem } from "../store/inboxStore";
-import { isOpen, ownedBy } from "../lib/decisions/decisionRows";
+import type { SessionDecisionItem } from "../store/inboxStore";
 import { useCollectionRows } from "./useCollectionRows";
 import { useActiveWorkspaceKey } from "./useWorkspaceCollection";
 import { inViewerQueue } from "../lib/decisionQueue";
@@ -29,15 +28,4 @@ export function useDecisionRows(): { workspace: SessionDecisionItem[]; mine: Ses
   const where = useMemo(() => (d: SessionDecisionItem) => listed(d) && (inWorkspaceList(d, key) || inViewerQueue(d)), [key]);
   const rows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where, sig: decisionRowSig });
   return useMemo(() => ({ workspace: rows.filter((d) => inWorkspaceList(d, key)), mine: rows, workspaceKey: key }), [rows, key]);
-}
-
-const ownedSig = (d: SessionDecisionItem) => `${d.status}|${d.passed_to?.id ?? ""}|${d.holder_key ?? ""}|${(d.asked_user_ids ?? []).join(",")}|${d.user_id ?? ""}`;
-
-/** How many open decisions the viewer owns: the Decisions row's count, Mine's. */
-export function useOwnedDecisionCount(): number {
-  const me = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
-  const key = useActiveWorkspaceKey();
-  // The rows Mine lists (useDecisionRows), so the count and the tab agree.
-  const where = useMemo(() => (d: SessionDecisionItem) => listed(d) && isOpen(d) && ownedBy(d, me) && (inWorkspaceList(d, key) || inViewerQueue(d)), [me, key]);
-  return useCollectionRows<SessionDecisionItem>("sessionDecisions", { where, sig: ownedSig }).length;
 }

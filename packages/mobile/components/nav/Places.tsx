@@ -6,7 +6,7 @@ import { useTheme } from '@/constants/Theme';
 import { DrawerHeading, DrawerRow } from '@/components/nav/DrawerRow';
 import { LivePulse, useCallsOn, useLiveRooms } from '@/components/calls/LiveRooms';
 import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
-import { useOwnedDecisionCount } from '@codecast/web/hooks/useDecisionRows';
+import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
 
 /** The app's places that are not tabs, as slide-out rows: the questions
  *  you own, calls, plans, docs, triggers and the org. `onLeave` closes the
@@ -17,7 +17,7 @@ export function Places({ onLeave }: { onLeave: () => void }) {
   const orgOn = useWorkspaceFeatureState('org');
   const callsOn = useCallsOn();
   const live = useLiveRooms(callsOn).length > 0;
-  const waiting = useOwnedDecisionCount();
+  const waiting = useDecisionQueue().length;
 
   const go = (route: string) => {
     void Haptics.selectionAsync();

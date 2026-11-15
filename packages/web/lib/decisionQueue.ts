@@ -50,6 +50,9 @@ export type QueueItem = {
   source: QueueItemSource;
   conversationId: string;
   session?: InboxSession;
+  // The asking session's name as the decision row recorded it, for a session
+  // this client holds no row for.
+  sessionTitle?: string;
   question: string;
   // Authored payload (source "decide") — otherwise recovered context.
   contextMd?: string;
@@ -304,6 +307,7 @@ export function decisionQueueItems(
       source: "decide",
       conversationId: d.conversation_id,
       session: sessions[d.conversation_id],
+      sessionTitle: d.session_title,
       question: d.question,
       contextMd: d.context_md,
       options: d.options,

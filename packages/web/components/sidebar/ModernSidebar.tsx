@@ -17,7 +17,7 @@ import { placeSection, RAIL_MORE_EVENT } from "../../lib/navPlace";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { sortedWorkbenches } from "../../lib/workbenchSwitch";
 import { useNeedsInputCount } from "../../hooks/useNeedsInputCount";
-import { useOwnedDecisionCount } from "../../hooks/useDecisionRows";
+import { useDecisionQueue } from "../../hooks/useDecisionQueue";
 import { useThreadUnread } from "../../hooks/useThreadsSync";
 import { useLiveRoomCount } from "../../hooks/useLiveRoomCount";
 import { usePoppedOut } from "../../hooks/usePoppedOut";
@@ -57,9 +57,9 @@ export const ModernInboxRow = memo(function ModernInboxRow({ isActive, isNarrow,
   return <RegistryNavSection id="inbox" isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} badge={needs > 0 ? <NavCount n={needs} tone={NEEDS_YOU} /> : undefined} />;
 });
 
-/** The open decisions you own. Always drawn: at zero the count goes, the row stays. */
+/** The decisions waiting on you: the queue the stepper walks and the panel lists. Always drawn: at zero the count goes, the row stays. */
 const DecisionsRow = memo(function DecisionsRow({ isActive, isNarrow, onMobileClose }: RowProps) {
-  const pending = useOwnedDecisionCount();
+  const pending = useDecisionQueue().length;
   return <RegistryNavSection id="decisions" isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} badge={pending > 0 ? <NavCount n={pending} tone={NEEDS_YOU} /> : undefined} />;
 });
 
