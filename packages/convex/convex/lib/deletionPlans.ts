@@ -350,6 +350,7 @@ export const LEFT_OUT: Record<string, string> = {
   wallet_ledger: "no conversation index (hosted assistant spend)",
   move_rehearsals: "no conversation index (short-lived move scratch)",
   app_calls: "no team or workspace index",
+  meeting_bots: "no team or call index; holds the meeting link and bot status, no transcript text (open follow-up: index by transcript_id)",
   judges: "no team or workspace index",
   agent_reviews: "no team or workspace index",
   commit_ci: "no team or workspace index",

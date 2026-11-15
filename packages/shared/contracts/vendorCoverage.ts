@@ -21,6 +21,7 @@ export const VENDORS = {
   slack: { name: "Slack", receives: "team-account", feature: "Slack" },
   github: { name: "GitHub", receives: "team-account", feature: "GitHub" },
   linear: { name: "Linear", receives: "team-account", feature: "Linear" },
+  google: { name: "Google", receives: "team-account", feature: "Google Calendar" },
   // Push delivery: regulated teams' push bodies carry no transcript text (lib/pushPrivacy).
   expo: { name: "Expo push", receives: "no-content", feature: "Push notifications" },
 } as const;

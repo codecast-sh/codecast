@@ -18,6 +18,7 @@ const ALLOWED: Record<string, { vendor: Vendor; receives: string }> = {
   "slack.com": { vendor: "slack", receives: "the team's own Slack workspace (its Slack plan must carry a BAA; ct-87104)" },
   "api.github.com": { vendor: "github", receives: "the team's own GitHub repos: org membership, deploy targets" },
   "api.linear.app": { vendor: "linear", receives: "the team's own Linear workspace, issues the team links" },
+  "www.googleapis.com": { vendor: "google", receives: "the person's own connected Google Calendar: their OAuth token and a week's time window; reads back event times, titles and meeting links (meetingCalendar)" },
   "exp.host": { vendor: "expo", receives: "push notifications to the team's phones (bodies must carry no transcript text for regulated teams)" },
 };
 
