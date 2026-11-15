@@ -39,6 +39,7 @@ import * as Font from 'expo-font';
 import { setTaskErrorReporter } from '@codecast/web/lib/taskActions';
 import { StoreSyncBridge } from '@/components/StoreSyncBridge';
 import { appAlert } from '@/lib/popups';
+import { PresenceRequests } from '@/components/PresenceRequests';
 
 // A task write the server refuses (createTaskAndAdopt drops its stub) says so,
 // as web's toast does.
@@ -337,6 +338,7 @@ function RootLayoutNav() {
                     </Suspense>
                   </OverlayErrorBoundary>
                 ) : null}
+                <PresenceRequests />
                 {/* Last, so the lock sits above every host before it. */}
                 <BiometricGate />
               </AuthGate>

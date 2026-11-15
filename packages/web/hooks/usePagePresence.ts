@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { useTabContext } from "../lib/tabParams";
+import { useTabPane } from "../lib/tabParams";
 
 // Is the reader actually HERE — this tab on screen, the window focused, the
 // document visible? Read marks (chat channels, the Threads page) must follow
@@ -24,14 +24,14 @@ function readPresence(): boolean {
 /** Is this page the tab pane on screen? No tab shell (a standalone window, a
  *  test) means the page IS the view. */
 export function useTabActive(): boolean {
-  const tab = useTabContext();
+  const tab = useTabPane();
   return tab ? tab.isActive : true;
 }
 
 /** Is this page on screen? A split sibling is on screen without being the
  *  active (focused) pane. */
 export function useTabVisible(): boolean {
-  const tab = useTabContext();
+  const tab = useTabPane();
   return tab ? (tab.isVisible ?? tab.isActive) : true;
 }
 
