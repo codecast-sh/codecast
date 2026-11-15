@@ -25,7 +25,7 @@ export function AreaBar({ onLeave }: { onLeave?: () => void }) {
           onPress={() => {
             void Haptics.selectionAsync();
             onLeave?.();
-            router.navigate(`/(tabs)/${t.name}` as never);
+            router.dismissTo(`/(tabs)/${t.name}` as never);
           }}
           activeOpacity={0.6}
           accessibilityRole="button"

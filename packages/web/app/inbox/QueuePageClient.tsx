@@ -41,6 +41,7 @@ import { bootstrapCut, windowConversationSince, type WindowedConversation } from
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
 import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVisit";
 import { requestSessionRestart } from "../../lib/sessionCommands";
+import { afterBootIdle } from "../../lib/bootIdle";
 import { SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
@@ -64,19 +65,24 @@ export type SeatConversation = {
   head: { open: boolean; onToggle: () => void };
 };
 
-export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetNonce, targetTimestamp, highlightQuery, onClearHighlight, seat, headerEnd, autoFocusInput = true, diffOnlyWithChanges, hideHeaderTitle }: { sessionId: string; isIdle: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetNonce?: number; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void; seat?: SeatConversation; headerEnd?: ReactNode; autoFocusInput?: boolean; diffOnlyWithChanges?: boolean; hideHeaderTitle?: boolean }) {
-  devRenderCount("InboxConversation2");
+type InboxConversationPaneProps = { sessionId: string; isIdle: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetNonce?: number; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void; seat?: SeatConversation; headerEnd?: ReactNode; autoFocusInput?: boolean; diffOnlyWithChanges?: boolean; hideHeaderTitle?: boolean };
+
+export const InboxConversation = memo(function InboxConversation(props: InboxConversationPaneProps) {
   // Non-blocking switch: the heavy work of a session switch is mounting the new
   // conversation's message tree (every block keyed by msg._id unmounts/remounts,
-  // re-parsing markdown). Defer the id the BODY renders from so a switch stays
-  // interruptible — React keeps the previous conversation painted and
+  // re-parsing markdown). Defer the props the pane renders from so a switch
+  // stays interruptible — React keeps the previous conversation painted and
   // interactive while it mounts the next one at transition priority, instead of
   // freezing the main thread on one synchronous render. The parent's sidebar
-  // highlight still moves instantly off the live id. Renaming the prop to
-  // liveSessionId means every existing reference below reads the deferred value,
-  // so the whole pane (body + banners + resume target) stays self-consistent and
-  // swaps atomically when the next conversation is ready.
-  const sessionId = useDeferredValue(liveSessionId);
+  // highlight still moves instantly off the live id. Deferring every prop
+  // together keeps the pane self-consistent (the old conversation never gets
+  // the next one's callbacks or last message) and lets the urgent render bail
+  // out on the unchanged props, so it costs nothing until the swap.
+  return <InboxConversationPane {...useDeferredValue(props)} />;
+});
+
+const InboxConversationPane = memo(function InboxConversationPane({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetNonce, targetTimestamp, highlightQuery, onClearHighlight, seat, headerEnd, autoFocusInput = true, diffOnlyWithChanges, hideHeaderTitle }: InboxConversationPaneProps) {
+  devRenderCount("InboxConversation2");
   const {
     conversation,
     hasMoreAbove,
@@ -761,9 +767,11 @@ export function QueuePageClient() {
   const currentSessionIdForWarm = currentSession?._id ?? null;
   useWatchEffect(() => {
     if (currentSessionIdForWarm) ensureHydrated(currentSessionIdForWarm);
-    for (const s of sortedSessions.slice(0, 50)) {
-      if (s._id !== currentSessionIdForWarm) ensureHydrated(s._id);
-    }
+    return afterBootIdle(() => {
+      for (const s of sortedSessions.slice(0, 50)) {
+        if (s._id !== currentSessionIdForWarm) ensureHydrated(s._id);
+      }
+    });
   }, [sortedSessions, currentSessionIdForWarm]);
 
   const handleClearHighlight = useCallback(() => {
