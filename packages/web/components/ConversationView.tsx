@@ -101,7 +101,7 @@ import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { PermissionProposals, TeammatePermissions } from "./conversation/teamProposals";
 import { TeamProposalContext, type TeamProposalRole } from "../hooks/useTeamProposals";
 import { useSyncMyTeamSuggestions, useSyncPendingSuggestions } from "../hooks/useGuestSuggestions";
-import { SessionDecisionCard } from "./SessionDecisionCard";
+import { ThreadDecisionCard } from "./SessionDecisionCard";
 import { PreloadPublishedPage } from "./PublishedPageEmbed";
 import { HostedApprovalCard, HostedApprovalPending, HostedApprovalSettled } from "./conversation/HostedApprovalCard";
 import { PermissionAnswer, PermissionAskCard, PermissionRecordLine } from "./conversation/PermissionAsk";
@@ -5229,7 +5229,7 @@ const ConversationViewInner = (
       {/* A hosted conversation's own approval and a permission ask live in
           the transcript's flow (hostedTailCard); the rest dock above the composer. */}
       {decisionItem && conversation && !onSendOverride && !inlineApproval && (
-        <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} more={pendingDecision ? pendingDecisions.length - 1 : 0} targetNonce={targetMessageId ? targetNonce : undefined} scrollToMessage={scrollToMessageById} />
+        <ThreadDecisionCard conversationId={conversation._id} asks={pendingDecisions} fallback={decisionStepper?.item ?? null} stepper={decisionStepper} targetNonce={targetMessageId ? targetNonce : undefined} scrollToMessage={scrollToMessageById} />
       )}
       {/* The decision answering this one brings up: its page loads ahead. */}
       {pendingDecisions[1]?.reportSlug && <PreloadPublishedPage slug={pendingDecisions[1].reportSlug} decision={pendingDecisions[1].key.replace(/^decide:/, "")} />}
