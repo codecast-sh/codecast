@@ -527,6 +527,26 @@ describe("applyHideTransition — explicit kill forces teardown", () => {
     expect(kills(db)).toHaveLength(0);
   });
 
+  // A switch (agent, project, fork) queues a kill paired with a resume and
+  // leaves the conversation_id column unset. That kill takes down the session
+  // that is about to be replaced, not the resumed one, so a hide afterwards
+  // still queues its own teardown.
+  test("a switch's paired kill does not suppress a later hide's teardown", async () => {
+    const tables = mkTables();
+    tables.daemon_commands.push({
+      _id: "cmdSwitch", user_id: "u1", command: "kill_session",
+      args: JSON.stringify({ conversation_id: CONV }), created_at: Date.now(),
+    });
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+
+    const { teardownEnqueued } = await applyHideTransition({ db }, doc, patch, { forceKill: true });
+    expect(teardownEnqueued).toBe(true);
+    expect(kills(db)).toHaveLength(1);
+  });
+
   // A persistent anchor goes dormant on a kill, it is never retired — only
   // decommissionAnchor clears `persistent`. Forcing must not change that.
   // Killing an anchor means DORMANCY, not death — so it keeps BOTH halves of

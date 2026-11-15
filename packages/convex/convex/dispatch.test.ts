@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { getFunctionName } from "convex/server";
+import { convexTest } from "convex-test";
+import { anyApi, getFunctionName } from "convex/server";
+import schema from "./schema";
+import { allModules } from "./testModules.testkit";
 import { applyPatches, classifyHideTransition, dispatch } from "./dispatch";
 import { reconfigureSession } from "./conversations";
 import { getReceipt } from "./localFirstCommands";
@@ -1433,5 +1436,144 @@ describe("staffHeadOfPeople side effect", () => {
       .toEqual({ team_id: "teams_acme", project_path: "/Users/me/src/app" });
     expect(await run({ team_id: "teams_acme", host_user_id: userId, client_id: "orgrolestub-head-2", adopt_conversation_id: "conversations_me" }))
       .toEqual({ team_id: "teams_acme", adopt_conversation_id: "conversations_me" });
+  });
+});
+
+const api = anyApi as any;
+
+// eg-2908 / ct-91233: a web killSession timed out in dispatch:dispatch on every
+// retry. Each hide teardown's kill_session dedupe read every unexecuted
+// daemon_commands row the user had, so one kill of a big group read
+// (teardowns x backlog) documents. Driven end to end through the real
+// mutation, with the patches the web store's killSession sends for a lead and
+// its nested group, and with convex-test enforcing a read cap that one scan of
+// a 5,000-row backlog alone would exceed.
+describe("killSession through dispatch does not scale with the daemon_commands backlog", () => {
+  const CHILDREN = 40;
+  const READ_CAP = 2_000;
+
+  async function seed(backlog: number) {
+    const t = convexTest({ schema, modules: allModules, transactionLimits: { documentsRead: READ_CAP } });
+    const now = Date.now();
+    const ids = await t.run(async (ctx) => {
+      const user = await ctx.db.insert("users", { name: "Me" } as any);
+      const conv = (extra: Record<string, any>) => ctx.db.insert("conversations", {
+        user_id: user, agent_type: "claude_code", started_at: now, updated_at: now,
+        message_count: 5, is_private: true, status: "active", ...extra,
+      } as any);
+      const lead = await conv({ session_id: "s-lead" });
+      const children: any[] = [];
+      for (let i = 0; i < CHILDREN; i++) {
+        children.push(await conv({ session_id: `s-c${i}`, parent_conversation_id: lead, has_pending_messages: true }));
+      }
+      const all = [lead, ...children];
+      for (const c of children) {
+        for (let m = 0; m < 2; m++) {
+          await ctx.db.insert("pending_messages", {
+            conversation_id: c, from_user_id: user, owner_user_id: user, content: `queued ${m}`,
+            status: "pending", created_at: now, retry_count: 0,
+          } as any);
+        }
+      }
+      for (const c of all) {
+        await ctx.db.insert("agent_tasks", {
+          user_id: user, title: "loop", prompt: "p", schedule_type: "recurring", interval_ms: 3_600_000,
+          mode: "apply", status: "scheduled", retry_count: 0, run_count: 0, created_at: now,
+          originating_conversation_id: c,
+        } as any);
+      }
+      for (let i = 0; i < backlog; i++) {
+        await ctx.db.insert("daemon_commands", {
+          user_id: user, command: "send_message", created_at: now - 60_000 + i,
+          args: JSON.stringify({ conversation_id: `other${i}` }),
+        } as any);
+      }
+      return { user, lead, all };
+    });
+    const as = t.withIdentity({ subject: `${ids.user}|test` });
+    return { t, as, ...ids };
+  }
+
+  async function drain(t: any) {
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 1));
+      await t.finishInProgressScheduledFunctions();
+    }
+  }
+
+  const hidePatch = (ids: any[], fields: Record<string, any>) => ({
+    sessions: Object.fromEntries(ids.map((id) => [String(id), fields])),
+    conversations: Object.fromEntries(ids.map((id) => [String(id), fields])),
+  });
+
+  async function kill(backlog: number) {
+    const s = await seed(backlog);
+    await s.as.mutation(api.dispatch.dispatch, {
+      action: "killSession", args: [String(s.lead)],
+      patches: hidePatch(s.all, { inbox_dismissed_at: 777 }),
+    });
+    await drain(s.t);
+    return s;
+  }
+
+  const pendingKills = (t: any) => t.run(async (ctx: any) =>
+    (await ctx.db.query("daemon_commands").order("desc").take(500)).filter((c: any) => c.command === "kill_session" && c.executed_at === undefined));
+
+  test("the kill succeeds under a read cap one 5,000-row backlog scan would exceed, at 50 and at 5,000", async () => {
+    for (const backlog of [50, 5_000]) {
+      const { t, all } = await kill(backlog);
+      const kills = await pendingKills(t);
+      expect(kills.map((c: any) => JSON.parse(c.args).conversation_id).sort()).toEqual(all.map(String).sort());
+    }
+  });
+
+  test("every kill effect still lands on the lead and each nested child, and restore re-arms the schedules", async () => {
+    const { t, as, all } = await kill(50);
+    const rows = await t.run(async (ctx: any) => ({
+      convs: await Promise.all(all.map((id: any) => ctx.db.get(id))),
+      messages: await ctx.db.query("pending_messages").collect(),
+      tasks: await ctx.db.query("agent_tasks").collect(),
+    }));
+    for (const c of rows.convs) {
+      expect(c.inbox_dismissed_at).toBe(777);
+      expect(c.inbox_killed_at).toBeGreaterThan(0);
+      expect(c.status).toBe("completed");
+    }
+    const kills = await pendingKills(t);
+    for (const id of all) expect(kills.filter((c: any) => JSON.parse(c.args).conversation_id === String(id))).toHaveLength(1);
+    expect(rows.messages.length).toBe(CHILDREN * 2);
+    for (const m of rows.messages) expect(m.status).toBe("cancelled");
+    expect(rows.tasks.length).toBe(all.length);
+    for (const task of rows.tasks) {
+      expect(task.status).toBe("completed");
+      expect(task.canceled_on_kill_at).toBeGreaterThan(0);
+    }
+
+    await as.mutation(api.dispatch.dispatch, {
+      action: "restoreSession", args: [String(all[0])],
+      patches: hidePatch(all, { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_snoozed_until: null, inbox_killed_at: null }),
+    });
+    await drain(t);
+    const restored = await t.run(async (ctx: any) => ctx.db.query("agent_tasks").collect());
+    for (const task of restored) {
+      expect(task.status).toBe("scheduled");
+      expect(task.canceled_on_kill_at).toBeUndefined();
+    }
+  });
+
+  test("a second kill within the hour queues no second kill_session; a re-kill after the first ran queues exactly one", async () => {
+    const { t, as, lead } = await kill(50);
+    const leadKills = async () => (await pendingKills(t)).filter((c: any) => JSON.parse(c.args).conversation_id === String(lead));
+    const killLead = () => as.mutation(api.dispatch.dispatch, {
+      action: "killSession", args: [String(lead)], patches: hidePatch([lead], { inbox_dismissed_at: 888 }),
+    });
+
+    await killLead();
+    expect(await leadKills()).toHaveLength(1);
+
+    const [first] = await leadKills();
+    await t.run((ctx: any) => ctx.db.patch(first._id, { executed_at: Date.now() }));
+    await killLead();
+    expect(await leadKills()).toHaveLength(1);
   });
 });
