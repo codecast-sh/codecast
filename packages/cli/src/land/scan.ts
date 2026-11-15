@@ -65,10 +65,12 @@ export type TreeVerdict =
   /** A line run made it and it holds work main lacks, in use or not: the run ships that work after its decision, never a hand. */
   | "run"
   /** A session marked it held (hold.ts): its work stays on its branch, never landed or pruned, until released. */
-  | "held";
+  | "held"
+  /** Another tree already holds every change it would land, in a newer form: landing it too can only regress that tree's work. */
+  | "superseded";
 
 /** Verdicts whose tree `cast land prune` archives and removes. */
-export const PRUNABLE: ReadonlySet<TreeVerdict> = new Set(["empty", "landed", "stale"]);
+export const PRUNABLE: ReadonlySet<TreeVerdict> = new Set(["empty", "landed", "stale", "superseded"]);
 
 export interface RosterRow {
   short_id?: string;
@@ -85,6 +87,9 @@ export interface TreeFile {
   verdict: FileVerdict;
   /** A = added, D = deleted, M = modified, relative to the tree's base. */
   status: string;
+  /** Blob shas of the file at the tree's base and in the tree (all zeros when absent), for comparing trees with each other. */
+  src?: string;
+  dst?: string;
 }
 
 export interface TreeReport {
@@ -105,6 +110,8 @@ export interface TreeReport {
   owner: { short_id: string; title: string | null; work_state: string | null } | null;
   counts: Record<FileVerdict, number>;
   files: TreeFile[];
+  /** Other landable trees that change some of the same files differently: land one, then scan again before the next. */
+  overlaps?: Array<{ path: string; files: string[] }>;
 }
 
 async function git(cwd: string, args: string[], opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): Promise<string> {
@@ -369,7 +376,7 @@ export interface ScanContext {
 export async function scanTree(entry: WorktreeEntry, ctx: ScanContext): Promise<TreeReport> {
   const base = await worktreeBase(entry, ctx.mainRef);
   const rows = base ? await treeChanges(entry.path, base) : [];
-  const files: TreeFile[] = rows.map((r) => ({ path: r.path, status: r.status, verdict: fileVerdict(r.src, r.dst, ctx.mainBlobs.get(r.path)) }));
+  const files: TreeFile[] = rows.map((r) => ({ path: r.path, status: r.status, verdict: fileVerdict(r.src, r.dst, ctx.mainBlobs.get(r.path)), src: r.src, dst: r.dst }));
 
   // The tree's own HEAD reflog: its last checkout or commit HERE. HEAD's commit
   // time would read a tree that never committed as old as the commit it was cut from.
@@ -486,5 +493,69 @@ export async function scanRepo(root: string, opts: { roster: RosterRow[] | null;
   const trees = (await mapLimit(entries, opts.concurrency ?? 4, (e) =>
     scanTree(e, ctx).catch((err) => { errors.push({ path: e.path, error: String(err?.message ?? err).split("\n")[0] }); return null; }),
   )).filter((t): t is TreeReport => !!t);
+  // Only the files a landable tree would land are compared, so read just those.
+  const contested = new Set(trees.filter((t) => !t.primary && LANDABLE.has(t.verdict)).flatMap((t) => t.files.filter((f) => f.verdict === "only" || f.verdict === "both").map((f) => f.path)));
+  const shas = trees.flatMap((t) => t.files.filter((f) => contested.has(f.path)).flatMap((f) => [f.src, f.dst])).filter((sha): sha is string => !!sha && !ZERO.test(sha));
+  relateTrees(trees, await readBlobs(root, [...new Set(shas)]));
   return { repo, root, origin, mainRef, trees, errors };
+}
+
+/** Verdicts a deploy lands, and so the ones another tree can supersede or overlap. */
+const LANDABLE: ReadonlySet<TreeVerdict> = new Set(["ready", "review"]);
+
+/**
+ * Judge the trees against each other, not only against main. Several trees
+ * often hold successive versions of the same work (a worker's tree, then an
+ * integration tree that merged it); landing each in turn against main, with
+ * conflicts kept on both sides, built a main that did not compile (Nov 14:
+ * four overlapping cast computer trees landed as one broken release).
+ *
+ * A landable tree is superseded when another tree changed every file it would
+ * land and already holds its change there (the same line test as absorbed),
+ * and is at least as recent. Landable trees that change a file differently
+ * without either holding the other are listed as overlaps. Mutates `trees`.
+ */
+export function relateTrees(trees: TreeReport[], blobs: Map<string, string>): void {
+  const pending = (t: TreeReport) => t.files.filter((f) => f.verdict === "only" || f.verdict === "both");
+  const text = (sha: string | undefined) => (!sha || ZERO.test(sha) ? "" : blobs.get(sha));
+  const holds = (mine: TreeFile, theirs: TreeFile | undefined): boolean => {
+    if (!theirs || theirs.dst === undefined || mine.dst === undefined) return false;
+    if (theirs.dst === mine.dst) return true;
+    if (ZERO.test(mine.dst) || ZERO.test(theirs.dst)) return false;
+    const base = text(mine.src), tree = text(mine.dst), other = text(theirs.dst);
+    return base !== undefined && tree !== undefined && other !== undefined && absorbedInto(base, tree, other);
+  };
+  // The main checkout counts too: once a deploy applied one tree there, an older copy of the same work reads superseded on the next scan.
+  const others = trees.filter((t) => pending(t).length > 0);
+  // Newest first, so of two trees holding each other's work the older one is the one that goes.
+  const byRecency = [...trees].sort((a, b) => b.lastActivity - a.lastActivity || a.path.localeCompare(b.path));
+  for (const t of byRecency) {
+    if (t.primary || !LANDABLE.has(t.verdict)) continue;
+    const mine = pending(t);
+    if (mine.length === 0) continue;
+    const newer = others.find((o) => {
+      if (o === t || o.verdict === "superseded" || o.lastActivity < t.lastActivity) return false;
+      const theirs = new Map(o.files.map((f) => [f.path, f]));
+      return mine.every((f) => holds(f, theirs.get(f.path)));
+    });
+    if (newer) {
+      t.verdict = "superseded";
+      t.reason = `${newer.path} holds all ${mine.length} of its unlanded files in a newer form; landing this one too would undo that tree's work`;
+    }
+  }
+  const landable = trees.filter((t) => !t.primary && LANDABLE.has(t.verdict));
+  for (const t of landable) {
+    const mine = pending(t);
+    const overlaps = landable
+      .filter((o) => o !== t)
+      .map((o) => {
+        const theirs = new Map(pending(o).map((f) => [f.path, f]));
+        return { path: o.path, files: mine.filter((f) => theirs.has(f.path) && theirs.get(f.path)!.dst !== f.dst).map((f) => f.path) };
+      })
+      .filter((o) => o.files.length > 0);
+    if (overlaps.length) {
+      t.overlaps = overlaps;
+      t.reason += `; overlaps ${overlaps.map((o) => `${o.path} (${o.files.length} files)`).join(", ")}: land one, scan again, then the next`;
+    }
+  }
 }

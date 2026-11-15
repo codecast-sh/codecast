@@ -157,9 +157,9 @@ export function keepVerdicts(scan: LandScan, verdicts: Set<string>): LandScan {
   return { ...scan, repos, ...(hosts ? { hosts } : {}) };
 }
 
-const ORDER: TreeVerdict[] = ["ready", "review", "held", "run", "stale", "landed", "empty", "live", "primary"];
+const ORDER: TreeVerdict[] = ["ready", "review", "held", "run", "superseded", "stale", "landed", "empty", "live", "primary"];
 const TONE: Record<TreeVerdict, (s: string) => string> = {
-  ready: fmt.success, review: fmt.warning, held: fmt.warning, run: fmt.accent, stale: fmt.muted, landed: fmt.muted, empty: fmt.muted, live: fmt.accent, primary: fmt.label,
+  ready: fmt.success, review: fmt.warning, held: fmt.warning, run: fmt.accent, superseded: fmt.muted, stale: fmt.muted, landed: fmt.muted, empty: fmt.muted, live: fmt.accent, primary: fmt.label,
 };
 
 function treeLine(t: TreeReport, now: number): string {
@@ -241,6 +241,8 @@ Verdicts (a tree's own work = its base to its working tree, untracked files incl
            never landed or pruned, until cast land release
   run      a line run made it: the run ships its change after its decision, so
            it is never landed by hand (land diff refuses it)
+  superseded  another tree holds every change it would land, in a newer form:
+           never landed (land diff refuses it); prune archives it
   stale    finished and untouched for 7 days: archived and released, not landed
   landed   main already holds every change it made
   empty    no changes of its own
@@ -309,10 +311,12 @@ A scan that cannot run prints { "error": "..." } on stdout and exits 1.
     .action(async (tree: string, opts: { only?: boolean; both?: boolean }) => {
       const dir = path.resolve(tree);
       if (!fs.existsSync(dir)) { console.error(`no worktree at ${dir}. Pass a worktree's path; cast land scan -v lists every tree with its path`); process.exit(1); }
-      const scan = await scanRepo(await repoRootOf(dir), { roster: null, processCwds: [], fetch: false, only: [dir] });
+      // The whole repo, not just this tree: whether another tree supersedes it is a comparison between them.
+      const scan = await scanRepo(await repoRootOf(dir), { roster: null, processCwds: [], fetch: false });
       const report = scan.trees.find((t) => t.path === dir);
       if (!report) { console.error(`no worktree at ${dir}. Pass a worktree's path; cast land scan -v lists every tree with its path`); process.exit(1); }
       if (report.verdict === "run" || report.verdict === "held") { console.error(`not landed by hand: ${dir} is ${report.reason}`); process.exit(1); }
+      if (report.verdict === "superseded") { console.error(`not landed: ${report.reason}`); process.exit(1); }
       const only: FileVerdict[] | undefined = opts.only || opts.both ? [...(opts.only ? ["only" as const] : []), ...(opts.both ? ["both" as const] : [])] : undefined;
       process.stdout.write(await treePatch(report, only));
     });

@@ -4,8 +4,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  ACTIVE_MS, PRUNABLE, STALE_MS, absorbedInto, fileVerdict, ownerIsLive, ownerOf, parseRawDiff, parseWorktreeList, scanRepo, treeVerdict,
-  type RepoScan, type VerdictFacts,
+  ACTIVE_MS, PRUNABLE, STALE_MS, absorbedInto, fileVerdict, ownerIsLive, ownerOf, parseRawDiff, parseWorktreeList, relateTrees, scanRepo, treeVerdict,
+  type RepoScan, type TreeReport, type VerdictFacts,
 } from "./scan.js";
 import { pruneTargets, type LandScan } from "./cli.js";
 import { ARCHIVE_REF_PREFIX, pruneTree, treePatch } from "./prune.js";
@@ -70,6 +70,68 @@ describe("treeVerdict", () => {
     expect(treeVerdict(facts({ held: "x" })).verdict).toBe("held");
     expect(treeVerdict(facts({ held: "x", primary: true })).verdict).toBe("primary");
     expect(PRUNABLE.has("held")).toBe(false);
+  });
+});
+
+describe("relateTrees", () => {
+  // Blob ids stand for contents; "0" is absent.
+  const blobs = new Map([
+    ["b0", "const settle = 120;\nfunction act() {}\n"],
+    ["w1", "const settle = 120;\nfunction act() { walk(); }\nconst batched = true;\n"],
+    ["w2", "const settle = 60;\nfunction act() { walk(); }\nconst batched = true;\nconst lanes = perPid();\n"],
+    ["x1", "const settle = 120;\nfunction act() { other(); }\n"],
+    ["n1", "export const leaf = 1;\n"],
+  ]);
+  const ZERO = "0000000000000000000000000000000000000000";
+  const report = (p: string, verdict: TreeReport["verdict"], ago: number, files: Array<[string, string, string]>): TreeReport => ({
+    repo: "r", path: p, branch: "", head: "h", base: "b", primary: false, inUse: null, verdict, reason: "open", lastActivity: NOW - ago, owner: null,
+    counts: { same: 0, absorbed: 0, only: files.length, both: 0 },
+    files: files.map(([path, src, dst]) => ({ path, status: "M", verdict: "only" as const, src, dst })),
+  });
+
+  test("a worker's tree whose every change an integration tree holds in a newer form is superseded, and prunable", () => {
+    const worker = report("/w/axwalk", "ready", 5 * 3_600_000, [["main.swift", "b0", "w1"]]);
+    const integrate = report("/w/integrate", "review", 3_600_000, [["main.swift", "b0", "w2"], ["leaf.ts", ZERO, "n1"]]);
+    relateTrees([worker, integrate], blobs);
+    expect(worker.verdict).toBe("superseded");
+    expect(worker.reason).toContain("/w/integrate holds all 1 of its unlanded files");
+    expect(integrate.verdict).toBe("review");
+    expect(PRUNABLE.has("superseded")).toBe(true);
+  });
+
+  test("an older tree never supersedes a newer one, and a held or live tree's newer copy still counts", () => {
+    const newer = report("/w/new", "ready", 3_600_000, [["main.swift", "b0", "w1"]]);
+    const older = report("/w/old", "ready", 9 * 3_600_000, [["main.swift", "b0", "w2"]]);
+    relateTrees([newer, older], blobs);
+    expect(newer.verdict).toBe("ready");
+    const worker = report("/w/worker", "ready", 5 * 3_600_000, [["main.swift", "b0", "w1"]]);
+    const held = report("/w/held", "held", 3_600_000, [["main.swift", "b0", "w2"]]);
+    relateTrees([worker, held], blobs);
+    expect(worker.verdict).toBe("superseded");
+  });
+
+  test("work a deploy already applied to the main checkout supersedes the tree it came from", () => {
+    const worker = report("/w/worker", "ready", 5 * 3_600_000, [["main.swift", "b0", "w1"]]);
+    const checkout = { ...report("/repo", "primary", 60_000, [["main.swift", "b0", "w2"]]), primary: true };
+    relateTrees([checkout, worker], blobs);
+    expect(worker.verdict).toBe("superseded");
+    expect(checkout.verdict).toBe("primary");
+  });
+
+  test("of two identical trees only the older goes", () => {
+    const a = report("/w/a", "ready", 2 * 3_600_000, [["main.swift", "b0", "w1"]]);
+    const b = report("/w/b", "ready", 3_600_000, [["main.swift", "b0", "w1"]]);
+    relateTrees([a, b], blobs);
+    expect([a.verdict, b.verdict]).toEqual(["superseded", "ready"]);
+  });
+
+  test("a tree with a change nobody else holds stays, and different edits to one file are named as overlaps", () => {
+    const a = report("/w/a", "ready", 2 * 3_600_000, [["main.swift", "b0", "x1"]]);
+    const b = report("/w/b", "review", 3_600_000, [["main.swift", "b0", "w1"]]);
+    relateTrees([a, b], blobs);
+    expect(a.verdict).toBe("ready");
+    expect(a.overlaps).toEqual([{ path: "/w/b", files: ["main.swift"] }]);
+    expect(b.reason).toContain("overlaps /w/a (1 files): land one, scan again, then the next");
   });
 });
 
