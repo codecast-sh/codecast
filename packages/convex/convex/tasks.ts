@@ -49,7 +49,7 @@ import { isViableInboxParent } from "./inboxFilters";
 import { listLiveManagedSessions } from "./lib/liveSessions";
 import { requireInitiative } from "./lib/initiativeRef";
 import { projectTasks, projectTasksIn } from "./lib/projectWork";
-import { taskCommentsWithSessionInfo, type CommentSessionCache } from "./lib/commentSessionInfo";
+import { taskCommentsWithSessionInfo } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { canSendProductMessage, enqueuePendingMessage, tellRole } from "./pendingMessages";
@@ -3038,6 +3038,17 @@ export const context = query({
 // viewer (tasks.convergence.test.ts). Mutates `result` in
 // place — the spread form `{...t, ...}` doubled peak heap and was a top
 // contributor to TooMuchMemoryCarryOver on these UDFs.
+const RECENT_COMMENTS = 3;
+const RECENT_COMMENT_CHARS = 420;
+
+/** A problem's newest comments, oldest first, each cut to its first line. */
+export function recentCommentLines(rows: ReadonlyArray<Doc<"task_comments">>): Array<{ _id: string; author: string; comment_type: string; text: string; created_at: number }> {
+  return [...rows]
+    .sort((a, b) => a.created_at - b.created_at)
+    .slice(-RECENT_COMMENTS)
+    .map((c) => ({ _id: String(c._id), author: c.author, comment_type: c.comment_type, text: c.text.split("\n")[0].slice(0, RECENT_COMMENT_CHARS), created_at: c.created_at }));
+}
+
 async function enrichTasks(ctx: any, userId: Id<"users">, result: any[]): Promise<any[]> {
   const allUserIds = new Set<string>();
   for (const t of result) {
@@ -3102,15 +3113,20 @@ async function enrichTasks(ctx: any, userId: Id<"users">, result: any[]): Promis
   // `webActiveSessions`; the dormant origin badge is `webTaskOrigins`, fetched
   // one-shot by the client (a dormant session's badge data no longer changes).
   //
-  // Comments are the one join every channel carries, so the bootstrap floor,
-  // the crawl and byIds write one row shape: a row that arrived by a list and
-  // a row refetched by byIds (the sync log's refetch on last_comment_at) are
-  // the same row. Every caller is one-shot (webList is the E8 bootstrap floor,
-  // the crawl and byIds are convex.query calls), so the conversation reads the
-  // session_info join makes re-run nothing. One cache serves the whole list.
-  const sessionInfo: CommentSessionCache = new Map();
+  // A list row carries how many comments it has, never the thread: the
+  // threads lived in every cached row of every client (87 MB of 156 MB on a
+  // 22k-task account) though only an open task draws one, and it comes from
+  // webGetTaskDetail. A problem (a task with a cause) also carries its newest
+  // few comments' first lines, which the line's problem list reads to say why
+  // a run handed it back (lib/line/problemPage escalationWhy). Every channel
+  // (the floor, the crawl, byIds) builds the row here, so they stay one shape.
   await Promise.all(result.map(async (t) => {
-    t.comments = await taskCommentsWithSessionInfo(ctx, t._id, userId, sessionInfo);
+    const rows: Doc<"task_comments">[] = await ctx.db
+      .query("task_comments")
+      .withIndex("by_task_id", (q: any) => q.eq("task_id", t._id))
+      .collect();
+    t.comment_count = rows.length;
+    if (t.cause) t.recent_comments = recentCommentLines(rows);
   }));
 
   for (const t of result) {

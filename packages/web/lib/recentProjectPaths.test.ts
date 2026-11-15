@@ -6,6 +6,7 @@ import {
   recentProjectPathsFromSessionKeys,
   recentProjectPathsFromSessions,
   recentProjectSessionKey,
+  recentProjectSessionKeys,
 } from "./recentProjectPaths";
 
 describe("recentProjectPathsFromSessions", () => {
@@ -86,5 +87,20 @@ describe("recentProjectSessionKey", () => {
     const after = recentProjectSessionKey({ user_id: "me", project_path: "/repo", updated_at: 179_999 });
     expect(after).toBe(before);
     expect(recentProjectPathsFromSessionKeys([after], "me")[0]?.path).toBe("/repo");
+  });
+});
+
+describe("recentProjectSessionKeys", () => {
+  test("returns the same array for the same collection and re-keys only changed rows", () => {
+    const a = { user_id: "me", project_path: "/a", updated_at: 60_000 };
+    const b = { user_id: "me", project_path: "/b", updated_at: 60_000 };
+    const first = { a, b };
+    const keys = recentProjectSessionKeys(first);
+    expect(recentProjectSessionKeys(first)).toBe(keys);
+    const moved = { ...b, project_path: "/c" };
+    const next = recentProjectSessionKeys({ a, b: moved });
+    expect(next).not.toBe(keys);
+    expect(next[0]).toBe(keys[0]);
+    expect(next[1]).toBe(recentProjectSessionKey(moved));
   });
 });
