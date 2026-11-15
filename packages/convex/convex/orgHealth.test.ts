@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { makeFakeDb } from "./testDb";
-import { HEALTH_CAPS, HEALTH_TASK_FIELDS, NAV_PROMPT_LIVE_SINCE, computeOrgHealth, readTurnsSince, readWorkTasks, roleActivity, slimWorkTasks } from "./orgHealth";
+import schema from "./schema";
+import { makeFakeDb, schemaIndexes } from "./testDb";
+import { HEALTH_CAPS, HEALTH_TASK_FIELDS, NAV_PROMPT_LIVE_SINCE, computeOrgHealth, healthMembersAndRoles, readHealthDecisions, readTurnsSince, readWorkTasks, roleActivity, slimWorkTasks } from "./orgHealth";
 import { collectOrgSessions } from "./org";
 import { reachedSentence } from "@codecast/shared/contracts/orgAreas";
 
@@ -577,5 +578,85 @@ describe("readTurnsSince counts inbound turns, not tool results", () => {
     const { db, role } = await read(false);
     const a = await roleActivity(ctxOf(db), ME as any, role, T, { wholeWorkspaceLatest: null });
     expect(a.wakes_7d.total).toBe(4);
+  });
+});
+
+// ct-73207: orgHealth:healthReport died in prod on Union (53 people, ~1,200
+// decisions a week, a full pending inbox) with "too many system operations"
+// at the first fanned part, healthDecisionsPart, and with OOM and 3s timeouts.
+// The decisions part read every decision of the week whole (context, options,
+// card) member by member, then fetched each pending inbox row's decision a
+// second time. It must answer a workspace that size well inside one query's
+// limits, with the same numbers. On the base this fixture reads 1,654 docs,
+// 5.96 MB in 361 db calls (200 of them the inbox's repeat gets).
+describe("org.health decisions part on a large workspace (ct-73207)", () => {
+  const MEMBERS = 53;
+  const ANSWERED = 900;
+  const PENDING = 300;
+  const INBOX = HEALTH_CAPS.inbox_per_person;
+  const BUDGET = { docs: 3000, bytes: 2 * 1024 * 1024, calls: 300 };
+
+  function meter(db: any) {
+    const used = { docs: 0, bytes: 0, calls: 0 };
+    const tally = (v: any) => {
+      const rows = Array.isArray(v) ? v : Array.isArray(v?.page) ? v.page : v ? [v] : [];
+      used.docs += rows.length;
+      for (const r of rows) used.bytes += JSON.stringify(r).length;
+      return v;
+    };
+    const wrap = (q: any): any => new Proxy(q, {
+      get(target, prop) {
+        const value = target[prop];
+        if (prop === Symbol.asyncIterator && typeof value === "function") {
+          used.calls++;
+          return () => { const it = value.call(target); return { next: () => it.next().then((r: any) => { if (!r.done) tally(r.value); return r; }) }; };
+        }
+        if (typeof value !== "function") return value;
+        return (...args: any[]) => {
+          const out = value.apply(target, args);
+          if (out && typeof out.then === "function") { used.calls++; return out.then(tally); }
+          return out && typeof out === "object" ? wrap(out) : out;
+        };
+      },
+    });
+    return { db: wrap(db), used };
+  }
+
+  function bigWorkspace() {
+    const memberIds = Array.from({ length: MEMBERS }, (_, i) => (i === 0 ? ME : `users_member_${i}`));
+    const body = "Context for the person: what was tried, the tradeoff, and what each choice does next. ".repeat(30);
+    const decision = (id: string, status: string, at: number) => ({
+      _id: id, conversation_id: "conversations_c", session_id: "s", user_id: ME, short_id: id, question: `Ship ${id}?`, context_md: body, status, created_at: at,
+      ...(status === "answered" ? { resolved_at: at + 30 * 60_000 } : {}),
+      options: [{ label: "Ship it", description: body.slice(0, 600) }, { label: "Hold", description: body.slice(0, 600) }],
+      hops: [{ role_id: GROWTH, at: at + 10 * 60_000, recommendation: 0 }],
+    });
+    const session_decisions = [
+      ...Array.from({ length: ANSWERED }, (_, i) => decision(`session_decisions_a${i}`, "answered", NOW - 6 * D + i * 60_000)),
+      ...Array.from({ length: PENDING }, (_, i) => decision(`session_decisions_p${i}`, "pending", NOW - 5 * D + i * 60_000)),
+    ];
+    const decision_inbox = Array.from({ length: INBOX }, (_, i) => ({ _id: `decision_inbox_${i}`, decision_id: `session_decisions_p${i}`, user_id: ME, status: "pending", created_at: NOW - 5 * D + i * 60_000 }));
+    return makeFakeDb({
+      team_memberships: memberIds.map((u, i) => ({ _id: `team_memberships_${i}`, user_id: u, team_id: TEAM, role: "member", joined_at: 1 })),
+      org_roles: [{ _id: GROWTH, short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth lead", handle: "growth", status: "active", created_by: ME, created_at: 1, updated_at: 1 }],
+      session_decisions,
+      decision_inbox,
+    }, { indexes: schemaIndexes(schema as any) });
+  }
+
+  test("reads within one query's budget and counts every decision of the week", async () => {
+    const { db, used } = meter(bigWorkspace());
+    const ctx = { db } as any;
+    const { memberIds, roleIds } = await healthMembersAndRoles(ctx, ME as any, TEAM);
+    const dec = await readHealthDecisions(ctx, TEAM, memberIds, roleIds, NOW);
+
+    expect(dec.decisionsOf[GROWTH]).toBe(ANSWERED + PENDING);
+    expect(dec.latency[GROWTH]).toHaveLength(ANSWERED + PENDING);
+    expect(dec.decisionsTruncated).toBe(false);
+    expect(dec.peopleWaiting[ME]).toEqual({ n: INBOX, oldest_min: 5 * 24 * 60 });
+
+    expect(used.docs).toBeLessThanOrEqual(BUDGET.docs);
+    expect(used.calls).toBeLessThanOrEqual(BUDGET.calls);
+    expect(used.bytes).toBeLessThanOrEqual(BUDGET.bytes);
   });
 });
