@@ -6,6 +6,7 @@ import { PLANS } from "../../lib/acmeWorld/world";
 import { TRIGGER_IDS, SUMMARY_RUNS } from "../../lib/acmeWorld/triggers";
 import { PR_RETRY, REPO } from "../../lib/acmeWorld/pullRequests";
 import { REVIEW_RUN_ID } from "../../lib/acmeWorld/workflows";
+import { WEBHOOKS_SEAT } from "../../lib/acmeWorld/orgRoles";
 
 const PLAN = `/plans/${PLANS(0)[0].short_id}`;
 /** The plan page's work section under its document: progress, tabs, the tab's content. */
@@ -82,7 +83,7 @@ export const TRACKING: Shot[] = [
   {
     name: "tasks-and-plans/task",
     route: "/tasks/ct-4181",
-    viewport: { width: 1200, height: 1700 },
+    viewport: { width: 1280, height: 900 },
     frame: "window",
     out: "public/documentation/tasks-and-plans/task.webp",
   },
@@ -130,6 +131,7 @@ export const TRACKING: Shot[] = [
   {
     name: "triggers/trigger",
     route: `/triggers/${TRIGGER_IDS.summary}`,
+    steps: [{ wait: "div, span, h2, h3", text: "Run history" }, { wait: "button", text: "Run now" }, { sleep: 600 }],
     viewport: { width: 1200, height: 860 },
     frame: "window",
     out: "public/documentation/triggers/trigger.webp",
@@ -213,9 +215,19 @@ export const TRACKING: Shot[] = [
   {
     name: "workflows/graph",
     route: `/workflows/runs/${REVIEW_RUN_ID}`,
-    viewport: { width: 1280, height: 1200 },
-    steps: [{ wait: "button", text: "graph" }, { click: "button", text: "graph" }, { sleep: 1200 }],
-    frame: "window",
+    viewport: { width: 1440, height: 900 },
+    steps: [
+      { wait: "button", text: "graph" },
+      { click: "button", text: "graph" },
+      { wait: ".react-flow" },
+      { js: "document.querySelector('.react-flow').scrollIntoView({ block: 'center' })" },
+      // Fit the whole graph, start to Ship, to the frame.
+      { click: ".react-flow__controls-fitview" },
+      { hover: "button", text: "graph" },
+      { sleep: 1200 },
+    ],
+    crop: { selector: ".react-flow", pad: 0 },
+    frame: "element",
     out: "public/documentation/workflows/graph.webp",
   },
   {
@@ -260,23 +272,42 @@ export const TRACKING: Shot[] = [
 
   /* ── Org roles ───────────────────────────────────────────────────────── */
   {
-    name: "org-roles/hire-head-of-people",
-    route: "/org?panel=open",
-    viewport: { width: 1440, height: 900 },
+    name: "org-roles/add-a-role",
+    route: "/org",
+    viewport: { width: 1440, height: 1000 },
     steps: [
-      // The chart before anyone was hired: the same tree with no roles on it.
-      { wait: "[data-cc-shell]" },
-      { js: "(() => { const s = __inboxStore.getState(); s.syncTable('orgTree', { ...s.orgTree, roles: [], anchors: [] }); })()" },
-      { wait: "[data-org-panel-hire]" },
+      { wait: "button", text: "Hire" },
+      { click: "button", text: "Hire" },
+      { wait: "button", text: "Write a role" },
+      { click: "button", text: "Write a role" },
+      { wait: "input[placeholder='Head of Growth']" },
+      { click: "input[placeholder='Head of Growth']" },
+      { type: "Webhooks lead" },
+      { click: "button, label", text: "Webhook retries" },
+      // Reports to Sarah Chen, picked the way the select's change would.
+      { js: "(() => { const sel = [...document.querySelectorAll('[role=dialog] select')].find((x) => [...x.options].some((o) => o.text.startsWith('Sarah Chen'))); const opt = [...sel.options].find((o) => o.text.startsWith('Sarah Chen')); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, opt.value); sel.dispatchEvent(new Event('change', { bubbles: true })); })()" },
+      { js: "document.activeElement?.blur?.()" },
       { sleep: 800 },
     ],
-    frame: "window",
-    out: "public/documentation/org-roles/hire-head-of-people.webp",
+    crop: { selector: "[role=dialog]:has(input[placeholder='Head of Growth'])", pad: 24 },
+    frame: "element",
+    out: "public/documentation/org-roles/add-a-role.webp",
   },
   {
     name: "org-roles/role",
-    route: "/org/rl-hooks",
-    viewport: { width: 1440, height: 900 },
+    // A role's page is its standing conversation, with the role's tabs beside it.
+    route: `/conversation/${WEBHOOKS_SEAT._id}`,
+    viewport: { width: 1600, height: 900 },
+    steps: [
+      { wait: "button[aria-label^='Open the panel'], button[aria-label^='Close the panel']" },
+      // The panel remembers being open; open it only when it is closed.
+      { js: "document.querySelector(\"button[aria-label^='Open the panel: overview']\")?.click()" },
+      { wait: "button", text: "Overview" },
+      // The toggle keeps focus after the click, and its tooltip with it.
+      { js: "document.activeElement?.blur?.()" },
+      { hover: "h1, h2", text: "Webhooks lead" },
+      { sleep: 1200 },
+    ],
     frame: "window",
     out: "public/documentation/org-roles/role.webp",
   },
@@ -284,7 +315,7 @@ export const TRACKING: Shot[] = [
     name: "org-roles/proposal",
     route: "/org?proposal=op-41",
     viewport: { width: 1440, height: 1000 },
-    steps: [{ wait: "button", text: "Accept" }, { sleep: 800 }],
+    steps: [{ wait: "p, div", text: "3 changes: 1 new role" }, { sleep: 800 }],
     frame: "window",
     out: "public/documentation/org-roles/proposal.webp",
   },
