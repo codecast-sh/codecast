@@ -228,6 +228,12 @@ const config: Config = {
   					height: '0'
   				}
   			},
+  			'effort-bump': {
+  				'0%, 100%': { transform: 'translateX(0)' },
+  				'25%': { transform: 'translateX(-2px)' },
+  				'60%': { transform: 'translateX(2px)' },
+  				'85%': { transform: 'translateX(-1px)' }
+  			},
   			'fadeSlideIn': {
   				'0%': {
   					opacity: '0',
@@ -242,7 +248,8 @@ const config: Config = {
   		animation: {
   			'accordion-down': 'accordion-down 0.2s ease-out',
   			'accordion-up': 'accordion-up 0.2s ease-out',
-  			'fadeSlideIn': 'fadeSlideIn 0.3s ease-out'
+  			'fadeSlideIn': 'fadeSlideIn 0.3s ease-out',
+  			'effort-bump': 'effort-bump 0.28s ease-out'
   		}
   	}
   },

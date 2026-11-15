@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   AGENT_MODEL_CONFIG,
@@ -26,6 +26,8 @@ import { useAgentDefinitions } from "../hooks/useSyncAgentDefinitions";
 import { toConvexAgentType } from "@codecast/shared/contracts";
 import { modelOptionKey, modelFitsAgent, effortGlyph } from "../lib/modelSwitch";
 import { commitModelChange, notifyModelToast as notifyToast } from "../lib/modelSwitchWeb";
+import { stepEffort, stepEffortLevel, useEffortPulse } from "../lib/effortStep";
+import { MenuKeyCaps } from "./KeyboardShortcutsHelp";
 
 // First-class model/effort control for the web. The commit rails live in
 // lib/modelSwitch.ts (shared with the mobile switcher); this module owns the
@@ -67,6 +69,10 @@ export interface ModelEffortRowsProps {
   /** Only the model list, or only the effort levels (the new-session foot
    *  gives each its own menu). Omitted, both. */
   part?: "model" | "effort";
+  /** ←/→ while the menu is open: one effort level down or up. Given, the
+   *  step goes through the session's own stepping (lib/effortStep: one switch
+   *  per run of presses); omitted, it is an ordinary effort pick. */
+  onStepEffort?: (dir: 1 | -1) => void;
 }
 
 /**
@@ -84,21 +90,58 @@ export function ModelEffortRows({
   ownerDeviceId,
   keepOpen = false,
   part,
+  onStepEffort,
 }: ModelEffortRowsProps) {
   const { dynamic, featured, all } = useDynamicModels(agentType, ownerDeviceId);
   const [search, setSearch] = useState("");
   const { defaultKey, setDefault } = useDefaultModelPin(agentType);
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
-  if (!cfg) return null;
   // Dynamic clients: Default + the curated featured head; typing searches the
   // device's full inventory. Everything else: the shared curated rail.
-  const rail = midSession ? liveRailOptions(cfg) : launchRailOptions(cfg);
+  const rail = cfg && (midSession ? liveRailOptions(cfg) : launchRailOptions(cfg));
   // A client with cloud agent providers (Cursor; Codex: Codex Cloud and the
   // Agents API) lists its local models and each provider's side by side; the
   // composer's "run in the cloud" switch and its choice of provider pick
   // which, so show only those (local ones for a local launch). No cloud
   // agent takes an effort from codecast, so a cloud launch offers none.
   const lane = cloudAgentProviderForLaunch(agentType, modelKey)?.id ?? null;
+  // Claude Code's picker: ←/→ move effort while the menu is open, whichever
+  // row holds focus. Only where this rail offers effort levels.
+  const stepsEffort = !!cfg && part !== "model" && cfg.efforts.length > 0 && !lane;
+  // Heard on the whole menu: a menu opened by the pointer holds focus on its
+  // content, above these rows. Latest props through a ref, one listener.
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const onArrow = useRef<(dir: 1 | -1) => void>(() => {});
+  onArrow.current = (dir) => {
+    if (onStepEffort) { onStepEffort(dir); return; }
+    const next = cfg && stepEffortLevel(cfg.efforts, effort, dir);
+    if (next) onSelect({ effort: next });
+  };
+  useEffect(() => {
+    const menu = stepsEffort ? rowsRef.current?.closest<HTMLElement>("[role=menu]") : null;
+    if (!menu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      if (!dir) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onArrow.current(dir);
+    };
+    menu.addEventListener("keydown", onKey, true);
+    return () => menu.removeEventListener("keydown", onKey, true);
+  }, [stepsEffort]);
+  if (!cfg || !rail) return null;
+  const effortLabel = (
+    <DropdownMenuLabel className="flex items-center gap-2 text-mark uppercase tracking-wider text-sol-text-dim">
+      Effort
+      <span className="ml-auto flex items-center gap-1.5 normal-case tracking-normal" title="Lower, raise (←/→ while open)">
+        <MenuKeyCaps action="conv.effortDown" className="flex items-center gap-[2px]" />
+        <MenuKeyCaps action="conv.effortUp" className="flex items-center gap-[2px]" />
+      </span>
+    </DropdownMenuLabel>
+  );
   const models = (dynamic ? [cfg.models[0], ...featured] : rail.models)
     .filter((m) => (cloudAgentProviderForLaunch(agentType, m.key)?.id ?? null) === lane);
   const q = search.trim().toLowerCase();
@@ -152,22 +195,23 @@ export function ModelEffortRows({
   };
   if (part === "effort") {
     return (
-      <>
-        <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
+      <div ref={rowsRef}>
+        {effortLabel}
         {rail.efforts.map((level: string) => {
           const active = level === "default" ? !effort : level === effort;
           return (
             <DropdownMenuItem key={level} onSelect={() => { if (!active) onSelect({ effort: level }); }} className="flex items-center gap-2 text-xs">
               <span className={`w-3 text-center ${active ? "text-sol-cyan" : "text-transparent"}`}>●</span>
               <span className={active ? "text-sol-text font-medium" : "text-sol-text-secondary"}>{level}</span>
+              {level !== "default" && <EffortMeter levels={cfg.efforts} effort={level} className="ml-auto text-sol-text-muted" />}
             </DropdownMenuItem>
           );
         })}
-      </>
+      </div>
     );
   }
   return (
-    <>
+    <div ref={rowsRef}>
       <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">Model</DropdownMenuLabel>
       {models.map(modelRow)}
       {dynamic && all.length > 0 && (
@@ -190,7 +234,7 @@ export function ModelEffortRows({
       )}
       {part !== "model" && cfg.efforts.length > 0 && !lane && <>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
+        {effortLabel}
         {/* Chips size to their label and wrap — clients with many effort levels
             (pi: off/minimal/low/medium/high/xhigh + default = 7) flow onto a second
             row instead of overflowing narrow equal-width columns. `grow` lets each
@@ -217,7 +261,53 @@ export function ModelEffortRows({
           })}
         </div>
       </>}
-    </>
+    </div>
+  );
+}
+
+/** Tracks whether `at` was less than `ms` ago, re-rendering when it lapses. */
+function useRecent(at: number | undefined, ms: number): boolean {
+  const [, tick] = useState(0);
+  const left = at ? at + ms - Date.now() : 0;
+  useEffect(() => {
+    if (left <= 0) return;
+    const t = setTimeout(() => tick((n) => n + 1), left);
+    return () => clearTimeout(t);
+  }, [at, left > 0]);
+  return left > 0;
+}
+
+/**
+ * An effort level as rising bars, one per level the agent has, filled up to
+ * the current one, so where it sits on the scale (and that it can move) reads
+ * at a glance. With a conversation it answers the effort keys: the bars light
+ * cyan for a moment on each step, and shake when the scale has no further level.
+ */
+export function EffortMeter({ levels, effort, conversationId, className = "" }: {
+  levels: readonly string[];
+  effort: string | null | undefined;
+  conversationId?: string;
+  className?: string;
+}) {
+  const pulse = useEffortPulse(conversationId);
+  const lit = useRecent(pulse?.at, 700);
+  if (levels.length === 0) return null;
+  const at = effort ? levels.indexOf(effort) : -1;
+  const span = Math.max(levels.length - 1, 1);
+  return (
+    <span
+      key={pulse?.edge ? pulse.at : "meter"}
+      aria-hidden
+      className={`inline-flex h-2.5 shrink-0 items-end gap-[1.5px] transition-colors duration-500 ${lit ? "!text-sol-cyan" : ""} ${lit && pulse?.edge ? "motion-safe:animate-effort-bump" : ""} ${className}`}
+    >
+      {levels.map((level, i) => (
+        <span
+          key={level}
+          className={`w-[2px] rounded-[1px] bg-current transition-opacity duration-150 ${i <= at ? "opacity-100" : "opacity-25"}`}
+          style={{ height: `${35 + (65 * i) / span}%` }}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -315,12 +405,13 @@ export function LaunchEffortPill({ conversationId }: { conversationId: string })
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" className={FOOT_PICK} title="Effort for this session">
+          <EffortMeter levels={cfg.efforts} effort={effort} conversationId={conversationId} />
           <span className={effort ? "capitalize" : "text-sol-text-dim"}>{effort ?? "effort"}</span>
           <Chevron />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-[9rem]">
-        <ModelEffortRows {...rowProps} part="effort" />
+      <DropdownMenuContent align="start" className="min-w-[11rem]">
+        <ModelEffortRows {...rowProps} part="effort" onStepEffort={(dir) => stepEffort(conversationId, dir, true)} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

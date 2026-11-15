@@ -70,6 +70,8 @@ export type ShortcutAction =
   | 'conv.cycleDensity'
   | 'conv.favorite'
   | 'conv.review'
+  | 'conv.effortUp'
+  | 'conv.effortDown'
   | 'msg.next'
   | 'msg.prev'
   | 'msg.fork'
@@ -405,6 +407,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   // meta with no ctrl variant on purpose: ctrl+shift+e is session.rename,
   // which wins at the capture listener.
   { key: 'meta+shift+e', action: 'compose.richToggle', when: 'conversation', skipInputCheck: true, fixed: true, description: 'Toggle rich compose editor' },
+
+  // Codex's effort keys: one level up or down for the session in view, from
+  // the composer too. A blank session relaunches with the new level, a live
+  // one gets a single `/effort` once the presses settle (lib/effortStep).
+  { key: 'alt+.', action: 'conv.effortUp', when: 'conversation', skipInputCheck: true, description: 'Raise effort' },
+  { key: 'alt+,', action: 'conv.effortDown', when: 'conversation', skipInputCheck: true, description: 'Lower effort' },
 
   { key: 'escape', action: 'msg.clearSelection', when: 'conversation', skipInputCheck: true, description: 'Clear selection' },
   { key: 'alt+j', action: 'msg.next', when: 'conversation', description: 'Next user message' },

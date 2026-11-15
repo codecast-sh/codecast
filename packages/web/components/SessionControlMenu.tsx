@@ -16,7 +16,8 @@ import { switchSessionAgent, forkSessionAsAgent, sessionRowFor } from "../lib/se
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
 import { agentAccent } from "../lib/agentColors";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
-import { ModelEffortRows, useDefaultModelPin } from "./ModelEffortPicker";
+import { EffortMeter, ModelEffortRows, useDefaultModelPin } from "./ModelEffortPicker";
+import { effortLevelsFor, stepEffort } from "../lib/effortStep";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -363,6 +364,7 @@ export function SessionControlPanel({
             ownerDeviceId={ownerDeviceId}
             midSession={!blank}
             onSelect={onModelSelect}
+            onStepEffort={(dir) => stepEffort(conversationId, dir, blank)}
           />
         </div>
       )}
@@ -507,10 +509,14 @@ export function HeaderModelControl({
     ? `${cloudNote} · switch attempt, fork, hand off`
     : `Model: ${overlayModel ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} · model, agent, fork, hand off`;
   // A cloud launch that asked for nothing more names what the panel does instead: move it (fork or hand off).
+  // The effort as a level meter: it lights when Alt+. / Alt+, move it.
+  const effortLevels = overlayEffort ? effortLevelsFor(agentType, storeModel, live?.sessionId, blank) : [];
   const triggerBody = <>
     {!triggerLabel && cloud && <MoveRight className="h-2.5 w-2.5 shrink-0" aria-hidden />}
     <span className="truncate max-w-none">{triggerLabel || (cloud ? "move" : "model")}</span>
-    {glyph && <span className="text-sol-text-dim/80">{glyph}</span>}
+    {effortLevels.length > 0
+      ? <EffortMeter levels={effortLevels} effort={overlayEffort} conversationId={conversationId} className="text-sol-text-dim/80" />
+      : glyph && <span className="text-sol-text-dim/80">{glyph}</span>}
   </>;
 
   return (
