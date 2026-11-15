@@ -43,6 +43,14 @@ describe("buildEventFilter", () => {
     expect(errors[1]).toContain('Unknown event "nope"');
   });
 
+  test("chat_message watches the one channel --channel names, and needs it", async () => {
+    expect(await buildEventFilter("chat_message", { channel: "#intake" }, noCheckout)).toEqual({ event_type: "chat_message", channel_id: "#intake" });
+    await expect(buildEventFilter("chat_message", {}, noCheckout)).rejects.toThrow(/exit 1/);
+    expect(errors[0]).toContain("--channel");
+    await expect(buildEventFilter("pr_opened", { channel: "#intake", repo: "" }, noCheckout)).rejects.toThrow(/exit 1/);
+    expect(errors[1]).toContain("--channel only narrows");
+  });
+
   test("an event one typo away names the near match", async () => {
     await expect(buildEventFilter("pr_commentz", {}, noCheckout)).rejects.toThrow(/exit 1/);
     expect(errors[0]).toContain("Next step: did you mean pr_comment?");
@@ -55,5 +63,6 @@ describe("narrowingWithoutOn", () => {
     expect(narrowingWithoutOn({ repo: "" })).toBe("--repo");
     expect(narrowingWithoutOn({ on: "error_new", source: "web" })).toBeUndefined();
     expect(narrowingWithoutOn({})).toBeUndefined();
+    expect(narrowingWithoutOn({ channel: "#intake" })).toBe("--channel");
   });
 });

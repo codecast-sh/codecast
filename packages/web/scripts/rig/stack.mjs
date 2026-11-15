@@ -12,9 +12,10 @@
 //   docs/architecture/sync-sim.md ("Disposable Convex deployment") run by
 //   script: a scratch copy of the tree with no .env.local in it, `convex dev`
 //   as an anonymous local deployment on 127.0.0.1, with the production
-//   variables unset. Its database lives in
-//   ~/.convex/anonymous-convex-backend-state/anonymous-agent/, so the seeded
-//   world survives restarts. `--refresh` copies the tree over the scratch
+//   variables unset. Its database lives in the scratch copy's
+//   packages/convex/.convex/local/default/ (older CLIs: under
+//   ~/.convex/anonymous-convex-backend-state/), so the seeded world survives
+//   restarts. `--refresh` copies the tree over the scratch
 //   copy again and the watcher pushes the change. Two backend caps are
 //   raised (the CLI passes its environment to the backend it spawns): a
 //   function's JS time from 1s to 30s (DATABASE_UDF_USER_TIMEOUT_SECONDS) and
@@ -66,7 +67,10 @@ export function localDeployment() {
     throw new Error(`refusing: ${envFile} names ${convexUrl} ${deployment}, not a local anonymous deployment`);
   }
   const name = deployment.slice("anonymous:".length);
-  const config = JSON.parse(readFileSync(join(ANON_STATE, name, "config.json"), "utf8"));
+  // Newer Convex CLIs keep a local deployment's state in the project
+  // (.convex/local/default); older ones under ~/.convex.
+  const projectConfig = join(SCRATCH, "packages/convex/.convex/local/default/config.json");
+  const config = JSON.parse(readFileSync(existsSync(projectConfig) ? projectConfig : join(ANON_STATE, name, "config.json"), "utf8"));
   const siteUrl = `http://127.0.0.1:${config.ports?.site ?? Number(new URL(convexUrl).port) + 1}`;
   return { kind: "local", name, convexUrl, siteUrl, adminKey: config.adminKey, appUrl: `http://localhost:${WEB_PORT}` };
 }

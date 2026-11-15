@@ -7,10 +7,11 @@ import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import type { CloudPlacementProgress, RewindFilesOp, RewindStagedMark } from "@codecast/shared/contracts";
 import type { RoleIcon } from "@codecast/shared/contracts/roleIcon";
-import { cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
+import { approvesSecretRead, cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
 import { withoutSecrets } from "@codecast/shared/contracts/secretShapes";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
+import { withoutListThread } from "../lib/taskComments";
 import { crawlScopesClearedBy, crawlWatermarkScope } from "../hooks/syncMetaKeys";
 import type { SharedObjectKind } from "@codecast/shared/entities";
 import type { CodeAnchorText } from "@codecast/shared/comments";
@@ -589,6 +590,8 @@ export type ProjectItem = {
   client_key?: string;
   title: string;
   description?: string;
+  /** Standing instructions every session in the project starts with (session-projects.md SP6). */
+  instructions?: string;
   status: string;
   /** Workspace truth (server row field): set = team project, absent = personal. */
   team_id?: string | null;
@@ -1372,6 +1375,10 @@ export type TaskItem = {
   activeSession?: { session_id: string; title?: string; agent_status?: string; agent_type?: string } | null;
   source_agent_type?: string | null;
   origin_session?: { conversation_id: string; session_id: string; title?: string; started_by?: string; last_message_at?: number; message_count?: number } | null;
+  /** How many comments the task has (list channels); the thread itself rides `comments` from the detail. */
+  comment_count?: number;
+  /** A problem's newest comments' first lines, oldest first (list channels). */
+  recent_comments?: Array<{ _id: string; author: string; comment_type: string; text: string; created_at: number }>;
   session_count?: number;
   created_from_conversation?: string;
   /** The call this task was pulled from (a transcripts id). */
@@ -1431,6 +1438,18 @@ export type SessionReadItem = {
   updated_at: number;
 };
 
+// How loudly the viewer hears one session (sessionWatch.listMine). No row is
+// the default: the ordinary rules, and the viewer's project, folder and
+// teammate mutes.
+export type SessionNotifyLevel = "all" | "needs_input" | "muted";
+export type SessionNotifyItem = {
+  _id: string;
+  conversation_id: string;
+  level: SessionNotifyLevel;
+  updated_at: number;
+};
+export const sessionNotifyKey = (conversationId: string) => `sn:${conversationId}`;
+
 // The decision queue: one explicit question an agent handed its human via
 // `cast decide` (session_decisions table). Answering is local-first — the
 // resolution fields flip on the draft and ride the generic patch rail; the
@@ -1489,6 +1508,8 @@ export type SessionDecisionItem = {
   card?: import("@codecast/shared/contracts/changeCard").ChangeCard;
   /** `cast decide --run`: the command the card runs on a person's Run, and how that went. */
   run?: import("@codecast/shared/contracts/commandRun").CommandRun;
+  /** An Ask first read of a Touch ID secret: its Approve confirms with a passkey. */
+  touch_id?: boolean;
   blocking: boolean;
   default_option?: number;
   /** A pointer card (a staffing proposal's): answering clears it and
@@ -1680,7 +1701,24 @@ const sessionUnreadMaps = new WeakMap<
 // One row's verdict, kept while the row ref, its winning mark and its local
 // viewed time hold: a heartbeat hands back a new sessions map in which every
 // other row keeps its ref, so the rebuild re-judges only the rows that moved.
-const sessionUnreadByRow = new WeakMap<InboxSession, { mark: SessionReadItem | undefined; viewed: number | undefined; unread: boolean }>();
+type UnreadVerdict = { mark: SessionReadItem | undefined; viewed: number | undefined; unread: boolean; a: number; b: number };
+const sessionUnreadByRow = new WeakMap<InboxSession, UnreadVerdict>();
+// One row's unread verdict against its read mark and local view stamp, cached
+// on the row; it carries two hashes of the id so the set's digest is a sum.
+function unreadVerdictOf(session: InboxSession, id: string, mark: SessionReadItem | undefined, viewed: number | undefined): UnreadVerdict {
+  let verdict = sessionUnreadByRow.get(session);
+  if (!verdict || verdict.mark !== mark || verdict.viewed !== viewed) {
+    let a = 0x811c9dc5, b = 5381;
+    for (let i = 0; i < id.length; i++) {
+      const c = id.charCodeAt(i);
+      a = Math.imul(a ^ c, 0x01000193);
+      b = (Math.imul(b, 33) + c) | 0;
+    }
+    verdict = { mark, viewed, unread: isSessionUnread({ ...sessionActivityFacts(session), mark, localViewedAt: viewed }), a, b };
+    sessionUnreadByRow.set(session, verdict);
+  }
+  return verdict;
+}
 
 /** Which sessions are lit for this viewer, derived from the marks, the rows'
  *  own updated_at, and the local "last opened" record as the fallback for a
@@ -1703,14 +1741,7 @@ export function sessionUnreadMap(state: {
   for (const id in state.sessions) {
     const session = state.sessions[id];
     if (!session) continue;
-    const mark = marks[id];
-    const viewed = state._lastViewedAt[id];
-    let verdict = sessionUnreadByRow.get(session);
-    if (!verdict || verdict.mark !== mark || verdict.viewed !== viewed) {
-      verdict = { mark, viewed, unread: isSessionUnread({ ...sessionActivityFacts(session), mark, localViewedAt: viewed }) };
-      sessionUnreadByRow.set(session, verdict);
-    }
-    if (verdict.unread) out[id] = true;
+    if (unreadVerdictOf(session, id, marks[id], state._lastViewedAt[id]).unread) out[id] = true;
   }
   byViewed.set(state._lastViewedAt, out);
   return out;
@@ -1742,11 +1773,38 @@ export function sessionUnreadWakeSig(state: {
   sessionReads: Record<string, SessionReadItem>;
   _lastViewedAt: Record<string, number>;
 }): string {
-  return unreadSetSig(sessionUnreadMap(state));
+  let byReads = sessionUnreadSigs.get(state.sessions);
+  if (!byReads) sessionUnreadSigs.set(state.sessions, byReads = new WeakMap());
+  let byViewed = byReads.get(state.sessionReads);
+  if (!byViewed) byReads.set(state.sessionReads, byViewed = new WeakMap());
+  const cached = byViewed.get(state._lastViewedAt);
+  if (cached !== undefined) return cached;
+  // A digest of the lit set, summed from the per-row verdicts: a write that
+  // moves one row costs one verdict, and no map of the set is built for it.
+  // When the map for these inputs is already built, its ids are the set.
+  let a = 0, b = 0, n = 0;
+  const add = (verdict: UnreadVerdict) => {
+    a = (a + verdict.a) | 0;
+    b = (b + verdict.b) | 0;
+    n++;
+  };
+  const built = sessionUnreadMaps.get(state.sessions)?.get(state.sessionReads)?.get(state._lastViewedAt);
+  if (built) {
+    for (const id in built) add(sessionUnreadByRow.get(state.sessions[id])!);
+  } else {
+    const marks = sessionReadMap(state.sessionReads);
+    for (const id in state.sessions) {
+      const session = state.sessions[id];
+      if (!session) continue;
+      const verdict = unreadVerdictOf(session, id, marks[id], state._lastViewedAt[id]);
+      if (verdict.unread) add(verdict);
+    }
+  }
+  const sig = `${n}.${(a >>> 0).toString(36)}.${(b >>> 0).toString(36)}`;
+  byViewed.set(state._lastViewedAt, sig);
+  return sig;
 }
-// A digest of the lit set (makeCollectionSig over the unread map), so the
-// signature is short whatever the number of unread sessions.
-const unreadSetSig = makeCollectionSig<boolean>(() => "");
+const sessionUnreadSigs = new WeakMap<object, WeakMap<object, WeakMap<object, string>>>();
 
 // Close the open subtree under a parent in the draft — the optimistic mirror
 // of the server's cascadeClose, so a "close subtasks too" choice renders
@@ -1824,6 +1882,9 @@ export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "sessio
 
 export type ClientUI = {
   theme?: "light" | "dark";
+  // Sessions whose canvas is on (lib/sessionCanvas): conversation id → the
+  // page the person pinned, null for "the latest page". Absent is off.
+  session_canvas?: Record<string, { pin: string | null; at: number }>;
   // Personal sheet filters, by "<docId>:<tabId>" (components/sheets/useSheetFilter):
   // a person's own view of a tab's rows, hidden from nobody else.
   sheet_filters?: Record<string, unknown>;
@@ -2898,8 +2959,21 @@ const REST_RANK: Record<SessionRestState, number> = { needs_input: 0, done: 1, d
 export function rankVerdictOf(s: InboxSession, placement?: { work_state: WorkState } | null): SessionVerdict {
   return placement ? verdictOfWorkState(placement.work_state) : classifySession(s);
 }
-function sessionSortRank(s: InboxSession, placement?: { work_state: WorkState } | null): [number, number, number, number, number, number, number] {
-  const c = rankVerdictOf(s, placement);
+type SortRank = [number, number, number, number, number, number, number];
+// A row's rank reads only its own fields and the class it sorts by, so it is
+// cached on the row object (the sync layer keeps the ref while no field
+// changes) and keyed by that class: placing again after one row moved builds
+// one tuple, not one per row.
+const _sortRankCache = new WeakMap<object, { work_state: WorkState; rank: SortRank }>();
+function sessionSortRank(s: InboxSession, placement?: { work_state: WorkState } | null): SortRank {
+  const work_state = sortWorkStateOf(s, placement);
+  const hit = _sortRankCache.get(s);
+  if (hit && hit.work_state === work_state) return hit.rank;
+  const rank = buildSortRank(s, verdictOfWorkState(work_state));
+  _sortRankCache.set(s, { work_state, rank });
+  return rank;
+}
+function buildSortRank(s: InboxSession, c: SessionVerdict): SortRank {
   return [
     s.is_pinned ? 0 : 1,                              // pinned first
     s.is_deferred ? 1 : 0,                            // deferred last
@@ -4516,11 +4590,11 @@ export function visualOrderSessions(
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
-  // Same order the status view renders: questions, pinned, new, needs input,
+  // Same order the status view renders: pinned, questions, new, needs input,
   // done, working, dormant — the chokepoint's own sections, so the walk and
   // the render can never disagree.
   const sections: Array<[InboxSession[], string]> = [
-    [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
+    [placed.pinned, "pinned"], [placed.questions, "questions"], [placed.newSessions, "new"],
     [placed.needsInput, "needs_input"], [placed.done, "done"],
     [placed.working, "working"], [placed.dormant, "dormant"],
   ];
@@ -6632,6 +6706,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
     focus?: string,
   ) => void;
   deleteTrigger: (taskId: string) => void;
+  /** Attach a source to a project (projectSources.webAddSource): a channel, or an event by name. Paints a stub keyed by `clientKey`. */
+  addProjectSource: (projectId: string, source: { channel_id?: string; event?: string; title: string }, clientKey: string) => void;
   /** A hosted conversation's Stop: the row settles at once, and the engine
    *  ends its running turn (dispatch stopHostedTurn). */
   stopHostedTurn: (conversationId: string) => void;
@@ -6792,6 +6868,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** The Threads page's session read mark: "seen up to the current message
    *  count". Local only — a session's read state never dispatches. */
   markSessionSeen: (id: string) => void;
+
+  /** The viewer's per-session notify settings, keyed sn:<conversation id>. */
+  sessionNotify: Record<string, SessionNotifyItem>;
+  /** Subscribe to every message, to needs input, mute, or go back to default. */
+  setSessionNotify: (conversationId: string, level: SessionNotifyLevel | "default") => void;
 
   // -- Session unread (server-backed, per viewer) --
   /** The viewer's read marks, keyed by row id (sessionReads.listMine). Unread
@@ -7046,7 +7127,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   updatePlan: (shortId: string, fields: { title?: string; project_id?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }>; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[] }) => void;
   /** Name (or clear) a project's lead; adds the project to the role's scope when it is missing. */
   setProjectLead: (projectId: string, roleId: string | null, opts?: { leave_sessions?: boolean }) => Promise<{ scope?: string; took_over?: string } | null | undefined>;
-  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null; project_path?: string | null; metrics?: InitiativeMetric[] }) => void;
+  updateProject: (id: string, fields: { title?: string; description?: string; instructions?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null; project_path?: string | null; metrics?: InitiativeMetric[] }) => void;
 
   // -- Issue sync sources (docs/architecture/issue-sync.md S1.3) --
   addIssueSyncSource: (opts: { provider: "linear" | "github"; kind: "linear_project" | "linear_team" | "github_repo"; external_id: string; external_key?: string; name: string; url?: string; project_id?: string; project_name?: string }) => Promise<any>;
@@ -7064,6 +7145,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** `only: "requested"` is a decline: the server keeps a row filled since (secrets.remove). */
   removeSecret: (id: string, only?: "requested") => void;
   setSecretAskFirst: (id: string, askFirst: boolean, grant?: string) => void;
+  setSecretTouchId: (id: string, touchId: boolean, grant?: string) => void;
   stageSecret: (row: SecretMeta, hold?: readonly (keyof SecretMeta)[]) => void;
   /** A secret's Activity or Previous (`events:<id>`, `versions:<id>`) as a press shows it; undefined drops it. */
   stageSecretHistory: (key: string, rows: unknown[] | undefined) => void;
@@ -7115,7 +7197,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   restoreDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
-  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean }) => void;
+  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; muted_projects?: string[]; muted_folders?: string[]; machine_wide_presence?: boolean }) => void;
   setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
   setClaudeBackend: (backend: "sdk" | "tmux") => void;
   setAgentDefaultParams: (agent: string, params: Record<string, string>) => void;
@@ -7840,7 +7922,10 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
     // creator, assignee_info and plan. They stay preserved so a row without
     // them (an older server's list, the create stub's rekey) keeps the cached
     // thread.
-    preserveFields: ["comments", "history", "linked_conversations", "related_docs", "source_insight", "graph_missing", "graph_status"],
+    // A list row now carries comment_count (and a problem its recent_comments)
+    // instead of the thread; the detail row carries the thread and no count,
+    // so each fills the other's gap.
+    preserveFields: ["comments", "comment_count", "recent_comments", "history", "linked_conversations", "related_docs", "source_insight", "graph_missing", "graph_status"],
   },
   // The decision queue. NOT delta: listForUser returns the complete visible
   // window (pending + 24h of resolved) on every push, so absence means the
@@ -8736,7 +8821,7 @@ function hideSessionInDraft(
 ): HideResult {
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const stashHiddenValue = mode === "stash" && stashHidden ? true : null;
-  const sessionValues = Object.values(draft.sessions) as InboxSession[];
+  const sessionValues = Object.values(baseOf(draft).sessions) as InboxSession[];
   // The removed set must match what the card visually contains, so the sweep
   // uses the SAME nesting definition the renderer does (nestParentIdOf): Task
   // subagents (parent_conversation_id) AND agent-team teammates (spawned_by +
@@ -8833,8 +8918,28 @@ function hideSessionInDraft(
 // mode, same as j/k), not the default grouped layout's order.
 function sessionPastRemoved(draft: any, removedIds: string[]): string | null {
   if (!draft.currentSessionId || !removedIds.includes(draft.currentSessionId)) return draft.currentSessionId;
-  const next = nextSessionPastRemoved(computeVisualOrder(draft), draft.currentSessionId, new Set(removedIds));
-  return next?._id ?? null;
+  // Ordered on the state before this action: placement memoizes on its
+  // inputs, and a draft's proxies are new inputs, so ordering the draft placed
+  // every row again (most of a stash's cost). A row an earlier write in the
+  // same action hid (killSessions' loop) is skipped like a removed one.
+  const base = baseOf(draft);
+  const removed = new Set(removedIds);
+  const gone = (s: InboxSession) => {
+    if (removed.has(s._id)) return true;
+    const now = draft.sessions[s._id];
+    return !now || HIDE_STAMPS.some((f) => now[f] !== (s as any)[f]);
+  };
+  const ordered = computeVisualOrder(base);
+  const idx = ordered.findIndex((s) => s._id === draft.currentSessionId);
+  return (ordered.slice(idx + 1).find((s) => !gone(s)) ?? ordered.find((s) => !gone(s)))?._id ?? null;
+}
+
+const HIDE_STAMPS = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_snoozed_until", "inbox_killed_at"] as const;
+
+/** The state an action started from: a plain object, so reads allocate no
+ *  child drafts and memoized derivations see the inputs they cached. */
+function baseOf<T>(draft: T): T {
+  return (isDraft(draft) ? original(draft as object) : draft) as T;
 }
 
 // Move the selection after a user removed rows (stash, kill, dismiss, delete):
@@ -10071,6 +10176,24 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete (this.agentTasks as any)[taskId];
     delete (this.foreignTriggers as any)[taskId];
   }),
+  // The stub the server row supersedes through the agentTasks altKey (client_key).
+  addProjectSource: action(function (this: Draft, projectId: string, source: { channel_id?: string; event?: string; title: string }, clientKey: string) {
+    const event_type = source.channel_id ? "chat_message" : source.event!;
+    (this.agentTasks as any)[clientKey] = {
+      _id: clientKey,
+      client_key: clientKey,
+      project_id: projectId,
+      title: source.title,
+      prompt: "",
+      schedule_type: "event",
+      event_filter: { event_type, ...(source.channel_id ? { channel_id: source.channel_id } : {}) },
+      status: "scheduled",
+      mode: "apply",
+      retry_count: 0,
+      run_count: 0,
+      created_at: Date.now(),
+    };
+  }),
   stopHostedTurn: action(function (this: Draft, conversationId: string) {
     const row = (this.sessions as any)[conversationId];
     if (row) row.agent_status = "idle";
@@ -10558,6 +10681,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const count = this.conversations[id]?.message_count ?? this.sessions[id]?.message_count;
     if (typeof count === "number") this._seenMessageCount[id] = count;
     this._seenUpToAt[id] = Date.now();
+  }),
+
+  sessionNotify: {},
+  setSessionNotify: action(function (this: Draft, conversationId: string, level: SessionNotifyLevel | "default") {
+    const key = sessionNotifyKey(conversationId);
+    if (level === "default") delete this.sessionNotify[key];
+    else this.sessionNotify[key] = { _id: key, conversation_id: conversationId, level, updated_at: Date.now() };
   }),
 
   // -- Session unread --
@@ -11093,8 +11223,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   snoozeSession: action(function (this: Draft, id: string, until: number) {
-    const ids = [id, ...Object.values(this.sessions).filter((row) => nestParentIdOf(row) === id).map((row) => row._id)];
-    const next = nextSessionPastRemoved(computeVisualOrder(this), id, new Set(ids));
+    const base = baseOf(this);
+    const ids = [id, ...Object.values(base.sessions).filter((row) => nestParentIdOf(row) === id).map((row) => row._id)];
+    const next = ids.includes(base.currentSessionId ?? "") || ids.includes(base.sidePanelSessionId ?? "") ? nextSessionPastRemoved(computeVisualOrder(base), id, new Set(ids)) : undefined;
     if (!setSessionSnoozeInDraft(this, id, until)) return;
     for (const sid of ids.slice(1)) setSessionSnoozeInDraft(this, sid, until);
     if (ids.includes(this.currentSessionId ?? "")) {
@@ -12942,7 +13073,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   markKilling: action(function (this: Draft, id: string) {
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId === id) {
-      const next = nextSessionPastRemoved(computeVisualOrder(this), id, new Set([id]));
+      const next = nextSessionPastRemoved(computeVisualOrder(baseOf(this)), id, new Set([id]));
       newSessionId = next?._id ?? null;
     }
     delete this.sessions[id];
@@ -13918,6 +14049,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!row) return;
     row.ask_first = askFirst;
   }),
+  setSecretTouchId: action(function (this: Draft, id: string, touchId: boolean, _grant?: string) {
+    const row = (this.secrets as any)[id];
+    if (!row) return;
+    row.touch_id = touchId;
+  }),
   // A row painted before the server has it: a create's stub, keyed by a stub id
   // and given its short_id when the create answers (registry altKey), or a
   // fill or value swap whose value went straight to its action. `hold` names
@@ -14738,6 +14874,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
         image_storage_ids: imageIds && imageIds.length ? imageIds : undefined,
         created_at: Date.now(),
       });
+      // A list row counts its comments instead of carrying them (tasks.ts enrichTasks).
+      if (typeof task.comment_count === "number") task.comment_count += 1;
     }
   }),
 
@@ -15700,12 +15838,27 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
   // its run consumes the answer as the open gate, or, when the run is past
   // it, the server sends the same message (settleClientResolution).
   if (content && !row.workflow_run_id && !runs) {
-    queueMicrotask(() => {
+    const deliver = () => {
       const s = useInboxStore.getState();
       const clientId = s.addOptimisticMessage(convId, content);
       s.sendMessage(convId, content, undefined, clientId);
-    });
+    };
+    // An Approve on an Ask first read reaches the agent only once the server
+    // took it: a refused one (no Touch ID, a spent grant) must not tell the
+    // agent it was approved. The dispatch binding releases it (releaseHeldAnswer).
+    if (approvesSecretRead(row, row.answer_index ?? -1)) heldAnswerDeliveries.set(decisionId, deliver);
+    else queueMicrotask(deliver);
   }
+}
+
+const heldAnswerDeliveries = new Map<string, () => void>();
+
+/** The answerDecision dispatch for `decisionId` settled: deliver its held answer when it landed, drop it when it was refused for good. */
+export function releaseHeldAnswer(decisionId: unknown, landed: boolean): void {
+  if (typeof decisionId !== "string") return;
+  const deliver = heldAnswerDeliveries.get(decisionId);
+  heldAnswerDeliveries.delete(decisionId);
+  if (landed) deliver?.();
 }
 
 /** Whom an escalation reaches, from the roster a client holds: the manager on the org tree, the members on the team roster. */
@@ -15992,12 +16145,26 @@ export function hydrateMergeValue(
   }
   if (typeof val === "object") {
     const live = cur as Record<string, unknown> | undefined;
+    const cached = key === "tasks" ? dropListThreads(val as Record<string, any>) : (val as Record<string, unknown>);
     return {
       apply: true,
-      value: unionHydrate(cacheFloorUnderSnapshot(key, val as Record<string, unknown>, live), live),
+      value: unionHydrate(cacheFloorUnderSnapshot(key, cached, live), live),
     };
   }
   return { apply: true, value: val };
+}
+
+// A cached task written by a list that counts comments keeps no thread across
+// a reload: the detail query brings it back when the task opens, and the
+// threads were most of the cache (87 MB of 156 MB on a 22k-task account).
+function dropListThreads(rows: Record<string, any>): Record<string, any> {
+  let out: Record<string, any> | null = null;
+  for (const id in rows) {
+    const row = rows[id];
+    const slim = withoutListThread(row);
+    if (slim !== row) (out ??= { ...rows })[id] = slim;
+  }
+  return out ?? rows;
 }
 
 // Drop persisted feedHasMore=false entries (in place) so they hydrate as

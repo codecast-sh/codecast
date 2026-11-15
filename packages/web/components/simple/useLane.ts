@@ -6,7 +6,7 @@ import { useMemo } from "react";
 import type { InboxSession, SessionDecisionItem } from "../../store/inboxStore";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useInboxStore } from "../../store/inboxStore";
-import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useNowWhen } from "../../hooks/useCoarseNow";
 import { conversationState, conversationTitle, isLaneConversation, isOpenApproval, oldestFirst } from "./lane";
 
 const laneWhere = (row: InboxSession) => isLaneConversation(row as any);
@@ -44,7 +44,12 @@ export function useConversationApprovals(conversationId: string): SessionDecisio
  *  boolean so a heartbeat on its row wakes nobody. The clock re-asks it,
  *  because a stalled turn settles with time alone. */
 export function useConversationWorking(conversationId: string): boolean {
-  const now = useCoarseNow(15_000);
+  // Re-renders the caller (a whole conversation screen) only when the clock
+  // changes the answer, not on every tick.
+  const now = useNowWhen((t) => {
+    const row = useInboxStore.getState().sessions[conversationId];
+    return !!row && conversationState(row, 0, t) === "working" ? "1" : "0";
+  }, 15_000);
   return useInboxStore((s) => {
     const row = s.sessions[conversationId];
     return !!row && conversationState(row, 0, now) === "working";
