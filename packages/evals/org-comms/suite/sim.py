@@ -5,7 +5,10 @@
 # sees its inbox and the reads it asked for, then acts: messages, a pinned
 # state, reads for next round. A fact counts as delivered to an agent when it
 # reaches that agent's context (message or a read of a pinned state that
-# carries the fact id) by the deadline. Usage: sim.py <tag> <model> <reps> <policy,...>
+# carries the fact id) by the deadline. A policy ending in +log also gives the
+# team a shared log: each agent may post typed entries (fact, fail, interface),
+# and each agent gets the entries that are new to it at the start of the next
+# round, with the policy text of variants/LOG.md. Usage: sim.py <tag> <model> <reps> <policy,...>
 import json, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -72,9 +75,18 @@ POLICY_WORDS = {os.path.basename(f)[:-3]: open(f).read().strip() for f in __impo
 FORMAT = """Act for this round. Answer with JSON only:
 {"messages": [{"to": "<agent id>", "text": "..."}], "pinned_state": "one line others can read, or empty", "read": ["agent ids whose pinned state you want to read next round"], "why": "<=25 words"}
 When you pass on a fact, include its id in brackets, like [F9]. Messages arrive at the start of next round and cost the recipient a turn. Pinned states cost nobody anything; anyone may read them."""
+LOG_FORMAT = """
+With the shared log, your JSON may also carry "share": [{"kind": "fact" or "fail" or "interface", "text": "one line, with the fact id"}], at most 3 entries. Every other agent gets them at the start of next round."""
+LOG_KINDS = {"fact", "fail", "interface"}
+LOG_SUFFIX = "+log"
+
+def log_mode(policy):
+    """The base policy and whether the shared log is on: G3+log is G3 with the log."""
+    return (policy[: -len(LOG_SUFFIX)], True) if policy.endswith(LOG_SUFFIX) else (policy, False)
 
 def system(policy, me):
-    guidance = POLICY_WORDS.get(policy, "")
+    base, log_on = log_mode(policy)
+    guidance = "\n\n".join(x for x in (POLICY_WORDS.get(base, ""), POLICY_WORDS.get("LOG", "") if log_on else "") if x)
     team = "\n".join(f"  {k}: {v}" for k, v in AGENTS.items())
     return ("You are an AI agent session in codecast. The instructions below are part of your standing context.\n\n" + MESSAGING +
             f"\n\n<org-context>\nThe team:\n{team}\n\nYou are {me}: {AGENTS[me]}\n" + (f"\n{guidance}\n" if guidance else "") + "</org-context>")
@@ -98,6 +110,11 @@ def world(tag, policy, rep, model):
     seen = {a: "" for a in AGENTS}  # everything that reached an agent's context, per round
     log = []
     known_at = {}  # (fact, agent) -> round it reached them
+    _, log_on = log_mode(policy)
+    shared = []  # the shared log: {"round", "by", "kind", "text"}, in the order posted
+    log_seen = {a: 0 for a in AGENTS}  # how many entries of the log each agent has read
+    log_deliveries = log_unneeded = 0
+    needers = {f: set(nb) for f, h, r0, nb, dl, _ in FACTS}
     for rnd in range(1, ROUNDS + 1):
         prompts = {}
         for a in AGENTS:
@@ -105,9 +122,15 @@ def world(tag, policy, rep, model):
             reads = [f"{b}'s pinned state: {pinned[b] or '(empty)'}" for b in wants[a] if b in AGENTS]
             if a == "L" and os.environ.get("LEAD_FEED") and rnd > 1:
                 reads = ["Your area's feed (every worker's pinned state, read by your routine):"] + [f"{b}: {pinned[b] or '(empty)'}" for b in AGENTS if b != "L"]
+            fresh = [e for e in shared[log_seen[a]:] if e["by"] != a]
+            log_seen[a] = len(shared)
+            for e in fresh:
+                log_deliveries += 1
+                if not any(f"[{f}]" in e["text"] and a in needers[f] for f in needers): log_unneeded += 1
+            log_text = ("\n\nNew entries on the shared log:\n" + ("\n".join(f"{e['by']} ({e['kind']}): {e['text']}" for e in fresh) or "(none)")) if log_on else ""
             ctx = (f"Round {rnd} of {ROUNDS}.\n\nWhat you know first-hand:\n" + ("\n".join(own) or "(nothing new)") +
                    "\n\nMessages that arrived for you:\n" + ("\n".join(f"from {m['from']}: {m['text']}" for m in inbox[a]) or "(none)") +
-                   "\n\nReads you asked for:\n" + ("\n".join(reads) or "(none)") + f"\n\n{FORMAT}")
+                   "\n\nReads you asked for:\n" + ("\n".join(reads) or "(none)") + log_text + f"\n\n{FORMAT}" + (LOG_FORMAT if log_on else ""))
             prompts[a] = ctx
             seen_now = ctx
             for f, *_ in FACTS:
@@ -120,6 +143,10 @@ def world(tag, policy, rep, model):
                 t = str(m.get("to", "")).strip()
                 if t in AGENTS and t != a: inbox[t].append({"from": a, "text": str(m.get("text", ""))})
             pinned[a] = str(o.get("pinned_state", "") or "")
+            if log_on:
+                for e in [e for e in (o.get("share", []) or []) if isinstance(e, dict)][:3]:
+                    kind, text = str(e.get("kind", "")).strip(), str(e.get("text", "")).strip()
+                    if kind in LOG_KINDS and text: shared.append({"round": rnd, "by": a, "kind": kind, "text": text})
             wants[a] = [str(x) for x in (o.get("read", []) or [])][:5]
             log.append({"round": rnd, "agent": a, "sent": [m.get("to") for m in o.get("messages", []) or []], "reads": wants[a], "texts": [str(m.get("text", "")) for m in o.get("messages", []) or []]})
     sends = sum(len(x["sent"]) for x in log)
@@ -130,7 +157,8 @@ def world(tag, policy, rep, model):
     res = {"policy": policy, "rep": rep, "sends": sends, "to_lead": lead_in, "delivered_on_time": len(on_time), "needed": len(need),
            "missed": [f"{f}->{a}" for f, a, dl in need if (f, a) not in on_time], "noise_spread": noise_spread,
            "latency": {f"{f}->{a}": known_at.get((f, a)) for f, a, dl in need}}
-    json.dump({"result": res, "log": log}, open(f"{base}/world.json", "w"), indent=1)
+    if log_on: res.update({"log_entries": len(shared), "log_deliveries": log_deliveries, "log_unneeded": log_unneeded})
+    json.dump({"result": res, "log": log, "shared": shared}, open(f"{base}/world.json", "w"), indent=1)
     return res
 
 if __name__ == "__main__":
@@ -142,4 +170,5 @@ if __name__ == "__main__":
     for p in policies:
         R = [r for r in res if r["policy"] == p]
         n = len(R)
-        print(f"{p}: sends {sum(r['sends'] for r in R)/n:.1f}  to_lead {sum(r['to_lead'] for r in R)/n:.1f}  on_time {sum(r['delivered_on_time'] for r in R)/n:.2f}/{R[0]['needed']}  noise {sum(r['noise_spread'] for r in R)/n:.1f}  missed {[m for r in R for m in r['missed']]}")
+        shared_cost = f"  log entries {sum(r['log_entries'] for r in R)/n:.1f} deliveries {sum(r['log_deliveries'] for r in R)/n:.1f} unneeded {sum(r['log_unneeded'] for r in R)/n:.1f}" if "log_entries" in R[0] else ""
+        print(f"{p}: sends {sum(r['sends'] for r in R)/n:.1f}  to_lead {sum(r['to_lead'] for r in R)/n:.1f}  on_time {sum(r['delivered_on_time'] for r in R)/n:.2f}/{R[0]['needed']}  noise {sum(r['noise_spread'] for r in R)/n:.1f}{shared_cost}  missed {[m for r in R for m in r['missed']]}")
