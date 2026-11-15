@@ -13,6 +13,7 @@ import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { RunFallbackLine } from "./decisions/RunFallbackLine";
+import { DecisionPlace } from "./decisions/DecisionPlace";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
@@ -31,12 +32,11 @@ import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
 import { useHeldOption } from "../lib/agentTabGuard";
 import { NOT_CONFIRMED } from "@codecast/shared/contracts/secrets";
-import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, List } from "lucide-react";
-import Link from "next/link";
+import { ChevronUp, ChevronDown } from "lucide-react";
 import { ShareControl } from "./ShareControl";
 import { policyTeamOf } from "@codecast/shared/contracts";
 import "./decisions/decisions.css";
-
+export { ThreadDecisionCard } from "./decisions/ThreadDecisionCard";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
 import { RoleFace } from "./org/RoleFace";
@@ -88,7 +88,7 @@ import { ModernDecisionDock } from "./conversation/ModernDecisionDock";
 // each. `asks` is all of them in the order they are answered, this one
 // included, and `onPick` brings another up without answering this one: the
 // sheet steps through them from its header, the dock lists them as rows.
-type Size = "full" | "line";
+export type Size = "full" | "line";
 
 // The last conversation whose ask was settled from its open sheet, and when:
 // the next ask of that session opens as the sheet too, where the reader is.
@@ -100,47 +100,6 @@ const CONTINUE_MS = 5_000;
 // target says nothing about an ask that arrives later.
 const JUMP_FRESH_MS = 10_000;
 const jumpedHere = (targetNonce: number | undefined) => targetNonce !== undefined && Date.now() - targetNonce < JUMP_FRESH_MS;
-
-/**
- * A thread's card: the ask picked from it while that ask is still open, else
- * the first of the thread's asks (blocking before advisory), else the one the
- * queue hands in for a terminal question. Picking brings an ask up at the
- * size the person was reading, once: the size is spent as soon as the card
- * has drawn with it, so a card drawn again later (the person folded it, left
- * and came back) opens the way that ask opens by itself. The pick belongs to
- * the visit it was made in: the pane outlives the thread it shows, so leaving
- * the thread drops it and a return starts from the first ask, as ever.
- *
- * A permission ask (`cast decide --run`) is never one of the asks stepped to
- * here: in a thread it is its own card in the transcript, with the command it
- * runs, and it comes up there once the asks ahead of it are answered.
- */
-export function ThreadDecisionCard({ conversationId, asks, fallback, stepper, targetNonce, scrollToMessage }: {
-  conversationId: string;
-  /** The thread's open `cast decide` asks, in the order they are answered. */
-  asks: readonly QueueItem[];
-  /** The queue's own item, shown when the thread has no authored ask. */
-  fallback?: QueueItem | null;
-  stepper: DecisionStepper | null;
-  targetNonce?: number;
-  scrollToMessage?: (messageId: string) => void;
-}) {
-  const [picked, setPicked] = useState<{ key: string; size?: Size } | null>(null);
-  // The rows past the first few, once opened, stay open while the person moves between the thread's asks.
-  const [allRows, setAllRows] = useState(false);
-  useWatchEffect(() => { setPicked(null); setAllRows(false); }, [conversationId]);
-  useWatchEffect(() => { if (picked?.size) setPicked({ key: picked.key }); }, [picked]);
-  const pick = useCallback((key: string, size: Size) => setPicked({ key, size }), []);
-  const showAllRows = useCallback(() => setAllRows(true), []);
-  const runKeys = useInboxStore((s) => asks.filter((a) => !!a.decisionId && !!s.sessionDecisions[a.decisionId]?.run).map((a) => a.key).join("\u0001"));
-  const steppable = useMemo(() => { const run = new Set(runKeys.split("\u0001")); return asks.filter((a) => !run.has(a.key)); }, [asks, runKeys]);
-  const shown = steppable.find((a) => a.key === picked?.key) ?? asks[0] ?? fallback ?? null;
-  if (!shown) return null;
-  return (
-    <SessionDecisionCard key={shown.key} item={shown} stepper={stepper} asks={steppable.some((a) => a.key === shown.key) ? steppable : undefined} onPick={pick}
-      startSize={picked?.key === shown.key ? picked.size : undefined} allRows={allRows} onAllRows={showAllRows} targetNonce={targetNonce} scrollToMessage={scrollToMessage} />
-  );
-}
 
 export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, allRows, onAllRows, targetNonce, scrollToMessage }: {
   item: QueueItem;
@@ -732,43 +691,11 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
           <div className="decision-sheet-col mx-auto w-full px-6 min-h-10 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
             {whoIsAsking}
             {stepper ? (
-              // The queue's own controls: step either way, and the count opens the whole list.
-              <span className="shrink-0 flex items-center rounded-full border border-sol-border text-meta text-sol-text-muted tabular-nums" data-decision-place>
-                {stepper.onPrev && stepper.total > 1 && (
-                  <button onClick={stepper.onPrev} className="pl-1.5 pr-0.5 py-0.5 rounded-l-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Previous decision" aria-label="Previous decision">
-                    <ChevronLeft className="w-3.5 h-3.5" />
-                  </button>
-                )}
-                <Link href="/decisions" className="flex items-center gap-1 px-1.5 py-0.5 hover:text-sol-text hover:bg-sol-card transition-colors no-underline" title="All decisions waiting on you">
-                  <List className="w-3 h-3" />
-                  <span className="decision-head-wide">{stepper.position} of {stepper.total}</span>
-                  <span className="decision-head-short">{stepper.position}/{stepper.total}</span>
-                </Link>
-                {stepper.total > 1 && (
-                  <button onClick={stepper.onSkip} className="pl-0.5 pr-1.5 py-0.5 rounded-r-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Next decision" aria-label="Next decision">
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </span>
-            ) : place && threadAsks ? (
-              // The thread's own asks: step either way without answering this one.
-              <span className="shrink-0 flex items-center rounded-full border border-sol-border text-meta text-sol-text-muted tabular-nums" data-decision-place>
-                <button onClick={() => stepThread(-1)} className="pl-1.5 pr-0.5 py-0.5 rounded-l-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Previous decision in this thread" aria-label="Previous decision in this thread">
-                  <ChevronLeft className="w-3.5 h-3.5" />
-                </button>
-                <span className="px-1.5 py-0.5">
-                  <span className="decision-head-wide">decision {place.position} of {place.total}</span>
-                  <span className="decision-head-short">{place.position}/{place.total}</span>
-                </span>
-                <button onClick={() => stepThread(1)} className="pl-0.5 pr-1.5 py-0.5 rounded-r-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Next decision in this thread" aria-label="Next decision in this thread">
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </span>
+              <DecisionPlace position={stepper.position} total={stepper.total} queue
+                onPrev={stepper.onPrev && stepper.total > 1 ? stepper.onPrev : undefined} onNext={stepper.total > 1 ? stepper.onSkip : undefined} />
             ) : place && (
-              <span className="shrink-0 text-meta text-sol-text-dim tabular-nums" data-decision-place>
-                <span className="decision-head-wide">decision {place.position} of {place.total}</span>
-                <span className="decision-head-short">{place.position}/{place.total}</span>
-              </span>
+              <DecisionPlace position={place.position} total={place.total}
+                onPrev={threadAsks ? () => stepThread(-1) : undefined} onNext={threadAsks ? () => stepThread(1) : undefined} />
             )}
             {/* A hosted approval is the person's own: no link to share it, and
                 its conversation is one tap away in the escape hatch. */}
