@@ -114,6 +114,13 @@ export function metricItemsFor(rows: PunchRow[] | undefined) {
 }
 
 export const fmtMetric = (metric: TimelineMetric, v: number) => METRIC_CFG[metric].fmtVal(v);
+export const fmtMetricAxis = (metric: TimelineMetric, v: number) => METRIC_CFG[metric].fmtAxis(v);
+
+/** Left padding that fits the widest y-axis label (11px text, ~6.7px a glyph). */
+export function axisPadLeft(labels: string[]): number {
+  const longest = labels.reduce((m, l) => Math.max(m, l.length), 0);
+  return Math.max(32, Math.ceil(longest * 6.7) + 8);
+}
 
 // Metric accessor tolerant of payloads that predate the typed counters.
 export function metricHours(r: PunchRow, metric: TimelineMetric): number[] {
@@ -465,10 +472,11 @@ function TimelineChart({
 
   const maxV = useMemo(() => Math.max(...points.map((d) => d.value), 1), [points]);
 
+  const yTicks = [0, maxV * 0.25, maxV * 0.5, maxV * 0.75, maxV];
   const chartH = 180;
   const padTop = 12;
   const padBot = 28;
-  const padLeft = 32;
+  const padLeft = axisPadLeft(yTicks.map((v) => cfg.fmtAxis(v)));
   const padRight = 8;
   const plotW = containerW - padLeft - padRight;
   const plotH = chartH - padTop - padBot;
@@ -489,7 +497,6 @@ function TimelineChart({
 
   if (points.length === 0) return null;
 
-  const yTicks = [0, maxV * 0.25, maxV * 0.5, maxV * 0.75, maxV];
   const hp = hovered ? points[hovered.idx] : null;
 
   return (

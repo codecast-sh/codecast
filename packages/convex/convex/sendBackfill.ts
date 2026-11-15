@@ -163,12 +163,12 @@ export const step = internalMutation({
             }
           }
           if (bytes > STEP_BYTES) {
-            await recordUsageDays(ctx, c, turns);
+            await recordUsageDays(ctx, c, turns, { withAccount: false });
             await ctx.scheduler.runAfter(0, internal.sendBackfill.step, { ...range, conv_before: convBefore, conv_id: c._id, msg_after: m.timestamp, usage_after: lastUsage });
             return;
           }
         }
-        await recordUsageDays(ctx, c, turns);
+        await recordUsageDays(ctx, c, turns, { withAccount: false });
       }
       convBefore = c._creationTime;
       msgAfter = args.after - 1;

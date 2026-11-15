@@ -20,6 +20,8 @@ import {
   fmtDayLabel,
   fmtK,
   fmtMetric,
+  fmtMetricAxis,
+  axisPadLeft,
   fmtUsd,
   metricHours,
   metricItemsFor,
@@ -291,6 +293,7 @@ function MemberBreakdown({
         series={series}
         dayKeys={dayKeys}
         fmt={(v) => fmtMetric(metric, v)}
+        fmtAxis={(v) => fmtMetricAxis(metric, v)}
         onPickRange={(a, b) => onRangeChange({ from: a, to: b })}
       />
 
@@ -339,28 +342,31 @@ function MemberLines({
   series,
   dayKeys,
   fmt,
+  fmtAxis,
   onPickRange,
 }: {
   series: { name: string; color: string; values: number[] }[];
   dayKeys: string[];
   fmt: (v: number) => string;
+  fmtAxis: (v: number) => string;
   onPickRange: (from: string, to: string) => void;
 }) {
   const { ref, width } = useContainerWidth();
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverAt, setHover] = useState<{ idx: number; x: number; y: number } | null>(null);
   const brush = useDayBrush((a, b) => { setHover(null); onPickRange(dayKeys[a], dayKeys[b]); });
-  const h = 140, padL = 32, padR = 8, padT = 6, padB = 20;
+  const h = 140, padR = 8, padT = 6, padB = 20;
   const n = dayKeys.length;
   const max = useMemo(() => {
     let m = 1;
     for (const s of series) for (const v of s.values) if (v > m) m = v;
     return m;
   }, [series]);
+  const padL = axisPadLeft([0, 0.5, 1].map((f) => fmtAxis(max * f)));
   const plotH = h - padT - padB;
   const toX = (i: number) => padL + (i / Math.max(n - 1, 1)) * (width - padL - padR);
   const toY = (v: number) => padT + (1 - v / max) * plotH;
-  const xLabels = useMemo(() => timeAxisLabels(dayKeys, toX), [dayKeys, width]);
+  const xLabels = useMemo(() => timeAxisLabels(dayKeys, toX), [dayKeys, width, padL]);
   if (n === 0) return null;
   // A hover left over from a wider window (before a zoom) points past this one.
   const hover = hoverAt && hoverAt.idx < n ? hoverAt : null;
@@ -393,7 +399,7 @@ function MemberLines({
         {[0, 0.5, 1].map((f) => (
           <g key={f}>
             <line x1={padL} x2={width - padR} y1={toY(max * f)} y2={toY(max * f)} stroke="currentColor" className="text-sol-border/8" strokeWidth={0.5} strokeDasharray={f === 0 ? "none" : "2,3"} />
-            <text x={padL - 4} y={toY(max * f) + 3} textAnchor="end" className="fill-sol-text-dim" style={{ fontSize: 11 }}>{fmt(max * f)}</text>
+            <text x={padL - 4} y={toY(max * f) + 3} textAnchor="end" className="fill-sol-text-dim" style={{ fontSize: 11 }}>{fmtAxis(max * f)}</text>
           </g>
         ))}
         {xLabels.map((l, i) => (

@@ -62,10 +62,16 @@ const addHours = (into: number[], from: number[]) => into.map((v, h) => v + (fro
 // fold when none was pending. A fork starts with a copy of its parent's
 // history, which the parent already counted: the fork owns only the turns
 // after it was created.
+//
+// `withAccount: false` is for a rebuild from old transcripts: the account a
+// session runs on is read as of now, so it cannot say which account an old
+// turn was spent on, and the rebuild leaves the per-account rows
+// (account_usage_daily, never wiped) as live counting wrote them.
 export async function recordUsageDays(
   ctx: { db: any; scheduler: any },
   conversation: Doc<"conversations">,
   turns: UsageTurn[],
+  opts: { withAccount?: boolean } = {},
 ): Promise<void> {
   const own = conversation.forked_from ? turns.filter((t) => t.timestamp >= conversation._creationTime) : turns;
   const byDay = new Map<number, DayHours>();
@@ -82,7 +88,7 @@ export async function recordUsageDays(
   if (byDay.size === 0) return;
   // The account these turns ran on, so the fold can split them by account
   // (the shared pool's per-person view). A pending row holds one account.
-  const account = await accountOfSession(ctx, conversation);
+  const account = opts.withAccount === false ? undefined : await accountOfSession(ctx, conversation);
   const pending = await ctx.db
     .query("usage_pending")
     .withIndex("by_conversation_day", (q: any) => q.eq("conversation_id", conversation._id))

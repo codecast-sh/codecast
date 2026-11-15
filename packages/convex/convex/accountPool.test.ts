@@ -251,6 +251,22 @@ describe("sharing an account into the team's pool", () => {
     expect(rows[0].split).toEqual([{ user_id: JASON, name: "Jason", tokens: 1000 }]);
   });
 
+  test("a usage rebuild leaves the per-account rows as live counting wrote them", async () => {
+    // The account is read as of now, so a rebuild of old turns cannot say
+    // which account they ran on, and account_usage_daily is never wiped.
+    const { recordUsageDays } = await import("./lib/usageDaily");
+    const db = fixture();
+    const conv = { _id: "conversations_r", user_id: JASON, owner_device_id: "jason-laptop", _creationTime: NOW - DAY };
+    db._tables.conversations.push(conv);
+    const scheduled: any[] = [];
+    const ctx = { db, scheduler: { async runAfter(_d: number, _f: any, args: any) { scheduled.push(args); } } };
+    await recordUsageDays(ctx, conv as any, [{ usage: { input_tokens: 100, output_tokens: 900 }, model: "claude-opus-5-5", timestamp: NOW - 60_000 }], { withAccount: false });
+    expect(db._tables.usage_pending[0].account).toBeUndefined();
+    await (fold as any)._handler({ db }, scheduled[0]);
+    expect(db._tables.account_usage_daily).toEqual([]);
+    expect(db._tables.user_usage_daily).toHaveLength(1);
+  });
+
   test("a machine that regenerates its key gets a fresh copy", async () => {
     const db = fixture();
     await share(db);

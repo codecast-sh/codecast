@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { ACTIVITY_DAY_MS, ACTIVITY_LIVE_DAYS, rollupActivityDay } from "./lib/activityDaily";
+import { ACTIVITY_DAY_MS, ACTIVITY_LIVE_DAYS, activityLiveFrom, rollupActivityDay } from "./lib/activityDaily";
 import { dayStartUtc } from "./lib/userSend";
 
 // The rollup behind `user_activity_daily` (see lib/activityDaily.ts for why
@@ -70,7 +70,11 @@ export const rollupCandidates = internalQuery({
 /**
  * Re-roll the days around the live window for everyone active in them. One
  * mutation per (user, day) keeps each transaction small; the users table is
- * small enough to walk in one read.
+ * small enough to walk in one read. Today is skipped (no read takes it from a
+ * row); yesterday is rolled so its row is ready the moment it leaves the live
+ * window. A day that keeps losing its write conflict (a busy account's
+ * conversations change under the read) is left for the next hour's run rather
+ * than stopping every account after it.
  */
 export const sweep = internalAction({
   args: { days: v.optional(v.number()) },
@@ -80,22 +84,32 @@ export const sweep = internalAction({
     const since = today - days * ACTIVITY_DAY_MS;
     const users: Id<"users">[] = await ctx.runQuery(internal.activityDays.rollupCandidates, { since });
     let rolled = 0;
+    let failed = 0;
     for (const user_id of users) {
-      for (let i = 0; i < days; i++) {
-        await ctx.runMutation(internal.activityDays.rollupDay, {
-          user_id,
-          day_start: today - i * ACTIVITY_DAY_MS,
-        });
-        rolled++;
+      for (let i = 1; i < days; i++) {
+        try {
+          await ctx.runMutation(internal.activityDays.rollupDay, {
+            user_id,
+            day_start: today - i * ACTIVITY_DAY_MS,
+          });
+          rolled++;
+        } catch (e) {
+          failed++;
+          console.warn(`activity sweep: ${user_id} day ${today - i * ACTIVITY_DAY_MS} left for the next run: ${e}`);
+        }
       }
     }
-    return { users: users.length, rolled };
+    return { users: users.length, rolled, failed };
   },
 });
 
 /**
  * Fill (or repair) a stretch of history. `user_id` does one account; without it
- * every account is walked, each from today back `days`. Chunked through
+ * every account is walked, each from the day before the live window back
+ * `days`. The live days are skipped: reads take them from the raw rows, the
+ * hourly sweep rolls them, and their conversations are written every second,
+ * so a batch reading a busy account's today fails its write conflict on every
+ * retry and kills the whole walk. Chunked through
  * `rollupDaysBatch` so no single transaction reads a year of sessions, and
  * re-scheduled when the chunk runs long rather than racing the action timeout.
  */
@@ -111,6 +125,7 @@ export const backfill = internalAction({
     const days = args.days ?? 400;
     const today = dayStartUtc(Date.now());
     const until = today - days * ACTIVITY_DAY_MS;
+    const first = activityLiveFrom(Date.now()) - ACTIVITY_DAY_MS;
     const users: Id<"users">[] = args.user_id
       ? [args.user_id]
       : await ctx.runQuery(internal.activityDays.rollupCandidates, {});
@@ -120,7 +135,7 @@ export const backfill = internalAction({
     let sessions = 0;
     let index = args.start_index ?? 0;
     for (; index < users.length; index++) {
-      let day: number | null = today;
+      let day: number | null = first;
       while (day !== null) {
         const res: { days: number; sessions: number; next_day: number | null } = await ctx.runMutation(
           internal.activityDays.rollupDaysBatch,
