@@ -70,6 +70,11 @@ export async function prepareRealBrowserStart(
   return true;
 }
 
+/** The pairing command, for a person at a terminal only: an agent's output carries the setup card instead, and an agent never hands a person a command. */
+function pairStep(lead = " — pair it with"): string {
+  return process.stdout.isTTY ? `${lead} \`cast browser extension setup\`` : "";
+}
+
 /** The agent's next step and the marker that puts the setup card under this command. */
 function printSetupCard(): void {
   for (const line of agentSetupLines("browser")) console.log(line);
@@ -375,8 +380,8 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         return;
       }
       if (!state?.token) {
-        console.log(`${fmt.muted(icons.dot)} not set up — \`cast browser extension setup\``);
-        console.log(`  Install Codecast from ${fmt.highlight(BRIDGE_STORE_URL)} first.`);
+        console.log(`${fmt.muted(icons.dot)} not set up${pairStep()}`);
+        console.log(`  The extension is Codecast: ${fmt.highlight(BRIDGE_STORE_URL)}.`);
         printSetupCard();
         return;
       }
@@ -406,12 +411,12 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         const chosen = pickBridgeProfile(found, state.profile);
         printProfileLines(found, chosen, !!chosen && chosen.dir === state.profile);
       } else if (state.extensionSeenAt) {
-        console.log(`${WARN} extension not connected — it was paired before, so check Chrome is running with the extension enabled (reload it at chrome://extensions), or re-run \`cast browser extension setup\``);
+        console.log(`${WARN} extension not connected — it was paired before, so check Chrome is running with the extension enabled (reload it at chrome://extensions)${pairStep(" or pair again with")}`);
       } else {
-        console.log(`${WARN} extension not connected — run \`cast browser extension setup\`; it hands the extension the current token`);
+        console.log(`${WARN} extension not connected${pairStep()}`);
       }
       if (!s.extensionConnected) {
-        console.log(`  Install Codecast from ${fmt.highlight(BRIDGE_STORE_URL)} if it is not installed yet.`);
+        console.log(`  The extension is Codecast: ${fmt.highlight(BRIDGE_STORE_URL)}.`);
         printSetupCard();
       }
       console.log(fmt.muted(`  CDP endpoint for any engine: ${bridgeWsUrl(bridge).replace(bridge.token, "<token>")} (token in ${bridgeStatePath()})`));

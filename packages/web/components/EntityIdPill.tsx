@@ -109,6 +109,7 @@ import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "
 import { replayFacts, replayTitle } from "./ops/opsModel";
 import { ModPaneEmbed } from "./mods/ModPaneEmbed";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
+import { taskCommentCount } from "../lib/taskComments";
 
 export { SessionHoverContent };
 
@@ -133,7 +134,7 @@ function TaskHoverContent({ task }: { task: any }) {
   const kind = task.task_type && task.task_type !== "task" ? task.task_type : null;
   const source = task.source && task.source !== "human" ? task.source : null;
   const labels: string[] = task.labels ?? [];
-  const commentCount = task.comments?.length ?? 0;
+  const commentCount = taskCommentCount(task);
   const sessionCount = task.conversation_ids?.length ?? 0;
 
   // Where the task lives and when, one wrapping line: no label column, each
