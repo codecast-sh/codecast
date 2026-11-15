@@ -49,14 +49,24 @@ function Rule({ name, to, children }: { name: string; to: Go; children: ReactNod
   );
 }
 
-export function FlowLoop({ loop, rates, href, select, liveKey, onShowFlows }: {
-  loop: Loop; rates: LoopRates; href: LineViewProps["href"]; select: LineViewProps["select"]; liveKey: string | null; onShowFlows: () => void;
+export function FlowLoop({ loop, rates, href, select, liveKey, onShowFlows, onStalled }: {
+  loop: Loop; rates: LoopRates; href: LineViewProps["href"]; select: LineViewProps["select"]; liveKey: string | null; onShowFlows: () => void; onStalled: () => void;
 }) {
   const at = (patch: LineSelectionPatch): Go => ({ href: href(patch), go: () => select(patch) });
   const signals = at({ view: "signals", sig: null, stage: null, item: null, source: null });
   const forYou = at({ view: "foryou" });
   const library = (item: string | null) => at({ view: "flows", item, run: null });
   const shipped = at({ view: "shipped" });
+  const runs: Go = { href: href({ view: "line", mode: "map" }), go: onShowFlows };
+  const stalled: Go = { href: runs.href, go: onStalled };
+  // One count per stage, each opening the list it counts; each repeats a number drawn below or in the nav.
+  const stages: Array<{ name: string; n: number; unit: string; to: Go }> = [
+    { name: "Signals", n: loop.signals.today, unit: "today", to: signals },
+    { name: "Triage", n: loop.problems.open, unit: "open", to: at({ view: "problems", status: null }) },
+    { name: "Build", n: loop.line.running + loop.line.waiting + loop.line.stalled, unit: "in flight", to: runs },
+    { name: "Checks", n: loop.checks.reduce((n, c) => n + c.at, 0), unit: "at a check", to: { href: "/workflows" } },
+    { name: "Ship and watch", n: loop.ship.watching, unit: "watching", to: shipped },
+  ];
   const r = loop.rules;
   return (
     <section className="lp" aria-label="The whole loop" data-flow-loop="">
@@ -93,7 +103,11 @@ export function FlowLoop({ loop, rates, href, select, liveKey, onShowFlows }: {
       </div>
 
       <ol className="lp-row lp-stages">
-        {["Signals", "Triage", "Build", "Checks", "Ship and watch"].map((s, i) => <li key={s}><span className="lp-stage-n lw-num">{i + 1}</span>{s}</li>)}
+        {stages.map((s) => (
+          <li key={s.name}>
+            <a className="lp-stage" href={s.to.href} onClick={follow(s.to)} data-loop-stage={s.name}>{s.name}<span className="lp-stage-n"><b className="lw-num">{s.n.toLocaleString()}</b> {s.unit}</span></a>
+          </li>
+        ))}
       </ol>
 
       <div className="lp-body">
@@ -133,7 +147,7 @@ export function FlowLoop({ loop, rates, href, select, liveKey, onShowFlows }: {
             <span className="lp-figs">
               <Fig n={loop.line.running} label="running" tone="live" />
               <Fig n={loop.line.waiting} label="on a person" tone="you" to={forYou} />
-              <Fig n={loop.line.stalled} label="stalled" tone="bad" />
+              <Fig n={loop.line.stalled} label="stalled" tone="bad" to={stalled} />
             </span>
           </div>
         </div>

@@ -164,6 +164,6 @@ test("no answer at a person's step: grouped by its word, no Edit instructions; a
   expect(withdrawn.textContent).toContain("merged into another");
   await act(async () => { (withdrawn.querySelector(".sp-row-tog") as HTMLElement).click(); });
   expect(withdrawn.querySelector("[data-line-start-again]")).toBeNull();
-  expect(withdrawn.textContent).toContain("nothing to ask again");
+  expect(withdrawn.textContent).toContain("Nothing was asked; the problem is");
   root.unmount();
 });

@@ -256,6 +256,7 @@
 .lset-declare { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; padding: 7px 10px; border-radius: 8px; border: 1px dashed color-mix(in srgb, var(--sol-border) 85%, transparent); }
 .lset-declare-words { font-size: var(--fs-meta); color: var(--sol-text-muted); line-height: 1.45; min-width: 0; flex: 1 1 220px; }
 .lset-declare-words b { color: var(--sol-text); font-weight: 600; }
+.lset-declare-group { font-size: var(--fs-meta); color: var(--sol-text-dim); }
 .lset-declare .lset-add { margin-left: 0; white-space: nowrap; }
 
 /* A source in words: its state first, then what it watches, then what it reported. */

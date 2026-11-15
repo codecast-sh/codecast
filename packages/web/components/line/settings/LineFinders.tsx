@@ -103,7 +103,8 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
         return (
           <div key={s.source} className="lset-declare" data-lset-undeclared={s.source}>
             <span className="lset-declare-words"><b>{s.source}</b> reported {s.week} in 7 days; not in this flow, so unwatched</span>
-            {canEdit && <button type="button" className="lset-add" onClick={() => send([{ op: "set_finder", finder: f }])} title={`Adding it ${groupingWords(f.fingerprint)}`} data-lset-declare={s.source}>Add {s.source} to the settings</button>}
+            {canEdit && <span className="lset-declare-group" data-lset-declare-group>{groupingWords(f.fingerprint).replace(/^c/, "C")}</span>}
+            {canEdit && <button type="button" className="lset-add" onClick={() => send([{ op: "set_finder", finder: f }])} data-lset-declare={s.source}>Add {s.source} to the settings</button>}
           </div>
         );
       })}

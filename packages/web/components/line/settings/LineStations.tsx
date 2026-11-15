@@ -50,6 +50,7 @@ const asWorkflow = (row: any): LineWorkflow => ({
 
 const minutes = (seconds: number | undefined) => (seconds ? String(Math.round((seconds / 60) * 10) / 10) : "");
 const roles = (n: number) => `${n} ${n === 1 ? "role" : "roles"}`;
+const shippedDiff = (n: number) => (n === 0 ? "Every station matches shipped" : `${n} ${n === 1 ? "station differs" : "stations differ"} from shipped`);
 
 /** One project's stations and the way each is written: the repo's line once a
  *  machine has published the project's profile (LX5), else the viewer's
@@ -172,7 +173,7 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
             <div className="text-meta mt-0.5" style={{ color: "var(--sol-text-dim)" }}>
               {!customized
                 ? "Click a station to read its prompt"
-                : `${changedCount === 0 ? "Every station matches shipped." : `${changedCount} ${changedCount === 1 ? "station differs" : "stations differ"} from shipped.`} Click a station to edit${changedCount ? " or reset" : ""} it.${onFork.length === 0 ? " Switch a role to the copy below for its runs to use it." : ""}`}
+                : shippedDiff(changedCount)}
             </div>
           )}
         </div>
@@ -247,8 +248,8 @@ function RepoLineHeader({ repo, changedCount, onResetAll }: { repo: ReturnType<t
           {!repo.gate.writable
             ? repo.gate.reason
             : own
-              ? `${changedCount === 0 ? "Every station matches shipped." : `${changedCount} ${changedCount === 1 ? "station differs" : "stations differ"} from shipped.`} Click a station to edit${changedCount ? " or reset" : ""} it. An edit is written to the repo on ${repo.gate.device} and checked before it lands; each run records the version it ran.`
-              : `Click a station to read it. Editing one writes the steps into the repo, in ${REPO_LINE_REL_DIR}, on ${repo.gate.device}; runs in that checkout use it from then on.`}
+              ? `${shippedDiff(changedCount)}; edits go to the repo on ${repo.gate.device}`
+              : `Editing a station writes it into ${REPO_LINE_REL_DIR} on ${repo.gate.device}`}
         </div>
       </div>
       {own && repo.writable && changedCount > 0 && (

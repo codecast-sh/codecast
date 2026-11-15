@@ -42,9 +42,9 @@ const STAGE_VIEW_KEY = "codecast.flows.stageView";
 const readStageView = (): StageView => { try { const v = localStorage.getItem(STAGE_VIEW_KEY); return STAGE_VIEWS.find((x) => x === v && x !== "volume") ?? "loop"; } catch { return "loop"; } };
 
 /** The whole loop, its data read only while it shows. */
-function LoopPane({ space, workspace, href, select, liveKey, onShowFlows }: { space: string | null; workspace: LineViewProps["workspace"]; href: LineViewProps["href"]; select: LineViewProps["select"]; liveKey: string | null; onShowFlows: () => void }) {
+function LoopPane({ space, workspace, href, select, liveKey, onShowFlows, onStalled }: { space: string | null; workspace: LineViewProps["workspace"]; href: LineViewProps["href"]; select: LineViewProps["select"]; liveKey: string | null; onShowFlows: () => void; onStalled: () => void }) {
   const { loop, rates } = useFlowLoop(space, workspace);
-  return <FlowLoop loop={loop} rates={rates} href={href} select={select} liveKey={liveKey} onShowFlows={onShowFlows} />;
+  return <FlowLoop loop={loop} rates={rates} href={href} select={select} liveKey={liveKey} onShowFlows={onShowFlows} onStalled={onStalled} />;
 }
 
 export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
@@ -62,6 +62,8 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
     if (selection.view === "volume") select({ view: "line", mode: "map" });
   };
   const [activity, setActivity] = useState<ActivityFilter>("all");
+  const showFlows = () => { setActivity("all"); pickView("flows"); };
+  const showStalled = () => { setActivity("stalled"); pickView("flows"); };
   // The runs of every flow in the live family, for the activity rail, each named by its flow when the family has more than one.
   const laneLabel = useMemo(() => new Map((map?.lanes ?? []).map((l) => [l.key, l.label])), [map?.lanes]);
   const runs = useMemo(() => {
@@ -116,7 +118,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
         <b>{drawnLane.label}</b>
         {drawnFigs.running ? <span><b className="lw-num">{drawnFigs.running}</b> running</span> : null}
         {drawnFigs.waiting ? <a data-tone="you" href={href({ view: "foryou", process: model.graphKey, step: null, show: null })} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select({ view: "foryou", process: model.graphKey, step: null, show: null }); }}><b className="lw-num">{drawnFigs.waiting}</b> on a person</a> : null}
-        {drawnFigs.stalled ? <span data-tone="bad"><b className="lw-num">{drawnFigs.stalled}</b> stalled</span> : null}
+        {drawnFigs.stalled ? <a data-tone="bad" href="#fs-queue" onClick={(e) => { e.preventDefault(); setFull(false); setActivity("stalled"); }} data-flows-full-stalled=""><b className="lw-num">{drawnFigs.stalled}</b> stalled</a> : null}
       </span>
     ) : null}
     <button type="button" className="lwg-btn fs-full-btn" data-ghost="" aria-pressed={full} onClick={() => setFull(!full)} title={full ? "Back to every flow (Esc)" : "Full view"} aria-label={full ? "Exit full view" : "Full view"} data-flows-full={full ? "on" : "off"}>
@@ -127,7 +129,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
   return (
     <div className="fs" data-flows-stage={live.flow.slug ?? undefined}>
       <section className="fll-live fs-live" data-live-flow={live._id} data-on={live.on ? "" : undefined}>
-        <LiveFlowHead live={live} workspace={workspace} stalled={stalled} onStalled={() => { setActivity("stalled"); pickView("flows"); }} flows={map?.lanes.length} onOpenFlow={(slug) => select({ view: "flows", item: slug, run: null })}>
+        <LiveFlowHead live={live} workspace={workspace} stalled={stalled} onStalled={showStalled} flows={map?.lanes.length} onOpenFlow={(slug) => select({ view: "flows", item: slug, run: null })}>
           {/* The whole loop a change moves through, what moved through the line over a window, or the live flows one by one. */}
           <div className="lw-seg fs-view" role="tablist" aria-label="Show">
             {STAGE_VIEWS.map((v) => (
@@ -137,7 +139,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
           <a className="lw-chip fs-lib" href={href(library)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select(library); }} data-flows-library-link><BookOpen className="w-3.5 h-3.5" aria-hidden />Library</a>
         </LiveFlowHead>
       </section>
-      {view === "loop" ? <LoopPane space={space ?? null} workspace={workspace} href={href} select={select} liveKey={drawnLane ? processKeyOf(drawnLane.key) : null} onShowFlows={() => pickView("flows")} /> : null}
+      {view === "loop" ? <LoopPane space={space ?? null} workspace={workspace} href={href} select={select} liveKey={drawnLane ? processKeyOf(drawnLane.key) : null} onShowFlows={showFlows} onStalled={showStalled} /> : null}
       {view === "volume" && map ? <VolumePage map={map} live={live} href={href} select={select} selection={selection} now={workspace.now} /> : null}
       {view !== "flows" ? null : <>
       <div className="fs-app">

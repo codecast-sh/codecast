@@ -103,7 +103,7 @@ export function TryPanel({ model, step, draft, runs }: TrySlotProps) {
       </div>
 
       {can && !can.editable ? (
-        <div className="lw-empty" title={can.reason}><b>Saved on another machine</b>Test it there, or ask an agent</div>
+        <div className="lw-empty" title={can.reason} data-line-try-elsewhere={can.home?.machine ?? ""}><b>Saved on {can.home?.machine ?? "another machine"}</b>Test it there, or ask an agent</div>
       ) : candidates.length === 0 ? (
         <div className="lw-empty"><b>No finished run of this step yet</b>Saving does not need one</div>
       ) : (

@@ -107,10 +107,10 @@ function StallLead({ s, of }: { s: Stall; of: number }) {
   const day = dayWords(s.to);
   return (
     <p className="sp-stall" data-line-step-stall={s.n}>
-      <b>One stall, not separate failures.</b>{" "}
-      <span className="lw-num">{s.n}</span>{s.n < of ? <> of these <span className="lw-num">{of}</span></> : ""} runs hit the limit between <span className="lw-num">{clock(s.from)}</span> and <span className="lw-num">{clock(s.to)}</span>{day ? ` ${day}` : ""}
-      {s.machines > 1 ? <>, on <span className="lw-num">{s.machines}</span> machines</> : ", on one machine"}
-      {s.empty === s.n ? ", and none of their sessions ran a turn." : s.empty ? <>. <span className="lw-num">{s.empty}</span> of their sessions never ran a turn.</> : "."}
+      <b>One stall</b>{" · "}
+      <span className="lw-num">{s.n}</span>{s.n < of ? <> of <span className="lw-num">{of}</span></> : ""} runs, <span className="lw-num">{clock(s.from)}</span>–<span className="lw-num">{clock(s.to)}</span>{day ? ` ${day}` : ""}
+      {" · "}{s.machines > 1 ? <><span className="lw-num">{s.machines}</span> machines</> : "one machine"}
+      {s.empty === s.n ? " · no session ran a turn" : s.empty ? <>{" · "}<span className="lw-num">{s.empty}</span> never ran a turn</> : ""}
     </p>
   );
 }
@@ -375,7 +375,7 @@ function Thing({ r, step, model, ws, needs, now }: { r: WorkRow; step: LineStep;
   return (
     <div className="sp-detail" data-line-step-thing="none">
       <p className="sp-said">{waits ? "This run reached the step, and no decision was presented for it."
-        : problem?.closed ? `Nothing was asked before the run ended, and the problem is ${problem.status}: there is nothing to ask again.`
+        : problem?.closed ? `Nothing was asked; the problem is ${problem.status}`
         : "Nothing was asked before the run ended."}</p>
       <Foot d={d}>{again}</Foot>
     </div>
