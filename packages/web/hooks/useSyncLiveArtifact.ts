@@ -8,6 +8,7 @@ import { useWatchEffect } from "./useWatchEffect";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { liveRowId } from "../store/liveArtifactsSlice";
+import { isStubDoc } from "../components/live/liveStub";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useServerAuthSettled } from "./useServerAuthSettled";
 import { useConvexSync } from "./useConvexSync";
@@ -193,7 +194,8 @@ function useElementsFeed(docId: string): { ready: boolean } {
     setSince(start);
     setReady(false);
   }, [docId]);
-  const args = authSettled && docId ? { doc_id: docId as any, since } : "skip";
+  const stub = isStubDoc(docId);
+  const args = authSettled && docId && !stub ? { doc_id: docId as any, since } : "skip";
   const { data, error } = useQueryNoThrow(api.liveArtifacts.elementsSince, args as any);
   useFeederError("liveArtifacts.elementsSince", error);
   useConvexSync(
@@ -216,17 +218,19 @@ function useElementsFeed(docId: string): { ready: boolean } {
       if (next > since) setSince(next);
     }, [since]),
   );
-  return { ready };
+  // A placeholder doc has nothing on the server: what this tab holds is all of it.
+  return { ready: ready || stub };
 }
 
 /** Mount every feeder an artifact's page needs. */
 export function useSyncLiveArtifact(docId: string): { ready: boolean } {
   const feed = useElementsFeed(docId);
-  useSyncCollection("livePresence", api.livePresence.presence, docId ? { doc_id: docId as any } : "skip", {
+  const onServer = !!docId && !isStubDoc(docId);
+  useSyncCollection("livePresence", api.livePresence.presence, onServer ? { doc_id: docId as any } : "skip", {
     select: useCallback((rows: any) => (Array.isArray(rows) ? rows.map((r: any) => ({ ...r, _id: `${r.doc_id}|${r.actor}` })) : rows), []),
     dropAbsent: useCallback((row: any) => row?.doc_id === docId, [docId]),
   });
-  useSyncCollection("liveVersions", api.liveArtifacts.versions, docId ? { doc_id: docId as any } : "skip", {
+  useSyncCollection("liveVersions", api.liveArtifacts.versions, onServer ? { doc_id: docId as any } : "skip", {
     select: useCallback((p: any) => p?.versions?.map((v: any) => ({ ...v, _id: String(v._id) })), []),
   });
   return feed;
