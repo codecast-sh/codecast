@@ -31,7 +31,7 @@ import { recordExternalEventOnce } from "./externalEvents";
 import { recordDeployMarker } from "./deploys";
 import { appSourceIn, refreshAppManifestSoon } from "./lib/appSource";
 import { markConnectionLost } from "./lib/sourceHealth";
-import { linkReplayToGroup, upsertReplayManifest } from "./replays";
+import { linkReplayToGroup, upsertReplayManifest } from "./lib/replayWrites";
 import { recordMomentEvents } from "./moments";
 import { takeFromWindow, windowSpent } from "./ipRateLimit";
 import { readableRowByRef, rowByRef } from "./lib/rowByRef";

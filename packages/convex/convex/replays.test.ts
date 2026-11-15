@@ -5,25 +5,8 @@ import { gunzipSync, gzipSync, strFromU8, strToU8 } from "fflate";
 import { sha256Hex } from "./lib/hash";
 import { replayChunkKey } from "./lib/r2";
 import { applyBatch, createSource } from "./ingest";
-import {
-  chunkObject,
-  cliGet,
-  get,
-  webGetReplay,
-  linkReplayToGroup,
-  list,
-  browse,
-  saveShape,
-  recordReplayChunk,
-  REPLAY_GROUP_LINKS_MAX,
-  saveImported,
-  saveCaptureLength,
-  saveSummary,
-  upsertReplayManifest,
-  CHUNK_LANDING_MS,
-  REPLAYS_NEW_PER_HOUR,
-  shouldQueueAssembly,
-} from "./replays";
+import { chunkObject, cliGet, get, webGetReplay, list, browse, saveShape, saveImported, saveCaptureLength, saveSummary, CHUNK_LANDING_MS } from "./replays";
+import { linkReplayToGroup, recordReplayChunk, REPLAY_GROUP_LINKS_MAX, upsertReplayManifest, REPLAYS_NEW_PER_HOUR, shouldQueueAssembly } from "./lib/replayWrites";
 import { chunkReplayEvents, gunzipCapped, putChunk, readReplayChunks, REPLAY_CHUNK_MAX_INFLATED_BYTES, signReplayChunks } from "./lib/replayChunks";
 import { withCaptureLength } from "./lib/replayImport";
 import { REPLAY_BROWSE_SCAN_MAX, REPLAY_GROUP_SCAN_MAX, writeReplayTimeline } from "./lib/replayReads";

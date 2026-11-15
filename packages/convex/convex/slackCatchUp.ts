@@ -16,7 +16,8 @@ import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { slackApi } from "./lib/slackApi";
 import { linkReceivesInbound } from "./lib/slackMirror";
-import { findMirroredRow, isMirrorableMessage, mirrorMessage } from "./slackSync";
+import { findMirroredRow, mirrorMessage } from "./slackSync";
+import { isMirrorableMessage } from "./lib/slackText";
 
 // Lines a little older than the mark are read again, for a line Slack stamped
 // just before the previous run read history but indexed just after.

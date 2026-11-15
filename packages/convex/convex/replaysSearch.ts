@@ -9,7 +9,7 @@ import { scopeArgs } from "./lib/ingestScopeArgs";
 import { scopeOf, sourceByRef } from "./lib/ingestScope";
 import { sourceViewOf } from "./lib/sourceStats";
 import { readableReplay, searchCore, storedCore } from "./lib/replayReads";
-import { findReplay } from "./replays";
+import { findReplay } from "./lib/replayWrites";
 
 /**
  * `cast replay ls` over the imported store (/cli/replays/search): one page of

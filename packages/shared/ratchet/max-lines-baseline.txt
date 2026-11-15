@@ -130,7 +130,6 @@ packages/convex/convex/plans.ts 1950
 packages/convex/convex/prCli.ts
 packages/convex/convex/prShepherd.ts 850
 packages/convex/convex/pushRouter.test.ts 950
-packages/convex/convex/replays.ts 950
 packages/convex/convex/repos.ts 1400
 packages/convex/convex/schema.ts
 packages/convex/convex/secrets.test.ts 1050

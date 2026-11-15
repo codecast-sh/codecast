@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { replayStyleKey } from "./lib/r2";
 import { signPlayerManifest } from "./lib/replayChunks";
-import { upsertReplayManifest } from "./replays";
+import { upsertReplayManifest } from "./lib/replayWrites";
 import { handleReplaySign, validateReplaySign } from "./replaysHttp";
 import { h, teamSource, world } from "./replays.testkit";
 import { REPLAY_STYLE_LIMITS } from "@codecast/shared/contracts/replayPlayer";

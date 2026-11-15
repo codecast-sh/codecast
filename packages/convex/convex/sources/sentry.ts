@@ -48,7 +48,7 @@ import { claimWebhookDelivery, groupByRef } from "../ingest";
 import { mirrorGroups, type MirroredGroup } from "../lib/groupWrite";
 import { patchSourceStats } from "../lib/sourceStats";
 import { takeFromWindow } from "../ipRateLimit";
-import { linkReplayToGroup } from "../replays";
+import { linkReplayToGroup } from "../lib/replayWrites";
 import { importVendorRecording, VendorCallError, type ImportOutcome, type VendorRecording } from "./vendorReplay";
 import type { RrwebEvent } from "@codecast/shared/replay";
 import { HOUR_MS } from "../lib/ingestGroups";

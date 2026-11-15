@@ -52,12 +52,13 @@ import {
   hasStandalonePreviewLink,
   isSharedMessage,
   shortcodeToEmoji,
-  slackAttachmentsToMarkdown,
   slackDisplayName,
-  slackToMarkdown,
   slackUserIdsIn,
   type SlackAttachment,
   type SlackInboundResolver,
+  inboundTextParts,
+  isMirrorableMessage,
+  systemNoticeLine,
 } from "./lib/slackText";
 import {
   APP_REMOVED_ERROR,
@@ -2028,11 +2029,6 @@ export const applyFileRepair = internalMutation({
   },
 });
 
-// A Slack message's words as markdown: its text, then its cards and quoted messages.
-function inboundTextParts(msg: any, resolver: SlackInboundResolver): string[] {
-  return [slackToMarkdown(String(msg.text ?? ""), resolver), slackAttachmentsToMarkdown(msg.attachments, resolver)].filter(Boolean);
-}
-
 // Lines mirrored before quoted Slack messages rendered as quote cards, drawn
 // again from their stored events. Lines with files are left alone: their body
 // also carries file lines the event alone cannot rebuild.
@@ -2069,13 +2065,6 @@ export const rerenderSharedQuotes = internalAction({
 });
 
 // One Slack message (root, reply, broadcast, bot card, file share) to a chat line.
-// The message subtypes that carry a line a person or app wrote; every other
-// subtype is an edit, delete or system notice with its own path.
-export function isMirrorableMessage(m: { subtype?: string } | null | undefined): boolean {
-  const sub = m?.subtype;
-  return sub === undefined || sub === "file_share" || sub === "thread_broadcast" || sub === "bot_message";
-}
-
 export async function mirrorMessage(
   ctx: ActionCtx,
   c: { install: Install; link: Link; anchor_handle: string | null },
@@ -2294,21 +2283,6 @@ export const processEvent = internalAction({
     }
   },
 });
-
-// What Slack's own housekeeping reads as in chat. Null for a subtype worth no
-// line at all, which the caller records as a skip.
-function systemNoticeLine(subtype: string | undefined, who: string, event: any): string | null {
-  const plain = (raw: unknown) => slackToMarkdown(String(raw ?? ""), { user: () => null });
-  switch (subtype) {
-    case "channel_join": return `${who} joined the Slack channel`;
-    case "channel_leave": return `${who} left the Slack channel`;
-    case "channel_topic": return `${who} set the Slack topic: ${plain(event.topic)}`;
-    case "channel_purpose": return `${who} set the Slack purpose: ${plain(event.purpose)}`;
-    case "channel_name": return `${who} renamed the Slack channel to #${event.name ?? ""}`;
-    case "pinned_item": return `${who} pinned a message in Slack`;
-    default: return null;
-  }
-}
 
 export const pauseLink = internalMutation({
   args: { link_id: v.id("slack_channel_links"), error: v.string() },

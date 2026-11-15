@@ -24,13 +24,12 @@ import { isLiveVoiceRow, isSilentAgentRow } from "@codecast/shared/chat";
 import { parseCommentThreadRootKey } from "@codecast/shared/comments";
 import { plainPreview } from "./chatText";
 import {
-  THREAD_UNREAD_SCAN,
   authorsFor,
   readChannel,
   requireCaller,
   threadSummariesFor,
-  threadUnreadFor,
 } from "./chat";
+import { THREAD_UNREAD_SCAN, threadUnreadFor } from "./lib/chatReadState";
 import { isInCommentThread } from "./comments";
 import { listConversationComments } from "./commentStore";
 import type { ConversationComment } from "./lib/conversationCommentRows";

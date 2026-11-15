@@ -8,7 +8,7 @@ import { internal } from "../_generated/api";
 import { scheduleTriggerMatch } from "./triggerMatch";
 import { nextShortId } from "../counters";
 import { recordExternalEventOnce } from "../externalEvents";
-import { linkReplayToGroup } from "../replays";
+import { linkReplayToGroup } from "./replayWrites";
 import { takeFromWindow } from "../ipRateLimit";
 import { schedulePromotion } from "../ingestPromotions";
 import { patchSourceStats } from "./sourceStats";

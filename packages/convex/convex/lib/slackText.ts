@@ -309,3 +309,30 @@ export function slackDisplayName(author: { name: string; isAgent?: boolean; via?
   const via = author.via ? ` · via ${author.via}` : "";
   return `${base} (agent${via})`.slice(0, 80);
 }
+
+// A Slack message's words as markdown: its text, then its cards and quoted messages.
+export function inboundTextParts(msg: any, resolver: SlackInboundResolver): string[] {
+  return [slackToMarkdown(String(msg.text ?? ""), resolver), slackAttachmentsToMarkdown(msg.attachments, resolver)].filter(Boolean);
+}
+
+// The message subtypes that carry a line a person or app wrote; every other
+// subtype is an edit, delete or system notice with its own path.
+export function isMirrorableMessage(m: { subtype?: string } | null | undefined): boolean {
+  const sub = m?.subtype;
+  return sub === undefined || sub === "file_share" || sub === "thread_broadcast" || sub === "bot_message";
+}
+
+// What Slack's own housekeeping reads as in chat. Null for a subtype worth no
+// line at all, which the caller records as a skip.
+export function systemNoticeLine(subtype: string | undefined, who: string, event: any): string | null {
+  const plain = (raw: unknown) => slackToMarkdown(String(raw ?? ""), { user: () => null });
+  switch (subtype) {
+    case "channel_join": return `${who} joined the Slack channel`;
+    case "channel_leave": return `${who} left the Slack channel`;
+    case "channel_topic": return `${who} set the Slack topic: ${plain(event.topic)}`;
+    case "channel_purpose": return `${who} set the Slack purpose: ${plain(event.purpose)}`;
+    case "channel_name": return `${who} renamed the Slack channel to #${event.name ?? ""}`;
+    case "pinned_item": return `${who} pinned a message in Slack`;
+    default: return null;
+  }
+}

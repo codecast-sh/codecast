@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { patchReplay } from "./lib/replayIndex";
 import { REPLAY_SEARCH_PAGE } from "./lib/replayReads";
-import { ensureReplay } from "./replays";
+import { ensureReplay } from "./lib/replayWrites";
 import { importStatus, search } from "./replaysSearch";
 import { h, teamSource, world } from "./replays.testkit";
 

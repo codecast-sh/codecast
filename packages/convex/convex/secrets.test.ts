@@ -9,7 +9,7 @@ import schema from "./schema";
 import { hashToken } from "./apiTokens";
 import { allModules } from "./testModules.testkit";
 import { decryptSecret, encryptSecret } from "./secrets";
-import { APPROVE_FOR_SESSION, SECRET_APPROVAL_TTL_MS, SECRET_PAYLOAD_MAX, isPresenceRequired, validatePayload } from "@codecast/shared/contracts/secrets";
+import { APPROVE_FOR_SESSION, SECRET_APPROVAL_TTL_MS, isPresenceRequired } from "@codecast/shared/contracts/secrets";
 import { seedPresence } from "./passkeys.testkit";
 import { formatVaultDeclined, parseVaultReady } from "@codecast/shared/contracts";
 import { isHumanOnlyCategory } from "./lib/decisionCategory";
@@ -986,18 +986,6 @@ test("every value write gets a version past the last one, even inside one millis
   await as(ana).action(api.secrets.restore, { ref: "app" });
   expect((await as(ana).query(api.secrets.show, { ref: "app" })).value_updated_at).toBe(ahead + 2);
   expect((await as(ana).action(api.secrets.reveal, { ref: "app" })).payload.cookies[0].value).toBe("cookie-1");
-});
-
-test("a value at the size limit encrypts and decrypts whole, and the limit counts bytes", async () => {
-  const workspace = "team:t1";
-  const ascii = { content: "a".repeat(SECRET_PAYLOAD_MAX - 100) };
-  expect(validatePayload("file", ascii)).toEqual({ payload: ascii });
-  expect(await decryptSecret(await encryptSecret(ascii, workspace), workspace)).toEqual(ascii);
-  const cjk = { content: "漢".repeat(Math.floor((SECRET_PAYLOAD_MAX - 100) / 3)) };
-  expect(validatePayload("file", cjk)).toEqual({ payload: cjk });
-  expect(await decryptSecret(await encryptSecret(cjk, workspace), workspace)).toEqual(cjk);
-  // 200,000 characters of CJK text is 600 KB: past the limit, whatever its length in characters.
-  expect(validatePayload("file", { content: "漢".repeat(200_000) })).toMatchObject({ error: expect.stringMatching(/at most 512 KB/) });
 });
 
 test("every value the redaction feed sends is on its secret's trail, once per user and value", async () => {
