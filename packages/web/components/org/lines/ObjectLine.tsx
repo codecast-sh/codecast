@@ -62,6 +62,8 @@ export type ObjectLineProps = {
   onToggle?: () => void;
   ghost?: LineGhost;
   selected?: boolean;
+  /** A control at the end of the title, shown on hover and while pressed. */
+  action?: ReactNode;
   className?: string;
 } & Record<`data-${string}`, string | number | undefined>;
 
@@ -75,7 +77,7 @@ function ownClick(e: React.SyntheticEvent): boolean {
 
 const NO_CHANGES: readonly string[] = [];
 
-export function ObjectLine({ kind, id, target, glyph, title, sub, owner: ownerCell, hideOwner, face: faceCell, state, measure, date, depth = 0, expanded, onToggle, ghost, selected, className, ...data }: ObjectLineProps) {
+export function ObjectLine({ kind, id, target, glyph, title, sub, owner: ownerCell, hideOwner, face: faceCell, state, measure, date, depth = 0, expanded, onToggle, ghost, selected, action, className, ...data }: ObjectLineProps) {
   const { open, onLinkClick } = useLineOpen();
   const owner = hideOwner ? null : ownerCell;
   const face = hideOwner ? null : faceCell;
@@ -130,6 +132,7 @@ export function ObjectLine({ kind, id, target, glyph, title, sub, owner: ownerCe
           : <span className="ol-name" title={title} data-line-title>{title}</span>}
         {sub != null && sub !== false && <span className="ol-sub" title={typeof sub === "string" ? sub : undefined} data-line-sub>{sub}</span>}
         {face != null && <span className="ol-face" aria-hidden>{face}</span>}
+        {action != null && <span className="ol-act">{action}</span>}
       </span>
       {owner != null && <span className="ol-owner" data-line-owner>{owner}</span>}
       {ghost ? (

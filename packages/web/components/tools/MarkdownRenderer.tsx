@@ -1,6 +1,6 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import { memo } from "react";
-import { tryRenderHtmlMessage } from "../HtmlSnippet";
+import { tryRenderHtmlMessage } from "../../lib/canvasFence";
 import { MD_COMPONENTS } from "../../lib/markdownComponents";
 import { MD_REHYPE_PLUGINS, MD_REMARK_PLUGINS } from "../../lib/markdownPlugins";
 import { RevealHost } from "../ObjectReveal";
