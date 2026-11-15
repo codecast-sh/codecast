@@ -27,15 +27,13 @@
 import { fmt, icons } from "../colors.js";
 import { readStdinBody } from "../sendBody.js";
 import { inlineImageMarker } from "../inlineImage.js";
-import { writeShotFile } from "../browser/shotFile.js";
+import { offerShotFile } from "../browser/shotFile.js";
 import { agentSetupLines } from "@codecast/shared/contracts/agentToolSetup";
 import { asComputerError, ComputerError, grantSetupLines } from "./errors.js";
 import { actionVerdict, failedActionVerdict, verdictLine } from "./verdict.js";
 import { formatAction, formatApps, formatCapabilities, formatSnapshot, formatWindows, jsonChanges } from "./format.js";
 import { diffTrees, filterTree, formatDiff, resolveElement, type TreeFilter } from "./tree.js";
-import { ensureScreenshotDir, rewriteScreenshotForJson, screenshotFileName, sweepScreenshots } from "./screenshotFile.js";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { rewriteScreenshotForJson, screenshotDir, sweepScreenshots } from "./screenshotFile.js";
 import type { ComputerSetupDeps } from "./setup.js";
 import type {
   ComputerActionMethod,
@@ -44,6 +42,7 @@ import type {
   ComputerListWindowsResult,
   ComputerPermissionId,
   ComputerProviderCapabilities,
+  ComputerRect,
   ComputerSnapshotResult,
 } from "./types.js";
 
@@ -123,6 +122,8 @@ export interface ComputerOptions {
   find?: string;
   under?: string;
   fullResolution?: boolean;
+  /** `--crop x,y,w,h`: one window region, in window points, at full density. */
+  crop?: string;
   /** `--no-cursor` arrives as `cursor: false`: hide the agent cursor overlay. */
   cursor?: boolean;
   /** `get-app-state --diff`: only what changed since this window's last snapshot. */
@@ -257,6 +258,16 @@ function numberFlag(flag: string, raw: string | undefined, min: number, max: num
   return value;
 }
 
+/** `--crop x,y,w,h` in window points. */
+function cropFlag(raw: string): ComputerRect {
+  const parts = raw.split(",").map((p) => p.trim());
+  const usage = "--crop takes x,y,width,height in window points, e.g. --crop 0,0,400,300";
+  if (parts.length !== 4) throw invalid(usage);
+  const [x, y, width, height] = parts.map((p) => numberFlag("--crop", p, -1_000_000, 1_000_000)!);
+  if (!(width > 0 && height > 0)) throw invalid(usage);
+  return { x, y, width, height };
+}
+
 function oneOf(flag: string, raw: string | undefined, allowed: string[]): string | undefined {
   if (raw === undefined) return undefined;
   const value = raw.trim().toLowerCase();
@@ -289,8 +300,14 @@ function targetParams(o: ComputerOptions): Record<string, unknown> {
 function observeParams(verb: ComputerVerb, o: ComputerOptions): Record<string, unknown> {
   const params: Record<string, unknown> = {};
   const wantShot = verb in ACTION_METHOD ? o.screenshot === true : o.screenshot !== false && verb === "get-app-state";
+  if (o.crop !== undefined && !wantShot) throw invalid("--crop shapes the screenshot, so it needs one (drop --no-screenshot)");
   if (!wantShot) params.noScreenshot = true;
-  else if (o.fullResolution) params.fullResolution = true;
+  else {
+    // The helper writes the picture here; the CLI owns the directory's sweep.
+    params.screenshotDir = screenshotDir();
+    if (o.fullResolution) params.fullResolution = true;
+    if (o.crop !== undefined) params.crop = cropFlag(o.crop);
+  }
   if (o.cursor === false) params.cursor = false;
   if (o.restoreWindow) params.restoreWindow = true;
   return params;
@@ -438,26 +455,20 @@ function printJson(sink: ComputerSink, body: Record<string, unknown>): void {
 /**
  * Put the capture in the conversation on the human path.
  *
- * `writeShotFile` downscales past the sync cap and prints the report line;
- * the marker is emitted only for a file this command just wrote, at an
- * absolute path, which is that module's stated contract.
+ * The helper wrote the file; `offerShotFile` downscales it past the sync cap
+ * and prints the report line, and the marker is emitted only for that file,
+ * which this command just produced, at an absolute path.
  */
 function emitScreenshot(result: ComputerSnapshotResult, o: ComputerOptions, sink: ComputerSink): void {
-  const data = result.screenshot?.data;
-  if (!data) return;
+  const file = result.screenshot?.path;
+  if (!file) return;
+  sweepScreenshots();
   try {
-    const dir = ensureScreenshotDir();
-    sweepScreenshots(dir);
-    const file = path.join(dir, screenshotFileName(result.snapshot.id));
-    const abs = writeShotFile(Buffer.from(data, "base64"), file, { inline: o.inline, quiet: sink.quietShots });
-    // Same rule as the --json path: a window capture can hold anything that
-    // was on screen, so it is readable by this uid and nobody else.
-    fs.chmodSync(file, 0o600);
+    const abs = offerShotFile(file, { inline: o.inline, quiet: sink.quietShots });
     if (abs) sink.image(abs);
   } catch (err) {
-    // The tree is the answer; a picture that could not be written is a note,
-    // not a failure.
-    console.error(fmt.muted(`  screenshot not written: ${err instanceof Error ? err.message : String(err)}`));
+    // The tree is the answer; a picture that cannot be read is a note, not a failure.
+    console.error(fmt.muted(`  screenshot not shown: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 

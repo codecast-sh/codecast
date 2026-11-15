@@ -12,7 +12,7 @@ import { pickLaptopLink, proveLaptopBridge, readLaptopLinks, ownUserId, type Lap
 import { CLOSE_BAD_TOKEN } from "../browser/bridge/protocol.js";
 import { ComputerError, asComputerError, grantSetupLines, computerErrorFromWire } from "./errors.js";
 import { CLOSE_NOT_GRANTED, parseScreenshotFrame } from "./remoteServe.js";
-import { ensureScreenshotDir, screenshotFileName, SCREENSHOT_TTL_MS } from "./screenshotFile.js";
+import { screenshotDir, SCREENSHOT_TTL_MS } from "./screenshotFile.js";
 import type { ComputerClientLike } from "./run.js";
 import type { ComputerActionMethod, ComputerActionResult, ComputerListAppsResult, ComputerListWindowsResult, ComputerProviderCapabilities, ComputerSnapshotResult } from "./types.js";
 
@@ -153,20 +153,21 @@ export class RemoteComputerClient implements ComputerClientLike {
 
   /**
    * The capture as this machine's own file, 0600 in the CLI's screenshot dir,
-   * named for the snapshot like a local one. `data` is filled in this process
-   * only, for the printers that still read it; it never crossed the link.
+   * named for the snapshot like a local one so the sweep finds it.
    */
   private landScreenshot(result: ComputerSnapshotResult, frame: { contentType: string; bytes: Buffer }): ComputerSnapshotResult {
     const shot = result.screenshot as (NonNullable<ComputerSnapshotResult["screenshot"]> & { bytes?: number; contentType?: string }) | null;
     if (!shot) return result;
-    const dir = ensureScreenshotDir(this.o.screenshotDir);
-    const file = path.join(dir, `remote-${screenshotFileName(result.snapshot?.id ?? `r${Date.now()}`)}`);
+    const dir = this.o.screenshotDir ?? screenshotDir();
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const id = (result.snapshot?.id ?? `r${Date.now()}`).replace(/[^\w.-]/g, "_");
+    const file = path.join(dir, `remote-${id}-screenshot.png`);
     fs.writeFileSync(file, frame.bytes, { mode: 0o600 });
     fs.chmodSync(file, 0o600);
     const { contentType: _ct, ...rest } = shot;
     return {
       ...result,
-      screenshot: { ...rest, bytes: frame.bytes.length, path: file, expiresAt: new Date(Date.now() + SCREENSHOT_TTL_MS).toISOString(), data: frame.bytes.toString("base64") } as typeof result.screenshot,
+      screenshot: { ...rest, bytes: frame.bytes.length, path: file, expiresAt: new Date(Date.now() + SCREENSHOT_TTL_MS).toISOString() } as typeof result.screenshot,
     };
   }
 

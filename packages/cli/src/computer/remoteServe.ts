@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import type { CloudHost } from "../browser/cloudHost.js";
 import { asComputerError, ComputerError } from "./errors.js";
 import { remoteRefusal } from "./remoteGrant.js";
-import { ensureScreenshotDir } from "./screenshotFile.js";
+import { screenshotDir } from "./screenshotFile.js";
 import type { ComputerClientLike } from "./run.js";
 import type { ComputerActionMethod, ComputerScreenshotData } from "./types.js";
 
@@ -59,19 +59,17 @@ export function parseScreenshotFrame(frame: Buffer): { id: number; contentType: 
   return { id: frame.readUInt32BE(0), contentType: frame.subarray(6, 6 + ctLen).toString("utf-8"), bytes: frame.subarray(6 + ctLen) };
 }
 
-/** The helper's pixels as bytes: the file it wrote (removed once read), or today's base64. */
-export function takeScreenshotBytes(shot: ComputerScreenshotData & { bytes?: number }): { bytes: Buffer; meta: Record<string, unknown> } | null {
-  const { data, path: file, dataOmitted: _o, expiresAt: _e, ...meta } = shot;
-  let bytes: Buffer | null = null;
-  if (file) {
-    try {
-      bytes = fs.readFileSync(file);
-      fs.rmSync(file, { force: true });
-    } catch {
-      bytes = null;
-    }
-  } else if (data) bytes = Buffer.from(data, "base64");
-  if (!bytes) return null;
+/** The helper's pixels as bytes: the file it wrote, removed once read. */
+export function takeScreenshotBytes(shot: ComputerScreenshotData): { bytes: Buffer; meta: Record<string, unknown> } | null {
+  const { path: file, expiresAt: _e, ...meta } = shot;
+  if (!file) return null;
+  let bytes: Buffer;
+  try {
+    bytes = fs.readFileSync(file);
+    fs.rmSync(file, { force: true });
+  } catch {
+    return null;
+  }
   return { bytes, meta: { ...meta, bytes: bytes.length, contentType: `image/${shot.format}` } };
 }
 
@@ -117,7 +115,7 @@ export function serveComputerSocket(ws: RemoteSocket, o: ServeComputerOptions): 
       return reply(id, { ok: false, error: { code: "remote_refused", message: why } });
     }
     // Where the helper writes its capture is this laptop's business, never the caller's.
-    if ("screenshotDir" in params) params.screenshotDir = ensureScreenshotDir();
+    if ("screenshotDir" in params) params.screenshotDir = screenshotDir();
     o.onFirstUse?.(o.host);
     o.log(`[COMPUTER-REMOTE] ${where} ${method}${typeof params.app === "string" ? ` ${params.app}` : ""}`);
     try {

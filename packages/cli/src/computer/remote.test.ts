@@ -21,7 +21,14 @@ afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c();
 
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489", "hex");
 
-function fakeHelper(calls: string[], shot: () => Record<string, unknown> | null = () => ({ data: PNG.toString("base64"), format: "png", width: 1, height: 1, scale: 1 })): ComputerClientLike {
+/** The helper writes its capture to a file and replies with the path, as both real helpers do. */
+function helperShot(): Record<string, unknown> {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cast-remote-helper-")), "s-screenshot.png");
+  fs.writeFileSync(file, PNG, { mode: 0o600 });
+  return { path: file, format: "png", width: 1, height: 1, scale: 1 };
+}
+
+function fakeHelper(calls: string[], shot: () => Record<string, unknown> | null = helperShot): ComputerClientLike {
   const snap = (app: string) => ({ snapshot: { id: `s${calls.length}`, app: { name: app }, window: { title: "Untitled" }, treeText: "0 window Untitled" }, screenshot: shot(), screenshotStatus: { state: "captured" } });
   return {
     capabilities: async () => { calls.push("capabilities"); return { platform: "darwin" } as never; },
@@ -94,7 +101,7 @@ describe("cast computer --on laptop through the bridge", () => {
     await r.client.getAppState({ app: "com.apple.TextEdit" });
     expect(r.calls).toEqual(["getAppState", "setValue", "listApps", "getAppState"]);
     expect(r.sockets.length).toBe(1);
-    const shot = state.screenshot as unknown as { path: string; bytes: number; data?: string };
+    const shot = state.screenshot as unknown as { path: string; bytes: number };
     expect(fs.readFileSync(shot.path).equals(PNG)).toBe(true);
     expect(fs.statSync(shot.path).mode & 0o777).toBe(0o600);
     expect(path.dirname(shot.path)).toBe(r.shots);
