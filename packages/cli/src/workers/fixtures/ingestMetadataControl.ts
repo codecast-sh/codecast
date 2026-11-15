@@ -28,7 +28,9 @@ if (mode === 'old-tail') {
   assert.equal(producerPreimage.split(current).length, 2);
   const altered = producerPreimage.replace(current, old)
     .replace(/from (['"])(\.[^'"]+)\1/g, (_whole, quote, name) => `from ${quote}${path.resolve(workerDir, name)}${quote}`)
-    .replace(/import\((['"])(\.[^'"]+)\1\)/g, (_whole, quote, name) => `import(${quote}${path.resolve(workerDir, name)}${quote})`);
+    .replace(/import\((['"])(\.[^'"]+)\1\)/g, (_whole, quote, name) => `import(${quote}${path.resolve(workerDir, name)}${quote})`)
+    // Workspace packages resolve from the package, never from the scratch copy's directory.
+    .replace(/from (['"])(@codecast\/[^'"]+)\1/g, (_whole, quote, name) => `from ${quote}${Bun.resolveSync(name, workerDir)}${quote}`);
   loadedProducer = path.join(home, 'old-tail-producer.ts');
   fs.writeFileSync(loadedProducer, altered);
 }

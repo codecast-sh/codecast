@@ -66,7 +66,7 @@ const ALLOWED: Record<string, string> = {
   // and the resolver would grow the boot graph main.ts must keep to fastPath.
   "main.ts": "compares CODECAST_DIR with DRY_RUN_EMPTY_CODECAST_DIR before anything loads",
   // The host side of `cast run` ships to the host as its own source and can
-  // import nothing, so it resolves the directory the same way, once, in its body.
+  // import nothing, so it names the host's ~/.codecast once, in its body.
   [path.join("run", "hostRunner.ts")]: "ships as source to the host and cannot import the resolver",
 };
 

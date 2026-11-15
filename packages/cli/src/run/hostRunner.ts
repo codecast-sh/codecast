@@ -103,8 +103,8 @@ export async function hostRunnerMain(args: string[], parts: { slots: typeof runn
   // so a runner shipped from a Mac would think every Linux host is a Mac. os answers at run time, on the host.
   const PLATFORM = os.platform();
   const ARCH = os.arch();
-  // The CLI's state directory, resolved here because this body cannot import codecastDir().
-  const STATE_DIR = process.env.CODECAST_DIR || path.join(os.homedir(), ".codecast");
+  // The host's state directory, resolved here because this body cannot import codecastDir().
+  const STATE_DIR = path.join(os.homedir(), ".codecast");
   const ROOT = process.env.CAST_RUN_ROOT || path.join(STATE_DIR, "run");
   const RUNS = path.join(ROOT, "runs");
   const ID_RE = /^r[a-z0-9]{6,24}$/;

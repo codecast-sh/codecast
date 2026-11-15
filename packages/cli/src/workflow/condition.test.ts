@@ -135,6 +135,11 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and ship.exit_code = 3", { outcome: "success", "ship.exit_code": "3" }, false],
     ["outcome = failure and ship.exit_code != 3", { outcome: "failure", "ship.exit_code": "1" }, true],
     ["outcome = failure and ship.exit_code != 3", { outcome: "failure", "ship.exit_code": "3" }, false],
+    // check.cast: exit 2 from verify means the check could not judge, not that it failed.
+    ["outcome = failure and verify.exit_code != 2", { outcome: "failure", "verify.exit_code": "1" }, true],
+    ["outcome = failure and verify.exit_code != 2", { outcome: "failure", "verify.exit_code": "2" }, false],
+    ["outcome = failure and verify.exit_code = 2", { outcome: "failure", "verify.exit_code": "2" }, true],
+    ["outcome = failure and verify.exit_code = 2", { outcome: "failure", "verify.exit_code": "1" }, false],
     // The ship segment inside the change line (flows.md FL3): its stations read under the node's name.
     ["outcome = success and ship__rebase.json.landed != true", { outcome: "success", "ship__rebase.json.landed": "false" }, true],
     ["outcome = success and ship__rebase.json.landed = true", { outcome: "success", "ship__rebase.json.landed": "true" }, true],
@@ -155,6 +160,13 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and ship__conflict.json.exit = unshipped", { outcome: "failure", "ship__conflict.json.exit": "conflict" }, false],
     ["outcome = failure and ship__unshipped.json.exit = conflict", { outcome: "failure", "ship__unshipped.json.exit": "unshipped" }, false],
     ["outcome = failure and ship__unshipped.json.exit = unshipped", { outcome: "failure", "ship__unshipped.json.exit": "unshipped" }, true],
+    // The check segment imported into change and quick-change: its exits read through each stop node.
+    ["outcome = failure and check__verify.exit_code != 2", { outcome: "failure", "check__verify.exit_code": "1" }, true],
+    ["outcome = failure and check__verify.exit_code = 2", { outcome: "failure", "check__verify.exit_code": "2" }, true],
+    ["outcome = failure and check__failed.json.exit != unjudged", { outcome: "failure", "check__failed.json.exit": "failed" }, true],
+    ["outcome = failure and check__failed.json.exit = unjudged", { outcome: "failure", "check__failed.json.exit": "failed" }, false],
+    ["outcome = failure and check__unjudged.json.exit != unjudged", { outcome: "failure", "check__unjudged.json.exit": "unjudged" }, false],
+    ["outcome = failure and check__unjudged.json.exit = unjudged", { outcome: "failure", "check__unjudged.json.exit": "unjudged" }, true],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {

@@ -9,11 +9,11 @@ byte-identical.
 
 Every message costs the recipient a turn over its whole context. Read before you write: `cast read <id>` and `cast diff <id>` cost it nothing. Sessions found by search or the feed are history to read, not colleagues to ask; message an old session only when it still owns work that must change.
 
-After accepting work from another session, send one result: commit or artifact, verification, caveats, required action, with `--done` when nothing is asked back. Report earlier only for blockers or material changes. An inbound `<session-message from="…">` needs no reply unless it asks something; one with `intent="inform"` needs none, and one with `intent="done"` closes the exchange: never answer it. Never send acknowledgment-only replies. A `<user-message from="…">` is a human: answer in this thread.
+After accepting work from another session, send one result (commit or artifact, verification, caveats, required action), with `--done` if nothing is asked back; report earlier only for blockers or material changes. An inbound `<session-message from="…">` needs a reply only when it asks something, never when marked `intent="inform"` or `"done"`, and never just to acknowledge. A `<user-message from="…">` is a human: answer in this thread.
 
 Check a session's diff before attributing changes to it, and its machine and checkout before assuming it explains your local tree. Multi-line bodies go through `cast send <id> - <<'EOF'`, never `"$(cat file)"`.
 
-After fan-out work, tidy the human's inbox: `cast stash [id]` takes a session out of it while it keeps running (`--hide` keeps it out through trigger wakes), `cast restore [id]` brings one back, and `cast kill <id>` is the deliberate "done with it" (always name the id: killing your own session cuts you off mid-turn). Tell the human which sessions you hid or killed, and why. `cast guide messaging` has the rest.
+After fan-out work, tidy the human's inbox: `cast stash [id]` takes a session out of it while it keeps running, `cast restore [id]` brings one back, and `cast kill <id>` is the deliberate "done with it" (always name the id: killing your own session cuts you off mid-turn). Tell the human which sessions you hid or killed, and why. `cast guide messaging` has the rest.
 <!-- cast @VERSION@ -->
 <!-- /codecast-messaging -->
 
