@@ -29,6 +29,7 @@ import { FlowList } from "./FlowList";
 import { FlowLoop } from "./FlowLoop";
 import { VolumePage } from "./VolumePage";
 import { useFlowLoop } from "../../../../../hooks/useFlowLoop";
+import { runsAtChecks } from "../../../../../lib/line/flowLoop";
 import { FlowActivity, type ActivityFilter } from "./FlowActivity";
 import { useFlowLibrary, type FlowRun } from "../../../../../hooks/useFlowLibrary";
 import type { LineViewProps } from "../types";
@@ -42,34 +43,38 @@ const STAGE_VIEW_KEY = "codecast.flows.stageView";
 const readStageView = (): StageView => { try { const v = localStorage.getItem(STAGE_VIEW_KEY); return STAGE_VIEWS.find((x) => x === v && x !== "volume") ?? "loop"; } catch { return "loop"; } };
 
 /** The whole loop, its data read only while it shows. */
-function LoopPane({ space, workspace, href, select, liveKey, onShowFlows, onStalled }: { space: string | null; workspace: LineViewProps["workspace"]; href: LineViewProps["href"]; select: LineViewProps["select"]; liveKey: string | null; onShowFlows: () => void; onStalled: () => void }) {
+function LoopPane({ space, workspace, href, select, liveKey, onRuns }: { space: string | null; workspace: LineViewProps["workspace"]; href: LineViewProps["href"]; select: LineViewProps["select"]; liveKey: string | null; onRuns: (f: ActivityFilter) => void }) {
   const { loop, rates } = useFlowLoop(space, workspace);
-  return <FlowLoop loop={loop} rates={rates} href={href} select={select} liveKey={liveKey} onShowFlows={onShowFlows} onStalled={onStalled} />;
+  return <FlowLoop loop={loop} rates={rates} href={href} select={select} liveKey={liveKey} onRuns={onRuns} />;
 }
 
 export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
   const { space, select, href, workspace, model, selection } = props;
-  const { live, runsOf } = useFlowLibrary(space);
+  const { live, runsOf, flows } = useFlowLibrary(space);
   const map = useFlowMapRow(space);
   const [full, setFull] = useState(false);
   // The page opens on the whole loop; the flows one by one are a press away, and the choice is kept on this device.
   const [kept, setKept] = useState<StageView>(readStageView);
-  const view: StageView = selection.view === "volume" ? "volume" : kept;
-  const pickView = (v: StageView) => {
+  // The run list's filter lives in the address (activity), so a count that opens it is a link that keeps it; one names the Flows view.
+  const activity = (selection.activity ?? "all") as ActivityFilter;
+  const view: StageView = selection.view === "volume" ? "volume" : selection.activity ? "flows" : kept;
+  const pickView = (v: StageView, to: ActivityFilter = "all") => {
     if (v === "volume") return select({ view: "volume" });
     setKept(v);
     try { localStorage.setItem(STAGE_VIEW_KEY, v); } catch { /* private mode */ }
-    if (selection.view === "volume") select({ view: "line", mode: "map" });
+    const next = to === "all" ? null : to;
+    if (selection.view === "volume") select({ view: "line", mode: "map", activity: next });
+    else if (next !== selection.activity) select({ activity: next });
   };
-  const [activity, setActivity] = useState<ActivityFilter>("all");
-  const showFlows = () => { setActivity("all"); pickView("flows"); };
-  const showStalled = () => { setActivity("stalled"); pickView("flows"); };
+  const setActivity = (f: ActivityFilter) => select({ activity: f === "all" ? null : f });
+  const showRuns = (f: ActivityFilter) => pickView("flows", f);
   // The runs of every flow in the live family, for the activity rail, each named by its flow when the family has more than one.
   const laneLabel = useMemo(() => new Map((map?.lanes ?? []).map((l) => [l.key, l.label])), [map?.lanes]);
   const runs = useMemo(() => {
     const keys = map?.lanes.length ? map.lanes.map((l) => l.key) : live?.flow.slug ? [live.flow.slug] : [];
     return keys.flatMap((k) => runsOf.get(k) ?? []);
   }, [map?.lanes, live, runsOf]);
+  const atCheck = useMemo(() => runsAtChecks([...runsOf.values()].flat(), flows), [runsOf, flows]);
   // The drawn flow's live runs by station, keyed by its graph's node ids (and by label, for a station the graph names
   // under another id), so the map badges each step that holds work.
   const drawnLane = map?.lanes.find((l) => processKeyOf(l.key) === model.graphKey) ?? null;
@@ -118,7 +123,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
         <b>{drawnLane.label}</b>
         {drawnFigs.running ? <span><b className="lw-num">{drawnFigs.running}</b> running</span> : null}
         {drawnFigs.waiting ? <a data-tone="you" href={href({ view: "foryou", process: model.graphKey, step: null, show: null })} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select({ view: "foryou", process: model.graphKey, step: null, show: null }); }}><b className="lw-num">{drawnFigs.waiting}</b> on a person</a> : null}
-        {drawnFigs.stalled ? <a data-tone="bad" href="#fs-queue" onClick={(e) => { e.preventDefault(); setFull(false); setActivity("stalled"); }} data-flows-full-stalled=""><b className="lw-num">{drawnFigs.stalled}</b> stalled</a> : null}
+        {drawnFigs.stalled ? <a data-tone="bad" href={href({ activity: "stalled" })} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); setFull(false); setActivity("stalled"); }} data-flows-full-stalled=""><b className="lw-num">{drawnFigs.stalled}</b> stalled</a> : null}
       </span>
     ) : null}
     <button type="button" className="lwg-btn fs-full-btn" data-ghost="" aria-pressed={full} onClick={() => setFull(!full)} title={full ? "Back to every flow (Esc)" : "Full view"} aria-label={full ? "Exit full view" : "Full view"} data-flows-full={full ? "on" : "off"}>
@@ -129,7 +134,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
   return (
     <div className="fs" data-flows-stage={live.flow.slug ?? undefined}>
       <section className="fll-live fs-live" data-live-flow={live._id} data-on={live.on ? "" : undefined}>
-        <LiveFlowHead live={live} workspace={workspace} stalled={stalled} onStalled={showStalled} flows={map?.lanes.length} onOpenFlow={(slug) => select({ view: "flows", item: slug, run: null })}>
+        <LiveFlowHead live={live} workspace={workspace} stalled={stalled} onStalled={() => showRuns("stalled")} flows={map?.lanes.length} onOpenFlow={(slug) => select({ view: "flows", item: slug, run: null })}>
           {/* The whole loop a change moves through, what moved through the line over a window, or the live flows one by one. */}
           <div className="lw-seg fs-view" role="tablist" aria-label="Show">
             {STAGE_VIEWS.map((v) => (
@@ -139,14 +144,14 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
           <a className="lw-chip fs-lib" href={href(library)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select(library); }} data-flows-library-link><BookOpen className="w-3.5 h-3.5" aria-hidden />Library</a>
         </LiveFlowHead>
       </section>
-      {view === "loop" ? <LoopPane space={space ?? null} workspace={workspace} href={href} select={select} liveKey={drawnLane ? processKeyOf(drawnLane.key) : null} onShowFlows={showFlows} onStalled={showStalled} /> : null}
+      {view === "loop" ? <LoopPane space={space ?? null} workspace={workspace} href={href} select={select} liveKey={drawnLane ? processKeyOf(drawnLane.key) : null} onRuns={showRuns} /> : null}
       {view === "volume" && map ? <VolumePage map={map} live={live} href={href} select={select} selection={selection} now={workspace.now} /> : null}
       {view !== "flows" ? null : <>
       <div className="fs-app">
         {map ? <FlowList map={map} drawn={model.graphKey} select={select} href={href} /> : null}
         {/* In full view the map moves to the window's own layer (FullView); its place here stays, so leaving puts it back. */}
         <div className="fs-map" data-mode={selection.mode}>{full ? null : <ProcessView {...props} expand={expand} live={liveAt} />}</div>
-        <FlowActivity runs={runs} flowLabel={flowLabel} now={workspace.now} href={href} filter={activity} onFilter={setActivity} />
+        <FlowActivity runs={runs} atCheck={atCheck} flowLabel={flowLabel} now={workspace.now} href={href} filter={activity} onFilter={setActivity} />
       </div>
       <section className="fll-live fs-work" id="fs-queue"><LiveFlowWork live={live} workspace={workspace} href={href} /></section>
       </>}

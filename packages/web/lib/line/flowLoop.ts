@@ -49,6 +49,19 @@ const LANDING = /^(ship|land|merge|push|ready_to_land|rebase)$/;
 /** Stations where a change goes out. */
 const DEPLOYING = /^(deploy|wait_for_live)$/;
 
+/** The checks: the segments the Change flow runs before it lands (a new judge joins on its own), else the usual four. */
+function checkSlugs(library: ReadonlyArray<AppFlow>): string[] {
+  const bySlug = new Map(library.map((f) => [f.slug, f]));
+  const changeUses = (bySlug.get("change")?.uses ?? []).filter((u) => !SHIPPING.test(u));
+  return (changeUses.length ? changeUses : CHECK_SEGMENTS).filter((slug) => bySlug.has(slug));
+}
+
+/** The live runs standing at one of the checks: what the Loop's Checks count counts and its run list lists. */
+export function runsAtChecks<R extends Run>(runs: ReadonlyArray<R>, library: ReadonlyArray<AppFlow>): R[] {
+  const slugs = new Set(checkSlugs(library));
+  return runs.filter((r) => LIVE.has(r.status) && slugs.has(segmentTopOf(r.current_node_id ?? "")));
+}
+
 export function flowLoop(o: {
   map: FlowMap | null;
   runs: ReadonlyArray<Run>;
@@ -68,11 +81,8 @@ export function flowLoop(o: {
   const mine = live.filter((r) => personFlow(r.workflow_slug));
   const stationOf = (r: Run) => segmentTopOf(r.current_node_id ?? "");
 
-  // The checks: the segments the Change flow runs before it lands (a new judge joins on its own), else the usual four.
-  const changeUses = (bySlug.get("change")?.uses ?? []).filter((u) => !SHIPPING.test(u));
-  const checks: LoopCheck[] = (changeUses.length ? changeUses : CHECK_SEGMENTS).flatMap((slug) => {
-    const seg = bySlug.get(slug);
-    if (!seg) return [];
+  const checks: LoopCheck[] = checkSlugs(o.library).flatMap((slug) => {
+    const seg = bySlug.get(slug)!;
     const person = seg.stations.some((s) => s.kind === "person");
     const here = live.filter((r) => stationOf(r) === slug);
     return [{ slug, label: seg.label, person, at: here.length, waiting: here.filter((r) => r.status === "paused").length }];

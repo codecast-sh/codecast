@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { flowLoop } from "../flowLoop";
+import { flowLoop, runsAtChecks } from "../flowLoop";
 
 const NOW = Date.parse("2026-11-06T12:00:00Z");
 const flow = (slug: string, takes: string[], stations: Array<{ id: string; kind: string }>) => ({ slug, label: slug[0].toUpperCase() + slug.slice(1), takes, stations }) as any;
@@ -40,6 +40,12 @@ describe("the whole loop", () => {
   test("the shared checks count the runs standing in them; a person's gate is marked", () => {
     // In the order the Change flow runs them, a new judge with them; landing and deploying are not checks.
     expect(loop.checks.map((c) => [c.slug, c.person, c.at, c.waiting])).toEqual([["check", false, 0, 0], ["review", false, 1, 0], ["judge", false, 0, 0], ["decide", true, 1, 1]]);
+  });
+
+  test("the runs at a check are the ones the Checks count counts, from any flow", () => {
+    const runs = [run("1", "change", "running", "review__review"), run("2", "change", "paused", "decide__decide"), run("3", "change", "running", "ship__rebase"), run("6", "change", "completed", "review__review")];
+    expect(runsAtChecks(runs, library).map((r) => r._id)).toEqual(["1", "2"]);
+    expect(runsAtChecks(runs, library).length).toBe(loop.checks.reduce((n, c) => n + c.at, 0));
   });
 
   test("ship and watch, and what comes back", () => {

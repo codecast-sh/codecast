@@ -21,6 +21,7 @@ const FILTERS: Array<{ key: ActivityFilter; label: string }> = [
   { key: "you", label: "On a person" },
   { key: "stalled", label: "Stalled" },
   { key: "failed", label: "Failed" },
+  { key: "check", label: "At a check" },
 ];
 
 /** Where a run stands now: a paused run waits on a person, a running one unchanged for STALLED_MS is stalled. */
@@ -43,20 +44,24 @@ function runWords(r: FlowRun, st: RunState): string {
   }
 }
 
-export type ActivityFilter = RunState | "all";
+export type ActivityFilter = RunState | "all" | "check";
 
-/** `filter`/`onFilter`: which runs it lists, held by the stage so the head's stalled count can narrow it. */
-export function FlowActivity({ runs, flowLabel, now, href, filter, onFilter: setFilter }: { runs: FlowRun[]; flowLabel: (r: FlowRun) => string | null; now: number; href: LineViewProps["href"]; filter: ActivityFilter; onFilter: (f: ActivityFilter) => void }) {
+const rowsOf = (runs: FlowRun[], now: number) => runs.map((r) => ({ r, st: runState(r, now) })).sort((a, b) => b.r.updated_at - a.r.updated_at);
+
+/** `filter`/`onFilter`: which runs it lists, held in the address so a count that opens it can narrow it.
+ *  `atCheck`: the runs of any flow standing at a check, listed under "At a check". */
+export function FlowActivity({ runs, atCheck, flowLabel, now, href, filter, onFilter: setFilter }: { runs: FlowRun[]; atCheck: FlowRun[]; flowLabel: (r: FlowRun) => string | null; now: number; href: LineViewProps["href"]; filter: ActivityFilter; onFilter: (f: ActivityFilter) => void }) {
   const [more, setMore] = useState(false);
-  const rows = useMemo(() => runs.map((r) => ({ r, st: runState(r, now) })).sort((a, b) => b.r.updated_at - a.r.updated_at), [runs, now]);
+  const rows = useMemo(() => rowsOf(runs, now), [runs, now]);
+  const checkRows = useMemo(() => rowsOf(atCheck, now), [atCheck, now]);
   const counts = useMemo(() => {
-    const c: Record<string, number> = {};
+    const c: Record<string, number> = { check: checkRows.length };
     for (const x of rows) c[x.st] = (c[x.st] ?? 0) + 1;
     return c;
-  }, [rows]);
+  }, [rows, checkRows]);
   const shownFilters = FILTERS.filter((f) => f.key === "all" || counts[f.key]);
   const picked = filter !== "all" && !counts[filter] ? "all" : filter;
-  const list = picked === "all" ? rows : rows.filter((x) => x.st === picked);
+  const list = picked === "all" ? rows : picked === "check" ? checkRows : rows.filter((x) => x.st === picked);
   const shown = more ? list : list.slice(0, SHOWN);
   return (
     <aside className="fs-rail" aria-label="Activity" data-flow-activity={rows.length}>

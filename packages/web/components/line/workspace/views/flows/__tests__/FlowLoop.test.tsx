@@ -18,7 +18,7 @@ const loop: Loop = {
 };
 
 const html = renderToStaticMarkup(
-  <MemoryRouter><FlowLoop loop={loop} rates={null} href={(p) => `/flows?view=${p.view ?? ""}`} select={() => {}} liveKey={null} onShowFlows={() => {}} onStalled={() => {}} /></MemoryRouter>,
+  <MemoryRouter><FlowLoop loop={loop} rates={null} href={(p) => `/flows?view=${p.view ?? ""}${p.activity ? `&activity=${p.activity}` : ""}`} select={() => {}} liveKey={null} onRuns={() => {}} /></MemoryRouter>,
 );
 const doc = new JSDOM(html).window.document;
 
@@ -29,14 +29,14 @@ describe("the Loop view's stage strip", () => {
       ["Signals", "42", "/flows?view=signals"],
       ["Triage", "17", "/flows?view=problems"],
       ["Build", "9", "/flows?view=line"],
-      ["Checks", "3", "/workflows"],
+      ["Checks", "3", "/flows?view=line&activity=check"],
       ["Ship and watch", "6", "/flows?view=shipped"],
     ]);
     expect(doc.querySelector(".lp-signals .lp-box-head b")?.textContent).toBe("42");
   });
 
-  test("stalled opens the runs it counts", () => {
+  test("stalled opens the runs it counts, the filter in its address", () => {
     const stalled = [...doc.querySelectorAll("a.lp-fig")].find((a) => a.textContent?.includes("stalled"));
-    expect(stalled?.getAttribute("href")).toBe("/flows?view=line");
+    expect(stalled?.getAttribute("href")).toBe("/flows?view=line&activity=stalled");
   });
 });
