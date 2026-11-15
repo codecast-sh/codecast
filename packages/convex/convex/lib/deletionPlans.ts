@@ -56,6 +56,9 @@ function plans() {
     under("artifact_viewers", "by_artifact_email", "artifact_id"),
     under("page_queries", "by_artifact", "artifact_id"),
     under("page_query_sets", "by_artifact_version", "artifact_id"),
+    under("page_state_config", "by_artifact", "artifact_id"),
+    under("page_state", "by_artifact_collection_key", "artifact_id"),
+    under("page_state_counts", "by_artifact_collection", "artifact_id"),
   ];
   const artifactBase = {
     children: artifactRows,
