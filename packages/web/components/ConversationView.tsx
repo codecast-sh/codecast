@@ -187,7 +187,7 @@ import { PeerTransferStrip } from "./conversation/PeerTransferStrip";
 import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SummaryOnlyState, SessionGalleryButton, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { SessionAccountLine } from "./conversation/SessionAccountLabel";
 import { HeaderModelControl } from "./SessionControlMenu";
-import { stepEffort } from "../lib/effortStep";
+import { useEffortKeys } from "../hooks/useEffortKeys";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
 import { NewSessionFoot, NewSessionView, NonOwnerMessageInput } from "./conversation/sessionControls";
@@ -2234,13 +2234,8 @@ const ConversationViewInner = (
   }, [hasAnyThinking]));
 
   // Alt+. / Alt+, (Codex's keys): this session's effort one level up or down,
-  // the blank launch and a live session alike (lib/effortStep).
-  const stepEffortKey = useCallback((dir: 1 | -1) => {
-    if (guest || !isOwner || !conversation?._id) return false;
-    return stepEffort(conversation._id, dir, (conversation.message_count ?? 0) === 0);
-  }, [guest, isOwner, conversation?._id, conversation?.message_count]);
-  usePaneShortcutAction('conv.effortUp', useCallback(() => stepEffortKey(1), [stepEffortKey]));
-  usePaneShortcutAction('conv.effortDown', useCallback(() => stepEffortKey(-1), [stepEffortKey]));
+  // the blank launch and a live session alike.
+  useEffortKeys(conversation?._id, { blank: (conversation?.message_count ?? 0) === 0, enabled: !guest && isOwner, focusOnly: false });
 
   usePaneShortcutAction('conv.ask', useCallback(() => {
     if (guest || !conversation?._id) return;

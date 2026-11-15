@@ -73,8 +73,8 @@ const bursts = new Map<string, { before: { model?: string | null; effort?: strin
  * Moves a session's effort one level. The control repaints on the press; the
  * switch itself (a relaunch flag, or a `/effort` message to a live agent) goes
  * once the keys settle, so a run of presses sends one change, from where the
- * run started to where it ended. Returns false when the session takes no
- * effort from codecast.
+ * run started to where it ended. Always takes the press (a session with no
+ * effort levels says so), so the key never types its character into the box.
  */
 export function stepEffort(viewId: string, dir: 1 | -1, blank: boolean): boolean {
   const store = useInboxStore.getState();
@@ -85,7 +85,7 @@ export function stepEffort(viewId: string, dir: 1 | -1, blank: boolean): boolean
   const levels = effortLevelsFor(agentType, live?.model, live?.sessionId, blank);
   if (levels.length === 0) {
     toast("This agent takes no effort level from codecast");
-    return false;
+    return true;
   }
   const next = stepEffortLevel(levels, live?.effort, dir);
   if (next === null) { pulse(conversationId, true); return true; }

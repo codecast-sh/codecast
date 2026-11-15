@@ -101,7 +101,10 @@ describe("inputGuardBypass", () => {
 // stole Ctrl+M into the background composer and let bare letters approve
 // permissions on the conversation underneath.
 describe("worksInModal is restricted to app-chrome shortcuts", () => {
-  const ALLOWED: ShortcutAction[] = ["ui.openSettings", "palette.toggle", "session.composeDock"];
+  // The effort keys act only on the composer that holds focus (the compose
+  // popup is a modal); the conversation behind a modal declines them
+  // (hooks/useEffortKeys).
+  const ALLOWED: ShortcutAction[] = ["ui.openSettings", "palette.toggle", "session.composeDock", "conv.effortUp", "conv.effortDown"];
 
   test("only the allowlisted actions fire while a modal is open", () => {
     const flagged = SHORTCUTS.filter((s) => s.worksInModal).map((s) => s.action);

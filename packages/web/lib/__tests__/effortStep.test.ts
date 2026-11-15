@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { CLAUDE_EFFORT_LEVELS, PI_EFFORT_LEVELS } from "@codecast/shared/contracts";
 import { effortLevelsFor, effortPosition, stepEffortLevel } from "../effortStep";
+import { ownsEffortKey } from "../../hooks/useEffortKeys";
 
 describe("stepEffortLevel", () => {
   const levels = CLAUDE_EFFORT_LEVELS;
@@ -33,5 +34,25 @@ describe("effortLevelsFor", () => {
 
   test("a client without levels has nothing to step", () => {
     expect(effortLevelsFor("cursor", null, null, true)).toEqual([]);
+  });
+});
+
+describe("ownsEffortKey", () => {
+  const conv = { conversationId: "conv", focusOnly: false };
+  const dock = { conversationId: "dock", focusOnly: true };
+
+  test("focus in a compose popup or dock: only that surface takes the key", () => {
+    expect(ownsEffortKey({ ...dock, scope: "dock", modalOpen: true })).toBe(true);
+    expect(ownsEffortKey({ ...conv, scope: "dock", modalOpen: true })).toBe(false);
+    expect(ownsEffortKey({ ...conv, scope: "dock", modalOpen: false })).toBe(false);
+  });
+
+  test("focus in the conversation: the conversation takes it, a dock does not", () => {
+    expect(ownsEffortKey({ ...conv, scope: null, modalOpen: false })).toBe(true);
+    expect(ownsEffortKey({ ...dock, scope: null, modalOpen: false })).toBe(false);
+  });
+
+  test("a modal over the conversation keeps the key off the session behind it", () => {
+    expect(ownsEffortKey({ ...conv, scope: null, modalOpen: true })).toBe(false);
   });
 });

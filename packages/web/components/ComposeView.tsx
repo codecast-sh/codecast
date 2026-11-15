@@ -1,3 +1,4 @@
+import { EFFORT_SCOPE_ATTR, useEffortKeys } from "../hooks/useEffortKeys";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -575,6 +576,8 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   const conversation = sessionId
     ? ({ _id: sessionId, status: "active" } as unknown as ConversationData)
     : null;
+  // Alt+. / Alt+, set this blank's launch effort while focus is inside it.
+  useEffortKeys(sessionId, { blank: true, enabled: !hosted, focusOnly: true });
   // The centred popup lays out like the new-session page: the question and
   // project chips above the composer, the launch pickers in its foot, the
   // strip and this project's sessions below. The dock and the assistant's
@@ -605,6 +608,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       role="dialog"
       aria-modal={docked ? undefined : "true"}
       aria-label="New session"
+      {...{ [EFFORT_SCOPE_ATTR]: sessionId ?? "" }}
       data-cc-compose-sheet={hosted && !docked ? "" : undefined}
       // Clicking dead space inside the dialog must not blur the composer (a
       // blurred dialog leaks keyboard focus to the app). preventDefault on
