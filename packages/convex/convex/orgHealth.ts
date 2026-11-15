@@ -396,11 +396,11 @@ function mergeHealthDecisions(into: HealthDecisions, part: HealthDecisions) {
   into.decisionsTruncated ||= part.decisionsTruncated;
 }
 
-async function readPeopleWaiting(ctx: Ctx, uid: Id<"users">, now: number): Promise<{ n: number; oldest_min: number | null }> {
+async function readPeopleWaiting(ctx: Ctx, uid: Id<"users">, now: number, known?: Map<string, any>): Promise<{ n: number; oldest_min: number | null }> {
   const inbox: any[] = await ctx.db.query("decision_inbox").withIndex("by_user_status", (q: any) => q.eq("user_id", uid).eq("status", "pending")).take(HEALTH_CAPS.inbox_per_person);
   let oldest: number | null = null;
   for (const row of inbox) {
-    const d = await ctx.db.get(row.decision_id);
+    const d = known?.get(String(row.decision_id)) ?? await ctx.db.get(row.decision_id);
     if (d?.status === "pending") oldest = oldest === null ? d.created_at : Math.min(oldest, d.created_at);
   }
   return { n: inbox.length, oldest_min: oldest === null ? null : Math.floor((now - oldest) / 60_000) };
@@ -427,26 +427,36 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
 // ct-73207: a decision row carries its whole card (context, options), so a
 // busy workspace's week is megabytes, and one query reading it all ran out of
 // system operations, memory and time on Union. The fanned path reads it in
-// slices, each a bounded page of one member's ladder or one member's inbox.
+// slices: one per member (inbox plus the head of both ladders), then further
+// pages only for a ladder that has more, so the query count follows the data.
 export const HEALTH_DECISION_PAGE = 200;
+export const HEALTH_DECISION_FIRST_PAGE = 50;
 const HEALTH_DECISION_FAN = 16;
 
+type LadderStatus = "pending" | "answered";
 export type HealthDecisionSlice =
-  | { member_id: Id<"users">; status: "pending" | "answered"; cursor: string | null; num_items: number }
-  | { inbox_of: Id<"users"> };
-export type HealthDecisionSliceResult = { part: HealthDecisions; read: number; next: string | null };
+  | { member_id: Id<"users">; first: true }
+  | { member_id: Id<"users">; status: LadderStatus; cursor: string; num_items: number };
+export type HealthDecisionSliceResult = { part: HealthDecisions; ladders: { status: LadderStatus; read: number; next: string | null }[] };
 
 export async function readHealthDecisionSlice(ctx: Ctx, roleIds: string[], now: number, slice: HealthDecisionSlice): Promise<HealthDecisionSliceResult> {
   const acc = emptyHealthDecisions();
-  if ("inbox_of" in slice) {
-    acc.peopleWaiting[String(slice.inbox_of)] = await readPeopleWaiting(ctx, slice.inbox_of, now);
-    return { part: acc, read: 0, next: null };
-  }
+  const roleSet = new Set(roleIds.map(String));
   const cut7 = now - HEALTH_WINDOW_7D_MS;
-  const res = await ctx.db.query("session_decisions").withIndex("by_user_status_created", (q: any) => q.eq("user_id", slice.member_id).eq("status", slice.status).gte("created_at", cut7)).order("desc")
-    .paginate({ cursor: slice.cursor, numItems: Math.max(1, Math.min(slice.num_items, HEALTH_DECISION_PAGE)) });
-  tallyDecisions(acc, res.page, new Set(roleIds.map(String)), now);
-  return { part: acc, read: res.page.length, next: res.isDone ? null : res.continueCursor };
+  const pages: [LadderStatus, string | null, number][] = "first" in slice
+    ? [["pending", null, HEALTH_DECISION_FIRST_PAGE], ["answered", null, HEALTH_DECISION_FIRST_PAGE]]
+    : [[slice.status, slice.cursor, slice.num_items]];
+  const known = new Map<string, any>();
+  const ladders: HealthDecisionSliceResult["ladders"] = [];
+  for (const [status, cursor, numItems] of pages) {
+    const res = await ctx.db.query("session_decisions").withIndex("by_user_status_created", (q: any) => q.eq("user_id", slice.member_id).eq("status", status).gte("created_at", cut7)).order("desc")
+      .paginate({ cursor, numItems: Math.max(1, Math.min(numItems, HEALTH_DECISION_PAGE)) });
+    tallyDecisions(acc, res.page, roleSet, now);
+    if (status === "pending") for (const d of res.page) known.set(String(d._id), d);
+    ladders.push({ status, read: res.page.length, next: res.isDone ? null : res.continueCursor });
+  }
+  if ("first" in slice) acc.peopleWaiting[String(slice.member_id)] = await readPeopleWaiting(ctx, slice.member_id, now, known);
+  return { part: acc, ladders };
 }
 
 /** The decisions part, sliced: `run` answers one slice in its own query (null
@@ -456,19 +466,20 @@ export async function fanHealthDecisions(memberIds: Id<"users">[], run: (slice: 
   const acc = emptyHealthDecisions();
   let denied = false;
   const take = (r: HealthDecisionSliceResult | null) => { if (r === null) denied = true; else mergeHealthDecisions(acc, r.part); return r; };
-  const ladder = async (member_id: Id<"users">, status: "pending" | "answered") => {
-    let cursor: string | null = null;
-    let read = 0;
+  const ladder = async (member_id: Id<"users">, status: LadderStatus, read: number, cursor: string | null) => {
     while (!denied) {
-      const r = take(await run({ member_id, status, cursor, num_items: Math.min(HEALTH_DECISION_PAGE, HEALTH_CAPS.decisions - read) }));
-      if (!r || r.next === null) return;
-      read += r.read;
       if (read >= HEALTH_CAPS.decisions) { acc.decisionsTruncated = true; return; }
-      cursor = r.next;
+      if (cursor === null) return;
+      const r = take(await run({ member_id, status, cursor, num_items: Math.min(HEALTH_DECISION_PAGE, HEALTH_CAPS.decisions - read) }));
+      if (!r) return;
+      read += r.ladders[0].read;
+      cursor = r.ladders[0].next;
     }
   };
-  const jobs = memberIds.flatMap((m) => [() => ladder(m, "pending"), () => ladder(m, "answered"), async () => { take(await run({ inbox_of: m })); }]);
-  await mapLimit(jobs, HEALTH_DECISION_FAN, (job) => job());
+  await mapLimit(memberIds, HEALTH_DECISION_FAN, async (m) => {
+    const r = take(await run({ member_id: m, first: true }));
+    for (const l of r?.ladders ?? []) await ladder(m, l.status, l.read, l.next);
+  });
   return denied ? null : acc;
 }
 
@@ -982,33 +993,35 @@ export const health = query({
 // out; the CLI reads the action so `cast org health` always returns.
 export const healthMembers = query({
   args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")) },
-  handler: async (ctx, args): Promise<Id<"users">[] | null> => {
+  handler: async (ctx, args): Promise<{ memberIds: Id<"users">[]; roleIds: string[] } | null> => {
     const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
     if (!userId) return null;
-    return (await healthMembersAndRoles(ctx, userId, args.team_id)).memberIds;
+    return healthMembersAndRoles(ctx, userId, args.team_id);
   },
 });
 
 export const healthDecisionSliceArg = v.union(
-  v.object({ member_id: v.id("users"), status: v.union(v.literal("pending"), v.literal("answered")), cursor: v.union(v.string(), v.null()), num_items: v.number() }),
-  v.object({ inbox_of: v.id("users") }),
+  v.object({ member_id: v.id("users"), first: v.literal(true) }),
+  v.object({ member_id: v.id("users"), status: v.union(v.literal("pending"), v.literal("answered")), cursor: v.string(), num_items: v.number() }),
 );
 
 /** One slice for a workspace's caller: a member who left between the roster
- *  and the slice reads as empty, never as another account's rows. */
-export async function answerHealthDecisionSlice(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, slice: HealthDecisionSlice): Promise<HealthDecisionSliceResult> {
-  const { memberIds, roleIds } = await healthMembersAndRoles(ctx, userId, teamId);
-  const member = String("inbox_of" in slice ? slice.inbox_of : slice.member_id);
-  if (!memberIds.some((m) => String(m) === member)) return { part: emptyHealthDecisions(), read: 0, next: null };
+ *  and the slice reads as empty, never as another account's rows. The role ids
+ *  come from the roster read; they only pick which hops on readable rows count. */
+export async function answerHealthDecisionSlice(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, roleIds: string[], now: number, slice: HealthDecisionSlice): Promise<HealthDecisionSliceResult> {
+  const member = teamId
+    ? await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", slice.member_id).eq("team_id", teamId)).first()
+    : String(slice.member_id) === String(userId);
+  if (!member) return { part: emptyHealthDecisions(), ladders: [] };
   return readHealthDecisionSlice(ctx, roleIds, now, slice);
 }
 
 export const healthDecisionsPart = query({
-  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), now: v.number(), slice: healthDecisionSliceArg },
+  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), now: v.number(), role_ids: v.array(v.string()), slice: healthDecisionSliceArg },
   handler: async (ctx, args): Promise<HealthDecisionSliceResult | null> => {
     const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
     if (!userId) return null;
-    return answerHealthDecisionSlice(ctx, userId, args.team_id, args.now, args.slice);
+    return answerHealthDecisionSlice(ctx, userId, args.team_id, args.role_ids, args.now, args.slice);
   },
 });
 
@@ -1038,10 +1051,10 @@ export const healthReport = action({
   args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")) },
   handler: async (ctx, args): Promise<any> => {
     const now = Date.now();
-    const memberIds: Id<"users">[] | null = await ctx.runQuery((api as any).orgHealth.healthMembers, args);
-    if (memberIds === null) return null;
+    const roster: { memberIds: Id<"users">[]; roleIds: string[] } | null = await ctx.runQuery((api as any).orgHealth.healthMembers, args);
+    if (roster === null) return null;
     const [decisions, work, unplaced] = await Promise.all([
-      fanHealthDecisions(memberIds, (slice) => ctx.runQuery((api as any).orgHealth.healthDecisionsPart, { ...args, now, slice })),
+      fanHealthDecisions(roster.memberIds, (slice) => ctx.runQuery((api as any).orgHealth.healthDecisionsPart, { ...args, now, role_ids: roster.roleIds, slice })),
       ctx.runQuery((api as any).orgHealth.healthWorkPart, { ...args, now }),
       // What reaches no goal (ct-95900), counted from whole tables in its own budget.
       unplacedOrUnread(ctx.runQuery((api as any).orgUnplaced.part, { ...args, now })),

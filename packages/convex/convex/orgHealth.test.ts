@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
-import { HEALTH_CAPS, HEALTH_DECISION_PAGE, HEALTH_TASK_FIELDS, NAV_PROMPT_LIVE_SINCE, answerHealthDecisionSlice, computeOrgHealth, fanHealthDecisions, healthMembersAndRoles, readHealthDecisions, type HealthDecisionSliceResult, readTurnsSince, readWorkTasks, roleActivity, slimWorkTasks } from "./orgHealth";
+import { HEALTH_CAPS, HEALTH_DECISION_FIRST_PAGE, HEALTH_DECISION_PAGE, HEALTH_TASK_FIELDS, NAV_PROMPT_LIVE_SINCE, answerHealthDecisionSlice, computeOrgHealth, fanHealthDecisions, healthMembersAndRoles, readHealthDecisions, type HealthDecisionSliceResult, readTurnsSince, readWorkTasks, roleActivity, slimWorkTasks } from "./orgHealth";
 import { collectOrgSessions } from "./org";
 import { reachedSentence } from "@codecast/shared/contracts/orgAreas";
 
@@ -622,20 +622,23 @@ describe("org.health decisions part on a large workspace (ct-73207)", () => {
     return { db: wrap(db), used };
   }
 
-  function bigWorkspace() {
+  const HEAVY = 3;
+
+  function bigWorkspace(answered = ANSWERED, pending = PENDING) {
     const memberIds = Array.from({ length: MEMBERS }, (_, i) => (i === 0 ? ME : `users_member_${i}`));
+    const heavy = memberIds.slice(0, HEAVY);
     const body = "Context for the person: what was tried, the tradeoff, and what each choice does next. ".repeat(30);
-    const decision = (id: string, status: string, at: number) => ({
-      _id: id, conversation_id: "conversations_c", session_id: "s", user_id: ME, short_id: id, question: `Ship ${id}?`, context_md: body, status, created_at: at,
+    const decision = (user: string, id: string, status: string, at: number) => ({
+      _id: id, conversation_id: "conversations_c", session_id: "s", user_id: user, short_id: id, question: `Ship ${id}?`, context_md: body, status, created_at: at,
       ...(status === "answered" ? { resolved_at: at + 30 * 60_000 } : {}),
       options: [{ label: "Ship it", description: body.slice(0, 600) }, { label: "Hold", description: body.slice(0, 600) }],
       hops: [{ role_id: GROWTH, at: at + 10 * 60_000, recommendation: 0 }],
     });
-    const session_decisions = [
-      ...Array.from({ length: ANSWERED }, (_, i) => decision(`session_decisions_a${i}`, "answered", NOW - 6 * D + i * 60_000)),
-      ...Array.from({ length: PENDING }, (_, i) => decision(`session_decisions_p${i}`, "pending", NOW - 5 * D + i * 60_000)),
-    ];
-    const decision_inbox = Array.from({ length: INBOX }, (_, i) => ({ _id: `decision_inbox_${i}`, decision_id: `session_decisions_p${i}`, user_id: ME, status: "pending", created_at: NOW - 5 * D + i * 60_000 }));
+    const session_decisions = heavy.flatMap((u, m) => [
+      ...Array.from({ length: answered }, (_, i) => decision(u, `session_decisions_${m}a${i}`, "answered", NOW - 6 * D + i * 60_000)),
+      ...Array.from({ length: pending }, (_, i) => decision(u, `session_decisions_${m}p${i}`, "pending", NOW - 5 * D + i * 60_000)),
+    ]);
+    const decision_inbox = heavy.flatMap((u, m) => Array.from({ length: Math.min(INBOX, pending) }, (_, i) => ({ _id: `decision_inbox_${m}_${i}`, decision_id: `session_decisions_${m}p${pending - 1 - i}`, user_id: u, status: "pending", created_at: NOW - 5 * D + i * 60_000 })));
     return makeFakeDb({
       team_memberships: memberIds.map((u, i) => ({ _id: `team_memberships_${i}`, user_id: u, team_id: TEAM, role: "member", joined_at: 1 })),
       org_roles: [{ _id: GROWTH, short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth lead", handle: "growth", status: "active", created_by: ME, created_at: 1, updated_at: 1 }],
@@ -644,48 +647,69 @@ describe("org.health decisions part on a large workspace (ct-73207)", () => {
     }, { indexes: schemaIndexes(schema as any) });
   }
 
+  const sortedLatency = (d: any) => ({ ...d, latency: { [GROWTH]: [...d.latency[GROWTH]!].sort() } });
+
   test("each fanned query reads within one query's budget and the week counts whole", async () => {
     const base = bigWorkspace();
-    const { memberIds } = await healthMembersAndRoles({ db: base } as any, ME as any, TEAM);
+    const roster = meter(base);
+    const { memberIds, roleIds } = await healthMembersAndRoles({ db: roster.db } as any, ME as any, TEAM);
     const worst = { docs: 0, bytes: 0, calls: 0 };
+    const total = { ...roster.used };
     let queries = 0;
     const dec = (await fanHealthDecisions(memberIds, async (slice) => {
       const { db, used } = meter(base);
-      const out = await answerHealthDecisionSlice({ db } as any, ME as any, TEAM, NOW, slice);
+      const out = await answerHealthDecisionSlice({ db } as any, ME as any, TEAM, roleIds, NOW, slice);
       queries++;
-      for (const k of ["docs", "bytes", "calls"] as const) worst[k] = Math.max(worst[k], used[k]);
+      for (const k of ["docs", "bytes", "calls"] as const) { worst[k] = Math.max(worst[k], used[k]); total[k] += used[k]; }
       return out;
     }))!;
 
-    expect(dec.decisionsOf[GROWTH]).toBe(ANSWERED + PENDING);
-    expect(dec.latency[GROWTH]).toHaveLength(ANSWERED + PENDING);
+    expect(dec.decisionsOf[GROWTH]).toBe(HEAVY * (ANSWERED + PENDING));
+    expect(dec.latency[GROWTH]).toHaveLength(HEAVY * (ANSWERED + PENDING));
     expect(dec.decisionsTruncated).toBe(false);
-    expect(dec.peopleWaiting[ME]).toEqual({ n: INBOX, oldest_min: 5 * 24 * 60 });
-    const whole = await readHealthDecisions({ db: base } as any, TEAM, memberIds, [GROWTH], NOW);
-    expect({ ...dec, latency: { [GROWTH]: [...dec.latency[GROWTH]!].sort() } }).toEqual({ ...whole, latency: { [GROWTH]: [...whole.latency[GROWTH]!].sort() } });
+    for (const m of [ME, "users_member_1", "users_member_2"]) expect(dec.peopleWaiting[m]).toEqual({ n: INBOX, oldest_min: 5 * 24 * 60 - (PENDING - INBOX) });
+    const one = meter(base);
+    const whole = await readHealthDecisions({ db: one.db } as any, TEAM, memberIds, roleIds, NOW);
+    expect(sortedLatency(dec)).toEqual(sortedLatency(whole));
 
-    expect(queries).toBeGreaterThan(MEMBERS);
+    // One query per member, plus a page per further 200 rows of a heavy ladder.
+    const pagesAfterFirst = (n: number) => Math.ceil((n - HEALTH_DECISION_FIRST_PAGE) / HEALTH_DECISION_PAGE);
+    expect(queries).toBe(MEMBERS + HEAVY * (pagesAfterFirst(ANSWERED) + pagesAfterFirst(PENDING)));
     expect(worst.docs).toBeLessThanOrEqual(BUDGET.docs);
     expect(worst.calls).toBeLessThanOrEqual(BUDGET.calls);
     expect(worst.bytes).toBeLessThanOrEqual(BUDGET.bytes);
+    // Spread over many queries, a refresh still reads no more than the single read did.
+    expect(total.docs).toBeLessThanOrEqual(one.used.docs + roster.used.docs);
+    expect(total.bytes).toBeLessThanOrEqual(one.used.bytes + roster.used.bytes);
   });
 
-  test("a ladder past the cap reads as truncated, and a non-member slice reads nothing", async () => {
+  test("a ladder at or past the cap reads as truncated, and a non-member slice reads nothing", async () => {
     const base = bigWorkspace();
-    const empty = await answerHealthDecisionSlice({ db: base } as any, ME as any, TEAM, NOW, { member_id: "users_stranger" as any, status: "answered", cursor: null, num_items: 200 });
-    expect(empty).toEqual({ part: { decisionsOf: {}, decisionsByDay: {}, latency: {}, decisionsTruncated: false, peopleWaiting: {} }, read: 0, next: null });
+    const empty = await answerHealthDecisionSlice({ db: base } as any, ME as any, TEAM, [GROWTH], NOW, { member_id: "users_stranger" as any, first: true });
+    expect(empty).toEqual({ part: { decisionsOf: {}, decisionsByDay: {}, latency: {}, decisionsTruncated: false, peopleWaiting: {} }, ladders: [] });
     const pages: HealthDecisionSliceResult[] = [];
     const dec = (await fanHealthDecisions([ME as any], async (slice) => {
-      const r = await answerHealthDecisionSlice({ db: base } as any, ME as any, TEAM, NOW, slice);
-      if ("member_id" in slice && slice.status === "answered") pages.push(r);
+      const r = await answerHealthDecisionSlice({ db: base } as any, ME as any, TEAM, [GROWTH], NOW, slice);
+      pages.push(r);
       return r;
     }))!;
-    expect(pages.every((p) => p.read <= HEALTH_DECISION_PAGE)).toBe(true);
+    expect(pages.every((p) => p.ladders.every((l) => l.read <= HEALTH_DECISION_PAGE))).toBe(true);
     expect(dec.decisionsOf[GROWTH]).toBe(ANSWERED + PENDING);
     expect(await fanHealthDecisions([ME as any], async () => null)).toBeNull();
+
+    const atCap = bigWorkspace(HEALTH_CAPS.decisions, 0);
+    const capped = (await fanHealthDecisions([ME as any], (slice) => answerHealthDecisionSlice({ db: atCap } as any, ME as any, TEAM, [GROWTH], NOW, slice)))!;
+    const whole = await readHealthDecisions({ db: atCap } as any, TEAM, [ME as any], [GROWTH], NOW);
+    expect(whole.decisionsTruncated).toBe(true);
+    expect(sortedLatency(capped)).toEqual(sortedLatency(whole));
+
     let calls = 0;
-    const endless = await fanHealthDecisions([ME as any], async (slice) => { if ("member_id" in slice) calls++; return { part: { decisionsOf: {}, latency: {}, decisionsTruncated: false, peopleWaiting: {} }, read: slice.num_items ?? 0, next: "more" }; });
+    const endless = await fanHealthDecisions([ME as any], async (slice) => {
+      calls++;
+      const ladders = "first" in slice ? (["pending", "answered"] as const).map((status) => ({ status, read: HEALTH_DECISION_FIRST_PAGE, next: "more" })) : [{ status: slice.status, read: slice.num_items, next: "more" }];
+      return { part: { decisionsOf: {}, latency: {}, decisionsTruncated: false, peopleWaiting: {} }, ladders };
+    });
     expect(endless!.decisionsTruncated).toBe(true);
-    expect(calls).toBe(2 * Math.ceil(HEALTH_CAPS.decisions / HEALTH_DECISION_PAGE));
+    expect(calls).toBe(1 + 2 * Math.ceil((HEALTH_CAPS.decisions - HEALTH_DECISION_FIRST_PAGE) / HEALTH_DECISION_PAGE));
   });
 });

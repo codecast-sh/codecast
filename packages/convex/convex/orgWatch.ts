@@ -132,12 +132,12 @@ export const listWatched = internalQuery({
 // decision ladder and the open task set in their own budgets, then the core.
 export const membersPart = internalQuery({
   args: { user_id: v.id("users"), team_id: v.optional(v.id("teams")) },
-  handler: async (ctx, args): Promise<Id<"users">[]> => (await healthMembersAndRoles(ctx, args.user_id, args.team_id)).memberIds,
+  handler: async (ctx, args): Promise<{ memberIds: Id<"users">[]; roleIds: string[] }> => healthMembersAndRoles(ctx, args.user_id, args.team_id),
 });
 
 export const decisionsPart = internalQuery({
-  args: { user_id: v.id("users"), team_id: v.optional(v.id("teams")), now: v.number(), slice: healthDecisionSliceArg },
-  handler: async (ctx, args): Promise<HealthDecisionSliceResult> => answerHealthDecisionSlice(ctx, args.user_id, args.team_id, args.now, args.slice),
+  args: { user_id: v.id("users"), team_id: v.optional(v.id("teams")), now: v.number(), role_ids: v.array(v.string()), slice: healthDecisionSliceArg },
+  handler: async (ctx, args): Promise<HealthDecisionSliceResult> => answerHealthDecisionSlice(ctx, args.user_id, args.team_id, args.role_ids, args.now, args.slice),
 });
 
 export const workPart = internalQuery({
@@ -196,9 +196,9 @@ export const sweep = internalAction({
     for (const w of watched) {
       const now = Date.now();
       try {
-        const memberIds = await ctx.runQuery(internal.orgWatch.membersPart, { user_id: w.user_id, team_id: w.team_id });
+        const roster = await ctx.runQuery(internal.orgWatch.membersPart, { user_id: w.user_id, team_id: w.team_id });
         const [decisions, work, unplaced] = await Promise.all([
-          fanHealthDecisions(memberIds, (slice) => ctx.runQuery(internal.orgWatch.decisionsPart, { user_id: w.user_id, team_id: w.team_id, now, slice })),
+          fanHealthDecisions(roster.memberIds, (slice) => ctx.runQuery(internal.orgWatch.decisionsPart, { user_id: w.user_id, team_id: w.team_id, now, role_ids: roster.roleIds, slice })),
           ctx.runQuery(internal.orgWatch.workPart, { user_id: w.user_id, team_id: w.team_id, now }),
           // A failed unplaced read leaves those kinds untold this pass; the rest still runs.
           ctx.runQuery(internal.orgUnplaced.internalPart, { user_id: w.user_id, team_id: w.team_id, now }).catch((e: unknown) => { console.warn("org_area_watch_unplaced_failed", { error: e instanceof Error ? e.message : String(e) }); return null; }),
