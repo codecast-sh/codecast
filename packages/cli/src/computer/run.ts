@@ -624,14 +624,8 @@ export async function execute(
       else sink.log(formatWindows(result));
       return;
     }
-    case "get-app-state": {
-      const zzT0 = performance.now();
-      const zzR = await client.getAppState(buildParams(verb, raw, deps));
-      const zzT1 = performance.now();
-      emitSnapshot(zzR, raw, sink);
-      if (process.env.ZZ_T) console.error(`ZZT boot ${zzT0.toFixed(0)} helper ${(zzT1 - zzT0).toFixed(0)} emit ${(performance.now() - zzT1).toFixed(0)}`);
-      return;
-    }
+    case "get-app-state":
+      return emitSnapshot(await client.getAppState(buildParams(verb, raw, deps)), raw, sink);
     case "find":
       return runFind(raw, client, deps, sink);
     case "wait":
