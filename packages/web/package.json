@@ -144,6 +144,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "fake-indexeddb": "^6.2.4",
+    "fast-check": "^4.10.2",
     "globals": "^15.14.0",
     "jsdom": "^30.0.1",
     "postcss": "^8.4.49",

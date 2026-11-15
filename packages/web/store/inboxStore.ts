@@ -4532,15 +4532,25 @@ function assertPlacementParity(
   }
 }
 
-// The "your move" rows (Ctrl+I, queue advance): questions, NEEDS YOU and
-// DONE, plus a fresh start held in NEW whose turn has settled on the person.
-export function yourMoveOf(placed: PlacedInbox): (s: InboxSession) => boolean {
-  const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
+// Which slice of the on-screen order a jump or advance walks. "yourMove" is
+// every row that is the person's move (questions, NEEDS YOU, DONE, plus a fresh
+// start held in NEW whose turn has settled on the person), which queue advance
+// and the oldest-permission jump read. The other three are one section each,
+// for the jump shortcuts: Ctrl+I lands on NEEDS YOU, never a decision.
+export type InboxWalk = "yourMove" | "decisions" | "needsYou" | "done";
+
+export function walkFilterOf(placed: PlacedInbox, walk: InboxWalk): (s: InboxSession) => boolean {
+  if (walk === "decisions") return placed.isQuestion;
+  const keep = new Set<string>();
+  const add = (rows: InboxSession[]) => { for (const s of rows) keep.add(s._id); };
+  if (walk !== "done") add(placed.needsInput);
+  if (walk !== "needsYou") add(placed.done);
   for (const s of placed.newSessions) {
     const ws = placed.placements.get(s._id)?.work_state;
-    if (ws === "needs_input" || ws === "done") keep.add(s._id);
+    if ((ws === "needs_input" && walk !== "done") || (ws === "done" && walk !== "needsYou")) keep.add(s._id);
   }
-  return (s) => placed.isQuestion(s) || keep.has(s._id);
+  if (walk === "yourMove") return (s) => placed.isQuestion(s) || keep.has(s._id);
+  return (s) => !placed.isQuestion(s) && keep.has(s._id);
 }
 
 /** A conversation nothing was sent in yet: a draft, not work in progress.
@@ -4563,9 +4573,9 @@ export function visualOrderSessions(
     // Grouped-view collapse: sessions inside a collapsed status section are
     // skipped, so Ctrl+J/K only walks cards the panel actually renders.
     collapsedSections?: Record<string, boolean>;
-    // Narrow the walk to the "your move" rows: questions, NEEDS YOU and DONE
-    // exactly as the chokepoint files them (Ctrl+I, queue advance).
-    yourMove?: boolean;
+    // Narrow the walk to one slice of the order (InboxWalk), exactly as the
+    // chokepoint files it.
+    walk?: InboxWalk;
     // Which project each session works in, for project chips (store/workProjects).
     projectOf?: (sessionId: string) => string | null;
   } = {},
@@ -4597,10 +4607,7 @@ export function visualOrderSessions(
       result.push(s);
     }
   }
-  if (opts.yourMove) {
-    return result.filter(yourMoveOf(placed));
-  }
-  return result;
+  return opts.walk ? result.filter(walkFilterOf(placed, opts.walk)) : result;
 }
 
 // Canonical label ordering — ONE comparator drives the chip row, the "by
@@ -5701,11 +5708,10 @@ export function computeVisualOrder(state: {
   questionResolutions?: QuestionResolutions;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
 }, opts: {
-  // Only the rows that are the user's move (questions, NEEDS YOU, DONE), in
-  // the same on-screen order — see visualOrderSessions. Every mode honors it,
-  // so Ctrl+I lands on the first such card the user can see, whatever lens or
-  // flat view is up.
-  yourMove?: boolean;
+  // Only one slice of the rows (InboxWalk), in the same on-screen order; see
+  // visualOrderSessions. Every mode honors it, so a jump lands on the first
+  // such card the user can see, whatever lens or flat view is up.
+  walk?: InboxWalk;
 } = {}): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
@@ -5720,8 +5726,7 @@ export function computeVisualOrder(state: {
   // the shelf, not the active desk underneath it.
   if (state.showFavorites) {
     const order = favoritesVisualOrder(state.sessions, chipProjectFilters(state), state.favorites, projectOfFromState(state));
-    if (!opts.yourMove) return order;
-    return order.filter(yourMoveOf(placed));
+    return opts.walk ? order.filter(walkFilterOf(placed, opts.walk)) : order;
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
   const mode = resolveInboxViewMode(state.clientState.ui);
@@ -5740,10 +5745,9 @@ export function computeVisualOrder(state: {
       chipMatches: (s) => chipMatchesSession(s, chipFilterOpts(state, bucketByConv)),
       nestWorkers: nestsWorkers(state.clientState.ui),
     });
-    if (!opts.yourMove) return flat;
     // A flat card still wears the bucket verdict (its badge reads from the same
-    // placement), so "your move" is the same membership walked in flat order.
-    return flat.filter(yourMoveOf(placed));
+    // placement), so a walk is the same membership in flat order.
+    return opts.walk ? flat.filter(walkFilterOf(placed, opts.walk)) : flat;
   }
   // Grouped and the lenses: the placed status sections over the SAME visible
   // set; the lens branches below regroup all of it, pinned rows included (each
@@ -5752,7 +5756,7 @@ export function computeVisualOrder(state: {
     bucketFilters: chipBucketFilters(state),
     bucketByConv,
     collapsedSections: mode === "grouped" ? collapsed : undefined,
-    yourMove: opts.yourMove,
+    walk: opts.walk,
     projectOf: projectOfFromState(state),
   });
   if (mode === "bucket") {
@@ -6463,10 +6467,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setFeedCursor: (key: string, cursor: string | null) => void;
   sortedSessions: () => InboxSession[];
   visualOrder: () => InboxSession[];
-  // The on-screen rows that are the user's move (questions, NEEDS YOU, DONE)
-  // in render order — what Ctrl+I and the queue's advance walk. Same verdicts
-  // as the panel, so the first entry is always the first such card visible.
-  yourMoveOrder: () => InboxSession[];
+  // The on-screen rows of one slice (InboxWalk) in render order: "yourMove"
+  // is what the queue's advance walks, the sections are the jump shortcuts'
+  // targets. Same verdicts as the panel, so the first entry is always the
+  // first such card visible.
+  walkOrder: (walk: InboxWalk) => InboxSession[];
 
   // -- Navigation --
   advanceToNext: () => void;
@@ -12846,7 +12851,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   visualOrder: () => computeVisualOrder(get()),
-  yourMoveOrder: () => computeVisualOrder(get(), { yourMove: true }),
+  walkOrder: (walk: InboxWalk) => computeVisualOrder(get(), { walk }),
 
   // =====================
   // NAVIGATION
@@ -12854,7 +12859,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   advanceToNext: () => {
     const currentId = get().currentSessionId;
-    const idleSessions = get().yourMoveOrder();
+    const idleSessions = get().walkOrder("yourMove");
     const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
     const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
     if (nextIdle && nextIdle._id !== currentId) {
