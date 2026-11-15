@@ -28,6 +28,8 @@ import { causeDoubt } from "../../../../../lib/line/lineTrace";
 import { failCause } from "../../../../../lib/line/runReport";
 import { homeExpectation, offTopicComebacks, withoutOffTopic, type TopicSignal } from "../../../../../lib/line/timeline";
 import { taskByRef } from "../../../../../lib/taskRef";
+import { taskCommentsOf } from "../../../../../lib/taskComments";
+import { useSyncTaskDetail } from "../../../../../hooks/useSyncTasks";
 import { activeWorkspaceKeyOf, workspaceKeyOfRow } from "../../../../../lib/workspaceScope";
 import { hasOpenModal } from "../../../../../shortcuts";
 import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
@@ -144,8 +146,10 @@ function ProblemBody({ issue, model, workspace, selection, select, href, prev, n
   const home = useMemo(() => homeExpectation(issue.history, signals as ReadonlyArray<TopicSignal>), [issue.history, signals]);
   const full = useMemo(() => withoutOffTopic(issue.history, offTopic), [issue.history, offTopic]);
 
-  const task = useInboxStore((st) => (st.tasks as unknown as Record<string, BandTask & { comments?: BandNote[] }>)[issue.id] ?? null);
-  const notes = task?.comments;
+  // The whole thread (a list row carries only its newest lines) for the moves out below.
+  useSyncTaskDetail(issue.id);
+  const task = useInboxStore((st) => (st.tasks as unknown as Record<string, BandTask & { comments?: BandNote[]; recent_comments?: BandNote[] }>)[issue.id] ?? null);
+  const notes = task ? taskCommentsOf(task) : undefined;
   // Runs whose findings were moved to another problem after they ran: their work is that problem's. They stay in Work,
   // marked and linked there, and never set this problem's state.
   const moves = useMemo(() => movedOut(notes ?? []), [notes]);
