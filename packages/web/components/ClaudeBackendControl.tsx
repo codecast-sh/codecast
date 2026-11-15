@@ -5,7 +5,7 @@
 // surfaces: the "Runs in" rows of the session control panel, and the header
 // pill an SDK session shows where a tmux session shows its terminal pill.
 
-import { Cpu, SquareTerminal } from "lucide-react";
+import { Plug, SquareTerminal } from "lucide-react";
 import type { ClaudeBackend } from "@codecast/shared/contracts";
 import { useClaudeBackend } from "../hooks/useSessionCommands";
 import { useManagedSessionFields } from "../hooks/useManagedSessionFields";
@@ -14,9 +14,7 @@ import { backendRows, type BackendRow } from "../lib/claudeBackendControl";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
-const TOOLTIP = "Runs in the background, with no terminal to watch";
-
-const BACKEND_ICON: Record<ClaudeBackend, typeof Cpu> = { tmux: SquareTerminal, sdk: Cpu };
+const BACKEND_ICON: Record<ClaudeBackend, typeof Plug> = { tmux: SquareTerminal, sdk: Plug };
 
 function press(conversationId: string, row: BackendRow) {
   if (!row.action) return;
@@ -66,33 +64,36 @@ export function BackendRunsInRows({ conversationId, sectionLabelClassName }: { c
 }
 
 /**
- * The header pill of a session running in an Agent SDK host. It sits where a
- * tmux session's terminal pill sits, because that is where a person looks for
- * the terminal; it has none, so it offers the move to one.
+ * The header pill of a session running in an Agent SDK host: a plug, for the
+ * direct connection, where a tmux session shows its terminal pill. It opens
+ * the move to a terminal; after the move the terminal pill takes its place.
  */
 export function SdkBackendPill({ conversationId, isLive, canSwitch }: { conversationId: string; isLive: boolean; canSwitch: boolean }) {
   const { switching, rows } = useBackendRows(conversationId);
   const toTerminal = rows.find((r) => r.backend === "tmux")!;
-  const moving = switching && "moving" in switching;
+  const moving = !!switching && "moving" in switching;
   const failed = switching && "failed" in switching ? switching.failed : null;
-  // A quiet chip: where the session runs is a detail, not a status to watch.
   const colors = failed
     ? "bg-sol-red/10 text-sol-red border-sol-red/30 hover:bg-sol-red/20"
     : `border-sol-border/40 hover:bg-sol-bg-alt ${isLive ? "text-sol-text-dim hover:text-sol-text-muted" : "text-sol-text-dim/60"}`;
-  const body = <span className="cq-sq2">{moving ? "Moving to terminal…" : "Background"}</span>;
-  const pillClass = `inline-flex items-center rounded-full border px-2 py-0.5 text-meta font-medium transition-colors ${colors}`;
+  const pillClass = `inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-meta font-medium transition-colors ${colors}`;
+  const body = <>
+    <Plug className="h-3 w-3" />
+    {moving && <span className="cq-sq2">Moving to terminal…</span>}
+  </>;
+  const tip = failed ?? "Direct connection · no terminal";
   if (!canSwitch) {
     return (
-      <ShortcutTooltip label={TOOLTIP} side="bottom">
-        <span data-sdk-pill className={pillClass}>{body}</span>
+      <ShortcutTooltip label={tip} side="bottom">
+        <span data-sdk-pill aria-label="Direct connection, no terminal" className={pillClass}>{body}</span>
       </ShortcutTooltip>
     );
   }
   return (
     <DropdownMenu>
-      <ShortcutTooltip label={failed ?? TOOLTIP} side="bottom">
+      <ShortcutTooltip label={tip} side="bottom">
         <DropdownMenuTrigger asChild>
-          <button type="button" data-sdk-pill className={pillClass}>{body}</button>
+          <button type="button" data-sdk-pill aria-label="Direct connection, no terminal" className={pillClass}>{body}</button>
         </DropdownMenuTrigger>
       </ShortcutTooltip>
       <DropdownMenuContent align="start" className="w-64 p-1">
@@ -105,7 +106,7 @@ export function SdkBackendPill({ conversationId, isLive, canSwitch }: { conversa
           <SquareTerminal className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
           <span className="flex min-w-0 flex-col">
             <span className="text-xs text-sol-text">{toTerminal.verb ?? "Switch to terminal"}</span>
-            <span className="truncate text-meta text-sol-text-dim">{moving ? "Moving…" : "Same session, in a terminal you can watch"}</span>
+            <span className="truncate text-meta text-sol-text-dim">{moving ? "Moving…" : "Same session, in a tmux pane"}</span>
           </span>
         </DropdownMenuItem>
         {failed && <div data-backend-failed className="px-2 pb-1 text-meta leading-snug text-sol-red">{failed}</div>}

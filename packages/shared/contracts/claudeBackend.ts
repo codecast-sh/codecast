@@ -8,7 +8,7 @@ export type ClaudeBackend = "tmux" | "sdk";
 export const DEFAULT_CLAUDE_BACKEND: ClaudeBackend = "tmux";
 
 export const CLAUDE_BACKEND_LABELS: Record<ClaudeBackend, string> = {
-  sdk: "Background",
+  sdk: "No terminal",
   tmux: "Terminal",
 };
 

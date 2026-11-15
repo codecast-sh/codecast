@@ -78,7 +78,7 @@ export function TmuxAttachPill({
     else if (p && tmuxSession && p !== tmuxSession) setAnim("tmux-pill-change"); // restart moved it
   }, [tmuxSession]);
 
-  // An Agent SDK session has no pane: its pill says so and offers the move to one.
+  // An Agent SDK session has no pane: its pill is a plug and offers the move to one.
   if (backend === "sdk" && conversationKey) return <SdkBackendPill conversationId={conversationKey} isLive={isLive} canSwitch={canSwitchBackend} />;
   if (!tmuxSession && agentType !== "codex") return null;
 

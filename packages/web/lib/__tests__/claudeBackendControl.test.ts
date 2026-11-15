@@ -11,14 +11,14 @@ describe("Runs in rows", () => {
   test("an idle tmux session offers the SDK as a plain switch and marks tmux current", () => {
     const rows = backendRows("tmux", "idle", null);
     expect(rows.map((r) => [r.backend, r.current, r.action])).toEqual([["tmux", true, null], ["sdk", false, "switch"]]);
-    expect(rows[1].hint).toContain("never parked");
+    expect(rows[1].hint).toContain("Never parked");
   });
 
   test("a running turn turns the other row into the interrupt, named on the row", () => {
     const [tmux] = backendRows("sdk", "working", null);
     expect(tmux.action).toBe("interrupt_and_switch");
-    expect(tmux.verb).toBe("Stop the turn, move to the terminal");
-    expect(backendRows("tmux", "permission_blocked", null)[1].verb).toBe("Stop the turn, move to the background");
+    expect(tmux.verb).toBe("Stop the turn, run in a terminal");
+    expect(backendRows("tmux", "permission_blocked", null)[1].verb).toBe("Stop the turn, run without a terminal");
   });
 
   test("while a switch is in flight nothing is pressable and the target says it is moving", () => {

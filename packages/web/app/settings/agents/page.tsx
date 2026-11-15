@@ -192,10 +192,10 @@ const claudeBackendOptions: { value: ClaudeBackend; description: string }[] = [
   { value: "tmux", description: "A terminal you can watch and attach to" },
 ];
 
-/** Where new Claude sessions run. A running session switches from its header. */
+/** Where new Claude sessions run. A running session switches from its ⋮ menu. */
 export function ClaudeBackendSection({ current }: { current: ClaudeBackend }) {
   return (
-    <SettingsSection title="Claude sessions run in" icon={SquareTerminal} description="For new sessions. A running session switches from its header.">
+    <SettingsSection title="Claude sessions run in" icon={SquareTerminal} description="For new sessions. A running session switches from its ⋮ menu.">
       <div className="px-4 py-3.5 sm:px-5" data-claude-backend-setting>
         <SettingsOptionGroup
           label="Claude sessions run in"
