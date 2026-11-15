@@ -12,13 +12,11 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { resolveConversationRef } from "./conversations";
 import { checkConversationAccess } from "./privacy";
-import { stripInjectionNoise } from "@codecast/shared/contracts";
+import { SESSION_MESSAGE_RE, stripInjectionNoise } from "@codecast/shared/contracts";
 
 // Pulls the sender short_id and the human body out of the wire wrapper,
 // tolerating the injection noise the daemon can prepend (the shared
-// stripInjectionNoise, so this accepts exactly the rows the clients do).
-const SESSION_MESSAGE_RE =
-  /<session-message\s+from="([^"]*)"(?:\s+[a-z_]+="[^"]*")*\s*>([\s\S]*)<\/session-message>/;
+// stripInjectionNoise and SESSION_MESSAGE_RE, so this accepts exactly the rows the clients do).
 
 function removeLeadingFramingNewline(body: string): string {
   if (body.startsWith("\r\n")) return body.slice(2);

@@ -38,6 +38,7 @@ import {
   isCompactionSummaryMessage,
   restoreFrameTags,
   sessionMessageIntentOf,
+  SESSION_MESSAGE_RE,
   type SessionMessageIntent,
 } from "@codecast/shared/contracts";
 import { LRUCache } from "../lib/lruCache";
@@ -67,8 +68,6 @@ export {
   isToolResultCarrier,
 } from "@codecast/shared/contracts";
 
-// Attributes are read one by one: a sender name may contain ">", never a quote.
-const SESSION_MESSAGE_RE = /<session-message\s+from="([^"]*)"(?:\s+[a-z_]+="[^"]*")*\s*>([\s\S]*)<\/session-message>/;
 const SESSION_MESSAGE_NAME_RE = /<session-message\s+from="[^"]*"\s+name="([^"]*)"/;
 
 function removeLeadingFramingNewline(body: string): string {

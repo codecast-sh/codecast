@@ -206,7 +206,10 @@ export type SessionMessageIntent = typeof SESSION_MESSAGE_INTENTS[number];
 
 // A session message's whole opening tag, read attribute by attribute: a
 // sender name may contain ">", never a double quote (formatSessionMessage).
-export const SESSION_MESSAGE_OPEN_TAG = /^<session-message(?:\s+[a-z_]+="[^"]*")*\s*>\n?/;
+// Attribute names may carry a hyphen: repaired rows hold `source-message="…"`.
+export const SESSION_MESSAGE_OPEN_TAG = /^<session-message(?:\s+[a-z_-]+="[^"]*")*\s*>\n?/;
+// A whole session message: group 1 the sender, group 2 the body to the LAST closing tag.
+export const SESSION_MESSAGE_RE = /<session-message\s+from="([^"]*)"(?:\s+[a-z_-]+="[^"]*")*\s*>([\s\S]*)<\/session-message>/;
 
 // The intent on a session message's opening tag; a tag without one is a request.
 export function sessionMessageIntentOf(rawContent: string | null | undefined): SessionMessageIntent {
