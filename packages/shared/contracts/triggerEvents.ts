@@ -267,3 +267,24 @@ export function eventFilterForSave(eventName: string, prior: TriggerScopeFilter 
   if (prior && isPrTriggerEvent(eventName) && prior.pr_number !== undefined) out.pr_number = prior.pr_number;
   return out;
 }
+
+/**
+ * Why a project may not take a channel as a source, or null when it may. A
+ * source copies every line into the project's main session, which is as
+ * visible as the project: a team project's is readable by its team. So a team
+ * project watches only a public channel of its own team, a personal project
+ * (its session is its owner's alone) any channel the owner reads, and no
+ * project a community room, where anyone signed in could drive its agent.
+ * `workspace` is the project's access key ("team:<id>" | "user:<id>").
+ */
+export function projectChannelRefusal(
+  project: { workspace?: string | null },
+  channel: { kind?: string; team_id?: unknown },
+): string | null {
+  if (channel.kind === "community") return "A project cannot watch a community room";
+  const team = project.workspace?.startsWith("team:") ? project.workspace.slice(5) : null;
+  if (!team) return null;
+  if (String(channel.team_id) !== team) return "A team project watches only its own team's channels";
+  if (channel.kind === "private" || channel.kind === "dm") return "A team project cannot watch a private channel: its main session is readable by the whole team";
+  return null;
+}
