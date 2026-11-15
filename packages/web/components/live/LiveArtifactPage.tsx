@@ -7,7 +7,7 @@ import { Suspense, useCallback, useMemo, useRef, useState, useSyncExternalStore,
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Archive, Check, Copy, Download, Link2, Lock, Maximize2, Minimize2, Plus, RotateCcw, Upload, Users, History, MessageSquare, MoreHorizontal, Redo2, Undo2, X } from "lucide-react";
-import { artifactSpec, artifactView, type ArtifactElement, type ArtifactPosition, type ArtifactType } from "@codecast/shared/artifacts";
+import { artifactSpec, type ArtifactElement, type ArtifactPosition, type ArtifactType } from "@codecast/shared/artifacts";
 import { useInboxStore } from "../../store/inboxStore";
 import { ShareControl } from "../ShareControl";
 import { policyTeamOf } from "@codecast/shared/contracts";
@@ -24,6 +24,8 @@ import { useLiveArtifact, useLiveVersions, useLiveDraftState, useLiveElements, u
 import { useWsConnected } from "../../hooks/useWsConnected";
 import { useShortcuts } from "../../shortcuts";
 import { claimKeys } from "../../shortcuts/keyOwnership";
+import { isStubDoc } from "./liveStub";
+import "./liveStubDocs";
 import { copyText } from "../../lib/copyText";
 import { hasOpenModal } from "../../shortcuts/registry";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
@@ -183,6 +185,8 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
       const t = e.target as HTMLElement | null;
       if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      // Only a press on the artifact (or on nothing in particular) is its own: a pane beside it keeps its keys.
+      if (t && t !== document.body && !t.closest("[data-detail-owns-keys]")) return;
       e.preventDefault();
       if (e.shiftKey) live.redo();
       else live.undo();
@@ -248,12 +252,9 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   const draftLabel = useLiveDraftState(doc._id)?.label;
   const commentRows = useLiveElements(doc._id, { layer: "comments" });
   const openRoots = useMemo(() => commentRows.filter((c) => !c.parent && !c.resolved), [commentRows]);
-  // A thread whose element is gone (a deleted sheet cell) does not count as open.
-  const commentCount = useMemo(() => {
-    if (!spec.commentPlaces || openRoots.length === 0) return openRoots.length;
-    const places = spec.commentPlaces(artifactView(doc.doc_type, doc.title, elements), openRoots.map((r) => ({ key: r.key, anchor: r.anchor })));
-    return openRoots.filter((r) => places.get(r.key) !== null).length;
-  }, [spec, openRoots, elements, doc.doc_type, doc.title]);
+  // Every open thread counts, one whose element is gone (a deleted sheet cell) included: the badge, the panel's
+  // Open tab and the CLI's "N open comments" say the same number.
+  const commentCount = openRoots.length;
   const typeStyle = docTypeStyle(doc.doc_type);
   const mod = isMac ? "⌘" : "Ctrl";
 
@@ -273,7 +274,8 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
             shell's own, and clip past it: the shell's buttons always stay reachable. */}
         <div data-live-toolbar className="flex-1 min-w-10 flex items-center justify-end gap-2 overflow-hidden">{toolbar}</div>
         {faces.length > 0 && <span data-live-facepile className="shrink-0"><PresenceFacepile present={faces} size={22} max={5} /></span>}
-        {!askClaims.claimed && mode === "edit" && <span className="shrink-0"><AskAgentControl doc={doc} selected={selected} /></span>}
+        {/* An agent works on the doc on the server: there is none to hand it until the create has landed. */}
+        {!askClaims.claimed && mode === "edit" && !isStubDoc(doc._id) && <span className="shrink-0"><AskAgentControl doc={doc} selected={selected} /></span>}
         <IconToggle on={panel === "comments"} title="Comments" label={commentCount ? `Comments, ${commentCount} open` : "Comments"} onClick={() => togglePanel("comments")} badge={commentCount}>
           <MessageSquare className="w-4 h-4" />
         </IconToggle>
@@ -288,9 +290,9 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
           key={params.get("share") ?? ""}
           defaultOpen={params.get("share") === "edit"}
           className="shrink-0"
-          access={<EditAccessSection doc={doc as any} requested={params.get("share") === "edit" ? params.get("add") : null} onGranted={() => { setParam("share", null); }} />}
+          access={<EditAccessSection doc={doc as any} ready={live.ready} requested={params.get("share") === "edit" ? params.get("add") : null} onGranted={() => { setParam("share", null); }} />}
           linkExtra={shareQuery ? <span className="text-meta text-sol-text-dim" data-live-share-view>With this view</span> : undefined}
-          label={spec.label.toLowerCase()} path={`/docs/${doc._id}${shareQuery ? `?${shareQuery}` : ""}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token, team: policyTeamOf("docs", doc as any) }} />
+          label={spec.label.toLowerCase()} path={`/docs/${doc._id}${shareQuery ? `?${shareQuery}` : ""}`} publicShare={isStubDoc(doc._id) ? undefined : { kind: "doc", id: doc._id, token: (doc as any).share_token, team: policyTeamOf("docs", doc as any) }} />
       </header>
 
       {live.draft.active && openRev === null && (
@@ -380,7 +382,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
           {openRev === null && <CursorLayer others={others} screenMap={screenMap} />}
         </div>
         {panel && (
-          <aside className={`live-panel ${panel === "product" ? "w-[clamp(300px,32%,480px)]" : "w-[300px]"} shrink-0 overflow-hidden flex flex-col border-l border-sol-border/40 bg-sol-bg min-h-0`} data-live-panel={panel}>
+          <aside className={`live-panel ${panel === "product" ? "w-[clamp(360px,40%,520px)]" : "w-[300px]"} shrink-0 overflow-hidden flex flex-col border-l border-sol-border/40 bg-sol-bg min-h-0`} data-live-panel={panel}>
             {panel === "comments" && (
               <CommentsPanel
                 doc={doc as any}
@@ -550,7 +552,7 @@ function ArtifactMenu({ doc, copyOf, shareQuery, canEdit, ready, exports, fileIm
         </button>
       </DropdownMenuTrigger>
       {/* The menu owns its keys: the Enter that picks a row must not also open the list row behind the page. */}
-      <DropdownMenuContent align="end" data-owns-keys="" className="min-w-[200px]">
+      <DropdownMenuContent align="end" loop data-owns-keys="" className="min-w-[200px]">
         {/* A copy holds the whole saved layer: offered once the page has read all of it. */}
         <DropdownMenuItem
           data-live-duplicate
@@ -665,9 +667,12 @@ const EDIT_CHOICES: SegmentedOption<"team" | "owners">[] = [
  * its link: the whole team, or its owner and the editors named. The workspace
  * decides who can see it; this decides who of them edits. Owner only.
  */
-function EditAccessSection({ doc, requested, onGranted }: { doc: { _id: string; user_id?: string; workspace?: string }; requested?: string | null; onGranted?: () => void }) {
+function EditAccessSection({ doc, ready, requested, onGranted }: { doc: { _id: string; user_id?: string; workspace?: string }; ready: boolean; requested?: string | null; onGranted?: () => void }) {
   const me = useInboxStore((s: any) => s.currentUser?._id as string | undefined);
   const edit = useInboxStore((s: any) => (s.liveHeads?.[doc._id]?.edit as "team" | "owners" | undefined) ?? "team");
+  // The setting is known once this page's feed has answered (a cached or placeholder head is not the server's
+  // word); until then nothing here can be pressed, or a press would replace the real setting and its editors.
+  const known = ready;
   const editorsSig = useInboxStore((s: any) => (s.liveHeads?.[doc._id]?.editors ?? []).join(","));
   const editors: string[] = useMemo(() => (editorsSig ? String(editorsSig).split(",") : []), [editorsSig]);
   const owner = !!me && String(doc.user_id) === me;
@@ -680,7 +685,7 @@ function EditAccessSection({ doc, requested, onGranted }: { doc: { _id: string; 
   const set = (next: "team" | "owners", list: string[]) => (useInboxStore.getState() as any).liveSetEditAccess(doc._id, next, list);
   const nameOf = (id: string) => roster.find((m) => m._id === id)?.name ?? "…";
   const addable = roster.filter((m) => !editors.includes(m._id));
-  const asker = requested && edit === "owners" ? addable.find((m) => m._id === requested) : undefined;
+  const asker = known && requested && edit === "owners" ? addable.find((m) => m._id === requested) : undefined;
   return (
     <div className="space-y-2" data-live-edit-access={edit}>
       <span className="text-xs font-medium text-sol-text-muted">Who can edit</span>
@@ -695,10 +700,13 @@ function EditAccessSection({ doc, requested, onGranted }: { doc: { _id: string; 
       <SegmentedChoice
         label="Who can edit"
         options={EDIT_CHOICES.map((o) => (o.value === "team" && teamName ? { ...o, label: `All of ${teamName}` } : o))}
-        value={edit}
+        // Nothing checked until the setting is known: a choice drawn before then would be a guess.
+        value={known ? edit : ("" as "team")}
+        disabled={!known}
         onPick={(v) => set(v, editors)}
       />
-      {edit === "owners" && (
+      {/* The editor list is written whole: only from the setting this page has read, never a cached one. */}
+      {known && edit === "owners" && (
         <div className="flex flex-wrap items-center gap-1.5">
           {editors.map((id) => (
             <span key={id} data-live-editor={id} className="inline-flex items-center gap-1 h-6 pl-2 pr-1 rounded-full bg-sol-bg-alt text-xs text-sol-text">
@@ -753,7 +761,9 @@ function FocusToggle({ docId }: { docId: string }) {
   useWatchEffect(() => () => {
     if (!zenFromArtifact) return;
     setTimeout(() => {
-      if (window.location.pathname.startsWith("/docs/")) return;
+      // The Docs list is part of Docs: going back to it on the way to another artifact keeps zen.
+      const path = window.location.pathname;
+      if (path === "/docs" || path.startsWith("/docs/")) return;
       zenFromArtifact = false;
       if ((useInboxStore.getState() as any).clientState.ui?.zen_mode) dispatchRef.current("ui.zenToggle");
     }, 0);

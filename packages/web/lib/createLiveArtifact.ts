@@ -6,58 +6,50 @@ import { artifactSpec, fromElement, type ArtifactElement, type ArtifactOp, type 
 import { docRows, sendLiveOps } from "../components/live/useLiveArtifact";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
+import { isRefusedDispatchError } from "../store/mutativeMiddleware";
+import { newStubDocId } from "../components/live/liveStub";
+import { noteStubDoc, promoteStubDoc } from "../components/live/liveStubDocs";
 
 export type WorkspaceStamp = { workspace: "team"; team_id: string } | { workspace: "personal" } | Record<string, never>;
 
 /** What a new artifact starts from: its product's seed, or a template's title and elements. */
 export type LiveStart = { title?: string; ops?: ArtifactOp[] };
 
-// One creation at a time: a second press while the first waits on the server makes nothing. A
-// create that waits longer than this frees the button (the toast still says it is on its way).
-let creating: Promise<string | null> | null = null;
-const PRESS_HOLD_MS = 20_000;
-// An answer this late, or after the person moved on, never moves the view: it offers the new artifact.
-const OPEN_FRESH_MS = 15_000;
+// A new artifact opens at once on a placeholder doc (components/live/liveStub.ts): its row is painted by
+// createDoc under the placeholder id, the page opens on it, and the seed (or template) lands in the store.
+// Everything written there waits under the placeholder until the server has made the doc; then
+// promoteStubDoc sends it under the real id and moves the page to the real address. Offline, the create
+// waits in the outbox like any write, and the artifact is usable meanwhile.
+// A double press (or a key held down) makes one artifact: a second press within this of the first is the same press.
+let lastPressAt = 0;
+const SAME_PRESS_MS = 1000;
 
 export function createLiveArtifact(type: ArtifactType, stamp: WorkspaceStamp, navigate: (href: string) => void, start?: LiveStart): Promise<string | null> {
-  if (creating) return creating;
+  if (Date.now() - lastPressAt < SAME_PRESS_MS) return Promise.resolve(null);
+  lastPressAt = Date.now();
   const spec = artifactSpec(type);
   const title = start?.title ?? `Untitled ${spec.label.toLowerCase()}`;
-  const pressedAt = Date.now();
-  const pressedOn = typeof window !== "undefined" ? window.location.pathname : "";
-  // The press shows at once; the artifact opens when the server has made it.
-  const toastId = toast.loading(`Creating ${title}…`);
-  const run = (async () => {
-    // No "navigate" receipt continuation: it would move the view whenever the server answered, even
-    // after the person moved on. The row the receipt carries seeds the store here instead, so the
-    // artifact's page paints at once when this decides to open it.
-    const store = useInboxStore.getState() as any;
-    const res = await store.createDoc({ title, content: "", doc_type: type, ...stamp });
-    const id: string | undefined = res?.row?._id ?? res?.id ?? res?._id;
-    if (!id) throw new Error("no id");
-    if (res?.row && !store.docs?.[id]) store.syncRecord("docs", id, res.row);
-    const ops = start?.ops ?? spec.seed?.() ?? [];
-    if (ops.length) sendLiveOps(id, "main", ops);
-    const href = `/docs/${id}`;
-    const stillHere = typeof window === "undefined" || window.location.pathname === pressedOn;
-    if (Date.now() - pressedAt <= OPEN_FRESH_MS && stillHere) {
-      toast.dismiss(toastId);
-      navigate(href);
-    } else {
-      // Offered for a short while, and only to a page that isn't showing it already.
-      if (typeof window !== "undefined" && window.location.pathname === href) toast.dismiss(toastId);
-      else toast.success(`${title} is ready`, { id: toastId, duration: 10_000, action: { label: "Open", onClick: () => navigate(href) } });
-    }
-    return id;
-  })().catch(() => {
-    toast.error(`Could not create ${title}`, { id: toastId });
-    return null;
-  });
-  creating = run;
-  const release = () => { if (creating === run) creating = null; };
-  void run.finally(release);
-  setTimeout(release, PRESS_HOLD_MS);
-  return run;
+  const stubId = newStubDocId();
+  const store = useInboxStore.getState() as any;
+  const created = store.createDoc({ title, content: "", doc_type: type, client_key: stubId, ...stamp });
+  noteStubDoc(stubId);
+  const ops = start?.ops ?? spec.seed?.() ?? [];
+  if (ops.length) sendLiveOps(stubId, "main", ops);
+  navigate(`/docs/${stubId}`);
+  return Promise.resolve(created)
+    .then((res: any) => {
+      const id: string | undefined = res?.row?._id ?? res?.id ?? res?._id;
+      if (!id) throw new Error("no id");
+      if (res?.row && !(useInboxStore.getState() as any).docs?.[id]) (useInboxStore.getState() as any).syncRecord("docs", id, res.row);
+      promoteStubDoc(stubId, id);
+      return id;
+    })
+    .catch((e: any) => {
+      // A create parked for a later send (offline) still lands: the outbox replays it and the docs row
+      // brings the real id (watchStubDocs). Only a refusal is final.
+      if (isRefusedDispatchError(e)) toast.error(`Could not create ${title}`);
+      return null;
+    });
 }
 
 /**
