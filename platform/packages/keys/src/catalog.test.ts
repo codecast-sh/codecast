@@ -45,6 +45,16 @@ describe("matchShortcut", () => {
     expect(resolveAction({ key: "˜", code: "KeyN", ctrlKey: true, altKey: true })).toBe("create");
   });
 
+  test("an alt punctuation chord matches via e.code where macOS composes ⌥. into ≥", () => {
+    const defs: ShortcutDef<"up">[] = [{ key: "alt+.", action: "up", description: "Up" }];
+    const mac = createShortcutCatalog(defs, { isMac: true });
+    const ev = (key: string, code: string) =>
+      ({ key, code, altKey: true, ctrlKey: false, metaKey: false, shiftKey: false }) as KeyboardEvent;
+    expect(mac.matchShortcut(ev("≥", "Period"), defs[0])).toBe(true);
+    expect(mac.matchShortcut(ev(".", "Period"), defs[0])).toBe(true);
+    expect(mac.matchShortcut(ev("≤", "Comma"), defs[0])).toBe(false);
+  });
+
   test("the e.code fallback never fires for a plain (no-Alt) chord", () => {
     // A chord with a mismatched e.key must NOT borrow the physical key — only
     // Alt chords get the fallback, so a layout that maps KeyN elsewhere wins.

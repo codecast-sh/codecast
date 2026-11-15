@@ -115,6 +115,13 @@ interface ParsedKey {
   key: string;
 }
 
+// The physical key (e.code) of each unshifted punctuation key on a US layout,
+// for matching an Alt chord whose e.key macOS composed into another glyph.
+const PUNCTUATION_CODES: Record<string, string> = {
+  '.': 'Period', ',': 'Comma', '/': 'Slash', ';': 'Semicolon', "'": 'Quote',
+  '[': 'BracketLeft', ']': 'BracketRight', '-': 'Minus', '=': 'Equal', '`': 'Backquote', '\\': 'Backslash',
+};
+
 // Every keydown checks the event against every def, so a combo is parsed
 // once and the result reused: the set of combos is the catalog's, and fixed.
 const parsedCombos = new Map<string, ParsedKey>();
@@ -214,11 +221,13 @@ export function createShortcutCatalog<A extends string>(
     // macOS composes Option+<letter> into a special character or dead key (⌥N
     // is the tilde dead key → e.key is "Dead"/"˜", never "n"), so an Alt chord
     // can't be matched on e.key alone. e.code reports the physical key
-    // regardless of the composed glyph, so fall back to it for plain
-    // alphanumeric Alt chords.
+    // regardless of the composed glyph, so fall back to it for Alt chords on
+    // letters, digits and the unshifted punctuation keys (⌥. types "≥").
     let keyMatches = parsed.key === eventKey;
-    if (!keyMatches && parsed.alt && /^[a-z0-9]$/.test(parsed.key)) {
-      keyMatches = e.code === `Key${parsed.key.toUpperCase()}` || e.code === `Digit${parsed.key}`;
+    if (!keyMatches && parsed.alt) {
+      keyMatches = /^[a-z0-9]$/.test(parsed.key)
+        ? e.code === `Key${parsed.key.toUpperCase()}` || e.code === `Digit${parsed.key}`
+        : PUNCTUATION_CODES[parsed.key] !== undefined && e.code === PUNCTUATION_CODES[parsed.key];
     }
     if (!keyMatches) return false;
     if (parsed.ctrl !== e.ctrlKey) return false;
