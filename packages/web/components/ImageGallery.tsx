@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useRef, useMemo } from "react";
-import { Link2, LocateFixed, MessageSquarePlus, X } from "lucide-react";
+import { Link2, LocateFixed, MessageSquarePlus, PanelRight, X } from "lucide-react";
 import { toast } from "sonner";
 import { useEventListener } from "../hooks/useEventListener";
 import { createPortal } from "react-dom";
@@ -17,6 +17,9 @@ import { usePageInfoRow } from "../hooks/usePageInfo";
 import { galleryItemKey, isGalleryPage, type GalleryImage, type GalleryItem } from "../lib/galleryItems";
 import { pageThumbUrl } from "../lib/publishedPageUrls";
 import { PageFavicon, PublishedPageEmbed } from "./PublishedPageEmbed";
+import { dockSessionPage } from "./conversation/SessionCanvasToggle";
+import { canOpenBeside } from "../lib/stage";
+import { hasStoredAuthToken } from "../lib/localAuth";
 
 export type { GalleryImage, GalleryItem } from "../lib/galleryItems";
 
@@ -258,6 +261,9 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
   const hasNext = currentIndex < list.length - 1;
   const count = list.length;
 
+  const dockedPin = useInboxStore((s) => (conversationId ? s.clientState.ui?.session_canvas?.[conversationId]?.pin ?? null : null));
+  const canDock = !!currentPage && !!conversationId && hasStoredAuthToken() && canOpenBeside();
+
   const copyLink = useCallback((href: string) => {
     copyToClipboard(href).then(() => toast.success("Image link copied")).catch(() => toast.error("Failed to copy link"));
   }, []);
@@ -305,6 +311,17 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
               arrows, sitting with the close button so the eye has one corner
               to check. Each shows only when it has somewhere to go. */}
           <div className="absolute top-4 right-4 flex items-center gap-0.5 z-10" onClick={e => e.stopPropagation()}>
+            {canDock && (
+              <button
+                onClick={() => { if (dockSessionPage(conversationId!, currentPage!)) close(); }}
+                className={`${ACTION_CLASS} ${dockedPin === currentPage ? "!text-sol-cyan" : ""}`}
+                title="Keep this page open beside the conversation"
+                aria-label="Keep beside the conversation"
+                aria-pressed={dockedPin === currentPage}
+              >
+                <PanelRight className="w-4 h-4" strokeWidth={2} />
+              </button>
+            )}
             {current?.href && (
               <button
                 onClick={() => copyLink(current.href!)}

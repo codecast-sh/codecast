@@ -132,6 +132,71 @@ describe("runReconcileCrawl — mid-crawl resume", () => {
     expect(meta?.backfilledAt).toBeGreaterThan(0);
   });
 
+  it("lands each flush's page, progress and checkpoint in one subscriber visit", async () => {
+    const ns = "foldNs";
+    const key = syncMetaKey(ns, "ws1");
+    const visits: { meta: boolean; progress: boolean; page: boolean }[] = [];
+    const off = useInboxStore.subscribe((s, prev) => {
+      visits.push({
+        meta: s.syncMeta[key] !== prev.syncMeta[key],
+        progress: s.syncProgress[ns] !== prev.syncProgress[ns],
+        page: (s as any).sessionDecisions !== (prev as any).sessionDecisions,
+      });
+    });
+    const rows = (p: string) => Array.from({ length: 200 }, (_, i) => ({ _id: `${p}${i}` }));
+    runReconcileCrawl({
+      namespace: ns,
+      wsKey: "ws1",
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 10,
+      fetchPage: pagedFetcher({
+        start: { rows: rows("a"), next: "c2" },
+        c2: { rows: rows("b"), next: "c3" },
+        c3: { rows: [], next: null },
+      }, []),
+      onPage: () => useInboxStore.setState({ sessionDecisions: { ...(useInboxStore.getState() as any).sessionDecisions } } as any),
+      onComplete: () => {},
+    });
+    await delay(200);
+    off();
+    // No checkpoint publishes on its own.
+    expect(visits.filter((v) => v.meta && !v.page).length).toBe(0);
+    expect(visits.filter((v) => v.page).every((v) => v.progress && v.meta)).toBe(true);
+  });
+
+  it("a checkpoint the server rejects as InvalidCursor restarts from page zero at once", async () => {
+    const ns = "resumeInvalidNs";
+    const key = syncMetaKey(ns, "ws1");
+    useInboxStore.getState().recordSyncMeta(key, { resumeCursor: "gone", resumeAt: Date.now() });
+    const fetched: (string | null)[] = [];
+    const pages = pagedFetcher({
+      start: { rows: [{ _id: "a" }], next: "c2" },
+      c2: { rows: [{ _id: "b" }], next: null },
+    }, fetched);
+    let completeFlag: boolean | null = null;
+    const all: any[] = [];
+    runReconcileCrawl({
+      namespace: ns,
+      wsKey: "ws1",
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 10,
+      fetchPage: async (cursor) => {
+        if (cursor === "gone") { fetched.push(cursor); throw new Error("Uncaught ConvexError: InvalidCursor: Tried to run a query starting from a cursor"); }
+        return pages(cursor);
+      },
+      onPage: (rows) => all.push(...rows),
+      onComplete: (_rows, complete) => { completeFlag = complete; },
+    });
+    await delay(60);
+    // One rejected fetch, no backoff retries, then the whole walk.
+    expect(fetched).toEqual(["gone", null, "c2"]);
+    expect(all.map((r) => r._id)).toEqual(["a", "b"]);
+    expect(completeFlag).toBe(true);
+    expect(useInboxStore.getState().syncMeta[key]?.resumeCursor ?? null).toBeNull();
+  });
+
   it("ignores a stale checkpoint and reports complete=true from a full walk", async () => {
     const ns = "resumeStaleNs";
     const key = syncMetaKey(ns, "ws1");

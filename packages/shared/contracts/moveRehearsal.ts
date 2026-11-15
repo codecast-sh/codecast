@@ -71,3 +71,6 @@ export function rehearsalPending(r: MoveRehearsal, bring: readonly string[] = []
 
 /** A rehearsal speaks for this long; after that the runner's own rehearsal before the move is the check. */
 export const REHEARSAL_TTL_MS = 15 * 60_000;
+
+/** A pending rehearsal whose runner has not reported by now never will: it reads as failed. */
+export const REHEARSAL_RUNNER_DEADLINE_MS = 5 * 60_000;
