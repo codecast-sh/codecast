@@ -12,7 +12,7 @@ mock.module("../../hooks/useStorageImageUrl", () => ({
 }));
 
 const { renderToStaticMarkup } = await import("react-dom/server");
-const { ChatAttachments } = await import("./ChatMessage");
+const { ChatAttachments } = await import("./ChatAttachments");
 
 test("a video attachment renders a player, never an image tile", () => {
   const html = renderToStaticMarkup(

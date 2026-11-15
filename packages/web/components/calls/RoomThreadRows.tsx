@@ -6,7 +6,7 @@ import { memo, useState } from "react";
 import { AlertTriangle, Captions, CaptionsOff, ChevronRight, Circle, DoorOpen, Globe, ImageUp, Link2Off, ListChecks, ListPlus, Sparkles, Square, Trash2, UserMinus, Video, VideoOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { callShareHref, describeClockSpans, recordingFailureWords, recordingLostWords, recordingStoppedItselfWords } from "@codecast/shared/contracts";
-import { ChatAttachments } from "../chat/ChatMessage";
+import { ChatAttachments } from "../chat/ChatAttachments";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import { EntityAwareLink } from "../EntityIdPill";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";

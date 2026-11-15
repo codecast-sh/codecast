@@ -153,10 +153,10 @@ packages/convex/convex/transcripts.test.ts 2050
 packages/convex/convex/transcripts.ts 3000
 packages/convex/convex/users.ts 4150
 packages/convex/convex/workflow_runs.ts
-packages/mobile/app/(tabs)/inbox.tsx 1050
+packages/mobile/app/(tabs)/inbox.tsx 1000
 packages/mobile/app/(tabs)/tasks.tsx 1250
 packages/mobile/app/call.tsx 950
-packages/mobile/app/session/[id].tsx 6600
+packages/mobile/app/session/[id].tsx 6500
 packages/mobile/components/MarkdownRenderer.tsx 950
 packages/mobile/components/session/NewSessionSheet.tsx 850
 packages/shared/contracts/agentClients.ts 1500
@@ -209,7 +209,7 @@ packages/web/components/calls/CallStage.tsx 1150
 packages/web/components/calls/RoomThread.tsx 1050
 packages/web/components/castCommand.test.ts
 packages/web/components/castCommand.ts 1000
-packages/web/components/chat/ChatMessage.tsx 900
+packages/web/components/chat/ChatMessage.tsx 850
 packages/web/components/conversation/blocks/castBlocks.tsx 1050
 packages/web/components/conversation/blocks/systemBlocks.tsx 1550
 packages/web/components/conversation/blocks/toolBlocks.tsx 1750
@@ -243,7 +243,7 @@ packages/web/store/__tests__/inboxSimHarness.ts 1000
 packages/web/store/__tests__/inboxStore.test.ts 5100
 packages/web/store/__tests__/outboxRetention.test.ts 1400
 packages/web/store/capabilities.ts 1300
-packages/web/store/chatSlice.ts 1800
+packages/web/store/chatSlice.ts 1650
 packages/web/store/clientSyncRegistry.ts
 packages/web/store/idbCache.native.ts 900
 packages/web/store/idbCache.ts 900
