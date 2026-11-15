@@ -672,6 +672,33 @@ describe("workflow/runner (LE14: json vars, graph hash, plan ready_tasks)", () =
     expect(ctx["died.exit_code"]).toBe("143");
   }, 15000);
 
+  // A daemon restart stopped the runners on Union's line-1 and left their Queue station's poller (onefix-nodes.ts
+  // queue) running under init for hours, beside the one each resumed run started (Nov 15). A resumed run runs its
+  // station again, so a script still running when its runner is stopped ends with the runner.
+  test("a station's script still running when its runner is stopped ends with the runner", async () => {
+    const pids = path.join(tmpDir, "pids");
+    const runnerScript = path.join(tmpDir, "stopped-runner.ts");
+    const station = { id: "poll", type: "command", script: `echo $$ > ${pids}; sleep 60 & echo $! >> ${pids}; wait`, timeout: 120 };
+    fs.writeFileSync(runnerScript, [
+      `import { stopRunOnSignals } from ${JSON.stringify(path.join(import.meta.dir, "runner.ts"))};`,
+      `import { executeCommand } from ${JSON.stringify(path.join(import.meta.dir, "commandStation.ts"))};`,
+      `stopRunOnSignals({} as any);`,
+      `await executeCommand(${JSON.stringify(station)} as any, {}, ${JSON.stringify(tmpDir)});`,
+    ].join("\n"));
+    const runner = Bun.spawn([process.execPath, runnerScript], { cwd: tmpDir, stdout: "ignore", stderr: "ignore" });
+    const { pollUntil } = await import("../test-helpers/pollUntil.js");
+    const started = () => (fs.existsSync(pids) ? fs.readFileSync(pids, "utf-8").trim().split("\n").filter(Boolean).map(Number) : []);
+    await pollUntil(() => started().length === 2, "the station's script and its child", { ms: 15000 });
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    try {
+      runner.kill("SIGTERM");
+      expect(await runner.exited).toBe(143);
+      await pollUntil(() => !started().some(alive), "the station's processes ending");
+    } finally {
+      for (const pid of started()) { try { process.kill(pid, "SIGKILL"); } catch {} }
+    }
+  }, 30000);
+
   test("the run reports a graph hash that ignores formatting but not content", async () => {
     const { graphHash } = await import("./parser.js");
     const a = parseWorkflowSource(`digraph g { start [shape=Mdiamond]\n exit [shape=Msquare]\n start -> exit }`);

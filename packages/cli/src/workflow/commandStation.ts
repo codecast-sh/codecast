@@ -114,6 +114,25 @@ export function stationExitCode(result: { status: number | null; signal?: NodeJS
   return 128 + ((result.signal && osConstants.signals[result.signal]) || 0);
 }
 
+// The process groups of the stations running now. A station's script runs in
+// a group of its own, which nothing ends when the runner does: a daemon
+// restart stopped the runners on Union's line-1 and left their Queue station's
+// poller running under init for hours, beside the one each resumed run started
+// (Nov 15). A resumed run runs its station again, so a script still running
+// when its runner exits ends with it. SIGTERM, so a script's trap can clean up.
+const runningGroups = new Set<number>();
+let endsWithRunner = false;
+function endWithRunner(pid: number): void {
+  runningGroups.add(pid);
+  if (endsWithRunner) return;
+  endsWithRunner = true;
+  process.on("exit", () => {
+    for (const group of runningGroups) {
+      try { process.kill(process.platform === "win32" ? group : -group, "SIGTERM"); } catch {}
+    }
+  });
+}
+
 export async function executeCommand(
   node: WorkflowNode,
   context: Record<string, string>,
@@ -140,14 +159,16 @@ export async function executeCommand(
         detached: process.platform !== "win32",
       });
       let stdout = "", stderr = "", timedOut = false;
+      if (child.pid) endWithRunner(child.pid);
       const timer = setTimeout(() => {
         timedOut = true;
         try { process.kill(-child.pid!, "SIGKILL"); } catch { child.kill("SIGKILL"); }
       }, timeoutMs);
+      const settled = () => { clearTimeout(timer); runningGroups.delete(child.pid!); };
       child.stdout!.on("data", (d) => { stdout += d; });
       child.stderr!.on("data", (d) => { stderr += d; });
-      child.on("error", (err) => { clearTimeout(timer); reject(err); });
-      child.on("close", (status, signal) => { clearTimeout(timer); resolve({ status, signal, stdout, stderr, timedOut }); });
+      child.on("error", (err) => { settled(); reject(err); });
+      child.on("close", (status, signal) => { settled(); resolve({ status, signal, stdout, stderr, timedOut }); });
     });
 
     const output = result.stdout + result.stderr + (result.timedOut ? `\ntimed out after ${timeoutMs / 1000}s` : "");
