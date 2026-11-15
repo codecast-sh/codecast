@@ -168,6 +168,24 @@ async function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * The persistent index keeps every file it once took: `add -A` never drops a
+ * staged entry because .gitignore or .git/info/exclude named it later. So a
+ * scratch file staged before anyone excluded it rode every snapshot after,
+ * and every ship froze it as a change (Nov 14-15: 23 scratch files in two
+ * ships). Drop the entries the ignore rules now cover, unless HEAD tracks
+ * them: a tracked file matching an ignore pattern is still content.
+ */
+async function dropNewlyIgnored(cwd: string, head: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const listed = await gitTry(cwd, ["ls-files", "-z", "--cached", "--ignored", "--exclude-standard"], env);
+  const ignored = (listed ?? "").split("\0").filter(Boolean);
+  if (!ignored.length) return;
+  const tracked = await gitTry(cwd, ["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", head, "--", ...ignored]);
+  const inHead = new Set((tracked ?? "").split("\0").filter(Boolean));
+  const drop = ignored.filter((p) => !inHead.has(p));
+  if (drop.length) await git(cwd, ["--literal-pathspecs", "rm", "--cached", "-q", "--ignore-unmatch", "--", ...drop], env);
+}
+
+/**
  * Snapshot the working tree of `cwd` (any directory inside a checkout; the
  * checkout is what gets snapshotted). Returns null outside a repo or before
  * the first commit.
@@ -201,6 +219,7 @@ export async function createTurnSnapshot(
     } else {
       await git(cwd, ["add", "-A", "--", ".", ...excludes], env);
     }
+    await dropNewlyIgnored(cwd, head, env);
     const tree = await git(cwd, ["write-tree"], env);
     const branch = (await gitTry(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])) ?? "HEAD";
     const headTree = await git(cwd, ["rev-parse", `${head}^{tree}`]);

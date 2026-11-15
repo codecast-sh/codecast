@@ -111,6 +111,21 @@ describe("createTurnSnapshot", () => {
     expect(await diffSnapshots(cwd, one.sha, two.sha, { stat: true })).toContain("b.txt");
   });
 
+  test("a scratch file excluded after a snapshot took it leaves the next snapshot; an ignored file HEAD tracks stays", async () => {
+    const { cwd } = repo();
+    fs.writeFileSync(path.join(cwd, "[id]"), "probe output\n");
+    fs.mkdirSync(path.join(cwd, "live-reads"));
+    fs.writeFileSync(path.join(cwd, "live-reads", "a.out"), "log\n");
+    const first = await createTurnSnapshot(cwd);
+    expect(git(cwd, ["ls-tree", "-r", "--name-only", first!.tree])).toContain("[id]");
+    fs.appendFileSync(path.join(cwd, ".git", "info", "exclude"), "/[[]id]\n/live-reads/\n/tracked.txt\n");
+    const second = await createTurnSnapshot(cwd);
+    const names = git(cwd, ["ls-tree", "-r", "--name-only", second!.tree]).split("\n");
+    expect(names).not.toContain("[id]");
+    expect(names).not.toContain("live-reads/a.out");
+    expect(names).toContain("tracked.txt");
+  });
+
   test("an unchanged tree writes nothing new and names the existing snapshot", async () => {
     const { cwd } = repo();
     fs.writeFileSync(path.join(cwd, "a.txt"), "1\n");
