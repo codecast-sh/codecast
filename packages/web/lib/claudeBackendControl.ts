@@ -20,8 +20,8 @@ export interface BackendRow {
 
 // The SDK path's gaps (docs/architecture/claude-sdk-backend.md parity matrix) are named on its row.
 const HINTS: Record<ClaudeBackend, string> = {
-  tmux: "A pane you can watch and attach to",
-  sdk: "No pane to attach · never parked when idle",
+  tmux: "A terminal you can watch",
+  sdk: "No terminal to watch · never parked when idle",
 };
 
 /** Only a started local Claude session has a backend to move. */
@@ -40,7 +40,7 @@ export function backendRows(backend: ClaudeBackend, agentStatus: string | null |
   return (["tmux", "sdk"] as const).map((b) => {
     const current = b === backend;
     const action = current || moving ? null : busy ? "interrupt_and_switch" as const : "switch" as const;
-    const target = b === "sdk" ? "the Agent SDK" : "the terminal";
+    const target = b === "sdk" ? "the background" : "the terminal";
     return {
       backend: b,
       label: CLAUDE_BACKEND_LABELS[b],

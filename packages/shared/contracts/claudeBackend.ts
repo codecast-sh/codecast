@@ -8,8 +8,8 @@ export type ClaudeBackend = "tmux" | "sdk";
 export const DEFAULT_CLAUDE_BACKEND: ClaudeBackend = "tmux";
 
 export const CLAUDE_BACKEND_LABELS: Record<ClaudeBackend, string> = {
-  sdk: "Agent SDK",
-  tmux: "Terminal (tmux)",
+  sdk: "Background",
+  tmux: "Terminal",
 };
 
 export function asClaudeBackend(v: unknown): ClaudeBackend | undefined {

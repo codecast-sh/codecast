@@ -18,7 +18,7 @@ describe("Runs in rows", () => {
     const [tmux] = backendRows("sdk", "working", null);
     expect(tmux.action).toBe("interrupt_and_switch");
     expect(tmux.verb).toBe("Stop the turn, move to the terminal");
-    expect(backendRows("tmux", "permission_blocked", null)[1].verb).toBe("Stop the turn, move to the Agent SDK");
+    expect(backendRows("tmux", "permission_blocked", null)[1].verb).toBe("Stop the turn, move to the background");
   });
 
   test("while a switch is in flight nothing is pressable and the target says it is moving", () => {

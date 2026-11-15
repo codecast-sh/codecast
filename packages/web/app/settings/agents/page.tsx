@@ -188,8 +188,8 @@ function PinnedAgentsSection() {
 }
 
 const claudeBackendOptions: { value: ClaudeBackend; description: string }[] = [
-  { value: "sdk", description: "No pane; prompts and status come from Claude itself" },
-  { value: "tmux", description: "A tmux pane you can watch and attach to" },
+  { value: "sdk", description: "No terminal to watch; prompts and status come from Claude itself" },
+  { value: "tmux", description: "A terminal you can watch and attach to" },
 ];
 
 /** Where new Claude sessions run. A running session switches from its header. */

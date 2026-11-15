@@ -12,8 +12,9 @@ import { useManagedSessionFields } from "../hooks/useManagedSessionFields";
 import { requestBackendSwitch } from "../lib/sessionCommands";
 import { backendRows, type BackendRow } from "../lib/claudeBackendControl";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { DeviceDot } from "./DeviceBadge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+
+const TOOLTIP = "Runs in the background, with no terminal to watch";
 
 const BACKEND_ICON: Record<ClaudeBackend, typeof Cpu> = { tmux: SquareTerminal, sdk: Cpu };
 
@@ -74,29 +75,22 @@ export function SdkBackendPill({ conversationId, isLive, canSwitch }: { conversa
   const toTerminal = rows.find((r) => r.backend === "tmux")!;
   const moving = switching && "moving" in switching;
   const failed = switching && "failed" in switching ? switching.failed : null;
+  // A quiet chip: where the session runs is a detail, not a status to watch.
   const colors = failed
     ? "bg-sol-red/10 text-sol-red border-sol-red/30 hover:bg-sol-red/20"
-    : isLive
-      ? "bg-sol-violet/10 text-sol-violet border-sol-violet/30 hover:bg-sol-violet/20"
-      : "bg-gray-500/10 text-gray-400 border-gray-500/25 hover:bg-gray-500/20";
-  const body = (
-    <span className="inline-flex items-center gap-1">
-      <Cpu className="w-3 h-3" />
-      <span className="cq-sq2">{moving ? "SDK → tmux" : "SDK"}</span>
-      <DeviceDot online={isLive} />
-    </span>
-  );
-  const pillClass = `inline-flex items-center rounded-full border pl-2 pr-1.5 py-0.5 text-meta font-medium transition-colors ${colors}`;
+    : `border-sol-border/40 hover:bg-sol-bg-alt ${isLive ? "text-sol-text-dim hover:text-sol-text-muted" : "text-sol-text-dim/60"}`;
+  const body = <span className="cq-sq2">{moving ? "Moving to terminal…" : "Background"}</span>;
+  const pillClass = `inline-flex items-center rounded-full border px-2 py-0.5 text-meta font-medium transition-colors ${colors}`;
   if (!canSwitch) {
     return (
-      <ShortcutTooltip label="Runs in an Agent SDK host: no terminal pane" side="bottom">
+      <ShortcutTooltip label={TOOLTIP} side="bottom">
         <span data-sdk-pill className={pillClass}>{body}</span>
       </ShortcutTooltip>
     );
   }
   return (
     <DropdownMenu>
-      <ShortcutTooltip label={failed ?? "Runs in an Agent SDK host: no terminal pane"} side="bottom">
+      <ShortcutTooltip label={failed ?? TOOLTIP} side="bottom">
         <DropdownMenuTrigger asChild>
           <button type="button" data-sdk-pill className={pillClass}>{body}</button>
         </DropdownMenuTrigger>
@@ -111,7 +105,7 @@ export function SdkBackendPill({ conversationId, isLive, canSwitch }: { conversa
           <SquareTerminal className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
           <span className="flex min-w-0 flex-col">
             <span className="text-xs text-sol-text">{toTerminal.verb ?? "Switch to terminal"}</span>
-            <span className="truncate text-meta text-sol-text-dim">{moving ? "Moving…" : "Same session, in a tmux pane"}</span>
+            <span className="truncate text-meta text-sol-text-dim">{moving ? "Moving…" : "Same session, in a terminal you can watch"}</span>
           </span>
         </DropdownMenuItem>
         {failed && <div data-backend-failed className="px-2 pb-1 text-meta leading-snug text-sol-red">{failed}</div>}
