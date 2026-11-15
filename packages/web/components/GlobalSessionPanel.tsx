@@ -27,7 +27,7 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, usageStanding, standingLabel, isUsageExhausted, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, isFleetProfile, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, isUsageExhausted, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
@@ -65,8 +65,11 @@ import { latestSessionCommand, requestAccountSwitchCommand, switchPending } from
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsRight, ChevronRight, ChevronDown, Star, Workflow, Play, Pause, Settings2, ArrowUpRight, Zap, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { InboxViewPicker } from "./InboxViewPicker";
+import { ContinueAccountPicker } from "./ContinueAccountPicker";
+import { useLocalDeviceId } from "../hooks/useLocalDeviceId";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
 import { CardWorkersLine } from "./inbox/SessionCardParts";
+import { foldedRunning } from "../lib/foldedSubagents";
 import { resolveCardBars } from "../lib/uiPrefDefaults";
 import { inboxViewModes } from "../store/inboxViewModes";
 import { SessionCard } from "./inbox/SessionCard";
@@ -300,6 +303,7 @@ function BlockedSessionsBanner({
   // Read for any blocked session, not just fleets of two: a single parked
   // session can be the one the machine is asking about.
   const accountData = useQuery(api.accountSwitch.listAccountProfiles, blocked.length > 0 ? {} : "skip");
+  const localDeviceId = useLocalDeviceId(blocked.length > 0);
   // How many tokens one percent of a usage window is worth, fitted across the
   // fleet (convex/usageCalibration.ts). Enrichment, so it goes through
   // useQueryNoThrow: without it the banner still names the tokens, it just
@@ -441,10 +445,18 @@ function BlockedSessionsBanner({
   for (const opt of accountOptions) if (opt.email) unavailable.delete(opt.email);
   // Usage of what the executing machines run now — the account that parked
   // these sessions, not whatever the machine at the desk is signed into.
-  const activeUsage = executors
-    .flatMap((d) => d.profiles.filter((p) => p.email && p.email === fleetEmailOf(d)))
-    .map((p) => p.usage)
-    .find((u) => !!u);
+  const fleetUsageOf = (d: (typeof executors)[number]) => d.profiles.find((p) => isFleetProfile(p, d, now))?.usage;
+  const activeUsage = executors.map(fleetUsageOf).find((u) => !!u);
+  // What each executing machine runs now, for the picker's "Now" section: the
+  // same fleetAccount answer the header chip shows for this machine.
+  const pickerMachines = executors.map((d) => ({
+    deviceId: d.device_id,
+    label: d.label,
+    isLocal: d.device_id === localDeviceId,
+    email: fleetEmailOf(d),
+    usage: fleetUsageOf(d),
+    sessions: acted.filter((sess) => executorFor(sess)?.device_id === d.device_id).length,
+  }));
   // The proposed account is the default pick, so the primary button approves
   // exactly what the machine asked for — the same account the sentence names.
   const proposalKey = proposal?.target_email ? `email:${proposal.target_email}` : null;
@@ -527,15 +539,7 @@ function BlockedSessionsBanner({
       : "");
 
   const switchTarget = (opt: AccountOption) => (opt.email ? { email: opt.email } : { profile: opt.name });
-  // "82% used" / "at limit" / "stale" — the SAME standing the bars render, so
-  // the account this picker ranks first is the one a person would point to on
-  // the meters. A stale account never shows a confident green number here.
-  const usageNote = (usage?: CcUsage): string => {
-    if (usage && isUsageExhausted(usage, now, parkedModels)) return ` — ${exhaustedLabel(usage, now)}`;
-    const s = usageStanding(usage, now);
-    if (s.percent === null && !s.stale) return ""; // no data at all
-    return ` — ${standingLabel(usage, now)}`;
-  };
+
 
   // Every way the banner closes goes through here: snooze 24h AND drop the
   // forced-open flag, so the header pill (which never hides while sessions
@@ -665,7 +669,7 @@ function BlockedSessionsBanner({
     : "";
   const continueTitle = compactTitle + (selectedAccount
     ? `Switch ${executors.length === 1 ? executors[0].label : "the machines owning these sessions"} to ${selectedAccount.email ?? selectedAccount.name}, restart the blocked sessions, and continue them on it`
-    : `Send "continue" to each blocked session on the current account — ${authCount > 0 ? `${authCount === acted.length ? "they are" : `the ${authCount} signed out are`} restarted first (their processes hold an expired login); ` : ""}a session pinned to another account's token is restarted on this one${limitCount > 0 && authCount === 0 ? "; the rest resume once the limit resets" : ""}`) + dismissTitle;
+    : `Send "continue" to each blocked session on the current account — ${authCount > 0 ? `${authCount === acted.length ? "they are" : `the ${authCount} signed out are`} restarted first (their processes hold an expired login); ` : ""}a session pinned to another account, or whose process still holds a spent login, is restarted on this one${limitCount > 0 && authCount === 0 ? "; the rest resume once the limit resets" : ""}`) + dismissTitle;
 
   // The permanent decision: clear the banner flag on these sessions so they
   // leave the blocked set for good (only a NEW banner re-flags them). Local
@@ -940,37 +944,16 @@ function BlockedSessionsBanner({
               : `Continue ${countLabel}`}
         </Button>
         {rankedAccounts.length > 0 && (
-          <label
-            className="flex min-w-0 max-w-full items-center gap-1.5 text-meta text-sol-text-dim"
-            title={`Which Claude account the sessions continue on${activeEmail ? ` — currently ${activeEmail}` : activeEmails.length > 1 ? ` — currently ${activeEmails.join(" / ")}` : ""}; only accounts saved on ${executors.length === 1 ? executors[0].label : "the machines owning these sessions"} are offered`}
-          >
-            on
-            <select
-              value={accountKey}
-              onChange={(e) => setOnAccount(e.target.value)}
-              disabled={busy !== null}
-              className="min-w-0 max-w-[220px] rounded border border-amber-500/25 bg-sol-bg px-1.5 py-0.5 text-meta text-sol-text outline-none hover:border-amber-500/50 focus:border-amber-500 disabled:opacity-60"
-            >
-              <option value="">
-                {activeEmails.length > 1
-                  ? "leave each machine on its own account"
-                  : activeEmail
-                    ? `stay on ${activeEmail}`
-                    : "stay on the current account"}
-                {activeEmails.length > 1 ? "" : usageNote(activeUsage)}
-              </option>
-              {rankedAccounts.map((t) => (
-                <option key={t.key} value={t.key}>
-                  {t.email ?? t.name}{usageNote(t.usage)}{t.missingOn.length > 0 ? ` — not on ${t.missingOn.join(", ")}` : ""}
-                </option>
-              ))}
-              {[...unavailable].map(([email, why]) => (
-                <option key={`off:${email}`} value={`off:${email}`} disabled>
-                  {email} — {why}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ContinueAccountPicker
+            machines={pickerMachines}
+            accounts={rankedAccounts}
+            unavailable={[...unavailable]}
+            value={selectedAccount?.key ?? ""}
+            recommendedKey={proposedOption?.key}
+            onChange={setOnAccount}
+            disabled={busy !== null}
+            now={now}
+          />
         )}
         </>}
         <button
@@ -2919,6 +2902,7 @@ function SessionListPanelImpl({
                   isSelected={selectedSet.has(session._id)}
                   isActive={session._id === activeSessionId}
                   globalIndex={-1}
+                  {...foldedRunning(standingRoleIdOf(session) ? undefined : subMap.get(session._id), showSubagents, coarseNow, activeSessionId)}
                   onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
@@ -3183,6 +3167,7 @@ function SessionListPanelImpl({
                   sessionLabel={labelByConv[session._id] ?? null}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
+                  {...foldedRunning(standingRoleIdOf(session) ? undefined : globalSubByParent.get(session._id), showSubagents, coarseNow, activeSessionId)}
                 />
                 {/* The bars stack under their card the way subagent rows do —
                     schedule rows keep the dock roster's full anatomy (name,

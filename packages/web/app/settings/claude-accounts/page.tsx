@@ -36,13 +36,13 @@ import {
   type ProfileLoginFlow,
 } from "../../../components/AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge, type MintFlow } from "../../../components/MintTokenDialog";
-import { profileHasSetupToken } from "@codecast/convex/convex/ccAccountsShared";
+import { isFleetProfile, profileHasSetupToken } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo, planTypeLabel, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
 import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../../../hooks/useMachineAccountSwitch";
-import { machineSwitchBlock, profileIsCurrentLogin, profileIsFleetAccount } from "../../../lib/machineAccountSwitch";
+import { machineSwitchBlock, profileIsCurrentLogin } from "../../../lib/machineAccountSwitch";
 import { AccountPoolPill } from "../../../components/settings/AccountPoolPill";
 import { AccountMachinesControl } from "../../../components/settings/AccountMachinesControl";
 import { useAccountPool, useSyncAccountPool } from "../../../hooks/useSyncAccountPool";
@@ -285,8 +285,8 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
   // see what is on now beside what comes next.
   const ranked = rankByHeadroom(device.profiles, now);
   const orderedProfiles = [
-    ...ranked.filter((p) => profileIsFleetAccount(p, fleet)),
-    ...ranked.filter((p) => !profileIsFleetAccount(p, fleet)),
+    ...ranked.filter((p) => isFleetProfile(p, device, now)),
+    ...ranked.filter((p) => !isFleetProfile(p, device, now)),
   ];
   // Suggest the email's local part as the profile name (claude2@almostcandid.com -> claude2).
   const suggested = (device.active_email?.split("@")[0] ?? "work").toLowerCase();
@@ -340,7 +340,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       {orderedProfiles.map((p) => {
           // The lit row is the account sessions run on: the launch profile
           // after a token switch, else the keychain login.
-          const isActive = profileIsFleetAccount(p, fleet);
+          const isActive = isFleetProfile(p, device, now);
           const viaToken = isActive && !!device.launch_profile && !device.fleet_store;
           const keychainLoginAside = !!device.launch_profile && !isActive && profileIsCurrentLogin(p, device.active_email);
           const onFleetStore = isActive && !!device.fleet_store;
