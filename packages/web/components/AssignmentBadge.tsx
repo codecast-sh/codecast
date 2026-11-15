@@ -20,7 +20,7 @@ import {
   DropdownMenuContent,
   DropdownMenuSeparator,
 } from "./ui/dropdown-menu";
-import { useState } from "react";
+import { useState, memo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { UserCheck } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
@@ -54,7 +54,7 @@ function RunnerBadge({ runner, compact, title }: { runner: Runner; compact: bool
   );
 }
 
-export function ConversationAssignmentBadge({ conversation, isOwner, guest, compact }: {
+export const ConversationAssignmentBadge = memo(function ConversationAssignmentBadge({ conversation, isOwner, guest, compact }: {
   conversation: { _id: string; user_id?: string; owner_device_id?: string | null; user?: { name?: string | null; email?: string | null; avatar_url?: string | null } | null };
   isOwner: boolean;
   guest: boolean;
@@ -67,7 +67,7 @@ export function ConversationAssignmentBadge({ conversation, isOwner, guest, comp
   } : undefined;
   if (guest) return runner ? <RunnerBadge runner={runner} compact={compact} title="Shared session · read-only access" /> : null;
   return <AssignmentBadge key={conversation._id} conversationId={conversation._id} ownerDeviceId={conversation.owner_device_id} runner={runner} isOwner={isOwner} compact={compact} />;
-}
+});
 
 /**
  * Where this session runs, beyond the device: the worktree it was given, and
