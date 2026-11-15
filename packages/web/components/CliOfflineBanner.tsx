@@ -71,14 +71,14 @@ function useSignedOutNotice(): StatusNotice | null {
     tone: "red",
     icon: LogIn,
     title: "This machine is signed out. Nothing syncs.",
-    detail: phase === "failed" ? <>Sign in did not finish. Run <code className="font-mono">cast auth</code> on this machine.</> : undefined,
+    detail: phase === "failed" ? "Sign in did not finish." : undefined,
     action: (
       <button
         onClick={signIn}
         disabled={phase === "running"}
         className="px-2 py-0.5 text-xs font-medium rounded bg-sol-red/20 text-sol-red hover:bg-sol-red/30 disabled:opacity-60"
       >
-        {phase === "running" ? "Signing in…" : "Sign in again"}
+        {phase === "running" ? "Signing in…" : phase === "failed" ? "Try again" : "Sign in again"}
       </button>
     ),
   };
@@ -91,6 +91,11 @@ function useCliOfflineNotice(): StatusNotice | null {
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
   const [mounted, setMounted] = useState(false);
   const [copied, setCopied] = useState(false);
+  // In the desktop app the shell reruns this machine's setup, which starts the
+  // daemon again: a button, never a command to type (daemonSetup.js).
+  const createSetupToken = useMutation(api.apiTokens.createSetupToken);
+  const runSetup = bridge("runDaemonSetup");
+  const [restart, setRestart] = useState<"idle" | "running" | "failed">("idle");
 
   const { user } = useCurrentUser();
   // Share the daemon-health hook with the chip so both get the same wall-clock
@@ -139,6 +144,34 @@ function useCliOfflineNotice(): StatusNotice | null {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  if (runSetup) {
+    const start = async () => {
+      setRestart("running");
+      try {
+        const { token } = await createSetupToken({});
+        setRestart((await runSetup(token)).ok ? "idle" : "failed");
+      } catch {
+        setRestart("failed");
+      }
+    };
+    return {
+      tone: TIER_TONE[tier],
+      icon: Terminal,
+      title: message,
+      detail: restart === "failed" ? "Restart did not finish." : undefined,
+      action: (
+        <button
+          onClick={start}
+          disabled={restart === "running"}
+          className="px-2 py-0.5 text-xs font-medium rounded bg-sol-bg-inset text-sol-text hover:bg-sol-bg-highlight disabled:opacity-60"
+        >
+          {restart === "running" ? "Restarting…" : restart === "failed" ? "Try again" : "Restart"}
+        </button>
+      ),
+      onDismiss: () => updateDismissed("cli_offline", Date.now()),
+    };
+  }
 
   return {
     tone: TIER_TONE[tier],

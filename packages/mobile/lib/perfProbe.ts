@@ -32,8 +32,17 @@ const CALM_FRAMES = 6;
 const CAP_MS = 5000;
 
 export function probeTouchEnd(e: GestureResponderEvent) {
-  const t0 = e.nativeEvent.timestamp;
-  const seen = performance.now();
+  watchFrames(e.nativeEvent.timestamp, performance.now());
+}
+
+/** The same line for a gesture the root never sees as a touch end (a
+ *  gesture-handler swipe claims its touch): call it where the gesture commits. */
+export function probeGesture() {
+  const now = performance.now();
+  watchFrames(now, now);
+}
+
+function watchFrames(t0: number, seen: number) {
   const id = ++seq;
   const from = route;
   for (const k in renders) delete renders[k];
@@ -57,7 +66,10 @@ export function probeTouchEnd(e: GestureResponderEvent) {
     if (calm >= CALM_FRAMES || t - t0 > CAP_MS || id !== seq) {
       const r = (n: number) => Math.round(n - t0);
       console.log(
-        `[tap] #${id} at=${Math.round(t0)} lag=${r(seen)} first=${r(first)} settle=${r(calm >= CALM_FRAMES ? calmSince : t)} gap=${Math.round(maxGap)} ${from} -> ${route} listeners=${readStoreListenerCount()} renders=${JSON.stringify(renders)}`,
+        `[tap] #${id} at=${Math.round(t0)} lag=${r(seen)} first=${r(first)} settle=${r(calm >= CALM_FRAMES ? calmSince : t)} gap=${Math.round(maxGap)} ${from} -> ${route} listeners=${readStoreListenerCount()} renders=${JSON.stringify(renders)} why=${JSON.stringify((globalThis as any).__ssWhy ?? {})}`,
+      );
+      (globalThis as any).__ssWhy = {};
+      void (0
       );
       return;
     }

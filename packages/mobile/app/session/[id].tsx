@@ -4,7 +4,7 @@ import { forkSessionAsAgent, sessionRowFor, switchSessionAgent } from '@codecast
 import { usePinnedAgentIds } from '@codecast/web/hooks/usePinnedAgents';
 import { AccountRecoveryBanner } from '@/components/AccountRecoveryBanner';
 import { ConversationSlideOut, useConversationDrawer } from '@/components/inbox/ConversationSlideOut';
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, Pressable, Modal, Animated, Easing, Dimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, Pressable, Modal, Animated, Easing, Dimensions, InteractionManager, PixelRatio, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
@@ -74,7 +74,7 @@ import { SessionActionsSheet, type SessionRow, type SessionTile } from '@/compon
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { ApprovalCard, ApprovalPending, ApprovalSettled } from '@/components/hosted/ApprovalCard';
 import { DecisionCard } from '@/components/decisions/DecisionCard';
-import { PermissionRecordLine } from '@/components/decisions/PermissionRecord';
+import { PermissionAnswerLine } from '@/components/decisions/PermissionRecord';
 import { permissionRecord } from '@codecast/shared/contracts/commandRun';
 import { useRunningPermission } from '@codecast/web/hooks/useRunningPermission';
 import { ProposalBatchContext } from '@/components/org/ProposalCard';
@@ -2142,6 +2142,9 @@ function directMessage(item: Message, body: string): Message {
 // compared by what it carries.
 const MVCP_ANCHOR_FIRST_VISIBLE = { minIndexForVisible: 0 };
 
+const PROGRESS_TRACK_HEIGHT = 48;
+const PROGRESS_STEP = 1 / (PROGRESS_TRACK_HEIGHT * PixelRatio.get());
+
 const MemoMessageBubble = memo(MessageBubble, (a, b) => {
   for (const k in b) {
     if (k !== 'toolRun' && (a as any)[k] !== (b as any)[k]) return false;
@@ -3011,6 +3014,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const [shareSelectionMode, setShareSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const scrollProgressAnim = useRef(new Animated.Value(0)).current;
+  const scrollProgressRef = useRef(0);
   const isNearBottomRef = useRef(true);
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
   const openedAtLastMessageTsRef = useRef<number | null>(null);
@@ -3820,6 +3824,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     return sampleTicks(promptRows, 24, activeIndex);
   }, [promptRows, activeStickyId]);
 
+  const progressTrackShown = allMessages.length > 150 && userScrolled && navTicks.length < 2;
+  const progressTrackShownRef = useRef(progressTrackShown);
+  progressTrackShownRef.current = progressTrackShown;
+
   const openNavigatorSheet = useCallback(() => setNavSheetVisible(true), []);
   const closeNavigatorSheet = useCallback(() => setNavSheetVisible(false), []);
 
@@ -4213,8 +4221,15 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const distanceFromTop = scrollHeight - offset - clientHeight;
     setIsNearTop(distanceFromTop < 96);
 
-    const progress = scrollHeight > clientHeight ? 1 - (offset / (scrollHeight - clientHeight)) : 0;
-    scrollProgressAnim.setValue(progress);
+    // The fill is a JS-driven view write, so it moves only while it shows and
+    // only by a whole device pixel of the bar; finer steps draw nothing.
+    if (progressTrackShownRef.current) {
+      const progress = scrollHeight > clientHeight ? 1 - (offset / (scrollHeight - clientHeight)) : 0;
+      if (Math.abs(progress - scrollProgressRef.current) >= PROGRESS_STEP || progress === 0 || progress === 1) {
+        scrollProgressRef.current = progress;
+        scrollProgressAnim.setValue(progress);
+      }
+    }
 
     if (offset > 400 && !userScrolled) {
       setUserScrolled(true);
@@ -4254,6 +4269,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     }
   }, [hasMoreAbove, loadingOlder, handleLoadOlder, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled]);
 
+  if (PERF_PROBE) { const g = globalThis as any; const v: Record<string, unknown> = { identityRow, pendingDecisions, runningPermission, parkedStatus, forkFamily, childConversationMap, navSourceMessages, conversationPending, resolvedRealId, initialScrollDone, userScrolled, isNearTop, newMessageCount, collapsed, searchVisible, highlightedMessageId, pendingScrollId, navSheetVisible, stickyActive, stickyBannerHeight, dismissedStickyVersion, jumpingToStart, jumpingToEnd, floatingHeaderHeight, storeConversation, hookHasMoreAbove, hookIsLoadingOlder, approvals, proposalBatch, hostedApprovalAt, agentWorking, gitDiffData, bookmarks, commits, pullRequests, allMessages, openRuns, insets, androidImeInset, commentSummary, latestUsage, hasPendingSends }; const prev = g.__ssPrev; if (prev) { const ch = Object.keys(v).filter((k) => prev[k] !== v[k]); g.__ssWhy = g.__ssWhy ?? {}; for (const k of ch) g.__ssWhy[k] = (g.__ssWhy[k] ?? 0) + 1; if (!ch.length) g.__ssWhy._none = (g.__ssWhy._none ?? 0) + 1; } g.__ssPrev = v; }
   if (conversation === undefined) {
     return (
       <RNView style={styles.container}>
@@ -4434,7 +4450,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     // answer lands once the step is over, so its record is final.
     if (kind?.kind === 'decision_answer' && !hosted) {
       const record = permissionRecord(kind.decision, (useInboxStore.getState().sessionDecisions as Record<string, any>)[kind.decision.id ?? '']?.run);
-      if (record) return <PermissionRecordLine {...record} />;
+      if (record) return <PermissionAnswerLine decisionId={kind.decision.id} {...record} />;
     }
 
     // A person's direct send (<user-message from="Name">) is that person's
@@ -4952,7 +4968,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         <RNView style={styles.jumpButtonsOverlay} pointerEvents="box-none">
           {/* The tick rail carries the position signal when it renders; only a
               thread with no rail (fewer than 2 ticks) keeps the old track. */}
-          {allMessages.length > 150 && userScrolled && navTicks.length < 2 && (
+          {progressTrackShown && (
             <RNView style={styles.scrollProgressTrackWrap}>
               <RNView style={styles.scrollProgressTrack}>
                 <Animated.View style={[styles.scrollProgressFill, {
@@ -5031,7 +5047,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         {!hosted && pendingDecisions[0]?.decisionId ? (
           <DecisionCard key={pendingDecisions[0].decisionId} decisionRef={pendingDecisions[0].decisionId} docked />
         ) : !hosted && runningPermission ? (
-          <RNView style={{ marginHorizontal: 12 }}><PermissionRecordLine question={runningPermission.question} outcome="running" /></RNView>
+          <RNView style={{ marginHorizontal: 12 }}><PermissionAnswerLine decisionId={runningPermission.id} question={runningPermission.question} outcome="running" /></RNView>
         ) : null}
         <RNView style={styles.composerLayer}>
           <MessageInput
@@ -6374,7 +6390,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   scrollProgressTrack: {
     width: 3,
-    height: 48,
+    height: PROGRESS_TRACK_HEIGHT,
     borderRadius: 1.5,
     backgroundColor: Theme.bgHighlight,
     overflow: 'hidden',
