@@ -40,35 +40,21 @@ final class HelperEntrypointSafetyTests: XCTestCase {
             .contains("if allowRecovery { raiseWindow(app)"))
     }
 
-    /// A click and a drag never raise: a focused target takes the HID stream,
-    /// a background one goes to its process through `BackgroundMouse`.
     func testAClickNeverRaisesTheTargetWindow() throws {
         let click = try region(of: "private func click(params:", until: "private func performClickAction(")
 
         XCTAssertFalse(click.contains("raiseWindow"))
-        XCTAssertTrue(click.contains("if isTargetWindowFocused(snapshot) {"))
-        XCTAssertTrue(click.contains("BackgroundMouse.click("))
+        XCTAssertTrue(click.contains("requireMouseFocus"))
     }
 
-    func testADragNeverRaises() throws {
+    /// Mouse input has no background route (AppKit drops a press on an inactive
+    /// window), so a drag refuses a background target rather than doing nothing,
+    /// and never raises one on its own.
+    func testADragNeedsFocusAndNeverRaises() throws {
         let drag = try region(of: "private func drag(params:", until: "private func currentKeyboardSnapshot(")
 
         XCTAssertFalse(drag.contains("raiseWindow"))
-        XCTAssertTrue(drag.contains("BackgroundMouse.drag("))
-    }
-
-    /// Background mouse input must leave the human's front app and screen
-    /// alone: nothing in it brings a process to the front or raises a window,
-    /// and the focus shield's taps see focus messages only, never the human's
-    /// keys or pointer.
-    func testBackgroundMouseNeverTakesTheFront() throws {
-        let source = try helperSource(file: "BackgroundMouse.swift")
-
-        for raise in ["SetFrontProcess", "activate(", "raiseWindow", "kAXRaiseAction", "makeKeyAndOrderFront", "CGWarpMouseCursorPosition", "post(tap:"] {
-            XCTAssertFalse(source.contains(raise), raise)
-        }
-        XCTAssertTrue(source.contains("eventsOfInterest: FocusShieldPolicy.eventMask"))
-        XCTAssertFalse(source.contains("CGEventMask.max"))
+        XCTAssertTrue(drag.contains("requireMouseFocus"))
     }
 
     /// An interrupted agent must never leave a modifier logically held for the
@@ -114,7 +100,7 @@ final class HelperEntrypointSafetyTests: XCTestCase {
         source.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
-    private func helperSource(file: String = "main.swift") throws -> String {
+    private func helperSource() throws -> String {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -123,7 +109,7 @@ final class HelperEntrypointSafetyTests: XCTestCase {
             contentsOf: packageRoot
                 .appendingPathComponent("Sources")
                 .appendingPathComponent("CodecastComputerUse")
-                .appendingPathComponent(file),
+                .appendingPathComponent("main.swift"),
             encoding: .utf8
         )
     }

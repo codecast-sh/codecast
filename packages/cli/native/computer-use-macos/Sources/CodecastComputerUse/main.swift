@@ -193,8 +193,8 @@ struct Snapshot {
     /// "sheet" or "dialog" while one covers the window, so the tree lists only it.
     let blockedBy: String?
 
-    /// A cached snapshot exists to prove element identity. Holding megabytes of
-    /// base64 in a process that lives for minutes is how a helper grows.
+    /// A cached snapshot exists to prove element identity; the picture belongs
+    /// to the read that took it.
     func withoutScreenshotPayload() -> Snapshot {
         Snapshot(
             id: id,
@@ -217,11 +217,41 @@ struct Snapshot {
     }
 }
 
+/// A window picture the helper wrote to a file (ScreenshotFile).
+
 struct ScreenshotPayload {
-    let data: String
+    let path: String
+    let bytes: Int
     let width: Int
     let height: Int
+    /// Picture pixels per window point.
     let scale: Double
+    /// The window region it shows, in window points, when it is a `--crop`.
+    let crop: CGRect?
+}
+
+/// What a read asks of its picture.
+struct ScreenshotRequest {
+    let fullResolution: Bool
+    /// Window points, from `--crop`.
+    let crop: CGRect?
+    let directory: String
+
+    init(params: [String: JSONValue]) throws {
+        fullResolution = params["fullResolution"]?.bool == true
+        directory = params["screenshotDir"]?.string ?? ScreenshotFile.defaultDirectory()
+        if case let .object(rect)? = params["crop"] {
+            guard let x = rect["x"]?.number, let y = rect["y"]?.number,
+                  let width = rect["width"]?.number, let height = rect["height"]?.number,
+                  width > 0, height > 0
+            else {
+                throw ProviderError(.invalidArgument, "crop needs x, y, width and height in window points, width and height above 0")
+            }
+            crop = CGRect(x: x, y: y, width: width, height: height)
+        } else {
+            crop = nil
+        }
+    }
 }
 
 enum ScreenshotStatus {
@@ -410,8 +440,7 @@ final class Provider {
         }
         let snapshot = try buildSnapshot(
             app: app,
-            includeScreenshot: params["noScreenshot"]?.bool != true,
-            fullResolution: params["fullResolution"]?.bool == true,
+            screenshot: params["noScreenshot"]?.bool == true ? nil : try ScreenshotRequest(params: params),
             windowId: windowId,
             windowIndex: windowIndex,
             restoreWindow: restoreWindow,
@@ -675,8 +704,7 @@ final class Provider {
 
     private func buildSnapshot(
         app: AppDescriptor,
-        includeScreenshot: Bool,
-        fullResolution: Bool,
+        screenshot request: ScreenshotRequest?,
         windowId: CGWindowID?,
         windowIndex: Int?,
         restoreWindow: Bool,
@@ -706,6 +734,7 @@ final class Provider {
             allowRecovery: restoreWindow
         )
         let focusedTitle = stringAttribute(focused, kAXTitleAttribute as String) ?? app.name
+        let includeScreenshot = request != nil
         let canCaptureScreenshot = includeScreenshot && screenCaptureTrustedSettled()
         guard let capture = WindowCapture.resolve(
             candidates: windowCandidates,
@@ -769,9 +798,22 @@ final class Provider {
                 lines.append("\t" + VisibleText.needsScreenRecording)
             }
         }
-        let screenshot = includeScreenshot ? capture.screenshotPayload(fullResolution: fullResolution) : nil
+        let id = UUID().uuidString
+        var screenshot: ScreenshotPayload?
+        var writeFailure: String?
+        if let request {
+            do {
+                screenshot = try capture.screenshotPayload(request, snapshotId: id)
+            } catch let failure as ScreenshotFile.Failure {
+                writeFailure = "the capture could not be written to \(request.directory): \(failure)"
+            } catch let failure as PrivateFileWrite.Failure {
+                writeFailure = "the capture could not be written to \(request.directory): \(failure)"
+            }
+        }
         let screenshotStatus: ScreenshotStatus = if screenshot != nil {
             .captured
+        } else if let writeFailure {
+            .failed(writeFailure)
         } else if includeScreenshot && !canCaptureScreenshot {
             .failed("Screen Recording permission is required for codecast computer; grant it or pass --no-screenshot to read the accessibility tree only.")
         } else if includeScreenshot {
@@ -780,7 +822,7 @@ final class Provider {
             .skipped
         }
         return Snapshot(
-            id: UUID().uuidString,
+            id: id,
             app: app,
             windowTitle: title,
             windowBounds: capture.bounds,
@@ -807,13 +849,21 @@ final class Provider {
     private func renderSnapshot(_ snapshot: Snapshot) -> [String: Any] {
         var screenshot: Any = NSNull()
         if let payload = snapshot.screenshot {
-            screenshot = [
-                "data": payload.data,
+            var rendered: [String: Any] = [
+                "path": payload.path,
                 "format": "png",
+                "bytes": payload.bytes,
                 "width": payload.width,
                 "height": payload.height,
                 "scale": payload.scale,
             ]
+            if let crop = payload.crop {
+                rendered["crop"] = [
+                    "x": Int(crop.minX.rounded()), "y": Int(crop.minY.rounded()),
+                    "width": Int(crop.width.rounded()), "height": Int(crop.height.rounded()),
+                ]
+            }
+            screenshot = rendered
         }
         return [
             "snapshot": [
@@ -3021,25 +3071,55 @@ struct WindowCapture {
         .sorted { $0.score > $1.score }
     }
 
-    /// Point sized unless asked otherwise: one pixel is one window point, so
-    /// a position read off the picture is the coordinate an action takes. A
-    /// retina capture made the agent divide by the scale, and the viewer that
-    /// shrinks a large image divided again, and a drag landed off by both.
-    func screenshotPayload(fullResolution: Bool = false) -> ScreenshotPayload? {
+    /// The picture a read returns, written to a file.
+    ///
+    /// Point sized by default, so a position read off the picture is the
+    /// coordinate an action takes: a retina capture made the agent divide by
+    /// the scale, and a viewer that shrank a large image divided again, and a
+    /// drag landed off by both. A window too large for a model to read whole
+    /// is shrunk here to the model's budget (ScreenshotBoundPolicy) instead of
+    /// by the model's API out of sight, so `scale` stays the true factor.
+    /// `--crop` returns one region at the display's full density, for text the
+    /// whole-window picture is too small to read. `--full-resolution` returns
+    /// the whole window at full density, bounded only by bytes.
+    func screenshotPayload(_ request: ScreenshotRequest, snapshotId: String) throws -> ScreenshotPayload? {
         guard let image else { return nil }
-        let pointScale = CGFloat(bounds.width) / CGFloat(max(image.width, 1))
-        let source: CGImage
-        if !fullResolution, pointScale < 0.99, let scaled = resizedImage(image, scale: pointScale) {
-            source = scaled
+        let pixelsPerPoint = Double(image.width) / max(Double(bounds.width), 1)
+        var source = image
+        var region = CGRect(origin: .zero, size: bounds.size)
+        var crop: CGRect?
+        if let requested = request.crop {
+            guard let clamped = ScreenshotCrop.clamp(requested, to: bounds.size) else {
+                throw ProviderError(
+                    .invalidArgument,
+                    "crop \(Int(requested.minX)),\(Int(requested.minY)),\(Int(requested.width)),\(Int(requested.height)) lies outside the window, which is \(Int(bounds.width))x\(Int(bounds.height)) points"
+                )
+            }
+            let pixels = ScreenshotCrop.pixelRect(clamped, pixelsPerPoint: pixelsPerPoint, imageWidth: image.width, imageHeight: image.height)
+            guard let cropped = image.cropping(to: pixels) else { return nil }
+            source = cropped
+            region = clamped
+            crop = clamped
+        }
+        let scale: Double = if crop != nil {
+            request.fullResolution ? 1 : ScreenshotBoundPolicy.modelScale(width: Double(source.width), height: Double(source.height))
+        } else if request.fullResolution {
+            1
         } else {
-            source = image
+            ScreenshotBoundPolicy.modelScale(width: region.width, height: region.height) / pixelsPerPoint
+        }
+        if scale < 0.99, let scaled = resizedImage(source, scale: CGFloat(scale)) {
+            source = scaled
         }
         guard let bounded = boundedPngData(source) else { return nil }
+        let path = try ScreenshotFile.write(bounded.data, directory: request.directory, snapshotId: snapshotId)
         return ScreenshotPayload(
-            data: bounded.data.base64EncodedString(),
+            path: path,
+            bytes: bounded.data.count,
             width: bounded.width,
             height: bounded.height,
-            scale: Double(bounded.width) / max(Double(bounds.width), 1)
+            scale: Double(bounded.width) / max(Double(region.width), 1),
+            crop: crop
         )
     }
 }

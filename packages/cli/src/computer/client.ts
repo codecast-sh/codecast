@@ -43,9 +43,11 @@ import {
   acquireStartLock,
   clearInstance,
   probeLiveness,
+  readHelperCaps,
   readInstance,
   stampComputerRaise,
   strayHelperPids,
+  writeHelperCaps,
   writeInstance,
   type ComputerInstanceState,
 } from "./instance.js";
@@ -89,7 +91,7 @@ export interface ComputerClientOptions {
   /** Stamps a deliberate raise so the daemon's focus sentinel does not bounce
    *  it. Called BEFORE the request goes out — a raise that lands fast must not
    *  be judged against a stamp that has not been written yet. */
-  stampRaise?: () => void;
+  stampRaise?: () => unknown;
 }
 
 /**
@@ -254,7 +256,7 @@ export class ComputerClient {
    */
   private async request<T>(method: ComputerMethod, params: unknown): Promise<T> {
     await this.enqueue(() => this.ensureCompatible());
-    if (isRestoreWindow(params)) (this.opts.stampRaise ?? stampComputerRaise)();
+    if (isRestoreWindow(params)) await (this.opts.stampRaise ?? stampComputerRaise)();
     return (await this.send(method, params)) as T;
   }
 
@@ -262,6 +264,14 @@ export class ComputerClient {
 
   private async ensureCompatible(): Promise<void> {
     if (this.caps) return;
+    // A helper another command already handshook answers from its cached
+    // caps; one that fails the checks below gets the full handshake path.
+    await this.ensureConnected();
+    const cached = this.state ? readHelperCaps(this.state) : null;
+    if (cached && this.compatible(cached)) {
+      this.caps = cached;
+      return;
+    }
     let caps = await this.handshake();
     if (caps.protocolVersion !== COMPUTER_PROTOCOL_VERSION) {
       // Dropping the connection alone reattaches to the same live helper
@@ -295,6 +305,12 @@ export class ComputerClient {
       }
     }
     this.caps = caps;
+    if (this.state) writeHelperCaps(this.state, caps);
+  }
+
+  private compatible(caps: ComputerProviderCapabilities): boolean {
+    const want = this.opts.version;
+    return caps.protocolVersion === COMPUTER_PROTOCOL_VERSION && !(want && caps.providerVersion && caps.providerVersion !== want);
   }
 
   private async handshake(): Promise<ComputerProviderCapabilities> {

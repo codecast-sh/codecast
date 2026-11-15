@@ -12,7 +12,6 @@ pure parts (the renderer, chords, PNG encoding) import nothing beyond the
 standard library, so `--self-test` runs them on any machine.
 """
 
-import base64
 import contextlib
 import warnings
 import json
@@ -20,6 +19,7 @@ import os
 import re
 import select
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -582,6 +582,58 @@ def encode_png(width, height, rgb):
 
     header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b"")
+
+
+SCREENSHOT_SUFFIX = "-screenshot.png"
+
+
+def default_screenshot_dir():
+    return os.path.join(os.environ.get("TMPDIR") or "/tmp", "codecast-computer")
+
+
+def screenshot_file_name(snapshot_id):
+    """The snapshot id names the file; nothing in it may leave the directory."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", snapshot_id).lstrip(".")[:96]
+    return (safe or "snapshot") + SCREENSHOT_SUFFIX
+
+
+def write_screenshot(png, directory, snapshot_id):
+    """The picture as a file the CLI reads, never base64 in the reply: 0600, in
+    a 0700 directory this uid owns. A symlink planted at the directory's name is
+    refused, never followed (the macOS helper's ScreenshotFile applies the same
+    rules, and the CLI sweeps the directory after a day)."""
+    if not os.path.isabs(directory):
+        raise ValueError("%s is not an absolute path" % directory)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    st = os.lstat(directory)
+    if not stat.S_ISDIR(st.st_mode):
+        raise ValueError("%s is not a directory" % directory)
+    if st.st_uid != os.getuid():
+        raise ValueError("%s is owned by uid %d, not %d" % (directory, st.st_uid, os.getuid()))
+    os.chmod(directory, 0o700)
+    path = os.path.join(directory, screenshot_file_name(snapshot_id))
+    write_private(path, png)
+    return path
+
+
+def screenshot_crop(spec, win):
+    """`--crop`: the window region in window points, clipped to the window, or
+    None for the whole window. X11 has one pixel per point, so a crop is already
+    at full density."""
+    if spec is None:
+        return None
+    try:
+        x, y, w, h = (float(spec[k]) for k in ("x", "y", "width", "height"))
+    except (TypeError, KeyError, ValueError):
+        raise ProviderError("invalid_argument", "crop needs x, y, width and height in window points")
+    if w <= 0 or h <= 0:
+        raise ProviderError("invalid_argument", "crop width and height must be above 0")
+    x0, y0 = max(0, int(x)), max(0, int(y))
+    x1, y1 = min(win["width"], int(-(-(x + w) // 1))), min(win["height"], int(-(-(y + h) // 1)))
+    if x1 <= x0 or y1 <= y0:
+        raise ProviderError("invalid_argument", "crop %g,%g,%g,%g lies outside the window, which is %dx%d points"
+                            % (x, y, w, h, win["width"], win["height"]))
+    return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
 
 
 def bgrx_to_rgb(data, width, height):
@@ -1433,21 +1485,32 @@ class Provider:
         title = win["title"] or (frame.get_name() or app.name)
         tree = tree_envelope(app.bundle_id or app.name.replace(" ", "_"), app.pid, title, app.name,
                              renderer.lines, renderer.focused_line)
+        snap_id = str(uuid.uuid4()).upper()
         shot, status = None, {"state": "skipped", "reason": "no_screenshot_flag"}
         if params.get("noScreenshot") is not True:
             meta = {"engine": "x11", "windowId": win["id"]}
+            crop = screenshot_crop(params.get("crop"), win)
+            region = crop or {"x": 0, "y": 0, "width": win["width"], "height": win["height"]}
+            directory = params.get("screenshotDir") or default_screenshot_dir()
             try:
-                captured = self.x.capture(win["x"], win["y"], win["width"], win["height"])
+                captured = self.x.capture(win["x"] + region["x"], win["y"] + region["y"], region["width"], region["height"])
             except Exception as err:
                 captured = None
                 status = {"state": "failed", "code": "screenshot_failed", "message": "X capture failed: %s" % err, "metadata": meta}
             if captured:
                 w, h, png = captured
-                shot = {"data": base64.b64encode(png).decode(), "format": "png", "width": w, "height": h, "scale": 1}
-                status = {"state": "captured", "metadata": meta}
+                try:
+                    shot = {"path": write_screenshot(png, directory, snap_id), "format": "png", "bytes": len(png),
+                            "width": w, "height": h, "scale": 1}
+                    if crop:
+                        shot["crop"] = crop
+                    status = {"state": "captured", "metadata": meta}
+                except (OSError, ValueError) as err:
+                    status = {"state": "failed", "code": "screenshot_failed",
+                              "message": "the capture could not be written to %s: %s" % (directory, err), "metadata": meta}
             elif status["state"] == "skipped":
                 status = {"state": "failed", "code": "screenshot_failed", "message": "the window is off screen", "metadata": meta}
-        snap = Snapshot(id=str(uuid.uuid4()).upper(), app=app, win=win, title=title, tree=tree,
+        snap = Snapshot(id=snap_id, app=app, win=win, title=title, tree=tree,
                         records=renderer.records, focused=renderer.focused_id, truncated=renderer.truncated,
                         depth_reached=renderer.depth_reached, shot=shot, status=status, event_mark=event_mark)
         self.remember(query, app, snap, params.get("windowIndex"))
@@ -2400,12 +2463,12 @@ class Server:
 # ── entry points ──────────────────────────────────────────────────────────────
 
 
-def write_private(path, text):
-    """0600 and atomic: the CLI polls this file and parses whatever it finds."""
+def write_private(path, content):
+    """0600 and atomic: the CLI reads this file and parses whatever it finds."""
     temp = "%s.%d.tmp" % (path, os.getpid())
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(text)
+    with os.fdopen(fd, "wb" if isinstance(content, bytes) else "w") as f:
+        f.write(content)
     os.replace(temp, path)
 
 
@@ -2484,6 +2547,27 @@ def self_test():
     assert abs(i * 0.03 - SETTLE_CEILING) < 0.031, "events that keep arriving stop at the ceiling"
     png = encode_png(2, 1, bgrx_to_rgb(bytes([0, 0, 255, 0, 255, 0, 0, 0]), 2, 1))
     assert png.startswith(b"\x89PNG") and zlib.decompress(png[png.index(b"IDAT") + 4:-16])[1:4] == b"\xff\x00\x00"
+    win = {"width": 100, "height": 50}
+    assert screenshot_crop(None, win) is None
+    assert screenshot_crop({"x": 90, "y": 40.5, "width": 30, "height": 30}, win) == {"x": 90, "y": 40, "width": 10, "height": 10}
+    for bad in ({"x": 200, "y": 0, "width": 5, "height": 5}, {"x": 0, "y": 0, "width": 0, "height": 5}, {"x": 0}):
+        try:
+            screenshot_crop(bad, win)
+            raise AssertionError("crop %r must be refused" % bad)
+        except ProviderError:
+            pass
+    assert screenshot_file_name("../../etc/passwd") == "-..-etc-passwd-screenshot.png"
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        shot = write_screenshot(b"png", os.path.join(root, "shots"), "ABC")
+        assert shot == os.path.join(root, "shots", "ABC-screenshot.png")
+        assert os.stat(shot).st_mode & 0o777 == 0o600 and os.stat(os.path.dirname(shot)).st_mode & 0o777 == 0o700
+        os.symlink(root, os.path.join(root, "link"))
+        try:
+            write_screenshot(b"png", os.path.join(root, "link"), "ABC")
+            raise AssertionError("a symlinked directory must be refused")
+        except ValueError:
+            pass
     blank = (4, 2, bytes(32))
     assert changed_rect(blank, (4, 2, bytes(32))) is None
     dot = bytearray(32)

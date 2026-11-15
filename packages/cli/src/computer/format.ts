@@ -20,7 +20,7 @@
  *    second full snapshot to find that out.
  */
 
-import { formatBytes } from "../browser/profile.js";
+import { formatBytes } from "../browser/formatBytes.js";
 import { actionVerdict, verdictLine } from "./verdict.js";
 import { pixelVerdict } from "./pixels.js";
 import { diffTrees, filterTree, formatDiff, type TreeFilter } from "./tree.js";
