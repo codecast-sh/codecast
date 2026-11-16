@@ -29,7 +29,7 @@ import { CommandDisclosure, KindGlyph, Row } from "./parts";
 import { FIELD_MONO, VAULT_DIALOG } from "../../lib/secretLook";
 import { cn } from "../../lib/utils";
 import { buttonVariants } from "../ui/button";
-import { shareSigninLedger } from "../../lib/secretLedgers";
+import { shareSigninLedger, shareSigninsLedger } from "../../lib/secretLedgers";
 import { vaultFailure } from "./vaultModel";
 import { useSampleVault, type SampleVault } from "./sampleVault";
 import { modernButton } from "../ui/modernLook";
@@ -343,6 +343,136 @@ export function SigninRequestFill({ row }: { row: SecretMeta }) {
       <Outcome ways={ways} />
       <InTerminal ways={ways} />
       {ways.review}
+    </div>
+  );
+}
+
+// ── Every open sign-in request at once ─────────────────────────────────────
+
+/** Where one site of a batch stands: its check's count (0 = not signed in there), then its save, or why either failed. */
+type BatchState = { checked?: Checked; saved?: Saved; failed?: string };
+type BatchPhase = "idle" | "checking" | "review" | "saving" | "done";
+
+/**
+ * One requested site in a batch: its check and then its save, each the same
+ * laptop command the site's own button sends. It draws nothing and starts a
+ * command once when the batch hands it its turn.
+ */
+function BatchSite({ row, device, team, turn, onState }: { row: SecretMeta; device: Device; team: Team; turn: "check" | "save" | null; onState: (id: string, s: BatchState) => void }) {
+  const check = useLaptopCommand<Checked>(true);
+  const save = useLaptopCommand<Saved>(false);
+  const args = { site: signinSite(row.sites![0]!) ?? row.sites![0]!, name: row.name, device, team };
+  useWatchEffect(() => {
+    if (turn === "check") void check.start(args);
+    else if (turn === "save") void save.start(args);
+  }, [turn]);
+  const sig = `${check.result?.cookies ?? ""}|${check.failed ?? ""}|${save.result?.short_id ?? ""}|${save.failed ?? ""}`;
+  useWatchEffect(() => {
+    if (sig !== "|||") onState(row._id, { checked: check.result ?? undefined, saved: save.result ?? undefined, failed: save.failed ?? check.failed ?? undefined });
+  }, [sig]);
+  return null;
+}
+
+/** The first site waits alone (the Mac may ask for Keychain access once); after it, this many run at a time. */
+const BATCH_PARALLEL = 4;
+
+/**
+ * Save every open sign-in request in one workspace from one laptop's Chrome:
+ * a press checks each site there, one review shows what was found, and its
+ * confirm saves them all. Sites Chrome is not signed in to stay open, each
+ * with its own button.
+ */
+export function SaveAllSignins({ rows, team }: { rows: SecretMeta[]; team: Team }) {
+  const devices = useDevices();
+  const onlineLocals = useSampleVault() ? SAMPLE_LAPTOPS : devices.onlineLocals;
+  const people = useInboxStore((s) => peopleOf(teamMembersOf(s)).length);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [phase, setPhase] = useState<BatchPhase>("idle");
+  const [states, setStates] = useState<Record<string, BatchState>>({});
+  // The sites a press took, fixed until it ends: a request filled meanwhile leaves the list but not the batch.
+  const [batch, setBatch] = useState<SecretMeta[]>([]);
+  const device = onlineLocals.find((d) => d.device_id === picked) ?? onlineLocals[0] ?? null;
+  const asked = rows.filter((r) => r.kind === "signin" && r.status === "requested" && r.sites?.length && !keepsOwnLogin(signinSite(r.sites[0]!) ?? ""));
+
+  const onState = (id: string, s: BatchState) => setStates((all) => ({ ...all, [id]: s }));
+  const found = batch.filter((r) => (states[r._id]?.checked?.cookies ?? 0) > 0);
+  const stage = phase === "saving" ? found : batch;
+  const finished = (r: SecretMeta) => (phase === "saving" ? !!(states[r._id]?.saved || states[r._id]?.failed) : !!(states[r._id]?.checked || states[r._id]?.failed));
+  const doneCount = stage.filter(finished).length;
+  // Turns go in list order: one until the first site finishes, then BATCH_PARALLEL at a time.
+  const open = new Set(stage.filter((r) => !finished(r)).slice(0, doneCount === 0 ? 1 : BATCH_PARALLEL).map((r) => r._id));
+  const turnOf = (r: SecretMeta): "check" | "save" | null =>
+    phase === "checking" && (open.has(r._id) || finished(r)) ? "check" : phase === "saving" && (open.has(r._id) || finished(r)) ? "save" : null;
+
+  useWatchEffect(() => {
+    if (phase === "checking" && batch.length && doneCount === batch.length) setPhase(found.length ? (team ? "review" : "saving") : "done");
+    else if (phase === "saving" && doneCount === found.length) setPhase("done");
+  }, [phase, doneCount]);
+
+  if (!device || (asked.length < 2 && phase === "idle")) return null;
+  const start = () => {
+    setStates({});
+    setBatch(asked);
+    setPhase("checking");
+  };
+  const saved = batch.filter((r) => states[r._id]?.saved).length;
+  const signedOut = batch.filter((r) => states[r._id]?.checked?.cookies === 0).length;
+  const failed = batch.filter((r) => states[r._id]?.failed).length;
+  const busy = phase === "checking" || phase === "saving";
+  const label =
+    phase === "checking" ? `Reading Chrome ${doneCount}/${batch.length}` : phase === "saving" ? `Saving ${doneCount}/${found.length}` : `Save ${asked.length} from my Chrome on ${device.label}`;
+
+  return (
+    <div className="ml-auto flex min-w-0 items-center gap-2 text-[12px] font-normal" data-vault-signin-all={phase}>
+      {batch.map((r) => (
+        <BatchSite key={r._id} row={r} device={device} team={team} turn={turnOf(r)} onState={onState} />
+      ))}
+      {phase === "done" && (
+        <span className="flex min-w-0 items-center gap-1.5 tabular-nums" data-vault-signin-all-outcome>
+          <Check size={13} className="shrink-0 text-sol-green" />
+          <span className="text-sol-text">{saved} saved</span>
+          {signedOut > 0 && <span className="text-sol-text-muted">· {signedOut} not signed in</span>}
+          {failed > 0 && <span className="text-sol-red">· {failed} failed</span>}
+        </span>
+      )}
+      {(phase !== "done" || asked.length >= 2) && (
+        <div className={cn(buttonVariants({ variant: "yellow", size: "sm" }), "min-w-0 items-stretch gap-0 overflow-hidden p-0")}>
+          <button type="button" disabled={busy} onClick={start} className="inline-flex min-w-0 items-center gap-1.5 px-3 text-[12.5px] font-semibold hover:brightness-110 disabled:cursor-not-allowed disabled:bg-sol-border disabled:text-sol-text-dim" data-vault-signin-all-button>
+            {busy ? <Loader2 size={13} className="shrink-0 animate-spin" /> : <Laptop size={13} className="shrink-0" />}
+            <span className="truncate tabular-nums">{label}</span>
+          </button>
+          {onlineLocals.length > 1 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" aria-label="Pick a laptop" disabled={busy} className="border-l border-sol-bg/25 px-1.5 hover:brightness-110">
+                  <ChevronDown size={13} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {onlineLocals.map((d) => (
+                  <DropdownMenuItem key={d.device_id} onSelect={() => setPicked(d.device_id)}>
+                    <Laptop size={13} />
+                    {d.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      )}
+      {phase === "review" && team && (
+        <SwitchReview
+          ledger={shareSigninsLedger({
+            team: team.name,
+            people,
+            laptop: device.label,
+            found: found.map((r) => ({ host: states[r._id]!.checked!.host, cookies: states[r._id]!.checked!.cookies, account_hint: states[r._id]!.checked!.account_hint })),
+            signedOut: batch.filter((r) => states[r._id]?.checked?.cookies === 0).map((r) => r.sites![0]!),
+          })}
+          onClose={() => setPhase("done")}
+          onConfirm={() => setPhase("saving")}
+        />
+      )}
     </div>
   );
 }

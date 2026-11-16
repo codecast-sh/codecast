@@ -110,7 +110,7 @@ export function webHost(url: string): string | null {
  * Judged by the Public Suffix List, private section included, the way Chrome
  * judges where a cookie may be set.
  */
-function ownsSubdomains(host: string): boolean {
+export function ownsSubdomains(host: string): boolean {
   return getDomain(host, { allowPrivateDomains: true }) !== null;
 }
 
