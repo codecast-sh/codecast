@@ -131,3 +131,25 @@ export function shareSigninLedger(r: { host: string; team: string; people: numbe
     keep: "Cancel",
   };
 }
+
+/** Sharing many sign-ins at once (the Vault's Save all): every site the check found, with its count and account, and the ones Chrome is not signed in to, which stay asked for. */
+export function shareSigninsLedger(r: { team: string; people: number; laptop: string; found: { host: string; cookies: number; account_hint?: string }[]; signedOut: string[] }): SwitchLedger {
+  return {
+    name: `Share ${r.found.length} sign-ins`,
+    subject: `Team · ${r.team}`,
+    shift: null,
+    figures: [
+      { value: String(r.people), label: r.people === 1 ? "person's agents sign in as you" : "people's agents sign in as you", tone: "warn" },
+      { value: String(r.found.length), label: r.found.length === 1 ? "site" : "sites" },
+    ],
+    rows: [
+      ...r.found.map((f) => ({ k: f.host, v: `${f.account_hint ?? "Yours"} · ${f.cookies} ${f.cookies === 1 ? "cookie" : "cookies"}`, tone: "warn" as const })),
+      ...(r.signedOut.length ? [{ k: "Not signed in", v: `${r.signedOut.join(", ")}: stay asked for` }] : []),
+      { k: "From", v: `Chrome on ${r.laptop}` },
+      { k: "Stays alive", v: "Agents write newer cookies back" },
+      { k: "To undo", v: "Delete each, then sign out on the site", tone: "warn" },
+    ],
+    confirm: `Share ${r.found.length} with the team`,
+    keep: "Cancel",
+  };
+}
