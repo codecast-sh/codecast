@@ -1837,7 +1837,7 @@ export type DocDetail = DocItem & {
 import type { KeyBindingOverride } from "@codecast/shared/contracts/keyBindings";
 export type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
 import type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, DecisionViewPrefs, DecisionRowStamps, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
-import { prefersModern } from "../lib/modernStyle";
+import { showsModern } from "../lib/modernStyle";
 
 /** What the header slide-over shows (components/anchor/AnchorPanel). */
 export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "session"; id: string };
@@ -5562,10 +5562,11 @@ export function inboxNestParentOf(rows: Iterable<InboxSession>, nestWorkers = fa
 }
 
 // Modern focused: the Modern style with its switch on (settings, Appearance).
-// Only the trims read it; Classic and Minimal never see it, and Modern without
-// it keeps every row and button it had.
+// Only the trims read it. It follows the style this device draws
+// (showsModern), not the account's, so a device showing Classic or Minimal
+// never sees it, and Modern without it keeps every row and button it had.
 export function isModernFocused(ui: { modern_style?: boolean; visual_style?: string; modern_focused?: boolean } | undefined): boolean {
-  return prefersModern(ui) && ui?.modern_focused === true;
+  return ui?.modern_focused === true && showsModern(ui);
 }
 
 // Whether spawned workers nest under their spawner: in Modern focused, where

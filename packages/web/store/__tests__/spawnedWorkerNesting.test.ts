@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { flatViewSessions, inboxNestParentOf, isSpawnedWorker, nestsWorkers, type InboxSession } from "../inboxStore";
+import { flatViewSessions, inboxNestParentOf, isModernFocused, isSpawnedWorker, nestsWorkers, type InboxSession } from "../inboxStore";
 import { placeSections } from "./placeTestHarness";
 
 // In Modern focused (nestsWorkers), sessions an agent spawned (`cast spawn`
@@ -40,6 +40,30 @@ describe("spawned workers nest under their spawner (web display only)", () => {
     expect(nestsWorkers({ modern_style: false, modern_focused: true })).toBe(false);
     expect(nestsWorkers({ visual_style: "minimal", modern_focused: true })).toBe(false);
     expect(nestsWorkers(undefined)).toBe(false);
+  });
+
+  it("follows the style this device draws, not the account's", () => {
+    // Modern and Focused on in the account, Classic chosen on this device:
+    // the screen is Classic, so no trims (worker nesting, the triage bar, the
+    // board hiding the rail) apply there.
+    const device = new Map<string, string>();
+    const prev = (globalThis as any).localStorage;
+    (globalThis as any).localStorage = { getItem: (k: string) => device.get(k) ?? null };
+    try {
+      const account = { modern_style: true, visual_style: "classic", modern_focused: true };
+      device.set("codecast-modern-style", "0");
+      expect(isModernFocused(account)).toBe(false);
+      expect(nestsWorkers(account)).toBe(false);
+      device.set("codecast-modern-style", "1");
+      expect(isModernFocused({ ...account, modern_style: false })).toBe(true);
+      // A device that never chose Modern follows the account, under its own base style.
+      device.delete("codecast-modern-style");
+      expect(isModernFocused(account)).toBe(true);
+      device.set("codecast-visual-style", "minimal");
+      expect(isModernFocused({ visual_style: "classic", modern_focused: true })).toBe(false);
+    } finally {
+      (globalThis as any).localStorage = prev;
+    }
   });
 
   it("only in Modern focused: every other style keeps every worker as its own row", () => {
