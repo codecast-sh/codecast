@@ -5,6 +5,7 @@
 // one error toast (./errorToast). Every consumer keeps importing from here.
 import { describeError, errorChain, errorSummary, rootError } from "./errorCause";
 import { showErrorToast } from "./errorToast";
+import { dropStylePreloads } from "./stylePreloads";
 import {
   claimErrorKey,
   setupErrorToasts as setupPlatformErrorToasts,
@@ -136,6 +137,10 @@ function startReplayOnError(analytics: AnalyticsRuntime) {
   const replay = parsed.ok ? parsed.config.replay : undefined;
   void import("@platform/analytics/replay")
     .then(({ startReplay }) => {
+      // Before the DOM capture can take its first snapshot: rrweb waits on a
+      // stylesheet preload link forever, a listener and a timer at a time
+      // (./stylePreloads).
+      dropStylePreloads();
       replayRecorder = startReplay({ sink, sampleRate: replay?.sampleRate ?? 0, replayDom: replay?.dom ?? "off" });
       if (regulated) replayRecorder.stop();
       else for (const reason of pendingKeeps.splice(0)) replayRecorder.keep(reason);
