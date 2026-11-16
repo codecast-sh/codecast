@@ -37,6 +37,12 @@ describe("parseStepHeading", () => {
     expect(parseStepHeading("Catch-all `app/[[...slug]]/page.tsx`")).toEqual({ title: "Catch-all", file: "app/[[...slug]]/page.tsx" });
     expect(parseStepHeading("Wire it (src/a.ts)")).toEqual({ title: "Wire it", file: "src/a.ts" });
   });
+
+  test("takes the ticked path with a line range, else the last, when the title names a file in backticks too", () => {
+    expect(parseStepHeading("`deploy.sh` uses the resolved remote `packages/convex/deploy.sh:45-57`")).toEqual({ title: "`deploy.sh` uses the resolved remote", file: "packages/convex/deploy.sh", start: 45, end: 57 });
+    expect(parseStepHeading("`dev.sh:12` reads it before `scripts/dev.sh`")).toEqual({ title: "reads it before `scripts/dev.sh`", file: "dev.sh", start: 12, end: 12 });
+    expect(parseStepHeading("Rename `a.ts` to `src/b.ts`")).toEqual({ title: "Rename `a.ts` to", file: "src/b.ts" });
+  });
   test("a bracket around a bare path is not part of it", () => {
     expect(parseStepHeading("Wire it [src/a.ts]")).toBeNull();
   });

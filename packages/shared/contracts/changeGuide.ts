@@ -50,12 +50,18 @@ const FENCE = /^\s*(```|~~~)/;
 // (`app/task/[id].tsx`, `app/(tabs)/index.tsx`), never a stray bracket.
 const SEG = String.raw`(?:\[\[[\w.-]+\]\]|\[[\w.-]+\]|\([\w.-]+\)|[\w@.~-])+`;
 const LOCATION_BODY = String.raw`((?:${SEG}\/)*${SEG}\.[\w-]+|(?:${SEG}\/)+${SEG})(?::L?(\d+)(?:\s*[-–]\s*L?(\d+))?)?`;
-const LOCATION_TICKED = new RegExp("`" + LOCATION_BODY + "`");
+const LOCATION_TICKED = new RegExp("`" + LOCATION_BODY + "`", "g");
 const LOCATION_BARE = new RegExp(String.raw`(?:^|[\s(])` + LOCATION_BODY + String.raw`(?=$|[\s),])`);
 
-/** The step's location on a heading line, and the title with it taken out. */
+/**
+ * The step's location on a heading line, and the title with it taken out. A
+ * title may name a file in backticks too ("`deploy.sh` uses the remote
+ * `packages/convex/deploy.sh:45-57`"): the location is the ticked path with a
+ * line range, else the last ticked path, since the location ends the line.
+ */
 export function parseStepHeading(text: string): { title: string; file: string; start?: number; end?: number } | null {
-  const ticked = text.match(LOCATION_TICKED);
+  const all = [...text.matchAll(LOCATION_TICKED)].reverse();
+  const ticked = all.find((t) => t[2]) ?? all[0] ?? null;
   const m = ticked ?? text.match(LOCATION_BARE);
   // Outside backticks a bare word with a dot ("e.g.") is prose: it needs a slash or a line number to count.
   if (!m || (!ticked && !m[2] && !m[1].includes("/"))) return null;

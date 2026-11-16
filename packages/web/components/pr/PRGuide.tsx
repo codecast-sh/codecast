@@ -6,6 +6,7 @@
 // marked stale once newer commits land.
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { Loader2, Route } from "lucide-react";
 import type { ChangeGuide, ChangeGuideStep } from "@codecast/shared/contracts/changeGuide";
 import { ChangeGuideWalkthrough } from "../tasks/ChangeGuideWalkthrough";
@@ -40,7 +41,12 @@ export function PRGuide({ pr, stepHref, authed }: { pr: Pr; stepHref: (hash: str
 
   const author = evidence?.change_guide?.steps?.length ? evidence.change_guide : null;
   if (author) {
-    return <ChangeGuideWalkthrough guide={author} stepHref={hrefFor} className="px-6 py-5" />;
+    return (
+      <div className="px-6 py-5" data-pr-guide="author">
+        <ChangeGuideWalkthrough guide={author} stepHref={hrefFor} />
+        <NotInGuide files={pr.files ?? []} steps={author.steps} stepHref={stepHref} />
+      </div>
+    );
   }
 
   const writing = row?.status === "writing" && now - row.created_at < PR_GUIDE_WRITING_STALE_MS;
@@ -59,6 +65,7 @@ export function PRGuide({ pr, stepHref, authed }: { pr: Pr; stepHref: (hash: str
       <div className="px-6 py-5" data-pr-guide="generated">
         <GeneratedMeta row={row!} stale={stale} writing={writing} failed={failed} onRewrite={press} />
         <ChangeGuideWalkthrough guide={guide} source="an order the model chose from the diff" stepHref={hrefFor} />
+        <NotInGuide files={pr.files ?? []} steps={guide.steps} stepHref={stepHref} />
         {review}
       </div>
     );
@@ -103,5 +110,27 @@ function GeneratedMeta({ row, stale, writing, failed, onRewrite }: { row: PrGuid
         </button>
       )}
     </div>
+  );
+}
+
+/** The changed files no step walks through, each opening its diff, so a reader knows what the guide leaves to the Files tab. */
+function NotInGuide({ files, steps, stepHref }: { files: readonly { filename: string; additions: number; deletions: number }[]; steps: readonly ChangeGuideStep[]; stepHref: (hash: string) => string }) {
+  const walked = new Set(steps.map((s) => s.file));
+  const rest = files.filter((f) => !walked.has(f.filename));
+  if (!rest.length) return null;
+  return (
+    <section className="mt-6 border-t border-sol-border/50 pt-4" data-pr-guide-rest={rest.length}>
+      <h3 className="mb-2 text-xs font-medium text-sol-text-dim">Not in the guide · {rest.length} {rest.length === 1 ? "file" : "files"}</h3>
+      <ul className="flex flex-col gap-0.5">
+        {rest.map((f) => (
+          <li key={f.filename} className="flex min-w-0 items-baseline gap-3 font-mono text-meta leading-5">
+            <Link href={stepHref(formatDiffHash({ file: f.filename }))} className="min-w-0 truncate text-sol-text-muted hover:text-sol-cyan hover:underline" title={`Open ${f.filename} in the diff`}>
+              {f.filename}
+            </Link>
+            <span className="shrink-0 tabular-nums"><span className="text-sol-green">+{f.additions}</span> <span className="text-sol-red">-{f.deletions}</span></span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
