@@ -1072,6 +1072,11 @@ export function parseSharedEntityUrl(
   return ref ? { ...ref, to: `${u.pathname}${u.search}${u.hash}` } : null;
 }
 
+/** A published page's public share address: what "open in full", "copy link" and the phone open. */
+export function pageShareUrl(slug: string): string {
+  return `https://codecast.sh/a/${slug}`;
+}
+
 /**
  * If `href` points at a published page (`cast publish` output), return its
  * slug; otherwise null. Accepts the canonical share URL

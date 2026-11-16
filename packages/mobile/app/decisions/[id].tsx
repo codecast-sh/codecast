@@ -21,7 +21,8 @@ import { AnswerButton, AnswerControls, appAnswerLook } from '@/components/decisi
 import { decisionAnswerLabel } from '@codecast/shared/contracts';
 
 import { DecisionThread } from '@/components/decisions/DecisionThread';
-import { reportUrl, useDecisionAnswer } from '@/components/decisions/DecisionCard';
+import { useDecisionAnswer } from '@/components/decisions/DecisionCard';
+import { pageShareUrl } from '@codecast/shared/entities';
 import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 // One `cast decide` at a time. The queue (useDecisionQueue) is the same model
@@ -136,7 +137,7 @@ export default function DecisionScreen() {
               {docBody && docBody !== contextMd?.trim() ? <MarkdownContent text={docBody} baseStyle={styles.context} /> : null}
             </CollapsibleBody>
           ) : null}
-          {reportSlug ? <LinkRow label="Open the report" onPress={() => openLink(reportUrl(reportSlug))} /> : null}
+          {reportSlug ? <LinkRow label="Open the report" onPress={() => openLink(pageShareUrl(reportSlug))} /> : null}
 
           <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} guarded={(i) => approvesPersonsAct(source, i)} />
 

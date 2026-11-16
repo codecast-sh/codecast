@@ -28,6 +28,7 @@ import { useSyncDecisionDetail, useDecisionDetail } from '@codecast/web/hooks/us
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import type { AnswerDraft } from '@codecast/web/lib/decisionAnswer';
 import { decisionAnswerLabel } from '@codecast/shared/contracts';
+import { pageShareUrl } from '@codecast/shared/entities';
 import { appAlert } from '@/lib/popups';
 
 
@@ -39,7 +40,6 @@ function settledOf(row: SessionDecisionItem): string | null {
     : null;
 }
 
-export const reportUrl = (slug: string) => `https://codecast.sh/a/${slug}`;
 
 /**
  * The answer press for one decision: approving an Ask first read takes Touch
@@ -194,7 +194,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
             </CollapsibleBody>
           ) : null}
           {row.report_slug ? (
-            <Pressable onPress={() => openLink(reportUrl(row.report_slug!))} hitSlop={6}>
+            <Pressable onPress={() => openLink(pageShareUrl(row.report_slug!))} hitSlop={6}>
               <Text style={styles.link}>Open the report ↗</Text>
             </Pressable>
           ) : null}

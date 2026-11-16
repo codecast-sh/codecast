@@ -92,6 +92,12 @@ export const PAGES_PART: AcmePart = {
     s.applyTailMessages(REPORT_SESSION._id, 0, REPORT_TRANSCRIPT(now) as any, null);
   },
   answers: {
+    // The pages one session published (the header's Pages chip), by the session's short id.
+    "conversationPages:list": (a) => {
+      const short = [...Object.values(SESSIONS), REPORT_SESSION].find((x) => x._id === a?.conversation_id)?.short_id;
+      const pages = PAGES(Date.now()).filter((p) => short && p.session_short_id === short);
+      return { _id: a?.conversation_id, pages: pages.map((p) => ({ slug: p.slug, created_at: p.created_at })).sort((x, y) => x.created_at - y.created_at) };
+    },
     "artifacts:listForWeb": () => ({ artifacts: PAGES(Date.now()) }),
     // What an embed needs to frame a page (artifacts.embedInfo): open pages only, so no gate tokens.
     "artifacts:embedInfo": (a) =>

@@ -2,12 +2,12 @@
 // tiles across the top (images, search, share, copy, huddle); everything else
 // is a short grouped list under them, with setting the session aside last.
 // One sheet, no "More…" step: a group that has nothing to offer is left out.
-import { useRef, type ComponentProps } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import type { ComponentProps } from 'react';
+import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { Text } from '@/components/Themed';
-import { BottomSheet } from '@/components/BottomSheet';
+import { BottomSheet, useRunAfterDismiss } from '@/components/BottomSheet';
 import { themedStyles, useTheme } from '@/constants/Theme';
 
 type IconName = ComponentProps<typeof Feather>['name'];
@@ -43,21 +43,14 @@ export function SessionActionsSheet({ visible, onClose, tiles, groups }: {
 }) {
   const Theme = useTheme();
   const { height } = useWindowDimensions();
-  // An action that opens its own modal (rename, the gallery, a picker) can
-  // only present once this sheet has finished leaving, so it runs from the
-  // sheet's dismissal on iOS; Android has no such rule.
-  const pending = useRef<(() => void) | null>(null);
+  // An action that opens its own modal (rename, the gallery, a picker) runs
+  // once this sheet has left.
+  const after = useRunAfterDismiss(onClose);
   const run = (fn: () => void) => {
     void Haptics.selectionAsync().catch(() => {});
-    if (Platform.OS === 'ios') pending.current = fn;
-    onClose();
-    if (Platform.OS !== 'ios') fn();
+    after.run(fn);
   };
-  const onDismiss = () => {
-    const fn = pending.current;
-    pending.current = null;
-    fn?.();
-  };
+  const onDismiss = after.onDismiss;
   const filled = groups.filter((g) => g.length > 0);
 
   return (

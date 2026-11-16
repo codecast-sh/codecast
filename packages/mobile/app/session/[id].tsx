@@ -54,7 +54,7 @@ import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
 import { usePendingMessageStatus, usePendingPermissions } from '@codecast/web/hooks/useSyncPendingPermissions';
 import { pendingMessageHoldReason } from '@codecast/web/lib/pendingBanner';
 import { HeldSendRow } from '@/components/HeldSendRow';
-import { NeedsInputStrip } from '@/components/session/NeedsInputStrip';
+import { NeedsYouButton } from '@/components/session/NeedsYouButton';
 import { TerminalOfferBar } from '@/components/terminal/TerminalOfferBar';
 import { terminalAvailable } from '@/components/terminal/PaneTerminal';
 import { useConversationCommits, useConversationPullRequests, useSyncConversationCommits, useSyncConversationPullRequests } from '@codecast/web/hooks/useSyncTimeline';
@@ -68,6 +68,7 @@ import { PermissionCard } from '@/components/PermissionCard';
 import { useComposerSuggestion } from '@codecast/web/hooks/useComposerSuggestion';
 import { SlashCommandPills } from '@/components/session/SlashCommandPills';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
+import { SessionPagesChip } from '@/components/session/SessionPagesChip';
 import { RoleFailoverBanner } from '@/components/org/RoleFailoverBanner';
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
@@ -300,10 +301,6 @@ function formatFullTimestamp(ts: number): string {
     minute: '2-digit',
     second: '2-digit',
   });
-}
-
-function formatAgentType(agentType?: string): string {
-  return agentType ? agentDisplayName(agentType) : 'Unknown';
 }
 
 function agentTypeColor(agentType?: string): string {
@@ -3894,7 +3891,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const [chipsExpanded, setChipsExpanded] = useState(false);
   const extraChipCount = [
     (conversation?.fork_count ?? 0) > 0,
-    !!conversation && isConvexId(conversation._id) && !hosted,
     !!latestUsage && internals,
     !!conversation?.parent_conversation_id,
     !!conversation?.forked_from_details,
@@ -3950,8 +3946,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     setActionsVisible(true);
   }, [hasDiff]);
   const isRealConversation = !!conversation && isConvexId(conversation._id);
+  const openGalleryAtNewest = () => { setGalleryIndex(Math.max(0, allSessionImages.length - 1)); setGalleryVisible(true); };
   const actionTiles: SessionTile[] = [
-    ...(allSessionImages.length > 0 ? [{ key: 'images', label: 'Images', icon: 'image' as const, count: allSessionImages.length, onPress: () => { setGalleryIndex(Math.max(0, allSessionImages.length - 1)); setGalleryVisible(true); } }] : []),
     { key: 'search', label: 'Search', icon: 'search', onPress: () => setSearchVisible(v => !v) },
     { key: 'share', label: 'Share', icon: 'share', onPress: handleShareConversation },
     { key: 'copy', label: 'Copy', icon: 'copy', onPress: handleCopyMenu },
@@ -4545,7 +4541,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           {/* The prompt list, More, and the compose pencil that starts the
               next session from here. Huddle, images and the board live in
               More, where a live huddle is listed first. */}
-          <NeedsInputStrip currentId={String(conversation._id)} />
+          <NeedsYouButton currentId={String(conversation._id)} />
           {navigatorRows.length > 0 && (
             <MessageListButton count={promptCount} onPress={openNavigatorSheet} />
           )}
@@ -4566,15 +4562,30 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.sessionMeta}
               >
-                {/* Every chip wears one quiet shell; only its icon carries color. */}
-                {conversation.agent_type && (
-                  <RNView style={styles.metaChip}>
-                    <AgentLogoSvg agentType={conversation.agent_type} size={11} />
-                    <RNText style={styles.metaChipText} maxFontSizeMultiplier={CHROME_FONT_CAP}>
-                      {formatAgentType(conversation.agent_type)}
-                    </RNText>
-                  </RNView>
+                {/* Every chip wears one quiet shell; only its icon carries color.
+                    The agent needs no chip: its logo badges the face above and
+                    the model chip names it. Where it runs and whose it is, then
+                    what it made, lead; the rest folds behind "+N". */}
+                {!hosted && (
+                  <AssignmentChip
+                    conversationId={isConvexId(conversation._id) ? conversation._id : null}
+                    ownerDeviceId={(conversation as any).owner_device_id}
+                    showToast={showToast}
+                  />
                 )}
+                {allSessionImages.length > 0 && (
+                  <Pressable
+                    onPress={openGalleryAtNewest}
+                    style={styles.metaChip}
+                    hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${allSessionImages.length} images, open the gallery`}
+                  >
+                    <FontAwesome name="image" size={10} color={Theme.magenta} />
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaChipText}>{allSessionImages.length}</RNText>
+                  </Pressable>
+                )}
+                <SessionPagesChip conversationId={isConvexId(conversation._id) ? String(conversation._id) : null} />
                 {!hosted ? (
                   <ModelSwitcherChip
                     conversationId={conversation._id}
@@ -4610,13 +4621,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                         <FontAwesome name="code-fork" size={10} color={Theme.violet} />
                         <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaChipText}>{conversation.fork_count}</RNText>
                       </Pressable>
-                    )}
-                    {!hosted && (
-                      <AssignmentChip
-                        conversationId={isConvexId(conversation._id) ? conversation._id : null}
-                        ownerDeviceId={(conversation as any).owner_device_id}
-                        showToast={showToast}
-                      />
                     )}
                     {latestUsage && internals && (
                       <RNView style={styles.metaChip}>

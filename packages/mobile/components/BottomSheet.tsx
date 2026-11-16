@@ -48,6 +48,25 @@ export function BottomSheet({
   );
 }
 
+/** Closes a sheet, then runs what the pick opens. On iOS anything presented
+ *  (a modal, the in-app browser) can only appear once the sheet has finished
+ *  leaving, so the work waits for the sheet's dismissal; Android has no such
+ *  rule. Pass `onDismiss` to the BottomSheet. */
+export function useRunAfterDismiss(onClose: () => void) {
+  const pending = useRef<(() => void) | null>(null);
+  const run = (fn: () => void) => {
+    if (Platform.OS === 'ios') pending.current = fn;
+    onClose();
+    if (Platform.OS !== 'ios') fn();
+  };
+  const onDismiss = () => {
+    const fn = pending.current;
+    pending.current = null;
+    fn?.();
+  };
+  return { run, onDismiss };
+}
+
 const styles = themedStyles((Theme) => StyleSheet.create({
   fill: { flex: 1 },
   backdrop: {
