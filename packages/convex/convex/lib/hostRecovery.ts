@@ -4,7 +4,7 @@
 // users.ts.
 import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
-import { recoveryModeOf, runsOwnFleet } from "../ccAccountsShared";
+import { recoveryModeOf, runsOwnFleet, withPersonRecovery } from "../ccAccountsShared";
 
 /**
  * The machine one recovery pass judges and moves. Without a device_id it is
@@ -12,7 +12,7 @@ import { recoveryModeOf, runsOwnFleet } from "../ccAccountsShared";
  * the host runs on a fleet store of its own (line-pool copies, runsOwnFleet):
  * the host's parks and meters are about its own accounts, which the laptop's
  * pass can neither see nor move. The host pass runs under the person's
- * recovery mode, read from their laptop whether or not it is online, with
+ * recovery mode (withPersonRecovery, whether or not their laptop is online), with
  * ask-first taken as auto: putting an account in the line pool is the
  * approval, and nobody sits at a host to answer an ask. Returns the host row
  * carrying that mode, so every rule below reads it as it reads a laptop's.
@@ -33,7 +33,8 @@ export async function recoveryFleet(
     .collect())
     .filter((d: Doc<"devices">) => !d.is_remote)
     .sort((a: Doc<"devices">, b: Doc<"devices">) => b.last_seen - a.last_seen)[0];
-  const on = !!person && recoveryModeOf(person) !== "off";
+  const user = await ctx.db.get(userId);
+  const on = !!person && recoveryModeOf(withPersonRecovery(person, user)) !== "off";
   return { ...host, cc_auto_switch: on, cc_recovery_ask: false, cc_auto_continue: false };
 }
 

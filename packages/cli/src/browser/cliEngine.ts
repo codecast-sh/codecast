@@ -57,13 +57,14 @@ import { markChallengedTab } from "./humanInput.js";
 import { tabIdOfTarget } from "./bridge/protocol.js";
 import { retryOnStall, shouldRetryAfterStall, STALL_NOTE, STALL_RETRY_DELAY_MS } from "./stall.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
+import type { SecretMeta } from "@codecast/shared/contracts/secrets";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, stopRemoteManagedBrowser, type StartOptions } from "./managedBrowser.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
 import { clearState, probeLiveness, readState, stopInstance, writeState } from "./instance.js";
 import { provisionLocalLogins } from "./credentials.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
-import { auditExplicitLoads, auditLanding, browserJarRead, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal } from "./siteGuard.js";
+import { auditExplicitLoads, auditLanding, browserJarRead, NAVIGATING_VERBS, refuseNavigation, savedSigninFailedNote, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal } from "./siteGuard.js";
 import { focusBrowserTabBlocking } from "./focusHttp.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
 import { registerAuditCommand } from "./auditCommand.js";
@@ -774,7 +775,7 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     // none for the site, in whichever Chrome this session drives: the human's
     // own through the bridge, or the agent browser (on a cloud host, the one
     // that applies). The desktop pane is the human's view and gets none.
-    if (url && !pane) await useVaultSignin(url, real ? bridgeEndpoint(await requireRealBridge()) : undefined);
+    if (url && !pane) vaultSigninInPlace = await useVaultSignin(url, () => detectSessionId?.() ?? null, real ? bridgeEndpoint(await requireRealBridge()) : undefined);
   } else {
     await ensurePinnedTab(session);
   }
@@ -1015,18 +1016,33 @@ export async function carryLogins(
   }
 }
 
+/** The Vault sign-in this process's `open` left in the browser, which a login page on landing then blames (savedSigninFailedNote). */
+let vaultSigninInPlace: SecretMeta | null = null;
+
 /**
  * A saved sign-in for the site (secrets/signinBrowser.ts), and a write-back of
- * newer cookies when the browser already uses it. Loaded only when `open`
- * runs, and never fails the open.
+ * newer cookies when the browser already uses it, before `open` navigates, in
+ * either driver (this engine, or cli.ts's built-in one). Returns the sign-in
+ * the page opens with, and never fails the open.
  */
-async function useVaultSignin(url: string, bridge?: CdpEndpoint): Promise<void> {
+export async function useVaultSignin(url: string, conversation: () => string | null, bridge?: CdpEndpoint): Promise<SecretMeta | null> {
   try {
     const { signInOnOpen } = await import("../secrets/signinBrowser.js");
-    await signInOnOpen(url, () => detectSessionId?.() ?? null, (line) => console.log(fmt.muted(`  ${line}`)), bridge);
+    return await signInOnOpen(url, conversation, (line) => console.log(fmt.muted(`  ${line}`)), bridge);
   } catch {
-    /* a courtesy, like carryLogins */
+    return null; // a courtesy, like carryLogins
   }
+}
+
+/**
+ * A login form where the work was expected, named with its fix, so an agent
+ * does not read it as an empty page or restart the browser over it. A saved
+ * sign-in the page opened with is what failed when there is one.
+ */
+export function landingSignInNote(url: string, o: { real: boolean; owner: string | null; signin: SecretMeta | null }): string | null {
+  if (!url) return null;
+  if (o.signin) return savedSigninFailedNote(url, o.signin);
+  return isRemoteDevice() ? cloudHostSignInHint(url) : signInLandingNote(url, keepsOwnLogin, { real: o.real, realHint: realModeHint(o.owner) });
 }
 
 /** The budget each verb, and each `do` step, gets (deadline.ts). */
@@ -1059,9 +1075,7 @@ function printFooter(o: Ctx, verb: string, owner: string | null): void {
     // per session, so per-session dedup is the same thing.
     const warn = url ? auditLanding({ url, tab: `engine:${o.session}`, session: owner, via: viaFor(verb) }) : null;
     if (warn) console.log(`${fmt.warning("!")} ${warn}`);
-    // A login form where the work was expected. Named, with the fix, so an
-    // agent does not read it as an empty page or restart the browser over it.
-    const signIn = url ? (isRemoteDevice() ? cloudHostSignInHint(url) : signInLandingNote(url, keepsOwnLogin, { real: isRealSession(o.session), realHint: realModeHint(owner) })) : null;
+    const signIn = landingSignInNote(url, { real: isRealSession(o.session), owner, signin: vaultSigninInPlace });
     if (signIn) console.log(`${fmt.warning("!")} ${signIn}`);
   }
 }

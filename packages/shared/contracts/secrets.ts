@@ -229,6 +229,11 @@ export function loginSitesProblem(kind: SecretKind | undefined, sites: string[] 
   return kind === "login" && !sites?.length ? "A login names the site it signs in to, like facebook.com (--site, or Site on the Vault page): browser fill types it only there" : null;
 }
 
+/** The site a `cast vault save-signin <site> --from-chrome` run saves (a Run card's argv, without `cast`), or null for any other command. */
+export function chromeSigninRunSite(argv: readonly string[]): string | null {
+  return argv[0] === "vault" && argv[1] === "save-signin" && argv[2] && !argv[2].startsWith("-") && argv.includes("--from-chrome") ? argv[2] : null;
+}
+
 /** A site as a sign-in compares it: lowercase, no leading dots or `www.`. */
 export const bareSite = (site: string) => site.toLowerCase().replace(/^\.+/, "").replace(/^www\./, "");
 
