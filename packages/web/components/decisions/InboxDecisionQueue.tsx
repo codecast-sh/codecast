@@ -9,17 +9,22 @@ import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useDecisionQueue } from "../../hooks/useDecisionQueue";
 import { useDecisionQueueCursor } from "../../lib/decisionQueueCursor";
 import { SectionHeader } from "../inbox/SectionHeader";
-import { askedOfViewer, isStackedAsk, type QueueItem } from "../../lib/decisionQueue";
+import { inViewerQueue, type QueueItem } from "../../lib/decisionQueue";
+import { decisionView, inTab, passesFilters } from "../../lib/decisions/decisionRows";
 
 // The inbox panel's Decisions section IS the decision queue: one row per
 // decision waiting on the viewer, numbered in the order the stepper walks
 // them, grouped under the session that asked. Its count, the sidebar's and
 // the stepper's "2 of 32" are the same number (useDecisionQueue().length),
-// and the row the stepper is on is lit. Advisory asks (the agent already
-// went ahead on a default) are not in the queue; they fold into one row.
+// and the row the stepper is on is lit. Advisory asks (the agent picked its
+// default and kept working) are not in the queue; they fold into one row that
+// opens the list filtered to them. The count is that list's own predicate (the
+// Mine tab under the advisory filter), so the row and the page it opens agree.
 
-const advisoryWhere = (d: SessionDecisionItem) => d.status === "pending" && !d.trial && !isStackedAsk(d);
-const advisorySig = (d: SessionDecisionItem) => `${d.status}:${d.blocking ? 1 : 0}:${d.stack_id ?? ""}:${d.in_queue === false ? 0 : 1}:${(d.asked_user_ids ?? []).join(",")}`;
+const ADVISORY_VIEW = decisionView({ blocking: "advisory" });
+const advisoryWhere = (d: SessionDecisionItem) => d.status === "pending" && !d.blocking && !d.trial && inViewerQueue(d);
+const advisorySig = (d: SessionDecisionItem) =>
+  `${d.status}:${d.blocking ? 1 : 0}:${d.in_queue === false ? 0 : 1}:${d.holder_key ?? ""}:${d.passed_to ? `${d.passed_to.kind}:${d.passed_to.id}` : ""}:${(d.asked_user_ids ?? []).join(",")}:${d.user_id ?? ""}`;
 
 // How many decisions the section draws before folding the rest into one row:
 // it leads the inbox, so it must leave the sections under it on screen.
@@ -48,7 +53,10 @@ export function InboxDecisionQueue({
   const cursor = useDecisionQueueCursor();
   const meId = useInboxStore((s) => s.currentUser?._id as string | undefined);
   const advisoryRows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: advisoryWhere, sig: advisorySig });
-  const advisory = useMemo(() => advisoryRows.filter((d) => askedOfViewer(d, meId)).length, [advisoryRows, meId]);
+  const advisory = useMemo(
+    () => advisoryRows.filter((d) => inTab(d, "mine", meId ?? null) && passesFilters(d, ADVISORY_VIEW, 0)).length,
+    [advisoryRows, meId],
+  );
 
   const groups = useMemo(() => {
     const byConv = new Map<string, Group>();
@@ -138,11 +146,11 @@ export function InboxDecisionQueue({
       ))}
       {advisory > 0 && (
         <Link
-          href="/decisions"
+          href="/decisions?blocking=advisory"
           data-decision-advisory={advisory}
           className="mt-1 flex items-center justify-between rounded-lg border border-dashed border-sol-border/60 px-2.5 py-1.5 text-[12px] text-sol-text-dim hover:text-sol-text no-underline"
         >
-          <span>Going ahead on a default</span>
+          <span>Not blocking</span>
           <span className="flex items-center gap-0.5 font-mono text-mark tabular-nums">{advisory}<ChevronRight className="w-3 h-3" /></span>
         </Link>
       )}

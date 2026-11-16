@@ -71,7 +71,7 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
     onSkip,
     onPrev,
     onExit,
-    item: current.source === "decide" ? undefined : current,
+    item: current,
   } : null, [current, position, queue.length, advance, onSkip, onPrev, onExit]);
 
   // Keep the rail's highlight on the question you are reading. Off the inbox
