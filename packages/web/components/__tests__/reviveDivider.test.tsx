@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
-import { MID_WORK_REVIVE_MESSAGE } from "@codecast/shared/contracts";
+import { MID_WORK_REVIVE_MESSAGE, watchdogRestartNote } from "@codecast/shared/contracts";
 
 const convexReact = await import("convex/react");
 mock.module("convex/react", () => ({
@@ -24,5 +24,12 @@ describe("revive divider", () => {
     expect(html).toContain("restarted after the agent process exited");
     expect(html).not.toContain("Pick up where you left off");
     expect(html).not.toContain("usage limit");
+  });
+
+  // The daemon's live-session watchdog ended the process itself: the caption says why.
+  test("a watchdog restart names its cause", () => {
+    const html = renderToStaticMarkup(<MemoryRouter><ReviveDivider content={watchdogRestartNote("it leaked memory (35 GB resident)")} timestamp={1_790_000_000_000} /></MemoryRouter>);
+    expect(html).toContain("restarted by codecast: it leaked memory (35 GB resident)");
+    expect(html).not.toContain("restarted after the agent process exited");
   });
 });
