@@ -4,20 +4,34 @@ How the line fits the rest of codecast, in one place. The other line docs
 (`the-line.md`, `the-line-end-to-end.md`, `line-profile.md`) specify parts;
 this one says what the parts are and how they relate. Sections are LM1 onward.
 
-## LM1. One line per project
+## LM1. Projects hold problems; sources and flows belong to the team
 
-A line is a project's way of changing itself: what it listens to, what it is
-trying to move, what it expects to see, what it holds work to, how it proves
-and ships a change, and who answers. The project is the unit because goals,
-expectations, owners and feedback all belong to a project.
+A project is a home for problems: what the team is trying to move in one area
+(its goals), how that area should behave (its expectations), and who answers
+for it (its owner). Everything that judges or answers a problem reads these
+from the project the problem belongs to.
 
-- A team has as many lines as it has projects. Union's eight projects are
-  eight lines; they share one repo and so one set of commands, and differ in
-  their sources, goals, expectations and owners.
-- A project has exactly one line. Different kinds of change (a prompt, code,
-  a UX fix) are branches inside the one graph, chosen by the cause's category,
-  so each project tells one story and its versions can be compared.
-- The team has a default line; a project uses it until it forks its own.
+Two things are the team's, not a project's:
+
+- **Sources.** A source says what it watches, how it fingerprints what it
+  sees, and whether its signals open problems. It has no fixed project: one
+  source (an error tracker, the nightly evals, the invariants) sees problems
+  in every area.
+- **Flows.** How a change is proven, checked, reviewed, decided and shipped is
+  a flow from the team's pool (flows.md): whole lines and segments, chosen per
+  change by what the change is, never by its project.
+
+A problem's project is decided by what the problem is about, in this order:
+the expectation its signal breaks (`ex-<project>-<n>` names its project); the
+project a single-purpose source names as its default; otherwise Ground places
+it, reading every project's charter beside the problem. A problem Ground moves
+keeps its signals and records where it was first filed.
+
+A change's flow is chosen the same way for every project: a finding runs the
+flow its source serves (a version's `serves`), a session's own change runs
+`change`, and a repo can name its default flow in its profile, since the
+commands a flow runs live there. Projects stay a filter wherever problems are
+listed; the pool of flows is listed across all of them.
 
 ## LM2. Objects, each with one home
 
@@ -66,7 +80,10 @@ Two kinds of context, used at two different moments.
 
 - **Goals** say what the project is trying to move (initiatives, metrics,
   charters). The ground step reads them to rank causes: which goal does this
-  threaten, how much.
+  threaten, how much. Every brief also offers the line's own goal, `line`:
+  the three numbers of LM8 and every station working. A cause that changes
+  the line itself serves that goal and no product goal (the-line-end-to-end.md
+  LE5).
 - **Expectations** say how the system should behave: what a good reply to a
   broker looks like, when an intro should go out, what a caller should see.
   A finder that judges behavior (an AgentWatch judge, a call grader) compares
@@ -105,9 +122,16 @@ the quote against that record), and the line shares at least two claim words
 with that quote (`followsFromQuote`). The shared words are a floor: they stop
 an invented line from riding in on an unrelated real quote, and they cannot
 tell a faithful line from one that reuses the quote's words to say something
-else, so every version records how it applied (`how: "auto"` or `"person"`)
-and a person can retire any line of it. Any other change waits for the project's
-person, as a card in their queue whose Apply lands it. `cast expectations show|propose|apply|drop`
+else, so every version records how it applied (`how: "auto"`, `"person"`, or
+`"stand_in"` when an agent session applied it with `cast expectations apply`)
+and a person can retire any line of it. Any other change is applied by a
+session with `cast expectations apply`, or the session that proposed it asks
+the project's person: one decision
+(`cast decide --proposal xp-N`) written under the presenting brief, with the
+cases the change settles judged under both wordings (`cast line judges try
+--proposal`). An answer opening with Apply lands it, one opening with Keep
+closes it, and any other course leaves it open for that session
+(`lib/expectationsApply`). `cast expectations show|propose|apply|drop`
 is the CLI; `/cli/expectations/brief` is what a judge reads (the active lines
 with ids under the version to cite). The line template's
 `expectations-daily` routine is the proposer; its cursor is the newest window
@@ -117,7 +141,7 @@ have run) records none. Shapes and the parser: `shared/contracts/expectations.ts
 ## LM6. Changing the line
 
 The line's definition is its profile, its graph and its station prompts. It
-lives in the project's repo (`.codecast/line.toml` and `.codecast/line/`),
+lives in the project's repo (`.codecast/line.toml` and `.codecast/line/*`),
 versioned with the code, and is mirrored to the app so anyone can read it on
 the project's line map (line-map.md LX5). Editing a value on the map writes the
 change to the repo through the machine that published it, which checks it and
@@ -152,9 +176,9 @@ its own:
 - the project page's Line tab leads with the project's line map (its flow and
   data, a panel per node where every value is read and edited, and the
   composer), then its expectations and its versions;
-- `/line` shows the same map for one project at a time, with a switcher across
+- `/flows` shows the same map for one project at a time, with a switcher across
   the team's lines and a roll-up that counts every line;
-- `/line/trace/<ref>` follows one thing (a signal, a fingerprint, a cause, a
+- `/flows/trace/<ref>` follows one thing (a signal, a fingerprint, a cause, a
   run or a card) from where it was seen to its outcome.
 
 ## LM8. The working view, "done", and the measure
@@ -188,9 +212,9 @@ findings or the clusters that group them.
   directory (`~/.local/share/codecast/flowfactory/judge-evals`, hand-run) reads
   every `judge-defects.json` under the repo's `cast-line` run directories,
   fetches the logged judge call behind each finding (read-only), and adds each
-  as a miss moment to `moments.json`, once. The prove prompt does not ask for
-  `judge-defects.json` yet; that instruction is a prompt change and ships with
-  its own before and after evals (prompting.md P9).
+  as a miss moment to `moments.json`, once. The prove prompt (`line/prove.md`)
+  asks for `judge-defects.json` when it finds the findings were the judge's
+  own mistake.
 - **A judge needs the facts it is judging.** It cannot compare behavior with
   an expectation without the state of things at the moment it judges: what
   was delivered and what is still in flight, and the time. A finding that
@@ -219,4 +243,6 @@ store's signals, causes and runs over a window (`lineMetrics`):
 
 A window with nothing to count reports no share rather than zero. The board
 is healthy when the first falls, the second is high and the third holds; the
-number of open findings or clusters is not a goal.
+number of open findings or clusters is not a goal. The line map's headline says all three in words over the map's window
+(`lineMetricsWords.ts`), and they are what the line's own goal (`line`, LM5)
+is measured by.

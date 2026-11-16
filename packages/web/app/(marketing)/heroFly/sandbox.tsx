@@ -8,6 +8,9 @@
  *   Convex        a stub client: queries load forever, writes resolve null
  *   entity pills  answered from the chapters' fixtures, no query, no store read
  *   personify     off, whatever the visitor chose
+ *   roles         each fixture row's own role snapshot, never the visitor's org
+ *   agent tab     never an agent's, so no control listens for the stamp
+ *   comment tools off, whatever the visitor chose
  *   theme         light Classic (tokens are also re-declared on .hero-sandbox)
  *   reveal bands  reported as already inside one, so none mounts a real pane
  *   hover cards   tooltips, entity cards and fork previews never open: each
@@ -15,6 +18,8 @@
  *   location      a memory router of the hero's own at /inbox, so the views'
  *                 links and location reads never see or move the visitor's page
  *   team features all off, whatever the visitor's team turned on
+ *   feed triage   off: a fixture card is never the visitor's session, so it
+ *                 never ticks from or selects into their inbox
  *   relative time measured from `now`, the instant the fixtures are stamped
  *                 against, so "2m ago" is the fixture's own offset however
  *                 long the page has been open
@@ -50,7 +55,11 @@ import { ConvexProvider } from "convex/react";
 import { MemoryRouter, UNSAFE_LocationContext } from "react-router";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ThemeContext } from "@/components/ThemeProvider";
-import { PersonifyOverride } from "@/hooks/usePersonifyAll";
+import { IdentityPrefsOverride } from "@/hooks/useIdentityPrefs";
+import { DEFAULT_IDENTITY_PREFS } from "@/lib/sessionIdentity";
+import { RoleRowsOverride } from "@/hooks/useLiveIdentityRow";
+import { AgentTabOverride } from "@/lib/agentTabGuard";
+import { CommentToolsOverride } from "@/hooks/useCommentTools";
 import { EntityFixtureContext } from "@/lib/entityDisplay";
 import { HoverCardsOff } from "@/lib/hoverCardsOff";
 import { LabelColorsReadOnly } from "@/lib/labelColors";
@@ -58,6 +67,7 @@ import { RelativeTimeNow } from "@/lib/conversationFormat";
 import { RevealInBandCtx } from "@/lib/revealHost";
 import { TeamFeatureOverride } from "@/lib/teamFeatures";
 import { TaskActiveSessionsOverride } from "@/components/tasks/taskActiveSession";
+import { FeedTriageOff } from "@/hooks/useFeedCardTriage";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { heroConvexStub } from "./convexStub";
 import { HERO_ENTITIES } from "./fixtures";
@@ -164,7 +174,10 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
     <ErrorBoundary name="HeroFlythrough" fallback={fallback} silent>
       <ConvexProvider client={heroConvexStub}>
         <ThemeContext.Provider value={HERO_THEME}>
-          <PersonifyOverride.Provider value={false}>
+          <IdentityPrefsOverride.Provider value={DEFAULT_IDENTITY_PREFS}>
+          <RoleRowsOverride.Provider value={null}>
+          <AgentTabOverride.Provider value={false}>
+          <CommentToolsOverride.Provider value={false}>
           <TeamFeatureOverride.Provider value={NO_FEATURES}>
             <EntityFixtureContext.Provider value={HERO_ENTITIES}>
               <RevealInBandCtx.Provider value={true}>
@@ -172,6 +185,7 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
               <LabelColorsReadOnly.Provider value={true}>
               <RelativeTimeNow.Provider value={now}>
               <TaskActiveSessionsOverride.Provider value={NO_ACTIVE_SESSIONS}>
+              <FeedTriageOff.Provider value={true}>
                 <HeroRouter>
                   <div
                     ref={rootRef}
@@ -205,6 +219,7 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
                     {children}
                   </div>
                 </HeroRouter>
+              </FeedTriageOff.Provider>
               </TaskActiveSessionsOverride.Provider>
               </RelativeTimeNow.Provider>
               </LabelColorsReadOnly.Provider>
@@ -212,7 +227,10 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
               </RevealInBandCtx.Provider>
             </EntityFixtureContext.Provider>
           </TeamFeatureOverride.Provider>
-          </PersonifyOverride.Provider>
+          </CommentToolsOverride.Provider>
+          </AgentTabOverride.Provider>
+          </RoleRowsOverride.Provider>
+          </IdentityPrefsOverride.Provider>
         </ThemeContext.Provider>
       </ConvexProvider>
     </ErrorBoundary>

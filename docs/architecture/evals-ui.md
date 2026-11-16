@@ -639,7 +639,7 @@ Pass and fail are also told apart by filled against hollow, so state never depen
 
 ## 7. Files
 
-All paths are under `/Users/ashot/src/codecast` unless they start with `~/src/platform`.
+All paths are under `/Users/codecast/src/codecast` unless they start with `~/src/platform`.
 
 ### Create
 

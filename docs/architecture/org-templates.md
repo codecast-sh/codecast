@@ -35,8 +35,7 @@ The entry point is `org-template.json`:
   "role": {
     "name": "CMO",
     "handle": "{{instance}}-cmo",
-    "charter": "org/charter.md",
-    "caps": { "hands_per_day": 4, "wakes_per_day": 12, "tokens_per_day": 200000 }
+    "charter": "org/charter.md"
   },
   "routines": [
     { "id": "cmo-weekly", "title": "CMO portfolio review", "every": "7d", "prompt": "org/prompts/cmo-weekly.md" }
@@ -44,7 +43,7 @@ The entry point is `org-template.json`:
 }
 ```
 
-All shown fields are required. Unknown keys are rejected at every manifest object. IDs are lowercase slugs up to 48 characters; expanded role handles must satisfy the backend's 2–32 character rule. Versions are three numeric components. Caps are nonnegative safe integers. Cadences use positive integer `m`, `h`, `d` or `w`, at most one year. Routine IDs are unique; `charter` is reserved. A manifest has one role and at most 50 routines.
+All shown fields are required. Unknown keys are rejected at every manifest object. IDs are lowercase slugs up to 48 characters; expanded role handles must satisfy the backend's 2–32 character rule. Versions are three numeric components. `role.caps` is optional, as is each of its keys; a role hired without a cap has no limit on it. Caps are nonnegative safe integers. Cadences use positive integer `m`, `h`, `d` or `w`, at most one year. Routine IDs are unique; `charter` is reserved. A manifest has one role and at most 50 routines.
 
 Text accepts only `{{instance}}`, `{{project.ref}}`, `{{project.name}}`, `{{project.dir}}`, `{{template.root}}` and `{{instance.file}}`. Substitution is literal. Unknown or malformed tokens fail. Charter and prompt paths are literal relative paths inside the release, with no traversal, absolute paths or symlinks. No shell expansion or install hooks run.
 
@@ -54,7 +53,7 @@ The digest is SHA-256 over sorted relative file paths. Each file contributes `JS
 
 ## A role that owns a line
 
-A v2 manifest may give its role the line it runs: `role.line`, a workflow slug (`line`, `feature`, or one pushed to the workspace), and `role.caps.cards`, a positive integer, the open change cards the line admits work against (line-profile.md LP6). Both are optional; v1 refuses them like any other unknown key. Install copies them into the role proposal beside the other caps. Applying the person's answer sets `org_roles.line_workflow_slug` and `caps.cards` under that decision, the only path by which a hire sets them, since both are otherwise human only. Reconcile verifies the created role carries the approved line and cap before provisioning, and upgrade refuses a release that changes either. The shipped line template (`packages/cli/org-templates/line/`, line-profile.md LP7) is the reference use.
+A v2 manifest may give its role the line it runs: `role.line`, a workflow slug (`line`, `feature`, or one pushed to the workspace), and `role.caps.cards`, a positive integer that no longer limits what the line starts (the-line-end-to-end.md LE6). Both are optional; v1 refuses them like any other unknown key. Install copies them into the role proposal beside the other caps. Applying the person's answer sets `org_roles.line_workflow_slug` and `caps.cards` under that decision, the only path by which a hire sets them, since both are otherwise human only. Reconcile verifies the created role carries the approved line and cap before provisioning, and upgrade refuses a release that changes either. The shipped line template (`packages/cli/org-templates/line/`, line-profile.md LP7) is the reference use.
 
 ## Receipt and recovery
 
@@ -72,30 +71,23 @@ If an attempted create has no verifiable server row, the command stops instead o
 
 ## Human approval and scheduling
 
-Installation creates an explicit-boundary stack without inheriting the proposer session's workspace. Its one protected `access` decision carries the shared `org-proposal` contract and the fixed create/create-with-changes/skip options. Reconcile requires `answered_by.kind === "user"`, a blocking decision, and the original proposal block. A human's answer may change the role, but its scope must still be exactly the instance project and initial trust must be `understand`.
+Installation creates an explicit-boundary stack without inheriting the proposer session's workspace. Its one protected `access` decision carries the shared `org-proposal` contract and the fixed create/create-with-changes/skip options. Reconcile requires `answered_by.kind === "user"`, a blocking decision, and the original proposal block. A human's answer may change the role, but its scope must still be exactly the instance project. Afterwards the role's scope must hold the instance project and may grow: a lead's area covers the projects of the leads that report to it, so reconcile refuses only a scope that lost the instance project. The proposal carries the role's Starts work on its own switch, on by default like every hire (off only for the Head of People); applying the answer sets the switch the person approved, and reconcile refuses a role whose switch differs from it.
 
 Reconcile calls `/cli/org/apply-decision` with `provision: false`, verifies the resulting role, then calls `/cli/role/provision` with the explicit project directory. The backend must include the personal-stack boundary fix: when a stack exists, its personal or team boundary is authoritative rather than falling through to the conversation's team. Deploy that backend before using personal template reconcile.
 
 The trigger backend currently cannot atomically create a paused trigger. New recurring triggers therefore have a first run one year ahead and a temporary `precheck: "exit 1"`, then are paused and read back with a zero run count. A failed pause leaves the temporary gate in place. The receipt does not become ready before these checks pass. Runtime loaders also reject incomplete, external, retired, paused or gated routines, and inactive roles.
 
-The template CLI never clears this gate or resumes a trigger. After human review of the routine, the role's actual trust and required grants, use this exact procedure for each approved routine:
-
-1. Keep the trigger **paused**. If necessary, pause it first with `cast trigger pause tr-N`.
-2. While paused, run `cast trigger update tr-N --every 7d --precheck ''`, substituting the **actual live cadence**, including any human override. The `--every` flag is essential: it resets `run_at` to now plus that cadence, preserving recurring scheduling and paused status while clearing the temporary gate. If a human replaced the temporary gate with a custom precheck, stop and review it; the CLI withholds this command rather than removing that override.
-3. Run `cast org template status <instance> --dir <approved-checkout>` and verify the row remains `paused`, `gated` is false, `intervalMs` matches the reviewed cadence and `runAt` is one cadence ahead.
-4. Only then explicitly run `cast trigger resume tr-N`.
-
-**Clearing the gate and resuming without `--every` leaves the first run one year away**, because the backend's resume operation preserves a nonzero `run_at`. Status and reconcile output include a per-routine activation procedure with the actual cadence rendered in seconds, so weeks and custom live overrides are preserved exactly. Those commands are instructions, not authorization. Incomplete upgrades, external routines and retired routines receive no activation procedure. A precheck is not a sandbox: manually forcing a trigger or arbitrary shell access can bypass scheduler checks. These operations do not claim to isolate credentials, tools or files, and `understand` never becomes elevated automatically.
+The host step turns each ready routine on itself (`armReadyRoutines`): bind, reconcile, upgrade and `status` call `orgTemplates.activateRoutine` for a managed routine that is ready (org-hire.md H6) and waiting, meaning created paused and never on (no `run_at`, or the old year-ahead date behind the `exit 1` gate) or paused by an upgrade while its cadence changed. Activation sets the first run one live cadence out and clears only the `exit 1` gate. A routine a person paused after it was on, one behind a precheck a person set, and one the role is paused or retired for stay paused; `cast org template activate` and the role page's Activate turn one on by hand, from a person or the role. A precheck is not a sandbox: manually forcing a trigger or arbitrary shell access can bypass scheduler checks. These operations do not claim to isolate credentials, tools or files, and the role's switch changes only by a person's approval.
 
 ## Upgrades and adoption
 
 Apply waits for all managed runs to finish before starting an upgrade, including changes that only edit prompt content. Interrupted upgrade recovery checks again before advancing the release. External runs do not block this check.
 
-Upgrade defaults to preview, listing changed files, shared-charter changes, cadence overrides, and added/removed routines. `--apply` advances only the named instance. Role identity, caps, trust, human charter, grants, and durable IDs are retained; identity or cap changes require a separate org decision. The charter uses a stable loader referencing the receipt, so updating the release pointer does not rewrite the human's charter document.
+Upgrade defaults to preview, listing changed files, shared-charter changes, cadence overrides, and added/removed routines. `--apply` advances only the named instance. Role identity, caps, trust, human charter, grants, and durable IDs are retained. A release's `role.caps` only shape new hires, so changing or dropping them upgrades freely; identity or line changes require a separate org decision. The charter uses a stable loader referencing the receipt, so updating the release pointer does not rewrite the human's charter document.
 
-Existing managed trigger prompts remain stable loader commands. Unchanged schedules keep their live pause state. New routines are gated and paused. Removed managed routines retain their IDs and are paused, then marked retired locally. Changed managed cadences are paused for review. A live cadence that differs from the previous manifest is an override: preview shows it and apply preserves it. Before any pause or cadence write, an upgrade pins its target artifact and atomically persists `phase: "upgrading"` plus a journal: original and target releases, original routine metadata, added/removed IDs, and each planned cadence's before/after values. It remains upgrading until every required routine is verified. Failed creation cannot report ready; runtime routine instructions and ordinary reconcile refuse while this journal exists.
+Existing managed trigger prompts remain stable loader commands. Unchanged schedules keep their live pause state. New routines are gated and paused. Removed managed routines retain their IDs and are paused, then marked retired locally. Changed managed cadences are paused while they change, then turned back on if they were on before. A live cadence that differs from the previous manifest is an override: preview shows it and apply preserves it. Before any pause or cadence write, an upgrade pins its target artifact and atomically persists `phase: "upgrading"` plus a journal: original and target releases, original routine metadata, added/removed IDs, and each planned cadence's before/after values. It remains upgrading until every required routine is verified. Failed creation cannot report ready; runtime routine instructions and ordinary reconcile refuse while this journal exists.
 
-Rerun `upgrade <instance> <target-folder> --apply` to finish forward, or pass the journal's original release folder with `--apply` to roll back. A preview identifies that recovery direction; any unrelated release is refused until recovery finishes. Recovery recognizes its own partially applied cadence writes from the saved before/after values. A third live value is treated as concurrent human drift and stops recovery instead of overwriting it. Rollback restores planned cadences, retains paused state, and records newly created routine IDs as paused/retired rather than deleting them. It never resumes routines. An ambiguous new-trigger create with no verifiable server row remains blocked even during rollback. A receipt backup remains beside the current receipt for the prior digest.
+Rerun `upgrade <instance> <target-folder> --apply` to finish forward, or pass the journal's original release folder with `--apply` to roll back. A preview identifies that recovery direction; any unrelated release is refused until recovery finishes. Recovery recognizes its own partially applied cadence writes from the saved before/after values. A third live value is treated as concurrent human drift and stops recovery instead of overwriting it. Rollback restores planned cadences and records newly created routine IDs as paused/retired rather than deleting them. It turns back on only routines that were on when the upgrade began. An ambiguous new-trigger create with no verifiable server row remains blocked even during rollback. A receipt backup remains beside the current receipt for the prior digest.
 
 To adopt already running channels, pass explicit mappings on install or reconcile:
 
@@ -103,8 +95,54 @@ To adopt already running channels, pass explicit mappings on install or reconcil
 cast org template install /releases/growth --instance product-growth --project <exact-project-id> --team <team-id> --adopt ads-monitor=tr-462 --dir /src/product
 ```
 
-Adopted triggers must exist in the account's full trigger list and match the pinned project directory. They are external references, with actual cadence and pause observations. Their prompts, bindings, cadence, precheck, pause state and IDs are never changed by reconcile or upgrade, even if the new release removes the routine. One trigger cannot satisfy multiple routine IDs. Existing external channels may still target older sessions; adoption records that fact, it does not perform a cutover.
+Adopted triggers must exist in the account's full trigger list and match the pinned project directory. They are external references, with actual cadence and pause observations. Their prompts, bindings, cadence, precheck, pause state and IDs are never changed by reconcile or upgrade, even if the new release removes the routine. One trigger cannot satisfy multiple routine IDs. Existing external channels may still target older sessions; adoption records that fact. `cast org template cutover <instance> [routine...] --dir <checkout>` replaces them with managed routines at their live cadences, pausing and keeping each adopted trigger (org-hire.md H8).
+
+## Answers left blank, and the folder a web hire binds in
+
+A hire can leave an answer blank: an optional input, or a hire posted by an agent's proposal rather than the form. No filled text ever reads with a hole where that answer belongs. Every fill (the charter, a routine's prompt, a setup step's title, price and guide) puts the input's label in brackets instead (`Verify [Apex domain] in Google Search Console`), and the setup step lists the answers its words are missing as `needs`. The role page fills a step's title and price from the instance row's answers as they stand, so the step asks for a missing answer in place: one field and Save (`orgTemplates.answer`, the store's `answerOrgTemplateInput`). The answer is written to the row's `config` and the host step is queued for a ready instance; bind pulls the row's answers into the receipt and the instance file, the same way it pulls the page's setup marks. One rule (`answerProblem`, shared) checks an answer wherever it is given: the hire form, `install --input` and the page.
+
+A web hire names no folder, so the first bind adopts the server's row in whatever folder it runs. When the project's registered checkout exists on this machine and that is not the folder, bind refuses and names the folder to run it in.
+
+## Tools a template ships
+
+A role's job is more than its words. The CMO queries Google Ads through a script, the Release Captain plans merges through another, and the channel routines load skills. Those files always travelled inside the release folder, but nothing named them: a prompt reached each one by a `{{template.root}}/scripts/...` path written in prose, the gallery could not say a template brings tools, and nobody could change one without editing the publisher's checkout.
+
+**Declared in the manifest.** A v2 manifest may carry `tools`, at most 50, each `{ id, kind, path, summary?, run?, needs? }`:
+
+```json
+"tools": [
+  { "id": "gads", "kind": "command", "path": "bin/gads.mjs", "run": "bun", "summary": "Google Ads API: query with GAQL, validate and apply mutations", "needs": ["bun"] },
+  { "id": "ads-daily", "kind": "skill", "path": "skills/ads-daily" }
+]
+```
+
+- `kind: "command"` is a file the role runs: a script or a CLI with its own subcommands. `run` names the program that runs it (`bun`, `node`, `python3`, `sh`, `bash`); without it the file must be executable in the release. `summary` is required: it is the one line the role and the gallery read.
+- `kind: "skill"` is a folder holding `SKILL.md` and whatever files it uses. Its summary is the `description` in the SKILL.md frontmatter, the one place it is written; a skill tool carries no `summary` and no `run`.
+- `needs` lists programs the tool expects on the host's `PATH`. `status` and `tools` report the missing ones; nothing installs them.
+
+Inspect refuses a tool whose path is missing, unsafe or of the wrong shape (a command path must be a file, executable unless it names its runner; a skill path a folder with a SKILL.md that has a `description`), and duplicate ids. Tool files are not filled with tokens: a script runs exactly as published and reads its instance from the environment below. Declaring tools changes nothing about the digest, freezing or the snapshot: they were already release files. Adding, removing or changing a tool's entry is a structure release (a minor version); changing only a tool's files is content (a patch).
+
+The gallery card names the commands a template ships and counts its skills; the hire preview lists them; the role page's Template section shows each one with its line, and whether the instance runs Codecast's library copy or the workspace's own.
+
+**How the role finds them.** Every `instructions` answer (the charter and each routine) ends its pinned header with the tool list: each id, its one line, and how to use it. A command is used through `cast org template run <instance> <tool> --dir <checkout> -- <args>`; a skill is read at its SKILL.md path in the pinned release. Prompts reference a tool by `{{tool.<id>}}`, which fills to that same command line or path; a token for an undeclared tool fails inspect. `cast org template tools <instance>` prints the list with what is missing on this host.
+
+**`run` is the stable entry point.** It verifies the pinned release's digest, then runs the tool from it with the project checkout as the working directory and `CODECAST_TEMPLATE_ROOT`, `CODECAST_TEMPLATE_INSTANCE`, `CODECAST_INSTANCE_FILE` (the receipt) and `CODECAST_PROJECT_DIR` set, passing arguments, stdin, stdout and the exit code through. It reads no server state, so it costs what the tool costs. Because a session calls the tool by instance and id rather than by a versioned path, a moved pin changes what runs without any prompt or memory changing.
+
+**Edit, try, release.** The pinned release stays read only. A role, or a person, changes a tool in a draft beside it:
+
+```sh
+cast org template edit <instance>                 # writable copy of the pinned release; prints its path
+cast org template run <instance> <tool> --draft -- <args>   # try the edited tool
+cast org template diff <instance>                 # files changed, the release class, the version it will carry
+cast org template release <instance> --changelog "What changed and why"
+```
+
+The draft lives at `<project>/.codecast/org-templates/drafts/<instance>/`. `edit` on an existing draft prints its path; `--reset` copies the pin again. `diff` lists added, changed and removed files (`--patch` adds the unified diff) and classifies the draft against the pin with the release rules (`classifyRelease`): content, structure or authority, and the smallest version that class allows.
+
+`release` is the whole loop in one command. It refuses an authority release (a new permission, a routine's mode, the line, the role's identity): the role never widens what it may do, and a person publishes such a change with `publish`. Otherwise it writes the next version into the draft's manifest, adds the changelog as that version's section of the draft's CHANGELOG.md, publishes the draft as a `canary` release into the instance's own workspace, then runs the host step with `--to` that version, so the instance moves through the journalled upgrade and its role is told what moved. The draft is removed once the instance is on the new release; it is now the pin.
+
+**Where an edit flows.** When the instance's workspace published the template, the release is the template's next version, and its other instances see it as an update like any other. When the template came from Codecast's library, the first release creates the workspace's own copy of the template, same id, its versions continuing from the pin. The workspace's own copy is the one its catalog and its instances read from then on, so Codecast's later releases stop being offered to it; that is the cost of running edited tools, and the role page's template line names the copy. Before publishing, `release` files the change upstream as a lesson on Codecast's template (its changelog and the list of changed files, never file contents), so the library can take the improvement into its next release. A Codecast admin releasing from a Codecast instance passes `--codecast` to release into the library itself.
 
 ## Verification
 
-`bun test ./packages/cli/src/orgTemplate*.test.ts` exercises the lifecycle against a fake API, including interruptions after server success, fresh/rerun behavior, scope and workspace refusal, rejected/advisory answers, snapshot corruption and symlink escapes, paused creation, human charter preservation, cadence overrides, external trigger adoption, multi-host project paths, partial upgrade/rollback failures and concurrent cadence drift. `orgTemplateActivation.test.ts` executes the actual backend update/resume functions against a fake database to pin the paused schedule-reset procedure. CLI registration is lazy and uses `OrgInitDeps`; no dependencies or backend mutations are introduced by the CLI implementation.
+`bun test ./packages/cli/src/orgTemplate*.test.ts` exercises the lifecycle against a fake API, including turning ready routines on and leaving a person's pause alone, cutover with live-cadence carry and rerun after interruption, interruptions after server success, fresh/rerun behavior, scope and workspace refusal, rejected/advisory answers, snapshot corruption and symlink escapes, paused creation, human charter preservation, cadence overrides, external trigger adoption, multi-host project paths, partial upgrade/rollback failures and concurrent cadence drift. `orgTemplateActivation.test.ts` executes the actual backend update/resume functions against a fake database to pin the paused schedule-reset procedure. CLI registration is lazy and uses `OrgInitDeps`; no dependencies or backend mutations are introduced by the CLI implementation.

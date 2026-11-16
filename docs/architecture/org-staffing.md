@@ -263,7 +263,7 @@ bottleneck; every change carries evidence a person can click; never apply;
 write for a founder who reads it on a phone; escalate anything about budget
 or people to the person you report to.
 
-Trust never rises above understand for the head of people: it applies nothing.
+The head of people applies no org change itself: every one goes through a proposal a person approves. Its switch is on like every role's (S23.1, revised 2026-10-22), so it starts hands for the work no lead owns.
 
 Seating (S12, S16) as shipped: `staff` also takes `seat: "existing" | "fresh"`
 (default existing when a standing agent exists, else a fresh session is
@@ -431,16 +431,51 @@ aliases of the Head of People (`@head-of-people`). The org page draws the root s
 "Head of People"; `/anchor` redirects to its scope page; the anchors table
 stays as the implementation detail it is. Coalescing default is two minutes.
 
-## S13. Personified roles
+## S13. Role faces: characters and icons
 
-Long lived roles get a face. A set of tasteful, whimsical animal profile
-icons (24 painted storybook portraits, one style, 256 px WebP) lives in
+Every long lived role carries two faces, and each viewer picks which one they
+see. The setting is `clientState.ui.show_characters` (absent reads as on).
+
+**Character.** An animal portrait and an optional given name. The 24 painted
+storybook portraits (one style, 256 px WebP) live in
 `packages/web/components/org/avatars/` with the key list in
-`packages/shared/contracts/orgAvatars.ts`. `org_roles.avatar?: key`. The
-hire form offers the set (a default derived from the handle so every role has
-one); the org node, the scope page header, the chat role pill, the wake card
-header and a proposal's ghost seat all draw it; a display name may differ from
-the handle and both show.
+`packages/shared/contracts/orgAvatars.ts`; `org_roles.avatar?: key`, defaulted
+from the handle at hire.
+
+**Icon.** A glyph of what the role looks after (a database for infrastructure,
+a coin for finances) in a rounded square tile, beside the role's title and no
+name. The tile shape says "role" (people and characters are circles). The
+format is `RoleIcon` in `packages/shared/contracts/roleIcon.ts`: up to 8
+validated vector shapes on a 24 grid, a concept word and one of the 8 sol
+accents, stored as `org_roles.icon`. Markup is only ever emitted by
+`roleIconSvg`, so a stored icon cannot carry script or style. A role with no
+icon yet shows its monogram in the same tile.
+
+**Drawing.** `roleIcons.generate` draws one: three drawers sketch in parallel
+from the design brief (`ROLE_ICON_LANGUAGE`), the server rasterizes each to a
+contact sheet, and a judge picks the best, rejecting a concept another role in
+the boundary already holds or one too close in shape (two rounds at most,
+about $0.10). Hiring schedules a drawing; `roleIcons:backfill` draws for
+roles that have none, one per run; Redraw on the scope page draws a fresh one
+behind the consequential confirm; `cast role icon @h --svg` sets a hand drawn
+one. A drawing never overwrites an icon a person set. A hire's drawing that
+fails (the model key out of credit) is retried by `roleIcons.redrawMissing`
+every 6 hours for roles hired in the last 3 days.
+
+**Pinned sessions.** A plain session in a viewer's header pins, with
+characters off, wears an icon too: drawn from its title in the same language,
+clear of every concept the viewer's roles hold, stored as
+`conversations.drawn_icon`. It shows bare, with no tile and no accent, so it
+never reads as a role. The pin asks for it (`sessionIcons.requestSessionIcon`)
+while it has none, at most once per 6 hours; until then, and while the session
+is untitled, the pin shows the title's letter.
+
+**Where it shows.** The resolver `sessionIdentity` (web, imported by mobile)
+returns a role face as `style: "character" | "icon"` from the viewer's prefs,
+and every surface (sidebar, session header, chat pill, org node, scope page,
+mentions, proposal author) draws what it returns. With characters off, no
+session wears a character at all, and "Personify every session" is locked off.
+What agents call themselves in their own messages is unchanged.
 
 ## S14. First open
 
@@ -574,8 +609,9 @@ id, the new change replaces the old and `revision.before` keeps it; an added
 one is a new row with the next seq. Every touched row carries `revision: {
 kind, note, at, before? }` and the proposal appends to `revisions: [{ op,
 seq, at, by, line, was?, note? }]`, the journal the pane and `cast org apply`
-list. A revise never resolves the proposal, even when it removes the last
-undecided change; the queue card is rewritten to the changes that remain.
+list. A revise that leaves nothing to decide settles the proposal: resolved
+when a person decided any change, withdrawn when the author removed them all.
+Otherwise the queue card is rewritten to the changes that remain.
 The CLI verb is `cast org revise op-N --remove <seq> | --amend <seq> --edits
 <json> --rationale <text> | --add <file> [--note <text>]`, session only.
 
@@ -923,7 +959,7 @@ A person who opens the inbox should meet their agents the way they meet a collea
 
 ### S23.1 A role has one switch, not three stages
 
-The trust stages (understand, decide, direct) collapse into one switch on the role's page: **Starts work on its own**. On, the role starts hands and answers decisions inside its scope. Off, it reads, answers questions, and recommends; what needs doing goes to the person as one recommendation, and the person starts it or flips the switch. The root role's switch is off and cannot be turned on: it proposes, a person applies (S12). Every other role's switch defaults to on when a person hires it, whether through an accepted proposal, the org skill or `cast role create`, because a person who hired a lead wants it to lead.
+The trust stages (understand, decide, direct) collapse into one switch on the role's page: **Starts work on its own**. On, the role starts hands and answers decisions inside its scope. Off, it reads, answers questions, and recommends; what needs doing goes to the person as one recommendation, and the person starts it or flips the switch. Every role's switch defaults to on when a person hires it, the root role included (revised 2026-10-22: the Head of People does org design, the Executive Assistant is the person's right hand, and neither needs to wait on a person to start work; org changes still go through proposals a person approves), whether through an accepted proposal, the org skill or `cast role create`, because a person who hired a lead wants it to lead.
 
 The words trust, stage, understand, decide and direct leave every person facing surface: the role page, the chart, the proposals, the history lines, the CLI's output and help. The stored field stays for one release under its name, mapped both ways (on is direct, off is understand; decide reads as on and is never written again), so nothing that reads it breaks while the surfaces move, and a source test pins the words gone the way S22's pins the old name.
 
@@ -934,7 +970,7 @@ A role never asks for the switch. Its standing text says that when it cannot sta
 Hands, wakes and tokens per day stay as the bound that keeps a runaway role from spending a week's budget in a night. They stop being something the person sets, reads about, or is asked about:
 
 - The proposal never asks about limits. The analyzer's sizing rule and the "daily allowance" asks go; a proposal names roles, scopes, records and the switch, and nothing else about a role's operation. The eval rubric's sizing line goes with it.
-- The role page shows no numbers by default. A disclosure under the role's settings, **Limits**, holds the three values with the defaults filled in, for the person who wants to look.
+- The role page shows no numbers by default. A disclosure under the role's settings, **Limits**, holds the three values, each empty (no limit) until the person sets one.
 - A role that reaches a cap waits. It writes one line in its brief and its pinned state says it is waiting for tomorrow; the org health view carries that line; nothing reaches the person's inbox or their queue. The role's standing text drops "caps are real" and the frame drops the counters.
 
 ### S23.3 A role's sessions are the role's
@@ -987,7 +1023,7 @@ with the sizing line replaced by "No limits") closed no alive record, asked
 about no limit in any sample, and kept the same three asks across all three;
 records recall was 12, 10 and 6 of 41, inside the variance rounds 9 to 11
 showed. On the web the Settings tab is one switch and a closed `Limits`
-disclosure with the defaults filled in (`ScopeSettings.mount.test.tsx`); the
+disclosure, empty until set (`ScopeSettings.mount.test.tsx`); the
 hire dialog names neither; `orgProposal.changeSentence`, the history line
 (`orgLogLine`), the chips and the kind labels say "starts work on its own";
 the proposal pane's cost line and sheet are gone; the overview tile with the
@@ -1058,11 +1094,11 @@ Written 2026-09-29, replacing escalation (`cast escalate`, org-roles-run-work.md
 
 **The route.** A session under a role that is waiting on anyone, for any reason (an open prompt, a stopped process, a declared blocked state, a question asked in prose), fires its role's needs-input trigger (S25): one run per ask, where a declared block is one ask per pinned state line and a stall is one per settle, and the key clears when the session works again (`agentTasks.routeUpWaitingSession`). Any agent can also write to a role with `cast role wake @handle "<the request>"`. The role answers when it can. A role that cannot answer tells the role it reports to the same way: its own waiting fires its parent's trigger, speaking as the role. The role that reports to a person raises it in its own thread and nowhere else: its pinned state says what the person will decide and why (`cast state --status blocked`), and a real choice between options is a `cast decide` card posted there with the role's recommendation. That card reaches the person the role reports to, not whoever hosts its session.
 
-**A decision travels the same way.** A `cast decide` posted by a session under a role fires that role's needs-input trigger, naming the session and the question (the waiting session's reason is "decision", with its short id); the role answers it when it holds the grant, or recommends an option and raises what needs a person in its own thread. It reaches a person's queue only when the role cannot be told. A decision posted by a lead that reports to a person goes to that person.
+**A decision travels the same way.** A `cast decide` posted by a session under a role fires that role's needs-input trigger, naming the session and the question (the waiting session's reason is "decision", with its short id); the role answers it when it holds the grant, or hands the same card up to its people: with the option it recommends, or passed up with no recommendation, and either way with a note giving the person what the role knows that the card does not say. The note shows on the role's line of the card's ladder; there is no second card and no separate surface. A role that does neither within five minutes hands it up by lapse, so a decision never waits on a role that stays silent. It reaches a person's queue at once only when the role cannot be told. A decision posted by a lead that reports to a person goes to that person.
 
 **A role's own session belongs to whom the role reports to.** Reporting to someone is being in their inbox, so there is one fact, `reports_to`, and the standing session's owners follow it (`sessionOwners.stampSeatOwners`, called wherever a role's parent is set: provisioning, a move, a retire's re-home, the backfill `migrations:stampStandingSeats`). Under a person, that person is its only owner; under a role, it has no person owner and rides the parent lead's card. The owner gesture on a standing session refuses and names the role move, the owner menu there offers "Reports to" instead of an owner list, and writing to it never claims it. The machine and account it runs on stay separate: that is where it runs, not whom it answers to.
 
-**Nothing waiting is lost.** When the route cannot reach a role (the person paused or cancelled its trigger, the role has no session, the org is off), the waiting session is the person's again: it notifies them as any session would. Sessions a role takes over that were already waiting route up when they move.
+**Nothing waiting is lost.** When the route cannot reach a role (the person paused or cancelled its trigger, the role has no session, the org is off, or the machine the role's session runs on has been silent for thirty minutes, `lib/orgRoutine.roleMachineAway`), the waiting session is the person's again: it notifies them as any session would. A role on a machine that is away is not woken at all: a wake queued for it would sit unread while the session it names waits on nobody, and the ask is kept unspent so the role is told once its machine is back. Sessions a role takes over that were already waiting route up when they move.
 
 **What the person sees.** One card per lead that needs them, filed the way any session that needs input is: the standing session's own facts put it in needs input (a blocked declaration, an open prompt) or in questions (a pending decision in its thread; projection v14 stopped the anchor rule from hiding an asking standing session). Never the sessions under it, never a special block. The sessions under a role stay subagent rows under its card with no gesture of their own, and their settles ring nobody (`under_role`).
 
@@ -1110,7 +1146,7 @@ Written 2026-10-02, from the founder. The one root role carried two jobs: it rev
 
 It runs on its host's daemon as every role does, so it sees exactly what its host can see and nothing more. The global one reaches across workspaces with no new query and no new grant: its session is personal, and it reads each workspace the way the person does from a shell, `--team` on every write and the read defaults of `resolveWorkspaceForRead` (CLAUDE.md, "reads may default, writes must be explicit"). The server never joins across boundaries for it; `listAnchors` already returns every row the viewer may see, personal and per team, and that is what the header draws from. A personal per team assistant is the same row shape with its working directory and brief pointed at one team. A team assistant's thread is team visible through the same chokepoint a team seat uses today (`patchConversationVisibility` in `provisionStandingAgent`). Several assistants may stand in one boundary; the default handle is `executive-assistant` for the first and `executive-assistant-<team slug>` for a personal per team one, and the hire form lets the person change it as for any role.
 
-What an assistant can do is what the opening says today, scoped to its reach: answer anything, route a request in an owned area to that lead (`cast role wake @handle --team`), bring decisions with a recommendation, keep the person's goals in its brief, raise what needs the person in its own thread (S28). It never reviews the structure; that is the Head of People's. In team chat and Slack the "workspace's agent" (`@anchor`, `cast anchor say`, `anchor_channels`) is the team's Executive Assistant when one stands, else the Head of People, so a team with no assistant answers as before. `rootAgentOf` on the web follows the same rule.
+What an assistant can do is what the opening says today, scoped to its reach: answer anything, route a request in an owned area to that lead (`cast role wake @handle --team`), bring decisions with a recommendation, keep the person's goals in its brief, raise what needs the person in its own thread (S28). It never reviews the structure; that is the Head of People's. In team chat and Slack the "workspace's agent" (`@anchor`, `cast anchor say`, `anchor_channels`, decision talk) is the role a team admin chose under Team settings, "Answers for the team" (`teams.workspace_agent_role_id`), else the Head of People, else the team's own assistant. Hiring a team assistant never moves it. A person's own workspace answers as their global assistant, else their Head of People. The web reads the server's `listAnchors.is_root` and has no rule of its own. The workspace's agent has no sidebar row: it is a role in Org, the root scope page is `/org/workspace` (`/anchor` redirects there), and talking to it is a header pin.
 
 **Names.** Every role shows a person like name with its role as the subtitle: "Ada · Executive Assistant, global", "Rowan · Head of People", "Ember · Growth lead". The stored `org_roles.name` stays the role title (every reader keeps working); a new optional `org_roles.given_name` is the name a person chose, and until they do the role wears `characterNameFor(role._id, avatarOf(role))` from `sessionCharacter.ts`, the same bank sessions already use, so no migration invents names and every role has one on every device. One reader, `roleIdentity(role)` in `@codecast/shared/contracts/orgIdentity.ts`, returns `{ name, title, subtitle }` (the subtitle adds an assistant's reach: "global", the team's name, or "personal, <team>"); the org node, the scope page header, the inbox card, the chat pill, the wake card, the proposal ghost, the header pin and `cast role show` draw from it. The hire form offers the name beside the face (the picker sessions have) and `cast role name <ref> <name>` sets it.
 
@@ -1203,7 +1239,7 @@ handoff of S32 runs from the original to each half for the areas it takes,
 with the retire waiting on it. A split is refused for a role with no area, a
 role already handing over, and the Head of People or an Executive Assistant.
 
-**As built (2026-10-02).** `HEAD_OF_PEOPLE_HANDLE`, `LEGACY_HEAD_OF_PEOPLE_HANDLE`, `EXECUTIVE_ASSISTANT_HANDLE`, `AssistantReach` and `isHeadOfPeopleRole` live in `shared/contracts/orgLead.ts`; the web (`orgStaffingTypes`), the CLI (`anchorAlias`, `orgInit`) and convex (`lib/orgAccess`) re-export them, so the handle has one home. The legacy rule is `rolesByHandle` in `lib/orgAccess.ts`: either handle finds the Head of People and nothing else, and `handleTaken` refuses both to any other role and to every assistant. `org_roles` gained `given_name`, `assistant` and `renamed_from`; `roleIdentity` (`shared/contracts/orgIdentity.ts`) is the one reader, and a legacy row still named "Chief of Staff" (`LEGACY_HEAD_OF_PEOPLE_NAME`) reads as the Head of People until migrated. The two openings are `headOfPeoplePrompt.ts` and `executiveAssistantPrompt.ts` (`lib/orgAssistant.assistantOpeningFor` fills a row's reach; `anchors.roleBootstrapOf` carries it as `assistantOpening`). Hiring: `orgRoles.hireAssistant` / `performHireAssistant`, `/cli/org/assistant`, `cast org assistant [--team] [--personal] [--name]` (`cast org chief` is a hidden alias), the web's `hireExecutiveAssistant` action and `HireAssistantCard` (the panel offers it until a global assistant stands; a personal workspace's onboarding hires the assistant, a team's the Head of People). The workspace agent rule is `anchors.isWorkspaceAgentRole` (`listAnchors.is_root`, `findExistingAnchor`, `@anchor` in `mentionResolve`). Pins: `clientState.ui.header_pins`, `lib/headerPins.ts` (`resolveHeaderPins`, `toggleHeaderPin`), `HeaderPins` and the generalised slide-over in `components/anchor/AnchorPanel.tsx` (`anchorPanel.target`), "Pin to header" in the role page's menu. The migrations are `migrations:renameHeadOfPeople` (`{dryRun, personal_root: "head_of_people" | "convert", reverse, only, scope}`; the charter doc follows the row, its default charter paragraph replaced and a person's kept, and a row renamed before the doc was part of the run gets the doc pass alone) and `migrations:seatExecutiveAssistant` (`{dryRun, only, reverse}`), tested in `orgRoles.assistant.test.ts`. `cast role update --given-name` names a role; `cast role show` and every surface print name then title.
+**As built (2026-10-02).** `HEAD_OF_PEOPLE_HANDLE`, `LEGACY_HEAD_OF_PEOPLE_HANDLE`, `EXECUTIVE_ASSISTANT_HANDLE`, `AssistantReach` and `isHeadOfPeopleRole` live in `shared/contracts/orgLead.ts`; the web (`orgStaffingTypes`), the CLI (`anchorAlias`, `orgInit`) and convex (`lib/orgAccess`) re-export them, so the handle has one home. The legacy rule is `rolesByHandle` in `lib/orgAccess.ts`: either handle finds the Head of People and nothing else, and `handleTaken` refuses both to any other role and to every assistant. `org_roles` gained `given_name`, `assistant` and `renamed_from`; `roleIdentity` (`shared/contracts/orgIdentity.ts`) is the one reader, and a legacy row still named "Chief of Staff" (`LEGACY_HEAD_OF_PEOPLE_NAME`) reads as the Head of People until migrated. The two openings are `headOfPeoplePrompt.ts` and `executiveAssistantPrompt.ts` (`lib/orgAssistant.assistantOpeningFor` fills a row's reach; `anchors.roleBootstrapOf` carries it as `assistantOpening`). Hiring: `orgRoles.hireAssistant` / `performHireAssistant`, `/cli/org/assistant`, `cast org assistant [--team] [--personal] [--name]` (`cast org chief` is a hidden alias), the web's `hireExecutiveAssistant` action and `HireAssistantCard` (the panel offers it until a global assistant stands; a personal workspace's onboarding hires the assistant, a team's the Head of People). The workspace agent rule is `anchors.workspaceAgentRoleOf`, read through `findExistingAnchor` (`listAnchors.is_root`, `@anchor` in `mentionResolve`, chat and Slack routing) and set by `anchors.setWorkspaceAgent`. Pins: `clientState.ui.header_pins`, `lib/headerPins.ts` (`resolveHeaderPins`, `toggleHeaderPin`), `HeaderPins` and the generalised slide-over in `components/anchor/AnchorPanel.tsx` (`anchorPanel.target`), "Pin to header" in the role page's menu. The migrations are `migrations:renameHeadOfPeople` (`{dryRun, personal_root: "head_of_people" | "convert", reverse, only, scope}`; the charter doc follows the row, its default charter paragraph replaced and a person's kept, and a row renamed before the doc was part of the run gets the doc pass alone) and `migrations:seatExecutiveAssistant` (`{dryRun, only, reverse}`), tested in `orgRoles.assistant.test.ts`. `cast role update --given-name` names a role; `cast role show` and every surface print name then title.
 
 ## S35. How work finds its owner
 
@@ -1269,7 +1305,7 @@ for real. Sessions with no log row at all are released too and marked "no
 record", since every filing since the log exists has a row.
 
 **Union.** The two Calling projects, Callers & Call Management
-(`/Users/ashot/src/union-mobile/outreach`) and camerons ideas
+(`/Users/codecast/src/union-mobile/outreach`) and camerons ideas
 (`/Users/ec2-user/src/union-mobile`), lose their folders (sd-338, answered
 "well we should do this"). The Calling lead keeps the two projects, their
 tasks and plans, and every session bound to them.
@@ -1684,3 +1720,67 @@ Written 2026-10-07. This section replaces S5 (the staffing pane and the ghost st
 **One translator.** `packages/shared/contracts/orgChangeWords.ts` is the one way a change becomes words: `changeWords(change, ctx)` gives the sentence (the brief clause set of `orgProposal.ts`, capitalised), the terse line the journal and the CLI print, the chip the map draws, and the fields with before, after and a passage diff; `subjectWords` joins a subject's changes into one sentence, `fieldMoves` says what an amend moved, `proposalTotals` writes the totals sentence. The web adds only what it alone knows: the live record a waiting card compares against, and faces (`proposalSubjects.ts`). `staffingModel.changeFields`, `staffingRevise.amendedMoves`, `proposalSubjects.rowsFor` and `orgMeta.chipLine`'s body went into it.
 
 **What was deleted.** The staffing pane and the scope panel, the proposal thread embed with its `since` cut, every `ProposalReplyBox`, the `/company` proposal cards, the ghost answer strips and Edit on chart nodes, the chart pane (`/org?view=chart`), the single-change card, accept-with-edits on the web, the `decide`, `acceptAll` and `decideAsk` store actions (the server mutations stay for the CLI routes), and the org tours that pointed at those surfaces.
+
+## S42. One screen for the company
+
+Written 2026-10-07. This section supersedes the split of S41 (a conversation beside a map, with goals, projects, people and the health page each on a page of their own) and S40's reach (the map as the only picture of the company on the screen). S41 still holds for how a proposal is drawn and answered: one card, in the conversation, staged until the send. S40 still holds for how the map draws. The build spec this came from is the "company in one screen" spec (D1 to D18).
+
+**Why.** The founder thinks about one thing, the company: what it is for, what it is trying to move, which work moves it, and who (a person or an agent) answers for each piece. Before this, those facts were spread over `/org`, `/goals`, `/projects`, an unrouted `/company`, `/org?view=health`, `/org/or-N`, `/team` and `/team/:username`, each laying out the same seven facts in its own order, most of them linking nowhere.
+
+**Two panes and one seam.** `/org` is `OrgScreen` (`components/org/OrgPage.tsx`). On the left is the conversation with whoever answers for what is being read; on the right is the company (`components/org/company/CompanyPane.tsx`). Between them is one resizable seam (`ConversationWithPanel` on react-resizable-panels), stored per person under one layout key, `clientState.layouts.org`, so the split stays where the person put it as they move between objects. Double-click resets it to half and half. Under 980px the panes stack behind a Conversation | Company switch, and the thread never remounts across that line.
+
+**The left pane.** Arriving by address at `/org/<ref>` puts that object's responsible party on the left: a goal's owner seat, a project's lead, the role itself, or the Head of People. Opening a sheet inside the screen never swaps it; "Talk to X" on a sheet and a double-click on a role on the map swap on purpose. The head says who you are talking to, with "Back to Head of People" when it is someone else. Above it, the needs-you strip (`OpenProposalsStrip.tsx`, `needsYou` in `staffingModel.ts`) is the one count of what waits on the person: proposals, decisions and stuck roles, the same number the sidebar's Org row shows. Picking a proposal there returns the left pane to the Head of People and scrolls to its card.
+
+**The right pane.** `Read | Map`, kept per person in `clientState.ui.org_view`, then one filter row both lenses share: Everything, Goals, Projects, People (`?lens=`). Read is the company as a document (`components/company/CompanyDocument.tsx`): one state line, the goals, the projects no goal carries, then people and roles, each a line from `components/org/lines/` on one column grid, with goals expanded in place (`clientState.ui.org_expanded`). Map is S40's map. Its corner holds As proposed, Following beside a thread, and on People, This week.
+
+**Sheets.** Every goal, project, role and person opens as a sheet over the right pane (`SheetFrame`, `sheets/{Goal,Project,Role,Person}Sheet.tsx`), 400 to 560px from the right edge, leaving at least 260px of the lens visible beside it, where the map rings the object and the document stays live. On a narrower pane the sheet covers the lens, which stays mounted underneath. The address holds only the top sheet; a back step appears when the in-screen stack holds more than one, and Esc steps back, then closes. Every sheet uses the same order: the crumb (the object's place in the company tree), the head line (owner, state, measure, date, in that order), **Serves**, an Ask box into the owner's standing session (Message on a person), then the kind's own sections with **Now** (live sessions, what waits on the person, and one violet line per open proposal change touching the object, which scrolls to its card) and **Carried by**, and the record and activity folded at the foot. A sheet has no Approve button: proposals are answered only in the thread.
+
+**Creating.** One New menu in the header: Goal and Project write an optimistic stub and open its sheet with the title focused; Role opens the hire dialog. The only other create is "+ Project" in a goal sheet's Carried by.
+
+**One address per object.** `objectHref` (`packages/shared/entities`) sends a goal (`in-N`), a project (`pj-…`), a role (`or-N`) and a person (`@username`) to `/org/<ref>`; inside the screen a pill opens the sheet instead. `/goals`, `/projects`, `/company`, `/team`, `/roadmap` and `/initiatives` redirect into `/org` with the matching filter. `/projects/<pj-…>` stays the work board, and `/team/:username` stays the activity profile, linked from the person sheet.
+
+**The gate.** The team feature `org` gates only the left pane. With it off, `/org` is the company alone: the document, the map and the sheets, with no conversation and no seam. Goals, projects and people do not need agents.
+
+**This week.** The health page (S29) is folded into the screen; its three parts each have a better home.
+- The picture: on the map's People filter, the corner's **This week** toggle (`?week=1`) draws each role card as its week (work that reached it against work it closed, day by day, and the signals that need a person) and the reporting lines as the work flowing down them, with handoffs between roles drawn across the tree (`OrgGraph`'s `flow` mode, numbers from `orgFlow.ts`). The open role sheet's lines stay lit. A health read that failed is said in the map's corner, never drawn as a quiet company. Leaving People or choosing Read drops the week from the address, and an address that asks for it shows the map.
+- A role's week: the role sheet's **This week** section shows the same card (`RoleWeekBody`), its fix loop, and behind **What if** its two levers (`RoleLevers`, `healthParts.tsx`): its daily limit replayed over the week and set in place, and part of its work handed to another role, asked of the Head of People.
+- The controls: pause, resume and run now live on the role's Triggers tab, and its daily limits in its Settings tab.
+- `/org?view=health` redirects to `/org?lens=people&week=1` (`healthRedirect`, `orgScreenModel.ts`). The header's menu reaches the same address as This week.
+
+**What was deleted.** The goal list and the goal page (`InitiativesList`, `InitiativePage`, `/initiatives`), the projects list with its inline create, the `/company` page (its document is the Read lens), the Team Directory, the roadmap page, the role page's glance header (`ScopeGlance`), the sidebar's Goals and Projects rows and Org under Agents, the palette's Goals, Company document and Team Directory rows, the six parallel href builders, the health page (`HealthPage`) and its board (`HealthBoard`): its waiting row is the needs-you strip, its role drawer is the role sheet, and its levers are `RoleLevers`.
+
+## S43. The person's inbox is part of the org the Head of People keeps
+
+A person ends up managing dozens of raw top-level sessions when nothing places them. The Head of People's job already says it keeps "where each of the person's sessions belongs" true; S43 gives it the means.
+
+**What it sees.** `cast org inputs` carries `sessions.loose`: the caller's own top-level sessions that nothing places (no role holds them, no task binds them, no seat), newest first, up to 40, each with its title, state, folder and size (`looseSessionsOf`, `convex/lib/orgSessionFiling.ts`).
+
+**What it proposes.** One change kind, `file_session: { session, title, to }`, where `to` is `@handle` (under that role, through the reparent core), `ct-N` (the session joins the task's work, and binds to it unless another live session owns the task) or `done` (out of the inbox, as the inbox's own done). Filings are their own kind of proposal work, uncapped like the records, so a tidy arrives as one card the person clears in one pass: one ask, "File N sessions where they belong", Approve all, and a per-row reject. Each apply lands in the org log, so History reads and undoes it.
+
+**Who decides a filing.** An admin, as for any proposal, and also the person whose sessions it files: a proposal that only files sessions, every one of them the caller's own, is theirs to accept on the card without being an admin (`filesOnlyOwnSessions`). A filing of anyone else's session, and every other kind of change, still needs an admin.
+
+**How often it looks.** Sessions gather every day, so the Head of People does not wait for its weekly review: a daily trigger on its standing session, "Look at the inbox" (`syncInboxLook`, `convex/orgInbox.ts`), armed with its routine from every door that arms one. Its precheck, `cast org loose --new`, exits 0 only when a loose session started since that trigger last ran, so a day with nothing new spends nothing. The run reads `cast org loose` (the loose sessions, the new ones marked, and the filing's shape) and keeps the inbox as its opening's job says; a person pauses or cancels it like any trigger, and a retire takes it with the role.
+
+**Who may file without asking.** A role whose "Starts work on its own" switch a person turned on: its filings apply as they are posted, each row marked as filed by it (`routeFilings`, `orgProposals.ts`). The Head of People's switch is off by default, so its filings wait on the card until the person turns it on. A role the Head of People hires for this work starts with the switch on, like every hire.
+
+**The prompt.** No routine and no steps: the review prompt's job line names where the person's sessions belong, and the reference lists the shape. The org-review eval's Fernhill worlds (`packages/evals/fixtures/org-review/fernhill.ts`) hold a messy inbox, a busy one and a control where every loose session is the person's own.
+
+## S44. The chart's companion drawer
+
+Written 2026-10-16. The chart page (`OrgChart`) had no way in for a person without a Head of People, and a proposal reference opened the whole chart with the proposal nowhere on it. The page now carries one companion surface, a drawer on the right of the chart, in the line workspace Map's pattern (`LineDrawer`): the chart stays in view on the left, the address holds what the drawer shows, and close, Esc or the header's control decide whether it is open (`clientState.ui.org_panel`, per device).
+
+- **No Head of People:** the drawer offers the hire (`HireHeadOfPeopleCard`). The press opens the shared review (`hireHeadLedger`): one session now, or the workspace's standing agent seated; the first review now, then weekly; only approved changes apply. The hire runs its first review on its own (`performStaff`), and its proposals arrive in the drawer.
+- **A Head of People:** its standing session's real conversation (`AnchorConversation`), with its open suggestions pinned above it as one set (S45).
+- **`?proposal=op-N`:** the proposal first and whole: where it lives (`op-N in <workspace>`, with Switch when that is not the workspace on screen), its title, what waits or what happened, and its card (`ProposalBody`) with every control, pinned over the conversation its answers go to (the author's thread, else the Head of People's), whose send applies them. While it is open and in this workspace, its changes are drawn on the chart; a click on an entry focuses its node, and a click on a marked node focuses its entry. Arriving by address lands in the proposal's workspace; inside a reveal band the drawer names it and offers the switch instead.
+- **`?session=<id>`:** a role (its standing session) or a session from the chart, in the drawer.
+
+The corner card (`OrgIntroCard`) opens `/org?panel=open`.
+
+## S45. The Head of People's suggestions are one current set
+
+Written 2026-10-16. A review posts one proposal per kind of work, the chat adds small ones, and the daily inbox look adds filings, so a workspace held several open proposals the person could not date or clear together. The model keeps proposals as they are (propose still refuses mixed kinds, a revise still never settles one); what changed is how they are read and who keeps them true.
+
+- **One set in the drawer** (`SuggestionSet`, split in `suggestionSetModel.ts`): the Head of People's open proposals (its role's, and any review or first chart whoever ran it) read as one list of pieces, oldest first. A line counts the whole set ("1 plan filed, 1 new role and 1 plan abandoned"; `proposalTotals` now reads mixed work, records by what they do); each piece is one sentence with its age (the latest revise of its changes, else its proposal's post; orange past seven days), and opens in place to its full card with the shared answer controls. "Accept all" stages an accept on every waiting piece across the set (`useAcceptRest`, the same logic as a single proposal's foot), through the hire review when a new role is in it; the composer's send applies them, one reply per proposal into each author's thread.
+- **What stays apart:** a proposal a newer one replaced (`superseded_by` an open one) is a struck row with Withdraw; a proposal another author posted (a lead's hire, a person's request) is listed under "Asked by others", because only its author can revise it and the Head of People cannot keep it current.
+- **Currency is the Head of People's job, stated in its prompts:** its opening and the review prompt say that everything it has open is one suggestion it keeps current (nothing out of date, said twice or contradicted; new work joins its open proposal of that kind), the review's reference lists every open proposal of its own with its age, and the daily look's prompt says the same of its filings. The opening reaches a standing session when it starts; the inbox look's prompt reaches live triggers through `syncInboxLook`.
+- **The drawer is resizable:** its left edge drags (`useEdgeResize`, per device under `codecast.org-panel-w`), 420px at least, 620px by default, the chart keeping 280px. What it pins over a thread (`PinnedLead`) takes at most 55% of its height and fades its hidden bottom, so the pinned view and the thread never read as one clipped run.

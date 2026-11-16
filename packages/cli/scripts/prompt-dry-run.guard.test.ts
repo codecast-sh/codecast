@@ -108,6 +108,15 @@ describe("guard cast: served reads", () => {
     expect(w.log()).toContain("SERVED org inputs --team T --json");
   });
 
+  test("a captured proposals listing is served, and --withdraw is never served, even under a prefix", () => {
+    const argv = ["org", "proposals"];
+    const w = world({ files: { [`reads/${servedReadKey(argv)}.out`]: "  op-41 Filings\n", [`reads/${servedReadKey(argv)}.prefix`]: argv.map((a) => `${a}\x1f`).join("") } });
+    expect(w.cast("org", "proposals").out).toBe("  op-41 Filings\n");
+    expect(w.cast("org", "proposals", "--json").out).toBe("  op-41 Filings\n");
+    expect(w.cast("org", "proposals", "--withdraw", "op-41").code).not.toBe(0);
+    expect(w.log()).not.toContain("SERVED org proposals --withdraw");
+  });
+
   test("a captured read is served with its exit code", () => {
     const argv = ["sessions", "--json"];
     const w = world({ files: { [`reads/${servedReadKey(argv)}.out`]: "[]\n", [`reads/${servedReadKey(argv)}.exit`]: "3\n" } });
@@ -223,12 +232,27 @@ describe("guard cast: served reads", () => {
     expect(classify("org", "inputs", "--team", "T")).toBe("read");
     expect(classify("brief", "edit", "-")).toBe("write");
     expect(classify("task", "create", "x")).toBe("write");
+    for (const argv of [["events", "resolve", "g1"], ["events", "ignore", "g1"], ["metrics", "add", "m"], ["metrics", "rm", "w1"], ["metrics", "backfill"]]) expect(classify(...argv)).toBe("write");
     expect(classify("plan", "replay", "pl-4")).toBe("read");
     for (const group of ["task", "trigger", "doc", "org"]) expect(classify(group, "replay", "x")).toBe("write");
     expect(classify("publish", "comments", "pg", "--resolve=c1")).toBe("write");
     expect(classify("read", "jx7abcd")).toBe("read");
     expect(classify("read", "jx7abcd", "--ack")).toBe("write");
     expect(classify("read", "jx7abcd", "--ask", "x")).toBe("read");
+    // The trial's cards and spend are a read; its verbs start runs, record spend or rebuild cards.
+    expect(classify("line", "trial", "--project", "AgentWatch Trial", "--json")).toBe("read");
+    expect(classify("line", "trial")).toBe("read");
+    for (const verb of ["run", "dispatch", "spend", "recard"]) expect(classify("line", "trial", verb, "x")).toBe("write");
+    // What a connected product lets codecast read is a read; a connector's own verbs run actions.
+    expect(classify("connector", "readers", "union")).toBe("read");
+    expect(classify("connector", "resolve", "union", "x")).toBe("write");
+    // Workflow runs and templates are listed; starting or re-asking a run writes.
+    for (const verb of ["runs", "list"]) expect(classify("workflow", verb)).toBe("read");
+    for (const verb of ["run", "reask"]) expect(classify("workflow", verb, "x")).toBe("write");
+    // The report page kit and the CLI's guides print; a bare decide still posts.
+    expect(classify("decide", "kit", "page.html")).toBe("read");
+    expect(classify("guide", "visual")).toBe("read");
+    expect(classify("decide", "Ship it?", "-o", "Ship")).toBe("write");
     expect(fs.existsSync(path.join(w.runDir, "calls.log"))).toBe(false);
     expect(w.real()).toEqual([]);
   });
@@ -250,9 +274,9 @@ describe("guard cast: served reads", () => {
     // Every check here is a guard spawn, about two seconds each at a load of 500.
   }, 120_000);
 
-  test("pr, chat and trigger history reads go live; their writes are refused", () => {
+  test("pr, chat, trigger history, events and metrics reads go live; their writes are refused", () => {
     const w = world();
-    for (const argv of [["pr", "ls"], ["pr", "show", "12"], ["pr", "events", "12"], ["pr", "threads", "12"], ["chat", "read", "--channel", "c1"], ["chat", "thread", "m1"], ["chat", "channels"], ["trigger", "log", "tr-1"], ["trigger", "history", "tr-1"]]) {
+    for (const argv of [["pr", "ls"], ["pr", "show", "12"], ["pr", "events", "12"], ["pr", "threads", "12"], ["chat", "read", "--channel", "c1"], ["chat", "thread", "m1"], ["chat", "channels"], ["trigger", "log", "tr-1"], ["trigger", "history", "tr-1"], ["events", "groups", "--status", "open"], ["events", "ls", "--since", "7d"], ["events", "show", "g1"], ["metrics", "ls"], ["metrics", "show", "w1"]]) {
       expect(w.cast(...argv).out).toBe(`LIVE ${argv.join(" ")} dir=/real/state\n`);
     }
     for (const argv of [["pr", "comment", "12", "hi"], ["pr", "merge", "12"], ["pr", "review", "12", "--approve"], ["chat", "send", "hi"], ["chat", "mark-read"]]) {
@@ -453,7 +477,7 @@ describe("prompt-dry-run.ts", () => {
     expect(h.recorded("stdin")).toBe("Reply with the word ok.");
     expect(h.recorded("env")).toBe("20\n1\nfake-token\n");
     expect(JSON.parse(fs.readFileSync(path.join(h.runDir, "args.json"), "utf8"))).toEqual({
-      model: "m-pinned", call: true, maxOutputTokens: 20, tools: [], maxTurns: 1, serve: null, guard: path.join(import.meta.dir, "prompt-dry-run-bin"), isolation: null, claudeMd: null,
+      model: "m-pinned", call: true, maxOutputTokens: 20, tools: [], maxTurns: 1, serve: null, guard: path.join(import.meta.dir, "prompt-dry-run-bin"), isolation: null, claudeMd: null, cwd: null, readOnly: false,
     });
     const out = JSON.parse(fs.readFileSync(path.join(h.runDir, "out.json"), "utf8"));
     expect(out).toMatchObject({ result: "ok", stop_reason: "end_turn", is_error: false });
@@ -548,6 +572,36 @@ describe("prompt-dry-run.ts", () => {
       expect(log).toContain("REFUSED task create Escaped\n");
     } finally {
       fs.rmSync(planted, { force: true });
+    }
+  }, 90_000);
+
+  // The line workspace's Try (cli lineTry.ts) promises nothing ships: a station replayed in a real
+  // checkout writes no file, and reaches no service it could write to (gh, a git remote), only the model.
+  test.if(process.platform === "darwin")("--read-only refuses file writes in the checkout and every connection but the model's and the broker's", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    // Outside the per-user temp root, which the sandbox leaves writable for Claude Code's own caches.
+    const checkout = path.join(import.meta.dir, `.ro-checkout-${process.pid}`);
+    fs.mkdirSync(checkout, { recursive: true });
+    const bash = [
+      `( : > '${checkout}/probe.txt' ) 2>&1 | sed 's/^/write: /'`,
+      `/usr/bin/nc -z -G 3 1.1.1.1 443 2>&1 && echo "direct: connected" || echo "direct: refused"`,
+      `echo "proxy: \${HTTPS_PROXY:-none}"`,
+      `curl -sS -o /dev/null --max-time 10 https://github.com 2>&1 | sed 's/^/github: /'`,
+      "cast task ls 2>&1 | sed 's/^/read: /'",
+    ].join("; ");
+    try {
+      const r = h.runWith({ FAKE_CLAUDE_BASH: bash }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake", "--cwd", checkout, "--read-only");
+      expect(r.err).toBe("");
+      expect(r.code).toBe(0);
+      const said = h.recorded("bash")!;
+      expect(said).toMatch(/write: .*Operation not permitted/);
+      expect(fs.existsSync(path.join(checkout, "probe.txt"))).toBe(false);
+      expect(said).toContain("direct: refused");
+      expect(said).toMatch(/proxy: http:\/\/127\.0\.0\.1:\d+/);
+      expect(said).toMatch(/github: .*403/);
+      expect(said).toContain(`read: LIVE task ls dir=${h.state}`);
+    } finally {
+      fs.rmSync(checkout, { recursive: true, force: true });
     }
   }, 90_000);
 

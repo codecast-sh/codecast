@@ -371,7 +371,7 @@
 }
 
 .mention-date-resolved {
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
   opacity: 0.8;
   font-family: var(--font-mono), monospace;
@@ -489,7 +489,7 @@
   position: absolute;
   bottom: 100%;
   left: -1px;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   line-height: 1;
   padding: 2px 5px;
@@ -571,11 +571,6 @@
   border-radius: 3px;
   font-size: 0.9em;
   font-weight: normal;
-}
-
-.doc-read-body :not(pre) > code::before,
-.doc-read-body :not(pre) > code::after {
-  content: none; /* the prose plugin's backtick pseudo-quotes */
 }
 
 .doc-read-body blockquote {
@@ -858,3 +853,8 @@
 @media (prefers-reduced-motion: reduce) {
   .draft-dots__row, .draft-panel, .draft-trimbar { animation: none; }
 }
+
+/* Modern (.modern-style): a document and the draft tools read in the interface sans; code
+   spans keep .tiptap code's mono. */
+.modern-style .doc-editor,
+.modern-style :is(.mention-date-resolved, .draft-lab-button, .draft-panel, .draft-trimbar) { font-family: var(--font-ui), sans-serif; }

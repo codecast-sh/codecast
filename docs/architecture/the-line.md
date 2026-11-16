@@ -1,8 +1,8 @@
-# The line: stations, gates, evidence, runs
+# Flows: stations, gates, evidence, runs
 
-One system for automated work with people in the loop. A scope owns a line.
-A task moves along it through stations. A run is one passage. A gate on the
-line is a decision in the person's queue. Evidence attaches to the task at the
+One system for automated work with people in the loop. A role owns a flow
+(flows.md FL0). A task moves along its steps through stations. A run is one
+passage. A gate in the flow is a decision in the person's queue. Evidence attaches to the task at the
 station that produced it. Chains are runs. Sections are numbered so code can
 cite them.
 
@@ -13,9 +13,9 @@ Nine words, each with one meaning and one table behind it.
 | Word | Meaning | Table |
 |---|---|---|
 | scope | what a role owns: projects and plans (scopes-and-feed.md F1) | `org_roles.scope` |
-| line | the workflow a scope's tasks run on; one per scope; shipped `line` by default | `org_roles.line_workflow_slug`, `workflows` |
+| flow | what a scope's tasks run through: its steps (the workflow), intake, switch and decider; one per owner role; the shipped `line` steps by default (flows.md FL0) | `org_roles.line_workflow_slug`, `workflows` |
 | station | a task status. The team's statuses, in order, are the stations | `tasks.status` / `status_id` |
-| run | one task's passage along a line | `workflow_runs` |
+| run | one task's passage through a flow | `workflow_runs` |
 | gate | a workflow node where a person decides. A gate IS a decision | `session_decisions` with `workflow_run_id` |
 | hold | a pending blocking decision bound to a task keeps it at its station | `session_decisions.task_id` + `station` |
 | evidence | what a station produced: pages, images, docs, files, a PR, verification text | `artifacts.task_id`, `tasks.*` |
@@ -25,7 +25,7 @@ Nine words, each with one meaning and one table behind it.
 Nothing else is coined. A chain (agent-definitions.md D5) is a linear workflow
 and its run is a run.
 
-## L2. A scope owns a line
+## L2. A role owns a flow
 
 `org_roles.line_workflow_slug?: string`, default `line`. Resolution, in order:
 a path on disk, the caller's own `workflows` row by slug, a shipped template by
@@ -266,10 +266,17 @@ field.
 
 ## L11. Limits
 
-Hands started by a run are unattended principals: reversible actions run;
-anything in a protected category goes through `cast decide`, which pins the
-holder to a person. A stalled hand is killed by the runner's timeout and the
-task returns to open with a comment. Two implement cycles, then the task goes
+Hands started by a run are unattended principals. Each opens with three
+lines (`unattendedOpening`, `packages/shared/contracts/unattended.ts`) that
+say only what is true of every unattended session: which step started it and
+that nobody is watching, that the run reads the outcome from the command the
+brief ends with (a pin when it names none), and that a decision which is a
+person's goes through `cast decide`, which pins the holder to a person. What one
+station may do, such as committing and pushing its branch, is in that
+station's own prompt. A hand that settles with no message and no result
+never ran a turn, and one that outlives the runner's timeout is killed: either
+fails its station, routes only on an edge that asks about the outcome, and
+otherwise returns the task to open with a comment. Two implement cycles, then the task goes
 to `in_review` blocked with a decision to the person (L4, failure gates).
 
 ## L12. The merge step
@@ -301,12 +308,24 @@ $project_path` (the runner now sets `$run_id`). The step asks the server
 first (`orgLineMerge.check`: the switch, the grant and its expiry, today's
 count against the limit), then lands the branch: with a pull request named in
 the handoff's evidence, `gh pr merge --rebase` once every check is green and
-the PR is open and mergeable; without one, a fast forward push of the branch
-head onto the default branch, refused when the branch is behind it. Then it
+the PR is open and mergeable; without one, a fast forward push onto the
+default branch. A branch the default branch has moved past lands its own
+commits replayed on top (authors, messages and session trailers kept, merges
+of the default branch into it dropped), but only when the default branch
+changed none of the files the branch touches since they parted and the replay
+comes out as the two merged; a branch whose files the default branch also
+changed is left, to be built again on it. A push that loses a race with
+another push to the default branch reads it again, up to three times. Then it
 records the merge (`orgLineMerge.record`): the role's `counters.merges` for
 today, `workflow_runs.merge` (sha, branch, target, PR), a `review` comment on
 the task as the role, and one line into the role's standing session so the
 role reports the merge to the person it reports to in its own words. Every
-refusal (off, no grant, limit reached, red checks, behind) prints one line
-saying the merge is left to a person and exits 0: an approved task whose
-merge waits for a person is not a failed run.
+refusal (off, no grant, limit reached, red checks, files in common with the
+default branch) prints one line saying the merge is left to a person and
+exits 0: an approved task whose merge waits for a person is not a failed run.
+Its run still ends through its landing steps (the Line pages read it as
+approved, not merged), but the task stays in review rather than done, and the
+watch a graph's watch station started is cleared, since nothing is live to
+watch (workflow_runs.runEndStatus). `cast workflow resume <task> --at merge`
+picks it up again at its merge station, now or with `--queue` when its
+machine has a free slot, once what stopped the merge is gone.

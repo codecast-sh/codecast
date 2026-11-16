@@ -51,7 +51,7 @@ NEW_VERSION="$MAJOR.$MINOR.$PATCH"
 # Same trap as the CLI: the bump is arithmetic on a local file, so a checkout
 # behind main computes a version that is already live, and this script would
 # publish older bytes under it and hand the fleet that floor. latest-mac.yml in
-# R2 is what electron-updater reads through dl.codecast.sh. (ct-49566)
+# R2 is what the app's own updater (main.js) reads through dl.codecast.sh. (ct-49566)
 # Two commands, not a pipe: `set -e` ignores a failing left-hand side, and a
 # download that quietly produced nothing would compare against an empty string.
 aws s3 cp "s3://$R2_BUCKET/desktop/latest-mac.yml" /tmp/codecast-published-latest-mac.yml \
@@ -170,6 +170,14 @@ else
   git add packages/electron/package.json packages/web/server/index.ts
   git commit -m "chore(electron): bump desktop to v${NEW_VERSION}"
   git push origin main
+fi
+
+# The desktop target's deploy in codecast (docs/architecture/deploys.md DP11),
+# finishing the deploy codecast asked for when it ran this. Non-fatal. With
+# --no-git the caller commits, so it marks (scripts/deploy-all.sh).
+if [ "$NO_GIT" != "1" ]; then
+  cast ship mark --surface desktop --sha "$(git rev-parse HEAD)" --version "$NEW_VERSION" ${CAST_DEPLOY_ID:+--deploy "$CAST_DEPLOY_ID"} \
+    || echo "  desktop deploy not recorded in codecast (non-fatal)"
 fi
 
 echo ""

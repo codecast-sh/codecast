@@ -1,73 +1,64 @@
-Codecast's agent features share one delivery mechanism: a **snippet** is a markdown section that `cast install` writes into the instruction files your coding agents already read. Claude Code reads `~/.claude/CLAUDE.md`. Codex reads `~/.codex/AGENTS.md`, and Grok reads `~/.grok/AGENTS.md`. A snippet teaches the agent a capability ("you can message other sessions", "you can set a trigger", "track your work as tasks") in the place the agent already looks for instructions.
+Your coding agents don't know codecast exists until something tells them. Agent features is where you decide what they learn: to look up what earlier sessions decided, hand work to another session, track work on your board, show results as charts and pages, or use your browser and your Mac. Each feature is a short set of instructions added to the agent's own setup on one computer. Switch it on and every new session there knows how to use it.
 
-This guide explains the mechanism. Each capability has its own guide: [memory](/documentation/memory), [messaging](/documentation/messaging), [pinned thread state](/documentation/thread-state), [ambient awareness](/documentation/ambient-awareness), [forks and spawn](/documentation/forks-and-spawn), [tasks and plans](/documentation/tasks-and-plans), [triggers](/documentation/triggers), [workflows](/documentation/workflows), [orchestration](/documentation/orchestration), [the visual canvas](/documentation/visual-canvas), and [published pages](/documentation/publish).
+Nothing runs because a feature is on. A feature teaches an agent what it can do; the agent reaches for it when the work calls for it, or when you ask.
 
-## The install flow
+![The top of the Agent features page: what it does and the three steps from a switch to a session that uses it](/documentation/agent-snippets/agent-features-intro.webp "Agent features, from the account menu. Switch a feature on for a machine, codecast adds it to that machine's agent setup, and new sessions pick it up.")
 
-`cast install` runs an interactive wizard. It walks through every snippet, shows what each one does and which files it writes to, and asks yes or no. Nothing is installed without your answer.
+## Find it
 
-```bash
-$ cast install            # interactive wizard, one prompt per snippet
-$ cast install messaging  # enable one snippet, no prompts
-$ cast install --all      # enable everything
-$ cast install messaging --disable   # turn one off
-$ cast install --disable  # turn everything off
-$ cast install --all --stubs         # short sections; agents read `cast guide <topic>` for flags
-```
+Open your account menu and choose **Agent features** (it lives at `/agent-features`). You need at least one computer connected to codecast; [Getting started](/documentation#getting-started) covers that.
 
-The single-snippet form is what the web's Agent features page runs on a machine when you toggle a snippet for it, so the CLI and the web control are the same code path.
+The page shows one computer at a time. Pick it from the row of machines above the list; the one you are on is marked *this computer*. Each machine keeps its own setup, so a feature you turn on for your laptop is not on your cloud host until you turn it on there too. A machine that is offline is shown read-only until it reconnects.
 
-The catalog today: `memory`, `messaging`, `pr`, `mods`, `forks`, `tasks`, `triggers`, `workflows`, `visual`, `publish`, `state`, `chat`, `calls`, `browser`, `computer`, `sim`, `check`, `decide`, `limits`, `orchestration` and `skills`. Most write a markdown section; `orchestration` and `skills` install skills, agents and hooks instead. `cast install -h` lists them with one line each, plus two that work differently: `stable`, a session start hook with three states (solo, team, off) rather than on and off, covered in the [ambient awareness guide](/documentation/ambient-awareness), and `hooks`, codecast's own Claude Code hooks.
+## The page
 
-## Where snippets are written
+Features are grouped by what you get from them:
 
-Every install targets each user-level instruction file an agent on the machine actually loads:
+| Group | What's in it |
+|-------|--------------|
+| **Context** | What an agent knows before it starts: past sessions, and where each thread stands |
+| **Working together** | Sessions that delegate, message each other, and bring you a decision instead of an interruption |
+| **Tracking & automation** | Tasks and plans on your board, runs that fire later or on events, pull requests seen through to merge, and skills |
+| **Showing the work** | Visuals in the conversation, pages you can share, and mods that extend the app |
+| **Hands on the machine** | Your browser, native apps and simulators, the shared typecheck, and usage limit recovery |
 
-| Target | When |
-|--------|------|
-| `~/.claude/CLAUDE.md` | always |
-| `~/.codex/AGENTS.md` | when `~/.codex` exists |
-| `~/.grok/AGENTS.md` | when `~/.grok` exists |
+![The Context group: Stable context, Memory and Thread State cards, each with a picture, a switch and a one-line summary](/documentation/agent-snippets/feature-group.webp "Each card shows what the feature looks like in use, its switch, and what you get. Click a card for How it works.")
 
-Agents with no user-level instruction file they load (Cursor, Gemini, pi) get none, so codecast never writes files nothing reads. New files are created with mode `0600` (owner read and write only). Codecast never touches project-level `CLAUDE.md` files: the snippets live in your user-level config, so every project gets them and your repos stay clean.
+- **The switch** on each card turns the feature on or off for the selected machine. The change applies within seconds.
+- **Turn on all** at the top of a group switches on everything in it that is off.
+- **Find a feature** searches names and descriptions. **All / On / Off** filters the list, and the count at the right says how many are on for this machine.
+- **Stable context** is the one feature with three settings instead of a switch: **Solo** starts each new session with a digest of your recent sessions, **Team** with your team's, and **Off** with nothing. **All projects** applies it everywhere rather than per project.
 
-```figure
-SnippetTargetsFigure
-The catalog ships inside the CLI; each section goes into every user-level file an installed agent reads, and nowhere else.
-```
+## How it works, for each feature
 
-## Markers make installs idempotent
+Click any card to open its detail. It shows what you'll see once it is on, the moments agents use it, and something to try asking. Many link straight to the place in the app the feature feeds, such as Tasks, Triggers or Pages, and to a full tour of the feature.
 
-Each snippet is delimited by its heading (for example `## Messaging`) and an HTML comment end marker (`<!-- /codecast-messaging -->`). The installer looks for both:
+At the bottom, **Read exactly what your agent reads** unfolds the full text the feature adds to your agent's setup. There is no hidden prompt: what you read there is what your agent reads.
 
-- Neither present: append the snippet to the end of the file.
-- Both present, installing: do nothing. Running `cast install` twice never duplicates a section.
-- Both present, updating: replace the old section, from heading to marker, with the fresh one in the same place.
+Features that need a one-time step on the machine, like [Browser](/documentation/browser) (pair the Chrome extension) and [Computer](/documentation/computer) (two macOS permissions), show that step right on the card and in the detail as soon as you switch them on.
 
-The installer also recognizes headings older CLI versions wrote (for example `## Publishing HTML artifacts` before the section became `## Publishing pages`), so an update replaces the old section instead of stacking a second copy under it.
+## New features
 
-```figure
-SectionMarkersFigure
-One file, three cases: a missing section is appended, a current one is left alone, a stale one is replaced where it stands.
-```
+When codecast ships a feature after you joined, a slim **New agent features** banner appears above your tabs. Open it to read what each one does, and click **Turn on** to switch it on for every machine that is online. Turning one on or dismissing it hides the banner for that feature for good; Agent features stays the place to change your mind. New features also carry a **New** pill on their card for a while.
 
-Anything you write outside the markers is yours. The installer only ever replaces the region it owns.
+## What changes on your machine
 
-## Versioning and self-updates
+- **Your agents' own instruction files, and nothing else.** Claude Code reads its instructions from a file in your home folder, and so do Codex and Grok. A feature adds one clearly marked section to each of those files that exists on the machine. Agents with no such file get nothing, so codecast never writes files no agent reads.
+- **Never your repositories.** Codecast doesn't touch the instruction files inside your projects. Every project gets the features, and your repos stay clean.
+- **Your own text is safe.** Codecast only ever replaces the sections it wrote. Anything you wrote yourself, above, below or between them, is left alone.
+- **A few features add more than text.** Skills adds slash commands, Orchestration adds an /orchestrate command and three helper agents, and Stable context adds a step that runs when a session starts. The detail for each says exactly what it adds, and switching it off removes it.
+- **Updates arrive on their own.** When codecast updates, any feature whose wording improved is refreshed in place. Features you switched off stay off.
+- **New sessions pick it up.** A session that is already running keeps the instructions it started with. Start a new one to use a feature you just switched on.
 
-Every snippet's text is compiled into the CLI, and your config at `~/.codecast/config.json` records, for each enabled snippet, a hash of the text it last wrote. After `cast update`, an automatic update, or a daemon start on a new version, codecast hashes each enabled snippet's new text and rewrites only the sections whose hash changed. Improved wording, new commands and new flags reach your agents without you re-running the wizard, and a release that leaves a snippet's text alone leaves your file alone. Disabled snippets stay disabled.
+## Where to go next
 
-## The shared "Referencing objects" section
+Each feature has its own guide: [memory](/documentation/memory), [messaging](/documentation/messaging), [thread state](/documentation/thread-state), [ambient awareness](/documentation/ambient-awareness), [forks and spawn](/documentation/forks-and-spawn), [tasks and plans](/documentation/tasks-and-plans), [triggers](/documentation/triggers), [workflows](/documentation/workflows), [orchestration](/documentation/orchestration), [skills](/documentation/skills), [the visual canvas](/documentation/visual-canvas), [published pages](/documentation/publish), [browser](/documentation/browser), [computer use](/documentation/computer) and [typecheck](/documentation/typecheck).
 
-Sessions, tasks, plans, triggers, calls, and docs all have short IDs (`jx7c6zk`, `ct-4102`, `pl-88`, `tr-42`, `cl-42`). Write one in prose anywhere in codecast and it renders as a live reference card. Rather than each snippet teaching its own object's ID format, a single `## Referencing objects` section explains all of them. Any snippet that introduces an object installs this section alongside itself. It is written once per file and refreshed in place, so enabling five features still yields exactly one copy.
+## When something is off
 
-## Per-device control from the web
-
-The daemon reports its snippet settings on every heartbeat, and the Agent features page shows one machine at a time with a switch per snippet. Flipping a switch sends the change to that machine's daemon, which runs the same non-interactive install path as `cast install <name>`; the next heartbeat confirms it. An offline machine is shown read-only. The catalog descriptions you see in the wizard, in `cast install -h`, and on the web all come from one shared source, so they cannot drift apart.
-
-![The Agent features page with two machines, features grouped by category, and a switch on each card](/documentation/agent-snippets/agent-features.webp "The Agent features page: pick a machine, then switch each feature on or off for it.")
-
-```figure
-SnippetRefreshFigure
-A switch on the web reaches one machine's daemon, which runs cast install; a CLI update rewrites only the sections whose text changed.
-```
+| What you notice | What to do |
+|-----------------|------------|
+| The switches are greyed out | The machine is offline. Start codecast on it, or pick a machine that is online |
+| An agent doesn't use a feature you just turned on | Start a new session. Running sessions keep the instructions they started with |
+| A feature is on for one computer but agents on another don't know it | Pick the other machine at the top of the page and switch it on there too |
+| You want a feature on a machine without opening the app | Features can also be switched from a terminal; see the [CLI reference](/documentation#cli) |

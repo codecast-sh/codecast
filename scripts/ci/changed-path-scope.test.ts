@@ -10,6 +10,8 @@ import {
   touchesPlatform,
   touchesComputer,
   computerScope,
+  touchesInjection,
+  injectionScope,
 } from "./changed-path-scope";
 
 const flags = (files: string[]) => classifyChangedPaths(files).flags;
@@ -17,14 +19,16 @@ const flags = (files: string[]) => classifyChangedPaths(files).flags;
 describe("areaOf", () => {
   test("maps each package to its area", () => {
     expect(areaOf("packages/cli/src/daemon.ts")).toBe("cli");
-    expect(areaOf("packages/evals/src/x.ts")).toBe("cli");
+    expect(areaOf("packages/evals/src/x.ts")).toBe("evals");
     expect(areaOf("packages/web/components/DiffView.tsx")).toBe("web");
     expect(areaOf("packages/convex/convex/tasks.ts")).toBe("convex");
     expect(areaOf("packages/shared/contracts/agentClients.ts")).toBe("shared");
     expect(areaOf("platform/packages/engine/src/index.ts")).toBe("platform");
     expect(areaOf("platform/vendor-manifest.txt")).toBe("platform");
     expect(areaOf("packages/electron/main.js")).toBe("electron");
-    expect(areaOf("packages/desktop/src-tauri/tauri.conf.json")).toBe("electron");
+    expect(areaOf("packages/playground/src/main.tsx")).toBe("playground");
+    expect(areaOf("infra/convex-host/Caddyfile")).toBe("infra");
+    expect(areaOf("infra/README.md")).toBe("infra");
     expect(areaOf("packages/mobile/app/index.tsx")).toBe("mobile");
     expect(areaOf("packages/browser-extension/background.js")).toBe("extension");
     expect(areaOf("packages/vscode-extension/src/extension.ts")).toBe("extension");
@@ -35,6 +39,8 @@ describe("areaOf", () => {
     expect(areaOf("CLAUDE.md")).toBe("docs");
     expect(areaOf("docs/architecture/sync-host.md")).toBe("docs");
     expect(areaOf(".github/ISSUE_TEMPLATE/bug.md")).toBe("docs");
+    expect(areaOf("QUARANTINE.md")).toBe("docs");
+    expect(areaOf("plans/README.md")).toBe("docs");
   });
 
   test("claims nothing it does not recognise", () => {
@@ -42,7 +48,9 @@ describe("areaOf", () => {
     expect(areaOf("bun.lock")).toBeNull();
     expect(areaOf(".github/workflows/ci.yml")).toBeNull();
     expect(areaOf("scripts/ci/changed-path-scope.ts")).toBeNull();
-    expect(areaOf("infra/nginx.conf")).toBeNull();
+    expect(areaOf("scripts/deploy-all.sh")).toBeNull();
+    expect(areaOf("dev.sh")).toBeNull();
+    expect(areaOf("nginx.dev.conf.example")).toBeNull();
   });
 });
 
@@ -65,79 +73,60 @@ describe("touchesPlatform", () => {
 });
 
 describe("classifyChangedPaths", () => {
-  test("a docs-only change runs only the shared suite, which reads docs/", () => {
+  // The jobs one change runs. Each set follows from what the job's files
+  // import or read (test-reach.test.ts checks those edges against the tree).
+  const ran = (files: string[]) => GATED_JOBS.filter((job) => flags(files)[jobFlag(job)]).sort();
+
+  test("a docs-only change runs the cli and shared suites, which read docs/", () => {
     const result = flags(["docs/architecture/sync-host.md", "README.md"]);
     expect(result.docs).toBe(true);
-    for (const job of GATED_JOBS) {
-      expect(result[jobFlag(job)], job).toBe(job === "test-shared");
-    }
+    expect(ran(["docs/architecture/sync-host.md", "README.md"])).toEqual(["test-cli", "test-shared"]);
     for (const area of AREAS) {
       if (area !== "docs") expect(result[area]).toBe(false);
     }
   });
 
-  test("a cli change runs build, typecheck, the cli, shared and mobile tests", () => {
-    const result = flags(["packages/cli/src/daemon.ts"]);
-    expect(result.cli).toBe(true);
-    expect(result.run_build).toBe(true);
-    expect(result.run_typecheck).toBe(true);
-    expect(result.run_test_cli).toBe(true);
-    expect(result.run_test_shared).toBe(true);
-    // The mobile guards borrow the import graph walker from packages/cli.
-    expect(result.run_test_mobile).toBe(true);
-    expect(result.run_lint).toBe(false);
-    expect(result.run_test_web).toBe(false);
-    expect(result.run_test_convex).toBe(false);
-    expect(result.run_test_electron).toBe(false);
+  // The few web and convex test files that import cli code run in
+  // test-always instead.
+  test("a cli change runs build, typecheck and the cli tests", () => {
+    expect(ran(["packages/cli/src/daemon.ts"])).toEqual(["build", "test-cli", "typecheck"]);
   });
 
-  // The eval home's unit tests are a step of test-cli, so an evals change has
-  // to reach that job, and only the jobs a cli change reaches.
-  test("an evals change runs the cli tests without forcing every job", () => {
+  // convex source imports web code. The cli test files that read web files
+  // run in test-always instead.
+  test("a web change runs lint and the web, convex and mobile tests", () => {
+    expect(ran(["packages/web/components/DiffView.tsx"])).toEqual(
+      ["build", "lint", "test-convex", "test-mobile", "test-web", "typecheck"],
+    );
+  });
+
+  test("a convex change runs the convex, web, cli and mobile tests", () => {
+    expect(ran(["packages/convex/convex/tasks.ts"])).toEqual(
+      ["build", "test-cli", "test-convex", "test-mobile", "test-web", "typecheck"],
+    );
+  });
+
+  // The eval home's unit tests are a step of test-cli.
+  test("an evals change runs typecheck and the cli tests without forcing every job", () => {
     const scope = classifyChangedPaths(["packages/evals/src/x.ts"]);
     expect(scope.forcedBy).toEqual([]);
-    expect(scope.flags).toEqual(flags(["packages/cli/src/daemon.ts"]));
-    expect(scope.flags.run_test_cli).toBe(true);
-    expect(scope.flags.run_test_web).toBe(false);
-    expect(scope.flags.run_test_convex).toBe(false);
-    expect(scope.flags.run_lint).toBe(false);
-  });
-
-  test("a web change runs lint, typecheck, build and the web tests", () => {
-    const result = flags(["packages/web/components/DiffView.tsx"]);
-    expect(result.run_lint).toBe(true);
-    expect(result.run_typecheck).toBe(true);
-    expect(result.run_build).toBe(true);
-    expect(result.run_test_web).toBe(true);
-    expect(result.run_test_cli).toBe(false);
-    expect(result.run_test_convex).toBe(false);
+    expect(ran(["packages/evals/src/x.ts"])).toEqual(["test-cli", "typecheck"]);
   });
 
   test("a shared change runs every job that reads shared", () => {
-    const result = flags(["packages/shared/contracts/inboxProjection.ts"]);
-    expect(result.run_build).toBe(true);
-    expect(result.run_typecheck).toBe(true);
-    expect(result.run_test_cli).toBe(true);
-    expect(result.run_test_web).toBe(true);
-    expect(result.run_test_convex).toBe(true);
-    // Only packages/web has a lint script, so a shared change leaves it out.
-    expect(result.run_lint).toBe(false);
+    expect(ran(["packages/shared/contracts/inboxProjection.ts"])).toEqual(
+      ["build", "test-cli", "test-convex", "test-mobile", "test-shared", "test-web", "typecheck"],
+    );
   });
 
-  // The vendored mirror is a dependency of every package, so a change to it has
-  // to keep reaching the jobs that used to see it through "shared" — and now
-  // also reach the job that tests the mirror itself (ct-49675).
-  test("a vendored platform change runs every job that reads the mirror", () => {
+  // The vendored mirror is a dependency of every package, so a change to it
+  // reaches every job that reads it, and the job that tests the mirror itself
+  // (ct-49675). Only packages/web has a lint script.
+  test("a vendored platform change runs every job but lint", () => {
     const result = flags(["platform/packages/engine/src/store.ts"]);
     expect(result.platform).toBe(true);
     expect(result.shared).toBe(false);
-    expect(result.run_test_platform).toBe(true);
-    expect(result.run_build).toBe(true);
-    expect(result.run_typecheck).toBe(true);
-    expect(result.run_test_cli).toBe(true);
-    expect(result.run_test_web).toBe(true);
-    expect(result.run_test_convex).toBe(true);
-    expect(result.run_lint).toBe(false);
+    expect(ran(["platform/packages/engine/src/store.ts"])).toEqual(GATED_JOBS.filter((job) => job !== "lint").sort());
   });
 
   test("a workspace manifest re-checks the mirror it declares", () => {
@@ -156,48 +145,37 @@ describe("classifyChangedPaths", () => {
     expect(flags(["docs/architecture/sync-host.md"]).run_test_platform).toBe(false);
   });
 
-  // test-cli carries the eval home's unit tests, which import convex prompt
-  // builders and parsers, so a convex-only change has to run them.
-  test("a convex change runs typecheck, build, the convex tests and the cli job's evals step", () => {
-    const result = flags(["packages/convex/convex/tasks.ts"]);
-    expect(result.run_typecheck).toBe(true);
-    expect(result.run_test_convex).toBe(true);
-    expect(result.run_test_cli).toBe(true);
-    expect(result.run_test_web).toBe(false);
-    expect(result.run_lint).toBe(false);
+  test("a mobile change runs the mobile tests only", () => {
+    expect(flags(["packages/mobile/app/index.tsx"]).mobile).toBe(true);
+    expect(ran(["packages/mobile/app/index.tsx"])).toEqual(["test-mobile"]);
   });
 
-  test("a mobile change runs the mobile tests and the shared suite only", () => {
-    const result = flags(["packages/mobile/app/index.tsx"]);
-    expect(result.mobile).toBe(true);
-    for (const job of GATED_JOBS) {
-      expect(result[jobFlag(job)], job).toBe(job === "test-mobile" || job === "test-shared");
-    }
+  // web imports electron's window registry, so an electron change reaches
+  // every job that loads web code.
+  test("an electron change runs the electron tests and everything that loads web", () => {
+    const file = "packages/electron/main.js";
+    expect(flags([file]).electron).toBe(true);
+    expect(ran([file])).toEqual(["build", "test-electron", "test-mobile", "test-web", "typecheck"]);
   });
 
-  test("an electron or desktop change runs the electron tests and the shared suite only", () => {
-    for (const file of ["packages/electron/main.js", "packages/desktop/src-tauri/tauri.conf.json"]) {
-      const result = flags([file]);
-      expect(result.electron).toBe(true);
-      for (const job of GATED_JOBS) {
-        expect(result[jobFlag(job)], `${file} ${job}`).toBe(job === "test-electron" || job === "test-shared");
-      }
-    }
+  // Nothing imports the playground; the root build and typecheck cover it.
+  test("a playground change runs build and typecheck only", () => {
+    const scope = classifyChangedPaths(["packages/playground/src/main.tsx"]);
+    expect(scope.forcedBy).toEqual([]);
+    expect(ran(["packages/playground/src/main.tsx"])).toEqual(["build", "typecheck"]);
   });
 
-  test("the mobile guards rerun for every package the native bundle reaches", () => {
-    // bundleGraph.guard walks into web, convex and shared; both guards import
-    // the graph walker from packages/cli.
-    for (const file of [
-      "packages/web/components/DiffView.tsx",
-      "packages/convex/convex/tasks.ts",
-      "packages/shared/contracts/agentClients.ts",
-      "packages/cli/src/bench/bootGraph.ts",
-      "platform/packages/analytics/src/index.ts",
-    ]) {
-      expect(flags([file]).run_test_mobile, file).toBe(true);
-    }
-    expect(flags(["packages/electron/main.js"]).run_test_mobile).toBe(false);
+  // infra's own tests run in test-always; no gated job reads infra/.
+  test("an infra change runs no gated job", () => {
+    const scope = classifyChangedPaths(["infra/convex-host/Caddyfile", "infra/README.md"]);
+    expect(scope.forcedBy).toEqual([]);
+    expect(scope.flags.infra).toBe(true);
+    expect(ran(["infra/convex-host/Caddyfile"])).toEqual([]);
+  });
+
+  // The cli files that read the extension's manifest run in test-always.
+  test("an extension change runs build only", () => {
+    expect(ran(["packages/browser-extension/background.js"])).toEqual(["build"]);
   });
 
   test("the electron tests rerun for the vendored @platform/desktop they require", () => {
@@ -205,26 +183,6 @@ describe("classifyChangedPaths", () => {
     expect(flags(["packages/electron/package.json"]).run_test_electron).toBe(true);
     expect(flags(["packages/web/components/DiffView.tsx"]).run_test_electron).toBe(false);
     expect(flags(["packages/shared/contracts/agentClients.ts"]).run_test_electron).toBe(false);
-  });
-
-  test("the shared suite runs for any change at all", () => {
-    // The max lines ratchet walks every package and a contract test reads its
-    // spec from docs/, so no classified change leaves it out.
-    const samples: Record<string, string> = {
-      cli: "packages/cli/src/daemon.ts",
-      web: "packages/web/components/DiffView.tsx",
-      convex: "packages/convex/convex/tasks.ts",
-      shared: "packages/shared/contracts/agentClients.ts",
-      platform: "platform/vendor-manifest.txt",
-      electron: "packages/electron/main.js",
-      mobile: "packages/mobile/app/index.tsx",
-      extension: "packages/browser-extension/background.js",
-      docs: "docs/architecture/head-of-people-prompt.md",
-    };
-    expect(Object.keys(samples).sort()).toEqual([...AREAS].sort());
-    for (const [area, file] of Object.entries(samples)) {
-      expect(flags([file]).run_test_shared, area).toBe(true);
-    }
   });
 
   test("an empty diff runs everything", () => {
@@ -239,9 +197,9 @@ describe("classifyChangedPaths", () => {
   });
 
   test("an unrecognised path runs everything and names itself", () => {
-    const scope = classifyChangedPaths(["infra/railway/web.toml"]);
+    const scope = classifyChangedPaths(["tools/railway/web.toml"]);
     for (const job of GATED_JOBS) expect(scope.flags[jobFlag(job)]).toBe(true);
-    expect(scope.forcedBy).toEqual(["infra/railway/web.toml"]);
+    expect(scope.forcedBy).toEqual(["tools/railway/web.toml"]);
   });
 
   test("a lockfile or workflow change runs everything", () => {
@@ -266,14 +224,14 @@ describe("classifyChangedPaths", () => {
 
 test("the classifier runs as a script and prints the flags", async () => {
   const proc = Bun.spawn(["bun", new URL("./changed-path-scope.ts", import.meta.url).pathname], {
-    stdin: new TextEncoder().encode("packages/web/components/DiffView.tsx\n"),
+    stdin: new TextEncoder().encode("packages/mobile/app/index.tsx\n"),
     stdout: "pipe",
     stderr: "pipe",
   });
   const stdout = await new Response(proc.stdout).text();
   expect(await proc.exited).toBe(0);
-  expect(stdout.split("\n")).toContain("run_test_web=true");
-  expect(stdout.split("\n")).toContain("run_test_cli=false");
+  expect(stdout.split("\n")).toContain("run_test_mobile=true");
+  expect(stdout.split("\n")).toContain("run_test_web=false");
 });
 
 describe("computer test scope", () => {
@@ -309,5 +267,45 @@ describe("computer test scope", () => {
     const stdout = await new Response(proc.stdout).text();
     expect(await proc.exited).toBe(0);
     expect(stdout.trim()).toBe("run_test_computer=true");
+  });
+});
+
+describe("injection suite scope", () => {
+  test("runs for the daemon, the paste path and the agent client contract", () => {
+    for (const file of [
+      "packages/cli/src/daemon.ts",
+      "packages/cli/src/tmuxPaste.ts",
+      "packages/shared/contracts/agentClients.ts",
+    ]) expect(touchesInjection(file)).toBe(true);
+  });
+
+  test("does not run for other files", () => {
+    for (const file of ["packages/cli/src/daemon.test.ts", "packages/cli/src/index.ts", "docs/README.md", ""])
+      expect(touchesInjection(file)).toBe(false);
+  });
+
+  // Every commit of a push is in the list ci.yml hands over, so an injection
+  // change in an earlier commit of a multi-commit push still counts.
+  test("an empty diff runs the suites, an unrelated one skips them", () => {
+    expect(injectionScope([])).toBe(true);
+    expect(injectionScope(["", "  "])).toBe(true);
+    expect(injectionScope(["packages/cli/src/index.ts"])).toBe(false);
+    expect(injectionScope(["packages/cli/src/index.ts", "packages/cli/src/tmuxPaste.ts"])).toBe(true);
+  });
+
+  test("the script prints the flag", async () => {
+    const run = async (input: string) => {
+      const proc = Bun.spawn(["bun", new URL("./changed-path-scope.ts", import.meta.url).pathname, "--injection-only"], {
+        stdin: new TextEncoder().encode(input),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stdout = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      return stdout.trim();
+    };
+    expect(await run("\n")).toBe("run_test_injection=true");
+    expect(await run("packages/web/index.ts\n")).toBe("run_test_injection=false");
+    expect(await run("packages/cli/src/daemon.ts\n")).toBe("run_test_injection=true");
   });
 });

@@ -185,6 +185,7 @@ lacks takes pi-ai's reported cost, then the model's catalog price, then
 | --- | --- | --- | --- |
 | claude-sonnet-5-5 | $2 | $10 | |
 | claude-opus-5-5 | $4 | $20 | |
+| claude-haiku-5-5 | $0.10 | $0.50 | prompts up to 100K tokens |
 | claude-haiku-4-5 | $1 | $5 | |
 
 Cache reads bill at a tenth of input and cache writes at 1.25x. A dated id

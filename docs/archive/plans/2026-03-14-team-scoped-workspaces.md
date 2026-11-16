@@ -78,7 +78,7 @@ Preserve all downstream logic (status filtering, `include_all`, `limit`, return 
 
 - [ ] **Step 2: Verify no type errors**
 
-Run: `cd /Users/ashot/src/codecast && npx convex dev --once`
+Run: `cd /Users/codecast/src/codecast && npx convex dev --once`
 
 - [ ] **Step 3: Commit**
 
@@ -107,7 +107,7 @@ Only replace the query resolution block (which index to use and how to get the i
 
 - [ ] **Step 2: Verify no type errors**
 
-Run: `cd /Users/ashot/src/codecast && npx convex dev --once`
+Run: `cd /Users/codecast/src/codecast && npx convex dev --once`
 
 - [ ] **Step 3: Commit**
 
@@ -137,7 +137,7 @@ Only replace the section that determines which docs to fetch (the user docs + te
 
 - [ ] **Step 2: Verify no type errors**
 
-Run: `cd /Users/ashot/src/codecast && npx convex dev --once`
+Run: `cd /Users/codecast/src/codecast && npx convex dev --once`
 
 - [ ] **Step 3: Commit**
 
@@ -161,7 +161,7 @@ Note: In team workspace, `by_team_id` will return projects from all team members
 
 - [ ] **Step 2: Verify no type errors**
 
-Run: `cd /Users/ashot/src/codecast && npx convex dev --once`
+Run: `cd /Users/codecast/src/codecast && npx convex dev --once`
 
 - [ ] **Step 3: Commit**
 
@@ -598,7 +598,7 @@ Add `--team <name>` option to task and plan create commands. When provided, look
 - [ ] **Step 4: Test**
 
 ```bash
-cd /Users/ashot/src/codecast && cast task create "Test personal task" -t task -p low
+cd /Users/codecast/src/codecast && cast task create "Test personal task" -t task -p low
 # Should be personal (no team mapping for codecast dir)
 ```
 
@@ -664,7 +664,7 @@ git commit -m "feat(web): redirect on workspace switch from detail pages"
 - [ ] **Step 2: Test CLI**
 
 ```bash
-cd /Users/ashot/src/codecast
+cd /Users/codecast/src/codecast
 cast task create "Personal test task" -t task -p low
 # Should be personal (no team mapping)
 ```

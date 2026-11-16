@@ -1,68 +1,44 @@
-`git blame` tells you who committed a line. When an agent wrote it, that answer is the person who ran the agent, and the reasoning behind the line is gone: the conversation where it was decided, the alternatives that were rejected, the prompt that asked for it. This guide covers how to get that back, with codecast and with the two tools built specifically for it.
+`git blame` tells you who committed a line. When an agent wrote it, that is just the person who ran the agent, and the reasoning is gone: the request that asked for it, the alternatives it rejected, the test that settled it. Codecast keeps that reasoning. For any line an agent wrote while codecast was running, you can see which session wrote it and open the conversation.
 
-## With codecast: `cast blame`
+![A file in the codecast repository view with Blame set to Sessions: a strip reading "99% by 2 sessions" with a chip per session, and the session that wrote each block of lines in the gutter](/documentation/which-session-wrote-this-line/session-blame.webp "Blame set to Sessions. The strip above the file lists the sessions that wrote it, with how many lines each. The gutter names the session behind each block of lines.")
 
-`cast blame` is a drop in replacement for `git blame` whose author column names the codecast session that wrote each line:
+## See it in the app
 
-```bash
-cast blame src/auth.ts             # every line, with sessions
-cast blame src/auth.ts:42          # one line
-cast blame -L 10,30 src/auth.ts    # a range
-cast blame --open src/auth.ts:42   # open the conversation behind line 42
-```
+1. Open **Code** in the sidebar, then a repository and a file.
+2. In the bar above the file, set **Blame** to **Sessions**. Press **B** to cycle Off, Git and Sessions.
 
-In place of an author name, a line shows the session's short id, the first name of the person who ran it, and the session's title, for example `jx74qbm Samvit Agent prompt guardrails`. `--open` goes further: when codecast knows the message that made the edit, it opens the conversation scrolled to that message; otherwise it opens the session.
+What you get:
 
-The repository view in the web app shows the same attribution beside the code:
+- **The gutter** names the session behind each block of lines, with how long ago it was written. A block written by a person outside any session shows their git name instead, like ordinary blame. Hover a block to see who ran the session, the commit, and how codecast traced the line to it.
+- **The strip above the file** sums it up: how much of the file traces to a session ("99% by 2 sessions"), then a chip per session with its title, who ran it and how many lines it wrote. Hover a chip to light up that session's lines wherever they are; click it to jump to the first one.
+- **Open the conversation** with the speech bubble at the end of a chip. A lock in its place means that session is private to someone else: you can see it exists, not read it.
 
-![A file in the repository view with session labels in the gutter beside the lines each session wrote, and a summary of the sessions that wrote the file](/documentation/shots/blame.webp "The code view: each block of lines names the session that wrote it, and the header shows which sessions wrote how much of the file.")
+**Git** shows ordinary blame, with commits and authors, if that is what you need.
 
-It works in three steps. Git does the line history locally, exactly as `git blame --porcelain` would. Codecast then resolves each commit to the session that made it: first by the commit's `Codecast-Session` trailer (below), then by the commits codecast recorded, then by a short hash an agent's recorded edit mentions, then by commit subject and time when the hash no longer matches. Lines that are not committed yet are matched by their content against your recent agent edits. When both apply, the session that wrote the line wins over the session that committed it, and a line no session touched keeps its ordinary git author.
+## Ask your agent why
 
-```figure
-BlameCascadeFigure
-Each line's commit falls through the checks until one names a session; a line no agent wrote keeps its git author.
-```
+You don't have to open the code view. Ask an agent with [Memory](/documentation/memory) on:
 
-The output matches git blame's default and porcelain formats, so editor integrations that shell out to `git blame` can call `cast blame` instead. Porcelain output carries the attribution as extra keys (`codecast-session`, `codecast-conversation`, `codecast-author`, `codecast-title`, `codecast-url` and `codecast-message`), which porcelain parsers ignore. For vim, `cast blame --install-fugitive` makes `:Gblame` show sessions, and `cast blame --log src/auth.ts` lists the sessions that shaped a file, newest first.
+- "Why does line 42 of src/auth.ts refresh the token early?"
+- "Which session added the retry cap in the webhook handler, and what was the reason?"
+- "Who changed the session timeout last, and did they mean to?"
 
-Nothing has to be installed in the repository. The attribution comes from sessions the codecast daemon already recorded, which is also its limit: it covers work done while the daemon was running, in agents codecast records (Claude Code, Codex, Cursor and Gemini), and reading it needs a codecast account with access to those sessions.
+The agent finds the session that wrote the line, reads the part of the conversation where it was decided, and answers from the author's own reasoning, with a link to that message.
 
-## The `Codecast-Session` trailer
+## The link inside each commit
 
-Every commit a Claude Code session makes carries a link to that session in its message:
+When an agent session commits, codecast adds a last line to the commit message that links back to the session, such as `Codecast-Session: https://codecast.sh/conversation/jx74qbm…`.
 
-```
-fix: refresh the token before it expires
+Because the link is part of the commit message, it survives rebases, squash merges and any git host, and anyone reading `git log` can follow it. In codecast, commit pages and a pull request's commit list show it as the session's name instead of a raw link. Following the link still needs access to the session: it points at the conversation, it doesn't share it.
 
-Codecast-Session: https://codecast.sh/conversation/jx74qbm2d0x6yhk3rb8e1nqz5f7aw9tc
-```
+Codecast adds this line only for sessions shared with your team, so a private session never leaves a link in a shared history. It covers commits Claude Code makes directly; commits made by a script the agent runs, or by other agents, don't get the line, and codecast traces those from its own record of the session's edits instead.
 
-Codecast's hooks add it by rewriting each `git commit` the agent runs to `git commit --trailer 'Codecast-Session: …'`, without touching the permission decision. The hook adds it only when the session is visible to its team, so a private session's link never lands in a shared history. Because the link lives in the commit message, it survives rebases, squash merges and any git host, `git log` alone leads back to the conversation, and `cast blame` and the team feed use it before any guess. Opening the link still needs access to the session: the trailer names it, it does not share it. A reader who can neither own nor see that session gets no attribution from it.
+## What it covers
 
-```figure
-TrailerFigure
-The hook rewrites the agent's commit command before it runs, and the link then travels with the commit message.
-```
+- **Work done while codecast was running**, in the agents it records: Claude Code, Codex, Cursor and Gemini. Code written before you installed codecast keeps its ordinary git blame.
+- **Only what you can see.** A session shows by name only if you can open it; otherwise you see that a session wrote the line, with a lock.
+- **Committed lines.** The code view shows a branch as it is on your git host.
 
-It covers `git commit` as Claude Code runs it, including `-m`, `-F`, `-am`, `--amend`, heredoc messages and commits inside compound commands. It does not cover commits made by a script the agent runs, a git alias, `git merge` or `git rebase`, or other agents: Codex can only rewrite a command by approving it too, so codecast leaves it alone there. To turn it off:
+## Other tools
 
-```bash
-git config codecast.sessionTrailer false   # in one repository
-cast config session_trailer false          # everywhere on this machine
-export CODECAST_SESSION_TRAILER=0          # in the environment an agent starts from
-```
-
-## With a dedicated attribution tool
-
-Two open source tools solve the same question from the other direction, by writing attribution into the repository itself.
-
-**[Git AI](https://usegitai.com/agent-blame)** stores attribution in git notes, captured through hooks in the agents while they work, so it has to be installed before the code is written. It supports twelve agents, including Claude Code, Codex, Cursor, Copilot and Gemini CLI, rewrites its attributions through rebases, squashes and cherry picks, and keeps the prompts behind each line.
-
-**[Agent Blame](https://www.mesa.dev/blog/agentblame-deep-dive)**, from Mesa, also writes git notes: it captures edits from Cursor, Claude Code and OpenCode and matches them to new lines in a post commit hook. Each attributed line shows the tool, the model, and a confidence score; it does not record prompts.
-
-Because both keep the record in git notes, the attribution travels with the code and anyone with a clone can read it, with no service involved.
-
-## Choosing
-
-Choose Git AI or Agent Blame when the attribution has to live in the repository: readable by anyone who clones it, auditable without an account, and you can install hooks before the work starts. Choose `cast blame` when you want the whole conversation behind a line rather than a label, when the code was written before anyone installed anything, or when your team already records its sessions in codecast. Its trailer puts the link in the repository too, though reading the conversation behind it still needs access in codecast. They do not conflict: git notes written by either tool sit alongside git history that `cast blame` reads.
+[Git AI](https://usegitai.com/agent-blame) and [Agent Blame](https://www.mesa.dev/blog/agentblame-deep-dive) take a different route: they write attribution into the repository itself as git notes, captured by hooks installed before the code is written. Anyone with a clone can read it, with no account. Choose them when attribution has to live in the repository; choose codecast when you want the whole conversation behind a line, or when the code was written before anyone installed anything. They work side by side.

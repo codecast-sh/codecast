@@ -1,7 +1,7 @@
 
 ## Thread state
 
-A pinned, agent-maintained status per thread (cast state). Adds `cast state "…"` so an agent keeps a short pinned state on its session: what it is working on, whether that work is in progress, blocked on you, or done, and the detail behind it. It shows above the composer and on the inbox card — the status colors the row, so blocked and finished sessions stand out in the list. The agent rewrites it as the work moves; the dashboard shows how far the thread has run since it was last written, so a neglected one reads as stale rather than current.
+A pinned, agent-maintained status per thread (cast state). Adds `cast state "…"` so an agent keeps a short pinned state on its session: what it is working on, whether that work is in progress, blocked on you, or done, and the detail behind it. It shows above the composer and on the inbox card, and the status colors the row, so blocked and finished sessions stand out in the list. The agent rewrites it as the work moves; the dashboard shows how far the thread has run since it was last written, so a neglected one reads as stale rather than current.
 
 Run `cast guide state` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
 <!-- cast @VERSION@ -->
@@ -19,7 +19,8 @@ Every codecast object has a short ID. Written anywhere (messages, summaries, tas
 | Trigger | `tr-42`   | `cast trigger ls` |
 | Doc     | `doc:<id>` | `cast doc ls`, `cast doc search` |
 | Call    | `cl-42`   | `cast calls` |
+| Flow    | `flow:change` | `cast flow ls` |
 
-Write the bare ID by default (`Filed under ct-4102.`); it reads as a normal sentence and still renders in full. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as an unreadable blob, and every command accepts the short one.
+Write the bare ID by default (`Filed under ct-4102.`); it reads as a sentence and renders in full. A flow ID alone on a line draws the flow, each step open to its prompt. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as a blob, and every command takes the short one.
 <!-- cast @VERSION@ -->
 <!-- /codecast-references -->

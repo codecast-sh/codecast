@@ -3,8 +3,10 @@
 // before a job starts and `needs.<job>.result` only after — so nothing but this
 // test stops them drifting apart and quietly turning a skipped job into a pass
 // (ct-49562).
-import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
 import { AREAS, ADVISORY_JOBS, GATED_JOBS, jobFlag } from "./changed-path-scope";
 
@@ -28,10 +30,11 @@ const verifyJob = jobs.verify;
 const assertRun: string = verifyJob.steps[0].run;
 
 describe("ci.yml job graph", () => {
-  test("holds exactly the classifier, the contract, the gated jobs, the advisory jobs and verify", () => {
+  test("holds exactly the classifier, the contract, the always-run tests, the gated jobs, the advisory jobs and verify", () => {
     expect(Object.keys(jobs)).toEqual([
       "code_paths",
       "ci-contract",
+      "test-always",
       ...GATED_JOBS,
       ...ADVISORY_JOBS,
       "verify",
@@ -60,21 +63,45 @@ describe("ci.yml job graph", () => {
       const setup = steps.findIndex((step) => step.uses === SETUP_BUN);
       expect(setup, `${name} sets up bun`).toBeGreaterThan(-1);
       expect(SETUP_DEPS, `${name} deps`).toContain(steps[setup].with?.deps ?? "install");
+      expect(String(steps[setup].with?.["bun-version"] ?? "0.0.0"), `${name} bun-version`).toMatch(/^\d+\.\d+\.\d+$/);
       const firstBun = steps.findIndex((step) => /\bbun\b/.test(String(step.run ?? "")));
       expect(setup, `${name} sets up bun before its first bun step`).toBeLessThan(firstBun);
+    }
+  });
+
+  // The release workflows build with the same bun as CI; a pin of their own
+  // is how the two drift apart.
+  test("the release workflows set bun up through the same composite action", () => {
+    for (const file of ["cut-cli-release", "finalize-cli-release", "cut-extension-release"]) {
+      const release = Bun.YAML.parse(
+        readFileSync(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8"),
+      ) as { jobs: Record<string, any> };
+      for (const [name, job] of Object.entries(release.jobs)) {
+        const steps: any[] = job.steps ?? [];
+        for (const step of steps) {
+          expect(String(step.uses ?? "").startsWith("oven-sh/setup-bun@"), `${file} ${name} uses setup-bun directly`).toBe(false);
+          expect(step.with?.["bun-version"], `${file} ${name} pins its own bun`).toBeUndefined();
+        }
+        const firstBun = steps.findIndex((step) => /\bbun\b/.test(String(step.run ?? "")));
+        if (firstBun < 0) continue;
+        const setup = steps.findIndex((step) => step.uses === SETUP_BUN);
+        expect(setup, `${file} ${name} sets up bun`).toBeGreaterThan(-1);
+        expect(setup, `${file} ${name} sets up bun before its first bun step`).toBeLessThan(firstBun);
+      }
     }
   });
 
   test("the composite action caches the bun store and installs only after", () => {
     const steps: any[] = setupBun.runs.steps;
     expect(setupBun.runs.using).toBe("composite");
-    expect(Object.keys(setupBun.inputs)).toEqual(["deps"]);
+    expect(Object.keys(setupBun.inputs)).toEqual(["deps", "bun-version"]);
     expect(setupBun.inputs.deps.default).toBe("install");
+    expect(String(setupBun.inputs["bun-version"].default)).toMatch(/^\d+\.\d+\.\d+$/);
     const bun = steps.findIndex((step) => String(step.uses ?? "").startsWith("oven-sh/setup-bun@"));
     const cache = steps.findIndex((step) => String(step.uses ?? "").startsWith("actions/cache@"));
     const install = steps.findIndex((step) => step.run === "bun install");
     expect(bun).toBe(0);
-    expect(steps[bun].with["bun-version"]).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(steps[bun].with["bun-version"]).toBe("${{ inputs.bun-version }}");
     expect(cache).toBeGreaterThan(bun);
     expect(steps[cache].if).toBe("inputs.deps != 'none'");
     expect(steps[cache].with.path).toBe("~/.bun/install/cache");
@@ -85,25 +112,99 @@ describe("ci.yml job graph", () => {
 });
 
 describe("code_paths", () => {
-  test("diffs against the merge base from a full but blobless history", () => {
+  const diffStep = jobs.code_paths.steps.find((step: any) => step.id === "diff");
+
+  test("lists changed paths once, from a full but blobless history", () => {
     const checkout = jobs.code_paths.steps.find((step: any) =>
       String(step.uses ?? "").startsWith("actions/checkout@"),
     );
     expect(checkout.with["fetch-depth"]).toBe(0);
     expect(checkout.with.filter).toBe("blob:none");
 
-    const classify = jobs.code_paths.steps.find((step: any) => step.id === "scope");
-    expect(classify.env.BASE_SHA).toBe("${{ github.event.pull_request.base.sha }}");
-    expect(classify.env.HEAD_SHA).toBe("${{ github.event.pull_request.head.sha }}");
-    expect(classify.run).toContain("--merge-base");
-    expect(classify.run).toContain("--no-renames");
-    expect(classify.run).toContain("bun scripts/ci/changed-path-scope.ts");
-    expect(classify.run).toContain('tee -a "$GITHUB_OUTPUT"');
+    expect(diffStep.env).toEqual({
+      EVENT_NAME: "${{ github.event_name }}",
+      PR_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+      PR_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+      PUSH_BEFORE_SHA: "${{ github.event.before }}",
+      PUSH_SHA: "${{ github.sha }}",
+    });
+    expect(diffStep.run).toContain("--no-renames");
+    expect(diffStep.run).not.toContain("set -e");
+    for (const id of ["scope", "computer_scope", "injection_scope"]) {
+      const classify = jobs.code_paths.steps.find((step: any) => step.id === id);
+      expect(classify.run, id).toContain('bun scripts/ci/changed-path-scope.ts');
+      expect(classify.run, id).toContain('< "${{ steps.diff.outputs.list }}"');
+      expect(classify.run, id).toContain('tee -a "$GITHUB_OUTPUT"');
+    }
+  });
+
+  // Run the diff step's shell against a scratch repository the way GitHub runs
+  // it, for each event shape, and read back the list it hands the classifiers.
+  describe("diff step", () => {
+    const git = (cwd: string, ...args: string[]) => {
+      const proc = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+      if (proc.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${proc.stderr}`);
+      return proc.stdout.toString().trim();
+    };
+    const scratch = mkdtempSync(join(tmpdir(), "ci-diff-"));
+    afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+    const repo = join(scratch, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "config", "user.email", "ci@example.com");
+    git(repo, "config", "user.name", "ci");
+    const commit = (file: string) => {
+      mkdirSync(dirname(join(repo, file)), { recursive: true });
+      writeFileSync(join(repo, file), Bun.randomUUIDv7());
+      git(repo, "add", "-A");
+      git(repo, "commit", "-q", "-m", file);
+      return git(repo, "rev-parse", "HEAD");
+    };
+    const first = commit("README.md");
+    const web = commit("packages/web/a.ts");
+    git(repo, "checkout", "-q", "-b", "feature", first);
+    const cli = commit("packages/cli/b.ts");
+    git(repo, "checkout", "-q", "main");
+    const docs = commit("docs/c.md");
+
+    const run = (env: Record<string, string>) => {
+      const temp = mkdtempSync(join(scratch, "runner-"));
+      const output = join(temp, "output");
+      writeFileSync(output, "");
+      const proc = Bun.spawnSync(["bash", "-e", "-c", diffStep.run], {
+        cwd: repo,
+        env: { PATH: Bun.env.PATH!, RUNNER_TEMP: temp, GITHUB_OUTPUT: output, EVENT_NAME: "", PR_BASE_SHA: "", PR_HEAD_SHA: "", PUSH_BEFORE_SHA: "", PUSH_SHA: "", ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+      const list = readFileSync(output, "utf8").match(/^list=(.*)$/m)![1];
+      return readFileSync(list, "utf8").split("\n").filter(Boolean);
+    };
+
+    test("a pull request diffs its head against the merge base", () => {
+      expect(run({ EVENT_NAME: "pull_request", PR_BASE_SHA: docs, PR_HEAD_SHA: cli })).toEqual(["packages/cli/b.ts"]);
+    });
+
+    test("a push diffs against the commit main pointed at before it", () => {
+      expect(run({ EVENT_NAME: "push", PUSH_BEFORE_SHA: web, PUSH_SHA: docs })).toEqual(["docs/c.md"]);
+      expect(run({ EVENT_NAME: "push", PUSH_BEFORE_SHA: first, PUSH_SHA: docs })).toEqual(["docs/c.md", "packages/web/a.ts"]);
+    });
+
+    test("no usable base leaves the list empty, which runs every job", () => {
+      const zeros = "0000000000000000000000000000000000000000";
+      expect(run({ EVENT_NAME: "push", PUSH_BEFORE_SHA: zeros, PUSH_SHA: docs })).toEqual([]);
+      expect(run({ EVENT_NAME: "push", PUSH_BEFORE_SHA: "1234567890123456789012345678901234567890", PUSH_SHA: docs })).toEqual([]);
+      expect(run({ EVENT_NAME: "push", PUSH_SHA: docs })).toEqual([]);
+      expect(run({ EVENT_NAME: "workflow_dispatch", PUSH_SHA: docs })).toEqual([]);
+      expect(run({ EVENT_NAME: "pull_request", PR_BASE_SHA: "1234567890123456789012345678901234567890", PR_HEAD_SHA: cli })).toEqual([]);
+    });
   });
 
   test("publishes every area and every job gate the classifier emits", () => {
     const expected = [...AREAS, ...GATED_JOBS.map(jobFlag)];
-    expect(Object.keys(jobs.code_paths.outputs).filter((name) => name !== "run_test_computer")).toEqual(expected);
+    const STEP_FLAGS = ["run_test_computer", "run_test_injection"];
+    expect(Object.keys(jobs.code_paths.outputs).filter((name) => !STEP_FLAGS.includes(name))).toEqual(expected);
     for (const name of expected) {
       expect(jobs.code_paths.outputs[name]).toBe(`\${{ steps.scope.outputs.${name} }}`);
     }
@@ -114,7 +215,10 @@ describe("code_paths", () => {
 // or it drifts red unnoticed (bun test strips types). A program counts when one
 // of the packages the typecheck job filters to runs it from its own script.
 describe("typecheck", () => {
-  // mobile typechecks through its own toolchain, outside this job.
+  // A known gap, not a second toolchain: packages/mobile has no `typecheck`
+  // script, so nothing in CI typechecks it. `cast check mobile` is its only
+  // check. Drop it from this list when the package gains the script and the
+  // job's filter gains the package.
   const NOT_IN_TYPECHECK_JOB = ["mobile"];
   const checkToml = Bun.TOML.parse(
     readFileSync(new URL("../../.codecast/check.toml", import.meta.url), "utf8"),
@@ -158,9 +262,15 @@ describe("gates", () => {
     }
   });
 
-  test("the classifier and the contract test are never gated", () => {
+  test("the classifier, the contract test and the always-run tests are never gated", () => {
     expect(jobs.code_paths.if).toBeUndefined();
     expect(jobs.code_paths.needs).toBeUndefined();
+    expect(jobs["test-always"].if).toBeUndefined();
+    expect(jobs["test-always"].needs).toBeUndefined();
+    expect(jobs["test-always"]["continue-on-error"]).toBeUndefined();
+    expect(
+      jobs["test-always"].steps.some((step: any) => step.run === "bun scripts/ci/always-run-tests.ts"),
+    ).toBe(true);
     expect(jobs["ci-contract"].if).toBeUndefined();
     expect(jobs["ci-contract"].needs).toBeUndefined();
     expect(
@@ -214,6 +324,7 @@ describe("verify", () => {
     expect(verify.needs).toEqual([
       "code_paths",
       "ci-contract",
+      "test-always",
       ...GATED_JOBS,
     ]);
     // Every job is either required by verify or declared advisory. A new job
@@ -226,6 +337,8 @@ describe("verify", () => {
     expect(assertStep.env.CI_CONTRACT).toBe("${{ needs.ci-contract.result }}");
     expect(assertStep.run).toContain('if [ "$CODE_PATHS" != "success" ]; then');
     expect(assertStep.run).toContain('if [ "$CI_CONTRACT" != "success" ]; then');
+    expect(assertStep.env.TEST_ALWAYS).toBe("${{ needs.test-always.result }}");
+    expect(assertStep.run).toContain('if [ "$TEST_ALWAYS" != "success" ]; then');
   });
 
   test("pairs every gated job's result with the flag that gated it", () => {
@@ -247,6 +360,7 @@ describe("verify", () => {
     const env: Record<string, string> = {
       CODE_PATHS: "success",
       CI_CONTRACT: "success",
+      TEST_ALWAYS: "success",
       ...Object.fromEntries(GATED_JOBS.map((job) => [envVar(job), "skipped"])),
       ...Object.fromEntries(GATED_JOBS.map((job) => [`${envVar(job)}_SHOULD_RUN`, "false"])),
       ...results,
@@ -289,6 +403,7 @@ describe("verify", () => {
     expect((await runVerify({ CODE_PATHS: "failure" }, {})).code).toBe(1);
     expect((await runVerify({ CI_CONTRACT: "failure" }, {})).code).toBe(1);
     expect((await runVerify({ CODE_PATHS: "skipped" }, {})).code).toBe(1);
+    expect((await runVerify({ TEST_ALWAYS: "failure" }, {})).code).toBe(1);
   });
 });
 
@@ -321,6 +436,41 @@ describe("darwin-only cli tests", () => {
 });
 
 
+// The injection suites are a step of test-cli that runs only for a change to
+// the injection path. The flag comes from code_paths, whose diff covers every
+// commit of a push; a diff of the last commit alone skipped the suites for an
+// injection change earlier in a multi-commit push.
+describe("injection suites", () => {
+  test("gate on the classifier's flag, not on a diff of their own", () => {
+    expect(jobs.code_paths.outputs.run_test_injection).toBe("${{ steps.injection_scope.outputs.run_test_injection }}");
+    const classify = jobs.code_paths.steps.find((step: any) => step.id === "injection_scope");
+    expect(classify.run).toContain("--injection-only");
+    const steps: any[] = jobs["test-cli"].steps;
+    const suites = steps.find((step) => String(step.name ?? "").startsWith("Injection suites"));
+    expect(suites.if).toBe("needs.code_paths.outputs.run_test_injection == 'true'");
+    for (const step of steps) expect(String(step.run ?? ""), step.name).not.toContain("git diff");
+  });
+});
+
+// Tests under scripts/ and infra/ belong to no package job.
+describe("tests outside packages/", () => {
+  test("run in test-always", () => {
+    const step = (jobs["test-always"].steps as any[]).find((s) => String(s.name ?? "").startsWith("Tests outside packages/"));
+    for (const file of ["./scripts/line.test.ts", "./infra/artifact-edge/worker.test.js", "./infra/replay-player/src/clock.test.ts", "infra/call-face-worker/turns.test.mjs"]) {
+      expect(step.run, file).toContain(file);
+      expect(Bun.file(new URL(`../../${file.replace(/^\.\//, "")}`, import.meta.url)).size, file).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("workflow concurrency", () => {
+  test("a pull request's newer run cancels the older one, and a push to main keeps its own", () => {
+    const top = workflow as any;
+    expect(top.concurrency.group).toBe("ci-${{ github.event.pull_request.number || github.sha }}");
+    expect(top.concurrency["cancel-in-progress"]).toBe("${{ github.event_name == 'pull_request' }}");
+  });
+});
+
 describe("computer tests are opt-in", () => {
   test("the default CLI suite excludes computer tests and the dedicated command restores them", () => {
     const config = Bun.TOML.parse(readFileSync(new URL("../../packages/cli/bunfig.toml", import.meta.url), "utf8")) as any;
@@ -331,15 +481,11 @@ describe("computer tests are opt-in", () => {
 
   test("only computer changes build and exercise the helper in CI", () => {
     expect(jobs.code_paths.outputs.run_test_computer).toBe("${{ steps.computer_scope.outputs.run_test_computer }}");
+    // Reads the same changed-path list as the scope step (see "diff step"
+    // above), where a missing base yields an empty list the classifier runs on.
     const classify = jobs.code_paths.steps.find((step: any) => step.id === "computer_scope");
-    expect(classify.env.PR_BASE_SHA).toBe("${{ github.event.pull_request.base.sha }}");
-    expect(classify.env.PUSH_BEFORE_SHA).toBe("${{ github.event.before }}");
     expect(classify.run).toContain("--computer-only");
-    // Mirrors the scope step: a PR diffs from its merge base, and a failed
-    // diff falls through to an empty list, which the classifier runs on.
-    expect(classify.run).toContain("--merge-base");
-    expect(classify.run).toContain("|| true");
-    expect(classify.run).not.toContain("set -e");
+    expect(classify.run).toContain('< "${{ steps.diff.outputs.list }}"');
     for (const name of ["Swift unit tests (helper core)", "Build and sign the computer helper", "Unit and e2e tests (cast computer, ungranted half)"]) {
       const step = jobs["computer-macos"].steps.find((step: any) => step.name === name);
       expect(step.if).toBe("needs.code_paths.outputs.run_test_computer == 'true'");

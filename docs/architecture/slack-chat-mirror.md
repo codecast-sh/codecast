@@ -28,6 +28,10 @@ A mirrored channel wears the Slack channel's name. `commitLink` renames the chat
 
 `pushMessage` posts as the bot with the author's name and avatar (`chat:write.customize`), threads by the root's Slack ts, adds `reply_broadcast` for a broadcast reply, renders images as image blocks, converts mentions to `<@U>` where the teammate is known in that workspace, and turns `ct-`/`pl-`/`tr-` ids into links. It then stamps `external` on the row with the ts and permalink. A `not_in_channel` error joins a public channel once and retries; fatal errors pause the link with the reason.
 
+## Regulated teams
+
+A team whose managed policy sets `regulated_data` (HIPAA, plan pl-990) sends Slack no transcript content until a team admin turns on "Slack plan covered by our BAA" (`slack_baa_confirmed`, Team settings → Managed devices). Until then every post and edit carries one line, `New activity in Codecast: <link|Open in Codecast>`, and nothing else: no blocks, no author name (an agent's name is its session title), no unfurl. The rule lives in `lib/slackSend.slackSend`, which every `chat.postMessage` and `chat.update` goes through: the mirror's pushes and edits, link notices, `cast anchor say` replies, and huddle transcript routes. `slackSend.test.ts` fails a content write that goes around it. Reactions carry only an emoji and are left alone.
+
 ## Identity
 
 - A Slack person whose Slack email matches a team member IS that member when `match_people_by_email` is on: the row's `user_id` is the teammate, and the row still carries `external` so the UI shows the Slack mark.

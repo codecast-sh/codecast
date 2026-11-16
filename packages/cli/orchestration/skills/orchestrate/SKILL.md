@@ -40,20 +40,34 @@ If the plan has no tasks, decompose it yourself:
 
 1. Read the plan goal and acceptance criteria
 2. Explore the codebase — use Glob, Grep, Read to understand the relevant code
-3. Create tasks with clear acceptance criteria, ordered by dependency:
+3. Cut the work into vertical slices: each step delivers one thin piece of
+   behavior through every layer it needs (schema, backend, UI) and works end
+   to end on its own, so integration problems surface in the first wave
+   rather than the last. A step that only adds a table, or only a screen
+   waiting for an API, is a layer, not a slice.
+4. Write the steps in waves, one per line with what done means after `::`.
+   Steps in a wave run in parallel; a blank line starts a wave that needs
+   every step of the one before:
 
 ```bash
-cast task create "Add status field to tasks schema" -t feature -p high --plan <plan_id>
-cast task create "Update task API to filter by status" -t feature -p high --plan <plan_id>
-cast task dep <second_id> --blocked-by <first_id>
+cast plan steps <plan_id> - <<'STEPS'
+Filter the board by status, end to end :: status field, query arg, board filter; verify: bun test <file>, filter in the browser
+
+Backfill status on existing tasks :: <...>; verify: <command and what it shows>
+Bulk-change status from the board :: <...>; verify: <...>
+STEPS
 ```
 
-Rules for decomposition:
-- Schema/data model first, then backend logic, then UI, then polish
-- Each task should produce a testable, committable change
-- Include test-writing as part of feature tasks, not separate tasks
-- Name tasks with specific files/functions, not generic descriptions
-- Reference actual code paths you found during exploration
+Order by what a step needs, never by what comes first. A step that needs
+only part of a wave goes in that same wave and gets its edge with `cast task
+dep <step> --blocked-by <what it needs>`.
+
+Each step's description names how it is verified: the test or check that
+proves it, and what to look at in the running app when it has behavior a
+person sees. A step that cannot say how it will be verified is not yet
+understood well enough to hand to a worker. Tests are part of the step that
+needs them, not a step of their own. Name steps with the files and functions
+they touch, from what you found while exploring.
 
 ## Spawning workers
 

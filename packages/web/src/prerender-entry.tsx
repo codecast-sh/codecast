@@ -43,6 +43,16 @@ import BlogAgentsTalk from "@/app/(marketing)/blog/agents-that-talk-to-each-othe
 import BlogPullRequests from "@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page";
 import BlogTeamSees from "@/app/(marketing)/blog/what-your-team-sees/page";
 import BlogWorktrees from "@/app/(marketing)/blog/one-repository-twenty-checkouts/page";
+import BlogTurns from "@/app/(marketing)/blog/the-tree-at-the-end-of-every-turn/page";
+import BlogUndo from "@/app/(marketing)/blog/undo-with-a-history/page";
+import BlogClaudeSessions from "@/app/(marketing)/blog/claude-code-sessions/page";
+import BlogAgentsTogether from "@/app/(marketing)/blog/claude-code-cursor-codex/page";
+import BlogFromYourPhone from "@/app/(marketing)/blog/claude-code-from-your-phone/page";
+import BlogOwnChrome from "@/app/(marketing)/blog/agents-in-your-own-chrome/page";
+import BlogHistoryOnDayOne from "@/app/(marketing)/blog/claude-code-history-on-day-one/page";
+import BlogChartReply from "@/app/(marketing)/blog/the-chart-in-the-reply/page";
+import BlogQuestions from "@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page";
+import BlogTaskPage from "@/app/(marketing)/blog/the-task-your-agent-reports-to/page";
 import BlogCloud from "@/app/(marketing)/blog/codecast-in-the-cloud/page";
 import BlogJumps from "@/app/(marketing)/blog/fewer-bigger-jumps/page";
 import BlogFieldManual from "@/app/(marketing)/blog/field-manual/page";
@@ -105,6 +115,16 @@ export function render(path: string): string {
             <Route path="blog/the-pull-request-that-knows-its-sessions" element={<BlogPullRequests />} />
             <Route path="blog/what-your-team-sees" element={<BlogTeamSees />} />
             <Route path="blog/one-repository-twenty-checkouts" element={<BlogWorktrees />} />
+            <Route path="blog/the-tree-at-the-end-of-every-turn" element={<BlogTurns />} />
+            <Route path="blog/undo-with-a-history" element={<BlogUndo />} />
+            <Route path="blog/claude-code-sessions" element={<BlogClaudeSessions />} />
+            <Route path="blog/claude-code-cursor-codex" element={<BlogAgentsTogether />} />
+            <Route path="blog/agents-in-your-own-chrome" element={<BlogOwnChrome />} />
+            <Route path="blog/claude-code-history-on-day-one" element={<BlogHistoryOnDayOne />} />
+            <Route path="blog/claude-code-from-your-phone" element={<BlogFromYourPhone />} />
+            <Route path="blog/the-chart-in-the-reply" element={<BlogChartReply />} />
+            <Route path="blog/the-questions-your-agents-save-for-you" element={<BlogQuestions />} />
+            <Route path="blog/the-task-your-agent-reports-to" element={<BlogTaskPage />} />
             <Route path="blog/codecast-in-the-cloud" element={<BlogCloud />} />
             <Route path="blog/fewer-bigger-jumps" element={<BlogJumps />} />
             <Route path="blog/field-manual" element={<BlogFieldManual />} />

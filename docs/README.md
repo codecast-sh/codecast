@@ -20,7 +20,7 @@ here: each one opens with a dated status line that says what shipped and what re
 | [Anchor runbook](anchor-runbook.md) | Operating the workspace agent |
 | [Browser branding](browser-branding.md) | The Cast icon on the separate agent browser on macOS |
 | [Releasing mobile](RELEASING-MOBILE.md) | iOS builds, TestFlight, App Store |
-| [Social posting](social-posting.md) | Posting to codecast's social accounts through Publora |
+| [MDM deployment](mdm.md) | Rolling the app and `cast` out to managed Macs |
 | [Prompting](prompting.md) | The standard every shipped prompt follows |
 | [Principles](principles.md) | How work is judged on every project's line |
 
@@ -37,6 +37,7 @@ here: each one opens with a dated status line that says what shipped and what re
 | [Sync sim](architecture/sync-sim.md) | Several people and windows simulated in one process |
 | [Multiplayer sim harness](architecture/multiplayer-sim-harness.md) | Phase 2 spec for the multiplayer harness |
 | [Undo and history](architecture/undo-history.md) | App-wide undo and redo |
+| [Durable sync delivery](architecture/sync-outbox.md) | The outbox that supersedes the sync log migration's transaction counter |
 
 ### Daemon and agents
 
@@ -48,6 +49,24 @@ here: each one opens with a dated status line that says what shipped and what re
 | [Session characters](architecture/session-characters.md) | Optional characters for sessions |
 | [System resources](architecture/system-resources.md) | Machine load and guided offload |
 | [Release signing](architecture/release-signing.md) | Signed CLI release manifests |
+| [Claude SDK backend](architecture/claude-sdk-backend.md) | Running a Claude Code session through the Agent SDK |
+| [Turn claims](architecture/turn-claims.md) | What happens to a turn when the agent process dies mid-turn |
+| [Turn snapshots](architecture/turn-snapshots.md) | A true file history per turn |
+| [Agent comms](architecture/agent-comms.md) | What the org tells an agent about whom to talk to |
+| [Hosted assistant](architecture/hosted-assistant.md) | The hosted assistant and hosted mode |
+
+### Sessions, teams and machines
+
+| Doc | |
+|---|---|
+| [Sessions in projects](architecture/session-projects.md) | A project as the workspace for its sessions, tasks, plans and docs |
+| [Session multiplayer](architecture/session-multiplayer.md) | Several people typing, sending and steering in one session |
+| [Team kit](architecture/team-kit.md) | A team's shared skills, commands, subagents and instructions |
+| [Team machines](architecture/team-machines.md) | A Linux box that belongs to a team |
+| [Shared hosts](architecture/shared-hosts.md) | One Linux cloud host used by several teammates at once |
+| [Vault](architecture/vault.md) | The team's passwords, keys and sign-ins, for people and agents |
+| [Vault integration map](architecture/vault-integration-map.md) | Where each piece of the vault build plugs in |
+| [Feature guides](architecture/feature-guides.md) | Team feature switches, offers and guides |
 
 ### Work, decisions and integrations
 
@@ -60,6 +79,10 @@ here: each one opens with a dated status line that says what shipped and what re
 | [Live Activity](architecture/live-activity.md) | iOS Lock Screen Live Activity |
 | [Slack chat mirror](architecture/slack-chat-mirror.md) | Team chat mirrored to Slack |
 | [External data](architecture/external-data.md) | Sources, events, replays, metrics and app connectors |
+| [Task graph](architecture/task-graph.md) | Blockers, waits, links and readiness |
+| [Ship](architecture/ship.md) | One Ship control for landing a change |
+| [Shipping a shared checkout](architecture/ship-checkout.md) | Landing one change from a checkout many agents edit |
+| [Deploys](architecture/deploys.md) | Deploys as a stage of the line and an object of their own |
 
 ### The line
 
@@ -68,6 +91,14 @@ here: each one opens with a dated status line that says what shipped and what re
 | [The line](architecture/the-line.md) | Stations, gates, evidence and runs |
 | [The line, end to end](architecture/the-line-end-to-end.md) | From a signal in the world to a shipped, watched change |
 | [Line profile](architecture/line-profile.md) | One line per project (`.codecast/line.toml`) |
+| [The line model](architecture/the-line-model.md) | The line's objects and where they live |
+| [Line map](architecture/line-map.md) | See the whole line, trace one thing, change it in place |
+| [Line workspace](architecture/line-workspace.md) | One process, many projects |
+| [Flows journeys](architecture/line-journeys.md) | What a person comes to /flows to do, page by page |
+| [Flows](architecture/flows.md) | A shared pool of structured ways to run a change |
+| [Line versions](architecture/line-versions.md) | What an iteration of the line leaves behind |
+| [Learning loop](architecture/learning-loop.md) | How a product learns from what happens to it |
+| [Regret](architecture/regret.md) | Which merged changes came back, and which checks let them through |
 | [Line principles](line/principles.md) | The principles agents on the line read |
 
 ### Org
@@ -94,6 +125,7 @@ here: each one opens with a dated status line that says what shipped and what re
 | [Evals](architecture/evals.md) | Replaying prod prompts against frozen moments |
 | [Evals home](architecture/evals-home.md) | One eval home on `@platform/evals` |
 | [Evals UI](architecture/evals-ui.md) | The evals UI |
+| [Evals converge](architecture/evals-converge.md) | Spec for converging evals on `@platform/evals` |
 
 ## Proposals
 
@@ -116,6 +148,7 @@ Each opens with its status. Shipped proposals stay as the record of why the desi
 |---|---|
 | [Fabro analysis](fabro-analysis.md) | Ideas taken from Fabro; most were adopted |
 | [Aivery on codecast](aivery-on-codecast.md) | Mostly built in another shape (org roles) |
+| [HumanLayer analysis](humanlayer-analysis.md) | HumanLayer compared with codecast; the adopted items are built |
 
 ## Archive
 
