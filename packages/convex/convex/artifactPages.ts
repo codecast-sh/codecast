@@ -44,7 +44,7 @@ function iconSvg(size: number, body: string, opts?: { sw?: number; stroke?: stri
 }
 
 function logoSvg(size = 22): string {
-  return `<svg width="${size}" height="${size}" style="${iconStyle(size)}" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="${LOGO_C}"/><path fill="#e86c5d" d="${LOGO_ARROW}"/></svg>`;
+  return `<svg width="${size}" height="${size}" style="${iconStyle(size)}" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="${LOGO_C}"/><path fill="currentColor" d="${LOGO_ARROW}"/></svg>`;
 }
 
 export interface BrandOpts {
@@ -130,9 +130,9 @@ function barHtml(o: BrandOpts): string {
   };
   return `
 <style id="__cc_style">
-  /* codecast web styles: JetBrains Mono (same Google Fonts source the web
-     app uses) + the Solarized token palette from globals.css. */
-  @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+  /* codecast's Modern style: Instrument Sans for the interface (JetBrains
+     Mono only for key caps) on neutral surfaces, as in the web app. */
+  @import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400..700&family=JetBrains+Mono:wght@600&display=swap");
   /* Pinned to the viewport top; the html margin reserves exactly the bar's
      height so the artifact's content starts below it — pinned, not overlaying.
      Colors ride on custom properties; html.__cc_dark (set by JS from the
@@ -145,39 +145,38 @@ function barHtml(o: BrandOpts): string {
   html.__cc_min #__cc_bar { transform: translateY(-100%); box-shadow: none; pointer-events: none; }
   html.__cc_min #__cc_pill { display: inline-flex; }
   #__cc_bar, .__cc_panel, #__cc_hint, #__cc_pill, #__cc_mlist, #__cc_notes, #__cc_qbtn {
-    --cc-bg: rgba(253,252,250,.9); --cc-ink: #002b36; --cc-mut: #586e75; --cc-dim: rgba(0,43,54,.48);
-    --cc-line: rgba(88,110,117,.22); --cc-hov: rgba(0,43,54,.06); --cc-card: #ffffff; --cc-soft: #faf9f7;
-    --cc-inbd: rgba(0,43,54,.22); --cc-blue: #268bd2; --cc-green: #859900; --cc-coral: #e86c5d;
+    --cc-bg: rgba(255,255,255,.88); --cc-ink: #111614; --cc-mut: #5d6662; --cc-dim: rgba(17,22,20,.45);
+    --cc-line: rgba(17,22,20,.1); --cc-hov: rgba(17,22,20,.05); --cc-card: #ffffff; --cc-soft: #f6f7f5;
+    --cc-inbd: rgba(17,22,20,.2); --cc-blue: #268bd2; --cc-green: #859900; --cc-coral: #e86c5d;
     --cc-shadow: rgba(0,43,54,.16); }
   html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint, html.__cc_dark #__cc_pill, html.__cc_dark #__cc_mlist, html.__cc_dark #__cc_notes, html.__cc_dark #__cc_qbtn {
-    --cc-bg: rgba(0,43,54,.85); --cc-ink: #fdf6e3; --cc-mut: #93a1a1; --cc-dim: rgba(253,246,227,.45);
-    --cc-line: rgba(147,161,161,.18); --cc-hov: rgba(147,161,161,.1); --cc-card: #08404e; --cc-soft: #073642;
-    --cc-inbd: rgba(147,161,161,.32); --cc-blue: #268bd2; --cc-green: #859900;
+    --cc-bg: rgba(23,27,26,.85); --cc-ink: #f1f3f2; --cc-mut: #9aa39f; --cc-dim: rgba(241,243,242,.42);
+    --cc-line: rgba(255,255,255,.09); --cc-hov: rgba(255,255,255,.06); --cc-card: #1d2220; --cc-soft: #171b1a;
+    --cc-inbd: rgba(255,255,255,.2); --cc-blue: #268bd2; --cc-green: #859900;
     --cc-shadow: rgba(0,0,0,.5); }
   #__cc_bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 2147483647;
     display: flex; align-items: center; gap: 2px;
     box-sizing: border-box;
     padding: 0 calc(10px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
-    font: 500 12px/1 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font: 500 13px/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
     background: var(--cc-bg); color: var(--cc-mut);
     -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
     border-bottom: 1px solid var(--cc-line); box-shadow: 0 1px 8px rgba(0,0,0,.05);
     text-align: left; transition: transform .22s ease; }
-  #__cc_pill { position: fixed; top: 8px; right: calc(8px + env(safe-area-inset-right)); z-index: 2147483647;
-    display: none; align-items: center; justify-content: center; width: 30px; height: 30px;
-    border: 1px solid var(--cc-line); border-radius: 999px; background: var(--cc-bg); color: var(--cc-ink);
+  #__cc_pill { position: fixed; top: 10px; right: calc(10px + env(safe-area-inset-right)); z-index: 2147483647;
+    display: none; align-items: center; justify-content: center; width: 26px; height: 26px;
+    border: 0; border-radius: 999px; background: var(--cc-bg); color: var(--cc-mut);
     -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
-    cursor: pointer; padding: 0; margin: 0; opacity: .55; transition: opacity .15s ease, transform .15s ease;
+    cursor: pointer; padding: 0; margin: 0; opacity: .5; transition: opacity .15s ease, background .15s ease;
     -webkit-tap-highlight-color: transparent; }
-  #__cc_pill:hover { opacity: 1; transform: scale(1.06); }
+  #__cc_pill:hover { opacity: 1; background: var(--cc-hov); color: var(--cc-ink); }
   #__cc_pill svg { display: block; }
   #__cc_bar .__cc_brand { color: var(--cc-ink); text-decoration: none; display: inline-flex; align-items: center;
-    opacity: .85; margin-right: 8px; }
+    opacity: .55; margin-right: 8px; transition: opacity .15s ease; }
   #__cc_bar .__cc_brand:hover { opacity: 1; }
   #__cc_bar .__cc_title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-weight: 500; color: var(--cc-ink); opacity: .82; letter-spacing: .01em; margin-right: 8px; }
-  #__cc_bar .__cc_sess { color: var(--cc-blue); text-decoration: none; white-space: nowrap; font-weight: 400;
-    opacity: .8; padding: 5px 7px; border-radius: 7px; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; }
+  #__cc_bar .__cc_sess { color: var(--cc-mut); text-decoration: none; white-space: nowrap; font-weight: 400; padding: 5px 7px; border-radius: 7px; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; }
   #__cc_bar .__cc_sess:hover { opacity: 1; background: var(--cc-hov); }
   #__cc_bar .__cc_when { color: var(--cc-dim); font-weight: 400; white-space: nowrap; padding: 0 7px; }
   #__cc_bar .__cc_dot { color: var(--cc-dim); opacity: .6; }
@@ -202,7 +201,7 @@ function barHtml(o: BrandOpts): string {
     max-height: 72vh; overflow-y: auto; overscroll-behavior: contain;
     background: var(--cc-card); color: var(--cc-mut); border-radius: 12px;
     box-shadow: 0 10px 32px var(--cc-shadow), 0 0 0 1px var(--cc-line);
-    font: 400 12px/1.45 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 8px; text-align: left;
+    font: 400 12px/1.45 "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif; padding: 8px; text-align: left;
     opacity: 0; transform: translateY(-4px); transition: opacity .16s ease, transform .16s ease; }
   .__cc_panel.__cc_in { opacity: 1; transform: none; }
   .__cc_panel[hidden] { display: none; }
@@ -371,7 +370,7 @@ function barHtml(o: BrandOpts): string {
   #__cc_mlist { position: fixed; z-index: 2147483647; background: var(--cc-card); border: 1px solid var(--cc-line);
     border-radius: 10px; box-shadow: 0 12px 32px var(--cc-shadow); padding: 4px; min-width: 224px; max-width: 320px;
     max-height: 218px; overflow-y: auto; overscroll-behavior: contain;
-    font: 400 12px/1.45 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    font: 400 12px/1.45 "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
   #__cc_mlist .__cc_mrow { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px; cursor: pointer;
     color: var(--cc-ink); }
   #__cc_mlist .__cc_mrow .__cc_mh { color: var(--cc-dim); margin-left: auto; font-size: 10px; padding-left: 10px; flex: none; }
@@ -384,7 +383,7 @@ function barHtml(o: BrandOpts): string {
   .__cc_panel .__cc_pendrow .__cc_sendall:disabled { opacity: .5; cursor: default; }
   #__cc_pins { position: absolute; top: 0; left: 0; width: 100%; height: 0; overflow: visible; z-index: 2147483645; pointer-events: none; }
   #__cc_pins .__cc_pin { position: absolute; transform: translate(-50%,-100%); width: 18px; height: 18px;
-    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 10px/18px "JetBrains Mono", ui-monospace, Menlo, monospace;
+    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 10px/18px "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
     text-align: center; box-shadow: 0 1px 5px rgba(0,0,0,.2); pointer-events: auto; cursor: pointer;
     animation: __cc_pop .18s ease; }
   #__cc_pins .__cc_pin.__cc_spin { width: 12px; height: 12px; background: #ffffff; border: 2px solid #e86c5d;
@@ -395,18 +394,18 @@ function barHtml(o: BrandOpts): string {
   @keyframes __cc_pulse { 50% { transform: translate(-50%,-100%) scale(1.5); } }
   #__cc_hint { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%);
     z-index: 2147483647; background: var(--cc-ink); color: var(--cc-card); padding: 11px 18px; border-radius: 999px;
-    font: 500 12px/1 "JetBrains Mono", ui-monospace, Menlo, monospace; box-shadow: 0 6px 20px rgba(0,0,0,.3); white-space: nowrap; }
+    font: 500 12px/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif; box-shadow: 0 6px 20px rgba(0,0,0,.3); white-space: nowrap; }
   html.__cc_pinmode, html.__cc_pinmode * { cursor: crosshair !important; }
   /* Notes: the codecast gallery's pins on a page. A numbered yellow dot where
      the reader clicked, its note as a dark label beside it, and the note's
      editor opening at the dot. */
   #__cc_notes { position: absolute; top: 0; left: 0; width: 100%; height: 0; overflow: visible; z-index: 2147483646;
-    pointer-events: none; font: 400 12px/1.45 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    pointer-events: none; font: 400 12px/1.45 "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
     text-align: left; letter-spacing: normal; text-transform: none; }
   #__cc_notes .__cc_np { position: absolute; width: 0; height: 0; }
   #__cc_notes .__cc_nd { all: unset; box-sizing: border-box; position: absolute; left: -12px; top: -12px; width: 24px; height: 24px;
     border-radius: 50%; background: #b58900; color: #000000; border: 2px solid rgba(0,0,0,.6);
-    box-shadow: 0 0 0 2px rgba(0,0,0,.45); font: 700 11px/20px "JetBrains Mono", ui-monospace, Menlo, monospace;
+    box-shadow: 0 0 0 2px rgba(0,0,0,.45); font: 700 11px/20px "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
     text-align: center; cursor: pointer; pointer-events: auto; transition: transform .12s ease; animation: __cc_npop .18s ease; }
   #__cc_notes .__cc_nd:hover { transform: scale(1.1); }
   #__cc_notes .__cc_np.__cc_on .__cc_nd { border-color: #ffffff; }
@@ -439,7 +438,7 @@ function barHtml(o: BrandOpts): string {
   #__cc_qbtn { all: unset; box-sizing: border-box; position: absolute; z-index: 2147483646; transform: translate(-50%,-100%);
     display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; cursor: pointer;
     background: var(--cc-ink); color: var(--cc-card); box-shadow: 0 6px 20px rgba(0,0,0,.25);
-    font: 600 11px/1 "JetBrains Mono", ui-monospace, Menlo, monospace; animation: __cc_npop .12s ease; }
+    font: 600 11px/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif; animation: __cc_npop .12s ease; }
   #__cc_qbtn svg { color: #b58900; }
   @keyframes __cc_npop { from { opacity: 0; transform: scale(.85); } }
   /* Bottom-sheet mode. The media query catches real narrow layout viewports;
@@ -477,7 +476,7 @@ function barHtml(o: BrandOpts): string {
   }
 </style>
 <div id="__cc_bar">
-  <a class="__cc_brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer" title="Published with codecast">${logoSvg(22)}</a>
+  <a class="__cc_brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer" title="Published with codecast">${logoSvg(18)}</a>
   <span class="__cc_title">${escAttr(o.title)}</span>
   ${sessionLink}
   ${latestLink}<button id="__cc_new" type="button" hidden></button>
@@ -487,7 +486,7 @@ function barHtml(o: BrandOpts): string {
   ${menuBtn}
   ${hideBtn}
 </div>
-<button id="__cc_pill" type="button" title="Show the codecast bar">${logoSvg(15)}</button>
+<button id="__cc_pill" type="button" title="Show the codecast bar">${logoSvg(13)}</button>
 <div id="__cc_hist" class="__cc_panel" hidden></div>
 <div id="__cc_menupanel" class="__cc_panel" hidden></div>
 <div id="__cc_cpanel" class="__cc_panel" hidden></div>

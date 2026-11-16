@@ -1,4 +1,5 @@
-// What every end-to-end script shares: the dev deployment in .env.local,
+// What every end-to-end script shares: the dev deployment in .env.local (or
+// the one PLAYGROUND_CONVEX_URL names, e.g. prod's .convex.cloud URL),
 // pass/fail bookkeeping, and visitors, each on their own live connection,
 // who wait on live queries and watch a room the way a browser would.
 import { join } from "node:path";
@@ -14,8 +15,8 @@ import { runtimeTokenForSecret, type TokenScope } from "../../convex/lib/identit
 import { livePath, versionPath } from "../../convex/lib/runPaths";
 
 export const ROOT = join(import.meta.dir, "../..");
-const env = await Bun.file(join(ROOT, ".env.local")).text();
-export const CLOUD = /^CONVEX_URL=(\S+)/m.exec(env)![1];
+export const CLOUD =
+  process.env.PLAYGROUND_CONVEX_URL ?? /^CONVEX_URL=(\S+)/m.exec(await Bun.file(join(ROOT, ".env.local")).text())![1];
 export const SITE = CLOUD.replace(/\.convex\.cloud$/, ".convex.site");
 
 const WAIT_MS = 15_000;
@@ -212,7 +213,13 @@ export async function checkServed(slug: string, number: number) {
   const index = await fetch(SITE + versionPath(slug, number));
   const html = await index.text();
   check(`v${number} index.html is served`, index.status === 200 && html.includes("<html"));
-  const queue = htmlReferences(html).map((r) => resolveRelative("index.html", r)!);
+  const refs = htmlReferences(html);
+  // The page's own rooted references: the SDK at its build's URL.
+  for (const ref of refs.filter((r) => r.startsWith("/"))) {
+    const res = await fetch(SITE + ref);
+    check(`v${number} reaches ${ref}`, res.status === 200, res.status);
+  }
+  const queue = refs.filter((r) => !r.startsWith("/")).map((r) => resolveRelative("index.html", r)!);
   const loaded = new Set<string>();
   while (queue.length) {
     const path = queue.shift()!;

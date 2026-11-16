@@ -28,12 +28,14 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Team chat
 
-`cast chat` is the team's shared channels: where the humans talk, and where your posts get seen. Use it when the team should see something, and `cast send` for one session.
+`cast chat` is the team's shared channels and direct messages: where the humans talk, and where your posts get seen. Use a channel when the team should see something, a direct message when one person must read or act, and `cast send` for one session.
 
 ```bash
 cast chat channels                                         # the team's channels, with unread counts
-cast chat read --channel <id> [--since 2h]
-cast chat send --channel <id> [--thread <root_id>] "<text>"
+cast teams members                                         # the team's people and their @handles
+cast chat dm @handle "<text>"                              # message a person directly (@a,@b for a group)
+cast chat read --channel <#name|@handle|id> [--since 2h]
+cast chat send --channel <#name|id> [--thread <root_id>] "<text>"
 cast chat search "<query>"
 ```
 

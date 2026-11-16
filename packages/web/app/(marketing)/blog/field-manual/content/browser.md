@@ -1,6 +1,8 @@
 Most agent browsing starts in a fresh, empty browser: no cookies, no SSO, no staging login. Codecast takes the opposite route. A Chrome extension, paired once per machine, lets every agent on that machine work in the Chrome profile you already use. If your Chrome can open a dashboard behind SSO, the agent can read it. Nothing about your profile is copied or synced anywhere.
 
-![A Chrome window with a red Cast tab group; the agent's background tab shows a staging checkout page with a red border, a terminal on the right shows a cast browser do flow failing at a wait step with console errors and a 500 POST, and below, the conversation row shows the same evidence inline.](/blog/field-manual/browser-hero.webp "One flow end to end: the agent's tab sits in the red Cast group behind your own tab, its run stops at the failing step, and the console error, failed request and screenshot land in the conversation without anyone asking for them.")
+There is no browser button to press: you ask an agent in plain words ("check the checkout on staging") and watch it happen in Chrome and in the thread. Setup is once per machine. Install the Codecast extension from the Chrome Web Store, then in **Agent features** turn on the Browser card and click **Pair**; the card reads "Chrome connected". If an agent reaches for the browser before that, a **Connect your Chrome** card appears under its step with **Install extension** and **Pair**, and offers to tell the agent to carry on once it is done.
+
+![A Chrome window with your own tabs and a red Cast tab group; the agent's background tab shows a staging checkout page with a red border, and below it the conversation row for Verify the order fix on staging: browser do, 5 steps, stopped at wait, with open tab and watch pills, a screenshot, a console TypeError and a 500 POST to /api/orders.](/blog/field-manual/browser-hero-app.webp "One flow end to end: the agent's tab sits in the red Cast group behind your own tab, its run stops at the failing step, and the console error, failed request and screenshot land in the conversation without anyone asking for them.")
 
 ## What you see in Chrome
 
@@ -29,7 +31,7 @@ An agent can also offer you a page (a staging build, a failing dashboard): a chi
 
 Agents do not guess at pixels. The page is read as a short list of things you can act on, each with a ref like `#e7`, and every action names a ref (or just "find Place order, click"). After a refresh, a stale ref is found again at the same position rather than pointing at whatever moved there.
 
-![Left, a terminal showing cast browser snapshot -i -s main output: textbox Email ref e3, textbox Card number ref e4, combobox Shipping e5, checkbox Save this card e6, button Place order e7, then cast browser click #e7. Right, the checkout page with each control labelled #e3 to #e7.](/blog/field-manual/browser-refs.webp "What the agent reads is a short list of pressable things. The refs on the left are the badges on the right.")
+![Left, a terminal showing cast browser snapshot -i -s main output: textbox Email ref e3, textbox Card number ref e4, combobox Shipping e5, checkbox Save this card e6, button Place order e7, then cast browser click #e7. Right, the checkout page with each control labelled #e3 to #e7.](/blog/field-manual/browser-refs.webp "The agent's side, for the curious: what it reads is a short list of pressable things, and the refs on the left are the badges on the right. You never type these.")
 
 Agents batch the steps they can see ahead into one run, which stops at the first failure and reports what ran and what never did. Waits are for text or a URL, never a fixed sleep.
 

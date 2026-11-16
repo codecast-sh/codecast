@@ -95,9 +95,12 @@ function buildHead(entry, siteUrl, card) {
   ].join("\n    ");
 }
 
-/** Strip the shell's own title/description/og/twitter tags so the injected set is the only one. */
+/** Strip the shell's own title/description/og/twitter tags so the injected set is the only one,
+ *  and the default color theme (plugins/colorThemeBoot.ts): a marketing page is light Classic,
+ *  so a first visit must not paint the app's theme before MarketingLayout's lock. */
 function stripShellMeta(shell) {
   return shell
+    .replace(/<script>window\.__ccDefaultColorTheme=[^<]*<\/script>\s*/, "")
     .replace(/<title>[\s\S]*?<\/title>\s*/, "")
     .replace(/<meta name="description"[^>]*\/>\s*/g, "")
     .replace(/<meta property="og:[^"]*"[^>]*\/>\s*/g, "")

@@ -9,13 +9,17 @@
  * which put the box into swap and starved everything else on it, Chrome's
  * extension included. `tsc --watch` keeps the graph in memory and re-checks
  * only what changed, in seconds, so one watcher serves any number of askers.
+ * An answer comes only from a pass that checked the files as they are on
+ * disk: tsc records each file's content version in its build info, and the
+ * asker compares those with the disk rather than trusting that tsc's file
+ * watching heard every change in time.
  *
  * The unit of sharing is the tree: sessions in the shared checkout share a
  * watcher; a worktree gets its own on first use. A watcher is a detached
  * `cast check-watch` process wrapping tsc's watch mode; it records each
  * pass in a state file (in progress, finished at, error count, the
  * diagnostics) that `cast check` reads. A watcher nobody has asked for in
- * a while exits on its own, and the machine keeps at most MAX_WATCHERS
+ * a while exits on its own, and the machine keeps at most machineCap("check")
  * alive: each holds a program in memory, and a fleet of worktrees could
  * otherwise recreate the pile this replaces.
  *
@@ -34,14 +38,18 @@
  */
 
 import { codecastPath } from "./codecastDir.js";
+import { CHECK_CONFIG_REL_PATH } from "./checkConfigPath.js";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { spawn, spawnSync } from "./proc.js";
 import { acquireFileLock } from "./lockFile.js";
 import { isPidAlive } from "./workspace/chrome.js";
 import { startLaunchdJob, unloadOwnLaunchdJob } from "./launchdJob.js";
+import { machineCap } from "./machineCaps.js";
+import { memoryDeath, oomKillCount, thisMachineTooSmall } from "./repoNeed.js";
+import { CHECK_HEAP_ENV, TSC_HEAP_MB, heapCapMb, heapDeath, isHeapFatal, isNativeFrame, tscNodeOptions } from "./checkHeap.js";
 
 /** One program to check: its name (a path segment of the state dir) and its tsconfig, relative to the tree root. */
 export interface CheckProject {
@@ -49,7 +57,6 @@ export interface CheckProject {
   tsconfig: string;
 }
 
-export const CHECK_CONFIG_REL_PATH = ".codecast/check.toml";
 
 /** The `[projects]` table of `.codecast/check.toml`, or null when the tree has none. */
 export function readCheckConfig(root: string): CheckProject[] | null {
@@ -114,11 +121,28 @@ export function resolveProjects(root: string, names: string[], cwd = process.cwd
   return names.map((name) => {
     const hit = configured?.find((p) => p.name === name);
     if (hit) return hit;
-    const abs = path.resolve(cwd, name);
-    const file = /tsconfig[^/]*\.json$/.test(abs) ? abs : path.join(abs, "tsconfig.json");
-    if (fs.existsSync(file) && path.resolve(file).startsWith(path.resolve(root))) {
-      const rel = path.relative(root, file);
-      return { name: slugOf(path.dirname(rel)), tsconfig: rel };
+    // A path reads from the caller's directory first, then from the tree root,
+    // the way the config and the docs write paths (`outreach/backend` from inside outreach/backend).
+    const bases = [path.resolve(cwd, name), path.resolve(root, name)];
+    const isFile = /tsconfig[^/]*\.json$/.test(name);
+    // A directory a configured project lives in is that project, whatever its
+    // tsconfig is called (cli's is tsconfig.typecheck.json; the folder's plain
+    // tsconfig.json is a different program with errors of its own).
+    if (!isFile) {
+      for (const abs of bases) {
+        const relDir = path.relative(root, abs) || ".";
+        const owners = fs.existsSync(abs) ? (configured ?? []).filter((p) => path.dirname(path.normalize(p.tsconfig)) === relDir) : [];
+        if (owners.length === 1) return owners[0];
+      }
+    }
+    const candidates = bases.map((abs) => (isFile ? abs : path.join(abs, "tsconfig.json")));
+    const file = candidates.find((f) => fs.existsSync(f)) ?? candidates[0];
+    // Inside by path, not by string prefix: a sibling worktree (`repo-wt/`) starts with the tree's own path.
+    const rel = path.relative(root, file);
+    if (fs.existsSync(file) && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+      // A path to a configured project's tsconfig is that project: its own
+      // name would start a second watcher holding the same program.
+      return configured?.find((p) => path.normalize(p.tsconfig) === rel) ?? { name: slugOf(path.dirname(rel)), tsconfig: rel };
     }
     const known = configured?.map((p) => p.name).join(", ");
     if (fs.existsSync(file)) {
@@ -128,8 +152,236 @@ export function resolveProjects(root: string, names: string[], cwd = process.cwd
   });
 }
 
-/** Live watchers this machine keeps at most; the least recently asked is stopped to make room. */
-export const MAX_WATCHERS = Math.max(1, parseInt(process.env.CAST_CHECK_MAX_WATCHERS ?? "", 10) || 6);
+/**
+ * Repo-relative paths in a project's program, read from its watcher's build
+ * info (tsc writes every file of the program there). Before the project's
+ * first pass on this tree (a worktree a line run just made), the list comes
+ * from another checkout of the same repository whose watcher has one: the
+ * program is the same give or take what a change adds, so a file one project
+ * imports from another's folder still counts for it. Null when no checkout has
+ * one.
+ */
+export function programFiles(root: string, project: CheckProject): Set<string> | null {
+  return builtProgramFiles(root, project) ?? otherCheckouts(root).map((tree) => builtProgramFiles(tree, project)).find(Boolean) ?? null;
+}
+
+/** The repository's other checkouts, its main one first (git worktree list). */
+function otherCheckouts(root: string): string[] {
+  try {
+    const self = fs.realpathSync(root);
+    return gitLines(root, ["worktree", "list", "--porcelain"])
+      .filter((l) => l.startsWith("worktree "))
+      .map((l) => l.slice("worktree ".length))
+      .filter((t) => fs.existsSync(t) && fs.realpathSync(t) !== self);
+  } catch {
+    return [];
+  }
+}
+
+function builtProgramFiles(root: string, project: CheckProject): Set<string> | null {
+  const dir = watchDir(root, project.name);
+  const program = readBuildInfo(dir);
+  if (!program) return null;
+  const files = new Set<string>();
+  for (const name of program.fileNames) {
+    if (typeof name !== "string") continue;
+    const rel = path.relative(root, path.resolve(dir, name));
+    if (!rel.startsWith("..")) files.add(rel.split(path.sep).join("/"));
+  }
+  return files;
+}
+
+/** The program a watcher's last pass recorded: its files, and what tsc knew of each. */
+function readBuildInfo(dir: string): { fileNames: unknown[]; fileInfos: unknown[]; root: unknown[] } | null {
+  type Program = { fileNames?: unknown; fileInfos?: unknown; root?: unknown };
+  try {
+    const info = JSON.parse(fs.readFileSync(buildInfoPath(dir), "utf-8")) as Program & { program?: Program };
+    // TypeScript before 5.6 nests the program under `program`.
+    const { fileNames, fileInfos, root } = info.program ?? info;
+    return Array.isArray(fileNames) ? { fileNames, fileInfos: Array.isArray(fileInfos) ? fileInfos : [], root: Array.isArray(root) ? root : [] } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The projects a set of changed files can affect: a project whose program
+ * holds one of them, or, for a file no program has seen yet (new, or a
+ * project never built here), one whose tsconfig sits above it.
+ */
+export function projectsTouching(root: string, projects: CheckProject[], changed: string[]): CheckProject[] {
+  const code = changed.filter((f) => /\.(m|c)?[jt]sx?$|(^|\/)(tsconfig[^/]*|package)\.json$/.test(f));
+  if (!code.length) return [];
+  return projects.filter((p) => {
+    const files = programFiles(root, p);
+    const dir = path.dirname(p.tsconfig);
+    const under = (f: string) => dir === "." || f.startsWith(`${dir}/`);
+    return code.some((f) => files?.has(f) || ((!files || !files.has(f)) && under(f) && !otherProjectOwns(root, projects, p, f)));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Whether a pass checked the files on disk
+// ---------------------------------------------------------------------------
+
+const SOURCE_MAP_COMMENT = /^\/\/[@#] source[M]appingURL=(.+)\r?\n?$/;
+
+/** The text as tsc reads a file: a byte order mark names the encoding and is dropped. */
+function textAsTscReads(bytes: Buffer): string {
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return Buffer.from(bytes.subarray(0, bytes.length & ~1)).swap16().toString("utf16le", 2);
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString("utf16le", 2);
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.toString("utf8", 3);
+  return bytes.toString("utf8");
+}
+
+/** The text without its last source map comment and the blank or `//#` lines after it, which tsc leaves out of a file's version. */
+function withoutSourceMapComment(text: string): string {
+  let lineEnd = text.length;
+  let lineStart = lineEnd;
+  for (let pos = lineEnd - 1; pos >= 0; pos--) {
+    const ch = text.charCodeAt(pos);
+    if (ch === 10 || ch === 13) {
+      if (ch === 10 && pos && text.charCodeAt(pos - 1) === 13) pos--;
+    } else if (ch < 127 || (ch !== 0x2028 && ch !== 0x2029)) {
+      lineStart = pos;
+      continue;
+    }
+    const line = text.substring(lineStart, lineEnd);
+    if (SOURCE_MAP_COMMENT.test(line)) return text.substring(0, lineStart);
+    if (!/^\s*(\/\/[@#] .*)?$/.test(line)) return text;
+    lineEnd = lineStart;
+  }
+  return text;
+}
+
+/** The version tsc records for a file's content: the sha256 of its text, source map comment aside (tsc's getSourceFileVersionAsHashFromText). */
+export function tscFileVersion(bytes: Buffer): string {
+  let text = textAsTscReads(bytes);
+  if (/\/\/[@#] source[M]appingURL=(.+)\r?\n?$/.test(text)) text = withoutSourceMapComment(text);
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** Each file's stat and version when last read, so an unchanged file is not hashed on every ask. */
+type DiskVersions = Record<string, [mtimeMs: number, size: number, ino: number, version: string]>;
+const diskVersionsPath = (dir: string): string => path.join(dir, "disk-versions.json");
+
+/**
+ * The program's files whose content on disk is not what the last finished
+ * pass checked. tsc records every file's version in the build info it writes
+ * as a pass ends, so this compares the pass with the disk directly, whatever
+ * tsc's file watching heard. Null when there is nothing to compare: no pass
+ * has written build info, or it records no content versions.
+ */
+export function filesNotAsChecked(dir: string, now = Date.now()): string[] | null {
+  const program = readBuildInfo(dir);
+  if (!program) return null;
+  const { fileNames, fileInfos } = program;
+  let known: DiskVersions = {};
+  try {
+    known = JSON.parse(fs.readFileSync(diskVersionsPath(dir), "utf-8"));
+  } catch {}
+  const read: DiskVersions = {};
+  const differ: string[] = [];
+  let compared = 0;
+  fileInfos.forEach((entry, i) => {
+    const recorded = typeof entry === "string" ? entry : (entry as { version?: unknown } | null)?.version;
+    const name = fileNames[i];
+    if (typeof recorded !== "string" || !/^[0-9a-f]{64}$/.test(recorded) || typeof name !== "string") return;
+    compared++;
+    const file = path.resolve(dir, name);
+    let version: string;
+    try {
+      const st = fs.statSync(file);
+      const was = known[file];
+      version = was && was[0] === st.mtimeMs && was[1] === st.size && was[2] === st.ino ? was[3] : tscFileVersion(fs.readFileSync(file));
+      // A file written within the clock's last two seconds can be written
+      // again with the same stat, so its version is read afresh next time.
+      if (now - st.mtimeMs > 2_000) read[file] = [st.mtimeMs, st.size, st.ino, version];
+    } catch {
+      differ.push(file);
+      return;
+    }
+    if (version !== recorded) differ.push(file);
+  });
+  if (!compared) return null;
+  try {
+    const tmp = `${diskVersionsPath(dir)}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(read));
+    fs.renameSync(tmp, diskVersionsPath(dir));
+  } catch {}
+  return differ;
+}
+
+type TypeScriptModule = typeof import("typescript");
+const typescriptModules = new Map<string, TypeScriptModule | null>();
+
+/** The TypeScript the project's tsc runs, loaded as a module so its config is read the way tsc reads it; null when the tree has none. */
+function treeTypeScript(root: string, tsconfig: string): TypeScriptModule | null {
+  const bin = tscInTree(root, tsconfig);
+  if (!bin) return null;
+  let lib: string;
+  try {
+    lib = path.join(path.dirname(fs.realpathSync(bin)), "../lib/typescript.js");
+  } catch {
+    return null;
+  }
+  if (!typescriptModules.has(lib)) {
+    try {
+      typescriptModules.set(lib, createRequire(lib)(lib) as TypeScriptModule);
+    } catch {
+      typescriptModules.set(lib, null);
+    }
+  }
+  return typescriptModules.get(lib) ?? null;
+}
+
+/**
+ * What changed that the last pass's build info does not list: a file the
+ * config's globs take in now and the pass did not (a new file nothing
+ * imports yet), and a config file written since the pass began (the
+ * tsconfig and every config it extends). Empty when the tree's TypeScript
+ * cannot be loaded or the build info names no roots.
+ */
+export function unlistedChanges(dir: string, root: string, tsconfig: string, passStartedAt?: number): string[] {
+  const program = readBuildInfo(dir);
+  const ts = program?.root.length ? treeTypeScript(root, tsconfig) : null;
+  if (!program || !ts) return [];
+  const key = (file: string) => (ts.sys.useCaseSensitiveFileNames ? path.resolve(file) : path.resolve(file).toLowerCase());
+  const recorded = new Set<string>();
+  const add = (id: unknown) => {
+    const name = typeof id === "number" ? program.fileNames[id - 1] : null;
+    if (typeof name === "string") recorded.add(key(path.resolve(dir, name)));
+  };
+  for (const entry of program.root) {
+    if (typeof entry === "number") add(entry);
+    else if (Array.isArray(entry) && typeof entry[0] === "number" && typeof entry[1] === "number") for (let id = entry[0]; id <= entry[1]; id++) add(id);
+  }
+  const config = path.join(root, tsconfig);
+  const parsed = ts.getParsedCommandLineOfConfigFile(config, undefined, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} });
+  if (!parsed) return [];
+  const changed = parsed.fileNames.filter((f) => !recorded.has(key(f)));
+  if (passStartedAt) {
+    const extended = (parsed.options.configFile as { extendedSourceFiles?: string[] } | undefined)?.extendedSourceFiles ?? [];
+    for (const file of [config, ...extended]) {
+      try {
+        if (fs.statSync(file).mtimeMs >= passStartedAt) changed.push(file);
+      } catch {}
+    }
+  }
+  return changed;
+}
+
+/** A git command's output lines in `root`; throws with git's message when it fails (a bad ref). */
+export function gitLines(root: string, args: string[]): string[] {
+  const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
+  if (r.status !== 0) throw new Error(String(r.stderr || `git ${args[0]} failed`).trim());
+  return String(r.stdout).split("\n").filter(Boolean);
+}
+
+/** Another project's program already holds `f`, so a nested project's tsconfig above it says nothing. */
+function otherProjectOwns(root: string, projects: CheckProject[], self: CheckProject, f: string): boolean {
+  return projects.some((q) => q !== self && !!programFiles(root, q)?.has(f));
+}
 
 /** How often a waiting asker refreshes `askedAt`, and how long without one leaves a running pass unwanted. */
 export const ASK_HEARTBEAT_MS = 30_000;
@@ -148,11 +400,15 @@ export interface WatchState {
   startedAt: number;
   /** A pass is running: tsc saw a change and has not printed its summary yet. */
   inProgress: boolean;
+  /** When the running or last pass started, as the watcher heard it. */
+  passStartedAt?: number;
   /** When the last pass finished, and what it found. */
   finishedAt?: number;
   errors?: number;
   /** When someone last asked; the watcher exits after IDLE_EXIT_MS without one. */
   askedAt?: number;
+  /** When the first pass finished: the build an asker waited for. */
+  firstFinishedAt?: number;
   /** The compiler this watcher runs. Absent means the tree had none and PATH's tsc is in use. */
   tsc?: string;
 }
@@ -160,20 +416,26 @@ export interface WatchState {
 export const IDLE_EXIT_MS = 45 * 60_000;
 
 /**
- * Exit when nobody has asked in IDLE_EXIT_MS, measured from the later of
- * the last ask and the last finished pass. A pass in flight never counts as
+ * Exit when nobody has asked in IDLE_EXIT_MS, measured from the later of the
+ * last ask and the first finished pass. A pass in flight never counts as
  * idle: on a loaded machine a first pass can outlive the idle window, and a
- * watcher that quit then threw the whole build away (seen 2026-09-17).
+ * watcher that quit then threw the whole build away (seen 2026-09-17). Later
+ * passes do not count: an agent editing the tree triggers them without anyone
+ * asking, and two such watchers burned 150% CPU for nobody (2026-10-14).
  */
-export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" | "finishedAt" | "startedAt">, now = Date.now()): boolean {
+export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" | "firstFinishedAt" | "startedAt">, now = Date.now()): boolean {
   if (state.inProgress) return false;
-  const last = Math.max(state.askedAt ?? 0, state.finishedAt ?? 0, state.startedAt);
+  const last = Math.max(state.askedAt ?? 0, state.firstFinishedAt ?? 0, state.startedAt);
   return now - last > IDLE_EXIT_MS;
 }
-/** A big program needs more heap than node's default; the largest figure the projects' own CI uses (union landing's typecheck.sh). */
-export const TSC_NODE_OPTIONS = "--max-old-space-size=6144";
-/** After a request, how long a change may take to reach tsc's watcher before we trust the last pass. */
-export const SETTLE_MS = 750;
+/**
+ * How long a pass that did not check the tree on disk may wait for tsc to
+ * start one that does, before the watcher counts as having lost track of it.
+ * tsc starts a pass a quarter second after it hears of a change.
+ */
+export const UNSEEN_GRACE_MS = 15_000;
+/** How long a watcher's recorded pid may be dead before an ask stops waiting on it. */
+const DEAD_GRACE_MS = 5_000;
 
 export function repoRoot(cwd = process.cwd()): string {
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf-8", timeout: 10_000 });
@@ -351,6 +613,7 @@ export function watchReducer(dir: string, state: WatchState) {
     if (ev.kind === "start") {
       buffer = [];
       state.inProgress = true;
+      state.passStartedAt = Date.now();
       writeWatchState(dir, state);
       return;
     }
@@ -359,6 +622,7 @@ export function watchReducer(dir: string, state: WatchState) {
       buffer = [];
       state.inProgress = false;
       state.finishedAt = Date.now();
+      state.firstFinishedAt ??= state.finishedAt;
       state.errors = ev.errors;
       writeWatchState(dir, state);
       return;
@@ -381,20 +645,35 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   if (seedBuildInfo(root, project)) console.log(`seeded the first pass from ${mainCheckoutOf(root)}`);
   // Incremental: a restarted watcher (the slot cap stops idle ones) and a
   // seeded worktree re-check only what changed since the recorded pass.
-  const child = spawn(own ?? "tsc", ["--noEmit", "--watch", "--preserveWatchOutput", "--pretty", "false", "--incremental", "--tsBuildInfoFile", buildInfoPath(dir), "-p", path.join(root, tsconfig)], {
+  const oomBefore = oomKillCount();
+  // Files are watched through their directories. tsc's default watches each
+  // file's inode, and on Linux an inode replaced while something still holds
+  // it open (git checkout swaps every file it changes) never reports its
+  // deletion: the watch stays on the old inode, and tsc never hears of that
+  // path again. A file under the include globs is also covered by its
+  // directory's watch; one reached only by import is not (ct-62781: Union's
+  // mobile program reaches ../backend, and an Implement round looped on
+  // exports present on disk).
+  const nodeOptions = tscNodeOptions(process.env.NODE_OPTIONS, process.env[CHECK_HEAP_ENV]);
+  const child = spawn(own ?? "tsc", ["--noEmit", "--watch", "--watchFile", "useFsEventsOnParentDirectory", "--preserveWatchOutput", "--pretty", "false", "--incremental", "--tsBuildInfoFile", buildInfoPath(dir), "-p", path.join(root, tsconfig)], {
     cwd: path.dirname(path.join(root, tsconfig)),
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS || TSC_NODE_OPTIONS },
+    env: { ...process.env, NODE_OPTIONS: nodeOptions },
   });
   let rest = "";
   // The last lines tsc printed, so a tsc that dies (out of heap, killed) says why in watch.log.
+  // Native stack frames stay out of it: V8 prints dozens after a fatal error,
+  // and they pushed out the one line that said why (a full heap).
   const tail: string[] = [];
+  let fatal: string | null = null;
   const onData = (chunk: Buffer | string): void => {
     rest += String(chunk);
     const lines = rest.split("\n");
     rest = lines.pop() ?? "";
     for (const line of lines) {
       reduce(line);
+      if (isHeapFatal(line)) fatal = line;
+      if (isNativeFrame(line)) continue;
       tail.push(line);
       if (tail.length > 20) tail.shift();
     }
@@ -403,6 +682,7 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   child.stderr?.on("data", onData);
   const idle = setInterval(() => {
     if (shouldIdleExit(readWatchState(dir) ?? state)) {
+      logWatcherEvent("idle-exit", { project, root });
       child.kill("SIGTERM");
       clearInterval(idle);
     }
@@ -417,12 +697,26 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
-  await new Promise<void>((resolve) =>
+  await new Promise<void>((resolve) => {
     child.on("exit", (code, signal) => {
-      console.log(`tsc exited (${signal ?? `code ${code}`}); its last lines:\n${[...tail, rest].filter(Boolean).join("\n")}`);
+      console.log(`tsc exited (${signal ?? `code ${code}`}); its last lines:\n${[...tail, rest].filter((l) => l && !isNativeFrame(l)).join("\n")}`);
+      // The last line is what an asker reads: a memory kill says so, with the machine's numbers.
+      const killed = memoryDeath({ what: `the ${project} typecheck (tsc)`, killed: signal === "SIGKILL", oomBefore, oomAfter: oomKillCount(), repoRoot: root });
+      const heap = heapDeath({ project, signal, fatal, nodeOptions });
+      if (killed ?? heap) console.log(killed ?? heap);
       resolve();
-    }),
-  );
+    });
+    // A tsc that never starts (none in the tree and none on PATH) emits only
+    // this, never exit: without it the watcher would wait forever with a pass
+    // marked in flight, and every ask would wait on it.
+    child.on("error", (err) => {
+      const missing = (err as NodeJS.ErrnoException).code === "ENOENT" && !own;
+      console.log(missing
+        ? `tsc did not start: this tree has no TypeScript installed (its dependencies are missing) and none is on PATH. Install them (the setup install in .codecast/workspace.toml, e.g. bun install), then ask again`
+        : `tsc did not start: ${err.message}`);
+      resolve();
+    });
+  });
   clearInterval(idle);
   try {
     fs.rmSync(statePath(dir), { force: true });
@@ -457,6 +751,9 @@ export const startDetachedWatcher: WatcherStarter = (root, { name, tsconfig }) =
   const viaRuntime = base.includes("bun") || base.includes("node");
   const args = viaRuntime ? [process.argv[1], "check-watch", root, name, tsconfig] : ["check-watch", root, name, tsconfig];
   const label = `sh.codecast.check.${path.basename(path.dirname(dir))}.${name}`.replace(/[^A-Za-z0-9._-]/g, "_");
+  // A cap the asker raised in NODE_OPTIONS reaches the watcher under launchd only by this name.
+  const asked = heapCapMb(process.env.NODE_OPTIONS);
+  if (asked && asked > TSC_HEAP_MB) process.env[CHECK_HEAP_ENV] = String(asked);
   if (startLaunchdJob({ label, argv: [process.execPath, ...args], plistPath: path.join(dir, "watcher.plist"), logPath: logPath(dir) })) return;
   const log = fs.openSync(logPath(dir), "a");
   try {
@@ -479,7 +776,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export async function checkProject(
   target: CheckProject,
   root: string,
-  opts: { start?: WatcherStarter; budgetMs?: number; fresh?: boolean; note?: (line: string) => void; maxWatchers?: number; kill?: (pid: number) => void } = {},
+  opts: { start?: WatcherStarter; budgetMs?: number; fresh?: boolean; note?: (line: string) => void; maxWatchers?: number; kill?: (pid: number) => void; protect?: ReadonlySet<string>; unseenGraceMs?: number } = {},
 ): Promise<CheckResult> {
   const project = target.name;
   const dir = watchDir(root, project);
@@ -516,23 +813,44 @@ export async function checkProject(
     release();
   }
   if (!state || !isPidAlive(state.pid)) started = await startWhenSlotFrees(target, root, { ...opts, start: opts.start ?? startDetachedWatcher, note, kill, deadline });
-  // Mark the ask (keeps the watcher alive), then let a change that landed a
-  // moment ago reach tsc before trusting the last pass.
+  // Mark the ask, which keeps the watcher alive.
   const askedAt = Date.now();
   const current = readWatchState(dir);
   if (current) writeWatchState(dir, { ...current, askedAt });
-  await sleep(SETTLE_MS);
   let noted = false;
   let beat = askedAt;
+  let deadSince: { pid: number; at: number } | null = null;
+  // A finished pass that did not check the files on disk, and since when.
+  let behind = null as { finishedAt: number; since: number } | null;
   for (;;) {
     const s = readWatchState(dir);
-    if (!s) throw new Error(`the ${project} typecheck watcher went away; its log is ${logPath(dir)}`);
+    if (!s) throw new Error(`the ${project} typecheck watcher went away: ${lastLogLine(dir) ?? "it left no log"} (${logPath(dir)})`);
+    // A watcher killed outright leaves its state behind, marked mid-pass. Its
+    // pid can also change while it starts (it relaunches itself under
+    // launchd), so only a pid that stays dead counts as gone.
+    if (isPidAlive(s.pid)) deadSince = null;
+    else if (!deadSince || deadSince.pid !== s.pid) deadSince = { pid: s.pid, at: Date.now() };
+    else if (Date.now() - deadSince.at > DEAD_GRACE_MS) throw new Error(`the ${project} typecheck watcher died: ${lastLogLine(dir) ?? "it left no log"} (${logPath(dir)})`);
     // Keep the pass wanted while this ask waits on it, so the queue never takes its slot.
     if (Date.now() - beat >= ASK_HEARTBEAT_MS) {
       beat = Date.now();
       writeWatchState(dir, { ...s, askedAt: beat });
     }
-    if (!s.inProgress && s.finishedAt) {
+    // A finished pass answers only if it checked the tree as it is on disk.
+    // A change can land after a pass read the file, or before tsc's debounce
+    // let it start the next one; tsc then starts another, which this ask waits
+    // for. A watcher that never does has lost track of the file, and the ask
+    // says so rather than answer about a tree that no longer exists.
+    const notAsChecked = !s.inProgress && s.finishedAt ? [...(filesNotAsChecked(dir) ?? []), ...unlistedChanges(dir, root, target.tsconfig, s.passStartedAt)] : [];
+    if (!s.inProgress && s.finishedAt && notAsChecked.length) {
+      const grace = opts.unseenGraceMs ?? UNSEEN_GRACE_MS;
+      if (behind?.finishedAt !== s.finishedAt) behind = { finishedAt: s.finishedAt, since: Date.now() };
+      else if (Date.now() - behind.since > grace) {
+        const named = notAsChecked.slice(0, 3).map((f) => path.relative(root, f)).join(", ") + (notAsChecked.length > 3 ? ` and ${notAsChecked.length - 3} more` : "");
+        throw new Error(`the ${project} typecheck watcher has not checked ${named} as it is on disk, and tsc started no pass in ${Math.round(grace / 1000)}s; run \`cast check --fresh ${project}\``);
+      }
+    }
+    if (!s.inProgress && s.finishedAt && !notAsChecked.length) {
       const diagnostics = fs.existsSync(outputPath(dir)) ? fs.readFileSync(outputPath(dir), "utf-8") : "";
       // A global tsc resolves libs and types its own way, so its errors are not
       // the project's. Say so rather than let a wall of them read as real. The
@@ -546,9 +864,23 @@ export async function checkProject(
     if (Date.now() > deadline) throw new Error(`the ${project} typecheck is still running after ${Math.round(budget / 60_000)} min; the machine is loaded. Ask again, or read ${logPath(dir)}`);
     if (!noted && Date.now() - askedAt > 5_000) {
       noted = true;
-      note(`waiting for the ${project} typecheck pass to finish…`);
+      note(`waiting for the ${project} typecheck pass to finish… (a first pass on a big program takes minutes; if this call is cut off, the pass keeps running and the next ask picks it up)`);
     }
     await sleep(300);
+  }
+}
+
+/**
+ * The last thing a watcher wrote to its log, which names why it stopped.
+ * Native stack frames are skipped: a log from an older watcher ends in dozens
+ * of them after V8 aborts, and the last one (a dyld frame) said nothing.
+ */
+export function lastLogLine(dir: string): string | null {
+  try {
+    const line = fs.readFileSync(logPath(dir), "utf-8").trim().split("\n").filter((l) => l.trim() && !isNativeFrame(l)).pop();
+    return line?.replace(/; its last lines:$/, "") ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -575,17 +907,53 @@ export function listWatchers(): Array<WatchState & { dir: string }> {
 }
 
 /**
- * Stop the least recently asked watchers until one more fits under `max`:
- * watchers between passes first, then passes nobody waits on. Returns what
- * was stopped, or null when every slot holds a wanted pass (nothing is
- * stopped then). A watcher's state file goes with it, so a later ask for
- * that project starts a fresh one.
+ * Stop every watcher on `tree` or a tree inside it. A watcher outlives the
+ * session that asked for it by up to IDLE_EXIT_MS, and its tsc works inside
+ * the tree all that time: a tree being set aside or released has nobody left
+ * to ask, and its watchers would keep it in use. Returns what was stopped.
  */
-export function makeRoom(max: number, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM"), now = Date.now()): Array<WatchState & { dir: string }> | null {
+export function stopWatchersIn(tree: string, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM")): Array<WatchState & { dir: string }> {
+  const stopped = listWatchers().filter((w) => w.root === tree || w.root.startsWith(`${tree}/`));
+  for (const w of stopped) {
+    try {
+      kill(w.pid);
+    } catch {}
+    fs.rmSync(statePath(w.dir), { force: true });
+    logWatcherEvent("stop", w, "its tree was released");
+  }
+  return stopped;
+}
+
+/**
+ * Every watcher start, eviction, stop and idle exit on this machine, one line each.
+ * A program stopped to make room is rebuilt whole on its next ask, so this is
+ * the cost the cap trades against memory, and the record that shows a cap
+ * too small for the trees sharing it.
+ */
+export const eventsPath = (): string => path.join(checkHome(), "events.log");
+
+export function logWatcherEvent(event: "start" | "evict" | "stop" | "idle-exit", w: { project: string; root: string }, detail = ""): void {
+  try {
+    fs.mkdirSync(checkHome(), { recursive: true });
+    fs.appendFileSync(eventsPath(), `${new Date().toISOString()} ${event} ${w.project} ${w.root}${detail ? ` ${detail}` : ""}\n`);
+  } catch {}
+}
+
+/**
+ * Stop the least recently asked watchers until one more fits under `max`:
+ * watchers between passes first, then passes nobody waits on. Watchers in
+ * `protect` (the programs the same `cast check` run already asked for) go
+ * last: stopping one only to rebuild it on that run's next ask is pure waste.
+ * Returns what was stopped, or null when every slot holds a wanted pass
+ * (nothing is stopped then). A watcher's state file goes with it, so a later
+ * ask for that project starts a fresh one.
+ */
+export function makeRoom(max: number, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM"), now = Date.now(), protect: ReadonlySet<string> = new Set()): Array<WatchState & { dir: string }> | null {
   const byAsk = (a: WatchState, b: WatchState) => (a.askedAt ?? a.startedAt) - (b.askedAt ?? b.startedAt);
   const live = listWatchers();
   const needed = Math.max(0, live.length - max + 1);
-  const eligible = [...live.filter((w) => !w.inProgress).sort(byAsk), ...live.filter((w) => w.inProgress && !isWanted(w, now)).sort(byAsk)];
+  const stoppable = (ws: Array<WatchState & { dir: string }>) => [...ws.filter((w) => !w.inProgress).sort(byAsk), ...ws.filter((w) => w.inProgress && !isWanted(w, now)).sort(byAsk)];
+  const eligible = [...stoppable(live.filter((w) => !protect.has(w.dir))), ...stoppable(live.filter((w) => protect.has(w.dir)))];
   if (eligible.length < needed) return null;
   const evicted: Array<WatchState & { dir: string }> = [];
   for (const victim of eligible.slice(0, needed)) {
@@ -593,6 +961,7 @@ export function makeRoom(max: number, kill: (pid: number) => void = (pid) => pro
       kill(victim.pid);
     } catch {}
     fs.rmSync(statePath(victim.dir), { force: true });
+    logWatcherEvent("evict", victim, `asked ${Math.round((now - (victim.askedAt ?? victim.startedAt)) / 60_000)}m ago, ${live.length} live, cap ${max}`);
     evicted.push(victim);
   }
   return evicted;
@@ -651,11 +1020,11 @@ function queuePlace(dir: string, now = Date.now()): number {
 async function startWhenSlotFrees(
   target: CheckProject,
   root: string,
-  opts: { start: WatcherStarter; note: (line: string) => void; kill: (pid: number) => void; maxWatchers?: number; deadline: number },
+  opts: { start: WatcherStarter; note: (line: string) => void; kill: (pid: number) => void; maxWatchers?: number; deadline: number; protect?: ReadonlySet<string> },
 ): Promise<boolean> {
   const project = target.name;
   const dir = watchDir(root, project);
-  const max = opts.maxWatchers ?? MAX_WATCHERS;
+  const max = opts.maxWatchers ?? machineCap("check");
   fs.mkdirSync(queueDir(), { recursive: true });
   fs.mkdirSync(dir, { recursive: true });
   const at = queuePlace(dir);
@@ -675,15 +1044,19 @@ async function startWhenSlotFrees(
         if (ahead === 0) {
           const releaseCapacity = await acquireFileLock(path.join(checkHome(), "capacity.lock"), { describe: "cast check watcher start", waitMs: 60_000 });
           try {
-            const evicted = makeRoom(max, opts.kill);
+            const evicted = makeRoom(max, opts.kill, Date.now(), opts.protect);
             if (evicted) {
               for (const w of evicted) opts.note(`stopped the ${w.project} watcher for ${w.root} (${w.inProgress ? "a pass nobody waits on" : "idle longest"}) to stay under ${max} watchers on this machine`);
+              const small = thisMachineTooSmall(root);
+              if (small) opts.note(small);
               opts.start(root, target);
+              logWatcherEvent("start", { project, root });
               fs.rmSync(queuedAtPath(dir), { force: true });
               opts.note(`starting the ${project} typecheck watcher for ${root} (first pass builds the whole program; later asks take seconds)`);
               const deadline = Date.now() + 30_000;
-              while (Date.now() < deadline && !readWatchState(dir)) await sleep(200);
-              if (!readWatchState(dir)) throw new Error(`the ${project} typecheck watcher did not start; its log is ${logPath(dir)}`);
+              const live = () => { const s = readWatchState(dir); return !!s && isPidAlive(s.pid); };
+              while (Date.now() < deadline && !live()) await sleep(200);
+              if (!live()) throw new Error(`the ${project} typecheck watcher did not start: ${lastLogLine(dir) ?? "it left no log"} (${logPath(dir)})`);
               return true;
             }
           } finally {
@@ -694,8 +1067,8 @@ async function startWhenSlotFrees(
           lastAhead = ahead;
           const busy = listWatchers().map((w) => w.project).join(", ");
           opts.note(ahead === 0
-            ? `queued: all ${max} typecheck slots hold passes someone is waiting on (${busy}); starting when one finishes`
-            : `queued: ${ahead} ask${ahead === 1 ? "" : "s"} ahead for the ${max} typecheck slots (${busy})`);
+            ? `queued: all ${max} typecheck slots hold passes someone is waiting on (${busy}); starting when one finishes (cast queue lists them)`
+            : `queued: ${ahead} ask${ahead === 1 ? "" : "s"} ahead for the ${max} typecheck slots (${busy}; cast queue lists them)`);
         }
       } finally {
         release();

@@ -1,0 +1,30 @@
+# frozen_string_literal: true
+require 'ethon/errors/ethon_error'
+require 'ethon/errors/url'
+require 'ethon/errors/global_init'
+require 'ethon/errors/form_add'
+require 'ethon/errors/multi_timeout'
+require 'ethon/errors/multi_assign'
+require 'ethon/errors/multi_fdset'
+require 'ethon/errors/share'
+require 'ethon/errors/multi_add'
+require 'ethon/errors/multi_remove'
+require 'ethon/errors/header'
+require 'ethon/errors/multi_perform'
+require 'ethon/errors/select'
+require 'ethon/errors/invalid_option'
+require 'ethon/errors/invalid_value'
+require 'ethon/errors/set_option'
+require 'ethon/errors/unsupported_option'
+require 'ethon/errors/mime'
+require 'ethon/errors/fork_safety'
+require 'ethon/errors/multi_wait'
+require 'ethon/errors/multi_poll'
+require 'ethon/errors/multi_wakeup'
+
+module Ethon
+
+  # This namespace contains all errors raised by ethon.
+  module Errors
+  end
+end

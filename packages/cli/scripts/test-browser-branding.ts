@@ -48,8 +48,10 @@ async function start(fresh: boolean) {
   const { targetId } = await conn.send("Target.createTarget", { url: server.url.href });
   const { sessionId } = await conn.send("Target.attachToTarget", { targetId, flatten: true });
   for (let attempt = 0; attempt < 100; attempt++) {
-    const value = await conn.send("Runtime.evaluate", { expression: "document.readyState", returnByValue: true }, sessionId);
-    if (value.result.value === "complete") return { app, sessionId };
+    // A new tab reports "complete" for its initial about:blank before the
+    // verification page commits, so wait for the page's own button.
+    const value = await conn.send("Runtime.evaluate", { expression: 'document.readyState === "complete" && !!document.getElementById("save")', returnByValue: true }, sessionId);
+    if (value.result.value === true) return { app, sessionId };
     await sleep(100);
   }
   throw new Error("Verification page did not load");

@@ -51,8 +51,8 @@ Policy, per client build:
 | policy | no `.sig` | signed by a pinned key | pinned key, bad signature | signed only by unknown keys |
 |---|---|---|---|---|
 | no keys pinned | accept, no request made | n/a | n/a | n/a |
-| keys pinned, `required: false` (today) | accept | accept, verified | refuse | accept |
-| keys pinned, `required: true` | refuse | accept, verified | refuse | refuse |
+| keys pinned, `required: false` | accept | accept, verified | refuse | accept |
+| keys pinned, `required: true` (current) | refuse | accept, verified | refuse | refuse |
 
 A bad signature by a pinned key is refused under every policy: it is evidence
 the manifest changed after signing, never "unsigned".
@@ -69,8 +69,12 @@ The invariant: a client is never asked to verify something the publisher does
 not yet produce, and the publisher never stops producing what a client in the
 field still accepts.
 
-Steps 1 to 3 are done: the key is pinned with `required: false` since
-2026-09-24. Step 4 is where the rollout stands.
+Steps 1 to 3 are done: the key is pinned since 2026-09-24. Step 5 ships
+`required: true` (2026-11-10), after every release since v1.1.207 was
+confirmed signed by the finalize workflow and the live `latest.json.sig`
+verified against the pinned key. It needs no fleet floor: the flag lives in
+the new binary, so older clients keep their own policy, and only the
+publisher is bound to sign every release from here on.
 
 1. **Ship the verification code with no key pinned.** Behaviour is byte for byte what the fleet does now: no
    signature request, no new refusal. Old clients keep updating.
@@ -122,8 +126,9 @@ the pattern the Apple signing certificate follows.
   `latest.json.sig` that `sign-manifest.ts --verify` accepted with this key, so
   a pipeline fault could never meet a pinned client. It shipped 2026-09-24.
 
-The release signing key must never sit on a laptop release path: `deploy.sh`
-publishes unsigned and deletes any `latest.json.sig` left from a CI release (a
-stale signature would no longer match, and a pinned client refuses that). It stays a step 3 compatible
-path until step 5, after which laptop publishes of `latest.json` stop working
-by design (CI is already the release path for binaries).
+The release signing key never sits on a laptop release path by default.
+`deploy.sh` never publishes an unsigned `latest.json`: it signs only with a key
+the person running it passes in `RELEASE_MANIFEST_SIGNING_KEY` for that run,
+verifies the signature against the pinned key, and otherwise stops before
+building anything. CI is the release path. The finalize workflow fails its
+run when the signing secret is missing rather than leave a release unsigned.

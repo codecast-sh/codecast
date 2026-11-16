@@ -8,13 +8,14 @@
 // avatar bar latched "Failed to load" on the ReferenceError.
 //
 // This pusher makes a push a proof instead of a reflex:
-//   1. wait until the functions directory has been quiet for QUIET_MS;
+//   1. wait until everything the backend bundles (the functions directory,
+//      packages/shared and platform/packages) has been quiet for QUIET_MS;
 //   2. refuse while the tree is behind origin/main (a snapshot push from a
 //      stale tree deletes newer functions from prod, the 2026-07-15 outage);
 //   3. take a signature of every file that ships;
 //   4. run the whole-program typecheck (`cast check convex`; a plain tsc when
 //      cast is not on PATH) and stop on any error;
-//   5. push once (`convex dev --once`);
+//   5. push once (`convex dev --once --typecheck disable`);
 //   6. take the signature again. If it moved, the push may have bundled a
 //      mid-edit state, so it is dirty again and goes around once more.
 // Function logs keep streaming in the same pane through `convex logs`.
@@ -30,12 +31,14 @@ export const STALE_RETRY_MS = 60_000;
 export const FAILED_PUSH_RETRY_MS = 60_000;
 
 /** Files whose change is worth a push. Codegen output is written BY the push
- *  and must not retrigger it; tests never ship; editors leave dotfiles. */
+ *  and must not retrigger it; tests and their fixtures (`*.testkit.ts`,
+ *  `*.testing.ts`) never ship; editors leave dotfiles. `rel` is relative to
+ *  the functions directory, or repo-relative for the other bundled sources. */
 export function shipsToProd(rel: string): boolean {
   const parts = rel.split(/[\\/]/);
   if (parts.some((p) => p.startsWith(".") || p === "_generated" || p === "node_modules")) return false;
   const last = parts[parts.length - 1] ?? "";
-  if (/\.test\.[cm]?[jt]sx?$/.test(last)) return false;
+  if (/\.(test|testkit|testing)\.[cm]?[jt]sx?$/.test(last)) return false;
   return /\.[cm]?[jt]sx?$|\.json$/.test(last);
 }
 
@@ -48,12 +51,26 @@ export function signatureOf(entries: Iterable<{ rel: string; mtimeMs: number; si
     .join("\n");
 }
 
+/** Every directory the backend bundles, the same set deploy.sh reads: the
+ *  functions, the shared package they import (`@codecast/shared`) and the
+ *  vendored platform packages. `prefix` namespaces a file in the signature
+ *  and the log; functions keep their bare path. */
+export function bundledSources(root: string): { dir: string; prefix: string }[] {
+  return [
+    { dir: join(root, "packages", "convex", "convex"), prefix: "" },
+    { dir: join(root, "packages", "shared"), prefix: "packages/shared/" },
+    { dir: join(root, "platform", "packages"), prefix: "platform/packages/" },
+  ];
+}
+
 export type CheckResult = { errors: number; diagnostics: string };
 
 export type GateIO = {
   now: () => number;
-  /** Is HEAD a superset of origin/main? */
+  /** Is HEAD a superset of `base`? */
   treeIsFresh: () => Promise<boolean>;
+  /** The ref freshness is judged against, for the log. Defaults to origin/main. */
+  base?: string;
   signature: () => Promise<string>;
   typecheck: () => Promise<CheckResult>;
   /** Exit code of the push. */
@@ -89,7 +106,10 @@ export class Gate {
     this.busy = true;
     try {
       if (!(await this.io.treeIsFresh())) {
-        if (!this.wasStale) this.io.log("REFUSING to push: this tree is BEHIND origin/main. Run: git pull — the push resumes on its own.");
+        if (!this.wasStale) {
+          const base = this.io.base ?? "origin/main";
+          this.io.log(`REFUSING to push: this tree is BEHIND ${base}. Run: git pull --rebase ${base.replace("/", " ")} — the push resumes on its own.`);
+        }
         this.wasStale = true;
         this.retryAt = this.io.now() + STALE_RETRY_MS;
         return "stale";
@@ -137,6 +157,7 @@ export class Gate {
 const PKG = join(import.meta.dir, "..");
 const ROOT = join(PKG, "..", "..");
 const FUNCTIONS = join(PKG, "convex");
+const SOURCES = bundledSources(ROOT);
 
 function stamp(): string {
   return new Date().toTimeString().slice(0, 8);
@@ -160,23 +181,39 @@ function run(cmd: string[], opts: { cwd: string; timeoutMs?: number; inherit?: b
   });
 }
 
-async function treeIsFresh(): Promise<boolean> {
-  // Offline (fetch fails or hangs under load), judge by the last-known
-  // origin/main rather than blocking local dev — the same rule dev.sh applies.
-  await run(["git", "fetch", "origin", "--quiet"], { cwd: ROOT, timeoutMs: 20_000 });
-  const r = await run(["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"], { cwd: ROOT, timeoutMs: 30_000 });
-  return r.code === 0;
+// The remote freshness is judged against: codecast-sh/codecast's, not a
+// fork's origin, which can sit far behind it while looking fresh.
+async function baseRemote(): Promise<string> {
+  const r = await run(["bash", join(ROOT, "scripts", "convex-base-remote.sh")], { cwd: ROOT, timeoutMs: 10_000 });
+  return (r.code === 0 && r.stdout.trim()) || "origin";
+}
+
+function treeIsFreshAgainst(remote: string): () => Promise<boolean> {
+  return async () => {
+    // Offline (fetch fails or hangs under load), judge by the last-known
+    // <remote>/main rather than blocking local dev — the same rule dev.sh applies.
+    await run(["git", "fetch", remote, "--quiet"], { cwd: ROOT, timeoutMs: 20_000 });
+    const r = await run(["git", "merge-base", "--is-ancestor", `${remote}/main`, "HEAD"], { cwd: ROOT, timeoutMs: 30_000 });
+    return r.code === 0;
+  };
 }
 
 async function signature(): Promise<string> {
   const entries: { rel: string; mtimeMs: number; size: number }[] = [];
-  for (const name of readdirSync(FUNCTIONS, { recursive: true }) as string[]) {
-    const abs = join(FUNCTIONS, name);
-    let st;
-    try { st = statSync(abs); } catch { continue; }
-    if (!st.isFile()) continue;
-    entries.push({ rel: relative(FUNCTIONS, abs).split(sep).join("/"), mtimeMs: st.mtimeMs, size: st.size });
-  }
+  // Walk by hand so dependency and dot directories are never descended into.
+  const walk = (dir: string, prefix: string): void => {
+    let names: string[];
+    try { names = readdirSync(dir); } catch { return; }
+    for (const name of names) {
+      if (name.startsWith(".") || name === "node_modules" || name === "_generated") continue;
+      const abs = join(dir, name);
+      let st;
+      try { st = statSync(abs); } catch { continue; }
+      if (st.isDirectory()) walk(abs, `${prefix}${name}/`);
+      else if (st.isFile()) entries.push({ rel: `${prefix}${name}`, mtimeMs: st.mtimeMs, size: st.size });
+    }
+  };
+  for (const source of SOURCES) walk(source.dir, source.prefix);
   // The package manifest ships too (a dependency change re-bundles).
   const pkg = statSync(join(PKG, "package.json"));
   entries.push({ rel: "package.json", mtimeMs: pkg.mtimeMs, size: pkg.size });
@@ -197,7 +234,8 @@ async function typecheck(): Promise<CheckResult> {
 }
 
 async function push(): Promise<number> {
-  const r = await run([join(PKG, "node_modules", ".bin", "convex"), "dev", "--once"], { cwd: PKG, inherit: true, timeoutMs: 15 * 60_000 });
+  // Step 4 already proved the tree green; the CLI's own pass would be a second fresh whole-program tsc per push.
+  const r = await run([join(PKG, "node_modules", ".bin", "convex"), "dev", "--once", "--typecheck", "disable"], { cwd: PKG, inherit: true, timeoutMs: 15 * 60_000 });
   return r.code;
 }
 
@@ -209,12 +247,16 @@ function tailLogs(): void {
 
 async function main(): Promise<void> {
   if (!existsSync(FUNCTIONS)) throw new Error(`no functions directory at ${FUNCTIONS}`);
-  const gate = new Gate({ now: Date.now, treeIsFresh, signature, typecheck, push, log });
-  watch(FUNCTIONS, { recursive: true }, (_event, filename) => {
-    const rel = filename == null ? undefined : String(filename).split(sep).join("/");
-    if (rel === undefined || shipsToProd(rel)) gate.onChange(rel);
-  });
-  log(`Watching ${relative(ROOT, FUNCTIONS)}: a push waits ${QUIET_MS / 1000}s of quiet, a fresh tree and a green typecheck.`);
+  const remote = await baseRemote();
+  const gate = new Gate({ now: Date.now, treeIsFresh: treeIsFreshAgainst(remote), base: `${remote}/main`, signature, typecheck, push, log });
+  for (const source of SOURCES) {
+    if (!existsSync(source.dir)) continue;
+    watch(source.dir, { recursive: true }, (_event, filename) => {
+      const rel = filename == null ? undefined : source.prefix + String(filename).split(sep).join("/");
+      if (rel === undefined || shipsToProd(rel)) gate.onChange(rel);
+    });
+  }
+  log(`Watching ${SOURCES.map((s) => relative(ROOT, s.dir)).join(", ")}: a push waits ${QUIET_MS / 1000}s of quiet, a tree not behind ${remote}/main and a green typecheck.`);
   tailLogs();
   for (;;) {
     await gate.tick();

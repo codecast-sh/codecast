@@ -92,11 +92,7 @@ Do not mark the task as done. The conductor will handle re-assignment or escalat
 
 ## If you discover issues outside your scope
 
-Create new tasks, do not fix unrelated problems:
-
-```bash
-cast task create "Bug: <description>" -t bug -p high --plan <plan_id>
-```
+Leave unrelated problems unfixed and file no tasks for them. Name each one in your final report, with where you saw it, so the conductor can decide what to pursue.
 
 ## Principles
 

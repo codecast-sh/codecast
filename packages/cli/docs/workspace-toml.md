@@ -96,10 +96,16 @@ cast ws trust --revoke    # forget every approval for this repo
 
 `cast ws acquire --trust` approves and acquires in one step.
 
-Two rules make the record worth keeping. An agent-driven acquire — the daemon
+Two rules make the record worth keeping. An agent-driven acquire (the daemon
 creating a worktree for a session, the warm pool building a slot, any `cast`
-run inside an agent session — never approves anything by itself; it gets the
-same refusal until a person runs `cast ws trust`. And the record lives in
+run inside an agent session) never approves anything by itself, and neither
+does `--trust` or `cast ws trust` run by an agent. Inside a session, the
+refusal posts an approval card in the conversation instead: it lists the
+folder and every hook and command list waiting, line by line, with Approve and
+Decline. Approve (confirmed with Touch ID) runs `cast ws trust` in that folder
+as the person and records exactly the lines the card showed; a line changed
+after the card was shown stays unapproved. The agent runs its acquire again
+when the answer arrives. And the record lives in
 `~/.codecast/workspace-trust.json`, never in the repo, so nothing in the repo
 can approve itself in the commit that changed it.
 

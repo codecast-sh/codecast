@@ -4,21 +4,18 @@ import { useInboxStore, type DocItem } from "../../store/inboxStore";
 import type { ItemRowState } from "../ListRowShell";
 import { DocDates } from "../DocDates";
 import { docOrigin, docTypeLabel } from "@codecast/shared/docs";
-import { docTypeStyle } from "../../lib/docTypeStyle";
+import { DocTypeMark } from "./DocTypeMark";
 import { getLabelColor } from "../../lib/labelColors";
-import { useHostedMode } from "../../lib/surfaces";
-import { sessionCardTitle } from "../../lib/sessionCard";
-import { stripMarkdown } from "@codecast/shared/contracts/plainText";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { modernPill, modernPillShape } from "../ui/modernLook";
 
-/** A note's first words after its title, as one line. */
-function noteSnippet(content: string | undefined, title: string): string {
-  const text = stripMarkdown((content ?? "").slice(0, 600)).replace(/\s+/g, " ").trim();
-  const body = text.startsWith(title) ? text.slice(title.length).trim() : text;
-  return body.slice(0, 160);
-}
-
-export function DocRow({ doc, onStar }: {
+export function DocRow({ doc, onStar, timeKey = "updated_at", match }: {
   doc: DocItem;
+  /** The words inside the doc a search matched, shown after its title. */
+  match?: string;
+  /** The time the row shows: the list's sort key (created or updated), so
+   *  the column agrees with the order. */
+  timeKey?: "created_at" | "updated_at";
   /** The list's row state; the doc row draws none of it. */
   state?: ItemRowState;
   /** Star or unstar. Without it the row stars through the store's pinDoc,
@@ -26,52 +23,31 @@ export function DocRow({ doc, onStar }: {
    *  rather than the store passes its own. */
   onStar?: (doc: DocItem, starred: boolean) => void;
 }) {
-  const cfg = docTypeStyle(doc.doc_type);
+  // Modern adds its looks; Classic's class strings stay as they were.
+  const m = useIsModernStyle();
   const title = (doc as any).display_title || doc.title || "Untitled";
-  // Hosted mode lists notes as a reader would: the title over a line of what
-  // it says and the conversation it came from, with no type dot or tag
-  // (every hosted note is a note).
-  const hosted = useHostedMode();
-  const source = useInboxStore((s) => {
-    const id = hosted ? (doc as any).conversation_id : undefined;
-    const row = id ? s.sessions[id] ?? s.conversations[id] : undefined;
-    return row ? sessionCardTitle(row as any) : null;
-  });
-  if (hosted) {
-    const snippet = noteSnippet(doc.content, title);
-    return (
-      <>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sol-text">{title}</span>
-          {(snippet || source) && (
-            <span data-cc-note-snippet className="mt-0.5 block truncate text-[12px] text-sol-text-dim">
-              {snippet}
-              {snippet && source ? " · " : null}
-              {source ? <span className="text-sol-text-dim/80">From {source}</span> : null}
-            </span>
-          )}
-        </span>
-        {doc.pinned && <Star aria-label="Starred" className="h-3 w-3 shrink-0 fill-current text-sol-yellow" />}
-        <DocDates doc={doc} className="text-xs text-gray-500 flex-shrink-0 cq-hide-minimal" />
-      </>
-    );
-  }
-
   return (
     <>
-      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dot}`} />
+      <DocTypeMark type={doc.doc_type} size={14} />
       {/* The star (stored as `pinned`): a starred doc sits on the shelf and
           sorts first. Hidden until hover on an unstarred row so the list
           stays quiet; always shown once set. */}
       <button
         onClick={(e) => { e.stopPropagation(); if (onStar) onStar(doc, !doc.pinned); else useInboxStore.getState().pinDoc(doc._id, !doc.pinned); }}
-        className={`flex-shrink-0 p-0.5 -m-0.5 rounded transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim/50 opacity-0 group-hover:opacity-100 hover:text-sol-yellow"}`}
+        className={`flex-shrink-0 p-0.5 -m-0.5 rounded transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim/50 opacity-0 group-hover:opacity-100 hover:text-sol-yellow"}${m ? " modern:-m-1.5 modern:rounded-control modern:p-1.5 modern:hover:bg-sol-text/[0.06]" : ""}`}
         title={doc.pinned ? "Unstar" : "Star (keeps it on your shelf)"}
         aria-label={doc.pinned ? "Unstar document" : "Star document"}
       >
         <Star className={`w-3 h-3 ${doc.pinned ? "fill-current" : ""}`} />
       </button>
-      <span className="flex-1 text-sol-text truncate min-w-0">{title}</span>
+      {match ? (
+        <>
+          <span className="shrink text-sol-text truncate min-w-0 max-w-[45%]">{title}</span>
+          <span className="flex-1 text-sol-text-dim truncate min-w-0" data-doc-match>{match}</span>
+        </>
+      ) : (
+        <span className="flex-1 text-sol-text truncate min-w-0">{title}</span>
+      )}
       {docOrigin(doc) === "agent" && (
         <span className="flex-shrink-0 cq-hide-compact" title={`${doc.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
       )}
@@ -79,7 +55,7 @@ export function DocRow({ doc, onStar }: {
         <Link
           href={`/plans/${doc.plan_short_id}`}
           onClick={(e) => e.stopPropagation()}
-          className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border/30 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/30 transition-colors flex-shrink-0 cq-hide-compact"
+          className={`text-meta px-1.5 py-0.5 rounded border border-sol-border/30 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/30 transition-colors flex-shrink-0 cq-hide-compact${m ? ` ${modernPill({}, "modern:font-mono modern:font-normal modern:hover:text-sol-cyan")}` : ""}`}
         >
           {doc.plan_short_id}
         </Link>
@@ -89,7 +65,7 @@ export function DocRow({ doc, onStar }: {
           {doc.labels.slice(0, 2).map((l) => {
             const lc = getLabelColor(l);
             return (
-              <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0 rounded-full border whitespace-nowrap ${lc.bg} ${lc.border} ${lc.text}`}>
+              <span key={l} className={`inline-flex items-center gap-1 text-meta px-1.5 py-0 rounded-full border whitespace-nowrap ${lc.bg} ${lc.border} ${lc.text}${m ? ` ${modernPillShape()}` : ""}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
                 {l}
               </span>
@@ -103,8 +79,8 @@ export function DocRow({ doc, onStar }: {
           })}
         </div>
       )}
-      <span className="text-[10px] text-gray-500 flex-shrink-0 tabular-nums cq-hide-minimal">{docTypeLabel(doc.doc_type)}</span>
-      <DocDates doc={doc} className="text-xs text-gray-500 flex-shrink-0 cq-hide-minimal" />
+      <span className="text-meta text-sol-text-dim flex-shrink-0 tabular-nums cq-hide-minimal">{docTypeLabel(doc.doc_type)}</span>
+      <DocDates doc={doc} timeKey={timeKey} className="text-xs text-sol-text-dim flex-shrink-0 cq-hide-minimal" />
     </>
   );
 }

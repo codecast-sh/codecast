@@ -1,7 +1,4 @@
 "use client";
-import { useAssistantConversationIds, useAssistantScope, useHostedMode, useModeWords } from "../../lib/surfaces";
-import { isAssistantDoc } from "../../lib/assistantScope";
-import { AssistantScopeSwitch, MoreInEverything } from "../../components/AssistantScopeSwitch";
 import { useCallback, useMemo, useRef, useEffect } from "react";
 import { sharePageUrl } from "../../lib/utils";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
@@ -9,13 +6,13 @@ import Link from "next/link";
 import { useInboxStore, DocItem, DocViewPrefs, ProjectItem } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
 
-import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { DocMenuItems } from "../../components/menus/ObjectContextMenus";
-import { docOriginClass, isOnHumanShelf, isOnNotesShelf, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
+import { docOriginClass, isOnHumanShelf, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
 import { DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
+import { knownCheckoutRoots } from "@codecast/convex/convex/projectPaths";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { docSearchText } from "../../lib/liveEntities";
@@ -31,7 +28,11 @@ import {
   Lightbulb,
 } from "lucide-react";
 import { DocRow } from "../../components/docs/DocRow";
-import { docTypeStyle } from "../../lib/docTypeStyle";
+import { NewDocMenu } from "../../components/docs/NewDocMenu";
+import { useArtifactContentSearch } from "../../hooks/useArtifactContentSearch";
+import { DocTypeMark } from "../../components/docs/DocTypeMark";
+import { isArtifactDocType } from "@codecast/shared/artifacts";
+import { createLiveArtifact, type WorkspaceStamp } from "../../lib/createLiveArtifact";
 
 const api = _api as any;
 
@@ -151,14 +152,11 @@ function useDocUrlState() {
 }
 
 export function DocListContent() {
-  const words = useModeWords();
   const params = useParams();
   const { docType, group, sort, dir, project: projectFilter, label: labelFilter, source: sourceFilter, setParam, setGroup, setSort, toggleSortDir, buildShareUrl } = useDocUrlState();
   const router = useRouter();
   const createDoc = useInboxStore((s) => s.createDoc);
   const wsStamp = workspaceStamp(useWorkspaceArgs());
-  const docs = useInboxStore((s) => s.docs);
-  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const projects = useInboxStore((s) => s.projects);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
   const createSavedView = useInboxStore((s) => s.createSavedView);
@@ -187,46 +185,39 @@ export function DocListContent() {
   // board makes between agent work and triage suggestions. "all" shows
   // everything. One shared rule (@codecast/shared/docs), so web and mobile
   // can't drift. Legacy "human"/"bot" links map onto the new values.
-  // Hosted mode's shelf is the person's own notes, so an agent org's role
-  // docs (a charter) stay with the agent docs.
-  const hosted = useHostedMode();
-  const onShelf = hosted ? isOnNotesShelf : isOnHumanShelf;
-  const sourceDocs = useMemo(() => {
+  const sourceFilteredDocs = useMemo(() => {
     if (sourceFilter === "agent" || sourceFilter === "bot") {
-      return docsList.filter((d) => !onShelf(d) && docOriginClass(d) === "agent");
+      return docsList.filter((d) => !isOnHumanShelf(d) && docOriginClass(d) === "agent");
     }
     if (sourceFilter === "mined") {
-      return docsList.filter((d) => !onShelf(d) && docOriginClass(d) === "mined");
+      return docsList.filter((d) => !isOnHumanShelf(d) && docOriginClass(d) === "mined");
     }
     if (sourceFilter === "all") return docsList;
     if (sourceFilter === "starred") return docsList.filter((d) => !!d.pinned);
     // "" (default) and legacy "human" links both mean the human's shelf.
-    return docsList.filter(onShelf);
-  }, [docsList, sourceFilter, onShelf]);
-  // The Assistant scope (lib/assistantScope), as To-dos read it: notes
-  // written by hand or in an assistant conversation. A coding agent's plans
-  // and findings wait under Everything.
-  const { only: assistantOnly } = useAssistantScope();
-  const assistantConversations = useAssistantConversationIds();
-  const sourceFilteredDocs = useMemo(
-    () => (assistantOnly ? sourceDocs.filter((d) => isAssistantDoc(d, assistantConversations)) : sourceDocs),
-    [assistantOnly, sourceDocs, assistantConversations],
-  );
-  const outOfScope = sourceDocs.length - sourceFilteredDocs.length;
+    return docsList.filter(isOnHumanShelf);
+  }, [docsList, sourceFilter]);
 
   const isShelfView = sourceFilter === "" || sourceFilter === "human";
   const hiddenAgentCount = useMemo(() => {
     if (!isShelfView) return 0;
-    return docsList.filter((d) => !onShelf(d)).length;
-  }, [docsList, isShelfView, onShelf]);
+    return docsList.filter((d) => !isOnHumanShelf(d)).length;
+  }, [docsList, isShelfView]);
+
+  // The checkouts the viewer's sessions name, read once per filter change: a
+  // doc's folder is matched to its repository through them (docFilters).
+  const checkouts = useMemo(
+    () => (projectFilter ? knownCheckoutRoots(Object.values(useInboxStore.getState().sessions)) : []),
+    [projectFilter],
+  );
 
   const filteredDocs = useMemo(() => {
     let list = sourceFilteredDocs;
     if (docType) list = list.filter((d) => d.doc_type === docType);
     if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
-    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter));
+    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter, checkouts));
     return list;
-  }, [sourceFilteredDocs, docType, labelFilter, projectFilter]);
+  }, [sourceFilteredDocs, docType, labelFilter, projectFilter, checkouts]);
 
   // Search corpus that ignores the active type TAB (but keeps explicit source/
   // project/label scope), so typing a query finds a doc whose type isn't the
@@ -235,9 +226,9 @@ export function DocListContent() {
   const searchScopeDocs = useMemo(() => {
     let list = sourceFilteredDocs;
     if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
-    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter));
+    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter, checkouts));
     return [...list].sort((a, b) => b.updated_at - a.updated_at);
-  }, [sourceFilteredDocs, labelFilter, projectFilter]);
+  }, [sourceFilteredDocs, labelFilter, projectFilter, checkouts]);
 
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -314,7 +305,7 @@ export function DocListContent() {
         return {
           key: g.type,
           label: docTypeLabel(g.type),
-          icon: <span className={`w-2 h-2 rounded-full ${docTypeStyle(g.type).dot}`} />,
+          icon: <DocTypeMark type={g.type} size={12} />,
           items: g.docs,
         };
       });
@@ -325,7 +316,7 @@ export function DocListContent() {
         label: g.project?.title || "No project",
         icon: <FolderKanban className={`w-3.5 h-3.5 ${g.project ? "text-sol-cyan" : "text-sol-text-dim"}`} />,
         extra: g.project ? (
-          <Link href={`/projects/${g.project._id}`} onClick={(e: any) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
+          <Link href={`/projects/${g.project._id}`} onClick={(e: any) => e.stopPropagation()} className="text-meta text-sol-cyan hover:underline flex-shrink-0">
             View project
           </Link>
         ) : undefined,
@@ -335,18 +326,35 @@ export function DocListContent() {
     return null;
   }, [group, typeGroups, projectGroups]);
 
-  const renderDocRow = useCallback((doc: DocItem, state: ItemRowState) => (
-    <DocRow doc={doc} state={state} />
-  ), []);
+  // The row's time is the one the list is sorted by, so the times read in
+  // order down the list.
+  // Boards, sheets and dashboards are found by the words inside them too.
+  const contentHits = useArtifactContentSearch();
+  // A hit in another of the viewer's workspaces is found too, and says where it lives, rather than vanishing.
+  const searchDocs = useMemo(() => {
+    const have = new Set(searchScopeDocs.map((d) => d._id));
+    const elsewhere = contentHits.hits
+      .filter((h) => !have.has(h._id))
+      .map((h) => ({ _id: h._id, title: h.title, doc_type: h.doc_type, source: "human", updated_at: h.updated_at ?? 0, created_at: h.updated_at ?? 0, where: h.where }) as unknown as DocItem);
+    const all = elsewhere.length ? [...searchScopeDocs, ...elsewhere] : searchScopeDocs;
+    // One ranked list wherever a doc lives: a title holding the words first, then the rest in list order.
+    const lq = contentHits.query.toLowerCase();
+    if (!lq) return all;
+    const titled = (d: DocItem) => (String(d.title ?? "").toLowerCase().includes(lq) ? 0 : 1);
+    return all.map((d, i) => [d, i] as const).sort((a, b) => titled(a[0]) - titled(b[0]) || a[1] - b[1]).map(([d]) => d);
+  }, [searchScopeDocs, contentHits.hits, contentHits.query]);
+  const renderDocRow = useCallback((doc: DocItem, state: ItemRowState) => {
+    const where = (doc as any).where as string | undefined;
+    const match = contentHits.snippets.get(doc._id);
+    return <DocRow doc={doc} state={state} timeKey={sort === "created" ? "created_at" : "updated_at"} match={where ? `In ${where} · ${match ?? ""}` : match} />;
+  }, [sort, contentHits.snippets]);
 
   return (
     <GenericListView<DocItem>
       activeItemId={params?.id as string | undefined}
       paletteTargetType="doc"
-      title={words.docsPage}
-      // Hosted Notes are one kind of thing: one tab, which the header draws
-      // as no choice at all (only its count, beside the title).
-      tabs={hosted ? [{ key: "", label: "All", count: sourceFilteredDocs.length }] : [
+      title="Docs"
+      tabs={[
         { key: "", label: "All", count: sourceFilteredDocs.length },
         ...DOC_TYPES.map((t) => ({
           key: t,
@@ -372,13 +380,10 @@ export function DocListContent() {
       onSortChange={setSort}
       sortDir={dir}
       onSortDirChange={toggleSortDir}
-      // Hosted mode does not open a door into developer content from a
-      // person's notes: Everything is in developer mode.
-      headerExtra={<AssistantScopeSwitch label="Which notes this lists" hidden={outOfScope} />}
-      listFooter={hosted ? (assistantOnly && outOfScope > 0 ? <div className="px-4 pb-3"><MoreInEverything hidden={outOfScope} /></div> : undefined) : hiddenAgentCount > 0 ? (
+      listFooter={hiddenAgentCount > 0 ? (
         <div className="px-6 py-2.5 border-t border-sol-border/15 flex items-center gap-2 text-xs text-sol-text-dim">
           <Bot className="w-3.5 h-3.5 opacity-40" />
-          <span>{hiddenAgentCount} {hiddenAgentCount === 1 ? words.agentDoc : words.agentDocs} not shown</span>
+          <span>{hiddenAgentCount} {hiddenAgentCount === 1 ? "agent doc" : "agent docs"} not shown</span>
           <button data-cc-inline-link onClick={() => setParam({ source: "all" })} className="text-sol-cyan hover:underline ml-0.5">
             Show all
           </button>
@@ -426,21 +431,28 @@ export function DocListContent() {
       getItemId={(d) => d._id}
       getItemRoute={(d) => `/docs/${d._id}`}
       getSearchText={(d) => docSearchText(d as any)}
-      searchAllItems={searchScopeDocs}
+      searchAllItems={searchDocs}
+      onSearchChange={contentHits.setQuery}
+      alsoMatches={contentHits.matches}
       emptyIcon={<FileText className="w-8 h-8 opacity-30" />}
       emptyMessage="No documents found"
-      createLabel={words.newDoc}
+      // With no type tab picked, + asks what to make; a type tab makes that type.
+      createMenu={docType ? undefined : (trigger) => <NewDocMenu>{trigger}</NewDocMenu>}
       onCreate={async () => {
         // Stamp the active workspace so the new doc lives where it was created
         // (a doc made in a team space belongs to that team).
+        if (isArtifactDocType(docType)) {
+          await createLiveArtifact(docType, wsStamp as WorkspaceStamp, (href) => router.push(href));
+          return;
+        }
         await createDoc(
           { title: "", doc_type: docType || "note", ...wsStamp },
           { version: 1, kind: "navigate" },
         );
       }}
       paletteShortcuts={[
-        { key: "t", mode: "type", label: "type" },
-        { key: "l", mode: "labels", label: "labels" },
+        { action: "doc.type", mode: "type", label: "type" },
+        { action: "doc.labels", mode: "labels", label: "labels" },
       ]}
       contextMenuContent={(items) => (
         <DocMenuItems docs={items} onOpen={(d) => router.push(`/docs/${d._id}`)} />

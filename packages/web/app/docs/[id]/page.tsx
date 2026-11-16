@@ -10,43 +10,33 @@ import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { AppLoader } from "../../../components/AppLoader";
 import { DocListContent } from "../page";
-import { DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
+import { RETYPABLE_DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
 import { docTypeStyle } from "../../../lib/docTypeStyle";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
+import { LiveArtifactPage } from "../../../components/live/LiveArtifactPage";
+import { isArtifactDocType } from "@codecast/shared/artifacts";
 import { EntryTimeline, type TimelineEntry } from "../../../components/EntryTimeline";
 import { ShareControl } from "../../../components/ShareControl";
+import { policyTeamOf } from "@codecast/shared/contracts";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { FeedCard } from "../../../components/ActivityFeed";
 import { WatchButton } from "../../../components/WatchButton";
-import { useSurface } from "../../../lib/surfaces";
-import { sessionCardTitle } from "../../../lib/sessionCard";
 import { Badge } from "../../../components/ui/badge";
 import "../../../components/editor/editor.css";
 import {
   Star,
   Archive,
-  Circle,
   CircleDot,
-  CheckCircle2,
-  XCircle,
-  CircleDotDashed,
   Tag,
 } from "lucide-react";
 import { taskPriority } from "../../../lib/taskPriority";
+import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
 import Link from "next/link";
 import { toast } from "sonner";
 import { DocDates } from "../../../components/DocDates";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-
-const STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; color: string }> = {
-  draft: { icon: CircleDotDashed, label: "Draft", color: "text-sol-text-dim" },
-  open: { icon: Circle, label: "Open", color: "text-sol-blue" },
-  in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow" },
-  in_review: { icon: CircleDot, label: "In Review", color: "text-sol-violet" },
-  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green" },
-  dropped: { icon: XCircle, label: "Dropped", color: "text-sol-text-dim" },
-};
+import { modernPill, modernToneOf } from "../../../components/ui/modernLook";
 
 function DocTypeSelector({
   value,
@@ -70,7 +60,7 @@ function DocTypeSelector({
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute top-full left-0 mt-1 bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1 z-50 min-w-[130px]">
-            {DOC_TYPES.map((key) => (
+            {RETYPABLE_DOC_TYPES.map((key) => (
               <button
                 key={key}
                 onClick={() => {
@@ -110,9 +100,6 @@ function DocDetailContent() {
   const router = useRouter();
   const openLinkedSession = useOpenLinkedSession();
   const id = params.id as string;
-  // Hosted mode reads a note: no type picker or Watch, and a line naming the
-  // conversation it came from in place of the Sessions list.
-  const internals = useSurface("docs.internals");
 
   const detailResult = useSyncDocDetail(id);
 
@@ -144,6 +131,8 @@ function DocDetailContent() {
       .filter((d) => d.parent_id === id)
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   }, [allDocs, id]);
+  // Related tasks render in their team's own status vocabulary.
+  const taskStatuses = useTeamTaskStatusList((data as any)?.team_id ?? null);
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const promoteToPlan = useInboxStore((s) => s.promoteDocToPlan);
@@ -195,6 +184,8 @@ function DocDetailContent() {
   }
 
   const doc = data;
+  // Boards, sheets and dashboards hold elements, not markdown: their own shell.
+  if (isArtifactDocType(doc.doc_type)) return <LiveArtifactPage doc={doc as any} />;
   const conversation = data.conversation;
   const relatedTasks = data.related_tasks || [];
   // Unified comment/entry timeline agents append via the CLI. Rides on the
@@ -226,15 +217,15 @@ function DocDetailContent() {
           drafting={{ overflow: true }}
           topBarLeft={
             <>
-              {internals && <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />}
+              <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />
               {doc.pinned && <Star className="w-3 h-3 text-sol-yellow fill-current" />}
-              {internals && <WatchButton entityType="doc" entityId={doc._id} />}
+              <WatchButton entityType="doc" entityId={doc._id} />
               <DocDates doc={doc} variant="full" className="text-xs text-sol-text-dim" />
             </>
           }
           topBarRight={
             <>
-              <ShareControl label="doc" path={`/docs/${doc._id}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token }} />
+              <ShareControl label="doc" path={`/docs/${doc._id}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token, team: policyTeamOf("docs", doc) }} />
               <button
                 onClick={handlePin}
                 className={`p-1.5 rounded-md transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim hover:text-sol-yellow"}`}
@@ -251,14 +242,6 @@ function DocDetailContent() {
               </button>
             </>
           }
-          leadContent={!internals && conversation ? (
-            <p data-cc-note-source className="text-[13px] text-sol-text-dim">
-              From{" "}
-              <button type="button" onClick={() => openLinkedSession(conversation)} className="text-sol-text-muted underline decoration-sol-border underline-offset-4 hover:text-sol-text">
-                {sessionCardTitle(conversation as any)}
-              </button>
-            </p>
-          ) : undefined}
           metaContent={
             <div className="flex items-center gap-4 text-xs text-sol-text-dim flex-wrap">
               {(doc as any).author_image && (() => {
@@ -283,7 +266,7 @@ function DocDetailContent() {
                     <Link key={l} href={`/docs?label=${encodeURIComponent(l)}`}>
                       <Badge
                         variant="outline"
-                        className="text-[10px] border-sol-border/50 text-sol-text-muted hover:brightness-90 transition-all cursor-pointer"
+                        className="text-meta border-sol-border/50 text-sol-text-muted hover:brightness-90 transition-all cursor-pointer"
                       >
                         {l}
                       </Badge>
@@ -294,7 +277,7 @@ function DocDetailContent() {
             </div>
           }
           footerContent={
-            internals && ((doc as any).related_conversations?.length > 0 || conversation) ? (
+            ((doc as any).related_conversations?.length > 0 || conversation) ? (
               <div>
                 <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
                   Sessions
@@ -334,7 +317,7 @@ function DocDetailContent() {
                     </span>
                     <Badge
                       variant="outline"
-                      className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto"
+                      className={`text-meta px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto ${modernPill({ tone: "cyan" })}`}
                     >
                       {(doc as any).active_plan.status}
                     </Badge>
@@ -349,7 +332,7 @@ function DocDetailContent() {
                   </h2>
                   <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
                     {relatedTasks.map((task: any) => {
-                      const status = STATUS_CONFIG[task.status] || STATUS_CONFIG.open;
+                      const status = statusVisual(taskStatusOf(task, taskStatuses), taskStatuses);
                       const priority = taskPriority(task.priority);
                       const StatusIcon = status.icon;
                       const PriorityIcon = priority.icon;
@@ -366,7 +349,7 @@ function DocDetailContent() {
                           </span>
                           <Badge
                             variant="outline"
-                            className={`text-[10px] px-1.5 py-0 ${status.color} border-current/30`}
+                            className={`text-meta px-1.5 py-0 ${status.color} border-current/30 ${modernPill({ tone: modernToneOf(status.color) })}`}
                           >
                             {status.label}
                           </Badge>
@@ -396,9 +379,9 @@ function DocDetailContent() {
                             <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
                           </svg>
                           <span className="flex-1 text-sm text-sol-text truncate">
-                            {child.title || "Untitled"}
+                            {(child as any).display_title || child.title || "Untitled"}
                           </span>
-                          <span className={`text-[10px] ${typeConf.color}`}>{docTypeLabel(child.doc_type)}</span>
+                          <span className={`text-meta ${typeConf.color}`}>{docTypeLabel(child.doc_type)}</span>
                         </Link>
                       );
                     })}
@@ -422,7 +405,7 @@ function DocDetailContent() {
                           <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.686-5.781a4.5 4.5 0 00-6.364-6.364L4.5 8.25a4.5 4.5 0 006.364 6.364l4.5-4.5z" />
                         </svg>
                         <span className="flex-1 text-sm text-sol-text truncate">
-                          {bl.title || "Untitled"}
+                          {(bl as any).display_title || bl.title || "Untitled"}
                         </span>
                       </Link>
                     ))}

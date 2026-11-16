@@ -21,11 +21,7 @@ You describe what you want; the agent writes the mod and pushes it. A link to a 
 
 When something breaks, it breaks small. A pane that fails to draw shows a red box in its own spot with **Try again**, and if a redraw fails the last good drawing stays on screen with a one-line note under it; the conversation and sidebar around it are untouched. The agent reads the same errors you see under **Logs**, so "it threw on an empty list" is usually fixed before you mention it. When the mod is right, the agent publishes it as a numbered version.
 
-The **Mods** page lists everything you and your agents added: each card says whether it is running, off or failed, what it adds (panes, commands, blocks) and what it may touch ("reads sessions", "writes tasks"), with an on/off switch, its logs and an **Open** button. A workspace with no mods yet offers **Ask an agent** as the way in. For someone who would rather start from a terminal, one command scaffolds a mod that already works:
-
-```terminal
-$ cast mod new standup-board
-```
+The **Mods** page lists everything you and your agents added: each card says whether it is running, off or failed, what it adds (panes, commands, blocks) and what it may touch ("reads sessions", "writes tasks"), with an on/off switch, its logs and an **Open** button. A workspace with no mods yet offers **Ask an agent** as the way in. (Agents, and anyone who prefers a terminal, can also start from a working scaffold with `cast mod new`.)
 
 ## Mods teach agents new nouns
 

@@ -24,6 +24,27 @@ Each talks raw CDP over a WebSocket to a page on a Chrome started with `--remote
   - The browser smoke suite: `rig/smoke.mjs` (below).
 - `call-e2e/`: a synthetic call participant and its checks, for testing huddles, recordings, guests and frame snapshots with no camera, screen picker or person. `publish.mjs` joins a LiveKit room as a member or guest and publishes a generated camera and screen share whose every frame carries a decodable timecode; `inspect.mjs` shows LiveKit's own view of the room's tracks and egresses; `grab.mjs` saves frames as a receiver gets them; `decode.mjs` reads the timecode back out of a PNG or recording. Its own `package.json` (run `npm install` there, then `node <script>`); its README has the recipes.
 - `renderCueWaveforms.ts`: draws every walkie cue as a waveform PNG at one shared scale, so a cue's loudness is reviewed by eye instead of by ear (`[outDir]`).
+- `render-gallery.ts`: loads the render gallery (`lib/renderGallery.ts`) into the open conversation, on web (`--web`) or a simulator (`--mobile [port]`), to look at every kind of transcript row at once; `--clear` removes the rows.
+- `sim.ts`: `bun run sim`, the multiplayer simulation harness runner; turns flags into `SIM_*` env vars and runs `store/__tests__/sim/`.
+
+## Budgets and benches
+
+- `typing-guard.sh`: the typing budget. Runs before every ship that touches web, shared or platform code and in CI.
+- `perf-budgets.sh`: the exact counts behind the perf benches (`perf/README.md`): fetches, subscriptions, store writes, commits and layout reads on the hot paths.
+- `perf-bench.sh`: A/B timing of the hot paths with strobe, base against this tree; every flag passes through to `strobe bench`.
+
+## Screenshots
+
+Each drives this session's cast browser tab and captures at 2x with a clipped `Page.captureScreenshot`.
+
+- `readme-shots.ts`: the README and docs screenshots (`docs/screenshots/*.png`), from the homepage's product film over fixture data.
+- `store-shots.ts`: the App Store screenshots, iPhone and iPad (`[shot...]`, `DEVICES=iphone`).
+- `app-element-shot.ts`: one element of a live app page (`<url-part> '<css selector>' out.png`).
+- `guide-figure-shots.ts`: every figure of a documentation guide or blog post at its final animation frame (`[slug] [n] [--phone]`).
+
+## Releases
+
+- `release-prompt.ts`: flags the next web deploy as one that asks open windows to reload now (`"<line for the card>"`); commit the bumped `release-prompt.json` with the change it announces.
 
 ## Browser smoke suite
 
@@ -53,7 +74,8 @@ bun scripts/rig/stack.mjs status | up [--refresh] | down
 Run by hand when their source changes; the output is checked in.
 
 - `hero-page.ts`: builds `public/hero/page.html`, the published page the homepage hero's Publish chapter frames, from the hero's publish fixture, so the page's markdown and highlighting code stays out of the hero's bundle (no arguments).
+- `social-banners.mjs`: draws the social profile banners (`public/brand/banner-{x,linkedin,bluesky}.png`) in the site's card style (no arguments).
 
 ## Build steps
 
-`precompress.mjs`, `prerender.mjs` and `indexnow.mjs` run after `vite build` in the `build` script of `package.json`.
+`precompress.mjs`, `prerender.mjs` and `indexnow.mjs` run after `vite build` in the `build` script of `package.json`. `og-cards.mjs` draws the social card of each SEO route and is called by `prerender.mjs`.

@@ -1,7 +1,7 @@
 
 ## Memory
 
-Cross-session recall (cast search / context / feed). Adds `cast search`, `cast context`, and `cast feed` so agents can find prior conversations relevant to their current task. Nothing runs automatically — agents call these when they need context.
+Cross-session recall (cast search / context / feed). Adds `cast search`, `cast context`, and `cast feed` so agents can find prior conversations relevant to their current task. Nothing runs automatically: agents call these when they need context.
 
 Run `cast guide memory` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
 <!-- cast @VERSION@ -->
@@ -19,7 +19,8 @@ Every codecast object has a short ID. Written anywhere (messages, summaries, tas
 | Trigger | `tr-42`   | `cast trigger ls` |
 | Doc     | `doc:<id>` | `cast doc ls`, `cast doc search` |
 | Call    | `cl-42`   | `cast calls` |
+| Flow    | `flow:change` | `cast flow ls` |
 
-Write the bare ID by default (`Filed under ct-4102.`); it reads as a normal sentence and still renders in full. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as an unreadable blob, and every command accepts the short one.
+Write the bare ID by default (`Filed under ct-4102.`); it reads as a sentence and renders in full. A flow ID alone on a line draws the flow, each step open to its prompt. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as a blob, and every command takes the short one.
 <!-- cast @VERSION@ -->
 <!-- /codecast-references -->
