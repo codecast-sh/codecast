@@ -120,7 +120,7 @@ export function DecisionQueueList() {
         <div className={`flex items-center gap-x-3 gap-y-2 flex-wrap mb-5${modern ? " min-h-7" : ""}`}>
           {!modern && <PageHeading title="Decisions" />}
           {/* A count of nothing says what the empty state below says better. */}
-          {(mine > 0 || onDefault > 0 || withLead > 0 || terminal.length > 0) && <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{onDefault ? ` · ${onDefault} going ahead` : ""}{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>}
+          {(mine > 0 || onDefault > 0 || withLead > 0 || terminal.length > 0) && <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{onDefault ? ` · ${onDefault} not blocking` : ""}{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>}
           <div className="ml-auto flex items-center gap-2 text-meta">
             {pending.length > 0 && (
               <Link href="/decisions?mode=step" className={`flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}>
@@ -281,7 +281,7 @@ function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: Dec
   if (group.kind === "default") {
     return (
       <section data-queue-group="default">
-        <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-blue inline-block" />} title="Going ahead on a default" count={group.items.length} />
+        <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-blue inline-block" />} title="Not blocking" count={group.items.length} />
         <div className="space-y-2">
           {group.items.map((d, i) => <DecisionCompactCard key={d._id} decision={d} keys={keys && i === 0} selected={selected.has(d._id)} onToggleSelect={selecting ? () => onToggle(d._id) : undefined} />)}
         </div>
