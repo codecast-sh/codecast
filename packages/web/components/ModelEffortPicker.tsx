@@ -143,8 +143,13 @@ export function ModelEffortRows({
       </span>
     </DropdownMenuLabel>
   );
-  const models = (dynamic ? [cfg.models[0], ...featured] : rail.models)
+  const laneModels = (dynamic ? [cfg.models[0], ...featured] : rail.models)
     .filter((m) => (cloudAgentProviderForLaunch(agentType, m.key)?.id ?? null) === lane);
+  // A launch with a pinned default has no separate "Default" row: the pinned
+  // model's own row is the default, badged, and reads as current until another
+  // is picked. (A pin outside the listed rows keeps the row, under its name.)
+  const pinListed = !!defaultKey && laneModels.some((m) => m.key === defaultKey);
+  const models = !midSession && pinListed ? laneModels.filter((m) => m.key !== "default") : laneModels;
   const q = search.trim().toLowerCase();
   const matches = dynamic && q
     ? all.filter((id) => id.toLowerCase().includes(q) && !models.some((m) => m.key === id)).slice(0, 24)
@@ -152,17 +157,23 @@ export function ModelEffortRows({
   // The transcript rollup stores the bare model id (no provider), so highlight
   // dynamic rows on a path-suffix match too.
   const isCurrent = (key: string) =>
-    key === modelKey || (dynamic && modelKey !== "default" && key.endsWith(`/${modelKey}`));
+    key === modelKey
+    || (!midSession && pinListed && modelKey === "default" && key === defaultKey)
+    || (dynamic && modelKey !== "default" && key.endsWith(`/${modelKey}`));
   const modelRow = (m: ModelOption) => {
     // Only launchable options can be the codecast default (the same bar the
     // server holds).
     const pinnable = m.key !== "default" && !!m.cliAlias;
     const isDefault = m.key === defaultKey;
-    // The "Default" row resolves to the user's codecast default at launch —
-    // say which model that is.
-    const hint = m.key === "default" && defaultKey
-      ? `Launches ${findModelOption(agentType, defaultKey)?.label ?? defaultKey} (your default)`
-      : m.hint;
+    // The "default" row: named after the pinned model when there is one, and
+    // "No default" when there is none (the agent's own setting decides).
+    const isDefaultRow = m.key === "default";
+    const label = !isDefaultRow ? m.label
+      : defaultKey ? findModelOption(agentType, defaultKey)?.label ?? defaultKey
+      : m.label === "Default" ? "No default" : m.label;
+    const hint = !isDefaultRow ? m.hint
+      : defaultKey ? "Your default"
+      : m.label === "Default" ? "The agent's own setting picks the model" : m.hint;
     return (
       <DropdownMenuItem
         key={m.key}
@@ -171,7 +182,7 @@ export function ModelEffortRows({
       >
         <span className={`mt-0.5 w-3 text-center text-xs ${isCurrent(m.key) ? "text-sol-cyan" : "text-transparent"}`}>●</span>
         <span className="flex flex-col min-w-0 grow">
-          <span className={`text-xs ${isCurrent(m.key) ? "text-sol-text font-medium" : "text-sol-text-secondary"}`}>{m.label}</span>
+          <span className={`text-xs ${isCurrent(m.key) ? "text-sol-text font-medium" : "text-sol-text-secondary"}`}>{label}</span>
           {hint && <span className="text-meta text-sol-text-dim truncate">{hint}</span>}
         </span>
         {pinnable && (
@@ -184,11 +195,11 @@ export function ModelEffortRows({
             className={`mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-meta whitespace-nowrap transition-all ${
               isDefault
                 ? "border-sol-cyan/50 text-sol-cyan"
-                : "border-sol-border/40 text-sol-text-dim opacity-0 group-hover:opacity-100 hover:text-sol-text hover:border-sol-border"
+                : `border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border ${defaultKey ? "opacity-0 group-hover:opacity-100" : ""}`
             }`}
             title={isDefault ? "Clear default — new sessions fall back to the agent's own setting" : "Launch every new session with this model"}
           >
-            {isDefault ? "default ✓" : "set default"}
+            {isDefault ? "default" : "make default"}
           </button>
         )}
       </DropdownMenuItem>
@@ -328,8 +339,8 @@ export const FOOT_PICK = "inline-flex items-center gap-1.5 h-7 px-2 rounded-md t
 
 /**
  * A blank session's launch model and effort, read off the live row, with the
- * rows' props (including the commit) and the words a trigger shows. "Default"
- * names what it launches when the person pinned a default model.
+ * rows' props (including the commit) and the words a trigger shows: the model
+ * that launches, whether it is the pinned default, or that none is pinned.
  */
 export function useLaunchModel(conversationId: string) {
   const live = useLiveSessionMeta(conversationId);
@@ -343,9 +354,12 @@ export function useLaunchModel(conversationId: string) {
     ?? (isDynamicModelKey(modelKey) ? dynamicModelOption(modelKey) : undefined);
   // A cloud agent launch runs at its provider's effort, whatever one was picked before.
   const cloudLaunch = !!cloudAgentProviderForLaunch(agentType, modelKey);
-  const label = modelKey === "default" && defaultKey
-    ? findModelOption(agentType, defaultKey)?.label ?? defaultKey
-    : opt?.label ?? "Model";
+  const pinLabel = defaultKey ? findModelOption(agentType, defaultKey)?.label ?? defaultKey : undefined;
+  // What the trigger says: the model that launches, tagged when it is the
+  // pinned default; with no pin and no pick, that no default is set.
+  const noDefault = modelKey === "default" && !pinLabel && opt?.label === "Default";
+  const isDefault = !!defaultKey && (modelKey === "default" || modelKey === defaultKey);
+  const label = modelKey === "default" && pinLabel ? pinLabel : noDefault ? "no default" : opt?.label ?? "Model";
   const rowProps: ModelEffortRowsProps = {
     agentType,
     modelKey,
@@ -362,7 +376,17 @@ export function useLaunchModel(conversationId: string) {
       });
     },
   };
-  return { cfg, rowProps, label, cloudLaunch, effort: live?.effort ?? null };
+  return { cfg, rowProps, label, isDefault, noDefault, cloudLaunch, effort: live?.effort ?? null };
+}
+
+/** The launch model as a trigger shows it: "Opus default", "Sonnet", or a dim "no default". */
+export function LaunchModelLabel({ label, isDefault, noDefault }: { label: string; isDefault: boolean; noDefault: boolean }) {
+  return (
+    <>
+      <span className={noDefault ? "text-sol-text-dim" : undefined}>{label}</span>
+      {isDefault && <span className="rounded border border-sol-cyan/40 px-1 text-meta text-sol-cyan">default</span>}
+    </>
+  );
 }
 
 const Chevron = () => (
@@ -377,7 +401,7 @@ const Chevron = () => (
  * reconfigureSession (the same idempotent respawn the agent pills use).
  */
 export function LaunchModelPill({ conversationId }: { conversationId: string }) {
-  const { cfg, rowProps, label, cloudLaunch, effort } = useLaunchModel(conversationId);
+  const { cfg, rowProps, label, isDefault, noDefault, cloudLaunch, effort } = useLaunchModel(conversationId);
   if (!cfg) return null;
   const glyph = cloudLaunch ? null : effortGlyph(effort);
   return (
@@ -388,7 +412,7 @@ export function LaunchModelPill({ conversationId }: { conversationId: string }) 
           className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60 font-mono"
           title="Model and effort for this session"
         >
-          {label}
+          <LaunchModelLabel label={label} isDefault={isDefault} noDefault={noDefault} />
           {glyph && <span className="opacity-80">{glyph}</span>}
           <Chevron />
         </button>

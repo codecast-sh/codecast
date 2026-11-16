@@ -29,7 +29,7 @@ import { toastWriteError } from "../../lib/dispatchBinding";
 import { ComposeRolePicker } from "../ComposeRolePicker";
 import type { RoleRecipient } from "../../lib/roleRecipients";
 import { AgentTypeIcon } from "../AgentTypeIcon";
-import { AgentDefinitionPill, FOOT_PICK, LaunchEffortPill, LaunchModelPill, ModelEffortRows, useLaunchModel } from "../ModelEffortPicker";
+import { AgentDefinitionPill, FOOT_PICK, LaunchEffortPill, LaunchModelLabel, LaunchModelPill, ModelEffortRows, useLaunchModel } from "../ModelEffortPicker";
 import { useConvex, useConvexAuth } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase, type ProjectPathOption } from "../../lib/utils";
@@ -1066,7 +1066,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
             <button type="button" className={FOOT_PICK} title="Agent and model for this session">
               <AgentTypeIcon agentType={currentAgent} />
               <span className={agentAccent(currentAgent).text}>{current?.label ?? currentAgent}</span>
-              {!hosted && launch.cfg && <span>{launch.label}</span>}
+              {!hosted && launch.cfg && <LaunchModelLabel label={launch.label} isDefault={launch.isDefault} noDefault={launch.noDefault} />}
               <ChevronDown className="w-3 h-3 opacity-50" />
             </button>
           </DropdownMenuTrigger>
