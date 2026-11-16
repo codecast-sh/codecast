@@ -99,8 +99,9 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-function run(browser: ReturnType<typeof fakeBrowser>, url: string, at: number, lines: string[] = [], conversation = "jx7abc") {
+function run(browser: ReturnType<typeof fakeBrowser>, url: string, at: number, lines: string[] = [], conversation = "jx7abc", used: string[] = []) {
   return useVaultSignin(url, {
+    used: (meta) => used.push(meta.name),
     port: 9222,
     endpoint: () => ({ siteUrl: "https://backend.test", apiToken: "tok" }),
     conversation: () => conversation,
@@ -315,6 +316,17 @@ describe("cast browser open with a saved sign-in", () => {
     await run(b, "https://bank.com", NOW);
     expect(calls.map((x) => x.route)).toEqual(["/cli/vault/list"]);
     expect(b.sets).toEqual([]);
+  });
+
+  test("says which sign-in the page opens with, put in now or already there, so a login page on landing blames it", async () => {
+    const b = fakeBrowser([]);
+    const used: string[] = [];
+    await run(b, "https://github.com", NOW, [], "jx7abc", used);
+    await run(b, "https://github.com", NOW + 60_000, [], "jx7abc", used);
+    expect(used).toEqual(["github-signin", "github-signin"]);
+    const none: string[] = [];
+    await run(fakeBrowser([]), "https://gitlab.com", NOW, [], "jx7abc", none);
+    expect(none).toEqual([]);
   });
 
   test("a site no sign-in covers, Google, and a backend that is down all leave the open alone", async () => {

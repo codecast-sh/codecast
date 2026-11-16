@@ -48,6 +48,10 @@ function seeds(now: number): Seed[] {
       meta: { name: "openai-staging", kind: "key", status: "requested", env: ["OPENAI_API_KEY"], created_at: now - 20 * 60_000, requested_by_name: AGENT, requested_from_conversation: SESSIONS[1].id, request_why: "Run the staging eval suite" },
       events: [["requested", 20 * 60_000, 1]],
     },
+    // TMP-BATCH-VERIFY
+    { meta: { name: "fly-signin", kind: "signin", status: "requested", sites: ["fly.io"], created_at: now - 10 * 60_000, requested_by_name: AGENT, request_why: "Fly dashboard" }, events: [["requested", 10 * 60_000, 1]] },
+    { meta: { name: "sentry-signin", kind: "signin", status: "requested", sites: ["sentry.io"], created_at: now - 9 * 60_000, requested_by_name: AGENT, request_why: "Production errors" }, events: [["requested", 9 * 60_000, 1]] },
+    { meta: { name: "zoom-signin", kind: "signin", status: "requested", sites: ["zoom.us"], created_at: now - 8 * 60_000, requested_by_name: AGENT, request_why: "Host accounts" }, events: [["requested", 8 * 60_000, 1]] },
     {
       meta: { name: "stripe-test", kind: "key", status: "ready", env: ["STRIPE_SECRET_KEY"], note: "Test mode, checkout tests", created_at: now - 40 * DAY_MS, last_used_at: now - 2 * HOUR, last_used_by_conversation: SESSIONS[0].id, use_count: 41 },
       payload: { value: "sample-stripe-test-not-a-real-key" },
