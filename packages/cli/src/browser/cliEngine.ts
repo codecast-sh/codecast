@@ -57,13 +57,14 @@ import { markChallengedTab } from "./humanInput.js";
 import { tabIdOfTarget } from "./bridge/protocol.js";
 import { retryOnStall, shouldRetryAfterStall, STALL_NOTE, STALL_RETRY_DELAY_MS } from "./stall.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
+import type { SecretMeta } from "@codecast/shared/contracts/secrets";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, stopRemoteManagedBrowser, type StartOptions } from "./managedBrowser.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
 import { clearState, probeLiveness, readState, stopInstance, writeState } from "./instance.js";
 import { provisionLocalLogins } from "./credentials.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
-import { auditExplicitLoads, auditLanding, browserJarRead, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal } from "./siteGuard.js";
+import { auditExplicitLoads, auditLanding, browserJarRead, NAVIGATING_VERBS, refuseNavigation, savedSigninFailedNote, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal } from "./siteGuard.js";
 import { focusBrowserTabBlocking } from "./focusHttp.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
 import { registerAuditCommand } from "./auditCommand.js";
@@ -1015,6 +1016,9 @@ export async function carryLogins(
   }
 }
 
+/** The Vault sign-in this process's `open` left in the browser, which a login page on landing then blames (savedSigninFailedNote). */
+let vaultSigninInPlace: SecretMeta | null = null;
+
 /**
  * A saved sign-in for the site (secrets/signinBrowser.ts), and a write-back of
  * newer cookies when the browser already uses it. Loaded only when `open`
@@ -1023,7 +1027,7 @@ export async function carryLogins(
 async function useVaultSignin(url: string, bridge?: CdpEndpoint): Promise<void> {
   try {
     const { signInOnOpen } = await import("../secrets/signinBrowser.js");
-    await signInOnOpen(url, () => detectSessionId?.() ?? null, (line) => console.log(fmt.muted(`  ${line}`)), bridge);
+    vaultSigninInPlace = await signInOnOpen(url, () => detectSessionId?.() ?? null, (line) => console.log(fmt.muted(`  ${line}`)), bridge);
   } catch {
     /* a courtesy, like carryLogins */
   }
@@ -1061,7 +1065,10 @@ function printFooter(o: Ctx, verb: string, owner: string | null): void {
     if (warn) console.log(`${fmt.warning("!")} ${warn}`);
     // A login form where the work was expected. Named, with the fix, so an
     // agent does not read it as an empty page or restart the browser over it.
-    const signIn = url ? (isRemoteDevice() ? cloudHostSignInHint(url) : signInLandingNote(url, keepsOwnLogin, { real: isRealSession(o.session), realHint: realModeHint(owner) })) : null;
+    const signIn = !url ? null
+      : vaultSigninInPlace ? savedSigninFailedNote(url, vaultSigninInPlace)
+      : isRemoteDevice() ? cloudHostSignInHint(url)
+      : signInLandingNote(url, keepsOwnLogin, { real: isRealSession(o.session), realHint: realModeHint(owner) });
     if (signIn) console.log(`${fmt.warning("!")} ${signIn}`);
   }
 }

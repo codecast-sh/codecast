@@ -29,6 +29,8 @@ import { denyNavigation, loadSitePolicy, type SitePolicy } from "./policy.js";
 import { auditLanding, recordBlocked, type AuditVia } from "./audit.js";
 import { DEFAULT_WEB_URL, webBaseUrl } from "../config/readLocalConfig.js";
 import { readSigninState, unapprovedSignins, type SigninMemory } from "../secrets/signin.js";
+import { shellArg } from "@codecast/shared/contracts/shellWords";
+import type { SecretMeta } from "@codecast/shared/contracts/secrets";
 import { isWebAuthnMethod, WEBAUTHN_REFUSAL } from "./bridge/protocol.js";
 
 export { auditLanding };
@@ -214,7 +216,8 @@ export function signInHost(url: string): string | null {
   const host = u.hostname.toLowerCase();
   if (SIGN_IN_HOSTS.includes(host)) return host;
   if (SIGN_IN_LABELS.test(host.split(".")[0]) && host.split(".").length > 2) return host;
-  if (SIGN_IN_PATHS.test(u.pathname)) return host;
+  // A single-page app routes in the hash: Apollo's form is `/#/login?redirectTo=`.
+  if (SIGN_IN_PATHS.test(u.pathname) || SIGN_IN_PATHS.test(u.hash.replace(/^#!?/, ""))) return host;
   return null;
 }
 
@@ -241,6 +244,20 @@ export function signInLandingNote(
     : "your Chrome's cookies for it were carried, so this site keeps its session elsewhere or you are signed out there too";
   const fix = o.realHint ? ` Or ${o.realHint}` : "";
   return `landed on a sign-in page (${host}) — ${why}. ${VAULT_SIGN_IN} Otherwise run \`cast browser login\` yourself now: it brings this tab to the front for the human and waits while they sign in. Report blocked only if it times out.${fix}`;
+}
+
+/**
+ * A login page right after a saved Vault sign-in went in (or was already in
+ * the browser): the saved session itself no longer signs in, so carrying,
+ * restarting or reopening changes nothing. The fix is the person saving it
+ * again from their Chrome, which the save command asks them for as a Yes card.
+ */
+export function savedSigninFailedNote(url: string, signin: Pick<SecretMeta, "name" | "workspace">): string | null {
+  const host = signInHost(url);
+  if (!host) return null;
+  const team = signin.workspace.startsWith("team:") ? ` --team ${signin.workspace.slice("team:".length)}` : " --personal";
+  const resave = `cast vault save-signin ${shellArg(host)} --from-chrome --name ${shellArg(signin.name)}${team}`;
+  return `landed on a sign-in page (${host}) with vault sign-in ${signin.name} in this browser: the saved session no longer signs in (expired, signed out, or saved without every cookie the site needs). \`${resave}\` asks your person with a Yes card to save it again from their Chrome; end your turn dormant naming the card, and open the page again when it wakes you. ${VAULT_SIGN_IN} Never copy cookies or type a credential as an argument.`;
 }
 
 /** Signing in from the Vault: the one way an agent types a person's credentials (secretInput.ts). */
