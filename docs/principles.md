@@ -16,7 +16,7 @@ Ship the whole requested scope as part of the product, not a slice beside it. A 
 
 Why: Work was repeatedly delivered as partial slices, CLI-only capability, or standalone bolt-ons the owner could not use.
 
-Evidence: 23 corrections across 19 sessions (`complete-and-integrated`): -Users-ashot/b22e7a56, mail/4a53ff52, codecast/290127df, codecast/902a9235, codecast/53dfd240, codecast/74f46999, codecast/27ac54c7, union-mobile/939092bf, union-mobile-outreach/6f18639e, -Users-ashot/0869f8ac, codecast/a4c2b17f, union-mobile-outreach/509b4b48, union-mobile-outreach/b8501299, bookmark/67e9d943, codecast/619d3d49, aurora/fc51b6ab, eaiden/512528df, mail/66bc2f86, mail/b76543a3.
+Evidence: 36 corrections across 31 sessions (`complete-and-integrated`): codecast/417df694, union-mobile/58f81b04, -Users-ashot/b22e7a56, mail/4a53ff52, codecast/290127df, codecast/902a9235, codecast/53dfd240, codecast/74f46999, codecast/27ac54c7, union-mobile/939092bf, union-mobile-outreach/6f18639e, -Users-ashot/0869f8ac, codecast/a4c2b17f, union-mobile-outreach/509b4b48, union-mobile-outreach/b8501299, bookmark/67e9d943, codecast/619d3d49, aurora/fc51b6ab, eaiden/512528df, mail/66bc2f86, mail/b76543a3, codecast/ac884a88, codecast/378a9c20, codecast/86dc1449, codecast/fb8e21ef, union-mobile/dba303fb, codecast/1763f6a6, codecast/af02f09f, codecast/a9c5405f, codecast/f364cad2, codecast/fa8d6b6a.
 
 ### PR-product-2 Simple, reliable core first
 
@@ -24,7 +24,7 @@ Get the core working simply and reliably before adding sophistication. Choose th
 
 Why: Over-built systems and pieces that duplicate existing capability keep failing at the basics the user actually needs.
 
-Evidence: 13 corrections across 10 sessions (`simple-reliable-core-first`): union-mobile/jx7b88a, codecast/cfdabd0a, codecast/46820e4a, codecast/14f1a996, codecast/fb8e21ef, eaiden/8b623c64, union-mobile/jx7580p, codecast/jx77tbn, union-fundraising/jx79x1p, codecast/jx7e3j5.
+Evidence: 18 corrections across 14 sessions (`simple-reliable-core-first`): union-mobile/jx7b88a, codecast/cfdabd0a, codecast/46820e4a, codecast/14f1a996, codecast/fb8e21ef, eaiden/8b623c64, union-mobile/jx7580p, codecast/jx77tbn, union-fundraising/jx79x1p, codecast/jx7e3j5, codecast/787e408d, codecast/6339c66e, codecast/323f42e2, union-mobile/jx72823.
 
 ### PR-product-4 Never harm live work or people
 
@@ -32,7 +32,7 @@ Changes and automation do not harm live work or real people. Before acting on ru
 
 Why: Harm to live work, a user's screen or another person cannot be undone by a later fix.
 
-Evidence: 9 corrections across 8 sessions (`never-harm-live-work-or-people`): codecast/52d95fcf, codecast/81fa353e, codecast/19bfa707, codecast/e7b2cf97, codecast/1582c431, codecast/6faa44cb, union-mobile-outreach/f558620d, codecast/71261eae.
+Evidence: 10 corrections across 9 sessions (`never-harm-live-work-or-people`): codecast/52d95fcf, codecast/81fa353e, codecast/19bfa707, codecast/e7b2cf97, codecast/1582c431, codecast/6faa44cb, union-mobile-outreach/f558620d, codecast/71261eae, union-mobile/ca918189.
 
 ### PR-product-6 Concepts mean what they say
 
@@ -56,7 +56,7 @@ When building something bespoke for one user or team, keep what you learn separa
 
 Why: Work that stays bespoke has to be rebuilt for every next user.
 
-Evidence: 3 corrections across 3 sessions (`generalize-into-reusable-templates`): platform/6f577d34, union-mobile/4e7c1c64, codecast/jx7162g.
+Evidence: 7 corrections across 6 sessions (`generalize-into-reusable-templates`): platform/6f577d34, union-mobile/4e7c1c64, codecast/jx7162g, codecast/79e02eca, codecast/98404800, codecast/891bb838.
 
 ## Code
 
@@ -66,7 +66,7 @@ Before building, find the system that already does the job and extend it. Every 
 
 Why: Parallel paths drift apart, and each copy fails in its own way.
 
-Evidence: 40 corrections across 28 sessions (`one-mechanism-one-codepath`): -Users-ashot/b22e7a56, union-mobile/939092bf, union-mobile/0890df87, codecast/ed999385, codecast/a5b1a2fc, union-mobile-outreach/6f18639e, union-mobile-outreach/85b15576, codecast/a3dd2256, union-mobile/a9e7343d, platform/70c3cbc8, codecast/b8189b1a, union-mobile/bcfdb6e9, codecast/044a5a51, codecast/7dbfa844, codecast/jx71mm7, codecast/jx79ech, union-mobile/7551c3e8, codecast/5996141c, codecast/jx7ab41, codecast/fb8e21ef, codecast/jx7csbd, codecast/4b84ce1d, union-mobile/jx7a7ch, codecast/29e4db36, union-mobile-outreach/b82f0a83, codecast/0ac05029, codecast/2cda322f, codecast/jx7f403.
+Evidence: 47 corrections across 33 sessions (`one-mechanism-one-codepath`): union-mobile/bb91c041, union-mobile/2a20d3fe, -Users-ashot/b22e7a56, union-mobile/939092bf, union-mobile/0890df87, codecast/ed999385, codecast/a5b1a2fc, union-mobile-outreach/6f18639e, union-mobile-outreach/85b15576, codecast/a3dd2256, union-mobile/a9e7343d, platform/70c3cbc8, codecast/b8189b1a, union-mobile/bcfdb6e9, codecast/044a5a51, codecast/7dbfa844, codecast/jx71mm7, codecast/jx79ech, union-mobile/7551c3e8, codecast/5996141c, codecast/jx7ab41, codecast/fb8e21ef, codecast/jx7csbd, codecast/4b84ce1d, union-mobile/jx7a7ch, codecast/29e4db36, union-mobile-outreach/b82f0a83, codecast/0ac05029, codecast/2cda322f, codecast/jx7f403, codecast/c2a5c2a0, codecast/4b9b70cd, union-mobile/adfb7975.
 
 ### PR-code-2 Fix the cause so it cannot recur
 
@@ -74,7 +74,7 @@ When something breaks, trace it to the mechanism that produced it and change tha
 
 Why: Surface patches and one-off repairs let the same failures return, and the owner repeatedly found agents building on top of something fundamentally broken.
 
-Evidence: 34 corrections across 23 sessions (`fix-the-cause-so-it-cannot-recur`): union-mobile-outreach/281e2ac7, codecast/bd3a20e0, codecast/eac20021, codecast/71261eae, codecast/714707a5, union-mobile/dcb2cd5b, union-mobile-outreach-backend/d98a708c, union-mobile/0890df87, codecast/a5b1a2fc, -Users-ashot/b22e7a56, union-mobile-outreach/4ae73c82, union-mobile/a1803f62, -Users-ashot--codecast/b6168064, codecast/jx77ps4, codecast/jx729jd, codecast/jx7ex0x, codecast/81fa353e, codecast/9f5f5126, codecast/6c146c5e, codecast/6d66a45e, union-mobile/jx7b88a, codecast/jx7b4ff, union-mobile/ef6841cf.
+Evidence: 39 corrections across 28 sessions (`fix-the-cause-so-it-cannot-recur`): union-mobile-outreach/281e2ac7, codecast/bd3a20e0, codecast/eac20021, codecast/71261eae, codecast/714707a5, union-mobile/dcb2cd5b, union-mobile-outreach-backend/d98a708c, union-mobile/0890df87, codecast/a5b1a2fc, -Users-ashot/b22e7a56, union-mobile-outreach/4ae73c82, union-mobile/a1803f62, -Users-ashot--codecast/b6168064, codecast/jx77ps4, codecast/jx729jd, codecast/jx7ex0x, codecast/81fa353e, codecast/9f5f5126, codecast/6c146c5e, codecast/6d66a45e, union-mobile/jx7b88a, codecast/jx7b4ff, union-mobile/ef6841cf, union-mobile/jx763br, union-mobile/6d5f7455, codecast/39d41cbf, codecast/53fedb97, union-mobile-outreach/4723bdce.
 
 ### PR-code-4 Fix the class, not the instance
 
@@ -82,7 +82,7 @@ Treat a reported defect as one example of a class. Fix it at the shared source, 
 
 Why: Fixing only the instance shown leaves its siblings broken and makes the human file each one by hand.
 
-Evidence: 12 corrections across 10 sessions (`fix-the-class-not-the-instance`): codecast/699d5248, codecast/jx76124, union-mobile/jx7016r, codecast/cfdabd0a, codecast/619d3d49, codecast/b06ea6c5, codecast/872d70ac, union-mobile/bcfdb6e9, union-mobile/b41bf2b5, codecast/b2ada11b.
+Evidence: 19 corrections across 16 sessions (`fix-the-class-not-the-instance`): codecast/eacfd299, codecast/de0bf5b1, codecast/699d5248, codecast/jx76124, union-mobile/jx7016r, codecast/cfdabd0a, codecast/619d3d49, codecast/b06ea6c5, codecast/872d70ac, union-mobile/bcfdb6e9, union-mobile/b41bf2b5, codecast/b2ada11b, codecast/59ea2ca6, codecast/4d9e2fbb, codecast/9e413736, codecast/ba632362.
 
 ### PR-code-5 Prove before you spread
 
@@ -90,7 +90,7 @@ Changes to shared infrastructure, migrations and known-fragile areas are finishe
 
 Why: These changes reach every user and session at once, so a regression is broad and hard to unwind.
 
-Evidence: 11 corrections across 10 sessions (`careful-with-shared-and-fragile`): codecast/9a114468, codecast/724d7618, codecast/57cdbdc9, codecast/30f7f14e, -Users-ashot-src/dcb2ee9a, codecast/616fbff1, union-mobile/bcfdb6e9, union-mobile-outreach/5adcd1a2, union-mobile-outreach/281e2ac7, union-mobile/jx74111.
+Evidence: 13 corrections across 12 sessions (`careful-with-shared-and-fragile`): codecast/9a114468, codecast/724d7618, codecast/57cdbdc9, codecast/30f7f14e, -Users-ashot-src/dcb2ee9a, codecast/616fbff1, union-mobile/bcfdb6e9, union-mobile-outreach/5adcd1a2, union-mobile-outreach/281e2ac7, union-mobile/jx74111, codecast/babb997b, codecast/98ca1dc2.
 
 ## Design
 
@@ -100,7 +100,7 @@ A surface leads with the essence of what is happening for the person who uses it
 
 Why: Operator pages repeatedly came back both overloaded and uninformative, and patching them did not fix the underlying model.
 
-Evidence: 52 corrections across 26 sessions (`essence-first-surfaces`): union-mobile-outreach/281e2ac7, union-mobile/3a9a43dd, mail/f697df4e, mail/4521d6f2, mail/27c9bbb2, family/9d308f48, codecast/466dbf0a, codecast/2a0909a7, codecast/916135f7, union-mobile/52e3266a, union-mobile/jx7b88a, codecast/fb8e21ef, codecast/jx7csbd, codecast/c26c9845, codecast/db2088f5, union-mobile-outreach/ed62e218, codecast/jx76jc2, codecast/be5f2068, codecast/13238939, codecast/4a0f40fd, codecast/56715870, codecast/jx75bq6, codecast/2a449dd0, codecast/a268e4ac, codecast/3c40c83d, codecast/jx78q70.
+Evidence: 94 corrections across 55 sessions (`essence-first-surfaces`): codecast/084db220, codecast/3bf087ae, codecast/4dfba4c5, codecast/d86935cc, codecast/743fc3d3, codecast/f3ccd01f, codecast/74bc85f4, codecast/ca4e3cf0, union-mobile-outreach/281e2ac7, union-mobile/3a9a43dd, mail/f697df4e, mail/4521d6f2, mail/27c9bbb2, family/9d308f48, codecast/466dbf0a, codecast/2a0909a7, codecast/916135f7, union-mobile/52e3266a, union-mobile/jx7b88a, codecast/fb8e21ef, codecast/jx7csbd, codecast/c26c9845, codecast/db2088f5, union-mobile-outreach/ed62e218, codecast/jx76jc2, codecast/be5f2068, codecast/13238939, codecast/4a0f40fd, codecast/56715870, codecast/jx75bq6, codecast/2a449dd0, codecast/a268e4ac, codecast/3c40c83d, codecast/jx78q70, codecast/378a9c20, codecast/6339c66e, codecast/77ece653, codecast/e778aee1, codecast/3844653f, codecast/41b9595f, codecast/92f1d545, codecast/9e5d1eb5, union-mobile/4a73357f, union-mobile/f011de88, codecast/8bd42f9e, codecast/47f7522a, codecast/ad3ac412, codecast/72de81b7, codecast/9788b781, codecast/4dc8fd16, codecast/4a374fd3, union-mobile/57e89dff, union-mobile/659522a5, union-mobile/32707c9f, union-mobile/ed84a8ea.
 
 ### PR-design-2 Restrained and distinctive
 
@@ -108,7 +108,7 @@ Aim for visuals that are restrained and distinctive at once. Work inside the exi
 
 Why: Output swung between plain defaults and busy over-decoration; clutter, loud accents and familiar AI design tells read as unconsidered.
 
-Evidence: 47 corrections across 30 sessions (`distinctive-restrained-visuals`): -Users-ashot/b22e7a56, family/52130ad8, family/037d4ff6, codecast/8407196b, codecast/0f33215d, union-mobile/0859d2b3, union-mobile/96cc4996, -Users-ashot/0869f8ac, codecast/479a0529, codecast/357dc99a, family/9d308f48, codecast/8c9aae26, codecast/jx78q70, codecast/jx7evm9, codecast/377c6024, union-mobile/2621cefb, union-mobile/99aaba5b, union-mobile/7868a451, codecast/51208eea, codecast/0da5df14, codecast/c26c9845, codecast/f9b2d254, codecast/c1273b38, codecast/be5f2068, codecast/b2ada11b, codecast/c8f6942d, codecast/jx7acve, codecast/jx7dmqa, family/jx7523m, union-fundraising/jx79x1p.
+Evidence: 72 corrections across 50 sessions (`distinctive-restrained-visuals`): codecast/3287828e, codecast/f3a3d81e, codecast/dad146a7, codecast/6f46e420, codecast/a2d64891, union-mobile/a0949a3e, -Users-ashot/b22e7a56, family/52130ad8, family/037d4ff6, codecast/8407196b, codecast/0f33215d, union-mobile/0859d2b3, union-mobile/96cc4996, -Users-ashot/0869f8ac, codecast/479a0529, codecast/357dc99a, family/9d308f48, codecast/8c9aae26, codecast/jx78q70, codecast/jx7evm9, codecast/377c6024, union-mobile/2621cefb, union-mobile/99aaba5b, union-mobile/7868a451, codecast/51208eea, codecast/0da5df14, codecast/c26c9845, codecast/f9b2d254, codecast/c1273b38, codecast/be5f2068, codecast/b2ada11b, codecast/c8f6942d, codecast/jx7acve, codecast/jx7dmqa, family/jx7523m, union-fundraising/jx79x1p, codecast/jx7av6x, codecast/1701d953, codecast/2f05058c, codecast/0cc88547, codecast/b2c6cf8e, codecast/0c56796e, codecast/2c03068a, codecast/227a2b9f, codecast/04126458, codecast/d8f57b98, codecast/36b17150, codecast/31a9caa4, codecast/fef9c730, codecast/4b5bb104.
 
 ### PR-design-4 Same object, same rendering
 
@@ -116,7 +116,7 @@ Each object has one canonical page and one rendering, and every reference to it,
 
 Why: When the same thing renders differently, or a reference leads nowhere, people read one object as several and cannot find their way through the product.
 
-Evidence: 20 corrections across 17 sessions (`same-object-same-rendering`): union-mobile-outreach/281e2ac7, union-mobile-outreach/b8501299, union-mobile/a9e7343d, aurora/34768c39, codecast/a893dea2, family/9d308f48, codecast/fb8e21ef, codecast/jx7csbd, union-mobile/7551c3e8, codecast/58d03e78, codecast/5de96742, codecast/9a39ebc7, codecast/jx72em9, codecast/jx72r3w, codecast/c26c9845, codecast/4b84ce1d, codecast/ba4a0a63.
+Evidence: 34 corrections across 29 sessions (`same-object-same-rendering`): union-mobile-outreach/281e2ac7, union-mobile-outreach/b8501299, union-mobile/a9e7343d, aurora/34768c39, codecast/a893dea2, family/9d308f48, codecast/fb8e21ef, codecast/jx7csbd, union-mobile/7551c3e8, codecast/58d03e78, codecast/5de96742, codecast/9a39ebc7, codecast/jx72em9, codecast/jx72r3w, codecast/c26c9845, codecast/4b84ce1d, codecast/ba4a0a63, codecast/aff10c45, codecast/04eb1d60, codecast/1b40c9be, codecast/6a686d2d, codecast/83e944ba, codecast/3c4957e8, codecast/dc462484, codecast/378a9c20, codecast/6339c66e, codecast/cd317d61, codecast/74bc85f4, codecast/2d161162.
 
 ### PR-design-6 Design for the real audience
 
@@ -134,7 +134,7 @@ Every label, status, button and generated sentence a user reads makes sense on f
 
 Why: Invented terms, ambiguous buttons and salesy copy made the owner ask what things meant, read as machine-written, and got rewritten line by line.
 
-Evidence: 23 corrections across 11 sessions (`self-explanatory-copy`): union-mobile-outreach/281e2ac7, codecast/2a990522, family/9d308f48, aurora/34768c39, family/52130ad8, family/037d4ff6, union-mobile/96cc4996, codecast/a893dea2, union-fundraising/jx79x1p, personal/jx736q0, union-fundraising/jx7bs72.
+Evidence: 26 corrections across 14 sessions (`self-explanatory-copy`): union-mobile-outreach/281e2ac7, codecast/2a990522, family/9d308f48, aurora/34768c39, family/52130ad8, family/037d4ff6, union-mobile/96cc4996, codecast/a893dea2, union-fundraising/jx79x1p, personal/jx736q0, union-fundraising/jx7bs72, union-mobile/jx77af7, union-mobile/6d5f7455, codecast/378a9c20.
 
 ## Process
 
@@ -144,7 +144,7 @@ When work first feels finished, treat that as the start of the final mile. Hunt 
 
 Why: The owner repeatedly had to demand more iteration because work was returned at its first acceptable version.
 
-Evidence: 51 corrections across 36 sessions (`final-mile-polish-rounds`): codecast/790a2342, -Users-ashot/3d89f116, -Users-ashot/b22e7a56, codecast/5cd65a63, union-mobile-outreach/b8501299, mail/4a53ff52, codecast/902a9235, union-mobile/3a9a43dd, codecast/d0e1b2a5, codecast/8b86a4df, union-mobile/0859d2b3, codecast/a893dea2, codecast/27ac54c7, union-mobile/96cc4996, family/52130ad8, mail/27c9bbb2, union-mobile-outreach/281e2ac7, codecast/a2f48cf2, codecast/fb8e21ef, codecast/51edf9a8, codecast/c26c9845, union-mobile/2621cefb, union-mobile/99aaba5b, union-mobile-outreach/79d8465e, aurora/fc51b6ab, family/0ba3e541, codecast/872d70ac, codecast/jx7csbd, union-mobile/jx7fchg, codecast/1f6146fa, codecast/d0c39b7b, codecast/jx7cv0h, codecast/jx7dqvy, codecast/jx7crht, codecast/jx7266j, codecast/jx7djk3.
+Evidence: 67 corrections across 51 sessions (`final-mile-polish-rounds`): codecast/417df694, codecast/74745baf, codecast/7e53831c, codecast/9788b781, codecast/a2d64891, codecast/d9e1ce6c, codecast/3287828e, union-mobile/5190efa5, codecast/790a2342, -Users-ashot/3d89f116, -Users-ashot/b22e7a56, codecast/5cd65a63, union-mobile-outreach/b8501299, mail/4a53ff52, codecast/902a9235, union-mobile/3a9a43dd, codecast/d0e1b2a5, codecast/8b86a4df, union-mobile/0859d2b3, codecast/a893dea2, codecast/27ac54c7, union-mobile/96cc4996, family/52130ad8, mail/27c9bbb2, union-mobile-outreach/281e2ac7, codecast/a2f48cf2, codecast/fb8e21ef, codecast/51edf9a8, codecast/c26c9845, union-mobile/2621cefb, union-mobile/99aaba5b, union-mobile-outreach/79d8465e, aurora/fc51b6ab, family/0ba3e541, codecast/872d70ac, codecast/jx7csbd, union-mobile/jx7fchg, codecast/1f6146fa, codecast/d0c39b7b, codecast/jx7cv0h, codecast/jx7dqvy, codecast/jx7crht, codecast/jx7266j, codecast/jx7djk3, codecast/378a9c20, codecast/891bb838, union-mobile/4a73357f, codecast/cc71d1ce, codecast/f9f785f3, union-mobile/cfe55c25, union-mobile/a27b507f.
 
 ### PR-process-2 Own the outcome, not the task
 
@@ -152,7 +152,7 @@ Own the outcome, not the task. Write the goal and how you will know it is met wh
 
 Why: Agents treated work as isolated fixes, handed steps back, or stalled at blockers, so the goal the owner cared about never moved.
 
-Evidence: 37 corrections across 25 sessions (`own-the-outcome-doggedly`): union-mobile-outreach/281e2ac7, union-mobile-outreach/85b15576, -Users-ashot/3d89f116, union-mobile-outreach/65e45a18, codecast/53dfd240, codecast/a893dea2, union-mobile/cacbf3c8, codecast/a2f48cf2, codecast/083b007c, union-mobile-outreach/afd41522, aurora/34768c39, -Users-ashot/95306fa0, union-mobile/jx7b88a, codecast/fb8e21ef, aurora/fc51b6ab, mail/b76543a3, codecast/jx75d3z, codecast/jx7etp0, codecast/jx74a40, union-mobile/jx7d5py, family/9d308f48, codecast/a8f5994d, -Users-ashot/b22e7a56, union-mobile/bb47b784, family/0ba3e541.
+Evidence: 72 corrections across 50 sessions (`own-the-outcome-doggedly`): codecast/22d4c672, codecast/da14f29f, codecast/9bb93b3f, codecast/fa0d609c, union-mobile/52cf2e6f, union-mobile/6e42ed88, union-mobile-outreach/281e2ac7, union-mobile-outreach/85b15576, -Users-ashot/3d89f116, union-mobile-outreach/65e45a18, codecast/53dfd240, codecast/a893dea2, union-mobile/cacbf3c8, codecast/a2f48cf2, codecast/083b007c, union-mobile-outreach/afd41522, aurora/34768c39, -Users-ashot/95306fa0, union-mobile/jx7b88a, codecast/fb8e21ef, aurora/fc51b6ab, mail/b76543a3, codecast/jx75d3z, codecast/jx7etp0, codecast/jx74a40, union-mobile/jx7d5py, family/9d308f48, codecast/a8f5994d, -Users-ashot/b22e7a56, union-mobile/bb47b784, family/0ba3e541, codecast/jx71gw6, codecast/jx74jnb, codecast/b3223646, codecast/9b95a994, codecast/23a8687c, union-mobile/22082440, union-mobile/d1e794f6, union-mobile/c211e734, union-mobile/jx763br, union-mobile/482fb63f, codecast/378a9c20, codecast/1f6146fa, union-mobile/7b19c84e, union-mobile/a27b507f, union-mobile/e6ec6225, codecast/9e2f99e8, union-mobile/6d5f7455, union-mobile/d0d158f7, union-mobile-outreach/6719f7ec.
 
 ### PR-process-3 Ground in current evidence
 
@@ -160,7 +160,7 @@ Ground every proposal, build and claim in current evidence, not memory or assump
 
 Why: Agents proposed mechanisms that already existed, contradicted shipped work, trusted stale plans, or asserted false limits without checking.
 
-Evidence: 29 corrections across 23 sessions (`ground-before-building`): platform/70c3cbc8, codecast/b8189b1a, union-mobile/0890df87, codecast/a0e831e8, -Users-ashot/b22e7a56, codecast/9a114468, union-mobile/cacbf3c8, codecast/790a2342, family/037d4ff6, family/0ba3e541, codecast/30f7f14e, codecast/5cd65a63, codecast/72e5cd0a, union-mobile-outreach/b8501299, codecast/fb8e21ef, codecast/jx7csbd, union-mobile/bcfdb6e9, family/101b6cc3, codecast/71261eae, union-mobile/jx7b88a, union-mobile-outreach/21872d19, codecast/a17b915d, codecast/6ed7379d.
+Evidence: 34 corrections across 27 sessions (`ground-before-building`): union-mobile/a27b507f, union-mobile/6e42ed88, union-mobile/cf2e4589, platform/70c3cbc8, codecast/b8189b1a, union-mobile/0890df87, codecast/a0e831e8, -Users-ashot/b22e7a56, codecast/9a114468, union-mobile/cacbf3c8, codecast/790a2342, family/037d4ff6, family/0ba3e541, codecast/30f7f14e, codecast/5cd65a63, codecast/72e5cd0a, union-mobile-outreach/b8501299, codecast/fb8e21ef, codecast/jx7csbd, union-mobile/bcfdb6e9, family/101b6cc3, codecast/71261eae, union-mobile/jx7b88a, union-mobile-outreach/21872d19, codecast/a17b915d, codecast/6ed7379d, union-mobile/f5bcf84b.
 
 ### PR-process-4 Independent review
 
@@ -176,7 +176,7 @@ When an attempt makes things worse, or several attempts in a row miss, stop patc
 
 Why: Tweaking the latest miss narrows into a dead end; a reset and a wider search find the right answer faster.
 
-Evidence: 10 corrections across 7 sessions (`rethink-when-attempts-miss`): codecast/c26c9845, codecast/jx7evm9, union-mobile/baef7735, union-mobile/0859d2b3, family/0ba3e541, codecast/377c6024, codecast/23b202ab.
+Evidence: 11 corrections across 8 sessions (`rethink-when-attempts-miss`): codecast/c26c9845, codecast/jx7evm9, union-mobile/baef7735, union-mobile/0859d2b3, family/0ba3e541, codecast/377c6024, codecast/23b202ab, union-mobile/64217b9d.
 
 ### PR-process-7 Stay on the named scope
 
@@ -184,7 +184,7 @@ Change what the human asked for and leave the rest as they had it. Add to the ex
 
 Why: Unrequested changes and detours cost review time and undo choices the human already made.
 
-Evidence: 7 corrections across 6 sessions (`stay-on-the-named-scope`): union-mobile/369be387, codecast/1c290857, codecast/fb8e21ef, aurora/fc51b6ab, union-mobile/jx7f6g8, codecast/jx7ak11.
+Evidence: 11 corrections across 8 sessions (`stay-on-the-named-scope`): union-mobile/369be387, codecast/1c290857, codecast/fb8e21ef, aurora/fc51b6ab, union-mobile/jx7f6g8, codecast/jx7ak11, codecast/432daa14, union-mobile/64217b9d.
 
 ### PR-process-9 Ship without coordination chatter
 
@@ -192,7 +192,7 @@ When the human asks you to ship, ship everything that is ready yourself and do n
 
 Why: Every message to another agent costs it a full turn over its context and delays the release for no gain.
 
-Evidence: 7 corrections across 7 sessions (`ship-without-coordination-chatter`): codecast/1d105764, union-mobile-outreach/dd6ba441, codecast/dd3b78dd, union-mobile/f3cdd1a5, codecast/41616389, union-mobile-outreach/006d67e4, codecast/jx737ae.
+Evidence: 9 corrections across 8 sessions (`ship-without-coordination-chatter`): codecast/1d105764, union-mobile-outreach/dd6ba441, codecast/dd3b78dd, union-mobile/f3cdd1a5, codecast/41616389, union-mobile-outreach/006d67e4, codecast/jx737ae, union-mobile/587e1063.
 
 ### PR-process-12 Read your conclusion as a skeptic
 
@@ -246,7 +246,7 @@ Write a prompt as the smallest self-contained set of principles that produces th
 
 Why: Structure and boilerplate over-anchor the model and bury the intent it needs to generalize.
 
-Evidence: 16 corrections across 11 sessions (`prompts-state-intent-minimally`): codecast/fb8e21ef, codecast/jx7csbd, aurora/ede2adeb, family/61d8c471, family/jx7523m, codecast/jx7e8hr, codecast/ab9f99a3, codecast/jx72nyf, codecast/jx75q89, codecast/jx7e4fy, family/jx77h0y.
+Evidence: 24 corrections across 16 sessions (`prompts-state-intent-minimally`): union-mobile/6477ed1d, codecast/fb8e21ef, codecast/jx7csbd, aurora/ede2adeb, family/61d8c471, family/jx7523m, codecast/jx7e8hr, codecast/ab9f99a3, codecast/jx72nyf, codecast/jx75q89, codecast/jx7e4fy, family/jx77h0y, codecast/d7b34a65, codecast/1f6146fa, codecast/378a9c20, union-mobile/a27b507f.
 
 ## Communication
 
@@ -256,7 +256,7 @@ Write every message, status and post for a smart reader who was not there and do
 
 Why: Compressed private vocabulary forces the owner to decode every report and repeatedly ask what terms mean.
 
-Evidence: 26 corrections across 16 sessions (`plain-self-contained-writing`): union-mobile-outreach/281e2ac7, union-mobile-outreach/6f18639e, codecast/a5b1a2fc, union-mobile-outreach-backend/d98a708c, union-mobile/469fd3c9, union-mobile/d1bc2e10, mail-packages-convex/62dfff91, codecast/b3f9d211, codecast/jx75vha, union-mobile/jx7b88a, codecast/ec488165, union-mobile-outreach/b82f0a83, codecast/fb8e21ef, union-mobile-outreach/92e01004, codecast/jx73ngf, codecast/jx7fk24.
+Evidence: 50 corrections across 32 sessions (`plain-self-contained-writing`): union-mobile-outreach/281e2ac7, union-mobile-outreach/6f18639e, codecast/a5b1a2fc, union-mobile-outreach-backend/d98a708c, union-mobile/469fd3c9, union-mobile/d1bc2e10, mail-packages-convex/62dfff91, codecast/b3f9d211, codecast/jx75vha, union-mobile/jx7b88a, codecast/ec488165, union-mobile-outreach/b82f0a83, codecast/fb8e21ef, union-mobile-outreach/92e01004, codecast/jx73ngf, codecast/jx7fk24, union-mobile/jx763br, union-mobile/d1e794f6, codecast/891bb838, codecast/79e02eca, codecast/378a9c20, union-mobile/jx7fsrw, union-mobile/jx7dqrv, union-mobile/jx79gjb, union-mobile/jx7466a, union-mobile/jx77af7, union-mobile/jx78v6e, union-mobile-outreach/9fadf3dd, codecast/7be03cd8, union-mobile/4e7c1c64, codecast/8c983e64, union-mobile/a27b507f.
 
 ### PR-comms-3 Say how long and where it lands
 
@@ -264,4 +264,4 @@ Before starting build work, tell the human roughly how long it will take and whe
 
 Why: The human plans around your work and should not have to chase it.
 
-Evidence: 3 corrections across 1 sessions (`set-expectations-up-front`): union-mobile/369be387.
+Evidence: 4 corrections across 2 sessions (`set-expectations-up-front`): union-mobile/369be387, union-mobile/jx763br.

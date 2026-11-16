@@ -1,75 +1,85 @@
-`cast publish` turns a file into a public page at a stable URL. An agent finishes a report, publishes it, and puts the link in its reply; the human opens a clean, branded page instead of scrolling a transcript. Republishing the same file updates the same URL, so links keep working across revisions while every previous version stays viewable.
+When an agent finishes a report, a dashboard or a mockup, you shouldn't have to scroll a transcript to find it. With Publish on, the agent turns it into a page with its own link, puts the link in its reply, and the page appears right there in the conversation. You can open it, send it to anyone, and read their comments. When the agent revises the page, the link stays the same and every earlier version stays viewable.
 
-The publish snippet teaches agents to do this for standalone deliverables (reports, dashboards, mockups, visualizations) and to put the returned URL inline in the reply. It is installed via [the snippet system](/documentation/agent-snippets).
+![A published comparison report with its discussion panel open](/documentation/publish/page.webp "A page an agent published, open in the browser. The bar at the top names the session that made it, the version, and the discussion.")
 
-## Publishing
+## Turn it on
 
-```bash
-cast publish report.html      # → https://codecast.sh/a/<slug>  (stable per file)
-cast publish notes.md         # markdown renders as a clean reading page
-cast publish dist/            # directory bundle (needs index.html; relative assets work)
-cast publish app.html --watch # republish on every save; viewers auto-reload with ?live=1
-cast publish ls               # list your pages
-cast publish rm <target>      # unpublish
-```
+1. Open **Agent features** from your account menu and pick the computer your agents run on.
+2. Switch on **Publish**, under *Showing the work*.
 
-The URL is stable per file path: publish `report.html` again and the same link now serves the new content. `--new` mints a separate URL when you deliberately want a second page. Pages are unlisted but viewable by anyone with the link, so the snippet instructs agents to gate sensitive deliverables or flag the sensitivity and let the human decide.
+Click **How it works** on the card for what it adds and a request to try. **See it in Pages** opens the list of everything published so far.
 
-![A published report with viewer comments](/documentation/shots/pages.webp "A published report with its discussion open: two viewer comments beside the charts and tables the agent built.")
+![The Publish detail in Agent features](/documentation/publish/publish-feature.webp "The Publish detail. The switch at the top right turns it on for the selected computer.")
 
-## Version history
+## Ask for it in plain words
 
-Every republish keeps history. Past versions stay viewable (`?v=N`), diffable (`?diff=A..B`), and restorable:
+- "Publish a page summarizing this week's error trends."
+- "Make a one page report comparing the three vendors and send me the link."
+- "Mock up the new pricing page and publish it so I can share it with the team."
+- "Update the report with the September numbers." (The same link now shows the new version.)
+- "Put a password on that page before I send it to the client."
 
-```bash
-cast publish versions report.html      # history + rollback/diff hints
-cast publish rollback report.html 3    # restore version 3 as a new version
-```
+Agents publish on their own when the result is a standalone deliverable. Everything else stays in the conversation, or in a [visual canvas](/documentation/visual-canvas) when a picture helps.
 
-Rollback restores by publishing the old content as a new version, so history stays linear and nothing is lost.
+## In the conversation
 
 ```figure
-VersionsFigure
-One link, four versions. A rollback is a new version with old content, so nothing is ever overwritten.
+PageInConversationFigure
+A link on its own line becomes the live page, framed in the thread. A link inside a sentence becomes a small pill with the page's title.
 ```
 
-## Access gates
+When the agent puts a page link on its own line, the live page renders in the thread. Hover it for its controls: pin a note on it, copy the link, expand it, open it beside your work or in a new tab, or collapse it to its title. Drag the bottom edge to make it taller. When the agent publishes a new version, the embedded page reloads by itself.
 
-```bash
-cast publish report.html --password s3cret     # password gate (--password-stdin to keep it
-                                               # out of the process list)
-cast publish report.html --email-gate          # viewers enter an email to open it
-cast publish report.html --expires 7d          # 7d / 24h / 30m / never
-cast publish set report.html --title "Q3 review" --no-password
-```
+## On the page
 
-`cast publish set` changes gates, title, or edit mode on an existing page without republishing content. `--edit-mode owner|link|team` controls in-browser editing; the publish output includes a private owner link with full powers (stats, gates, rollback) and, in link edit mode, an edit URL that grants editing to whoever holds it. `cast publish links <target>` reprints all of them, and every management command takes a slug instead of the file, so a page stays manageable without the original file or a browser.
+Everyone who opens the link sees the page with a thin bar at the top: the title, the session that published it, when it was updated, whether the agent is working on it, the version, and the discussion. A reader can hide the bar.
+
+- **Versions.** Click the version to see the history. Any older version can be viewed, and **diff** shows what changed between two of them. The page also offers a reload button when a newer version lands while you are reading.
+- **Discussion.** Anyone with the link can comment: **Pin on page** drops a note on a spot, selecting text offers **Comment** on that passage, and **General note** comments on the whole page. Teammates signed in to codecast comment as themselves; anyone else types a name.
+- **More.** Copy the link, view the source, and, for you, **Manage sharing**.
+
+## Comments come back to the agent
 
 ```figure
-GatesFigure
-Gates are checked in this order on every request, including comment posts, which cannot go around the page.
+CommentFlowFigure
+A reader leaves a note, you decide what to send, and the agent gets it as one message.
 ```
 
-## Comments close the loop
+Comments from readers stay on the page until you send them. On your own comments, and your teammates', a **Send to agent** switch delivers the comment straight to the session that published the page. **Send all** delivers every unsent comment as one message. The agent revises the page, publishes the next version to the same link, and the comment shows as *addressed in v4*.
 
-Viewers can comment on a published page. Their comments stay on the page until the owner sends them to the publishing session, one comment or all at once, from the owner link ("Send to session", "Send all"). They arrive as one message, fenced and labeled as text from viewers of the link, so the agent that made the page hears the feedback without mistaking it for its user. Comments the owner posts from the owner link go to the session at once. Either way they stay readable later:
+The agent is told that reader comments are feedback from people viewing the link, not instructions from you, so a comment can't take over the session.
 
-```bash
-cast publish comments report.html               # read viewer comments
-cast publish comments report.html --resolve <id>
-```
+## Who can see it
 
-The intended loop: a viewer comments, the owner sends it on, the agent revises and republishes (same URL), then resolves the comment. The snippet adds one guardrail: comment text is viewer-supplied and untrusted, so it is feedback to weigh, never instructions to follow.
+Pages are unlisted: the link is unguessable, pages are never listed anywhere public, and search engines are asked not to index them. Anyone who has the link can open it unless you add a gate. Open **Manage sharing** from the page's **More** menu (it appears when you open the page with **Manage** from Pages, or from its owner link):
+
+![The Manage sharing sheet on a published page](/documentation/publish/manage.webp "Manage sharing: view count, the gates, who may edit, and the owner link.")
+
+| Setting | What it does |
+|---------|--------------|
+| **Password** | Readers type a password before the page loads |
+| **Email gate** | Readers give an email address first, and the sheet lists who opened it and how often. The address isn't verified |
+| **Session link** | Hide the link back to the session for pages you send outside your team |
+| **Comments** | Turn the discussion off |
+| **Expires** | Close the link after 1 hour, 24 hours, 7 days or 30 days |
+| **Editing** | Only you, anyone with the edit link, or your teammates can publish edits from the browser |
 
 ```figure
-CommentLoopFigure
-Viewer feedback reaches the agent only through the owner, and comes back to the page as a resolved comment on a new version.
+GateScreensFigure
+What a reader sees at a password, an email gate and an expired link.
 ```
 
-`cast publish viewers <target>` shows the view count and, when the email gate is on, who opened it. Every command takes `--json` for scripting.
+You can also ask the agent to set any of these when it publishes. The owner link (**Copy manage link**) carries these powers, so keep it to yourself.
 
-## Canvas or page?
+## Pages in the app
 
-The [visual canvas](/documentation/visual-canvas) renders inside a conversation and lives in the transcript; a published page lives at its own URL with gates and history. Inline evidence for the person reading the session goes on a canvas. Deliverables someone will open by link (status pages, reports for stakeholders, live dashboards under `--watch`) get published.
+**Pages** in the sidebar (or "See it in Pages" on the feature card) lists everything you and your team published, with views, open comments and which gates are on. From a page's menu you can open it, copy its link, manage it, edit it in the browser, or delete it. Deleting a page removes its whole history, and the link stops working at once.
 
-For a single image there is a third door: `cast image <file-or-url>` uploads a screenshot or chart render and prints a stable URL that renders inline in message markdown and canvases, with no page around it. See [screenshots and images](/documentation/visual-canvas) for how agents use it.
+## When something is off
+
+| What you notice | What to do |
+|-----------------|------------|
+| The agent replied with a file path instead of a link | Check that Publish is on for that computer, then ask it to publish the file |
+| A reader can't open the link | Check **Manage sharing**: an expiry may have passed, or a password is set |
+| Your comment didn't reach the agent | Make sure **Send to agent** was on, or use **Send all** |
+| The page in the conversation looks out of date | It reloads on a new version; if it doesn't, use **open** to see the latest |

@@ -1,6 +1,7 @@
 #!/bin/bash
-# Build the codecast VS Code / Cursor extension into a .vsix and stage it for
-# the R2 upload (scripts/upload-binaries.sh → https://dl.codecast.sh/<name>).
+# Build the codecast VS Code / Cursor extension into a .vsix and stage it in
+# packages/web/public/binaries. With --publish it also uploads the file to R2
+# (https://dl.codecast.sh/codecast-blame.vsix); see the end of this script.
 #
 # Built in an isolated copy so the monorepo's workspace: deps don't break a
 # plain `npm install` inside the extension.

@@ -5,7 +5,7 @@ holds, evidence, runs. This document extends the line in both directions so
 that every change we make, to code or to a prompt, follows one graph:
 
 ```
-sense → attach → ground → admit → [plan gate] → prove → build → verify
+sense → attach → ground → admit → [plan] → prove → build → verify
       → eval → review → card → decide gate → ship → watch → learn
 ```
 
@@ -81,11 +81,11 @@ signals {
                 breaks (`ex-<project>-<n>`, the-line-model.md LM5)
   goal_hint     optional: the initiative metric key the finder believes it threatens
   observed_at, created_at
-  task_id       the cause it attached to (LE4)
+  task_id       the cause it attached to (LE4); absent while held
   project_id    the cause's project, else the one it was filed for (LP1)
   filed_for_project_id  set when the finder filed it for a project other
                 than its cause's (LE4)
-  attach        "fingerprint" | "judge" | "new" | "person"
+  attach        "fingerprint" | "judge" | "new" | "person" | "held"
 }
 ```
 
@@ -105,11 +105,38 @@ line: the line starts at attach.
 2. **Judge.** Otherwise the five closest open causes (text match on title and
    subject) go to one small call: "same cause as one of these, or none?". It
    answers with a task id, `none`, or `unsure`. `unsure` is `none`.
-3. **New.** Otherwise a new cause: a task with `source: "signal"`,
+3. **New, only by an explicit step.** Otherwise a new cause opens only when
+   something decided the signal is work: a person filed it (`person`, which
+   includes a cause filed from the line page), the line's learn station filed
+   it from a person's card answer (`lesson`, LE12), or a line profile in the
+   workspace declares its finder with `opens_causes = true` (line-profile.md
+   LP3). The cause is a task with `source: "signal"`,
    `triage_status: "suggested"`, the signal's title, and `cause` fields
-   (`signal_count`, `first_seen`, `last_seen`, `fingerprints[]`).
+   (`signal_count`, `first_seen`, `last_seen`, `fingerprints[]`), and the
+   signals held under its key before it opened join it.
+4. **Held.** Anything else stays a signal: no task, `attach: "held"`. An
+   automated finder (an error tracker, a nightly eval, a cluster judge) can
+   report far more than anyone works, so its observations count as evidence
+   until a line converts them, and a fingerprint an open cause already holds
+   still attaches to it in step 1.
 
 A cause that receives a signal while in `watch` (LE12) reopens.
+
+**A product's issue key (learning-loop.md LL3).** A product that groups its own
+findings files each one with `issue: true` (`cast signal add --issue <key>`),
+its fingerprint being the issue's key. That key is exactly one problem: the
+signal reaches only the cause holding the key (`cause.issue_key`), never
+another by the judge, and opens or is held by the rules above otherwise. A
+cause that gathered several keys before keys were exact keeps the first issue
+to reach it; the others open their own. The product's edits are followed:
+`cast signal merge --issue A --into B` stamps `merged_into: B` on A's signals
+(so A keeps resolving to B), folds A's open cause into B's (its signals move,
+`merged_keys` lists A, and A's cause is dropped as `duplicate_of` B with
+`cause.merged_into`), or makes A's cause B's when B has none. `cast signal
+split --issue C --from A [--move sg-...]` files C's first signal, which opens
+C's cause with `cause.split_from: A` whatever the profiles declare, and the
+named signals move there re-keyed to C with `split_from: A`. A finding also
+carries its `judge`, `judge_version` and `severity`.
 
 ## LE5. Ground: every cause names the goal it serves
 
@@ -123,17 +150,25 @@ project's when it has one, else its workspace's, never the repo profile's
 default project; the same brief `cast task update` checks the goal_ref
 against), and the cause with its signals, and writes four fields:
 
-- `goal_ref`: the initiative metric or project goal the cause threatens, or
-  `none`. A cause with `none` parks as `suggested` and never reaches a person
-  unless its signal count crosses the workspace threshold.
-- `category`: `code` | `prompt` | `ux` | `infra` | `data`.
+- `goal_ref`: the initiative metric or project goal the cause threatens,
+  `line` for a change to the line itself, or `none`. A cause with `none` parks
+  as `suggested` and never reaches a person unless its signal count crosses
+  the workspace threshold.
+- `category`: `code` | `prompt` | `ux` | `infra` | `data` | `line`.
 - `risk`: `low` | `review` | `plan`. `plan` means architecture, cross cutting
   design, schema, billing or anything in the protected decision categories:
-  the run stops at a plan gate before build.
+  the approach is planned and written down before build (LE7).
 - `readiness`: `ready` | `needs_context` | `not_actionable`, with one line why.
 
 Priority is computed, not judged: goal priority × severity × signal count,
 in `lib/linePriority.ts`.
+
+The line is a goal of its own. Every brief offers `line`, the line's own
+health: its three numbers (the-line-model.md LM8) moving the right way and
+every station doing its job. Only a change to the line itself (category
+`line`, line-map.md LX6) serves it; a product goal never stretches to cover
+line plumbing, and line plumbing never parks as serving nothing. It carries no
+priority of its own, so it ranks as an unranked goal.
 
 A fresh cause is grounded before admission, so admission can rank it and
 spends a hand only on causes worth one. `lineGround.sweep` takes the oldest
@@ -145,38 +180,63 @@ prompt carries verbatim. A reply it cannot use (a goal_ref the brief does not
 offer, a value outside the vocabulary) leaves the cause `needs_context` with
 the reason, for a person; no reply at all leaves it for the next pass.
 
-## LE6. Admit: work starts at the rate decisions finish
+## LE6. Admit: work starts as the machine has room
 
-The admission sweep is off: `crons.ts` does not register `orgLine.sweep`
-(since 2026-10-02), so a run starts when someone runs `cast workflow run
---task <ct-N>` (no file: the calling role's line, else the shipped `line`).
-The rule below is what `orgLine.sweep` and `orgLine.queue` compute.
+`orgLine.sweep` (the-line.md L9) runs every two minutes and admits causes,
+highest priority first, while all of these hold:
 
-`orgLine.sweep` (the-line.md L9) admits causes, highest priority first, while
-both hold:
+- the line's start switch is on (`lineStartsOn`, learning-loop.md LL5);
+- `counters.hands < caps.hands_per_day`;
+- a run slot is free where the role's runs work. The runner is whoever runs
+  the role's standing session (`seatPlace`). When online machines of the
+  runner offer a checkout of the role's repository (`devices.line_slots`,
+  each `{ root, origin, runs }`, declared in the host's
+  `~/.codecast/config.json` under `line.checkouts` and sent on the
+  heartbeat), the slots are those machines' `runs`, and each run goes to
+  the one with the most free slots, in `root` plus the role's folder under
+  its repository root, with `runner_device` set. The repository is matched
+  by `normalizeGitOrigin` of the origin in the runner's git plane.
+  Otherwise the runner's own machine takes at most `LINE_RUNS_PER_RUNNER`
+  (4), counted across every line role that person runs, minus runs on pool
+  machines.
 
-- the open cards of the person the role reports to (the top of its chain),
-  counted across every line they answer for, are fewer than the smallest
-  `caps.cards` among their live line roles (default 5; line-profile.md LP6),
-  and
-- `counters.hands < caps.hands_per_day`.
+A run works while it is `pending` or `running` with a task. A run paused at
+its card, or running but blocked on a pending decision, uses no machine and
+holds no slot. Decisions waiting for an answer never hold back a start: the
+line has no limit on open cards, and `caps.cards` limits nothing. One sweep
+starts at most `MAX_STARTS_PER_SWEEP` (10) runs, and reads only the
+candidates it can start: open ready causes by index, at most `CAUSE_WINDOW`
+(200) per scope project, oldest first, ranked within that window. A cause
+that waits shows "4 runs working on its machine" on the line page.
+`orgLine:explain` runs the same pass dry and says what it would start,
+where, and each load it read. A run a role starts outside the sweep takes a
+slot the same way (`orgLine.admitRoleRun`): a judge diagnosis
+(learning-loop.md LL11) counts against the same slots though it has no task,
+and when they are full its finding waits, saying so, for the judge-review
+sweep to start it.
 
-When the person answers a card, a slot frees and the next cause starts. A
-cause that waits shows "queued behind 5 open cards" on the line page.
-
-An open card is a pending, blocking `session_decisions` row of the role's
-host, asked at gate node `decide` (`LINE_CARD_GATE_NODE`) of a run the role's
-standing session spawned. Candidates are the role's assigned tasks plus causes
-(`source: "signal"`, `readiness: "ready"`, `goal_ref` set, unassigned) it owns.
-`orgLine.queue` returns the candidates in admission order with why each waits;
-`cast role limits <handle> --cards <n>` sets the cap.
+Candidates are the role's assigned tasks plus causes (`source: "signal"`,
+`readiness: "ready"`, `goal_ref` set, unassigned) it owns. `orgLine.queue`
+returns the candidates in admission order with why each waits, and the
+machine's `working` and `runs_cap`.
 
 ## LE7. Plan (only when `risk = plan`)
 
-An agent writes a short plan to the task (the approach, the files, what will
-be proven red, the size budget) and the run pauses on a plan gate: Approve,
-Revise (with a note, back to plan), Drop. Scope is frozen at the gate; new
-information during build sends the run back here instead of steering build.
+An agent writes a short plan to the task (the approach and why it beats the
+alternatives, the files, what will be proven red, the size budget) and the run
+goes straight on. Nobody approves the plan: the builder holds to it, the
+reviewer checks the branch against it, and the person meets the approach once,
+inside the finished change at Decide (LE11). A planner the record cannot carry
+to an approach pins `blocked` with what is missing, and the run stops (below).
+
+**Stopping instead of asking.** A run asks a person one thing, at its end. A
+station that cannot go on never parks a question in anyone's queue: the planner
+or builder that hands off `blocked` or `needs_context`, and the reviewer that
+rejects, end the run on purpose at a stop exit (`stopped`, `rejected`). The run
+fails with `fail_reason` "Stopped: <the station's own words>", the problem goes
+back to `open` with those words as a blocker comment, and it stays there until
+someone reruns the line. Any other failure (rounds exhausted, a dead session)
+ends the same way, with why and no decision (`on_failure=stop` on the graph).
 
 ## LE8. Prove, build, verify, eval
 
@@ -194,13 +254,24 @@ information during build sends the run back here instead of steering build.
 A miss that cannot be reproduced closes the cause as `dissolved` with the
 evidence; it is a success, not a failure.
 
+A Prove that ends without its proof (it failed outright, or `prove.json` is
+missing or says neither `reproduced: true` nor `false`) has neither shown the
+miss nor ruled it out, so the run goes to `unproven` and ends there. The cause
+moves back to `open` (a hand that already handed off `blocked` or
+`needs_context` leaves it in review) and gets a blocker comment carrying what
+Prove tried, or the run's last error when Prove left no output. It is never
+built on or dissolved; a person reruns the line once the miss can be shown.
+
 **Build.** One change, in the worktree, within the profile's size budget
-(400 changed lines by default; more splits or returns to plan). Prompt changes
+(400 changed lines by default). A choice the builder meets on the way is its
+own to make from the record, with the reason in its evidence; when the change
+cannot be built it hands off `blocked` and the run stops (LE7). Prompt changes
 follow the profile's prompting standard (codecast's `docs/prompting.md` by
 default).
 
 **Verify.** The profile's check command in the worktree (`cast ws check` by
-default). Two failed rounds stop the run with a decision to the owner.
+default). When the builder's rounds run out the run stops and the problem is left open
+with what the last check said; nobody is asked.
 
 **Eval.** The profile's eval command picks the surfaces the branch owes,
 replays them on the base and on the branch, and writes `$run_dir/reps.json`;
@@ -242,17 +313,41 @@ ChangeCard {
 }
 ```
 
-Only `wrong`, `change` and `recommend` are written by a model, in one call that
-reads the rest. Everything else is assembled from what the nodes recorded.
+The card is the run's record of the change, not what the person reads. Code
+assembles it from what the nodes recorded (proof, checks, diff, cost, and reach
+counted from the findings the presenter says the change covers); the only words
+it takes from a model are the presenter's `recommend` and `why`, and it refuses
+a report that contradicts the facts (Ship over a red check or proof).
 
 ## LE11. Decide
 
-The card becomes a blocking gate decision bound to the task and run (the-line.md
-L4), with the card as its report and three options: Ship, Revise (a note goes
-back to build), Drop (close with the reason). Cards for one line on one day
-share a stack (`stack="Line · <role> · <date>"`), so the person clears them in
-one sitting. The answer patches the run through `finalizeAnswer`; nothing is
-relayed by a session.
+Decide is the only time a run asks anything, and it is the last thing the run
+does before landing the change. Its person answers, or the lead on the card's
+ladder does when the lead starts work on its own: that lead's session answers
+the card like any holder (`cast decide answer`), with no grant and whatever its
+category, and the session that asked it never does (`answererFor`).
+
+The question comes from a session, not from a form. The presenting station
+(`card_write`, named by the gate as `asker=card_write`) reads the base presenter
+(`packages/cli/src/workflow/presenter.md`) followed by this line's addendum
+(`templates/line/card_write.md`). It runs the product before and after on the
+cases behind the problem, builds a page with the decision kit, and posts one
+decision with `cast decide`: its own question, its own answers, a short context
+and the page. It then pins `question`, `recommend`, `why`, `covers` and `page`.
+
+What the person gets reads like the answer a good session gives to "what was
+wrong, what did you do, should we ship it": plain language, and the problem and
+the fix shown on real cases. Code (the diff, the files, the checks) sits behind
+one fold. The session stays alive, so the person can talk it over in the same
+thread before answering.
+
+The `decide` gate adopts that session's pending decision and binds it to the
+task and run (the-line.md L4); it is one `session_decisions` row in the
+person's one queue (and on the lead's ladder), and the line files no stack of its own. The run routes on
+how the answer opens: `Ship` lands the change (LE12), `Drop` closes the problem
+with the reason, and any other answer goes back to the builder as the person's
+note. The answer patches the run through `finalizeAnswer`; nothing is relayed
+by a session.
 
 ## LE12. Ship, watch, learn
 
@@ -264,8 +359,12 @@ profile sets `[line.merge] auto` or the line's role holds a merge grant
 (the-line.md L12). A prompt surface change records the eval run set as the new baseline.
 
 **Watch.** The cause enters `watch` for the profile's `watch_days` (default 7):
-`tasks.watch_until`. A signal with one of its fingerprints during watch
-reopens it with the signal attached. A watch that ends quiet closes the cause
+`tasks.watch_until`, starting when the fix went live (`tasks.watch_from`: the
+deploy's live time, else the ship). A signal with one of its fingerprints
+during watch reopens it with the signal attached when what it saw happened
+after `watch_from`; older evidence, and a finding that cannot date what it saw
+(a bulk review of a whole history files `happened_after: 0`), joins the cause
+and leaves the watch running. A watch that ends quiet closes the cause
 as `resolved`. `cast task update --watch-days N` sets the watch (0 ends it);
 the hourly `signals.sweepWatches` closes quiet ones as done with a note naming
 the quiet window.

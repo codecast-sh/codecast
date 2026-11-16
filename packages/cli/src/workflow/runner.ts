@@ -1,37 +1,62 @@
+import { foreignTaskSource } from "@codecast/shared/tasks";
 import { CONTINUE_BANNER_KINDS, FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineForeignText, fromConvexAgentType, toConvexAgentType, resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
+import { splitReviewNote } from "./reviewNote";
 import { definitionLaunchFlags } from "../agentLaunch.js";
+import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
+import { NO_CAUSE_HISTORY } from "@codecast/shared/contracts/causeHistory";
+import { gateDoc } from "@codecast/shared/contracts/changeCard";
+import { ParkedClock, taskWaiting } from "./parkedClock.js";
+import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
-import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
-import { evalCondition, extractJsonOutput, lookupContextVar } from "./condition";
+import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
+import { evalCondition } from "./condition";
+import { keepEnds } from "./keepEnds";
+import { executeCommand, expandScriptVars, recordNodeOutput } from "./commandStation";
 import { planReadiness } from "../planReadiness.js";
-import { readCardFile } from "../cardFile.js";
-import { resultPreview } from "./chainWorkflow.js";
+import { readGateCard } from "../cardFile.js";
+import { agentResultPreview, resultPreview } from "./chainWorkflow.js";
+import { graphEdgesPayload, graphNodesPayload } from "./graphPayload.js";
 import { spawnSync } from "../proc.js";
 import { argvOnLaunchAccount } from "../ccAccounts.js";
-import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
-import { LineProfileError, lineCommandEnv, lineProfileVars, loadLineProfile } from "../lineProfile.js";
-import { claimRun, readCheckpoint, resumePoint, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
+import { LineProfileError, lineProfileVars, loadLineProfile } from "../lineProfile.js";
+import { deadEndReason, profileFailure, quotedTitle, taskStopCard } from "./runFailure.js";
+import { claimRun, clearVisits, readCheckpoint, resumePoint, runnerStamp, withOptionWords, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
+import { buildNodePrompt, expandAgentPrompt, expandPromptVars, presentsDecision, resolveModel, stationBrief } from "./nodePrompt";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
 import { c } from "../colors.js";
+import { cliFetch } from "../cliHttp.js";
+import { claudeProjectDirName } from "../projectPathResolver.js";
+import { frozenChangeContext } from "./flowChangeFile.js";
+import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
+import { lineRunsRoot } from "./runDirs.js";
+import { restoreRunTree } from "./runWorktree.js";
 
 function resolveNextNode(
   graph: WorkflowGraph,
   current: WorkflowNode,
   context: Record<string, string>
 ): WorkflowNode | null {
+  // A gate's labelled edges are its options: only choosing one follows it
+  // (resolveHumanGateTarget), never the fallthrough below.
   const outEdges = graph.edges
-    .filter(e => e.from === current.id)
+    .filter(e => e.from === current.id && !(current.type === "human" && e.label))
     .sort((a, b) => (b.weight || 0) - (a.weight || 0));
+
+  // An edge that sends the run back without spending a visit marks the node it names (runNodeLoop reads the mark).
+  const follow = (edge: WorkflowEdge): WorkflowNode | null => {
+    const node = graph.nodes.get(edge.to) ?? null;
+    if (node && edge.free_visit) context[`${edge.free_visit}.free_visit`] = "1";
+    return node;
+  };
 
   // First pass: edges with conditions
   const conditional = outEdges.filter(e => e.condition);
   for (const edge of conditional) {
     if (evalCondition(edge.condition!, context)) {
-      const node = graph.nodes.get(edge.to);
+      const node = follow(edge);
       if (node) return node;
     }
   }
@@ -41,7 +66,7 @@ function resolveNextNode(
   for (const edge of unconditional) {
     // If there were conditional edges and none matched, skip unconditional
     if (conditional.length > 0) continue;
-    const node = graph.nodes.get(edge.to);
+    const node = follow(edge);
     if (node) return node;
   }
 
@@ -58,85 +83,71 @@ function resolveNextNode(
 
 // ─── Node handlers ────────────────────────────────────────
 
-// Every node's result lands under `<id>.output` (capped for prompts). When the
-// result is JSON, or ends in a fenced json block, the parsed value is kept
-// whole under `<id>.json` so `$<id>.json.<path>` and conditions can read its
-// fields past the output cap.
-const NODE_JSON_CAP = 64_000;
-export function recordNodeOutput(context: Record<string, string>, nodeId: string, text: string, jsonSource = text): void {
-  context[`${nodeId}.output`] = text.slice(0, 4000);
-  const parsed = extractJsonOutput(jsonSource);
-  const json = parsed === undefined ? undefined : JSON.stringify(parsed);
-  if (json !== undefined && json.length <= NODE_JSON_CAP) context[`${nodeId}.json`] = json;
-  else delete context[`${nodeId}.json`];
+export { expandScriptVars, recordNodeOutput } from "./commandStation";
+
+// A call node (learning-loop.md LL1): one prompt, one answer, no tools and no
+// session. The prompt is the node's own words with $vars expanded and nothing
+// appended, so what the graph says is exactly what the model reads. It runs
+// through the server's one call path (/cli/model/call), on the team's model
+// budget, which answers with the text, the parsed JSON when the node asks
+// for json, and what the call cost. The answer lands under `<id>.output` and
+// `<id>.json`, the cost under `<id>.cost_usd`.
+export const CALL_NODE_DEFAULTS = { max_tokens: 1_000, output: "json" as const };
+
+export function callNodeBody(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string) {
+  return {
+    model: resolveModel(node, graph) || CHEAP_MODEL,
+    max_tokens: node.max_tokens ?? CALL_NODE_DEFAULTS.max_tokens,
+    ...(node.system ? { system: expandAgentPrompt(node.system, graph, context) } : {}),
+    prompt: expandAgentPrompt(node.prompt ?? "", graph, context),
+    output: node.output ?? CALL_NODE_DEFAULTS.output,
+    label: node.label,
+    project_path: cwd,
+  };
 }
 
-// $var in a script expands like $var in a prompt, but each value is
-// single-quoted so a task title with shell metacharacters stays data. `$(`
-// and `${` are left to the shell (no \w follows the `$`).
-// A dotted name ($scan.json.count) expands when the whole name resolves;
-// otherwise only its first word does and the rest stays literal text.
-export function expandScriptVars(script: string, context: Record<string, string>): string {
-  return script.replace(/\$(\w+(?:\.\w+)*)/g, (match, key: string) => {
-    const parts = key.split(".");
-    for (let n = parts.length; n >= 1; n--) {
-      const value = contextVar(context, parts.slice(0, n).join("."));
-      if (value === undefined) continue;
-      const rest = parts.slice(n).map(p => `.${p}`).join("");
-      return `'${value.replace(/'/g, `'\\''`)}'${rest}`;
-    }
-    return match;
-  });
+/** The command stations a resumed run makes again before it goes on: those marked `refresh` that it already made, in the order it made them. */
+export function refreshedOnResume(graph: WorkflowGraph, completed: string[]): WorkflowNode[] {
+  return [...new Set(completed)].map((id) => graph.nodes.get(id)).filter((n): n is WorkflowNode => !!n?.refresh && n.type === "command" && !!n.script);
 }
 
-async function executeCommand(
-  node: WorkflowNode,
-  context: Record<string, string>,
-  cwd: string
-): Promise<NodeOutcome> {
-  const script = expandScriptVars(node.script!, context);
-  console.log(`${c.dim}  $ ${script.split('\n')[0]}${script.includes('\n') ? '...' : ''}${c.reset}`);
-
-  try {
-    const result = spawnSync("bash", ["-c", script], {
-      cwd,
-      // A project's line command (line-profile.md LP2) names run values
-      // ($run_dir, $task_id, ...) that its own shell expands.
-      env: { ...process.env, ...lineCommandEnv(context) },
-      stdio: ["pipe", "pipe", "pipe"],
-      encoding: "utf-8",
-      // A repo's check command (the line's verify station) outruns the old
-      // two minute cap on most repos; a timeout read as a failed check and
-      // burned an implement visit. Per node, in seconds.
-      timeout: (node.timeout ?? 120) * 1000,
-    });
-
-    const output = (result.stdout || "") + (result.stderr || "");
-    if (output.trim()) {
-      console.log(c.dim + output.slice(0, 2000) + c.reset);
-    }
-
-    recordNodeOutput(context, node.id, output.trim(), result.stdout || "");
-    context[`${node.id}.exit_code`] = String(result.status ?? 0);
-
-    if (result.status === 0) {
-      console.log(`  ${c.green}✓ success${c.reset}`);
-      return "success";
-    } else {
-      console.log(`  ${c.red}✗ failed (exit ${result.status})${c.reset}`);
-      context["last_error"] = output.trim().slice(0, 2000);
-      return "failure";
-    }
-  } catch (err: any) {
-    console.log(`  ${c.red}✗ error: ${err.message}${c.reset}`);
-    recordNodeOutput(context, node.id, err.message);
+async function executeCallNode(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions): Promise<NodeOutcome> {
+  const body = callNodeBody(node, graph, context, cwd);
+  console.log(`${c.dim}  call: ${body.model}, up to ${body.max_tokens} tokens, ${body.output}${c.reset}`);
+  if (!options.convexSiteUrl || !options.apiToken) {
+    context["last_error"] = "A call node runs on codecast's model budget: sign in (cast auth) to run it.";
+    console.log(`  ${c.red}✗ ${context["last_error"]}${c.reset}`);
     return "failure";
   }
+  let result: any;
+  try {
+    const resp = await fetch(`${options.convexSiteUrl}/cli/model/call`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: options.apiToken, ...body, ...(options.runId ? { run_id: options.runId } : {}) }),
+    });
+    result = await resp.json();
+    if (!resp.ok && !result?.reason) result = { ok: false, error: result?.error ?? `the server answered ${resp.status}`, cost_usd: 0 };
+  } catch (err: any) {
+    result = { ok: false, error: err?.message ?? String(err), cost_usd: 0 };
+  }
+  context[`${node.id}.cost_usd`] = String(result?.cost_usd ?? 0);
+  if (!result?.ok) {
+    context["last_error"] = String(result?.error ?? "the call failed");
+    recordNodeOutput(context, node.id, context["last_error"]);
+    console.log(`  ${c.red}✗ ${context["last_error"]}${c.reset}`);
+    return "failure";
+  }
+  const text = String(result.text ?? "");
+  recordNodeOutput(context, node.id, text, result.json !== undefined ? JSON.stringify(result.json) : text);
+  console.log(c.dim + (text.length > 500 ? text.slice(0, 500) + "..." : text) + c.reset);
+  console.log(`  ${c.green}✓ answered${c.reset}${c.dim} ($${Number(result.cost_usd ?? 0).toFixed(4)})${c.reset}`);
+  return "success";
 }
 
 function findNewestSessionId(cwd: string, afterMs: number): string | null {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  const projectDirName = cwd.replace(/\//g, "-");
+  const projectDirName = claudeProjectDirName(cwd);
   const projectDir = path.join(claudeProjectsDir, projectDirName);
   if (!fs.existsSync(projectDir)) return null;
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/;
@@ -224,7 +235,7 @@ async function executeAgent(
       return "success";
     } else {
       console.log(`  ${c.red}✗ agent failed (exit ${result.status})${c.reset}`);
-      context["last_error"] = (stderr || output).slice(0, 2000);
+      context["last_error"] = keepEnds(stderr || output, 2000);
       return "failure";
     }
   } finally {
@@ -333,12 +344,41 @@ async function loadNodeDefinition(node: WorkflowNode, options: RunOptions): Prom
   return definitionCache.get(node.definition) ?? undefined;
 }
 
+/**
+ * Waits for a place at a station that takes only so many of the team's runs at
+ * once (workflow_runs.admitToStation). Eval proofs that queued for one of the
+ * eval host's slots inside Eval's own clock were killed mid-draw (ct-68695, 91
+ * of 95 cases, 2026-10-29); waiting here, before the station starts, spends
+ * none of it. A server that cannot answer three asks running (one older than
+ * the route) lets the run in: a cap never stops a line it cannot count for.
+ */
+export async function waitForStationPlace(node: WorkflowNode, cap: number, options: RunOptions): Promise<void> {
+  let unanswered = 0;
+  let said = false;
+  for (;;) {
+    const r = await cliCall(options, "/cli/workflow-runs/admit", { run_id: options.runId, node_id: node.id, cap });
+    if (r?.admitted !== false) {
+      if (r || ++unanswered >= 3) {
+        if (said) console.log(`  ${c.green}a place at ${node.label} is free${c.reset}`);
+        return;
+      }
+    } else if (!said) {
+      console.log(`  ${c.dim}waiting for a place at ${node.label}: ${r.inside} of ${cap} taken${c.reset}`);
+      said = true;
+    }
+    await new Promise((res) => setTimeout(res, options.stationPollMs ?? 30_000));
+  }
+}
+
 // One POST to a /cli route with the run's token; null on any failure so the
-// runner degrades instead of throwing mid-graph.
+// runner degrades instead of throwing mid-graph. Through cliFetch, so a write
+// that lost a race on every server retry (nothing applied) is sent again with
+// backoff, whatever the route: at fifty runs a station's spawn lost to other
+// stations' writes and failed its node on the first 500 (2026-10-23).
 async function cliCall(options: RunOptions, route: string, body: Record<string, any>): Promise<any | null> {
   if (!options.convexSiteUrl || !options.apiToken) return null;
   try {
-    const resp = await fetch(`${options.convexSiteUrl}${route}`, {
+    const resp = await cliFetch(`${options.convexSiteUrl}${route}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: options.apiToken, ...body }),
@@ -351,13 +391,20 @@ async function cliCall(options: RunOptions, route: string, body: Record<string, 
   }
 }
 
+// How long a settled hand with an empty session may still be waiting on its
+// first transcript sync before the station reads it as never having run.
+const EMPTY_HAND_GRACE_MS = 120_000;
+
 // A session node (backend=session) is a hand: a real codecast session started
 // through /cli/spawn exactly as `cast spawn --unattended` starts one, so it is
-// reachable with cast send/read and bound by the unattended mandate
-// (the-line.md L4). It nests under the run's own session (L10). The runner then waits for it to settle: done or
+// reachable with cast send/read and opened with the unattended opening
+// (the-line.md L11). It nests under the run's own session (L10). The runner then waits for it to settle: done or
 // needs_input, killed, or its process gone. A hand that outlives the node
-// timeout is killed and the node fails; runWorkflow's failure path returns the
-// task to open with a comment.
+// timeout fails the node; runWorkflow's failure path returns the task to open
+// with a comment. However the station ends, the server stops its hand when the
+// runner reports the node over (workflow_runs.stopStationHands). A run the
+// server never registered has nobody to report to, so its runner stops the
+// hand itself.
 async function executeSessionNode(
   node: WorkflowNode,
   graph: WorkflowGraph,
@@ -365,6 +412,90 @@ async function executeSessionNode(
   cwd: string,
   options: RunOptions,
   onSpawned?: () => void,
+): Promise<NodeOutcome> {
+  const outcome = await waitOnStation(node, graph, context, cwd, options, onSpawned);
+  const hand = context[`${node.id}.conversation_id`];
+  if (!options.runId && hand) await cliCall(options, "/cli/sessions/kill", { session: hand });
+  return outcome;
+}
+
+// A station the run's subject does (`backend=subject`, flows.md FL4): its brief,
+// which names what a stage found, goes to the session the change came from as a
+// message in its own thread; the run waits for that session to work on it and
+// settle, then freezes its change again, so the stages after read it as it is
+// now. A run whose change came from no session has nobody to send it to, and
+// stops here with what the stage found.
+async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions): Promise<NodeOutcome> {
+  const subject = subjectOf(context);
+  const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
+  if (!subject) {
+    context["last_error"] = `This run's change came from no session, so nobody can work on what the run found.${found}`;
+    context["station_dead"] = node.id;
+    return "failure";
+  }
+  const read = await cliCall(options, "/cli/inbox", { session_ids: [subject.conversationId], show_all: true, limit: 5 });
+  const row = (read?.sessions || []).find((r: any) => r.id === subject.conversationId);
+  if (!row || row.is_killed) {
+    context["last_error"] = `The session the change came from (${subject.shortId}) ${row ? "was stopped" : "cannot be read"}, so nobody can work on what the run found.${found}`;
+    context["station_dead"] = node.id;
+    return "failure";
+  }
+  const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
+  const sent = await cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body: brief, wake: true });
+  if (!sent) {
+    context["last_error"] = `Could not send ${node.label} to session ${subject.shortId}.${found}`;
+    context["station_dead"] = node.id;
+    return "failure";
+  }
+  const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
+  await waiting({ node_id: node.id, conversation_id: subject.conversationId, since: Date.now(), note: (context["stop_reason"] || brief).slice(0, 600) });
+  const outcome = await waitOnStation(node, graph, context, cwd, options, undefined, { ...subject, sentAtCount: row.message_count ?? 0 });
+  await waiting(null);
+  if (outcome !== "success") return outcome;
+  try {
+    const { refreezeSessionChange } = await import("./flowChange.js");
+    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
+    context["branch"] = change.branch;
+    context["change_files"] = change.paths.join(" ");
+    const said = moved
+      ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
+      : "the session's change is as it was: the stage runs again on the same change";
+    console.log(`  ${c.green}✓${c.reset} ${said}`);
+    recordNodeOutput(context, node.id, said);
+  } catch (err) {
+    context["last_error"] = `Could not freeze session ${subject.shortId}'s change again: ${err instanceof Error ? err.message : String(err)}`;
+    context["station_dead"] = node.id;
+    return "failure";
+  }
+  return "success";
+}
+
+/** The last thing a station said in words: a segment's exit steps only say which exit they took. */
+function lastSaid(state: WorkflowRunState): string | undefined {
+  for (const id of [...state.completed].reverse()) {
+    const out = state.context[`${id}.output`]?.trim();
+    if (out && !out.startsWith("{")) return out;
+  }
+  return undefined;
+}
+
+/** Tell the run's subject something in its own turn; a run with no subject, or a dry run, says nothing. */
+async function tellSubject(options: RunOptions, context: Record<string, string>, body: string): Promise<void> {
+  const subject = subjectOf(context);
+  if (!subject || options.dryRun) return;
+  await cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body, wake: true });
+}
+
+async function waitOnStation(
+  node: WorkflowNode,
+  graph: WorkflowGraph,
+  context: Record<string, string>,
+  cwd: string,
+  options: RunOptions,
+  onSpawned?: () => void,
+  // The run's subject (subjectStation.ts): the session the change came from, already sent its brief, which this
+  // station waits on instead of a hand of its own. It has answered once it has worked since the brief landed.
+  subject?: Subject & { sentAtCount: number },
 ): Promise<NodeOutcome> {
   if (!options.convexSiteUrl || !options.apiToken) {
     console.log(`  ${c.red}✗ session nodes need an authenticated CLI (cast auth)${c.reset}`);
@@ -382,17 +513,62 @@ async function executeSessionNode(
     context["branch"] = `codecast/${worktreeName}`;
   }
   // A resumed run waits on the hand its runner left working (runResume.ts)
-  // rather than starting the station over; a hand that died with it does not
-  // count, and the station starts anew.
-  const left = options.resumed?.hand && options.resumed.node_id === node.id ? options.resumed.hand : null;
+  // rather than starting the station over; a hand stopped when the run ended
+  // does not count, and the station starts anew. A hand that died with the
+  // runner (a reboot takes both) is waited for: the watchdog revives it in the
+  // same conversation (midWorkRevive.ts), usually after the sweep has already
+  // restarted this runner, and a second hand spawned meanwhile would work the
+  // same worktree beside it. One not back within the grace is not coming
+  // (recovery off, its revive budget spent): it is stopped, so a late revive
+  // finds it retired, and the station starts anew.
+  const left = !subject && options.resumed?.hand && options.resumed.node_id === node.id ? options.resumed.hand : null;
   if (options.resumed) options.resumed.hand = null;
   const leftRow = left ? ((await cliCall(options, "/cli/inbox", { session_ids: [left], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === left) : null;
-  const reattach = !!leftRow && (leftRow.is_live || leftRow.work_state === "done" || leftRow.work_state === "needs_input");
+  let reattach = !!leftRow && !leftRow.is_killed;
+  if (reattach && !leftRow.is_live && leftRow.work_state !== "done" && !(await revivedInTime(left!, options))) {
+    console.log(`${c.yellow}  ${context[`${node.id}.session_id`] || left!.slice(0, 7)} died with the last runner and was not revived; starting ${node.id} again${c.reset}`);
+    await cliCall(options, "/cli/sessions/kill", { session: left });
+    reattach = false;
+  }
+
+  // A station that presents a decision is the one session a person talks it
+  // over with (presenter.md), and its gate adopts the decision that session
+  // posted. Sent back to it (a card the run refused), a fresh hand would find
+  // its predecessor's decision, which it can neither correct nor withdraw and
+  // the gate never adopts: Present on ct-61115 re-pinned the same report, the
+  // card refused it again, and the run failed on max_visits with sd-1072 in the
+  // queue linked to nothing. So the run goes back to the hand that presented,
+  // with its brief as it stands now (a send restarts a stopped hand), and that
+  // hand has answered once it pins again.
+  const presenter = !reattach && presentsDecision(node, graph) ? context[`${node.id}.conversation_id`] : undefined;
+  let answeredAfter: number | null | undefined;
+  if (presenter) {
+    const before = await cliCall(options, "/cli/sessions/state/get", { session: presenter });
+    const sent = await cliCall(options, "/cli/messages/send", {
+      to: presenter,
+      ...(options.runSession ? { from: options.runSession } : {}),
+      body: `The run is back at this station, with you. Your brief as it stands now:\n\n${buildNodePrompt(node, graph, context)}`,
+      wake: true,
+    });
+    const since = typeof before?.at === "number" ? before.at : null;
+    // The send restarts a stopped presenter only if it can come back. One that cannot (killed, or an agent that crashes
+    // on every resume: ct-65353's presenter did, and its run waited out the 90-minute limit twice) is retired, and a
+    // fresh hand presents.
+    if (sent && await presenterBack(presenter, since, options)) answeredAfter = since;
+    else await retirePresenter(presenter, context[`${node.id}.session_id`] || presenter.slice(0, 7), options);
+  }
 
   let hand: { conversationId: string; shortId: string };
-  if (reattach) {
+  if (subject) {
+    hand = { conversationId: subject.conversationId, shortId: subject.shortId };
+    console.log(`  ${c.green}sent to${c.reset} ${c.cyan}${hand.shortId}${c.reset}, the session the change came from`);
+  } else if (reattach) {
     hand = { conversationId: left!, shortId: context[`${node.id}.session_id`] || left!.slice(0, 7) };
     console.log(`  ${c.green}waiting again on${c.reset} ${c.cyan}${hand.shortId}${c.reset}`);
+  } else if (answeredAfter !== undefined) {
+    hand = { conversationId: presenter!, shortId: context[`${node.id}.session_id`] || presenter!.slice(0, 7) };
+    onSpawned?.();
+    console.log(`  ${c.green}back to${c.reset} ${c.cyan}${hand.shortId}${c.reset}`);
   } else {
     const spawned = await spawnHand(node, graph, context, cwd, options, agent, model, worktreeName);
     if (!spawned) return "failure";
@@ -404,18 +580,51 @@ async function executeSessionNode(
   }
   const { conversationId, shortId } = hand;
 
-  if (options.runId) {
+  // The subject is no hand of the run's: it is reported as what the run waits on (executeSubjectNode), never as the station's session.
+  if (options.runId && !subject) {
     await reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", session_id: shortId });
   }
 
   const timeout = handTimeoutMs(node, options);
   const startMs = Date.now();
-  const pollInterval = options.pollIntervalMs ?? 10_000;
-  let wasLive = false;
+  // The runner it took over from was waiting on a live hand, so a reattached
+  // hand that reads not live has gone dark (below), not answered.
+  let wasLive = reattach;
   let lastState = "";
   let askedOnce = false;
-  while (Date.now() - startMs < timeout) {
-    await new Promise(r => setTimeout(r, pollInterval));
+  let heldDormant = false;
+  let emptySince = 0;
+  // A station whose every edge routes on the handoff is answered by the task, not by
+  // how the hand's session reads. A hand that handed off is done even while a
+  // dormant pin from an earlier wait or a background check it left running
+  // keeps its session parked: three Implement hands handed off and were killed
+  // 180 minutes later (ct-58311, ct-61013, ct-58686, 2026-10-22). And a session
+  // that reads finished without a handoff has not answered: four Implement
+  // hands read idle in the middle of a tool call routed on an empty handoff
+  // (ct-60376, ct-57854, ct-61269, ct-58286). Such a hand is asked once to
+  // finish with its handoff; one that settles again without it fails the station.
+  const outgoing = graph.edges.filter((e) => e.from === node.id);
+  const answersByHandoff = !!options.taskId && outgoing.length > 0 && outgoing.every((e) => /\bhandoff\b/.test(e.condition ?? ""));
+  // The work is open again at this station: a task still in review from the
+  // last round's handoff goes back to in progress, so only this hand's
+  // handoff can put it in review (a check that sent the round back leaves
+  // the old one standing).
+  if (answersByHandoff && !reattach && await handedOff(options)) {
+    await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "in_progress" });
+  }
+  let askedForHandoffAt = 0;
+  let seenMessages = -1;
+  let subjectWorked = false;
+  // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts).
+  const clock = new ParkedClock(startMs);
+  while (clock.elapsed() < timeout) {
+    await new Promise(r => setTimeout(r, handPollIntervalMs(Date.now() - startMs, options.pollIntervalMs)));
+    clock.beginPoll();
+    if (answersByHandoff && await handedOff(options)) {
+      console.log(`  ${c.green}✓ handed off${c.reset}`);
+      recordNodeOutput(context, node.id, "handed off");
+      return "success";
+    }
     const inbox = await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 });
     const row = (inbox?.sessions || []).find((r: any) => r.id === conversationId);
     if (!row) {
@@ -429,62 +638,231 @@ async function executeSessionNode(
     }
     const state: string = row.work_state || "idle";
     if (row.is_live) wasLive = true;
+    // A hand whose start failed (its machine refused it, or a cloud host's
+    // preparation failed) reads idle, never live and never killed: nothing
+    // would settle it before the node's timeout, three hours at prove. Once
+    // the error has stood past the first-sync grace, the station fails with it.
+    if (!wasLive && row.message_count === 0 && row.session_error) {
+      emptySince ||= Date.now();
+      if (Date.now() - emptySince >= EMPTY_HAND_GRACE_MS) {
+        console.log(`  ${c.red}✗ ${shortId} could not start${c.reset}: ${String(row.session_error).split("\n")[0]}`);
+        context["last_error"] = `hand ${shortId} at ${node.id} could not start: ${String(row.session_error).slice(0, 1500)}`;
+        context["station_dead"] = node.id;
+        return "failure";
+      }
+      continue;
+    }
+    // A hand seen live that now reads not live, neither killed nor
+    // hibernated, has a daemon that went quiet: its heartbeat lapsed, and the
+    // row reads stopped and needs_input on that alone. That is the daemon's
+    // silence, not the hand's answer: a hand that exits is reported by its
+    // daemon while the row is still live, and the settle below catches it
+    // there. A daemon frozen for 199s under load settled a hand mid tool
+    // call and routed the run to failure (agentwatch Build, 2026-10-14).
+    // Wait for the daemon to come back, or for the node's timeout; a hand
+    // that declared done before the silence keeps that answer.
+    const dark = wasLive && !row.is_live && !row.is_killed && row.agent_status !== "hibernated";
+    if (dark && state !== "done") {
+      if (lastState !== "dark") console.log(`${c.dim}  ${shortId}: its daemon has gone quiet, waiting for it to report again${c.reset}`);
+      lastState = "dark";
+      askedOnce = false;
+      continue;
+    }
     if (state !== lastState) {
       console.log(`${c.dim}  ${shortId}: ${state}${c.reset}`);
       lastState = state;
     }
-    // A hand parked on a usage limit (or a throttle, a dropped connection)
-    // files as needs_input, but it resumes on its own at the reset or the
-    // fleet's next account: wait for it within the node's timeout rather than
-    // read the park as its answer.
+    // A parked hand (limit, throttle, dropped connection) resumes on its own: wait. A limit or throttle also stops
+    // the node's clock (18 limit-parked hands hit their timeout, 2026-10-24); other parks keep it, so they still end.
     if (row.blocked_on && CONTINUE_BANNER_KINDS.includes(row.blocked_on)) {
-      if (lastState !== `parked:${row.blocked_on}`) console.log(`${c.dim}  ${shortId}: parked on ${row.blocked_on}, waiting for it to resume${c.reset}`);
+      const quota = row.blocked_on === "limit" || row.blocked_on === "throttle";
+      if (lastState !== `parked:${row.blocked_on}`) console.log(`${c.dim}  ${shortId}: parked on ${row.blocked_on}, waiting for it to resume${quota ? "; the node's clock stops until it does" : ""}${c.reset}`);
       lastState = `parked:${row.blocked_on}`;
+      if (quota) clock.park();
       continue;
     }
     // A live hand can read needs_input for a moment between a reply and its
     // next tool call; one such reading ended a prove station three minutes in,
     // with the hand still working. A live hand settles on needs_input only
     // when two reads in a row say so. One that stopped needs no second read.
+    // A transcript still growing is a hand at work, whatever its status reads: a process restarted outside the daemon
+    // posts statuses the daemon refuses (no launch token), and three Revise builds settled 15 s into their work (Oct 26).
+    const grew = seenMessages >= 0 && (row.message_count ?? 0) > seenMessages;
+    seenMessages = row.message_count ?? seenMessages;
     const asking = state === "needs_input" && row.is_live && !row.is_killed;
-    if (asking && !askedOnce) {
+    if (asking && (!askedOnce || grew)) {
       askedOnce = true;
       continue;
     }
     askedOnce = asking;
-    const settled = state === "done" || state === "needs_input" || row.is_killed || (wasLive && !row.is_live);
+    // The subject read finished before its brief landed: only work after it (a working read, or a reply past the brief) answers.
+    if (subject && state === "working") subjectWorked = true;
+    if (subject && !subjectWorked && (row.message_count ?? 0) < subject.sentAtCount + 2 && !row.is_killed) continue;
+    // A hand that pinned done after arming a once trigger into its own session reads dormant: the inbox files that
+    // rest as parked until the trigger wakes it (inboxProjection doneRest). Its done pin is its answer. Two onefix
+    // Builds armed their seven-day checks, pinned "watching" and waited at Build for hours (ct-74310, ct-86290,
+    // 2026-11-07). A hand whose background work still runs reads waiting, and the run waits on it (ct-59925).
+    const restPin = !subject && state === "dormant" && row.agent_status !== "waiting" && !row.is_killed
+      ? await cliCall(options, "/cli/sessions/state/get", { session: conversationId })
+      : undefined;
+    const settled = state === "done" || state === "needs_input" || (!!subject && state === "dormant") || row.is_killed || (wasLive && !row.is_live)
+      || restPin?.status === "done";
     if (!settled) continue;
-    const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
+    const pinned = restPin ?? await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
+    // A presenter brought back still shows the pin it left last visit until it pins again.
+    if (answeredAfter !== undefined && !row.is_killed && !(typeof pinned?.at === "number" && (answeredAfter === null || pinned.at > answeredAfter))) {
+      askedOnce = false;
+      continue;
+    }
     // conversations.getThreadState: the pinned text is `state`, its status `status`.
     const pinnedText: string = typeof pinned?.state === "string" ? pinned.state : "";
+    // A hand that pinned dormant said a machine wakes it next: a background
+    // check, a replay, a Monitor. Its row reads needs_input or not live while
+    // it waits, and that is the pause, not its answer: the Implement hand of
+    // ct-59998 pinned dormant on a check and an eval, and the run routed on
+    // the empty handoff (2026-10-16). Wait within the node's timeout for it to
+    // pin again. It still settles on done, on being killed, and on a real ask:
+    // an open question, or an error it does not come back from by itself.
+    // The run's subject is the exception: it pins dormant naming this run as its wake ("the run re-checks when this
+    // turn ends", ct-85419 waited 15 minutes at Fix check), so its dormant pin after the brief is its answer.
+    if (!subject && pinned?.status === "dormant" && state !== "done" && !row.is_killed && !row.awaiting_input && !row.blocked_on) {
+      if (!heldDormant) console.log(`${c.dim}  ${shortId}: pinned dormant, waiting for its wake${c.reset}`);
+      heldDormant = true;
+      askedOnce = false;
+      const waiting = await taskWaiting((route, body) => cliCall(options, route, body), options.taskId);
+      if (waiting && clock.park()) console.log(`${c.dim}  ${shortId}: its task waits (${waiting}); the node's clock stops until it clears${c.reset}`);
+      continue;
+    }
     // The pin is display text, capped; its json block is stored whole as
     // `result`, which is what the station's edges route on.
     const pinnedResult: string = typeof pinned?.result === "string" ? pinned.result : "";
     const output = `work_state: ${state}${pinnedText ? `\n${pinnedText}` : ""}`;
     recordNodeOutput(context, node.id, output, pinnedResult || output);
     const pinnedStatus: string = pinned?.status || "";
+    // A hand whose session holds no message and no pin never ran a turn: its
+    // process never started, or its transcript went to another conversation.
+    // It answered nothing, so the station fails instead of passing an empty
+    // result down the graph. A live one gets a moment for its first sync.
+    if (row.message_count === 0 && !pinnedStatus) {
+      emptySince ||= Date.now();
+      if (row.is_live && !row.is_killed && Date.now() - emptySince < EMPTY_HAND_GRACE_MS) continue;
+      console.log(`  ${c.red}✗ ${shortId} never ran a turn${c.reset}`);
+      context["last_error"] = `hand ${shortId} at ${node.id} never ran a turn: its session holds no messages and no result`;
+      context["station_dead"] = node.id;
+      return "failure";
+    }
+    // A hand that stopped on an API error it does not come back from by itself
+    // (a logged-out machine answers every prompt "Not logged in") and pinned
+    // nothing did no work. Read as a settle, it passed, and the run routed on
+    // the task's old fields: a whole box's runs parked their causes unread
+    // (Union, 2026-10-14). The station fails with the error instead.
+    if (!pinnedStatus && row.blocked_on && !CONTINUE_BANNER_KINDS.includes(row.blocked_on)) {
+      console.log(`  ${c.red}✗ ${shortId} stopped on an ${row.blocked_on} error${c.reset}`);
+      context["last_error"] = `hand ${shortId} at ${node.id} stopped on an ${row.blocked_on} error before doing the work${row.session_error ? `: ${String(row.session_error).slice(0, 1500)}` : ""}`;
+      context["station_dead"] = node.id;
+      return "failure";
+    }
     if (pinnedStatus === "blocked") {
       console.log(`  ${c.yellow}blocked${c.reset}: ${pinnedText.split("\n")[0] || "(no detail)"}`);
       context["last_error"] = pinnedText.slice(0, 2000);
+      // What it pinned is the question its ask gate puts to a person: kept whole.
+      context["blocked_note"] = pinnedText;
+      // A station that pinned blocked waits on a person: the run stops here,
+      // whatever its json says: the loop checks this before any edge.
+      context["station_blocked"] = node.id;
+      return "failure";
+    }
+    if (answersByHandoff) {
+      // A hand that ended a turn while its own check runs in the background
+      // (the Bash tool backgrounds past 120s) has not answered yet: the ask
+      // has it pin dormant, which the wait above holds to the node's timeout.
+      // Its handoff landed 1 to 60+ minutes later on 14 runs (ct-60145).
+      if (!askedForHandoffAt && !row.is_killed) {
+        askedForHandoffAt = Date.now();
+        console.log(`${c.yellow}  ${shortId}: read as finished without a handoff; asking it to finish with one${c.reset}`);
+        await cliCall(options, "/cli/messages/send", {
+          to: conversationId,
+          ...(options.runSession ? { from: options.runSession } : {}),
+          body: `The run reads this session as finished, but ${options.taskId} has no handoff from it, and this station's next step routes on the handoff. If work you started is still running (a backgrounded check, a replay), pin \`cast state --status dormant\` naming what you wait on and end your turn: the run waits for your wake. When the work is done, or cannot be done, end with \`cast task handoff ${options.taskId} --status done|blocked|needs_context\` as your brief says.`,
+          wake: true,
+        });
+        askedOnce = false;
+        heldDormant = false;
+        continue;
+      }
+      if (askedForHandoffAt && !row.is_killed && Date.now() - askedForHandoffAt < (options.handoffAskGraceMs ?? HANDOFF_ASK_GRACE_MS)) continue;
+      console.log(`  ${c.red}✗ ${shortId} ended without a handoff${c.reset}`);
+      context["last_error"] = `hand ${shortId} at ${node.id} ended its turn without a handoff${askedForHandoffAt ? ", also after being asked for one" : ""}`;
+      context["station_dead"] = node.id;
       return "failure";
     }
     console.log(`  ${c.green}✓ settled${c.reset} ${c.dim}(${state})${c.reset}`);
-    // A station that declared done has handed the run its answer and holds
-    // nothing for a person: retire it, or a later settle with no verdict
-    // files it under needs input for good. Its transcript stays and it
-    // restarts on a send. One that ended on a question stays as it is; the
-    // run's failure path puts that on the task as a blocker.
-    if (!row.is_killed && (state === "done" || pinnedStatus === "done")) {
-      await cliCall(options, "/cli/sessions/kill", { session: conversationId });
-    }
     return "success";
   }
 
   console.log(`  ${c.red}timeout${c.reset} after ${Math.round(timeout / 60_000)}m — killing ${shortId}`);
-  await cliCall(options, "/cli/sessions/kill", { session: conversationId });
   context["last_error"] = `hand ${shortId} killed after ${Math.round(timeout / 60_000)}m at ${node.id}`;
   context["killed_hand"] = shortId;
+  context["station_dead"] = node.id;
   return "failure";
+}
+
+// How long a hand asked for its missing handoff has to start answering before
+// a finished reading counts again: the message lands at its next turn.
+const HANDOFF_ASK_GRACE_MS = 3 * 60_000;
+
+/** Whether the run's task stands handed off: in review, with how the hand ended. */
+async function handedOff(options: RunOptions): Promise<boolean> {
+  const task = await cliCall(options, "/cli/work/get", { short_id: options.taskId });
+  return String(task?.status || "") === "in_review" && !!task?.execution_status;
+}
+
+// The watchdog revives a hand that died mid-work on its first pass after a
+// reboot, five minutes apart and three a pass, station hands first.
+const REVIVE_GRACE_MS = 20 * 60_000;
+
+/** Whether a hand that died with the last runner comes back (live, or done) within the grace. */
+async function revivedInTime(conversationId: string, options: RunOptions): Promise<boolean> {
+  const until = Date.now() + (options.reviveGraceMs ?? REVIVE_GRACE_MS);
+  const pollInterval = options.pollIntervalMs ?? 10_000;
+  while (Date.now() < until) {
+    await new Promise(r => setTimeout(r, pollInterval));
+    const row = ((await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === conversationId);
+    if (row?.is_killed) return false;
+    if (row?.is_live || row?.work_state === "done") return true;
+  }
+  return false;
+}
+
+/** How long a presenter sent back its brief has to come back for it before a fresh hand presents instead. */
+const PRESENTER_GRACE_MS = 10 * 60_000;
+
+/** Whether a presenter sent back its brief comes back for it within the grace: it reads live, or it has pinned since
+ *  `since`. A killed one never does. */
+async function presenterBack(conversationId: string, since: number | null, options: RunOptions): Promise<boolean> {
+  const until = Date.now() + (options.presenterGraceMs ?? PRESENTER_GRACE_MS);
+  const pollInterval = options.pollIntervalMs ?? 10_000;
+  for (;;) {
+    const row = ((await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === conversationId);
+    if (row?.is_killed) return false;
+    if (row?.is_live) return true;
+    const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
+    if (typeof pinned?.at === "number" && (since === null || pinned.at > since)) return true;
+    if (Date.now() >= until) return false;
+    await new Promise((r) => setTimeout(r, pollInterval));
+  }
+}
+
+/** A presenter that cannot come back is stopped, so a late revive finds it retired, and the cards it left waiting are
+ *  taken back, so the fresh hand's card is the only one its gate can adopt. */
+async function retirePresenter(conversationId: string, shortId: string, options: RunOptions): Promise<void> {
+  console.log(`${c.yellow}  ${shortId} did not come back for its brief; a fresh hand presents${c.reset}`);
+  const row = ((await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === conversationId);
+  await cliCall(options, "/cli/sessions/kill", { session: conversationId });
+  const listed = row?.session_id ? await cliCall(options, "/cli/decide", { action: "ls", session_id: row.session_id }) : null;
+  for (const d of listed?.decisions ?? []) {
+    if (d.status === "pending") await cliCall(options, "/cli/decide", { action: "cancel", decision_id: d.short_id ?? d.id });
+  }
 }
 
 /** Start a station's hand through /cli/spawn, the way `cast spawn --unattended` starts one. */
@@ -498,7 +876,7 @@ async function spawnHand(
   model: string | undefined,
   worktreeName: string | undefined,
 ): Promise<{ conversationId: string; shortId: string } | null> {
-  const prompt = applyUnattended(buildNodePrompt(node, graph, context));
+  const prompt = stationBrief(node, graph, context);
   console.log(`${c.dim}  session: ${agent}${model ? `, model ${model}` : ""}${worktreeName ? `, worktree ${worktreeName}` : ""}${c.reset}`);
 
   let gitRoot = cwd;
@@ -511,7 +889,7 @@ async function spawnHand(
     prompt,
     project_path: cwd,
     git_root: gitRoot,
-    title: stationTitle(node, context),
+    title: stationTitle(node, context, presentsDecision(node, graph)),
     // A station is the run's worker: nested under the run's own session, so
     // it reads, answers cast send and shows on the run, and stays out of the
     // inbox's top level. The task's blocker comment is what reaches a person.
@@ -520,10 +898,13 @@ async function spawnHand(
     ...(node.definition && !node.agent ? {} : { agent_type: agent }),
     ...(node.definition ? { definition: node.definition } : {}),
     ...(model ? { model } : {}),
-    // An isolated hand must run on this machine: the verify station reads
-    // its worktree from here, and a hand placed elsewhere by device fallback
-    // would leave verify checking nothing.
-    ...(worktreeName ? { isolated: true, worktree_name: worktreeName, device: deviceId() } : {}),
+    // Every hand runs on the machine running the run: the branch, its worktree
+    // and the proof directory live here. An isolated hand placed elsewhere left
+    // verify checking nothing; a shared hand placed by its path alone landed on
+    // another host with the same checkout path and could not read the run's
+    // branch (review on union-line-3 for a run on union-line-1, 2026-10-23).
+    device: deviceId(),
+    ...(worktreeName ? { isolated: true, worktree_name: worktreeName } : {}),
     // The review station is the task's reviewer, not the running role's hand
     // (the-line.md L3): no spawner, so the server files it under no role, and
     // review_for_task so it counts against the role's caps and its approve is
@@ -577,6 +958,7 @@ async function executeFanout(
     let outcome: NodeOutcome;
     if (options.dryRun) outcome = "success";
     else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd);
+    else if (branch.type === "call") outcome = await executeCallNode(branch, graph, ctx, cwd, options);
     else if ((branch.type === "agent" || branch.type === "prompt") && branch.backend === "session") outcome = await executeSessionNode(branch, graph, ctx, cwd, options);
     else if ((branch.type === "agent" || branch.type === "prompt") && branch.backend && branch.backend !== "builtin") outcome = await executeCliAgent(branch, graph, ctx, cwd, options);
     else if (branch.type === "agent" || branch.type === "prompt") outcome = await executeAgent(branch, graph, ctx, cwd, options);
@@ -585,6 +967,10 @@ async function executeFanout(
     // overwrite each other's last_error.
     for (const [k, v] of Object.entries(ctx)) {
       if (k.startsWith(`${branch.id}.`)) state.context[k] = v;
+    }
+    // The branch's own report ends its node, which stops its hand (workflow_runs.stopStationHands).
+    if (options.runId) {
+      await reportProgress(options, { current_node_id: node.id, node_id: branch.id, node_status: outcome === "failure" ? "failed" : "completed", outcome, session_id: ctx[`${branch.id}.session_id`] });
     }
     state.visitCounts[branch.id] = (state.visitCounts[branch.id] || 0) + 1;
     state.completed.push(branch.id);
@@ -627,23 +1013,19 @@ async function executeHumanGate(
     console.log(`  ${c.bold}${choice.key}${c.reset} → ${choice.label.replace(/^\[.\]\s*/, "")}`);
   }
 
-  const answer = await promptUser("  Your choice: ");
-  const answerUpper = answer.trim().toUpperCase();
-
-  const match = choices.find(c => c.key.toUpperCase() === answerUpper);
-  if (match) {
-    context["human.gate.selected"] = match.key;
-    context["human.gate.label"] = match.label;
-    context["human.gate.target"] = match.target;
-    return match.key.toLowerCase();
+  // An answer that names no option is asked again: defaulting to the first
+  // option would take a typo for "ship".
+  for (;;) {
+    const answerUpper = (await promptUser("  Your choice: ")).trim().toUpperCase();
+    const match = choices.find(c => c.key.toUpperCase() === answerUpper);
+    if (match) {
+      context["human.gate.selected"] = match.key;
+      context["human.gate.label"] = match.label;
+      context["human.gate.target"] = match.target;
+      return match.key.toLowerCase();
+    }
+    console.log(`  ${c.yellow}pick one of ${choices.map(ch => ch.key).join(", ")}${c.reset}`);
   }
-
-  // Default to first choice
-  const first = choices[0];
-  context["human.gate.selected"] = first.key;
-  context["human.gate.label"] = first.label;
-  context["human.gate.target"] = first.target;
-  return first.key.toLowerCase();
 }
 
 // An edge out of a gate is an option (the-line.md L4): "[A] Approve :: what
@@ -657,19 +1039,26 @@ export function parseGateEdgeLabel(label: string): { key: string; label: string;
   return { key: extractKey(head), label: head, ...(description ? { description } : {}) };
 }
 
+export { gateDoc };
+
 // The gate's question and document (the-line.md L4): the node's prompt
 // (first line the question, the rest the context) and its doc attribute,
 // both expanded with the same $vars a node prompt reads.
 // A card attribute names the change card (LE11) the gate decides on; a card
 // that is missing or fails its contract leaves the gate asking without it.
 export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>) {
-  const card = node.card ? readCardFile(expandPromptVars(node.card, graph, context).trim()) : null;
+  const card = node.card ? readGateCard(expandPromptVars(node.card, graph, context).trim()) : null;
   return {
     prompt: node.prompt ? expandPromptVars(node.prompt, graph, context) : node.label,
-    ...(node.doc ? { doc_md: expandPromptVars(node.doc, graph, context) } : {}),
+    ...(node.doc ? { doc_md: gateDoc(expandPromptVars(node.doc, graph, context)) } : {}),
     ...(node.category ? { category: node.category } : {}),
     ...(graph.stack ? { stack: expandPromptVars(graph.stack, graph, context) } : {}),
     ...(card && "card" in card ? { card: card.card } : {}),
+    ...(card && "proposal" in card ? { proposal: card.proposal } : {}),
+    ...(card && "judge_fix" in card ? { judge_fix: card.judge_fix } : {}),
+    // The presenting station the gate names, and its session when it ran: such a gate asks only the card it posted.
+    ...(node.asker ? { asker: node.asker } : {}),
+    ...(node.asker && context[`${node.asker}.session_id`] ? { asker_session_id: context[`${node.asker}.session_id`] } : {}),
   };
 }
 
@@ -681,40 +1070,14 @@ export function runRegistrationIsFatal(opts: { detach?: boolean; taskId?: string
   return !!(opts.detach || opts.taskId || opts.planId);
 }
 
-// the-line.md L8 node fidelity: the one serializer for a workflow push. Every
-// node attribute the daemon needs to run the stored graph as a local run
-// would (definition, reviewer, timeout, temperature, and the gate's doc and
-// category) rides here, so a second push site cannot drop one.
+// A workflow push: the stored stations and routes (graphPayload.ts), with the
+// graph's own attributes.
 export function graphToPushPayload(graph: WorkflowGraph) {
-  const nodes = [...graph.nodes.values()].map((n) => ({
-    id: n.id, label: n.label, shape: n.shape, type: n.type,
-    ...(n.prompt ? { prompt: n.prompt } : {}),
-    ...(n.script ? { script: n.script } : {}),
-    ...(n.model ? { model: n.model } : {}),
-    ...(n.backend ? { backend: n.backend } : {}),
-    ...(n.agent ? { agent: n.agent } : {}),
-    ...(n.isolated !== undefined ? { isolated: n.isolated } : {}),
-    ...(n.reasoning_effort ? { reasoning_effort: n.reasoning_effort } : {}),
-    ...(n.max_visits !== undefined ? { max_visits: n.max_visits } : {}),
-    ...(n.max_retries !== undefined ? { max_retries: n.max_retries } : {}),
-    ...(n.retry_target ? { retry_target: n.retry_target } : {}),
-    ...(n.goal_gate !== undefined ? { goal_gate: n.goal_gate } : {}),
-    ...(n.definition ? { definition: n.definition } : {}),
-    ...(n.reviewer !== undefined ? { reviewer: n.reviewer } : {}),
-    ...(n.timeout !== undefined ? { timeout: n.timeout } : {}),
-    ...(n.temperature !== undefined ? { temperature: n.temperature } : {}),
-    ...(n.doc ? { doc: n.doc } : {}),
-    ...(n.category ? { category: n.category } : {}),
-    ...(n.card ? { card: n.card } : {}),
-  }));
-  const edges = graph.edges.map((e) => ({
-    from: e.from, to: e.to,
-    ...(e.label ? { label: e.label } : {}),
-    ...(e.condition ? { condition: e.condition } : {}),
-  }));
+  const nodes = graphNodesPayload(graph);
+  const edges = graphEdgesPayload(graph);
   // The graph attribute stack (the-line.md L4: one decision stack per run)
   // travels with the push so a daemon run keeps it.
-  return { nodes, edges, ...(graph.stack ? { stack: graph.stack } : {}) };
+  return { nodes, edges, ...(graph.stack ? { stack: graph.stack } : {}), ...(graph.serves?.length ? { serves: graph.serves } : {}) };
 }
 
 async function executeRemoteHumanGate(
@@ -741,42 +1104,70 @@ async function executeRemoteHumanGate(
 
   if (choices.length === 0) {
     const response = await ask([{ key: "ok", label: "Continue", target: "" }]);
+    if (response === PRESENT_AGAIN) return presentAgain(node, graph, context, options);
+    if (response && !resumed?.response) await continueFreshIfStale(graph, options, node);
     return response ? "success" : "failure";
   }
 
-  const response = await ask(choices);
+  let response = await ask(choices);
+  if (response === PRESENT_AGAIN) return presentAgain(node, graph, context, options);
   if (!response) return "failure";
+  if (!resumed?.response) await continueFreshIfStale(graph, options, node);
+  // A question the presenting station answered is spent once the gate asks again.
+  delete context["human.gate.question"];
+  delete context["human.gate.no_card"];
 
-  // The human's message is context for the next hand.
-  context["human.message"] = response;
+  for (;;) {
+    // The human's message is context for the next hand.
+    context["human.message"] = response;
 
-  // Match: exact key, OR message starts with "key:" / "key " / "[key]" prefix
-  const trimmed = response.trim();
-  const match = choices.find(ch => {
-    const k = ch.key.toUpperCase();
-    const r = trimmed.toUpperCase();
-    return r === k
-      || r.startsWith(k + ":")
-      || r.startsWith(k + " ")
-      || r.startsWith(`[${k}]`);
-  });
+    // Match: exact key, OR message starts with "key:" / "key " / "[key]" prefix
+    const trimmed = response.trim();
+    const match = choices.find(ch => {
+      const k = ch.key.toUpperCase();
+      const r = trimmed.toUpperCase();
+      return r === k
+        || r.startsWith(k + ":")
+        || r.startsWith(k + " ")
+        || r.startsWith(`[${k}]`);
+    });
 
-  if (match) {
-    // Strip the key prefix from the message so the agent gets clean instructions
-    const stripped = trimmed.replace(new RegExp(`^\\[?${match.key}\\]?[:\\s]*`, "i"), "").trim();
-    // A bare key ("A") is the choice, not a note: nothing to hand on.
-    if (stripped) context["human.message"] = stripped;
-    else delete context["human.message"];
-    context["human.gate.selected"] = match.key;
-    context["human.gate.label"] = match.label;
-    context["human.gate.target"] = match.target;
-    console.log(`  ${c.green}✓ received: ${match.label}${c.reset}`);
-    return match.key.toLowerCase();
+    if (match) {
+      // Strip the key prefix from the message so the agent gets clean instructions
+      const stripped = trimmed.replace(new RegExp(`^\\[?${match.key}\\]?[:\\s]*`, "i"), "").trim();
+      // A bare key ("A") is the choice, not a note: nothing to hand on.
+      if (stripped) context["human.message"] = stripped;
+      else delete context["human.message"];
+      context["human.gate.selected"] = match.key;
+      context["human.gate.label"] = match.label;
+      context["human.gate.target"] = match.target;
+      console.log(`  ${c.green}✓ received: ${match.label}${c.reset}`);
+      return match.key.toLowerCase();
+    }
+
+    // Free text names no option, so it never follows one ("can you explain
+    // plainly" once landed a change through Ship). A graph that routes free
+    // text says so with an unlabelled edge out of the gate.
+    if (outEdges.some(e => !e.label)) {
+      console.log(`  ${c.green}✓ received message (free-form)${c.reset}`);
+      return "success";
+    }
+    // Otherwise it is a question back: the station that presents the decision
+    // answers it and the gate asks again; a gate with no presenter asks again
+    // itself, the question on top of its document.
+    const answerer = node.asker || node.answerer;
+    const asker = answerer ? graph.nodes.get(answerer) : undefined;
+    if (asker) {
+      context["human.gate.question"] = trimmed;
+      context["human.gate.target"] = asker.id;
+      console.log(`  ${c.yellow}? question back to ${asker.label}${c.reset}`);
+      return "success";
+    }
+    console.log(`  ${c.yellow}? a question, not a choice: asking again${c.reset}`);
+    const doc = [`**You asked:** ${trimmed}`, payload.doc_md].filter(Boolean).join("\n\n");
+    response = await reportGate(options, node.id, { ...payload, doc_md: doc }, choices);
+    if (!response) return "failure";
   }
-
-  // Pure free-form — route via success path (unconditional edges)
-  console.log(`  ${c.green}✓ received message (free-form)${c.reset}`);
-  return "success";
 }
 
 // Extract key from label like "[A] Approve" → "A"
@@ -801,104 +1192,7 @@ async function waitForEnter(label: string): Promise<void> {
 
 // ─── Prompt building ──────────────────────────────────────
 
-// Expand $goal and context variables. Unfilled vars are removed (not left as $var).
-// `$scout.output` names a prior node's result (the runner stores every
-// node's output under `<id>.output`), so a chain of nodes can hand work on.
-// Shared by node prompts and gate prompts and documents (the-line.md L4).
-export function expandPromptVars(template: string, graph: WorkflowGraph, context: Record<string, string>): string {
-  const goal = graph.goal || "";
-  return template.replace(/\$(\w+(?:\.\w+)*)/g, (_, key) => {
-    if (key === "goal") return goal;
-    return contextVar(context, key) ?? "";
-  });
-}
-
-// One $name as both expanders read it. `$human_message` is the gate note,
-// empty when there is none, so a script can test it without tripping on an
-// unset `$human.message` (which the shell would read as `$human`).
-function contextVar(context: Record<string, string>, key: string): string | undefined {
-  if (key === "human_message") return context["human.message"] ?? "";
-  return lookupContextVar(context, key);
-}
-
-function buildNodePrompt(
-  node: WorkflowNode,
-  graph: WorkflowGraph,
-  context: Record<string, string>
-): string {
-  const goal = graph.goal || "";
-  const parts: string[] = [];
-
-  if (goal) {
-    parts.push(`# Goal\n${goal}\n`);
-  }
-
-  if (node.prompt) {
-    parts.push(`# Task: ${node.label}\n${expandPromptVars(node.prompt, graph, context)}`);
-  } else {
-    parts.push(`# Task: ${node.label}\n${goal ? `Complete this step of the goal: ${goal}` : node.label}`);
-  }
-
-  // Surface human message prominently if present
-  if (context["human.message"]) {
-    parts.push(`\n# Human Instructions\n${context["human.message"]}`);
-  }
-
-  // A hand receives only what its prompt names (the-line.md L3: the reviewer
-  // sees the branch, the title and the criteria, nothing else). Builtin and
-  // cli agents keep the context and last error appendix.
-  if (node.backend === "session") return parts.join("\n");
-
-  // Add relevant context
-  const contextEntries = Object.entries(context)
-    .filter(([k, _v]) => !k.endsWith(".output") && !k.endsWith(".json") && !["outcome", "last_error", "human.message"].includes(k))
-    .slice(0, 10);
-  if (contextEntries.length > 0) {
-    parts.push(`\n# Context\n${contextEntries.map(([k, v]) => `- ${k}: ${v}`).join("\n")}`);
-  }
-
-  // Add last error if present
-  if (context["last_error"]) {
-    parts.push(`\n# Last Error\n\`\`\`\n${context["last_error"]}\n\`\`\``);
-  }
-
-  return parts.join("\n");
-}
-
-function resolveModel(node: WorkflowNode, graph: WorkflowGraph): string | undefined {
-  // Node-level model takes priority
-  if (node.model) return node.model;
-
-  // Parse model_stylesheet
-  if (graph.model_stylesheet) {
-    const rules = parseStylesheet(graph.model_stylesheet);
-    // ID selector
-    const byId = rules.find(r => r.selector === `#${node.id}`);
-    if (byId?.model) return byId.model;
-    // Universal
-    const universal = rules.find(r => r.selector === "*");
-    if (universal?.model) return universal.model;
-  }
-
-  return undefined;
-}
-
-function parseStylesheet(css: string): Array<{ selector: string; model?: string; reasoning_effort?: string }> {
-  const rules: Array<{ selector: string; model?: string; reasoning_effort?: string }> = [];
-  const ruleRe = /([^{]+)\{([^}]+)\}/g;
-  let m: RegExpExecArray | null;
-  while ((m = ruleRe.exec(css)) !== null) {
-    const selector = m[1].trim();
-    const body = m[2];
-    const props: Record<string, string> = {};
-    for (const prop of body.split(";")) {
-      const [k, v] = prop.split(":").map(s => s.trim());
-      if (k && v) props[k] = v;
-    }
-    rules.push({ selector, model: props.model, reasoning_effort: props.reasoning_effort });
-  }
-  return rules;
-}
+export { answersGate, buildNodePrompt, expandAgentPrompt, expandPromptVars, PRESENTER_BASE, presentsDecision, stationBrief } from "./nodePrompt";
 
 // ─── Main runner ──────────────────────────────────────────
 
@@ -919,10 +1213,63 @@ export interface RunOptions {
   runSession?: string;
   /** Settle poll for session nodes (tests shorten it). */
   pollIntervalMs?: number;
+  /** How often a run waiting for a place at a capped station asks again (waitForStationPlace; tests shorten it). */
+  stationPollMs?: number;
+  /** How long a resumed run waits for the hand it left to be revived (REVIVE_GRACE_MS; tests shorten it). */
+  reviveGraceMs?: number;
+  /** How long a presenter sent back its brief has to come back (PRESENTER_GRACE_MS; tests shorten it). */
+  presenterGraceMs?: number;
+  /** How long a hand asked for its missing handoff has before a finished reading counts (HANDOFF_ASK_GRACE_MS; tests shorten it). */
+  handoffAskGraceMs?: number;
   /** Continue this run row from where it stands instead of from start (runResume.ts). */
   resume?: ResumeRow;
   /** Set by runWorkflow on a resume: the gate and the hand the node it resumes at left open, each taken once. */
   resumed?: Pick<ResumePoint, "node_id" | "gate" | "hand">;
+  /**
+   * How this run continues in a fresh runner (the daemon's runner passes one
+   * that hands off and exits; runResume.ts handOffRun). Given, a gate answered
+   * after the graph's files or the runner's code changed on disk continues there.
+   */
+  continueFresh?: () => Promise<void>;
+  /** Set by runWorkflow when continueFresh is given: what this runner loaded (runResume.ts runnerStamp). */
+  loadedStamp?: string;
+  /** The flow versions the run was pinned to when this runner loaded its graph (flowVersionsKey). */
+  loadedFlowVersions?: string;
+  /** The flow versions the run is pinned to now, or null when that cannot be read. */
+  pinnedFlowVersions?: () => Promise<string | null>;
+  /** Set when the server answers a report with the run already over (workflow_runs runOver): why it ended. */
+  endedOnServer?: string;
+}
+
+/** The run ended on the server while this runner drove it (a person stopped it, its problem closed). */
+class RunEndedOnServer extends Error {}
+
+/**
+ * A runner whose run is over starts no station after it. A cancel cannot reach a runner waiting out a hold or inside
+ * a station's command, so the runner learns of it from the answer to its next report, and stops there: five runs
+ * stopped at their holds on Nov 5 went on through Build and Present when the holds ended (ct-73543's two cards).
+ */
+function stopIfEnded(options: RunOptions): void {
+  if (options.endedOnServer) throw new RunEndedOnServer(options.endedOnServer);
+}
+
+/** A run's pinned flow versions as one comparable string. */
+export function flowVersionsKey(versions: ReadonlyArray<{ version_id?: unknown }> | null | undefined): string {
+  return (versions ?? []).map((v) => String(v.version_id ?? "")).join(",");
+}
+
+/**
+ * Whether the run moved onto other flow versions since this runner loaded its
+ * graph (a re-pin). Such a run goes on in a fresh runner before its next
+ * station starts, so the station and the edges out of it are the version's: a
+ * re-pin restarted only runners paused at a gate, and ct-61929's runner,
+ * loaded before the Wallet station existed, sent a wallet verdict to a
+ * founder's card twice (Oct 30).
+ */
+async function pinnedElsewhere(options: RunOptions): Promise<boolean> {
+  if (!options.continueFresh || options.loadedFlowVersions === undefined || !options.pinnedFlowVersions) return false;
+  const now = await options.pinnedFlowVersions().catch(() => null);
+  return now !== null && now !== options.loadedFlowVersions;
 }
 
 // The task fields node prompts and edge conditions read. Loaded once at start
@@ -938,6 +1285,9 @@ async function loadTaskContext(options: RunOptions, context: Record<string, stri
   // and the `# Context` list, so it is escaped and capped as it enters
   // the context rather than at each of those sites (ct-49593).
   context["task_title"] = inlineForeignText(task.title);
+  // Where the task's prose came from, named in the fence an agent reads it in
+  // (nodePrompt agentFacingContext): "task ct-N · imported from github acme/api#412".
+  context["task_source"] = foreignTaskSource(task);
   context["task_description"] = capForeignText(
     escapeForeignControlChars(task.description || ""),
     FOREIGN_TEXT_CAPS.descriptionChars,
@@ -950,6 +1300,10 @@ async function loadTaskContext(options: RunOptions, context: Record<string, stri
   const verdict = task.review_verdict;
   context["review_verdict"] = verdict && (verdict.at ?? 0) >= freshSince ? String(verdict.verdict) : "none";
   context["review_note"] = verdict?.note ? capForeignText(escapeForeignControlChars(String(verdict.note)), FOREIGN_TEXT_CAPS.descriptionChars) : "";
+  const card = splitReviewNote(context["review_note"]);
+  // A note with no words still asks something the person can place.
+  context["review_question"] = inlineForeignText(card.question) || `Ship "${context["task_title"]}"?`;
+  context["review_body"] = card.body;
   // One routable value for "how did the hand end": the execution status of a
   // handoff that placed the task in review, else none. A `changes` verdict
   // moves the task to in_progress without clearing execution_status, so
@@ -957,6 +1311,13 @@ async function loadTaskContext(options: RunOptions, context: Record<string, stri
   // handoff (an inline question, a decision, a crash) reads as none and no
   // edge fires, which is the failure path.
   context["handoff"] = String(task.status || "") === "in_review" ? String(task.execution_status || "none") : "none";
+  // What a hand that stopped (blocked, needs_context) said in its handoff: the
+  // question the line's ask gate puts to a person, whole. Only a gate's doc
+  // names it (no hand's prompt does), and a person answers what they can read
+  // to its end, so it carries no prompt cap.
+  context["handoff_note"] = context["handoff"] === "blocked" || context["handoff"] === "needs_context"
+    ? escapeForeignControlChars(String(task.verification_evidence || ""))
+    : "";
   // The ground node's fields (the-line-end-to-end.md LE5), which the line's
   // edges route on; empty until ground writes them.
   context["goal_ref"] = inlineForeignText(task.goal_ref || "");
@@ -966,6 +1327,20 @@ async function loadTaskContext(options: RunOptions, context: Record<string, stri
   context["readiness_note"] = inlineForeignText(task.readiness_note || "");
   // Whose line this is, for the line's decision stack (LE11).
   context["assignee"] = inlineForeignText(task.assignee_info?.name || task.assignee || "unassigned");
+}
+
+// A cause remembers its attempts (line-workspace.md LW5): every run on a cause,
+// in any graph, is handed what the earlier runs on it found, proposed, built
+// and shipped, when each fix went live and whether the problem came back, as
+// $cause_history. The server assembles it from codecast's own records with the
+// derivation the web's timeline uses (lineWorkspace.causeHistoryForTask). Read
+// once at start: nothing a run does mid-way is an earlier attempt.
+export { NO_CAUSE_HISTORY };
+const UNREAD_CAUSE_HISTORY = "The problem's earlier attempts could not be read for this run; `cast task history <task>` shows them.";
+async function loadCauseHistory(options: RunOptions, context: Record<string, string>): Promise<void> {
+  if (!options.taskId) return;
+  const read = await cliCall(options, "/cli/work/history", { short_id: options.taskId, ...(options.runId ? { except_run_id: options.runId } : {}) });
+  context["cause_history"] = !read ? UNREAD_CAUSE_HISTORY : read.brief ? escapeForeignControlChars(String(read.brief)) : NO_CAUSE_HISTORY;
 }
 
 // The plan fields node prompts and edge conditions read, refreshed after
@@ -982,17 +1357,16 @@ async function loadPlanContext(options: RunOptions, context: Record<string, stri
   );
   context["plan_acceptance_criteria"] = (plan.acceptance_criteria || [])
     .map((c: string) => inlineForeignText(c)).join("\n- ");
-  const { open, ready } = planReadiness<any>(plan.tasks || []);
+  const { open, ready } = planReadiness<any>(plan.tasks || [], plan.graph_outside);
   context["ready_tasks"] = String(ready.length);
   context["open_tasks"] = String(open.length);
 }
 
-// The repo's default branch, for prompts that diff a hand's branch against it.
 // One name per graph and task: the isolated hand's worktree (and branch) and
 // the run's files directory share it, so a second visit or a later run on the
 // same task finds the same worktree and the same files.
 const slugPart = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-function runSlug(graph: WorkflowGraph, context: Record<string, string>, fallback: string): string {
+export function runSlug(graph: WorkflowGraph, context: Record<string, string>, fallback: string): string {
   return `${slugPart(graph.name)}-${slugPart(context["task_id"] || `${fallback}-${Date.now().toString(36)}`)}`;
 }
 
@@ -1004,13 +1378,10 @@ function runSlug(graph: WorkflowGraph, context: Record<string, string>, fallback
  * the temp directory.
  */
 export function lineRunDir(cwd: string, slug: string): string {
-  try {
-    const r = spawnSync("git", ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
-    if (r.status === 0 && r.stdout.trim()) return path.join(r.stdout.trim(), "cast-line", slug);
-  } catch {}
-  return path.join(os.tmpdir(), "cast-line", slug);
+  return path.join(lineRunsRoot(cwd), slug);
 }
 
+// The repo's default branch, for prompts that diff a hand's branch against it.
 function detectDefaultBranch(cwd: string): string {
   try {
     const r = spawnSync("git", ["-C", cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
@@ -1032,7 +1403,7 @@ async function queueTaskDecision(options: RunOptions, question: string, note: st
     ...(options.runId ? { workflow_run_id: options.runId, gate_node_id: nodeId } : {}),
     question,
     options: [
-      { label: "Reopen for another implement round", description: "Run the line on this task again. If the cause below is outside the change, fix that first or the run stops the same way." },
+      { label: "Reopen for another implement round", description: "Run the line on this task again. If the reason below is outside the change, fix that first or the run stops the same way." },
       { label: "Drop the task", description: "Close the task and land nothing." },
       { label: "I will take it myself", description: "The task stays parked in review for you to finish by hand." },
     ],
@@ -1042,83 +1413,15 @@ async function queueTaskDecision(options: RunOptions, question: string, note: st
   return !!result;
 }
 
-const quotedTitle = (context: Record<string, string>, fallback: string) => {
-  const title = context["task_title"] || fallback;
-  return `“${title.length > 80 ? `${title.slice(0, 79)}…` : title}”`;
-};
-
-// A fence that cannot be closed by the text inside it.
-function fenced(text: string): string {
-  const longest = Math.max(2, ...[...text.matchAll(/`{3,}/g)].map((m) => m[0].length));
-  const fence = "`".repeat(longest + 1);
-  return `${fence}text\n${text}\n${fence}`;
-}
-
-/**
- * What a station said when it failed, for a person reading cold. A check
- * that prints `{ steps: [{ name, ok, detail }], logs }` on stdout (line-
- * profile.md LP4) reads as a checklist; the rest of its output, the human
- * log, follows as a code block rather than prose a markdown renderer would
- * fold into one paragraph.
- */
-export function stationFailureMarkdown(context: Record<string, string>, nodeId: string): string {
-  let json: any;
-  try { json = JSON.parse(context[`${nodeId}.json`] ?? ""); } catch {}
-  const steps = Array.isArray(json?.steps) ? json.steps.filter((s: any) => typeof s?.name === "string") : [];
-  const list = steps.map((s: any) => `- ${s.ok === false ? "✗" : "✓"} ${s.name}${s.ok === false && s.detail ? `: ${String(s.detail)}` : ""}`).join("\n");
-  const raw = context[`${nodeId}.output`] || context["last_error"] || "";
-  const log = raw.split("\n").filter((line) => !(json && /^\s*\{/.test(line) && extractJsonOutput(line) !== undefined)).join("\n").trim();
-  const tail = log.length > 1500 ? `…${log.slice(-1500)}` : log;
-  return [list, tail ? fenced(tail) : "", typeof json?.logs === "string" ? `Logs: ${json.logs}` : ""].filter(Boolean).join("\n\n");
-}
-
-/**
- * The failure path's card (the-line.md L4): a question that says what
- * stopped the run and a body that shows why, from the station that sent the
- * last round back. The blocker comment is `summary` over the same body.
- */
-export function taskStopCard(graph: WorkflowGraph, state: WorkflowRunState, taskId: string): { question: string; summary: string; body: string } {
-  const reason = state.failReason || "workflow failed";
-  const label = (id: string) => graph.nodes.get(id)?.label || id;
-  const title = quotedTitle(state.context, taskId);
-  const handoff = state.context["handoff"];
-  const at = state.currentNodeId;
-  const hand = at ? state.context[`${at}.session_id`] : undefined;
-  const footer = hand ? `\n\n${label(at)} session: ${hand}` : "";
-  if (handoff === "blocked" || handoff === "needs_context") {
-    const said = state.context["last_error"] ? fenced(state.context["last_error"].slice(0, 1500)) : "";
-    return {
-      question: `${label(at)} handed off ${handoff} on ${title}. What next?`,
-      summary: `Workflow stopped: the hand handed off ${handoff} (${reason}); task left in review.`,
-      body: `${said}${footer}`.trim(),
-    };
-  }
-  if (/max_visits/.test(reason)) {
-    const visits = graph.nodes.get(at)?.max_visits ?? state.visitCounts[at] - 1;
-    // The station that routed into the visit over the limit: its edge label
-    // ("checks failed", "changes") is the reason the round was sent back.
-    const from = state.completed[state.completed.length - 1];
-    const sentBack = from && from !== at ? from : undefined;
-    const edgeLabel = sentBack ? graph.edges.find((e) => e.from === sentBack && e.to === at)?.label : undefined;
-    const says = sentBack ? `${label(sentBack)} still says “${edgeLabel || state.context[`${sentBack}.outcome`] || "failed"}”` : "";
-    const lead = `**${label(at)} ran ${visits} times, the most this line allows${sentBack ? `, and ${label(sentBack)} sent the last round back` : ""}.** The task is parked in review as blocked.`;
-    const detail = !sentBack ? ""
-      : state.context[`${sentBack}.outcome`] === "failure" ? `\n\n**${label(sentBack)}**\n\n${stationFailureMarkdown(state.context, sentBack)}`
-      : state.context["review_note"] ? `\n\n**${label(sentBack)}**\n\n${state.context["review_note"]}` : "";
-    return {
-      question: `${sentBack ? `${says} after` : "Stopped after"} ${visits} ${label(at)} rounds on ${title}. What next?`,
-      summary: `Workflow stopped: retries exhausted (${reason}); task left in review as blocked.`,
-      body: `${lead}${detail}${footer}`,
-    };
-  }
-  const detail = state.context["last_error"] ? fenced(state.context["last_error"].slice(0, 1500)) : "";
-  return { question: `${title} failed. What next?`, summary: `Workflow failed (${reason}); task returned to open.`, body: `${detail}${footer}`.trim() };
-}
-
 // A station's name, fixed at spawn: the node and what it works on, so the row
 // reads on its own ("Prove · ct-42") instead of a title drawn from the
-// unattended preamble every station's prompt opens with.
-export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: Record<string, string>): string {
+// unattended preamble every station's prompt opens with. A station that
+// presents a decision is the session a person talks the fix over with, and its
+// title shows wherever they meet it (the decision's chat, its page's bar): it
+// is named by the problem, in the problem's own words.
+export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: Record<string, string>, presents = false): string {
+  const problem = context["task_title"]?.replace(/\s+/g, " ").trim();
+  if (presents && problem) return problem.length > 100 ? `${problem.slice(0, 99).trimEnd()}…` : problem;
   const subject = context["task_id"] || context["plan_id"] || context["goal"];
   const label = node.label || node.id;
   return subject ? `${label} · ${subject.slice(0, 80)}` : label;
@@ -1140,16 +1443,31 @@ export function handTimeoutMs(node: Pick<WorkflowNode, "timeout">, options: Pick
 async function returnTaskOnFailure(options: RunOptions, graph: WorkflowGraph, state: WorkflowRunState): Promise<void> {
   // A dry run validates the graph; it never moves or comments on the real task.
   if (!options.taskId || options.dryRun) return;
-  const exhausted = /max_visits/.test(state.failReason || "");
+  // A problem closed while the run stood (merged into another, dropped by a person) ended the run, not the
+  // other way round: its close stands and its closing note says why (ct-59242 and ct-59534 came back open).
+  const closed = await cliCall(options, "/cli/work/get", { short_id: options.taskId });
+  if (closed && (closed.status === "done" || closed.status === "dropped")) return;
+  // A station's visit limit, or a way back to the session that ran out (subjectStation.sentBackWords).
+  const exhausted = /max_visits|sent the change back \d+ times/.test(state.failReason || "");
   const handoff = state.context["handoff"];
   const parkedByHand = handoff === "blocked" || handoff === "needs_context";
   // The card names the station's session, which a nested worker no longer
   // puts in the inbox on its own, so the blocker leads straight there.
   const card = taskStopCard(graph, state, options.taskId);
   let text = card.body ? `${card.summary}\n\n${card.body}` : card.summary;
-  // A hand that handed off blocked already parked the task in review.
-  if (!parkedByHand) {
-    await cliCall(options, "/cli/work/update", exhausted
+  // A run that stopped on purpose (a stop exit), or any failure on a graph
+  // that stops on failure, leaves its problem open with why and asks nobody.
+  if (state.context["stopped_at"] || graph.on_failure === "stop") {
+    const stopped = state.context["stopped_at"] ? `${state.failReason}${state.context[`${state.context["stopped_at"]}.from`] ?? ""}` : text;
+    await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "open" });
+    await cliCall(options, "/cli/work/comment", { short_id: options.taskId, comment_type: "blocker", text: stopped });
+    return;
+  }
+  // A hand that handed off blocked already parked the task in review; a
+  // station that only pinned blocked did not, so the run parks it.
+  const stationBlocked = !!state.context["station_blocked"];
+  if (!parkedByHand || stationBlocked) {
+    await cliCall(options, "/cli/work/update", exhausted || stationBlocked
       ? { short_id: options.taskId, status: "in_review", execution_status: "blocked" }
       : { short_id: options.taskId, status: "open" });
   }
@@ -1219,21 +1537,57 @@ export function stopRunOnSignals(options: RunOptions): void {
   process.once("SIGHUP", () => process.exit(129));
 }
 
-async function reportProgress(options: RunOptions, payload: Record<string, any>): Promise<void> {
-  if (!options.runId || !options.convexSiteUrl || !options.apiToken) return;
+async function reportProgress(options: RunOptions, payload: Record<string, any>): Promise<boolean> {
+  if (!options.runId || !options.convexSiteUrl || !options.apiToken) return false;
   // A run that reported its end has nothing left to stop: forget it, so a late
   // signal cannot mark a finished run failed.
   const node = payload.current_node_id ?? payload.node_id;
   if (payload.run_status === "completed" || payload.run_status === "failed") lastReportedNode.delete(options.runId);
   else if (typeof node === "string") lastReportedNode.set(options.runId, node);
-  const body = { api_token: options.apiToken, run_id: options.runId, ...payload };
+  const post = (p: Record<string, any>) => fetch(`${options.convexSiteUrl}/cli/workflow-runs/progress`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: options.apiToken, run_id: options.runId, ...p }),
+  });
   try {
-    await fetch(`${options.convexSiteUrl}/cli/workflow-runs/progress`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    let res = await post(payload);
+    // A backend older than this CLI rejects the whole report for an arg it does not know: the enrichments go, the report stays.
+    const extras = PROGRESS_ENRICHMENTS.filter((k) => k in payload);
+    if (!res.ok && extras.length) res = await post(Object.fromEntries(Object.entries(payload).filter(([k]) => !extras.includes(k))));
+    if (!res.ok) return false;
+    const answer = await res.json().catch(() => null) as { ended?: { status: string; reason: string | null } } | null;
+    if (answer?.ended) options.endedOnServer = answer.ended.reason || `the run is ${answer.ended.status}`;
+    return true;
   } catch {}
+  return false;
+}
+
+/**
+ * A report about the runner itself (its machine, its graph), naming no station: a run resumed at a capped station
+ * waits outside it for a place, and marking the station running here read every waiting run as inside it (Eval 6
+ * and Prove 8 under caps of 4, 07:08 UTC Nov 5). A backend that still needs a node gets the station as before.
+ */
+async function reportRunner(options: RunOptions, nodeId: string, payload: Record<string, any>): Promise<void> {
+  if (await reportProgress(options, { current_node_id: nodeId, ...payload })) return;
+  await reportProgress(options, { current_node_id: nodeId, node_id: nodeId, node_status: "running", ...payload });
+}
+const PROGRESS_ENRICHMENTS = ["visits", "waiting_on_session"];
+
+// A gate with a presenting station (`asker=`) decides on the card that station
+// posted and asks no question of its own. With no card of it standing, nobody
+// is asked, and the run goes back to the station to present one.
+const PRESENT_AGAIN = "\0present again";
+
+async function presentAgain(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, options: RunOptions): Promise<NodeOutcome> {
+  const asker = node.asker ? graph.nodes.get(node.asker) : undefined;
+  if (!asker) return "failure";
+  // A card taken back failed the run's row on the server; the run goes on, so it reads as running again.
+  if (options.runId && !options.dryRun) await reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "completed", outcome: "success", run_status: "running" });
+  context["human.gate.target"] = asker.id;
+  // Nobody answered, so this is no new attempt: the station's visits keep counting.
+  context["human.gate.no_card"] = node.label;
+  console.log(`  ${c.yellow}no card from ${asker.label} stands at ${node.label}: back to ${asker.label}${c.reset}`);
+  return "success";
 }
 
 async function reportGate(
@@ -1244,7 +1598,7 @@ async function reportGate(
 ): Promise<string | null> {
   if (!options.runId || !options.convexSiteUrl || !options.apiToken) return null;
   try {
-    await fetch(`${options.convexSiteUrl}/cli/workflow-runs/gate`, {
+    const resp = await fetch(`${options.convexSiteUrl}/cli/workflow-runs/gate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1255,29 +1609,82 @@ async function reportGate(
         choices,
       }),
     });
+    const asked = await resp.json().catch(() => null) as { error?: string; present_again?: boolean } | null;
+    if (asked?.present_again) return PRESENT_AGAIN;
+    // Nobody was asked: stop here so the failure path says why, rather than
+    // wait on an answer that cannot come.
+    if (asked?.error) {
+      console.log(`  ${c.red}gate not asked${c.reset}: ${asked.error}`);
+      return null;
+    }
   } catch {
     return null;
   }
   return pollGate(options);
 }
 
+/**
+ * A gate was answered: when the graph's files or the runner's code changed
+ * since this runner loaded them, the run continues in a fresh runner, which
+ * resumes at this gate with the answer the row holds and the stations as they
+ * are on disk now. Nothing is reported first, so the row still shows the answer.
+ */
+async function continueFreshIfStale(graph: WorkflowGraph, options: RunOptions, node: WorkflowNode): Promise<void> {
+  if (!options.continueFresh || options.loadedStamp === undefined) return;
+  if (runnerStamp(graph) === options.loadedStamp) return;
+  console.log(`${c.dim}  ${node.label} answered; the graph or the runner changed since this runner started: continuing in a fresh runner${c.reset}`);
+  await options.continueFresh();
+}
+
+// A hand's first minutes are when it fails to start or answers at once, so the
+// station reads its session every 10 s then; a hand that has worked longer is
+// read every 30 s. Each read is a backend call, and 200 line runs read every
+// 10 s for an hour were prod's largest single cost on 2026-11-10 (51k an hour).
+export const HAND_POLL_FAST_MS = 10_000;
+export const HAND_POLL_SLOW_MS = 30_000;
+export const HAND_POLL_FAST_WINDOW_MS = 3 * 60_000;
+export function handPollIntervalMs(workedMs: number, override?: number): number {
+  if (override !== undefined) return override;
+  return workedMs < HAND_POLL_FAST_WINDOW_MS ? HAND_POLL_FAST_MS : HAND_POLL_SLOW_MS;
+}
+
+// An answer that comes while the person is still at the card is picked up at
+// once; a gate that has waited longer is waiting on someone who walked away,
+// and a few seconds more cost nothing. Polling every 3s for days made paused
+// runs 7.9 backend calls a second (ct-56547).
+export const GATE_POLL_FAST_MS = 3000;
+export const GATE_POLL_SLOW_MS = 15_000;
+export const GATE_POLL_FAST_WINDOW_MS = 2 * 60_000;
+export function gatePollIntervalMs(waitedMs: number, override?: number): number {
+  if (override !== undefined) return override;
+  return waitedMs < GATE_POLL_FAST_WINDOW_MS ? GATE_POLL_FAST_MS : GATE_POLL_SLOW_MS;
+}
+
 /** Wait on the run's open gate: its answer, or null when the run stops waiting. */
+// A gate waits on a person for as long as they take: hours, or days. It ends
+// only with an answer or when the run leaves "paused" (withdrawn, cancelled);
+// a clock ending the wait would read as an answer nobody gave.
 async function pollGate(options: RunOptions): Promise<string | null> {
   if (!options.runId || !options.convexSiteUrl || !options.apiToken) return null;
-  for (let i = 0; i < 3600; i++) {
-    await new Promise(r => setTimeout(r, 3000));
+  const startedAt = Date.now();
+  for (;;) {
+    await new Promise(r => setTimeout(r, gatePollIntervalMs(Date.now() - startedAt, options.pollIntervalMs)));
     try {
       const resp = await fetch(`${options.convexSiteUrl}/cli/workflow-runs/poll-gate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ api_token: options.apiToken, run_id: options.runId }),
       });
-      const data = await resp.json() as { status?: string; gate_response?: string | null };
-      if (data.gate_response) return data.gate_response;
-      if (data.status !== "paused") return null;
+      const data = await resp.json() as { status?: string; gate_response?: string | null; gate_answer?: string | null; present_again?: boolean };
+      if (data.gate_response) return withOptionWords(data.gate_response, data.gate_answer);
+      // The card was taken back (`cast decide cancel`): it asks for a card in its place, not an end.
+      if (resp.ok && data.present_again) return PRESENT_AGAIN;
+      // Only the run's own status ends the wait. A refused or errored poll (an
+      // overloaded backend answers {error} with no status) is a poll that
+      // failed, not a gate taken back: four trial gates died that way at once.
+      if (resp.ok && typeof data.status === "string" && data.status !== "paused") return null;
     } catch {}
   }
-  return null;
 }
 
 // Library entry point — returns the run's terminal outcome instead of touching
@@ -1295,8 +1702,9 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     graph.goal = options.goalOverride;
   }
 
-  const { validateWorkflow, graphHash, graphNodeHashes } = await import("./parser");
-  const errors = validateWorkflow(graph);
+  const { validateWorkflow, graphHash, graphNodeHashes, emptySlots } = await import("./parser");
+  // A backbone runs only once a flow that extends it fills every slot.
+  const errors = [...validateWorkflow(graph), ...emptySlots(graph).map((s) => `Slot '${s.id}' is empty (${s.does}): fill it from a flow that extends this one, with subgraph ${s.id} { ... }`)];
   if (errors.length > 0) {
     console.error(`${c.red}Workflow validation errors:${c.reset}`);
     errors.forEach(e => console.error(`  ${c.red}✗ ${e}${c.reset}`));
@@ -1320,6 +1728,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   if (options.taskId) {
     initialContext["task_id"] = options.taskId;
     await loadTaskContext(options, initialContext);
+    await loadCauseHistory(options, initialContext);
   }
 
   if (options.planId) {
@@ -1327,19 +1736,20 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     await loadPlanContext(options, initialContext);
   }
 
-  // The repo's line profile, read once per run (line-profile.md LP2): every
-  // value as $line.<key>, so a shipped template names no path or tool of its
-  // own. A malformed profile stops the run rather than standing in defaults.
-  try {
-    Object.assign(initialContext, lineProfileVars(loadLineProfile(cwd).profile));
-  } catch (err) {
-    if (!(err instanceof LineProfileError)) throw err;
-    console.error(`${c.red}✗ ${err.message}${c.reset}`);
+  // A malformed profile stops the run before anything runs, rather than standing in defaults.
+  const profile = currentLineVars(cwd);
+  if (profile instanceof LineProfileError) {
+    console.error(`${c.red}✗ ${profile.message}${c.reset}`);
+    if (options.runId && !options.dryRun) await reportProgress(options, profileFailure(startNode.id, profile.message));
     return "invalid";
   }
+  Object.assign(initialContext, profile);
   // A run with no cause keeps its files under its own id, so a resume finds them.
   initialContext["run_dir"] = lineRunDir(cwd, !initialContext["task_id"] && options.runId ? `${slugPart(graph.name)}-${slugPart(options.runId)}` : runSlug(graph, initialContext, "run"));
+  // A change frozen for this run (flows.md FL4) waits on its own branch and worktree: every station starts on it.
+  Object.assign(initialContext, frozenChangeContext(initialContext["run_dir"]));
 
+  if (options.continueFresh) options.loadedStamp = runnerStamp(graph);
   // One runner per run: a resume never drives a run a live runner holds.
   const claim = options.runId && !options.dryRun ? claimRun(options.runId) : null;
   if (claim && "heldBy" in claim) {
@@ -1348,6 +1758,11 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   }
   try {
     return await driveRun(graph, options, cwd, initialContext, startNode, hash, graphNodeHashes);
+  } catch (err) {
+    if (!(err instanceof RunEndedOnServer)) throw err;
+    // Nothing is reported: the run's end, its task and its hands were settled when it ended.
+    console.log(`\n${c.bold}${c.yellow}━━━ The run is over on the server (${err.message}): this runner stops ━━━${c.reset}`);
+    return "failed";
   } finally {
     claim?.release();
   }
@@ -1375,6 +1790,9 @@ async function driveRun(
   if (graph.goal) {
     graph.goal = graph.goal.replace(/\$(\w+)/g, (_, key) => initialContext[key] || `$${key}`);
   }
+  // A script reads the goal as $goal too, the way a prompt does: a graph run
+  // with no task names its subject there (judge-review.cast, LL11).
+  if (graph.goal && initialContext["goal"] === undefined) initialContext["goal"] = graph.goal;
 
   const state: WorkflowRunState = {
     currentNodeId: startNode.id,
@@ -1392,6 +1810,7 @@ async function driveRun(
     // task, the profile, the run's ids) is read again.
     state.context = { ...resumeAt.context, ...initialContext };
     state.visitCounts = resumeAt.visit_counts;
+    for (const [id, n] of Object.entries(state.visitCounts)) state.context[`${id}.visits`] = String(n);
     state.completed = resumeAt.completed;
     state.currentNodeId = resumeAt.node_id;
     Object.assign(nodeOutcomes, resumeAt.node_outcomes);
@@ -1402,20 +1821,17 @@ async function driveRun(
       state.context["worktree"] = runSlug(graph, state.context, isolated.id);
       state.context["branch"] = `codecast/${state.context["worktree"]}`;
     }
+    // A run waiting days at its card can lose its checkout; its branch puts it back.
+    if (!options.dryRun) await restoreRunTree(cwd, state.context);
     options.resumed = { node_id: resumeAt.node_id, gate: resumeAt.gate, hand: resumeAt.hand };
     console.log(`${c.dim}Resuming at ${graph.nodes.get(resumeAt.node_id)?.label ?? resumeAt.node_id} (state from the ${resumeAt.from})${c.reset}`);
+    // The line's own text is read as it is now (line-versions.md LV4).
+    for (const node of refreshedOnResume(graph, state.completed)) await executeCommand(node, state.context, cwd);
   }
 
   // The machine driving the run, so the run is resumed there when its runner
   // dies (runResume.ts). Its own report: a server without the arg rejects it.
-  if (options.runId && !options.dryRun) {
-    await reportProgress(options, {
-      current_node_id: state.currentNodeId,
-      node_id: state.currentNodeId,
-      node_status: "running",
-      runner_device: deviceId(),
-    });
-  }
+  if (options.runId && !options.dryRun) await reportRunner(options, state.currentNodeId, { runner_device: deviceId() });
 
   if (options.runId && !resumeAt) {
     await reportProgress(options, {
@@ -1424,22 +1840,26 @@ async function driveRun(
       node_status: "running",
       run_status: "running",
     });
-    // Its own report: a server without the graph_hash arg rejects the whole
-    // call, and the run must still read as running there.
-    await reportProgress(options, {
-      current_node_id: startNode.id,
-      node_id: startNode.id,
-      node_status: "running",
-      graph_hash: hash,
-      graph_nodes: graphNodeHashes(graph),
-    });
   }
+  // The graph the run is on now, on a start or a resume that read a newer
+  // one (line-versions.md LV4). Its own report: a server without the
+  // graph_hash arg rejects the whole call, and the run must still read as
+  // running there.
+  if (options.runId && !options.dryRun) await reportRunner(options, state.currentNodeId, { graph_hash: hash, graph_nodes: graphNodeHashes(graph) });
 
   console.log(`\n${c.bold}${c.cyan}━━━ Workflow: ${graph.name} ━━━${c.reset}`);
   if (graph.goal) console.log(`${c.dim}Goal: ${graph.goal}${c.reset}`);
   console.log();
 
   let current: WorkflowNode = await runNodeLoop(resumeAt ? graph.nodes.get(resumeAt.node_id)! : startNode, graph, state, nodeOutcomes, cwd, options);
+
+  // An exit with `stop` ends the run on purpose, in the graph's own words for why.
+  if (current.type === "exit" && current.stop && !state.failed) {
+    const why = expandPromptVars(current.stop, graph, state.context).trim().replace(/\s+/g, " ");
+    state.failed = true;
+    state.failReason = `Stopped: ${(why || current.label).slice(0, 1000)}`;
+    state.context["stopped_at"] = current.id;
+  }
 
   // ── Stage 6: Exit node reached — check goal gates ─────────────────────────
   // Fabro: goal gates are only checked when reaching the exit node.
@@ -1493,6 +1913,8 @@ async function driveRun(
       });
     }
 
+    await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: false, lastOutput: lastSaid(state) }));
+
     // Log completion to bound plan
     if (options.planId && options.apiToken && options.convexSiteUrl && !options.dryRun) {
       try {
@@ -1508,8 +1930,15 @@ async function driveRun(
       } catch {}
     }
   } else if (state.failed) {
+    const diskFull = options.dryRun ? null : diskFullFailReason(options.cwd ?? process.cwd(), `${state.failReason ?? ""}\n${state.context["last_error"] ?? ""}`.trim(), options.taskId);
+    if (diskFull) state.failReason = diskFull.slice(0, 2000); // the run failed, not the problem: the host holds line runs, the problem requeues
     console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
-    await returnTaskOnFailure(options, graph, state);
+    // The run is reported over first: that stops its hands. The blocker
+    // comment that follows goes to the session that owns the task, which is
+    // often the hand itself, and a hand still reading as working is woken by
+    // it: ct-59998's dead Implement hand was resumed by its own run's failure
+    // comment three seconds after the run ended, and kept working the task
+    // with no run waiting on it (2026-10-16).
     if (options.runId) {
       await reportProgress(options, {
         current_node_id: current.id,
@@ -1519,9 +1948,28 @@ async function driveRun(
         fail_reason: state.failReason,
       });
     }
+    const requeued = diskFull && options.taskId ? await requeueAfterDiskFull((route, body) => cliCall(options, route, body), options.taskId) : null;
+    if (requeued) console.log(requeued.text);
+    if (!requeued?.queued) await returnTaskOnFailure(options, graph, state); // a refused requeue (a trial's) fails as usual
+    // A run that got past a ship step's success landed its change, whatever stopped it after.
+    const landed = state.completed.some((id) => /(^|__)(shipped|landed)$/.test(id));
+    await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: true, failReason: state.failReason, landed }));
     return "failed";
   }
   return "completed";
+}
+
+// The repo's line profile (line-profile.md LP2), every value as $line.<key>, so a
+// shipped template names no path or tool of its own. Read at a run's start and
+// again before every station: a run started (or checkpointed) before the profile
+// changed would otherwise run the old commands through every wait and resume.
+function currentLineVars(cwd: string): Record<string, string> | LineProfileError {
+  try {
+    return lineProfileVars(loadLineProfile(cwd).profile);
+  } catch (err) {
+    if (err instanceof LineProfileError) return err;
+    throw err;
+  }
 }
 
 // Core node-execution loop, shared by the initial pass and goal-gate retries.
@@ -1538,23 +1986,57 @@ async function runNodeLoop(
   let current: WorkflowNode = startNode;
 
   while (current.type !== "exit") {
+    if (await pinnedElsewhere(options)) {
+      console.log(`${c.dim}  The run moved onto a newer flow version: ${current.label} starts in a fresh runner on it${c.reset}`);
+      await options.continueFresh!();
+    }
     // ── Stage 1: Increment visit count, enforce max_visits ───────────────────
     // Fabro: checked first, before anything else. Exceeding limit = hard abort.
-    // Visit counts are NEVER reset (even after retry_target jumps).
+    // Within an attempt visit counts are never reset (even after retry_target jumps); a gate's answer starts the next.
     state.currentNodeId = current.id;
-    const visits = (state.visitCounts[current.id] || 0) + 1;
+    // A round sent back only because main moved under the change (a clash) is not the station failing: up to its
+    // max_free_visits such rounds spend none of its visits (a person's answer starts the count again, clearVisits). Ten runs ran out of Build visits on clashes alone after the
+    // Nov 5 lift, each Eval finding that main had moved again while the run rebuilt and waited.
+    const freeUsed = Number(state.context[`${current.id}.free.visits`] || 0);
+    const free = state.context[`${current.id}.free_visit`] === "1" && (state.visitCounts[current.id] || 0) > 0 && freeUsed < (current.max_free_visits ?? 0);
+    delete state.context[`${current.id}.free_visit`];
+    if (free) state.context[`${current.id}.free.visits`] = String(freeUsed + 1);
+    const visits = (state.visitCounts[current.id] || 0) + (free ? 0 : 1);
     state.visitCounts[current.id] = visits;
+    // Edges may route on how often a station has run (`build.visits >= 3`).
+    state.context[`${current.id}.visits`] = String(visits);
+    // A station's own id as the graph runs it (a segment's station is `<node>__<id>`), for a script that reports on itself.
+    state.context["station_id"] = current.id;
 
     if (current.max_visits !== undefined && visits > current.max_visits) {
       console.log(`\n${c.red}${c.bold}  ✗ max_visits=${current.max_visits} exceeded on '${current.label}' — aborting${c.reset}`);
       state.failed = true;
-      state.failReason = `max_visits=${current.max_visits} exceeded on ${current.id}`;
+      // A way back to the session that ran out says so in words, like every other stop of the run.
+      state.failReason = current.backend === "subject"
+        ? `Stopped: ${sentBackWords(state.context["stop_stage"] || current.label, current.max_visits)}`
+        : `max_visits=${current.max_visits} exceeded on ${current.id}`;
       break;
     }
+
+    // A run that waited days at a card runs the commands the profile names now.
+    const profile = currentLineVars(cwd);
+    if (profile instanceof LineProfileError) {
+      state.failed = true;
+      state.failReason = profileFailure(current.id, profile.message).fail_reason;
+      break;
+    }
+    Object.assign(state.context, profile);
+    // A runner alive through days at a hold loses its checkout as a parked one does (ct-68695 at the Eval wallet).
+    if (!options.dryRun && state.completed.length > 0) await restoreRunTree(cwd, state.context);
 
     // ── Stage 2: Print node header ────────────────────────────────────────────
     const icon = nodeIcon(current);
     console.log(`${c.bold}${icon} ${current.label}${c.reset}${visits > 1 ? c.dim + ` (visit ${visits})` + c.reset : ""}`);
+
+    // A station that takes only so many of the team's runs at once (the line profile's caps.stations): the run
+    // waits outside it for a place, and the station's clock starts once the place is the run's.
+    const stationCap = Number(state.context[`line.caps.stations.${current.id}`] || 0);
+    if (stationCap > 0 && options.runId && !options.dryRun) await waitForStationPlace(current, stationCap, options);
 
     // ── Stage 3: Execute node ─────────────────────────────────────────────────
     if (options.runId) {
@@ -1562,8 +2044,10 @@ async function runNodeLoop(
         current_node_id: current.id,
         node_id: current.id,
         node_status: "running",
+        visits,
       });
     }
+    stopIfEnded(options);
     const checkpoint = (next?: string) => {
       if (options.runId && !options.dryRun) writeCheckpoint(state.context["run_dir"], options.runId, state, nodeOutcomes, next);
     };
@@ -1575,10 +2059,15 @@ async function runNodeLoop(
     if (options.dryRun) {
       console.log(`${c.dim}  [dry-run]${c.reset}`);
       outcome = "success";
+      // A dry run walks a gate through its first option, as if it were chosen.
+      const option = current.type === "human" ? graph.edges.find(e => e.from === current.id && e.label) : undefined;
+      if (option) state.context["human.gate.target"] = option.to;
     } else if (current.type === "start") {
       outcome = "success";
     } else if (current.type === "command") {
       outcome = await executeCommand(current, state.context, cwd);
+    } else if (current.type === "call") {
+      outcome = await executeCallNode(current, graph, state.context, cwd, options);
     } else if (current.type === "human" && options.runId) {
       outcome = await executeRemoteHumanGate(current, graph, state.context, options);
     } else if (current.type === "human") {
@@ -1587,6 +2076,8 @@ async function runNodeLoop(
       outcome = await executeFanout(current, graph, state, cwd, options);
     } else if (current.type === "parallel_fanin") {
       outcome = "success";
+    } else if ((current.type === "agent" || current.type === "prompt") && current.backend === "subject") {
+      outcome = await executeSubjectNode(current, graph, state.context, cwd, options);
     } else if ((current.type === "agent" || current.type === "prompt") && current.backend === "session") {
       outcome = await executeSessionNode(current, graph, state.context, cwd, options, () => checkpoint());
     } else if (current.type === "agent" || current.type === "prompt") {
@@ -1599,6 +2090,12 @@ async function runNodeLoop(
     } else {
       outcome = "success";
     }
+    // A person's answer is the next attempt: a Revise sent back to a build that spent its visits is carried out (Oct 26).
+    if (current.type === "human" && outcome !== "failure" && !options.dryRun && !state.context["human.gate.no_card"]) clearVisits(state.visitCounts, state.context);
+    // "No decision of yours stands" is news for the one visit the gate sent back. Left set, every later visit (a card
+    // the card station refused) read it too, and Present withdrew its open card and posted it again unchanged,
+    // dropping the ladder's recommendations each time (sd-2513, sd-2527, sd-2528 on ct-62633, Nov 5).
+    if (current.type !== "human" && presentsDecision(current, graph)) delete state.context["human.gate.no_card"];
 
     if (options.runId) {
       await reportProgress(options, {
@@ -1610,10 +2107,16 @@ async function runNodeLoop(
         outcome,
         session_id: state.context[`${current.id}.session_id`],
         // A station script's own words (the dissolve station's JSON, a
-        // check's failure) are what its node shows; a session node has its session.
-        result_preview: current.type === "command" ? resultPreview(state.context[`${current.id}.output`] ?? "") : undefined,
+        // check's failure) are what its node shows; an agent's is what it
+        // concluded, so the run reads it without loading the transcript.
+        result_preview: current.type === "command" || current.type === "call" ? resultPreview(state.context[`${current.id}.output`] ?? "")
+          : current.type === "agent" || current.type === "prompt" ? agentResultPreview(state.context[`${current.id}.output`] ?? "")
+          : undefined,
+        // A call node's cost, as the server charged it (learning-loop.md LL10).
+        cost_usd: current.type === "call" ? Number(state.context[`${current.id}.cost_usd`] ?? 0) : undefined,
       });
     }
+    stopIfEnded(options);
 
     // A hand may have moved the task (handoff, verdict); the next edge routes
     // on the task as it is now. Verdicts older than this node read as none.
@@ -1628,6 +2131,13 @@ async function runNodeLoop(
     // builder), not for every hand after it: the reviewer sees only what its
     // prompt names (the-line.md L3). A command node in between keeps it.
     if (current.type === "agent" || current.type === "prompt") delete state.context["human.message"];
+
+    // A segment's stop the flow routes on (a failed check, a finding, a Revise, a conflict): its words are what
+    // the station it routes to reads as $stop_reason, cut to what a session needs.
+    if (current.segment_exit === "stop" && current.stop) {
+      state.context["stop_reason"] = failureExcerpt(expandPromptVars(current.stop, graph, state.context));
+      state.context["stop_stage"] = current.segment_label ?? current.label;
+    }
 
     // ── Stage 4: Record outcome in context and per-node map ───────────────────
     state.context["outcome"] = outcome;
@@ -1662,11 +2172,51 @@ async function runNodeLoop(
     // Priority: human gate target > conditional edges > unconditional edges >
     //           retry_target on failure with no edge > abort
     // A fanout's branches already ran inside executeFanout; the run continues
-    // at the fanin they converge on, never down one branch again.
-    const next = current.type === "parallel_fanout" && outcome === "success"
-      ? findFanin(current, graph)
-      : resolveHumanGateTarget(current, graph, state.context)
-        || resolveNextNode(graph, current, state.context);
+    // at the fanin they converge on, never down one branch again, and a
+    // fanout with a failed branch does not continue at all.
+    // A station that pinned blocked waits on a person: it routes only on an
+    // edge for a blocked handoff (the line's ask gate), never on its json, and
+    // without one the run stops here.
+    const stationBlocked = outcome === "failure" && state.context["station_blocked"] === current.id;
+    if (stationBlocked) {
+      state.context["handoff"] = "blocked";
+      state.context["handoff_note"] = state.context["blocked_note"] || state.context["last_error"] || "";
+    }
+    // A gate that came back without an answer (its question taken back,
+    // dismissed, or timed out) follows none of its choices: its labelled edges
+    // are the person's answers, and nobody gave one. Only an edge conditioned
+    // on that outcome routes it; without one the run stops here.
+    const unanswered = current.type === "human" && outcome === "failure";
+    // A station whose hand left no answer (it never ran a turn, or outlived
+    // its timeout and was killed) has nothing for the next node to read: only
+    // an edge that asks about the outcome routes it, never a plain one.
+    const stationDead = outcome === "failure" && state.context["station_dead"] === current.id;
+    delete state.context["station_dead"];
+    const next = stationBlocked
+      ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\bhandoff\b/.test(e.condition ?? "")) }, current, state.context)
+      : stationDead
+        ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\boutcome\b/.test(e.condition ?? "")) }, current, state.context)
+      : unanswered
+        ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || (!e.label && !!e.condition)) }, current, state.context)
+      : current.type === "parallel_fanout"
+        // A fanout's own edges are its branches, which all ran: a failed one
+        // follows none of them (that reran the first branch alone and went on
+        // to the fanin). It takes its retry_target, or the run stops here.
+        ? (outcome === "success" ? findFanin(current, graph) : null)
+        : resolveHumanGateTarget(current, graph, state.context)
+          || resolveNextNode(graph, current, state.context);
+    if (stationBlocked && next) delete state.context["station_blocked"];
+    // A gate's answer reaches the session the change came from, unless where it routes says it anyway: a station the
+    // session does (a Revise note) or a stop (the run's end message). A question back to the reviewer is no answer.
+    if (current.type === "human" && outcome !== "failure" && next && next.backend !== "subject" && next.segment_exit !== "stop" && !state.context["human.gate.question"] && state.context["human.gate.label"]) {
+      await tellSubject(options, state.context, gateAnswerMessage(current.segment_label ?? current.label, state.context["human.gate.label"], state.context["human.message"]));
+    }
+    if (stationBlocked && !next) {
+      console.log(`\n${c.yellow}  '${current.label}' is waiting on a person; the run stops here${c.reset}`);
+      state.failed = true;
+      state.failReason = `${current.id} is waiting on a person`;
+      break;
+    }
 
     if (!next) {
       if (outcome === "failure") {
@@ -1682,9 +2232,21 @@ async function runNodeLoop(
       // A dead end short of exit is not a completion: nothing routed, so the
       // run (and any bound task) must not read as delivered.
       state.failed = true;
-      state.failReason = `no outgoing edge from ${current.id} (outcome ${outcome}${state.context["review_verdict"] ? `, review_verdict ${state.context["review_verdict"]}` : ""})`;
+      // A dead station says why it left no answer; a routable outcome no edge
+      // takes names the fields its edges route on.
+      const saysWhy = stationDead || (current.type === "parallel_fanout" && outcome === "failure");
+      state.failReason = saysWhy && state.context["last_error"] ? state.context["last_error"] : deadEndReason(graph, current.id, outcome, state.context);
       break;
     }
+
+    // A station the run comes back to is told what sent it back: the station
+    // that routed here and what it said. A hand reads only what its prompt
+    // names, so without this a builder sent back by a failed check could not
+    // tell that round from its first and checked its own work again (ct-58757).
+    // A station that parks (a hold in front of another) is told what sent the run there even on its first visit, so it
+    // can pass it on: ct-61678's Revise note was lost at a hold the run had not passed before (Oct 30).
+    if (state.completed.includes(next.id) || next.parks) state.context["sent_back"] = `${current.label}: ${state.context[`${current.id}.output`] ?? ""}`.trim();
+    else delete state.context["sent_back"];
 
     checkpoint(next.id);
     console.log();
@@ -1718,6 +2280,7 @@ function nodeIcon(node: WorkflowNode): string {
     case "command": return "▶";
     case "agent": return "◉";
     case "prompt": return "○";
+    case "call": return "◇";
     default: return "·";
   }
 }

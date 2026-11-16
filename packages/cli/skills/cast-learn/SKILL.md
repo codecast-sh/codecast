@@ -32,8 +32,17 @@ was true only for this task.
 - A gotcha that needs more than two sentences: `cast doc create "<title>"
   -t insight -c -` with the body on stdin, and one line in the instructions
   pointing at it.
+- A rule the whole team should follow in every repository, not just this
+  one, goes into the team's kit as an instructions item: write it under its
+  own heading in a file and publish it with `cast cap publish --instructions
+  <file>#<heading>`. Every member's agents then read it. Extend an existing
+  team item when one covers the topic; the installed ones are the team's
+  sections in your own CLAUDE.md.
 - A rule about how the human wants to be worked with, not about the code,
   goes into memory rather than the shared instructions.
+- When the human's personal instruction file holds rules that belong to this
+  repository or to the team, offer `cast cap promote`, which proposes each
+  move and writes only what they accept.
 
 With `scan`, list the candidates and the route for each without writing.
 With `write` or no argument, write them and report what went where.

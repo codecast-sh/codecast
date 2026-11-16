@@ -1,11 +1,15 @@
 
 ## Tasks & Plans
 
-A human tracks your work through a dashboard: report status through tasks and plans, not chat. Your harness's todo list is for steps inside this session; anything that should outlive the session or show on the board is a task.
+A human tracks your work through a dashboard: report status through tasks and plans, not chat. Your harness's todo list is for steps inside this session; work that needs the board's tracking is a task.
 
-**Tasks are selective.** Self-contained work you will finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, will outlive this session, or the user asks. Tasks are internal by default; add `--human` only when the human must see and manage it themselves (a decision only they can make, a manual step, follow-up that outlives you). `--from-meeting` is only for tasks people decided in a meeting or conversation, never your own work; `--from-call cl-42` also links the task to that call, so it shows on the call's page.
+**Tasks are selective.** Self-contained work you will finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, or the user asks. Tasks are internal by default; add `--human` only when the human must see and manage it themselves (a decision only they can make, a manual step). `--from-meeting` is only for tasks people decided in a meeting or conversation, never your own work.
+
+**Finishing files nothing.** Follow-up work and bugs you find along the way are not tasks. Fix what you can within the work you were given; name the rest as suggested next steps in your reply, and the human decides what to pursue.
 
 **Plans are for coordination** across several tasks or sessions; many steps alone do not warrant one. Split one task's real steps into subtasks with `--parent`, shallow and small, and never mirror a plan as a subtask tree. Check for existing work before creating (`cast task ls -q "<topic>"`, `cast plan ls -q`, `cast task ready`), and file under a project when one fits (`cast project ls`).
+
+**Record what work waits on.** Work waiting on a task, a PR to merge (`#42:checks`: green CI), a decision or time gets a blocker, not a comment: `cast task dep ct-200 --blocked-by "#42"` keeps it off the ready list. To park, block the task you hold, go `dormant` naming the blocker, end your turn: its clearing wakes you.
 
 **Bind before you build.** `cast task start <id>` (or `cast plan bind <id>`) claims the work and binds this session; unbound work is invisible to the human tracking it. Move the binding when your focus moves. Claim a parent once and advance its subtasks with `update` and `done`; never `task start` your own subtask. A task has one owning session: starting one another session is still working on is refused until you settle with it who continues (`--take` once agreed).
 
@@ -16,13 +20,12 @@ A human tracks your work through a dashboard: report status through tasks and pl
 If bound to a plan, post progress and directional decisions there (`cast plan comment <plan_id> "…"`, `-d -r "why"` for a decision). If blocked, say so: **BLOCKED: <reason>** (needs a human), **NEEDS_CONTEXT: <what>** (escalates to the user), **DONE_WITH_CONCERNS: <concern>** (finished, flagged for review). After compaction, reground with `cast task context --current` / `cast plan context --current`, not memory.
 
 ```bash
-cast task create "Title" -p high               # --plan <id>, --parent <id>, --project "<name>", --human
+cast task create "Title" -p high               # --blocked-by "#42", --parent, --plan, --project, --human
 cast task start <id> | done <id> -m "what you verified"
 cast task comment <id> "…" -t progress
 cast task update <id> -t "…" -d "…" -s <status>
-cast task handoff <id> --status done --evidence "<what you verified>" [--guide -]
-cast plan create "Title" -g "goal"; cast task create "Step" --plan <plan_id>
-cast doc create "Title" -c - | show <id> | search "<title>"
+cast task handoff <id> --status done --evidence "<what you verified>"
+cast plan create "Title" -g "goal" --steps -  # "Step :: done means" per line; a blank line starts a wave needing the one before
 ```
 
 `cast guide tasks` has the full command reference.
@@ -41,7 +44,8 @@ Every codecast object has a short ID. Written anywhere (messages, summaries, tas
 | Trigger | `tr-42`   | `cast trigger ls` |
 | Doc     | `doc:<id>` | `cast doc ls`, `cast doc search` |
 | Call    | `cl-42`   | `cast calls` |
+| Flow    | `flow:change` | `cast flow ls` |
 
-Write the bare ID by default (`Filed under ct-4102.`); it reads as a normal sentence and still renders in full. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as an unreadable blob, and every command accepts the short one.
+Write the bare ID by default (`Filed under ct-4102.`); it reads as a sentence and renders in full. A flow ID alone on a line draws the flow, each step open to its prompt. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as a blob, and every command takes the short one.
 <!-- cast @VERSION@ -->
 <!-- /codecast-references -->

@@ -9,7 +9,7 @@ corrections across the team, so the same one is made in ten threads.
 
 Lessons belong to a project (docs/architecture/line-profile.md LP5). Run from
 the root of the repository whose lessons you are mining, and read its profile
-first with `cast line profile --json`: its `project` is where the signals go,
+first with `cast flow profile --json`: its `project` is where the signals go,
 and its `principles` are the project's own files, which new principles are
 written into. The clusters are matched against those files and the shared set
 together; `cast goals --json` returns both as one text (`principles`). A
@@ -23,7 +23,7 @@ cast search "don't|do not|never|stop|wrong|not like that|instead|revert" -s <win
 cast search "why did you|I said|again" -s <window> -n 30
 ```
 
-The first line's words are `REDIRECT_WORDS` in `packages/shared/contracts/projectMemory.ts`, the same words the session insight keeps when it samples a long session; `cast memory list` lists what those insights have already consolidated for the project, so read it before harvesting by hand.
+The first line's words are `REDIRECT_WORDS` in `packages/shared/contracts/redirectWords.ts`, the same words the session insight keeps when it samples a long session.
 
 When mining one project, keep the search to its sessions (add
 `repo:<name>` to the query). For each hit, `cast read <id> <line>` with a few messages of context to see
@@ -61,7 +61,7 @@ For each cluster, one of:
 
 ## File each cluster as a signal
 
-A cluster that needs a change goes through the signal door, so the line can
+A cluster that needs a change goes through the signal door, so the flow can
 take it up as a cause, and the same rule seen next week counts toward that
 cause instead of opening another:
 

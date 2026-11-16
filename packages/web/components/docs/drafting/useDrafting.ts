@@ -4,6 +4,7 @@ import type { Editor } from "@tiptap/core";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { LabRequest, LabResult } from "@codecast/shared/docs";
+import { teamVendorBlock } from "@codecast/shared/contracts";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import {
@@ -40,9 +41,15 @@ export function useDrafting(docId: string) {
     (st) => st.clientState.ui?.doc_drafting,
     (st) => (st.docDetails[docId] as any)?.overflow,
     (st) => (st.docs[docId] as any)?.overflow,
+    (st) => (st.docs[docId] as any)?.workspace,
+    (st) => st.teams,
   ]);
   const enabled = !!s.clientState.ui?.doc_drafting;
   const overflow: string = (s.docDetails[docId] as any)?.overflow ?? (s.docs[docId] as any)?.overflow ?? "";
+  // The Lab sends the doc to Anthropic: a regulated team's doc gets the line instead (the server refuses it too).
+  const workspace: string = (s.docs[docId] as any)?.workspace ?? "";
+  const labTeam = workspace.startsWith("team:") ? (s.teams || []).find((t: any) => `team:${t._id}` === workspace) : null;
+  const labBlock = teamVendorBlock(labTeam as any, "anthropic");
 
   // The editor's plugin carries the flag its decorations read; mirror the
   // preference into it whenever either side changes (a fresh mount included).
@@ -81,7 +88,7 @@ export function useDrafting(docId: string) {
       setLabRun({ kind: req.tool, label });
       try {
         const text = docPlainText(editor.state.doc);
-        const result: LabResult = await runLab({ ...req, text });
+        const result: LabResult = await runLab({ ...req, text, doc_id: docId });
         if (editor.isDestroyed) return null;
         const landed = applyLabResultInEditor(editor.view, result, target);
         if (result.tool !== "alternatives" && result.tool !== "trim") {
@@ -95,7 +102,7 @@ export function useDrafting(docId: string) {
         setLabRun(null);
       }
     },
-    [editor, labRun, runLab],
+    [editor, labRun, runLab, docId],
   );
 
   const aiAlternatives = useCallback(
@@ -142,6 +149,7 @@ export function useDrafting(docId: string) {
     stash,
     lab,
     labRun,
+    labBlock,
     trim,
     setTrim,
     draftingRef,

@@ -41,6 +41,11 @@ export const DOC_TYPES = [
   // humans write, and the brief the role keeps as its memory.
   "charter",
   "brief",
+  // Live artifacts (shared/artifacts): structured content synced as elements,
+  // not markdown. docs.content stays empty for these.
+  "board",
+  "sheet",
+  "dashboard",
 ] as const;
 export type DocType = (typeof DOC_TYPES)[number];
 
@@ -54,20 +59,30 @@ export const DOC_TYPE_LABELS: Record<DocType, string> = {
   decision: "Decision",
   charter: "Charter",
   brief: "Brief",
+  board: "Board",
+  sheet: "Sheet",
+  dashboard: "Dashboard",
 };
+
+const LIVE_DOC_TYPES = new Set<string>(["board", "sheet", "dashboard"]);
+
+/**
+ * Whether a doc may change from one type to another. Prose types retype
+ * freely; a board, sheet or dashboard holds elements, not markdown, so it
+ * neither becomes nor comes from another type.
+ */
+export function docTypeChangeAllowed(from: string | null | undefined, to: string): boolean {
+  if (from === to) return true;
+  return !LIVE_DOC_TYPES.has(from ?? "note") && !LIVE_DOC_TYPES.has(to);
+}
+
+/** The types a prose doc can be switched to (menus, the palette, the doc page's picker). */
+export const RETYPABLE_DOC_TYPES: readonly DocType[] = DOC_TYPES.filter((t) => !LIVE_DOC_TYPES.has(t));
 
 /** The label for any stored doc_type; unknown values read as a note, like every client's style fallback. */
 export function docTypeLabel(docType: string | null | undefined): string {
   return DOC_TYPE_LABELS[docType as DocType] ?? DOC_TYPE_LABELS.note;
 }
-
-export type DocSource =
-  | "human"
-  | "agent"
-  | "plan_mode"
-  | "file_sync"
-  | "inline_extract"
-  | "import";
 
 export type DocOrigin = "human" | "agent";
 
@@ -117,23 +132,6 @@ export function isOnHumanShelf(doc: {
   pinned?: boolean | null;
 }): boolean {
   return isHumanDocOrigin(doc) || !!doc.pinned;
-}
-
-/** Docs an agent org keeps about its own roles (a role's charter and brief).
- *  A charter is stamped human because a person may edit it, but it describes
- *  how the agents work, not a note of the person's. */
-export const ROLE_DOC_TYPES: ReadonlySet<string> = new Set(["charter", "brief"]);
-
-/**
- * The shelf in hosted mode, where the list is the person's own notes: the
- * human shelf without the agent org's role docs.
- */
-export function isOnNotesShelf(doc: {
-  source?: string | null;
-  pinned?: boolean | null;
-  doc_type?: string | null;
-}): boolean {
-  return isOnHumanShelf(doc) && !ROLE_DOC_TYPES.has(doc.doc_type ?? "");
 }
 
 /**

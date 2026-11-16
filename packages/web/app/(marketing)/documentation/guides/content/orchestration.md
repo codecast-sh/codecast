@@ -1,65 +1,65 @@
-Orchestration runs a whole plan across many agents at once. A conductor decomposes the goal into granular tasks with dependencies, spawns an implementer per ready task, each in its own isolated git worktree, then runs reviewers over completed work and critics over the integrated result. Humans watch waves of parallel work land instead of babysitting one session.
+Orchestration hands a whole [plan](/documentation/tasks-and-plans) to one agent and lets it run a team. That lead agent splits the goal into tasks, starts an implementer agent for every task that is ready, has a reviewer check each one before it lands, and finishes with critics who look over the combined result. Several tasks move at once, and you watch the plan fill in rather than steering one conversation through every step.
 
-Two entry points share this machinery: the `cast plan` autopilot commands, and the `/orchestrate` skill the orchestration snippet installs.
+It only starts when you ask for it.
 
-## What the snippet installs
+![A plan's Orchestration tab while agents work on it](/documentation/orchestration/plan.webp "The Orchestration tab on a plan: how many agents are working, how many tasks are done, any that are stuck, and each task's status in order.")
 
-Unlike the other snippets, orchestration installs more than a markdown section. Via [the snippet system](/documentation/agent-snippets), `cast install orchestration` writes:
+## Turn it on
 
-- an `/orchestrate` skill into `~/.claude/skills/`: the conductor's playbook,
-- three agent definitions into `~/.claude/agents/`: **implementer** (does the work), **reviewer** (checks each task before merge), **critic** (sweeps the integrated result for issues),
-- two lifecycle hooks in `~/.claude/settings.json` that fire only during orchestration runs.
+Open **Agent features** from your account menu, pick the computer your agents run on, and switch on **Orchestration**. It works with Claude Code, and the computer it runs on does the work, so a plan of many tasks keeps that machine busy for a while.
 
-Nothing activates on its own. Saying "orchestrate this plan" to an agent with the skill installed turns that agent into the conductor.
+![The Orchestration detail in Agent features](/documentation/orchestration/feature.webp "Click How it works on the card to see what it adds and a request to try.")
 
-## The execution model
+## Ask for it in plain words
 
-**Waves.** The conductor resolves the task dependency graph topologically. Every task whose dependencies are satisfied forms the current wave; the wave runs in parallel, one agent per task; completions unlock the next wave.
+- "Make a plan for the settings redesign, then orchestrate it."
+- "Orchestrate the dark mode plan."
+- "Orchestrate the rest of the billing plan, two tasks at a time."
+- "Stop after the first wave so I can look at it."
+
+If there is no plan yet, ask for one first and read it over. The plan is where you shape the work: its goal, its tasks and what depends on what.
+
+## How the work moves
 
 ```figure
 WavesFigure
 Eight tasks in three waves. Each wave starts the moment the work it depends on is done.
 ```
 
-**Worktree isolation.** Under the `/orchestrate` skill, each implementer works in its own git worktree on its own branch. Parallel agents never trample each other's files; completed branches merge back to main as their tasks pass review.
+**In waves.** Every task whose dependencies are done starts at once, each with its own implementer. As those finish, the next tasks unlock.
 
-**Review before merge.** A reviewer agent checks each completed task against its acceptance criteria and returns a verdict: pass, needs changes, or reject. Failures route back to implementation with the review attached.
+**Each in its own copy.** Every implementer works in a separate copy of your repository on its own branch, so agents running side by side never trip over each other's files. Finished work merges back once it passes review.
 
 ```figure
 ReviewVerdictFigure
-The reviewer's verdict decides each task's path. The conductor escalates instead of looping forever.
+A reviewer's verdict decides each task's path. After a few failed rounds, the lead agent asks you instead of looping.
 ```
 
-**Drive rounds.** After the graph completes, a critic reviews the integrated codebase. Issues it finds become fix tasks, which run as a new wave. Repeat until quality converges.
+**Reviewed before it lands.** A reviewer checks each finished task against what the task asked for and passes it, sends it back with notes, or rejects it. The lead agent tries a task a few times at most, then stops and asks you.
 
 ```figure
 CriticRoundFigure
 Critics look at the whole result, not single tasks. Serious findings go back in as a new wave.
 ```
 
-![Two worker sessions running side by side](/documentation/shots/fanout.webp "Two workers, Cursor and Codex, each on its own half of the same feature, running side by side.")
+**A final sweep.** Once every task has passed, critics review the combined code. Anything serious becomes new fix tasks and another wave; when they find nothing serious, the plan is done.
 
-## Driving from the CLI
+## What you see
 
-```bash
-cast plan create "Build user dashboard" --goal "Activity feed, metrics, settings"
-cast plan decompose pl-xxxx                 # Claude breaks the goal into 20–50 tasks (--depth shallow|medium|deep)
-cast plan show pl-xxxx                      # review the task list before running
-cast plan autopilot pl-xxxx                 # the main loop: waves until done
-```
+- **The plan page.** Tasks move from open to in progress to done as agents pick them up and finish. The **Orchestration** tab shows how many agents are working, how many tasks are complete, and any that are blocked, with each task's status in order. **Graph** draws what depends on what.
+- **The lead agent's conversation.** It narrates each wave: what it started, what passed review, what it sent back. You can message it at any point to change course.
+- **The plan's timeline.** Progress at the end of each wave and the decisions the lead agent made land on the plan, so the record of why survives the run.
+- **Your inbox, when it needs you.** A task the agents can't finish, a rejected review or a missing piece of context comes back to you as a question, and the conversation is flagged as needing input.
 
-Autopilot options bound the blast radius: `--dry-run` shows what would spawn, `--max 4` caps concurrency (3 by default), `--max-waves 3` stops early, `--verify` typechecks before merging. Autopilot checks on its agents every two minutes and runs them in the current checkout; the per-task worktrees and reviewer agents belong to the `/orchestrate` skill. While it runs:
+## Orchestration or a workflow
 
-```bash
-cast plan agents pl-xxxx      # active agent sessions
-cast plan wave pl-xxxx        # current and next wave
-cast plan progress pl-xxxx    # ETA and breakdown by status
-```
+Choose orchestration when the shape of the work isn't known up front and an agent should work it out. When the steps are known and must run the same way every time, with an approval at a fixed point, use a [workflow](/documentation/workflows) instead.
 
-A task whose agent dies or runs past 30 minutes is retried, up to 3 times, with a comment on each attempt. After that it is flagged for human attention and the run continues around it. An agent that prints `BLOCKED:` or `NEEDS_CONTEXT:` is stopped and its task flagged the same way.
+## When something is off
 
-## Watching it
-
-Every agent is a real session in the inbox, so the whole apparatus is observable with the ordinary tools: the dashboard groups workers under their plan, [`cast sessions --label`](/documentation/memory) watches a fleet live, and [messaging](/documentation/messaging) lets you (or the conductor) nudge any worker directly. Decisions made along the way land on the plan's timeline ([tasks and plans](/documentation/tasks-and-plans)), so the record of why survives the run.
-
-Choose orchestration when the structure of the work is not known up front and a conductor should discover it. When the steps are known and must run the same way every time, write a [workflow](/documentation/workflows) instead.
+| What you notice | What to do |
+|-----------------|------------|
+| The lead agent asks you about a task | Answer in its conversation. It carries on with the rest of the plan meanwhile |
+| Too many agents run at once for your machine | Tell the lead agent to run fewer tasks at a time |
+| A task is stuck in progress | Open the task; its sessions and activity show where it stopped. Ask the lead agent to retry or split it |
+| The plan's tasks look wrong before it starts | Edit the plan first, or ask for a new breakdown. Orchestrating a bad plan just builds the wrong thing faster |

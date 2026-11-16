@@ -1,103 +1,46 @@
-A typecheck is a function of the tree, not of the session that asks for it. The expensive part is building the program graph: a thousand files, one to two gigabytes of memory, minutes on a loaded machine. Every agent session that runs `tsc --noEmit` builds that same graph again. Seventeen of them were measured at once on one checkout on 2026-09-17, and thirty across two repos put the machine into swap and stalled everything else on it.
+Agents that change TypeScript check their work by typechecking it, and a typecheck of a real project is heavy: it loads the whole program into memory, often a gigabyte or two, and takes minutes on a busy machine. When every session runs its own, ten agents build the same program ten times at once. The machine runs out of memory, everything slows to a crawl, and the checks take longer still.
 
-`cast check` replaces the fresh `tsc` with a question to a process that already holds the answer. One `tsc --watch` per tree and project keeps the program in memory and checks only the files that changed. Any number of sessions can ask, and ten asks at once cost the same as one.
+With Typecheck on, agents on the same computer share one typecheck for each project. It stays loaded between checks and only rechecks the files that changed, so an agent's check comes back in seconds, and ten agents asking cost the same as one.
 
 ```figure
 SharedProgramFigure
-A fresh tsc in every session builds the same program again each time. cast check asks one watcher that already holds it.
+Left: every session builds the same program again, and memory runs out. Right: every session asks one shared typecheck that already holds it.
 ```
 
-The `check` snippet ([how snippets work](/documentation/agent-snippets)) writes a `## Typechecking` section into the agent's instruction file. It tells the agent to use `cast check` and never `tsc --noEmit`. Install it with `cast install check`.
+## Turn it on
 
-```bash
-cast check                 # every project the tree lists, or else the tsconfig nearest this directory
-cast check web             # one project, by its name in .codecast/check.toml
-cast check packages/api    # any directory or tsconfig path in the tree
-cast check --fresh         # restart the watcher, then ask
-cast check --json          # { project, errors, diagnostics } for each project
-cast check-status          # the watchers on this machine: tree, project, pid, last pass
-cast check-status --stop   # stop every watcher
-```
+1. Open **Agent features** from your account menu and pick the computer your agents run on.
+2. Switch on **Typecheck**, under *Hands on the machine*.
+3. New sessions on that computer use the shared typecheck from then on.
 
-## Naming the programs: `.codecast/check.toml`
+There's nothing else to set up for a project with one TypeScript configuration. Agents check the project they're working in.
 
-A tree lists its TypeScript programs in `.codecast/check.toml`. The file holds one `[projects]` table. Each key is the name a caller uses, and each value is the path of a tsconfig, relative to the tree root.
+## What you see
 
-```toml
-[projects]
-cli = "packages/cli/tsconfig.typecheck.json"
-web = "packages/web/tsconfig.json"
-convex = "packages/convex/convex/tsconfig.json"
-```
+Nothing new to learn. Ask for a typecheck the way you would anyway ("typecheck the web app and fix what's red"), or just ask for a change: agents check their own TypeScript before calling the work done. The agent reports what it found, project by project, and fixes what's red.
 
-Keep the file in git, so every worktree inherits it. If the repo ignores `.codecast/`, add `!.codecast/check.toml` to the ignore file. A name may use letters, digits, dot, dash and underscore, because the name becomes a directory on disk.
+![A conversation where the agent typechecked a small project, found three errors in one file and fixed them](/documentation/typecheck/conversation.webp "Asked to typecheck a small project and fix what is red. The agent found three errors, fixed them where they were, and said the check passes.")
 
-With no arguments, `cast check` checks every listed project whose tsconfig exists. A tree without the file gets one project: the `tsconfig.json` nearest the caller's directory, found by walking up to the tree root. A repo with more than one program needs the file, because the nearest tsconfig may not be the program a change reaches. An argument that is not a listed name is read as a path: a directory that holds a `tsconfig.json`, or a tsconfig file.
+- **The first check is the slow one.** It builds the program, so it takes as long as an ordinary typecheck. Every check after that, from any session in the same checkout, takes seconds.
+- **Your machine stays usable.** With a dozen agents at work, memory holds one program per project instead of one per agent.
+- **It tidies up after itself.** A shared typecheck nobody has asked in 45 minutes closes on its own. A machine keeps at most six running; when a seventh is needed, the one asked least recently makes room, and if all six are busy the new check waits its turn.
 
-## Point the entry at the tsconfig the repo's own script uses
+## Repositories with several projects
 
-The entry must name the tsconfig that the package's `typecheck` script runs. That is not always the plain `tsconfig.json` beside the code. A package whose build narrows `rootDir` often keeps a wider variant for checking. In this repo the CLI's script is `tsc --noEmit -p tsconfig.typecheck.json`, because the CLI imports generated files that sit outside the build's `rootDir`. An entry that names the build tsconfig reports hundreds of errors about files outside the root.
+A repository with more than one TypeScript program (a web app, a server and a command line tool, say) can list them by name in a small file in the repo, `.codecast/check.toml`. Agents can then check one by name ("typecheck the server") or all of them at once. Without the list, an agent checks the configuration closest to the folder it's working in, which may not be the program its change reaches.
 
-Read the `typecheck` script in each package before you write the entry. When a check returns errors nobody wrote, suspect the entry before the code. When an entry changes, the next ask sees that the running watcher was built on a different tsconfig, stops it, and starts a new one.
+You don't need to write the file yourself. Ask an agent: "set up codecast typecheck for every TypeScript project in this repo". Point each entry at the configuration the project's own typecheck script uses, and keep the file in git so every copy of the repo has it.
 
-The watcher also runs the project's own compiler. It takes the first `node_modules/.bin/tsc` found walking up from the tsconfig's directory to the tree root. If the tree installs none, it falls back to the `tsc` on PATH, and a result with errors carries a note that says so. A different compiler resolves libraries and types differently, so its errors are not the project's. In one worktree the wrong binary reported 1969 errors where the right one reported 0.
+## Worktrees
 
-## How the CLI talks to the watcher
+Each separate copy of a repository (a worktree) gets its own shared typecheck, because its files differ. The first check in a new worktree starts from what the main checkout already knows and rechecks only what the worktree changed, so it's quicker than a cold start. Each one still holds a whole program in memory, so give separate worktrees only to agents whose edits would collide.
 
-The two sides share files, not a socket. Each tree and project gets one directory under `~/.codecast/typecheck/`, named by a hash of the tree root, the root's base name, and the project name.
+## When something is off
 
-| File | Written by | Holds |
-|------|-----------|-------|
-| `state.json` | watcher and asker | pid, tsconfig, `inProgress`, `finishedAt`, `errors`, `askedAt` |
-| `diagnostics.txt` | watcher | the diagnostics of the last finished pass |
-| `watch.log` | watcher | the output of the watcher process |
-| `start.lock` | asker | a lock held while an asker decides whether to start a watcher |
-
-The watcher is a detached `cast check-watch` process that wraps `tsc --noEmit --watch --preserveWatchOutput --pretty false`. It reads the compiler's output one line at a time. A line that says a compilation started sets `inProgress` to true. The line `Found N errors. Watching for file changes.` ends the pass: the watcher writes the collected diagnostics to `diagnostics.txt`, then records `finishedAt` and the error count. Diagnostics reach the file only when a pass ends, so a reader never sees half a pass.
-
-An ask takes the lock, reads `state.json`, and starts a watcher only if none is alive. The lock means that two sessions that ask at the same moment start one watcher, not two. The asker then stamps `askedAt`, waits 750 ms so that a file saved a moment ago reaches the compiler, and polls the state every 300 ms. It returns when `inProgress` is false and a pass has finished. The output ends with one line for each project, for example `✓ web: 0 errors (pass 4s old)`.
-
-```figure
-AskFigure
-An ask and the watcher meet only in state.json: the ask stamps askedAt, settles 750 ms, and polls until a finished pass is on disk.
-```
-
-## First ask, later asks, and a pass that is still running
-
-The first ask on a tree starts the watcher, and that first pass builds the whole program. It takes as long as a plain `tsc`. Later asks read a finished pass or wait for a small one, and take seconds.
-
-If a pass runs for more than 5 seconds, the asker prints that it is waiting for the pass to finish. An ask waits up to 20 minutes. Past that it fails with a message that the typecheck is still running and the machine is loaded. The watcher keeps the work it has done, so ask again. Do not start your own `tsc`; that adds the load that made the pass slow.
-
-| Exit code | Meaning |
-|-----------|---------|
-| 0 | every project checked, no errors |
-| 1 | a project has errors, or a check failed |
-| 2 | the project name or path could not be resolved |
-
-`--fresh` stops the watcher and starts a new one before it asks. Use it when a watcher lost track, for example after dependencies were installed.
-
-## Sharing and limits
-
-The tree is the unit of sharing. Sessions in one checkout share a watcher for each project. A worktree has a different root, so it gets its own watcher on first use.
-
-Watchers build incrementally. Each records its last pass in its state directory, so a watcher that was stopped and started again rechecks only what changed since. A worktree's first watcher starts from the main checkout's last pass: files that match main are trusted, and only the files the worktree changed, plus whatever depends on them, are checked again. Paths a worktree links back into the main checkout, such as a shared `node_modules`, keep pointing at main. The worktree still holds a whole program in memory, so a worktree for every agent of a fan-out costs gigabytes each. Keep worktrees for edits that would collide.
-
-Each watcher holds a whole program in memory, so two rules bound the total. A watcher exits after 45 minutes with no ask, measured from the later of the last ask and the last finished pass. A pass in flight never counts as idle, because a first pass on a loaded machine can take longer than the idle window. A machine also keeps at most six watchers. When a seventh is needed, the idle watcher asked least recently is stopped, and the ask prints which one. A watcher whose pass someone is waiting on is never stopped this way: when all six hold such a pass, the ask joins a queue, oldest first, prints its place, and starts when a slot frees. The environment variable `CAST_CHECK_MAX_WATCHERS` changes the cap.
-
-```figure
-SlotsFigure
-A seventh program takes the slot of the idle watcher asked least recently. When every slot holds a pass someone waits on, the ask queues.
-```
-
-`cast check-status` lists each live watcher with its project, tree, pid and last pass, or `checking` while a pass runs. A state file whose process has died is removed during that listing, so a later ask starts a new watcher.
-
-On this repository's machine, with several sessions at work, it printed:
-
-```
-$ cast check-status
-packages-tidemark @ ~/src/platform  pid 97749  0 errors, 1m ago
-evals @ ~/src/codecast  pid 23517  checking
-web @ ~/src/codecast  pid 2268  checking
-cli @ ~/src/codecast  pid 71293  checking
-convex @ ~/src/codecast  pid 17167  checking
-```
+| What you notice | What to do |
+|-----------------|------------|
+| The first check takes minutes | Expected: it is building the program. Later checks take seconds |
+| The agent says a check is still running on a loaded machine | Let it finish and ask again. Starting another typecheck adds to the load that made it slow |
+| Hundreds of errors nobody wrote | The project list likely points at the wrong configuration. Ask the agent to compare it with the project's own typecheck script |
+| Errors look stale after installing packages | Ask the agent to restart the typecheck for that project |
+| Agents still run their own typecheck | Check Typecheck is on for that computer, and start a new session |

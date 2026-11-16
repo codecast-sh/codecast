@@ -1,7 +1,7 @@
 // The smoke baselines' diff (imagediff.mjs): what counts as a change, what a
 // mask leaves out, and when a shot fails. PNGs go through ffmpeg, as in the
 // smoke suite; the test skips where ffmpeg is missing.
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,7 +40,12 @@ function png(name: string, paint?: { x: number; y: number; w: number; h: number;
 }
 
 describe.skipIf(!hasFfmpeg)("diffPng", () => {
-  const base = png("base");
+  // Drawn before the tests, not while they are collected: a skipped describe
+  // still runs its body, and without ffmpeg this call throws.
+  let base = "";
+  beforeAll(() => {
+    base = png("base");
+  });
 
   test("an identical shot matches", () => {
     const r = diffPng(base, png("same"));

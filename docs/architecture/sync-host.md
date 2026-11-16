@@ -126,7 +126,7 @@ deadline; stopping the runtime cancels outstanding send timers.
 
 ## Election
 
-`navigator.locks.request("codecast-sync-host:<principal>")`: the first holder is
+`navigator.locks.request("codecast-sync-host:<schema>:<principal>")`: the first holder is
 host, release on window death promotes the next in line. Web Locks and
 BroadcastChannel are both per-origin and shared across Electron windows of one
 session partition, so desktop and multi-tab web use the same mechanism.
@@ -138,10 +138,13 @@ lands. Where the Locks API is missing (React Native,
 SSR, old engines) the window is host with no transport, which is today's behavior.
 
 Both names carry the account the window acts for (the principal the stored
-JWT names, `lib/authPrincipal.ts`): `codecast-replication-v1:<principal>` and
-`codecast-sync-host:<principal>`. A host and its followers therefore share one
+JWT names, `lib/authPrincipal.ts`): `codecast-replication-v1:<schema>:<principal>` and
+`codecast-sync-host:<schema>:<principal>`. A host and its followers therefore share one
 account by construction, and a window that just signed in as someone else can
 never take a snapshot, an update or a mut from the previous account's host.
+`<schema>` is `CACHE_SCHEMA_VERSION`: after a deploy, windows run different
+builds until each reloads, and a host from an older build never feeds a
+collection added since, so windows whose stores differ elect separate hosts.
 A window with no account (signed out, a guest share page) runs no transport.
 
 ## Account boundary

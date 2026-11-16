@@ -53,7 +53,7 @@ const AUTH = [
 ];
 const JUDGE = [
   "canAccessChannel", "canAccessComment", "canAccessCommit", "canAccessConversation", "canAccessDoc", "canAccessInitiative",
-  "canAccessPlan", "canAccessProject", "canAccessPullRequest", "canAccessResourceForUser", "canAccessTask", "canAccess",
+  "canAccessPlan", "canAccessProject", "canAccessPullRequest", "canAccessTask", "canAccess",
   "checkConversationAccess", "requireAccessibleConversation", "requireAccessibleDoc", "requireAccessibleInitiative",
   "requireAccessiblePlan", "requireAccessibleProject", "requireAccessiblePullRequest", "requireAccessibleTask",
   "requireTeamMembership", "requireTeamAdmin", "requireRole", "requireSameWorkspace", "requireWorkspaceMatch",

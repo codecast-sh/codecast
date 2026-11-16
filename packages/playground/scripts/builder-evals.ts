@@ -414,7 +414,7 @@ async function runScenario(s: Scenario): Promise<Row[]> {
     const sent = performance.now();
     let messageId: string;
     if (!appId) {
-      const app = await v.client.mutation(api.apps.create, { ...v.creds, prompt: step.ask });
+      const app = await v.client.mutation(api.apps.create, { ...v.creds, prompt: step.ask, unlisted: true });
       appId = app.app_id as Id<"apps">;
       slug = app.slug;
       room = v.watchRoom(appId);

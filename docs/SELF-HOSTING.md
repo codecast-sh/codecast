@@ -18,7 +18,7 @@ This guide walks through setting up a complete self-hosted Codecast instance fro
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) 1.3+ (package manager and runtime; the repo pins `bun@1.3.13`)
+- [Bun](https://bun.sh) 1.4+ (package manager and runtime; the repo pins `bun@1.4.4`)
 - [Railway](https://railway.app) account (or another hosting platform)
 - A domain name (e.g., `codecast.yourdomain.com`)
 - [Resend](https://resend.com) account (for auth emails)
@@ -193,7 +193,7 @@ Create a new Railway service from your repo. Railway will auto-detect the build:
 
 **Build command:**
 ```bash
-bun install --frozen-lockfile && cd packages/convex && bun run build && cd ../web && bun run build
+bun install --frozen-lockfile && cd packages/web && bun run build
 ```
 
 **Start command:**
@@ -276,6 +276,7 @@ bun run packages/cli/src/main.ts --version
 ### Build standalone binary
 
 ```bash
+cd packages/cli
 bun run build:binary
 # Produces: packages/cli/codecast (single-file executable)
 ```
@@ -689,7 +690,7 @@ The callback URL registered in GitHub must point to your **Convex** domain: `htt
 ### Password reset email not sending
 
 1. Check that `RESEND_API_KEY` is set on the Convex deployment
-2. The `from` address in `packages/convex/convex/auth.ts` must be on a domain verified in your Resend account
+2. The `from` address built in `packages/convex/convex/emails/send.ts` must be on a domain verified in your Resend account (see "Email" above)
 3. Check Convex function logs: `npx convex logs`
 
 ### CLI can't connect

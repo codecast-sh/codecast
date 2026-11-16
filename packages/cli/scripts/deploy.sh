@@ -63,6 +63,19 @@ fi
 : "${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID or create .env.deploy}"
 : "${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY or create .env.deploy}"
 
+# Clients refuse a latest.json that no pinned key signed
+# (docs/architecture/release-signing.md), so this path never publishes one
+# unsigned. CI is the release path and holds the key; this script signs only
+# with a key the person running it passes in RELEASE_MANIFEST_SIGNING_KEY for
+# this run, and otherwise stops here, before anything is built or uploaded.
+RELEASE_MANIFEST_KEY_ID="cli-release-2026"
+RELEASE_MANIFEST_PUBLIC_KEY=$(sed -n "s/.*\"$RELEASE_MANIFEST_KEY_ID\": \"\([^\"]*\)\".*/\1/p" src/releaseTrust.ts)
+if [[ -z "${RELEASE_MANIFEST_SIGNING_KEY:-}" || -z "$RELEASE_MANIFEST_PUBLIC_KEY" ]]; then
+  echo "ABORT: latest.json must be signed and RELEASE_MANIFEST_SIGNING_KEY is not set. Cut the release from CI: gh workflow run cut-cli-release.yml -R codecast-sh/codecast" >&2
+  exit 1
+fi
+export RELEASE_MANIFEST_SIGNING_KEY
+
 R2_BUCKET="codecast"
 : "${R2_ENDPOINT:?Set R2_ENDPOINT (e.g. https://<account-id>.r2.cloudflarestorage.com)}"
 export AWS_DEFAULT_REGION="auto"
@@ -128,7 +141,7 @@ fi
 # Upload binaries
 echo ""
 echo "Uploading binaries to R2..."
-for filename in "${ARTIFACTS[@]}" main.js.map; do
+for filename in "${ARTIFACTS[@]}"; do
   echo "  $filename"
   aws s3 cp "$BINARIES_DIR/$filename" "s3://$R2_BUCKET/$filename" \
     --endpoint-url "$R2_ENDPOINT" \
@@ -170,12 +183,23 @@ EOF
 )
 
 echo "$LATEST_JSON" > /tmp/latest.json
-# This path publishes unsigned. A signature left from a CI release would no
-# longer match, and a client that pins the key refuses a mismatch, so drop it.
+SIGNER="$REPO_ROOT/platform/packages/cli-kit/release/sign-manifest.ts"
+rm -f /tmp/latest.json.sig
+bun "$SIGNER" --manifest /tmp/latest.json --key-id "$RELEASE_MANIFEST_KEY_ID" --out /tmp/latest.json.sig
+bun "$SIGNER" --verify --manifest /tmp/latest.json --sig /tmp/latest.json.sig --public-key "$RELEASE_MANIFEST_PUBLIC_KEY"
+# Same order as the finalize workflow: the old signature goes first, so a
+# client checking in between sees a moment with no signature (it retries next
+# poll), never a signature over other bytes.
 aws s3 rm "s3://$R2_BUCKET/latest.json.sig" --endpoint-url "$R2_ENDPOINT" --only-show-errors || true
 aws s3 cp /tmp/latest.json "s3://$R2_BUCKET/latest.json" \
   --endpoint-url "$R2_ENDPOINT" \
   --content-type "application/json" \
+  --cache-control "no-cache, no-store, must-revalidate" \
+  --quiet
+aws s3 cp /tmp/latest.json.sig "s3://$R2_BUCKET/latest.json.sig" \
+  --endpoint-url "$R2_ENDPOINT" \
+  --content-type "application/json" \
+  --cache-control "no-cache, no-store, must-revalidate" \
   --quiet
 
 echo ""
@@ -229,7 +253,7 @@ fi
 # exists, so just refresh its assets.
 echo ""
 echo "Publishing GitHub release v$VERSION..."
-RELEASE_FILES=("${ARTIFACTS[@]/#/$BINARIES_DIR/}" "$BINARIES_DIR/main.js.map")
+RELEASE_FILES=("${ARTIFACTS[@]/#/$BINARIES_DIR/}")
 if gh release view "v$VERSION" >/dev/null 2>&1; then
   # A --no-bump rerun after a failed partial deploy refreshes these assets
   # while R2 may still hold the old bytes; R2 is authoritative mid-incident.
