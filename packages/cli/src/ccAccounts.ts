@@ -30,6 +30,8 @@ import { atomicWriteFile } from "./atomicWrite.js";
 import { createMtimeGatedCache } from "./mtimeGatedCache.js";
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { fleetStatePath, fleetStoreDir, readFleetState, type FleetState } from "./ccFleetState.js";
+export { fleetStatePath, fleetStoreDir, readFleetState, type FleetState } from "./ccFleetState.js";
 import {
   ccCredentialFile,
   ccKeychainWriteItem,
@@ -1506,16 +1508,8 @@ export function launchProfileName(now = Date.now()): string | undefined {
 export const FLEET_MIN_ACCESS_MS = 5 * 60 * 1000;
 const FLEET_REFRESH_AHEAD_MS = 60 * 60 * 1000;
 
-export function fleetStoreDir(): string {
-  return path.join(defaultConfigDir(), "cc-fleet").normalize("NFC");
-}
-
 function fleetLaunchFile(): string {
   return path.join(defaultConfigDir(), "cc-fleet.env");
-}
-
-export function fleetStatePath(): string {
-  return path.join(fleetStoreDir(), "state.json");
 }
 
 /** A cloud host holding pool copies (ccPool.ts, accountPool.deviceMayHold). */
@@ -1529,23 +1523,6 @@ export function drawsPool(): boolean {
 export function fleetStoreEnabled(): boolean {
   if (process.env.CODECAST_CC_FLEET === "0") return false;
   return !isRemoteDevice() || drawsPool();
-}
-
-export interface FleetState {
-  profile: string;
-  via: "token" | "login";
-  expires_at: number;
-  written_at: number;
-  /** A copy of the keychain login (fleetStoreLaunches). */
-  keychain?: true;
-}
-
-export function readFleetState(): FleetState | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(fleetStatePath(), "utf-8"));
-    if (typeof parsed?.profile === "string" && typeof parsed?.expires_at === "number") return parsed;
-  } catch {}
-  return null;
 }
 
 /** The store holds a credential that can serve a request now. */
