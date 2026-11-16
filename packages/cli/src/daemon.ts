@@ -138,7 +138,7 @@ import {
   ACCOUNT_LAUNCH_UNSET,
   adoptPushedCredential,
   FLEET_GATE_ACCOUNT,
-  fleetStoreReady,
+  fleetStoreLaunches,
   maintainFleetStore,
   switchFleetTo,
   fleetStoreDir,
@@ -23850,7 +23850,7 @@ const FLEET_MIGRATE_IDLE_MS = 60 * 60 * 1000;
 const FLEET_MIGRATE_PER_PASS = 3;
 
 async function migrateLegacyPanesToFleet(io: HibernationPassIo = productionHibernationIo): Promise<number> {
-  if (!fleetStoreReady() || !hasTmux()) return 0;
+  if (!fleetStoreLaunches() || !hasTmux()) return 0;
   const legacy = new Set(liveClaudeSessions().filter((s) => s.account !== FLEET_GATE_ACCOUNT).map((s) => s.id));
   if (legacy.size === 0) return 0;
   const candidates = await collectHibernationCandidates(io);
@@ -33841,7 +33841,7 @@ async function main(): Promise<void> {
         // A recovery continue into a pane that holds its own credential (one
         // launched before the fleet store, or pinned) would retry the account it
         // parked on. Restart it first: the continue then resumes it onto the store.
-        if (isRecoveryContinueClientId(msg.client_id) && fleetStoreReady() && paneFollowsFleet(msg.conversation_id) === false) {
+        if (isRecoveryContinueClientId(msg.client_id) && fleetStoreLaunches() && paneFollowsFleet(msg.conversation_id) === false) {
           logDelivery(`[CC-FLEET] conv=${msg.conversation_id.slice(0, 12)} parked on a credential of its own; restarting it onto the fleet store before the continue`);
           await killConversationBackends(msg.conversation_id, undefined, false, { keepTurnClaims: true }).catch(() => {});
         }
