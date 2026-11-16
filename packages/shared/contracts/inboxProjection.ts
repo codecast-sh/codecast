@@ -120,7 +120,10 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // only while its last activity is within HISTORY_IMPORT_INBOX_MS.
 // v25: a hibernated session files by the verdict it carries (done, a
 // structural wake, or the person's move) instead of always parking as dormant.
-export const INBOX_PROJECTION_VERSION = 25 as const;
+// v26: a process that exits while a standing trigger or loop owns its next
+// wake files under dormant, not needs_input (isExitBeforeArmedWake): a
+// trigger-run session ends its turn this way and the trigger resumes it.
+export const INBOX_PROJECTION_VERSION = 26 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -329,6 +332,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // into the "work in flight" arm below and file it WORKING forever (found by
   // the two-replica simulation, 2026-09-01).
   if (isExitAfterDone(input)) return hasMsgs ? doneRest() : "idle";
+  if (isExitBeforeArmedWake(input)) return hasMsgs ? "dormant" : "idle";
   if (dead || isUnresponsive) return hasMsgs ? "needs_input" : "idle";
 
   // Settled with content: who acts next? A rest verdict names a machine (dormant)
@@ -386,17 +390,33 @@ export function isExitAfterDone(input: Pick<WorkStateInput, "agentStatus" | "dec
   );
 }
 
+// The process exited while a standing trigger or a live /loop owns the
+// session's next wake, with nothing queued and no declared block. A trigger
+// delivers into a stopped session by resuming it, so the exit is the end of
+// a run, not a death: the wake the system verified stands. A declared block
+// still claims the human, and queued work still needs a restart.
+export function isExitBeforeArmedWake(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus" | "hasPending" | "isUnresponsive" | "armedTriggerHome" | "armedLoopHome">): boolean {
+  return (
+    !!input.agentStatus &&
+    DEAD_AGENT_STATUSES.has(input.agentStatus) &&
+    !!(input.armedTriggerHome || input.armedLoopHome) &&
+    input.declaredStatus !== "blocked" &&
+    !input.hasPending &&
+    !input.isUnresponsive
+  );
+}
+
 // The machine cannot proceed, or is gone: an open ask, a permission prompt, an
 // unresolved API-error banner, a dead or unresponsive agent with output, or the
 // agent's own declared block. The one condition that surfaces an anchor row out
 // of `hidden`, and what keeps a standing trigger's home from collapsing under
 // its schedule row.
-export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pendingApiError" | "agentStatus" | "messageCount" | "isUnresponsive" | "declaredStatus" | "hasPending">): boolean {
+export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pendingApiError" | "agentStatus" | "messageCount" | "isUnresponsive" | "declaredStatus" | "hasPending" | "armedTriggerHome" | "armedLoopHome">): boolean {
   const hasMsgs = input.messageCount > 0;
   if (input.awaitingInput) return true;
   if (input.pendingApiError && hasMsgs) return true;
   if (input.agentStatus === "permission_blocked") return true;
-  if (!!input.agentStatus && DEAD_AGENT_STATUSES.has(input.agentStatus) && hasMsgs && !isExitAfterDone(input)) return true;
+  if (!!input.agentStatus && DEAD_AGENT_STATUSES.has(input.agentStatus) && hasMsgs && !isExitAfterDone(input) && !isExitBeforeArmedWake(input)) return true;
   if (isDeclaredBlocked(input) && hasMsgs) return true;
   return input.isUnresponsive;
 }
