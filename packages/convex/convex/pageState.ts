@@ -158,9 +158,20 @@ async function rowAt(ctx: { db: QueryCtx["db"] }, artifactId: Id<"artifacts">, c
     .first();
 }
 
-/** A fresh key that sorts after every earlier one: time first, then randomness against same-millisecond inserts. */
-function newKey(now: number): string {
-  return now.toString(36).padStart(9, "0") + Math.random().toString(36).slice(2, 8).padEnd(6, "0");
+/**
+ * A fresh key that sorts after every earlier one: the time, then a counter
+ * past the last key inserted in the same millisecond, so two inserts that land
+ * together still list in the order they were made.
+ */
+async function newKey(ctx: { db: QueryCtx["db"] }, artifactId: Id<"artifacts">, collection: string, now: number): Promise<string> {
+  const prefix = now.toString(36).padStart(9, "0");
+  const last = await ctx.db
+    .query("page_state")
+    .withIndex("by_artifact_collection_key", (q) => q.eq("artifact_id", artifactId).eq("collection", collection).gte("key", prefix).lt("key", `${prefix}~`))
+    .order("desc")
+    .first();
+  const next = last ? (parseInt(last.key.slice(prefix.length), 36) || 0) + 1 : 0;
+  return prefix + next.toString(36).padStart(6, "0");
 }
 
 type WriteInput = { op: Op; key?: string; value_json?: string };
@@ -193,7 +204,7 @@ async function applyWrite(ctx: MutationCtx, artifactId: Id<"artifacts">, coll: P
     return { cleared: rows.length };
   }
 
-  const key = input.op === "insert" ? (input.key ?? newKey(now)) : input.key;
+  const key = input.op === "insert" ? (input.key ?? await newKey(ctx, artifactId, coll.id, now)) : input.key;
   if (!key) return { error: `${input.op} needs a key` };
   if (key.length > PAGE_STATE_LIMITS.key_chars) return { error: `keys are at most ${PAGE_STATE_LIMITS.key_chars} characters` };
   const existing = await rowAt(ctx, artifactId, coll.id, key);
