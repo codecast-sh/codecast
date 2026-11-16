@@ -308,7 +308,9 @@ describe("command groups stay off the boot graph", () => {
     // predicate the start hook needs, split out of the task graph. 365 the same
     // day: museTranscript.ts (out of parser.ts) and contracts/sendArrival.ts
     // (out of contracts/machineMessages.ts), both for max-lines, no new code.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(365);
+    // 366 on 2026-11-16: ccFleetState.ts, the fleet state record split out of
+    // ccAccounts.ts for its max-lines pin, no new code.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(366);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -434,8 +436,9 @@ describe("command groups stay off the boot graph", () => {
     // rounding; no new module on the graph. 4737 (2026-11-15): the deploy of
     // 66afd981a, all index.ts (+351/-74 lines): project remember, memory, forget
     // and outputs, the check watcher listing, chat and trigger flags; no new
-    // module on the graph.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4737);
+    // module on the graph. 4738 (2026-11-16): the fleet store's keychain-copy
+    // fix in ccAccounts.ts and ccFleetState.ts split out of it for max-lines.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4738);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -635,8 +638,9 @@ describe("command groups stay off the boot graph", () => {
     // account (`cast cloud`); contracts/projectContext.ts and
     // tasks/resumeSources.ts, read by stable context (the leaf keeps the task
     // graph's 12 files off this graph). 603 the same day: museTranscript.ts and
-    // contracts/sendArrival.ts, max-lines splits, no new code.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(603);
+    // contracts/sendArrival.ts, max-lines splits, no new code. 604 on
+    // 2026-11-16: ccFleetState.ts, out of ccAccounts.ts, the same split.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(604);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

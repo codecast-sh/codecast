@@ -1,5 +1,3 @@
-// The fleet store's on-disk location and the state record beside it
-// (ccAccounts.ts: putFleetOn writes it, fleetStoreReady and fleetStoreLaunches read it).
 import * as fs from "fs";
 import * as path from "path";
 import { defaultConfigDir } from "./config/configDir.js";
