@@ -10,7 +10,11 @@
 
 import { describe, expect, test } from "bun:test";
 import * as crypto from "node:crypto";
-import { chromeEncryptionKey, cookieHostKeys, decryptCookieValue, OWN_LOGIN_REASON, provisionCredentials, provisionLocalLogins } from "./credentials.js";
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { chromeEncryptionKey, cookieHostKeys, cookieHostWhere, decryptCookieValue, OWN_LOGIN_REASON, provisionCredentials, provisionLocalLogins } from "./credentials.js";
 
 /** Encrypt like Chrome does on macOS, to test the reverse. */
 function chromeEncrypt(plaintext: string, key: Buffer, withDomainHash = false): Buffer {
@@ -62,6 +66,41 @@ describe("cookieHostKeys", () => {
 
   test("returns something usable for a single label", () => {
     expect(cookieHostKeys("localhost")).toEqual(["localhost"]);
+  });
+});
+
+describe("cookieHostWhere", () => {
+  // The clause runs against Chrome's own cookie table, so it is checked by sqlite, not by reading the SQL.
+  const select = (host: string, keys: string[]): string[] => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-where-"));
+    try {
+      const db = path.join(dir, "Cookies");
+      const rows = keys.map((k) => `('${k}')`).join(",");
+      execFileSync("sqlite3", [db, `CREATE TABLE cookies (host_key TEXT); INSERT INTO cookies VALUES ${rows};`]);
+      return execFileSync("sqlite3", [db, `SELECT host_key FROM cookies WHERE ${cookieHostWhere(host)} ORDER BY host_key`], { encoding: "utf-8" }).trim().split("\n").filter(Boolean);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("takes a sign-in that lives on a subdomain the page never loads (Clerk's __client on clerk.<site>)", () => {
+    const jar = ["openrouter.ai", ".openrouter.ai", ".clerk.openrouter.ai", "clerk.openrouter.ai", "evilopenrouter.ai", ".ai", "openrouter.ai.evil.com"];
+    expect(select("openrouter.ai", jar)).toEqual([".clerk.openrouter.ai", ".openrouter.ai", "clerk.openrouter.ai", "openrouter.ai"]);
+  });
+
+  test("a subdomain host takes its parents and its own subdomains, never its siblings", () => {
+    const jar = [".apollo.io", "app.apollo.io", "x.app.apollo.io", "www.apollo.io", "evilapp.apollo.io"];
+    expect(select("app.apollo.io", jar)).toEqual([".apollo.io", "app.apollo.io", "x.app.apollo.io"]);
+  });
+
+  test("a public suffix or an IP reads only its own keys, never every site under it", () => {
+    expect(select("github.io", ["github.io", "alice.github.io", ".bob.github.io"])).toEqual(["github.io"]);
+    expect(select("10.0.0.4", ["10.0.0.4", "1.10.0.0.4"])).toEqual(["10.0.0.4"]);
+    expect(select("localhost", ["localhost", "a.localhost"])).toEqual(["localhost"]);
+  });
+
+  test("an underscore matches only itself", () => {
+    expect(select("a_b.example.com", ["x.a_b.example.com", "x.aXb.example.com"])).toEqual(["x.a_b.example.com"]);
   });
 });
 
