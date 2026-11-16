@@ -23,6 +23,7 @@ import {
   writeAccountToken,
   drawsPool,
   fleetStoreEnabled,
+  fleetStoreLaunches,
   getAccountsHeartbeatPayload,
   switchFleetTo,
 } from "./ccAccounts.js";
@@ -328,6 +329,31 @@ describe("fleet store (sandboxed $HOME)", () => {
     const state = await putFleetOn("live", now);
     expect(state.via).toBe("login");
     expect(fs.readFileSync(path.join(fleetStoreDir(), ".credentials.json"), "utf-8")).toContain("access-live");
+  });
+
+  // The store holds no refresh token, and the daemon defers the keychain
+  // refresh while a live claude holds that login, so a store copied from the
+  // keychain lapses (or is revoked by the holder's rotation) under every
+  // session launched on it. Those launches run on the keychain login instead,
+  // which refreshes itself; a dormant profile the daemon refreshes stays on the store.
+  it("launches on the keychain, not the store, when the store carries the machine's keychain login", async () => {
+    fs.writeFileSync(path.join(home, ".codecast", "cc-active.json"), JSON.stringify({ key: "u-live", since: 1 }));
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), JSON.stringify(login("access-keychain", now + 6 * 3_600_000)));
+    invalidateAccountsCache();
+
+    const state = await putFleetOn("live", now);
+    expect(state.keychain).toBe(true);
+    expect(fleetStoreLaunches(now)).toBe(false);
+    const launch = launchAccountPrefix(undefined);
+    expect(launch.account).toBe("live");
+    expect(launch.prefix).not.toContain("cc-fleet.env");
+
+    // A setup-token profile can carry the store without lapsing: sessions follow it.
+    const tok = await putFleetOn("tok", now);
+    expect(tok.keychain).toBeUndefined();
+    expect(fleetStoreLaunches(now)).toBe(true);
+    expect(launchAccountPrefix(undefined).account).toBe(FLEET_GATE_ACCOUNT);
   });
 
   it("runs a shell-less launch on the fleet store", async () => {

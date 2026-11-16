@@ -1500,9 +1500,9 @@ export function launchProfileName(now = Date.now()): string | undefined {
 // token. The launch record names the account; the keychain login stays put.
 
 /** A login access token with less than this left is not written to the store.
- *  The daemon refreshes a dormant fleet login an hour before it lapses, and
- *  maintainActiveCcToken refreshes the keychain login half an hour before, so
- *  the store is rewritten long before this floor is reached. */
+ *  The daemon refreshes a dormant fleet login an hour before it lapses, so the
+ *  store is rewritten long before this floor is reached (the keychain login
+ *  excepted: see fleetStoreLaunches). */
 export const FLEET_MIN_ACCESS_MS = 5 * 60 * 1000;
 const FLEET_REFRESH_AHEAD_MS = 60 * 60 * 1000;
 
@@ -1536,6 +1536,8 @@ export interface FleetState {
   via: "token" | "login";
   expires_at: number;
   written_at: number;
+  /** A copy of the keychain login (fleetStoreLaunches). */
+  keychain?: true;
 }
 
 export function readFleetState(): FleetState | null {
@@ -1550,6 +1552,14 @@ export function readFleetState(): FleetState | null {
 export function fleetStoreReady(now = Date.now()): boolean {
   const state = readFleetState();
   return fleetStoreEnabled() && !!state && state.expires_at > now;
+}
+
+/** Unpinned sessions launch on the store, unless it carries the keychain
+ *  login: maintainActiveCcToken defers that refresh while a live claude holds
+ *  it, so the copy lapses, or is revoked by a holder's rotation, under every
+ *  session on it. They launch on the self-refreshing keychain login instead. */
+export function fleetStoreLaunches(now = Date.now()): boolean {
+  return fleetStoreReady(now) && !readFleetState()?.keychain;
 }
 
 /** The bearer the fleet store carries for a profile, or null when it can carry
@@ -1662,12 +1672,16 @@ async function writeFleetStoreBlob(blob: string): Promise<void> {
  *  Throws when the profile can carry nothing now. */
 export async function putFleetOn(name: string, now = Date.now()): Promise<FleetState> {
   assertValidProfileName(name);
-  const bearer = fleetBearer(name, (await fleetLoginFor(name)).login, now);
+  const { login, machine } = await fleetLoginFor(name);
+  const bearer = fleetBearer(name, login, now);
   if (!bearer) {
     throw new CcAccountError(`Profile "${name}" has no setup-token and no live login to put on the fleet — sign into it again from Settings`);
   }
   if ((await readFleetStoreBlob()) !== bearer.blob) await writeFleetStoreBlob(bearer.blob);
-  const state: FleetState = { profile: name, via: bearer.via, expires_at: bearer.expires_at, written_at: now };
+  const state: FleetState = {
+    profile: name, via: bearer.via, expires_at: bearer.expires_at, written_at: now,
+    ...(bearer.via === "login" && machine ? { keychain: true as const } : {}),
+  };
   atomicWriteFile(fleetStatePath(), JSON.stringify(state), { mode: 0o600 });
   if (readLaunchRecord()?.profile !== name) setLaunchProfile(name, undefined, now);
   invalidateAccountsCache();
@@ -1800,7 +1814,7 @@ export function storeLaunchPrefix(file: string): string {
  *  keychain login, attributed as such. */
 export function launchAccountPrefix(pin: string | undefined, warn?: (msg: string) => void): { prefix: string; account?: string } {
   adoptPushedCredential();
-  if (!pin && fleetStoreReady() && fs.existsSync(fleetLaunchFile())) {
+  if (!pin && fleetStoreLaunches() && fs.existsSync(fleetLaunchFile())) {
     return { prefix: storeLaunchPrefix(fleetLaunchFile()), account: FLEET_GATE_ACCOUNT };
   }
   const account = pin ?? launchProfileName();
@@ -3163,7 +3177,7 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
         active_uuid: active?.uuid,
         ...(activeSince !== undefined ? { active_since: activeSince } : {}),
         ...(launch ? { launch_profile: launch.profile } : {}),
-        ...(launch && fleetStoreReady() ? { fleet_store: true } : {}),
+        ...(launch && fleetStoreLaunches() ? { fleet_store: true } : {}),
         profiles,
       };
     }
