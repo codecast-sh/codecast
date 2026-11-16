@@ -132,28 +132,39 @@ export function AssignmentChip({
 
   return (
     <>
-      <Pressable onPress={() => setSheetVisible(true)} hitSlop={8}>
+      <Pressable
+        onPress={() => setSheetVisible(true)}
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={`${d ? `Runs on ${deviceDisplayName(d)}` : 'No device'}; ${ownerList.length ? `owned by ${ownerList.map((o) => displayFor(o).name).join(', ')}` : 'no owners'}`}
+      >
         <View style={styles.chipShell}>
           {loaded && (
             <View style={[styles.lobe, { backgroundColor: devColor + '14' }]}>
               <FontAwesome name={d ? deviceIcon(d) : 'laptop'} size={10} color={devColor} />
               <Text style={[styles.lobeText, { color: devColor }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>
-                {d ? deviceDisplayName(d) : 'Unassigned'}
+                {d ? deviceDisplayName(d) : 'No device'}
               </Text>
               <View style={[styles.dot, { backgroundColor: d?.online ? Theme.green : Theme.textMuted0 }]} />
             </View>
           )}
           <View style={[styles.lobe, ownerList.length ? { backgroundColor: Theme.cyan + '14' } : null]}>
             {ownerList.length ? (
-              <>
-                <OwnerAvatar name={displayFor(ownerList[0]).name} image={displayFor(ownerList[0]).image} size={14} />
-                <Text style={[styles.lobeText, { color: Theme.cyan }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>
-                  {ownerList.length === 1 ? displayFor(ownerList[0]).name : `${ownerList.length} owners`}
-                </Text>
-              </>
+              // Faces only: the names are in the sheet and the label, and the
+              // row has the model and the branch to fit beside them.
+              <View style={styles.faces}>
+                {ownerList.slice(0, 3).map((o, i) => (
+                  <View key={String(o)} style={[styles.faceRing, i > 0 && styles.faceOverlap]}>
+                    <OwnerAvatar name={displayFor(o).name} image={displayFor(o).image} size={14} />
+                  </View>
+                ))}
+                {ownerList.length > 3 && (
+                  <Text style={[styles.lobeText, { color: Theme.cyan, marginLeft: 3 }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>+{ownerList.length - 3}</Text>
+                )}
+              </View>
             ) : (
               <>
-                <FontAwesome name="user-o" size={10} color={Theme.textMuted} />
+                <FontAwesome name="user-plus" size={10} color={Theme.textMuted} />
                 <Text style={[styles.lobeText, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>
                   Assign
                 </Text>
@@ -178,7 +189,7 @@ export function AssignmentChip({
             <View style={styles.grabber} />
             <ScrollView style={styles.list} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
-            <Text style={styles.sectionLabel}>Run on device · which machine</Text>
+            <Text style={styles.sectionLabel}>Device</Text>
             {sortedDevices.length === 0 && (
               <Text style={styles.emptyText}>No devices yet. Run the codecast daemon on a machine.</Text>
             )}
@@ -197,16 +208,16 @@ export function AssignmentChip({
                   <FontAwesome name={deviceIcon(dev)} size={14} color={color} style={{ width: 20 }} />
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={[styles.rowLabel, isCurrent && { color }]} numberOfLines={1}>
-                      {dev.is_remote && !isCurrent ? `Move to ${deviceDisplayName(dev)}` : deviceDisplayName(dev)}
+                      {deviceDisplayName(dev)}
                     </Text>
                     <Text style={styles.rowHint} numberOfLines={1}>
                       {isCurrent
                         ? 'Running here'
                         : dev.online
                           ? dev.is_remote
-                            ? 'Transfers the worktree'
-                            : 'Run here'
-                          : `Offline · last seen ${relativeSeen(dev.last_seen)}`}
+                            ? 'Online · moves the worktree'
+                            : 'Online'
+                          : `Offline · ${relativeSeen(dev.last_seen)}`}
                     </Text>
                   </View>
                   {isCurrent ? (
@@ -278,9 +289,9 @@ function OwnerSheetRows({
   return (
     <>
       {activeTeamId !== undefined && <OrgRolesFeeder teamId={activeTeamId} />}
+      <Text style={styles.sectionLabel}>Owners</Text>
       {currentRole && (
         <>
-          <Text style={styles.sectionLabel}>Reports to a role</Text>
           <View style={styles.row}>
             <FontAwesome name="sitemap" size={13} color={Theme.violet} style={{ width: 20 }} />
             <Text style={[styles.rowLabel, { flex: 1 }]} numberOfLines={1}>{currentRole.name}</Text>
@@ -311,11 +322,8 @@ function OwnerSheetRows({
               </TouchableOpacity>
             );
           })}
-          <View style={styles.divider} />
         </>
       )}
-
-      <Text style={styles.sectionLabel}>Owners · whose inbox</Text>
       {isPerson(currentUser) && !ownerIds.has(currentUser._id) && (
         <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); onDone(); void toggle(currentUser._id); }}>
           <FontAwesome name="user-plus" size={13} color={Theme.cyan} style={{ width: 20 }} />
@@ -485,6 +493,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   lobeText: chipText,
   dot: { width: 6, height: 6, borderRadius: 3 },
+  faces: { flexDirection: 'row', alignItems: 'center' },
+  // A ring in the chip's own fill separates overlapping faces.
+  faceRing: { borderRadius: 9, borderWidth: 1.5, borderColor: Theme.bg },
+  faceOverlap: { marginLeft: -5 },
   backdrop: {
     flex: 1,
     justifyContent: 'flex-end',

@@ -81,37 +81,41 @@ export async function renderMarkdownBody(md: string): Promise<string> {
 }
 
 
-// The codecast Solarized palette (web app globals.css), tuned for long reading:
-// body text one step softer than headings, code panels on the inset surface,
-// and the web app's syntax colours. Written once per scheme and emitted twice
+// The palette of codecast's Modern style: neutral surfaces, a near-black ink
+// with a green cast, and the verdigris accent. The page (--md-page) is the
+// app's background and the document sits on it as an outlined sheet (--md-bg).
+// Syntax colours stay the web app's. Written once per scheme and emitted twice
 // for dark, because dark applies either by choice (data-theme) or by the OS
 // when the reader has made no choice.
 const MD_LIGHT = `
   color-scheme: light;
-  --md-bg: #fbf5e2; --md-head: #002b36; --md-ink: #073642; --md-mut: #586e75; --md-dim: #93a1a1;
-  --md-line: rgba(88,110,117,.2); --md-card: #f3edda; --md-raise: #fffdf6; --md-soft: rgba(147,161,161,.2);
-  --md-coral: #e86c5d; --md-link: #b45309; --md-mark: rgba(181,137,0,.22); --md-quote: #2aa198;
-  --md-k: #859900; --md-s: #2aa198; --md-n: #d33682; --md-f: #268bd2; --md-c: #93a1a1;
+  --md-page: #f4f5f3; --md-bg: #ffffff; --md-head: #111614; --md-ink: #2a322f; --md-mut: #5d6662; --md-dim: #8b9490;
+  --md-line: rgba(17,22,20,.1); --md-card: #f6f7f5; --md-raise: #ffffff; --md-soft: rgba(17,22,20,.055);
+  --md-accent: #1f7a6b; --md-link: #1a6c5e; --md-mark: rgba(234,179,8,.24); --md-quote: #c9cfcc;
+  --md-shadow: 0 1px 2px rgba(16,24,22,.04), 0 18px 40px -24px rgba(16,24,22,.2);
+  --md-k: #859900; --md-s: #2aa198; --md-n: #d33682; --md-f: #268bd2; --md-c: #8b9490;
   --md-t: #b58900; --md-v: #cb4b16; --md-b: #dc322f;`;
 const MD_DARK = `
   color-scheme: dark;
-  --md-bg: #002b36; --md-head: #fdf6e3; --md-ink: #eee8d5; --md-mut: #93a1a1; --md-dim: #657b83;
-  --md-line: rgba(147,161,161,.16); --md-card: #073642; --md-raise: #08404e; --md-soft: rgba(147,161,161,.15);
-  --md-link: #eba445; --md-mark: rgba(181,137,0,.34); --md-c: #6c8289;`;
+  --md-page: #101312; --md-bg: #171b1a; --md-head: #f1f3f2; --md-ink: #d2d8d5; --md-mut: #9aa39f; --md-dim: #6c7571;
+  --md-line: rgba(255,255,255,.085); --md-card: #1d2220; --md-raise: #212725; --md-soft: rgba(255,255,255,.07);
+  --md-accent: #5dbfa9; --md-link: #72c9b5; --md-mark: rgba(234,179,8,.26); --md-quote: #3a423f;
+  --md-shadow: 0 1px 2px rgba(0,0,0,.4), 0 20px 48px -24px rgba(0,0,0,.7); --md-c: #6c7571;`;
 
 const MONO = `"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace`;
+const SANS = `"Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif`;
 
-/** Loaded by BOTH the published document and the editor preview. Hanken
- * Grotesk for reading text, JetBrains Mono (the codecast face) for headings,
- * code and labels. The @import has to be the first rule of whichever <style>
- * holds this. */
+/** Loaded by BOTH the published document and the editor preview. Instrument
+ * Sans (the Modern interface face) for text and headings, JetBrains Mono for
+ * code only. The @import has to be the first rule of whichever <style> holds
+ * this. */
 export const MD_THEME_CSS = `
-@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 :root {${MD_LIGHT} }
 @media (prefers-color-scheme: dark) { :root:not([data-theme=light]) {${MD_DARK} } }
 :root[data-theme=dark] {${MD_DARK} }
 .md {
-  font: 400 clamp(16px, 1rem + .1vw, 17px)/1.7 "Hanken Grotesk", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font: 400 clamp(16px, .97rem + .1vw, 16.5px)/1.68 ${SANS};
   color: var(--md-ink);
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
   font-feature-settings: "kern", "liga", "calt";
@@ -119,30 +123,29 @@ export const MD_THEME_CSS = `
 }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
-.md ::selection { background: color-mix(in srgb, var(--md-coral) 30%, transparent); }
-.md p { margin: 0 0 1.15em; text-wrap: pretty; }
+.md ::selection { background: color-mix(in srgb, var(--md-accent) 24%, transparent); }
+.md p { margin: 0 0 1.1em; text-wrap: pretty; }
 .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
-  position: relative; font-family: ${MONO}; font-weight: 600; line-height: 1.25; color: var(--md-head);
-  letter-spacing: -.02em; text-wrap: balance; scroll-margin-top: 64px;
+  position: relative; font-family: ${SANS}; font-weight: 600; line-height: 1.3; color: var(--md-head);
+  letter-spacing: -.012em; text-wrap: balance; scroll-margin-top: 64px;
 }
-.md h1 { font-size: 1.95em; font-weight: 700; margin: 0 0 .9em; letter-spacing: -.035em; line-height: 1.15; }
-/* A short coral rule under the page title, echoing the heading anchors. */
-.md > h1:first-child::after { content: ""; display: block; width: 36px; height: 2px; margin-top: .6em; border-radius: 1px;
-  background: color-mix(in srgb, var(--md-coral) 70%, transparent); }
-.md h2 { font-size: 1.28em; margin: 2.1em 0 .6em; }
-.md h3 { font-size: 1.08em; margin: 1.8em 0 .5em; }
-.md h4 { font-size: .96em; margin: 1.6em 0 .45em; }
-.md h5, .md h6 { font-size: .82em; color: var(--md-mut); margin: 1.6em 0 .5em; letter-spacing: 0; }
-.md .anchor { position: absolute; right: 100%; margin-right: .55em; top: 0; color: var(--md-coral);
-  font-family: ${MONO}; font-weight: 500; text-decoration: none; opacity: 0; transition: opacity .15s ease; }
-.md h1 .anchor { line-height: 1.15; }
-.md :is(h1,h2,h3,h4,h5,h6):hover .anchor, .md .anchor:focus-visible { opacity: .85; }
-@media (min-width: 920px) { .md h2 .anchor { opacity: .32; } }
+.md h1 { font-size: 2.05em; margin: 0 0 .8em; letter-spacing: -.028em; line-height: 1.14; }
+/* The page title closes on a hairline across the sheet, like a document head. */
+.md > h1:first-child { padding-bottom: .7em; margin-bottom: 1.1em; border-bottom: 1px solid var(--md-line); }
+.md h2 { font-size: 1.36em; margin: 2em 0 .55em; letter-spacing: -.018em; }
+.md h3 { font-size: 1.1em; margin: 1.7em 0 .45em; }
+.md h4 { font-size: 1em; margin: 1.5em 0 .4em; }
+.md h5, .md h6 { font-size: .88em; color: var(--md-mut); margin: 1.5em 0 .4em; letter-spacing: 0; }
+.md .anchor { position: absolute; right: 100%; margin-right: .5em; top: 0; color: var(--md-dim);
+  font-weight: 500; text-decoration: none; opacity: 0; transition: opacity .15s ease, color .15s ease; }
+.md .anchor:hover { color: var(--md-accent); }
+.md h1 .anchor { line-height: 1.14; }
+.md :is(h1,h2,h3,h4,h5,h6):hover .anchor, .md .anchor:focus-visible { opacity: 1; }
 .md a { color: var(--md-link); text-decoration: underline; text-decoration-thickness: 1px;
-  text-decoration-color: color-mix(in srgb, var(--md-link) 38%, transparent); text-underline-offset: .2em;
+  text-decoration-color: color-mix(in srgb, var(--md-link) 35%, transparent); text-underline-offset: .2em;
   transition: text-decoration-color .15s ease, color .15s ease; }
 .md a:hover { text-decoration-color: currentColor; }
-.md strong { font-weight: 650; color: var(--md-head); }
+.md strong { font-weight: 600; color: var(--md-head); }
 .md em { font-style: italic; }
 .md mark { background: var(--md-mark); color: inherit; padding: 0 .15em; border-radius: 3px; }
 .md del { color: var(--md-mut); }
@@ -161,38 +164,35 @@ export const MD_THEME_CSS = `
 .md pre[data-lang]::before { content: attr(data-lang); position: absolute; top: 10px; left: 1.5em; color: var(--md-dim);
   font: 500 .8em/1 ${MONO}; pointer-events: none; }
 .md pre .copy { all: unset; position: absolute; top: 6px; right: 8px; cursor: pointer; color: var(--md-mut);
-  font: 500 .8em/1 ${MONO}; padding: 5px 8px; border-radius: 6px;
+  font: 500 .8em/1 ${SANS}; padding: 5px 8px; border-radius: 6px;
   background: var(--md-raise); border: 1px solid var(--md-line); opacity: 0; transition: opacity .15s ease, color .15s ease; }
 .md pre:hover .copy, .md pre .copy:focus-visible, .md pre .copy.done { opacity: 1; }
 .md pre .copy:hover { color: var(--md-head); }
-.md pre .copy.done { color: var(--md-k); border-color: color-mix(in srgb, var(--md-k) 45%, transparent); }
+.md pre .copy.done { color: var(--md-accent); border-color: color-mix(in srgb, var(--md-accent) 45%, transparent); }
 @media (hover: none) { .md pre .copy { opacity: 1; } }
-.md blockquote { margin: 1.5em 0; padding: .8em 1.1em; border-left: 3px solid var(--md-quote); border-radius: 0 8px 8px 0;
-  background: color-mix(in srgb, var(--md-quote) 7%, transparent); color: var(--md-mut); }
+.md blockquote { margin: 1.4em 0; padding: .1em 0 .1em 1.1em; border-left: 2px solid var(--md-quote); color: var(--md-mut); }
 .md blockquote p { margin-bottom: .7em; }
 .md blockquote > :last-child { margin-bottom: 0; }
-.md ul, .md ol { margin: 0 0 1.15em; padding-left: 1.5em; }
-.md li { margin: .32em 0; padding-left: .25em; }
+.md ul, .md ol { margin: 0 0 1.1em; padding-left: 1.4em; }
+.md li { margin: .35em 0; padding-left: .3em; }
 .md li > p { margin-bottom: .5em; }
 .md li > ul, .md li > ol { margin: .3em 0 .3em; }
-.md ul > li::marker { color: var(--md-coral); }
-.md ul ul > li::marker { color: var(--md-dim); }
-.md ol > li::marker { color: var(--md-dim); font: 500 .8em ${MONO}; font-variant-numeric: tabular-nums; }
-.md li:has(> input[type=checkbox]) { list-style: none; margin-left: -1.5em; padding-left: 0; display: flex; gap: .6em; align-items: baseline; }
+.md li::marker { color: var(--md-dim); }
+.md ol > li::marker { font-variant-numeric: tabular-nums; }
+.md li:has(> input[type=checkbox]) { list-style: none; margin-left: -1.4em; padding-left: 0; display: flex; gap: .6em; align-items: baseline; }
 .md input[type=checkbox] { appearance: none; -webkit-appearance: none; width: .95em; height: .95em; margin: 0; flex: none;
   position: relative; top: .12em; border: 1.5px solid var(--md-dim); border-radius: 4px; background: var(--md-raise); opacity: 1; }
-.md input[type=checkbox]:checked { border-color: var(--md-k); background: var(--md-k); }
+.md input[type=checkbox]:checked { border-color: var(--md-accent); background: var(--md-accent); }
 .md input[type=checkbox]:checked::after { content: ""; position: absolute; left: .26em; top: .08em; width: .28em; height: .5em;
   border: solid var(--md-bg); border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .md li:has(> input[type=checkbox]:checked) { color: var(--md-dim); text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--md-dim) 60%, transparent); }
-.md hr { border: 0; margin: 2.8em auto; text-align: center; overflow: visible; height: auto; }
-.md hr::before { content: "* * *"; color: var(--md-coral); font: 500 .85em/1 ${MONO}; letter-spacing: .6em; padding-left: .6em; }
+.md hr { border: 0; border-top: 1px solid var(--md-line); margin: 2.4em 0; height: 0; }
 .md img, .md video { display: block; max-width: 100%; height: auto; margin: 1.5em auto; border-radius: 8px;
   box-shadow: 0 0 0 1px var(--md-line); }
 .md p > img:only-child { margin: .2em auto; }
 .md figure { margin: 1.5em 0; }
-.md figcaption { text-align: center; color: var(--md-mut); font: 400 .78em/1.5 ${MONO}; margin-top: .7em; }
+.md figcaption { text-align: center; color: var(--md-mut); font-size: .84em; line-height: 1.5; margin-top: .7em; }
 .md .tbl { margin: 1.5em 0; overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--md-line); border-radius: 10px;
   /* Scroll shadows: an edge with columns hidden past it darkens; the local
      layers cover each shadow once that edge is scrolled to. */
@@ -207,14 +207,14 @@ export const MD_THEME_CSS = `
 .md .tbl::-webkit-scrollbar-track { background: transparent; }
 .md .tbl::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--md-mut) 45%, transparent); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
 .md table { border-collapse: collapse; width: 100%; font-size: .92em; line-height: 1.5; font-variant-numeric: tabular-nums lining-nums; }
-.md th, .md td { text-align: left; padding: .55em .85em; border-bottom: 1px solid var(--md-line); vertical-align: top; }
+.md th, .md td { text-align: left; padding: .6em .9em; border-bottom: 1px solid var(--md-line); vertical-align: top; }
 .md td.prose { min-width: 15em; }
-.md th { font: 600 .8em/1.4 ${MONO}; color: var(--md-head); background: var(--md-card); white-space: nowrap; }
+.md th { font-weight: 600; font-size: .9em; color: var(--md-head); background: var(--md-card); white-space: nowrap; }
 .md tbody tr:last-child td { border-bottom: 0; }
 .md tbody tr:hover td { background: color-mix(in srgb, var(--md-card) 60%, transparent); }
 .md details { margin: 1.2em 0; padding: .65em 1em; border: 1px solid var(--md-line); border-radius: 10px; background: var(--md-card); }
 .md summary { cursor: pointer; font-weight: 600; color: var(--md-head); }
-.md summary::marker { color: var(--md-coral); }
+.md summary::marker { color: var(--md-dim); }
 .md details[open] > summary { margin-bottom: .6em; }
 .md .hljs-comment, .md .hljs-quote { color: var(--md-c); font-style: italic; }
 .md .hljs-keyword, .md .hljs-selector-tag, .md .hljs-doctag, .md .hljs-formula { color: var(--md-k); }
@@ -328,10 +328,14 @@ export function mdDocumentHtml(o: { title: string; bodyHtml: string }): string {
 ${MD_THEME_BOOT}
 <style>${MD_THEME_CSS}
   * { box-sizing: border-box; }
-  html { background: var(--md-bg); }
-  body { margin: 0; background: var(--md-bg); color: var(--md-ink); min-height: 100vh; }
-  main { max-width: 42rem; margin: 0 auto;
-    padding: clamp(32px, 8vh, 80px) calc(24px + env(safe-area-inset-right)) calc(112px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left));
+  html { background: var(--md-page); }
+  body { margin: 0; background: var(--md-page); color: var(--md-ink); min-height: 100vh;
+    padding: clamp(16px, 5vh, 48px) calc(20px + env(safe-area-inset-right)) calc(96px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left)); }
+  /* The document is a sheet on the page: one hairline, a soft lift, the
+     card radius of the app's Modern style. */
+  main { max-width: 46rem; margin: 0 auto; background: var(--md-bg);
+    border: 1px solid var(--md-line); border-radius: 14px; box-shadow: var(--md-shadow);
+    padding: clamp(36px, 6vw, 64px) clamp(28px, 7vw, 76px) clamp(40px, 6vw, 72px);
     animation: md-rise .6s cubic-bezier(.2,.7,.2,1) both; }
   /* A table wider than the text column spreads past it, centred, up to the viewport. */
   main.md .tbl { width: max-content; min-width: 100%; max-width: min(calc(100vw - 64px), 72rem);
@@ -341,12 +345,12 @@ ${MD_THEME_BOOT}
   .md-theme { all: unset; position: fixed; right: calc(18px + env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom));
     z-index: 10; width: 38px; height: 38px; border-radius: 999px; cursor: pointer; display: grid; place-items: center;
     color: var(--md-mut); background: color-mix(in srgb, var(--md-raise) 88%, transparent);
-    box-shadow: 0 0 0 1px var(--md-line), 0 6px 20px -8px rgba(0,43,54,.35);
+    box-shadow: 0 0 0 1px var(--md-line), 0 6px 20px -8px rgba(16,24,22,.3);
     -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
     transition: color .2s ease, transform .2s cubic-bezier(.3,.7,.2,1); -webkit-tap-highlight-color: transparent; }
   .md-theme:hover { color: var(--md-head); transform: translateY(-2px); }
   .md-theme:active { transform: scale(.94); }
-  .md-theme:focus-visible { box-shadow: 0 0 0 2px var(--md-coral); }
+  .md-theme:focus-visible { box-shadow: 0 0 0 2px var(--md-accent); }
   .md-theme svg { grid-area: 1 / 1; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8;
     stroke-linecap: round; stroke-linejoin: round; transition: transform .5s cubic-bezier(.3,.7,.2,1), opacity .3s ease; }
   .md-theme .sun { opacity: 0; transform: rotate(-90deg) scale(.5); }
@@ -359,10 +363,17 @@ ${MD_THEME_BOOT}
   /* A codecast window framing the page owns its theme. */
   :root[data-theme-host] .md-theme { display: none; }
   @media (prefers-reduced-motion: reduce) { main { animation: none; } .md-theme svg { transition: none; } }
-  @media (max-width: 640px) { .md .anchor { display: none; } .md h1 { font-size: 1.7em; } }
+  @media (max-width: 640px) {
+    html, body { background: var(--md-bg); }
+    body { padding: 0 0 calc(96px + env(safe-area-inset-bottom)); }
+    main { border: 0; border-radius: 0; box-shadow: none;
+      padding: 28px calc(22px + env(safe-area-inset-right)) 0 calc(22px + env(safe-area-inset-left)); }
+    .md .anchor { display: none; } .md h1 { font-size: 1.75em; }
+  }
   @media print {
-    :root { --md-bg: #fff; --md-ink: #000; --md-head: #000; --md-card: #fff; }
-    main { max-width: none; padding: 0; animation: none; }
+    :root { --md-page: #fff; --md-bg: #fff; --md-ink: #000; --md-head: #000; --md-card: #fff; }
+    body { padding: 0; }
+    main { max-width: none; padding: 0; border: 0; box-shadow: none; animation: none; }
     .md .anchor, .md .copy, .md-theme { display: none !important; }
     .md pre, .md blockquote, .md .tbl, .md img { break-inside: avoid; }
     main.md .tbl { width: auto; max-width: none; margin-left: 0; transform: none; }

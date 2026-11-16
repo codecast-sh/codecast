@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { ScrollView, StyleSheet, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { FontAwesome } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { BottomSheet } from '@/components/BottomSheet';
+import { BottomSheet, useRunAfterDismiss } from '@/components/BottomSheet';
 import { Text } from '@/components/Themed';
 import { themedStyles, useTheme } from '@/constants/Theme';
 
@@ -34,14 +34,14 @@ export function OptionSheet({
 }) {
   const Theme = useTheme();
   const { height } = useWindowDimensions();
+  const after = useRunAfterDismiss(onClose);
   const pick = (key: string) => {
     Haptics.selectionAsync();
-    onClose();
-    onSelect(key);
+    after.run(() => onSelect(key));
   };
 
   return (
-    <BottomSheet visible={visible} onClose={onClose}>
+    <BottomSheet visible={visible} onClose={onClose} onDismiss={after.onDismiss}>
       <Text style={styles.title}>{title}</Text>
       <ScrollView style={{ maxHeight: height * 0.5 }}>
         {options.map((o) => {
