@@ -1,0 +1,113 @@
+# frozen_string_literal: true
+module Ethon
+  class Easy
+    # This module contains logic for streaming response bodies to Ruby IOs.
+    module Files
+      # Stream the response body to a path or writable Ruby object. Ethon closes
+      # files it opens from paths; caller-provided objects remain caller-owned.
+      # Pass nil to restore in-memory response buffering.
+      def file=(destination)
+        # Resolve the handle first. Opening a path truncates it, so a cleaned
+        # up or fork-inherited handle must not touch the destination before the
+        # error is raised.
+        handle
+
+        # Install the new destination before releasing the old one. A failed
+        # open must leave the previous destination and its buffered response
+        # usable instead of leaving the Easy pointed at a path that cannot be
+        # opened.
+        # Pathname-like objects may also implement #write. Prefer the path when
+        # the object is not an IO (File and Tempfile expose #fileno).
+        if destination.respond_to?(:to_path) && !destination.respond_to?(:fileno)
+          replace_response_body_path(destination.to_path)
+        elsif destination.respond_to?(:write)
+          replace_response_body_io(destination)
+        elsif destination
+          replace_response_body_path(destination.to_s)
+        else
+          clear_response_body_io
+        end
+
+        @response_body = @response_body_io ? nil : String.new
+        destination
+      end
+
+      alias writedata= file=
+
+      def prepare_response_body_io
+        return unless @response_body_path && !@response_body_io
+
+        @response_body_io = File.open(@response_body_path, "wb")
+        @owns_response_body_io = true
+      end
+
+      def close_response_body_io
+        @response_body_io.close if @owns_response_body_io && @response_body_io && !@response_body_io.closed?
+        @response_body_io = nil
+        @owns_response_body_io = false
+      end
+
+      def clear_response_body_io
+        close_response_body_io
+        @response_body_path = nil
+      end
+
+      # Flush buffered writes without closing a caller-owned IO. Response
+      # callbacks and readers should see the complete body before the transfer
+      # is treated as finished.
+      def flush_response_body_io
+        io = @response_body_io
+        return unless io
+        return if io.respond_to?(:closed?) && io.closed?
+
+        io.flush if io.respond_to?(:flush)
+      end
+
+      # Finish the destination used by one transfer. A completion callback may
+      # already have installed the destination for the next transfer; only the
+      # stream this transfer wrote to belongs to it.
+      #
+      # @param [ IO, nil ] io The destination that transfer used.
+      def finish_response_body_io(io = @response_body_io)
+        return unless @response_body_io && @response_body_io.equal?(io)
+
+        if @owns_response_body_io
+          close_response_body_io
+        else
+          flush_response_body_io
+        end
+      end
+
+      private
+
+      # Open the new path first. If that fails, or if the old destination
+      # cannot be released, the previous state stays in place.
+      def replace_response_body_path(path)
+        io = File.open(path, "wb")
+        begin
+          clear_response_body_io
+        rescue Exception
+          close_quietly(io)
+          raise
+        end
+
+        @response_body_path = path
+        @response_body_io = io
+        @owns_response_body_io = true
+      end
+
+      def replace_response_body_io(io)
+        clear_response_body_io
+        @response_body_io = io
+        @owns_response_body_io = false
+      end
+
+      def close_quietly(io)
+        io.close unless io.closed?
+      rescue StandardError
+        # The caller is already handling the failure that kept us from
+        # installing the new destination.
+      end
+    end
+  end
+end

@@ -1,0 +1,19 @@
+current directory: /Users/codecast/src/codecast/~/.gem/hdr/gems/nkf-0.3.0/ext/nkf
+/opt/homebrew/opt/ruby/bin/ruby extconf.rb
+creating Makefile
+
+current directory: /Users/codecast/src/codecast/~/.gem/hdr/gems/nkf-0.3.0/ext/nkf
+make -j15 DESTDIR\= sitearchdir\=./.gem.20261116-18632-x3aj70 sitelibdir\=./.gem.20261116-18632-x3aj70 clean
+
+current directory: /Users/codecast/src/codecast/~/.gem/hdr/gems/nkf-0.3.0/ext/nkf
+make -j15 DESTDIR\= sitearchdir\=./.gem.20261116-18632-x3aj70 sitelibdir\=./.gem.20261116-18632-x3aj70
+compiling nkf.c
+linking shared-object nkf.bundle
+ld: warning: search path '/opt/homebrew/Cellar/openssl@3/3.6.1/lib' not found
+
+current directory: /Users/codecast/src/codecast/~/.gem/hdr/gems/nkf-0.3.0/ext/nkf
+make -j15 DESTDIR\= sitearchdir\=./.gem.20261116-18632-x3aj70 sitelibdir\=./.gem.20261116-18632-x3aj70 install
+/usr/bin/install -c -m 0755 nkf.bundle ./.gem.20261116-18632-x3aj70
+
+current directory: /Users/codecast/src/codecast/~/.gem/hdr/gems/nkf-0.3.0/ext/nkf
+make DESTDIR\= sitearchdir\=./.gem.20261116-18632-x3aj70 sitelibdir\=./.gem.20261116-18632-x3aj70 clean

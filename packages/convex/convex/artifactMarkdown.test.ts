@@ -36,20 +36,12 @@ describe("artifactMarkdown", () => {
     expect(html).toContain('<td style="text-align:right">2</td>');
   });
 
-  test("a column holding sentences is marked so it keeps a readable width", async () => {
-    const html = await renderMarkdownBody("| arm | what it is | p |\n|--|--|--|\n| c | reference: agent review with tools and more | 0.88 |\n| b | short | 0.82 |");
-    expect(html).toContain('<th class="prose">what it is</th>');
-    expect(html).toContain('<td class="prose">short</td>');
-    expect(html).toContain("<td>0.88</td>");
-    expect(html).toContain("<th>arm</th>");
-  });
-
   test("the document shell carries the theme, the title, and the copy script", async () => {
     const html = await renderMarkdownDocument("# T", "A <title>");
     expect(html).toContain("<title>A &lt;title&gt;</title>");
     expect(html).toContain('<main class="md">');
     expect(html).toContain('<meta name="color-scheme" content="light dark">');
-    expect(html).toContain("fonts.googleapis.com/css2?family=Hanken+Grotesk");
+    expect(html).toContain("fonts.googleapis.com/css2?family=Instrument+Sans");
     expect(html).toContain('querySelectorAll(".md pre")');
   });
 

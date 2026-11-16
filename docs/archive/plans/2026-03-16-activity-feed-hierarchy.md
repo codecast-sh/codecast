@@ -104,7 +104,7 @@ Note: We store `narrative` as the headline string and the `bullets` get embedded
 - [ ] **Step 3: Deploy Convex changes**
 
 ```bash
-cd /Users/ashot/src/codecast && npx convex deploy
+cd /Users/codecast/src/codecast && npx convex deploy
 ```
 
 - [ ] **Step 4: Regenerate day narratives to populate new format**
@@ -524,7 +524,7 @@ git commit -m "feat(web): wire up simplified ActivityFeed with new DaySection pr
 curl -s -o /dev/null -w "%{http_code}" http://local.codecast.sh
 ```
 
-If not running: `cd /Users/ashot/src/codecast && ./dev.sh`
+If not running: `cd /Users/codecast/src/codecast && ./dev.sh`
 
 - [ ] **Step 2: Take screenshot of the feed view**
 

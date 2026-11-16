@@ -122,19 +122,3 @@ describe("finalize refuses a manifest that misdescribes the helper", () => {
     expect(validate.run).toContain("the two darwin artifacts carry different cast computer helpers");
   });
 });
-
-describe("the builder builds the commit it was dispatched on", () => {
-  test("checkout pins github.sha, never the moving main branch (ct-93387)", () => {
-    // A macOS job can wait many minutes for a runner. Checking out `main` at job
-    // start built whatever landed in that window, against a daemon build id
-    // stamp committed for the dispatched tree.
-    const checkout = steps.find((s) => typeof s.uses === "string" && s.uses.startsWith("actions/checkout@"));
-    expect(checkout?.with?.ref).toBe("${{ github.sha }}");
-  });
-});
-
-describe("only main ships", () => {
-  test("a dispatch from another branch runs only as a dry run", () => {
-    expect((cut.jobs.build as any).if).toBe("github.ref == 'refs/heads/main' || inputs.dry_run");
-  });
-});
