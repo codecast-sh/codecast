@@ -33,7 +33,7 @@ import { describeHolders, planStop, releaseSession } from "./refcount.js";
 import { openDriver, type BrowserDriver } from "./driver.js";
 import { BrowserNotLive, explainConnectionLoss, isReachable, isTabUnresponsive } from "./recovery.js";
 import {
-  browserHome, keepsOwnLogin, listRealProfiles, type ChromeChannel,
+  browserHome, listRealProfiles, type ChromeChannel,
 } from "./profile.js";
 import { matchRefs, nearMatches, pickOrdinal, refLabel, snapshotJson, snapshotPage, splitOrdinalQuery } from "./snapshot.js";
 import {
@@ -48,13 +48,13 @@ import { defaultShotPath, imageSize, shotJson, writeShotFile } from "./shotFile.
 import { autoShotsEnabled, cdpAutoShotSource, clearAutoShots, maybeAutoShot, pruneHashes, setAutoShots } from "./autoShot.js";
 import { ownerKey } from "./owner.js";
 import { DesktopPaneUnavailable, withDesktopPanePage } from "./desktopPane.js";
-import { registerEngineCommands } from "./cliEngine.js";
+import { landingSignInNote, registerEngineCommands, useVaultSignin } from "./cliEngine.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
 import { startLocalBrowser, startManagedBrowser, stopRemoteManagedBrowser } from "./managedBrowser.js";
 import { ENGINE_MIN_VERSION, ENGINE_PACKAGE, engineFitness, ensureEngine } from "./engine.js";
 import { sameDocument } from "./url.js";
 import { loadSitePolicy } from "./policy.js";
-import { auditLanding, refuseNavigation, signInLandingNote } from "./siteGuard.js";
+import { auditLanding, refuseNavigation } from "./siteGuard.js";
 import { registerAuditCommand } from "./auditCommand.js";
 import { runBatch, type BatchContext } from "./batch.js";
 import { printStepResults, readStepPlan } from "../stepBatch.js";
@@ -62,10 +62,9 @@ import { provisionCredentials } from "./credentials.js";
 import { bridgeEndpoint, requestBrowserProfile } from "./bridge/host.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import {
-  hostOwnsBrowser, selectHostBrowser, isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
+  hostOwnsBrowser, selectHostBrowser, isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage,
 } from "./bridge/real.js";
 import { runBrowserSync, DEFAULT_SYNC_WAIT_S } from "./sync.js";
-import { cloudHostSignInHint } from "../cloud/browserSync.js";
 import { isRemoteDevice } from "../remote/device.js";
 import { buildHostsCommand } from "../hosts/cli.js";
 import { uploadOne } from "../imageCommand.js";
@@ -514,6 +513,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   async function openReal(url: string, o: { newTab?: boolean; wait: boolean }): Promise<void> {
     const sessionKey = me();
     await inReal(async (bridge, conn) => {
+      // A sign-in the team saved in the Vault goes into the human's Chrome before the tab loads the site.
+      const signin = await useVaultSignin(url, me, bridgeEndpoint(bridge));
       const targets = await listRealTargets(bridge);
       const owned = ownedRealTab(sessionKey);
       let targetId: string;
@@ -543,6 +544,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       const snap = await narrated("reading the page", snapshotPage(page, { maxChars: 1 }));
       console.log(pageLine(snap.url, snap.title));
       console.log(fmt.muted(`  real tab ${shortTabId(targetId)} — Chrome shows its debugging banner while cast drives it`));
+      const signIn = landingSignInNote(snap.url, { real: true, owner: sessionKey, signin });
+      if (signIn) console.log(`${WARN} ${signIn}`);
     });
   }
 
@@ -620,6 +623,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
             console.log(fmt.muted(`  carried ${cred.injected} cookie(s) for ${cred.host} from this machine`));
           }
         }
+        // Then a sign-in the team saved in the Vault, where this browser has none for the site.
+        const signin = await useVaultSignin(url, me);
 
         // Don't reload a page we are already on.
         //
@@ -656,7 +661,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // what was asked for, and if it left the allowlist, say so loudly.
         const landed = auditLanding({ url: snap.url, tab: targetId, session: me(), via: "open", policy });
         if (landed) console.log(`${WARN} ${landed}`);
-        const signIn = isRemoteDevice() ? cloudHostSignInHint(snap.url) : signInLandingNote(snap.url, keepsOwnLogin, { real: false, realHint: realModeHint(me()) });
+        const signIn = landingSignInNote(snap.url, { real: false, owner: me(), signin });
         if (signIn) console.log(`${WARN} ${signIn}`);
         console.log(fmt.muted(`  ${tabLine(targetId, "next: cast browser snapshot")}`));
         await emitAutoShot(page, o.shot);

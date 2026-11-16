@@ -718,10 +718,28 @@ export function isAutoContinueEnabled(device: { cc_auto_continue?: boolean | nul
   return device.cc_auto_continue === true;
 }
 
+/** The device flags one recovery mode stands for. setRecoveryMode keeps
+ * ask-first and auto-switch exclusive, and every mode but "off" resumes. */
+export function recoveryFlags(mode: RecoveryMode) {
+  return { cc_recovery_ask: mode === "ask", cc_auto_switch: mode === "auto", cc_auto_continue: mode !== "off" };
+}
+
+/** A machine row carrying its person's recovery mode. The mode belongs to the
+ * person (users.cc_recovery_mode), so every machine they run recovers the same
+ * way; a person who never chose one keeps the flags their machine row holds.
+ * Remote rows pass through: a cloud host's recovery is recoveryFleet's. */
+export function withPersonRecovery<T extends { is_remote?: boolean | null }>(
+  device: T,
+  user: { cc_recovery_mode?: RecoveryMode } | null | undefined,
+): T {
+  if (!user?.cc_recovery_mode || device.is_remote) return device;
+  return { ...device, ...recoveryFlags(user.cc_recovery_mode) };
+}
+
 /** Whether codecast may send a "continue" on the person's behalf at all: a
  * limit resume, an account switch, an error retry, a crash revive. Any mode
- * but "off" on the primary device row (see loadPrimaryForToggle); no primary
- * online means no one chose, so nothing is sent. */
+ * but "off" (withPersonRecovery); no primary online means nothing can be
+ * sent. */
 export function autoRecoveryEnabled(
   primary: { cc_auto_switch?: boolean | null; cc_recovery_ask?: boolean | null; cc_auto_continue?: boolean | null } | undefined | null,
 ): boolean {
@@ -1037,7 +1055,8 @@ export async function listOnlineDevices(
     .query("devices")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
-  const online = devices.filter((d) => isDeviceOnline(d, now));
+  const user = await ctx.db.get(userId);
+  const online = devices.filter((d) => isDeviceOnline(d, now)).map((d) => withPersonRecovery(d, user));
   const primary = online
     .filter((d) => !d.is_remote)
     .sort((a, b) => b.last_seen - a.last_seen)[0];

@@ -3358,14 +3358,20 @@ export default defineSchema({
     // sign-in, expired, turned off for the account: CloudAgentSetupBlock),
     // heartbeat-reported, so Settings does not call it connected.
     cloud_agent_blocks: v.optional(cloudAgentBlocksValidator),
+    // How codecast recovers a session that stopped on its own (a usage limit,
+    // an API error, a crash), for every machine this person runs. The device
+    // rows' cc_auto_switch / cc_auto_continue / cc_recovery_ask are read only
+    // until the person picks a mode here (withPersonRecovery).
+    cc_recovery_mode: v.optional(v.union(v.literal("ask"), v.literal("auto"), v.literal("resume"), v.literal("off"))),
     // Auto-switch on usage limits: when on, limit-parked sessions trigger a
     // server-side check that switches this machine to the best saved profile
     // and revives them, retrying until unblocked or every account is spent.
-    // Web-set (setAutoSwitchAccounts); the heartbeat never writes these.
+    // The legacy per-machine form of users.cc_recovery_mode, read only while
+    // that is unset; the heartbeat never writes these.
     cc_auto_switch: v.optional(v.boolean()),
     // Same-account resume once the limit window resets (no switch). Only an
     // explicit true turns it on; unset is off (recoveryModeOf).
-    // Web-set (setAutoContinueAccounts). Shares cc_auto_switch_state.
+    // Shares cc_auto_switch_state.
     cc_auto_continue: v.optional(v.boolean()),
     // Ask before changing accounts. When on, a limit that would trigger an
     // account switch instead records a PROPOSAL (cc_auto_switch_state
