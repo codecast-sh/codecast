@@ -133,7 +133,7 @@ export function DecisionList({ title, page, state, rows, tabs = ["mine", "team",
     { key: "kind", label: "Kind", icon: AXIS_ICON.kind, value: view.kind, multi: true, options: opts("kind", [...DECISION_KINDS], (k) => label("kind", k)), onChange: (v: string) => set({ kind: v }) },
     { key: "source", label: "Source", icon: AXIS_ICON.source, value: view.source, multi: true, options: opts("source", [FLOW_SOURCE], (k) => label("source", k)), onChange: (v: string) => set({ source: v }) },
     { key: "category", label: "Category", icon: AXIS_ICON.category, value: view.category, multi: true, options: opts("category", [], categoryLabel), onChange: (v: string) => set({ category: v }) },
-    { key: "blocking", label: "Blocking", icon: <CircleDot className="w-3 h-3" />, value: view.blocking, options: opts("blocking", ["blocking", "advisory"], (k) => (k === "blocking" ? "Blocking" : "Advisory")), onChange: (v: string) => set({ blocking: v }) },
+    { key: "blocking", label: "Blocking", icon: <CircleDot className="w-3 h-3" />, value: view.blocking, options: opts("blocking", ["blocking", "advisory"], (k) => (k === "blocking" ? "Blocking" : "Not blocking")), onChange: (v: string) => set({ blocking: v }) },
     { key: "age", label: "Waiting", icon: <Clock className="w-3 h-3" />, value: view.age, options: [{ key: "", label: "Any time" }, ...DECISION_AGES.map((a) => ({ key: a.key, label: a.label }))], onChange: (v: string) => set({ age: v }) },
   ].filter((d) => !(hideAxes as readonly string[]).includes(d.key));
   const hasFilters = filterDefs.some((d) => !!d.value);
