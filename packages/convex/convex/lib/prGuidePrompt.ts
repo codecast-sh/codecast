@@ -7,7 +7,7 @@
 import { parseChangeGuide, type ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 import { STRONG_MODEL, type SurfaceRequest } from "./anthropic";
 
-export const PR_GUIDE_PROMPT_VERSION = "pr-guide-1";
+export const PR_GUIDE_PROMPT_VERSION = "pr-guide-2";
 export const PR_GUIDE_MODEL = STRONG_MODEL;
 /** The strong model's thinking counts toward max_tokens; only tokens used are billed. */
 export const PR_GUIDE_MAX_TOKENS = 12_000;
@@ -24,7 +24,7 @@ Say only what the diff, the title and the description support. When a reason is 
 
 Format, exactly:
 - Optionally, first, two or three sentences on what the pull request does as a whole.
-- Then one \`##\` heading per step, with the step's location in backticks on the heading line: \`path/to/file.ts:start-end\`, using the new-file line numbers printed in the diff. For a deleted file, or a step about a whole file, give the path alone.
+- Then one \`##\` heading per step: a few words saying what the step does, followed on the same line by its location in backticks, \`path/to/file.ts:start-end\`, using the new-file line numbers printed in the diff. For a deleted file, or a step about a whole file, give the path alone.
 - Under each heading, a short paragraph on what that piece does and why it exists.
 
 A step is one range in one file; a file may appear in several steps. Cover every file with a meaningful change; small related changes can share a final step that names the most representative one. Reply with the guide and nothing else.`;
