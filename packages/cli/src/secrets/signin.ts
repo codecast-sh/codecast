@@ -13,6 +13,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { browserHome } from "../browser/profile.js";
+import { shellArg } from "@codecast/shared/contracts/shellWords";
 import { bareSite as bare, inSigninScope, keepsOwnLogin, originInSigninScope, SECRET_APPROVAL_TTL_MS, secretNameProblem, signinCookie, signinScopeSites, signinSite, type SecretMeta, type SigninCookie, type SigninPayload } from "@codecast/shared/contracts/secrets";
 
 /** A browser's newer cookies go back to the Vault at most this often per sign-in. */
@@ -54,6 +55,12 @@ export function pickSignin(rows: readonly SecretMeta[], host: string, now: numbe
  * rule the backend checks every write against)? Google's are never part of
  * any, as in every other carry.
  */
+/** The command that asks the person, with a Yes card, to save `signin` again from their own Chrome into the same row and workspace. */
+export function resaveSigninCommand(host: string, signin: Pick<SecretMeta, "name" | "workspace">): string {
+  const where = signin.workspace.startsWith("team:") ? `--team ${signin.workspace.slice("team:".length)}` : "--personal";
+  return `cast vault save-signin ${shellArg(host)} --from-chrome --name ${shellArg(signin.name)} ${where}`;
+}
+
 export function inSiteScope(domain: string, sites: readonly string[]): boolean {
   return !keepsOwnLogin(domain) && inSigninScope(domain, sites);
 }
