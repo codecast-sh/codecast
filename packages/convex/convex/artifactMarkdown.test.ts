@@ -49,7 +49,7 @@ describe("artifactMarkdown", () => {
     expect(html).toContain("<title>A &lt;title&gt;</title>");
     expect(html).toContain('<main class="md">');
     expect(html).toContain('<meta name="color-scheme" content="light dark">');
-    expect(html).toContain("fonts.googleapis.com/css2?family=Hanken+Grotesk");
+    expect(html).toContain("fonts.googleapis.com/css2?family=Instrument+Sans");
     expect(html).toContain('querySelectorAll(".md pre")');
   });
 
