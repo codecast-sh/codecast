@@ -45,6 +45,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { PageSession } from "./instance.js";
 import { CdpConnection } from "./cdp.js";
+import { ownsSubdomains } from "./bridge/guardrails.js";
 import { chromeUserDataRoot, cookieDbPath, keepsOwnLogin, type ChromeChannel } from "./profile.js";
 
 export { cookieDbPath };
@@ -165,8 +166,26 @@ export interface ReadCookiesResult {
 }
 
 /**
- * Read and decrypt this machine's cookies for one host — or every host, when
- * `host` is null.
+ * The WHERE clause that picks a host's cookies: every key Chrome would send to
+ * it (cookieHostKeys) and every subdomain's own. A login often lives on a
+ * subdomain the page never loads as a document: Clerk keeps its long-lived
+ * `__client` on `clerk.<site>`, and without it the site's own 60-second
+ * `__session` signs nothing in. A public suffix (`github.io`) or an IP owns no
+ * subdomains, so it reads only its own keys.
+ */
+export function cookieHostWhere(host: string): string {
+  const quote = (h: string) => `'${h.replace(/'/g, "''")}'`;
+  const keys = `host_key IN (${cookieHostKeys(host).map(quote).join(",")})`;
+  const clean = host.replace(/^\.+/, "").toLowerCase();
+  if (!ownsSubdomains(clean)) return keys;
+  // `_` is a LIKE wildcard; a hostname should hold none, but one that does matches only itself.
+  const like = `%.${clean}`.replace(/[\\_]/g, (c) => `\\${c}`);
+  return `(${keys} OR host_key LIKE ${quote(like)} ESCAPE '\\')`;
+}
+
+/**
+ * Read and decrypt this machine's cookies for one host and its subdomains
+ * (cookieHostWhere), or every host, when `host` is null.
  *
  * The database is copied before reading: Chrome holds it open with WAL, and
  * querying the live file risks both a lock error and a torn read.
@@ -188,9 +207,7 @@ export function localCookiesForHost(userDataDir: string, host: string | null, pr
     }
 
     // `host` null reads the whole jar (the manual `sync` with no site).
-    const where = host
-      ? `WHERE host_key IN (${cookieHostKeys(host).map((h) => `'${h.replace(/'/g, "''")}'`).join(",")})`
-      : "";
+    const where = host ? `WHERE ${cookieHostWhere(host)}` : "";
     const raw = execFileSync(
       "sqlite3",
       [
