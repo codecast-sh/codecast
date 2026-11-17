@@ -135,6 +135,42 @@ export function isOnHumanShelf(doc: {
 }
 
 /**
+ * Which docs a docs list shows. "" is the default view, the human's shelf;
+ * "agent" and "mined" are the machine docs off it, split by origin. Web and
+ * mobile both filter through `filterDocsByShelf`, so the two lists can't drift.
+ * Legacy links: "human" means the shelf, "bot" means agent.
+ */
+export type DocShelfFilter = "" | "starred" | "agent" | "mined" | "all";
+
+export const DOC_SHELF_FILTER_LABELS: Record<DocShelfFilter, string> = {
+  "": "Your docs",
+  starred: "Starred",
+  agent: "Agent-internal",
+  mined: "Mined & synced",
+  all: "All docs",
+};
+
+export function filterDocsByShelf<T extends { source?: string | null; pinned?: boolean | null }>(
+  docs: T[],
+  filter: string,
+): T[] {
+  if (filter === "agent" || filter === "bot") return docs.filter((d) => !isOnHumanShelf(d) && docOriginClass(d) === "agent");
+  if (filter === "mined") return docs.filter((d) => !isOnHumanShelf(d) && docOriginClass(d) === "mined");
+  if (filter === "all") return docs;
+  if (filter === "starred") return docs.filter((d) => !!d.pinned);
+  return docs.filter(isOnHumanShelf);
+}
+
+/** The docs list's default order: starred first, then most recently updated. */
+export function compareDocsDefault(
+  a: { pinned?: boolean | null; updated_at: number },
+  b: { pinned?: boolean | null; updated_at: number },
+): number {
+  if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+  return b.updated_at - a.updated_at;
+}
+
+/**
  * The doc source a plan-body doc should carry, derived from its plan's
  * source. Plans have their own source vocabulary (human, promoted, template,
  * fork, imported…); the doc only needs the origin answer, and anything a

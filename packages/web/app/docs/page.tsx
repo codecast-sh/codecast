@@ -9,7 +9,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { DocMenuItems } from "../../components/menus/ObjectContextMenus";
-import { docOriginClass, isOnHumanShelf, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
+import { filterDocsByShelf, DOC_SHELF_FILTER_LABELS, isOnHumanShelf, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
 import { DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
 import { knownCheckoutRoots } from "@codecast/convex/convex/projectPaths";
@@ -185,18 +185,7 @@ export function DocListContent() {
   // board makes between agent work and triage suggestions. "all" shows
   // everything. One shared rule (@codecast/shared/docs), so web and mobile
   // can't drift. Legacy "human"/"bot" links map onto the new values.
-  const sourceFilteredDocs = useMemo(() => {
-    if (sourceFilter === "agent" || sourceFilter === "bot") {
-      return docsList.filter((d) => !isOnHumanShelf(d) && docOriginClass(d) === "agent");
-    }
-    if (sourceFilter === "mined") {
-      return docsList.filter((d) => !isOnHumanShelf(d) && docOriginClass(d) === "mined");
-    }
-    if (sourceFilter === "all") return docsList;
-    if (sourceFilter === "starred") return docsList.filter((d) => !!d.pinned);
-    // "" (default) and legacy "human" links both mean the human's shelf.
-    return docsList.filter(isOnHumanShelf);
-  }, [docsList, sourceFilter]);
+  const sourceFilteredDocs = useMemo(() => filterDocsByShelf(docsList, sourceFilter), [docsList, sourceFilter]);
 
   const isShelfView = sourceFilter === "" || sourceFilter === "human";
   const hiddenAgentCount = useMemo(() => {
@@ -405,11 +394,11 @@ export function DocListContent() {
           {
             key: "source", label: "Source", icon: <Bot className="w-3 h-3" />, value: sourceFilter, showEmptyOption: true,
             options: [
-              { key: "", label: "Your docs (default)", icon: User },
-              { key: "starred", label: "Starred", icon: Star, color: "text-sol-yellow" },
-              { key: "agent", label: "Agent-internal", icon: Bot, color: "text-sol-cyan" },
-              { key: "mined", label: "Mined & synced", icon: Lightbulb, color: "text-sol-yellow" },
-              { key: "all", label: "All docs", icon: Layers },
+              { key: "", label: `${DOC_SHELF_FILTER_LABELS[""]} (default)`, icon: User },
+              { key: "starred", label: DOC_SHELF_FILTER_LABELS.starred, icon: Star, color: "text-sol-yellow" },
+              { key: "agent", label: DOC_SHELF_FILTER_LABELS.agent, icon: Bot, color: "text-sol-cyan" },
+              { key: "mined", label: DOC_SHELF_FILTER_LABELS.mined, icon: Lightbulb, color: "text-sol-yellow" },
+              { key: "all", label: DOC_SHELF_FILTER_LABELS.all, icon: Layers },
             ],
             onChange: (v: string) => setParam({ source: v }),
           },

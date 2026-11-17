@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { stripTitleHeading } from "@codecast/shared/docs";
 import {
   StyleSheet,
@@ -28,7 +27,9 @@ export default function DocDetailScreen() {
   const Theme = useTheme();
   const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
   const router = useRouter();
-  const docs = useInboxStore((s) => s.docs);
+  // The one row, not the collection: a whole-collection subscription would
+  // repaint this page on every doc sync across the workspace.
+  const storeDoc = useInboxStore((s) => (id ? s.docs[id] : undefined));
   const docsLoading = useFeedLoading("docs");
   // The persisted body cache (docDetails): prefetched for recent docs and kept
   // by every open, so the body paints on the first frame; the live detail
@@ -36,11 +37,6 @@ export default function DocDetailScreen() {
   const docKey = id && isConvexId(id) ? id : undefined;
   const liveDetail = useSyncDocDetail(docKey);
   const cachedDetail = useInboxStore((s) => (docKey ? s.docDetails[docKey] : undefined)) as any;
-
-  const storeDoc = useMemo(() => {
-    if (!id) return undefined;
-    return docs[id] ?? Object.values(docs).find((d) => d._id === id);
-  }, [docs, id]);
 
   // A share link carries the token along (?share=). When the doc isn't in the
   // viewer's store — a guest, or a teammate before docs sync — the public

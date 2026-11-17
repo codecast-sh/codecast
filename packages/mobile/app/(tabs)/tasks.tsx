@@ -23,7 +23,8 @@ import { Theme, Spacing, themedStyles, useAppearanceKey, useTheme } from "@/cons
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
 import { createTaskAndAdopt } from "@codecast/web/lib/taskActions";
 import { buildTaskTree, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
-import { isOnHumanShelf } from "@codecast/shared/docs";
+import { filterDocsByShelf, compareDocsDefault, DOC_SHELF_FILTER_LABELS, type DocShelfFilter } from "@codecast/shared/docs";
+import { useWorkspaceCollection } from "@codecast/web/hooks/useWorkspaceCollection";
 import { filterToWorkspace } from "@codecast/web/lib/workspaceScope";
 import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
 import { useActiveTeam, useSwitchActiveTeam } from "@/hooks/useWorkspaceArgs";
@@ -32,7 +33,7 @@ import { resolveAssigneeInfo } from "@codecast/web/lib/liveEntities";
 import { sameAssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { TaskItemRow, STATUS_CONFIG, PRIORITY_CONFIG, PRIORITY_ORDER, showTaskActions } from "@/components/TaskItem";
 import { PlanItemRow, PLAN_STATUS_CONFIG, PLAN_STATUS_ORDER } from "@/components/PlanItem";
-import { DocItemRow, DOC_TYPE_CONFIG, DOC_TYPES } from "@/components/DocItem";
+import { DocItemRow } from "@/components/DocItem";
 import { showActionSheet } from "@/lib/popups";
 import { RoutineList } from "@/components/hosted/Routines";
 
@@ -65,6 +66,9 @@ const SOURCE_OPTIONS: { key: SourceFilter; label: string }[] = [
   { key: "human", label: "Human" },
   { key: "bot", label: "Bot" },
 ];
+
+const DOC_SHELF_OPTIONS = (Object.keys(DOC_SHELF_FILTER_LABELS) as DocShelfFilter[])
+  .map((key) => ({ key, label: DOC_SHELF_FILTER_LABELS[key] }));
 
 const FILTER_STATUSES: TaskStatus[] = ["open", "in_progress", "in_review", "backlog", "done", "dropped"];
 const FILTER_PRIORITIES = ["urgent", "high", "medium", "low"] as const;
@@ -188,6 +192,7 @@ type TaskListItem =
   | { kind: "doneToggle"; key: string };
 
 const taskItemKey = (item: TaskListItem) => item.key;
+const docItemKey = (item: DocItem) => item._id;
 
 export default function TasksScreen() {
   const Theme = useTheme();
@@ -206,6 +211,7 @@ export default function TasksScreen() {
     if (linkedSegment) setSegment(linkedSegment);
   }
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("");
+  const [docShelf, setDocShelf] = useState<DocShelfFilter>("");
   const [refreshing, setRefreshing] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const [searchInput, setSearchInput] = useState("");
@@ -249,7 +255,6 @@ export default function TasksScreen() {
 
   const tasks = useInboxStore((s) => s.tasks);
   const plans = useInboxStore((s) => s.plans);
-  const docs = useInboxStore((s) => s.docs);
   const updateTask = useInboxStore((s) => s.updateTask);
 
   // Strict workspace boundary at read time: the store caches rows from every
@@ -269,7 +274,9 @@ export default function TasksScreen() {
       return sameAssigneeInfo(info, t.assignee_info) ? t : ({ ...t, assignee_info: info } as TaskItem);
     }), [tasks, teamId, orgRoles]);
   const plansList = useMemo(() => filterToWorkspace(Object.values(plans), teamId), [plans, teamId]);
-  const docsList = useMemo(() => filterToWorkspace(Object.values(docs), teamId), [docs, teamId]);
+  // Docs go through the workspace key and the registry's listed rule (archived
+  // docs stay held but leave lists), the same read the web docs page makes.
+  const docsList = useWorkspaceCollection<DocItem>("docs");
 
   // "human" = the human's board (isOnHumanBoard, shared with web): human or
   // meeting origin, promoted (cast task create --human, triage accept), or
@@ -282,13 +289,6 @@ export default function TasksScreen() {
     if (sourceFilter === "human") return list.filter(onBoard);
     if (sourceFilter === "bot") return list.filter((i) => !onBoard(i));
     return list.filter((i) => !i.ephemeral);
-  }, [sourceFilter]);
-  // Docs have their own shared shelf rule (human origin or pinned), so the
-  // split can't drift from the web docs list.
-  const applyDocSourceFilter = useCallback(<T extends { source?: string; pinned?: boolean }>(list: T[]): T[] => {
-    if (sourceFilter === "human") return list.filter(isOnHumanShelf);
-    if (sourceFilter === "bot") return list.filter((d) => !isOnHumanShelf(d));
-    return list;
   }, [sourceFilter]);
 
   const filteredTasks = useMemo(() => {
@@ -383,6 +383,10 @@ export default function TasksScreen() {
     label: o.label, selected: o.key === sourceFilter, onPress: () => setSourceFilter(o.key),
   }))), [sourceFilter]);
 
+  const pickDocShelf = useCallback(() => showActionSheet("Show", DOC_SHELF_OPTIONS.map((o) => ({
+    label: o.label, selected: o.key === docShelf, onPress: () => setDocShelf(o.key),
+  }))), [docShelf]);
+
   const pickStatus = useCallback(() => showActionSheet("Filter by Status", [
     { label: "All Statuses", selected: !statusFilter, onPress: () => setStatusFilter("") },
     ...FILTER_STATUSES.map((st) => ({ label: STATUS_CONFIG[st].label, selected: st === statusFilter, onPress: () => setStatusFilter(st) })),
@@ -404,6 +408,10 @@ export default function TasksScreen() {
   // assignee only narrow the task list.
   const activeFilters = useMemo(() => {
     const list: { key: string; label: string; clear: () => void }[] = [];
+    if (segment === "docs") {
+      if (docShelf) list.push({ key: "source", label: DOC_SHELF_FILTER_LABELS[docShelf], clear: () => setDocShelf("") });
+      return list;
+    }
     if (sourceFilter) list.push({ key: "source", label: sourceFilter === "human" ? "Human" : "Bot", clear: () => setSourceFilter("") });
     if (segment !== "tasks") return list;
     if (statusFilter) list.push({ key: "status", label: STATUS_CONFIG[statusFilter]?.label, clear: () => setStatusFilter("") });
@@ -414,12 +422,14 @@ export default function TasksScreen() {
       list.push({ key: "assignee", label: named, clear: () => setAssigneeFilter("") });
     }
     return list;
-  }, [segment, sourceFilter, statusFilter, priorityFilter, assigneeFilter, tasksList]);
+  }, [segment, sourceFilter, docShelf, statusFilter, priorityFilter, assigneeFilter, tasksList]);
 
   const openFilterMenu = useCallback(() => {
     const valueOf = <T,>(opts: { key: T; label: string }[], key: T) => opts.find((o) => o.key === key)?.label ?? "";
     showActionSheet(segment === "tasks" ? "Filter & Sort" : "Filter", [
-      { label: `Show: ${valueOf(SOURCE_OPTIONS, sourceFilter)}`, onPress: pickSource },
+      segment === "docs"
+        ? { label: `Show: ${DOC_SHELF_FILTER_LABELS[docShelf]}`, onPress: pickDocShelf }
+        : { label: `Show: ${valueOf(SOURCE_OPTIONS, sourceFilter)}`, onPress: pickSource },
       ...(segment === "tasks" ? [
         { label: `Status: ${statusFilter ? STATUS_CONFIG[statusFilter].label : "All"}`, onPress: pickStatus },
         { label: `Priority: ${priorityFilter ? PRIORITY_CONFIG[priorityFilter as keyof typeof PRIORITY_CONFIG].label : "All"}`, onPress: pickPriority },
@@ -429,7 +439,7 @@ export default function TasksScreen() {
       ] : []),
       ...(activeFilters.length > 0 ? [{ label: "Clear filters", destructive: true, onPress: () => activeFilters.forEach((f) => f.clear()) }] : []),
     ]);
-  }, [segment, sourceFilter, statusFilter, priorityFilter, assigneeFilter, groupBy, sortBy, activeFilters, pickSource, pickStatus, pickPriority, pickAssignee, pickGroupBy, pickSort]);
+  }, [segment, sourceFilter, docShelf, statusFilter, priorityFilter, assigneeFilter, groupBy, sortBy, activeFilters, pickSource, pickDocShelf, pickStatus, pickPriority, pickAssignee, pickGroupBy, pickSort]);
 
   const filteredPlans = useMemo(() => applySourceFilter(plansList), [plansList, applySourceFilter]);
 
@@ -445,8 +455,10 @@ export default function TasksScreen() {
     return groups;
   }, [filteredPlans]);
 
+  // The web docs page's default view: one flat list, starred first, then
+  // most recently updated.
   const filteredDocs = useMemo(() => {
-    let list = applyDocSourceFilter(docsList);
+    let list = filterDocsByShelf(docsList, docShelf);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(
@@ -456,21 +468,8 @@ export default function TasksScreen() {
           d.labels?.some((l: string) => l.toLowerCase().includes(q)),
       );
     }
-    return list;
-  }, [docsList, searchQuery, applyDocSourceFilter]);
-
-  const groupedDocs = useMemo(() => {
-    const groups: Record<string, DocItem[]> = {};
-    for (const d of filteredDocs) {
-      const key = d.doc_type || "note";
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(d);
-    }
-    for (const key of Object.keys(groups)) {
-      groups[key].sort((a, b) => b.updated_at - a.updated_at);
-    }
-    return groups;
-  }, [filteredDocs]);
+    return [...list].sort(compareDocsDefault);
+  }, [docsList, searchQuery, docShelf]);
 
   const activeTaskCount = useMemo(
     () => filteredTasks.filter((t) => ACTIVE_STATUSES.includes(t.status as TaskStatus)).length,
@@ -644,30 +643,11 @@ export default function TasksScreen() {
     [groupedPlans, router],
   );
 
-  const renderDocSection = useCallback(
-    (docType: string) => {
-      const items = groupedDocs[docType];
-      if (!items?.length) return null;
-      const cfg = DOC_TYPE_CONFIG[docType] ?? DOC_TYPE_CONFIG.note;
-      return (
-        <RNView key={docType}>
-          <RNView style={styles.sectionHeader}>
-            <FontAwesome name={cfg.icon} size={11} color={cfg.color} />
-            <RNText style={[styles.sectionTitle, { color: cfg.color }]}>
-              {cfg.label} ({items.length})
-            </RNText>
-          </RNView>
-          {items.map((d) => (
-            <DocItemRow
-              key={d._id}
-              doc={d}
-              onPress={() => router.push(`/doc/${d._id}` as any)}
-            />
-          ))}
-        </RNView>
-      );
-    },
-    [groupedDocs, router],
+  const renderDocItem = useCallback(
+    ({ item }: { item: DocItem }) => (
+      <DocItemRow doc={item} onPress={() => router.push(`/doc/${item._id}` as any)} />
+    ),
+    [router],
   );
 
   return (
@@ -786,7 +766,23 @@ export default function TasksScreen() {
         </RNView>
       )}
 
-      {segment === "tasks" && filteredTasks.length > 0 ? (
+      {segment === "docs" && filteredDocs.length > 0 ? (
+        <FlatList
+          data={filteredDocs}
+          keyExtractor={docItemKey}
+          renderItem={renderDocItem}
+          initialNumToRender={16}
+          maxToRenderPerBatch={16}
+          windowSize={9}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Theme.textMuted} />
+          }
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          ListFooterComponent={<RNView style={{ height: 80 }} />}
+        />
+      ) : segment === "tasks" && filteredTasks.length > 0 ? (
         <FlatList
           data={taskListItems}
           keyExtractor={taskItemKey}
@@ -861,12 +857,10 @@ export default function TasksScreen() {
                 <FontAwesome name="file-text-o" size={32} color={Theme.textMuted0} />
                 <RNText style={styles.emptyText}>No docs</RNText>
                 <RNText style={styles.emptySubtext}>
-                  {searchQuery || sourceFilter ? "Try a different filter" : "Documents created by you or your agents"}
+                  {searchQuery || docShelf ? "Try a different filter" : "Documents you write or star"}
                 </RNText>
               </RNView>
-            ) : (
-              DOC_TYPES.filter((t) => groupedDocs[t]?.length).map((t) => renderDocSection(t))
-            )}
+            ) : null}
           </>
         )}
         <RNView style={{ height: 80 }} />

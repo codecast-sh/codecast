@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { docOrigin, docOriginClass, isHumanDocOrigin, isOnHumanShelf, docSourceForPlanSource, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel, docMentionExcerpt, renderDocMentionExcerpt } from "./index";
+import { docOrigin, docOriginClass, isHumanDocOrigin, isOnHumanShelf, docSourceForPlanSource, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel, docMentionExcerpt, renderDocMentionExcerpt, filterDocsByShelf, compareDocsDefault } from "./index";
 
 describe("docOrigin", () => {
   test("only an explicit human stamp is human", () => {
@@ -171,5 +171,31 @@ describe("docMentionExcerpt", () => {
     expect(md).toContain("L63 ## Workstreams");
     expect(md).toContain("cast doc show s979abc <from>:<to>");
     expect(md).not.toContain("intro line 59");
+  });
+});
+
+describe("filterDocsByShelf", () => {
+  const human = { _id: "h", source: "human", updated_at: 1 };
+  const starredAgent = { _id: "s", source: "agent", pinned: true, updated_at: 2 };
+  const agent = { _id: "a", source: "agent", updated_at: 3 };
+  const mined = { _id: "m", source: "file_sync", updated_at: 4 };
+  const all = [human, starredAgent, agent, mined];
+  const ids = (f: string) => filterDocsByShelf(all, f).map((d) => d._id);
+
+  test("the default view is the human shelf, legacy human links too", () => {
+    expect(ids("")).toEqual(["h", "s"]);
+    expect(ids("human")).toEqual(["h", "s"]);
+  });
+  test("agent and mined split the machine docs off the shelf", () => {
+    expect(ids("agent")).toEqual(["a"]);
+    expect(ids("bot")).toEqual(["a"]);
+    expect(ids("mined")).toEqual(["m"]);
+  });
+  test("starred and all", () => {
+    expect(ids("starred")).toEqual(["s"]);
+    expect(ids("all")).toEqual(["h", "s", "a", "m"]);
+  });
+  test("default order puts starred first, then newest updated", () => {
+    expect([...all].sort(compareDocsDefault).map((d) => d._id)).toEqual(["s", "m", "a", "h"]);
   });
 });
