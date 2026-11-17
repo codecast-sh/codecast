@@ -4,8 +4,7 @@ import { TextInput, Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect, startTransition } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { NEEDS_YOU_FILTER, waitingOnYou } from '@/lib/needsInputGlance';
+import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme, useAppearanceKey } from '@/constants/Theme';
 import {
@@ -64,8 +63,7 @@ class SearchErrorBoundary extends Component<{ resetKey: string; children: ReactN
 }
 
 export default function InboxScreen() {
-  const { only } = useLocalSearchParams<{ only?: string }>();
-  return <InboxView onlyNeedsYou={only === NEEDS_YOU_FILTER} />;
+  return <InboxView />;
 }
 
 // Rows that fill a phone screen with some to spare, mounted with the list.
@@ -74,10 +72,8 @@ const FIRST_PAINT_ROWS = 14;
 /** The inbox list. The tab shows it whole; a conversation's slide-out panel
  *  shows it as `panel`, where a row opens in place of the conversation
  *  (`onOpenSession`) and `currentId`'s row is marked as the one on screen. */
-export function InboxView({ panel = false, currentId, onOpenSession, onExit, onlyNeedsYou = false }: {
+export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   panel?: boolean;
-  /** Narrowed to Needs You (the session header's strip opens it this way). */
-  onlyNeedsYou?: boolean;
   currentId?: string;
   onOpenSession?: (conversationId: string, messageId?: string) => void;
   /** The panel's title leaves for the inbox tab. */
@@ -443,21 +439,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onl
     }
     const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
       sectionHeaderCount(shown, full, n, showSubagents);
-    // The strip's view: every session that waits on you (needs input or holds
-    // a decision), whatever label or project the inbox is narrowed to. The
-    // strip counts the same rows less the session it sits in.
-    if (onlyNeedsYou) {
-      const waiting = waitingOnYou(placed) as InboxSession[];
-      // Its own collapse key: a Needs You section folded in the full inbox
-      // must not turn this view into a bare header.
-      const shown = renderSection('Needs You', waiting, Theme.accent, "needs_you_only", waiting.length);
-      return [shown ?? (
-        <RNView key="empty" style={styles.emptyInbox}>
-          <Feather name="check-circle" size={28} color={Theme.textMuted0} />
-          <RNText style={styles.emptyText}>Nothing needs you</RNText>
-        </RNView>
-      )];
-    }
     // Flat views: one "All" run ordered by the shared comparator — "recent"
     // reshuffles on activity, "time" is a stable creation chronology honoring
     // any manual order dragged on desktop.
@@ -509,7 +490,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onl
     sections.push(renderSection('Dormant', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, onlyNeedsYou, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, rowBudget, planRows, placed]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, rowBudget, planRows, placed]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
@@ -593,18 +574,14 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onl
   // What the inbox is narrowed to, named in the title: a label or a project
   // picked in the slide-out panel. The clear mark beside it goes back to all.
   const filterBucket = activeBucketFilter ? buckets[activeBucketFilter] : undefined;
-  const filterName = onlyNeedsYou ? 'Needs You' : filterBucket?.name ?? activeProjectFilter ?? null;
-  const filterColor = onlyNeedsYou ? Theme.accent : filterBucket ? labelHexColor(filterBucket.name) : activeProjectFilter ? projectColor(activeProjectFilter) : undefined;
+  const filterName = filterBucket?.name ?? activeProjectFilter ?? null;
+  const filterColor = filterBucket ? labelHexColor(filterBucket.name) : activeProjectFilter ? projectColor(activeProjectFilter) : undefined;
   const clearFilter = useCallback(() => {
     void Haptics.selectionAsync();
-    if (onlyNeedsYou) {
-      router.setParams({ only: undefined } as never);
-      return;
-    }
     setActiveBucketFilter(null);
     setActiveProjectFilter(null);
-  }, [onlyNeedsYou, router, setActiveBucketFilter, setActiveProjectFilter]);
-  const shownCount = onlyNeedsYou ? waitingOnYou(placed).length : filterName ? chipFilter(activeSessions).length : headerCount;
+  }, [setActiveBucketFilter, setActiveProjectFilter]);
+  const shownCount = filterName ? chipFilter(activeSessions).length : headerCount;
 
   // Pull-to-reveal: the list opens scrolled past a search row that sits above
   // its first section, so a short pull shows it and a longer one refreshes.

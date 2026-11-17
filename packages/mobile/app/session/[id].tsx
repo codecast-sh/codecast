@@ -54,7 +54,6 @@ import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
 import { usePendingMessageStatus, usePendingPermissions } from '@codecast/web/hooks/useSyncPendingPermissions';
 import { pendingMessageHoldReason } from '@codecast/web/lib/pendingBanner';
 import { HeldSendRow } from '@/components/HeldSendRow';
-import { NeedsYouButton } from '@/components/session/NeedsYouButton';
 import { TerminalOfferBar } from '@/components/terminal/TerminalOfferBar';
 import { terminalAvailable } from '@/components/terminal/PaneTerminal';
 import { useConversationCommits, useConversationPullRequests, useSyncConversationCommits, useSyncConversationPullRequests } from '@codecast/web/hooks/useSyncTimeline';
@@ -2755,7 +2754,7 @@ function SessionHeaderBar({ children, inFlow = false }: { children?: ReactNode; 
         accessibilityRole="button"
         accessibilityLabel={drawer ? 'Inbox and other areas' : 'Back'}
       >
-        {drawer ? <Feather name="menu" size={20} color={Theme.text} /> : <FontAwesome name="chevron-left" size={18} color={Theme.text} />}
+        {drawer ? <Feather name="sidebar" size={20} color={Theme.text} /> : <FontAwesome name="chevron-left" size={18} color={Theme.text} />}
       </TouchableOpacity>
       {children}
     </RNView>
@@ -4547,7 +4546,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           {/* The prompt list, More, and the compose pencil that starts the
               next session from here. Huddle, images and the board live in
               More, where a live huddle is listed first. */}
-          <NeedsYouButton currentId={String(conversation._id)} />
           {navigatorRows.length > 0 && (
             <MessageListButton count={promptCount} onPress={openNavigatorSheet} />
           )}
