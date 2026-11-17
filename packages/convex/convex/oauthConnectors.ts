@@ -47,7 +47,7 @@ export interface ProviderConfig {
   tokenAuth: "body" | "basic";
   /** Fetch the connected account's label after exchange. Total: a failed
    *  profile read stores the connection unlabeled rather than failing it. */
-  profile: (accessToken: string) => Promise<{ label?: string; id?: string }>;
+  profile: (accessToken: string) => Promise<{ label?: string; id?: string; appUserId?: string }>;
   /** Extra authorize params some providers require. */
   authorizeExtra?: Record<string, string>;
 }
@@ -59,7 +59,7 @@ const linear: ProviderConfig = {
   tokenUrl: "https://api.linear.app/oauth/token",
   // write is what lets outbound push a title/state/label back onto an issue
   // (S5); read + issues:create alone can only ever create, never update.
-  scopes: ["read", "write", "comments:create"],
+  scopes: ["read", "write", "comments:create", "app:assignable"],
   env: { clientId: "LINEAR_OAUTH_CLIENT_ID", clientSecret: "LINEAR_OAUTH_CLIENT_SECRET" },
   tokenAuth: "body",
   // actor: "app" attributes our writes to the Codecast app rather than to
@@ -71,12 +71,13 @@ const linear: ProviderConfig = {
       const r = await fetch("https://api.linear.app/graphql", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-        body: JSON.stringify({ query: "{ organization { id name urlKey } }" }),
+        body: JSON.stringify({ query: "{ organization { id name urlKey } viewer { id } }" }),
         signal: AbortSignal.timeout(10_000),
       });
       const j: any = await r.json();
       const org = j?.data?.organization;
-      return org ? { label: org.name ?? org.urlKey, id: org.id } : {};
+      const appUserId = j?.data?.viewer?.id;
+      return { ...(org ? { label: org.name ?? org.urlKey, id: org.id } : {}), ...(appUserId ? { appUserId } : {}) };
     } catch {
       return {};
     }
@@ -296,6 +297,7 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
     team_id: scope === "team" ? st.team_id : undefined,
     account_label: label,
     account_id: accountId,
+    app_user_id: profile.appUserId,
     access_token_enc: await encryptRefreshToken(tok.access_token, env.clientSecret),
     refresh_token_enc: typeof tok.refresh_token === "string" ? await encryptRefreshToken(tok.refresh_token, env.clientSecret) : undefined,
     access_expires_at: accessExpiresAt(tok, Date.now()),
@@ -344,6 +346,7 @@ export const storeConnection = internalMutation({
     team_id: v.optional(v.string()),
     account_label: v.optional(v.string()),
     account_id: v.optional(v.string()),
+    app_user_id: v.optional(v.string()),
     access_token_enc: v.string(),
     refresh_token_enc: v.optional(v.string()),
     access_expires_at: v.optional(v.number()),
@@ -376,6 +379,7 @@ export const storeConnection = internalMutation({
             granted_scopes: args.granted_scopes,
             account_label: args.account_label,
             account_id: args.account_id,
+            app_user_id: args.app_user_id,
           },
           updated_at: now,
         });
@@ -395,6 +399,7 @@ export const storeConnection = internalMutation({
         granted_scopes: args.granted_scopes,
         account_label: args.account_label ?? existing.account_label,
         account_id: args.account_id ?? existing.account_id,
+        app_user_id: args.app_user_id ?? existing.app_user_id,
         updated_at: now,
         pending_confirm_hash: args.pending_confirm_hash,
         pending_expires_at: now + CONFIRM_TTL_MS,
@@ -408,6 +413,7 @@ export const storeConnection = internalMutation({
       connected_by: userId,
       account_label: args.account_label,
       account_id: args.account_id,
+      app_user_id: args.app_user_id,
       access_token_enc: args.access_token_enc,
       refresh_token_enc: args.refresh_token_enc,
       access_expires_at: args.access_expires_at,
@@ -504,6 +510,7 @@ export const finishConfirm = internalMutation({
       granted_scopes: replacement.granted_scopes,
       account_label: replacement.account_label ?? r.account_label,
       account_id: replacement.account_id ?? r.account_id,
+      app_user_id: replacement.app_user_id ?? r.app_user_id,
       // The promotion is the newest word on this connection: a refresh that
       // was in flight against the old credentials must not land on top of it.
       last_error: undefined,

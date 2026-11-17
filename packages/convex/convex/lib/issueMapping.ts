@@ -32,9 +32,11 @@ export type NormalizedIssue = {
   state_name?: string;
   /** Our priority word. Absent means the provider has no priority (GitHub). */
   priority?: string;
+  assignee_id?: string;
   assignee_email?: string;
   assignee_login?: string;
   assignee_label?: string;
+  delegate_id?: string;
   labels: string[];
   remote_updated_at: number;
   remote_created_at?: number;
@@ -170,8 +172,10 @@ export function normalizeLinearIssue(
     status: linearStatusFor(data?.state?.type, data?.state?.name),
     state_name: data?.state?.name,
     priority: linearPriorityWord(data?.priority),
+    assignee_id: assignee?.id ?? data?.assigneeId ?? undefined,
     assignee_email: assignee?.email,
     assignee_label: assignee?.name || assignee?.displayName || assignee?.email,
+    delegate_id: data?.delegate?.id ?? data?.delegateId ?? undefined,
     labels: labelNames(data?.labels),
     remote_updated_at: ts(data?.updatedAt, now),
     remote_created_at: data?.createdAt ? ts(data.createdAt, now) : undefined,

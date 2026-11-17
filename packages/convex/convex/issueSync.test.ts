@@ -72,6 +72,7 @@ describe("linear webhook payloads", () => {
     expect(linearEventKind("update", { updatedFrom: { stateId: "s_doing" } }, closed)).toBe("issue_closed");
 
     expect(linearEventKind("update", { updatedFrom: { assigneeId: null } }, moved)).toBe("issue_assigned");
+    expect(linearEventKind("update", { updatedFrom: { delegateId: null } }, moved)).toBe("issue_assigned");
     expect(linearEventKind("update", { updatedFrom: { labelIds: [] } }, moved)).toBe("issue_labeled");
     expect(linearEventKind("update", { updatedFrom: { title: "old" } }, moved)).toBe("issue_edited");
     expect(linearEventKind("remove", {}, moved)).toBe("issue_closed");

@@ -1,6 +1,7 @@
 import { internal } from "../_generated/api";
 import { inlineForeignText } from "@codecast/shared/contracts";
 import { scheduleTriggerMatch } from "./triggerMatch";
+import { delegatedToSourceApp } from "./issueSyncAccess";
 import type { NormalizedIssue } from "./issueMapping";
 import type { SourceDoc } from "../issueSync";
 
@@ -19,9 +20,9 @@ export async function maybeDelegate(ctx: any, source: SourceDoc | null, task: an
   const byLabel = issue.labels.some((l) => l.toLowerCase() === label);
   const target = source.delegate_assignee?.toLowerCase();
   const byAssignee = !!target
-    && [issue.assignee_login, issue.assignee_email, issue.assignee_label]
+    && [issue.assignee_id, issue.assignee_login, issue.assignee_email, issue.assignee_label]
       .some((v) => typeof v === "string" && v.toLowerCase() === target);
-  if (!byLabel && !byAssignee) return;
+  if (!byLabel && !byAssignee && !(await delegatedToSourceApp(ctx, source, issue.delegate_id))) return;
 
   await ctx.scheduler.runAfter(0, internal.tasks.spawnSessionForTaskInternal, {
     task_id: task._id,

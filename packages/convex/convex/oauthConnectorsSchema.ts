@@ -22,6 +22,7 @@ export const oauthConnectorTables = {
     /** The external account (a Linear workspace name, a Notion workspace). */
     account_label: v.optional(v.string()),
     account_id: v.optional(v.string()),
+    app_user_id: v.optional(v.string()),
     /** Encrypted with the same AES-GCM/HKDF scheme googleOAuth uses. Notion
      *  issues no refresh token (its access tokens do not expire); Linear does.
      *  So access_token_enc is always present and refresh_token_enc is optional. */
@@ -61,6 +62,7 @@ export const oauthConnectorTables = {
       granted_scopes: v.array(v.string()),
       account_label: v.optional(v.string()),
       account_id: v.optional(v.string()),
+      app_user_id: v.optional(v.string()),
     })),
     /** Health stamps read by the integrations page. issue-sync.md S1.5 —
      *  the same three fields github_app_installations carries, so one card

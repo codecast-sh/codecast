@@ -79,9 +79,11 @@ export const normalizedIssueValidator = v.object({
   status: v.string(),                       // our category
   state_name: v.optional(v.string()),
   priority: v.optional(v.string()),         // our priority word; absent = don't touch
+  assignee_id: v.optional(v.string()),
   assignee_email: v.optional(v.string()),
   assignee_login: v.optional(v.string()),
   assignee_label: v.optional(v.string()),
+  delegate_id: v.optional(v.string()),
   labels: v.array(v.string()),
   remote_updated_at: v.number(),
   remote_created_at: v.optional(v.number()),
@@ -280,7 +282,7 @@ export function linearEventKind(action: string, payload: any, issue: NormalizedI
   if (action === "create") return "issue_opened";
   if (action === "remove") return "issue_closed";
   const changed = payload?.updatedFrom ?? {};
-  if ("assigneeId" in changed) return "issue_assigned";
+  if ("assigneeId" in changed || "delegateId" in changed) return "issue_assigned";
   if ("stateId" in changed) {
     if (issue.status === "done" || issue.status === "dropped") return "issue_closed";
     return "issue_status";
