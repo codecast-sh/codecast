@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode, useCallback, useMemo } from "react";
+import { createContext, useContext, useState, ReactNode, useCallback, useMemo, useSyncExternalStore } from "react";
 import { useInboxStore, resolveVisualStyle } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -7,6 +7,8 @@ import { lockedAtBoot } from "../lib/themeBootLock";
 import { applyThemeVars, availableThemes, cacheThemeVars, DEFAULT_COLOR_THEME, resolveColorThemeKey, themeVarsByMode } from "../lib/theme/colorTheme";
 import type { ModRow } from "../lib/mods/host";
 import { MODERN_STYLE_KEY, VISUAL_STYLE_KEY, prefersModern, showsModern, storedModern } from "../lib/modernStyle";
+import { subscribeThemePreview, themePreview } from "../lib/theme/preview";
+import { ThemeBackdrop } from "./theme/ThemeBackdrop";
 // The family's faces and token sheet, for the hosted assistant's note cards
 // and the marketing pages' assistant section. The faces are fetched only once
 // a rule uses them.
@@ -142,15 +144,27 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // index.html replayed from the cache, so a cold load never flashes the
   // default; once mods are known and the theme is gone, the default takes over.
   // A choice whose mod is gone falls back to the default theme.
-  const colorThemeKey = useInboxStore((s) => resolveColorThemeKey(s.clientState.ui?.color_theme));
+  // A mod's Preview button shows a theme for a moment without storing it (lib/theme/preview.ts).
+  const storedThemeKey = useInboxStore((s) => resolveColorThemeKey(s.clientState.ui?.color_theme));
+  const previewKey = useSyncExternalStore(subscribeThemePreview, themePreview, () => null);
+  const colorThemeKey = previewKey ?? storedThemeKey;
   const modMap = useInboxStore((s) => (s as any).mods as Record<string, ModRow> | undefined);
   const installed = useInboxStore((s) => s.clientState.ui?.mods_installed);
   const modsKnown = !!modMap && Object.keys(modMap).length > 0;
-  const colorTheme = useMemo(() => {
-    const themes = availableThemes(Object.values(modMap ?? {}), installed ?? []);
-    const chosen = themes.find((c) => c.key === colorThemeKey)?.theme;
-    return chosen ?? (modsKnown ? themes.find((c) => c.key === DEFAULT_COLOR_THEME)?.theme : undefined);
-  }, [colorThemeKey, modMap, installed, modsKnown]);
+  const chosenChoice = useMemo(
+    () => availableThemes(Object.values(modMap ?? {}), installed ?? []).find((c) => c.key === colorThemeKey),
+    [colorThemeKey, modMap, installed],
+  );
+  const colorTheme = useMemo(
+    () => chosenChoice?.theme ?? (modsKnown ? availableThemes([], []).find((c) => c.key === DEFAULT_COLOR_THEME)?.theme : undefined),
+    [chosenChoice, modsKnown],
+  );
+  // A backdrop theme's scene comes from the mod that declares it, named by the key's first half.
+  const backdropRow = useMemo(() => {
+    if (!chosenChoice?.theme.backdrop) return undefined;
+    const modName = chosenChoice.key.slice(0, chosenChoice.key.indexOf("/"));
+    return Object.values(modMap ?? {}).find((r) => r.name === modName);
+  }, [chosenChoice, modMap]);
   // Original sets no variables, so the stylesheet's Solarized shows through.
   // Modern was not drawn for Solarized: under it, Original means the default
   // theme's palette.
@@ -160,8 +174,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useWatchEffect(() => {
     if (!styleReady || !colorVars) return;
     applyThemeVars(!lock ? colorVars[shownTheme] : {});
-    if (!lock) cacheThemeVars(colorVars);
-  }, [colorVars, shownTheme, lock, styleReady]);
+    if (!lock && !previewKey) cacheThemeVars(colorVars);
+  }, [colorVars, shownTheme, lock, styleReady, previewKey]);
 
   const toggleTheme = useCallback(() => {
     const current = useInboxStore.getState().clientState.ui?.theme ?? initialTheme;
@@ -192,6 +206,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   return (
     <ThemeLockContext.Provider value={acquireLock}>
       <ThemeContext.Provider value={themeContext}>
+        {backdropRow && chosenChoice?.theme.backdrop && !lock && styleReady && (
+          <ThemeBackdrop row={backdropRow} themeId={chosenChoice.theme.id} backdrop={chosenChoice.theme.backdrop} mode={shownTheme} />
+        )}
         {children}
       </ThemeContext.Provider>
     </ThemeLockContext.Provider>
