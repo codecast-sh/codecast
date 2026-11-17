@@ -178,8 +178,9 @@ export type DecisionStepper = {
   // Back to the decision before this one; absent where there is no queue to walk.
   onPrev?: () => void;
   onExit?: () => void;
-  // A Claude Code poll / permission prompt has no authored row in the store;
-  // the queue hands the card its model this way.
+  // The item the queue is on. A thread holding several asks shows this one
+  // (ThreadDecisionCard), and a Claude Code poll / permission prompt, which
+  // has no authored row in the store, gets its card's model from it.
   item?: QueueItem;
 };
 

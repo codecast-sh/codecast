@@ -350,3 +350,19 @@ test("the rows opened past the first few stay open from one ask to the next", as
   expect(rows()).toBe(5);
   await act(() => root.unmount());
 });
+
+test("in the queue a thread holding several asks shows the one the stepper is on, and follows it", async () => {
+  const pane = document.createElement("div");
+  document.body.appendChild(pane);
+  const root = createRoot(pane);
+  const asks = [1, 2, 3, 4, 5, 6].map((n) => ask(n));
+  const stepper = (n: number): any => ({ position: n, total: asks.length, onDone: () => {}, onSkip: () => {}, item: asks[n - 1] });
+  const draw = (n: number) => act(() => root.render(<MemoryRouter>{modern(<ThreadDecisionCard conversationId="c1" asks={asks} stepper={stepper(n)} />)}</MemoryRouter>));
+  const asked = () => asks.map((a) => a.question).filter((q) => pane.querySelector("[data-session-decision]")!.textContent!.includes(q));
+
+  await draw(4);
+  expect(asked()).toEqual(["Question 4?"]);
+  await draw(2);
+  expect(asked()).toEqual(["Question 2?"]);
+  await act(() => root.unmount());
+});

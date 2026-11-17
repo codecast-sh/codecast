@@ -82,25 +82,22 @@ export async function renderMarkdownBody(md: string): Promise<string> {
 
 
 // The palette of codecast's Modern style: neutral surfaces, a near-black ink
-// with a green cast, and the verdigris accent. The page (--md-page) is the
-// app's background and the document sits on it as an outlined sheet (--md-bg).
+// with a green cast, and the verdigris accent.
 // Syntax colours stay the web app's. Written once per scheme and emitted twice
 // for dark, because dark applies either by choice (data-theme) or by the OS
 // when the reader has made no choice.
 const MD_LIGHT = `
   color-scheme: light;
-  --md-page: #f4f5f3; --md-bg: #ffffff; --md-head: #111614; --md-ink: #2a322f; --md-mut: #5d6662; --md-dim: #8b9490;
+  --md-bg: #ffffff; --md-head: #111614; --md-ink: #2a322f; --md-mut: #5d6662; --md-dim: #8b9490;
   --md-line: rgba(17,22,20,.1); --md-card: #f6f7f5; --md-raise: #ffffff; --md-soft: rgba(17,22,20,.055);
-  --md-accent: #1f7a6b; --md-link: #1a6c5e; --md-mark: rgba(234,179,8,.24); --md-quote: #c9cfcc;
-  --md-shadow: 0 1px 2px rgba(16,24,22,.04), 0 18px 40px -24px rgba(16,24,22,.2);
+  --md-accent: #1f7a6b; --md-link: #1a6c5e; --md-mark: rgba(234,179,8,.24);
   --md-k: #859900; --md-s: #2aa198; --md-n: #d33682; --md-f: #268bd2; --md-c: #8b9490;
   --md-t: #b58900; --md-v: #cb4b16; --md-b: #dc322f;`;
 const MD_DARK = `
   color-scheme: dark;
-  --md-page: #101312; --md-bg: #171b1a; --md-head: #f1f3f2; --md-ink: #d2d8d5; --md-mut: #9aa39f; --md-dim: #6c7571;
+  --md-bg: #171b1a; --md-head: #f1f3f2; --md-ink: #d2d8d5; --md-mut: #9aa39f; --md-dim: #6c7571;
   --md-line: rgba(255,255,255,.085); --md-card: #1d2220; --md-raise: #212725; --md-soft: rgba(255,255,255,.07);
-  --md-accent: #5dbfa9; --md-link: #72c9b5; --md-mark: rgba(234,179,8,.26); --md-quote: #3a423f;
-  --md-shadow: 0 1px 2px rgba(0,0,0,.4), 0 20px 48px -24px rgba(0,0,0,.7); --md-c: #6c7571;`;
+  --md-accent: #5dbfa9; --md-link: #72c9b5; --md-mark: rgba(234,179,8,.26); --md-c: #6c7571;`;
 
 const MONO = `"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace`;
 const SANS = `"Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif`;
@@ -170,15 +167,17 @@ export const MD_THEME_CSS = `
 .md pre .copy:hover { color: var(--md-head); }
 .md pre .copy.done { color: var(--md-accent); border-color: color-mix(in srgb, var(--md-accent) 45%, transparent); }
 @media (hover: none) { .md pre .copy { opacity: 1; } }
-.md blockquote { margin: 1.4em 0; padding: .1em 0 .1em 1.1em; border-left: 2px solid var(--md-quote); color: var(--md-mut); }
+.md blockquote { margin: 1.4em 0; padding: .75em 1.1em; border-left: 2px solid var(--md-accent); border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--md-accent) 6%, transparent); color: var(--md-mut); }
 .md blockquote p { margin-bottom: .7em; }
 .md blockquote > :last-child { margin-bottom: 0; }
 .md ul, .md ol { margin: 0 0 1.1em; padding-left: 1.4em; }
 .md li { margin: .35em 0; padding-left: .3em; }
 .md li > p { margin-bottom: .5em; }
 .md li > ul, .md li > ol { margin: .3em 0 .3em; }
-.md li::marker { color: var(--md-dim); }
-.md ol > li::marker { font-variant-numeric: tabular-nums; }
+.md li::marker { color: var(--md-accent); }
+.md li li::marker { color: var(--md-dim); }
+.md ol > li::marker { font-weight: 600; font-variant-numeric: tabular-nums; }
 .md li:has(> input[type=checkbox]) { list-style: none; margin-left: -1.4em; padding-left: 0; display: flex; gap: .6em; align-items: baseline; }
 .md input[type=checkbox] { appearance: none; -webkit-appearance: none; width: .95em; height: .95em; margin: 0; flex: none;
   position: relative; top: .12em; border: 1.5px solid var(--md-dim); border-radius: 4px; background: var(--md-raise); opacity: 1; }
@@ -209,12 +208,12 @@ export const MD_THEME_CSS = `
 .md table { border-collapse: collapse; width: 100%; font-size: .92em; line-height: 1.5; font-variant-numeric: tabular-nums lining-nums; }
 .md th, .md td { text-align: left; padding: .6em .9em; border-bottom: 1px solid var(--md-line); vertical-align: top; }
 .md td.prose { min-width: 15em; }
-.md th { font-weight: 600; font-size: .9em; color: var(--md-head); background: var(--md-card); white-space: nowrap; }
+.md th { font-weight: 600; font-size: .9em; color: var(--md-head); background: color-mix(in srgb, var(--md-accent) 7%, var(--md-bg)); white-space: nowrap; }
 .md tbody tr:last-child td { border-bottom: 0; }
 .md tbody tr:hover td { background: color-mix(in srgb, var(--md-card) 60%, transparent); }
 .md details { margin: 1.2em 0; padding: .65em 1em; border: 1px solid var(--md-line); border-radius: 10px; background: var(--md-card); }
 .md summary { cursor: pointer; font-weight: 600; color: var(--md-head); }
-.md summary::marker { color: var(--md-dim); }
+.md summary::marker { color: var(--md-accent); }
 .md details[open] > summary { margin-bottom: .6em; }
 .md .hljs-comment, .md .hljs-quote { color: var(--md-c); font-style: italic; }
 .md .hljs-keyword, .md .hljs-selector-tag, .md .hljs-doctag, .md .hljs-formula { color: var(--md-k); }
@@ -328,18 +327,16 @@ export function mdDocumentHtml(o: { title: string; bodyHtml: string }): string {
 ${MD_THEME_BOOT}
 <style>${MD_THEME_CSS}
   * { box-sizing: border-box; }
-  html { background: var(--md-page); }
-  body { margin: 0; background: var(--md-page); color: var(--md-ink); min-height: 100vh;
-    padding: clamp(16px, 5vh, 48px) calc(20px + env(safe-area-inset-right)) calc(96px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left)); }
-  /* The document is a sheet on the page: one hairline, a soft lift, the
-     card radius of the app's Modern style. */
-  main { max-width: 46rem; margin: 0 auto; background: var(--md-bg);
-    border: 1px solid var(--md-line); border-radius: 14px; box-shadow: var(--md-shadow);
-    padding: clamp(36px, 6vw, 64px) clamp(28px, 7vw, 76px) clamp(40px, 6vw, 72px);
+  html { background: var(--md-bg); }
+  /* The page is the document: no sheet inside a codecast frame's own border.
+     A faint verdigris wash at the head gives it a little light. */
+  body { margin: 0; color: var(--md-ink); min-height: 100vh;
+    background: radial-gradient(1100px 420px at 12% -140px, color-mix(in srgb, var(--md-accent) 16%, transparent), transparent 70%),
+      radial-gradient(800px 320px at 95% -160px, color-mix(in srgb, var(--md-accent) 9%, transparent), transparent 70%),
+      var(--md-bg); background-repeat: no-repeat; }
+  main { max-width: 44rem; margin: 0 auto;
+    padding: clamp(40px, 9vh, 88px) calc(28px + env(safe-area-inset-right)) calc(112px + env(safe-area-inset-bottom)) calc(28px + env(safe-area-inset-left));
     animation: md-rise .6s cubic-bezier(.2,.7,.2,1) both; }
-  /* A table wider than the text column spreads past it, centred, up to the viewport. */
-  main.md .tbl { width: max-content; min-width: 100%; max-width: min(calc(100vw - 64px), 72rem);
-    margin-left: 50%; transform: translateX(-50%); }
   @keyframes md-rise { from { opacity: 0; transform: translateY(8px); } }
   ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
   .md-theme { all: unset; position: fixed; right: calc(18px + env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom));
@@ -364,16 +361,13 @@ ${MD_THEME_BOOT}
   :root[data-theme-host] .md-theme { display: none; }
   @media (prefers-reduced-motion: reduce) { main { animation: none; } .md-theme svg { transition: none; } }
   @media (max-width: 640px) {
-    html, body { background: var(--md-bg); }
-    body { padding: 0 0 calc(96px + env(safe-area-inset-bottom)); }
-    main { border: 0; border-radius: 0; box-shadow: none;
-      padding: 28px calc(22px + env(safe-area-inset-right)) 0 calc(22px + env(safe-area-inset-left)); }
+    main { padding: 32px calc(22px + env(safe-area-inset-right)) calc(96px + env(safe-area-inset-bottom)) calc(22px + env(safe-area-inset-left)); }
     .md .anchor { display: none; } .md h1 { font-size: 1.75em; }
   }
   @media print {
-    :root { --md-page: #fff; --md-bg: #fff; --md-ink: #000; --md-head: #000; --md-card: #fff; }
-    body { padding: 0; }
-    main { max-width: none; padding: 0; border: 0; box-shadow: none; animation: none; }
+    :root { --md-bg: #fff; --md-ink: #000; --md-head: #000; --md-card: #fff; }
+    body { background: #fff; }
+    main { max-width: none; padding: 0; animation: none; }
     .md .anchor, .md .copy, .md-theme { display: none !important; }
     .md pre, .md blockquote, .md .tbl, .md img { break-inside: avoid; }
     main.md .tbl { width: auto; max-width: none; margin-left: 0; transform: none; }

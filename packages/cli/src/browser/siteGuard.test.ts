@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { auditExplicitLoads, browserJarRead, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal, withScheme } from "./siteGuard.js";
+import { auditExplicitLoads, browserJarRead, NAVIGATING_VERBS, refuseNavigation, savedSigninFailedNote, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal, withScheme } from "./siteGuard.js";
 import { SECRET_APPROVAL_TTL_MS } from "@codecast/shared/contracts/secrets";
 import type { SigninMemory } from "../secrets/signin.js";
 import { readAudit } from "./audit.js";
@@ -74,10 +74,14 @@ describe("signInHost", () => {
     expect(signInHost("https://github.com/login?return_to=%2Fsettings")).toBe("github.com");
     expect(signInHost("https://app.example.com/users/sign_in")).toBe("app.example.com");
     expect(signInHost("https://sso.corp.example.com/")).toBe("sso.corp.example.com");
+    expect(signInHost("https://app.apollo.io/#/login?redirectTo=https%3A%2F%2Fapp.apollo.io%2F%23%2Fhome")).toBe("app.apollo.io");
+    expect(signInHost("https://app.example.com/#!/signin")).toBe("app.example.com");
   });
   test("leaves ordinary pages alone", () => {
     expect(signInHost("https://ads.google.com/aw/overview")).toBeNull();
     expect(signInHost("https://github.com/ashot/codecast")).toBeNull();
+    expect(signInHost("https://app.apollo.io/#/home")).toBeNull();
+    expect(signInHost("https://docs.example.com/guide#login")).toBeNull();
     expect(signInHost("https://example.com/blog/how-we-login-users")).toBeNull();
     expect(signInHost("id.example")).toBeNull(); // two labels: "id" is the site, not a front door
     expect(signInHost("not a url at all ::")).toBeNull();
@@ -110,6 +114,22 @@ describe("signInLandingNote", () => {
     expect(note).toContain("cast browser handoff");
     expect(note).toContain("copy cookies or move to another browser");
     for (const refused of ["cast browser login", "cast browser sync", "Or "]) expect(note).not.toContain(refused);
+  });
+});
+
+describe("savedSigninFailedNote", () => {
+  const resave = (note: string | null) => /`(cast vault save-signin [^`]+)`/.exec(note ?? "")?.[1];
+
+  test("blames the saved sign-in and names the Yes card that saves it again into the same row", () => {
+    const team = savedSigninFailedNote("https://openrouter.ai/sign-in?redirect_url=x", { name: "openrouter-signin", workspace: "team:t1" });
+    expect(team).toContain("vault sign-in openrouter-signin");
+    expect(team).not.toContain("cast browser sync");
+    expect(resave(team)).toBe("cast vault save-signin openrouter.ai --from-chrome --name openrouter-signin --team t1");
+    expect(resave(savedSigninFailedNote("https://app.apollo.io/#/login", { name: "apollo me", workspace: "user:u1" }))).toBe("cast vault save-signin app.apollo.io --from-chrome --name 'apollo me' --personal");
+  });
+
+  test("says nothing on a page that is not a sign-in", () => {
+    expect(savedSigninFailedNote("https://openrouter.ai/settings/keys", { name: "openrouter-signin", workspace: "team:t1" })).toBeNull();
   });
 });
 
