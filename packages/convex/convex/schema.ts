@@ -4644,6 +4644,10 @@ export default defineSchema({
     // What was offered for the turn. Absent on rows recorded before Nov 2026,
     // which never reported "ignored" and so stay out of the take rate.
     shown: v.optional(v.array(v.string())),
+    // How many trailing characters of the sent message the person typed (a
+    // count, not the words): what the composer folded in ahead of them, such
+    // as quotes and proposal answers, is not theirs.
+    typed_length: v.optional(v.number()),
     created_at: v.number(),
   })
     .index("by_user_created", ["user_id", "created_at"])
@@ -6521,6 +6525,21 @@ export default defineSchema({
     .index("by_workspace", ["workspace"])
     .index("by_workspace_name", ["workspace", "name"])
     .index("by_short_id", ["short_id"]),
+
+  // A person's standing yes to fill a workspace's sign-in requests from their
+  // own Chrome on one laptop (signinAutofill.ts). Set only by a person on the
+  // web. `tried` holds when each open request was last sent there, keyed by
+  // the secret's id, so a signed-out site waits AUTOFILL_RETRY_MS.
+  signin_autofill: defineTable({
+    user_id: v.id("users"),
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    device_id: v.string(),
+    created_at: v.number(),
+    tried: v.optional(v.record(v.string(), v.number())),
+  })
+    .index("by_user_workspace", ["user_id", "workspace"])
+    .index("by_workspace", ["workspace"]),
 
   // A secret's previous values: rotate (and a fulfill over a stored value)
   // keeps the old ciphertext here for 7 days so a person can restore it

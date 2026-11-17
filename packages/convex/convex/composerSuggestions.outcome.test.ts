@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { recordSuggestionOutcome } from "./composerSuggestions";
+import { record as recordSuggestionOutcome } from "./suggestionOutcomes";
 
 // Pills are the owner's alone, and so is the report of what became of one.
 
@@ -20,7 +20,7 @@ const report = (db: any, userId: string, conversation_id = "conv_1") =>
     { conversation_id, anchor_message_uuid: "m1", suggestion: "ship it", outcome: "sent" },
   );
 
-describe("composerSuggestions.recordSuggestionOutcome", () => {
+describe("suggestionOutcomes.record", () => {
   test("another user's session takes no outcome", async () => {
     const db = world();
     await report(db, BEN);

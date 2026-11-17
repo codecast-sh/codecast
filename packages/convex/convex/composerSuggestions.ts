@@ -8,7 +8,8 @@ import { verifyApiToken } from "./apiTokens";
 import { CHEAP_MODEL, parseJsonBlock, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
 import { openaiFetch } from "./lib/openai";
 import { NO_TEAM_CONTENT_GATE, vendorAllowedFor, vendorRefusalFromDb, type VendorGate } from "./lib/vendorGuard";
-import { stripInjectionNoise } from "@codecast/shared/contracts";
+import { MAX_SUGGESTIONS, MAX_SUGGESTION_CHARS, outcomeArgs, suggestionsProvider, writeSuggestionOutcome } from "./lib/suggestionOutcomeWrite";
+export { MAX_SUGGESTIONS, MAX_SUGGESTION_CHARS };
 
 // Suggested replies for the composer ("suggestion pills"). Fourth member of
 // the Haiku family (titleGeneration, idleSummary, sessionInsights): an
@@ -19,20 +20,17 @@ import { stripInjectionNoise } from "@codecast/shared/contracts";
 // like a model.
 
 const PROFILE_TTL_MS = 12 * 60 * 60 * 1000;
-// One reply, drawn as ghost text in the empty composer. Alternatives behind a
-// key were tried (Nov 2026) and matched what people typed in 0 of 180 eval
-// replays, so the suggester makes its one prediction or none.
-export const MAX_SUGGESTIONS = 1;
+// One reply (MAX_SUGGESTIONS, lib/suggestionOutcomeWrite), drawn as ghost
+// text in the empty composer. Alternatives behind a key were tried (Nov 2026)
+// and matched what people typed in 0 of 180 eval replays, so the suggester
+// makes its one prediction or none.
 // The model's probability that the developer sends the reply. Below it the
 // ghost stays empty: a wrong ghost costs a glance and teaches people to stop
 // reading it, and silence is right when the session gives no basis.
 const MIN_CONFIDENCE = 0.5;
-// Recent outcomes the suggester reads back, newest first.
-const OUTCOMES_FOR_PROMPT = 12;
 // A pill may carry a full working prompt (a reusable multi-sentence
 // directive), not just a verdict — so the cap is "not a pasted wall", not
 // "fits on one line". The row truncates visually; the send carries it whole.
-const MAX_SUGGESTION_CHARS = 1000;
 
 // A message row that carries a real human-readable turn (mirrors
 // idleSummary.isSummarizableMessage without the low-signal filter, which we
@@ -239,9 +237,9 @@ export const getRecentUserInputs = internalQuery({
     for (const conv of conversations) {
       if (out.length >= 400) break;
       if (isMachineDrivenConversation(conv)) continue;
-      // The miner sends this corpus to Anthropic, so a regulated team's
-      // conversation stays out of it while Anthropic has no BAA.
-      if (await vendorRefusalFromDb(ctx, { conversationId: conv._id }, "anthropic")) continue;
+      // The miner sends this corpus to the suggester's vendor, so a regulated
+      // team's conversation stays out of it while that vendor has no BAA.
+      if (await vendorRefusalFromDb(ctx, { conversationId: conv._id }, suggestionsProvider())) continue;
       // Filter BEFORE take: most user-role rows are tool-result carriers (the
       // agent's tool outputs come back as role "user"), and an unfiltered
       // window fills up with them, crowding out every typed prompt. Same
@@ -356,73 +354,11 @@ export const storeSuggestionProfile = internalMutation({
   },
 });
 
-// Client-reported fate of the suggestions shown for one agent turn. Owner-
-// gated; append-only. `shown` is optional so a client built before it
-// existed still records.
+// The name phone builds released before Nov 2026 still call: the same write
+// as suggestionOutcomes.record. It takes no words of the person's.
 export const recordSuggestionOutcome = mutation({
-  args: {
-    conversation_id: v.id("conversations"),
-    anchor_message_uuid: v.string(),
-    suggestion: v.string(),
-    outcome: v.union(v.literal("sent"), v.literal("edited"), v.literal("ignored"), v.literal("dismissed")),
-    shown: v.optional(v.array(v.string())),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return;
-    // Suggestions are shown to the session's owner only (getComposerSuggestions),
-    // so only the owner can report what became of them.
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || String(conv.user_id) !== String(userId)) return;
-    const cap = (t: string) => t.slice(0, MAX_SUGGESTION_CHARS);
-    await ctx.db.insert("suggestion_outcomes", {
-      user_id: userId,
-      conversation_id: args.conversation_id,
-      anchor_message_uuid: args.anchor_message_uuid,
-      suggestion: cap(args.suggestion),
-      outcome: args.outcome,
-      ...(args.shown ? { shown: args.shown.slice(0, MAX_SUGGESTIONS).map(cap) } : {}),
-      created_at: Date.now(),
-    });
-  },
-});
-
-// The composer take rate, from the outcome log: per person and ISO week, of
-// the replies typed in the codecast composer while a suggestion was on show,
-// how many took it. Replies from a terminal, a decision card, or a client
-// that was not showing the suggestion are not in it, so it reads high for
-// people who answer elsewhere. Only rows that carry `shown` count, so the
-// rate starts with the clients that report "ignored".
-// `npx convex run composerSuggestions:suggestionFunnel '{"since_days":14}'`
-export function funnelOf(rows: Array<{ user_id: string; outcome: string; shown?: string[]; created_at: number }>) {
-  const out = new Map<string, { user: string; week: string; replied: number; sent: number; edited: number; ignored: number }>();
-  for (const r of rows) {
-    if (!r.shown) continue;
-    const d = new Date(r.created_at);
-    const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - ((d.getUTCDay() + 6) % 7)));
-    const week = monday.toISOString().slice(0, 10);
-    const key = `${r.user_id}|${week}`;
-    const row = out.get(key) ?? { user: String(r.user_id), week, replied: 0, sent: 0, edited: 0, ignored: 0 };
-    row.replied++;
-    if (r.outcome === "sent" || r.outcome === "edited") row[r.outcome]++;
-    else row.ignored++;
-    out.set(key, row);
-  }
-  return [...out.values()]
-    .sort((a, b) => (a.week === b.week ? a.user.localeCompare(b.user) : a.week.localeCompare(b.week)))
-    .map((r) => ({ ...r, composer_take_rate: r.replied ? Math.round(((r.sent + r.edited) / r.replied) * 100) / 100 : 0 }));
-}
-
-export const suggestionFunnel = internalQuery({
-  args: { since_days: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const since = Date.now() - (args.since_days ?? 28) * 86_400_000;
-    const rows = await ctx.db
-      .query("suggestion_outcomes")
-      .withIndex("by_created", (q) => q.gte("created_at", since))
-      .collect();
-    return funnelOf(rows as any);
-  },
+  args: outcomeArgs,
+  handler: async (ctx, args) => writeSuggestionOutcome(ctx, args),
 });
 
 export const storeSuggestions = internalMutation({
@@ -951,66 +887,6 @@ function profileForPrompt(profile: StoredProfile) {
   };
 }
 
-// The newest outcomes, each with what the developer sent instead when they
-// rewrote or passed over the suggestion. That reply is read from the
-// transcript (the first user row after the anchor), never stored with the
-// outcome: a deleted or redacted session takes it along. A regulated team's
-// conversation stays out, as in getRecentUserInputs, because this goes to the
-// suggester's vendor. Rows from before `shown` existed carry no ignored
-// record, so they are left out rather than read as a stream of takes.
-export const getRecentOutcomes = internalQuery({
-  args: { user_id: v.id("users") },
-  handler: async (ctx, args): Promise<SuggestionOutcome[]> => {
-    const rows = await ctx.db
-      .query("suggestion_outcomes")
-      .withIndex("by_user_created", (q) => q.eq("user_id", args.user_id))
-      .order("desc")
-      .take(OUTCOMES_FOR_PROMPT * 3);
-    const refused = new Map<string, boolean>();
-    const out: SuggestionOutcome[] = [];
-    for (const r of rows) {
-      if (out.length >= OUTCOMES_FOR_PROMPT) break;
-      if (!r.shown || r.outcome === "dismissed") continue;
-      const conv = String(r.conversation_id);
-      if (!refused.has(conv)) refused.set(conv, !!(await vendorRefusalFromDb(ctx, { conversationId: r.conversation_id }, "anthropic")));
-      if (refused.get(conv)) continue;
-      const outcome = r.outcome as SuggestionOutcome["outcome"];
-      if (outcome === "sent") {
-        out.push({ outcome, suggestion: r.suggestion });
-        continue;
-      }
-      const reply = await replyAfter(ctx, r.conversation_id, r.anchor_message_uuid);
-      // Gone (deleted, redacted, encrypted) or not words they typed: the
-      // outcome has nothing to teach without it.
-      if (reply) out.push({ outcome, suggestion: r.suggestion, reply });
-    }
-    return out;
-  },
-});
-
-// The first message the developer typed after the agent turn `anchor` (a
-// message_uuid, or a message id for rows that have none), or null.
-async function replyAfter(ctx: any, conversationId: Id<"conversations">, anchor: string): Promise<string | null> {
-  const byUuid = await ctx.db
-    .query("messages")
-    .withIndex("by_conversation_uuid", (q: any) => q.eq("conversation_id", conversationId).eq("message_uuid", anchor))
-    .first();
-  const id = byUuid ? null : ctx.db.normalizeId("messages", anchor);
-  const at = byUuid ?? (id ? await ctx.db.get(id) : null);
-  if (!at || String(at.conversation_id) !== String(conversationId)) return null;
-  const next = await ctx.db
-    .query("messages")
-    .withIndex("by_conversation_role_timestamp", (q: any) =>
-      q.eq("conversation_id", conversationId).eq("role", "user").gt("timestamp", at.timestamp)
-    )
-    .filter((q: any) => q.eq(q.field("tool_results"), undefined))
-    .first();
-  if (!next || next.is_encrypted) return null;
-  const text = stripInjectionNoise(next.content ?? "").trim();
-  if (!text || text.startsWith("/") || /^<command-/.test(text) || isMachineCarrierText(text)) return null;
-  return text;
-}
-
 // Rebuild one user's profile from their input history: collect, rank, mine,
 // store. Shared by the lazy TTL refresh inside the suggester and the
 // on-demand internal action below.
@@ -1120,7 +996,7 @@ export const generateComposerSuggestions = action({
     }
 
     // A regulated team's session gets no suggestions while the provider has no BAA (lib/vendorGuard).
-    const provider = process.env.SUGGESTIONS_PROVIDER === "openai" ? "openai" : "anthropic";
+    const provider = suggestionsProvider();
     const gate = { ctx, scope: { conversationId: args.conversation_id } };
     if (!(await vendorAllowedFor(ctx, gate.scope, provider))) return { status: "skipped", reason: "vendor_not_covered" };
 
@@ -1132,7 +1008,7 @@ export const generateComposerSuggestions = action({
       profile = await refreshProfile(ctx, user._id, now);
     }
 
-    const outcomes = await ctx.runQuery(internal.composerSuggestions.getRecentOutcomes, { user_id: user._id });
+    const outcomes = await ctx.runQuery(internal.suggestionOutcomes.recent, { user_id: user._id });
     try {
       const predicted = await predictSuggestions(context, { ...profile, outcomes }, provider, gate);
       if (predicted.error) return { status: "error", reason: predicted.error };

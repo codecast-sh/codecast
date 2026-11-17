@@ -132,7 +132,7 @@ export const CLIENT_SYNC_REGISTRY = {
   settingsData: {
     persistence: { kind: "collection", key: "settingsData" },
     sync: { isDelta: true, deepFields: ["value"] },
-    feeds: ["users.getRecentProjectsWithGitInfo", "githubApp.listInstallations", "devices.listAgentBoxes"],
+    feeds: ["users.getRecentProjectsWithGitInfo", "githubApp.listInstallations", "devices.listAgentBoxes", "mcpAuth.oauthStatus"],
   },
   sessions: {
     writtenBy: ["conversations"],

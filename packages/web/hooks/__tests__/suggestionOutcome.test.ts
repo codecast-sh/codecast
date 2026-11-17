@@ -5,13 +5,13 @@ const shown = { anchor: "a1", text: "add the test first" };
 
 describe("suggestionOutcome", () => {
   test("a taken suggestion sent as written, or changed first", () => {
-    expect(suggestionOutcome(shown, shown, "a1", " add the test first ")).toEqual({ anchor_message_uuid: "a1", suggestion: "add the test first", outcome: "sent", shown: ["add the test first"] });
+    expect(suggestionOutcome(shown, shown, "a1", " add the test first ")).toEqual({ anchor_message_uuid: "a1", suggestion: "add the test first", outcome: "sent", shown: ["add the test first"], typed_length: 18 });
     expect(suggestionOutcome(shown, shown, "a1", "add the test first, then ship")).toMatchObject({ outcome: "edited" });
   });
 
   test("own words after a ghost on show for this turn are ignored", () => {
     expect(suggestionOutcome(null, shown, "a1", "revert the flag")).toEqual({
-      anchor_message_uuid: "a1", suggestion: "add the test first", outcome: "ignored", shown: ["add the test first"],
+      anchor_message_uuid: "a1", suggestion: "add the test first", outcome: "ignored", shown: ["add the test first"], typed_length: 15,
     });
   });
 
