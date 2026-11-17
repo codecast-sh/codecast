@@ -45,6 +45,14 @@ describe("backend switch hold in the daemon", () => {
     expect(repair.indexOf("backendSwitchHeld(sessionId, conversationId)")).toBeLessThan(repair.indexOf("repairInFlight.get(sessionId)"));
   });
 
+  test("delivery on a cloud host near its run limit is held, not failed, ahead of every fallback", () => {
+    const fn = block("async function deliverMessageIntoSession(");
+    const hold = fn.indexOf('if (isRemoteDevice()) {\n    const runLimitHold = (await import("./cloud/hostReadiness.js")).runLimitHold(Date.now(), undefined, logDelivery);\n    if (runLimitHold) throw runLimitHold;');
+    expect(hold).toBeGreaterThan(fn.indexOf("if (backendSwitchHeld(conversationId)) throw"));
+    expect(hold).toBeLessThan(fn.indexOf("planHandoffTarget(planHandoffChildren, conversationId)"));
+    expect(src).toMatch(/err instanceof SwapHeldError \|\| err instanceof RunLimitHoldError \|\| err instanceof ForeignWriterHoldError/);
+  });
+
   test("a kill cancels a switch in progress and waits for it to let go; a park is refused during one", () => {
     const kill = src.slice(src.indexOf('case "kill_session": {'), src.indexOf('case "hibernate_session": {'));
     expect(kill).toContain("await cancelBackendSwitch(conversationId, sessionIdHint)");

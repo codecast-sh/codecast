@@ -22,21 +22,22 @@ import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { fmt, icons } from "../colors.js";
 import { formatAgeShort } from "../publishCommand.js";
 import {
-  dialRemoteHost, ensureUp, hostState, inspectHost, isEc2Host, patchHost, probedRemoteHost, readHosts, stopHost, toRemoteHost, upsertHost, writeHosts,
+  connectedRemoteHost, dialRemoteHost, ensureUp, hostState, inspectHost, isEc2Host, patchHost, probedRemoteHost, readHosts, stopHost, toRemoteHost, upsertHost, writeHosts,
   type CloudHost, type HostState,
 } from "../browser/cloudHost.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
-import { hostProvider, isMacHost } from "./providers/registry.js";
+import { EC2_HOURLY_USD } from "./providers/aws.js";
+import { displayRefusal, hostHasSystemd, hostProvider, isMacHost } from "./providers/registry.js";
 import { normalizeReachFolder, reachHostRefusal, reachLine, readReachStatus, type ReachFolder, type ReachStatus } from "../cloud/reach.js";
 import { ACCOUNT_KEY_URL, cwdGitRoot, deployKeyUrl, grantAccountKey, grantDeployKey, hostAccessPath, repoOrigin, type HostAccessPath, type HostGitState } from "../cloud/hostGit.js";
 import { hostToolsDetailLines, parseHostToolsStamp, summarizeHostTools, type HostToolsReport } from "../cloud/hostTools.js";
 import { parseHostMcpOverrides } from "../cloud/hostMcpOverrides.js";
 import { deviceId } from "../remote/device.js";
-import { ssh, sshDestination, sshIdentity, type RemoteHost } from "../remote/session-move.js";
+import { ssh, sshDestination, sshIdentity, sshShell, type RemoteHost } from "../remote/session-move.js";
 import { ROOT_WORKSPACE_NAME, type AgentLoginsReport } from "../cloud/prepare.js";
 import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
 import { FIND_CAST_SH } from "../cloud/ghWrapper.js";
@@ -46,6 +47,7 @@ import { commandGroup } from "../commandGroups.js";
 import { commandTree, unknownCommandNextStep } from "../commandSuggestion.js";
 import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
 import { checkIdleMinutes, provisionArgv, registerHostCreateCommand } from "./create.js";
+import { hostRunLimit, runLimitText, type RunLimit } from "./namespaceCli.js";
 import { registerHostResizeCommand } from "./resize.js";
 import { registerHostTeamCommand } from "./team.js";
 import type { MacDesktop } from "./macLogin.js";
@@ -65,43 +67,6 @@ function die(msg: string, hint?: string): never {
 // --------------------------------------------------------------------------
 
 /**
- * On-demand USD per hour, us-west-2, Linux. A short table on purpose: these
- * are the types we actually launch, and a wrong price is worse than an
- * admitted unknown, so an unlisted type prints "rate unknown" rather than
- * being guessed from its family.
- */
-export const EC2_HOURLY_USD: Record<string, number> = {
-  "t3.micro": 0.0104,
-  "t3.small": 0.0208,
-  "t3.medium": 0.0416,
-  ...Object.fromEntries(CLOUD_HOST_SIZES.map((size) => [size.type, size.hourly_usd])),
-  "m5.large": 0.096,
-  "m5.xlarge": 0.192,
-  "c5.large": 0.085,
-  "c5.xlarge": 0.17,
-  "r6a.large": 0.1134,
-  "r6a.xlarge": 0.2268,
-  "r6a.2xlarge": 0.4536,
-  "r6a.4xlarge": 0.9072,
-  "r6a.8xlarge": 1.8144,
-  "r7a.large": 0.15215,
-  "r7a.xlarge": 0.3043,
-  "r7a.2xlarge": 0.6086,
-  "r7a.4xlarge": 1.2172,
-  "r7a.8xlarge": 2.4344,
-  "r7i.large": 0.1323,
-  "r7i.xlarge": 0.2646,
-  "r7i.2xlarge": 0.5292,
-  "r7i.4xlarge": 1.0584,
-  "r7i.8xlarge": 2.1168,
-  "r8g.large": 0.11782,
-  "r8g.xlarge": 0.23564,
-  "r8g.2xlarge": 0.47128,
-  "r8g.4xlarge": 0.94256,
-  "r8g.8xlarge": 1.88512,
-};
-
-/**
  * Report a host as soon as provisioning learns its device: the server prepares
  * (rather than plainly starts) launches only on a host some laptop reports on,
  * and the daemon's own pass may be 15 minutes away. Best effort; that pass
@@ -118,7 +83,8 @@ async function reportHostNow(id: string): Promise<void> {
 }
 
 /** The provision summary's auto-stop line: what the host costs while it sits idle. */
-export function idleStopLine(idleMinutes: number): string {
+export function idleStopLine(idleMinutes: number, namespace = false): string {
+  if (namespace) return `idle auto-stop: ${idleMinutes > 0 ? `the host releases its task marker after ${idleMinutes}m idle` : "no task marker is held"}, then Namespace stops it (never sooner than 15m after the last ssh session)`;
   return idleMinutes > 0
     ? `idle auto-stop: ${idleMinutes}m — after that it powers itself off and costs only its disk`
     : "idle auto-stop: disabled — it stays up, billing its hourly rate, until you stop it (cast hosts sleep)";
@@ -152,6 +118,7 @@ function usdRate(n: number): string {
  * keep costing after it sleeps.
  */
 export function estimateHostCost(input: {
+  host?: CloudHost;
   instanceType?: string;
   volumeGiB?: number;
   state: HostState | string;
@@ -159,7 +126,7 @@ export function estimateHostCost(input: {
   if (/^mac\d|^mac-/.test(input.instanceType ?? "")) {
     return { hourlyUsd: null, diskMonthlyUsd: null, line: "Mac dedicated host billing continues while the instance is stopped; 24-hour minimum allocation. Release the dedicated host to end its charges. Storage is billed separately." };
   }
-  const hourlyUsd = input.instanceType ? EC2_HOURLY_USD[input.instanceType] ?? null : null;
+  const hourlyUsd = (input.instanceType && (input.host ? hostProvider(input.host).hourlyUsd?.(input.host, input.instanceType) : EC2_HOURLY_USD[input.instanceType])) || null;
   const diskMonthlyUsd = typeof input.volumeGiB === "number" ? input.volumeGiB * GP3_USD_PER_GIB_MONTH : null;
   const disk = diskMonthlyUsd === null ? "disk size unknown" : `about ${usd(diskMonthlyUsd)}/month disk`;
 
@@ -399,6 +366,7 @@ export interface HostReport {
   setup?: { applied: { hash: string; at: string } | null; want: string; declared: boolean };
   /** One line per laptop folder reached on this host, with the daemon's last word on it. */
   reach: string[];
+  runLimit?: RunLimit;
 }
 
 /** One line for the host's declared setup: applied and current, pending, or nothing declared. */
@@ -561,7 +529,7 @@ async function settleMacDesktop(up: CloudHost, remote: RemoteHost, report: { des
     // SIP keeps these two grants out of every script's reach: someone switches
     // them on once, on the Mac's own screen. A host imaged from this one keeps them.
     console.log(fmt.muted(`  cast computer needs ${missing.join(" and ")}, which macOS takes only from its own screen, once per machine:`));
-    console.log(fmt.muted(`    ssh ${sshIdentity(remote).join(" ")} -N -L 5901:localhost:5900 ${sshDestination(remote)} &  then open vnc://localhost:5901`));
+    console.log(fmt.muted(`    ${sshShell([...sshIdentity(remote), "-N", "-L", "5901:localhost:5900", sshDestination(remote)])} &  then open vnc://localhost:5901`));
     console.log(fmt.muted(`    sign in as ${remote.user} (its password: ~/.codecast/desktop-password on the Mac), run \`cast computer setup --yes\` over ssh, and switch on codecast computer in each pane`));
   };
   if (report.desktop === "live") {
@@ -658,7 +626,9 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   const current: CloudHost = { ...host, address: address ?? undefined };
   // One probe picks the address every SSH call below uses: a tailnet that
   // shows the node online but drops its traffic must not fail each of them.
-  const remote = live && address ? await probedRemoteHost(current) : null;
+  const remote = live && address ? await connectedRemoteHost(current) : null;
+  const notDialed = live && address && !remote;
+  const whyNot = notDialed ? "not dialed (no open connection)" : "asleep";
 
   // The device id: from the registry when we already know it, else learned
   // over SSH — which only works while the box is up.
@@ -666,6 +636,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   let deviceNote: string | undefined;
   if (!deviceId) {
     if (!live) deviceNote = "device id unknown until it wakes";
+    else if (notDialed) deviceNote = `device id unknown: ${whyNot}`;
     else {
       const learned = await guard(async () => {
         const { learnHostDeviceId } = await import("../cloud/prepare.js");
@@ -707,8 +678,8 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   let worktrees: Array<RemoteWorktree & { hasSession: boolean }> = [];
   let worktreesNote: string | undefined;
   let danglingSeeds: Array<{ repo: string; name: string }> = [];
-  if (live && address) {
-    const listed = await guard(() => readRemoteWorktrees(remote!));
+  if (remote) {
+    const listed = await guard(() => readRemoteWorktrees(remote));
     if (listed.error) worktreesNote = `unknown (${listed.error})`;
     worktrees = markOrphanWorktrees(listed.value ?? [], sessions);
     // Seed refs left behind by a failed acquire or a worktree removed by
@@ -723,8 +694,8 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
       repo: "", name, state: "", branch: "", path: "", hasSession: true,
     }));
     worktreesNote = worktrees.length
-      ? "asleep — these are only the ones its sessions name"
-      : "asleep, and no session names one — wake it to list them";
+      ? `${whyNot} — these are only the ones its sessions name`
+      : `${whyNot}, and no session names one — wake it to list them`;
   }
 
   let mirror: HostMirrorStamp | null | undefined;
@@ -732,7 +703,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   let tools: HostToolsReport | null | undefined;
   let toolsNote: string | undefined;
   let setup: HostReport["setup"];
-  if (live && address) {
+  if (remote) {
     // The mirror stamp comes back verified against the disk (mirror/push.ts).
     const { readRemoteMirrorStamp } = await import("../cloud/mirror/push.js");
     const stamp = await guard(async () => parseHostMirrorStamp(JSON.stringify(await readRemoteMirrorStamp(remote!, 5_000, undefined, undefined, true))));
@@ -759,13 +730,14 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
       if (tools && (mcpOut ?? "").trim()) tools.mcpOverrides = parseHostMcpOverrides(mcpOut!);
     }
   } else {
-    mirrorNote = "asleep";
-    toolsNote = "asleep";
+    mirrorNote = whyNot;
+    toolsNote = whyNot;
   }
 
   const cost = facts.error
     ? { hourlyUsd: null, diskMonthlyUsd: null, line: `unknown (${facts.error})` }
     : estimateHostCost({
+        host,
         instanceType: facts.value?.instanceType,
         volumeGiB: facts.value?.volumeGiB,
         state: facts.value?.state ?? "unknown",
@@ -789,6 +761,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     ...(tools !== undefined ? { tools } : {}),
     ...(toolsNote ? { toolsNote } : {}),
     ...(setup ? { setup } : {}),
+    ...hostRunLimit(host, live ? facts.value?.startedAt : undefined),
     git: hostGitReport(host),
     reach: hostReachLines(host),
     cost: {
@@ -857,7 +830,7 @@ function printHostReport(r: HostReport, opts: { verbose?: boolean } = {}): void 
     : r.state === "unknown" ? fmt.warning(`unknown (${r.stateError ?? "no answer"})`)
     : fmt.warning(r.state);
   console.log(`${fmt.highlight(r.id)}  ${fmt.muted(`${r.provider} · ${r.region}`)}`);
-  console.log(`  state      ${mark}${r.address ? `  ${r.address}` : ""}`);
+  console.log(`  state      ${mark}${r.address ? `  ${r.address}` : ""}${r.runLimit ? `  ${runLimitText(r.runLimit)}` : ""}`);
 
   console.log(`  device     ${deviceText(r.device)}`);
 
@@ -925,6 +898,13 @@ function pick(id: string | undefined, what: string): CloudHost {
   const rows = readHosts();
   const h = id ? rows.find((r) => r.id === id) : rows.find((r) => isEc2Host(r) && r.platform !== "darwin") ?? rows[0];
   if (!h) die(id ? `no host ${id}` : what, "`cast hosts add <instance-id> --key <pem>` first");
+  return h;
+}
+
+function displayHost(id: string | undefined): CloudHost {
+  const h = pick(id, "no linux host registered");
+  const refusal = displayRefusal(h);
+  if (refusal) die(refusal);
   return h;
 }
 
@@ -1054,18 +1034,23 @@ export function buildHostsCommand(parent: Command): Command {
 
   hosts
     .command("add <instanceId>")
-    .description("Register an existing EC2 instance as a host")
-    .requiredOption("--key <path>", "SSH private key for it")
+    .description("Register an existing EC2 instance (or, with --provider namespace, a Devbox by name) as a host")
+    .addOption(new Option("--provider <name>", "Where the host runs").choices(["aws", "namespace"]).default("aws"))
+    .option("--key <path>", "SSH private key for it (aws)")
+    .option("--max-run <duration>", "With --provider namespace, the hard run limit of the account's Devbox, e.g. 4h, 90m, 1h30m")
     .option("--region <name>", "AWS region", "us-west-2")
     .option("--profile <name>", "AWS credentials profile (remembered for wake and sleep)")
     .option("--user <name>", "SSH user (ubuntu for Linux, ec2-user for Mac)")
     .option("--provision", "Install tools, sync configuration, and start the remote service")
     .option("--service-user <name>", "With --provision, create a separate Mac login with SSH and passwordless sudo")
     .option("--idle <minutes>", "With --provision, auto-stop after this many idle minutes (0 disables; default 20)")
-    .action(async (instanceId: string, o: { key: string; region: string; user?: string; profile?: string; provision?: boolean; serviceUser?: string; idle?: string }) => {
+    .action(async (instanceId: string, o: { key?: string; region: string; user?: string; profile?: string; provision?: boolean; serviceUser?: string; idle?: string; provider: string; maxRun?: string }) => {
       if (o.serviceUser && !o.provision) die("--service-user requires --provision");
       if (o.idle !== undefined && !o.provision) die("--idle requires --provision");
       if (o.idle !== undefined) { try { checkIdleMinutes(o.idle); } catch (err) { die((err as Error).message); } }
+      if (o.provider === "namespace") return (await import("./namespaceCli.js")).addNamespaceHost(hosts, instanceId, o);
+      if (o.maxRun !== undefined) die("--max-run is for --provider namespace");
+      if (!o.key) die("--key <path> is required for an aws host");
       const previous = readHosts().find((entry) => entry.id === instanceId);
       const host: CloudHost = {
         id: instanceId, provider: "aws", region: o.region, user: o.user ?? "ubuntu",
@@ -1116,9 +1101,11 @@ export function buildHostsCommand(parent: Command): Command {
       }
       if (o.idle !== undefined && (!/^\d+$/.test(o.idle) || !Number.isSafeInteger(parseInt(o.idle, 10)))) die("Idle minutes must be a nonnegative whole number");
       if (o.shared && isMacHost(h)) die("--shared is for Linux hosts");
+      if (o.shared && displayRefusal(h)) die(`--shared is not supported on ${h.provider} hosts yet`);
       // A shared host's owner daemon must be rewritten as a peer, or it stays a remote device on the laptop's logins.
       if (o.shared && !o.daemon) die("--shared needs the daemon step: it turns the owner's daemon into a peer");
       const { provisionLinuxHost, IDLE_WATCHDOG_VERSION } = await import("../browser/provisionLinux.js");
+      const provision = hostHasSystemd(h) ? provisionLinuxHost : (await import("./providers/namespaceProvision.js")).provisionDevboxHost;
       console.log(`provisioning ${h.id} (${h.region})…`);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       // Shared stays shared, even provisioned from a laptop that never knew: the host keeps the record.
@@ -1159,8 +1146,8 @@ export function buildHostsCommand(parent: Command): Command {
         // version when that lands: a later step that fails (the daemon restart
         // is refused while sessions are live) must not leave `cast hosts reach`
         // and forward-agent asking for a provision that already happened.
-        const report = await provisionLinuxHost(dialRemoteHost(up), {
-          idleStopMinutes: idle, skipDaemon: !o.daemon, gitIdentity: o.gitIdentity, shared,
+        const report = await provision(dialRemoteHost(up), {
+          idleStopMinutes: idle, skipDaemon: !o.daemon, gitIdentity: o.gitIdentity, shared, maxRunMinutes: up.maxRunMinutes,
           // A shared host's browser runs as its own login, and any user on the box can reach its debugging port.
           onBaseInstalled: () => { patchHost(up.id, { idleStopMinutes: idle, watchdogVersion: IDLE_WATCHDOG_VERSION, ...(shared ? { shared: true, browserSync: false } : {}) }); },
         }, (m) => console.log(fmt.muted(`  ${m}`)));
@@ -1174,8 +1161,8 @@ export function buildHostsCommand(parent: Command): Command {
         console.log(`  git key:  ${report.git.trim()}`);
         console.log(`  agents:   ${report.agents.trim()}`);
         console.log(`  tools:    ${report.tools.trim()}`);
-        console.log(fmt.muted(`  ${idleStopLine(idle)}`));
-        console.log(fmt.muted(`  watch it: cast hosts view`));
+        console.log(fmt.muted(`  ${idleStopLine(idle, !hostHasSystemd(up))}`));
+        if (!displayRefusal(up)) console.log(fmt.muted(`  watch it: cast hosts view`));
         if (shared && o.team) {
           console.log(fmt.muted("  registering it as a team machine…"));
           const args = ["hosts", "team", "register", "--team", o.team, "--name", o.name ?? h.id, ...(up.address ? ["--address", up.address] : [])];
@@ -1206,7 +1193,7 @@ export function buildHostsCommand(parent: Command): Command {
       const platform = hostCastPlatform(up);
       try {
         const { version, restart } = updateHostCast(remote, platform, { restart: o.restart, force: o.force, source: o.fromCheckout ? "checkout" : "release" }, (m) => console.log(fmt.muted(`  ${m}`)));
-        console.log(`${OK} cast ${version} is installed on ${up.id}${platform === "linux" ? " and runs there" : ""}`);
+        console.log(`${OK} cast ${version} is installed on ${up.id}${platform !== "darwin" ? " and runs there" : ""}`);
         if (!restart) console.log(fmt.muted("  the running daemon is untouched; `cast hosts update` without --no-restart moves it over"));
         else if ("refused" in restart) die(restart.refused);
         else console.log(`${OK} ${platform === "darwin" ? "Mac service restarted" : `daemon restarted onto ${version} (pid ${restart.pid})`}`);
@@ -1566,8 +1553,8 @@ export function buildHostsCommand(parent: Command): Command {
         die("the home mirror is off", "`cast config cloud_mirror_enabled true` to turn it on");
       }
       const previewHost = id ? pick(id, "no host registered") : readHosts().find((r) => r.provider === "aws");
-      const previewRemote = previewHost ? await probedRemoteHost(previewHost) : null;
-      const previewHome = previewRemote ? remoteHome(previewRemote) : "/home/ubuntu";
+      const previewRemote = previewHost ? await connectedRemoteHost(previewHost) : null;
+      const previewHome = previewRemote ? remoteHome(previewRemote) : previewHost?.address ? remoteHome(toRemoteHost(previewHost)) : "/home/ubuntu";
       let preview;
       try {
         preview = await buildHomeMirror({ config, hostHome: previewHome, takeOver: o.takeOver, projects: previewHost && previewRemote ? readProjectRegistrations(previewRemote, undefined, previewHost.id) : [] });
@@ -1627,7 +1614,7 @@ export function buildHostsCommand(parent: Command): Command {
     .description("Live view of the host's screen — VLC (RTSP) or any browser (HLS), over an SSH tunnel")
     .option("--vlc", "Open it in VLC")
     .action(async (id: string | undefined, o: { vlc?: boolean }) => {
-      const h = pick(id, "no linux host registered");
+      const h = displayHost(id);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       const { ensureViewTunnel } = await import("../browser/liveView.js");
       try {
@@ -1656,7 +1643,7 @@ export function buildHostsCommand(parent: Command): Command {
     .option("--novnc", "Open noVNC's own page over an SSH tunnel instead (for a host with no codecast daemon yet)")
     .option("--stop", "Close the noVNC tunnel now instead of when it goes idle")
     .action(async (id: string | undefined, o: { open: boolean; novnc?: boolean; stop?: boolean }) => {
-      const h = pick(id, "no linux host registered");
+      const h = displayHost(id);
       const { ensureVncTunnel, closeHostTunnel, TUNNEL_IDLE_SECONDS } = await import("../browser/liveView.js");
       if (o.stop) {
         if (!h.address) die(`${h.id} has no address; it is asleep, so no tunnel is open`);
@@ -1694,7 +1681,7 @@ export function buildHostsCommand(parent: Command): Command {
     .command("shot [id]")
     .description("One screenshot of the host's screen, saved locally")
     .action(async (id: string | undefined) => {
-      const h = pick(id, "no linux host registered");
+      const h = displayHost(id);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       const { machineShot } = await import("../browser/liveView.js");
       try {
@@ -1750,9 +1737,9 @@ export function buildHostsCommand(parent: Command): Command {
 
   hosts
     .command("rm <id>")
-    .description("Forget a host — the registry entry only, the instance is untouched")
+    .description("Forget a host — the registry entry only (and a Devbox's generated ssh files), the instance is untouched")
     .option("--force", "Remove it even while it is awake")
-    .action((id: string, o: { force?: boolean }) => {
+    .action(async (id: string, o: { force?: boolean }) => {
       const rows = readHosts();
       const h = rows.find((r) => r.id === id);
       if (!h) die(`no host ${id} is registered`, "`cast hosts ls` to see what is");
@@ -1767,7 +1754,9 @@ export function buildHostsCommand(parent: Command): Command {
         }
       }
       writeHosts(rows.filter((r) => r.id !== id));
+      const note = hostProvider(h).forget?.(h);
       console.log(`${OK} forgot ${id} — the machine itself still exists; delete it at the provider if you meant that`);
+      if (note) console.log(fmt.muted(`  ${note}`));
     });
 
   return hosts;

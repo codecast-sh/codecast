@@ -49,6 +49,7 @@ export interface RemoteHost {
   /** The user's home on the remote. Defaults to the macOS layout for the
    * original Scaleway hosts; Linux hosts must say /home/<user>. */
   homeDir?: string;
+  proxyCommand?: string;
 }
 
 /** Where ~ is on the remote — the macOS default unless the host says otherwise. */
@@ -155,9 +156,15 @@ export function resolveLocalSession(sessionId: string): LocalSession {
 // SSH / rsync primitives
 // --------------------------------------------------------------------------
 
-export const sshIdentity = (host: Pick<RemoteHost, "keyPath">): string[] => ["-i", host.keyPath];
+export const sshIdentity = (host: Pick<RemoteHost, "keyPath" | "proxyCommand">): string[] => [
+  "-i", host.keyPath,
+  ...(host.proxyCommand ? ["-o", `ProxyCommand=${host.proxyCommand}`, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"] : []),
+];
 export const sshDestination = (host: Pick<RemoteHost, "user" | "address">): string => `${host.user}@${host.address}`;
-const rsyncShell = (host: RemoteHost): string => `ssh ${sshBase(host).join(" ")}`;
+export const sshControlPath = (host: Pick<RemoteHost, "user" | "address">): string => path.join(os.tmpdir(), `cast-ssh-${host.user}-${host.address.replace(/[^\w.]/g, "_")}`);
+export const shellWord = (a: string): string => (/^[\w@%+=:,./-]+$/.test(a) ? a : shq(a));
+export const sshShell = (argv: string[]): string => `ssh ${argv.map(shellWord).join(" ")}`;
+const rsyncShell = (host: RemoteHost): string => sshShell(sshBase(host));
 
 export function sshBase(host: RemoteHost): string[] {
   // Keepalives make a dead connection an ERROR instead of a forever-hang: on a
@@ -167,7 +174,7 @@ export function sshBase(host: RemoteHost): string[] {
   // The control socket reuses the authenticated connection ensureUp parked
   // (same path formula), so each transfer command skips the handshake dice on
   // networks where one handshake was measured at 36 seconds.
-  const socket = path.join(os.tmpdir(), `cast-ssh-${host.user}-${host.address.replace(/[^\w.]/g, "_")}`);
+  const socket = sshControlPath(host);
   return [
     ...sshIdentity(host),
     "-o", "StrictHostKeyChecking=accept-new",
@@ -296,7 +303,7 @@ export function gitSshUrl(host: RemoteHost, remotePath: string): string {
 export function gitEnv(host: RemoteHost): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    GIT_SSH_COMMAND: `ssh ${sshIdentity(host).join(" ")} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20`,
+    GIT_SSH_COMMAND: sshShell([...sshIdentity(host), "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20"]),
   };
 }
 

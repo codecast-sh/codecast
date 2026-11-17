@@ -47,7 +47,7 @@ function assertOffGraph(entry: string) {
   return graph;
 }
 
-const LAZY_PROVIDER_MODULES = [path.join(SRC, "hosts/providers/ec2Start.ts")];
+const LAZY_PROVIDER_MODULES = ["hosts/providers/ec2Start.ts", "hosts/providers/namespaceStart.ts", "hosts/providers/namespaceProvision.ts", "hosts/namespaceCli.ts"].map((file) => path.join(SRC, file));
 
 function assertLazyProviderModulesOffGraph(graph: ReturnType<typeof buildBootGraph>, entry: string) {
   const onGraph = LAZY_PROVIDER_MODULES.filter((file) => graph.nodes.has(file)).map((file) => {
@@ -664,7 +664,8 @@ describe("command groups stay off the boot graph", () => {
     // 2026-11-16: ccFleetState.ts, out of ccAccounts.ts, the same split. 605
     // the same day: contracts/screenRecording.ts, for the screen recording brief.
     // 608 on 2026-11-17: hosts/providers/registry.ts, aws.ts and scalewayMac.ts, the HostProvider registry and the per-provider describe/inspect/stop modules (GitHub #93).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(608);
+    // 609 the same day: hosts/providers/namespace.ts, the Namespace provider's describe/inspect/stop module (GitHub #93).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(609);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

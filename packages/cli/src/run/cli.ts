@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { commandGroup } from "../commandGroups.js";
-import { ensureUp, openCloudHosts, readHosts, resolveCloudHost, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
+import { dialsWithoutWakingNow, ensureUp, openCloudHosts, readHosts, resolveCloudHost, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
 import { isMacHost } from "../hosts/providers/registry.js";
 import { remoteRepoPath } from "../remote/session-move.js";
 import { resolveSeedRoots } from "../cloud/prepare.js";
@@ -147,12 +147,12 @@ function transportFor(host: RunRecord["host"]): Transport {
   const now = readHosts().find((h) => h.id === host.id);
   if (now?.address) host = hostRecord(now);
   const home = host.homeDir ?? `/home/${host.user}`;
-  return sshTransport({ address: host.address, user: host.user, keyPath: host.keyPath, remoteBaseDir: `${home}/work`, homeDir: home }, host.id);
+  return sshTransport({ address: host.address, user: host.user, keyPath: host.keyPath, remoteBaseDir: `${home}/work`, homeDir: home, proxyCommand: host.proxyCommand }, host.id);
 }
 
 function hostRecord(cloud: CloudHost): RunRecord["host"] {
   const r = toRemoteHost(cloud);
-  return { id: cloud.id, address: r.address, user: r.user, keyPath: r.keyPath, ...(r.homeDir ? { homeDir: r.homeDir } : {}) };
+  return { id: cloud.id, address: r.address, user: r.user, keyPath: r.keyPath, ...(r.homeDir ? { homeDir: r.homeDir } : {}), ...(r.proxyCommand ? { proxyCommand: r.proxyCommand } : {}) };
 }
 
 /**
@@ -163,6 +163,11 @@ function hostRecord(cloud: CloudHost): RunRecord["host"] {
  */
 type Chosen = { host: RunRecord["host"]; info?: HostInfoWire; wouldWake?: boolean; sticky?: CloudHost };
 
+const dialable = async (hosts: CloudHost[]) => {
+  const ok = await Promise.all(hosts.map((h) => dialsWithoutWakingNow(h)));
+  return hosts.filter((_, i) => ok[i]);
+};
+
 async function chooseHost(flag: string | true | undefined, needGb: number, log: (m: string) => void, seedCwd: string, opts: { wake?: boolean } = {}): Promise<Chosen> {
   const wake = opts.wake !== false;
   const local = process.env.CAST_RUN_LOCAL_HOST;
@@ -172,8 +177,9 @@ async function chooseHost(flag: string | true | undefined, needGb: number, log: 
   }
   const up = async (cloud: CloudHost) => {
     if (!wake) {
-      const info = cloud.address ? await probeHost(transportFor(hostRecord(cloud))) : undefined;
-      return { host: cloud.address ? hostRecord(cloud) : { id: cloud.id, address: "", user: cloud.user, keyPath: cloud.keyPath }, ...(info ? { info } : { wouldWake: true }) };
+      const dial = cloud.address && (await dialsWithoutWakingNow(cloud));
+      const info = dial ? await probeHost(transportFor(hostRecord(cloud))) : undefined;
+      return { host: dial ? hostRecord(cloud) : { id: cloud.id, address: "", user: cloud.user, keyPath: cloud.keyPath }, ...(info ? { info } : { wouldWake: true }) };
     }
     return { host: hostRecord(await ensureUp(cloud, log)) };
   };
@@ -186,7 +192,7 @@ async function chooseHost(flag: string | true | undefined, needGb: number, log: 
   }
   // Picking on its own, cast sends runs to Linux hosts (the default a cloud session gets); a Mac host is used when named.
   // A host reserved for one job (devices.reserved_for) takes runs only when named with --host.
-  const cands = (await openCloudHosts()).filter((h) => h.address && !isMacHost(h));
+  const cands = await dialable((await openCloudHosts()).filter((h) => h.address && !isMacHost(h)));
   const last = listRecords().find((r) => r.seedCwd === seedCwd && !r.host.local);
   // A host this checkout used in the last half hour without a tool failure holds its warm dependencies and slots:
   // go there without probing (the host's own queue handles a full host), so a loaded laptop's slow ssh cannot move the run.
@@ -396,13 +402,13 @@ const TIMING_ORDER: Array<[string, string]> = [
   ["queueMs", "queue"], ["checkoutMs", "checkout"], ["depsMs", "deps"], ["runMs", "command"], ["outputsMs", "pack outputs"], ["outputsBackMs", "outputs back"],
 ];
 
-function showRun(rec: RunRecord, state: RunStateWire | null, json: boolean, unreachable = false): void {
+function showRun(rec: RunRecord, state: RunStateWire | null, json: boolean, unreachable?: "not answering" | "asleep"): void {
   if (json) { process.stdout.write(`${JSON.stringify({ record: rec, state, ...(unreachable ? { host_answered: false } : {}) }, null, 2)}\n`); return; }
   const timings = { ...rec.timings, ...(state?.timings ?? {}) };
   const lines = [
     `${rec.id}  ${rec.argv.join(" ")}`,
     `host      ${rec.host.id}${state ? ` (${state.host})` : ""}, slot ${state?.slot ?? "-"}`,
-    `state     ${state ? state.phase : unreachable ? `unknown: ${rec.host.id} is not answering${rec.code !== undefined ? ` (last seen exit ${rec.code})` : ""}` : "gone from the host"}${state?.code !== undefined ? `, exit ${state.code}` : ""}${state?.reason ? ` (${state.reason})` : ""}`,
+    `state     ${state ? state.phase : unreachable ? `unknown: ${rec.host.id} is ${unreachable}${rec.code !== undefined ? ` (last seen exit ${rec.code})` : ""}` : "gone from the host"}${state?.code !== undefined ? `, exit ${state.code}` : ""}${state?.reason ? ` (${state.reason})` : ""}`,
     `snapshot  ${rec.sha.slice(0, 10)}${rec.dirty ? " with uncommitted work" : ""}, ${fmtBytes(rec.uploadBytes ?? 0)} sent`,
     ...(state?.deps ? [`deps      ${state.deps.clone === "none" ? "none" : `${state.deps.warm ? "warm" : `cold (install ${fmtMs(state.deps.installMs ?? 0)})`}, ${state.deps.clone}`}`] : []),
     ...(state?.outputs ? [`outputs   ${state.outputs.files} files, ${fmtBytes(state.outputs.bytes)}`] : []),
@@ -440,7 +446,7 @@ async function subAction(verb: string, args: string[]): Promise<number> {
     return 0;
   }
   if (verb === "hosts") {
-    const hosts = readHosts().filter((h) => h.address);
+    const hosts = await dialable(readHosts().filter((h) => h.address));
     const infos = await Promise.all(hosts.map(async (h) => ({ h, r: await probeHostDetail(transportFor(hostRecord(h)), 10_000) })));
     for (const { h, r } of infos) {
       const info = r.info;
@@ -453,8 +459,10 @@ async function subAction(verb: string, args: string[]): Promise<number> {
   const rec = recordOrFail(rest[0], rest.slice(1));
   if (verb === "show") {
     let state: RunStateWire | null | undefined;
-    try { state = statusOf(rec); } catch { state = undefined; }
-    showRun(rec, state ?? null, !!flags.json, state === undefined);
+    const cloud = readHosts().find((h) => h.id === rec.host.id);
+    const asleep = !!cloud?.proxyCommand && !(await dialsWithoutWakingNow(cloud));
+    if (!asleep) try { state = statusOf(rec); } catch { state = undefined; }
+    showRun(rec, state ?? null, !!flags.json, asleep ? "asleep" : state === undefined ? "not answering" : undefined);
     return 0;
   }
   if (verb === "wait" && !rec.host.local) {

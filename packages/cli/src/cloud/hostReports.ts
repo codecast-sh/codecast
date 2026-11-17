@@ -20,7 +20,7 @@ import { CLOUD_HOST_SIZES, isCloudHostSize, parseWakePhaseLine, type CloudHostAc
 
 export function buildCloudHostReport(host: CloudHost, managedBy: string, now = Date.now()): CloudHostReport {
   const facts = inspectHost(host);
-  const cost = estimateHostCost({ instanceType: facts.instanceType, volumeGiB: facts.volumeGiB, state: facts.state });
+  const cost = estimateHostCost({ host, instanceType: facts.instanceType, volumeGiB: facts.volumeGiB, state: facts.state });
   let images: CloudHostReport["images"] = [];
   if (hostProvider(host).images) {
     try { images = listImages({ region: host.region ?? "us-west-2", profile: host.profile }, host.platform ?? facts.platform ?? "linux").slice(0, 10).map(({ id, name, created }) => ({ id, name, created })); } catch { /* no image permission: none shown */ }
@@ -43,6 +43,7 @@ export function buildCloudHostReport(host: CloudHost, managedBy: string, now = D
     ...(cost.diskMonthlyUsd !== null ? { disk_monthly_usd: Math.round(cost.diskMonthlyUsd * 100) / 100 } : {}),
     ...(facts.volumeGiB !== undefined ? { disk_gib: facts.volumeGiB } : {}),
     ...(host.idleStopMinutes !== undefined ? { idle_stop_minutes: host.idleStopMinutes } : {}),
+    ...(host.maxRunMinutes !== undefined ? { max_run_minutes: host.maxRunMinutes } : {}),
     ...(host.autoscaled ? { autoscaled: true } : {}),
     images,
     logins_held: held,

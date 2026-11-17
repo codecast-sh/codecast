@@ -8,7 +8,7 @@
 
 import { spawnSync } from "../../proc.js";
 import { readAuthConfig, defaultConfigDir } from "../../config/readAuthConfig.js";
-import { ec2Inspection, ec2State } from "./aws.js";
+import { ec2HourlyUsd, ec2Inspection, ec2State } from "./aws.js";
 import type { HostProvider } from "./types.js";
 
 export const CODECAST_MACHINE_PATH = "/cli/cast/env-machine";
@@ -54,7 +54,10 @@ export const codecastProvider: HostProvider = {
   clones: false,
   resizes: false,
   macOnly: false,
+  display: true,
+  systemd: true,
   describe: codecastDescribe,
+  hourlyUsd: ec2HourlyUsd,
   state: () => ec2State(codecastDescribe()),
   inspect() {
     const inst = codecastDescribe();

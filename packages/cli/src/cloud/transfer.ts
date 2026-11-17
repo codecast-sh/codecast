@@ -2,7 +2,7 @@ import { spawnSync, type SpawnSyncReturns } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { gitSshUrl, HOST_EXCLUDES, remoteHome, shq, sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
+import { gitSshUrl, HOST_EXCLUDES, remoteHome, shq, sshBase, sshDestination, sshShell, type RemoteHost } from "../remote/session-move.js";
 import { hostProbeOrigin } from "./hostGit.js";
 import { MANIFEST_REL_PATH } from "../workspace/resolver.js";
 import { collectCopyFiles, manifestCopyEntries, sourceStat, validateRelativePath } from "../workspace/copyFiles.js";
@@ -194,7 +194,7 @@ export function refreshRemoteCheckout(
         checked(spawnSync("git", ["-C", repo, "push", "-q", "--force", "--",
           gitSshUrl(host, repoPath), "refs/heads/main:refs/remotes/origin/main"], {
           encoding: "utf-8", stdio: "pipe", timeout: 300_000,
-          env: { ...process.env, GIT_SSH_COMMAND: ["ssh", ...sshBase(host)].map(shq).join(" ") },
+          env: { ...process.env, GIT_SSH_COMMAND: sshShell(sshBase(host)) },
         }), "push fresh origin/main to cloud checkout");
       });
       viaLaptop = true;
@@ -325,7 +325,7 @@ export function pushLaptopSeed(host: RemoteHost, seedCwd: string, repoPath: stri
   if (!seed.snapshot || !SHA_RE.test(seed.snapshot)) throw new Error("seed has no snapshot to push");
   checked(spawnSync("git", ["-C", seedCwd, "push", "-q", "--force", "--", gitSshUrl(host, repoPath), `${seed.snapshot}:${ref}`], {
     encoding: "utf-8", stdio: "pipe", timeout: 300_000,
-    env: { ...process.env, GIT_SSH_COMMAND: ["ssh", ...sshBase(host)].map(shq).join(" ") },
+    env: { ...process.env, GIT_SSH_COMMAND: sshShell(sshBase(host)) },
   }), `push laptop seed for ${name} to cloud checkout`);
   return { ...seed, ref };
 }

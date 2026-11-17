@@ -9,7 +9,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync } from "../proc.js";
-import { sshBase, sshDestination, shq, type RemoteHost } from "../remote/session-move.js";
+import { sshBase, sshDestination, sshShell, shq, type RemoteHost } from "../remote/session-move.js";
 import { HOST_PATH_EXPORT } from "../cloud/syncSide.js";
 import { EXIT_INFRA } from "../infraExit.js";
 import { hostRunnerSource, type HostInfoWire } from "./hostRunner.js";
@@ -53,7 +53,7 @@ export function sshTransport(host: RemoteHost, label = host.address): Transport 
       } finally { fs.closeSync(fd); }
     },
     pushTarget(repo) {
-      return { url: `ssh://${sshDestination(host)}${repo}`, env: { GIT_SSH_COMMAND: ["ssh", ...sshBase(host)].map(shq).join(" ") } };
+      return { url: `ssh://${sshDestination(host)}${repo}`, env: { GIT_SSH_COMMAND: sshShell(sshBase(host)) } };
     },
   };
 }

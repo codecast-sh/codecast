@@ -12,17 +12,56 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { loginIdForHostPath, type HostReadiness } from "@codecast/shared/contracts";
+import { RUN_LIMIT_HOLD_MINUTES, loginIdForHostPath, runEndsAt, runMinutesLeft, type HostReadiness } from "@codecast/shared/contracts";
+import { RunLimitHoldError } from "../terminalHold.js";
 
 const FILES = ["mirror.json", "host-tools.json", "host-setup.json", "host-setup-last.json", "agent-auth-origin.json"] as const;
+
+export const RUN_LIMIT_FILES = { max: "/etc/cast-max-run-minutes", uptime: "/proc/uptime" };
+
+const bootInstants = new Map<string, number>();
+const overrunLogged = new Set<string>();
+
+export function readRunLimit(now = Date.now(), files = RUN_LIMIT_FILES): { maxMinutes: number; endsAt: number } | undefined {
+  try {
+    const maxMinutes = Number(fs.readFileSync(files.max, "utf-8").trim());
+    const uptime = Number.parseFloat(fs.readFileSync(files.uptime, "utf-8"));
+    if (!Number.isInteger(maxMinutes) || maxMinutes <= 0 || !Number.isFinite(uptime)) return undefined;
+    let boot = bootInstants.get(files.uptime);
+    if (boot === undefined) {
+      boot = Math.round((now - uptime * 1000) / 60_000) * 60_000;
+      bootInstants.set(files.uptime, boot);
+    }
+    return { maxMinutes, endsAt: runEndsAt(boot, maxMinutes) };
+  } catch {
+    return undefined;
+  }
+}
+
+export function runLimitHold(now = Date.now(), files = RUN_LIMIT_FILES, log: (message: string) => void = () => {}): RunLimitHoldError | null {
+  const limit = readRunLimit(now, files);
+  if (!limit) return null;
+  if (limit.endsAt <= now) {
+    const key = `${files.max}:${limit.endsAt}`;
+    if (!overrunLogged.has(key)) {
+      overrunLogged.add(key);
+      log(`[RUN-LIMIT] this host is ${Math.floor((now - limit.endsAt) / 60_000)} min past its declared ${limit.maxMinutes} min run limit and still up: the limit is wrong, delivering messages without a hold`);
+    }
+    return null;
+  }
+  const left = runMinutesLeft(limit.endsAt, now);
+  return left < RUN_LIMIT_HOLD_MINUTES ? new RunLimitHoldError(limit.maxMinutes, left) : null;
+}
 
 function readJson(file: string): any {
   try { return JSON.parse(fs.readFileSync(file, "utf-8")); } catch { return null; }
 }
 
-export function readHostReadiness(codecastDir: string, castVersion?: string, now = Date.now()): HostReadiness {
+export function readHostReadiness(codecastDir: string, castVersion?: string, now = Date.now(), runFiles = RUN_LIMIT_FILES): HostReadiness {
   const at = (name: string) => path.join(codecastDir, name);
   const out: HostReadiness = { at: now, ...(castVersion ? { cast_version: castVersion } : {}) };
+  const runLimit = readRunLimit(now, runFiles);
+  if (runLimit) out.run_ends_at = runLimit.endsAt;
   const stamp = readJson(at("mirror.json"));
   if (stamp && typeof stamp.files === "object") {
     const entries = Object.entries(stamp.files as Record<string, any>);
@@ -76,7 +115,7 @@ export class HostReadinessReporter {
   constructor(private codecastDir: string, private castVersion?: string) {}
 
   next(now = Date.now()): HostReadiness | undefined {
-    const mtimes = FILES.map((f) => { try { return fs.statSync(path.join(this.codecastDir, f)).mtimeMs; } catch { return 0; } }).join(",");
+    const mtimes = [...FILES.map((f) => path.join(this.codecastDir, f)), RUN_LIMIT_FILES.max].map((f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } }).join(",");
     if (mtimes !== this.mtimes || !this.cached) { this.cached = readHostReadiness(this.codecastDir, this.castVersion, now); this.mtimes = mtimes; }
     const { at: _, ...content } = this.cached;
     const hash = createHash("sha256").update(JSON.stringify(content)).digest("hex");

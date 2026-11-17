@@ -32,7 +32,7 @@ const exec = (command: string, args: string[], options: { env?: NodeJS.ProcessEn
 };
 let logs: Mock<typeof console.log>;
 
-function fixture(): KeepaliveOptions & { configDir: string; idleConfigPath: string; idleWatchdogPath: string; idleProbePath: string } {
+function fixture(): KeepaliveOptions & { configDir: string; idleConfigPath: string; idleHomePath: string; idleWatchdogPath: string; idleProbePath: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-keepalive-"));
   scratch.push(root);
   const idleConfigPath = path.join(root, "cast-idle-minutes");
@@ -41,7 +41,7 @@ function fixture(): KeepaliveOptions & { configDir: string; idleConfigPath: stri
   const idleProbePath = path.join(root, "idle-probe.py");
   fs.writeFileSync(idleWatchdogPath, idleWatchdogScript());
   fs.writeFileSync(idleProbePath, cloudIdleProbeScript);
-  return { configDir: path.join(root, "config"), idleConfigPath, idleWatchdogPath, idleProbePath, platform: "linux", now };
+  return { configDir: path.join(root, "config"), idleConfigPath, idleHomePath: path.join(root, "cast-idle-home"), idleWatchdogPath, idleProbePath, platform: "linux", now };
 }
 
 function command(options: KeepaliveOptions): Command {
@@ -159,6 +159,27 @@ describe("cast hosts keepalive", () => {
     expect(() => command(options).parse(["hosts", "keepalive", "1", "--json"], { from: "user" })).toThrow("upgrade its idle watchdog");
     expect(fs.existsSync(options.configDir)).toBe(false);
     expect(logs).not.toHaveBeenCalled();
+  });
+
+  test("the probe line of the version 4 watchdog and of this build's both pass", () => {
+    const v4 = 'if ! timeout 15s python3 /usr/local/lib/codecast/idle-probe.py /home/ubuntu > /run/cast-idle-work.json; then';
+    const v5 = 'if ! timeout 15s python3 /usr/local/lib/codecast/idle-probe.py "$HOME_DIR" > /run/cast-idle-work.json; then';
+    const current = idleWatchdogScript();
+    expect(current).toContain(v5);
+    for (const line of [v4, v5]) {
+      const options = fixture();
+      fs.writeFileSync(options.idleWatchdogPath, `#!/bin/bash\n${line}\n  active=1\nfi\n`);
+      expect(() => createHostKeepalive("1", options)).not.toThrow();
+    }
+  });
+
+  test("the lease directory follows /etc/cast-idle-home", () => {
+    const { configDir, ...options } = fixture();
+    const home = path.join(path.dirname(options.idleHomePath), "devbox-home");
+    fs.writeFileSync(options.idleHomePath, `${home}\n`);
+    const lease = createHostKeepalive("1", options);
+    expect(fs.readdirSync(path.join(home, ".codecast/host-keepalive"))).toEqual([lease.id]);
+    expect(fs.existsSync(configDir)).toBe(false);
   });
 
   test("the existing hosts builder exposes the local keepalive command", () => {

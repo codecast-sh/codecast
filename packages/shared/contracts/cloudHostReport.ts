@@ -23,6 +23,11 @@ export interface HostReadiness {
   at: number;
 }
 
+export const RUN_LIMIT_WARN_MINUTES = 30;
+export const RUN_LIMIT_HOLD_MINUTES = 10;
+export const runEndsAt = (startedAt: number, maxRunMinutes: number): number => startedAt + maxRunMinutes * 60_000;
+export const runMinutesLeft = (endsAt: number, now: number): number => Math.max(0, Math.floor((endsAt - now) / 60_000));
+
 export const CLOUD_HOST_ACTIONS = ["wake", "sleep", "setup", "image", "delete_image", "clone"] as const;
 
 /**

@@ -6,6 +6,8 @@ export const scalewayMacProvider: HostProvider = {
   clones: false,
   resizes: false,
   macOnly: true,
+  display: true,
+  systemd: false,
   describe: awsDescribe,
   state: (host) => ({ state: "running", address: host.address }),
   inspect: (host) => ({ state: "running", address: host.address }),

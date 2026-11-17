@@ -122,13 +122,16 @@ test("the generated watchdog protects live work with a stale stamp, but still st
   executable("timeout", 'shift; exec "$@"');
   executable("systemctl", `printf '%s' "$*" > '${f.root}/poweroff'`);
   fs.writeFileSync(path.join(f.root, "minutes"), "1");
-  fs.writeFileSync(path.join(f.root, "stamp"), "old");
+  fs.writeFileSync(path.join(f.root, "home"), f.root);
+  fs.mkdirSync(path.join(f.root, ".codecast"));
+  fs.writeFileSync(path.join(f.root, ".codecast/host-active"), "old");
   const original = idleWatchdogScript();
   const script = original.replaceAll("/etc/cast-idle-minutes", `${f.root}/minutes`)
     .replaceAll("/run/cast-last-active", `${f.root}/state`)
-    .replaceAll("/home/ubuntu/.codecast/host-active", `${f.root}/stamp`)
+    .replaceAll("/etc/cast-idle-home", `${f.root}/home`)
+    .replaceAll("/etc/cast-idle-action", `${f.root}/action`)
     .replaceAll("/run/cast-idle-work.json", `${f.root}/decision.json`)
-    .replace("/usr/local/lib/codecast/idle-probe.py /home/ubuntu", `${f.root}/probe.py ${f.root} ${f.proc}`);
+    .replace('/usr/local/lib/codecast/idle-probe.py "$HOME_DIR"', `${f.root}/probe.py "$HOME_DIR" ${f.proc}`);
   const run = async (body: string) => {
     fs.writeFileSync(path.join(f.root, "state"), "1");
     fs.rmSync(path.join(f.root, "poweroff"), { force: true });

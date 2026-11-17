@@ -13,7 +13,7 @@ PROMPTS
 cast hosts ls --json
 ```
 
-The existing host is woken over AWS and reached over SSH. The repository is refreshed from the real remote's main branch. If the host cannot authenticate to the git remote, the laptop fetches fresh main into a temporary repository and transfers it over SSH; it never rewrites the laptop's branches or index. The refresh is fetch-only: an existing host checkout keeps its HEAD and its uncommitted work; only a shared placement (below) moves HEAD, and it refuses a dirty tree rather than discarding it.
+A cloud host is an AWS instance or a Namespace Devbox, and both are reached over SSH. An AWS host is woken over AWS. A Devbox starts when something connects to it (see [Namespace Devbox hosts](#namespace-devbox-hosts)). The repository is refreshed from the real remote's main branch. If the host cannot authenticate to the git remote, the laptop fetches fresh main into a temporary repository and transfers it over SSH; it never rewrites the laptop's branches or index. The refresh is fetch-only: an existing host checkout keeps its HEAD and its uncommitted work; only a shared placement (below) moves HEAD, and it refuses a dirty tree rather than discarding it.
 
 Manifest-listed private files travel directly over SSH, not Convex. Each worktree receives a private input snapshot, including local manifest overrides, without modifying the shared checkout. Healing uses that same snapshot. Setup and dependency installation run on the host. `PORT_WEB` (or the corresponding manifest port name), `CODECAST_PORT_WEB`, and the worktree identity are available in new and resumed sessions. Use the allocated port explicitly when starting a development server.
 
@@ -37,7 +37,28 @@ For a deliberately quiet operation, run this on the cloud host before starting i
 cast hosts keepalive 30
 ```
 
-Each call creates an independent lease for 1–1440 whole minutes. Leases use the installed host's `/home/ubuntu/.codecast/host-keepalive` directory, not a session's `HOME` or `CODECAST_DIR`. A shorter later lease cannot cancel another caller's longer one. Expiry removes that lease's veto; the ordinary idle grace still applies. The command refuses an older watchdog without lease support; updating only the CLI binary does not upgrade an existing host's watchdog. The command does not wake, provision, or restart a host.
+Each call creates an independent lease for 1–1440 whole minutes. Leases use the installed host's `.codecast/host-keepalive` directory in its login home (`/home/ubuntu` on AWS, `/home/devbox` on a Devbox), not a session's `HOME` or `CODECAST_DIR`. A shorter later lease cannot cancel another caller's longer one. Expiry removes that lease's veto; the ordinary idle grace still applies. The command refuses an older watchdog without lease support; updating only the CLI binary does not upgrade an existing host's watchdog. The command does not wake, provision, or restart a host.
+
+## Namespace Devbox hosts
+
+A cloud host can be a [Namespace](https://namespace.so) Devbox instead of an AWS instance. It needs the `devbox` and `nsc` CLIs installed and signed in on the laptop: `devbox` creates, stops, deletes and dials the box, and `nsc` reads whether it is running without waking it.
+
+```sh
+cast hosts create --provider namespace --name my-box --type m --idle 20 --max-run 4h
+cast hosts add --provider namespace my-box --max-run 4h
+```
+
+`create` makes a Devbox from the stock image (`devbox create ... --no_checkout --image builtin:default --auto_stop_idle_timeout 5m`) and provisions it. `add` registers one that exists; it takes no `--key`, because the key is the one `devbox` generated under `~/.namespace/ssh`. `--type` is `s`, `m`, `l` or `xl`. `--provider` defaults to `aws`.
+
+**Dialing.** A Devbox has no public address and needs nothing in `~/.ssh/config`: codecast connects through `devbox ssh-proxy`. Any new connection to a stopped box starts it, which takes about 10 seconds, so codecast reads state from `nsc` and never opens a connection just to check. `cast hosts ls` reads a running box's worktrees and stamps only while a connection to it is already open, and shows `not dialed (no open connection)` otherwise.
+
+**Idle.** A Devbox ignores a guest poweroff, so the idle watchdog holds a Namespace task marker while the host is busy and drops it once the host has been idle for `--idle` minutes. Namespace then stops the box. It stops a box no sooner than about 15 minutes after the last ssh session was opened, whatever `--idle` says, so `--idle` is a minimum.
+
+**Run-time limit.** Namespace enforces a hard maximum run time and does not expose it, so you give it with `--max-run`. `--max-run` must be longer than 30 minutes. The limit counts from each start. `cast hosts ls` shows the limit and the time left. With under 30 minutes left, the session and `cast hosts ls` warn. With under 10 minutes left, new messages are held, not failed, until the host restarts, and a new cloud session prefers another host. A host still up past its declared limit is no longer held, because the declared limit is evidently wrong; the daemon log says so once.
+
+**Removing.** `cast hosts rm` unregisters the host. It also removes the box's key and ssh file under `~/.namespace/ssh`, which `devbox delete` leaves behind. The Devbox itself stays: `devbox delete` removes it, and `devbox configure-ssh my-box` restores the ssh files if you keep it.
+
+The daemon and the watchdog run as Devbox services, which restart on every boot, in place of systemd units. Restarting the daemon for an update runs `cast stop` on the host and leaves the service alone: the service's loop starts the new daemon within 5 seconds. Not supported on a Devbox yet: live view and the managed browser (no display stack is installed), `--shared` hosts, autoscale, clone, resize and machine images, and `services` in a `[host]` spec, which are systemd units. Cost shows as unknown. AWS hosts keep everything described elsewhere in this page.
 
 ## Updating a host
 
@@ -86,7 +107,7 @@ this build installs and says so when they differ, because a host provisioned by
 an older build never recorded a watchdog version to compare against.
 `cast hosts provision` is what replaces them.
 
-A restart does not by itself kill sessions on the host, but whether it does
+On a systemd host, a restart does not by itself kill sessions, but whether it does
 depends on who started the tmux server. A server the daemon spawned shares the
 daemon's control group and dies with it under `KillMode=control-group`; a
 server started from an SSH session sits in its own scope under the user slice
@@ -225,7 +246,7 @@ Every prepare and wake applies the merged spec first (`cloud/hostSetup.ts`), onc
 
 `CODECAST_CLOUD=1` is also in every agent a host's daemon launches (the launch prefix, `agentEnvScrub`) and in the daemon's own unit, so a hook, a skill or a script can tell a cloud host from the laptop.
 
-`cast hosts image [id]` captures a prepared host as an AMI (no reboot), tagged as codecast's. `cast hosts create` launches from the newest one when `--image` is not given, with a one-time early-boot step that makes the clone its own machine before its daemon starts: a new `/etc/machine-id` (so its device id is a clone id, never the source host's), the source's codecast token removed, the source's session worktrees cleared. Provisioning then gives it its own token, and the mirror, logins and host setup find it in step. `cast hosts image --list` lists them.
+`cast hosts image [id]` captures a prepared AWS host as an AMI (no reboot), tagged as codecast's. `cast hosts create` on AWS launches from the newest one when `--image` is not given, with a one-time early-boot step that makes the clone its own machine before its daemon starts: a new `/etc/machine-id` (so its device id is a clone id, never the source host's), the source's codecast token removed, the source's session worktrees cleared. Provisioning then gives it its own token, and the mirror, logins and host setup find it in step. `cast hosts image --list` lists them.
 
 ## Keeping a cloud session's folder in step with the laptop
 

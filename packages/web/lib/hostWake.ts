@@ -48,7 +48,7 @@ const RECENT_ACTION_MS = 10 * 60_000;
 /** The roster floors last_seen to the minute (presenceState.bucketTs). */
 const LAST_SEEN_BUCKET_MS = 60_000;
 
-const beating = (h: DaemonHealth) => h.kind !== "offline" && h.kind !== "quiet" && h.kind !== "unknown";
+export const beating = (h: DaemonHealth) => h.kind !== "offline" && h.kind !== "quiet" && h.kind !== "unknown";
 
 export function hostWakeStage(
   d: HostWakeDevice | null | undefined,

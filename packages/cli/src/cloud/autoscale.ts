@@ -20,6 +20,8 @@ export function withAutoscaleLock<T>(fn: () => Promise<T>): Promise<T> {
   return withMirrorLock(path.join(defaultConfigDir(), "autoscale-lock"), fn, undefined, CLOUD_START_RUN_MS);
 }
 
+export const registeredHostId = (line: string): string | undefined => /^Registered ([\w-]+)\./.exec(line)?.[1];
+
 /** Launch and provision a host like `like`; resolves to its registry entry. */
 export async function launchAutoscaledHost(like: CloudHost, size: string, log: (m: string) => void): Promise<CloudHost> {
   const { cmd, prefixArgs } = resolveCastInvocation();
@@ -32,7 +34,7 @@ export async function launchAutoscaledHost(like: CloudHost, size: string, log: (
       for (const raw of chunk.toString().split("\n")) {
         const line = raw.replace(/\x1b\[[0-9;]*m/g, "").trim();
         if (!line) continue;
-        launched ??= /Registered (i-[0-9a-f]+)/.exec(line)?.[1];
+        launched ??= registeredHostId(line);
         tail.push(line);
         if (tail.length > 5) tail.shift();
         log(line);

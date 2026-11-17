@@ -4,6 +4,7 @@ import type { CloudHost, HostState } from "../../browser/cloudHost.js";
 export interface HostFacts {
   state: HostState;
   address?: string;
+  startedAt?: number;
 }
 
 export interface HostInspection extends HostFacts {
@@ -28,7 +29,12 @@ export interface HostProvider {
   readonly clones: boolean;
   readonly resizes: boolean;
   readonly macOnly: boolean;
+  readonly display: boolean;
+  readonly systemd: boolean;
   describe(host: CloudHost): any;
+  describeAsync?(host: CloudHost): Promise<any>;
+  forget?(host: CloudHost): string | undefined;
+  hourlyUsd?(host: CloudHost, instanceType: string): number | undefined;
   state(host: CloudHost): HostFacts;
   inspect(host: CloudHost): HostInspection;
   stop(host: CloudHost): void;

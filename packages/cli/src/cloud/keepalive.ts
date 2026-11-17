@@ -8,6 +8,7 @@ export interface KeepaliveOptions {
   configDir?: string;
   platform?: NodeJS.Platform;
   idleConfigPath?: string;
+  idleHomePath?: string;
   idleWatchdogPath?: string;
   idleProbePath?: string;
   now?: number;
@@ -25,13 +26,15 @@ export function createHostKeepalive(minutes: string, options: KeepaliveOptions =
   const watchdog = options.idleWatchdogPath ?? "/usr/local/bin/cast-idle-check";
   if (!fs.statSync(options.idleProbePath ?? "/usr/local/lib/codecast/idle-probe.py", { throwIfNoEntry: false })?.isFile()
     || !fs.statSync(watchdog, { throwIfNoEntry: false })?.isFile()
-    || !/^if ! timeout \d+s python3 \/usr\/local\/lib\/codecast\/idle-probe\.py \/home\/ubuntu > .*; then$/m.test(fs.readFileSync(watchdog, "utf8"))) {
+    || !/^if ! timeout \d+s python3 \/usr\/local\/lib\/codecast\/idle-probe\.py (?:\/home\/ubuntu|"\$HOME_DIR") > .*; then$/m.test(fs.readFileSync(watchdog, "utf8"))) {
     throw new Error("This host's idle watchdog does not support keepalive leases; upgrade its idle watchdog before starting quiet work");
   }
 
   const expiry = Math.floor((options.now ?? Date.now()) / 1000) + duration * 60;
   const lease = { id: randomUUID(), expiresAt: new Date(expiry * 1000).toISOString() };
-  const dir = path.join(options.configDir ?? "/home/ubuntu/.codecast", "host-keepalive");
+  const homePath = options.idleHomePath ?? "/etc/cast-idle-home";
+  const home = (fs.existsSync(homePath) ? fs.readFileSync(homePath, "utf8").trim() : "") || "/home/ubuntu";
+  const dir = path.join(options.configDir ?? path.join(home, ".codecast"), "host-keepalive");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.chmodSync(dir, 0o700);
   atomicWriteFile(path.join(dir, lease.id), `${expiry}\n`, { mode: 0o600 });

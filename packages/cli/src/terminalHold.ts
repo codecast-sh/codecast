@@ -1,4 +1,5 @@
 import { unreachableTerminalHoldReason } from "@codecast/shared/contracts/deliveryHold";
+import { formatDuration } from "@codecast/shared/time";
 
 // A live agent whose terminal has no way for the daemon to type into it (a
 // plain Alacritty window: daemon.ts TMUX_ONLY_TERMINALS; a Ghostty whose
@@ -13,6 +14,16 @@ export class TerminalHoldError extends Error {
   readonly recheckMs = TERMINAL_HOLD_RECHECK_MS;
   constructor(readonly terminalLabel: string, hint?: string | null) {
     const reason = unreachableTerminalHoldReason(terminalLabel, hint);
+    super(reason);
+    this.holdReason = reason;
+  }
+}
+
+export class RunLimitHoldError extends Error {
+  readonly holdReason: string;
+  readonly recheckMs = TERMINAL_HOLD_RECHECK_MS;
+  constructor(maxRunMinutes: number, minutesLeft: number) {
+    const reason = `this host reaches its ${formatDuration(maxRunMinutes * 60_000)} run limit in ${minutesLeft} min; held until it restarts`;
     super(reason);
     this.holdReason = reason;
   }

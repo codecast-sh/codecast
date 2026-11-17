@@ -96,7 +96,7 @@ import { readInputIdleMs } from "./inputIdle.js";
 import { folderFetchGate } from "./folderFetchGate.js";
 import { checkoutOfMoveClone, copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush, primeGhToken } from "./remote/agentAuth.js";
-import { dialRemoteHost, hostForDevice, noteDialError, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
+import { dialRemoteHost, dialsWithoutWaking, hostForDevice, noteDialError, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
 import {
   AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocket, hostAgentSocketEnv,
   bridgeAddressStale, shouldRunBridge,
@@ -341,7 +341,7 @@ import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketN
 import { ghosttyPane } from "./ghostty.js";
 import type { PaneTransport } from "./paneTransport.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
-import { TerminalHoldError } from "./terminalHold.js";
+import { RunLimitHoldError, TerminalHoldError } from "./terminalHold.js";
 import { ForeignWriterHoldError, foreignSessionWriter, foreignWriterScreen, parsePsRows, PS_ROWS_ARGS, type PsRow } from "./foreignSessionWriter.js";
 import { HERD_TAKE_PATH, SwapHeldError, abortableWait, closeHerdrPane, pollUntilUp, serveHerdTake, swapHeld, takeBusy, type HerdTakeDeps } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
@@ -4263,7 +4263,7 @@ async function liveSyncJobs(): Promise<import("./cloud/liveSyncJobs.js").LiveSyn
   liveSyncJobsInstance = new LiveSyncJobs({
     report: async (conversationId, report) => { await syncServiceRef?.reportLocalMirror(conversationId, deviceId(), report); },
     activity: async (ids) => (syncServiceRef ? syncServiceRef.localMirrorActivity(ids) : []),
-    hostFor: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); return h?.address ? dialRemoteHost(h) : null; },
+    hostFor: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); return h?.address && dialsWithoutWaking(h) ? dialRemoteHost(h) : null; },
     hostFailed: (hostDeviceId, err) => noteDialError(hostForDevice(hostDeviceId), err),
     scopeFor: (spec) => readSyncScope(spec.local_root),
     log,
@@ -4456,7 +4456,7 @@ const reaches = new HeldConnections({
       // Turned off (not re-approved in another mode): take the mountpoint and
       // its "comes back" note off the host, now that sshfs has let go of it.
       const host = readHosts().find((h) => h.id === hostId);
-      if (host?.address && !host.reach?.some((f) => f.path === folder)) {
+      if (host?.address && !host.reach?.some((f) => f.path === folder) && dialsWithoutWaking(host)) {
         spawn("ssh", reachRemoveArgs(toRemoteHost(host), folder!), { stdio: "ignore", env: process.env })
           .on("error", (err) => log(`[REACH] could not clear ${folder} on ${hostId}: ${err.message}`));
       }
@@ -9698,7 +9698,7 @@ async function executeRemoteCommand(
             const [{ handleSyncRequest }, { readSyncScope }] = await Promise.all([import("./cloud/syncRequests.js"), import("./cloud/syncScope.js")]);
             const ask = async () => handleSyncRequest(mirrorArgs, {
               jobs: await liveSyncJobs(),
-              hostFor: (id) => { const h = hostForDevice(id); return h?.address ? dialRemoteHost(h) : null; },
+              hostFor: (id) => { const h = hostForDevice(id); return h?.address && dialsWithoutWaking(h) ? dialRemoteHost(h) : null; },
               scopeFor: (root) => readSyncScope(root),
               isProjectRoot: async (root) => {
                 if (computeLocalProjectRoots().includes(root)) return true;
@@ -27403,6 +27403,10 @@ async function deliverMessageIntoSession(
   }
   // A backend switch is stopping one backend and starting the other: the message waits for the new one.
   if (backendSwitchHeld(conversationId)) throw new BackendSwitchHoldError();
+  if (isRemoteDevice()) {
+    const runLimitHold = (await import("./cloud/hostReadiness.js")).runLimitHold(Date.now(), undefined, logDelivery);
+    if (runLimitHold) throw runLimitHold;
+  }
 
   const childConvId = planHandoffTarget(planHandoffChildren, conversationId);
   if (childConvId) {
@@ -34003,7 +34007,7 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${hold.holdReason} in conv=${msg.conversation_id.slice(0, 12)}; retrying when the screen changes`);
             holdConversationForPrompt(msg.conversation_id);
             rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
-          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof ForeignWriterHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
+          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof RunLimitHoldError || err instanceof ForeignWriterHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
             // never spending the retry budget, and tried again at the error's

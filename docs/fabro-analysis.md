@@ -165,7 +165,7 @@ We're a TypeScript/Convex stack. Rewriting in Rust would be a complete detour. T
 They built their own multi-provider LLM client across 4 crates. We use the Anthropic SDK directly plus our agent runtime (which delegates to `claude` or `codex` CLI). No need to build a provider abstraction -- the CLI tools handle that.
 
 ### 4. Their Sandbox Infrastructure
-Daytona, exe.dev, Sprites -- these are cloud VM providers. Interesting for enterprise but premature for us. Our worktree isolation + local execution is sufficient for now. Worth revisiting when we need cloud agent execution.
+Daytona, exe.dev, Sprites -- these are cloud VM providers. No longer premature: codecast now runs cloud hosts on AWS and on Namespace Devboxes behind one host provider interface, so another substrate is another provider rather than a sandbox layer like theirs.
 
 ## Integration Recommendations
 

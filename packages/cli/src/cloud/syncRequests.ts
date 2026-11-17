@@ -21,7 +21,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "../proc.js";
-import { gitSshUrl, remoteHome, shq, sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
+import { gitSshUrl, remoteHome, shq, sshBase, sshDestination, sshShell, type RemoteHost } from "../remote/session-move.js";
 import { mergeTrees, overlayTree, sshHostSide } from "./liveSync.js";
 import type { LiveSyncJobs } from "./liveSyncJobs.js";
 import { FETCH_EXCLUDED_NAMES, homeLoginReason } from "./mirror/discovery.js";
@@ -75,7 +75,7 @@ const git = (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => run("git",
 function pipeline(line: string, env?: NodeJS.ProcessEnv): Promise<string> {
   return run("bash", ["-o", "pipefail", "-c", line], { env }).done;
 }
-const sshLine = (host: RemoteHost, command: string) => ["ssh", ...sshArgs(host, command)].map(shq).join(" ");
+const sshLine = (host: RemoteHost, command: string) => sshShell(sshArgs(host, command));
 /** Unpack a tar stream into `dir` only once all of it arrived: a cut stream leaves nothing half-written. */
 const unpackInto = (dir: string) => `d=${shq(dir)}; t=$(mktemp -d "\${TMPDIR:-/tmp}/codecast-pull.XXXXXX") && { tar -C "$t" -xf - && mkdir -p "$d" && cp -a "$t"/. "$d"/; rc=$?; rm -rf "$t"; [ $rc -eq 0 ]; }`;
 const sshArgs = (host: RemoteHost, command: string) => [...sshBase(host), sshDestination(host), command];
@@ -216,7 +216,7 @@ async function status(args: SyncRequestArgs, deps: SyncRequestDeps, host: Remote
 async function fetchHostTree(args: SyncRequestArgs, host: RemoteHost, scope?: SyncScope): Promise<SnapshotResult> {
   const ref = `refs/codecast/sync/${args.conversation_id}-request`;
   const snap = await runRemoteSide<SnapshotResult>(host, { op: "snapshot", cwd: args.remote_cwd, scope, commit: true, ref });
-  await git(args.local_root, ["fetch", "--quiet", "--no-tags", gitSshUrl(host, args.remote_cwd), `+${ref}:${ref}`], { GIT_SSH_COMMAND: `ssh ${sshBase(host).map(shq).join(" ")}` });
+  await git(args.local_root, ["fetch", "--quiet", "--no-tags", gitSshUrl(host, args.remote_cwd), `+${ref}:${ref}`], { GIT_SSH_COMMAND: sshShell(sshBase(host)) });
   return snap;
 }
 
@@ -312,7 +312,7 @@ async function pullRef(args: SyncRequestArgs, host: RemoteHost): Promise<SyncAns
   const ref = args.ref!;
   const sha = await git(args.local_root, ["rev-parse", "--verify", `${ref}^{commit}`]).catch(() => { throw new Error(`the laptop has no branch or commit named ${ref}`); });
   const name = /^[0-9a-f]{7,40}$/.test(ref) ? sha.slice(0, 12) : ref.replace(/^refs\/heads\//, "");
-  await git(args.local_root, ["push", "--quiet", "--force", "--no-verify", gitSshUrl(host, args.remote_cwd), `${sha}:refs/remotes/laptop/${name}`], { GIT_SSH_COMMAND: `ssh ${sshBase(host).map(shq).join(" ")}` });
+  await git(args.local_root, ["push", "--quiet", "--force", "--no-verify", gitSshUrl(host, args.remote_cwd), `${sha}:refs/remotes/laptop/${name}`], { GIT_SSH_COMMAND: sshShell(sshBase(host)) });
   return { lines: [`brought ${ref} (${sha.slice(0, 10)}) from the laptop as laptop/${name}: git log laptop/${name}, git checkout laptop/${name} -- <paths>, or git merge laptop/${name}`] };
 }
 

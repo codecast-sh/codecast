@@ -15,7 +15,8 @@ import { parseLinuxMemory, parseMacMemory } from "../systemResources.js";
 import { readRepoNeed, tooSmallFor, type RepoNeed } from "../repoNeed.js";
 import { hostState, readHosts, resolveCloudHost, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
 import { ssh } from "../remote/session-move.js";
-import { CLOUD_HOST_SIZES } from "@codecast/shared/contracts";
+import type { HostFacts } from "../hosts/providers/types.js";
+import { CLOUD_HOST_SIZES, RUN_LIMIT_HOLD_MINUTES, runEndsAt, runMinutesLeft } from "@codecast/shared/contracts";
 
 export { readRepoNeed, tooSmallFor, type RepoNeed };
 
@@ -84,15 +85,29 @@ export interface HostChoiceDeps {
   resolve: (hostArg?: string) => CloudHost;
   hosts: () => CloudHost[];
   state: (host: CloudHost) => string;
+  runLeft: (host: CloudHost) => number | undefined;
   probe: (host: CloudHost) => Headroom;
 }
 
-const defaultDeps: HostChoiceDeps = {
-  resolve: resolveCloudHost,
-  hosts: readHosts,
-  state: (host) => { try { return hostState(host).state; } catch { return "unknown"; } },
-  probe: (host) => probeHeadroom(host),
-};
+function placementDeps(): HostChoiceDeps {
+  const facts = new Map<string, HostFacts | null>();
+  const factsOf = (host: CloudHost): HostFacts | null => {
+    if (!facts.has(host.id)) {
+      try { facts.set(host.id, hostState(host)); } catch { facts.set(host.id, null); }
+    }
+    return facts.get(host.id)!;
+  };
+  return {
+    resolve: resolveCloudHost,
+    hosts: readHosts,
+    state: (host) => factsOf(host)?.state ?? "unknown",
+    runLeft: (host) => {
+      const startedAt = host.maxRunMinutes ? factsOf(host)?.startedAt : undefined;
+      return startedAt === undefined ? undefined : runMinutesLeft(runEndsAt(startedAt, host.maxRunMinutes!), Date.now());
+    },
+    probe: (host) => probeHeadroom(host),
+  };
+}
 
 /** Autoscale as the laptop applies it: the template to copy, how many hosts it may add, at what size. */
 export interface AutoscalePlan {
@@ -147,12 +162,14 @@ export function chooseCloudHost(
   hostArg: string | undefined,
   log: (m: string) => void,
   opts: { fallback: boolean; autoscale?: AutoscalePlan; need?: RepoNeed },
-  deps: HostChoiceDeps = defaultDeps,
+  deps: HostChoiceDeps = placementDeps(),
 ): HostChoice {
   const asked = deps.resolve(hostArg);
   const awake = (h: CloudHost) => deps.state(h) === "running";
+  const endsIn = (h: CloudHost) => { const left = deps.runLeft(h); return left !== undefined && left < RUN_LIMIT_HOLD_MINUTES ? left : undefined; };
   if (!asked.address || !awake(asked)) return { host: asked, moved: false };
-  const room = deps.probe(asked);
+  const askedEndsIn = endsIn(asked);
+  const room: Headroom = askedEndsIn !== undefined ? { fit: false, why: `reaches its run limit in ${askedEndsIn} min` } : deps.probe(asked);
   const small = tooSmallFor(room, opts.need);
   const free = room.memoryAvailable !== undefined ? `${gb(room.memoryAvailable)} GB free` : "free memory unknown";
   if (room.fit && !small && (!opts.fallback || (room.memoryAvailable ?? 0) >= ROOMY)) return { host: asked, moved: false };
@@ -166,7 +183,7 @@ export function chooseCloudHost(
   // A host reserved for one job (devices.reserved_for) is never a fallback; it takes work only when named.
   const others = deps.hosts().filter((h) => h.id !== asked.id && h.deviceId && !h.reservedFor);
   const best = others
-    .filter((h) => h.address && awake(h))
+    .filter((h) => h.address && awake(h) && endsIn(h) === undefined)
     .map((h) => ({ h, room: deps.probe(h) }))
     .filter((c) => c.room.fit && !tooSmallFor(c.room, opts.need) && (room.fit && !small ? (c.room.memoryAvailable ?? 0) >= ROOMY : true))
     .sort((a, b) => samePlatformFirst(a.h, b.h) || (b.room.memoryAvailable ?? 0) - (a.room.memoryAvailable ?? 0))[0];

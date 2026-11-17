@@ -117,3 +117,30 @@ test("missing identity, missing local row, empty roster and changed viewer never
   expect(globalPill()).toBeUndefined();
   expect(useStatusNoticeStore.getState().notices.size).toBe(0);
 });
+
+test("a cloud host within 30 minutes of its run limit says so beside its session, and not before or after", async () => {
+  await mount(); await settle();
+  const runLimit = (runEndsAt?: number, patch: object = {}) => act(() => useInboxStore.setState({
+    machineRosterLive: true,
+    machineRoster: healthRows(Date.now()).map(d => d.device_id === "cloud"
+      ? { ...d, is_remote: true, online: true, last_seen: Date.now() - 1_000, host_readiness: { at: Date.now(), ...(runEndsAt ? { run_ends_at: runEndsAt } : {}) }, ...patch }
+      : d),
+  } as any));
+  const chip = () => host.querySelector('[data-session="cloud"] [data-host-run-limit]')?.getAttribute("aria-label");
+  const inMinutes = (m: number) => Date.now() + m * 60_000 + 30_000;
+  await runLimit(inMinutes(25));
+  expect(chip()).toBe("stops in 25 min · run limit");
+  expect(sessionText("laptop")).toBe("Session delivery controls");
+  await runLimit(inMinutes(5));
+  expect(chip()).toBe("stops in 5 min · run limit");
+  await runLimit(inMinutes(31));
+  expect(chip()).toBeUndefined();
+  await runLimit(Date.now() - 60_000);
+  expect(chip()).toBeUndefined();
+  await runLimit(undefined);
+  expect(chip()).toBeUndefined();
+  await runLimit(inMinutes(25), { last_seen: Date.now() - 2 * 3_600_000, online: false });
+  expect(chip()).toBeUndefined();
+  await runLimit(inMinutes(25), { is_remote: false });
+  expect(chip()).toBeUndefined();
+});

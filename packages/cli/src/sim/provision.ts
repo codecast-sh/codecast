@@ -16,7 +16,7 @@
 
 import * as fs from "node:fs";
 import { spawnSync } from "../proc.js";
-import { sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
+import { sshBase, sshDestination, sshShell, type RemoteHost } from "../remote/session-move.js";
 
 export const HOST_XCODE = "/Applications/Xcode.app";
 const PATH_LINE = 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"';
@@ -82,7 +82,7 @@ export function streamXcode(host: RemoteHost, app: string, log: (m: string) => v
   const name = app.slice(app.lastIndexOf("/") + 1);
   const remote = `${PATH_LINE}; set -e; rm -rf /tmp/cast-xcode; mkdir -p /tmp/cast-xcode; cd /tmp/cast-xcode; ${unpack} | tar -xf -; sudo -n rm -rf '${dest}'; sudo -n mv '${name}' '${dest}'; rm -rf /tmp/cast-xcode; ${dest === HOST_XCODE ? `${activateLines()}; ` : ""}echo XCODE-IN-PLACE`;
   log(`streaming ${app} to the host (several GB; this takes a while)…`);
-  const sshCmd = ["ssh", ...sshBase(host), sshDestination(host), remote].map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+  const sshCmd = sshShell([...sshBase(host), sshDestination(host), remote]);
   const r = spawnSync("bash", ["-c", `set -o pipefail; tar -C '${dir}' -cf - '${name}' | ${pack} | ${sshCmd}`], { encoding: "utf-8", timeout: 4 * 3600_000, maxBuffer: 16 * 1024 * 1024 });
   if (r.status !== 0 || !(r.stdout ?? "").includes("XCODE-IN-PLACE")) throw new Error(`Xcode copy failed: ${`${r.stdout ?? ""}${r.stderr ?? ""}`.trim().slice(-400)}`);
 }

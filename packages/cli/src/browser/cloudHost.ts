@@ -28,17 +28,16 @@
  * same act whether the machine happens to be awake.
  */
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
-import * as os from "node:os";
 import * as path from "node:path";
-import { sshDestination, sshIdentity, type RemoteHost } from "../remote/session-move.js";
+import { sshControlPath, sshDestination, sshIdentity, type RemoteHost } from "../remote/session-move.js";
 import { codecastPath } from "../codecastDir.js";
 import { hostProvider, hostSleeps, isMacHost } from "../hosts/providers/registry.js";
 import { HOST_TAILNET_COMMAND, localTailnet, readHostTailnet, tailnetDialAddress, type TailnetRecord } from "../cloud/tailnet.js";
 import type { WakePhase } from "@codecast/shared/contracts";
-import type { HostInspection } from "../hosts/providers/types.js";
+import type { HostFacts, HostInspection } from "../hosts/providers/types.js";
 
 export { AwsCliFailed, instanceNameTag } from "../hosts/providers/aws.js";
 
@@ -48,13 +47,15 @@ export interface CloudHost {
   /** Stable id: an EC2 instance id, or a Scaleway server uuid. */
   id: string;
   /** codecast: an EC2 machine in codecast's own account (`cast cloud`), woken and stopped through the backend. */
-  provider: "aws" | "scaleway-mac" | "codecast";
+  provider: "aws" | "scaleway-mac" | "codecast" | "namespace";
   region: string;
   profile?: string;
   platform?: "linux" | "darwin";
   /** SSH user for this image. Ubuntu images use `ubuntu`, Scaleway Macs `m1`. */
   user: string;
   keyPath: string;
+  proxyCommand?: string;
+  maxRunMinutes?: number;
   /** Last known address. Re-read on every boot: a stopped instance loses it. */
   address?: string;
   /** The host's node on the laptop's tailnet, learned over SSH by ensureUp.
@@ -288,7 +289,7 @@ export function describeInstance(host: CloudHost): any {
  * and the resulting HostGone advice ("remove it with hosts rm") would have
  * had the user delete a perfectly good registration.
  */
-export function hostState(host: CloudHost): { state: HostState; address?: string } {
+export function hostState(host: CloudHost): HostFacts {
   return hostProvider(host).state(host);
 }
 
@@ -345,7 +346,7 @@ export async function ensureUp(
   // public address. A tailnet dial that fails once drops to public for the
   // rest of this wait: the tailnet is an optimisation, never the only way in.
   let dial = tailnetDialAddress(host.tailnet) ?? address;
-  const socketFor = (a: string) => path.join(os.tmpdir(), `cast-ssh-${host.user}-${a.replace(/[^\w.]/g, "_")}`);
+  const socketFor = (a: string) => sshControlPath({ user: host.user, address: a });
   let socket = socketFor(dial);
   // Evict a wedged master first. A master whose link died silently (mobile
   // network flap) still owns the socket, and every client that attaches to
@@ -370,7 +371,7 @@ export async function ensureUp(
       execFileSync(
         "ssh",
         [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-         "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+         "-o", `ConnectTimeout=${host.proxyCommand ? 30 : 10}`, "-o", "BatchMode=yes",
          // Keepalives on the MASTER: without them a dead link is never
          // noticed and the socket stays wedged for ControlPersist's lifetime.
          "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
@@ -448,16 +449,96 @@ export async function reachableRemoteHosts(also: RemoteHost[] = [], reach = sshR
 export async function reachableRemoteHost(
   host: CloudHost,
   deps: { toRemoteHost: (h: CloudHost) => RemoteHost; sshReachable: (h: RemoteHost) => Promise<boolean> },
+  now = Date.now(),
 ): Promise<RemoteHost | null> {
   const first = deps.toRemoteHost(host);
+  if (host.proxyCommand) return (await proxyHostUp(host, first, deps.sshReachable, now)) ? first : null;
   if (await deps.sshReachable(first)) return first;
   if (!host.address || first.address === host.address) return null;
   const pub = deps.toRemoteHost({ ...host, tailnet: undefined });
   return (await deps.sshReachable(pub)) ? pub : null;
 }
 
+const muxCheckArgs = (host: RemoteHost): string[] => ["-o", `ControlPath=${sshControlPath(host)}`, "-O", "check", sshDestination(host)];
+
+const MASTER_LOST_HOLD_OFF_MS = 90_000;
+const NSC_RUNNING_TTL_MS = 10_000;
+const NSC_NOT_RUNNING_TTL_MS = 30_000;
+
+const masterSeen = new Map<string, { alive: boolean; lostAt?: number }>();
+const proxyStateAt = new Map<string, { at: number; up: boolean }>();
+const proxyReads = new Map<string, Promise<boolean>>();
+
+function noteMaster(hostId: string, alive: boolean, now: number): void {
+  if (alive) masterSeen.set(hostId, { alive: true });
+  else if (masterSeen.get(hostId)?.alive) {
+    masterSeen.set(hostId, { alive: false, lostAt: now });
+    proxyStateAt.delete(hostId);
+  }
+}
+
+function masterLostLately(hostId: string, now: number): boolean {
+  const seen = masterSeen.get(hostId);
+  return !!seen && !seen.alive && seen.lostAt !== undefined && now - seen.lostAt < MASTER_LOST_HOLD_OFF_MS;
+}
+
+function cachedProxyRunning(hostId: string, now: number): boolean | undefined {
+  const seen = proxyStateAt.get(hostId);
+  return seen && now - seen.at < (seen.up ? NSC_RUNNING_TTL_MS : NSC_NOT_RUNNING_TTL_MS) ? seen.up : undefined;
+}
+
+function readProxyRunning(host: CloudHost, now: number): Promise<boolean> {
+  const pending = proxyReads.get(host.id);
+  if (pending) return pending;
+  const read = (async () => {
+    try { return !!(await hostProvider(host).describeAsync?.(host)); } catch { return false; }
+  })()
+    .then((up) => { proxyStateAt.set(host.id, { at: now, up }); return up; })
+    .finally(() => { proxyReads.delete(host.id); });
+  proxyReads.set(host.id, read);
+  return read;
+}
+
+async function controlMasterAlive(host: CloudHost, remote: RemoteHost, reach: (h: RemoteHost) => Promise<boolean>, now = Date.now()): Promise<boolean> {
+  const alive = await reach(remote);
+  noteMaster(host.id, alive, now);
+  return alive;
+}
+
+async function proxyHostUp(host: CloudHost, remote: RemoteHost, reach: (h: RemoteHost) => Promise<boolean>, now: number): Promise<boolean> {
+  if (await controlMasterAlive(host, remote, reach, now)) return true;
+  if (masterLostLately(host.id, now)) return false;
+  return cachedProxyRunning(host.id, now) ?? (await readProxyRunning(host, now));
+}
+
+export function dialsWithoutWaking(host: CloudHost, now = Date.now()): boolean {
+  if (!host.proxyCommand) return true;
+  const alive = spawnSync("ssh", muxCheckArgs(toRemoteHost(host)), { timeout: 5_000, stdio: "ignore", env: process.env }).status === 0;
+  noteMaster(host.id, alive, now);
+  if (alive) return true;
+  if (masterLostLately(host.id, now)) return false;
+  const cached = cachedProxyRunning(host.id, now);
+  if (cached === undefined) void readProxyRunning(host, now);
+  return cached ?? false;
+}
+
+export async function dialsWithoutWakingNow(host: CloudHost, now = Date.now()): Promise<boolean> {
+  return !host.proxyCommand || proxyHostUp(host, toRemoteHost(host), sshReachable, now);
+}
+
+export async function connectedRemoteHost(host: CloudHost, reach = sshReachable): Promise<RemoteHost | null> {
+  if (!host.proxyCommand) return probedRemoteHost(host, reach);
+  const remote = toRemoteHost(host);
+  return (await controlMasterAlive(host, remote, reach)) ? remote : null;
+}
+
 /** Does anything answer SSH there right now? Cheap, no AWS API call. */
 export function sshReachable(host: RemoteHost, timeoutMs = 4000): Promise<boolean> {
+  if (host.proxyCommand) {
+    return new Promise((resolve) => {
+      execFile("ssh", muxCheckArgs(host), { timeout: timeoutMs, env: process.env }, (err) => resolve(!err));
+    });
+  }
   return new Promise((resolve) => {
     const sock = net.connect({ host: host.address, port: 22 });
     const done = (up: boolean) => { sock.destroy(); resolve(up); };
@@ -481,6 +562,7 @@ export function toRemoteHost(host: CloudHost): RemoteHost {
     keyPath: host.keyPath,
     remoteBaseDir: `${home}/work`,
     homeDir: home,
+    ...(host.proxyCommand ? { proxyCommand: host.proxyCommand } : {}),
   };
 }
 
@@ -521,4 +603,7 @@ export async function probedRemoteHost(host: CloudHost, reach = sshReachable): P
 
 export function resetDialFailuresForTests(): void {
   tailnetFailedAt.clear();
+  proxyStateAt.clear();
+  proxyReads.clear();
+  masterSeen.clear();
 }
