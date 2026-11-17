@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
 import { canReadRoomlessCall } from "./callRooms";
@@ -66,5 +66,35 @@ describe("screen recording access", () => {
     expect(list.map((c: any) => String(c._id))).not.toContain(String(ids.inShared));
     const one = await as.query(api.transcripts.webGetCall, { transcript_id: ids.inShared });
     expect(one?.screen).toEqual({ width: null, height: null, no_audio: false });
+  });
+});
+
+describe("unsent screen recordings", () => {
+  test("the sweep removes one never sent, with its words and file row, and keeps one that was sent", async () => {
+    const { t, ids } = await world();
+    const { sent, unsent } = await t.run(async (ctx) => {
+      const sent = (await ctx.db.get(ids.inShared))!;
+      const unsent = (await ctx.db.get(ids.inPrivate))!;
+      for (const rec of [sent, unsent]) {
+        await ctx.db.insert("transcript_segments", { transcript_id: rec._id, seq: 1, speaker_id: "mic", speaker_name: "Speaker", text: "this button", t0: 0, t1: 900 } as any);
+        await ctx.db.insert("call_recordings", { transcript_id: rec._id, room_key: rec.room_key, team_id: rec.team_id, kind: "screen", status: "ready", r2_key: "calls/x/1-screen.mp4", started_by: ids.owner, requested_at: 1, updated_at: 1 } as any);
+      }
+      await ctx.db.insert("pending_messages", {
+        conversation_id: ids.sharedConv, from_user_id: ids.owner, owner_user_id: ids.owner, status: "delivered", created_at: Date.now(),
+        content: `<screen-recording call="${sent.short_id}" id="${sent._id}" duration="0:10">\nA screen recording\n</screen-recording>\n\nfix it`,
+      } as any);
+      return { sent: sent._id, unsent: unsent._id };
+    });
+    expect(await t.mutation(internal.screenRecordings.sweepUnsent, { transcript_id: sent })).toEqual({ removed: false });
+    expect(await t.mutation(internal.screenRecordings.sweepUnsent, { transcript_id: unsent })).toEqual({ removed: true });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(sent)).not.toBeNull();
+      expect(await ctx.db.get(unsent)).toBeNull();
+      const left = async (table: "transcript_segments" | "call_recordings", id: any) =>
+        (await ctx.db.query(table).collect()).filter((r: any) => String(r.transcript_id) === String(id)).length;
+      expect(await left("transcript_segments", unsent)).toBe(0);
+      expect(await left("call_recordings", unsent)).toBe(0);
+      expect(await left("call_recordings", sent)).toBe(1);
+    });
   });
 });

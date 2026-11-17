@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, themedStyles, useTheme } from '@/constants/Theme';
 import { castPlayerScript } from '@codecast/convex/convex/lib/castPlayer';
+import { formatCallTime } from '@codecast/shared/contracts';
 import { openLink } from '@/lib/links';
 import { optionalNative } from '@/lib/optionalNative';
 
@@ -20,32 +21,66 @@ const WebViewComp: any = optionalNative('RNCWebViewModule', () => require('react
 // player it shipped with. Escaped so no "</script" inside closes the tag.
 const PLAYER_JS = castPlayerScript({ upgradeVideos: false }).replace(/<\/(script)/gi, '<\\/$1');
 
-function playerDocument(src: string, accent: string): string {
-  const attr = (v: string) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+/** Timed words to play beside the video (a screen recording's transcript):
+ *  each a seek, the one under playback marked. */
+export type PlayerLine = { t0: number; text: string };
+
+const esc = (v: string) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
+function playerDocument(src: string, accent: string, opts: { startMs?: number; lines?: PlayerLine[] } = {}): string {
+  const lines = opts.lines ?? [];
+  const start = Math.max(0, (opts.startMs ?? 0) / 1000);
+  const list = lines.length
+    ? `<ol id="lines">${lines.map((l, i) => `<li data-t="${l.t0 / 1000}" data-i="${i}"><span class="t">${formatCallTime(l.t0)}</span><span>${esc(l.text)}</span></li>`).join('')}</ol>`
+    : '';
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-html,body{margin:0;height:100%;background:#000;font-family:ui-monospace,Menlo,monospace}
-body{display:flex;align-items:center;justify-content:center}
-cast-player{--cast-accent:${accent};--cast-radius:0px;--cast-bg:#000;width:min(100vw, calc(100vh * var(--cast-aspect, 16/9)))}
+html,body{margin:0;height:100%;background:#000;font-family:ui-monospace,Menlo,monospace;color:#fff}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center}
+cast-player{--cast-accent:${accent};--cast-radius:0px;--cast-bg:#000;width:min(100vw, calc(${lines.length ? '58vh' : '100vh'} * var(--cast-aspect, 16/9)));flex:0 0 auto}
+#lines{list-style:none;margin:0;padding:8px 0 24px;width:100%;flex:1 1 0;overflow-y:auto;font-size:14px;line-height:1.4}
+#lines li{display:flex;gap:10px;padding:7px 16px}
+#lines li .t{color:#8a8f98;width:38px;flex:0 0 auto;text-align:right;font-variant-numeric:tabular-nums}
+#lines li.on{background:${accent}33}
+#lines li.on .t{color:${accent}}
 </style>
 <script>${PLAYER_JS}</script>
 </head><body>
-<cast-player src="${attr(src)}" data-auto-aspect></cast-player>
+<cast-player src="${esc(src)}" data-auto-aspect></cast-player>
+${list}
 <script>
 customElements.whenDefined("cast-player").then(function () {
   var p = document.querySelector("cast-player");
-  setTimeout(function () { p.play(); }, 0);
+  var items = [].slice.call(document.querySelectorAll("#lines li"));
+  var on = -1;
+  function mark() {
+    var t = p.currentTime || 0, k = -1;
+    for (var i = 0; i < items.length; i++) if (t >= parseFloat(items[i].dataset.t) - 0.05) k = i;
+    if (k === on) return;
+    if (on >= 0) items[on].classList.remove("on");
+    on = k;
+    if (k >= 0) { items[k].classList.add("on"); items[k].scrollIntoView({ block: "nearest" }); }
+  }
+  items.forEach(function (li) { li.addEventListener("click", function () { p.seek(parseFloat(li.dataset.t)); p.play(); mark(); }); });
+  p.addEventListener("timeupdate", mark);
+  setTimeout(function () { if (${start} > 0) p.seek(${start}); p.play(); mark(); }, 0);
 });
 </script>
 </body></html>`;
 }
 
-export function InlineVideo({ src, caption, tiled }: { src: string; caption?: string; tiled?: boolean }) {
+/** The full-screen player: a video, and optionally its timed lines under it. */
+export function VideoPlayerModal({ src, visible, onClose, caption, startMs, lines }: {
+  src: string;
+  visible: boolean;
+  onClose: () => void;
+  caption?: string;
+  startMs?: number;
+  lines?: PlayerLine[];
+}) {
   const Theme = useTheme();
   const insets = useSafeAreaInsets();
-  const [open, setOpen] = useState(false);
-
-  const onPress = () => (WebViewComp ? setOpen(true) : void openLink(src));
+  if (!WebViewComp) return null;
   // The player document is ours; any other navigation leaves for the browser.
   const onShouldStart = (req: any) => {
     const url: string = req?.url ?? '';
@@ -53,7 +88,46 @@ export function InlineVideo({ src, caption, tiled }: { src: string; caption?: st
     if (/^https?:/i.test(url)) void openLink(url);
     return false;
   };
+  return (
+    <Modal
+      visible={visible}
+      animationType="fade"
+      onRequestClose={onClose}
+      supportedOrientations={['portrait', 'landscape-left', 'landscape-right']}
+    >
+      <RNView style={[styles.modal, lines?.length ? { paddingTop: insets.top + 44 } : null]}>
+        {visible && (
+          <WebViewComp
+            originWhitelist={['*']}
+            source={{ html: playerDocument(src, Theme.blue, { startMs, lines }) }}
+            onShouldStartLoadWithRequest={onShouldStart}
+            javaScriptEnabled
+            domStorageEnabled={false}
+            allowsInlineMediaPlayback
+            mediaPlaybackRequiresUserAction={false}
+            allowsFullscreenVideo
+            setSupportMultipleWindows={false}
+            style={styles.web}
+          />
+        )}
+        <RNView style={[styles.header, { paddingTop: insets.top + 6 }]} pointerEvents="box-none">
+          {caption ? <RNText style={styles.headerTitle} numberOfLines={1}>{caption}</RNText> : <RNView style={{ flex: 1 }} />}
+          <TouchableOpacity onPress={onClose} hitSlop={10} accessibilityLabel="Close video" style={styles.close}>
+            <FontAwesome name="close" size={16} color="#fff" />
+          </TouchableOpacity>
+        </RNView>
+      </RNView>
+    </Modal>
+  );
+}
 
+/** Whether the app can play a video itself; without the WebView module a
+ *  video opens in the browser. */
+export const canPlayInApp = !!WebViewComp;
+
+export function InlineVideo({ src, caption, tiled }: { src: string; caption?: string; tiled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const onPress = () => (WebViewComp ? setOpen(true) : void openLink(src));
   return (
     <RNView style={tiled ? styles.tile : undefined}>
       <TouchableOpacity
@@ -68,37 +142,7 @@ export function InlineVideo({ src, caption, tiled }: { src: string; caption?: st
         </RNView>
       </TouchableOpacity>
       {caption ? <RNText style={styles.caption}>{caption}</RNText> : null}
-      {WebViewComp && (
-        <Modal
-          visible={open}
-          animationType="fade"
-          onRequestClose={() => setOpen(false)}
-          supportedOrientations={['portrait', 'landscape-left', 'landscape-right']}
-        >
-          <RNView style={styles.modal}>
-            {open && (
-              <WebViewComp
-                originWhitelist={['*']}
-                source={{ html: playerDocument(src, Theme.blue) }}
-                onShouldStartLoadWithRequest={onShouldStart}
-                javaScriptEnabled
-                domStorageEnabled={false}
-                allowsInlineMediaPlayback
-                mediaPlaybackRequiresUserAction={false}
-                allowsFullscreenVideo
-                setSupportMultipleWindows={false}
-                style={styles.web}
-              />
-            )}
-            <RNView style={[styles.header, { paddingTop: insets.top + 6 }]} pointerEvents="box-none">
-              {caption ? <RNText style={styles.headerTitle} numberOfLines={1}>{caption}</RNText> : <RNView style={{ flex: 1 }} />}
-              <TouchableOpacity onPress={() => setOpen(false)} hitSlop={10} accessibilityLabel="Close video" style={styles.close}>
-                <FontAwesome name="close" size={16} color="#fff" />
-              </TouchableOpacity>
-            </RNView>
-          </RNView>
-        </Modal>
-      )}
+      <VideoPlayerModal src={src} visible={open} onClose={() => setOpen(false)} caption={caption} />
     </RNView>
   );
 }

@@ -122,6 +122,7 @@ import { CastCommandBlock } from '@/components/session/CastCommandBlock';
 import { openLink } from '@/lib/links';
 import { PERF_PROBE, probeRender } from '@/lib/perfProbe';
 import { useShallowStable } from '@/hooks/useShallowStable';
+import { useSizedText } from '@/hooks/useTextSize';
 import { RelativeTime } from '@/components/RelativeTime';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
@@ -2037,8 +2038,10 @@ const MemoMessageBubble = memo(MessageBubble, (a, b) => {
   return x === y || (!!x && !!y && x.run === y.run && x.expanded === y.expanded && x.justOpened === y.justOpened);
 });
 
-function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, sender, showToast, collapsed: globalCollapsed, childConversationMap, bookmarkedSet, toolRun }: {
+function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, sender, showToast, collapsed: globalCollapsed, childConversationMap, bookmarkedSet, toolRun, openFullscreen }: {
   message: Message;
+  /** Opens the screen's one full-message viewer, which outlives this row. */
+  openFullscreen?: (message: Message, userName?: string) => void;
   /** Someone other than the session's owner who sent this turn, named above the bubble. */
   sender?: string;
   /** The folded run of tool calls this message belongs to (lib/toolRuns). */
@@ -2064,6 +2067,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const router = useRouter();
   // Who the agent speaks as: its role, its character, or its product name.
   const speakerRow = useSessionIdentityRow(conversationId);
+  // Message text follows the phone's text size (Settings › Appearance).
+  const bodyText = useSizedText(S.bubbleText.fontSize, S.bubbleText.lineHeight);
+  const readText = useSizedText(15, 24);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     message.tool_calls?.forEach(tc => {
@@ -2074,8 +2080,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     return initial;
   });
   const [contentExpanded, setContentExpanded] = useState(false);
-  const [fullscreenVisible, setFullscreenVisible] = useState(false);
-  const [userContentExpanded, setUserContentExpanded] = useState(false);
   const [localExpanded, setLocalExpanded] = useState(false);
   useEffect(() => { setLocalExpanded(false); }, [globalCollapsed]);
   const isBookmarked = bookmarkedSet?.has(message._id);
@@ -2181,7 +2185,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const toolsFolded = !!toolRun && !toolRun.expanded;
   if (toolsFolded && !runHead) return null;
 
-  const bodyStyle = [styles.bubbleText, isUser ? styles.userText : styles.assistantText];
+  const bodyStyle = [styles.bubbleText, bodyText, isUser ? styles.userText : styles.assistantText];
 
   // The bubble's fill over the screen, for the fade that clips a long turn.
   const userFill = blendOver(Theme.userBubble + USER_BUBBLE_ALPHA, Theme.bg);
@@ -2245,8 +2249,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
           style={[
             isUser ? styles.userBubbleContent : styles.bubbleContent,
             isLongContent && !contentExpanded && styles.bubbleContentCollapsed,
-            !isUser && !contentExpanded && !isLongContent && estimatedOverflow && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
-            isUser && !userContentExpanded && !isLongContent && estimatedOverflow && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
+            !contentExpanded && !isLongContent && estimatedOverflow && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
           ]}
         >
           {(() => {
@@ -2295,14 +2298,14 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
                     <RNView style={styles.contextPillRow}>
                       {contexts.map((ctx, idx) => <ContextBlockPill key={idx} ctx={ctx} />)}
                     </RNView>
-                    {remaining ? <MarkdownContent text={remaining} baseStyle={[styles.bubbleText, styles.userText]} isUser={true} /> : null}
+                    {remaining ? <MarkdownContent text={remaining} baseStyle={[styles.bubbleText, bodyText, styles.userText]} isUser={true} /> : null}
                   </>
                 );
               }
             }
             return <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />;
           })()}
-          {((isLongContent && !contentExpanded) || (!isUser && estimatedOverflow && !contentExpanded) || (isUser && estimatedOverflow && !userContentExpanded)) && (
+          {!contentExpanded && (isLongContent || estimatedOverflow) && (
             <LinearGradient
               colors={isUser ? [userFill + '00', userFill] : [Theme.bg + '00', Theme.bg]}
               style={styles.contentGradientOverlay}
@@ -2310,32 +2313,14 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             />
           )}
         </RNView>
-        {isUser && estimatedOverflow && (
+        {(isLongContent || estimatedOverflow) && (
           <RNView style={styles.contentActions}>
-            <TouchableOpacity onPress={() => setUserContentExpanded(!userContentExpanded)} style={styles.showMoreButton} activeOpacity={0.7}>
-              <FontAwesome name={userContentExpanded ? "chevron-up" : "chevron-down"} size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
-              <RNText style={styles.showMoreText}>{userContentExpanded ? 'Collapse' : 'Expand'}</RNText>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setFullscreenVisible(true)} style={styles.showMoreButton} activeOpacity={0.7}>
-              <FontAwesome name="expand" size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
-              <RNText style={styles.showMoreText}>Fullscreen</RNText>
-            </TouchableOpacity>
-          </RNView>
-        )}
-        {!isUser && (isLongContent || estimatedOverflow) && (
-          <RNView style={styles.contentActions}>
-            <TouchableOpacity
-              onPress={() => setContentExpanded(!contentExpanded)}
-              style={styles.showMoreButton}
-              activeOpacity={0.7}
-            >
+            <TouchableOpacity onPress={() => setContentExpanded(!contentExpanded)} style={styles.showMoreButton} activeOpacity={0.7}>
               <FontAwesome name={contentExpanded ? "chevron-up" : "chevron-down"} size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
-              <RNText style={styles.showMoreText}>
-                {contentExpanded ? 'Collapse' : 'Expand'}
-              </RNText>
+              <RNText style={styles.showMoreText}>{contentExpanded ? 'Collapse' : 'Expand'}</RNText>
             </TouchableOpacity>
-            {rawContent.length > 500 && (
-              <TouchableOpacity onPress={() => setFullscreenVisible(true)} style={styles.showMoreButton} activeOpacity={0.7}>
+            {openFullscreen && (isUser || rawContent.length > 500) && (
+              <TouchableOpacity onPress={() => openFullscreen(message, userName)} style={styles.showMoreButton} activeOpacity={0.7}>
                 <FontAwesome name="expand" size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
                 <RNText style={styles.showMoreText}>Fullscreen</RNText>
               </TouchableOpacity>
@@ -2411,7 +2396,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             // A `cast say` is the agent talking: its words, not a command row.
             const said = sayTextOf(castCmd);
             if (said) {
-              return <MarkdownContent key={tc.id} text={said} baseStyle={[styles.bubbleText, { fontSize: 15, lineHeight: 24 }, styles.assistantText]} isUser={false} />;
+              return <MarkdownContent key={tc.id} text={said} baseStyle={[styles.bubbleText, readText, styles.assistantText]} isUser={false} />;
             }
             if (castCmd) {
               return (
@@ -2464,25 +2449,42 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         </RNView>
       )}
       </RNView>
-      {fullscreenVisible && (
-        <Modal visible={fullscreenVisible} animationType="slide" onRequestClose={() => setFullscreenVisible(false)}>
-          <RNView style={styles.messageFullscreen}>
-            <RNView style={styles.messageFullscreenHeader}>
-              {isUser
-                ? <RNText style={styles.messageFullscreenRole}>{userName || 'You'}</RNText>
-                : <MobileAgentSpeaker row={speakerRow} agentType={agentType} size={20} badge={agentType ? <AgentLogoSvg agentType={agentType} size={9} /> : undefined} nameStyle={styles.messageFullscreenRole} />}
-              <RNText style={styles.messageFullscreenTime}>{formatFullTimestamp(message.timestamp)}</RNText>
-              <TouchableOpacity onPress={() => setFullscreenVisible(false)} style={{ padding: 6, marginLeft: 'auto' }} activeOpacity={0.7}>
-                <FontAwesome name="close" size={18} color={Theme.textMuted} />
-              </TouchableOpacity>
-            </RNView>
-            <ScrollView style={styles.messageFullscreenContent} contentContainerStyle={{ paddingBottom: 60 }}>
-              <MarkdownContent text={stripSystemTags(rawContentRaw)} baseStyle={[styles.bubbleText, { fontSize: 15, lineHeight: 24 }, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
-            </ScrollView>
-          </RNView>
-        </Modal>
-      )}
     </Pressable>
+  );
+}
+
+// One full-message viewer per screen, held above the transcript so a row
+// that unmounts (scrolled out of the list's window as new turns land) does
+// not take the open viewer with it.
+function MessageFullscreen({ message, userName, agentType, conversationId, onClose }: {
+  message: Message | null;
+  userName?: string;
+  agentType?: string;
+  conversationId?: string;
+  onClose: () => void;
+}) {
+  const Theme = useTheme();
+  const readText = useSizedText(15, 24);
+  const speakerRow = useSessionIdentityRow(conversationId);
+  if (!message) return null;
+  const isUser = message.role === 'user';
+  return (
+    <Modal visible animationType="slide" onRequestClose={onClose}>
+      <RNView style={styles.messageFullscreen}>
+        <RNView style={styles.messageFullscreenHeader}>
+          {isUser
+            ? <RNText style={styles.messageFullscreenRole}>{userName || 'You'}</RNText>
+            : <MobileAgentSpeaker row={speakerRow} agentType={agentType} size={20} badge={agentType ? <AgentLogoSvg agentType={agentType} size={9} /> : undefined} nameStyle={styles.messageFullscreenRole} />}
+          <RNText style={styles.messageFullscreenTime}>{formatFullTimestamp(message.timestamp)}</RNText>
+          <TouchableOpacity onPress={onClose} style={{ padding: 6, marginLeft: 'auto' }} activeOpacity={0.7}>
+            <FontAwesome name="close" size={18} color={Theme.textMuted} />
+          </TouchableOpacity>
+        </RNView>
+        <ScrollView style={styles.messageFullscreenContent} contentContainerStyle={{ paddingBottom: 60 }}>
+          <MarkdownContent text={stripSystemTags(message.content || '')} baseStyle={[styles.bubbleText, readText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+        </ScrollView>
+      </RNView>
+    </Modal>
   );
 }
 
@@ -3317,6 +3319,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // Read through a ref so every bubble keeps one handler as images arrive.
   const allSessionImagesRef = useRef(allSessionImages);
   allSessionImagesRef.current = allSessionImages;
+  const [fullscreenMessage, setFullscreenMessage] = useState<{ message: Message; userName?: string } | null>(null);
+  const openFullscreen = useCallback((message: Message, userName?: string) => setFullscreenMessage({ message, userName }), []);
   const openGallery = useCallback((image: ImageData) => {
     const key = imageKeyOf(image);
     const idx = key ? allSessionImagesRef.current.findIndex(img => imageKeyOf(img) === key) : -1;
@@ -4452,6 +4456,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           globalToolResultMap={globalToolResultMap}
           globalImageMap={globalImageMap}
           openGallery={openGallery}
+          openFullscreen={openFullscreen}
           userName={sender || conversation.user?.name || conversation.user?.email?.split('@')[0]}
           sender={sender}
           showToast={showToast}
@@ -5080,6 +5085,13 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           </ScrollView>
         </RNView>
       </Modal>
+      <MessageFullscreen
+        message={fullscreenMessage?.message ?? null}
+        userName={fullscreenMessage?.userName}
+        agentType={conversation.agent_type}
+        conversationId={String(conversation._id)}
+        onClose={() => setFullscreenMessage(null)}
+      />
       <ImageGallery
         items={allSessionImages}
         useSrc={useImageSrc}

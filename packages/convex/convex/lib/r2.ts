@@ -229,10 +229,20 @@ export type CallRecordingSigner = (key: string) => Promise<{ url: string; expire
 export function callRecordingSigner(when: CallRecordingSignWhen): CallRecordingSigner | null {
   const b = callRecordingsBucketFromEnv();
   if (!b) return null;
-  return (key) =>
-    when === "fresh"
-      ? r2FreshGetUrl(b, key, Date.now(), PRIVATE_OBJECT_GET_PARAMS)
-      : r2StableGetUrl(b, key, when.stable.at, when.stable.windowMs, PRIVATE_OBJECT_GET_PARAMS);
+  return (key) => {
+    const params = recordingGetParams(key);
+    return when === "fresh"
+      ? r2FreshGetUrl(b, key, Date.now(), params)
+      : r2StableGetUrl(b, key, when.stable.at, when.stable.windowMs, params);
+  };
+}
+
+/** A recording file is always served as `video/mp4`, whatever type its
+ *  upload carried: a phone's screen recording arrives labelled
+ *  `video/quicktime`, which Chrome will not play though the bytes are the
+ *  same MP4 family (H.264 and AAC). Live frames (JPEG) keep their own type. */
+export function recordingGetParams(key: string): Record<string, string> {
+  return key.endsWith(".mp4") ? { ...PRIVATE_OBJECT_GET_PARAMS, "response-content-type": "video/mp4" } : PRIVATE_OBJECT_GET_PARAMS;
 }
 
 /** One recording object's read URL (callRecordingSigner), or null when the

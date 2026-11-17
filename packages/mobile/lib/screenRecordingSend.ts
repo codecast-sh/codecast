@@ -31,8 +31,9 @@ export type PickedRecording = { uri: string; mime: string; durationMs: number; w
 export type BegunRecording = { transcriptId: string; call: string };
 
 /** Pick one video from the library: a screen recording, as the system saved
- *  it. Null when cancelled. The file is taken as it is (no re-encode), so a
- *  long recording is ready at once and its text stays sharp in the frames. */
+ *  it. Null when cancelled. The system picker runs out of process and needs
+ *  no Photos permission in its automatic mode (asking for the asset's
+ *  current representation made iOS ask for full library access). */
 export async function pickScreenRecording(): Promise<PickedRecording | null> {
   if (!ImagePicker) {
     appAlert('Not available', 'Sending a recording needs a build with expo-image-picker.');
@@ -42,7 +43,6 @@ export async function pickScreenRecording(): Promise<PickedRecording | null> {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['videos'],
       allowsMultipleSelection: false,
-      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
     });
     if (result.canceled || !result.assets[0]) return null;
     const a = result.assets[0];
@@ -105,4 +105,11 @@ export function recordingUpload(uri: string): Promise<boolean> | null {
 /** The message a send carries for a recording and the person's words. */
 export function screenRecordingContent(begun: BegunRecording, picked: PickedRecording, text: string): string {
   return formatScreenRecordingMessage({ call: begun.call, transcriptId: begun.transcriptId, durationMs: picked.durationMs }, text);
+}
+
+/** Take back a recording picked for a turn that was not sent: the server
+ *  removes it (and refuses if it went out after all). Best effort; the
+ *  unsent sweep removes it later otherwise. */
+export function discardScreenRecording(convex: ConvexReactClient, begun: BegunRecording): void {
+  void convex.mutation(api.screenRecordings.discard, { transcript_id: begun.transcriptId as Id<'transcripts'> }).catch(() => {});
 }

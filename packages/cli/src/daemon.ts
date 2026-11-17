@@ -33821,17 +33821,18 @@ async function main(): Promise<void> {
         }
 
         // A screen recording the person sent: its tag becomes the timed lines
-        // and a keyframe at each, cut here (screenRecordingBrief). While the
-        // server is still reading the words the row waits, as a hold, so the
-        // retry count is untouched and other sessions keep delivering.
+        // and a keyframe at each (screenRecordingBrief).
         if (messageContent.trimStart().startsWith("<screen-recording")) {
           const { screenRecordingForDelivery } = await import("./screenRecordingBrief.js");
           const tag = `Screen recording msg=${msg._id.slice(0, 8)}`;
-          const out = await screenRecordingForDelivery(messageContent, msg.created_at ?? Date.now(), { siteUrl: getSiteUrl(), apiToken: getAuthToken() }, (line) => logDelivery(`${tag} ${line}`));
+          // Never awaited: the frames are cut in the background and the row
+          // waits as a hold (retry count untouched), so every other session's
+          // delivery goes on meanwhile.
+          const out = screenRecordingForDelivery(msg._id, messageContent, msg.created_at ?? Date.now(), { siteUrl: getSiteUrl(), apiToken: getAuthToken() }, (line) => logDelivery(`${tag} ${line}`));
           if (out.wait) {
-            logDelivery(`HELD: ${tag} still transcribing`);
+            logDelivery(`HELD: ${tag} cutting frames or waiting on its words`);
             releaseInFlight();
-            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "transcribing the screen recording", 10_000);
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "preparing the screen recording", 3_000);
             continue;
           }
           messageContent = out.content;

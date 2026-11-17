@@ -27,13 +27,13 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalAction, internalMutation, internalQuery, mutation } from "./functions";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { recRoomKey, TRANSCRIBE_MAX_BYTES } from "@codecast/shared/contracts";
 import { authorizeRoom } from "./callRooms";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessConversation } from "./lib/access";
 import { beginCallRecord } from "./transcripts";
-import { callRecordingGetUrl, callRecordingKey, callRecordingsBucketFromEnv, r2Presign } from "./lib/r2";
+import { callRecordingCallPrefix, callRecordingGetUrl, callRecordingKey, callRecordingsBucketFromEnv, r2Presign } from "./lib/r2";
 import { syncCallVideo, teammateName } from "./lib/callRecordingRuns";
 import { extractAudioTrack, Mp4AudioError, urlByteSource } from "./lib/mp4Audio";
 import { SEGMENT_WRITE_BATCH, transcribeAudio } from "./lib/recordingTranscription";
@@ -114,8 +114,73 @@ async function beginCore(ctx: any, userId: Id<"users">, args: BeginArgs): Promis
     },
   });
   const uploadUrl = await r2Presign(bucket, "PUT", r2Key, UPLOAD_URL_SECONDS);
+  // A recording picked and never sent is nobody's: it is removed once the
+  // person has had a fair while to send it (sweepUnsent).
+  if (conv) await ctx.scheduler.runAfter(UNSENT_GRACE_MS, internal.screenRecordings.sweepUnsent, { transcript_id: id });
   return { transcript_id: id, call: t.short_id!, upload_url: uploadUrl };
 }
+
+/** How long a picked recording waits to be sent before it is removed: past
+ *  any caption somebody is still typing, and past a phone left in a pocket
+ *  with the composer open. */
+export const UNSENT_GRACE_MS = 6 * 60 * 60_000;
+
+/** Pending messages read back looking for the one that carried it. */
+const SENT_SCAN_LIMIT = 500;
+
+/** Was the recording sent: is there a message into its session, written
+ *  after the pick, that carries its tag? Every send keeps its pending row
+ *  (delivered, injected, failed alike), so the session's own queue answers. */
+async function wasSent(ctx: any, t: Doc<"transcripts">): Promise<boolean> {
+  const convId = t.screen_recording?.conversation_id;
+  if (!convId) return true;
+  const needle = `<screen-recording call="${t.short_id}"`;
+  let seen = 0;
+  for await (const row of ctx.db.query("pending_messages").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", convId)).order("desc")) {
+    if (row._creationTime < t.started_at || ++seen > SENT_SCAN_LIMIT) break;
+    if (typeof row.content === "string" && row.content.includes(needle)) return true;
+  }
+  return false;
+}
+
+/** Remove a recording entirely: its words, its file row, the record, and
+ *  the object in the bucket (on a retrying action of its own). */
+async function removeRecording(ctx: any, t: Doc<"transcripts">): Promise<void> {
+  const segs = await ctx.db.query("transcript_segments").withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id)).collect();
+  for (const s of segs) await ctx.db.delete(s._id);
+  const rows = await ctx.db.query("call_recordings").withIndex("by_transcript", (q: any) => q.eq("transcript_id", t._id)).collect();
+  for (const r of rows) await ctx.db.delete(r._id);
+  await ctx.db.delete(t._id);
+  // The whole call's prefix, now and again after the upload URL has lapsed:
+  // a tile removed mid-upload can still land its bytes after this runs.
+  const sweep = { keys: [], prefixes: [callRecordingCallPrefix(String(t._id))], attempt: 0 };
+  await ctx.scheduler.runAfter(0, internal.callRecordings.deleteObjects, sweep);
+  await ctx.scheduler.runAfter(UPLOAD_URL_SECONDS * 1000 + 60_000, internal.callRecordings.deleteObjects, sweep);
+}
+
+export const sweepUnsent = internalMutation({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args): Promise<{ removed: boolean }> => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t?.screen_recording || (await wasSent(ctx, t))) return { removed: false };
+    await removeRecording(ctx, t);
+    return { removed: true };
+  },
+});
+
+/** The person took the recording back off the turn before sending it. A
+ *  recording that went out stays: it belongs to the conversation now. */
+export const discard = mutation({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args): Promise<{ removed: boolean }> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const t = await ownScreenRecording(ctx, userId, args.transcript_id);
+    if (await wasSent(ctx, t)) return { removed: false };
+    await removeRecording(ctx, t);
+    return { removed: true };
+  },
+});
 
 export const uploaded = mutation({
   args: { transcript_id: v.id("transcripts") },

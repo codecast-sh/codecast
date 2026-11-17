@@ -15,6 +15,7 @@ import {
   r2Presign,
   r2StableGetUrl,
   stableSigningWindow,
+  recordingGetParams,
 } from "./r2";
 import { CALL_RECORDING_URL_WINDOW_MS as W } from "@codecast/shared/contracts";
 
@@ -156,5 +157,12 @@ describe("callRecordingManifestKey", () => {
     expect(callRecordingManifestKey("calls/t1/1727000000000-composite.mp4", null)).toBeNull();
     expect(callRecordingManifestKey("calls/t1/1727000000000-composite.mp4", "../x")).toBeNull();
     expect(callRecordingManifestKey("elsewhere/f.mp4", "EG_abc")).toBeNull();
+  });
+});
+
+describe("recordingGetParams", () => {
+  test("a video is served as mp4 whatever it was uploaded as; a live frame keeps its type", () => {
+    expect(recordingGetParams("calls/t/1-screen-track.mp4")).toEqual({ "response-cache-control": "private, no-store", "response-content-type": "video/mp4" });
+    expect(recordingGetParams("calls/t/1-live.jpg")).toEqual({ "response-cache-control": "private, no-store" });
   });
 });

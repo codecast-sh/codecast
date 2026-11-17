@@ -57,7 +57,9 @@ import { soundSend } from "../lib/sounds";
 import type { MentionItem } from "./editor/MentionList";
 import { MentionMenu } from "./editor/MentionMenu";
 import { mergeMentionSuggestions, mentionViewTimes, orderMentionItems } from "../lib/mentionRanking";
-import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft } from "lucide-react";
+import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft, MonitorPlay } from "lucide-react";
+import { formatCallTime } from "@codecast/shared/contracts";
+import { isRecordingFile, useScreenRecordingAttach } from "../hooks/useScreenRecordingAttach";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, filterMentionItems, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
@@ -355,6 +357,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // (beginOptimisticSession), so hosted wording applies from the first frame.
   const storeHosted = useIsHostedConversation(conversationId);
   const hostedConversation = isHostedAgentType(agentType) || storeHosted;
+  // A video dropped or pasted in is a screen recording for the session
+  // (hooks/useScreenRecordingAttach): the agent gets its words and frames.
+  const screenRec = useScreenRecordingAttach(conversationId, isConvexId(conversationId) && !hostedConversation);
   // A hosted conversation whose month is used up says so at rest and holds
   // Send, rather than letting a message travel only to come back refused.
   const allowanceOut = useAllowanceOut(hostedConversation);
@@ -1304,7 +1309,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     attachSend(() => { void handleSubmitRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent); });
     return () => attachSend(null);
   }, [attachSend]);
-  const hasContent = (composeMode ? composeHasContent : message.trim().length > 0) || pastedImages.length > 0 || queuedMessages.length > 0;
+  const hasContent = (composeMode ? composeHasContent : message.trim().length > 0) || pastedImages.length > 0 || !!screenRec.recording || queuedMessages.length > 0;
   // A showing ghost suggestion is content too: it can run several lines, and
   // the collapsed pill (narrow, fully rounded) bends that into an ellipse.
   const isExpanded = !!hero || composeMode || !!onSubmitWithIntent || !!onSendAndAdvance || isFocused || message.length > 0 || ghostVisible || pastedImages.length > 0 || queuedMessages.length > 0 || reviewCount > 0 || !!branchMapNode;
@@ -1631,14 +1636,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     uploadImage(file);
   }, [hostedConversation, uploadImage]);
 
+
   useWatchEffect(() => {
     if (onDropFiles) {
       onDropFiles.current = (files: File[]) => {
-        files.forEach(f => { if (f.type.startsWith("image/")) takeImage(f); });
+        files.forEach(f => {
+          if (isRecordingFile(f)) void screenRec.attach(f);
+          else if (f.type.startsWith("image/")) takeImage(f);
+        });
       };
       return () => { if (onDropFiles) onDropFiles.current = null; };
     }
-  }, [onDropFiles, takeImage]);
+  }, [onDropFiles, takeImage, screenRec.attach]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
@@ -1649,9 +1658,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         if (!hasImage) { e.preventDefault(); hasImage = true; }
         const file = items[i].getAsFile();
         if (file) takeImage(file);
+      } else if (items[i].kind === "file") {
+        const file = items[i].getAsFile();
+        if (file && isRecordingFile(file)) {
+          e.preventDefault();
+          void screenRec.attach(file);
+        }
       }
     }
-  }, [takeImage]);
+  }, [takeImage, screenRec.attach]);
 
   // Set when a submit could not commit its send (the optimistic row + outbox
   // enqueue refused). Read synchronously right after handleSubmit() is called:
@@ -1783,6 +1798,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       useInboxStore.getState().clearDraftFinal(conversationId);
       sendingRef.current = false;
       await onGateSend(text, gateImages);
+      suggestionRef.current?.settleSend(typed);
       return;
     }
     if (onWorkflowLaunch) {
@@ -1830,6 +1846,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const quoteIds = review.quoteIds;
     // "Send together" (lib/jointSend): others' live drafts fold in as named parts.
     if (!forking) message = takeJointSend(conversationId, message);
+    // An attached screen recording rides as its tag (a fork leaves it here).
+    if (!forking) message = screenRec.take(message);
     const quotedOriginals: OptimisticImage[] = quoted.map(q => ({ media_type: "image/png", storage_id: q.storageId }));
     const quotedUploads = quoted.map(q => uploadMarkedImage(convex, q));
     const hasUploadingImages = submitImages.some(img => img.uploading) || quotedUploads.length > 0;
@@ -2940,6 +2958,25 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> deselect</span>
                     </span>
                   )}
+                </div>
+              )}
+              {screenRec.recording && (
+                <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50">
+                  <div className="group relative flex h-16 items-center gap-2 rounded-lg bg-sol-bg px-3 ring-1 ring-sol-border/40" title={screenRec.recording.file.name}>
+                    <MonitorPlay className="h-4 w-4 shrink-0 text-sol-cyan" />
+                    <div className="min-w-0">
+                      <div className="text-sm text-sol-text">Screen recording</div>
+                      <div className="text-meta tabular-nums text-sol-text-dim">
+                        {formatCallTime(screenRec.recording.durationMs)}
+                        {!screenRec.recording.uploaded && <span className="ml-2 text-sol-yellow">uploading</span>}
+                      </div>
+                    </div>
+                    <button type="button" onClick={screenRec.remove} aria-label="Remove recording" className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-sol-bg-alt border border-sol-border flex items-center justify-center text-sol-text-secondary hover:text-sol-text transition-colors opacity-0 group-hover:opacity-100">
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               )}
               {pastedImages.length > 0 && (

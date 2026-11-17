@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { formatScreenRecordingMessage, framedLines, lineMomentMs, parseScreenRecordingMessage } from "@codecast/shared/contracts";
-import { expandScreenRecording, SCREEN_RECORDING_WORDS_WAIT_MS, type ScreenRecordingCall } from "./screenRecordingBrief";
+import { expandScreenRecording, screenRecordingForDelivery, SCREEN_RECORDING_WORDS_WAIT_MS, type ScreenRecordingCall } from "./screenRecordingBrief";
 
 const sent = formatScreenRecordingMessage({ call: "cl-12", durationMs: 42_000 }, "fix this please");
 
@@ -90,5 +90,47 @@ describe("expandScreenRecording", () => {
     expect(first.kind).toBe("ready");
     if (first.kind === "ready") expect((await expandScreenRecording(first.text, deps, 0)).kind).toBe("unchanged");
     expect((await expandScreenRecording("hello", deps, 0)).kind).toBe("unchanged");
+  });
+});
+
+describe("screenRecordingForDelivery", () => {
+  const slowCall = (n: number) =>
+    call({ segments: Array.from({ length: n }, (_, i) => ({ t0: i * 1000, t1: i * 1000 + 900, text: `this is line ${i}` })) });
+
+  test("a 12-frame cut never holds the delivery loop, and the copy is there on a later pass", async () => {
+    let cut = 0;
+    const deps = {
+      getCall: async () => slowCall(12),
+      // 2 s a frame in production; 40 ms here keeps the test short while
+      // still taking ~0.5 s for the whole cut.
+      frameAt: async (_c: string, ms: number) => { await new Promise((r) => setTimeout(r, 40)); cut++; return `/tmp/f-${ms}.png`; },
+    };
+    const t0 = performance.now();
+    const first = screenRecordingForDelivery("m1", sent, Date.now(), { siteUrl: null, apiToken: null }, undefined, deps);
+    const firstMs = performance.now() - t0;
+    expect(first).toEqual({ wait: true });
+    expect(firstMs).toBeLessThan(20);
+    // An unrelated message delivered during the cut answers at once.
+    const t1 = performance.now();
+    expect(screenRecordingForDelivery("m2", "plain words", Date.now(), { siteUrl: null, apiToken: null }, undefined, deps)).toEqual({ wait: false, content: "plain words" });
+    expect(performance.now() - t1).toBeLessThan(5);
+    // Rechecks while cutting stay waits, and cost nothing.
+    expect(screenRecordingForDelivery("m1", sent, Date.now(), { siteUrl: null, apiToken: null }, undefined, deps)).toEqual({ wait: true });
+    expect(cut).toBeLessThan(12);
+    while (cut < 12) await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 10));
+    const done = screenRecordingForDelivery("m1", sent, Date.now(), { siteUrl: null, apiToken: null }, undefined, deps);
+    expect(done.wait).toBe(false);
+    if (!done.wait) expect(done.content.match(/\[Image \//g)).toHaveLength(12);
+  });
+
+  test("words still being read: the job is dropped and asked again on the next pass", async () => {
+    let asked = 0;
+    const deps = { getCall: async () => { asked++; return call({ transcribe_status: "pending", segments: [], filmed: true }); }, frameAt: async () => null };
+    expect(screenRecordingForDelivery("m3", sent, Date.now(), { siteUrl: null, apiToken: null }, undefined, deps).wait).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(screenRecordingForDelivery("m3", sent, Date.now(), { siteUrl: null, apiToken: null }, undefined, deps).wait).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(asked).toBe(2);
   });
 });

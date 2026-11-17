@@ -105,26 +105,57 @@ export function serverBriefDeps(siteUrl: string, apiToken: string, baseUrl: stri
   };
 }
 
-/** What the daemon does with a message as it delivers it: the text to type
- *  in, or a wait while the words are still being read. Anything that is not
- *  a screen recording, or that cannot be expanded, goes as it came (the
- *  tag's own text says how to fetch the same). */
-export async function screenRecordingForDelivery(
+type DeliveryOutcome = { wait: true } | { wait: false; content: string };
+
+/** Expansions in progress or done, by message. The delivery loop never
+ *  awaits one: it starts the job, holds the message, and finds the result
+ *  waiting on a later pass. */
+const jobs = new Map<string, { done: DeliveryOutcome | null; startedAt: number }>();
+/** A finished job nobody came back for (the message was cancelled) is
+ *  dropped after this long. */
+const JOB_TTL_MS = 30 * 60_000;
+
+/** What the daemon does with a message as it delivers it, without ever
+ *  blocking the loop: the text to type in, or a wait (the frames are being
+ *  cut in the background, or the words are still being read on the server).
+ *  Anything that is not a screen recording, or that cannot be expanded, goes
+ *  as it came: the tag's own text says how to fetch the same. `key` is the
+ *  message's id. */
+export function screenRecordingForDelivery(
+  key: string,
   content: string,
   createdAt: number,
   server: { siteUrl: string | null; apiToken: string | null },
   log: (line: string) => void = () => {},
-): Promise<{ wait: true } | { wait: false; content: string }> {
-  if (!content.trimStart().startsWith("<screen-recording") || !server.siteUrl || !server.apiToken) return { wait: false, content };
-  try {
-    const brief = await expandScreenRecording(content, serverBriefDeps(server.siteUrl, server.apiToken), Date.now() - createdAt);
-    if (brief.kind === "wait") return { wait: true };
-    if (brief.kind === "ready") {
-      log(`expanded with ${brief.frames} frame(s)`);
-      return { wait: false, content: brief.text };
-    }
-  } catch (err) {
-    log(`not expanded: ${err instanceof Error ? err.message : String(err)}`);
+  deps?: BriefDeps,
+): DeliveryOutcome {
+  if (!content.trimStart().startsWith("<screen-recording")) return { wait: false, content };
+  const briefDeps = deps ?? (server.siteUrl && server.apiToken ? serverBriefDeps(server.siteUrl, server.apiToken) : null);
+  if (!briefDeps) return { wait: false, content };
+  const now = Date.now();
+  for (const [k, j] of jobs) if (now - j.startedAt > JOB_TTL_MS) jobs.delete(k);
+  const job = jobs.get(key);
+  if (job) {
+    if (!job.done) return { wait: true };
+    jobs.delete(key);
+    return job.done;
   }
-  return { wait: false, content };
+  const entry: { done: DeliveryOutcome | null; startedAt: number } = { done: null, startedAt: now };
+  jobs.set(key, entry);
+  void expandScreenRecording(content, briefDeps, now - createdAt).then(
+    (brief) => {
+      if (brief.kind === "wait") {
+        // The words are not there yet: forget the job, so the next pass asks again.
+        jobs.delete(key);
+        return;
+      }
+      if (brief.kind === "ready") log(`expanded with ${brief.frames} frame(s) in ${Date.now() - now} ms`);
+      entry.done = brief.kind === "ready" ? { wait: false, content: brief.text } : { wait: false, content };
+    },
+    (err) => {
+      log(`not expanded: ${err instanceof Error ? err.message : String(err)}`);
+      entry.done = { wait: false, content };
+    },
+  );
+  return { wait: true };
 }
