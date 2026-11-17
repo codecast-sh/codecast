@@ -8,7 +8,6 @@ import type { DispatchFn } from "@platform/engine";
 import { stampDeliveryReceipts } from "./syncDeliveryReceipts";
 import { toast } from "sonner";
 import { humanizeConvexError } from "@codecast/shared/contracts";
-import { PRESENCE_REQUIRED } from "@codecast/shared/contracts/secrets";
 import { isChatRoomRefusal, useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { dropRejectedOrgIntent } from "../store/orgSlice";
@@ -126,8 +125,6 @@ const CALLER_REPORTED_ACTIONS = new Set([
   "admitGuestKnock",
   "denyGuestKnock",
   "removeCallGuest",
-  // The meeting link field takes its stub back, puts the link back and says the server's words (calls MeetingBotField).
-  "sendMeetingBot",
   // Live artifact writes: the live layer puts the rows back and says "Not saved: <why>" once per write.
   "applyLiveOps",
   "liveSendOps",
@@ -150,24 +147,8 @@ export function wasDispatchFailureReported(error: unknown): boolean {
   return typeof error === "object" && error !== null && reportedFailures.has(error);
 }
 
-/**
- * The person-facing reason inside a server refusal: the last refusal in a
- * (possibly nested, convCommand-wrapped) Convex error message, minus the
- * client tag, request id, stack frames and routing context. "Not authorized"
- * reads as the session access it is.
- */
-export function dispatchRefusalReason(message: string, fallback = "rejected by the server"): string {
-  const reason =
-    message
-      .split(/Uncaught (?:Convex)?Error:/)
-      .pop()
-      ?.split("\n")[0]
-      ?.replace(/\s+at\s+(?:async\s+)?\S+\s+\(.*$/, "")
-      .replace(/\s+Called by client.*$/, "")
-      .replace(`${PRESENCE_REQUIRED}: `, "")
-      .trim() || fallback;
-  return /not authorized/i.test(reason) ? "you don't have access to that session" : reason;
-}
+import { dispatchRefusalReason } from "./dispatchRefusal";
+export { dispatchRefusalReason };
 
 /**
  * A caller's toast for a failed write: nothing when the failure toast already
