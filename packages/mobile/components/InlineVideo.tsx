@@ -46,7 +46,7 @@ cast-player{--cast-accent:${accent};--cast-radius:0px;--cast-bg:#000;width:min(1
 </style>
 <script>${PLAYER_JS}</script>
 </head><body>
-<cast-player src="${esc(src)}" data-auto-aspect></cast-player>
+<cast-player src="${esc(start > 0 ? `${src.split("#")[0]}#t=${start}` : src)}" data-auto-aspect></cast-player>
 ${list}
 <script>
 customElements.whenDefined("cast-player").then(function () {
@@ -63,7 +63,9 @@ customElements.whenDefined("cast-player").then(function () {
   }
   items.forEach(function (li) { li.addEventListener("click", function () { p.seek(parseFloat(li.dataset.t)); p.play(); mark(); }); });
   p.addEventListener("timeupdate", mark);
-  setTimeout(function () { if (${start} > 0) p.seek(${start}); p.play(); mark(); }, 0);
+  // The start rides the file's own media fragment (#t=), which the video
+  // honors as it loads; a seek issued here, before it can seek, is dropped.
+  setTimeout(function () { p.play(); mark(); }, 0);
 });
 </script>
 </body></html>`;

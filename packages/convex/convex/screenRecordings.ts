@@ -57,11 +57,14 @@ const BEGIN_ARGS = {
   // The session it is being sent to: its readers read the recording.
   conversation_id: v.optional(v.string()),
   mime: v.string(),
+  // The file's exact length: the upload URL is signed for it, so the bucket
+  // takes those bytes and no others.
+  size_bytes: v.number(),
   duration_ms: v.optional(v.number()),
   width: v.optional(v.number()),
   height: v.optional(v.number()),
 };
-type BeginArgs = { conversation_id?: string; mime: string; duration_ms?: number; width?: number; height?: number };
+type BeginArgs = { conversation_id?: string; mime: string; size_bytes: number; duration_ms?: number; width?: number; height?: number };
 type Begun = { transcript_id: Id<"transcripts">; call: string; upload_url: string };
 
 export const begin = mutation({
@@ -83,8 +86,23 @@ export const cliBegin = mutation({
   },
 });
 
+/** Screen recordings one person may open in an hour: far past anyone
+ *  showing an agent things, short of a script filling the bucket. */
+export const SCREEN_RECORDINGS_PER_HOUR = 30;
+
 async function beginCore(ctx: any, userId: Id<"users">, args: BeginArgs): Promise<Begun> {
   const mime = VIDEO_TYPES.includes(args.mime) ? args.mime : "video/mp4";
+  const size = Math.round(args.size_bytes);
+  if (!(size > 0) || size > SCREEN_RECORDING_MAX_BYTES) {
+    throw new Error(`A recording can be up to ${Math.round(SCREEN_RECORDING_MAX_BYTES / 1024 / 1024 / 1024)} GB`);
+  }
+  const hourAgo = Date.now() - 60 * 60_000;
+  let recent = 0;
+  for await (const r of ctx.db.query("transcripts").withIndex("by_creator_started", (q: any) => q.eq("started_by", userId).gt("started_at", hourAgo))) {
+    if (r.screen_recording && ++recent >= SCREEN_RECORDINGS_PER_HOUR) {
+      throw new Error(`That is ${SCREEN_RECORDINGS_PER_HOUR} screen recordings in an hour; try again later`);
+    }
+  }
   const convId = args.conversation_id ? ctx.db.normalizeId("conversations", args.conversation_id) : null;
   const conv = convId ? await ctx.db.get(convId) : null;
   if (args.conversation_id && (!conv || !(await canAccessConversation(ctx, userId, conv)))) throw new Error("Session not found");
@@ -113,10 +131,14 @@ async function beginCore(ctx: any, userId: Id<"users">, args: BeginArgs): Promis
       ...(args.height ? { height: Math.round(args.height) } : {}),
     },
   });
-  const uploadUrl = await r2Presign(bucket, "PUT", r2Key, UPLOAD_URL_SECONDS);
+  const uploadUrl = await r2Presign(bucket, "PUT", r2Key, UPLOAD_URL_SECONDS, undefined, undefined, { "content-length": String(size) });
+  // An upload whose `uploaded` never arrives (the app killed mid-send) is
+  // found once its URL has lapsed and processed then (probeUpload).
+  await ctx.scheduler.runAfter(UPLOAD_URL_SECONDS * 1000 + 60_000, internal.screenRecordings.probeUpload, { transcript_id: id });
   // A recording picked and never sent is nobody's: it is removed once the
-  // person has had a fair while to send it (sweepUnsent).
-  if (conv) await ctx.scheduler.runAfter(UNSENT_GRACE_MS, internal.screenRecordings.sweepUnsent, { transcript_id: id });
+  // person has had a fair while to send it (sweepUnsent). That holds for one
+  // opened without a session too: nothing can ever send it.
+  await ctx.scheduler.runAfter(UNSENT_GRACE_MS, internal.screenRecordings.sweepUnsent, { transcript_id: id });
   return { transcript_id: id, call: t.short_id!, upload_url: uploadUrl };
 }
 
@@ -125,22 +147,10 @@ async function beginCore(ctx: any, userId: Id<"users">, args: BeginArgs): Promis
  *  with the composer open. */
 export const UNSENT_GRACE_MS = 6 * 60 * 60_000;
 
-/** Pending messages read back looking for the one that carried it. */
-const SENT_SCAN_LIMIT = 500;
-
-/** Was the recording sent: is there a message into its session, written
- *  after the pick, that carries its tag? Every send keeps its pending row
- *  (delivered, injected, failed alike), so the session's own queue answers. */
-async function wasSent(ctx: any, t: Doc<"transcripts">): Promise<boolean> {
-  const convId = t.screen_recording?.conversation_id;
-  if (!convId) return true;
-  const needle = `<screen-recording call="${t.short_id}"`;
-  let seen = 0;
-  for await (const row of ctx.db.query("pending_messages").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", convId)).order("desc")) {
-    if (row._creationTime < t.started_at || ++seen > SENT_SCAN_LIMIT) break;
-    if (typeof row.content === "string" && row.content.includes(needle)) return true;
-  }
-  return false;
+/** Was the recording sent: marked when the message carrying its tag was
+ *  queued into its session (lib/screenRecordingSent). */
+function wasSent(t: Doc<"transcripts">): boolean {
+  return !!t.screen_recording?.sent_at;
 }
 
 /** Remove a recording entirely: its words, its file row, the record, and
@@ -162,7 +172,7 @@ export const sweepUnsent = internalMutation({
   args: { transcript_id: v.id("transcripts") },
   handler: async (ctx, args): Promise<{ removed: boolean }> => {
     const t = await ctx.db.get(args.transcript_id);
-    if (!t?.screen_recording || (await wasSent(ctx, t))) return { removed: false };
+    if (!t?.screen_recording || wasSent(t)) return { removed: false };
     await removeRecording(ctx, t);
     return { removed: true };
   },
@@ -176,7 +186,7 @@ export const discard = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     const t = await ownScreenRecording(ctx, userId, args.transcript_id);
-    if (await wasSent(ctx, t)) return { removed: false };
+    if (wasSent(t)) return { removed: false };
     await removeRecording(ctx, t);
     return { removed: true };
   },
@@ -202,10 +212,73 @@ export const cliUploaded = mutation({
 
 async function uploadedCore(ctx: any, userId: Id<"users">, transcriptId: Id<"transcripts">): Promise<void> {
   const t = await ownScreenRecording(ctx, userId, transcriptId);
-  // Once: a second press (a retried upload's echo) finds the work under way.
-  if (t.video_runs) return;
-  await ctx.scheduler.runAfter(0, internal.screenRecordings.processUpload, { transcript_id: t._id });
+  await startProcessing(ctx, t);
 }
+
+/** Schedule the one transcription a recording gets. The mark is written in
+ *  the same transaction as the schedule, so a second `uploaded` (a retried
+ *  request, the phone and the web both reporting) finds the work under way
+ *  and never transcribes, appends and bills the words twice. */
+export const PROCESSING_LEASE_MS = 15 * 60_000;
+
+async function startProcessing(ctx: any, t: Doc<"transcripts">): Promise<boolean> {
+  if (!t.screen_recording) return false;
+  // A result landed (words, or the verdict that there are none): done for good.
+  if (t.transcribe_status !== "pending") return false;
+  // The mark is a lease. A job holds it while it can still be running (an
+  // action is cut off at 10 minutes); one older than that died without
+  // reaching its finally, and the recording would sit pending for good.
+  const taken = t.screen_recording.processing_at;
+  if (taken && Date.now() - taken < PROCESSING_LEASE_MS) return false;
+  await ctx.db.patch(t._id, { screen_recording: { ...t.screen_recording, processing_at: Date.now() } });
+  await ctx.scheduler.runAfter(0, internal.screenRecordings.processUpload, { transcript_id: t._id });
+  return true;
+}
+
+/** The upload's URL has lapsed and no client said the bytes landed. If they
+ *  did, process them now; if not, the unsent sweep removes the record. */
+export const probeUpload = internalAction({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args): Promise<{ started: boolean }> => {
+    const row: { r2_key: string; started: boolean } | null = await ctx.runQuery(internal.screenRecordings.forProbe, { transcript_id: args.transcript_id });
+    if (!row || row.started) return { started: false };
+    const signed = await callRecordingGetUrl(row.r2_key, "fresh");
+    const size = signed ? await objectSize(signed.url) : null;
+    if (!size) return { started: false };
+    const started: boolean = await ctx.runMutation(internal.screenRecordings.startIfIdle, { transcript_id: args.transcript_id });
+    return { started };
+  },
+});
+
+export const clearWords = internalMutation({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args): Promise<void> => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t?.screen_recording || t.last_seq === 0) return;
+    const segs = await ctx.db.query("transcript_segments").withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id)).collect();
+    for (const s of segs) await ctx.db.delete(s._id);
+    await ctx.db.patch(t._id, { last_seq: 0 });
+  },
+});
+
+export const forProbe = internalQuery({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args): Promise<{ r2_key: string; started: boolean } | null> => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t?.screen_recording) return null;
+    // Started means a result landed, or a job still holds its lease.
+    const held = !!t.screen_recording.processing_at && Date.now() - t.screen_recording.processing_at < PROCESSING_LEASE_MS;
+    return { r2_key: t.screen_recording.r2_key, started: t.transcribe_status !== "pending" || held };
+  },
+});
+
+export const startIfIdle = internalMutation({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args): Promise<boolean> => {
+    const t = await ctx.db.get(args.transcript_id);
+    return t ? await startProcessing(ctx, t) : false;
+  },
+});
 
 export const forProcess = internalQuery({
   args: { transcript_id: v.id("transcripts") },
@@ -314,6 +387,9 @@ export const processUpload = internalAction({
       if (!audio) return;
       const gate = { ctx, scope: { row: { table: "transcripts" as const, id: args.transcript_id } } };
       const segments = await transcribeAudio(gate, new Blob([audio.bytes as Uint8Array<ArrayBuffer>], { type: "audio/mp4" }), "recording.m4a", durationMs);
+      // A retried job (the lease ran out on one that died) starts from no
+      // words, so lines its predecessor wrote are not doubled.
+      await ctx.runMutation(internal.screenRecordings.clearWords, { transcript_id: args.transcript_id });
       for (let i = 0; i < segments.length; i += SEGMENT_WRITE_BATCH) {
         await ctx.runMutation(internal.transcripts.appendRecordingSegments, {
           transcript_id: args.transcript_id,

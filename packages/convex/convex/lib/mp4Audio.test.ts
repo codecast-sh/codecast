@@ -78,3 +78,64 @@ describe.skipIf(!ffmpeg)("extractAudioTrack", () => {
     await expect(extractAudioTrack(bufferByteSource(new TextEncoder().encode("hello world, not a movie")))).rejects.toBeInstanceOf(Mp4AudioError);
   });
 });
+
+// Hand-built hostile files: an uploader controls every byte.
+function box(type: string, ...payload: Uint8Array[]): Uint8Array {
+  const body = payload.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(8 + body);
+  new DataView(out.buffer).setUint32(0, out.length);
+  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+  let o = 8;
+  for (const p of payload) { out.set(p, o); o += p.length; }
+  return out;
+}
+const u32s = (...n: number[]) => { const b = new Uint8Array(n.length * 4); const dv = new DataView(b.buffer); n.forEach((v, i) => dv.setUint32(i * 4, v >>> 0)); return b; };
+const full = (type: string, ...payload: Uint8Array[]) => box(type, new Uint8Array(4), ...payload);
+const hdlr = full("hdlr", u32s(0), new TextEncoder().encode("soun"), u32s(0, 0, 0), new Uint8Array(1));
+const mdhd = full("mdhd", u32s(0, 0, 1000, 1000), u32s(0));
+function audioMoov(stbl: Uint8Array[]): Uint8Array {
+  return box("moov", full("mvhd", new Uint8Array(96)), box("trak", box("mdia", mdhd, hdlr, box("minf", box("stbl", ...stbl)))));
+}
+const ftyp = box("ftyp", new TextEncoder().encode("isom"), u32s(0));
+const cat = (...parts: Uint8Array[]) => { const o = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let k = 0; for (const p of parts) { o.set(p, k); k += p.length; } return o; };
+const fast = async (bytes: Uint8Array) => {
+  const t0 = performance.now();
+  const err = await extractAudioTrack(bufferByteSource(bytes), { maxBytes: 25 * 1024 * 1024 }).then(() => null, (e) => e);
+  return { err, ms: performance.now() - t0 };
+};
+
+describe("hostile files", () => {
+  test("a chunk count far beyond its box is refused, not looped over", async () => {
+    const moov = audioMoov([full("stsc", u32s(1, 1, 1, 1)), full("stsz", u32s(4, 1)), full("stco", u32s(0x7fffffff, 0))]);
+    const { err, ms } = await fast(cat(ftyp, moov));
+    expect(err).toBeInstanceOf(Mp4AudioError);
+    expect(ms).toBeLessThan(200);
+  });
+
+  test("a sample table that claims more entries than it holds is refused", async () => {
+    const moov = audioMoov([full("stsc", u32s(0x7fffffff, 1, 1, 1)), full("stsz", u32s(0, 0x7fffffff)), full("stco", u32s(1, 0))]);
+    const { err, ms } = await fast(cat(ftyp, moov));
+    expect(err).toBeInstanceOf(Mp4AudioError);
+    expect(ms).toBeLessThan(200);
+  });
+
+  test("a movie header bigger than the cap, or than the file, is refused before it is read", async () => {
+    let read = 0;
+    const header = new Uint8Array(16);
+    const dv = new DataView(header.buffer);
+    dv.setUint32(0, 1); header.set(new TextEncoder().encode("moov"), 4); dv.setUint32(8, 0); dv.setUint32(12, 500 * 1024 * 1024);
+    const src = { size: 600 * 1024 * 1024, read: async (o: number, l: number) => { read += l; return o === 0 ? header.subarray(0, l) : new Uint8Array(l); } };
+    const err = await extractAudioTrack(src).then(() => null, (e) => e);
+    expect(err).toBeInstanceOf(Mp4AudioError);
+    expect(read).toBeLessThan(1024);
+  });
+
+  test("an endless run of tiny top-level boxes is cut off", async () => {
+    const tiny = box("free");
+    const many = new Uint8Array(tiny.length * 200_000);
+    for (let i = 0; i < 200_000; i++) many.set(tiny, i * tiny.length);
+    const { err, ms } = await fast(cat(ftyp, many));
+    expect(err).toBeInstanceOf(Mp4AudioError);
+    expect(ms).toBeLessThan(2000);
+  });
+});

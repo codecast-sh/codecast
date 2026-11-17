@@ -66,9 +66,13 @@ const uploads = new Map<string, Promise<boolean>>();
  *  server has named it (the upload goes on); null when it could not. */
 export async function beginScreenRecording(convex: ConvexReactClient, picked: PickedRecording, conversationId: string): Promise<BegunRecording | null> {
   let begun: { transcript_id: Id<'transcripts'>; call: string; upload_url: string };
+  let blob: Blob;
   try {
+    // Read first: the upload URL is signed for the file's exact length.
+    blob = await (await fetch(picked.uri)).blob();
     begun = await convex.mutation(api.screenRecordings.begin, {
       conversation_id: conversationId,
+      size_bytes: blob.size,
       mime: picked.mime,
       duration_ms: picked.durationMs,
       ...(picked.width ? { width: picked.width } : {}),
@@ -78,13 +82,12 @@ export async function beginScreenRecording(convex: ConvexReactClient, picked: Pi
     appAlert('Could not attach the recording', err instanceof Error ? err.message : String(err));
     return null;
   }
-  uploads.set(picked.uri, upload(convex, picked, begun));
+  uploads.set(picked.uri, upload(convex, blob, begun));
   return { transcriptId: String(begun.transcript_id), call: begun.call };
 }
 
-async function upload(convex: ConvexReactClient, picked: PickedRecording, begun: { transcript_id: Id<'transcripts'>; upload_url: string }): Promise<boolean> {
+async function upload(convex: ConvexReactClient, blob: Blob, begun: { transcript_id: Id<'transcripts'>; upload_url: string }): Promise<boolean> {
   try {
-    const blob = await (await fetch(picked.uri)).blob();
     // Stored as MP4 whatever the picker called it: a QuickTime file is the
     // same container family, and browsers refuse to play `video/quicktime`.
     const res = await fetch(begun.upload_url, { method: 'PUT', headers: { 'Content-Type': 'video/mp4' }, body: blob });

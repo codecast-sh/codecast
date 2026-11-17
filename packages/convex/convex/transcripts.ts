@@ -1874,7 +1874,14 @@ function shapeCallRow(t: Doc<"transcripts">) {
     // A screen recording somebody sent to a session (screenRecordings.ts):
     // its picture size, and whether the video had any sound to transcribe.
     screen: t.screen_recording
-      ? { width: t.screen_recording.width ?? null, height: t.screen_recording.height ?? null, no_audio: !!t.screen_recording.no_audio }
+      ? {
+          width: t.screen_recording.width ?? null,
+          height: t.screen_recording.height ?? null,
+          no_audio: !!t.screen_recording.no_audio,
+          // The session it was sent to: a daemon expands its tag only there,
+          // and only for a message its recorder sent (cli screenRecordingBrief).
+          conversation_id: t.screen_recording.conversation_id ? String(t.screen_recording.conversation_id) : null,
+        }
       : null,
   };
 }

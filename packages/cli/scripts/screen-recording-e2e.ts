@@ -46,13 +46,15 @@ if (!auth?.auth_token || !auth.convex_url) throw new Error("not signed in on thi
 const sent = formatScreenRecordingMessage({ call, transcriptId, durationMs: 0 }, caption ?? "");
 // 2. The daemon's delivery step.
 const t0 = Date.now();
+// The session and sender a real delivery carries: the recording's own.
+const into = { conversationId: process.env.SR_CONVERSATION ?? "", senderUserId: String(auth.user_id ?? "") };
 const server = { siteUrl: auth.convex_url.replace(".cloud", ".site"), apiToken: auth.auth_token };
 // The daemon's delivery step, polled the way its hold rechecks it.
-let out = screenRecordingForDelivery("sr-e2e", sent, Date.now(), server, (l) => console.log(`[delivery] ${l}`));
+let out = screenRecordingForDelivery("sr-e2e", sent, Date.now(), into, server, (l) => console.log(`[delivery] ${l}`));
 const firstAnswerMs = Date.now() - t0;
 while (out.wait && Date.now() - t0 < 5 * 60_000) {
   await sleep(1000);
-  out = screenRecordingForDelivery("sr-e2e", sent, Date.now(), server, (l) => console.log(`[delivery] ${l}`));
+  out = screenRecordingForDelivery("sr-e2e", sent, Date.now(), into, server, (l) => console.log(`[delivery] ${l}`));
 }
 console.log(`[delivery] first answer in ${firstAnswerMs} ms (the loop is never held), ready after ${Date.now() - t0} ms`);
 if (out.wait) throw new Error("the recording's words are still being read; run again in a moment");

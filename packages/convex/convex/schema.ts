@@ -8276,6 +8276,11 @@ export default defineSchema({
       width: v.optional(v.number()),
       height: v.optional(v.number()),
       no_audio: v.optional(v.boolean()),
+      // When its one transcription was scheduled (screenRecordings.startProcessing).
+      processing_at: v.optional(v.number()),
+      // When a message carrying its tag was queued into its session: the
+      // unsent sweep keeps it from then on.
+      sent_at: v.optional(v.number()),
     })),
     // Reading the words back OUT of that audio, for a recorder that had no
     // recognizer of its own. A phone cannot stream microphone audio to the live

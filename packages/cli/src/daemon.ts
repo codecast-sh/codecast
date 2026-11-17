@@ -33828,7 +33828,7 @@ async function main(): Promise<void> {
           // Never awaited: the frames are cut in the background and the row
           // waits as a hold (retry count untouched), so every other session's
           // delivery goes on meanwhile.
-          const out = screenRecordingForDelivery(msg._id, messageContent, msg.created_at ?? Date.now(), { siteUrl: getSiteUrl(), apiToken: getAuthToken() }, (line) => logDelivery(`${tag} ${line}`));
+          const out = screenRecordingForDelivery(msg._id, messageContent, msg.created_at ?? Date.now(), { conversationId: String(msg.conversation_id), senderUserId: String(msg.from_user_id ?? "") }, { siteUrl: getSiteUrl(), apiToken: getAuthToken() }, (line) => logDelivery(`${tag} ${line}`));
           if (out.wait) {
             logDelivery(`HELD: ${tag} cutting frames or waiting on its words`);
             releaseInFlight();

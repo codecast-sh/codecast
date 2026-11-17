@@ -31,7 +31,10 @@ export type ScreenRecordingCall = {
   transcribe_status: "pending" | "done" | "failed" | null;
   /** The video is in (its file is a ready call file). */
   filmed?: boolean;
-  screen?: { no_audio?: boolean } | null;
+  /** Who recorded it. */
+  started_by?: string;
+  /** Set only on a screen recording: the session it was sent to. */
+  screen?: { no_audio?: boolean; conversation_id?: string | null } | null;
   segments: Array<{ t0: number; t1: number; text: string }>;
 };
 
@@ -49,12 +52,24 @@ export type BriefOutcome =
   | { kind: "wait" }
   | { kind: "ready"; text: string; frames: number };
 
-/** `waitedMs`: how long this message has been waiting on the words so far. */
-export async function expandScreenRecording(content: string, deps: BriefDeps, waitedMs: number): Promise<BriefOutcome> {
+/** The message being delivered: the session it goes into, and who sent it. */
+export type DeliveryTarget = { conversationId: string; senderUserId: string };
+
+/** `waitedMs`: how long this message has been waiting on the words so far.
+ *
+ *  The words and frames are read with the session owner's token, which can
+ *  read far more than the people in the session can (a private voice note, a
+ *  1:1 huddle). So a tag expands only when it names a screen recording, sent
+ *  to this very session, by the person who recorded it. Any other tag is
+ *  delivered as it was typed: a teammate's text naming the owner's call must
+ *  not make the owner's daemon type that call into a shared session. */
+export async function expandScreenRecording(content: string, deps: BriefDeps, waitedMs: number, into: DeliveryTarget): Promise<BriefOutcome> {
   const parsed = parseScreenRecordingMessage(content);
   if (!parsed || parsed.lines.length) return { kind: "unchanged" };
   const call = await deps.getCall(parsed.call);
-  if (!call) return { kind: "unchanged" };
+  if (!call || !call.screen) return { kind: "unchanged" };
+  if (!call.screen.conversation_id || call.screen.conversation_id !== into.conversationId) return { kind: "unchanged" };
+  if (!call.started_by || call.started_by !== into.senderUserId) return { kind: "unchanged" };
   const pending = call.transcribe_status === "pending";
   if (pending && waitedMs < (call.filmed ? SCREEN_RECORDING_WORDS_WAIT_MS : SCREEN_RECORDING_UPLOAD_WAIT_MS)) return { kind: "wait" };
   const handle = call.short_id ?? parsed.call;
@@ -125,6 +140,7 @@ export function screenRecordingForDelivery(
   key: string,
   content: string,
   createdAt: number,
+  into: DeliveryTarget,
   server: { siteUrl: string | null; apiToken: string | null },
   log: (line: string) => void = () => {},
   deps?: BriefDeps,
@@ -142,7 +158,7 @@ export function screenRecordingForDelivery(
   }
   const entry: { done: DeliveryOutcome | null; startedAt: number } = { done: null, startedAt: now };
   jobs.set(key, entry);
-  void expandScreenRecording(content, briefDeps, now - createdAt).then(
+  void expandScreenRecording(content, briefDeps, now - createdAt, into).then(
     (brief) => {
       if (brief.kind === "wait") {
         // The words are not there yet: forget the job, so the next pass asks again.

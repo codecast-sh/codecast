@@ -1,4 +1,5 @@
 import { UNCONFIRMED_DELIVERY_REASON } from "@codecast/shared/contracts";
+import { noteScreenRecordingSent } from "./lib/screenRecordingSent";
 import { steeringOwnerFor, suggestFromTeammate } from "./teamSuggestions";
 import { unreachableTerminalOf } from "@codecast/shared/contracts/deliveryHold";
 import { isWorkflowRunLog } from "./lib/runLog";
@@ -472,6 +473,9 @@ export async function enqueuePendingMessage(
       if (existing) return existing._id;
     }
   }
+
+  // A screen recording rides this send: from now on it is sent, and kept.
+  await noteScreenRecordingSent(ctx, conversation._id, fromUserId, fields.content);
 
   if (fields.queue) {
     return await insertEnqueuedPendingMessage(ctx, {

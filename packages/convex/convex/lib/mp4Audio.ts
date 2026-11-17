@@ -31,7 +31,7 @@ export type ExtractedAudio = {
 
 export class Mp4AudioError extends Error {
   constructor(
-    readonly reason: "not_mp4" | "fragmented" | "compressed_header" | "no_moov" | "too_large",
+    readonly reason: "not_mp4" | "fragmented" | "compressed_header" | "no_moov" | "too_large" | "malformed",
     message: string,
   ) {
     super(message);
@@ -77,11 +77,28 @@ function path(b: Uint8Array, root: Box, types: string[]): Box | null {
   return cur;
 }
 
+/** Bounds on what an uploaded file may claim. Every number below comes from
+ *  bytes the uploader chose, so each one is checked before it is used. */
+/** Top-level boxes walked before giving up: a real file has a handful. */
+const MAX_TOP_BOXES = 4096;
+/** The movie header read into memory: an hour of 60 fps video's tables are a
+ *  few MB. */
+export const MAX_MOOV_BYTES = 64 * 1024 * 1024;
+
+const malformed = (what: string) => new Mp4AudioError("malformed", `malformed file: ${what}`);
+
+/** How many fixed-size entries a full box's table can hold after `skip`
+ *  bytes of its payload: what a count it declares must not exceed. */
+function tableRoom(box: Box, skip: number, entryBytes: number): number {
+  return Math.max(0, Math.floor((box.size - box.headerSize - 4 - skip) / entryBytes));
+}
+
 /** The top-level boxes of the whole source, read header by header. */
 async function topLevel(src: ByteSource): Promise<Box[]> {
   const out: Box[] = [];
   let o = 0;
   while (o + 8 <= src.size) {
+    if (out.length >= MAX_TOP_BOXES) throw malformed("too many top-level boxes");
     const h = await src.read(o, Math.min(16, src.size - o));
     let size = u32(h, 0);
     const type = fourcc(h, 4);
@@ -152,6 +169,8 @@ export async function extractAudioTrack(src: ByteSource, opts: { maxBytes?: numb
   }
   const moovBox = top.find((b) => b.type === "moov");
   if (!moovBox) throw new Mp4AudioError("no_moov", "the file has no movie header (was it cut off mid-upload?)");
+  if (moovBox.size > MAX_MOOV_BYTES) throw malformed(`movie header of ${moovBox.size} bytes`);
+  if (moovBox.start + moovBox.size > src.size) throw malformed("movie header runs past the end of the file");
   const moov = await src.read(moovBox.start, moovBox.size);
   const root: Box = { ...moovBox, start: 0 };
   if (child(moov, root, "cmov")) throw new Mp4AudioError("compressed_header", "compressed movie headers are not supported");
@@ -179,8 +198,10 @@ export async function extractAudioTrack(src: ByteSource, opts: { maxBytes?: numb
   if (!stsc || !stsz || !stco) throw new Mp4AudioError("not_mp4", "the audio track's sample table is incomplete");
   const wide = stco.type === "co64";
 
-  // Chunk offsets, as the source has them.
+  // Chunk offsets, as the source has them. Each declared count is held to
+  // what its own box can carry.
   const chunkCount = u32(moov, fullPayload(stco));
+  if (chunkCount > tableRoom(stco, 4, wide ? 8 : 4)) throw malformed("chunk table longer than its box");
   const offsets: number[] = [];
   for (let i = 0; i < chunkCount; i++) {
     const at = fullPayload(stco) + 4 + i * (wide ? 8 : 4);
@@ -190,23 +211,29 @@ export async function extractAudioTrack(src: ByteSource, opts: { maxBytes?: numb
   // Sample sizes: one size for all, or a table.
   const constantSize = u32(moov, fullPayload(stsz));
   const sampleCount = u32(moov, fullPayload(stsz) + 4);
+  if (!constantSize && sampleCount > tableRoom(stsz, 8, 4)) throw malformed("sample size table longer than its box");
   const sizeOf = (i: number) => (constantSize ? constantSize : u32(moov, fullPayload(stsz) + 8 + i * 4));
 
   // Samples per chunk, from stsc's runs.
   const runs: Array<{ first: number; perChunk: number }> = [];
   const stscCount = u32(moov, fullPayload(stsc));
+  if (stscCount > tableRoom(stsc, 4, 12)) throw malformed("chunk run table longer than its box");
   for (let i = 0; i < stscCount; i++) {
     const at = fullPayload(stsc) + 4 + i * 12;
     runs.push({ first: u32(moov, at), perChunk: u32(moov, at + 4) });
   }
+  // One pass over the runs (sorted by first chunk, as the format requires),
+  // bounded by the samples there are, not by what a run claims per chunk.
   const lengths: number[] = [];
   let sample = 0;
+  let run = -1;
   for (let c = 0; c < chunkCount; c++) {
     const chunkNo = c + 1;
-    let perChunk = 0;
-    for (const r of runs) if (r.first <= chunkNo) perChunk = r.perChunk;
+    while (run + 1 < runs.length && runs[run + 1].first <= chunkNo) run++;
+    const perChunk = run >= 0 ? runs[run].perChunk : 0;
     let len = 0;
     for (let k = 0; k < perChunk && sample < sampleCount; k++, sample++) len += sizeOf(sample);
+    if (len > 0 && (offsets[c] < 0 || offsets[c] + len > src.size)) throw malformed("a chunk lies outside the file");
     lengths.push(len);
   }
   const total = lengths.reduce((n, l) => n + l, 0);

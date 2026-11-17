@@ -66,6 +66,8 @@ export function useScreenRecordingAttach(conversationId: string, enabled: boolea
       begun = await convex.mutation(api.screenRecordings.begin, {
         conversation_id: conversationId,
         mime: file.type || "video/mp4",
+        // The upload URL is signed for exactly this many bytes.
+        size_bytes: file.size,
         duration_ms: facts.durationMs,
         ...(facts.width ? { width: facts.width, height: facts.height } : {}),
       });
