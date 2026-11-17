@@ -1,5 +1,5 @@
-// Settings › Appearance › Text size: Small, Medium or Large conversation text
-// and composers on this phone (lib/textSize.ts).
+// Settings › Appearance › Text size: Small, Medium or Large text on this
+// phone (lib/textSize.ts).
 import { useCallback } from 'react';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { showActionSheet } from '@/lib/popups';

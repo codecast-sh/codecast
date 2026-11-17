@@ -9,7 +9,6 @@ import { useConvex } from 'convex/react';
 import { useTypingReporter } from '@codecast/web/hooks/useChatTyping';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
-import { useSizedText } from '@/hooks/useTextSize';
 import { TYPE_SCALE } from '@codecast/shared/render/typeScale';
 import { MentionStrip, type MentionCandidate } from './MentionStrip';
 import {
@@ -62,7 +61,6 @@ export function ChatComposerBar({
 }) {
   const Theme = useTheme();
   const convex = useConvex();
-  const inputText = useSizedText(styles.input.fontSize as number);
   const [storedDraft] = useState(() => (draftKey ? String(useInboxStore.getState().drafts[draftKey]?.draft_message ?? '') : ''));
   const {
     value: draft,
@@ -207,7 +205,7 @@ export function ChatComposerBar({
         <ThemedTextInput
           key={epoch}
           ref={inputRef}
-          style={[styles.input, inputText]}
+          style={styles.input}
           placeholder={placeholder}
           placeholderTextColor={placeholderTint ?? Theme.textMuted0}
           value={draft}

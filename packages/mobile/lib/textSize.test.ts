@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { resolveTextSize, sizedText } from './textSize';
+import { resolveTextSize, sizeStyle, sizedText } from './textSize';
 
 describe('text size', () => {
   test('defaults to medium', () => {
@@ -18,5 +18,13 @@ describe('text size', () => {
   test('steps grow the line height with the size', () => {
     expect(sizedText(15, 24, 'medium')).toEqual({ fontSize: 16.5, lineHeight: 26 });
     expect(sizedText(15, 24, 'large')).toEqual({ fontSize: 18, lineHeight: 29 });
+  });
+
+  test('a style is raised only where it sets a size', () => {
+    const style = { fontSize: 13, lineHeight: 18, color: 'red' };
+    expect(sizeStyle(style, 'small')).toBe(style);
+    expect(sizeStyle(style, 'medium')).toEqual({ fontSize: 14.5, lineHeight: 20, color: 'red' });
+    const inherits = { color: 'red' } as { color: string; fontSize?: number };
+    expect(sizeStyle(inherits, 'large')).toBe(inherits);
   });
 });

@@ -5,6 +5,8 @@
 // first. The paging is web's own (useScopeFeedStream); only
 // the rows are drawn here. "workspace" is the root: the whole workspace.
 import { useCallback, useMemo } from 'react';
+import { useTextSize } from '@/hooks/useTextSize';
+import { sizeStyle } from '@/lib/textSize';
 import { ActivityIndicator, FlatList, Image, ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -47,6 +49,7 @@ const KIND_ICON: Record<FeedKind, React.ComponentProps<typeof FontAwesome>['name
 
 export default function ScopeBoardScreen() {
   const Theme = useTheme();
+  const textSize = useTextSize();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { tree, ready } = useSyncOrgTree();
@@ -79,7 +82,7 @@ export default function ScopeBoardScreen() {
         headerBackTitle: 'Back',
         headerStyle: { backgroundColor: Theme.bgAlt },
         headerTintColor: Theme.text,
-        headerTitleStyle: { fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted },
+        headerTitleStyle: sizeStyle({ fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted }, textSize),
       }}
     />
   );

@@ -1,4 +1,6 @@
 import { useEffect, useMemo } from 'react';
+import { useTextSize } from '@/hooks/useTextSize';
+import { sizeStyle } from '@/lib/textSize';
 import { StyleSheet, ActivityIndicator, TouchableOpacity, View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
@@ -32,6 +34,7 @@ import { useAuth } from '@/lib/auth';
  */
 export default function ShareLinkScreen() {
   const Theme = useTheme();
+  const textSize = useTextSize();
   const params = useLocalSearchParams<{ share: string | string[] }>();
   const router = useRouter();
   const { isAuthenticated } = useAuth();
@@ -108,7 +111,7 @@ export default function ShareLinkScreen() {
           title: 'Shared link',
           headerStyle: { backgroundColor: Theme.bgAlt },
           headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted },
+          headerTitleStyle: sizeStyle({ fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted }, textSize),
         }}
       />
       <RNView style={styles.container}>

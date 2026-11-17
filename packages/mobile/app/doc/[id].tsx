@@ -1,4 +1,6 @@
 import { stripTitleHeading } from "@codecast/shared/docs";
+import { useTextSize } from '@/hooks/useTextSize';
+import { sizeStyle } from '@/lib/textSize';
 import {
   StyleSheet,
   ScrollView,
@@ -25,6 +27,7 @@ import { openWebPage, WEB_ORIGIN } from "@/lib/links";
 
 export default function DocDetailScreen() {
   const Theme = useTheme();
+  const textSize = useTextSize();
   const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
   const router = useRouter();
   // The one row, not the collection: a whole-collection subscription would
@@ -87,7 +90,7 @@ export default function DocDetailScreen() {
           title: cfg.label,
           headerStyle: { backgroundColor: Theme.bgAlt },
           headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted },
+          headerTitleStyle: sizeStyle({ fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted }, textSize),
         }}
       />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>

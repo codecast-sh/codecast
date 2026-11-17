@@ -121,7 +121,6 @@ import { CastCommandBlock } from '@/components/session/CastCommandBlock';
 import { openLink } from '@/lib/links';
 import { PERF_PROBE, probeRender } from '@/lib/perfProbe';
 import { useShallowStable } from '@/hooks/useShallowStable';
-import { useSizedText } from '@/hooks/useTextSize';
 import { RelativeTime } from '@/components/RelativeTime';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
@@ -2037,6 +2036,9 @@ const MemoMessageBubble = memo(MessageBubble, (a, b) => {
   return x === y || (!!x && !!y && x.run === y.run && x.expanded === y.expanded && x.justOpened === y.justOpened);
 });
 
+// Spoken and fullscreen text reads at 15/24 before the phone's text size.
+const READ_TEXT = { fontSize: 15, lineHeight: 24 };
+
 function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, sender, showToast, collapsed: globalCollapsed, childConversationMap, bookmarkedSet, toolRun, openFullscreen }: {
   message: Message;
   /** Opens the screen's one full-message viewer, which outlives this row. */
@@ -2066,9 +2068,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const router = useRouter();
   // Who the agent speaks as: its role, its character, or its product name.
   const speakerRow = useSessionIdentityRow(conversationId);
-  // Message text follows the phone's text size (Settings › Appearance).
-  const bodyText = useSizedText(S.bubbleText.fontSize, S.bubbleText.lineHeight);
-  const readText = useSizedText(15, 24);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     message.tool_calls?.forEach(tc => {
@@ -2184,7 +2183,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const toolsFolded = !!toolRun && !toolRun.expanded;
   if (toolsFolded && !runHead) return null;
 
-  const bodyStyle = [styles.bubbleText, bodyText, isUser ? styles.userText : styles.assistantText];
+  const bodyStyle = [styles.bubbleText, isUser ? styles.userText : styles.assistantText];
 
   // The bubble's fill over the screen, for the fade that clips a long turn.
   const userFill = blendOver(Theme.userBubble + USER_BUBBLE_ALPHA, Theme.bg);
@@ -2297,7 +2296,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
                     <RNView style={styles.contextPillRow}>
                       {contexts.map((ctx, idx) => <ContextBlockPill key={idx} ctx={ctx} />)}
                     </RNView>
-                    {remaining ? <MarkdownContent text={remaining} baseStyle={[styles.bubbleText, bodyText, styles.userText]} isUser={true} /> : null}
+                    {remaining ? <MarkdownContent text={remaining} baseStyle={[styles.bubbleText, styles.userText]} isUser={true} /> : null}
                   </>
                 );
               }
@@ -2395,7 +2394,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             // A `cast say` is the agent talking: its words, not a command row.
             const said = sayTextOf(castCmd);
             if (said) {
-              return <MarkdownContent key={tc.id} text={said} baseStyle={[styles.bubbleText, readText, styles.assistantText]} isUser={false} />;
+              return <MarkdownContent key={tc.id} text={said} baseStyle={[styles.bubbleText, READ_TEXT, styles.assistantText]} isUser={false} />;
             }
             if (castCmd) {
               return (
@@ -2463,7 +2462,6 @@ function MessageFullscreen({ message, userName, agentType, conversationId, onClo
   onClose: () => void;
 }) {
   const Theme = useTheme();
-  const readText = useSizedText(15, 24);
   const speakerRow = useSessionIdentityRow(conversationId);
   if (!message) return null;
   const isUser = message.role === 'user';
@@ -2480,7 +2478,7 @@ function MessageFullscreen({ message, userName, agentType, conversationId, onClo
           </TouchableOpacity>
         </RNView>
         <ScrollView style={styles.messageFullscreenContent} contentContainerStyle={{ paddingBottom: 60 }}>
-          <MarkdownContent text={stripSystemTags(message.content || '')} baseStyle={[styles.bubbleText, readText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+          <MarkdownContent text={stripSystemTags(message.content || '')} baseStyle={[styles.bubbleText, READ_TEXT, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
         </ScrollView>
       </RNView>
     </Modal>

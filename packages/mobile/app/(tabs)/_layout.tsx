@@ -7,6 +7,8 @@ import { setInboxDrawerOpen, useInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { TAB_BAR_HEIGHT, useAppearanceKey, useTheme } from '@/constants/Theme';
 import { TYPE_SCALE } from '@codecast/shared/render/typeScale';
 import { Mono, useMonoFace } from '@/constants/fonts';
+import { useTextSize } from '@/hooks/useTextSize';
+import { sizeStyle } from '@/lib/textSize';
 import {
   MOBILE_HEADER_STYLE,
   MOBILE_HEADER_TITLE_STYLE,
@@ -22,6 +24,9 @@ export default function TabLayout() {
   const appearance = useAppearanceKey();
   const labelFace = useMonoFace(Mono.medium);
   const titleFace = useMonoFace(Mono.semiBold);
+  // React Navigation draws the labels and titles, so the Themed Text never
+  // sizes them: they follow the phone's text size here.
+  const textSize = useTextSize();
   const { unreadCount, chatMentions, anyLive } = useTabSignals();
   // The slide-out panel belongs to the inbox: its drag is live only there.
   const onInbox = usePathname() === '/inbox';
@@ -40,13 +45,13 @@ export default function TabLayout() {
           borderTopColor: Theme.borderLight,
           height: TAB_BAR_HEIGHT,
         },
-        tabBarLabelStyle: {
+        tabBarLabelStyle: sizeStyle({
           ...MOBILE_TAB_LABEL_STYLE,
           // Modern holds words to the type scale's 12pt floor; React
           // Navigation draws the label, so the Text resolver never sees it.
           ...(appearance.startsWith('modern') ? { fontSize: TYPE_SCALE.meta.size } : null),
           fontFamily: labelFace,
-        },
+        }, textSize),
         headerStyle: {
           ...MOBILE_HEADER_STYLE,
           backgroundColor: Theme.bgAlt,
@@ -54,11 +59,11 @@ export default function TabLayout() {
           shadowOpacity: 0,
           elevation: 0,
         },
-        headerTitleStyle: {
+        headerTitleStyle: sizeStyle({
           ...MOBILE_HEADER_TITLE_STYLE,
           color: Theme.text,
           fontFamily: titleFace,
-        },
+        }, textSize),
         headerTintColor: Theme.text,
       }}>
       <Tabs.Screen
@@ -116,7 +121,7 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
-  ), [Theme, appearance, labelFace, titleFace, unreadCount, chatMentions, anyLive]);
+  ), [Theme, appearance, labelFace, titleFace, textSize, unreadCount, chatMentions, anyLive]);
 
   return (
     <SlideOutDrawer enabled={onInbox} open={drawerOpen} setOpen={setInboxDrawerOpen} drawer={drawerPanel}>

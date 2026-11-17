@@ -17,6 +17,8 @@ import {
 import { createContext, forwardRef, useContext } from 'react';
 
 import { Theme, getActiveLook, useActiveScheme, useTheme } from '@/constants/Theme';
+import { TextSizeContext } from '@/lib/textSizeContext';
+import { sizeStyle } from '@/lib/textSize';
 import { isCapsText, monoStyle, namedFaceGroup, useLateFacesLoaded, type FaceGroup } from '@/constants/fonts';
 
 // Under Modern, the face group a Text names outright, handed to the Text
@@ -51,8 +53,9 @@ export const Text = forwardRef<DefaultText, TextProps>(function Text(props, ref)
   // render already follows a look flip; no second subscription per Text.
   const look = getActiveLook();
   const inherited = useContext(InheritedFace);
-  if (look !== 'modern') return <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style], late, look)} />;
-  const text = <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style], late, look, inherited, isCapsText(otherProps.children))} />;
+  const size = useContext(TextSizeContext);
+  if (look !== 'modern') return <DefaultText ref={ref} {...otherProps} style={sizeStyle(monoStyle([{ color }, style], late, look), size)} />;
+  const text = <DefaultText ref={ref} {...otherProps} style={sizeStyle(monoStyle([{ color }, style], late, look, inherited, isCapsText(otherProps.children)), size)} />;
   const named = namedFaceGroup(style);
   return named && named !== inherited ? <InheritedFace.Provider value={named}>{text}</InheritedFace.Provider> : text;
 });
@@ -63,12 +66,13 @@ export const TextInput = forwardRef<DefaultTextInput, TextInputProps>(function T
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
   const late = useLateFacesLoaded();
   const look = getActiveLook();
+  const size = useContext(TextSizeContext);
   return (
     <DefaultTextInput
       ref={ref}
       placeholderTextColor={Theme.inputPlaceholder}
       {...otherProps}
-      style={monoStyle([{ color }, style], late, look)}
+      style={sizeStyle(monoStyle([{ color }, style], late, look), size)}
     />
   );
 });

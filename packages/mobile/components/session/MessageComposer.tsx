@@ -25,7 +25,6 @@ import { beginScreenRecording, discardScreenRecording, pickScreenRecording, reco
 import { formatCallTime } from '@codecast/shared/contracts';
 import type { useComposerField } from '@/lib/composerField';
 import { appAlert } from '@/lib/popups';
-import { useSizedText } from '@/hooks/useTextSize';
 
 // A send with attachments and no text carries this as its content.
 export const IMAGE_ONLY_CONTENT = '[image]';
@@ -199,9 +198,6 @@ export function MessageComposer({
   const { height: winHeight } = useWindowDimensions();
   const { value: message, onChangeText, epoch, inputRef } = field;
   const [expanded, setExpanded] = useState(false);
-  // Typed text follows the phone's text size (Settings › Appearance).
-  const inlineText = useSizedText(styles.textInput.fontSize as number);
-  const expandedText = useSizedText(styles.expandedInput.fontSize as number, styles.expandedInput.lineHeight as number);
   // Content height of the inline input; the fullscreen affordance only appears
   // once the text actually wraps, so a one-liner keeps the card minimal.
   const [inputHeight, setInputHeight] = useState(0);
@@ -352,7 +348,6 @@ export function MessageComposer({
           ref={inputRef}
           style={[
             styles.textInput,
-            inlineText,
             // Grow with the text up to a third of the screen; beyond that it scrolls.
             { maxHeight: Math.round(winHeight * 0.33) },
             inputStyle,
@@ -409,7 +404,7 @@ export function MessageComposer({
             {galleryEl(true)}
             <TextInput
               key={epoch}
-              style={[styles.expandedInput, expandedText]}
+              style={styles.expandedInput}
               value={message}
               onChangeText={onChangeText}
               placeholder={placeholder}

@@ -4,6 +4,8 @@
 // line sent here is the wake, the same as web; the header's board button opens
 // everything in the role's scope. "workspace" is the root: the workspace agent.
 import { useCallback, useState } from 'react';
+import { useTextSize } from '@/hooks/useTextSize';
+import { sizeStyle } from '@/lib/textSize';
 import { ActivityIndicator, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
@@ -23,6 +25,7 @@ import { appAlert } from '@/lib/popups';
 
 export default function RoleScreen() {
   const Theme = useTheme();
+  const textSize = useTextSize();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { tree, meId, ready } = useSyncOrgTree();
@@ -59,7 +62,7 @@ export default function RoleScreen() {
         headerBackTitle: 'Org',
         headerStyle: { backgroundColor: Theme.bgAlt },
         headerTintColor: Theme.text,
-        headerTitleStyle: { fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted },
+        headerTitleStyle: sizeStyle({ fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted }, textSize),
       }}
     />
   );

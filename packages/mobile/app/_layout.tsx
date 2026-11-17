@@ -24,6 +24,7 @@ import { ensureModernFaces } from '@/lib/modernFaces';
 import { followServerUiKey, useInboxStore } from '@codecast/web/store/inboxStore';
 import { convex } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { TextSizeProvider } from '@/hooks/useTextSize';
 import { convexAuthStorageKey } from '@/lib/cachePrincipal';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useLiveActivity } from '@/hooks/useLiveActivity';
@@ -280,70 +281,72 @@ function RootLayoutNav() {
         <ConvexAuthProvider client={convex} storage={secureStorage}>
           <AuthProvider>
             <ThemeProvider value={navTheme}>
-              <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-              {STORE_SHOTS ? null : <AnalyticsIdentify />}
-              <AuthGate>
-                {/* Back is a bare chevron: the tab group has no title, so a labeled
-                    back button read "(tabs)" on every pushed screen. */}
-                <Stack screenOptions={{ headerBackButtonDisplayMode: 'minimal' }}>
-                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                  <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
-                  <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />
-                  {/* The session screen draws its own title bar, so the nav
-                      header is off from the first frame. reveal=1 is a session
-                      the new session sheet just started: pushed with no
-                      transition under the sheet, so it is already there when
-                      the sheet slides away. */}
-                  <Stack.Screen
-                    name="session/[id]"
-                    options={({ route }) => ({
-                      title: 'Conversation',
-                      headerShown: false,
-                      animation: (() => {
-                        const p = route.params as { reveal?: string } | undefined;
-                        return p?.reveal ? 'none' : 'default';
-                      })(),
-                      // A rightward drag on a conversation uncovers the inbox
-                      // behind it (components/inbox/ConversationSlideOut), so
-                      // the edge swipe is that panel's, not a pop.
-                      gestureEnabled: false,
-                    })}
-                  />
-                  <Stack.Screen name="terminal/[id]" options={{ headerShown: false }} />
-                  <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
-                  <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
-                  <Stack.Screen name="project/[id]" options={{ title: 'Project' }} />
-                  <Stack.Screen name="goal/[id]" options={{ title: 'Goal' }} />
-                  <Stack.Screen name="doc/[id]" options={{ title: 'Doc' }} />
-                  <Stack.Screen name="org/index" options={{ title: 'Org' }} />
-                  {/* A role's page is the session screen on its standing
-                      conversation, which draws its own header. */}
-                  <Stack.Screen name="org/[id]/index" options={{ headerShown: false }} />
-                  <Stack.Screen name="org/[id]/board" options={{ title: 'Board' }} />
-                  <Stack.Screen name="person/[id]" options={{ title: 'Person' }} />
-                  {/* Both draw their own header (a back chevron and a title),
-                      so the nav header would be a second one stacked on top. */}
-                  <Stack.Screen name="record" options={{ headerShown: false }} />
-                  <Stack.Screen name="calls" options={{ headerShown: false }} />
-                  <Stack.Screen name="recording/[id]" options={{ headerShown: false }} />
-                  <Stack.Screen
-                    name="call"
-                    options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'slide_from_bottom' }}
-                  />
-                </Stack>
-                <ComposeHost />
-                <UndoBarHost />
-                <PopupHost />
-                {calls ? (
-                  <OverlayErrorBoundary>
-                    <Suspense fallback={null}>
-                      <CallOverlay />
-                    </Suspense>
-                  </OverlayErrorBoundary>
-                ) : null}
-                {/* Last, so the lock sits above every host before it. */}
-                <BiometricGate />
-              </AuthGate>
+              <TextSizeProvider>
+                <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+                {STORE_SHOTS ? null : <AnalyticsIdentify />}
+                <AuthGate>
+                  {/* Back is a bare chevron: the tab group has no title, so a labeled
+                      back button read "(tabs)" on every pushed screen. */}
+                  <Stack screenOptions={{ headerBackButtonDisplayMode: 'minimal' }}>
+                    <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                    <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
+                    <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />
+                    {/* The session screen draws its own title bar, so the nav
+                        header is off from the first frame. reveal=1 is a session
+                        the new session sheet just started: pushed with no
+                        transition under the sheet, so it is already there when
+                        the sheet slides away. */}
+                    <Stack.Screen
+                      name="session/[id]"
+                      options={({ route }) => ({
+                        title: 'Conversation',
+                        headerShown: false,
+                        animation: (() => {
+                          const p = route.params as { reveal?: string } | undefined;
+                          return p?.reveal ? 'none' : 'default';
+                        })(),
+                        // A rightward drag on a conversation uncovers the inbox
+                        // behind it (components/inbox/ConversationSlideOut), so
+                        // the edge swipe is that panel's, not a pop.
+                        gestureEnabled: false,
+                      })}
+                    />
+                    <Stack.Screen name="terminal/[id]" options={{ headerShown: false }} />
+                    <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
+                    <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
+                    <Stack.Screen name="project/[id]" options={{ title: 'Project' }} />
+                    <Stack.Screen name="goal/[id]" options={{ title: 'Goal' }} />
+                    <Stack.Screen name="doc/[id]" options={{ title: 'Doc' }} />
+                    <Stack.Screen name="org/index" options={{ title: 'Org' }} />
+                    {/* A role's page is the session screen on its standing
+                        conversation, which draws its own header. */}
+                    <Stack.Screen name="org/[id]/index" options={{ headerShown: false }} />
+                    <Stack.Screen name="org/[id]/board" options={{ title: 'Board' }} />
+                    <Stack.Screen name="person/[id]" options={{ title: 'Person' }} />
+                    {/* Both draw their own header (a back chevron and a title),
+                        so the nav header would be a second one stacked on top. */}
+                    <Stack.Screen name="record" options={{ headerShown: false }} />
+                    <Stack.Screen name="calls" options={{ headerShown: false }} />
+                    <Stack.Screen name="recording/[id]" options={{ headerShown: false }} />
+                    <Stack.Screen
+                      name="call"
+                      options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'slide_from_bottom' }}
+                    />
+                  </Stack>
+                  <ComposeHost />
+                  <UndoBarHost />
+                  <PopupHost />
+                  {calls ? (
+                    <OverlayErrorBoundary>
+                      <Suspense fallback={null}>
+                        <CallOverlay />
+                      </Suspense>
+                    </OverlayErrorBoundary>
+                  ) : null}
+                  {/* Last, so the lock sits above every host before it. */}
+                  <BiometricGate />
+                </AuthGate>
+              </TextSizeProvider>
             </ThemeProvider>
           </AuthProvider>
         </ConvexAuthProvider>

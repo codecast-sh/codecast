@@ -4,6 +4,8 @@
 // roles nest the same way. A role opens its page, which is the conversation
 // with the agent that holds the seat; a session opens the session.
 import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
+import { useTextSize } from '@/hooks/useTextSize';
+import { sizeStyle } from '@/lib/textSize';
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
@@ -53,6 +55,7 @@ function Fold({ collapsed, hidden, onPress }: { collapsed: boolean; hidden: numb
 
 export default function OrgScreen() {
   const Theme = useTheme();
+  const textSize = useTextSize();
   const router = useRouter();
   const { tree, ready, error, missing, retry } = useSyncOrgTree();
   const now = useCoarseNow(30_000);
@@ -149,7 +152,7 @@ export default function OrgScreen() {
           headerBackTitle: 'Back',
           headerStyle: { backgroundColor: Theme.bgAlt },
           headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 16, fontFamily: Mono.semiBold, color: Theme.text },
+          headerTitleStyle: sizeStyle({ fontSize: 16, fontFamily: Mono.semiBold, color: Theme.text }, textSize),
         }}
       />
       {!tree ? (

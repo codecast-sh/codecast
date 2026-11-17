@@ -3,6 +3,8 @@
 // label, the loading / not-found state, and the sessions block. Both screens
 // read the store and draw these; nothing here fetches.
 import { Children, cloneElement, isValidElement, useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import { useTextSize } from '@/hooks/useTextSize';
+import { sizeStyle } from '@/lib/textSize';
 import { ActivityIndicator, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -34,6 +36,7 @@ export function ObjectHeader({ type, shortId, refId, link, title, menu }: {
   menu?: SheetItem[];
 }) {
   const Theme = useTheme();
+  const textSize = useTextSize();
   const ref = refId ?? shortId;
   const url = link ?? (ref && type ? buildEntityUrl(type, ref) : null);
   const items: SheetItem[] = [
@@ -47,7 +50,7 @@ export function ObjectHeader({ type, shortId, refId, link, title, menu }: {
         title: shortId ?? title,
         headerStyle: { backgroundColor: Theme.bgAlt },
         headerTintColor: Theme.text,
-        headerTitleStyle: { fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted },
+        headerTitleStyle: sizeStyle({ fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted }, textSize),
         headerRight: () => (
           <RNView style={styles.headerButtons}>
             {url && (
