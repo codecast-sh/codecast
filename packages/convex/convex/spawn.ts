@@ -7,13 +7,14 @@ import { verifyApiToken } from "./apiTokens";
 import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { inheritedChildPrivacy, resolveCreationPrivacy } from "./privacy";
 import { admitSubagent, startSpawnedSession, type QueuedStart } from "./subagentFleet";
-import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
+import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, isHostedAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { listTeamMachines, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 import { listSessionOwnerIds } from "./sessionOwners";
 import { roleOfConversation } from "./lib/actor";
+import { actingPersonOf } from "./lib/userSend";
 import { canAccessTask } from "./lib/access";
 import { capsFor, countersFor, roleStartsOnItsOwn, roleTokensToday } from "./lib/orgCaps";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
@@ -259,6 +260,14 @@ export async function spawnSessionCore(
   // with the prompt once the host has the checkout ready.
   if (opts.cloudPark) return { conversationId, shortId };
 
+  // A session spawning through the CLI acts under the account it runs on; its
+  // brief is from the person whose send started the turn it is working on.
+  // Only a session the caller runs speaks for its turn, and a hosted child
+  // takes input from its runner alone.
+  const spawnerRow = opts.spawnerConversationId ? await ctx.db.get(opts.spawnerConversationId) : null;
+  const briefFrom = spawnerRow && spawnerRow.user_id === userId && !isHostedAgentType(agentType)
+    ? actingPersonOf(spawnerRow, userId)
+    : userId;
   const start: QueuedStart = {
     agentType: fromConvexAgentType(agentType),
     projectPath: opts.projectPath || opts.gitRoot,
@@ -275,6 +284,7 @@ export async function spawnSessionCore(
     // (runnerUserId === userId); a team agent box target keeps a plain start.
     callerUserId: String(userId),
     prompt: opts.prompt,
+    ...(briefFrom !== userId ? { briefFromUserId: String(briefFrom) } : {}),
   };
   // A worker under a parent counts against the fleet's limits and may wait
   // for a slot (subagentFleet.ts); every other spawn starts now.

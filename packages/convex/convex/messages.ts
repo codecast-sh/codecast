@@ -27,7 +27,7 @@ import { computeWorkspaceKey } from "./lib/access";
 import { redactSecrets } from "./redact";
 import { storeHostedReplay } from "./hostedReplay";
 import { canSendProductMessage, markPendingDelivered } from "./pendingMessages";
-import { queuedBy, scheduleUserSend, turnOrigin } from "./lib/userSend";
+import { queuedBy, scheduleUserSend, turnOpener, turnOpenerPatch, type TurnOpener } from "./lib/userSend";
 import { recordUsageDays, type UsageTurn } from "./lib/usageDaily";
 import { validateCommandId } from "./localFirstCommands";
 import {
@@ -1196,7 +1196,7 @@ export const addMessage = mutation({
     if (matchingPending) await settleEchoedPending(ctx, matchingPending, messageId);
     const sendMsg = { _id: messageId, role: args.role, content: contentToStore, tool_results: safeToolResults, from_user_id: fromUserIdToStore, queued: queuedBy(matchingPending) };
     await scheduleUserSend(ctx, conversation, sendMsg, msgTimestamp);
-    const origin = turnOrigin(conversation, sendMsg);
+    const opener = turnOpener(conversation, sendMsg);
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
     await bumpSessionTallies(ctx, conversation, undefined, { tool_results: safeToolResults });
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
@@ -1278,7 +1278,7 @@ export const addMessage = mutation({
       await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind, args.conversation_id);
     }
     if (safetyPatch) Object.assign(convPatch, safetyPatch);
-    if (origin && origin !== conversation.last_turn_origin) convPatch.last_turn_origin = origin;
+    Object.assign(convPatch, turnOpenerPatch(conversation, opener));
     if (args.role === "user" && contentToStore?.trim()) {
       convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
@@ -1710,8 +1710,8 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
 
   const ids: Id<"messages">[] = [];
   let insertedCount = 0;
-  // The newest turn opener in this batch (conversations.last_turn_origin).
-  let lastTurnOrigin: "person" | "machine" | null = null;
+  // The newest turn opener in this batch (conversations.last_turn_origin/by).
+  let lastTurnOpener: TurnOpener | null = null;
   // Batch positions this call inserted (vs patched an existing uuid), for
   // the usage rollup: a resync must never count a turn twice.
   const insertedIndexes = new Set<number>();
@@ -1898,7 +1898,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
     insertedIndexes.add(batchIndex);
     const sendMsg = { _id: messageId, role: msg.role, content: contentToStore, tool_results: safeToolResults, from_user_id: matchingPending?.from_user_id, queued: queuedBy(matchingPending) };
     await scheduleUserSend(ctx, conversation, sendMsg, msgTimestamp);
-    lastTurnOrigin = turnOrigin(conversation, sendMsg) ?? lastTurnOrigin;
+    lastTurnOpener = turnOpener(conversation, sendMsg) ?? lastTurnOpener;
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
     await bumpSessionTallies(ctx, conversation, undefined, { tool_results: safeToolResults });
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
@@ -2002,7 +2002,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
       await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind, args.conversation_id);
     }
     if (safetyPatch) Object.assign(convPatch, safetyPatch);
-    if (lastTurnOrigin && lastTurnOrigin !== conversation.last_turn_origin) convPatch.last_turn_origin = lastTurnOrigin;
+    Object.assign(convPatch, turnOpenerPatch(conversation, lastTurnOpener));
     const userMsgs = args.messages.filter((m) => m.role === "user");
     if (userMsgs.length > 0) {
       const lastUserMsg = userMsgs[userMsgs.length - 1];

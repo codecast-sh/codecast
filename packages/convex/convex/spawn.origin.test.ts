@@ -120,3 +120,27 @@ describe("a handoff starts on the source's machine", () => {
     expect(start?.target_device_id).toBe("source-box");
   });
 });
+
+describe("who a session's spawn brief is from", () => {
+  const TEAMMATE = "teammate";
+  const briefSender = async (spawner: Record<string, unknown>) => {
+    const db = makeFakeDb({
+      users: [{ _id: OWNER }, { _id: TEAMMATE }],
+      conversations: [{ ...PARENT, ...spawner }, FOREIGN],
+    });
+    const ctx = { db, auth: { getUserIdentity: async () => ({ subject: `${OWNER}|session` }) } };
+    await (createSessionFromCli as any)._handler(ctx, { agent_type: "codex", spawner_session: spawner._id ?? PARENT.session_id, prompt: "Investigate this for me" });
+    const brief = db._inserted.find((entry: any) => entry.table === "pending_messages");
+    return brief?.doc?.from_user_id ?? (await db.query("pending_messages").collect())[0]?.from_user_id;
+  };
+
+  test("a teammate's send started the spawner's turn: the brief is theirs, not the runner's", async () => {
+    expect(await briefSender({ last_turn_origin: "person", last_turn_by: TEAMMATE })).toBe(TEAMMATE);
+  });
+
+  test("the runner's own turn or a machine turn keeps the caller", async () => {
+    expect(await briefSender({ last_turn_origin: "person", last_turn_by: OWNER })).toBe(OWNER);
+    expect(await briefSender({ last_turn_origin: "machine", last_turn_by: TEAMMATE })).toBe(OWNER);
+    expect(await briefSender({})).toBe(OWNER);
+  });
+});

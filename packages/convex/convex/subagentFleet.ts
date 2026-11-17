@@ -49,6 +49,9 @@ export interface QueuedStart {
   definition?: AgentDefinitionSpec;
   callerUserId?: string;
   prompt?: string;
+  // Who the brief is from, when that is not the caller: the person whose send
+  // started the spawning session's turn (actingPersonOf).
+  briefFromUserId?: string;
   createdAt: number;
 }
 
@@ -77,7 +80,7 @@ export async function startSpawnedSession(ctx: any, runnerUserId: Id<"users">, c
   const prompt = (start.prompt ?? "").trim();
   if (prompt) {
     const conversation = await ctx.db.get(conversationId);
-    const author = start.callerUserId ? (start.callerUserId as Id<"users">) : runnerUserId;
+    const author = (start.briefFromUserId ?? start.callerUserId ?? runnerUserId) as Id<"users">;
     await enqueuePendingMessage(ctx, conversation, author, { content: prompt });
   }
 }

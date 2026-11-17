@@ -1088,6 +1088,29 @@ describe("machine prompt delivery safety", () => {
       expect(f.statuses).toContainEqual(expect.objectContaining({ messageId: "update", status: "delivered" }));
     });
 
+    // A spawn's delivery is already running when the start carries its brief,
+    // and tries the cloud rail on every tick of its wait. That rail failing for
+    // a local conversation must not erase the carry's echo record, or the
+    // brief's transcript turn never carries its row id and the server cannot
+    // name its sender.
+    test.each([true, false])("leaves the launch's echo record for the transcript turn to pair (session linked: %s)", async cached => {
+      const f = fixture("tmux", cached);
+      f.state.menu = null;
+      const ledger = f.deps.deliveryEchoLedger();
+      f.deps.cloudAgents.deliver = async () => {
+        if (!f.launchPromptCarries.size) {
+          carry(f, { taken: true });
+          ledger.expect({ messageId: "update", conversationId: "conv", payload: "the brief" });
+        }
+        return null;
+      };
+      await expect(f.deliver("the brief")).resolves.toBe(true);
+      expect(f.bodies).toEqual([]);
+      // The ledger keeps the real clock, not the fixture's.
+      const stamped = ledger.stamp("conv", [{ messageUuid: "u1", role: "human", content: "the brief", timestamp: Date.now() + 1000 }]);
+      expect(stamped[0].deliveryIds).toEqual(["update"]);
+    });
+
     test("keeps the carry when the delivered mark fails, so the retry settles it instead of pasting", async () => {
       const f = fixture("tmux", true);
       f.state.menu = null;

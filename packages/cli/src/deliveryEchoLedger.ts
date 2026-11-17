@@ -208,6 +208,17 @@ export class DeliveryEchoLedger {
   }
 
   /**
+   * One hand-over failed before the agent could have taken it: drop the
+   * record only if no other hand-over of the message was recorded too. A
+   * failure on one rail says nothing of another: a spawn's delivery tries the
+   * cloud rail on every tick while it waits for the start, and its forget
+   * erased the launch command's record of the brief, which then never paired.
+   */
+  withdraw(messageId: string): void {
+    this.db.query("DELETE FROM deliveries WHERE messageId = ? AND echoKey IS NULL AND lastSubmittedAt IS NULL").run(messageId);
+  }
+
+  /**
    * The transcript turns with the deliveries they echo stamped on: a turn seen
    * before keeps its pairing, a new user turn pairs with the open deliveries it
    * echoes. Returns new objects only for turns that carry ids.

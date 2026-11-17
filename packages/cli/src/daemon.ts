@@ -27551,11 +27551,11 @@ async function deliverMessageIntoSession(
     try {
       delivered = await cloudAgents.deliver(conversationId, content);
     } catch (err) {
-      deliveryEchoLedger().forget(messageId);
+      deliveryEchoLedger().withdraw(messageId);
       throw err;
     }
     if (!delivered) {
-      deliveryEchoLedger().forget(messageId);
+      deliveryEchoLedger().withdraw(messageId);
       return tryAppServerDelivery();
     }
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
@@ -27872,6 +27872,7 @@ async function deliverMessageIntoSession(
       throw new TerminalHoldError(termLabel);
     } else {
       logDelivery(`Trying ${termLabel} injection for tty=${live.proc.tty}`);
+      let handedOver = false;
       try {
         // Mark "injected" best-effort (non-blocking) BEFORE the terminal paste — same ack-race
         // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
@@ -27879,13 +27880,14 @@ async function deliverMessageIntoSession(
         markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
         // Recorded before the keystrokes: the agent can echo it before they return.
         deliveryEchoLedger().expect({ messageId, conversationId, payload: content });
+        handedOver = true;
         await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
           agentType: detectedType,
         });
         logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
         return true;
       } catch (err) {
-        deliveryEchoLedger().forget(messageId);
+        if (handedOver) deliveryEchoLedger().withdraw(messageId);
         if (err instanceof PendingDeliveryHeldError || err instanceof TerminalHoldError) throw err;
         if (isDeliveryVerdict(err)) throw err;
         logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);

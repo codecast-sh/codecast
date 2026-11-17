@@ -194,6 +194,33 @@ describe("pairing a turn with the delivery it echoes", () => {
     expect(ids(l.stamp("c", [user("go", "u1")]))).toEqual([null]);
   });
 
+  test("a failed hand-over withdraws its own record, and only while no other hand-over shares it", () => {
+    const l = ledger();
+    l.expect({ messageId: "pm1", conversationId: "c", payload: "go", submittedAt: at });
+    l.withdraw("pm1");
+    expect(ids(l.stamp("c", [user("go", "u1")]))).toEqual([null]);
+    l.expect({ messageId: "pm2", conversationId: "c", payload: "go on", submittedAt: at });
+    l.expect({ messageId: "pm2", conversationId: "c", payload: "go on", submittedAt: at + 10 });
+    l.withdraw("pm2");
+    expect(ids(l.stamp("c", [user("go on", "u2")]))).toEqual([["pm2"]]);
+  });
+
+  // A spawn's brief rides the launch command while a delivery attempt for the
+  // same row waits for the start and tries the cloud rail on every tick: that
+  // try failing, whether it ran before or after the launch recorded the brief,
+  // must leave the brief to pair.
+  test.each([["before", 0], ["after", 1]] as const)("a cloud try that fails %s the launch prompt's record leaves it to pair", (_order, launchFirst) => {
+    const l = ledger();
+    const brief = "# Investigate the rule prompts\n\nRead the incidents and report back.";
+    const picked = pickLaunchPrompt([{ _id: "pm1", conversation_id: "c", content: brief, created_at: at }], "c")!;
+    const launch = () => l.expect({ messageId: "pm1", conversationId: "c", payload: picked.text, submittedAt: at });
+    if (launchFirst) launch();
+    l.expect({ messageId: "pm1", conversationId: "c", payload: brief, submittedAt: at });
+    if (!launchFirst) launch();
+    l.withdraw("pm1");
+    expect(ids(l.stamp("c", [user(brief, "u1")]))).toEqual([["pm1"]]);
+  });
+
   test("the pairing survives a daemon restart", () => {
     const dir = mkdtempSync(join(tmpdir(), "echo-ledger-"));
     dirs.push(dir);

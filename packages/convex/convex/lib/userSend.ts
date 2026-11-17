@@ -168,16 +168,38 @@ export function classifyUserSend(conversation: Doc<"conversations">, msg: SendMe
   return words === null ? null : { user_id: msg.from_user_id ?? conversation.user_id, words };
 }
 
-// Who started the turn a user-role message opens (conversations.last_turn_origin):
-// "person" for a person's own send, "machine" for a program's send or a
-// machine-delivered message (a wake, a session message, a scheduled task).
-// Null for what opens no turn of its own (tool results, noise): the stamp keeps
-// its previous value.
-export function turnOrigin(conversation: Doc<"conversations">, msg: SendMessage): "person" | "machine" | null {
+// Who started the turn a user-role message opens (conversations.last_turn_origin
+// and last_turn_by): a person's own send names that person, a program's send or
+// a machine-delivered message (a wake, a session message, a scheduled task) is
+// "machine" with nobody. Null for what opens no turn of its own (tool results,
+// noise): the stamp keeps its previous value.
+export type TurnOpener = { origin: "person"; by: Id<"users"> } | { origin: "machine" };
+
+export function turnOpener(conversation: Doc<"conversations">, msg: SendMessage): TurnOpener | null {
   if (msg.role !== "user" || (msg.tool_results && msg.tool_results.length > 0)) return null;
-  if (classifyUserSend(conversation, msg)) return "person";
-  if (msg.queued === "program" || isMachineDeliveredMessage(msg.content)) return "machine";
+  const send = classifyUserSend(conversation, msg);
+  if (send) return { origin: "person", by: send.user_id };
+  if (msg.queued === "program" || isMachineDeliveredMessage(msg.content)) return { origin: "machine" };
   return null;
+}
+
+// The conversation fields a turn opener changes; empty when it changes none.
+export function turnOpenerPatch(conversation: Doc<"conversations">, opener: TurnOpener | null): Partial<Doc<"conversations">> {
+  if (!opener) return {};
+  const by = opener.origin === "person" ? opener.by : undefined;
+  const patch: Partial<Doc<"conversations">> = {};
+  if (opener.origin !== conversation.last_turn_origin) patch.last_turn_origin = opener.origin;
+  if (String(by ?? "") !== String(conversation.last_turn_by ?? "")) patch.last_turn_by = by;
+  return patch;
+}
+
+// Who a session's own action speaks for when the session acts through the CLI
+// (its brief to a session it spawns): the person whose send started the turn
+// it is working on, else the account it runs under. A session on a teammate's
+// shared machine runs under that teammate's account, so without this every
+// brief it writes for the person typing to it would read as the teammate's.
+export function actingPersonOf(conversation: Pick<Doc<"conversations">, "last_turn_origin" | "last_turn_by"> | null | undefined, fallback: Id<"users">): Id<"users"> {
+  return conversation?.last_turn_origin === "person" && conversation.last_turn_by ? conversation.last_turn_by : fallback;
 }
 
 // Team attribution for the per-day counters (sends here, tokens in
