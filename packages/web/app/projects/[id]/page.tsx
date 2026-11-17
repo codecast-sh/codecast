@@ -134,7 +134,7 @@ function ProjectDetailContent() {
   // at once. The per view query only fills what the store has not cached yet:
   // its snapshot moves when the dispatch lands and the query re-runs, so the
   // store's word wins field by field.
-  const storeProject = useInboxStore((s) => (projectRef ? (s.projects as any)[projectRef] ?? Object.values(s.projects as Record<string, any>).find((p) => p.short_id === projectRef) : undefined));
+  const storeProject = useInboxStore((s) => (projectRef ? (s.projects as any)[projectRef] ?? Object.values(s.projects as Record<string, any>).find((p) => p.short_id === projectRef || p.client_key === projectRef) : undefined));
   const projectId: string = storeProject?._id ?? projectRef;
   const { data: serverProject } = useQueryNoThrow(api.projects.webGet, isConvexId(projectId) ? { id: projectId } : "skip");
   const project = useMemo(

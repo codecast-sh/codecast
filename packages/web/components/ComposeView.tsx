@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useSyncUserSkills, useUserSkills } from "../hooks/useSyncUserSkills";
-import { useInboxStore, isConvexId, resolveComposeProjectPath, bucketProjectPath, newProjectKeyOf, projectAddressOnce } from "../store/inboxStore";
+import { useInboxStore, isConvexId, resolveComposeProjectPath, bucketProjectPath, newProjectStartedBy, newProjectHref } from "../store/inboxStore";
 import { savedDefaultProject } from "../lib/machinePicker";
 import { NewSessionFoot, NewSessionView } from "./conversation/sessionControls";
 import { MessageInput } from "./MessageInput";
@@ -472,7 +472,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     // awaits awaitConvexId(sessionId), so the in-flight create is already tracked
     // when the send resolves the stub→real id. Idempotent (once-guarded in store).
     // Started as a new project: its key, so the way on goes to the project.
-    const projectKey = useInboxStore.getState().sessions[sessionId]?._newProject ? newProjectKeyOf(sessionId) : null;
+    const projectKey = newProjectStartedBy(sessionId);
     sentRef.current = true;
     const ready = materializeRef.current?.();
     // A hosted create carries the first message, so a refused one marks it.
@@ -504,7 +504,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       // A new project opens on its page; started without opening, it says so
       // with the way there.
       if (projectKey) {
-        const go = () => void projectAddressOnce(projectKey).then((addr) => { if (addr) router.push(`/projects/${addr}`); });
+        const go = () => router.push(newProjectHref(projectKey));
         if (open) go();
         else {
           const title = (useInboxStore.getState().projects as Record<string, { title?: string }>)[projectKey]?.title;
@@ -529,10 +529,18 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       // Cmd+Enter → send & open: hide the popup now, then switch Codecast onto
       // the new conversation once its real id resolves.
       bridge("paletteHide")?.();
+      if (projectKey) {
+        bridge("paletteNavigate")?.(newProjectHref(projectKey));
+        return;
+      }
       void resolveConvexId().then((convexId) => {
         if (submit) submit({ conversationId: convexId, navigate: true });
         else if (convexId) bridge("paletteNavigate")?.(`/conversation/${convexId}`);
       });
+      return;
+    }
+    if (projectKey) {
+      router.push(newProjectHref(projectKey));
       return;
     }
     void resolveConvexId().then((convexId) => {
