@@ -101,6 +101,7 @@ export {
   type ParsedRoomKey,
 } from "@codecast/shared/contracts";
 import { featureVendorRefusal } from "./lib/vendorGuard";
+import { canAccessConversation } from "./lib/access";
 
 /** The lease is the truth: a row older than the stale window is not in the
  *  room, whatever else it says. One filter for every reader (occupancy,
@@ -214,9 +215,16 @@ export async function recRoutingTeam(
 export async function canReadRoomlessCall(
   ctx: any,
   userId: Id<"users">,
-  t: Pick<Doc<"transcripts">, "room_key" | "started_by" | "team_id" | "participants" | "rec_shared" | "recorded_people">,
+  t: Pick<Doc<"transcripts">, "room_key" | "started_by" | "team_id" | "participants" | "rec_shared" | "recorded_people" | "screen_recording">,
 ): Promise<boolean> {
   if (String(t.started_by) === String(userId)) return true;
+  // A screen recording is part of the session it was sent to, like an image
+  // in a message there: the session's readers read it, and the team's call
+  // sharing never reaches it.
+  if (t.screen_recording) {
+    const conv = t.screen_recording.conversation_id ? await ctx.db.get(t.screen_recording.conversation_id) : null;
+    return !!conv && (await canAccessConversation(ctx, userId, conv));
+  }
   const heard =
     parseRoomKey(t.room_key)?.kind === "meet" &&
     ((t.participants ?? []).some((p) => String(p.id) === String(userId)) ||

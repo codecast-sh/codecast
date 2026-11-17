@@ -83,6 +83,7 @@ export * from "./callGuests";
 // The row a finished huddle leaves in its chat room or session: one formatter
 // for the digest markdown and the <huddle-summary> wire tag, one parser back.
 export * from "./huddleDigest";
+export * from "./screenRecording";
 export * from "./convexErrors";
 // Without these two lines every consumer reinvents the capability vocabulary:
 // convex copied the constants, the web store reached in by relative path, and
@@ -144,3 +145,5 @@ export { SIDE_ANSWER_EXPIRE_MS, explainAskFailure } from "./sessionAsk";
 export * from "./systemResources";
 export * from "./resourceOffloadPolicy";
 export * from "./testArtifacts";
+// Codecast for outside agents (MCP): the address, the read tools, what a connection can do.
+export * from "./agentAccess";

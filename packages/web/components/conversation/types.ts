@@ -3,6 +3,7 @@ import type { ThreadStateFields, DecisionAnswerMessage, SessionEscalationMessage
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { SentFileData } from "@codecast/shared/files";
 import type { ChatWakePrompt, HuddleSummaryTag } from "../sessionMessage";
+import type { ParsedScreenRecording } from "@codecast/shared/contracts";
 import type { ExternalEventRecord } from "../../lib/externalEventRecord";
 import type { ContextRecoveryPrompt, SessionHandoffPrompt } from "../../lib/sessionHandoff";
 
@@ -419,6 +420,8 @@ export type UserMessageKind =
   // from="Name">): a normal user bubble attributed to that person.
   | { kind: 'direct_user'; from: string; body: string }
   | { kind: 'huddle_summary'; huddle: HuddleSummaryTag }
+  // A screen recording the person sent: the player over its timed words.
+  | { kind: 'screen_recording'; recording: ParsedScreenRecording }
   | { kind: 'chat_wake'; wake: ChatWakePrompt }
   // The human's answer to a `cast decide` question (store answerDecision).
   | { kind: 'decision_answer'; decision: DecisionAnswerMessage }

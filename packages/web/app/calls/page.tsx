@@ -165,7 +165,7 @@ function CallListRow({ call, selected, place, below }: { call: any; selected: bo
   // (`filmed` comes off the record, so the list reads no recordings), and
   // one being filmed right now says REC by its clock, from the room's flag
   // the stage reads.
-  const filmed = !recording && !!call.filmed;
+  const filmed = (!recording || !!call.screen) && !!call.filmed;
   const filmingNow = useRoomRecordingOn(live && !recording ? call.room_key : null);
   const people: any[] = call.participants || [];
   // Nobody spoke and nothing was filmed: only typed lines keep it listed.
@@ -375,6 +375,10 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   // A recording has no room: nobody can join it, nobody else can see it, and
   // the room chat those affordances open would have no second person in it.
   const recording = isRecRoomKey(call?.room_key);
+  // A recording with a picture: a screen recording somebody sent to a
+  // session (convex screenRecordings). Its video is a call file like a
+  // huddle's, so the player and the line seeks are the huddle's.
+  const filmable = !recording || !!call?.screen;
   // No room behind it at all (a recording, or a meeting a bot attended on
   // another platform): nobody to join. A meeting still has a chat (its own,
   // relayed by the bot, and its agents' replies) and a video (the bot's, once
@@ -413,7 +417,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   // the moment Record is pressed, so it turns on reactively), and so does the
   // room's live flag. A huddle nobody filmed never subscribes, and a live one
   // would otherwise re-run the question on every line said.
-  const callRecs = useCallRecordings(!recording && call && (call.filmed || roomRecording) ? String(call._id) : null);
+  const callRecs = useCallRecordings(filmable && call && (call.filmed || roomRecording) ? String(call._id) : null);
   const videoFiles = useMemo(() => (callRecs?.recordings ?? []).map(toVideoFile), [callRecs]);
   const hasVideo = useMemo(() => playableFiles(videoFiles).length > 0, [videoFiles]);
   // A regulated team's audit log gets one entry when this call's recording is opened here (lib/accessLogOpen).
@@ -824,12 +828,12 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
           stacked on a laptop, side by side on a wide screen when there is a
           picture to stand beside the words. */}
       <div className="call-media">
-      <div className="call-media-body" data-side={!recording && (hasVideo || videoExpected) ? "" : undefined}>
+      <div className="call-media-body" data-side={filmable && (hasVideo || videoExpected) ? "" : undefined}>
       <div className="call-media-side">
       {/* The huddle's video, in step with the thread, or what to know about
           it while there is none to play: being filmed, saving, failed,
           deleted. */}
-      {!recording && (hasVideo || videoNotice || recordingDeleted) && callRecs && (
+      {filmable && (hasVideo || videoNotice || recordingDeleted) && callRecs && (
         <div className="shrink-0 space-y-2 px-6 pt-4">
           {videoNotice && <CallVideoNoticeLine notice={videoNotice} quiet={!live} onDelete={() => removeRun(videoNotice.run)} />}
           {hasVideo && (

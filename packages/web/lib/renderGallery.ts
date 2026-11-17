@@ -19,6 +19,8 @@ import {
   formatDecisionAnswer,
   formatVaultReady,
   formatHuddleSummaryTag,
+  formatScreenRecordingMessage,
+  screenRecordingBrief,
   formatMachineSwitchNotice,
   formatScheduledTask,
   formatSessionMessage,
@@ -28,6 +30,9 @@ import {
   THROTTLE_BANNER_PREFIX,
   CLIENT_ERROR_BANNER_PREFIX,
   CLOUD_AGENT_ACTION_SUBTYPE,
+  MID_WORK_REVIVE_MESSAGE,
+  MOVE_INTERRUPT_MESSAGE,
+  wrapMentionContext,
 } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { formatJointMessage } from "@codecast/shared/contracts/jointMessage";
@@ -396,6 +401,7 @@ export function renderGalleryMessages(now: number): Row[] {
 
   section("People and sessions");
   user("Plain words a person typed, with an id ct-42 and a link https://codecast.sh.");
+  user(`Slot @[iOS perf jx7bm3n]${wrapMentionContext("### Session: iOS perf\n`jx7bm3n` | 12 messages | active\n\n> `cast read jx7bm3n` for full conversation transcript")} under the new lead.`);
   user(formatUserMessage("Sarah Chen", "Sent from the dashboard by a teammate."));
   user(formatJointMessage([{ from: "Sarah Chen", body: "Ship it." }, { from: "Maya Ortiz", body: "After the e2e passes." }]));
   user(formatSessionMessage("jx7bm3n", "Parser cost on open is **under 2ms**; no action needed.", { name: "iOS perf" }));
@@ -411,7 +417,23 @@ export function renderGalleryMessages(now: number): Row[] {
     actionItems: ["Alice writes the flag", "Bob runs the e2e"],
     summaryStatus: "done",
   } as any, { callRef: "cl-42" }));
+  // A screen recording as the person sends it, and as the agent receives it
+  // (the daemon's copy: timed lines with a frame each).
+  user(formatScreenRecordingMessage({ call: "cl-43", durationMs: 38_000 }, "The send button does nothing on the phone. Can you fix it?"));
+  user(screenRecordingBrief({
+    ref: { call: "cl-44", durationMs: 21_000 },
+    caption: "This title gets cut off.",
+    segments: [
+      { t0: 1200, t1: 5200, text: "So this is the session screen." },
+      { t0: 6100, t1: 11_800, text: "And this title here is cut off at the end." },
+      { t0: 12_500, t1: 19_000, text: "It should wrap onto a second line instead." },
+    ],
+    frames: new Map([[0, "/tmp/frame-1.png"], [1, "/tmp/frame-2.png"]]),
+    words: "done",
+  }));
   user(HANDOFF);
+  user(MID_WORK_REVIVE_MESSAGE);
+  user(MOVE_INTERRUPT_MESSAGE);
   user(composeContextRecoveryPrompt({
     source: { short_id: "jx7bm3n", title: "iOS app performance tuning", agent_type: "claude_code", message_count: 2140 },
     brief: "## Goal\n\nStartup under **1s** to the first inbox row.\n\n## Next steps\n\n1. Re-measure after the next OTA.",

@@ -74,6 +74,7 @@ import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { appAlert, showActionSheet, type SheetItem } from '@/lib/popups';
 import { ComposeButton } from '@/components/session/ComposeButton';
+import { ScreenRecordingCard } from '@/components/ScreenRecordingCard';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
 import { sessionLanded } from '@/lib/compose';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
@@ -2549,7 +2550,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     return () => task.cancel();
   }, [autoFocus]);
   const [error, setError] = useState<string | null>(null);
-  const images = useComposerImages(setMessage);
+  const images = useComposerImages(setMessage, { recordingsTo: !hosted && isConvexId(String(conversationId)) ? String(conversationId) : undefined });
   const { selectedImages } = images;
   // The session row's live fields (synced with the inbox): is_connected is
   // the heartbeat verdict, agent_status what the agent is doing now.
@@ -2608,13 +2609,12 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     ).trim();
     // Answers staged on a proposal card ride this send (lib/reviewActions), as on the web.
     const staged = (useInboxStore.getState().reviewComments[conversationId] ?? []).length > 0;
-    if (!trimmedMessage && selectedImages.length === 0 && !staged) return;
+    if (!trimmedMessage && !images.attached && !staged) return;
     if (allowanceOut) return;
     setError(null);
-    suggestion.settleSend(trimmedMessage);
 
     const sendImages = images.optimisticImages();
-    const content = attachReviewToMessage(conversationId, trimmedMessage) || IMAGE_ONLY_CONTENT;
+    const content = images.withRecording(attachReviewToMessage(conversationId, trimmedMessage)) || IMAGE_ONLY_CONTENT;
 
     // The bubble lands on the next frame, in a commit of its own: written
     // inside the press, it shares the composer's commit, which Reanimated
@@ -2622,6 +2622,8 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     requestAnimationFrame(() => {
       try {
         dispatchComposerSend(conversationId, content, sendImages);
+        // Reported only once the send is committed: a refused one is retried.
+        suggestion.settleSend(trimmedMessage);
       } catch (error) {
         captureError(error instanceof Error ? error : new Error(String(error)));
         setError(error instanceof Error ? error.message : 'Could not save your message. Please try again.');
@@ -2645,7 +2647,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
   };
 
   const stagedAnswers = useInboxStore((s) => (s.reviewComments[conversationId]?.length ?? 0) > 0);
-  const canSend = (!!message.trim() || selectedImages.length > 0 || stagedAnswers) && !allowanceOut;
+  const canSend = (!!message.trim() || images.attached || stagedAnswers) && !allowanceOut;
   const agentStatus = managedSession?.managed ? managedSession.agent_status : undefined;
   const agentWorking = !!agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus);
   // While a turn works and the box is empty, send becomes Stop. A hosted
@@ -2711,13 +2713,10 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
         onDismissError={() => setError(null)}
         suggestion={suggestion.text === null ? null : {
           text: suggestion.text,
-          index: suggestion.index,
-          count: suggestion.count,
           onUse: () => {
             const t = suggestion.accept();
             if (t !== null) { setMessage(t); inputRef.current?.focus(); }
           },
-          onNext: () => { suggestion.cycle(1); },
         }}
         above={hosted ? null : <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />}
       />
@@ -4407,7 +4406,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const joint = kind?.kind === 'direct_user' ? parseJointMessage(item.content) : null;
     const bubbleBody = kind?.kind === 'direct_user'
       ? (joint ? joint.map((p) => `**${p.from}:** ${p.body}`).join('\n\n') : kind.body)
-      : kind?.kind === 'decision_answer' ? (kind.decision.question ? `> ${kind.decision.question}\n\n` : '') + kind.decision.answer : null;
+      : kind?.kind === 'decision_answer' ? (kind.decision.question ? `> ${kind.decision.question}\n\n` : '') + kind.decision.answer
+      : kind?.kind === 'screen_recording' ? kind.recording.caption : null;
     const sender = kind?.kind === 'direct_user' ? kind.from : undefined;
     const isSearchDimmed = searchMatchIds && !searchMatchIds.has(item._id);
     const isCurrentSearchMatch = searchMatchList.length > 0 && searchMatchList[currentMatchIndex] === item._id;
@@ -4460,6 +4460,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           bookmarkedSet={bookmarkedSet}
           toolRun={run ? { run, expanded: openRuns.has(run.head) || (!!highlightedMessageId && run.members.includes(highlightedMessageId)), justOpened: Date.now() - (runOpenedAt.current.get(run.head) ?? 0) < RUN_FADE_WINDOW_MS, onToggle: () => toggleRun(run.head) } : undefined}
       />
+        {kind?.kind === 'screen_recording' ? <ScreenRecordingCard recording={kind.recording} /> : null}
         {hosted && item.role === 'assistant' && originalIndex === allMessages.length - 1 ? (
           <RNView style={{ paddingHorizontal: 16 }}>
             <ReplyChips

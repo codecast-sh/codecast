@@ -1,6 +1,6 @@
 import { parseGoalMessage } from "@codecast/shared/contracts/sessionGoal";
 import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage, isInterruptNotice } from "../../lib/conversationProcessor";
-import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload, parseWorkflowHarnessFrame, sessionMessageIntentOf } from "@codecast/shared/contracts";
+import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload, parseScreenRecordingMessage, parseWorkflowHarnessFrame, sessionMessageIntentOf } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, parseVaultReady, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
@@ -382,6 +382,10 @@ export function classifyUserMessage(
     const escalation = parseSessionEscalation(tNoReminders);
     if (escalation) return { kind: 'session_escalation', escalation };
   }
+  // A screen recording the person sent (shared/contracts/screenRecording):
+  // their message as they wrote it, or the agent's copy with its lines.
+  const screen = parseScreenRecordingMessage(tNoReminders);
+  if (screen) return { kind: 'screen_recording', recording: screen };
   const sessionMsg = parseInboundSessionMessage(t);
   if (sessionMsg) {
     // A huddle that ended in this session's room: the digest rides the

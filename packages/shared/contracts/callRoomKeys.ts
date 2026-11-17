@@ -225,13 +225,13 @@ export function callLength(startedAt: number, endedAt: number | null | undefined
  *  the room key: a key is an opaque id that tells a person nothing and costs
  *  an agent tokens. */
 export function callDisplayTitle(
-  call: { title?: string | null; room_key: string; participants?: ReadonlyArray<{ id: string; name: string }> },
+  call: { title?: string | null; room_key: string; participants?: ReadonlyArray<{ id: string; name: string }>; screen?: unknown },
   names: CallPlaceNames = {},
 ): string {
   const title = call.title?.trim();
   if (title) return title;
   const parsed = parseRoomKey(call.room_key);
-  if (parsed?.kind === "rec") return "Untitled voice note";
+  if (parsed?.kind === "rec") return call.screen ? "Screen recording" : "Untitled voice note";
   if (parsed?.kind === "meet") return names.untitled ?? peopleTitle(call.participants, names.viewerId, "Meeting") ?? "Untitled meeting";
   if (names.peerName) return `Call with ${names.peerName}`;
   if (parsed?.kind === "session" && names.sessionTitle) return `Huddle in ${names.sessionTitle}`;

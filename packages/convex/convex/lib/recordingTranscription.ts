@@ -1,6 +1,10 @@
 // How a finished recording's audio becomes transcript segments: the model
 // that reads the file, the write batch, and the reply parser. Used by
-// transcripts.transcribeRecording.
+// transcripts.transcribeRecording and screenRecordings.transcribe.
+
+import { TRANSCRIBE_MAX_BYTES } from "@codecast/shared/contracts";
+import { openaiFetch, openaiRefusal } from "./openai";
+import type { VendorGate } from "./vendorGuard";
 
 /**
  * What reads the file.
@@ -67,4 +71,42 @@ export function parseTranscriptionSegments(
   const whole = typeof body.text === "string" ? body.text.trim() : "";
   if (!whole) return [];
   return [{ ...speaker, text: whole, t0: 0, t1: Math.max(0, fallbackDurationMs) }];
+}
+
+export type RecordingSegment = ReturnType<typeof parseTranscriptionSegments>[number];
+
+/**
+ * Read the words out of one audio file: the one request every recording's
+ * transcription makes, whoever produced the audio (a phone's m4a, the
+ * desktop recorder's webm, the sound track pulled out of a screen
+ * recording). Throws with a plain reason; an empty result is a recording
+ * nobody spoke in. `filename`'s extension is what the endpoint reads the
+ * container off.
+ */
+export async function transcribeAudio(
+  gate: VendorGate,
+  audio: Blob,
+  filename: string,
+  fallbackDurationMs: number,
+): Promise<RecordingSegment[]> {
+  if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not set");
+  const refusal = await openaiRefusal(gate);
+  if (refusal) throw new Error(refusal);
+  // The recorder stops before it can make a file this big (see
+  // shared/contracts/recordingAudio). Reaching here means something else
+  // produced the audio, and the endpoint would refuse it with a 413 that
+  // reads like an outage — say the real thing instead.
+  if (audio.size > TRANSCRIBE_MAX_BYTES) {
+    throw new Error(
+      `audio is ${Math.round(audio.size / 1024 / 1024)}MB, over the ${Math.round(TRANSCRIBE_MAX_BYTES / 1024 / 1024)}MB transcription limit`,
+    );
+  }
+  const form = new FormData();
+  form.append("file", audio, filename);
+  form.append("model", RECORDING_TRANSCRIBE_MODEL);
+  form.append("response_format", "verbose_json");
+  const resp = await openaiFetch(gate, "/v1/audio/transcriptions", { method: "POST", body: form });
+  if (!resp) throw new Error("OPENAI_API_KEY is not set");
+  if (!resp.ok) throw new Error(`OpenAI ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
+  return parseTranscriptionSegments(await resp.json(), fallbackDurationMs);
 }

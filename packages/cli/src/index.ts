@@ -15987,6 +15987,8 @@ trigger
   .option("--pr <number>", "Only fire for this pull request")
   .option("--source <name|src-N>", "Only fire for this source (with --on and an event a source reports: error_new, job_failed, check_failed, ...; see cast sources ls). Checked when saved")
   .option("--channel <#name|id>", "The team channel a chat_message trigger watches (required with --on chat_message; cast chat channels lists them). Checked when saved")
+  .option("--page <slug|url|path>", "The published page a page_state trigger watches (required with --on page_state; cast publish watch is the short form). Checked when saved")
+  .option("--collection <names>", "With --page: only these state collections, comma-separated (default: every one you can read)")
   .option("--title <title>", stdinText("Short title (defaults to first 60 chars of prompt)"))
   // Accepted so old snippets still parse; it captures nothing.
   .addOption(new Option("--context <mode>").hideHelp())
@@ -16255,7 +16257,7 @@ Examples:
       } else if (schedule_type === "event") {
         // The scope is half the meaning of an event trigger, and --repo is
         // often filled in from the checkout rather than typed, so say it.
-        console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} ${fmt.highlight(describeEventScope(event_filter!))}: ${c.bold}${title}${c.reset}`);
+        console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} ${fmt.highlight(describeEventScope({ ...event_filter!, ...(event_filter!.page_id ? { page_slug: event_filter!.page_id } : {}) }))}: ${c.bold}${title}${c.reset}`);
       } else if (options.in) {
         console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} in ${options.in}: ${c.bold}${title}${c.reset}`);
       } else {

@@ -33,10 +33,12 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { copyToClipboard } from "../../../lib/utils";
 import { usePendingMessageStatus } from "../../../hooks/useSyncPendingPermissions";
-import { extractAgentSetup, hasAgentSetupMarker, isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
+import { extractAgentSetup, hasAgentSetupMarker, isHostedAgentType, stripMentionContext, stripPastedContent } from "@codecast/shared/contracts";
 import { AgentToolSetupCard } from "./AgentToolSetupCard";
 import { SentFileBlock, type SentFileData } from "../../tools/SentFileBlock";
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
+import { ScreenRecordingCard } from "../../calls/ScreenRecordingCard";
+import type { ParsedScreenRecording } from "@codecast/shared/contracts";
 import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_COMPONENTS, USER_MD_REMARK } from "../../messageMarkdown";
@@ -202,7 +204,7 @@ function CancelPendingButton({ onClick, disabled, quiet = false }: { onClick: ()
 }
 
 
-function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision, bubble }: { content: string; decision?: DecisionAnswerMessage; /** Clean mode's chat bubble: right-aligned, no name row. */ bubble?: boolean; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
+function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision, bubble, screenRecording }: { content: string; decision?: DecisionAnswerMessage; /** A screen recording sent with these words: its player under them. */ screenRecording?: ParsedScreenRecording; /** Clean mode's chat bubble: right-aligned, no name row. */ bubble?: boolean; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
   const relativeTime = useRelativeTime();
   // A hosted conversation has no machine or process: its pending notes speak
   // of the assistant picking the message up, not of delivery to an agent.
@@ -217,7 +219,8 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   // The plan step's request id while the review is open: asked on the press, not on mount.
   const [rewinding, setRewinding] = useState<string | null>(null);
   const openRewind = () => { if (conversationId) setRewinding(requestRewind(conversationId, "plan", { message_ts: timestamp })); };
-  const rawContent = stripPastedContent(content)
+  // A mention's injected context is for the agent; the person sees what they typed.
+  const rawContent = stripMentionContext(stripPastedContent(content))
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")
     .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
@@ -468,7 +471,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const { isBookmarked, toggleBookmark: handleToggleBookmark } = useMessageBookmark(conversationId, messageId);
 
   const handleCopy = () => {
-    setTimeout(() => { copyToClipboard(content).then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
+    setTimeout(() => { copyToClipboard(stripMentionContext(content)).then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
   };
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
@@ -669,6 +672,11 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           return <MessageMarkdown content={displayContent} userText />;
         })()}
       </div> : null}
+      {!effectivelyCollapsed && screenRecording && (
+        <div className={`${indent} mt-2`}>
+          <ScreenRecordingCard recording={screenRecording} />
+        </div>
+      )}
       {!effectivelyCollapsed && images && images.filter(img => !img.tool_use_id).length > 0 && (
         <div className={`${indent} mt-2`}>
           {images.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}

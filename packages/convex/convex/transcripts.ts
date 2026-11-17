@@ -55,7 +55,6 @@ import {
   trustedAgentStatus,
   REC_LEASE_STALE_MS,
   RECORDING_SUMMARY_PUSH_TYPE,
-  TRANSCRIBE_MAX_BYTES,
   asrTranscriptionSession,
   callParticipantKind,
   callSpeakerName,
@@ -91,9 +90,9 @@ import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { siteUrl } from "./lib/siteUrl";
 import { slackSend } from "./lib/slackSend";
 import { CHEAP_MODEL, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
-import { openaiFetch, openaiRefusal } from "./lib/openai";
+import { openaiFetch } from "./lib/openai";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
-import { RECORDING_TRANSCRIBE_MODEL, SEGMENT_WRITE_BATCH, parseTranscriptionSegments } from "./lib/recordingTranscription";
+import { SEGMENT_WRITE_BATCH, parseTranscriptionSegments, transcribeAudio } from "./lib/recordingTranscription";
 export { parseTranscriptionSegments };
 import { HUDDLE_GRACE_MS, quietSince, withinHuddleGrace } from "./lib/huddleGrace";
 export { HUDDLE_GRACE_MS };
@@ -1385,6 +1384,9 @@ export const setSummary = internalMutation({
       ...(args.summary ? { summary: args.summary } : {}),
       ...(args.action_items ? { action_items: args.action_items } : {}),
     });
+    // A screen recording reaches its reader as the message that carries it:
+    // no digest, no call_ended trigger, no "recording ready" push.
+    if (t.screen_recording) return;
     if (firstVerdict) {
       await scheduleHuddleDigest(ctx, t, args);
       await announceCallEnded(ctx, t, args);
@@ -1683,37 +1685,18 @@ export const transcribeRecording = internalAction({
         transcript_id: args.transcript_id,
       });
       if (!row?.storage_id) throw new Error("no audio attached");
-      if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not set");
       // A regulated team's recording reaches OpenAI only once it has a BAA (lib/vendorGuard).
       const gate = { ctx, scope: { row: { table: "transcripts", id: args.transcript_id } } };
-      const refusal = await openaiRefusal(gate);
-      if (refusal) throw new Error(refusal);
       const audio = await ctx.storage.get(row.storage_id);
       if (!audio) throw new Error("audio missing from storage");
-      // The recorder stops before it can make a file this big (see
-      // shared/contracts/recordingAudio). Reaching here means something else
-      // produced the audio, and the endpoint would refuse it with a 413 that
-      // reads like an outage — say the real thing instead.
-      if (audio.size > TRANSCRIBE_MAX_BYTES) {
-        throw new Error(
-          `audio is ${Math.round(audio.size / 1024 / 1024)}MB, over the ${Math.round(TRANSCRIBE_MAX_BYTES / 1024 / 1024)}MB transcription limit`,
-        );
-      }
-      const form = new FormData();
       // The extension is what the API reads the container off. A phone records
       // m4a; the desktop recorder's MediaRecorder gives webm everywhere but
       // Safari, which gives mp4.
       const ext = audio.type.includes("webm") ? "webm" : "m4a";
-      form.append("file", audio, `recording.${ext}`);
-      form.append("model", RECORDING_TRANSCRIBE_MODEL);
-      form.append("response_format", "verbose_json");
-      const resp = await openaiFetch(gate, "/v1/audio/transcriptions", { method: "POST", body: form });
-      if (!resp) throw new Error("OPENAI_API_KEY is not set");
-      if (!resp.ok) {
-        throw new Error(`OpenAI ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
-      }
-      const segments = parseTranscriptionSegments(
-        await resp.json(),
+      const segments = await transcribeAudio(
+        gate,
+        audio,
+        `recording.${ext}`,
         Math.max(0, (row.ended_at ?? row.started_at) - row.started_at),
       );
       if (!segments.length) throw new Error("transcription came back empty");
@@ -1888,6 +1871,11 @@ function shapeCallRow(t: Doc<"transcripts">) {
     // offering only the words. Off the row, so neither the list nor the
     // detail re-runs for the recording reconciler's writes.
     filmed: callFilmed(t),
+    // A screen recording somebody sent to a session (screenRecordings.ts):
+    // its picture size, and whether the video had any sound to transcribe.
+    screen: t.screen_recording
+      ? { width: t.screen_recording.width ?? null, height: t.screen_recording.height ?? null, no_audio: !!t.screen_recording.no_audio }
+      : null,
   };
 }
 
@@ -1917,8 +1905,10 @@ async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
   // the merged list came back short and skipped recent calls. With every
   // source holding its own top `limit` kept rows, the merged top `limit` is
   // exact.
+  // A screen recording is a message in a session, not a call: it lives in
+  // that session's thread and on its own page, never in the history.
   const keep = async (t: Doc<"transcripts">) =>
-    !(await isSilentHuddle(ctx, t)) && (await canReadCall(ctx, userId, t));
+    !t.screen_recording && !(await isSilentHuddle(ctx, t)) && (await canReadCall(ctx, userId, t));
   const walk = async (query: any, only?: (t: Doc<"transcripts">) => boolean) => {
     const kept: Doc<"transcripts">[] = [];
     let scanned = 0;

@@ -33820,6 +33820,23 @@ async function main(): Promise<void> {
           }
         }
 
+        // A screen recording the person sent: its tag becomes the timed lines
+        // and a keyframe at each, cut here (screenRecordingBrief). While the
+        // server is still reading the words the row waits, as a hold, so the
+        // retry count is untouched and other sessions keep delivering.
+        if (messageContent.trimStart().startsWith("<screen-recording")) {
+          const { screenRecordingForDelivery } = await import("./screenRecordingBrief.js");
+          const tag = `Screen recording msg=${msg._id.slice(0, 8)}`;
+          const out = await screenRecordingForDelivery(messageContent, msg.created_at ?? Date.now(), { siteUrl: getSiteUrl(), apiToken: getAuthToken() }, (line) => logDelivery(`${tag} ${line}`));
+          if (out.wait) {
+            logDelivery(`HELD: ${tag} still transcribing`);
+            releaseInFlight();
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "transcribing the screen recording", 10_000);
+            continue;
+          }
+          messageContent = out.content;
+        }
+
         // If recently injected to tmux, skip re-delivery (prevents retry race causing duplicates).
         // Confirmed entries expire on the short TTL so a genuinely lost injection is redelivered;
         // unconfirmed entries (the "injected" mark never reached Convex, so this row is still

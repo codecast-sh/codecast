@@ -1,0 +1,130 @@
+// The agent's copy of a screen recording a person sent it.
+//
+// The message arrives holding only the recording's tag and the person's own
+// words (shared/contracts/screenRecording). The daemon delivering it calls
+// this: the call's transcript from the server, a keyframe cut on this machine
+// at each line that matters (the same `cast call snap` code, so the frame the
+// agent reads is the frame `cl-N@m:ss` names), and the tag rewritten as timed
+// lines with their pictures. While the server is still reading the words the
+// delivery waits; a recording that is never transcribed still goes, with what
+// it has.
+import { CODECAST_BASE_URL } from "@codecast/shared/entities";
+import {
+  framedLines,
+  lineMomentMs,
+  parseScreenRecordingMessage,
+  screenRecordingBrief,
+  type BriefSegment,
+} from "@codecast/shared/contracts";
+
+/** How long a delivery waits on the server's transcription before sending
+ *  what it has. Whisper reads a few minutes of speech in well under this. */
+export const SCREEN_RECORDING_WORDS_WAIT_MS = 3 * 60_000;
+/** The same wait while the video itself is still uploading (a long
+ *  recording on a phone's connection), which has to land before any words. */
+export const SCREEN_RECORDING_UPLOAD_WAIT_MS = 15 * 60_000;
+
+export type ScreenRecordingCall = {
+  short_id: string | null;
+  started_at: number;
+  ended_at: number | null;
+  transcribe_status: "pending" | "done" | "failed" | null;
+  /** The video is in (its file is a ready call file). */
+  filmed?: boolean;
+  screen?: { no_audio?: boolean } | null;
+  segments: Array<{ t0: number; t1: number; text: string }>;
+};
+
+export type BriefDeps = {
+  /** The call as `/cli/calls/get` answers it; null when it cannot be read. */
+  getCall: (call: string) => Promise<ScreenRecordingCall | null>;
+  /** A picture of the screen `atMs` into the call, written locally; null when none could be cut. */
+  frameAt: (call: string, atMs: number) => Promise<string | null>;
+};
+
+export type BriefOutcome =
+  /** Not a screen recording, or already expanded: deliver as it is. */
+  | { kind: "unchanged" }
+  /** The words are still being read: try again shortly. */
+  | { kind: "wait" }
+  | { kind: "ready"; text: string; frames: number };
+
+/** `waitedMs`: how long this message has been waiting on the words so far. */
+export async function expandScreenRecording(content: string, deps: BriefDeps, waitedMs: number): Promise<BriefOutcome> {
+  const parsed = parseScreenRecordingMessage(content);
+  if (!parsed || parsed.lines.length) return { kind: "unchanged" };
+  const call = await deps.getCall(parsed.call);
+  if (!call) return { kind: "unchanged" };
+  const pending = call.transcribe_status === "pending";
+  if (pending && waitedMs < (call.filmed ? SCREEN_RECORDING_WORDS_WAIT_MS : SCREEN_RECORDING_UPLOAD_WAIT_MS)) return { kind: "wait" };
+  const handle = call.short_id ?? parsed.call;
+  const segments: BriefSegment[] = call.segments.map((s) => ({ t0: s.t0, t1: s.t1, text: s.text }));
+  const frames = new Map<number, string>();
+  // One at a time: each is an ffmpeg seek into the same file, and the
+  // delivery has a budget; a frame that cannot be cut is left out.
+  for (const i of framedLines(segments)) {
+    const file = await deps.frameAt(handle, lineMomentMs(segments[i])).catch(() => null);
+    if (file) frames.set(i, file);
+  }
+  const opening = segments.length ? null : await deps.frameAt(handle, 500).catch(() => null);
+  const durationMs = Math.max(parsed.durationMs, (call.ended_at ?? call.started_at) - call.started_at);
+  const text = screenRecordingBrief({
+    ref: { call: handle, transcriptId: parsed.transcriptId, durationMs },
+    caption: parsed.caption,
+    segments,
+    frames,
+    words: pending ? "pending" : call.transcribe_status === "failed" ? "failed" : "done",
+    noAudio: !!call.screen?.no_audio,
+    opening,
+  });
+  return { kind: "ready", text, frames: frames.size + (opening ? 1 : 0) };
+}
+
+/** The deps as the daemon has them: the server over the CLI routes with the
+ *  machine's token, and frames cut by `cast call snap`'s own code into the
+ *  owner-only scratch directory. */
+export function serverBriefDeps(siteUrl: string, apiToken: string, baseUrl: string = CODECAST_BASE_URL): BriefDeps {
+  const post = async (route: string, body: Record<string, unknown>) => {
+    const res = await fetch(`${siteUrl}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, ...body }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const out = await res.json().catch(() => null);
+    if (!res.ok || out?.error) throw new Error(`${route}: ${out?.error ?? res.status}`);
+    return out;
+  };
+  return {
+    getCall: async (call) => (await post("/cli/calls/get", { transcript_id: call })) as ScreenRecordingCall | null,
+    frameAt: async (call, atMs) => {
+      const { snapCall, snapMomentRef } = await import("./callSnap.js");
+      const res = await snapCall(snapMomentRef(call, atMs), {}, { post, resolveCallId: async (r) => r, baseUrl });
+      return res.frames[0]?.path ?? null;
+    },
+  };
+}
+
+/** What the daemon does with a message as it delivers it: the text to type
+ *  in, or a wait while the words are still being read. Anything that is not
+ *  a screen recording, or that cannot be expanded, goes as it came (the
+ *  tag's own text says how to fetch the same). */
+export async function screenRecordingForDelivery(
+  content: string,
+  createdAt: number,
+  server: { siteUrl: string | null; apiToken: string | null },
+  log: (line: string) => void = () => {},
+): Promise<{ wait: true } | { wait: false; content: string }> {
+  if (!content.trimStart().startsWith("<screen-recording") || !server.siteUrl || !server.apiToken) return { wait: false, content };
+  try {
+    const brief = await expandScreenRecording(content, serverBriefDeps(server.siteUrl, server.apiToken), Date.now() - createdAt);
+    if (brief.kind === "wait") return { wait: true };
+    if (brief.kind === "ready") {
+      log(`expanded with ${brief.frames} frame(s)`);
+      return { wait: false, content: brief.text };
+    }
+  } catch (err) {
+    log(`not expanded: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return { wait: false, content };
+}
