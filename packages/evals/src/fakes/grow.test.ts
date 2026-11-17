@@ -110,7 +110,8 @@ describe('grow: what a candidate may reach, anywhere in it', () => {
   });
 });
 
-describe('grow: where a candidate runs', () => {
+// Scoring and the fake's tests run under sandbox-exec, which only macOS has.
+describe.skipIf(process.platform !== 'darwin')('grow: where a candidate runs', () => {
   // Each writes outside its run dir: one on every send, so scoring hits it; one only past the captures' peer, so only the fake's tests do.
   for (const [where, at, failed] of [
     ['scoring', "if (to.endsWith('peer'))", /fails in the sandbox/],
@@ -159,7 +160,7 @@ describe('grow: what a kept edit may carry, and where it goes', () => {
     expect(r.leaks?.map((l) => l.token)).toEqual([secret]);
   });
 
-  test('a kept edit is written to the grow record as a patch, never over the tracked verbs.ts', async () => {
+  test.skipIf(process.platform !== 'darwin')('a kept edit is written to the grow record as a patch, never over the tracked verbs.ts', async () => {
     const r = await grow({ tree, treeFile: TREE_FILE, roster, model: 'stub', misses: 100, isRead: () => false, sinceDays: 7, edit: async (work) => {
       await Bun.write(join(work, 'verbs.ts'), better);
       return { costUsd: 0 };
