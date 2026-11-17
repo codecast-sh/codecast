@@ -112,6 +112,10 @@ function parseToggle(flag: string, raw: string): boolean {
   return fail(`Invalid ${flag} "${raw}". Pass on or off.`);
 }
 
+function clearable(raw: string): string {
+  return raw.trim().toLowerCase() === "none" ? "" : raw;
+}
+
 function printSource(s: any): void {
   const color = SOURCE_STATUS_COLORS[s.status] ?? "";
   const project = s.project_title || s.project_short_id || s.project_id || "";
@@ -123,6 +127,9 @@ function printSource(s: any): void {
     s.delegate_label ? `label ${s.delegate_label}` : null,
     s.delegate_assignee ? `assignee ${s.delegate_assignee}` : null,
     s.auto_spawn ? "auto-spawn" : null,
+    s.spawn_isolated === false ? "worktrees off" : null,
+    s.spawn_device ? `device ${s.spawn_device}` : null,
+    s.spawn_definition ? `as ${s.spawn_definition}` : null,
     s.push_new_tasks ? "push new tasks" : null,
   ].filter(Boolean).join(" · ");
   console.log(`    ${c.dim}synced ${ago(s.last_synced_at)}${delegation ? `  ·  ${delegation}` : ""}${c.reset}`);
@@ -386,14 +393,20 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
     .option("--delegate-assignee <who>", "Provider user (id or login) that means 'hand this to an agent'")
     .option("--auto-spawn <on|off>", "Spawn a session as soon as the delegation signal appears")
     .option("--push-new-tasks <on|off>", "Create tasks made in this project on the provider too")
+    .option("--isolated <on|off>", "Give each auto-spawned session its own git worktree (on unless set off)")
+    .option("--device <name|none>", "Machine auto-spawned sessions start on (label or device id; an offline machine queues the start until it is back); none clears it")
+    .option("--as <definition|none>", "Run auto-spawned sessions as a named agent definition (cast agent ls); none clears it")
     .action(async (id: string, options: any) => {
       const body: Record<string, unknown> = { id };
       if (options.delegateLabel !== undefined) body.delegate_label = options.delegateLabel;
       if (options.delegateAssignee !== undefined) body.delegate_assignee = options.delegateAssignee;
       if (options.autoSpawn !== undefined) body.auto_spawn = parseToggle("--auto-spawn", options.autoSpawn);
       if (options.pushNewTasks !== undefined) body.push_new_tasks = parseToggle("--push-new-tasks", options.pushNewTasks);
+      if (options.isolated !== undefined) body.spawn_isolated = parseToggle("--isolated", options.isolated);
+      if (options.device !== undefined) body.device = clearable(options.device);
+      if (options.as !== undefined) body.definition = clearable(options.as);
       if (Object.keys(body).length === 1) {
-        fail("Nothing to set. Pass --delegate-label, --delegate-assignee, --auto-spawn, or --push-new-tasks.");
+        fail("Nothing to set. Pass --delegate-label, --delegate-assignee, --auto-spawn, --push-new-tasks, --isolated, --device, or --as.");
       }
       await post("/cli/integrations/update-source", body);
       console.log(`${c.green}ok${c.reset} Updated ${c.cyan}${id}${c.reset}`);
