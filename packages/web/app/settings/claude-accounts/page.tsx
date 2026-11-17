@@ -37,7 +37,7 @@ import {
 } from "../../../components/AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge, type MintFlow } from "../../../components/MintTokenDialog";
 import { isFleetProfile, profileHasSetupToken } from "@codecast/convex/convex/ccAccountsShared";
-import { formatAgo, planTypeLabel, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
+import { describeLastAction, formatAgo, planTypeLabel, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
 import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/RecoveryModeSelect";
@@ -261,7 +261,7 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
       )}
       {!exhausted && !state?.last_decision && state?.last_action && state.last_action_at && (
         <div className="px-4 py-2 text-meta text-sol-text-dim sm:px-5">
-          Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
+          Last action: {describeLastAction(state.last_action, device.profiles)}{" "}
           {formatAgo(now - state.last_action_at)}.
         </div>
       )}

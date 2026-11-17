@@ -17,7 +17,7 @@ export const RESUMED_MATCH_MS = 30 * 60_000;
 
 export type LimitRecoveryAction = {
   kind: "switch" | "continue";
-  // The account the session continues on (profile name, else email).
+  // The account the session continues on (email, else profile name).
   target?: string;
   by: "auto" | "you";
   at: number;
@@ -47,7 +47,7 @@ export function limitRecoveryAction(input: {
     const switchedTo = lastAction.startsWith("switch:") ? lastAction.slice("switch:".length) : undefined;
     return {
       kind: recorded ? (recorded.kind as "switch" | "continue") : switchedTo ? "switch" : "continue",
-      target: recorded?.target_name ?? recorded?.target_email ?? switchedTo,
+      target: recorded?.target_email ?? recorded?.target_name ?? switchedTo,
       by: lastAction === "manual" ? "you" : "auto",
       at: lastActionAt,
     };

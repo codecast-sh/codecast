@@ -280,6 +280,26 @@ export function fallbackProfiles<
 // Explaining a recovery decision
 // ---------------------------------------------------------------------------
 
+/**
+ * How an account reads on screen: its email. A profile's name is the daemon's
+ * id for it (an account-pool share is saved as `pool-<local part>`), never a
+ * label. `key` may be either, as a session's `cc_account` pin is; an unknown
+ * pool id still drops its `pool-` prefix.
+ */
+export function accountDisplayName(profiles: ReadonlyArray<{ name: string; email?: string | null }>, key?: string | null): string | undefined {
+  const want = key?.trim().toLowerCase();
+  if (!want) return undefined;
+  const p = profiles.find((x) => x.name.toLowerCase() === want || x.email?.toLowerCase() === want);
+  return p?.email || (p?.name ?? key!.trim()).replace(/^pool-/, "");
+}
+
+/** The machine's `last_action` ("switch:<profile>", "manual", ...) as a phrase. */
+export function describeLastAction(lastAction: string, profiles: ReadonlyArray<{ name: string; email?: string | null }>): string {
+  return lastAction.startsWith("switch:")
+    ? `switched to ${accountDisplayName(profiles, lastAction.slice("switch:".length))}`
+    : lastAction;
+}
+
 /** What the recovery loop most recently did, or wants to do. Recorded by the
  * server on every switch, proposal, continue and exhaustion so a person can
  * read WHY the account changed instead of noticing it after the fact. */
@@ -310,7 +330,7 @@ export function describeDecision(d: RecoveryDecision | undefined | null): string
   const cause = d.pegged_window
     ? `${d.pegged_window} hit its limit on ${d.from_email ?? "the active account"}`
     : `${d.from_email ?? "the active account"} could not continue`;
-  const target = d.target_name ?? d.target_email;
+  const target = d.target_email ?? d.target_name?.replace(/^pool-/, "");
   const standing = d.target_percent != null ? ` (${Math.round(d.target_percent)}% used)` : "";
   switch (d.kind) {
     case "switch":

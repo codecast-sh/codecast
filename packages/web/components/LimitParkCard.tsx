@@ -17,13 +17,13 @@
 import Link from "next/link";
 import { Check, Hourglass, Loader2, RefreshCw, TimerReset, Zap } from "lucide-react";
 import { exhaustionBannerCopy, isExhaustionCurrent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { describeDecision, pendingProposal, formatAgo, standingLabel } from "@codecast/shared/contracts";
+import { accountDisplayName, describeDecision, pendingProposal, formatAgo, standingLabel } from "@codecast/shared/contracts";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useInboxStore } from "../store/inboxStore";
 import { DISPATCH_REFUSED, latestSessionCommand, switchPending } from "../lib/sessionCommands";
 import { formatResetPhrase, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
 import type { LimitRecoveryAction } from "../lib/limitRecovery";
-import { accountDisplayName, continueOnAccount, limitContinueTarget } from "../lib/limitContinue";
+import { continueOnAccount, limitContinueTarget } from "../lib/limitContinue";
 import { Button } from "./ui/button";
 
 type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
@@ -63,7 +63,7 @@ export function LimitParkCard({
   // rule, shared with the phone (lib/limitContinue).
   const { fleetEmail, active, best } = limitContinueTarget(device, now, live);
   const accountLabel = accountDisplayName(profiles, pinnedAccount ?? active?.email ?? fleetEmail);
-  const bestLabel = best?.email ?? best?.name;
+  const bestLabel = accountDisplayName(profiles, best?.email ?? best?.name);
   const exhausted = isExhaustionCurrent(device?.auto_switch_state?.exhausted_at, profiles, now);
   const proposal = live && device ? pendingProposal([device], now) : null;
   // The standing shown on the button matches the meters: "stale" when a rolled
@@ -83,7 +83,7 @@ export function LimitParkCard({
     return (
       <LimitRecoveryCard
         windowLabel={windowLabel}
-        action={phase.action}
+        action={{ ...phase.action, target: accountDisplayName(profiles, phase.action.target) }}
         step={phase.phase === "recovering" ? phase.step : "done"}
         timestamp={timestamp}
         now={now}

@@ -26,7 +26,7 @@ import { RecoveryModeSelect, RecoveryDecisionNote } from "./RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../hooks/useMachineAccountSwitch";
 import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, profileHasSetupToken, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { formatAgo, headroomScore, describeDecision, planTypeLabel } from "@codecast/shared/contracts";
+import { describeLastAction, formatAgo, headroomScore, describeDecision, planTypeLabel } from "@codecast/shared/contracts";
 import { planAgentType, resolveAccountChip } from "../lib/accountUsageChip";
 import { machineSwitchBlock, machineSwitchPendingCopy, profileIsCurrentLogin } from "../lib/machineAccountSwitch";
 import { usageTone } from "../lib/usageTone";
@@ -561,7 +561,7 @@ export function AccountUsageChip() {
           )}
           {!exhausted && !state?.last_decision && state?.last_action && state.last_action_at && (
             <div className="mt-1.5 px-2 text-meta text-sol-text-dim">
-              Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
+              Last action: {describeLastAction(state.last_action, profiles)}{" "}
               {formatAgo(now - state.last_action_at)}
             </div>
           )}
