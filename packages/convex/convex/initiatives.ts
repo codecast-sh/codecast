@@ -1,4 +1,5 @@
 import { cleanMetrics, metricArgValidator, requireSeries, seriesLookup, type MetricArg } from "./lib/metricSeries";
+import { goalPredictions } from "./lib/goalPredictions";
 import { labelsOf, noteOrgChange, partyRef, recordSubject, whereOfRecord, withOrgChange } from "./lib/orgChangeLog";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { v, type Validator } from "convex/values";
@@ -753,6 +754,8 @@ export const get = query({
       // Each metric's history read as a direction, and the first milestone not reached.
       trends: metricTrends(initiative),
       next_milestone: nextMilestone(initiative),
+      // What its tasks predicted for its metrics, and what the metric did after each shipped.
+      predictions: await goalPredictions(ctx, initiative),
       parent: parent ? brief(parent) : undefined,
       sub_initiatives: children.map(brief),
       updates: await Promise.all(updates.map(async (u: any) => ({ ...u, by_label: await ownerLabel(ctx, u.by) }))),

@@ -17576,6 +17576,8 @@ work
   .option("--model <model>", "Model a session spawned for this task launches with")
   .option("--effort <level>", "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max")
   .option("--ephemeral", "Bookkeeping with no value once done (a checklist, a probe): kept off the board, the feed and notifications; cast task keep undoes it")
+  .option("--goal-ref <ref>", "The goal it serves: a metric ref (in-N:key) or project short id from cast goals")
+  .option("--predict <line>", "The predicted effect on a goal metric, read after ship: \"in-9:intros_a_week +5% by 2026-12-15 :: <basis>\" (or in 21d after ship)")
   .option("--json", "Output the created task as JSON (one object for one title, an array for several)")
   .action(async (title: string, options: any) => {
     // Bulk decomposition: `cast task create --parent ct-x -` gives one subtask
@@ -17639,6 +17641,8 @@ work
       // so this overrides the "agent" default a session would otherwise set.
       if (options.fromMeeting || fromCall) body.source = "meeting";
       if (fromCall) body.from_call = fromCall;
+      if (options.goalRef) body.goal_ref = options.goalRef.trim();
+      if (options.predict) body.predict = options.predict;
       body.project_path = getRealCwd();
 
       const result = await cliPost("/cli/work/create", body);
@@ -18136,6 +18140,7 @@ work
   .option("--readiness <state>", "Whether it can be worked as it stands: ready, needs_context or not_actionable")
   .option("--readiness-note <text>", stdinText("One line on why"))
   .option("--watch-days <n>", "Watch the problem after ship: a new report within N days reopens it, a quiet watch closes it as resolved; 0 ends the watch")
+  .option("--predict <line>", "The predicted effect on a goal metric, read after ship: \"in-9:intros_a_week +5% by 2026-12-15 :: <basis>\" (or in 21d after ship); '' clears")
   .option("--model <model>", "Model a session spawned for this task launches with; '' clears")
   .option("--effort <level>", "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max; '' clears")
   .action(async (shortId: string, options: any) => {
@@ -18149,6 +18154,7 @@ work
       }
       body.watch_days = days;
     }
+    if (options.predict !== undefined) body.predict = options.predict;
     try {
       Object.assign(body, groundUpdateBody(options), taskHintBody({ model: options.model, effort: options.effort }));
     } catch (err) {

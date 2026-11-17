@@ -6,6 +6,7 @@
 // it see the same chain and the same numbers.
 import { INITIATIVE_STATUSES, initiativeChain, metricLine, metricReadings, metricTrends, paceWords, type InitiativeLink, type InitiativeMetric, type InitiativeRow, type MetricReading, type MetricSeries, type MetricTrend } from "@codecast/shared/contracts/initiative";
 import { seriesLookup } from "./metricSeries";
+import { goalHitRate } from "./goalPredictions";
 
 export type ServedInitiative = {
   _id: string;
@@ -23,14 +24,17 @@ export type ServedInitiative = {
   target_date: number | null;
   /** The goals above it, nearest first, up to the top level goal. */
   chain: InitiativeLink[];
+  /** How its tasks' predictions read after ship: "4 of 9 predictions held, 2 open"; empty when none. */
+  predictions?: string;
 };
 
 /** A served goal's numbers in the words a role reads them: value against target, the trend, live or reported, and the pace a goal behind its date needs. */
-export function servedMetricLines(i: Pick<ServedInitiative, "metrics" | "trends" | "target_date">, now = Date.now()): string[] {
-  return i.metrics.map((m) => {
+export function servedMetricLines(i: Pick<ServedInitiative, "metrics" | "trends" | "target_date"> & { predictions?: string }, now = Date.now()): string[] {
+  const lines = i.metrics.map((m) => {
     const pace = m.guardrail ? "" : paceWords(m, i.trends[m.key], i.target_date, now);
     return `${metricLine(m, now, i.trends[m.key])}${pace ? `; ${pace}` : ""}`;
   });
+  return i.predictions ? [...lines, `Predictions: ${i.predictions}`] : lines;
 }
 
 
@@ -61,7 +65,8 @@ export async function readWorkspaceInitiatives(ctx: { db: any }, workspace: stri
 export async function roleServedInitiatives(ctx: { db: any }, role: { _id: any; team_id?: any; scope_user_id?: any; host_user_id?: any; scope?: { project_ids?: any[] } }): Promise<ServedInitiative[]> {
   const workspace = roleWorkspace(role);
   const rows = await readWorkspaceInitiatives(ctx, workspace);
-  return servedInitiatives(rows, { role_id: String(role._id), project_ids: (role.scope?.project_ids ?? []).map(String) }, SERVED_INITIATIVES_MAX, await seriesLookup(ctx, workspace, rows));
+  const served = servedInitiatives(rows, { role_id: String(role._id), project_ids: (role.scope?.project_ids ?? []).map(String) }, SERVED_INITIATIVES_MAX, await seriesLookup(ctx, workspace, rows));
+  return Promise.all(served.map(async (i) => ({ ...i, predictions: await goalHitRate(ctx, { short_id: i.short_id, workspace }) })));
 }
 
 const roleWorkspace = (role: { team_id?: any; scope_user_id?: any; host_user_id?: any }) => (role.team_id ? `team:${role.team_id}` : `user:${role.scope_user_id ?? role.host_user_id}`);
