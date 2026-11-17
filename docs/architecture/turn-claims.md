@@ -17,6 +17,7 @@ wired in `daemon.ts` (search `turnClaims()`).
 |---|---|
 | First mid-turn status of a turn (`thinking`, `working`, `permission_blocked`) | Opened, with `attempts: 0`. A claim already open keeps its attempts: the continue a resume sends is the same turn going on. |
 | `compacting` | Unchanged. An automatic compaction runs inside a turn that is already claimed; a manual `/compact` is no turn (it ends on a boundary idle with no Stop). |
+| `working` straight after a `compacting` that began with no claim open | Nothing opened. Claude Code compacts an idle session before its prompt cache expires, and that compaction's SessionStart reports `working` like one inside a turn; no turn follows and no Stop ends it. It is marked like a release one second on, so the status file it leaves behind opens nothing when a restarted daemon replays it or the watchdog finds it. Before this rule, idle sessions held claims for days, and the reboot of 2026-11-16 resumed 70 of them. |
 | A newer status from another session of the same conversation (a `/clear` moved it on, tmux or SDK) | The old session's claim is released. When that claim's resume was still waiting to come up, the new session is the resume: the claim moves to it with its attempts, so a process that dies on every resume after its first hook still counts toward the cap. An older status (a file replayed late at boot) changes nothing. |
 | First status from a session after a resume was queued | Recorded as `heardAt`: the resumed process is up. |
 | A prompt (`thinking`) on an open claim | The first one after a resume is its continue (`continuedAt`), the same turn. Any other (the person's next prompt after an Escape left the claim open) starts a new turn with its own attempts. |
@@ -167,7 +168,9 @@ and was not run again. Nothing is replayed: the resume continues from the
 transcript, and the agent decides what to redo.
 
 At most three resumes a pass, behind the load governor, workflow station
-hands first, the same pacing as the revive path.
+hands first, the same pacing as the revive path. Within that, the newest turn
+goes first: a reboot ends every claim at once, and the sessions that were
+working when the machine went down are the ones a person is waiting on.
 
 ## Where the claim lives
 

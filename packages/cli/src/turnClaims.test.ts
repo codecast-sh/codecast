@@ -68,6 +68,35 @@ describe("TurnClaimLedger", () => {
     expect(ledger.get("s1")).toMatchObject({ claimedAt: 3000 });
   });
 
+  // 2026-11-16: sessions idle for up to five days each held a claim opened by
+  // an idle compaction, and a reboot resumed 70 of them ahead of the four
+  // sessions that were mid-turn.
+  test("a compaction of an idle session opens nothing, live or replayed from its status file", () => {
+    const file = path.join(scratch(), "claims.json");
+    const ledger = new TurnClaimLedger(file, () => 60_000);
+    ledger.apply("s1", "c1", "thinking", { at: 1000 });
+    ledger.apply("s1", "c1", "idle", { turnEnded: true, at: 2000 }); // Stop
+    ledger.apply("s1", "c1", "compacting", { at: 50_000 }); // PreCompact, no turn open
+    ledger.apply("s1", "c1", "working", { at: 51_000 }); // SessionStart(compact), and nothing after it
+    expect(ledger.list()).toEqual([]);
+    // The status file still says "working": the watchdog finds it, and a restarted daemon replays it.
+    expect(ledger.open("s1", "c1", 51_000)).toBe(false);
+    const restarted = new TurnClaimLedger(file, () => 60_000);
+    restarted.apply("s1", "c1", "working", { at: 51_000 });
+    expect(restarted.list()).toEqual([]);
+    // The next turn is a turn: a prompt, or a tool call of a wake that sent none.
+    restarted.apply("s1", "c1", "working", { at: 55_000 });
+    expect(restarted.get("s1")).toMatchObject({ claimedAt: 55_000 });
+  });
+
+  test("only the compaction's own next status is swallowed", () => {
+    const ledger = new TurnClaimLedger(path.join(scratch(), "claims.json"), () => 60_000);
+    ledger.apply("s1", "c1", "compacting", { at: 50_000 });
+    ledger.apply("s1", "c1", "idle", { sessionBoundary: true, at: 51_000 }); // a manual /compact ended
+    ledger.apply("s1", "c1", "working", { at: 53_000 });
+    expect(ledger.get("s1")).toMatchObject({ claimedAt: 53_000 });
+  });
+
   test("an older status from the previous session, replayed late, does not drop the new session's claim", () => {
     const ledger = new TurnClaimLedger(path.join(scratch(), "claims.json"), () => 0);
     ledger.apply("new", "c1", "working", { at: 5000 });
@@ -368,6 +397,17 @@ describe("TurnClaimRecovery", () => {
     expect(h.ledger.list()).toEqual([]);
     await h.recovery.request();
     expect(h.resumes).toHaveLength(MAX_TURN_RESUME_ATTEMPTS);
+  });
+
+  test("after a mass death the newest turns are resumed first", async () => {
+    const h = harness(path.join(scratch(), "claims.json"), () => dead({ lastLifeAt: h.now() }));
+    for (const [id, minutesAgo] of [["old", 90], ["older", 95], ["oldest", 99], ["mid-turn", 1]] as const) {
+      h.ledger.open(id, `conv-${id}`, h.now() - minutesAgo * MIN);
+    }
+    await h.recovery.request();
+    expect(h.resumes.map((c) => c.sessionId)).toEqual(["mid-turn", "old", "older"]);
+    await h.recovery.request();
+    expect(h.resumes.map((c) => c.sessionId)).toEqual(["mid-turn", "old", "older", "oldest"]);
   });
 
   test("a claim whose agent is still alive is never resumed, and keeps its claim", async () => {

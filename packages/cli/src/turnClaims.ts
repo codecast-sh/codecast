@@ -88,6 +88,8 @@ export class TurnClaimLedger {
   private readonly released = new Map<string, number>();
   /** A counter bumped by every status, in memory only: a pass skips a claim whose session spoke while it looked. */
   private readonly touched = new Map<string, number>();
+  /** Sessions whose last status was a compaction that began with no turn open, in memory only. */
+  private readonly compactingOutsideTurn = new Set<string>();
   private seq = 0;
 
   /**
@@ -141,6 +143,24 @@ export class TurnClaimLedger {
       const carried = awaitingResume(c) && !this.claims.has(sessionId);
       if (carried) this.claims.set(sessionId, { ...c, sessionId });
       changed = this.drop(id, opts.at, { carried }) || changed;
+    }
+    // A compaction with no turn open. Claude Code compacts an idle session
+    // before its prompt cache expires, and that compaction's SessionStart
+    // reports "working" exactly as one inside a turn does (statusHook.ts). No
+    // turn follows it and no Stop ends it, so a claim opened here outlived the
+    // idle session for days: after the reboot of 2026-11-16 the pass resumed
+    // 70 such sessions, oldest first, and the four that were mid-turn at the
+    // shutdown came back last, up to 1h50m later. The "working" opens nothing,
+    // and is marked like a release one second on (status times are whole
+    // seconds), so the status file it leaves behind opens nothing either when
+    // a restarted daemon replays it or the watchdog finds it.
+    const endsIdleCompaction = status === "working" && this.compactingOutsideTurn.has(sessionId) && !this.claims.has(sessionId);
+    if (status === "compacting" && !this.claims.has(sessionId)) this.compactingOutsideTurn.add(sessionId);
+    else this.compactingOutsideTurn.delete(sessionId);
+    if (endsIdleCompaction) {
+      this.released.set(sessionId, Math.max(opts.at + 1000, this.released.get(sessionId) ?? 0));
+      this.save();
+      return;
     }
     const c = this.claims.get(sessionId);
     // The first status after a resume: the resumed process is up. Statuses a
@@ -413,7 +433,11 @@ export class TurnClaimRecovery {
 
   private async pass(): Promise<void> {
     const { ledger, log } = this.deps;
-    const claims = this.deps.order ? await this.deps.order(ledger.list()) : ledger.list();
+    // Newest turn first. A reboot ends every claim at once and a pass resumes
+    // only a few, so the order decides who waits: the sessions working when the
+    // machine went down are the ones a person is waiting on.
+    const newestFirst = ledger.list().sort((a, b) => b.claimedAt - a.claimedAt);
+    const claims = this.deps.order ? await this.deps.order(newestFirst) : newestFirst;
     let resumed = 0;
     for (const claim of claims) {
       const tag = `${claim.sessionId.slice(0, 8)} conv=${claim.conversationId.slice(0, 12)}`;
