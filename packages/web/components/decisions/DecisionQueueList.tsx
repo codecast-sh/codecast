@@ -281,7 +281,7 @@ function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: Dec
   if (group.kind === "default") {
     return (
       <section data-queue-group="default">
-        <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-blue inline-block" />} title="Going ahead on a default" count={group.items.length} />
+        <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-blue inline-block" />} title="Agents went ahead without you" count={group.items.length} />
         <div className="space-y-2">
           {group.items.map((d, i) => <DecisionCompactCard key={d._id} decision={d} keys={keys && i === 0} selected={selected.has(d._id)} onToggleSelect={selecting ? () => onToggle(d._id) : undefined} />)}
         </div>

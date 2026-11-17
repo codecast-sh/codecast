@@ -138,11 +138,11 @@ export function InboxDecisionQueue({
       ))}
       {advisory > 0 && (
         <Link
-          href="/decisions"
+          href="/decisions?tab=mine&blocking=advisory"
           data-decision-advisory={advisory}
           className="mt-1 flex items-center justify-between rounded-lg border border-dashed border-sol-border/60 px-2.5 py-1.5 text-[12px] text-sol-text-dim hover:text-sol-text no-underline"
         >
-          <span>Going ahead on a default</span>
+          <span>Agents went ahead without you</span>
           <span className="flex items-center gap-0.5 font-mono text-mark tabular-nums">{advisory}<ChevronRight className="w-3 h-3" /></span>
         </Link>
       )}
