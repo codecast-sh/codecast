@@ -1066,7 +1066,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
             <button type="button" className={FOOT_PICK} title="Agent and model for this session">
               <AgentTypeIcon agentType={currentAgent} />
               <span className={agentAccent(currentAgent).text}>{current?.label ?? currentAgent}</span>
-              {!hosted && launch.cfg && <LaunchModelLabel label={launch.label} isDefault={launch.isDefault} noDefault={launch.noDefault} />}
+              {!hosted && launch.cfg && <LaunchModelLabel label={launch.label} noDefault={launch.noDefault} />}
               <ChevronDown className="w-3 h-3 opacity-50" />
             </button>
           </DropdownMenuTrigger>

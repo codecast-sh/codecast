@@ -340,7 +340,7 @@ export const FOOT_PICK = "inline-flex items-center gap-1.5 h-7 px-2 rounded-md t
 /**
  * A blank session's launch model and effort, read off the live row, with the
  * rows' props (including the commit) and the words a trigger shows: the model
- * that launches, whether it is the pinned default, or that none is pinned.
+ * that launches, or that none is pinned.
  */
 export function useLaunchModel(conversationId: string) {
   const live = useLiveSessionMeta(conversationId);
@@ -355,10 +355,9 @@ export function useLaunchModel(conversationId: string) {
   // A cloud agent launch runs at its provider's effort, whatever one was picked before.
   const cloudLaunch = !!cloudAgentProviderForLaunch(agentType, modelKey);
   const pinLabel = defaultKey ? findModelOption(agentType, defaultKey)?.label ?? defaultKey : undefined;
-  // What the trigger says: the model that launches, tagged when it is the
-  // pinned default; with no pin and no pick, that no default is set.
+  // What the trigger says: the model that launches; with no pin and no pick,
+  // that no default is set.
   const noDefault = modelKey === "default" && !pinLabel && opt?.label === "Default";
-  const isDefault = !!defaultKey && (modelKey === "default" || modelKey === defaultKey);
   const label = modelKey === "default" && pinLabel ? pinLabel : noDefault ? "no default" : opt?.label ?? "Model";
   const rowProps: ModelEffortRowsProps = {
     agentType,
@@ -376,17 +375,12 @@ export function useLaunchModel(conversationId: string) {
       });
     },
   };
-  return { cfg, rowProps, label, isDefault, noDefault, cloudLaunch, effort: live?.effort ?? null };
+  return { cfg, rowProps, label, noDefault, cloudLaunch, effort: live?.effort ?? null };
 }
 
-/** The launch model as a trigger shows it: "Opus default", "Sonnet", or a dim "no default". */
-export function LaunchModelLabel({ label, isDefault, noDefault }: { label: string; isDefault: boolean; noDefault: boolean }) {
-  return (
-    <>
-      <span className={noDefault ? "text-sol-text-dim" : undefined}>{label}</span>
-      {isDefault && <span className="rounded border border-sol-cyan/40 px-1 text-meta text-sol-cyan">default</span>}
-    </>
-  );
+/** The launch model as a trigger shows it: "Opus", or a dim "no default". */
+export function LaunchModelLabel({ label, noDefault }: { label: string; noDefault: boolean }) {
+  return <span className={noDefault ? "text-sol-text-dim" : undefined}>{label}</span>;
 }
 
 const Chevron = () => (
@@ -401,7 +395,7 @@ const Chevron = () => (
  * reconfigureSession (the same idempotent respawn the agent pills use).
  */
 export function LaunchModelPill({ conversationId }: { conversationId: string }) {
-  const { cfg, rowProps, label, isDefault, noDefault, cloudLaunch, effort } = useLaunchModel(conversationId);
+  const { cfg, rowProps, label, noDefault, cloudLaunch, effort } = useLaunchModel(conversationId);
   if (!cfg) return null;
   const glyph = cloudLaunch ? null : effortGlyph(effort);
   return (
@@ -412,7 +406,7 @@ export function LaunchModelPill({ conversationId }: { conversationId: string }) 
           className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60 font-mono"
           title="Model and effort for this session"
         >
-          <LaunchModelLabel label={label} isDefault={isDefault} noDefault={noDefault} />
+          <LaunchModelLabel label={label} noDefault={noDefault} />
           {glyph && <span className="opacity-80">{glyph}</span>}
           <Chevron />
         </button>
