@@ -5,6 +5,7 @@
 // of it, which entry a person means by a number or a few words, and the op
 // each record command sends. The network calls and the exits live in index.ts.
 
+import { hitRateWords, predictionText, realisedLine, PREDICTION_VERDICT_WORDS, type GoalPredictionRow } from "@codecast/shared/contracts/predictedEffect";
 import { targetDayOf, targetDayStamp, targetDayPassed } from "@codecast/shared/time";
 import {
   INITIATIVE_HEALTH_LABEL,
@@ -458,6 +459,18 @@ export function recordWriteLines(c: Palette, verb: string, result: any, list: In
   ];
 }
 
+/** One task's prediction on a goal: its verdict and what the metric did, or when it will be read. */
+export function predictionLines(c: Palette, p: GoalPredictionRow): string[] {
+  const r = p.realised;
+  const color = !r ? c.dim : r.verdict === "held" ? c.green : r.verdict === "opposite" ? c.red : c.yellow;
+  const said = predictionText(p.predicted).split(" :: ")[0];
+  const what = r ? realisedLine(p.predicted, r, p.unit).replace(/^[a-z ]+: /, "") : `${said}${p.predicted.read_at ? "" : " after ship"}`;
+  return [
+    `  ${c.cyan}${p.short_id}${c.reset} ${color}${r ? PREDICTION_VERDICT_WORDS[r.verdict] : "open"}${c.reset} ${what} ${c.dim}· ${p.title}${c.reset}`,
+    `    ${c.dim}${r ? `${said}; ` : ""}basis: ${p.predicted.basis}${c.reset}`,
+  ];
+}
+
 const indented = (text: string, by = "  "): string[] => text.split("\n").map((l) => `${by}${l}`);
 
 /**
@@ -494,6 +507,12 @@ export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; 
     out.push(head("Metrics", "each number against its target"));
     for (const m of readings) out.push(`  ${metricRecordLine(c, m, trends[m.key], now)} ${c.dim}· ${m.key}${m.source ? ` · ${m.source}` : ""}${c.reset}`);
     out.push(hint(`Report a value: cast goal report ${row.short_id} ${readings[0].key}=<value> --source <link or short id>`));
+  }
+
+  const predictions = row.predictions?.rows ?? [];
+  if (predictions.length) {
+    out.push(head("Predictions", hitRateWords(row.predictions.tally)));
+    for (const p of predictions) out.push(...predictionLines(c, p));
   }
 
   const section = (list: InitiativeRecordList, title: string, entries: RecordEntry[]) => {

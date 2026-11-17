@@ -32,7 +32,7 @@ export function cleanMetrics(raw: MetricArg[]): InitiativeMetric[] {
   return metrics;
 }
 
-async function watchIn(ctx: { db: any }, workspace: string, ref: string) {
+export async function watchIn(ctx: { db: any }, workspace: string, ref: string) {
   const row = await ctx.db.query("metric_watches").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
   return row && row.workspace === workspace ? row : null;
 }
