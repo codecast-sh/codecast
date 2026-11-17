@@ -74,7 +74,7 @@ convention.
   last_error?: string,
   // delegation: which provider side signal means "hand this to an agent"
   delegate_label?: string,        // default "agent"
-  delegate_assignee?: string,     // provider user id or login that means "agent"
+  delegate_assignee?: string,     // Linear user id, email or display name; GitHub login: means "agent"
   auto_spawn: boolean,            // spawn a session when the signal appears
   push_new_tasks: boolean,        // tasks created in the project are created on the provider
   spawn_isolated?: boolean,       // false turns auto-spawn worktrees off; unset means on
@@ -102,6 +102,15 @@ that pair: `app_installations` (Linear, Notion, and the token connectors in
 `tokenConnectors.ts`), `slack_installations`,
 `github_app_installations`; `google_installations` is personal only. The
 shared catalog (`appDescriptors.ts`) says which scopes each connector takes.
+
+The Linear connector installs as the app (`actor=app`) with the scopes
+`read`, `write`, `comments:create` and `app:assignable`; the last is what lets
+people pick the Codecast app as an issue's delegate. At connect it also reads
+`viewer { id }`, the app's own Linear user id in that workspace, and stores it
+as optional `app_user_id` on the `app_installations` row. A reconnect stages
+the id in `pending_replacement` with the rest of the new grant and promotes it
+on confirm. A connection made before `app:assignable` was requested has
+neither the capability nor an `app_user_id` until it is reconnected.
 
 A team connection serves the team's members inside the team. A personal
 connection follows its owner into every workspace they work in. Every
@@ -153,6 +162,7 @@ them as health.
 | status (category)     | state.type: triage,backlog -> backlog; unstarted -> open; started -> in_progress; completed -> done; canceled, duplicate -> dropped. Team states named like "review" under started -> in_review | open -> open; closed+not_planned -> dropped; any other closed -> done (`githubStatusFor`) |
 | priority              | 0 none, 1 urgent, 2 high, 3 medium, 4 low | not synced (GitHub has none)          |
 | assignee              | assignee.email -> users.email / alternate_emails | assignees[0].login -> users.github_username |
+| (delegation signals)  | assignee.id (`assignee_id`), delegate.id (`delegate_id`); webhooks send `assigneeId`, `delegateId` | not read |
 | labels                | labels[].name                            | labels[].name                         |
 | parent_id (subtask)   | parentId (sub-issue), both ways          | not synced                            |
 | comments              | comments (markdown, user)                | issue comments                        |
@@ -333,9 +343,18 @@ A task with `external` becomes a session three ways:
    The caller is passed as `callerUserId`, so the cloud upgrade applies when
    `--device` names a managed cloud host.
 3. Automatically. When an inbound event carries the source's delegation
-   signal (label equals `delegate_label`, or assignee equals
-   `delegate_assignee`) and `auto_spawn` is on, `applyRemote` schedules the
-   spawn once per task (guarded by `conversation_ids` being empty). Triggers
+   signal and `auto_spawn` is on, `applyRemote` schedules the spawn once per
+   task (guarded by `conversation_ids` being empty). The signal is any of:
+   the label equals `delegate_label`; the assignee matches
+   `delegate_assignee` (Linear: user id, email or display name; GitHub: login;
+   all case-insensitive); or, on Linear, the issue's delegate
+   is the app user of the connection that serves the source (team connection
+   first, then the source owner's personal one, the token's resolution). The
+   third needs no source setting, and a connection without `app_user_id`
+   never matches it. Delegation never bypasses `auto_spawn`. The task is
+   created or linked on every issue event of an imported source whether or
+   not `auto_spawn` is on; an issue whose team and project are both outside
+   every imported source has no source and is ignored. Triggers
    also fire: every inbound event is normalized and handed to
    `agentTasks.matchTaskTriggers` as `issues/opened`, `issues/assigned`,
    `issues/labeled`, `issues/closed`, `issue_comment/created`, with
@@ -376,7 +395,8 @@ integration work) through `internal.externalEvents.record`, with `source`
 `issue_closed`, `issue_reopened`, `issue_commented`, `issue_status`,
 `issue_edited`, the `issue { provider, key, url, title }` object, `task_ids`
 set to the backing task, and `dedupe_key` = `<provider>:<issue id>:<kind>:<event ts>`.
-A webhook names its kind from its action. A pull (import, reconcile) has no
+A webhook names its kind from its action, and a Linear update whose
+`updatedFrom` has `assigneeId` or `delegateId` is `issue_assigned`. A pull (import, reconcile) has no
 action, so the kind is derived from the diff it applied
 (`issueMapping.kindFromDiff`: created -> opened, status -> closed or status,
 assignee -> assigned, labels -> labeled, else edited, a landed comment ->
