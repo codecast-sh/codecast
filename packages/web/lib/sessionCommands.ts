@@ -8,6 +8,7 @@
 import { useInboxStore, type AccountSwitchArgs } from "../store/inboxStore";
 import { isParkedDispatchError, isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { MACHINE_SWITCH_TIMEOUT_MS } from "./machineAccountSwitch";
+import { dispatchRefusalReason } from "./dispatchRefusal";
 
 export type SessionCommandKind = "restart" | "repair" | "move" | "switch" | "line_edit" | "interrupt" | "backend" | "rewind";
 
@@ -234,7 +235,7 @@ export function deviceMoveStatusOf(
   const failed = (failure: string) =>
     now < sessionCommandDeadline(gesture) + MOVE_FAILED_LINGER_MS ? { phase: "failed" as const, stage: null, failure } : idle;
   if (gesture.confirmed_at) return now - gesture.confirmed_at < MOVE_RESTORED_LINGER_MS ? { phase: "restored", stage: null, failure: null } : idle;
-  if (gesture.result === DISPATCH_REFUSED) return failed(gesture.error ?? "Move failed");
+  if (gesture.result === DISPATCH_REFUSED) return failed(`Move to ${dest} failed · ${dispatchRefusalReason(gesture.error ?? "")}`);
   const since = conversationCommandRows(Object.fromEntries(rows.map((r) => [r._id, r])), gesture.conversation_id ?? "", gesture.requested_at);
   const last = [...since].reverse();
   const resume = last.find((c) => c.command === "resume_session");

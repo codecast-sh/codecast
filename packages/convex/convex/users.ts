@@ -17,7 +17,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots, ownDevice } from "./devices";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { reissueStrandedCloudSpawns } from "./cloudPlacement";
-import { reissueWaitingMigrations } from "./sessionMigrations";
+import { reissueWaitingMigrations, settleLateResume } from "./sessionMigrations";
 import { fromConvexAgentType, LOCAL_AGENT_CLIENTS, isPinnableAgentId, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { adminChangesZones, recutChangesDays } from "./lib/changesDirty";
@@ -967,6 +967,7 @@ export const reportCommandResult = mutation({
       ...(command.command === "set_provider_key" ? { args: undefined } : {}),
     });
     if (command.command === "start_session" && !args.error) await stampStartedWorktree(ctx, command.args, args.result);
+    if (command.command === "resume_session" && !args.error) await settleLateResume(ctx, command);
     // A `cast decide --run` the machine could not take fails its card and tells the session.
     if (command.command === "run_cast" && args.error) {
       const decision_id = (() => { try { return String(JSON.parse(command.args ?? "{}").decision_id ?? ""); } catch { return ""; } })();

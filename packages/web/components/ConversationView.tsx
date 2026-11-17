@@ -1259,7 +1259,7 @@ const ConversationViewInner = (
   const { handleForkFromMessage, forkHandler, handleForkFromBranch, handleForkReply, forkTailHandler } = useForkActions({ injectSession, conversation, addOptimisticFork, currentUser, hasMoreAbove, convCommand, timelineRef, populateInputRef, addOptimisticMsg, sendInlineMessage });
   // Bridge for the quote/comment review UI: lets MessageReview, the selection
   // toolbar, and the review bar push text into the composer without prop-drilling.
-  const { dropFilesRef, isDragging, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useConversationFileDrop();
+  const { dropFilesRef, isDragging, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useConversationFileDrop({ recordings: true });
 
   // Rewind/fork navigator reads the same cached list (populated by
   // useConversationMessages), gated to owners of an active session since
@@ -4180,7 +4180,7 @@ const ConversationViewInner = (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/95" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
             <svg className="w-10 h-10 mx-auto mb-3 text-sol-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-            <p className="text-sol-cyan text-sm font-medium">Drop images to attach</p>
+            <p className="text-sol-cyan text-sm font-medium">Drop images or a screen recording</p>
           </div>
         </div>
       )}

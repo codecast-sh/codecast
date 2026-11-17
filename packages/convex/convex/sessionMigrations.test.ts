@@ -13,6 +13,7 @@ import {
   performReapStale,
   performRunHere,
   performRetryFailed,
+  settleLateResume,
   planMigration,
   reissueWaitingMigrations,
   STALE_MIGRATION_MS,
@@ -559,6 +560,24 @@ describe("runHere", () => {
     await performCancelBatch({ db }, ME as any, (first as any).batch_id);
     const next = await performRunHere({ db }, ME as any, { conversation_id: "c3", device_id: LAPTOP });
     expect((next as any).batch_id).not.toBe((first as any).batch_id);
+  });
+});
+
+describe("settleLateResume", () => {
+  test("a resume that reports after the runner gave up turns the move done", async () => {
+    const db = fixtures();
+    const { rows } = await startedBatch(db, ["c1"]);
+    const id = rows[0].migration_id as any;
+    await performBeginSession({ db }, ME as any, { migration_id: id, device_id: LAPTOP }, NOW);
+    const fin = await performFinishSession({ db }, ME as any, { migration_id: id, project_path: "/home/ubuntu/work/a", source_path: "/Users/me/src/repo/.codecast/worktrees/a" }, NOW + 5);
+    await performFailSession({ db }, ME as any, { migration_id: id, error: "Moved, but its daemon has not confirmed the resume." });
+    expect(rowsOf(db)[0].status).toBe("failed");
+    const resume = commands(db).find((c) => c._id === (fin as any).resume_command_id);
+    // Another session's resume leaves the row alone.
+    await settleLateResume({ db }, { ...resume, _id: "other-command" }, NOW + 10);
+    expect(rowsOf(db)[0].status).toBe("failed");
+    await settleLateResume({ db }, resume, NOW + 10);
+    expect(rowsOf(db)[0]).toMatchObject({ status: "done", error: undefined, finished_at: NOW + 10 });
   });
 });
 

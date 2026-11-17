@@ -162,6 +162,24 @@ export function describeRow(row: RunnerRow): string {
   return `${row.short_id ?? short(row.conversation_id)}${row.title ? ` "${row.title.slice(0, 40)}"` : ""}`;
 }
 
+// A transfer of a big repo runs for many minutes in one call. The row says so
+// on a beat, with how long it has run: the person sees it is alive, and the
+// server's reaper (STALE_MIGRATION_MS) never mistakes a slow copy for a dead runner.
+export const TRANSFER_REPORT_MS = 60_000;
+
+export async function whileReporting<T>(io: Pick<RunnerIo, "report" | "now">, id: string, stage: string, work: () => Promise<T>, everyMs = TRANSFER_REPORT_MS): Promise<T> {
+  const started = io.now();
+  await io.report(id, { status: "transferring", stage });
+  const beat = setInterval(() => {
+    void io.report(id, { status: "transferring", stage: `${stage} (${minutes(io.now() - started)} so far)` }).catch(() => {});
+  }, everyMs);
+  try {
+    return await work();
+  } finally {
+    clearInterval(beat);
+  }
+}
+
 /** Poll a daemon command until it reports or the TTL has surely killed it. */
 export async function awaitCommand(io: Pick<RunnerIo, "commandStatus" | "now" | "sleep">, commandId: string, timeoutMs = COMMAND_TIMEOUT_MS): Promise<CommandStatus | null> {
   const deadline = io.now() + timeoutMs;
@@ -355,9 +373,9 @@ export async function migrateRow(
         if (sibling.pushed) { pushedHead = sibling.head; break; }
         owner = ledger.claim(key);
       }
-      await io.report(id, { status: "transferring", stage: owner ? "pushing worktree + transcript" : "pushing transcript (worktree already there)" });
       try {
-        const t = await io.transferToCloud(facts, { skipTree: !owner, pushedHead, bring: row.bring_paths ?? [] });
+        const t = await whileReporting(io, id, owner ? "pushing worktree + transcript" : "pushing transcript (worktree already there)",
+          () => io.transferToCloud(facts, { skipTree: !owner, pushedHead, bring: row.bring_paths ?? [] }));
         transfer = t;
         if (owner) ledger.settle(key, t.pushedHead);
       } catch (err) {
@@ -365,8 +383,7 @@ export async function migrateRow(
         throw err;
       }
     } else {
-      await io.report(id, { status: "transferring", stage: "pulling worktree + transcript from the cloud host" });
-      transfer = await io.transferToLocal(facts);
+      transfer = await whileReporting(io, id, "pulling worktree + transcript from the cloud host", () => io.transferToLocal(facts));
     }
     if (small) {
       transfer = { ...transfer, verification: `${transfer.verification}. This host is too small for the repo's real work: ${small}. Expect its whole-program typecheck (cast check) and dev server (cast dev) to run out of memory here; run them through a worker on a bigger machine (cast spawn --subagent) or ask for the host to be resized (cast hosts resize)` };

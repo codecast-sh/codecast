@@ -1076,6 +1076,26 @@ export const confirmSession = mutation({
   },
 });
 
+/**
+ * The destination's resume reported after the runner stopped waiting for it
+ * (a loaded machine can take longer than RESUME_CONFIRM_TIMEOUT_MS): the move
+ * landed, so its row says done rather than the "not confirmed" failure.
+ */
+export async function settleLateResume(ctx: { db: any }, command: { _id: any; user_id: any; args?: string }, now = Date.now()) {
+  let conversationId: string | undefined;
+  try { conversationId = JSON.parse(command.args ?? "{}").conversation_id; } catch { return; }
+  if (!conversationId) return;
+  const rows = await ctx.db
+    .query("session_migrations")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
+    .collect();
+  for (const row of rows) {
+    if (row.resume_command_id?.toString() !== command._id.toString() || row.status === "done") continue;
+    if (row.user_id.toString() !== command.user_id.toString()) continue;
+    await ctx.db.patch(row._id, { status: "done" as const, stage: "running on the destination", error: undefined, finished_at: now, updated_at: now });
+  }
+}
+
 /** Any step failed: lift the fence, record why. The session stays where it was. */
 export async function performFailSession(
   ctx: { db: any },

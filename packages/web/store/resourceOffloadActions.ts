@@ -28,3 +28,19 @@ export function cancelResourceBatch(batch: MigrationBatch, now: number) {
   }
   if (batch.rows.every(r => r.status === "cancelled")) batch.state = "cancelled";
 }
+
+export function requeueMigrationBatch(batch: MigrationBatch, now: number) {
+  batch.cancelled_at = null;
+  for (const row of batch.rows) {
+    if (row.status !== "failed" && row.status !== "cancelled") continue;
+    if (row.status === "failed") batch.failed--; else batch.cancelled--;
+    row.status = "queued";
+    row.error = null;
+    row.stage = null;
+    row.started_at = null;
+    row.finished_at = null;
+    row.updated_at = now;
+    batch.queued++;
+  }
+  batch.state = "running";
+}

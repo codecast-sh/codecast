@@ -200,7 +200,6 @@ function CandidateRow({
 function BatchCard({ b, devices, now, expandedDefault }: { b: Batch; devices: Map<string, Device>; now: number; expandedDefault: boolean }) {
   const [expanded, setExpanded] = useState(expandedDefault);
   const cancel = useMutation(api.sessionMigrations.cancelBatch);
-  const retry = useMutation(api.sessionMigrations.retryFailed);
   const [busy, setBusy] = useState<"cancel" | "retry" | null>(null);
   const to = devices.get(b.to_device_id);
   const toName = to ? deviceDisplayName(to) : b.to_device_id.slice(0, 8);
@@ -230,8 +229,8 @@ function BatchCard({ b, devices, now, expandedDefault }: { b: Batch; devices: Ma
         const r = await cancel({ batch_id: b.batch_id });
         toast.success(`Cancelled ${r.cancelled} queued session${r.cancelled === 1 ? "" : "s"}`);
       } else {
-        const r = await retry({ batch_id: b.batch_id });
-        toast.success(`Re-queued ${r.requeued} session${r.requeued === 1 ? "" : "s"}`);
+        // The store paints the rows queued at once; the rows' own pills say so.
+        await useInboxStore.getState().retryMigrationBatch(b.batch_id);
       }
     } catch (e: any) {
       toast.error(e?.message ?? `Could not ${kind}`);

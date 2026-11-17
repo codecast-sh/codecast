@@ -156,3 +156,68 @@ export function batchLooksUnclaimed(b: { created_at: number; rows: Array<{ statu
   const started = b.rows.some((r) => r.status !== "queued" && r.status !== "cancelled");
   return !started && b.rows.some((r) => r.status === "queued") && now - b.created_at > BATCH_UNCLAIMED_WARN_MS;
 }
+
+/** The newest migration of one conversation in the batch list, with its batch. */
+export function conversationMigrationOf(
+  batches: MigrationBatch[] | null | undefined,
+  conversationId: string | undefined,
+): { batch: MigrationBatch; row: MigrationBatchRow } | null {
+  if (!batches || !conversationId) return null;
+  let best: { batch: MigrationBatch; row: MigrationBatchRow } | null = null;
+  for (const batch of batches) {
+    const row = batch.rows.find((r) => r.conversation_id === conversationId);
+    if (row && (!best || batch.created_at > best.batch.created_at)) best = { batch, row };
+  }
+  return best;
+}
+
+// How long a landed move's green line and a failed move's retry stay up.
+export const MIGRATION_DONE_LINGER_MS = 8_000;
+export const MIGRATION_FAILED_LINGER_MS = 10 * 60_000;
+
+export type MigrationMoveView =
+  | { phase: "moving"; status: MigrationRowStatus; label: string; detail: string | null; tone: "active" | "warn"; startedAt: number; cancellable: boolean }
+  | { phase: "done"; label: string }
+  | { phase: "failed"; label: string };
+
+/**
+ * What a conversation's move between machines says right now, from its
+ * migration row: one line of where it stands, or null once it has settled
+ * long enough ago that the session's own status speaks again. `dest` and
+ * `from` are display names. A row can be cancelled until its transfer starts
+ * (the runner honours a cancelled batch while it waits for the turn to end).
+ */
+export function migrationMoveView(
+  m: { batch: MigrationBatch; row: MigrationBatchRow } | null,
+  names: { dest: string; from: string; executor: string },
+  now: number,
+): MigrationMoveView | null {
+  if (!m) return null;
+  const status = effectiveRowStatus(m.batch, m.row);
+  const settledAt = m.row.finished_at ?? m.row.updated_at;
+  if (status === "done") return now - settledAt < MIGRATION_DONE_LINGER_MS ? { phase: "done", label: `Now running on ${names.dest}` } : null;
+  if (status === "cancelled") return null;
+  if (status === "failed") {
+    return now - settledAt < MIGRATION_FAILED_LINGER_MS
+      ? { phase: "failed", label: `Move to ${names.dest} failed${m.row.error ? ` · ${m.row.error}` : ""}` }
+      : null;
+  }
+  const unclaimed = status === "queued" && batchLooksUnclaimed(m.batch, now);
+  const detail: Record<Exclude<MigrationRowStatus, "done" | "failed" | "cancelled">, string> = {
+    queued: unclaimed ? `waiting for ${names.executor} to start it` : "starting",
+    waiting_idle: "waiting for the current turn to end",
+    quiescing: `stopping the agent on ${names.from}`,
+    transferring: "copying work and transcript",
+    switching: "handing off",
+    resuming: `starting on ${names.dest}`,
+  };
+  return {
+    phase: "moving",
+    status,
+    label: `Moving to ${names.dest}`,
+    detail: detail[status],
+    tone: unclaimed ? "warn" : "active",
+    startedAt: m.row.started_at ?? m.batch.created_at,
+    cancellable: status === "queued" || status === "waiting_idle",
+  };
+}

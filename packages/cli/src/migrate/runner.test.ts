@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  whileReporting,
   SharedTreeLedger,
   WAIT_FOR_STATUSES,
   migrateRow,
@@ -458,4 +459,24 @@ test("safe offload cannot report success when no destination resume was queued",
   expect(out.outcome).toBe("failed");
   expect(out.detail).toContain("no destination resume was queued");
   expect(w.calls.find(c => c[0] === "confirm")?.[2]).toBe(false);
+});
+
+describe("whileReporting", () => {
+  test("a long transfer re-reports its stage with the time so far, and stops once it ends", async () => {
+    const reports: string[] = [];
+    let now = 0;
+    const io = { now: () => now, report: async (_id: string, p: { stage?: string }) => { reports.push(p.stage ?? ""); } };
+    const out = await whileReporting(io as any, "m1", "pulling", async () => {
+      now = 3 * 60_000;
+      await new Promise((r) => setTimeout(r, 30));
+      return "ok";
+    }, 5);
+    expect(out).toBe("ok");
+    expect(reports[0]).toBe("pulling");
+    expect(reports.slice(1).length).toBeGreaterThan(0);
+    expect(reports[1]).toBe("pulling (3m so far)");
+    const settled = reports.length;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(reports.length).toBe(settled);
+  });
 });

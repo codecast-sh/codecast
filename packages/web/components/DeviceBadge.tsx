@@ -8,6 +8,7 @@
  */
 
 import { useMemo } from "react";
+import { Loader2 } from "lucide-react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -19,6 +20,17 @@ import { useSyncDevices } from "../hooks/useSyncDevices";
 import type { RestartPhase, RestartStage } from "../hooks/useSessionRestart";
 import { useConversationCommands } from "../hooks/useSessionCommands";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useSyncCollection } from "../hooks/useSyncCollection";
+import {
+  conversationMigrationOf,
+  isRowTerminal,
+  MIGRATION_FAILED_LINGER_MS,
+  migrationMoveView,
+  ROW_STATUS_LABEL,
+  type MigrationBatch,
+  type MigrationBatchRow,
+  type MigrationMoveView,
+} from "../lib/migrationPlan";
 import {
   DISPATCH_REFUSED,
   deviceMoveStatusOf,
@@ -247,6 +259,7 @@ export function DeviceBadge({
 // The machine a session runs on is disabled as a target, but it is the one
 // row the reader looks for: undo the disabled dimming and mark it in blue.
 export const RUNNING_HERE_ROW = "data-[disabled]:opacity-100 bg-sol-blue/10 ring-1 ring-inset ring-sol-blue/40";
+const MOVING_HERE_ROW = "data-[disabled]:opacity-100 bg-sol-orange/10 ring-1 ring-inset ring-sol-orange/40";
 
 export function RunningHereTag({ online, suffix }: { online: boolean; suffix?: string }) {
   return (
@@ -283,29 +296,39 @@ export function RunOnDeviceItems({
     void requestSessionMove(conversationId, { device_id: d.device_id, is_remote: isRemote, label: deviceDisplayName(d) }).catch(() => {});
   const localDeviceId = useInboxStore(localDeviceIdOf);
   const names = useMemo(() => distinctDeviceNames([...locals, ...remotes]), [locals, remotes]);
+  const moving = useMoveInFlight(conversationId);
 
   const row = (d: Device, isRemote: boolean) => {
     const isOwner = d.device_id === ownerDeviceId;
+    const isDest = moving?.to_device_id === d.device_id;
     // An asleep cloud box is still a valid destination: the move wakes it.
     // Only a machine that CANNOT wake (a laptop or remote Mac gone dark) is dead.
     const usable = d.online || (isRemote && deviceWakesOnUse(d));
+    // One move at a time: while one runs, its destination shows how far it
+    // got and no other move is offered.
+    const offered = !isOwner && usable && !moving;
     const { name, host } = names.get(d.device_id) ?? { name: deviceDisplayName(d) };
     return (
       <DropdownMenuItem
         key={d.device_id}
-        disabled={isOwner || !usable}
-        onSelect={() => !isOwner && usable && move(d, isRemote)}
-        className={isOwner ? RUNNING_HERE_ROW : undefined}
+        disabled={!offered}
+        onSelect={() => offered && move(d, isRemote)}
+        className={isOwner ? RUNNING_HERE_ROW : isDest ? MOVING_HERE_ROW : undefined}
       >
         <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
         <span className="flex-1 truncate">
-          {isOwner || !usable ? name : `Move to ${name}`}
+          {offered ? `Move to ${name}` : name}
           {host && <span className="ml-1.5 text-sol-text-dim">{host}</span>}
         </span>
         {d.device_id === localDeviceId && (
           <span className="ml-2 shrink-0 whitespace-nowrap rounded-full border border-sol-border px-2 py-0.5 text-meta text-sol-text-muted">this device</span>
         )}
-        {isOwner ? <RunningHereTag online={d.online} /> : (
+        {isDest ? (
+          <span className="ml-2 flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-sol-orange/15 px-2 py-0.5 text-meta font-medium text-sol-orange">
+            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+            moving · {moving!.label}
+          </span>
+        ) : isOwner ? <RunningHereTag online={d.online} /> : (
           <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-meta text-sol-text-muted">
             {d.online ? "" : usable ? "asleep, wakes on move" : "offline"}
             <DeviceDot online={d.online} />
@@ -363,25 +386,43 @@ export function useDeviceMoveStatus(conversationId: string | undefined): {
   startedAt: number | null;
   restoredLabel: string | undefined;
   retry: () => void;
+  cancel?: () => void;
 } {
   const gesture = useInboxStore((s) =>
     conversationId ? latestSessionCommand(s.sessionCommands, (r) => r.conversation_id === conversationId && r.kind === "move") : undefined);
+  const migration = useConversationMigration(conversationId, !!gesture && !gesture.to_remote && !gesture.confirmed_at);
   const open = !!gesture && !gesture.confirmed_at && gesture.result !== DISPATCH_REFUSED;
   // Tick fast only while the strip shows something; a settled move is idle.
-  const now = useCoarseNow(deviceMoveStatusOf(gesture, [], Date.now()).phase !== "idle" ? 1_000 : 60_000);
-  const rows = useConversationCommands(conversationId, open && !sessionCommandTimedOut(gesture!, now));
+  const busy = deviceMoveStatusOf(gesture, [], Date.now()).phase !== "idle" || (!!migration && !isRowTerminal(migration.row.status));
+  const recentMigration = !!migration && Date.now() - (migration.row.finished_at ?? migration.row.updated_at) < MIGRATION_FAILED_LINGER_MS;
+  const now = useCoarseNow(busy || recentMigration ? 1_000 : 60_000);
+  const rows = useConversationCommands(conversationId, open && !sessionCommandTimedOut(gesture!, now) && !migration);
   const { phase, stage, failure, resumed } = deviceMoveStatusOf(gesture, rows, now);
+  const names = useMigrationNames(migration?.row);
+  const view = migrationMoveView(migration, names, now);
+  // A move back from a cloud host runs as a migration (sessionMigrations.runHere):
+  // its row is the move's truth, and the click's own row only says it was asked.
+  const migrationSpeaks = !!view && (!gesture || view.phase === "moving" || gesture.to_device_id === migration!.row.to_device_id || migration!.batch.created_at > gesture.requested_at);
 
   // The destination's resume landed: stamp the row confirmed, which every
-  // reader of the move takes as "running there now".
+  // reader of the move takes as "running there now". A click answered by a
+  // migration settles with it: confirmed when it lands, dropped when it was
+  // refused (a press while the move was already under way) or the move failed,
+  // since the migration line says what happened.
   useWatchEffect(() => {
-    if (gesture && resumed && !gesture.confirmed_at) useInboxStore.getState().confirmSessionCommand(gesture._id);
-  }, [gesture, resumed]);
+    if (!gesture || gesture.confirmed_at) return;
+    if (resumed && !migrationSpeaks) { useInboxStore.getState().confirmSessionCommand(gesture._id); return; }
+    if (!migrationSpeaks || !view) return;
+    if (view.phase === "done") useInboxStore.getState().confirmSessionCommand(gesture._id);
+    else if (view.phase === "failed" || gesture.result === DISPATCH_REFUSED) useInboxStore.getState().dismissSessionCommand(gesture._id);
+  }, [gesture, resumed, migrationSpeaks, view?.phase]);
 
+  const batchId = migration?.batch.batch_id;
   return useMemo(() => {
-    if (!conversationId || !gesture || phase === "idle") {
-      return { phase: "idle" as RestartPhase, stage: null, failure: null, startedAt: null, restoredLabel: undefined, retry: () => {} };
-    }
+    const idle = { phase: "idle" as RestartPhase, stage: null, failure: null, startedAt: null, restoredLabel: undefined, retry: () => {} };
+    if (!conversationId) return idle;
+    if (migrationSpeaks && view) return migrationStatus(view, batchId!);
+    if (!gesture || phase === "idle") return idle;
     const dest = gesture.to_label ?? gesture.to_device_id ?? "";
     return {
       phase: phase as RestartPhase,
@@ -394,5 +435,75 @@ export function useDeviceMoveStatus(conversationId: string | undefined): {
         void requestSessionMove(conversationId, { device_id: gesture.to_device_id, is_remote: !!gesture.to_remote, label: dest }).catch(() => {});
       },
     };
-  }, [conversationId, gesture, phase, stage?.label, stage?.tone, failure]);
+  }, [conversationId, gesture, phase, stage?.label, stage?.tone, failure, migrationSpeaks, view?.phase, view?.label, (view as any)?.detail, (view as any)?.tone, (view as any)?.cancellable, (view as any)?.startedAt, batchId]);
+}
+
+function migrationStatus(view: MigrationMoveView, batchId: string) {
+  const store = () => useInboxStore.getState();
+  if (view.phase === "done") return { phase: "restored" as RestartPhase, stage: null, failure: null, startedAt: null, restoredLabel: view.label, retry: () => {} };
+  if (view.phase === "failed") {
+    return { phase: "failed" as RestartPhase, stage: null, failure: view.label, startedAt: null, restoredLabel: undefined,
+      retry: () => void store().retryMigrationBatch(batchId).catch(() => {}) };
+  }
+  return {
+    phase: "restarting" as RestartPhase,
+    stage: { label: view.detail ? `${view.label} · ${view.detail}` : view.label, tone: view.tone },
+    failure: null,
+    startedAt: view.startedAt,
+    restoredLabel: undefined,
+    retry: () => {},
+    cancel: view.cancellable ? () => void store().cancelResourceOffload(batchId).catch(() => {}) : undefined,
+  };
+}
+
+/**
+ * The conversation's newest migration (a move between a cloud host and a
+ * laptop), read from the store. The batch list is fed only while one could be
+ * under way: the conversation carries a migration fence, the caller has a
+ * move in flight (`asked`), or the cached copy still shows one running.
+ */
+export function useConversationMigration(conversationId: string | undefined, asked = false): { batch: MigrationBatch; row: MigrationBatchRow } | null {
+  const fenced = useInboxStore((s) =>
+    conversationId ? !!(s.sessions[conversationId]?.migration_batch_id ?? (s.conversations[conversationId] as any)?.migration_batch_id) : false);
+  const sig = useInboxStore((s) => {
+    const m = conversationMigrationOf(s.migrationBatches, conversationId);
+    return m ? [m.batch.batch_id, m.batch.cancelled_at, m.row.status, m.row.stage, m.row.error, m.row.started_at, m.row.finished_at, m.row.updated_at].join("|") : "";
+  });
+  const cached = useMemo(() => conversationMigrationOf(useInboxStore.getState().migrationBatches, conversationId), [conversationId, sig]);
+  const live = !!cached && !isRowTerminal(cached.row.status) && !cached.batch.cancelled_at;
+  useSyncCollection("migrationBatches", (api as any).sessionMigrations.listBatches, conversationId && (fenced || asked || live) ? {} : "skip");
+  return cached;
+}
+
+/** Display names for the machines a migration row names. */
+function useMigrationNames(row: MigrationBatchRow | undefined) {
+  const roster = useInboxStore((s) => s.machineRoster as Device[]);
+  return useMemo(() => {
+    const name = (id: string | null | undefined, fallback: string) => {
+      const d = rosterDeviceOf(roster, id);
+      return d ? deviceDisplayName(d) : fallback;
+    };
+    return {
+      dest: name(row?.to_device_id, "the other machine"),
+      from: name(row?.from_device_id, "the cloud host"),
+      executor: name(row?.executor_device_id, "the moving machine"),
+    };
+  }, [roster, row?.to_device_id, row?.from_device_id, row?.executor_device_id]);
+}
+
+/**
+ * The move a conversation is in, for the device menu: where it is heading and
+ * a word on how far it got. A migration (back from a cloud host) reports its
+ * phase; a plain move only that it is under way.
+ */
+function useMoveInFlight(conversationId: string): { to_device_id: string; label: string } | null {
+  const m = useConversationMigration(conversationId);
+  const gesture = useInboxStore((s) => latestSessionCommand(s.sessionCommands, (r) => r.conversation_id === conversationId && r.kind === "move"));
+  if (m && !isRowTerminal(m.row.status) && !m.batch.cancelled_at) {
+    return { to_device_id: m.row.to_device_id, label: ROW_STATUS_LABEL[m.row.status] };
+  }
+  if (gesture?.to_device_id && deviceMoveStatusOf(gesture, [], Date.now()).phase === "restarting") {
+    return { to_device_id: gesture.to_device_id, label: "starting" };
+  }
+  return null;
 }

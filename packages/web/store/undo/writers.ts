@@ -309,7 +309,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   workflowRuns: "Written only by respondToGate, a gate answer that resumes the run; never undoable.",
   currentUser: "Profile and preference settings; never undoable, and the undo binding ignores the key.",
   migrationBatches:
-    "Written only by startResourceOffload and cancelResourceOffload, which start or cancel a migration batch on hosts; machine control is never undoable.",
+    "Written only by startResourceOffload, cancelResourceOffload and retryMigrationBatch, which start, cancel or re-queue a migration batch on hosts; machine control is never undoable.",
   opsSources:
     "Written by createOpsSource, removeOpsSource, setOpsSourceStatus, setOpsSourceProject and the replay import's start and stop: a create, a delete, a setting and a running job, none of them undoable.",
   opsGroups:

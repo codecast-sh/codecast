@@ -822,12 +822,14 @@ function useConversationTaskStats(conversationId: string | undefined) {
 // Driven entirely by useSessionRestart's phase/stage; mounted only while a
 // restart is in some visible state, so the 1s elapsed tick costs nothing
 // otherwise.
-export function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry, restoredLabel }: {
+export function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry, onCancel, restoredLabel }: {
   phase: RestartPhase;
   stage: RestartStage | null;
   failure: string | null;
   startedAt: number | null;
   onRetry: () => void;
+  /** Stops it while it is still in flight (a move that has not started copying). */
+  onCancel?: () => void;
   /** "Back live" confirmation text — device moves say where the session landed. */
   restoredLabel?: string;
 }) {
@@ -855,7 +857,16 @@ export function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry, 
       <span className={`w-2 h-2 rounded-full shrink-0 ${toneClass.dot} ${tone === "error" ? "" : "animate-pulse"}`} />
       <span className="min-w-0 truncate">{label}</span>
       {elapsed !== null && elapsed >= 3 && (
-        <span className="shrink-0 tabular-nums opacity-60">{elapsed}s</span>
+        <span className="shrink-0 tabular-nums opacity-60">{elapsed < 60 ? `${elapsed}s` : formatElapsedClock(elapsed * 1000)}</span>
+      )}
+      {phase === "restarting" && onCancel && (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="shrink-0 ml-auto font-medium hover:underline"
+        >
+          Cancel
+        </button>
       )}
       {phase === "failed" && (
         <button
@@ -875,7 +886,7 @@ export function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry, 
 // the same daemon command rows. useDeviceMoveStatus reads the move's
 // sessionCommands row, so this stays mounted-cheap when idle.
 export function DeviceMoveStatusStrip({ conversationId }: { conversationId: string }) {
-  const { phase, stage, failure, startedAt, restoredLabel, retry } = useDeviceMoveStatus(conversationId);
+  const { phase, stage, failure, startedAt, restoredLabel, retry, cancel } = useDeviceMoveStatus(conversationId);
   return (
     <RestartStatusStrip
       phase={phase}
@@ -883,6 +894,7 @@ export function DeviceMoveStatusStrip({ conversationId }: { conversationId: stri
       failure={failure}
       startedAt={startedAt}
       onRetry={retry}
+      onCancel={cancel}
       restoredLabel={restoredLabel}
     />
   );
