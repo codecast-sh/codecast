@@ -22,6 +22,8 @@ export function useSetupFeatures(teamId: string | null) {
     total: SETUP_FEATURES.length + 1,
     onCount: SETUP_FEATURES.length + 1 - off.length,
     allOn: off.length === 0,
+    /** The features still off: what "turn all on" adds. */
+    off,
     turnAllOn: () => {
       if (!teamId) return;
       const st = useInboxStore.getState();

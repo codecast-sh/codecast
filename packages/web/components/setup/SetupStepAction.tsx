@@ -76,7 +76,7 @@ export function SetupStepAction({ step, team, look = "row", onAct }: Props) {
     case "notifications":
       return <NotificationsAction variant={variant} label={label} onAct={onAct} />;
     case "team_features":
-      return team ? <TeamFeaturesAction teamId={String(team._id)} variant={variant} label={label} onAct={onAct} /> : null;
+      return team ? <TeamFeaturesAction teamId={String(team._id)} teamName={team.name} variant={variant} label={label} onAct={onAct} /> : null;
   }
 }
 
@@ -161,20 +161,27 @@ function NotificationsAction({ variant, label, onAct }: ActionProps) {
   );
 }
 
-function TeamFeaturesAction({ teamId, variant, label, onAct }: ActionProps & { teamId: string }) {
+function TeamFeaturesAction({ teamId, teamName, variant, label, onAct }: ActionProps & { teamId: string; teamName: string }) {
   const features = useSetupFeatures(teamId);
   return (
-    <Button
-      variant={variant}
-      size="xs"
-      data-setup-action="team_features"
-      onClick={() => {
+    <ConsequentialSwitch
+      on={false}
+      ledger={featuresAllLedger({
+        group: "Team",
+        machine: teamName,
+        names: features.off.map((f) => `${f.name} · ${f.short}`),
+        appliesTo: `Everyone in ${teamName}`,
+      })}
+      onTurnOn={() => {
+        const names = features.off.map((f) => f.name).join(", ");
         features.turnAllOn();
-        toast.success(`All ${features.total} team features on`);
+        toast.success(`Turned on ${names} for ${teamName}`);
         onAct?.();
       }}
-    >
-      {label}
-    </Button>
+      onTurnOff={() => {}}
+      trigger={({ press, reviewing }) => (
+        <Button variant={variant} size="xs" onClick={press} aria-haspopup="dialog" aria-expanded={reviewing} data-setup-action="team_features">{label}</Button>
+      )}
+    />
   );
 }

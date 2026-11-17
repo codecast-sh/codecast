@@ -31,7 +31,9 @@ export function SetupMeter() {
   const [open, setOpen] = useState(false);
   const next = nextStep(steps);
 
-  if (!ready || done >= total) return null;
+  // A press that finishes the last step leaves the open list up, every row
+  // checked, so the person sees it land; the meter goes once they close it.
+  if (!ready || (done >= total && !open)) return null;
   if (!open && snoozedAt > 0 && Date.now() - snoozedAt < METER_SNOOZE_MS) return null;
 
   return (
