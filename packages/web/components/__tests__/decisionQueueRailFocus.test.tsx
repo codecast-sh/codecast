@@ -62,15 +62,16 @@ mock.module("../../hooks/useDecisionQueue", () => ({
 // importing the real module to keep its other exports would drag the entire
 // conversation tree (and its Convex hooks) into the process for nothing. No
 // other test imports it — the one that names it reads it as source text.
+// It reports the item the stepper hands it, the one the thread's card shows.
 mock.module("../../app/inbox/QueuePageClient", () => ({
   InboxConversation: ({ sessionId }: { sessionId: string }) => (
-    <div data-conv={sessionId} />
+    <div data-conv={sessionId} data-stepper-item={React.useContext(realQueueModule.DecisionStepperContext)?.item?.key} />
   ),
 }));
 
+const React = await import("react");
 const { DecisionQueue } = await import("../DecisionQueue");
 const { useInboxStore } = await import("../../store/inboxStore");
-const React = await import("react");
 const { createRoot } = await import("react-dom/client");
 
 const act: <T>(cb: () => T | Promise<T>) => Promise<T> = (React as any).act;
@@ -112,5 +113,26 @@ describe("the queue lights the rail card it is showing", () => {
     queue = [];
     await act(async () => root.render(<DecisionQueue />));
     expect(railFocus()).toBe(CONV_A);
+  });
+});
+
+// A rail row under a session's group links to /decisions?s=<conv>&d=<key>.
+// The thread's card shows the stepper's item when it is one of the thread's
+// asks, so the stepper must hand it the `cast decide` ask the row named, not
+// only a poll or permission item; otherwise every row of one session showed
+// that session's first ask.
+describe("a rail row picks the ask the thread's card shows", () => {
+  test("entering on the third ask of a session hands that ask to the card", async () => {
+    queue = [item("decide:1", CONV_A), item("decide:5", CONV_A), item("decide:19", CONV_A)];
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const shown = () => container.querySelector("[data-conv]")?.getAttribute("data-stepper-item");
+    await act(async () => root.render(<DecisionQueue key="19" initialConversationId={CONV_A} initialKey="decide:19" />));
+    expect(shown()).toBe("decide:19");
+    await act(async () => root.render(<DecisionQueue key="5" initialConversationId={CONV_A} initialKey="decide:5" />));
+    expect(shown()).toBe("decide:5");
+    await act(async () => root.unmount());
+    container.remove();
   });
 });
