@@ -7,7 +7,7 @@
 // It opens a grouped list; a row jumps to its call. Derived from the messages
 // the view already holds (lib/whatItRan), nothing stored.
 import React, { memo, useMemo, useState } from "react";
-import { SquareTerminal, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { HEADER_CHIP } from "../../lib/headerChip";
 import { RAN_GROUPS, whatItRan, type RanCall, type RanGroup, type RanRisk } from "../../lib/whatItRan";
@@ -43,6 +43,8 @@ type Msg = Parameters<typeof whatItRan>[0] extends readonly (infer M)[] | undefi
 // A group can run to thousands of calls (polling reads); the newest show, the rest on request.
 const GROUP_CAP = 150;
 const firstLine = (command: string) => command.split("\n").find((l) => l.trim()) ?? command;
+// The row names what ran, not where: a leading `cd <dir> &&` is dropped (the title keeps it).
+const shownLine = (command: string) => firstLine(command).replace(/^\s*(?:cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*&&\s*)+/, "");
 const lineCount = (command: string) => command.split("\n").filter((l) => l.trim()).length;
 
 function worstOf(calls: readonly RanCall[]): RanRisk {
@@ -115,10 +117,10 @@ export const WhatItRanChip = memo(function WhatItRanChip({
           title={`What it ran: ${label}`}
           className={`${HEADER_CHIP} ${open ? "bg-sol-bg-alt text-sol-text" : ""} flex-shrink-0`}
         >
-          {/* The header family's quiet ink; only the icon carries the risk
-              color, and only the riskiest group is named (the list has the rest). */}
-          <SquareTerminal className={`w-3 h-3 ${allFailed ? "" : RISK_TEXT[worst]}`} aria-hidden />
-          <span data-ran-token={lead} className={`tabular-nums ${risky(lead).every((c) => c.failed) ? "line-through decoration-1" : ""}`}>
+          {/* Status, not an action: the header's quiet ink, a dot in the
+              risk's color, and only the riskiest group named (the list has the rest). */}
+          <span aria-hidden className={`w-1.5 h-1.5 rounded-full shrink-0 ${allFailed ? RISK_DOT.normal : RISK_DOT[worst]}`} />
+          <span data-ran-token={lead} className={`tabular-nums text-sol-text-dim ${risky(lead).every((c) => c.failed) ? "line-through decoration-1" : ""}`}>
             {GROUP_TOKEN[lead]} {risky(lead).length}
           </span>
         </button>
@@ -174,8 +176,8 @@ export const WhatItRanChip = memo(function WhatItRanChip({
                     className="w-full flex items-center gap-2 px-3 py-[3px] text-left hover:bg-sol-bg-highlight"
                   >
                     <span aria-hidden className={`w-1.5 h-1.5 rounded-full shrink-0 ${RISK_DOT[call.risk]}`} />
-                    <code className={`min-w-0 flex-1 truncate font-mono text-[12px] ${call.risk === "normal" ? "text-sol-text-secondary" : RISK_TEXT[call.risk]}`}>
-                      {firstLine(call.command)}
+                    <code className={`min-w-0 flex-1 truncate font-mono text-[12px] ${call.risk === "normal" ? "text-sol-text-muted" : "text-sol-text"}`}>
+                      {shownLine(call.command)}
                     </code>
                     {lineCount(call.command) > 1 && <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">{lineCount(call.command)} lines</span>}
                     {(call.denied || call.failed) && <span className="shrink-0 text-meta text-sol-text-dim">{call.denied ? "denied" : "failed"}</span>}
