@@ -185,7 +185,7 @@ export function AccountUsageChip() {
   // Hooks run unconditionally; the placeholder device is never flipped because
   // the panel (and its switches) only render once a real device exists.
   const recovery = useAccountRecoveryToggles(
-    device ?? { device_id: "", auto_switch: false, auto_continue: undefined },
+    device ?? { auto_switch: false, auto_continue: undefined },
   );
   const sw = useMachineAccountSwitch({
     deviceId: device?.device_id,
@@ -542,7 +542,7 @@ export function AccountUsageChip() {
         </div>
 
         <div className="shrink-0 border-t border-sol-border/60 px-3 py-2.5">
-          {/* Device-level mode — shown even when the current login isn't a
+          {/* The person's mode, shown even when the current login isn't a
               saved profile, so it is always reachable from here. */}
           <div className="flex items-center gap-2 px-2">
             <Zap className={`h-3.5 w-3.5 ${recovery.recovery.mode === "off" ? "text-sol-text-dim" : "text-sol-cyan"}`} />
