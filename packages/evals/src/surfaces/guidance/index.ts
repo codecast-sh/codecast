@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -6,6 +7,8 @@ import type { CheckResult, ConvoMessage } from '@platform/evals';
 import { UsageError } from '@platform/evals/cli';
 
 import { renderGuidanceFile, type GuidanceMode } from '../../../../shared/contracts/snippets';
+import { loadCorrection } from '../../corrections/store';
+import { DRY_RUN_SCRIPT } from '../../paths';
 import { gate, type AgentResult, type SurfaceImpl } from '../../surface';
 import { describeTurn } from '../roleWake/world';
 
@@ -22,6 +25,8 @@ export interface GuidanceSnap {
   request: string;
   /** Full sections or stubs; full unless the fixture says otherwise. */
   mode?: GuidanceMode;
+  /** A real moment's case: the correction it was drafted from (corrections/find.ts). */
+  correction?: { conversation: string; line: number; said: string; rule: string };
 }
 
 export interface GuidanceLabel {
@@ -77,14 +82,39 @@ export function firstDecisive(actions: string[], label: GuidanceLabel): { action
 
 const promptOf = (snap: GuidanceSnap): string => snap.request + REHEARSAL;
 
-const impl: SurfaceImpl = {
-  refForms: 'guidance@ takes fixtures only, like guidance@fixture:delegate-audits',
+/**
+ * The agent under test has Bash and file tools, so a guidance replay runs only
+ * inside the harness's closed sandbox. The harness says whether it can build
+ * one here (`--isolation-check`); anything but "isolated" refuses the replay.
+ */
+let isolation: string | null = null;
+export function assertIsolated(check = (): string => spawnSync('bun', [DRY_RUN_SCRIPT, '--isolation-check'], { encoding: 'utf8' }).stdout.trim()): void {
+  isolation ??= check();
+  if (isolation !== 'isolated') throw new Error(`guidance replays need the harness sandbox, and prompt-dry-run.ts --isolation-check answered "${isolation || '(nothing)'}": refusing to run an agent with tools outside it`);
+}
 
-  capture: async () => {
-    throw new UsageError('guidance has no capture of real moments: freeze a fixture, like guidance@fixture:delegate-audits');
+const impl: SurfaceImpl = {
+  refForms: 'guidance@ takes a fixture, like guidance@fixture:delegate-audits, or a correction ./evals corrections drafted, as guidance@<session id>:<line>',
+
+  // A real moment is a correction a person typed: its drafted request is the case, and the session line is its record.
+  async capture(ref) {
+    const c = loadCorrection(ref);
+    if (!c?.draft) throw new UsageError(`no drafted correction at ${ref}: ./evals corrections lists them, and finds new ones`);
+    const snap: GuidanceSnap = { captured_at: c.at, request: c.draft.request, correction: { conversation: c.conversation, line: c.line, said: c.said, rule: c.draft.rule } };
+    return {
+      snapshot: snap,
+      // One subject per line: the convo views find a moment by subject, and one session can hold several corrections.
+      subject: { kind: 'session', id: c.id, title: c.title },
+      asOf: c.at,
+      anchor: { kind: 'message', id: c.messageId },
+      // A list shows the start of a name: the draft's short title, else its rule.
+      name: (c.draft.title || c.draft.rule).slice(0, 100),
+      meta: { conversation_id: c.conversation, correction: c.id },
+    };
   },
 
   async replay(snap: GuidanceSnap, ctx) {
+    if (!ctx.dry) assertIsolated();
     const claudeMd = renderGuidanceFile(snap.mode ?? 'full', 'eval');
     const a = await ctx.agent({ prompt: promptOf(snap), model: ctx.model, maxTurns: 20, claudeMd, promptSha: createHash('sha256').update(claudeMd).digest('hex') });
     const actions = actionsOf(a);

@@ -3,7 +3,8 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { actionsOf, firstDecisive, type GuidanceLabel } from './index';
+import { saveCorrection } from '../../corrections/store';
+import impl, { actionsOf, assertIsolated, firstDecisive, type GuidanceLabel } from './index';
 
 const line = (o: unknown) => JSON.stringify(o);
 
@@ -35,5 +36,32 @@ describe('guidance actions', () => {
       for (const p of [...label.want, ...(label.avoid ?? []), ...(label.reply ? [label.reply] : [])]) expect(() => new RegExp(p, 'i')).not.toThrow();
       expect(`${file} ${label.want.length > 0 || Boolean(label.reply)}`).toBe(`${file} true`);
     }
+  });
+});
+
+describe('guidance capture', () => {
+  test('a drafted correction captures as its request, one subject per line, and an undrafted one is refused', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'guidance-home-'));
+    const prev = process.env.CODECAST_EVALS_HOME;
+    process.env.CODECAST_EVALS_HOME = home;
+    try {
+      const base = { conversation: 'tst0000000000000000000000000000a', messageId: 'm1', at: '2026-01-02T03:04:00.000Z', title: 'Invoice export', before: '', said: 'no, export it yourself' };
+      saveCorrection({ ...base, id: 'tst0000000000000000000000000000a:518', line: 518, status: 'drafted', draft: { rule: 'Run the steps within your reach.', request: 'Export last month as CSV.', want: ['export'], avoid: [], criteria: 'It runs the export itself.' } });
+      saveCorrection({ ...base, id: 'tst0000000000000000000000000000a:367', line: 367, status: 'not-guidance' });
+      const got = await impl.capture(`${base.conversation}:518`, { readConversation: async () => null });
+      expect(got.snapshot).toEqual({ captured_at: base.at, request: 'Export last month as CSV.', correction: { conversation: base.conversation, line: 518, said: 'no, export it yourself', rule: 'Run the steps within your reach.' } });
+      expect(got.subject.id).toBe(`${base.conversation}:518`);
+      expect(got.anchor).toEqual({ kind: 'message', id: 'm1' });
+      await expect(impl.capture(`${base.conversation}:367`, { readConversation: async () => null })).rejects.toThrow('no drafted correction');
+    } finally {
+      if (prev === undefined) delete process.env.CODECAST_EVALS_HOME;
+      else process.env.CODECAST_EVALS_HOME = prev;
+    }
+  });
+});
+
+describe('guidance isolation', () => {
+  test('a replay refuses unless the harness answers isolated', () => {
+    expect(() => assertIsolated(() => 'not isolated: no sandbox-exec')).toThrow('refusing to run an agent with tools');
   });
 });

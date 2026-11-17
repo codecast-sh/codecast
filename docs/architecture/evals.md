@@ -114,6 +114,7 @@ lists every surface's ref forms.
 | `fixture:<case>` | all | a committed synthetic case |
 | `<session>:<line>`, or a session URL with `#msg-<id>` | title, insight, settle, suggest, ask, handoff | that message, read through `/cli/read` |
 | `<session>` (a handoff child) | handoff | the real handoff whose child this is |
+| `<session>:<line>` | guidance | a correction typed at that line, as `./evals corrections find` drafted it (below) |
 | `<callId>` | call-summary | the call's end |
 | `tr-N` | role-wake | a trigger whose reads were captured within the hour by `./evals snapshot role-wake --trigger tr-N --team T --role <handle> --name n` |
 | `<session>[:<line>]` | anchor-brief | a standing session's opening, its reads captured by `./evals snapshot anchor-brief` |
@@ -144,6 +145,102 @@ The loop:
 
 `freeze replay <id>` replays one freeze; `check` replays every freeze of each
 surface named. `check --dry` answers with canned output and spends nothing.
+
+## Corrections become checks
+
+A person correcting an agent ("no, run that step yourself", "go ahead
+without me", "set up a check-in so this keeps moving") is the most direct evidence there is of
+what the guidance should have said. `./evals corrections` turns those lines
+into guidance freezes, and `./evals climb guidance` rewrites the guidance
+until they pass: docs/prompting.md P9, run by a machine.
+
+- `./evals corrections find --since 14d [--team]` reads typed user lines
+  that hold a correction word (cast-lessons' `REDIRECT_WORDS` and a few
+  more) through `/cli/search` and `/cli/read`, keeps the ones prod's
+  `typedWords` counts as a person's own send, and reads what the agent did
+  just before. Before any of it reaches a model, each conversation is put to
+  the vendor guard (`/cli/read` with `vendor: "anthropic"` answers
+  `vendor_refusal`): a refused conversation, or a server that does not
+  answer, is `withheld` and never triaged or drafted. A batched triage call
+  keeps the lines that correct how the agent works, not the work itself. A
+  draft call reads each with the rendered guidance and either sets it aside
+  (the habit is not the guidance's to fix) or writes the case: a request
+  about a made-up company that puts a fresh agent at the same choice, want
+  and avoid patterns that name the act (never a `--help` or `cast guide`
+  read, and matching a command anywhere in a chained shell call), one judge
+  sentence, the general rule and a short title. Every line read is kept in
+  `EVALS_HOME/corrections/<conversation id>-<line>.json` with its status, so
+  a rerun over an overlapping window reads only what is new.
+  `./evals corrections` lists them with each case's newest result;
+  `dismiss <id>` sets a draft aside and `draft --replace <id>` drafts it
+  again. Drafting is one sample, so a reviewer reads the list before
+  freezing.
+- `./evals corrections freeze [ids]` makes each draft a private freeze,
+  `guidance@<conversation id>:<line>`, tagged `correction`: the request is
+  its snapshot, the sentence its criteria, the patterns its label (through
+  `writeLabel`, to the private labels repo).
+- A guidance replay gives an agent Bash and file tools, so it runs only
+  when `prompt-dry-run.ts --isolation-check` answers `isolated`; anything
+  else refuses the replay.
+
+`./evals climb guidance` trains on some correction freezes and holds the
+rest out. The split is pinned on each correction when it is frozen
+(`split` in its record, by a hash of its id, `HOLD_OUT_SHARE` 0.35) and
+never changes, so a freeze an earlier climb trained on can never be held
+out later. A climb refuses a correction freeze with no pinned split. The
+rewriter never reads the held-out freezes and the rounds never replay them.
+The climb then runs:
+- **The baseline:** every guidance freeze at `--final-reps` (8). A
+  `--baseline <batch>` given instead must hold that many scored reps on
+  every freeze, and every rep must have recorded this tree's guidance as its
+  promptSha (a rep that recorded none is refused too). If every training
+  correction already passes, the climb stops: the miss is not in this
+  prompt.
+- **Rounds:** each round hands the failing training reps (actions, last
+  reply, each check's evidence) with the rendered guidance and
+  docs/prompting.md to a rewriter on the prod model. The rewriter answers
+  with find and replace pairs over the rendered text. A pair is applied only
+  when its text sits exactly once in the template source, and is otherwise
+  refused, with the refusal fed back. The rewriter is told the size budget
+  (`GUIDANCE_MAX_CHARS`, `GUIDANCE_SECTION_MAX_CHARS` in `snippets.ts`). A
+  round that leaves the file over it, or larger than it was when already
+  over, is refused before replay. A round replays the training freezes at
+  `--reps` (3) and is kept only when it is complete and their mean rises by
+  `--margin` (0.02), because a 3-rep round is noisy.
+- **The final:** the best tree runs every freeze at `--final-reps`. The
+  claim is weighed per subset with check's own Mann-Whitney:
+  - the held-out corrections must separate better;
+  - the guards must not be worse;
+  - the training corrections are reported but claim nothing.
+
+  Every batch must be complete, or there is no claim. Beside each verdict
+  the final prints every held-out case and every guard, base passes to
+  final passes, so a subset verdict never hides the case that moved.
+
+Every climb appends its attempt to `EVALS_HOME/climb/attempts.jsonl`, the
+ones that ended without a claim included, and a climb whose held-out
+freezes were weighed before says how many times. Climbing again until one
+attempt wins is another draw at the same test, and the ledger keeps that
+visible.
+
+One `--max-usd` caps the whole climb (baseline, rounds, rewriter, final),
+and each check runs under what is left of it. Spend counts every rep a batch
+started, a crashed one included. The climb runs only in a
+linked worktree, because it edits `snippets.ts` in place. Every write first
+checks that the files still hold what the climb last wrote, so an edit
+another session made underneath is never overwritten. Whatever stops a
+climb, the original sources go back, unless the final ran and the rewrite
+is left for reading. Each round's replay is its own `./evals check`
+process, because a process renders the guidance from the source it
+imported at start. The record (split, every proposal, history, verdict) is
+under `EVALS_HOME/climb/<stamp>/`.
+
+`./evals climb guidance --baseline <batch> --propose` runs one rewriter
+round over a recorded batch and replays nothing: it prints the diagnosis
+and the diff and saves `proposal.patch`, leaving the tree untouched.
+
+Raising the guidance budget is a reviewer's call that needs an eval showing
+the words pay, a held-out one, and the reason is recorded on the constant.
 
 ## Two data homes, and the privacy rules
 

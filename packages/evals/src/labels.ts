@@ -23,7 +23,10 @@ export function labelsRemoteProblem(dir: string): string | null {
 /** LABELS_REMOTE's visibility on GitHub (PRIVATE, PUBLIC, INTERNAL), or null when gh cannot see it. */
 export function labelsRepoVisibility(): string | null {
   const r = spawnSync('gh', ['repo', 'view', LABELS_REMOTE, '--json', 'visibility', '-q', '.visibility'], { encoding: 'utf8' });
-  return r.status === 0 ? r.stdout.trim() : null;
+  if (r.status === 0) return r.stdout.trim();
+  // gh before 2.x has no `visibility` field; `isPrivate` is the same answer for a personal repo.
+  const old = spawnSync('gh', ['repo', 'view', LABELS_REMOTE, '--json', 'isPrivate', '-q', '.isPrivate'], { encoding: 'utf8' });
+  return old.status === 0 ? (old.stdout.trim() === 'true' ? 'PRIVATE' : 'PUBLIC') : null;
 }
 
 /** Throws unless a push from `dir` can only reach the private labels repo. */

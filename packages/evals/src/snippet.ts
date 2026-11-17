@@ -19,6 +19,10 @@ baseline, edit the prompt, \`check\` again. \`./evals --help\` and each
 command's \`--help\` carry the details; \`./evals doctor\` says what is missing.
 
 - Claim a prompt win only when \`check\` prints \`separated: better\`.
+- A correction a person typed to an agent is a test of the guidance:
+  \`./evals corrections find\` drafts one per correction, \`corrections freeze\`
+  makes them freezes, and \`./evals climb guidance\` rewrites the guidance
+  until they pass, with every other guidance freeze as a guard.
 - Real data (freezes, runs, labels) lives in \`EVALS_HOME\`, never in git: this
   repo is public. Only synthetic fixtures are committed.
 `;

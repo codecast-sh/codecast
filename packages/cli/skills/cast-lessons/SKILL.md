@@ -59,6 +59,18 @@ For each cluster, one of:
 - Nothing, with the reason: the rule is present and the fix is elsewhere
   (a hook, a tool, a prompt), named.
 
+## Make agent habits a test
+
+A cluster about how agents work with codecast or with the person (asking
+for what they could do, waiting when they could proceed, the wrong tool or
+channel) is the codecast guidance's to fix, and a principle line alone does
+not prove the fix took. From the codecast repository,
+`./evals corrections find --since <window>` drafts a test from each such
+correction (the request that recreates the choice and the check a right
+answer passes), `./evals corrections freeze` keeps the ones you accept,
+and `./evals climb guidance` rewrites the guidance until they pass without
+breaking the other guidance tests. Name the freezes in the cluster's signal.
+
 ## File each cluster as a signal
 
 A cluster that needs a change goes through the signal door, so the flow can

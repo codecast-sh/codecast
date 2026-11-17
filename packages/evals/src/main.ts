@@ -16,6 +16,8 @@ import { registerApi } from './commands/api';
 import { registerBisect } from './commands/bisect';
 import { registerCapture } from './commands/capture';
 import { registerCheck } from './commands/check';
+import { registerClimb } from './commands/climb';
+import { registerCorrections } from './commands/corrections';
 import { registerDoctor } from './commands/doctor';
 import { registerFakes } from './commands/fakes';
 import { registerGrade, registerRescore } from './commands/grade';
@@ -79,6 +81,8 @@ ${fmt.cmd('./evals doctor')} says what is missing, docs/architecture/evals.md ha
   registerStatus(program);
   registerCheck(program, sources);
   registerStale(program);
+  registerCorrections(program, sources);
+  registerClimb(program, sources);
   registerLine(program, sources);
   registerEvals(program, sources);
   registerLabel(program, sources);
