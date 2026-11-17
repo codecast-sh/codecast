@@ -71,6 +71,7 @@ export default function SendToChatScreen() {
     if (!picked || !url) return;
     const store = useInboxStore.getState();
     const channelId = picked.kind === 'person' ? store.openDmChannel([picked.id]) : picked.id;
+    if (!channelId) return;
     store.sendChatMessage(channelId, [note.trim(), url].filter(Boolean).join('\n\n'));
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     showNotice(`Sent to ${picked.kind === 'channel' && !picked.dm ? '#' : ''}${picked.name}`);
