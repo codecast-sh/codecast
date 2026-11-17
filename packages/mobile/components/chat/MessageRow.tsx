@@ -7,6 +7,7 @@ import type { ChatMessageRow } from '@codecast/web/store/inboxStore';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
+import { useSizedText } from '@/hooks/useTextSize';
 import { TYPE_SCALE } from '@codecast/shared/render/typeScale';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
@@ -277,6 +278,7 @@ export const MessageRow = memo(function MessageRow({
   knownMentionHandles?: Set<string>;
 }) {
   const Theme = useTheme();
+  const mdText = useSizedText(styles.mdBase.fontSize as number, styles.mdBase.lineHeight as number);
   const { author, agentStatus } = message;
   const thinking = agentStatus === 'thinking' || agentStatus === 'streaming';
   const errored = agentStatus === 'error';
@@ -362,7 +364,7 @@ export const MessageRow = memo(function MessageRow({
           <RNView>
             <MarkdownContent
               text={message.content}
-              baseStyle={styles.mdBase}
+              baseStyle={[styles.mdBase, mdText]}
               knownMentionHandles={knownMentionHandles}
               // Long-press is the actions gesture in chat; the OS selection
               // callout would float over the sheet. Copy lives in the sheet.

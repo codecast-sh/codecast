@@ -1,4 +1,4 @@
-import { resourceOffloadStubs, cancelResourceBatch } from "./resourceOffloadActions";
+import { resourceOffloadStubs, cancelResourceBatch, requeueMigrationBatch } from "./resourceOffloadActions";
 import { approvesCommandRun } from "@codecast/shared/contracts/commandRun";
 import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, GOAL_RESUME_RESET, goalCanPause, goalCanResume, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
@@ -1877,6 +1877,8 @@ export type ClientUI = {
   modern_focused?: boolean;
   /** The phone's own Modern choice (packages/mobile/lib/mobileLook.ts). Absent or null: the phone follows modern_style. */
   mobile_modern_style?: boolean | null;
+  /** The phone's text size for conversations and composers (packages/mobile/lib/textSize.ts). Absent: medium. */
+  mobile_text_size?: "small" | "medium" | "large";
   sidebar_collapsed?: boolean;
   // The sidebar sections the chevrons pin open (true) or closed (false), by
   // section key. A section the user never touched is absent and follows the
@@ -4562,6 +4564,27 @@ export function isUnsentConversation(s: { message_count?: number; last_user_mess
 }
 
 
+/** One placed section narrowed by the chip filter. A row nested under a card
+ *  the chip drops stands in that card's place, its own nested rows still under
+ *  it: a project's session that rides its role's standing session (which works
+ *  elsewhere) shows under the project chip instead of vanishing with that card. */
+export function chipFilterSection(
+  items: readonly InboxSession[],
+  subsByParent: ReadonlyMap<string, readonly InboxSession[]>,
+  matches: (s: InboxSession) => boolean,
+): InboxSession[] {
+  const out: InboxSession[] = [];
+  const seen = new Set<string>();
+  const visit = (row: InboxSession) => {
+    if (seen.has(row._id)) return;
+    seen.add(row._id);
+    if (matches(row)) { out.push(row); return; }
+    for (const sub of subsByParent.get(row._id) ?? []) visit(sub);
+  };
+  for (const s of items) visit(s);
+  return out;
+}
+
 export function visualOrderSessions(
   placed: PlacedInbox,
   projectFilters?: readonly ProjectFilterTerm[],
@@ -4590,22 +4613,18 @@ export function visualOrderSessions(
     [placed.working, "working"], [placed.dormant, "dormant"],
   ];
   const result: InboxSession[] = [];
+  // The shared predicate and section rule (chipFilterSection) so the walk and
+  // the render can never disagree, including the mid-create stub carve-out.
+  const chipOn = !!(projectFilters?.length || opts.bucketFilters?.length);
+  const matches = (s: InboxSession) => chipMatchesSession(s, {
+    projectFilters,
+    bucketFilters: opts.bucketFilters,
+    bucketByConv: opts.bucketByConv ?? {},
+    projectOf: opts.projectOf,
+  });
   for (const [section, key] of sections) {
     if (collapsed?.[key]) continue;
-    for (const s of section) {
-      // The shared predicate (chipMatchesSession) so the walk and the render
-      // can never disagree — including the mid-create stub carve-out.
-      if (
-        (projectFilters?.length || opts.bucketFilters?.length) &&
-        !chipMatchesSession(s, {
-          projectFilters,
-          bucketFilters: opts.bucketFilters,
-          bucketByConv: opts.bucketByConv ?? {},
-          projectOf: opts.projectOf,
-        })
-      ) continue;
-      result.push(s);
-    }
+    result.push(...(chipOn ? chipFilterSection(section, placed.subsByParent, matches) : section));
   }
   return opts.walk ? result.filter(walkFilterOf(placed, opts.walk)) : result;
 }
@@ -5393,6 +5412,8 @@ export function projectOfFromState(state: Partial<WorkProjectSource>): ((session
 
 export type ChipFilterOpts = { projectFilters?: readonly ProjectFilterTerm[]; bucketFilters?: readonly BucketFilterTerm[]; bucketByConv: Record<string, string | undefined>; projectOf?: (sessionId: string) => string | null };
 
+const MID_CREATE_STUB_MS = 60 * 60_000;
+
 export function chipMatchesSession(
   s: InboxSession,
   opts: ChipFilterOpts,
@@ -5401,7 +5422,9 @@ export function chipMatchesSession(
   // just summoned must stay reachable no matter which chip is focused — under
   // a project EXCLUDE, Ctrl+N from a focused session in that project would
   // otherwise navigate you onto a card the panel refuses to render.
-  if (!isConvexId(s._id)) return true;
+  // A draft left unsent for days is not mid-create: it answers to the chips
+  // like any other row.
+  if (!isConvexId(s._id) && Date.now() - Math.max(s.started_at ?? 0, s.updated_at ?? 0) < MID_CREATE_STUB_MS) return true;
   if (opts.projectFilters?.length && !passesFilterTerms(opts.projectFilters, projectAxisKeys(s, opts.projectOf))) return false;
   return passesFilterTerms(opts.bucketFilters, opts.bucketByConv[s._id]);
 }
@@ -6326,6 +6349,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   startResourceOffload: (args: ResourceOffloadIntent) => Promise<any>;
   requestMoveRehearsals: (args: { request_id: string; source_device_id: string; selections: Array<{ conversation_id: string; session_id: string; destination_id: string }> }) => Promise<any>;
   cancelResourceOffload: (batchId: string) => Promise<any>;
+  retryMigrationBatch: (batchId: string) => Promise<any>;
   setSessionBackground: (deviceId: string, sessionId: string, background: boolean) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
   /** Move a Claude conversation between tmux and the Agent SDK (lib/sessionCommands requestBackendSwitch). */
@@ -7724,7 +7748,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // would collapse the laptop's sidebar on the ultrawide, or send a headset id
 // to a phone that cannot open it.
 export const PER_DEVICE_UI_KEYS = new Set([
-  "visual_style", "modern_style", "mobile_modern_style",
+  "visual_style", "modern_style", "mobile_modern_style", "mobile_text_size",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
   "trigger_prompt_height", "thread_state_collapsed", "calls_list_open", "people_view", "float_face_size",
@@ -11865,6 +11889,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const batch = this.migrationBatches?.find(b => b.batch_id === batchId);
     if (batch) cancelResourceBatch(batch, requested_at);
     return { requested_at };
+  }),
+
+  // A failed or cancelled move, queued again: the rows read queued at once, the
+  // server re-queues them and wakes their executors (sessionMigrations.retryFailed).
+  retryMigrationBatch: asyncAction(function (this: Draft, batchId: string) {
+    const batch = this.migrationBatches?.find(b => b.batch_id === batchId);
+    if (batch) requeueMigrationBatch(batch, Date.now());
   }),
 
   setSessionBackground: asyncAction(function (this: Draft, deviceId: string, sessionId: string, background: boolean) {
