@@ -26,7 +26,7 @@ import { EntityIdPill } from "../EntityIdPill";
 import { KeyCap } from "../KeyCap";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { AddSecretDialog, type AddMode } from "./AddSecretDialog";
-import { SaveAllSignins, SaveSigninDialog } from "./SaveSignin";
+import { SaveSigninDialog, SigninAutofill } from "./SaveSignin";
 import { SecretDetail } from "./SecretDetail";
 import { DeclineRequest, ValueEditor } from "./ValueForm";
 import { CommandDisclosure, KindGlyph, RequestHead, ScopeMark } from "./parts";
@@ -696,10 +696,6 @@ function VaultBody({ fit }: { fit: Fit }) {
                   <h2 className="mb-1.5 flex items-center gap-2 text-[12px] font-medium text-sol-magenta">
                     <span className="size-1.5 rounded-full bg-sol-magenta" />
                     Asked for <span className="tabular-nums">{requests.length}</span>
-                    <SaveAllSignins
-                      rows={requests.filter((r) => r.workspace === (keys.team ?? keys.personal))}
-                      team={vaultScope.team ? { id: vaultScope.team.id, name: vaultScope.team.name } : null}
-                    />
                   </h2>
                   <ul className="flex flex-col gap-2">
                     {requests.map((r, i) => (

@@ -39,6 +39,7 @@ import { pickOnlineLocalDevice } from "./cloud";
 import { isConvexId } from "@codecast/shared/entities";
 import {
   bareSite,
+  chromeSigninRunSite,
   cleanSecretEdit,
   cleanSecretList,
   cleanSecretSites,
@@ -205,22 +206,35 @@ async function scopedBy(ctx: any, userId: Id<"users">, person: boolean, sites: s
   return userId;
 }
 
-/** The person's own Save sign-in from my Chrome (requestSigninCapture) still running for these sites: the cookies their laptop stores with their token are theirs. */
+/**
+ * The person's own save from their Chrome still running for these sites: the
+ * cookies their laptop stores with their token are theirs. Either Save sign-in
+ * on the Vault page (requestSigninCapture's vault_capture_signin, pending until
+ * the daemon reports it), or Run on an agent's `save-signin --from-chrome` card
+ * (lib/commandRuns.ts: pressed signed in with Touch ID; its run_cast is acked
+ * at start, so the decision's run state is what says it is still going).
+ */
 async function captureAskedFor(ctx: any, userId: Id<"users">, sites: string[]): Promise<boolean> {
   const now = Date.now();
+  const forSites = (site: unknown) => typeof site === "string" && sites.every((s) => bareSite(s) === bareSite(site));
   const pending: Doc<"daemon_commands">[] = await ctx.db
     .query("daemon_commands")
     .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined))
     .collect();
-  return pending.some((c) => {
+  const fromVaultPage = pending.some((c) => {
     if (c.command !== "vault_capture_signin" || now - c.created_at > DAEMON_COMMAND_TTL_MS) return false;
     try {
-      const site = JSON.parse(c.args ?? "{}").site;
-      return typeof site === "string" && sites.every((s) => bareSite(s) === bareSite(site));
+      return forSites(JSON.parse(c.args ?? "{}").site);
     } catch {
       return false;
     }
   });
+  if (fromVaultPage) return true;
+  const pressed: Doc<"session_decisions">[] = await ctx.db
+    .query("session_decisions")
+    .withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", userId).eq("status", "answered").gte("resolved_at", now - DAEMON_COMMAND_TTL_MS))
+    .collect();
+  return pressed.some((d) => (d.run?.state === "queued" || d.run?.state === "running") && forSites(chromeSigninRunSite(d.run.argv)));
 }
 
 const isPerson = async (ctx: any) => !!(await getAuthUserId(ctx));
@@ -1080,6 +1094,7 @@ export const request = mutation({
       row = (await ctx.db.get(id))!;
     }
     await recordSecretEvent(ctx, row, "requested", { actor: userId, conversation_id: conversation?._id });
+    if (kind === "signin") await ctx.scheduler.runAfter(0, internal.signinAutofill.asked, { workspace: row.workspace });
     if (conversation) {
       const people = await peopleFor(ctx, conversation);
       await emitNotification(ctx as any, {
