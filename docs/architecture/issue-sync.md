@@ -77,6 +77,9 @@ convention.
   delegate_assignee?: string,     // provider user id or login that means "agent"
   auto_spawn: boolean,            // spawn a session when the signal appears
   push_new_tasks: boolean,        // tasks created in the project are created on the provider
+  spawn_isolated?: boolean,       // false turns auto-spawn worktrees off; unset means on
+  spawn_device?: string,          // device id auto-spawn starts on
+  spawn_definition?: string,      // agent definition name auto-spawn runs as
   created_at: number, updated_at: number,
 }
 ```
@@ -293,7 +296,11 @@ verify the signature, dedupe, store the raw event, and schedule the handler.
 - Linear signature: HMAC SHA256 of the raw body with `LINEAR_WEBHOOK_SECRET`,
   header `Linear-Signature`, and `webhookTimestamp` within 60 seconds.
 - Handler resolves the source (by `data.project.id`, `data.team.id`, or
-  `repository.full_name`), then `applyRemote`:
+  `repository.full_name`). A `paused` source returns `source_paused` before
+  anything is applied: no task is created or updated, no comment is attached,
+  nothing is spawned. A source in `error` keeps flowing. Nothing is lost: the
+  reconcile pulls from `last_synced_at - 5 min` and that stamp does not move
+  while the source is paused. Otherwise the handler runs `applyRemote`:
   - Issue create -> create task in the source project (if none by external id).
   - Issue update -> field level apply per S3.
   - Issue remove / deleted (Linear `trashed`, `archivedAt`; GitHub
@@ -314,8 +321,17 @@ subscriber notifications, and a team activity event (S8).
 A task with `external` becomes a session three ways:
 
 1. Board and task page: the existing assign to agent action.
-2. CLI: `cast task start <id> --spawn [--agent <type>]` calls
+2. CLI: `cast task start <id> --spawn [--agent <type>] [--isolated]
+   [--worktree <name>] [--device <name>] [--as <definition>]` calls
    `/cli/work/spawn`, which shares `spawnSessionForTask` with `assignToAgent`.
+   `--isolated` gives the session its own git worktree and `--worktree` names
+   it (and implies `--isolated`). `--device` names the machine and `--as` runs
+   the session as an agent definition; both mean what they mean on `cast
+   spawn`, except that a team machine is refused and no saved default device
+   applies (`createSessionFromCli` uses `defaultDeviceFor`; the task spawn does
+   not). The flags are sent only when given, so isolation stays opt-in here.
+   The caller is passed as `callerUserId`, so the cloud upgrade applies when
+   `--device` names a managed cloud host.
 3. Automatically. When an inbound event carries the source's delegation
    signal (label equals `delegate_label`, or assignee equals
    `delegate_assignee`) and `auto_spawn` is on, `applyRemote` schedules the
@@ -326,6 +342,27 @@ A task with `external` becomes a session three ways:
    `repository` set to the repo full name or the Linear team key. The CLI
    shorthands are `issue_opened`, `issue_assigned`, `issue_labeled`,
    `issue_closed`, `issue_commented` (`shared/contracts/triggerEvents.ts`).
+
+Auto-spawn options come from the source (S1.3):
+
+- Isolation is on unless `spawn_isolated` is `false`, so sources that existed
+  before the field switch to worktrees on deploy. The worktree is named after
+  the issue identifier, lowercased, with anything outside `[a-z0-9._-]`
+  replaced by `-` (`eng-123`, `owner-repo-12`); a task with no identifier gets
+  the daemon's `session-<shortId>`. A name over 64 characters keeps its tail,
+  so identifiers that differ only in the number stay distinct. A re-spawn for
+  the same task reuses the worktree and continues on its branch.
+- `spawn_device` is one fixed device per source. `set --device` resolves the
+  name against the source owner's devices and stores the device id; a team
+  machine is refused. An offline device queues the start until it is back
+  instead of falling back to another machine; a device that has since been
+  removed falls back to normal routing.
+- `spawn_definition` is stored by name and resolved at spawn time, and only the
+  source's owner can set it: the spawn runs as the owner, on the owner's
+  machine, and the name resolves across the owner's teams. An explicit
+  agent type beats the definition's client; the task's own model and effort
+  beat the definition's; the definition's `isolated` ORs in. If the name no
+  longer resolves, the spawn is skipped and a task note says why.
 
 The spawn posts one provider comment ("Codecast session <link> picked this
 up"). The session's `cast task comment` and `cast task done` go through the
@@ -371,6 +408,6 @@ installations and the reader's own. The OAuth confirm step
 ## S10. CLI
 
 - `cast task show/ls` print the identifier and url when `external` is set.
-- `cast task start <id> --spawn`.
+- `cast task start <id> --spawn [--agent <type>] [--isolated] [--worktree <name>] [--device <name>] [--as <definition>]`.
 - `cast trigger add --on issue_opened|issue_assigned|issue_labeled|issue_closed|issue_commented`.
-- `cast integrations ls|connect <provider> [--personal|--team]|disconnect <provider> [--personal|--team]|candidates <provider>|import <provider> <ref> [--project <ref>] [--kind <kind>]|sources|sync <source>|pause <source>|resume <source>|remove <source>|set <source> [--delegate-label] [--delegate-assignee] [--auto-spawn on|off] [--push-new-tasks on|off]`. `connect` binds to the active team unless `--personal`; `disconnect` acts on the one connected scope, or the one named.
+- `cast integrations ls|connect <provider> [--personal|--team]|disconnect <provider> [--personal|--team]|candidates <provider>|import <provider> <ref> [--project <ref>] [--kind <kind>]|sources|sync <source>|pause <source>|resume <source>|remove <source>|set <source> [--delegate-label] [--delegate-assignee] [--auto-spawn on|off] [--push-new-tasks on|off] [--isolated on|off] [--device <name>|none] [--as <definition>|none]`. `none` clears `--device` and `--as`. `connect` binds to the active team unless `--personal`; `disconnect` acts on the one connected scope, or the one named.

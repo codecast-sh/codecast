@@ -16,7 +16,7 @@ import { pullRequestsLinkedToConversation } from "./lib/prSessions";
 import { spawnSessionCore } from "./spawn";
 import { resolveSessionLaunchDevice } from "./sessionLaunch";
 import { addConversationToWorkItem } from "./conversationLinks";
-import { resolveTaskGitContext } from "./tasks";
+import { resolveTaskGitContext } from "./lib/taskLaunch";
 import { answerCore } from "./sessionDecisions";
 import { roleOfRun } from "./lib/actor";
 import { roleMergeAllowance } from "./lib/regretRead";

@@ -10,6 +10,8 @@ import { ownerOf } from "@codecast/shared/contracts/orgLead";
 import { matchHandle, teamRoster } from "./lib/mentionResolve";
 import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { enqueueStartSession } from "./devices";
+import { resolveSpawnDefinition, resolveTaskSpawnDevice } from "./spawn";
+import { resolveDefinitionFor } from "./agentDefinitions";
 import { resolveCallRef } from "./transcripts";
 import { outcomeOfDeclaration, subagentEnded } from "./subagentFleet";
 import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
@@ -45,12 +47,10 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, createWorkContext, scopeByProject, explicitWorkspace } from "./data";
 import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
-import { isViableInboxParent } from "./inboxFilters";
 import { listLiveManagedSessions } from "./lib/liveSessions";
 import { requireInitiative } from "./lib/initiativeRef";
 import { projectTasks, projectTasksIn } from "./lib/projectWork";
 import { taskCommentsWithSessionInfo, type CommentSessionCache } from "./lib/commentSessionInfo";
-import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { canSendProductMessage, enqueuePendingMessage, tellRole } from "./pendingMessages";
 import { addConversationToWorkItem, linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
@@ -62,6 +62,7 @@ import { isLineRun } from "@codecast/shared/contracts/changeCard";
 import { cancelCore } from "./workflow_runs";
 import { withdrawClosedProblemAsks } from "./sessionDecisions";
 import { webBaseUrl } from "./lib/slackOAuth";
+import { resolveTaskGitContext, resolveWorkerParentConversation, worktreeNameFor } from "./lib/taskLaunch";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
 // callers keep working unchanged.
@@ -97,114 +98,6 @@ export { canAccessTask };
 // The six status CATEGORIES (see @codecast/shared/tasks/statuses.ts). Teams
 // refine them with named statuses; tasks.status always holds the category.
 const VALID_TASK_STATUSES = TASK_STATUS_CATEGORIES;
-
-// Resolve the orchestrator conversation a task's worker session should nest
-// under: the session that created the task's plan
-// (plans.created_from_conversation_id), which is the de-facto orchestrator and
-// — unlike plans.current_session_id — is stamped once and never churned by
-// per-worker auto-binding. Returns undefined when there's no plan, no recorded
-// creator, or the creator isn't a renderable inbox parent, in which case the
-// worker stays top-level and the client's plan-grouping fallback handles it.
-export async function resolveWorkerParentConversation(
-  ctx: any,
-  userId: Id<"users">,
-  planId: Id<"plans"> | undefined,
-): Promise<Id<"conversations"> | undefined> {
-  if (!planId) return undefined;
-  let plan;
-  try {
-    plan = await ctx.db.get(planId);
-  } catch {
-    return undefined;
-  }
-  const creatorId = plan?.created_from_conversation_id as Id<"conversations"> | undefined;
-  if (!creatorId) return undefined;
-  let parent;
-  try {
-    parent = await ctx.db.get(creatorId);
-  } catch {
-    return undefined;
-  }
-  return isViableInboxParent(parent, userId.toString()) ? creatorId : undefined;
-}
-
-/**
- * Resolve the project/git context a task-bound session must launch in:
- * `project_path` (the task's own, or its team's directory mapping), `git_root`,
- * and the `git_remote_url` recovered from the task's source conversations (a task
- * itself stores no remote). Shared by `dispatch.createSession` and
- * `tasks.assignToAgent` so both task-launch paths stamp the conversation and
- * route the daemon identically — without a project_path the conversation can't
- * be started by any daemon (the "start agent run did nothing" bug). `seed` is the
- * caller's path: it refines the choice inside the task's team and never overrides it.
- */
-export async function resolveTaskGitContext(
-  ctx: any,
-  userId: Id<"users">,
-  task: any,
-  mappings: any[],
-  seed?: { project_path?: string; git_root?: string },
-): Promise<{ project_path?: string; git_root?: string; git_remote_url?: string }> {
-  let git_root = seed?.git_root;
-  let git_remote_url: string | undefined;
-
-  // What the task pins wins: its own path, then its project's. A seed is only
-  // trusted past that when it already sits inside the task's team, because the
-  // web sends the viewer's open repo as the seed when the task pins nothing —
-  // and that repo may belong to another team entirely (a Union task launched
-  // three sessions into ~/src/codecast this way). Otherwise the team's mapped
-  // directory routes, and a foreign seed is the last resort that keeps a task
-  // whose team has no mapping startable at all.
-  const project = task.project_id ? await ctx.db.get(task.project_id).catch(() => null) : null;
-  const teamKey = task.team_id?.toString();
-  const seedInTaskTeam = !!teamKey
-    && resolveTeamForPath(mappings, seed?.project_path, undefined).teamId?.toString() === teamKey;
-  const project_path: string | undefined =
-    task.project_path
-    || project?.project_path
-    || (seedInTaskTeam ? seed?.project_path : undefined)
-    || (teamKey ? mappings.find((m: any) => m.team_id?.toString() === teamKey)?.path_prefix : undefined)
-    || seed?.project_path;
-  if (!git_root && project_path !== seed?.project_path) git_root = project_path;
-
-  // A git_root that isn't an ancestor of the resolved project_path describes a
-  // DIFFERENT repo — typically the viewer's currently-open conversation stamped
-  // alongside a task-derived path. The daemon prefers git_root when picking a
-  // cwd, so an unrelated root that happens to exist on the target machine would
-  // launch the session in the wrong repo. Drop it; the project_path routes.
-  if (git_root && project_path && project_path !== git_root && !project_path.startsWith(git_root.replace(/\/+$/, "") + "/")) {
-    git_root = undefined;
-  }
-
-  // A task stores project_path but never git_remote_url; recover it from the
-  // task's source conversations (which a daemon stamped git metadata onto) so a
-  // daemon on a different machine can remap a foreign path to the local checkout.
-  const sourceIds: Id<"conversations">[] = [];
-  if (task.created_from_conversation) sourceIds.push(task.created_from_conversation);
-  for (const cid of (task.conversation_ids ?? [])) {
-    if (!sourceIds.some((s) => s.toString() === cid.toString())) sourceIds.push(cid);
-  }
-  const sources: GitMetaSource[] = [];
-  for (const cid of sourceIds) {
-    const c = await ctx.db.get(cid).catch(() => null);
-    if (c && c.user_id.toString() === userId.toString()) {
-      sources.push({ git_remote_url: c.git_remote_url, git_root: c.git_root, updated_at: c.updated_at, started_at: c.started_at });
-    }
-  }
-  const inherited = pickInheritedGitMeta(sources);
-  if (inherited.git_remote_url) {
-    git_remote_url = inherited.git_remote_url;
-    // Prefer the real repo root over a foreign full path so the daemon can keep
-    // the in-repo subpath when remapping to a local checkout.
-    if (inherited.git_root && project_path
-        && project_path.startsWith(inherited.git_root)
-        && inherited.git_root !== git_root) {
-      git_root = inherited.git_root;
-    }
-  }
-
-  return { project_path, git_root, git_remote_url };
-}
 
 type TaskStatus = typeof VALID_TASK_STATUSES[number];
 
@@ -4067,13 +3960,29 @@ export async function spawnSessionForTask(
   ctx: any,
   userId: Id<"users">,
   task: any,
-  opts: { agent_type?: string; initial_message?: string } = {},
+  opts: {
+    agent_type?: string;
+    initial_message?: string;
+    isolated?: boolean;
+    worktree_name?: string;
+    target_device_id?: string;
+    definition?: string;
+    caller_user_id?: Id<"users">;
+  } = {},
 ): Promise<{ conversationId: Id<"conversations">; sessionId: string }> {
   const initial_message = opts.initial_message;
+  const prompt = buildTaskSpawnPrompt(task, initial_message);
+  const asDef = await resolveSpawnDefinition(ctx, userId, opts.definition, {
+    agentType: opts.agent_type,
+    model: task.model,
+    effort: task.effort,
+    prompt,
+    isolated: opts.isolated,
+  });
   // Round-trip through the client registry so any spelling a caller supplies
   // (a daemon client id, a convex literal, something stale) normalizes to the
   // closed union the conversations row stores. Unknown falls back to claude.
-  const daemonAgentType = fromConvexAgentType(opts.agent_type ?? "claude_code");
+  const daemonAgentType = fromConvexAgentType(asDef.agentType ?? opts.agent_type ?? "claude_code");
   const agent_type = toConvexAgentType(daemonAgentType);
 
   const now = Date.now();
@@ -4155,7 +4064,9 @@ export async function spawnSessionForTask(
   // session linked via active_task_id, so clobbering assignee only lost the
   // human owner and dropped the task out of the launcher's "assigned to me" view.
 
-  const content = buildTaskSpawnPrompt(task, initial_message);
+  const content = asDef.prompt ?? prompt;
+  const worktreeName = opts.worktree_name
+    || (asDef.isolated && task.external?.identifier ? worktreeNameFor(task.external.identifier) || undefined : undefined);
 
   // Single canonical writer: stamps owner_user_id for the daemon's delivery poll and flips
   // has_pending_messages. The task session is the launcher's own, so owner == sender.
@@ -4170,8 +4081,13 @@ export async function spawnSessionForTask(
     createdAt: now,
     // The task's execution hints (task-graph.md TG8), fixed at launch; the
     // daemon drops a model or effort its client does not offer.
-    ...(task.model ? { model: task.model } : {}),
-    ...(task.effort ? { effort: task.effort } : {}),
+    ...(asDef.model ? { model: asDef.model } : {}),
+    ...(asDef.effort ? { effort: asDef.effort } : {}),
+    isolated: asDef.isolated,
+    worktreeName,
+    targetDeviceId: opts.target_device_id,
+    definition: asDef.definition,
+    callerUserId: opts.caller_user_id,
   });
 
   // S7: tell the provider issue that a session took it, exactly once per
@@ -4222,6 +4138,10 @@ export const spawnForTask = mutation({
     short_id: v.string(),
     agent_type: v.optional(v.string()),
     initial_message: v.optional(v.string()),
+    isolated: v.optional(v.boolean()),
+    worktree_name: v.optional(v.string()),
+    device: v.optional(v.string()),
+    definition: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -4237,6 +4157,11 @@ export const spawnForTask = mutation({
     return await spawnSessionForTask(ctx, auth.userId, task, {
       agent_type: args.agent_type,
       initial_message: args.initial_message,
+      isolated: args.isolated,
+      worktree_name: args.worktree_name,
+      target_device_id: args.device ? await resolveTaskSpawnDevice(ctx, auth.userId, args.device) : undefined,
+      definition: args.definition,
+      caller_user_id: auth.userId,
     });
   },
 });
@@ -4250,14 +4175,33 @@ export const spawnSessionForTaskInternal = internalMutation({
     user_id: v.id("users"),
     agent_type: v.optional(v.string()),
     initial_message: v.optional(v.string()),
+    isolated: v.optional(v.boolean()),
+    worktree_name: v.optional(v.string()),
+    target_device_id: v.optional(v.string()),
+    definition: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const task = await ctx.db.get(args.task_id);
     if (!task) return null;
     if ((task.conversation_ids ?? []).length > 0) return null;
+    if (args.definition && !(await resolveDefinitionFor(ctx, args.user_id, args.definition))) {
+      const text = `The automatic session was not started: no agent definition named "${args.definition}" exists. Create it, or change the source's definition with \`cast integrations set\` (--as <name|none>).`;
+      const comments = await ctx.db
+        .query("task_comments")
+        .withIndex("by_task_id", (q) => q.eq("task_id", task._id))
+        .collect();
+      if (!comments.some((c) => c.text === text)) {
+        await insertTaskComment(ctx, task._id, { author: "codecast", text, comment_type: "note" });
+      }
+      return null;
+    }
     return await spawnSessionForTask(ctx, args.user_id, task, {
       agent_type: args.agent_type,
       initial_message: args.initial_message,
+      isolated: args.isolated,
+      worktree_name: args.worktree_name,
+      target_device_id: args.target_device_id,
+      definition: args.definition,
     });
   },
 });

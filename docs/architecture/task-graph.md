@@ -266,7 +266,9 @@ Tasks keep `model` and gain `effort` (`low | medium | high | xhigh | max`).
 fixed at launch, so every spawn for a task reads them: `cast plan orchestrate`
 and `autopilot` through `resolveTaskModel`, and the server's
 `spawnSessionForTask` (`cast task start --spawn`, the board's assign to agent,
-issue sync) on the start it queues for the daemon.
+issue sync) on the start it queues for the daemon. `--spawn` also takes
+`--isolated`, `--worktree <name>`, `--device <name>` and `--as <definition>`,
+sent only when given (issue-sync.md S7.2).
 
 ## TG9. Short-lived tasks
 

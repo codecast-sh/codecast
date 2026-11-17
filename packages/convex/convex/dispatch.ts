@@ -38,7 +38,8 @@ import { resolveTeamForPath, buildShareUpdate, isTeamMember } from "./privacy";
 import { applyMembershipVisibilityChange } from "./teams";
 import { isTeamVisibilityLevel } from "./teamVisibility";
 import { resumeConversationSession } from "./daemonCommandUtils";
-import { addDepCore, removeDepCore, resolveAssigneeToUserId, recalcPlanProgress, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
+import { addDepCore, removeDepCore, resolveAssigneeToUserId, recalcPlanProgress, subscribeUser } from "./tasks";
+import { resolveWorkerParentConversation, resolveTaskGitContext } from "./lib/taskLaunch";
 import { api, internal } from "./_generated/api";
 import { sentryStatusFor } from "./sources/sentry";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType,

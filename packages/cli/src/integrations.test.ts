@@ -121,8 +121,17 @@ describe("sources", () => {
     answer = () => [{ _id: "src_1", status: "active", name: "ASH", kind: "linear_team", last_synced_at: Date.now() - 5 * 60_000 }];
     await run("sources");
     expect(logs.join("\n")).toContain("synced 5m ago");
+    expect(logs.join("\n")).not.toContain("worktrees off");
     await expect(run("import", "jira", "X", "--project", "p")).rejects.toThrow(/exit 1/);
     expect(logs.join("\n")).toContain('Unknown provider "jira"');
+  });
+});
+
+describe("sources delegation line", () => {
+  test("shows worktrees off, the device and the definition only when set", async () => {
+    answer = () => [{ _id: "src_1", status: "active", name: "ASH", kind: "linear_team", auto_spawn: true, spawn_isolated: false, spawn_device: "dev_1", spawn_definition: "reviewer" }];
+    await run("sources");
+    expect(logs.join("\n")).toContain("auto-spawn · worktrees off · device dev_1 · as reviewer");
   });
 });
 
@@ -132,6 +141,17 @@ describe("set", () => {
     await run("set", "src_1", "--auto-spawn", "on", "--push-new-tasks", "off", "--delegate-label", "agent");
     const upd = calls.find((c) => c.path === "/cli/integrations/update-source")!;
     expect(upd.body).toEqual({ id: "src_1", auto_spawn: true, push_new_tasks: false, delegate_label: "agent" });
+  });
+  test("sends the spawn options only when their flag is used, and none clears", async () => {
+    answer = () => ({});
+    await run("set", "src_1", "--isolated", "off", "--device", "studio", "--as", "reviewer");
+    expect(calls[0].body).toEqual({ id: "src_1", spawn_isolated: false, device: "studio", definition: "reviewer" });
+    calls.length = 0;
+    await run("set", "src_1", "--device", "None", "--as", "none");
+    expect(calls[0].body).toEqual({ id: "src_1", device: "", definition: "" });
+    calls.length = 0;
+    await run("set", "src_1", "--auto-spawn", "on");
+    expect(calls[0].body).toEqual({ id: "src_1", auto_spawn: true });
   });
   test("refuses a bad toggle value and an empty set", async () => {
     answer = () => ({});

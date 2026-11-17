@@ -14,7 +14,6 @@
 // tasks, and the change-feed interceptor lives in the wrapped builders.
 
 import { v } from "convex/values";
-import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   action,
@@ -57,10 +56,11 @@ import {
 import { afterStatusEdges } from "./taskLinks";
 import { recordTaskChange, type TaskChangeBy, type TaskFieldChange } from "./lib/taskHistory";
 import { verifyApiToken } from "./apiTokens";
+import { resolveTaskSpawnDevice } from "./spawn";
 import { connectionReaches, githubDeliveryServesSource, hasPersonalConnection, linearDeliveryServesSource, resolveLinearLabelIds } from "./lib/issueSyncAccess";
 import { teamTaskStatuses } from "@codecast/shared/tasks";
-import { inlineForeignText } from "@codecast/shared/contracts";
 import { mintProjectShortId } from "./lib/projectShortId";
+import { fireTriggers, maybeDelegate, recordFeedEvent } from "./lib/issueSyncDelegation";
 
 /** A provider issue normalized to one shape before it touches a task (S2). */
 export const normalizedIssueValidator = v.object({
@@ -110,7 +110,7 @@ const IMPORT_MAX_PAGES = 10;
 /** Reconcile overlap so a webhook that never arrived is still inside the window (S6). */
 const RECONCILE_OVERLAP_MS = 5 * 60 * 1000;
 
-type SourceDoc = {
+export type SourceDoc = {
   _id: Id<"issue_sync_sources">;
   provider: "linear" | "github";
   kind: string;
@@ -123,6 +123,9 @@ type SourceDoc = {
   delegate_label?: string;
   delegate_assignee?: string;
   auto_spawn: boolean;
+  spawn_isolated?: boolean;
+  spawn_device?: string;
+  spawn_definition?: string;
   push_new_tasks: boolean;
   last_synced_at?: number;
 };
@@ -323,6 +326,7 @@ export const onLinearEvent = internalMutation({
     const source = (await sourceFor(ctx, "linear", container?.project?.id ?? "__none__"))
       ?? (await sourceFor(ctx, "linear", container?.team?.id ?? "__none__"));
     if (!source) return await done("no_source");
+    if (source.status === "paused") return await done("source_paused");
     if (!(await linearDeliveryServesSource(ctx, source as SourceDoc, payload))) return await done("foreign_organization");
 
     const now = Date.now();
@@ -431,6 +435,7 @@ export const onGithubIssue = internalMutation({
 
     const source = await sourceFor(ctx, "github", repo);
     if (!source) return { skipped: "no_source" as const };
+    if (source.status === "paused") return { skipped: "source_paused" as const };
     if (!(await githubDeliveryServesSource(ctx, source as SourceDoc, payload, repo))) return { skipped: "foreign_installation" as const };
 
     const action: string = payload?.action ?? event.action ?? "edited";
@@ -468,6 +473,7 @@ export const onGithubIssueComment = internalMutation({
 
     const source = await sourceFor(ctx, "github", repo);
     if (!source) return { skipped: "no_source" as const };
+    if (source.status === "paused") return { skipped: "source_paused" as const };
     if (!(await githubDeliveryServesSource(ctx, source as SourceDoc, payload, repo))) return { skipped: "foreign_installation" as const };
 
     const now = Date.now();
@@ -751,111 +757,6 @@ async function upsertComment(ctx: any, taskId: Id<"tasks">, comment: NormalizedC
   });
   await ctx.db.patch(id, { external });
   return true;
-}
-
-/* ---------------- Delegation, feed, triggers (S7, S8) ---------------- */
-
-/**
- * The source's delegation convention (S7.3): a label or an assignee on the
- * provider side that means "an agent takes this". Guarded by the task having
- * no session yet, so the signal spawns once and re-firing events are inert.
- */
-async function maybeDelegate(ctx: any, source: SourceDoc | null, task: any, issue: NormalizedIssue) {
-  if (!source?.auto_spawn) return;
-  if ((task.conversation_ids ?? []).length > 0) return;
-
-  const label = (source.delegate_label || "agent").toLowerCase();
-  const byLabel = issue.labels.some((l) => l.toLowerCase() === label);
-  const target = source.delegate_assignee?.toLowerCase();
-  const byAssignee = !!target
-    && [issue.assignee_login, issue.assignee_email, issue.assignee_label]
-      .some((v) => typeof v === "string" && v.toLowerCase() === target);
-  if (!byLabel && !byAssignee) return;
-
-  await ctx.scheduler.runAfter(0, internal.tasks.spawnSessionForTaskInternal, {
-    task_id: task._id,
-    user_id: source.user_id,
-    // Why: this is the one spawn with no human in the loop — a labelled issue
-    // launches an agent by itself — and identifier/url come from the provider,
-    // so they are escaped before they lead the prompt (ct-49559).
-    initial_message: `Picked up from ${inlineForeignText(issue.identifier)}: ${inlineForeignText(issue.url)}`,
-  });
-}
-
-/** S8: one feed row per inbound event, deduped so retries do not stack. */
-async function recordFeedEvent(
-  ctx: any,
-  source: SourceDoc | null,
-  task: any,
-  issue: NormalizedIssue,
-  kind: string | undefined,
-  now: number,
-) {
-  const teamId = task.team_id ?? source?.team_id;
-  if (!kind || !teamId) return;
-  await ctx.scheduler.runAfter(0, internal.externalEvents.record, {
-    team_id: teamId,
-    source: issue.provider,
-    repository: issue.repo,
-    kind,
-    actor_login: issue.actor,
-    title: issue.title || issue.identifier,
-    url: issue.url,
-    issue: {
-      provider: issue.provider,
-      key: issue.identifier,
-      url: issue.url,
-      title: issue.title,
-    },
-    task_ids: [task._id],
-    project_ids: task.project_id ? [task.project_id] : undefined,
-    dedupe_key: `${issue.provider}:${issue.id}:${kind}:${issue.remote_updated_at || now}`,
-  });
-}
-
-/**
- * Hand the event to armed triggers (S7). Two shapes, both scheduled: the
- * provider-native pair (`issues` + `opened`) that GitHub users already arm on,
- * and the CLI shorthand (`issue_opened`) that reads the same for Linear. The
- * repository is the repo name, or the Linear team key when there is none.
- */
-async function fireTriggers(
-  ctx: any,
-  source: SourceDoc | null,
-  issue: NormalizedIssue,
-  kind: string | undefined,
-  githubAction: string | undefined,
-  hasComment: boolean,
-) {
-  // A source that is gone has no workspace to keep the fan out inside: wake nobody.
-  if (!source) return;
-  const repository = issue.repo ?? issue.team_key ?? source.external_id;
-  const eventType = hasComment ? "issue_comment" : "issues";
-  const action = githubAction ?? linearActionFor(kind);
-  // team_id keeps the fan out inside the source's team: event filters are
-  // user chosen strings, and "issues" is one every team writes. The CLI
-  // shorthands (issue_opened ...) are expanded to this provider pair before
-  // they are stored, so this one call covers both spellings.
-  await scheduleTriggerMatch(ctx, {
-    event_type: eventType,
-    action,
-    repository,
-    // A personal source has no team, and an event with neither a team nor a
-    // workspace wakes every user's trigger: scope it to the source's own key.
-    ...(source.team_id ? { team_id: source.team_id } : { workspace: source.workspace }),
-  });
-}
-
-function linearActionFor(kind: string | undefined): string | undefined {
-  switch (kind) {
-    case "issue_opened": return "opened";
-    case "issue_assigned": return "assigned";
-    case "issue_labeled": return "labeled";
-    case "issue_closed": return "closed";
-    case "issue_reopened": return "reopened";
-    case "issue_commented": return "created";
-    default: return "edited";
-  }
 }
 
 /* ---------------- Outbound (S5) ---------------- */
@@ -1573,15 +1474,25 @@ const updateSourceArgs = {
   delegate_label: v.optional(v.string()),
   delegate_assignee: v.optional(v.string()),
   auto_spawn: v.optional(v.boolean()),
+  spawn_isolated: v.optional(v.boolean()),
+  device: v.optional(v.string()),
+  definition: v.optional(v.string()),
   push_new_tasks: v.optional(v.boolean()),
 };
 
 async function updateSourceFor(ctx: any, userId: Id<"users">, id: Id<"issue_sync_sources">, args: any) {
-  await requireSource(ctx, userId, id);
+  const source = await requireSource(ctx, userId, id);
+  if (args.definition !== undefined && String(source.user_id) !== String(userId)) {
+    forbidden("Forbidden: only the source's owner can set its agent definition");
+  }
   const patch: Record<string, any> = { updated_at: Date.now() };
-  for (const key of ["status", "delegate_label", "delegate_assignee", "auto_spawn", "push_new_tasks"]) {
+  for (const key of ["status", "delegate_label", "delegate_assignee", "auto_spawn", "spawn_isolated", "push_new_tasks"]) {
     if (args[key] !== undefined) patch[key] = args[key];
   }
+  if (args.device !== undefined) {
+    patch.spawn_device = args.device.trim() ? await resolveTaskSpawnDevice(ctx, source.user_id, args.device) : undefined;
+  }
+  if (args.definition !== undefined) patch.spawn_definition = args.definition.trim() || undefined;
   // Resuming a paused or errored source clears the error that parked it.
   if (args.status === "active") patch.last_error = undefined;
   await ctx.db.patch(id, patch);

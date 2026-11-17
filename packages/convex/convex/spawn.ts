@@ -96,6 +96,23 @@ export function resolveDeviceSelector(
   throw new Error(`Unknown device "${wanted}". Your devices: ${known}`);
 }
 
+export async function resolveTaskSpawnDevice(
+  ctx: { db: any },
+  userId: Id<"users">,
+  value: string,
+): Promise<string> {
+  const devices = await ctx.db
+    .query("devices")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  const boxes = await listTeamMachines(ctx, userId);
+  const id = resolveDeviceSelector(devices, value, boxes.map(({ device }) => device));
+  if (!devices.some((d: DeviceSelectorRow) => d.device_id === id)) {
+    throw new Error(`"${value}" is a team machine, and task spawns cannot run on a team machine yet. Pick one of your own devices.`);
+  }
+  return id;
+}
+
 /**
  * Resolve a `cast spawn --subagent [parent]` ref to the parent conversation.
  * The ref is whatever the calling session has on hand — its session UUID

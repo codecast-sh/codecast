@@ -12500,7 +12500,7 @@ program
   .option("--worktree <name>", "Name the worktree (implies --isolated; one task only)")
   .option("--merge-back", "With --subagent --isolated: bring each worker's changes into this checkout when it finishes done (an isolated definition does this by default)")
   .option("--no-merge-back", "Leave each worker's changes in its worktree")
-  .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
+  .option("--device <name>", "Machine to start on (label or device id, e.g. nose); an offline machine queues the start until it is back")
   .option("--cloud [host]", "Run each task in its own worktree on the cloud host (wakes it, syncs the repo + gitignored files over SSH); [host] = a registered instance id")
   .option("--shared", "With --cloud: run in the host's main checkout instead of a fresh worktree (one task only; refused when that checkout is dirty or already used by a live session)")
   .option("--from <source>", "With --cloud: what each worktree starts from: checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
@@ -17855,6 +17855,10 @@ work
   .option("--spawn", "Also hand the task to a fresh agent session (the server spawns it, so this works from any shell)")
   .option("--agent <type>", "Agent type for --spawn: claude (default) or codex")
   .option("--message <text>", stdinText("First message for the spawned session (default: the task's own brief)"))
+  .option("--isolated", "For --spawn: give the session its own git worktree")
+  .option("--worktree <name>", "For --spawn: name the worktree (implies --isolated)")
+  .option("--device <name>", "For --spawn: machine to start on (label or device id); an offline machine queues the start until it is back")
+  .option("--as <definition>", "For --spawn: run the session as a named agent definition (cast agent ls)")
   .action(async (shortId: string, options: any) => {
     // The caller's own session, never a guess (taskClaim.ts): the server hands
     // the task to the session's role, so a wrong session hands it to the wrong
@@ -17870,6 +17874,10 @@ work
       const spawnBody: Record<string, any> = { short_id: shortId };
       if (options.agent) spawnBody.agent_type = options.agent;
       if (options.message) spawnBody.initial_message = options.message;
+      if (options.isolated || options.worktree) spawnBody.isolated = true;
+      if (options.worktree) spawnBody.worktree_name = options.worktree;
+      if (options.device) spawnBody.device = options.device;
+      if (options.as) spawnBody.definition = options.as;
       const spawned = await cliPost("/cli/work/spawn", spawnBody);
       const link = `${readConfig()?.web_url || WEB_URL}/conversation/${spawned.conversationId}`;
       console.log(`${c.green}ok${c.reset} spawned ${c.cyan}${spawned.sessionId}${c.reset} for ${c.cyan}${shortId}${c.reset}`);
