@@ -424,7 +424,7 @@ describe("idle watchdog and the daemon's activity stamp", () => {
   });
 });
 
-describe("idle watchdog actions", () => {
+describe.skipIf(process.platform !== "linux")("idle watchdog actions", () => {
   const roots: string[] = [];
   afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
