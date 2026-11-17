@@ -507,6 +507,16 @@ Self-hosters: replace the URLs with your own. See [Self-Hosting](docs/SELF-HOSTI
 
 The full registry of 140+ context-aware shortcuts is available in-app via `?`.
 
+## Star History
+
+<a href="https://www.star-history.com/#codecast-sh/codecast&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=codecast-sh/codecast&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=codecast-sh/codecast&type=Date" />
+    <img alt="Star history of codecast-sh/codecast" src="https://api.star-history.com/svg?repos=codecast-sh/codecast&type=Date" />
+  </picture>
+</a>
+
 ## License
 
 [MIT](LICENSE)
