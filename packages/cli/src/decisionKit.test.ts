@@ -149,3 +149,30 @@ describe("the kit reads a count out of a whole", () => {
     expect(kit.outOf("12 of 9")).toBeNull();
   });
 });
+
+describe("the kit places a timeline's moments", () => {
+  const kit = loadKit();
+
+  // sd-3408 (Nov 16): a visitor's 11 s wait, 2.7 s before the booking saved and the 8.3 s the change removes after it, with
+  // the slow rule at 2 s. The old line cut the 8.3 s stretch to a fixed share, so it drew shorter than the 2.7 s that stays.
+  test("a wait split into shaded stretches is drawn to scale", () => {
+    const s = kit.timelineScale([0, 2.7, 11, 2], [0, 2.7, 2.7, 11]);
+    expect(s.cut).toBeNull();
+    expect(s.x(2.7)).toBeCloseTo(2.7 / 11, 6);
+    expect(s.x(11)).toBe(1);
+  });
+
+  test("a long quiet stretch is cut short only when the moments past it would crowd", () => {
+    // The guide's example: one message on Jul 20, then three moments in the last week of 97 days.
+    const crowded = kit.timelineScale([0, 86, 94, 90], [0, 97]);
+    expect(crowded.cut).toEqual({ a: 0, b: 86 });
+    expect(crowded.x(86)).toBeCloseTo(0.28, 6);
+    expect(kit.timelineScale([0, 60, 90], []).cut).toBeNull();
+  });
+
+  test("a shade's edges stretch the line", () => {
+    const s = kit.timelineScale([2, 5], [0, 10]);
+    expect([s.lo, s.hi]).toEqual([0, 10]);
+    expect(s.x(5)).toBeCloseTo(0.5, 6);
+  });
+});

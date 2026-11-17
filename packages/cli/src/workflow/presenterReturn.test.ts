@@ -133,6 +133,31 @@ describe("workflow/runner (a presenter sent back its brief)", () => {
     expect(routed("/cli/workflow-runs/progress", (b) => b.node_id === "decide" && b.run_status === "running")).toHaveLength(1);
   }, 20000);
 
+  // ct-92392 (Nov 16): the builder took its own card back to put its change through one more review. The run came back
+  // to it with "What brought the run back: Decide:" and nothing after, and it posted a new card unreviewed.
+  test("a presenter whose card was taken back is told in its brief that nobody was asked", async () => {
+    const told = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      present [label="Present", backend=session, agent=claude, timeout=600, prompt="What brought the run back: $sent_back"]
+      decide [label="Decide", shape=hexagon, asker=present, prompt="Ship it?"]
+      ship [shape=parallelogram, script="true"]
+      exit [shape=Msquare]
+      start -> present -> decide
+      decide -> ship [label="[S] Ship :: Land it"]
+      ship -> exit
+    }`);
+    onReturn = (h) => { h.live = true; h.pinnedAt = 5000; };
+    const base = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).endsWith("/cli/workflow-runs/gate")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      return base(url, init);
+    }) as typeof fetch;
+    polls = [{ status: "failed", gate_response: null, present_again: true }, { status: "running", gate_response: "S" }];
+    expect(await runWorkflow(told, { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, presenterGraceMs: 50 } as RunOptions)).toBe("completed");
+    const back = routed("/cli/messages/send").map((c) => String(c.body.body)).find((b) => b.startsWith("The run is back at this station"));
+    expect(back).toContain("What brought the run back: Decide: no open decision of yours stands here, so nobody has been asked.");
+  }, 20000);
+
   test("a presenter that comes back keeps the station: nothing is retired and no second hand starts", async () => {
     onReturn = (h) => { h.live = true; h.pinnedAt = 5000; };
     expect(await run()).toBe("completed");

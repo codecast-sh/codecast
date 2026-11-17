@@ -1619,6 +1619,9 @@ async function presentAgain(node: WorkflowNode, graph: WorkflowGraph, context: R
   context["human.gate.target"] = asker.id;
   // Nobody answered, so this is no new attempt: the station's visits keep counting.
   context["human.gate.no_card"] = node.label;
+  // What the station is told sent the run back, beside the note its brief carries (nodePrompt.ts): a "Decide:" with
+  // nothing after it said nothing of where the card had gone (ct-92392, Nov 16).
+  recordNodeOutput(context, node.id, "no open decision of yours stands here, so nobody has been asked.");
   console.log(`  ${c.yellow}no card from ${asker.label} stands at ${node.label}: back to ${asker.label}${c.reset}`);
   return "success";
 }

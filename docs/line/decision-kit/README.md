@@ -150,7 +150,7 @@ A number written as a count out of a whole (`57 of 300`) draws its share as a ba
 </dk-board>
 ```
 
-**When it happened.** Moments in a person's story placed by day, when the gaps between them are the point: how long someone waited, which side of a rule a message fell on. `rule` draws the line a policy or a check sets; a `<dk-span>` shades a stretch; the mark carrying `miss` is the moment at fault. A long stretch where nothing happens is cut short and marked, and on a phone the line stands upright with the moments in order.
+**When it happened.** Moments in a person's story placed by day, when the gaps between them are the point: how long someone waited, which side of a rule a message fell on. `rule` draws the line a policy or a check sets; a `<dk-span>` shades a stretch; the mark carrying `miss` is the moment at fault. The line is to scale, so a shaded wait reads as the share of the whole it was. Only when moments would sit too close to tell apart is a long stretch where nothing happens cut short and marked. No label covers another, and on a phone the line stands upright with the moments in order.
 
 ```html
 <dk-timeline unit="day" rule="90" rule-label="match step refuses">

@@ -1576,9 +1576,10 @@ export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?
 
 /**
  * A problem that closes (done, dropped, merged) asks nothing more: each of its
- * questions still pending is withdrawn with the close's reason, and each trial
- * card still waiting on one closes. Called from tasks.afterStatusMove on every
- * close, whoever closes it.
+ * questions still pending is withdrawn with the close's reason, and what
+ * waits on one closes with it: its trial card, and the expectations proposal
+ * it asked about. Called from tasks.afterStatusMove on every close, whoever
+ * closes it.
  */
 export async function withdrawClosedProblemAsks(ctx: Ctx, task: { _id: Id<"tasks"> }, reason: string, now: number): Promise<string[]> {
   const pending: DecisionRow[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", task._id).eq("status", "pending")).collect();
@@ -1586,11 +1587,20 @@ export async function withdrawClosedProblemAsks(ctx: Ctx, task: { _id: Id<"tasks
   return pending.map((r) => r.short_id ?? String(r._id));
 }
 
-/** Withdraw one question with its reason, and close the trial card still waiting on it. */
+/**
+ * Withdraw one question with its reason, and close what still waits on it: its
+ * trial card, and an open expectations proposal it asked about, since nobody
+ * will be asked about that proposal now. Eight of Union's fix runs each left
+ * one open for the same stale line when they dropped their problem, and seven
+ * were closed by hand (Nov 15). A proposal asked again on a newer card points
+ * at that card instead, so it stays open. The card's withdrawn_reason says why.
+ */
 async function withdrawWithCard(ctx: Ctx, row: DecisionRow, reason: string, now: number): Promise<void> {
   await withdrawCore(ctx, row, now, undefined, reason);
   const cards = await ctx.db.query("trial_cards").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).collect();
   for (const c of cards) if (c.status === "waiting") await ctx.db.patch(c._id, { status: "closed", updated_at: now });
+  const proposals = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).collect();
+  for (const p of proposals) if (p.status === "open") await ctx.db.patch(p._id, { status: "dropped", resolved_at: now, updated_at: now });
 }
 
 /**

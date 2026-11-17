@@ -716,45 +716,64 @@
     board.setAttribute("data-dk", "");
   }
 
+  // Where a timeline's values sit along its line, from 0 to 1. The line is to
+  // scale, so each stretch is drawn as long as it was: a wait a change removes
+  // reads as the share of the whole it is. Only when two moments would sit
+  // closer than a twentieth of the line to tell apart is the longest stretch
+  // cut to a fixed share and marked, and only one that holds most of the line
+  // with no moment or shade's edge inside it, so the crowded moments get the
+  // width. `edges` (where shades begin and end) stretch the line but crowd
+  // nothing.
+  var CUT_SHARE = 0.28, CROWDED = 0.05;
+  function timelineScale(moments, edges) {
+    function sorted(vs) { return vs.filter(function (v, i) { return !isNaN(v) && vs.indexOf(v) === i; }).sort(function (a, b) { return a - b; }); }
+    var at = sorted(moments), all = sorted(moments.concat(edges || []));
+    if (!all.length) return null;
+    var lo = all[0], hi = all[all.length - 1], span = hi - lo || 1, cut = null, crowded = false;
+    for (var i = 1; i < all.length; i++) if (!cut || all[i] - all[i - 1] > cut.b - cut.a) cut = { a: all[i - 1], b: all[i] };
+    for (var j = 1; j < at.length; j++) if ((at[j] - at[j - 1]) / span < CROWDED) crowded = true;
+    if (!crowded || !cut || (cut.b - cut.a) / span <= 0.5) cut = null;
+    function x(v) {
+      if (!cut) return (v - lo) / span;
+      var per = (1 - CUT_SHARE) / (span - (cut.b - cut.a) || 1);
+      if (v <= cut.a) return (v - lo) * per;
+      if (v >= cut.b) return (cut.a - lo) * per + CUT_SHARE + (v - cut.b) * per;
+      return (cut.a - lo) * per + CUT_SHARE * (v - cut.a) / (cut.b - cut.a);
+    }
+    return { lo: lo, hi: hi, cut: cut, x: x };
+  }
+
   // Moments placed by when they happened, in days (or any unit), with the line
-  // a rule draws. A stretch where nothing happens is cut short and marked, so
-  // the moments that matter get the width.
+  // a rule draws and the stretches a shade covers.
   function drawTimeline(t) {
     if (t.hasAttribute("data-dk")) return;
     var marks = [].slice.call(t.querySelectorAll(":scope > dk-mark")), spans = [].slice.call(t.querySelectorAll(":scope > dk-span"));
-    var pts = marks.map(function (m) { return num(m.getAttribute("at")); });
-    var rule = t.hasAttribute("rule") ? num(t.getAttribute("rule")) : null;
-    var all = pts.concat(rule == null ? [] : [rule]).filter(function (v) { return !isNaN(v); }).sort(function (a, b) { return a - b; });
-    if (!all.length) return;
-    var lo = all[0], hi = all[all.length - 1], span = hi - lo || 1;
-    // The widest gap between moments, when it holds most of the span, shrinks to a fixed share.
-    var cut = null;
-    for (var i = 1; i < all.length; i++) if (!cut || all[i] - all[i - 1] > cut.b - cut.a) cut = { a: all[i - 1], b: all[i] };
-    var squeeze = cut && (cut.b - cut.a) / span > 0.5 ? cut : null, GAP = 0.28;
-    function x(v) {
-      if (!squeeze) return (v - lo) / span;
-      var rest = span - (squeeze.b - squeeze.a), per = (1 - GAP) / (rest || 1);
-      if (v <= squeeze.a) return (v - lo) * per;
-      if (v >= squeeze.b) return (squeeze.a - lo) * per + GAP + (v - squeeze.b) * per;
-      return (squeeze.a - lo) * per + GAP * (v - squeeze.a) / (squeeze.b - squeeze.a);
-    }
+    var rule = t.hasAttribute("rule") ? num(t.getAttribute("rule")) : null, edges = [];
+    spans.forEach(function (s) { edges.push(num(s.getAttribute("from")), num(s.getAttribute("to"))); });
+    var scale = timelineScale(marks.map(function (m) { return num(m.getAttribute("at")); }).concat(rule == null ? [] : [rule]), edges);
+    if (!scale) return;
+    var x = scale.x, cut = scale.cut, brk = cut && ((x(cut.a) + CUT_SHARE / 2) * 100).toFixed(2) + "%";
     function pct(v) { return (x(v) * 100).toFixed(2) + "%"; }
     var axis = el("div", "dk-axis"), unit = t.getAttribute("unit") || "day";
     spans.forEach(function (s) {
       var band = el("span", "dk-tl-span");
       var from = num(s.getAttribute("from")), to = num(s.getAttribute("to"));
-      band.style.left = pct(isNaN(from) ? lo : from);
-      band.style.width = "calc(" + pct(isNaN(to) ? hi : to) + " - " + band.style.left + ")";
+      if (isNaN(from)) from = scale.lo;
+      if (isNaN(to)) to = scale.hi;
+      band.style.left = pct(from);
+      band.style.width = "calc(" + pct(to) + " - " + band.style.left + ")";
       band.title = s.textContent.trim();
       axis.appendChild(band);
       if (s.textContent.trim()) {
         var lbl = el("span", "dk-tl-span-label", s.textContent.trim());
-        lbl.style.left = squeeze ? ((x(squeeze.a) + GAP / 2) * 100).toFixed(2) + "%" : "calc(" + band.style.left + " + 0.5rem)";
-        if (squeeze) lbl.setAttribute("data-mid", "");
+        // A shade the cut runs through is named at the break, over the stretch it stands for; any other at its own start.
+        var through = cut && from <= cut.a && to >= cut.b;
+        lbl.style.left = through ? brk : "calc(" + band.style.left + " + 0.5rem)";
+        if (through) lbl.setAttribute("data-mid", "");
         axis.appendChild(lbl);
       }
     });
-    if (squeeze) { var brk = el("span", "dk-tl-break"); brk.style.left = ((x(squeeze.a) + GAP / 2) * 100).toFixed(2) + "%"; axis.appendChild(brk); }
+    if (cut) { var b = el("span", "dk-tl-break"); b.style.left = brk; axis.appendChild(b); }
     if (rule != null) {
       var r = el("span", "dk-tl-rule");
       r.style.left = pct(rule);
@@ -765,7 +784,7 @@
       r.style.order = String(Math.round(rule * 1000));
       axis.appendChild(r);
     }
-    // Labels alternate above and below the line, so neighbours never collide.
+    // Labels alternate above and below the line; settleTimeline moves apart any that still touch.
     marks.forEach(function (m, j) {
       var at = num(m.getAttribute("at")), dot = el("span", "dk-tl-mark");
       if (isNaN(at)) return;
@@ -788,6 +807,52 @@
     marks.concat(spans).forEach(function (n) { n.remove(); });
     t.appendChild(axis);
     t.setAttribute("data-dk", "");
+    // Where labels land depends on the line's width and on the fonts, so the layout runs again when either changes.
+    var width = -1, settle = function () { width = t.clientWidth; settleTimeline(t); };
+    if (window.ResizeObserver) new ResizeObserver(function () { if (t.clientWidth !== width) settle(); }).observe(t);
+    else settle();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(settle);
+  }
+
+  // No label on a timeline covers another. Each side of the line is laid out
+  // nearest first (the shades' names, the moments, then the rule's): a label
+  // that would touch one already placed moves out past it, the rule's line
+  // growing to reach its label, and the timeline's room grows to hold them
+  // all. On a phone the line stands upright and its labels sit in order, so
+  // none moves.
+  function settleTimeline(t) {
+    var axis = t.querySelector(":scope > .dk-axis"), rule = axis && axis.querySelector(":scope > .dk-tl-rule");
+    if (!axis) return;
+    var up = [].slice.call(axis.querySelectorAll(":scope > .dk-tl-span-label, :scope > .dk-tl-mark[data-side='up'] > .dk-tl-label"));
+    var down = [].slice.call(axis.querySelectorAll(":scope > .dk-tl-mark[data-side='down'] > .dk-tl-label"));
+    up.concat(down).forEach(function (n) { n.style.translate = ""; });
+    if (rule) rule.style.top = "";
+    t.style.paddingTop = t.style.paddingBottom = "";
+    if (!axis.offsetWidth || getComputedStyle(axis).display === "flex") return;
+    var line = axis.getBoundingClientRect(), GAP = 4, placed = { up: [], down: [] }, top = line.top, bottom = line.bottom;
+    // How far a label must move out from the line to clear every label already placed on its side.
+    function place(box, side) {
+      var dir = side === "up" ? -1 : 1, s = 0, moved = true;
+      while (moved) {
+        moved = false;
+        placed[side].forEach(function (p) {
+          if (box.left < p.right + GAP && box.right > p.left - GAP && box.top + dir * s < p.bottom + GAP && box.bottom + dir * s > p.top - GAP) {
+            s = dir < 0 ? box.bottom - p.top + GAP : p.bottom - box.top + GAP;
+            moved = true;
+          }
+        });
+      }
+      placed[side].push({ left: box.left, right: box.right, top: box.top + dir * s, bottom: box.bottom + dir * s });
+      top = Math.min(top, box.top + dir * s);
+      bottom = Math.max(bottom, box.bottom + dir * s);
+      return s;
+    }
+    up.forEach(function (n) { var s = place(n.getBoundingClientRect(), "up"); if (s) n.style.translate = "0 " + -s + "px"; });
+    if (rule) { var s = place(rule.firstChild.getBoundingClientRect(), "up"); if (s) rule.style.top = "calc(-2.8rem - " + s + "px)"; }
+    down.forEach(function (n) { var s = place(n.getBoundingClientRect(), "down"); if (s) n.style.translate = "0 " + s + "px"; });
+    var room = getComputedStyle(t);
+    t.style.paddingTop = Math.max(parseFloat(room.paddingTop), line.top - top + 8) + "px";
+    t.style.paddingBottom = Math.max(parseFloat(room.paddingBottom), bottom - line.bottom + 8) + "px";
   }
 
   // Cases read compact: one row each, the words the change moves (the first
@@ -962,5 +1027,5 @@
     t.setAttribute("data-dk", "");
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", draw); else draw();
-  window.decisionKit = { draw: draw, parseUnified: parseUnified, wordDiff: wordDiff, segments: segments, outOf: outOf };
+  window.decisionKit = { draw: draw, parseUnified: parseUnified, wordDiff: wordDiff, segments: segments, outOf: outOf, timelineScale: timelineScale };
 })();

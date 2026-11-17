@@ -9,7 +9,7 @@ import { brief, forProject, lines, overview, personEditCore, propose, resolve, r
 import { answerTrialCardCore, cards } from "./lineTrial";
 import { pauseAtGateCore } from "./workflow_runs";
 import { settleExpectationCard } from "./lib/expectationsApply";
-import { ask } from "./sessionDecisions";
+import { ask, withdrawClosedProblemAsks } from "./sessionDecisions";
 
 const INDEXES = schemaIndexes(schema);
 const TEAM = "teams_union";
@@ -340,6 +340,26 @@ describe("a session's proposal that needs a person", () => {
     expect(second.replaced).toBe(first.short_id);
     expect((await asked(ctx)).map((d: any) => [d.short_id, d.status])).toEqual([[first.short_id, "withdrawn"], [second.short_id, "pending"]]);
     expect((await run(show, ctx, scope())).proposals.find((p: any) => p.short_id === "xp-2")).toMatchObject({ status: "open", card: second.short_id });
+  });
+
+  // Eight of Union's fix runs in two hours each proposed rewording the same stale line (trial-99) and asked about it
+  // on their problem, then dropped the problem. The drop withdrew each card and left its proposal open with nobody
+  // asked, and seven were closed by hand (Nov 15).
+  test("a problem that closes drops the proposal its card asked about; one asked on another problem stays open", async () => {
+    const { ctx } = await proposed();
+    await run(propose, ctx, { ...scope(), conversation_id: "sess-routine", summary: "Callbacks", ops: [{ op: "add", part: "Calls", text: "Callbacks wait for an ask.", citations: [BARE] }] });
+    await ctx.db.insert("conversations", { user_id: OWNER, session_id: "sess-other", team_id: TEAM, is_private: false, title: "Another fix", message_count: 1, created_at: 1, updated_at: 1 });
+    const problem = (short_id: string) => ({ short_id, user_id: OWNER, team_id: TEAM, workspace: `team:${TEAM}`, title: `Problem ${short_id}`, status: "in_progress", created_at: 1, updated_at: 1 });
+    const closing = await ctx.db.insert("tasks", problem("ct-1"));
+    await ctx.db.insert("tasks", problem("ct-2"));
+    const card = await askAbout(ctx, "sess-routine", "xp-2", { task: "ct-1" });
+    const other = await askAbout(ctx, "sess-other", "xp-3", { task: "ct-2" });
+    expect(await withdrawClosedProblemAsks(ctx, { _id: closing }, "The records show the judge was right.", 50)).toEqual([card.short_id]);
+    const proposals = (await run(show, ctx, scope())).proposals;
+    expect(proposals.find((p: any) => p.short_id === "xp-2")).toMatchObject({ status: "dropped", card: card.short_id });
+    expect(proposals.find((p: any) => p.short_id === "xp-3")).toMatchObject({ status: "open", card: other.short_id });
+    const statuses = Object.fromEntries((await asked(ctx)).map((d: any) => [d.short_id, [d.status, d.withdrawn_reason]]));
+    expect(statuses).toEqual({ [card.short_id]: ["withdrawn", "The records show the judge was right."], [other.short_id]: ["pending", undefined] });
   });
 
   test("in a trial project a session standing in applies it", async () => {
