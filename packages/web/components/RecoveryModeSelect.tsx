@@ -1,18 +1,21 @@
 "use client";
 
-// How this machine recovers a session that stopped on its own (a usage limit,
-// an API error, a crash) — one
-// mutually exclusive choice, rendered identically in the header panel and the
-// Claude Accounts settings page. A radio group rather than two switches
+// How codecast recovers a session that stopped on its own (a usage limit, an
+// API error, a crash) on every machine the person runs: one mutually exclusive
+// choice, rendered identically in the header panel, the Claude Accounts
+// settings page and the park card's picker. A radio group rather than two switches
 // because the modes exclude each other: "ask before switching" and "switch
 // automatically" cannot both be on, and two independent toggles let them be.
 //
 // It also states what the machine LAST did and why (describeDecision), so an
 // account change is explained where the setting that caused it lives.
 
+import { useState } from "react";
+import { ChevronDown, Zap } from "lucide-react";
 import { describeDecision, formatAgo, type RecoveryDecision } from "@codecast/shared/contracts";
 import type { RecoveryMode } from "@codecast/convex/convex/ccAccountsShared";
 import { RECOVERY_MODE_COPY, type RecoveryModeControl } from "../hooks/useAccountRecoveryToggles";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 // From least to most done on the person's behalf.
 const ORDER: RecoveryMode[] = ["off", "resume", "ask", "auto"];
@@ -59,6 +62,34 @@ export function RecoveryModeSelect({
         );
       })}
     </div>
+  );
+}
+
+/** The mode as a small button that opens the selector, for surfaces where a
+ * stopped session is shown (the park card). Picking a mode closes it. */
+export function RecoveryModePicker({ control }: { control: RecoveryModeControl }) {
+  const [open, setOpen] = useState(false);
+  const on = control.mode !== "off";
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-meta font-semibold ${
+            on ? "border-sol-cyan/40 text-sol-cyan hover:bg-sol-cyan/10" : "border-sol-border text-sol-text-muted hover:bg-sol-bg-alt"
+          }`}
+        >
+          <Zap className="h-3 w-3" />
+          {RECOVERY_MODE_COPY[control.mode].short}
+          <ChevronDown className="h-3 w-3 opacity-70" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[340px] p-1.5">
+        <RecoveryModeSelect
+          control={{ ...control, set: async (mode) => { setOpen(false); await control.set(mode); } }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 
