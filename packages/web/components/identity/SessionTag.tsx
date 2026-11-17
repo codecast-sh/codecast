@@ -3,11 +3,12 @@
 // names a session beside other content (a comment's author, a timeline row, a
 // linked session) draws this, at one of a few sizes, so a session reads the
 // same everywhere.
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { AgentTypeIcon } from "../AgentTypeIcon";
 import { WorkspaceTile } from "./WorkspaceTile";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { SessionGlyph } from "./SessionGlyph";
+import { IdentityFace } from "./IdentityFace";
 import { SessionIdentityLine } from "./SessionIdentityLine";
 import { identityRowOf, type IdentityRow } from "../../lib/sessionIdentity";
 
@@ -27,7 +28,7 @@ type TagRow = IdentityRow & { agent_type?: string | null } & Record<string, unkn
  *  with the agent inside (WorkspaceTile), and the brand alone in Classic and
  *  Minimal. Every list of sessions leads its rows with this, so a session
  *  looks the same on the board, the rail, a task and the org chart. */
-export function SessionMark({ session, size = 16, iconClassName = "w-3.5 h-3.5", className = "flex-shrink-0", showAgent = true }: {
+export function SessionMark({ session, size = 16, iconClassName = "w-3.5 h-3.5", className = "flex-shrink-0", showAgent = true, onPick }: {
   session: TagRow;
   size?: number;
   /** The plain brand's box, sized to sit beside the surface's text. */
@@ -35,22 +36,19 @@ export function SessionMark({ session, size = 16, iconClassName = "w-3.5 h-3.5",
   className?: string;
   /** Off (the viewer hid agent icons), Modern's tile shows the workspace's initial. */
   showAgent?: boolean;
+  /** Opens the character picker: the face becomes a button with its hover card. */
+  onPick?: (e: MouseEvent) => void;
 }) {
   const agent = session.agent_type || "claude_code";
   const modern = useIsModernStyle();
-  return (
-    <SessionGlyph
-      row={identityRowOf(session)}
-      size={size}
-      className={className}
-      badge={showAgent ? <AgentTypeIcon agentType={agent} className="w-full h-full p-[1px]" /> : undefined}
-      fallback={modern ? <WorkspaceTile row={session} size={size} showAgent={showAgent} className={className} /> : (
-        <span className={`inline-flex ${className}`} title={agent}>
-          <AgentTypeIcon agentType={agent} className={iconClassName} />
-        </span>
-      )}
-    />
+  const badge = showAgent ? <AgentTypeIcon agentType={agent} className="w-full h-full p-[1px]" /> : undefined;
+  const fallback = modern ? <WorkspaceTile row={session} size={size} showAgent={showAgent} className={className} /> : (
+    <span className={`inline-flex ${className}`} title={agent}>
+      <AgentTypeIcon agentType={agent} className={iconClassName} />
+    </span>
   );
+  if (onPick) return <IdentityFace row={session} size={size} className={className} badge={badge} onPick={onPick} fallback={fallback} />;
+  return <SessionGlyph row={identityRowOf(session)} size={size} className={className} badge={badge} fallback={fallback} />;
 }
 
 export function SessionTag({

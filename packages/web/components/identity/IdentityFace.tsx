@@ -12,7 +12,7 @@ import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 type Side = "top" | "bottom" | "left" | "right";
 type Align = "start" | "center" | "end";
 
-export function IdentityFace({ row: rawRow, size = 18, className, hover = true, onPick, side = "bottom", align = "start", badge, prefs }: {
+export function IdentityFace({ row: rawRow, size = 18, className, hover = true, onPick, side = "bottom", align = "start", badge, prefs, fallback = null }: {
   row: IdentityRow & Record<string, unknown>;
   prefs?: IdentityPrefs;
   size?: number;
@@ -24,12 +24,14 @@ export function IdentityFace({ row: rawRow, size = 18, className, hover = true, 
   align?: Align;
   /** Corner glyph riding the face (the agent brand); forwarded to SessionFace. */
   badge?: ReactNode;
+  /** What to draw for a session nobody personified. */
+  fallback?: ReactNode;
 }) {
   const row = useLiveIdentityRow(rawRow);
   const id = sessionIdentity(row, useIdentityPrefs(prefs));
   // Not personified: the caller draws whatever it drew before (the agent icon),
   // so opting out costs the row nothing.
-  if (id.kind === "plain") return null;
+  if (id.kind === "plain") return <>{fallback}</>;
   const pickable = !!onPick && id.kind === "character";
   const face = pickable ? (
     <button
