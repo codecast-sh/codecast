@@ -1,6 +1,7 @@
 import { withInboxView } from "../../lib/inboxViewHistory";
-import { useState, useCallback, useRef, memo, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from "react";
+import { useState, useCallback, useRef, memo, useMemo, lazy, Suspense, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
+import { useBoundedDeferredValue } from "../../hooks/useBoundedDeferredValue";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useMissingSessionLookup } from "../../hooks/useMissingSessionRow";
@@ -76,8 +77,11 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   // highlight still moves instantly off the live id. Renaming the prop to
   // liveSessionId means every existing reference below reads the deferred value,
   // so the whole pane (body + banners + resume target) stays self-consistent and
-  // swaps atomically when the next conversation is ready.
-  const sessionId = useDeferredValue(liveSessionId);
+  // swaps atomically when the next conversation is ready. Bounded: a session
+  // streaming on screen re-renders this pane on every message, and each of
+  // those renders restarts the deferred mount, so a plain useDeferredValue
+  // never lands and the pane stays on the old conversation.
+  const sessionId = useBoundedDeferredValue(liveSessionId);
   const {
     conversation,
     hasMoreAbove,

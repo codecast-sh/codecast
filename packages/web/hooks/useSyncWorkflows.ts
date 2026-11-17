@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { activeTeamIdOf } from "../lib/activeTeam";
-import { useSyncCollection } from "./useSyncCollection";
+import { entityIdArgs, useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { stableRefId } from "../store/wakeSig";
 import { isViewersWorkflow } from "../store/lineWorkflowSlice";
@@ -196,7 +196,9 @@ const SHIPPED_SESSION_FLOWS = new Set(appPool().filter((f) => f.kind === "line" 
 
 /** Feeder: the runs a session started for its change (convex sessionFlowRuns), live ones first. */
 export function useSyncSessionFlowRuns(conversationId: string | null | undefined) {
-  return useSyncCollection("workflowRuns", api.sessionFlowRuns.forConversation, conversationId ? { conversation_id: conversationId } : "skip");
+  // entityIdArgs: a session not yet created on the server is a local stub id,
+  // and v.id("conversations") rejects it (a server error per pane per stub).
+  return useSyncCollection("workflowRuns", api.sessionFlowRuns.forConversation, entityIdArgs("conversation_id", conversationId ?? undefined));
 }
 
 /** Reader: a session's own flow runs, newest first (undefined while cold and empty). */
