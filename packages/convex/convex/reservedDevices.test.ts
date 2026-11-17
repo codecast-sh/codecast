@@ -57,9 +57,9 @@ describe("a reserved machine takes work only by name", () => {
 
   test("opening it again lets it claim like any machine", async () => {
     const { t, fresh } = await seed();
-    expect(await t.mutation(api.devices.setDeviceReservation, { api_token: TOKEN, device_id: "line-4", purpose: "  " })).toEqual({ reserved_for: null });
+    expect(await t.mutation(api.deviceReservation.setDeviceReservation, { api_token: TOKEN, device_id: "line-4", purpose: "  " })).toEqual({ reserved_for: null });
     const claim = await t.mutation(api.devices.claimConversationForStart, { api_token: TOKEN, conversation_id: fresh, device_id: "line-4" });
     expect(claim.won).toBe(true);
-    expect(await t.mutation(api.devices.setDeviceReservation, { api_token: TOKEN, device_id: "line-4", purpose: "  Union   line " })).toEqual({ reserved_for: "Union line" });
+    expect(await t.mutation(api.deviceReservation.setDeviceReservation, { api_token: TOKEN, device_id: "line-4", purpose: "  Union   line " })).toEqual({ reserved_for: "Union line" });
   });
 });

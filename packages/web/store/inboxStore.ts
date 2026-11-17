@@ -10118,7 +10118,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.shared_team_ids = [...teamIds].sort();
   }),
-  // Mirrors performSetDeviceReservation (convex/devices.ts): an empty purpose opens the machine again.
+  // Mirrors performSetDeviceReservation (convex/deviceReservation.ts): an empty purpose opens the machine again.
   setDeviceReservation: action(function (this: Draft, deviceId: string, purpose: string) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.reserved_for = cleanReservationPurpose(purpose) ?? undefined;

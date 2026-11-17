@@ -265,7 +265,7 @@ export function registerDevicesCommand(program: Command): void {
       if (!purpose) die("Name the job it is kept for, e.g. cast devices reserve <device> Union line");
       const b = await backend();
       const d = await ownDevice(b, needle);
-      const res = await b.client.mutation(b.api.devices.setDeviceReservation, { api_token: b.token, device_id: d.device_id, purpose });
+      const res = await b.client.mutation(b.api.deviceReservation.setDeviceReservation, { api_token: b.token, device_id: d.device_id, purpose });
       console.log(`${fmt.success("ok")} ${deviceDisplayName(d)} is reserved for ${res.reserved_for}`);
     });
 
@@ -275,7 +275,7 @@ export function registerDevicesCommand(program: Command): void {
     .action(async (needle: string) => {
       const b = await backend();
       const d = await ownDevice(b, needle);
-      await b.client.mutation(b.api.devices.setDeviceReservation, { api_token: b.token, device_id: d.device_id, purpose: "" });
+      await b.client.mutation(b.api.deviceReservation.setDeviceReservation, { api_token: b.token, device_id: d.device_id, purpose: "" });
       console.log(`${fmt.success("ok")} ${deviceDisplayName(d)} takes any work again`);
     });
 

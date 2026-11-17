@@ -153,6 +153,7 @@ import type * as deploys from "../deploys.js";
 import type * as deploysBackfill from "../deploysBackfill.js";
 import type * as deploysView from "../deploysView.js";
 import type * as deviceAppearance from "../deviceAppearance.js";
+import type * as deviceReservation from "../deviceReservation.js";
 import type * as deviceRouting from "../deviceRouting.js";
 import type * as deviceSettingsShared from "../deviceSettingsShared.js";
 import type * as devices from "../devices.js";
@@ -938,6 +939,7 @@ declare const fullApi: ApiFromModules<{
   deploysBackfill: typeof deploysBackfill;
   deploysView: typeof deploysView;
   deviceAppearance: typeof deviceAppearance;
+  deviceReservation: typeof deviceReservation;
   deviceRouting: typeof deviceRouting;
   deviceSettingsShared: typeof deviceSettingsShared;
   devices: typeof devices;
