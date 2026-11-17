@@ -3,7 +3,7 @@
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, MessageSquare, MessagesSquare } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, MessageSquare, MessagesSquare } from "lucide-react";
 import { useInboxStore, type SessionDecisionItem, type DecisionDetailItem } from "../../store/inboxStore";
 import { useSyncTaskEvidence, useTaskEvidenceByShortId } from "../../hooks/useSyncTaskEvidence";
 import { useDecisionThread } from "../../hooks/useDecisionThread";
@@ -21,7 +21,8 @@ import { DeployedIn } from "../line/widgets/DeployedIn";
 import { OriginTrail } from "../line/widgets/OriginTrail";
 import "../line/workspace/workspace.css";
 import { OptionPages } from "./OptionPages";
-import { DecisionPager } from "./DecisionPager";
+import { DecisionPager, useDecisionStep, type DecisionStep } from "./DecisionPager";
+import { useDecisionQueue } from "../../hooks/useDecisionQueue";
 import { HandoffNote } from "./DecisionParties";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
@@ -66,6 +67,8 @@ function DocumentBody({ decision, detail, answerable, pager }: { decision: Sessi
   // The thread that asked opens from its own button ("Talk to the session"),
   // the page's lead action: the session is selected in the inbox at once.
   const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
+  // Read before the answer, so the slot this decision held is known once it leaves the list.
+  const step = useDecisionStep([decision.short_id, decision._id]);
 
   // Who asked, who may answer, who holds it. A change card leads with the
   // change and its proof, so for one these facts follow the card.
@@ -87,7 +90,7 @@ function DocumentBody({ decision, detail, answerable, pager }: { decision: Sessi
           <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
             <ArrowLeft className="w-3 h-3" /> The queue
           </Link>
-          {pager && <span className="ml-auto"><DecisionPager ids={[decision.short_id, decision._id]} /></span>}
+          {pager && <span className="ml-auto"><DecisionPager step={step} /></span>}
         </div>
 
         {/* ── Header ── */}
@@ -246,7 +249,27 @@ function DocumentBody({ decision, detail, answerable, pager }: { decision: Sessi
         {a.answerSection && <section className="mt-8 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
           <DecisionAnswerPanel decision={decision} detail={detail} answerable={answerable} a={a} />
         </section>}
+
+        {/* Settled: where to go from here, the thread that asked or the next decision waiting. */}
+        {!pending && <DecisionNext decisionId={decision._id} step={step} openSession={jumpToAsk} />}
       </div>
+    </div>
+  );
+}
+
+function DecisionNext({ decisionId, step, openSession }: { decisionId: string; step: DecisionStep; openSession: () => Promise<boolean> }) {
+  // The list's next, else the first decision still waiting in the queue.
+  const queue = useDecisionQueue();
+  const queued = queue.find((q) => q.decisionId && q.decisionId !== decisionId);
+  const next = step.pos?.next ?? (queued ? queued.shortId ?? queued.decisionId ?? null : null);
+  return (
+    <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-next>
+      <Button type="button" variant="outline" size="sm" onClick={() => void openSession()} data-decision-next-session>
+        <MessagesSquare />Open the session
+      </Button>
+      <Button type="button" variant="blue" size="sm" className="ml-auto" disabled={!next} onClick={() => step.go(next)} data-decision-next-decision>
+        {next ? <>Next decision<ArrowRight /></> : "No decisions waiting"}
+      </Button>
     </div>
   );
 }
