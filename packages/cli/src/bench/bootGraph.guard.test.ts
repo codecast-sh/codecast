@@ -446,7 +446,9 @@ describe("command groups stay off the boot graph", () => {
     // 4755 (2026-11-17): the decisions command's --touching, --files and
     // --supersedes options in index.ts +2 (decisionsTouching.ts itself loads
     // on demand), usageLimits.ts +1, commandGroups.ts and snippets.ts +1 each.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4755);
+    // 4757 the same day: the `cast guide sim` text in snippets.ts (the rotate
+    // verb and its paragraph); the verb loads simstream.ts on demand.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4757);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
