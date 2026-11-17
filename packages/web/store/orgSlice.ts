@@ -364,6 +364,8 @@ type OrgServerVerbs<R> = {
   provisionOrgRole: (roleId: string) => R;
   /** Return a failed-over role to the host it left: roleFailover.moveBack. */
   moveOrgRoleBack: (roleId: string) => void;
+  /** Leave a failed-over role where the move put it and clear its line: roleFailover.keepHere. */
+  keepOrgRoleHere: (roleId: string) => void;
   /** A template role's setup item (H3): orgTemplates.setup. */
   markOrgTemplateSetup: (instanceKey: string, id: string, status: "done" | "open" | "skipped") => R;
   answerOrgTemplateInput: (instanceKey: string, key: string, value: string) => R;
@@ -969,7 +971,7 @@ export function orgIntentNoticeText(intent: OrgIntent, reason: "refused" | "expi
     // server's value either way).
     case "line": return reason === "refused" ? `Setting the line to ${intent.slug} ${tail}; put back.` : "";
     case "retireRole": return `Retiring @${intent.handle} ${tail}; the role is back.`;
-    case "moveBack": return `Moving @${intent.handle} back to ${intent.from.from.label} ${tail}.`;
+    case "moveBack": return intent.keep ? `Keeping @${intent.handle} on ${intent.from.to?.label ?? "its new host"} ${tail}.` : `Moving @${intent.handle} back to ${intent.from.from.label} ${tail}.`;
     case "moveSession": return `Moving the session ${tail}; it is back where it was.`;
     case "moveRole": return `Moving the role ${tail}; it is back where it was.`;
     case "movePerson": return `Moving the person ${tail}; they are back where they were.`;
@@ -1083,7 +1085,7 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
     (action === "updateOrgRole" && i.kind === "roleFields" && i.role_id === args[0] && sameValue(roleFieldKeys(i.fields), roleFieldKeys((args[1] as OrgUpdateRoleInput | undefined) ?? {}))) ||
     (action === "setProjectLead" && i.kind === "roleFields" && i.role_id === args[1] && sameValue(roleFieldKeys(i.fields), ["scope"])) ||
     (action === "setRoleLine" && i.kind === "line" && i.role_id === args[0] && i.slug === args[1]) ||
-    (action === "moveOrgRoleBack" && i.kind === "moveBack" && i.role_id === args[0]) ||
+    ((action === "moveOrgRoleBack" || action === "keepOrgRoleHere") && i.kind === "moveBack" && i.role_id === args[0] && !!i.keep === (action === "keepOrgRoleHere")) ||
     ((action === "undoOrgChange" || action === "redoOrgChange") && i.kind === "undoChange" && i.batch === args[0] && i.redo === (action === "redoOrgChange")));
   for (const i of reverts) { state.revertOrgIntent(i.id); notices.push(orgIntentNoticeText(i, "refused")); }
   const revised = orgVerdictRevisedNotice(error);
@@ -1574,6 +1576,11 @@ export function createOrgSlice(): OrgSliceImpl {
 
     moveOrgRoleBack: action(function (this: OrgDraft, roleId: string) {
       const intent = this.orgTree && moveBackIntent(this.orgTree, roleId, intentId());
+      if (intent) { applyOrgIntent(this.orgTree!, intent); pushIntent(this, intent); }
+    }),
+
+    keepOrgRoleHere: action(function (this: OrgDraft, roleId: string) {
+      const intent = this.orgTree && moveBackIntent(this.orgTree, roleId, intentId(), true);
       if (intent) { applyOrgIntent(this.orgTree!, intent); pushIntent(this, intent); }
     }),
 

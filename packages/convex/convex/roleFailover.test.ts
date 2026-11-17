@@ -125,6 +125,17 @@ test("with no cloud host nothing moves, and the owner gets one line, once", asyn
   expect(await notices(w.t, w.seed.ashot)).toHaveLength(1);
 });
 
+// The incident on Nov 15: a floor bump marked @agent-quality stuck, its host
+// updated minutes later, and the Stuck banner stayed for 16 hours.
+test("a stuck line clears once the host serves again", async () => {
+  const w = await world({ macQuietMs: ROLE_FAILOVER_QUIET_MS + MIN, cloudHost: false });
+  await sweep(w.t, w.now);
+  expect((await w.t.run((ctx: any) => ctx.db.get(w.role._id))).failover).toMatchObject({ reason: "offline" });
+  await macBack(w);
+  expect((await sweep(w.t, Date.now())).outcomes).toEqual([]);
+  expect((await w.t.run((ctx: any) => ctx.db.get(w.role._id))).failover).toBeUndefined();
+});
+
 test("a quiet host with nothing queued stays put", async () => {
   const w = await world({ macQuietMs: ROLE_FAILOVER_QUIET_MS + MIN, queued: false });
   expect((await sweep(w.t, w.now)).outcomes).toEqual([]);
@@ -188,6 +199,17 @@ test("the prior runner, not an admin, moves it back onto their own Mac", async (
   expect(after.conv.owner_device_id).toBe("jason-mac");
   expect(String(after.conv.user_id)).toBe(String(w.seed.jason));
   expect(after.role.failover).toBeUndefined();
+});
+
+test("keep here leaves the session where the move put it and clears the line", async () => {
+  const w = await world({ macQuietMs: ROLE_FAILOVER_QUIET_MS + MIN });
+  await failedOver(w);
+  const asJason = w.t.withIdentity({ subject: `${w.seed.jason}|test` });
+  await asJason.mutation(anyApi.roleFailover.keepHere, { role_id: String(w.role._id) });
+  const after = await w.t.run(async (ctx: any) => ({ conv: await ctx.db.get(w.conv), role: await ctx.db.get(w.role._id) }));
+  expect(after.conv.owner_device_id).toBe("cloud-1");
+  expect(after.role.failover).toBeUndefined();
+  await expect(w.asAshot.mutation(anyApi.roleFailover.keepHere, { role_id: String(w.role._id) })).rejects.toThrow(/no failover/);
 });
 
 test("roleMoveBackState: only a host the viewer may use, and only once it is back", () => {

@@ -1,11 +1,12 @@
 "use client";
 // The owner's line when the failover sweep moved a role's standing session off
 // a dead host, or found nowhere to move it (convex roleFailover.ts). It sits
-// where the paused note does, above the conversation, and carries the one
-// action: Move back. A move back that changes the account the role runs and
-// bills under goes through the consequential review first.
+// where the paused note does, above the conversation, and carries the two ways
+// to settle a move: Move back, or Keep here, which leaves the session on its
+// new host and clears the line. A move back that changes the account the role
+// runs and bills under goes through the consequential review first.
 import { useState } from "react";
-import { ArrowRight, TriangleAlert, Undo2 } from "lucide-react";
+import { ArrowRight, Check, TriangleAlert, Undo2 } from "lucide-react";
 import { moveBackRefusal, roleFailoverBillsUnder, roleFailoverReasonWords, type MoveBackState, type RoleFailover } from "@codecast/shared/contracts/roleFailover";
 import { useRoleMoveBack } from "../../hooks/useRoleMoveBack";
 import { cn } from "../../lib/utils";
@@ -20,6 +21,8 @@ type NoteProps = {
   nameOf: (userId: string) => string;
   /** Absent when the viewer may not move the role. */
   onMoveBack?: () => void;
+  /** Keep here; absent when the viewer may not move the role. */
+  onKeep?: () => void;
   className?: string;
 };
 
@@ -33,7 +36,7 @@ export function RoleFailoverLine(props: NoteProps) {
 /** `back`: what a press would meet (roleMoveBackState). Move back is offered
  *  only to a viewer who can make it: a host they may not use shows who can
  *  instead, and a host still offline shows the button held. */
-export function RoleFailoverNote({ role, failover: f, viewerId, nameOf, onMoveBack, back, className }: NoteProps & { back: MoveBackState | null }) {
+export function RoleFailoverNote({ role, failover: f, viewerId, nameOf, onMoveBack, onKeep, back, className }: NoteProps & { back: MoveBackState | null }) {
   const [reviewing, setReviewing] = useState(false);
   const stuck = !f.to;
   const tone = stuck ? "var(--sol-red)" : "var(--sol-orange)";
@@ -57,6 +60,7 @@ export function RoleFailoverNote({ role, failover: f, viewerId, nameOf, onMoveBa
       {f.to && onMoveBack && (back === "ok" || back === "offline") && (
         <OrgButton size="sm" onClick={press} disabled={back === "offline"} title={back === "offline" ? moveBackRefusal(f, back, nameOf) : undefined} data-failover-back={back}><Undo2 className="w-3 h-3" /> Move back</OrgButton>
       )}
+      {f.to && onKeep && <OrgButton size="sm" onClick={onKeep} data-failover-keep><Check className="w-3 h-3" /> Keep here</OrgButton>}
       {reviewing && f.to && onMoveBack && (
         <SwitchReview
           ledger={moveRoleBackLedger({ handle: role.handle, name: role.name, here: f.to.label, there: f.from.label, runner: backRunner })}

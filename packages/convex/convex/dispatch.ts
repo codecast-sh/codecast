@@ -28,6 +28,7 @@ import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, perf
 import { performJoinTeamHost, performRemoveTeamHostMember, performRenameTeamHost, performUnregisterTeamHost } from "./teamHosts";
 import { performSetAccountDevices, performSetAccountShares } from "./accountPool";
 import { cancelBot, requestBot } from "./meetingBots";
+import { disconnectCore } from "./mcpAuth";
 import { setJoinAllFor, setMeetingChoiceFor } from "./lib/meetingCalendarCore";
 import type { DeviceSnippetChange, ProviderKeyCommand } from "@codecast/shared/contracts";
 import { upsertBinding } from "./capabilityBindings";
@@ -768,6 +769,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   moveOrgRoleBack: async (ctx, _userId, [roleId]: [string]) => {
     return await ctx.runMutation!((api as any).roleFailover.moveBack, { role_id: roleId });
+  },
+  keepOrgRoleHere: async (ctx, _userId, [roleId]: [string]) => {
+    return await ctx.runMutation!((api as any).roleFailover.keepHere, { role_id: roleId });
   },
   markOrgTemplateSetup: async (ctx, _userId, [instanceKey, id, status]: [string, string, "done" | "open" | "skipped"]) => {
     return await ctx.runMutation!((api as any).orgTemplates.setup, { instance_key: instanceKey, id, status });
@@ -3355,6 +3359,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   sendMeetingBot: async (ctx, userId, [meeting_url, client_key]: [string, string]) =>
     requestBot(ctx, userId, { meeting_url, client_key }),
   cancelMeetingBot: async (ctx, userId, [meet_id]: [string]) => cancelBot(ctx, userId, meet_id),
+  // Settings › Connected agents: end an outside agent's MCP grant, or revoke a cast token seen reading through /mcp (mcpAuth.ts).
+  disconnectAgent: async (ctx, userId, [kind, id]: ["grant" | "cast_token", string]) => disconnectCore(ctx, userId, kind, id),
   // The calls page's calendar meetings (meetingCalendar.ts): one meeting's
   // switch, and join-all. Both bring the person's bots in line at once.
   setCalendarMeetingChoice: async (ctx, userId, [id, choice]: [string, "on" | "off" | null]) =>

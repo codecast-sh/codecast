@@ -152,7 +152,13 @@ export async function performRoleFailover(ctx: any, role: any, now: number, minC
   const roster: Probe[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", conv.user_id)).collect();
   const device = roster.find((d) => d.device_id === conv.owner_device_id) ?? null;
   const reason = hostTrouble(device, conv, { now, roster, minCliVersion, lastFailoverAt: last?.at ?? 0 });
-  if (!reason) return null;
+  if (!reason) {
+    // A stuck line is about the host as it was; once the session's host
+    // serves again the role is no longer stuck. A move (with `to`) stays, for
+    // its move-back.
+    if (last && !last.to) await ctx.db.patch(role._id, { failover: undefined });
+    return null;
+  }
   if ((await queuedCount(ctx, conv._id)) === 0) return null;
 
   const ownerId = await roleOwnerOf(ctx, role);
@@ -211,12 +217,17 @@ export const sweep = internalMutation({
  * session on a teammate's unshared machine), and so is a host still past the
  * quiet threshold, which the next sweep would only move it off again.
  */
-export async function performMoveRoleBack(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
-  const role = await requireRole(ctx, userId, args.role_id, "access");
+async function requireSettleableMove(ctx: any, userId: Id<"users">, roleId: string): Promise<{ role: any; f: any }> {
+  const role = await requireRole(ctx, userId, roleId, "access");
   const f = role.failover;
   if (!f?.to) throw new Error("This role has no failover to undo");
   const priorRunner = String(f.from.user_id) === String(userId);
   if (!priorRunner && !(await userCanAdminRole(ctx, userId, role))) throw new Error("Only an admin of the role, or whoever ran it there, can move it back");
+  return { role, f };
+}
+
+export async function performMoveRoleBack(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
+  const { role, f } = await requireSettleableMove(ctx, userId, args.role_id);
   const device = await resolveSessionLaunchDevice(ctx, userId, f.from.device_id);
   const machines = device ? [{ device_id: device.device_id, user_id: String(device.user_id), last_seen: device.last_seen }] : [];
   const state = roleMoveBackState(asFailover(f), machines, Date.now());
@@ -226,6 +237,22 @@ export async function performMoveRoleBack(ctx: any, userId: Id<"users">, args: {
   }
   return moveStandingSession(ctx, userId, role, f.from.device_id);
 }
+
+/** Keep here: the session stays on the host the failover moved it to, and the
+ *  move's line leaves the role. Same people as Move back. */
+export async function performKeepRoleHere(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<void> {
+  const { role } = await requireSettleableMove(ctx, userId, args.role_id);
+  await ctx.db.patch(role._id, { failover: undefined });
+}
+
+export const keepHere = mutation({
+  args: { api_token: v.optional(v.string()), role_id: v.string() },
+  handler: async (ctx, { api_token, ...args }) => {
+    const userId = await getAuthenticatedUserId(ctx, api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    return performKeepRoleHere(ctx, userId, args);
+  },
+});
 
 export const moveBack = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string() },

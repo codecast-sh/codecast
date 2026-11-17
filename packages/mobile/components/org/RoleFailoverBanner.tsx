@@ -57,6 +57,11 @@ export function RoleFailoverBanner({ roleShortId }: { roleShortId: string | null
             <Text style={styles.actText}>Move back</Text>
           </Pressable>
         )}
+        {canMove && (
+          <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); useInboxStore.getState().keepOrgRoleHere(role._id); }} hitSlop={8} style={[styles.act, { borderColor: tone + '66' }]} testID="role-failover-keep">
+            <Text style={styles.actText}>Keep here</Text>
+          </Pressable>
+        )}
       </View>
     </View>
   );

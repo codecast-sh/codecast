@@ -25,11 +25,11 @@ const { RoleFailoverNote } = await import("./RoleFailoverNote");
 const base = { at: 1, reason: "offline" as const, owner_user_id: "me", from: { device_id: "mac", label: "Jason's MacBook", user_id: "jason" }, to: { device_id: "c1", label: "cloud-1", user_id: "me" } };
 const nameOf = (id: string) => (id === "jason" ? "Jason" : "someone");
 
-async function mount(failover: any, onMoveBack?: () => void, back: "ok" | "offline" | "not_yours" | null = "ok") {
+async function mount(failover: any, onMoveBack?: () => void, back: "ok" | "offline" | "not_yours" | null = "ok", onKeep?: () => void) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  await act(async () => { root.render(React.createElement(RoleFailoverNote, { role: { handle: "agent-quality", name: "Agent Quality" }, failover, viewerId: "me", nameOf, onMoveBack, back })); });
+  await act(async () => { root.render(React.createElement(RoleFailoverNote, { role: { handle: "agent-quality", name: "Agent Quality" }, failover, viewerId: "me", nameOf, onMoveBack, onKeep, back })); });
   return { host, unmount: () => act(async () => root.unmount()) };
 }
 
@@ -60,11 +60,20 @@ test("a move on the same account moves back in one press", async () => {
   await unmount();
 });
 
+test("keep here settles the move in one press, even while the old host is offline", async () => {
+  let kept = 0;
+  const { host, unmount } = await mount(base, () => {}, "offline", () => kept++);
+  await act(async () => { (host.querySelector("[data-failover-keep]") as HTMLButtonElement).click(); });
+  expect(kept).toBe(1);
+  await unmount();
+});
+
 test("stuck names the host, and offers no move", async () => {
   const { host, unmount } = await mount({ ...base, to: undefined }, () => {});
   expect(host.querySelector("[data-head-failover]")?.getAttribute("data-head-failover")).toBe("stuck");
   expect(host.textContent).toContain("no always-on machine");
   expect(host.querySelector("[data-failover-back]")).toBeNull();
+  expect(host.querySelector("[data-failover-keep]")).toBeNull();
   await unmount();
 });
 

@@ -16,9 +16,10 @@ const withFailover = (): OrgTree => {
   t.roles.find((r) => r._id === ROLE)!.failover = JSON.parse(JSON.stringify(FAILOVER));
   return t;
 };
-const run = (data: OrgSliceData, ...args: any[]): OrgSliceData => {
+const run = (data: OrgSliceData, ...args: any[]): OrgSliceData => runAs("moveOrgRoleBack", data, ...args);
+const runAs = (name: "moveOrgRoleBack" | "keepOrgRoleHere", data: OrgSliceData, ...args: any[]): OrgSliceData => {
   const slice = createOrgSlice();
-  return mutate(data, (draft) => { (slice.moveOrgRoleBack as any).call(draft, ...args); });
+  return mutate(data, (draft) => { (slice[name] as any).call(draft, ...args); });
 };
 const roleOf = (t: OrgTree | null) => t!.roles.find((r) => r._id === ROLE)!;
 
@@ -49,5 +50,20 @@ describe("move back", () => {
   it("does nothing for a role with no move to undo", () => {
     const st = run({ orgTree: JSON.parse(JSON.stringify(ORG_FIXTURE)), orgIntents: [] }, ROLE);
     expect(st.orgIntents).toHaveLength(0);
+  });
+});
+
+describe("keep here", () => {
+  it("clears the line at once, and only its own refusal puts it back", () => {
+    const st = runAs("keepOrgRoleHere", { orgTree: withFailover(), orgIntents: [] }, ROLE);
+    expect(roleOf(st.orgTree).failover).toBeUndefined();
+    const store = (reverted: string[]) => ({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id: string) => reverted.push(id) });
+    const other: string[] = [];
+    dropRejectedOrgIntent(store(other), "moveOrgRoleBack", [ROLE]);
+    expect(other).toEqual([]);
+    const own: string[] = [];
+    const notices = dropRejectedOrgIntent(store(own), "keepOrgRoleHere", [ROLE]);
+    expect(own).toEqual([st.orgIntents[0].id]);
+    expect(notices[0]).toBe("Keeping @" + roleOf(withFailover()).handle + " on cloud-1 was refused.");
   });
 });

@@ -393,7 +393,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       <ConversationWithPanel open={panelOpen} layout={panelLayout} panel={panelNode} conversation={
         <div className="flex-1 min-w-0 min-h-0 flex flex-col" data-scope-conversation={standingId ?? "none"}>
           {paused && role && <RolePausedNote name={role.name} className={cn("mx-3 mt-2")} onResume={canEdit ? () => update({ status: "active" }) : undefined} />}
-          {role?.failover && <RoleFailoverLine role={role} failover={role.failover} viewerId={me?.user_id ?? meId} nameOf={(id) => tree?.people.find((p) => p.user_id === id)?.name || "a teammate"} className={cn("mx-3 mt-2")} onMoveBack={canEdit || role.failover.from.user_id === (me?.user_id ?? meId) ? () => store().moveOrgRoleBack(role._id) : undefined} />}
+          {role?.failover && <RoleFailoverLine role={role} failover={role.failover} viewerId={me?.user_id ?? meId} nameOf={(id) => tree?.people.find((p) => p.user_id === id)?.name || "a teammate"} className={cn("mx-3 mt-2")} {...(canEdit || role.failover.from.user_id === (me?.user_id ?? meId) ? { onMoveBack: () => store().moveOrgRoleBack(role._id), onKeep: () => store().keepOrgRoleHere(role._id) } : {})} />}
           {standingId ? (
             <div className="flex-1 min-h-0">
               <InboxConversation
