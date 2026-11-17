@@ -20,6 +20,8 @@ import { filterByWorkspace } from "../workspaceScope";
 import { activeWorkspaceKeyOf } from "../workspaceScope";
 import { objectByShortId } from "./objects";
 import { modIsActive } from "./active";
+import { availableThemes, DEFAULT_COLOR_THEME, resolveColorThemeKey } from "../theme/colorTheme";
+import { setThemePreview, THEME_PREVIEW_MS } from "../theme/preview";
 
 export type ModRow = {
   _id: string;
@@ -478,7 +480,7 @@ export class ModRuntime {
     this.post({ type: "emit", event, payload: plain(payload) });
   }
 
-  private addLog(level: ModLogLine["level"], text: string): void {
+  addLog(level: ModLogLine["level"], text: string): void {
     this.logs.push({ level, text, at: Date.now() });
     if (this.logs.length > 200) this.logs.splice(0, this.logs.length - 200);
     this.pendingLogs.push({ level, text });
@@ -562,8 +564,9 @@ export class ModRuntime {
     try {
       // The store action runs synchronously inside call() before its first
       // await, so wrapping the call covers the write itself.
-      const run = () => this.call(msg.method, msg.args ?? [], msg.key);
-      const value = await (this.isAutomated(msg.origin) ? withoutUndo(run) : run());
+      const automated = this.isAutomated(msg.origin);
+      const run = () => this.call(msg.method, msg.args ?? [], msg.key, automated);
+      const value = await (automated ? withoutUndo(run) : run());
       this.post({ type: "reply", cid: msg.cid, ok: true, value: plain(value) });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
@@ -605,7 +608,7 @@ export class ModRuntime {
     if (!canWrite(this.row.manifest, write)) throw new Error(`permissions.write does not include "${write}"`);
   }
 
-  private async call(method: string, args: unknown[], key?: string): Promise<unknown> {
+  private async call(method: string, args: unknown[], key?: string, automated = true): Promise<unknown> {
     const store = useInboxStore.getState() as any;
     const a0 = args[0] as any;
     const a1 = args[1] as any;
@@ -720,6 +723,29 @@ export class ModRuntime {
           ...(typeof patch.body === "string" ? { body: patch.body } : {}),
           ...(patch.fields && typeof patch.fields === "object" ? { fields: patch.fields } : {}),
         });
+        return null;
+      }
+      case "theme.list": {
+        const current = resolveColorThemeKey(store.clientState?.ui?.color_theme);
+        return availableThemes(Object.values(store.mods ?? {}), store.clientState?.ui?.mods_installed ?? []).map((c) => ({
+          key: c.key, title: c.theme.title, mod: c.modTitle ?? null, backdrop: !!c.theme.backdrop, current: c.key === current,
+        }));
+      }
+      case "theme.current": return resolveColorThemeKey(store.clientState?.ui?.color_theme);
+      case "theme.apply":
+      case "theme.preview": {
+        // The person's look changes only when they press for it, never from a hook or a render.
+        if (automated) throw new Error(`$.${method} runs only from the person's press (a button's onPress or a command)`);
+        const themeKey = a0 === null || a0 === undefined ? null : String(a0);
+        const known = availableThemes(Object.values(store.mods ?? {}), store.clientState?.ui?.mods_installed ?? []);
+        if (themeKey && !known.some((c) => c.key === themeKey)) throw new Error(`no theme "${themeKey}"; $.theme.list() names them as "<mod>/<theme id>"`);
+        if (method === "theme.preview") {
+          const ms = typeof a1?.ms === "number" ? Math.min(Math.max(a1.ms, 1000), 60000) : THEME_PREVIEW_MS;
+          setThemePreview(themeKey, ms);
+          return null;
+        }
+        setThemePreview(null);
+        store.updateClientUI({ color_theme: themeKey ?? DEFAULT_COLOR_THEME });
         return null;
       }
       case "docs.create": {

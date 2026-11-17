@@ -16,10 +16,11 @@ reference.
 
 They want to know what they could have, not how the SDK works. Answer with
 what codecast could look like and do for them: their own color theme for the
-whole app, the things they track (customers, bugs, deals) as objects with ids
-that turn into live references, a pane or sidebar section over their work,
-richer blocks in agents' replies, something that watches their machine. Tie
-each to their own work where you can, and offer to build one with them now.
+whole app, even a live animated scene behind it, the things they track
+(customers, bugs, deals) as objects with ids that turn into live references,
+a pane or sidebar section over their work, richer blocks in agents' replies,
+something that watches their machine. Tie each to their own work where you
+can, and offer to build one with them now.
 Leave manifests, grants and the build loop for once they pick something.
 
 Before telling someone a mod cannot do something, try it: scaffold, push and
@@ -129,6 +130,15 @@ it is right.
   and `font-mono` stacks. The person picks it in Settings > Appearance, and it
   recolors every surface, Tailwind's color scales included. A theme is data
   only: there is no CSS hook, so it survives every change to the app.
+- A theme can carry a live scene behind the whole app: add `backdrop`
+  (`tint`, how much of `bg` covers the scene, and `glass`, a blur in px for
+  panels) and draw it in `on("theme.backdrop", { theme: id })` on the canvas
+  the event hands you, with `e.loop` for motion. The scene runs in a frame of
+  its own with no network and no `$`, so it draws only from what the module
+  carries. Give `bg-alt` and `card` an alpha (`#ffffff66`) so it shows through
+  panels, and keep `bg` and `text` readable against each other.
+- `$.theme` lists, applies and previews themes from a press, so a fence can
+  offer a theme in chat as a card with Apply and Preview buttons.
 
 ## The local half
 

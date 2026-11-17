@@ -44,10 +44,11 @@ const SHADCN: Record<string, ThemeColorToken> = {
   "--destructive": "red",
 };
 
-/** "#268bd2" -> "205 69% 49%", the form the shadcn variables hold. */
+/** "#268bd2" -> "205 69% 49%", the form the shadcn variables hold; "#268bd280" adds " / 0.5". */
 export function hexToHslTriplet(hex: string): string {
   const h = hex.slice(1);
-  const full = h.length === 3 ? [...h].map((c) => c + c).join("") : h;
+  const full = h.length <= 4 ? [...h].map((c) => c + c).join("") : h;
+  const alpha = full.length === 8 ? parseInt(full.slice(6, 8), 16) / 255 : 1;
   const [r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16) / 255);
   const max = Math.max(r, g, b), min = Math.min(r, g, b);
   const l = (max + min) / 2;
@@ -59,7 +60,8 @@ export function hexToHslTriplet(hex: string): string {
     hue = (hue * 60 + 360) % 360;
   }
   const round = (n: number) => Math.round(n * 10) / 10;
-  return `${round(hue)} ${round(s * 100)}% ${round(l * 100)}%`;
+  const hsl = `${round(hue)} ${round(s * 100)}% ${round(l * 100)}%`;
+  return alpha < 1 ? `${hsl} / ${Math.round(alpha * 1000) / 1000}` : hsl;
 }
 
 /**

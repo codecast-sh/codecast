@@ -34,7 +34,31 @@ declare module "codecast-mod" {
     (event: "session.state", matcher: Partial<SessionStateEvent>, hook: Hook<SessionStateEvent, void>): void;
     (event: "data.change", hook: Hook<{ collection: Collection }, void>): void;
     (event: "data.change", matcher: { collection: Collection }, hook: Hook<{ collection: Collection }, void>): void;
+    /**
+     * Draw a theme's live scene: the manifest theme with this id has a `backdrop`. It runs in a frame of
+     * its own, full-window behind the app, while that theme is on. The frame reaches no network and `$`
+     * answers nothing there: draw from the code and data the module carries. Use e.loop for motion.
+     */
+    (event: "theme.backdrop", matcher: { theme: string }, hook: Hook<BackdropEvent, void>): void;
   }
+
+  export type BackdropEvent = {
+    /** The theme's id. */
+    theme: string;
+    /** The mode on screen; the scene is drawn again when it changes. */
+    mode: "light" | "dark";
+    /** Full-window, sized in device pixels (width and height below times dpr). Draw in 2d or webgl. */
+    canvas: HTMLCanvasElement;
+    width: number;
+    height: number;
+    dpr: number;
+    /** The person asked for reduced motion: e.loop draws one still frame (and again on resize). */
+    reducedMotion: boolean;
+    /** Calls fn every frame with ms since the start and since the last frame; returns a stop. */
+    loop(fn: (t: number, dt: number) => void): () => void;
+    /** The window resized: the canvas is already resized, in CSS pixels times dpr. */
+    onResize(fn: (width: number, height: number, dpr: number) => void): () => void;
+  };
 
   /**
    * Every hook is `($, e, next)`. `$` is the codecast API, bound to this
@@ -173,6 +197,20 @@ declare module "codecast-mod" {
       update(id: string, patch: { title?: string; status?: string; fields?: Record<string, unknown>; body?: string }): Promise<void>;
       archive(id: string): Promise<void>;
     };
+    /**
+     * Color themes: codecast's own and every one the person's mods declare, keyed "<mod>/<theme id>"
+     * (codecast's own are "codecast/<id>"). apply and preview run only from the person's press (a
+     * button's onPress, a command), never from a render or an event hook.
+     */
+    theme: {
+      list(): Promise<{ key: string; title: string; mod: string | null; backdrop: boolean; current: boolean }[]>;
+      /** The key of the theme the person chose. */
+      current(): Promise<string>;
+      /** Make it the person's theme (null: codecast's default). */
+      apply(key: string | null): Promise<void>;
+      /** Show it in this window for `ms` (8s by default, 60s at most) without choosing it; null ends a preview. */
+      preview(key: string | null, opts?: { ms?: number }): Promise<void>;
+    };
     /** Needs permissions.write "docs". */
     docs: {
       create(doc: { title: string; content: string }): Promise<{ id: string }>;
@@ -240,11 +278,17 @@ declare module "codecast-mod" {
     /** What agents should know to use this mod well: its objects, its fences, when to reach for them. Write it in AGENTS.md beside the manifest; every session the mod applies to starts with it, and `cast mod guide` prints it. */
     agents?: string;
     /**
-     * Color themes the person can pick in Settings > Appearance. Data, not CSS: a hex
-     * value per token for light and/or dark; a token left out keeps codecast's own.
-     * Accents also recolor every Tailwind scale of their hue, and bg/text the grays.
+     * Color themes the person can pick in Settings > Appearance (or that $.theme.apply sets). Data, not
+     * CSS: a hex value per token for light and/or dark; a token left out keeps codecast's own. Accents
+     * also recolor every Tailwind scale of their hue, and bg/text the grays.
+     *
+     * `backdrop` puts a live scene behind the whole app, drawn by on("theme.backdrop", { theme: id }).
+     * The window's background turns see-through: `tint` (0 to 1, default 0.15) is how much of `bg`
+     * covers the scene, and `glass` (px, 0 to 40) blurs what shows through panels. Keep `bg` and `text`
+     * opaque and readable against each other, and give `bg-alt` and `card` an alpha (#rrggbbaa) so the
+     * scene shows through panels.
      */
-    themes?: { id: string; title: string; light?: ThemePalette; dark?: ThemePalette }[];
+    themes?: { id: string; title: string; light?: ThemePalette; dark?: ThemePalette; backdrop?: { tint?: number; glass?: number } }[];
     /** The local half: a module the daemon runs on each of your machines (cast mod revoke stops it on one). */
     local?: { main: string; description?: string };
     /**

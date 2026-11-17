@@ -39,4 +39,12 @@ describe("theme variables", () => {
     expect(hexToHslTriplet("#268bd2")).toBe("204.8 69.4% 48.6%");
     expect(themeVars({ bg: "#fff" }, "light")["--background"]).toBe("0 0% 100%");
   });
+
+  test("a color with alpha keeps it, in the hex variables and the HSL triplets", () => {
+    expect(hexToHslTriplet("#ffffff80")).toBe("0 0% 100% / 0.502");
+    expect(hexToHslTriplet("#fff8")).toBe("0 0% 100% / 0.533");
+    const vars = themeVars({ card: "#ffffff66" }, "light");
+    expect(vars["--sol-card"]).toBe("#ffffff66");
+    expect(vars["--card"]).toBe("0 0% 100% / 0.4");
+  });
 });

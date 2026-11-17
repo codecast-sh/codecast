@@ -344,13 +344,18 @@ export type ModSurface =
 export type ResolvedObject = { title: string; status?: string; fields?: Record<string, unknown>; body?: string };
 
 /** The events a hooks module can hook, with what each matcher may name. */
-export const MOD_EVENTS = ["mod.start", "ui.render", "object.resolve", "command.run", "session.state", "data.change"] as const;
+export const MOD_EVENTS = ["mod.start", "ui.render", "object.resolve", "command.run", "session.state", "data.change", "theme.backdrop"] as const;
 export type ModEventName = (typeof MOD_EVENTS)[number];
 
 // -- Protocol ---------------------------------------------------------------
 
 export type HostToFrame =
-  | { type: "load"; proto: number; mod: { id: string; name: string; manifest: ModManifest; context: ModContext }; code: string; primary?: boolean }
+  /**
+   * `backdrop` loads the mod as a theme's live scene instead of its hooks
+   * runtime: a visible frame behind the app that runs only the matching
+   * `theme.backdrop` hook, reaches nothing and is answered nothing.
+   */
+  | { type: "load"; proto: number; mod: { id: string; name: string; manifest: ModManifest; context: ModContext }; code: string; primary?: boolean; backdrop?: { theme: string } }
   | { type: "render"; rid: string; key: string; surface: ModSurface }
   | { type: "invoke"; rid: string; fn: string; args: unknown[] }
   | { type: "command"; rid: string; id: string }
@@ -392,6 +397,7 @@ export const MOD_METHODS = [
   "tasks.create", "tasks.update",
   "sessions.send", "sessions.open",
   "docs.create",
+  "theme.list", "theme.current", "theme.apply", "theme.preview",
   "objects.create", "objects.update", "objects.archive",
   "local.get", "local.meta", "local.call",
   "http.fetch",

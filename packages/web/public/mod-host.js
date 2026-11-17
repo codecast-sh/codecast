@@ -11,7 +11,8 @@
     loaded = true;
     var msg = ev.data;
     var fetchList = (msg.mod.manifest.permissions && msg.mod.manifest.permissions.fetch) || [];
-    var connect = fetchList === "*" ? "https: wss:" : fetchList.join(" ") || "'none'";
+    // A theme's backdrop draws and reaches nothing, whatever the manifest may fetch.
+    var connect = msg.backdrop ? "'none'" : fetchList === "*" ? "https: wss:" : fetchList.join(" ") || "'none'";
     var meta = document.createElement("meta");
     meta.httpEquiv = "Content-Security-Policy";
     meta.content = "default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; connect-src " + connect;

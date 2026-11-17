@@ -31,6 +31,13 @@ describe("color themes in a mod manifest", () => {
     expect(themeErrors([{ id: "x", title: "X", dark: {} }, { id: "x", title: "X", dark: {} }])[0]).toContain("declared twice");
   });
 
+  test("a backdrop theme takes alpha colors and a tint and glass in range", () => {
+    expect(themeErrors([{ id: "lagoon", title: "Lagoon", light: { card: "#ffffff66", "bg-alt": "#fff8" }, backdrop: { tint: 0.2, glass: 16 } }])).toEqual([]);
+    expect(themeErrors([{ id: "x", title: "X", dark: {}, backdrop: { tint: 2 } }])[0]).toContain("backdrop.tint must be a number from 0 to 1");
+    expect(themeErrors([{ id: "x", title: "X", dark: {}, backdrop: { css: "x" } }])[0]).toContain('backdrop has an unknown key "css"');
+    expect(themeErrors([{ id: "x", title: "X", dark: {}, backdrop: true }])[0]).toContain("backdrop must be an object");
+  });
+
   test("the authoring types name every token, so editors autocomplete the whole contract", () => {
     const types = readFileSync(join(import.meta.dir, "..", "mods", "authoring.d.ts"), "utf8");
     const block = types.slice(types.indexOf("export type ThemePalette"), types.indexOf("export type Manifest"));

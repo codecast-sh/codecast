@@ -259,6 +259,60 @@ function captureConsole(): void {
   addEventListener("unhandledrejection", (ev) => post({ type: "log", level: "error", text: `unhandled: ${errorText((ev as PromiseRejectionEvent).reason)}` }));
 }
 
+// -- A theme's backdrop ---------------------------------------------------------
+
+/**
+ * This frame is a theme's live scene: a full-window canvas behind the app.
+ * The `theme.backdrop` hook draws on it, through `loop` for motion, which
+ * draws one still frame when the person asks for reduced motion.
+ */
+async function runBackdrop(theme: string): Promise<void> {
+  const style = document.createElement("style");
+  style.textContent = "html,body{margin:0;height:100%;overflow:hidden;background:transparent}body>canvas{position:fixed;inset:0;width:100%;height:100%;display:block}";
+  document.head.appendChild(style);
+  const canvas = document.createElement("canvas");
+  document.body.appendChild(canvas);
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const resizers = new Set<(width: number, height: number, dpr: number) => void>();
+  const stills = new Set<() => void>();
+  const fit = () => {
+    const dpr = devicePixelRatio || 1;
+    canvas.width = Math.round(innerWidth * dpr);
+    canvas.height = Math.round(innerHeight * dpr);
+    for (const fn of resizers) fn(innerWidth, innerHeight, dpr);
+    for (const draw of stills) draw();
+  };
+  fit();
+  addEventListener("resize", fit);
+  const loop = (fn: (t: number, dt: number) => void) => {
+    const start = performance.now();
+    let last = start;
+    let stopped = false;
+    const tick = (now: number) => {
+      if (stopped) return;
+      fn(now - start, now - last);
+      last = now;
+      if (!reducedMotion) requestAnimationFrame(tick);
+    };
+    const still = () => requestAnimationFrame(tick);
+    if (reducedMotion) stills.add(still);
+    requestAnimationFrame(tick);
+    return () => { stopped = true; stills.delete(still); };
+  };
+  const e = {
+    theme, mode: context?.theme ?? "light", canvas, width: innerWidth, height: innerHeight, dpr: devicePixelRatio || 1, reducedMotion, loop,
+    onResize: (fn: (width: number, height: number, dpr: number) => void) => { resizers.add(fn); return () => resizers.delete(fn); },
+  };
+  let drawn = true;
+  try {
+    await dispatch("theme.backdrop", e, makeApi(undefined, "hook"), () => { drawn = false; });
+  } catch (err) {
+    post({ type: "log", level: "error", text: `theme.backdrop: ${errorText(err)}` });
+    return;
+  }
+  if (!drawn) post({ type: "log", level: "error", text: `theme "${theme}" has a backdrop, but the mod has no on("theme.backdrop", { theme: "${theme}" }) hook to draw it` });
+}
+
 /** Called by the bundle's entry with the mod's `register`. */
 export async function start(register: Register | undefined): Promise<void> {
   const load = (globalThis as any).__modLoad as Extract<HostToFrame, { type: "load" }> | undefined;
@@ -282,6 +336,10 @@ export async function start(register: Register | undefined): Promise<void> {
     await register(on);
   } catch (err) {
     post({ type: "load-failed", error: `register threw: ${errorText(err)}` });
+    return;
+  }
+  if (load?.backdrop) {
+    await runBackdrop(load.backdrop.theme);
     return;
   }
   post({ type: "ready", hooks: hooks.map(({ event, matcher }) => ({ event, matcher })) });
