@@ -177,7 +177,7 @@ function PinnedAgentsSection() {
           <SettingsRow
             key={d.id}
             label={<span className="flex items-center gap-2"><AgentTypeIcon agentType={d.convexId} className="h-4 w-4" />{d.displayName}</span>}
-            description={last ? "At least one local agent stays pinned." : d.pinnedByDefault === false ? "Unpinned by default." : undefined}
+            description={last ? "At least one local agent stays pinned." : undefined}
           >
             <Switch checked={on} disabled={last} onCheckedChange={(v) => toggle(d.id, v)} aria-label={`Pin ${d.displayName}`} />
           </SettingsRow>
