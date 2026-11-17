@@ -1209,6 +1209,29 @@ export async function pageAdmission(
 }
 
 /**
+ * Who may COMMENT on a page. The page's own calls go through pageAdmission as
+ * any read does. A reply from inside the app (from_app, signed in by session,
+ * no identity token) carries no page keys, so the app's own people are
+ * admitted to the discussion they already see in Threads: the owner always,
+ * and a teammate who sees the page in the gallery while it has not expired (a
+ * team gate still admits only its team). Comments only: reads, page state and
+ * MCP read_page keep the full gates.
+ */
+export async function commentAdmission(
+  ctx: { db: QueryCtx["db"]; auth: QueryCtx["auth"] },
+  artifact: Doc<"artifacts">,
+  presented: { owner_key?: string; edit_key?: string; identity_token?: string; k?: string; e?: string; m?: string; from_app?: boolean },
+): Promise<PageAdmission> {
+  const admission = await pageAdmission(ctx, artifact, presented);
+  if (!admission.blocked || !presented.from_app || presented.identity_token || !admission.identity) return admission;
+  const inApp = admission.role === "owner"
+    || (admission.role === "teammate"
+      && !isExpired(artifact)
+      && (!artifact.team_gate || (await isTeamMember(ctx, admission.identity.user._id, artifact.team_gate))));
+  return inApp ? { ...admission, blocked: null } : admission;
+}
+
+/**
  * Where a signed-in account stands on a page with nothing presented but
  * itself: what a session acting as its user (the CLI, a page-state watcher)
  * may read and write. The same rule as a browser, so an agent never sees more
@@ -1217,10 +1240,34 @@ export async function pageAdmission(
 export async function accountAdmission(ctx: { db: QueryCtx["db"] }, artifact: Doc<"artifacts">, userId: Id<"users">): Promise<PageAdmission> {
   const user = await ctx.db.get(userId);
   const identity = user ? { user, name: commenterDisplayName(user), avatar: commenterAvatar(user) } : null;
-  // The member token the app's /pages/auth relay hands this account, so a
-  // member of a team-gated page's team is admitted as in a browser.
-  const m = (await mTokenFor(artifact, String(userId))) ?? undefined;
-  return await admissionFor(ctx, artifact, identity, false, { m });
+  return await admissionFor(ctx, artifact, identity, false, {});
+}
+
+/** The gate tokens for a page as `holder` would hold them: k for the password
+ *  wall, e for the email wall, m for the team gate. Who may be HANDED them is
+ *  the caller's rule (unlockKeys, keysHandedTo). */
+async function gateKeysFor(artifact: Doc<"artifacts">, holder: string): Promise<{ k: string | null; e: string | null; m: string | null }> {
+  return {
+    k: artifact.password_hash ? await kTokenFor(artifact.password_hash, artifact.slug) : null,
+    e: artifact.email_gate && artifact.owner_key ? await eTokenFor(artifact.owner_key, artifact.slug) : null,
+    m: await mTokenFor(artifact, holder),
+  };
+}
+
+/** The keys the app hands this reader without a decision in hand, as
+ *  unlockKeys does: the owner holds them all, a team-gated page's members
+ *  hold them all, and nobody else holds any. Expiry is no key: nothing opens it. */
+async function keysHandedTo(
+  ctx: { db: QueryCtx["db"] },
+  artifact: Doc<"artifacts">,
+  role: SteerRole | undefined,
+  identity: CommentIdentity | null,
+): Promise<{ k: string | null; e: string | null; m: string | null } | null> {
+  if (role === "owner") return await gateKeysFor(artifact, String(artifact.user_id));
+  if (identity && artifact.team_gate && (await isTeamMember(ctx, identity.user._id, artifact.team_gate))) {
+    return await gateKeysFor(artifact, String(identity.user._id));
+  }
+  return null;
 }
 
 async function admissionFor(
@@ -1236,16 +1283,19 @@ async function admissionFor(
       : identity && (await teammatesWhoCanSee(ctx, artifact)).has(identity.user._id.toString())
         ? "teammate"
         : undefined;
-  // A team gate admits the owner and that team's members, never every
-  // teammate the owner has elsewhere.
-  const behindWall = role === "owner"
-    || (role === "teammate" && (!artifact.team_gate || (await isTeamMember(ctx, identity!.user._id, artifact.team_gate))));
-  const blocked = behindWall
-    ? null
-    : await gateFailure(artifact, { k: presented.k, e: presented.e, m: presented.m }, (h) => teamGateAdmitsHolder(ctx, artifact, h));
-  const editor = role === "owner"
+  // Every gate applies to everyone, as the serve route applies it: an expired
+  // page is shut to all, and the password, email and team gates open to the
+  // keys a caller presents or the app would hand it (keysHandedTo). Being the
+  // owner or a teammate who sees the page in the gallery is not a key.
+  const handed = await keysHandedTo(ctx, artifact, role, identity);
+  const blocked = await gateFailure(
+    artifact,
+    { k: presented.k ?? handed?.k ?? undefined, e: presented.e ?? handed?.e ?? undefined, m: presented.m ?? handed?.m ?? undefined },
+    (h) => teamGateAdmitsHolder(ctx, artifact, h),
+  );
+  const editor = !blocked && (role === "owner"
     || (artifact.edit_mode === "link" && !!artifact.edit_key && presented.edit_key === artifact.edit_key)
-    || (artifact.edit_mode === "team" && role === "teammate" && behindWall);
+    || (artifact.edit_mode === "team" && role === "teammate"));
   return { identity, role, editor, blocked };
 }
 
@@ -1427,6 +1477,9 @@ export const submitComments = mutation({
     // Idempotency key for the web outbox: a retry with the same client_id
     // returns the row already inserted.
     client_id: v.optional(v.string()),
+    // A reply from inside the app (Threads, a page's discussion panel), sent
+    // by dispatch addPageComment with no page keys in hand. See commentAdmission.
+    from_app: v.optional(v.boolean()),
     // The viewing gates the page itself cleared, echoed back: ?k= for the
     // password wall, ?e= for the email wall. This mutation is reachable
     // without going through the page, so it checks them again rather than
@@ -1449,7 +1502,7 @@ export const submitComments = mutation({
         : null;
     if (!artifact) return { error: "Not found" };
     if (artifact.comments_disabled) return { error: "Comments are off on this page" };
-    const { identity, role, blocked } = await pageAdmission(ctx, artifact, args);
+    const { identity, role, blocked } = await commentAdmission(ctx, artifact, args);
     if (blocked) return { error: blocked };
     if (args.client_id) {
       const dupe = await ctx.db
@@ -2049,11 +2102,7 @@ async function unlockKeys(
   } else if (!owner && !(await readsDecisionFiling(ctx, userId, artifact.slug, decision))) {
     return null;
   }
-  return {
-    k: artifact.password_hash ? await kTokenFor(artifact.password_hash, artifact.slug) : null,
-    e: artifact.email_gate && artifact.owner_key ? await eTokenFor(artifact.owner_key, artifact.slug) : null,
-    m: await mTokenFor(artifact, userId),
-  };
+  return await gateKeysFor(artifact, userId);
 }
 
 // Everything an embed needs to frame a page, for several pages in one round trip: what getShared tells anyone,

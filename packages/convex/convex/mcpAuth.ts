@@ -14,6 +14,17 @@ import { hashToken, verifyApiToken } from "./apiTokens";
 import { bumpWindow } from "./ipRateLimit";
 import { newSlug } from "./lib/slug";
 
+/** Whether this deployment lets agents connect over OAuth (registration,
+ *  consent, tokens). Off, /mcp takes a cast token alone. One home for the
+ *  switch: the HTTP routes, the consent calls and Settings all read it. */
+export const oauthEnabled = () => process.env.MCP_OAUTH_ENABLED === "1";
+
+/** For Settings: whether to offer the setup steps at all. */
+export const oauthStatus = query({
+  args: {},
+  handler: async (): Promise<{ enabled: boolean }> => ({ enabled: oauthEnabled() }),
+});
+
 export const ACCESS_PREFIX = "cmcp_";
 const REFRESH_PREFIX = "cmcr_";
 export const ACCESS_TTL_MS = 60 * 60 * 1000;
@@ -21,6 +32,14 @@ export const REFRESH_IDLE_MS = 90 * 24 * 60 * 60 * 1000;
 export const CODE_TTL_MS = 60 * 1000;
 const UNAPPROVED_CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const READ_NOTE_THROTTLE_MS = 60 * 1000;
+/** Registrations per caller address an hour. Through codecast.sh the address is its server's, so this is that path's whole budget. */
+export const REGISTER_PER_HOUR = 120;
+/** Registrations from everyone an hour: the backstop when a caller address is forged (someone reaching the web server past Cloudflare). Far above real use. */
+export const REGISTER_GLOBAL_PER_HOUR = 2000;
+/** Codes one person may mint an hour (each Allow is one). */
+export const APPROVE_PER_HOUR = 30;
+/** Calls one connection (grant or cast token) may make to /mcp a minute. */
+export const MCP_CALLS_PER_MINUTE = 240;
 
 export const newGrantSecret = (prefix: string) => prefix + newSlug(43);
 const secret = newGrantSecret;
@@ -86,25 +105,28 @@ export const resolveBearer = internalQuery({
   },
 });
 
-/** Last read per grant or per cast token, at most once a minute. */
+/** One call through /mcp: counted against the connection's per-minute budget, and its last read noted at most once a minute. */
 export const noteRead = internalMutation({
   args: {
     user_id: v.id("users"),
     grant_id: v.optional(v.id("mcp_grants")),
     token_id: v.optional(v.id("api_tokens")),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ ok: boolean; retry_after_ms?: number }> => {
     const now = Date.now();
+    const limited = await bumpWindow(ctx.db, `mcp_calls:${args.grant_id ?? args.token_id}`, MCP_CALLS_PER_MINUTE, 60 * 1000);
+    if (!limited.ok) return { ok: false, retry_after_ms: limited.retry_after_ms };
     if (args.grant_id) {
       const grant = await ctx.db.get(args.grant_id);
       if (grant && now - (grant.last_used_at ?? 0) > READ_NOTE_THROTTLE_MS) await ctx.db.patch(grant._id, { last_used_at: now });
-      return;
+      return { ok: true };
     }
-    if (!args.token_id) return;
+    if (!args.token_id) return { ok: true };
     const tokenId = args.token_id;
     const row = await ctx.db.query("mcp_bearer_reads").withIndex("by_token", (q) => q.eq("token_id", tokenId)).first();
     if (!row) await ctx.db.insert("mcp_bearer_reads", { user_id: args.user_id, token_id: tokenId, first_read_at: now, last_read_at: now });
     else if (now - row.last_read_at > READ_NOTE_THROTTLE_MS) await ctx.db.patch(row._id, { last_read_at: now });
+    return { ok: true };
   },
 });
 
@@ -113,8 +135,11 @@ export const noteRead = internalMutation({
 export const registerClient = internalMutation({
   args: { client_name: v.string(), redirect_uris: v.array(v.string()), ip: v.string() },
   handler: async (ctx, args): Promise<{ ok: true; client_id: string; created_at: number } | { ok: false; error: string; status: number }> => {
-    const limited = await bumpWindow(ctx.db, `mcp_register:${args.ip}`, 20, 60 * 60 * 1000);
+    const hour = 60 * 60 * 1000;
+    const limited = await bumpWindow(ctx.db, `mcp_register:${args.ip}`, REGISTER_PER_HOUR, hour);
     if (!limited.ok) return { ok: false, error: "Too many registrations; try again later", status: 429 };
+    const everyone = await bumpWindow(ctx.db, "mcp_register:all", REGISTER_GLOBAL_PER_HOUR, hour);
+    if (!everyone.ok) return { ok: false, error: "Too many registrations; try again later", status: 429 };
     const uris = args.redirect_uris.slice(0, 10);
     if (uris.length === 0 || !uris.every(redirectUriAllowed) || uris.some((u) => u.length > 2000)) {
       return { ok: false, error: "redirect_uris must be https, loopback http, or an app scheme", status: 400 };
@@ -266,17 +291,18 @@ export async function disconnectCore(ctx: { db: any }, userId: Id<"users">, kind
   await ctx.db.delete(token._id);
 }
 
-/** Codes, unapproved clients and lapsed grants past their time. */
+/** Codes, unapproved clients and lapsed grants past their time, each read by
+ *  an index on the time that ends it (crons.ts runs it hourly). */
 export const sweep = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
-    for (const c of await ctx.db.query("mcp_auth_codes").withIndex("by_expires", (q) => q.lt("expires_at", now)).take(200)) await ctx.db.delete(c._id);
-    for (const c of await ctx.db.query("mcp_clients").take(500)) {
-      if (!c.approved_at && now - c.created_at > UNAPPROVED_CLIENT_TTL_MS) await ctx.db.delete(c._id);
-    }
-    for (const g of await ctx.db.query("mcp_grants").take(500)) {
-      if (g.refresh_expires_at < now) await ctx.db.delete(g._id);
-    }
+    for (const c of await ctx.db.query("mcp_auth_codes").withIndex("by_expires", (q) => q.lt("expires_at", now)).take(500)) await ctx.db.delete(c._id);
+    const unapproved = await ctx.db
+      .query("mcp_clients")
+      .withIndex("by_approved_created", (q) => q.eq("approved_at", undefined).lt("created_at", now - UNAPPROVED_CLIENT_TTL_MS))
+      .take(500);
+    for (const c of unapproved) await ctx.db.delete(c._id);
+    for (const g of await ctx.db.query("mcp_grants").withIndex("by_refresh_expires", (q) => q.lt("refresh_expires_at", now)).take(500)) await ctx.db.delete(g._id);
   },
 });

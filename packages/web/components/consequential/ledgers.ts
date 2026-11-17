@@ -742,11 +742,13 @@ export function deployTargetLedger(r: {
 }
 
 /** Connecting an outside agent to codecast over MCP (docs/architecture/agent-mcp.md): it reads as this account. */
-export function agentConnectLedger(r: { client: string; host: string; account: string; workspaces: string[] }): SwitchLedger {
+export function agentConnectLedger(r: { client: string; host: string; account: string; workspaces: string[]; newHost?: boolean }): SwitchLedger {
   return {
-    name: `Connect ${r.client}`,
-    subject: `returns to ${r.host}`,
+    // The host is the identity (where the grant goes); the name is the agent's own claim.
+    name: `Connect ${r.host}`,
+    subject: `calls itself “${r.client}”`,
     shift: null,
+    ...(r.newHost ? { alert: "First time connecting this site" } : {}),
     figures: [
       { value: String(r.workspaces.length), label: r.workspaces.length === 1 ? "workspace" : "workspaces" },
       { value: "0", label: "writes" },

@@ -36,6 +36,15 @@ export const DOCUMENT_POLICY = [
 // review in plans/security-closure-ledger.json raises it.
 export const HSTS = "max-age=86400";
 
+// Pages whose one press grants something must never render inside another
+// site: a page that frames one under a decoy can steer the press. These get an
+// ENFORCED frame-ancestors 'none' and X-Frame-Options DENY regardless of the
+// report-only draft above. The agent consent page (/oauth/authorize) grants an
+// outside agent read access as the person (docs/architecture/agent-mcp.md).
+export function isUnframeablePath(pathname: string): boolean {
+  return pathname === "/oauth/authorize" || pathname.startsWith("/oauth/authorize/");
+}
+
 // Sentry's CSP security endpoint for a DSN, or null when the DSN is missing or
 // not a Sentry DSN. The key in a DSN is public (it ships in the client bundle).
 export function cspReportEndpoint(
@@ -113,7 +122,12 @@ export function createResponsePolicy(options: ResponsePolicyOptions = {}): Middl
     // search result. A header, not a robots.txt
     // Disallow: unfurl bots honor robots.txt too, and the card is how the
     // link is meant to travel.
-    if (isUnindexedPath(new URL(c.req.url).pathname)) c.header("X-Robots-Tag", "noindex, nofollow");
+    const pathname = new URL(c.req.url).pathname;
+    if (isUnindexedPath(pathname)) c.header("X-Robots-Tag", "noindex, nofollow");
+    if (isUnframeablePath(pathname)) {
+      c.header("X-Frame-Options", "DENY");
+      c.header("Content-Security-Policy", "frame-ancestors 'none'");
+    }
     if (!c.res.headers.get("Content-Type")?.includes("text/html")) return;
     if (shouldReport()) {
       // report-uri for Firefox and Safari; Chrome prefers report-to when the

@@ -5,8 +5,8 @@
 // deployment; elsewhere they are 404 and /mcp takes a `cast` token alone.
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { MCP_PATH, MCP_PROTOCOL_VERSIONS, MCP_READ_SCOPE, MCP_SERVER_NAME, MCP_TOOLS } from "@codecast/shared/contracts";
-import type { McpCaller, TokenReply } from "./mcpAuth";
+import { MCP_CALLER_IP_HEADER, MCP_CALLER_SIG_HEADER, MCP_PATH, MCP_PROTOCOL_VERSIONS, MCP_READ_SCOPE, MCP_SERVER_NAME, MCP_TOOLS, verifyCallerAddress } from "@codecast/shared/contracts";
+import { oauthEnabled, type McpCaller, type TokenReply } from "./mcpAuth";
 import { clientIp } from "./lib/httpRateLimit";
 import { htmlToText } from "./lib/htmlText";
 
@@ -18,8 +18,9 @@ const CORS = {
 };
 
 const PAGE_TEXT_MAX = 200_000;
+/** Requests one JSON-RPC batch may carry. */
+const MAX_BATCH = 20;
 
-export const oauthEnabled = () => process.env.MCP_OAUTH_ENABLED === "1";
 /** The origin agents see: codecast.sh in prod (its server proxies here). */
 export const publicOrigin = () => (process.env.MCP_PUBLIC_ORIGIN || "https://codecast.sh").replace(/\/+$/, "");
 /** Where the consent page lives: the web app. */
@@ -125,10 +126,19 @@ export const mcp = httpAction(async (ctx, request) => {
     return json(rpcError(null, -32700, "Parse error"), 400);
   }
 
-  await ctx.runMutation(internal.mcpAuth.noteRead, {
+  if (Array.isArray(body) && body.length > MAX_BATCH) {
+    return json(rpcError(null, -32600, `A batch holds at most ${MAX_BATCH} requests`), 400);
+  }
+
+  const allowed: { ok: boolean; retry_after_ms?: number } = await ctx.runMutation(internal.mcpAuth.noteRead, {
     user_id: caller.userId,
     ...(caller.kind === "grant" ? { grant_id: caller.grantId } : { token_id: caller.tokenId }),
   });
+  if (!allowed.ok) {
+    return json(rpcError(null, -32000, "Too many requests from this connection; slow down"), 429, {
+      "Retry-After": String(Math.ceil((allowed.retry_after_ms ?? 60_000) / 1000)),
+    });
+  }
 
   if (Array.isArray(body)) {
     const replies = (await Promise.all(body.map((r) => handleRpc(ctx, caller, r)))).filter(Boolean);
@@ -170,6 +180,16 @@ export const authorizationServerMetadata = httpAction(async () => {
 
 // ── Registration and tokens ──
 
+/** The caller's address for limits: the one codecast.sh signed when the
+ *  signature verifies under MCP_FORWARD_SECRET, else what our front proxy saw. */
+export async function callerAddress(request: Request): Promise<string> {
+  const secret = process.env.MCP_FORWARD_SECRET;
+  const forwarded = request.headers.get(MCP_CALLER_IP_HEADER);
+  const signature = request.headers.get(MCP_CALLER_SIG_HEADER);
+  if (secret && forwarded && signature && (await verifyCallerAddress(secret, forwarded, signature))) return `caller:${forwarded}`;
+  return clientIp(request);
+}
+
 export const register = httpAction(async (ctx, request) => {
   if (!oauthEnabled()) return notFound();
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -182,7 +202,7 @@ export const register = httpAction(async (ctx, request) => {
   const redirect_uris = Array.isArray(body?.redirect_uris) ? body.redirect_uris.filter((u: unknown) => typeof u === "string") : [];
   const out: { ok: true; client_id: string; created_at: number } | { ok: false; error: string; status: number } = await ctx.runMutation(
     internal.mcpAuth.registerClient,
-    { client_name: typeof body?.client_name === "string" ? body.client_name : "", redirect_uris, ip: clientIp(request) },
+    { client_name: typeof body?.client_name === "string" ? body.client_name : "", redirect_uris, ip: await callerAddress(request) },
   );
   if (!out.ok) return json({ error: out.status === 429 ? "slow_down" : "invalid_redirect_uri", error_description: out.error }, out.status);
   return json(

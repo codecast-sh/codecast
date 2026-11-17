@@ -6,14 +6,17 @@
 
 import { internal } from "../_generated/api";
 
-/** The caller's address as the proxy mesh reports it. */
+/**
+ * The caller's address as our own front proxy recorded it: the RIGHTMOST
+ * X-Forwarded-For entry, the one the proxy in front of the backend
+ * (infra/convex-host/Caddyfile) appends or sets. Anything to its left, and
+ * cf-connecting-ip or x-real-ip, the client can write itself (this host is not
+ * behind Cloudflare's proxy), so a limit keyed on them is free to dodge.
+ */
 export function clientIp(request: Request): string {
-  return (
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    request.headers.get("cf-connecting-ip") ||
-    request.headers.get("x-real-ip") ||
-    "unknown"
-  );
+  const forwarded = request.headers.get("x-forwarded-for");
+  const last = forwarded?.split(",").map((s) => s.trim()).filter(Boolean).pop();
+  return last || "unknown";
 }
 
 function tooManyRequests(retryAfterMs: number, extraHeaders: Record<string, string>): Response {

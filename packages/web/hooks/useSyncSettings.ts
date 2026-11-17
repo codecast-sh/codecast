@@ -28,6 +28,9 @@ const queries = {
   teamBudget: api.modelCalls.budgetForTeam,
   // Team settings > Managed devices: enrollment tokens and enrolled devices (admins only). Read on demand.
   managedDevices: api.managedDevices.adminOverview,
+  // Whether this deployment lets outside agents connect over OAuth (Settings >
+  // Connected agents offers setup only when it does). Read on demand.
+  agentOAuth: api.mcpAuth.oauthStatus,
 };
 
 export type SettingsDataName = keyof typeof queries;

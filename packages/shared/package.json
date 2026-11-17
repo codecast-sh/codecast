@@ -12,6 +12,7 @@
     ".": "./index.ts",
     "./network": "./network/index.ts",
     "./contracts": "./contracts/index.ts",
+    "./contracts/agentAccess": "./contracts/agentAccess.ts",
     "./contracts/resourceOffloadIntent": "./contracts/resourceOffloadIntent.ts",
     "./contracts/moveRehearsal": "./contracts/moveRehearsal.ts",
     "./contracts/managedPolicy": "./contracts/managedPolicy.ts",

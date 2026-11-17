@@ -159,3 +159,34 @@ export const MCP_CLIENT_SETUPS: readonly McpClientSetup[] = [
   { id: "cursor", name: "Cursor", command: (url) => JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { url } } }), then: "Add to ~/.cursor/mcp.json, then Connect" },
   { id: "codex", name: "Codex", command: (url) => `codex mcp add ${MCP_SERVER_NAME} --url ${url}`, then: `Run codex mcp login ${MCP_SERVER_NAME}` },
 ];
+
+// ── The caller's address through codecast.sh ──
+// Every request codecast.sh forwards to the backend arrives from the web
+// server's own address, so a per-address limit there would be one budget for
+// everyone. The web server passes the caller's address (Cloudflare's
+// cf-connecting-ip) in its own header, with an HMAC under MCP_FORWARD_SECRET,
+// a secret only the web server and Convex hold. The backend trusts the address
+// only when the signature verifies; anything else counts against clientIp.
+
+export const MCP_CALLER_IP_HEADER = "x-codecast-caller-ip";
+export const MCP_CALLER_SIG_HEADER = "x-codecast-caller-sig";
+
+async function hmacHex(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`mcp-caller:${message}`)));
+  return Array.from(mac, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function signCallerAddress(secret: string, address: string): Promise<string> {
+  return hmacHex(secret, address);
+}
+
+/** Constant-time over the signature's length; false for anything malformed. */
+export async function verifyCallerAddress(secret: string, address: string, signature: string): Promise<boolean> {
+  if (!secret || !address || !signature) return false;
+  const expected = await hmacHex(secret, address);
+  if (expected.length !== signature.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ signature.charCodeAt(i);
+  return diff === 0;
+}

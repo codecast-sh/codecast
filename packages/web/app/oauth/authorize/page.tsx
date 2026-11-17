@@ -14,6 +14,7 @@ import { AppLoader } from "../../../components/AppLoader";
 import { Button } from "../../../components/ui/button";
 import { SwitchReview } from "../../../components/consequential/ConsequentialSwitch";
 import { agentConnectLedger } from "../../../components/consequential/ledgers";
+import { isFramed } from "./consentFrame";
 
 function withParams(base: string, params: Record<string, string | null>): string {
   const url = new URL(base);
@@ -46,6 +47,7 @@ function AuthorizeContent() {
     }
   }, [isLoading, isAuthenticated, localAuthed]);
 
+  if (isFramed(window)) return <Shell title="Can't connect" error="Open this page in its own tab to connect an agent." />;
   if (malformed) return <Shell title="Can't connect" error="This link is missing what an agent sends. Start the connection again from the agent." />;
   if (!isAuthenticated || info === undefined) return <AppLoader />;
   if ("error" in info) return <Shell title="Can't connect" error={info.error} />;
@@ -65,10 +67,20 @@ function AuthorizeContent() {
 
   const workspaces = info.workspaces;
   const account = info.account.email ?? info.account.name ?? "you";
-  const ledger = agentConnectLedger({ client: info.client_name, host: info.redirect_host, account, workspaces });
+  const ledger = agentConnectLedger({ client: info.client_name, host: info.redirect_host, account, workspaces, newHost: info.new_host });
 
+  // The return host is the identity: it is where the grant goes, and the agent
+  // cannot fake it. The name is whatever the agent registered as.
   return (
-    <Shell title={info.client_name} subtitle={info.redirect_host} error={error}>
+    <Shell title={info.redirect_host} error={error}>
+      <div className="mb-5 flex flex-wrap items-center gap-2 text-[13px]" data-consent-claim>
+        <span className="truncate text-sol-text-muted">calls itself “{info.client_name}”</span>
+        {info.new_host && (
+          <span className="rounded border border-sol-orange/50 px-1.5 py-px text-mark font-semibold uppercase tracking-wide text-sol-orange" data-consent-new-host>
+            New site
+          </span>
+        )}
+      </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[13px]" data-consent-facts>
         <dt className="text-sol-text-dim">As</dt>
         <dd className="truncate text-sol-text">{account}</dd>
@@ -83,18 +95,17 @@ function AuthorizeContent() {
           {sending ? "Connecting" : "Connect"}
         </Button>
       </div>
-      {reviewing && <SwitchReview ledger={ledger} onClose={() => setReviewing(false)} onConfirm={allow} />}
+      {reviewing && <SwitchReview ledger={ledger} armAfterMs={500} onClose={() => setReviewing(false)} onConfirm={allow} />}
     </Shell>
   );
 }
 
-function Shell({ title, subtitle, error, children }: { title: string; subtitle?: string; error?: string | null; children?: React.ReactNode }) {
+function Shell({ title, error, children }: { title: string; error?: string | null; children?: React.ReactNode }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-sol-bg p-4">
       <div className="w-full max-w-sm rounded-lg border border-sol-border bg-sol-bg-alt/50 p-6" data-consent>
         <div className="mb-1 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Connect an agent</div>
         <h1 className="truncate text-lg font-semibold text-sol-text">{title}</h1>
-        {subtitle && <div className="mb-5 truncate text-[13px] text-sol-text-muted">returns to {subtitle}</div>}
         {error && <p className="mt-3 text-[13px] text-sol-red" role="alert">{error}</p>}
         {children}
       </div>

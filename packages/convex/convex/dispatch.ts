@@ -2996,6 +2996,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(o.slug ? { slug: o.slug } : { artifact_id: o.artifactId as Id<"artifacts"> }),
       author_name: "",
       deliver: false,
+      from_app: true,
       ...(o.parentId && isServerId(o.parentId) ? { parent_id: o.parentId } : {}),
       client_id: o.clientId,
       comments: [{ text: o.text }],
@@ -3343,6 +3344,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   cancelResourceOffload: async (ctx, _userId, [batch_id], result) => {
     return ctx.runMutation!(api.sessionMigrations.cancelBatch, { batch_id, requested_at: result.requested_at });
+  },
+  retryMigrationBatch: async (ctx, _userId, [batch_id]: [string]) => {
+    return ctx.runMutation!(api.sessionMigrations.retryFailed, { batch_id });
   },
   // A live flow's switch (liveFlows.ts). Dispatch runs only as the signed-in
   // person, so an agent's API token never reaches it.

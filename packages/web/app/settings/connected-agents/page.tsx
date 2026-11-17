@@ -1,11 +1,14 @@
 // Settings › Connected agents (docs/architecture/agent-mcp.md). The jobs: add
 // codecast to an agent (copy the address or the client's one line), see what a
 // connected agent can and cannot do, and disconnect one. Rows render from the
-// store (mcpConnections), fed here; Disconnect paints on the press.
+// store (mcpConnections), fed here; Disconnect paints on the press. The setup
+// and the can/cannot lists show only where the deployment lets agents connect
+// (mcpAuth.oauthStatus); elsewhere the page is the connected list alone.
 import { useState } from "react";
 import { Cable, Check, Copy, ShieldCheck, Unplug } from "lucide-react";
 import { MCP_CAN, MCP_CANNOT, MCP_CLIENT_SETUPS, MCP_PATH } from "@codecast/shared/contracts";
 import { useMcpConnections } from "../../../hooks/useMcpConnections";
+import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { useInboxStore } from "../../../store/inboxStore";
 import type { McpConnectionRow } from "../../../store/agentConnectionsSlice";
 import { formatRelativeTime } from "../../../lib/conversationFormat";
@@ -45,11 +48,13 @@ export default function ConnectedAgentsPage() {
   const [client, setClient] = useState(MCP_CLIENT_SETUPS[1].id);
   const setup = MCP_CLIENT_SETUPS.find((c) => c.id === client) ?? MCP_CLIENT_SETUPS[0];
   const { rows, ready } = useMcpConnections();
+  const canConnect = useSettingsData("agentOAuth").data?.enabled === true;
   const disconnect = useInboxStore((s) => s.disconnectAgent);
   const [revoking, setRevoking] = useState<McpConnectionRow | null>(null);
 
   return (
     <SettingsPanel>
+      {canConnect && (<>
       <SettingsSection title="Add codecast to an agent" icon={Cable} padded>
         <div className="space-y-3">
           <CopyBox text={address} label="address" />
@@ -73,6 +78,7 @@ export default function ConnectedAgentsPage() {
           </ul>
         </div>
       </SettingsSection>
+      </>)}
 
       <SettingsSection title="Connected" icon={Unplug}>
         {rows.length === 0 ? (

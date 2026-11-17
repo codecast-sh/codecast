@@ -10,7 +10,8 @@
 // tested without a browser) and its two writes. The trigger is the site's own
 // control when it has one (`trigger`), so a chip, a switch or a row button all
 // open the same review.
-import { useRef, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
@@ -94,11 +95,37 @@ export function ConsequentialSwitch({ on, ledger, onTurnOn, onTurnOff, trigger, 
 const CAPTURE = { capture: true };
 
 /** The review itself: controlled, for a site that opens it from somewhere other than a trigger of its own. */
-export function SwitchReview({ ledger: l, onClose, onConfirm, onPick, children }: { ledger: SwitchLedger; onClose: () => void; onConfirm: () => void; onPick?: (option: string) => void; children?: ReactNode }) {
+/**
+ * `armAfterMs`: the confirm stays dead until the window has been in front this
+ * long, counted from the review opening and again from every focus or return
+ * to visible. A page that grants access to another site (the agent consent
+ * page) uses it so a click meant for something else, a double click or one
+ * timed under a decoy, cannot land on the confirm.
+ */
+function useArmed(ms: number | undefined): boolean {
+  const [armed, setArmed] = useState(!ms);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rearm = useCallback(() => {
+    if (!ms) return;
+    setArmed(false);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setArmed(true), ms);
+  }, [ms]);
+  useWatchEffect(() => {
+    rearm();
+    return () => { if (timer.current) clearTimeout(timer.current); };
+  }, [rearm]);
+  useEventListener("focus", rearm, ms ? window : null);
+  useEventListener("visibilitychange", () => { if (document.visibilityState === "visible") rearm(); }, ms ? document : null);
+  return armed;
+}
+
+export function SwitchReview({ ledger: l, onClose, onConfirm, onPick, children, armAfterMs }: { ledger: SwitchLedger; onClose: () => void; onConfirm: () => void; onPick?: (option: string) => void; children?: ReactNode; armAfterMs?: number }) {
   const cancel = useRef<HTMLButtonElement>(null);
   const [typed, setTyped] = useState("");
+  const armed = useArmed(armAfterMs);
   const unmatched = !!l.typed && typed.trim() !== l.typed.expect.trim();
-  const blocked = !!l.blocked || unmatched;
+  const blocked = !!l.blocked || unmatched || !armed;
   // The modifier makes confirming a chord: a stray Enter, or one meant for the page behind, does nothing.
   useEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.stopPropagation(); onConfirm(); }

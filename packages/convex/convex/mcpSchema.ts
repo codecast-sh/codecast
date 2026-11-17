@@ -19,7 +19,9 @@ export const mcpTables = {
     created_at: v.number(),
     // Set when a person first approves it; an unapproved client is swept.
     approved_at: v.optional(v.number()),
-  }).index("by_client_id", ["client_id"]),
+  })
+    .index("by_client_id", ["client_id"])
+    .index("by_approved_created", ["approved_at", "created_at"]),
 
   // A one-time authorization code: hashed, 60 s, deleted on exchange.
   mcp_auth_codes: defineTable({
@@ -55,7 +57,8 @@ export const mcpTables = {
     .index("by_user", ["user_id"])
     .index("by_access_hash", ["access_hash"])
     .index("by_refresh_hash", ["refresh_hash"])
-    .index("by_previous_refresh_hash", ["previous_refresh_hash"]),
+    .index("by_previous_refresh_hash", ["previous_refresh_hash"])
+    .index("by_refresh_expires", ["refresh_expires_at"]),
 
   // A `cast` CLI token used as a bearer on /mcp, so a leaked token reading
   // through MCP shows on the Connected agents list. One row per token.

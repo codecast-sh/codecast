@@ -9,11 +9,8 @@ import { mutation, query } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { MCP_READ_SCOPE } from "@codecast/shared/contracts";
 import { hashToken } from "./apiTokens";
-import { CODE_TTL_MS, newGrantSecret, redirectHost } from "./mcpAuth";
-
-// Off unless the deployment turned OAuth on (mcpHttp oauthEnabled), so a
-// deployment without it mints no codes.
-const oauthOff = () => process.env.MCP_OAUTH_ENABLED !== "1";
+import { APPROVE_PER_HOUR, CODE_TTL_MS, newGrantSecret, oauthEnabled, redirectHost } from "./mcpAuth";
+import { bumpWindow } from "./ipRateLimit";
 
 type ConsentRequest = { client_id: string; redirect_uri: string };
 
@@ -28,7 +25,7 @@ async function checkRequest(ctx: { db: any }, req: ConsentRequest): Promise<{ ok
 export const consentInfo = query({
   args: { client_id: v.string(), redirect_uri: v.string() },
   handler: async (ctx, args) => {
-    if (oauthOff()) return { error: "Connecting agents is not on for this deployment yet." };
+    if (!oauthEnabled()) return { error: "Connecting agents is not on for this deployment yet." };
     const userId = await getAuthUserId(ctx);
     if (!userId) return { error: "Sign in first" };
     const checked = await checkRequest(ctx, args);
@@ -39,10 +36,17 @@ export const consentInfo = query({
       const team = await ctx.db.get(m.team_id);
       if (team) teams.push(team.name);
     }
+    // The return host is the fact the screen leads with; the name is the
+    // client's own claim. A web host this person has never connected is flagged.
+    const host = redirectHost(args.redirect_uri);
+    const isWeb = new URL(args.redirect_uri).protocol === "https:";
+    const known = (await ctx.db.query("mcp_grants").withIndex("by_user", (q) => q.eq("user_id", userId)).collect())
+      .some((g) => g.redirect_host === host);
     return {
       workspaces: ["Personal", ...teams],
       client_name: checked.client.client_name,
-      redirect_host: redirectHost(args.redirect_uri),
+      redirect_host: host,
+      new_host: isWeb && !known,
       account: { name: user?.name ?? null, email: user?.email ?? null },
     };
   },
@@ -59,11 +63,13 @@ export const approve = mutation({
     resource: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ code: string } | { error: string }> => {
-    if (oauthOff()) return { error: "Connecting agents is not on for this deployment yet." };
+    if (!oauthEnabled()) return { error: "Connecting agents is not on for this deployment yet." };
     const userId = await getAuthUserId(ctx);
     if (!userId) return { error: "Sign in first" };
     const checked = await checkRequest(ctx, args);
     if (!checked.ok) return { error: checked.error };
+    const limited = await bumpWindow(ctx.db, `mcp_approve:${userId}`, APPROVE_PER_HOUR, 60 * 60 * 1000);
+    if (!limited.ok) return { error: "Too many agent connections in the last hour. Try again later." };
     if (args.code_challenge_method !== "S256" || !/^[A-Za-z0-9_-]{43,128}$/.test(args.code_challenge)) {
       return { error: "This agent did not send a valid PKCE challenge." };
     }

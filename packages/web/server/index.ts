@@ -12,6 +12,7 @@ import { registerHashedAssets, registerMissingArtifactGuard, registerStableEntry
 import { createResponsePolicy } from "./responsePolicy";
 import { CONVEX_URL } from "./convexUrl";
 import { MCP_ROUTES } from "@codecast/shared/contracts/agentAccess";
+import { mcpForwardHeaders } from "./mcpForward";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -179,9 +180,7 @@ app.get("/a/:slug", (c) => {
 const CONVEX_SITE = (process.env.CONVEX_SITE_URL || CONVEX_URL.replace(".convex.cloud", ".convex.site")).replace(/\/+$/, "");
 for (const [path, backendPath] of Object.entries(MCP_ROUTES)) {
   app.all(path, async (c) => {
-    const headers = new Headers(c.req.raw.headers);
-    headers.delete("host");
-    headers.delete("content-length");
+    const headers = await mcpForwardHeaders(c.req.raw.headers, process.env.MCP_FORWARD_SECRET);
     const hasBody = c.req.method !== "GET" && c.req.method !== "HEAD";
     const upstream = await fetch(`${CONVEX_SITE}${backendPath}${new URL(c.req.url).search}`, {
       method: c.req.method,
