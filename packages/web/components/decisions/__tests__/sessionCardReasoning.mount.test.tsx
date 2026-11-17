@@ -320,6 +320,23 @@ test("an advisory ask stepped to in the sheet, then folded, stays folded when th
   await act(() => root.unmount());
 });
 
+test("stepping the queue through one thread's asks moves the card to the queue's current ask", async () => {
+  const pane = document.createElement("div");
+  document.body.appendChild(pane);
+  const root = createRoot(pane);
+  const asks = [ask(1), ask(2), ask(3)];
+  const draw = (n: number) => act(() => root.render(<MemoryRouter><ThreadDecisionCard conversationId="c1" asks={asks}
+    fallback={asks[n - 1]} stepper={{ item: asks[n - 1], position: n, total: 3, onDone: () => {}, onSkip: () => {}, onExit: () => {} } as any} /></MemoryRouter>));
+  const question = () => pane.querySelector("h1.decision-question")!.textContent;
+  await draw(2);
+  expect(question()).toBe("Question 2?");
+  await draw(3);
+  expect(question()).toBe("Question 3?");
+  await draw(1);
+  expect(question()).toBe("Question 1?");
+  await act(() => root.unmount());
+});
+
 test("a permission ask behind an ordinary one is never a row or a step: it waits for its own card in the transcript", async () => {
   const { useInboxStore } = await import("../../../store/inboxStore");
   const before = useInboxStore.getState().sessionDecisions;
@@ -349,4 +366,24 @@ test("the rows opened past the first few stay open from one ask to the next", as
   expect(pane.querySelector("[data-cc-ask-question]")!.textContent).toBe("Question 6?");
   expect(rows()).toBe(5);
   await act(() => root.unmount());
+});
+
+// Talking a run's gate over with its session is answering it in your own
+// words: "Discuss with …" opens the same box, so the text reaches the agent
+// as the answer and the question closes, instead of a comment that leaves
+// the sheet over the transcript.
+test("on a run gate, Discuss with the session opens the own-words answer", async () => {
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  useInboxStore.getState().syncTable("sessionDecisions", [{
+    _id: "d5", short_id: "sd-5", conversation_id: "c1", status: "pending", blocking: true, created_at: Date.now() - 60_000,
+    question: "Ship it?", options: [{ label: "Ship" }, { label: "Wait" }], workflow_run_id: "run1",
+  } as any]);
+  const gate = { ...item(true), key: "decide:d5", decisionId: "d5", question: "Ship it?" };
+  const { pane, unmount } = await mount(<SessionDecisionCard item={gate} stepper={null} />);
+  expect(pane.querySelector("textarea")).toBeNull();
+  const discuss = pane.querySelector<HTMLButtonElement>("[data-decision-ask]")!;
+  expect(discuss.textContent).toContain("Discuss with");
+  await act(() => { discuss.click(); });
+  expect(pane.querySelector("textarea")!.getAttribute("placeholder")).toContain("Answer in your own words");
+  unmount();
 });

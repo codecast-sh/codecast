@@ -38,8 +38,10 @@ const LazyThread = lazy(() => threadModule.then((m) => ({ default: m.CommentThre
  *  pipeline step). `compact` (a card) leaves the thread unread until the
  *  person opens it; elsewhere showing it reads it. `askFirst` opens the box
  *  on asking the session (a surface whose point is talking to it). `noAsk`
- *  drops the ask button, for a page that opens the session itself. */
-export function DecisionDiscussion({ decisionId, compact = false, className, open: openProp, onOpenChange, bare = false, askerName, askFirst = false, noAsk = false }: { decisionId: string; compact?: boolean; className?: string; open?: boolean; onOpenChange?: (open: boolean) => void; bare?: boolean; askerName?: string; askFirst?: boolean; noAsk?: boolean }) {
+ *  drops the ask button, for a page that opens the session itself.
+ *  `onDiscuss` replaces what "Discuss with …" opens, for a host that answers
+ *  the decision in its own words itself (the session's docked card). */
+export function DecisionDiscussion({ decisionId, compact = false, className, open: openProp, onOpenChange, bare = false, askerName, askFirst = false, noAsk = false, onDiscuss }: { decisionId: string; compact?: boolean; className?: string; open?: boolean; onOpenChange?: (open: boolean) => void; bare?: boolean; askerName?: string; askFirst?: boolean; noAsk?: boolean; onDiscuss?: () => void }) {
   const [openOwn, setOpenOwn] = useState(false);
   const open = openProp ?? openOwn;
   const setOpen = (o: boolean) => { setOpenOwn(o); onOpenChange?.(o); };
@@ -80,7 +82,7 @@ export function DecisionDiscussion({ decisionId, compact = false, className, ope
     const store = useInboxStore.getState();
     if (!askFirst && sessionId && store.currentSessionId !== sessionId) store.requestNavigate(sessionId);
   };
-  const discuss = () => { setAsking(true); setOpen(true); };
+  const discuss = onDiscuss ?? (() => { setAsking(true); setOpen(true); });
 
   const shown = open || comments.length > 0;
   const Thread = (LoadedThread ?? LazyThread) as ThreadComponent;

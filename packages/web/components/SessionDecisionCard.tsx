@@ -283,6 +283,10 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
     else if (isOnThreadRoute()) void jumpToDecisionAsk();
   }, [canJumpToAsk, messages, item.decisionId, item.question, scrollToMessage, jumpToDecisionAsk]);
   const grow = useCallback(() => setSize("full"), []);
+  // Answering in the person's own words: the text goes to the agent as the answer and the question closes.
+  // "Discuss with …" on this card opens the same box, since talking it over with the session is that answer.
+  const ownWords = !isInfraDialog && !richControls && !isPermissionCard;
+  const openOwnWords = useCallback(() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }, []);
 
   // Folding swaps the sheet for the pill in one frame, and the eye loses it.
   // A faint veil the size of the sheet collapses into the pill, which answers
@@ -516,7 +520,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
       {card && <ChangeCardView card={card} density="inline" change={false} recommend={!richControls} summarized={cardBar} />}
       {/* A run's gate is owned by the session that started the run or the
           project's lead, not this log: discuss it with them (ct-58330). */}
-      {decideId && decisionRow?.workflow_run_id && <DecisionDiscussion decisionId={decideId} compact />}
+      {decideId && decisionRow?.workflow_run_id && <DecisionDiscussion decisionId={decideId} compact onDiscuss={ownWords ? openOwnWords : undefined} />}
       {reasoning && (
         <div className="decision-body text-sm text-sol-text-muted border-l-2 border-sol-border pl-4" data-decision-context>
           {reasoning}
@@ -595,7 +599,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
           {/* A permission prompt is answered by Approve/Deny only; an infra
               dialog is handled in the session. Neither takes typed answers. */}
           {!isPermissionCard && (
-            <TypeAnswerButton keys onOpen={() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }} />
+            <TypeAnswerButton keys onOpen={openOwnWords} />
           )}
         </div>
       )}
