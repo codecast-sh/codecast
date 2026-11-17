@@ -1250,15 +1250,21 @@ export const getDueTasks = query({
       .withIndex("by_user_run_at", (q) => q.eq("user_id", auth.userId).lte("run_at", now))
       .collect();
 
+    const limit = args.limit || 5;
+    const perDevice = new Map<string, number>();
     const dueTasks = [];
     for (const task of tasks) {
       if (task.status !== "scheduled" || task.user_id !== auth.userId || task.run_at === undefined || !(task.run_at <= now)) continue;
+      const device = task.created_device_id ?? "";
+      const taken = perDevice.get(device) ?? 0;
+      if (taken >= limit) continue;
       if (await cloudTriggerConversation(ctx, task)) continue;
       if (await roleTriggerHeld(ctx, task)) continue;
       if (projectRunsInline(task)) continue;
+      perDevice.set(device, taken + 1);
       dueTasks.push(task);
     }
-    return dueTasks.slice(0, args.limit || 5);
+    return dueTasks;
   },
 });
 
