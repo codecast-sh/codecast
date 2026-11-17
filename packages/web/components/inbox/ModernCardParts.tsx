@@ -42,7 +42,7 @@ export function ModernProjectChip({ project, label, directory, workProject, onFi
   onFilterProject?: (e: React.MouseEvent) => void;
   onFilterLabel?: (e: React.MouseEvent) => void;
   /** Where it runs, when that is worth saying: a glyph and the machine's name. */
-  device?: { icon: React.ReactNode; title: string } | null;
+  device?: { icon: React.ReactNode; title: string; name: string } | null;
   className?: string;
 }) {
   const getLabelColor = useLabelColor();
@@ -60,7 +60,8 @@ export function ModernProjectChip({ project, label, directory, workProject, onFi
   const onPress = title
     ? (e: React.MouseEvent) => clickProjectChip(workProjectChipKey(pid), null, e.altKey, e.shiftKey)
     : label ? onFilterLabel : onFilterProject;
-  const body = <>{device?.icon}{dot}<span className="truncate">{name}</span></>;
+  // With no project to name, the chip names the machine its glyph stands for.
+  const body = <>{device?.icon}{dot}<span className="truncate">{name || device?.name}</span></>;
   return onPress && name ? (
     <button type="button" data-mc-chip="project" title={where} className={`${CHIP} ${PRESS} ${className}`} onClick={(e) => { stop(e); onPress(e); }}>
       {body}

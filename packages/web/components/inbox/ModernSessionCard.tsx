@@ -202,7 +202,7 @@ export function ModernSessionCardView({
 
   // Line 3, left to right: what gives way first to what stays.
   const device = chrome.showDeviceIcon !== false && placeDevice
-    ? { icon: <DeviceIcon d={placeDevice} className="w-3 h-3 shrink-0" />, title: placeDevice.is_remote ? `Runs in the cloud on ${deviceDisplayName(placeDevice)}` : `Runs on ${deviceDisplayName(placeDevice)}, not this machine` }
+    ? { icon: <DeviceIcon d={placeDevice} className="w-3 h-3 shrink-0" />, name: deviceDisplayName(placeDevice), title: placeDevice.is_remote ? `Runs in the cloud on ${deviceDisplayName(placeDevice)}` : `Runs on ${deviceDisplayName(placeDevice)}, not this machine` }
     : null;
   const shipHref = ship?.deploy ? entityRoute("deploy", ship.deploy) : null;
   const chips: React.ReactNode[] = [];
