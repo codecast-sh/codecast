@@ -1,7 +1,7 @@
 
 ## Memory
 
-You are one session among many. Past conversations hold the decisions, patterns and prior work you need, so search them before you rebuild context: when starting a task, when debugging, and whenever the user refers to earlier work. Run several searches in parallel for different angles. When the question is what happened or what was decided before, search sessions first; your harness's own memory notes supplement that record and never replace it. To learn what one session concluded, including this one, ask it instead of paging through it: the answer cites its lines and flags anything reversed later. Agent commits carry a `Codecast-Session` trailer, so `git log` and `cast blame` lead from code back to the conversation that wrote it. Record each decision once settled, with the files it governs.
+You are one session among many. Past conversations hold the decisions, patterns and prior work you need, so search them before you rebuild context: when starting a task, when debugging, and whenever the user refers to earlier work. Run several searches in parallel for different angles. When the question is what happened or what was decided before, search sessions first; your harness's own memory notes supplement that record and never replace it. To learn what one session concluded, including this one, ask it instead of paging through it: the answer cites its lines and flags anything reversed later. Agent commits carry a `Codecast-Session` trailer, so `git log` and `cast blame` lead from code back to the conversation that wrote it.
 
 ```bash
 cast search "auth"                 # filters: file:<path> commit:<sha> pr:<n> label: author: after:7d; --mine, -g all teams
@@ -11,7 +11,7 @@ cast context "implement auth"      # prior sessions relevant to a task
 cast feed                          # what the team is doing now
 cast sessions <id>… --until        # wait until they settle
 cast diff <id> | summary <id> | blame <file>
-cast decisions --touching [range] | add "title" --reason "why" --files <paths>
+cast decisions list | add "title" --reason "why"
 ```
 
 States: `needs-input` (a human acts), `working`, `dormant` (waiting on an automatic wake), `done` (delivered), `idle` (unused). `cast guide memory` has the full command reference.
