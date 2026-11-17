@@ -25,8 +25,6 @@ import {
   markAllThreadsRead,
   markRead,
   markThreadRead,
-  MENTION_WAKES_PER_SENDER_HOUR,
-  MENTION_WAKES_PER_TARGET_HOUR,
   openDm,
   listChannelMembers,
   removeChannelMember,
@@ -51,7 +49,7 @@ import { listMine, markAllRead, markRead as markThreadReadMine, unreadCount } fr
 import { backfillThreadReads } from "./threadReads";
 import { PREFERENCE_MAP } from "./notificationRouter";
 import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
-import { dayBucket, hourBucket } from "./lib/chatQuota";
+import { dayBucket, hourBucket, MENTION_WAKES_PER_SENDER_HOUR, MENTION_WAKES_PER_TARGET_HOUR } from "./lib/chatQuota";
 import { follow as followChannel, unfollow as unfollowChannel } from "./orgChannels";
 import { addChannelAgents, removeChannelAgent } from "./chatAgents";
 import { endRound, onRoundTurnEnded, skipFloor } from "./chatRounds";

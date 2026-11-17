@@ -33,6 +33,7 @@ import { STRIPE_WEBHOOK_PATH, stripeWebhook } from "./billing";
 import { realtimeWebhook as recallRealtimeWebhook, statusWebhook as recallStatusWebhook } from "./meetingBotsHttp";
 import { RECALL_REALTIME_PATH, RECALL_STATUS_PATH } from "./lib/recall";
 import { claimFrontier } from "./lib/claimFrontier";
+import { vendorRefusalFor } from "./lib/vendorGuard";
 import { heartbeatTailnetArg } from "./lib/heartbeatTailnet";
 import {
   serve as repoPublicServe,
@@ -694,8 +695,15 @@ http.route({
       }
       // `cast read` and `cast diff`: one audit entry per read of a regulated team's conversation (repeats collapse).
       await ctx.runMutation(internal.accessLog.recordCliConversation, { api_token, conversation_id: String(conversation_id), action: "open" });
+      // A caller that will send this text to a model asks the vendor guard first: the refusal, or null when it may go.
+      // Without the conversation's full id the guard cannot place it, so the answer is a refusal, never a pass.
+      // A page read with `after` carries no conversation block; the request's own id serves when it is a full id.
+      const fullId = (result as { conversation?: { id?: string } }).conversation?.id ?? (String(conversation_id).length >= 32 ? String(conversation_id) : undefined);
+      const vendorRefusal = body.vendor === "anthropic"
+        ? (fullId ? await vendorRefusalFor(ctx, { conversationId: fullId, apiToken: api_token }, "anthropic") : "The conversation could not be placed, so its text is not sent to a model.")
+        : undefined;
 
-      return new Response(JSON.stringify(result), {
+      return new Response(JSON.stringify(vendorRefusal === undefined ? result : { ...result, vendor_refusal: vendorRefusal }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
       });
@@ -5411,7 +5419,7 @@ import {
   register as mcpRegister,
   token as mcpToken,
 } from "./mcpHttp";
-import { MCP_ROUTES } from "@codecast/shared/contracts";
+import { MCP_ROUTES } from "@codecast/shared/contracts/agentAccess";
 for (const method of ["POST", "GET", "OPTIONS"] as const) http.route({ path: MCP_ROUTES["/mcp"], method, handler: mcpServer });
 http.route({ path: MCP_ROUTES["/.well-known/oauth-protected-resource"], method: "GET", handler: mcpResourceMetadata });
 http.route({ path: MCP_ROUTES["/.well-known/oauth-protected-resource/mcp"], method: "GET", handler: mcpResourceMetadata });

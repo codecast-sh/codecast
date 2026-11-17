@@ -299,6 +299,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   teams: "Team create, delete and membership visibility are never undoable.",
   teamMembers: "Only the viewer's own presence status writes it, a setting; never undoable.",
   bookmarks: "toggleBookmark's spec carries an inverse (the same toggle), which reaches the server as the toggle itself.",
+  mcpConnections: "Written only by disconnectAgent, which revokes an outside agent's access (a delete); never undoable.",
   permissionRules: "Written only by addPermissionRule, a create, and removePermissionRule, a delete; never undoable.",
   sessionGoals:
     "Written only by setSessionGoal, pauseSessionGoal, resumeSessionGoal and clearSessionGoal, which steer an agent working toward the goal; machine control, never undoable.",

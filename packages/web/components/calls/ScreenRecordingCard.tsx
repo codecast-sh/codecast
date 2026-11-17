@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, MicOff, MonitorPlay } from "lucide-react";
 import { callAnchorHref, formatCallTime, type ParsedScreenRecording } from "@codecast/shared/contracts";
 import { toVideoFile, useCallRecordings } from "../../hooks/useRoomRecording";
 import { useCallDetail } from "../../hooks/useSyncCalls";
 import { CALL_VIDEO_LOADING, playableFiles } from "../../lib/calls/callVideo";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 // A screen recording the person sent to the session (shared/contracts/
 // screenRecording): the video they made beside what they said while making
@@ -33,7 +34,7 @@ export function ScreenRecordingCard({ recording }: { recording: ParsedScreenReco
   const [nowMs, setNowMs] = useState<number | null>(null);
   const active = nowMs === null ? -1 : lines.findIndex((l, i) => nowMs >= l.t0 && nowMs < (lines[i + 1]?.t0 ?? Infinity));
   const listRef = useRef<HTMLOListElement>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (active < 0) return;
     listRef.current?.querySelector<HTMLElement>(`[data-line="${active}"]`)?.scrollIntoView({ block: "nearest" });
   }, [active]);

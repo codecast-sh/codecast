@@ -309,8 +309,10 @@ describe("command groups stay off the boot graph", () => {
     // day: museTranscript.ts (out of parser.ts) and contracts/sendArrival.ts
     // (out of contracts/machineMessages.ts), both for max-lines, no new code.
     // 366 on 2026-11-16: ccFleetState.ts, the fleet state record split out of
-    // ccAccounts.ts for its max-lines pin, no new code.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(366);
+    // ccAccounts.ts for its max-lines pin, no new code. 367 the same day:
+    // contracts/screenRecording.ts, which the daemon reads to expand a screen
+    // recording into its brief.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(367);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -438,7 +440,10 @@ describe("command groups stay off the boot graph", () => {
     // and outputs, the check watcher listing, chat and trigger flags; no new
     // module on the graph. 4738 (2026-11-16): the fleet store's keychain-copy
     // fix in ccAccounts.ts and ccFleetState.ts split out of it for max-lines.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4738);
+    // 4750 (2026-11-16): the deploy of 458b815d8: contracts/screenRecording.ts
+    // +8 for the daemon's screen recording brief, page-data trigger events and
+    // their filter +2, the snippets text the guidance budget trimmed +2.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4750);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -639,8 +644,9 @@ describe("command groups stay off the boot graph", () => {
     // tasks/resumeSources.ts, read by stable context (the leaf keeps the task
     // graph's 12 files off this graph). 603 the same day: museTranscript.ts and
     // contracts/sendArrival.ts, max-lines splits, no new code. 604 on
-    // 2026-11-16: ccFleetState.ts, out of ccAccounts.ts, the same split.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(604);
+    // 2026-11-16: ccFleetState.ts, out of ccAccounts.ts, the same split. 605
+    // the same day: contracts/screenRecording.ts, for the screen recording brief.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(605);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

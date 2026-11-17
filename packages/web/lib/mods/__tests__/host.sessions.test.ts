@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { useInboxStore } from "../../../store/inboxStore";
-import { queryCollection } from "../host";
+import { queryCollection } from "../collectionQuery";
 
 // A mod reads sessions with the inbox's own answers attached, so "waiting on
 // me" is one where clause and never a re-derivation of inbox rules.

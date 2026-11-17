@@ -264,6 +264,7 @@ function plans() {
     byWorkspace("signals", "by_workspace_created"),
     byWorkspace("secrets", "by_workspace", { children: secretRows }),
     byWorkspace("secret_events", "by_workspace_at"),
+    byWorkspace("signin_autofill", "by_workspace"),
     byWorkspace("event_sources", "by_workspace_name"),
     byWorkspace("event_groups", "by_workspace_last_seen"),
     byWorkspace("event_samples", "by_workspace_at"),

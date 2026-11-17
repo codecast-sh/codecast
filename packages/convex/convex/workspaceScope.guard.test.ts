@@ -45,6 +45,7 @@ const PUBLIC_CROSS_TEAM = new Map<string, string>([
   ["tasks.ts:webMentionList", "workspace \"all\" mention list only; rows carry their workspace key"],
   ["docs.ts:webMentionList", "workspace \"all\" mention list only; rows carry their workspace key"],
   ["plans.ts:webMentionList", "workspace \"all\" mention list only; rows carry their workspace key"],
+  ["mcpConsent.ts:consentInfo", "the OAuth consent screen names every workspace an agent grant reads (a grant spans them all); rows are team names, read nothing else"],
 ]);
 
 const SESSION_CROSS_TEAM = new Map<string, string>([

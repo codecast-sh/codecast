@@ -98,6 +98,12 @@ describe('grow: what a candidate may reach, anywhere in it', () => {
       expect({ code, why: body(code) }).toEqual({ code, why: expect.stringMatching(/reaches past the fake|reads names|members of a global|computed key|shadows a global/) });
   });
 
+  test('own() stays exactly as written, and nothing else is named own', () => {
+    expect(staticCheck(original, original.replace(/const own = .*\n/, 'const own = (map: any, key: string) => map[key];\n'))).toMatch(/changes own\(\)/);
+    expect(body('const own = (map: any, key: string) => map[key]; void own;')).toMatch(/binds the name own/);
+    expect(body("const f = (own: any) => own['x']; void f;")).toMatch(/binds the name own|computed key/);
+  });
+
   test('a handler that computes on plain data, and looks keys up with own(), passes', () => {
     for (const code of ['void Array.isArray(body);', 'void Math.max(1, 2);', 'void JSON.stringify(body);', "void own(STATE_TAG, String(body));", 'void Object.values(STATE_TAG);', 'void STATE_TAG.working;'])
       expect({ code, why: body(code) }).toEqual({ code, why: null });

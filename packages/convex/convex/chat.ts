@@ -52,7 +52,7 @@ import {
 import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, isHostedAgentType, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 import { matchHandle, resolveChatMentions, teamRoster } from "./lib/mentionResolve";
-import { agentPosterKey, dayBucket, hourBucket, reserveQuotas, takeQuota, takeQuotas } from "./lib/chatQuota";
+import { AGENT_POSTS_PER_CHANNEL_DAY, AGENT_ROOTS_PER_CHANNEL_DAY, agentPosterKey, dayBucket, hourBucket, mentionWakeQuotas, reserveQuotas, takeQuota, takeQuotas } from "./lib/chatQuota";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { displayName } from "./lib/displayNames";
 import { purgeUserTeam, touchThread } from "./threadReads";
@@ -158,16 +158,6 @@ const ANCHOR_WAKE_LIMIT = 6;
 // collectively hammer one host.
 const ANCHOR_HOST_WAKE_LIMIT = 30;
 const ANCHOR_REPLY_LIMIT = 60;
-
-// The agent noise rules (docs/architecture/agent-channels.md C2/C3), counted
-// in chat_agent_quota. A role or session posts at most this many lines per
-// channel per UTC day, starts at most this many thread roots, and a mention
-// wakes at most this often per sender and per target per hour — over the cap
-// the send is refused (posts) or the mention folds (wakes).
-const AGENT_POSTS_PER_CHANNEL_DAY = 30;
-const AGENT_ROOTS_PER_CHANNEL_DAY = 5;
-export const MENTION_WAKES_PER_SENDER_HOUR = 10;
-export const MENTION_WAKES_PER_TARGET_HOUR = 30;
 
 // A push-to-talk burst costs what a send costs, so it is capped like one — the
 // start is the send. The transcript patch that follows fires every few seconds
@@ -425,6 +415,8 @@ async function requireTeamForWrite(
 
 // patchChat lives in lib/chatRows; re-exported for the modules that import it from here.
 export { patchChat };
+// The mention-wake caps live in lib/chatQuota; the web sim reads them from here.
+export { MENTION_WAKES_PER_SENDER_HOUR, MENTION_WAKES_PER_TARGET_HOUR } from "./lib/chatQuota";
 
 // ── Identity ────────────────────────────────────────────────────────────────
 
@@ -4302,20 +4294,6 @@ async function enforceAgentPostQuota(
 }
 
 type MentionWakeResult = { roles: number; sessions: number; folded: number; skipped: string[] };
-
-// The hourly wake caps (C2): one more wake from `senderKey` and one more into
-// `targetKey`, both or neither; over either the wake folds. Checked per target
-// so one folded target does not fold the rest, and spent only after each check
-// that can skip the target: a wake that cannot happen must not spend hourly
-// credit. The mention rail (sender: the person) and the mention-reply relay
-// (sender: the replying session) both count against these keys, so an agent
-// answering an agent costs what a fresh mention costs.
-function mentionWakeQuotas(senderKey: string, targetKey: string): { key: string; limit: number }[] {
-  return [
-    { key: `mention_from:${senderKey}`, limit: MENTION_WAKES_PER_SENDER_HOUR },
-    { key: `mention_to:${targetKey}`, limit: MENTION_WAKES_PER_TARGET_HOUR },
-  ];
-}
 
 // Wake the roles and sessions a line named. This is the ONE exception to "an
 // agent line wakes nobody": an explicit mention is a request for that party's

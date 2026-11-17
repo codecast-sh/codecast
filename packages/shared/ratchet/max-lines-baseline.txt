@@ -234,7 +234,6 @@ packages/web/lib/line/lineModel.ts 1350
 packages/web/lib/line/problemPage.ts 1150
 packages/web/lib/line/runReport.ts 1350
 packages/web/lib/lineFlow.ts 950
-packages/web/lib/mods/host.ts 900
 packages/web/store/__tests__/capabilities.test.ts 1000
 packages/web/store/__tests__/chatSlice.test.ts 1000
 packages/web/store/__tests__/gestureBridge.test.ts 1500

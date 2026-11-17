@@ -11,10 +11,7 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { spawn } from "./proc.js";
-import { findChromeBinary, keychainArgs } from "./workspace/chrome.js";
 import { stdinText } from "./sendBody.js";
 import { inlineDecisionKit, usesDecisionKit } from "./decisionKit.js";
 import type { Command } from "commander";
@@ -47,9 +44,9 @@ import { runPublishUnwatch, runPublishWatch } from "./publishWatch.js";
 import { jsonText, parseKeyValue, readInlinePageData, readPageData, runPublishData, runPublishState, type StateWrite } from "./publishData.js";
 import { PAGE_DATA_FILE } from "@codecast/shared/contracts/pageData";
 import { captureMotionThumb, renderMotion, splitMotionOutputs, staleRenderNote } from "./publishMotion.js";
+import { captureThumb } from "./publishThumb.js";
 
 const WATCH_DEBOUNCE_MS = 400;
-const THUMB_TIMEOUT_MS = 10_000;
 
 // ── bundle walk ──────────────────────────────────────────────────────────────
 
@@ -65,72 +62,6 @@ export function walkBundleDir(dir: string): string[] {
   };
   visit("");
   return filterBundlePaths(out);
-}
-
-// ── thumbnail capture ────────────────────────────────────────────────────────
-
-/** The same Chrome discovery every launcher uses (CHROME_PATH, app bundles, PATH). */
-export const findChrome = findChromeBinary;
-
-/** The headless command line for one thumbnail. Pure, so the flag set is
- * testable without spawning a browser. The throwaway profile dir keeps the
- * capture off the human's real profile (which a running Chrome holds locked)
- * and, with the keychain flag, off the macOS keychain when the home has none. */
-export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: string, extraArgs: string[] = []): string[] {
-  return [
-    "--headless=new",
-    `--screenshot=${outPng}`,
-    `--user-data-dir=${profileDir}`,
-    "--window-size=1200,630",
-    "--hide-scrollbars",
-    "--disable-gpu",
-    "--no-first-run",
-    ...keychainArgs(),
-    ...extraArgs,
-    `file://${entryHtmlAbsPath}`,
-  ];
-}
-
-/** A whole PNG: the signature up front and the IEND chunk closing it, so a
- * screenshot still being written never passes for a finished one. */
-export function isCompletePng(bytes: Buffer): boolean {
-  return bytes.length > 20 && bytes.readUInt32BE(0) === 0x89504e47 && bytes.subarray(-8, -4).toString("latin1") === "IEND";
-}
-
-/** Headless-Chrome 1200x630 screenshot of a local html file → base64 png.
- * ANY failure (no Chrome, timeout, bad exit) returns null silently — a
- * thumbnail must never block or delay a publish beyond its timeout.
- *
- * The shot is taken the moment the file is whole, not when Chrome exits:
- * Chrome 154 writes the screenshot and then never quits, in every headless
- * mode, so waiting on its exit turned every capture into a timeout. Chrome is
- * killed with SIGKILL either way (SIGTERM is ignored while it starts under load). */
-export async function captureThumb(entryHtmlAbsPath: string, opts: { extraArgs?: string[]; timeoutMs?: number } = {}): Promise<string | null> {
-  try {
-    const chrome = findChrome();
-    if (!chrome) return null;
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-thumb-"));
-    const outPng = path.join(tmpDir, "thumb.png");
-    const child = spawn(chrome, thumbArgs(entryHtmlAbsPath, outPng, path.join(tmpDir, "profile"), opts.extraArgs), { stdio: "ignore" });
-    try {
-      const deadline = Date.now() + (opts.timeoutMs ?? THUMB_TIMEOUT_MS);
-      let exited = false;
-      child.once("exit", () => { exited = true; });
-      child.once("error", () => { exited = true; });
-      while (Date.now() < deadline) {
-        const bytes = fs.existsSync(outPng) ? fs.readFileSync(outPng) : null;
-        if (bytes && isCompletePng(bytes)) return bytes.toString("base64");
-        if (exited) return null;
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      return null;
-    } finally {
-      child.kill("SIGKILL");
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  } catch {
-    return null;
-  }
 }
 
 // ── publish payload assembly ─────────────────────────────────────────────────

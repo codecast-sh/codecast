@@ -11,6 +11,30 @@
 
 import type { MutationCtx } from "../_generated/server";
 
+// The agent noise rules (docs/architecture/agent-channels.md C2/C3), counted
+// in chat_agent_quota. A role or session posts at most this many lines per
+// channel per UTC day, starts at most this many thread roots, and a mention
+// wakes at most this often per sender and per target per hour — over the cap
+// the send is refused (posts) or the mention folds (wakes).
+export const AGENT_POSTS_PER_CHANNEL_DAY = 30;
+export const AGENT_ROOTS_PER_CHANNEL_DAY = 5;
+export const MENTION_WAKES_PER_SENDER_HOUR = 10;
+export const MENTION_WAKES_PER_TARGET_HOUR = 30;
+
+// The hourly wake caps (C2): one more wake from `senderKey` and one more into
+// `targetKey`, both or neither; over either the wake folds. Checked per target
+// so one folded target does not fold the rest, and spent only after each check
+// that can skip the target: a wake that cannot happen must not spend hourly
+// credit. The mention rail (sender: the person) and the mention-reply relay
+// (sender: the replying session) both count against these keys, so an agent
+// answering an agent costs what a fresh mention costs.
+export function mentionWakeQuotas(senderKey: string, targetKey: string): { key: string; limit: number }[] {
+  return [
+    { key: `mention_from:${senderKey}`, limit: MENTION_WAKES_PER_SENDER_HOUR },
+    { key: `mention_to:${targetKey}`, limit: MENTION_WAKES_PER_TARGET_HOUR },
+  ];
+}
+
 // Who a machine's line is counted against: a bot by its user id, a session-typed
 // line by the session behind it. The session id is the caller's own stamp (an
 // honest downgrade, like `origin`): narrowing the count to a session is a

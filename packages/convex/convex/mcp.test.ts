@@ -12,7 +12,7 @@ import { pageSlug } from "./mcpTools";
 import { accountAdmission, pageAdmission } from "./artifacts";
 import { kTokenFor } from "./lib/artifactGates";
 import { htmlToText } from "./lib/htmlText";
-import { MCP_CALLER_IP_HEADER, MCP_CALLER_SIG_HEADER, MCP_ROUTES, signCallerAddress } from "@codecast/shared/contracts";
+import { MCP_CALLER_IP_HEADER, MCP_CALLER_SIG_HEADER, MCP_ROUTES, signCallerAddress } from "@codecast/shared/contracts/agentAccess";
 
 beforeAll(() => {
   process.env.MCP_OAUTH_ENABLED = "1";

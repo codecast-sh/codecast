@@ -5,7 +5,7 @@
 import { v } from "convex/values";
 import { internalQuery } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { MCP_READ_SCOPE } from "@codecast/shared/contracts";
+import { MCP_READ_SCOPE } from "@codecast/shared/contracts/agentAccess";
 import { scopedFetch } from "./data";
 import { canAccessDoc, canAccessPlan, canAccessTask } from "./lib/access";
 import { accountAdmission, pagesVisibleTo } from "./artifacts";

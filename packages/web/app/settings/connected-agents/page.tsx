@@ -6,7 +6,7 @@
 // (mcpAuth.oauthStatus); elsewhere the page is the connected list alone.
 import { useState } from "react";
 import { Cable, Check, Copy, ShieldCheck, Unplug } from "lucide-react";
-import { MCP_CAN, MCP_CANNOT, MCP_CLIENT_SETUPS, MCP_PATH } from "@codecast/shared/contracts";
+import { MCP_CAN, MCP_CANNOT, MCP_CLIENT_SETUPS, MCP_PATH } from "@codecast/shared/contracts/agentAccess";
 import { useMcpConnections } from "../../../hooks/useMcpConnections";
 import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { useInboxStore } from "../../../store/inboxStore";

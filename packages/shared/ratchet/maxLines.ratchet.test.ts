@@ -113,6 +113,9 @@ import { join } from "node:path";
 // that landed beside it. PIN 247.
 // 2026-11-15: the fix forward of the deploy that grew cloud/mirror/apply.test.ts
 // split it (MCP tests to apply.mcp.test.ts, fixtures to apply.testkit.ts). PIN 246.
+// 2026-11-16: the fix forward of 458b815d8 split nine files back under their
+// pins and took lib/mods/host.ts under the cap (its collection reads moved to
+// lib/mods/collectionQuery.ts). PIN 245.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -129,7 +132,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 246;
+const PIN = 245;
 
 const result = checkRatchet({
   name: "max lines",

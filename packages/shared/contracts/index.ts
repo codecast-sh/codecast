@@ -146,4 +146,3 @@ export * from "./systemResources";
 export * from "./resourceOffloadPolicy";
 export * from "./testArtifacts";
 // Codecast for outside agents (MCP): the address, the read tools, what a connection can do.
-export * from "./agentAccess";

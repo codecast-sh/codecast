@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { HYPERFRAMES_RUNTIME, MOTION_RENDER_MANIFEST } from "@codecast/shared/contracts";
 import { motionEntry, motionRenderArgs, motionSourceHash, motionThumbHtml, staleRenderNote } from "./publishMotion";
-import { buildPublishPayload, isCompletePng, walkBundleDir } from "./publish";
+import { buildPublishPayload, walkBundleDir } from "./publish";
+import { isCompletePng } from "./publishThumb";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }); });

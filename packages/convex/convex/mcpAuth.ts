@@ -7,9 +7,9 @@
 // `cast` mutation that accepts a CLI token.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { internalMutation, internalQuery, query } from "./_generated/server";
+import { internalMutation, internalQuery, query } from "./functions";
 import type { Id } from "./_generated/dataModel";
-import { MCP_READ_SCOPE } from "@codecast/shared/contracts";
+import { MCP_READ_SCOPE } from "@codecast/shared/contracts/agentAccess";
 import { hashToken, verifyApiToken } from "./apiTokens";
 import { bumpWindow } from "./ipRateLimit";
 import { newSlug } from "./lib/slug";

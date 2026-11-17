@@ -1192,12 +1192,12 @@ describe("thread read side effects: both arg shapes", () => {
     expect(calls).toEqual([
       {
         name: "artifacts:submitComments",
-        args: { slug: "report", author_name: "", deliver: false, client_id: "cl-1", comments: [{ text: "hi" }] },
+        args: { slug: "report", author_name: "", deliver: false, from_app: true, client_id: "cl-1", comments: [{ text: "hi" }] },
       },
       {
         name: "artifacts:submitComments",
         args: {
-          artifact_id: ART, author_name: "", deliver: false,
+          artifact_id: ART, author_name: "", deliver: false, from_app: true,
           parent_id: "b".repeat(32), client_id: "cl-2", comments: [{ text: "yo" }],
         },
       },

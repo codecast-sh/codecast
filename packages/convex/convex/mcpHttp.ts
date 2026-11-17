@@ -5,7 +5,7 @@
 // deployment; elsewhere they are 404 and /mcp takes a `cast` token alone.
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { MCP_CALLER_IP_HEADER, MCP_CALLER_SIG_HEADER, MCP_PATH, MCP_PROTOCOL_VERSIONS, MCP_READ_SCOPE, MCP_SERVER_NAME, MCP_TOOLS, verifyCallerAddress } from "@codecast/shared/contracts";
+import { MCP_CALLER_IP_HEADER, MCP_CALLER_SIG_HEADER, MCP_PATH, MCP_PROTOCOL_VERSIONS, MCP_READ_SCOPE, MCP_SERVER_NAME, MCP_TOOLS, verifyCallerAddress } from "@codecast/shared/contracts/agentAccess";
 import { oauthEnabled, type McpCaller, type TokenReply } from "./mcpAuth";
 import { clientIp } from "./lib/httpRateLimit";
 import { htmlToText } from "./lib/htmlText";

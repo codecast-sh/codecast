@@ -16,13 +16,12 @@ import {
   predictSuggestions,
   suggestRequest,
   isMachineDrivenConversation,
-  minePhrases,
   normalizeForMatch,
   parseMinedProfile,
-  rankInputs,
   sanitizeSuggestions,
   parseJsonBlock,
 } from "./composerSuggestions";
+import { minePhrases, rankInputs } from "./lib/suggestionInputRanking";
 
 const DAY = 24 * 60 * 60 * 1000;
 

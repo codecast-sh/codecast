@@ -20,7 +20,7 @@ import {
   type MotionRenderManifest,
 } from "@codecast/shared/contracts";
 import { pickBundleEntry } from "./publishCommand.js";
-import { captureThumb } from "./publish.js";
+import { captureThumb } from "./publishThumb.js";
 
 /** What HyperFrames' own commands write into a project (render and snapshot
  * output). A composition's page never serves them; the MP4 the page offers is

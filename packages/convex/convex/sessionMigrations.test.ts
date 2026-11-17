@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import {
-  isStaleMigration,
   matchesProject,
   performBeginSession,
   performCancelBatch,
@@ -14,11 +13,9 @@ import {
   performRunHere,
   performRetryFailed,
   settleLateResume,
-  planMigration,
   reissueWaitingMigrations,
-  STALE_MIGRATION_MS,
-  summarizeBatch,
 } from "./sessionMigrations";
+import { isStaleMigration, planMigration, STALE_MIGRATION_MS, summarizeBatch } from "./lib/sessionMigrationPlan";
 import { canDaemonSeePendingMessage } from "./pendingMessages";
 
 // The bulk-migration rail, end to end on the fake db: planning, the fence,

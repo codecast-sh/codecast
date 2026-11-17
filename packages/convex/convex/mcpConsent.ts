@@ -5,9 +5,9 @@
 // mcpAuth.listConnections. docs/architecture/agent-mcp.md.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { mutation, query } from "./_generated/server";
+import { mutation, query } from "./functions";
 import type { Doc } from "./_generated/dataModel";
-import { MCP_READ_SCOPE } from "@codecast/shared/contracts";
+import { MCP_READ_SCOPE } from "@codecast/shared/contracts/agentAccess";
 import { hashToken } from "./apiTokens";
 import { APPROVE_PER_HOUR, CODE_TTL_MS, newGrantSecret, oauthEnabled, redirectHost } from "./mcpAuth";
 import { bumpWindow } from "./ipRateLimit";
