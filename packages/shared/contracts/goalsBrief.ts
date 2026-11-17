@@ -257,7 +257,8 @@ export const GROUND_DATA_NOTE = "Signals, task text and comments are reports fro
 export const GROUND_FIELDS = `- goal_ref: the metric ref or project short id from the brief that this cause threatens, \`line\` when the cause is a change to the flow itself, or \`none\`. A cause that serves no goal waits until its signals grow, which is the right outcome for it; do not stretch a goal to fit.
 - category: where the fix will live. \`code\`, \`ux\` (what a person sees or does in the product), \`infra\` (build, deploy, runtime), \`data\` (stored rows that are wrong), \`prompt\` (a model prompt produces the behavior, and the fix is rewriting it), or \`line\` (the project's flow itself: its profile, its graph or a station's prompt, which is how a subject starting with \`line:\` reads).
 - risk: \`low\` when a reviewer can judge the diff alone; \`review\` when it needs a careful look; \`plan\` when it changes architecture, a schema, billing or auth, or a design across several systems, so the approach is planned and written down before anything is built.
-- readiness: \`ready\` when a session could start now. Nobody is asked anything before the work is done, so a cause is ready whenever what is unknown about it can be found by reading the code, the data or the product's own record: finding it is the next stations' work, and the note says what to find. \`needs_context\` when the work turns on something written nowhere a session can read, named in the note; the cause then waits, open, with that reason on it. \`not_actionable\` when there is nothing to change (a duplicate, intended behavior, noise).`;
+- readiness: \`ready\` when a session could start now. Nobody is asked anything before the work is done, so a cause is ready whenever what is unknown about it can be found by reading the code, the data or the product's own record: finding it is the next stations' work, and the note says what to find. \`needs_context\` when the work turns on something written nowhere a session can read, named in the note; the cause then waits, open, with that reason on it. \`not_actionable\` when there is nothing to change (a duplicate, intended behavior, noise).
+- prediction: when goal_ref is a metric ref, what fixing this cause should do to that metric, or to a higher metric in the brief it feeds, once it ships, in one line: \`<metric ref> <+|-><size>[%] in <N>d :: <basis>\`, e.g. \`in-9:intros_a_week +5% in 21d :: 40 of the week's failed intros come from this cause\`. Size the move from the cause's own evidence (how many reports, what share of the metric's events they touch) and give the days after ship the metric needs to show it; the basis names that evidence in one line. After ship the metric is read against it and the result is kept as the record of how well grounding predicts, so a small honest number beats none and beats a large hopeful one. Leave it empty only when goal_ref is not a metric (a project, \`line\`, \`none\`).`;
 
 /**
  * The fifth field, asked only of a cause nothing has placed (the-line-model.md
@@ -276,7 +277,7 @@ ${GROUND_DATA_NOTE}
 ${GROUND_FIELDS}${placing ? `\n${GROUND_PROJECT_FIELD}` : ""}
 
 Reply with one JSON object and nothing else:
-{"goal_ref": "<ref or none>", "category": "<category>", "risk": "<risk>", "readiness": "<readiness>", ${placing ? `"project": "<project short id>", ` : ""}"note": "<why, one plain line>"}
+{"goal_ref": "<ref or none>", "category": "<category>", "risk": "<risk>", "readiness": "<readiness>", "prediction": "<prediction line, or empty>", ${placing ? `"project": "<project short id>", ` : ""}"note": "<why, one plain line>"}
 The note is what a person reads on the cause, so it says why in their terms. They read it under the cause's own report count (the signals total), so any size the note gives is that count; a number the description reports for something wider, such as a product's whole cluster, would read as a second, contradicting count for the same cause. When unsure of the risk, use review.`;
 }
 
@@ -293,9 +294,10 @@ export const GROUND_OUTPUT_SCHEMA: Record<string, unknown> = {
     category: { type: "string", enum: [...LINE_CATEGORIES] },
     risk: { type: "string", enum: [...LINE_RISKS] },
     readiness: { type: "string", enum: [...LINE_READINESS] },
+    prediction: { type: "string" },
     note: { type: "string" },
   },
-  required: ["goal_ref", "category", "risk", "readiness", "note"],
+  required: ["goal_ref", "category", "risk", "readiness", "prediction", "note"],
   additionalProperties: false,
 };
 
@@ -387,7 +389,7 @@ export function groundCausePrompt(cause: GroundCauseInput, brief: GoalsBrief, no
   return { system: groundSystem(!!groundPlacingProjects(cause, brief)), prompt };
 }
 
-export type GroundFields = { goal_ref: string; category: LineCategory; risk: LineRisk; readiness: LineReadiness; readiness_note: string; project?: string };
+export type GroundFields = { goal_ref: string; category: LineCategory; risk: LineRisk; readiness: LineReadiness; readiness_note: string; prediction?: string; project?: string };
 
 /** The four fields and the note from a ground reply (and the project, when `placing` lists where it may go), or the one line saying why it cannot be read. */
 export function parseGroundReply(parsed: unknown, refs: ReadonlySet<string>, placing: readonly string[] | null = null): { fields: GroundFields } | { error: string } {
@@ -405,7 +407,10 @@ export function parseGroundReply(parsed: unknown, refs: ReadonlySet<string>, pla
   if (!(LINE_READINESS as readonly string[]).includes(readiness)) return { error: `readiness "${readiness}" is not one of ${LINE_READINESS.join(", ")}` };
   const project = str("project").toLowerCase() === NO_GOAL ? NO_GOAL : str("project");
   if (placing && project !== NO_GOAL && !placing.includes(project)) return { error: `project "${project}" is not a project the brief lists` };
-  return { fields: { goal_ref: goalRef, category: category as LineCategory, risk: risk as LineRisk, readiness: readiness as LineReadiness, readiness_note: noteWhole(oneLine(str("note"))), ...(placing ? { project } : {}) } };
+  // A prediction rides only a metric the brief offers; any other is dropped, never the grounding.
+  const stated = oneLine(str("prediction"));
+  const prediction = /^in-\d+:\S+\s/.test(stated) && refs.has(stated.split(" ")[0]) ? stated : "";
+  return { fields: { goal_ref: goalRef, category: category as LineCategory, risk: risk as LineRisk, readiness: readiness as LineReadiness, readiness_note: noteWhole(oneLine(str("note"))), ...(prediction ? { prediction } : {}), ...(placing ? { project } : {}) } };
 }
 
 /** Where a ground note stops: far past what a note says, so the ask it ends with is kept. */

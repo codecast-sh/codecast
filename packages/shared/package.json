@@ -128,6 +128,8 @@
     "./contracts/follow": "./contracts/follow.ts",
     "./contracts/roleGoals": "./contracts/roleGoals.ts",
     "./contracts/briefStanding": "./contracts/briefStanding.ts",
+    "./contracts/metricStanding": "./contracts/metricStanding.ts",
+    "./contracts/predictedEffect": "./contracts/predictedEffect.ts",
     "./contracts/roleLevel": "./contracts/roleLevel.ts",
     "./contracts/rolePlaybook": "./contracts/rolePlaybook.ts",
     "./entities": "./entities/index.ts",

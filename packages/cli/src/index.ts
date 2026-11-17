@@ -37,6 +37,7 @@ import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 import { matchProject, looksLikeConvexId } from "./projectRef.js";
 import { groundUpdateBody } from "@codecast/shared/contracts/goalsBrief";
+import { predictionText, realisedLine } from "@codecast/shared/contracts/predictedEffect";
 import { SOURCE_NEEDED, answerWrite, healthText, initiativeLine, initiativeShowLines, liveSeries, metricRecordLine, milestoneWrite, parseInitiativeHealth, pickRecordEntry, readDayArg, readMilestoneArg, readMomentArg, readSourceArg, recordVerb, recordWriteLines, removeWrite, saidWrite, scopeSentence, sourceFillIn, sourceWrite, unread, type Read, type RecordWrite } from "./initiativeCommand.js";
 import { INITIATIVE_RECORD_LISTS, INITIATIVE_STATUSES, metricReadings, metricTrends, parseMetricSpec, type IntentSource } from "@codecast/shared/contracts/initiative";
 import { ORG_CONTEXT_GUIDANCE, orgWhereLines } from "@codecast/shared/contracts/orgWhere";
@@ -17576,6 +17577,8 @@ work
   .option("--model <model>", "Model a session spawned for this task launches with")
   .option("--effort <level>", "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max")
   .option("--ephemeral", "Bookkeeping with no value once done (a checklist, a probe): kept off the board, the feed and notifications; cast task keep undoes it")
+  .option("--goal-ref <ref>", "The goal it serves: a metric ref (in-N:key) or project short id from cast goals")
+  .option("--predict <line>", "The predicted effect on a goal metric, read after ship: \"in-9:intros_a_week +5% by 2026-12-15 :: <basis>\" (or in 21d after ship)")
   .option("--json", "Output the created task as JSON (one object for one title, an array for several)")
   .action(async (title: string, options: any) => {
     // Bulk decomposition: `cast task create --parent ct-x -` gives one subtask
@@ -17639,6 +17642,8 @@ work
       // so this overrides the "agent" default a session would otherwise set.
       if (options.fromMeeting || fromCall) body.source = "meeting";
       if (fromCall) body.from_call = fromCall;
+      if (options.goalRef) body.goal_ref = options.goalRef.trim();
+      if (options.predict) body.predict = options.predict;
       body.project_path = getRealCwd();
 
       const result = await cliPost("/cli/work/create", body);
@@ -17825,6 +17830,7 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   if (t.labels?.length && want("details")) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
   if (t.assignee && want("details")) console.log(`  ${c.dim}Assignee: ${t.assignee_name || t.assignee}${c.reset}`);
   if (t.created_at && want("details")) console.log(`  ${c.dim}Created: ${new Date(t.created_at).toLocaleString()}${t.creator_name ? ` by ${t.creator_name}` : ""}${c.reset}`);
+  if (t.predicted && want("details")) console.log(`  ${c.dim}Predicts: ${predictionText(t.predicted)}${t.realised ? `; ${realisedLine(t.predicted, t.realised)}` : ""}${c.reset}`);
   // The graph in the web's order and words (task-graph.md TG12).
   for (const s of want("graph") ? taskGraphSections(t, t.links, { waitId: fmt.muted, ...checkoutWords(getRealCwd()) }) : []) {
     const head = `  ${s.holds ? c.red : c.dim}${s.label}:${c.reset}`;
@@ -18136,6 +18142,7 @@ work
   .option("--readiness <state>", "Whether it can be worked as it stands: ready, needs_context or not_actionable")
   .option("--readiness-note <text>", stdinText("One line on why"))
   .option("--watch-days <n>", "Watch the problem after ship: a new report within N days reopens it, a quiet watch closes it as resolved; 0 ends the watch")
+  .option("--predict <line>", "The predicted effect on a goal metric, read after ship: \"in-9:intros_a_week +5% by 2026-12-15 :: <basis>\" (or in 21d after ship); '' clears")
   .option("--model <model>", "Model a session spawned for this task launches with; '' clears")
   .option("--effort <level>", "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max; '' clears")
   .action(async (shortId: string, options: any) => {
@@ -18149,6 +18156,7 @@ work
       }
       body.watch_days = days;
     }
+    if (options.predict !== undefined) body.predict = options.predict;
     try {
       Object.assign(body, groundUpdateBody(options), taskHintBody({ model: options.model, effort: options.effort }));
     } catch (err) {

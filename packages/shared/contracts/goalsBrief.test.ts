@@ -141,6 +141,15 @@ describe("parseGroundReply", () => {
     const r = parseGroundReply(reply(note), refs);
     expect("fields" in r && r.fields.readiness_note).toBe(note);
   });
+  test("a prediction rides only a metric the brief offers, and an empty one is absent", () => {
+    const metricRefs = new Set(["none", "in-9:intros_a_week"]);
+    const with_ = (prediction: string) => parseGroundReply({ ...reply("why"), prediction }, metricRefs);
+    expect(with_("in-9:intros_a_week +5% in 21d :: evidence")).toMatchObject({ fields: { prediction: "in-9:intros_a_week +5% in 21d :: evidence" } });
+    for (const p of ["", "in-8:other +5% in 7d :: x", "pr-1 +5% in 7d :: x", "in-9:intros_a_week"]) {
+      const r = with_(p);
+      expect("fields" in r && "prediction" in r.fields).toBe(false);
+    }
+  });
   test("a note past the cap ends at its last full sentence, never mid-word", () => {
     const r = parseGroundReply(reply("A whole sentence here. ".repeat(200)), refs);
     const kept = "fields" in r ? r.fields.readiness_note : "";
