@@ -325,7 +325,7 @@ export function Moment({ beats, beat, onAnswer, paused, lap }: { beats: Beat[]; 
     case "deploy":
       return (
         <>
-          <PanelHead title="Deploy" sub="Wait for live" icon="shell" right={<Chiplet color={LINE}>parked</Chiplet>} />
+          <PanelHead title="Deploy" sub="Go live" icon="shell" right={<Chiplet color={LINE}>parked</Chiplet>} />
           <div className="mt-3 flex flex-wrap gap-1.5">
             <Chiplet color={MUTED}>holds no slot</Chiplet>
             <Chiplet color={MUTED}>holds no session</Chiplet>

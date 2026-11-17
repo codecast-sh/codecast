@@ -63,7 +63,7 @@ const LIBRARY: LibFlow[] = [
   { id: "judge", name: "Judge", exit: good("Low risk"), steps: [S("Guidelines"), S("Diff"), A("Judge", [plain("Unscored"), { name: "High risk", tone: "warn" }])] },
   { id: "decide", name: "Decide", exit: good("Ship"), steps: [P("Decide", [asked("Revise"), bad("Dropped")])] },
   { id: "ship", name: "Ship", exit: good("Shipped"), steps: [S("Rebase", [plain("Already landed"), asked("Conflict")]), S("Land", [loop("default branch moved"), bad("Not shipped")])] },
-  { id: "deploy", name: "Deploy", exit: LIVE, steps: [S("Wait for live", [bad("Deploy failed")])] },
+  { id: "deploy", name: "Deploy", exit: LIVE, steps: [S("Go live", [bad("Deploy failed")])] },
 ];
 
 const waysOut = (f: LibFlow) => [...f.steps.flatMap((s) => s.ends ?? []), ...(f.more ?? [])];

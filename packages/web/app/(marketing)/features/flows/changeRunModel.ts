@@ -144,7 +144,7 @@ export function buildBeats(answers: Answer[]): Beat[] {
         { step: "decide", ch: 3, dwell: 1300, key: "S", kind: "pressed", tag: "Ship", tone: "person", log: { name: "Decide", out: "Ship", meta: keyMeta("S") } },
         { step: "land", ch: 4, dwell: 1600, sub: "rebase", kind: "rebase", tag: "Rebase", tone: "plain", log: { name: "Rebase", out: "onto main", meta: CHANGE.approved } },
         { step: "land", ch: 4, dwell: 1700, sub: "land", kind: "land", sha: CHANGE.landed, tag: "on main", tone: "plain", log: { name: "Land", out: "on main", meta: CHANGE.landed } },
-        { step: "deploy", ch: 5, dwell: 3400, kind: "deploy", tag: "parked", tone: "line", log: { name: "Deploy", out: "Wait for live, parked", meta: "2 targets" } },
+        { step: "deploy", ch: 5, dwell: 3400, kind: "deploy", tag: "parked", tone: "line", log: { name: "Deploy", out: "Go live, parked", meta: "2 targets" } },
         { step: "live", ch: 5, dwell: 0, kind: "live", terminal: true, tag: "web, backend", tone: "line", log: { name: "Live", out: "web, backend", meta: `${CHANGE.deploys.web}, ${CHANGE.deploys.backend}` } },
       );
       break;
