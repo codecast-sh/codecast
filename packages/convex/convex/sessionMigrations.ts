@@ -1266,12 +1266,37 @@ export const runHere = mutation({
   },
 });
 
+/** The conversation's migration row that is still queued or running, if any (a queued row holds no fence yet). */
+async function openMigrationOf(ctx: { db: any }, userId: Id<"users">, conversationId: Id<"conversations">) {
+  const rows = await ctx.db
+    .query("session_migrations")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
+    .collect();
+  for (const row of rows) {
+    if (row.user_id.toString() !== userId.toString() || TERMINAL_STATUSES.has(row.status)) continue;
+    if (row.status === "queued" && (await loadBatch(ctx, userId, row.batch_id))?.cancelled_at) continue;
+    return row as { batch_id: string; to_device_id: string };
+  }
+  return null;
+}
+
 export async function performRunHere(ctx: any, userId: Id<"users">, args: { conversation_id: string; device_id: string; request_id?: string }) {
   const conv = await findPullableConversation(ctx, userId, args.conversation_id);
   if (!conv) throw new Error("not your conversation (you can only move a session you run or own, or one visible to your team)");
   const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
   const owner = devices.find((d: any) => d.device_id === conv.owner_device_id);
   const target = devices.find((d: any) => d.device_id === args.device_id);
+  // A move already under way answers for a second press toward the same
+  // machine (the press is the person asking where it stands, and the header
+  // shows that). Toward another machine it must be cancelled first.
+  const open = await openMigrationOf(ctx, userId, conv._id);
+  if (open) {
+    if (open.to_device_id === args.device_id) {
+      return { ok: true as const, command_id: null, device_id: args.device_id, label: target?.label ?? "", batch_id: open.batch_id };
+    }
+    const heading = devices.find((d: any) => d.device_id === open.to_device_id);
+    throw new Error(`already moving to ${heading?.label ?? "another machine"}; cancel that move first`);
+  }
   if (owner?.is_remote && conv.cloud_placement !== "pending" && target && !target.is_remote && conv.user_id.toString() === userId.toString()) {
     const batch = await performCreateBatch(ctx, userId, { conversation_ids: [conv._id.toString()], to_device_id: args.device_id, interrupt_on_timeout: false });
     if (batch.batch_id) return { ok: true as const, command_id: batch.command_ids[0], device_id: args.device_id, label: target.label ?? "", batch_id: batch.batch_id };

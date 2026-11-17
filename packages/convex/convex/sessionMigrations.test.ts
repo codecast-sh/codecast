@@ -537,6 +537,29 @@ describe("runHere", () => {
     expect(row.session_error).toBeUndefined();
     expect(commands(db).some((c) => c.command === "resume_session" && c.target_device_id === LAPTOP)).toBe(true);
   });
+
+  test("a second press while the move is under way answers with the same batch; a press toward another machine says to cancel first", async () => {
+    const db = fixtures();
+    const first = await performRunHere({ db }, ME as any, { conversation_id: "c3", device_id: LAPTOP, request_id: "req-1" });
+    expect((first as any).batch_id).toBeDefined();
+    // Queued (no fence yet), then claimed (fenced): both answer with the running batch.
+    const again = await performRunHere({ db }, ME as any, { conversation_id: "c3", device_id: LAPTOP, request_id: "req-2" });
+    expect((again as any).batch_id).toBe((first as any).batch_id);
+    await performBeginSession({ db }, ME as any, { migration_id: rowsOf(db)[0]._id, device_id: rowsOf(db)[0].executor_device_id }, NOW);
+    const third = await performRunHere({ db }, ME as any, { conversation_id: "c3", device_id: LAPTOP, request_id: "req-3" });
+    expect((third as any).batch_id).toBe((first as any).batch_id);
+    expect(rowsOf(db)).toHaveLength(1);
+    await expect(performRunHere({ db }, ME as any, { conversation_id: "c3", device_id: LAPTOP2, request_id: "req-4" }))
+      .rejects.toThrow("already moving to MacBook; cancel that move first");
+  });
+
+  test("a cancelled queued move no longer blocks a new one", async () => {
+    const db = fixtures();
+    const first = await performRunHere({ db }, ME as any, { conversation_id: "c3", device_id: LAPTOP });
+    await performCancelBatch({ db }, ME as any, (first as any).batch_id);
+    const next = await performRunHere({ db }, ME as any, { conversation_id: "c3", device_id: LAPTOP });
+    expect((next as any).batch_id).not.toBe((first as any).batch_id);
+  });
 });
 
 describe("reaper", () => {
