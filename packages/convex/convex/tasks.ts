@@ -10,6 +10,8 @@ import { ownerOf } from "@codecast/shared/contracts/orgLead";
 import { matchHandle, teamRoster } from "./lib/mentionResolve";
 import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { enqueueStartSession } from "./devices";
+import { resolveSpawnDefinition, resolveTaskSpawnDevice } from "./spawn";
+import { resolveDefinitionFor } from "./agentDefinitions";
 import { resolveCallRef } from "./transcripts";
 import { outcomeOfDeclaration, subagentEnded } from "./subagentFleet";
 import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
@@ -4055,6 +4057,10 @@ export async function canLaunchTaskSession(
     .first());
 }
 
+export function worktreeNameFor(identifier: string): string {
+  return identifier.toLowerCase().replace(/[^a-z0-9._-]/g, "-").replace(/\.{2,}/g, ".").slice(-64).replace(/^[^a-z0-9]+/, "");
+}
+
 /**
  * Spawn a session that works one task. THE spawn: the board's assign-to-agent
  * action, the CLI's `cast task start --spawn`, and issue sync's automatic
@@ -4067,13 +4073,29 @@ export async function spawnSessionForTask(
   ctx: any,
   userId: Id<"users">,
   task: any,
-  opts: { agent_type?: string; initial_message?: string } = {},
+  opts: {
+    agent_type?: string;
+    initial_message?: string;
+    isolated?: boolean;
+    worktree_name?: string;
+    target_device_id?: string;
+    definition?: string;
+    caller_user_id?: Id<"users">;
+  } = {},
 ): Promise<{ conversationId: Id<"conversations">; sessionId: string }> {
   const initial_message = opts.initial_message;
+  const prompt = buildTaskSpawnPrompt(task, initial_message);
+  const asDef = await resolveSpawnDefinition(ctx, userId, opts.definition, {
+    agentType: opts.agent_type,
+    model: task.model,
+    effort: task.effort,
+    prompt,
+    isolated: opts.isolated,
+  });
   // Round-trip through the client registry so any spelling a caller supplies
   // (a daemon client id, a convex literal, something stale) normalizes to the
   // closed union the conversations row stores. Unknown falls back to claude.
-  const daemonAgentType = fromConvexAgentType(opts.agent_type ?? "claude_code");
+  const daemonAgentType = fromConvexAgentType(asDef.agentType ?? opts.agent_type ?? "claude_code");
   const agent_type = toConvexAgentType(daemonAgentType);
 
   const now = Date.now();
@@ -4155,7 +4177,9 @@ export async function spawnSessionForTask(
   // session linked via active_task_id, so clobbering assignee only lost the
   // human owner and dropped the task out of the launcher's "assigned to me" view.
 
-  const content = buildTaskSpawnPrompt(task, initial_message);
+  const content = asDef.prompt ?? prompt;
+  const worktreeName = opts.worktree_name
+    || (asDef.isolated && task.external?.identifier ? worktreeNameFor(task.external.identifier) || undefined : undefined);
 
   // Single canonical writer: stamps owner_user_id for the daemon's delivery poll and flips
   // has_pending_messages. The task session is the launcher's own, so owner == sender.
@@ -4170,8 +4194,13 @@ export async function spawnSessionForTask(
     createdAt: now,
     // The task's execution hints (task-graph.md TG8), fixed at launch; the
     // daemon drops a model or effort its client does not offer.
-    ...(task.model ? { model: task.model } : {}),
-    ...(task.effort ? { effort: task.effort } : {}),
+    ...(asDef.model ? { model: asDef.model } : {}),
+    ...(asDef.effort ? { effort: asDef.effort } : {}),
+    isolated: asDef.isolated,
+    worktreeName,
+    targetDeviceId: opts.target_device_id,
+    definition: asDef.definition,
+    callerUserId: opts.caller_user_id,
   });
 
   // S7: tell the provider issue that a session took it, exactly once per
@@ -4222,6 +4251,10 @@ export const spawnForTask = mutation({
     short_id: v.string(),
     agent_type: v.optional(v.string()),
     initial_message: v.optional(v.string()),
+    isolated: v.optional(v.boolean()),
+    worktree_name: v.optional(v.string()),
+    device: v.optional(v.string()),
+    definition: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -4237,6 +4270,11 @@ export const spawnForTask = mutation({
     return await spawnSessionForTask(ctx, auth.userId, task, {
       agent_type: args.agent_type,
       initial_message: args.initial_message,
+      isolated: args.isolated,
+      worktree_name: args.worktree_name,
+      target_device_id: args.device ? await resolveTaskSpawnDevice(ctx, auth.userId, args.device) : undefined,
+      definition: args.definition,
+      caller_user_id: auth.userId,
     });
   },
 });
@@ -4250,14 +4288,33 @@ export const spawnSessionForTaskInternal = internalMutation({
     user_id: v.id("users"),
     agent_type: v.optional(v.string()),
     initial_message: v.optional(v.string()),
+    isolated: v.optional(v.boolean()),
+    worktree_name: v.optional(v.string()),
+    target_device_id: v.optional(v.string()),
+    definition: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const task = await ctx.db.get(args.task_id);
     if (!task) return null;
     if ((task.conversation_ids ?? []).length > 0) return null;
+    if (args.definition && !(await resolveDefinitionFor(ctx, args.user_id, args.definition))) {
+      const text = `The automatic session was not started: no agent definition named "${args.definition}" exists. Create it, or change the source's definition with \`cast integrations set\` (--as <name|none>).`;
+      const comments = await ctx.db
+        .query("task_comments")
+        .withIndex("by_task_id", (q) => q.eq("task_id", task._id))
+        .collect();
+      if (!comments.some((c) => c.text === text)) {
+        await insertTaskComment(ctx, task._id, { author: "codecast", text, comment_type: "note" });
+      }
+      return null;
+    }
     return await spawnSessionForTask(ctx, args.user_id, task, {
       agent_type: args.agent_type,
       initial_message: args.initial_message,
+      isolated: args.isolated,
+      worktree_name: args.worktree_name,
+      target_device_id: args.target_device_id,
+      definition: args.definition,
     });
   },
 });

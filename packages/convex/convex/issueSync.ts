@@ -57,6 +57,7 @@ import {
 import { afterStatusEdges } from "./taskLinks";
 import { recordTaskChange, type TaskChangeBy, type TaskFieldChange } from "./lib/taskHistory";
 import { verifyApiToken } from "./apiTokens";
+import { resolveTaskSpawnDevice } from "./spawn";
 import { connectionReaches, githubDeliveryServesSource, hasPersonalConnection, linearDeliveryServesSource, resolveLinearLabelIds } from "./lib/issueSyncAccess";
 import { teamTaskStatuses } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
@@ -123,6 +124,9 @@ type SourceDoc = {
   delegate_label?: string;
   delegate_assignee?: string;
   auto_spawn: boolean;
+  spawn_isolated?: boolean;
+  spawn_device?: string;
+  spawn_definition?: string;
   push_new_tasks: boolean;
   last_synced_at?: number;
 };
@@ -323,6 +327,7 @@ export const onLinearEvent = internalMutation({
     const source = (await sourceFor(ctx, "linear", container?.project?.id ?? "__none__"))
       ?? (await sourceFor(ctx, "linear", container?.team?.id ?? "__none__"));
     if (!source) return await done("no_source");
+    if (source.status === "paused") return await done("source_paused");
     if (!(await linearDeliveryServesSource(ctx, source as SourceDoc, payload))) return await done("foreign_organization");
 
     const now = Date.now();
@@ -431,6 +436,7 @@ export const onGithubIssue = internalMutation({
 
     const source = await sourceFor(ctx, "github", repo);
     if (!source) return { skipped: "no_source" as const };
+    if (source.status === "paused") return { skipped: "source_paused" as const };
     if (!(await githubDeliveryServesSource(ctx, source as SourceDoc, payload, repo))) return { skipped: "foreign_installation" as const };
 
     const action: string = payload?.action ?? event.action ?? "edited";
@@ -468,6 +474,7 @@ export const onGithubIssueComment = internalMutation({
 
     const source = await sourceFor(ctx, "github", repo);
     if (!source) return { skipped: "no_source" as const };
+    if (source.status === "paused") return { skipped: "source_paused" as const };
     if (!(await githubDeliveryServesSource(ctx, source as SourceDoc, payload, repo))) return { skipped: "foreign_installation" as const };
 
     const now = Date.now();
@@ -775,6 +782,9 @@ async function maybeDelegate(ctx: any, source: SourceDoc | null, task: any, issu
   await ctx.scheduler.runAfter(0, internal.tasks.spawnSessionForTaskInternal, {
     task_id: task._id,
     user_id: source.user_id,
+    isolated: source.spawn_isolated !== false,
+    target_device_id: source.spawn_device || undefined,
+    definition: source.spawn_definition || undefined,
     // Why: this is the one spawn with no human in the loop — a labelled issue
     // launches an agent by itself — and identifier/url come from the provider,
     // so they are escaped before they lead the prompt (ct-49559).
@@ -1573,15 +1583,25 @@ const updateSourceArgs = {
   delegate_label: v.optional(v.string()),
   delegate_assignee: v.optional(v.string()),
   auto_spawn: v.optional(v.boolean()),
+  spawn_isolated: v.optional(v.boolean()),
+  device: v.optional(v.string()),
+  definition: v.optional(v.string()),
   push_new_tasks: v.optional(v.boolean()),
 };
 
 async function updateSourceFor(ctx: any, userId: Id<"users">, id: Id<"issue_sync_sources">, args: any) {
-  await requireSource(ctx, userId, id);
+  const source = await requireSource(ctx, userId, id);
+  if (args.definition !== undefined && String(source.user_id) !== String(userId)) {
+    forbidden("Forbidden: only the source's owner can set its agent definition");
+  }
   const patch: Record<string, any> = { updated_at: Date.now() };
-  for (const key of ["status", "delegate_label", "delegate_assignee", "auto_spawn", "push_new_tasks"]) {
+  for (const key of ["status", "delegate_label", "delegate_assignee", "auto_spawn", "spawn_isolated", "push_new_tasks"]) {
     if (args[key] !== undefined) patch[key] = args[key];
   }
+  if (args.device !== undefined) {
+    patch.spawn_device = args.device.trim() ? await resolveTaskSpawnDevice(ctx, source.user_id, args.device) : undefined;
+  }
+  if (args.definition !== undefined) patch.spawn_definition = args.definition.trim() || undefined;
   // Resuming a paused or errored source clears the error that parked it.
   if (args.status === "active") patch.last_error = undefined;
   await ctx.db.patch(id, patch);
