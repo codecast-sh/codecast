@@ -78,3 +78,49 @@ describe("profile feed access", () => {
     for (const t of ["Personal task", "Personal doc", "Team task", "Team doc"]) expect(seen).toContain(t);
   });
 });
+
+// The message half reads the per-send log, so what a program queued in the
+// person's name (a restart notice, a trigger brief) never shows as typed, and
+// every page of "load more" holds the next sends instead of the next sessions.
+describe("profile feed messages", () => {
+  function sendTables(): Record<string, any[]> {
+    const t = tables();
+    t.conversations = [
+      { _id: "c_team", _creationTime: 20, user_id: OWNER, team_id: TEAM, is_private: false, team_visibility: "full", title: "Team session", message_count: 3, started_at: 20, updated_at: 30 },
+      { _id: "c_private", _creationTime: 21, user_id: OWNER, team_id: TEAM, is_private: true, title: "Private session", message_count: 1, started_at: 21, updated_at: 31 },
+    ];
+    t.messages = [
+      { _id: "m_restart", _creationTime: 40, conversation_id: "c_team", role: "user", timestamp: 40, content: "Your agent process exited while this work was still in progress, and codecast restarted the session." },
+    ];
+    t.user_sends = Array.from({ length: 5 }, (_, i) => ({
+      _id: `s_${i}`, _creationTime: 50 + i, user_id: OWNER, team_id: TEAM, conversation_id: "c_team", message_id: `m_${i}`, timestamp: 50 + i, words: 2, text: `typed ${i}`, clipped: false,
+    }));
+    t.user_sends.push({ _id: "s_private", _creationTime: 60, user_id: OWNER, team_id: TEAM, conversation_id: "c_private", message_id: "m_p", timestamp: 60, words: 2, text: "private typed", clipped: false });
+    return t;
+  }
+  const run = (viewer: string, paginationOpts: any) =>
+    (getUserProfileFeed as any)._handler(
+      { auth: ctx(viewer).auth, db: makeFakeDb(sendTables(), { indexes: schemaIndexes(schema as any) }) },
+      { user_id: OWNER, team_id: TEAM, paginationOpts },
+    );
+  const messages = (res: any) => res.page.filter((i: any) => i.type === "message").map((i: any) => i.preview);
+
+  test("shows logged sends only, never a machine message in the transcript", async () => {
+    const res = await run(OWNER, { numItems: 10, cursor: null });
+    expect(messages(res)).toEqual(["private typed", "typed 4", "typed 3", "typed 2", "typed 1", "typed 0"]);
+  });
+
+  test("load more continues through older sends", async () => {
+    const first = await run(OWNER, { numItems: 3, cursor: null });
+    expect(messages(first)).toEqual(["private typed", "typed 4", "typed 3"]);
+    expect(first.isDone).toBe(false);
+    const second = await run(OWNER, { numItems: 3, cursor: first.continueCursor });
+    expect(messages(second)).toEqual(["typed 2", "typed 1", "typed 0"]);
+  });
+
+  test("a teammate never sees a send into a private session", async () => {
+    const res = await run(MEMBER, { numItems: 10, cursor: null });
+    expect(messages(res)).not.toContain("private typed");
+    expect(messages(res)).toContain("typed 4");
+  });
+});

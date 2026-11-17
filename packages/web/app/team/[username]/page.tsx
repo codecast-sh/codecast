@@ -538,7 +538,7 @@ function MessageRow({ item, router }: { item: any; router: ReturnType<typeof use
   if (!oneLine) return null;
 
   return (
-    <div className="rounded hover:bg-sol-blue/[0.05] -mx-1.5 px-1.5 py-[2px] cursor-pointer transition-colors" onClick={() => router.push(`/conversation/${item.entity_id}`)}>
+    <div className="rounded hover:bg-sol-blue/[0.05] -mx-1.5 px-1.5 py-[2px] cursor-pointer transition-colors" onClick={() => router.push(`/conversation/${item.entity_id}${item.meta?.message_id ? `#msg-${item.meta.message_id}` : ""}`)}>
       <span className="text-[13px] text-sol-text-secondary whitespace-normal break-words leading-relaxed">{oneLine}</span>
     </div>
   );

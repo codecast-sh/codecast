@@ -28,11 +28,11 @@ import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { verifyApiToken } from "./apiTokens";
 import { findSessionCommandByRequest, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
-import { DAEMON_COMMAND_TTL_MS, isUnattendedConversation, repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { DAEMON_COMMAND_TTL_MS, isUnattendedConversation, isTestArtifactPath, repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import { activeTeamMembershipFor, canAccessTask, canAccessDoc, workspaceGrantsAccess } from "./lib/access";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
-import { stripMessageTags, isUserMessageNoise, fetchUserSendDays, isProgramLaunched } from "./lib/userSend";
+import { fetchUserSendDays, isProgramLaunched } from "./lib/userSend";
 import { bucketActivityDays, loadUserActivity } from "./lib/profileActivity";
 import { canSeeMemberSpend, fetchUserUsageDays } from "./lib/usageDaily";
 import { bucketPunchcardRows } from "./lib/activityPunchcard";
@@ -2097,65 +2097,47 @@ export const getUserProfileFeed = query({
 
     const items: ProfileFeedItem[] = [];
 
-    // Messages are the spine of the feed, so we paginate over the user's
-    // conversations (newest first) and pull each page's user-authored messages.
-    // The activity overlay (tasks/docs/commits) is appended only on the first
-    // page so it sits at the top without re-fetching on every "load more".
+    // Messages are the spine of the feed: the per-send log (user_sends), so
+    // "Typed" here means what the Typed chart and the Prompts page count, with
+    // restart notices, trigger briefs, spawned briefs and cast sends already
+    // left out. Paging the log (one row per send, newest first) keeps every
+    // "load more" page full. The activity overlay (tasks/docs/commits) rides
+    // the first page only, so it sits at the top without re-fetching.
     const isFirstPage = !paginationOpts.cursor;
-    const convoQuery = args.team_id
-      ? ctx.db
-          .query("conversations")
-          .withIndex("by_team_user_updated", (q: any) =>
-            q.eq("team_id", args.team_id).eq("user_id", args.user_id)
-          )
-          .order("desc")
-      : ctx.db
-          .query("conversations")
-          .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-          .order("desc");
-    const convoPage = await convoQuery.paginate(paginationOpts);
+    let sendQuery = ctx.db
+      .query("user_sends")
+      .withIndex("by_user_timestamp", (q) => q.eq("user_id", args.user_id))
+      .order("desc");
+    if (args.team_id) sendQuery = sendQuery.filter((q) => q.eq(q.field("team_id"), args.team_id));
+    const sendPage = await sendQuery.paginate(paginationOpts);
 
-    // Privacy gate: (team_id, user_id) is routing, not visibility. Drop private
-    // conversations so a teammate's profile never exposes their message text.
+    // Privacy gate: a send's team is routing, not visibility. Drop sends into
+    // private sessions so a teammate's profile never exposes their text.
     const isVisible = await getProfileVisibilityPredicate(ctx, userId, args.user_id, args.team_id);
-    const recentConvos = convoPage.page.filter(isVisible);
-
-    // Shared with insert-time send counting (lib/userSend) so "what I wrote"
-    // and the Sends chart metric agree on what a human-typed message is.
-    const stripTags = stripMessageTags;
-    const isNoise = isUserMessageNoise;
-
-    for (const c of recentConvos) {
-      if ((c as any).parent_conversation_id) continue;
-      const allMsgs = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_timestamp", (q: any) =>
-          q.eq("conversation_id", c._id)
-        )
-        .order("desc")
-        .take(40);
-      const sessionMeta = { message_count: c.message_count, project: c.project_path?.split("/").pop(), status: c.status, duration_ms: c.started_at && c.updated_at ? c.updated_at - c.started_at : undefined };
-      for (let i = 0; i < allMsgs.length; i++) {
-        const m = allMsgs[i];
-        if (m.role !== "user") continue;
-        if (m.from_user_id && String(m.from_user_id) !== String(args.user_id)) continue;
-        if (!m.content || isNoise(m.content)) continue;
-        if (m.tool_results && m.tool_results.length > 0 && (!m.content || !m.content.trim())) continue;
-        const prev = allMsgs[i + 1];
-        if (prev?.role === "assistant" && prev?.tool_calls?.some((tc: any) => tc.name === "Task" || tc.name === "Agent")) continue;
-        const content = stripTags(m.content);
-        if (!content) continue;
-        items.push({
-          type: "message",
-          timestamp: m.timestamp || m._creationTime,
-          verb: "messaged",
-          preview: content,
-          entity_id: String(c._id),
-          entity_type: "session",
-          entity_title: c.title || "Untitled",
-          meta: sessionMeta,
-        });
-      }
+    const conversations = new Map<string, Doc<"conversations"> | null>();
+    for (const send of sendPage.page) {
+      // A picked decision option is a tap, not typing.
+      if (send.decision?.picked) continue;
+      const key = String(send.conversation_id);
+      if (!conversations.has(key)) conversations.set(key, await ctx.db.get(send.conversation_id));
+      const c = conversations.get(key);
+      if (!c || !isVisible(c) || isTestArtifactPath(c.project_path ?? "")) continue;
+      items.push({
+        type: "message",
+        timestamp: send.timestamp,
+        verb: "messaged",
+        preview: send.text,
+        entity_id: key,
+        entity_type: "session",
+        entity_title: c.title || "Untitled",
+        meta: {
+          message_id: String(send.message_id),
+          message_count: c.message_count,
+          project: c.project_path?.split("/").pop(),
+          status: c.status,
+          duration_ms: c.started_at && c.updated_at ? c.updated_at - c.started_at : undefined,
+        },
+      });
     }
 
     if (isFirstPage) {
@@ -2233,7 +2215,7 @@ export const getUserProfileFeed = query({
 
     items.sort((a, b) => b.timestamp - a.timestamp);
     if (legacy) return items.slice(0, legacyLimit);
-    return { page: items, isDone: convoPage.isDone, continueCursor: convoPage.continueCursor };
+    return { page: items, isDone: sendPage.isDone, continueCursor: sendPage.continueCursor };
   },
   // The runtime validator above also tolerates legacy {limit} callers, but the
   // advertised type is paginated-only so usePaginatedQuery accepts it and new
