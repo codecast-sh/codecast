@@ -95,6 +95,7 @@ export const APP_SURFACES: AppSurface[] = [
   settings("settings/sync", "sync settings"),
   settings("settings/profile", "profile"),
   settings("settings/apps", "connected applications"),
+  settings("settings/connected-agents", "outside agents connected over MCP"),
   settings("settings/accounts", "linked accounts"),
   settings("settings/plan", "the assistant's plan, usage and extra credit"),
   settings("settings/claude-accounts", "Claude accounts"),

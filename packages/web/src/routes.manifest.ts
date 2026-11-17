@@ -277,6 +277,8 @@ const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 // Settings
 const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
+const SettingsConnectedAgents = lazy(() => import("@/app/settings/connected-agents/page"));
+const OAuthAuthorize = lazy(() => import("@/app/oauth/authorize/page"));
 const SettingsAgents = lazy(() => import("@/app/settings/agents/page"));
 const SettingsAgentLibrary = lazy(() => import("@/app/settings/agent-library/page"));
 const SettingsDevices = lazy(() => import("@/app/settings/devices/page"));
@@ -351,6 +353,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "reset-password", component: cast(ResetPassword), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "confirm", component: cast(Confirm), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "auth/cli", component: cast(AuthCli), layout: "auth", guestOk: true, guestKind: "public" },
+  { path: "oauth/authorize", component: cast(OAuthAuthorize), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "slack/connect", component: cast(SlackConnect), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "connect/whisk", component: cast(WhiskReturn), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "start", component: cast(Start), layout: "standalone" },
@@ -587,6 +590,7 @@ export const ROUTES: RouteEntry[] = [
   // -- Settings (SettingsLayout; index = /settings) --
   { path: "settings", component: cast(Settings), layout: "settings" },
   { path: "settings/cli", component: cast(SettingsCli), layout: "settings" },
+  { path: "settings/connected-agents", component: cast(SettingsConnectedAgents), layout: "settings" },
   { path: "settings/agents", component: cast(SettingsAgents), layout: "settings" },
   { path: "settings/agent-library", component: cast(SettingsAgentLibrary), layout: "settings" },
   { path: "settings/devices", component: cast(SettingsDevices), layout: "settings" },

@@ -19,6 +19,7 @@ import { castPlayerScriptPlugin } from "./plugins/castPlayerScript";
 import { tailwindInWorker } from "./plugins/tailwindWorker";
 import { stallWatchdogPlugin } from "./plugins/stallWatchdog";
 import { convexPreconnectPlugin } from "./plugins/convexPreconnect";
+import { mcpProxyPlugin } from "./plugins/mcpProxy";
 import { uiFontPreloadPlugin } from "./plugins/uiFontPreload";
 import { precacheScope } from "./plugins/precacheScope";
 import autoprefixer from "autoprefixer";
@@ -82,6 +83,7 @@ export default defineConfig(({ mode, command }) => ({
     colorThemeBootPlugin(),
     // DNS and TLS to the Convex deployment start with the page, not after boot.
     convexPreconnectPlugin(),
+    mcpProxyPlugin(),
     // With the Modern style on, its interface face (Instrument Sans) starts
     // with the page, so the first paint does not swap from a fallback.
     uiFontPreloadPlugin(),

@@ -327,6 +327,15 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["sessionGoals.forConversation"],
     writtenBy: ["sessionGoals"],
   },
+  // The composer's suggested reply (convex composerSuggestions.ts): one row
+  // per conversation, its owner's only, fed while the conversation is open,
+  // so delta. The ghost in the empty composer reads it (hooks/useComposerSuggestion).
+  // Only the server writes it.
+  composerSuggestions: {
+    persistence: { kind: "collection", key: "composerSuggestions" },
+    sync: { isDelta: true },
+    feeds: ["composerSuggestions.forConversation"],
+  },
   // Decision stacks (D5): the viewer's open stacks with their progress. The
   // list is the complete visible set, so a snapshot; every stack verb is a
   // named mutation and the row echoes back through this feed.
@@ -1644,6 +1653,17 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["meetingBots.listMine"],
     writtenBy: ["meetingBots"],
   },
+  // Outside agents connected to the viewer's account over MCP
+  // (mcpAuth.listConnections): OAuth grants and cast tokens seen reading
+  // through /mcp. Snapshot: the answer is the whole set, so a disconnected one
+  // is gone on the next push. Read only on Settings › Connected agents, which
+  // feeds it; Disconnect drops the row on the draft (store/agentConnectionsSlice.ts).
+  mcpConnections: {
+    sync: {},
+    localFirst: true,
+    unprotectedFields: ["last_used_at"],
+    feeds: ["mcpAuth.listConnections"],
+  },
   // The viewer's upcoming meetings with links from their connected Google
   // Calendar (meetingCalendar.listUpcoming, soonest first). Snapshot: the
   // answer is the whole upcoming window. localFirst: a meeting's switch
@@ -2040,6 +2060,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sessionDecisions: "shared",
   decisionStacks: "shared",
   sessionGoals: "shared",
+  composerSuggestions: "shared",
   handledDecisions: "shared",
   decisionDetails: "shared",
   orgTemplateInstances: "shared",
@@ -2192,6 +2213,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   callFrameShares: "local",
   callList: "shared",
   meetingBots: "shared",
+  // Per-view: fed by the Settings page that shows it.
+  mcpConnections: "local",
   meetingCalendarEvents: "shared",
   meetingBotSettings: "shared",
   callDetails: "shared",

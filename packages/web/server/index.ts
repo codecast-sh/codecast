@@ -10,6 +10,8 @@ import { registerShareRoutes, getShellHtml, shareSsrReady } from "./share";
 import { registerWeekCardImage } from "./weekCardImage";
 import { registerHashedAssets, registerMissingArtifactGuard, registerStableEntryPoints } from "./staticAssets";
 import { createResponsePolicy } from "./responsePolicy";
+import { CONVEX_URL } from "./convexUrl";
+import { MCP_ROUTES } from "@codecast/shared/contracts/agentAccess";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -168,6 +170,30 @@ app.get("/a/:slug", (c) => {
   const search = new URL(c.req.url).search;
   return c.redirect(`${ARTIFACT_EDGE}/${slug}${search}`, 302);
 });
+
+// Codecast for outside agents (docs/architecture/agent-mcp.md): the MCP server
+// and its OAuth endpoints answer on codecast.sh so the issuer and the resource
+// agents see are one origin. The Convex site serves them; this forwards the
+// request whole (method, auth, body) and hands the reply back unchanged. The
+// consent page, /oauth/authorize, is an app route and is not proxied.
+const CONVEX_SITE = (process.env.CONVEX_SITE_URL || CONVEX_URL.replace(".convex.cloud", ".convex.site")).replace(/\/+$/, "");
+for (const [path, backendPath] of Object.entries(MCP_ROUTES)) {
+  app.all(path, async (c) => {
+    const headers = new Headers(c.req.raw.headers);
+    headers.delete("host");
+    headers.delete("content-length");
+    const hasBody = c.req.method !== "GET" && c.req.method !== "HEAD";
+    const upstream = await fetch(`${CONVEX_SITE}${backendPath}${new URL(c.req.url).search}`, {
+      method: c.req.method,
+      headers,
+      body: hasBody ? await c.req.arrayBuffer() : undefined,
+    });
+    const out = new Headers(upstream.headers);
+    out.delete("content-encoding");
+    out.delete("content-length");
+    return new Response(upstream.body, { status: upstream.status, headers: out });
+  });
+}
 
 // A published weekly card's unfurl image (before the bot middleware: unfurlers fetch it with a bot UA).
 registerWeekCardImage(app);

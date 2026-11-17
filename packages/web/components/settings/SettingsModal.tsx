@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers, ScrollText, BadgeCheck, ChevronLeft } from "lucide-react";
+  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cable, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers, ScrollText, BadgeCheck, ChevronLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -37,6 +37,7 @@ import DevicesPanel from "../../app/settings/devices/page";
 import MigratePanel from "../../app/settings/migrate/page";
 import DesktopPanel from "../../app/settings/desktop/page";
 import AppsPanel from "../../app/settings/apps/page";
+import ConnectedAgentsPanel from "../../app/settings/connected-agents/page";
 import PlanPanel from "../../app/settings/plan/page";
 import { modernButton, modernDialog, modernField, modernLook, modernMenuLabel, modernScrim } from "../ui/modernLook";
 
@@ -66,6 +67,7 @@ const PANELS: Record<PanelId, React.ComponentType> = {
   "migrate": MigratePanel,
   "desktop": DesktopPanel,
   "apps": AppsPanel,
+  "connected-agents": ConnectedAgentsPanel,
 };
 
 /** Privacy lives inside Sync & Privacy, so a link to it opens that panel. */
@@ -102,6 +104,7 @@ const GROUPS: { label: string; sections: NavDef[] }[] = [
       { id: "calls", label: "Calls", icon: Video, desc: "How a call starts for you: camera, mic, devices, walkie, meetings", keywords: "camera microphone mic mute devices walkie huddle meeting record join always on recording light hands free press" },
       { id: "accounts", label: "Accounts", icon: KeyRound, desc: "Sign-in identities linked to this account", keywords: "github oauth email login delete danger" },
       { id: "apps", label: "Apps", icon: MonitorSmartphone, desc: "Codecast on your Mac, your iPhone and in Chrome", keywords: "desktop mac macos download dmg ios iphone ipad app store mobile phone push chrome extension install" },
+      { id: "connected-agents", label: "Connected agents", icon: Cable, desc: "Claude, Cursor, Codex and other agents that read codecast as you", keywords: "mcp claude cursor codex chatgpt connector oauth outside agent connect disconnect revoke address" },
     ],
   },
   {

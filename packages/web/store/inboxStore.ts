@@ -260,21 +260,20 @@ import { promptTitle } from "@codecast/shared/contracts/assistant";
  *  (projects.client_key), so its synced row supersedes the stub. */
 export const newProjectKeyOf = (stubId: string): string => `pjstub-${stubId}`;
 
-/** A project's address (its `pj-` short id) once the server row behind a
- *  stub key has landed; null after `timeoutMs` with none. */
-export function projectAddressOnce(clientKey: string, timeoutMs = 30_000): Promise<string | null> {
-  const find = (st: { projects: Record<string, any> }) =>
-    (Object.values(st.projects) as Array<{ client_key?: string; short_id?: string }>).find((p) => p.client_key === clientKey && p.short_id)?.short_id ?? null;
-  const now = find(useInboxStore.getState());
-  if (now) return Promise.resolve(now);
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => { unsub(); resolve(null); }, timeoutMs);
-    const unsub = useInboxStore.subscribe((st) => {
-      const addr = find(st);
-      if (addr) { clearTimeout(timer); unsub(); resolve(addr); }
-    });
-  });
+/** The stub key of the project a stub's first send starts (the composer's new
+ *  project switch), read before or after createSession files the stub into
+ *  it; null for every other send, including later ones from the rekeyed row,
+ *  which still carries `_newProject`. */
+export function newProjectStartedBy(sessionId: string): string | null {
+  const row = useInboxStore.getState().sessions[sessionId];
+  const key = newProjectKeyOf(sessionId);
+  return row?.project_id === key || (row?._newProject && !row.project_id) ? key : null;
 }
+
+/** The page of a project started from a composer, open at once on its stub
+ *  key: the project page finds the row by that key before and after the
+ *  server row supersedes it, then moves to the `pj-` address. */
+export const newProjectHref = (clientKey: string): string => `/projects/${clientKey}`;
 
 function newProjectFor(s: { drafts: Record<string, any>; pendingMessages: Record<string, Array<{ role?: string; content?: string }>>; clientState: any }, stubId: string, firstMessage?: string) {
   // The send inserts the first message before it fires the create, and the
@@ -356,6 +355,7 @@ import { createExpectationsSlice, type ExpectationsSliceActions } from "./expect
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createLiveArtifactsSlice, type LiveArtifactsSliceActions } from "./liveArtifactsSlice";
 import { createMeetingBotsSlice, type MeetingBotsSliceActions } from "./meetingBotsSlice";
+import { createAgentConnectionsSlice, type AgentConnectionsSliceActions } from "./agentConnectionsSlice";
 import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
@@ -5896,7 +5896,7 @@ function dropGuestKnock(draft: any, guestId: string): void {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, AgentConnectionsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -15768,6 +15768,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   ...createLiveArtifactsSlice(),
   // Meeting bot writes (store/meetingBotsSlice.ts): send to a pasted link, remove.
   ...createMeetingBotsSlice(),
+  // Outside agents over MCP (store/agentConnectionsSlice.ts): disconnect from Settings.
+  ...createAgentConnectionsSlice(),
 
 });
 

@@ -41,6 +41,7 @@ export const DATA_SCOPE = {
   // team_workspace / line_workspace and their readers filter on it.
   sessionDecisions: "viewer",
   sessionGoals: "entity",
+  composerSuggestions: "entity",
   decisionStacks: "viewer",
   weeklyCards: "viewer",
   handledDecisions: "viewer",
@@ -201,6 +202,7 @@ export const DATA_SCOPE = {
   callFrameShares: "entity",
   callList: "viewer",
   meetingBots: "viewer",
+  mcpConnections: "viewer",
   meetingCalendarEvents: "viewer",
   meetingBotSettings: "viewer",
   callDetails: "entity",

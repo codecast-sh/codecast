@@ -353,14 +353,14 @@ export function agentFullAccessLedger(r: { agent: string; label: string; from: s
 }
 
 /** Every off agent feature in a group, turned on at once on one machine. */
-export function featuresAllLedger(r: { group: string; machine: string; names: string[] }): SwitchLedger {
+export function featuresAllLedger(r: { group: string; machine: string; names: string[]; appliesTo?: string }): SwitchLedger {
   return {
     name: `${r.group} features`,
     subject: r.machine,
     figures: [{ value: String(r.names.length), label: "capabilities added", tone: "warn" }],
     rows: [
       { k: "Adds", v: plural(r.names.length, "feature"), list: r.names },
-      { k: "Applies to", v: "New sessions here" },
+      { k: "Applies to", v: r.appliesTo ?? "New sessions here" },
     ],
     stop: "Each card's switch",
     confirm: `Turn on ${r.names.length}`,
@@ -738,5 +738,44 @@ export function deployTargetLedger(r: {
     confirm: r.action === "deploy" ? `Deploy ${r.commits} ${r.commits === 1 ? "commit" : "commits"}` : verb,
     keep: "Not now",
     ...(r.blocked ? { blocked: r.blocked } : {}),
+  };
+}
+
+/** Connecting an outside agent to codecast over MCP (docs/architecture/agent-mcp.md): it reads as this account. */
+export function agentConnectLedger(r: { client: string; host: string; account: string; workspaces: string[] }): SwitchLedger {
+  return {
+    name: `Connect ${r.client}`,
+    subject: `returns to ${r.host}`,
+    shift: null,
+    figures: [
+      { value: String(r.workspaces.length), label: r.workspaces.length === 1 ? "workspace" : "workspaces" },
+      { value: "0", label: "writes" },
+    ],
+    rows: [
+      { k: "Reads as", v: r.account },
+      { k: "Reads", v: "Docs, tasks, plans, pages, session cards", list: r.workspaces, tone: "warn" },
+      { k: "Never", v: "Transcripts, vault, credentials", tone: "ok" },
+      { k: "Lasts", v: "Until 90 days unused" },
+    ],
+    stop: "Settings › Connected agents",
+    confirm: "Connect",
+    keep: "Cancel",
+  };
+}
+
+/** Revoking a `cast` token seen reading through /mcp: it also signs that machine's cast out. */
+export function castTokenRevokeLedger(r: { name: string; lastRead: string }): SwitchLedger {
+  return {
+    name: "Revoke token",
+    subject: r.name,
+    shift: null,
+    figures: [{ value: r.lastRead, label: "last read over MCP" }],
+    rows: [
+      { k: "Ends", v: "MCP reads with it", tone: "ok" },
+      { k: "Also ends", v: "cast on the machine holding it", tone: "warn" },
+      { k: "To undo", v: "cast auth on that machine" },
+    ],
+    confirm: "Revoke",
+    keep: "Keep it",
   };
 }

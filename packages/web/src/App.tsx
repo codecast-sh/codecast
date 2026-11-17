@@ -189,6 +189,8 @@ const LaneRedirect = lazy(() => import("@/components/LaneRedirect"));
 
 const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
+const SettingsConnectedAgents = lazy(() => import("@/app/settings/connected-agents/page"));
+const OAuthAuthorize = lazy(() => import("@/app/oauth/authorize/page"));
 const SettingsAgents = lazy(() => import("@/app/settings/agents/page"));
 const SettingsAgentLibrary = lazy(() => import("@/app/settings/agent-library/page"));
 const SettingsDevices = lazy(() => import("@/app/settings/devices/page"));
@@ -277,6 +279,7 @@ export function App() {
             {/* Touch ID for the desktop app and the phone, signed in or not (lib/passkeyPresence). */}
             <Route path="confirm" element={<E name="Confirm"><Confirm /></E>} />
             <Route path="auth/cli" element={<E name="AuthCli"><AuthCli /></E>} />
+            <Route path="oauth/authorize" element={<E name="OAuthAuthorize"><OAuthAuthorize /></E>} />
             <Route path="slack/connect" element={<E name="SlackConnect"><SlackConnect /></E>} />
             {/* Whisk's return after connecting mail and calendar (convex/whisk.ts). */}
             <Route path="connect/whisk" element={<E name="WhiskReturn"><WhiskReturn /></E>} />
@@ -509,6 +512,7 @@ export function App() {
             <Route path="settings" element={<SettingsLayout />}>
               <Route index element={<E name="Settings"><Settings /></E>} />
               <Route path="cli" element={<E name="SettingsCli"><SettingsCli /></E>} />
+              <Route path="connected-agents" element={<E name="SettingsConnectedAgents"><SettingsConnectedAgents /></E>} />
               <Route path="agents" element={<E name="SettingsAgents"><SettingsAgents /></E>} />
               <Route path="agent-library" element={<E name="SettingsAgentLibrary"><SettingsAgentLibrary /></E>} />
               <Route path="devices" element={<E name="SettingsDevices"><SettingsDevices /></E>} />

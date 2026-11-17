@@ -1205,6 +1205,31 @@ export async function pageAdmission(
     const user = userId ? await ctx.db.get(userId) : null;
     if (user) identity = { user, name: commenterDisplayName(user), avatar: commenterAvatar(user) };
   }
+  return await admissionFor(ctx, artifact, identity, isOwner, presented);
+}
+
+/**
+ * Where a signed-in account stands on a page with nothing presented but
+ * itself: what a session acting as its user (the CLI, a page-state watcher)
+ * may read and write. The same rule as a browser, so an agent never sees more
+ * of a page than its person would in the app.
+ */
+export async function accountAdmission(ctx: { db: QueryCtx["db"] }, artifact: Doc<"artifacts">, userId: Id<"users">): Promise<PageAdmission> {
+  const user = await ctx.db.get(userId);
+  const identity = user ? { user, name: commenterDisplayName(user), avatar: commenterAvatar(user) } : null;
+  // The member token the app's /pages/auth relay hands this account, so a
+  // member of a team-gated page's team is admitted as in a browser.
+  const m = (await mTokenFor(artifact, String(userId))) ?? undefined;
+  return await admissionFor(ctx, artifact, identity, false, { m });
+}
+
+async function admissionFor(
+  ctx: { db: QueryCtx["db"] },
+  artifact: Doc<"artifacts">,
+  identity: CommentIdentity | null,
+  isOwner: boolean,
+  presented: { edit_key?: string; k?: string; e?: string; m?: string },
+): Promise<PageAdmission> {
   const role: SteerRole | undefined =
     isOwner || identity?.user._id === artifact.user_id
       ? "owner"
@@ -1867,41 +1892,49 @@ async function pageWorkspace(
   return computeWorkspaceKey({ user_id: row.user_id }, conv);
 }
 
+export type VisiblePage = { row: Doc<"artifacts">; workspace: WorkspaceKey; author: { name: string | null; image: string | null }; mine: boolean };
+
+/** The pages a viewer's gallery holds: their own, and teammates' pages whose
+ *  workspace is a team they share. The one enumeration behind the app's Pages
+ *  view and the MCP list_pages tool. */
+export async function pagesVisibleTo(ctx: { db: QueryCtx["db"] }, userId: Id<"users">): Promise<VisiblePage[]> {
+  const convs = new Map<string, Doc<"conversations"> | null>();
+  const rows: VisiblePage[] = [];
+
+  const viewer = await ctx.db.get(userId);
+  const me = { name: viewer?.name ?? null, image: viewer?.image ?? null };
+  const mine = await ctx.db
+    .query("artifacts")
+    .withIndex("by_user", (q) => q.eq("user_id", userId))
+    .collect();
+  for (const row of mine) rows.push({ row, workspace: await pageWorkspace(ctx, row, convs), author: me, mine: true });
+
+  // Teammates' artifacts: visible in the gallery, but WITHOUT the secrets —
+  // manage/edit keys belong to the owner alone. Team edit rights flow
+  // through editForWeb (authed), not through key possession.
+  for (const [uid, teams] of await visibleOwnersFor(ctx, userId)) {
+    const theirs = await ctx.db
+      .query("artifacts")
+      .withIndex("by_user", (q) => q.eq("user_id", uid))
+      .collect();
+    if (!theirs.length) continue;
+    const user = await ctx.db.get(uid);
+    const author = { name: user?.name ?? null, image: user?.image ?? null };
+    for (const row of theirs) {
+      const workspace = await pageWorkspace(ctx, row, convs);
+      if (teams.has(workspace)) rows.push({ row, workspace, author, mine: false });
+    }
+  }
+  return rows;
+}
+
 export const listForWeb = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { artifacts: [] };
 
-    const convs = new Map<string, Doc<"conversations"> | null>();
-    type Author = { name: string | null; image: string | null };
-    const rows: Array<{ row: Doc<"artifacts">; workspace: WorkspaceKey; author: Author; mine: boolean }> = [];
-
-    const viewer = await ctx.db.get(userId);
-    const me = { name: viewer?.name ?? null, image: viewer?.image ?? null };
-    const mine = await ctx.db
-      .query("artifacts")
-      .withIndex("by_user", (q) => q.eq("user_id", userId))
-      .collect();
-    for (const row of mine) rows.push({ row, workspace: await pageWorkspace(ctx, row, convs), author: me, mine: true });
-
-    // Teammates' artifacts: visible in the gallery, but WITHOUT the secrets —
-    // manage/edit keys belong to the owner alone. Team edit rights flow
-    // through editForWeb (authed), not through key possession.
-    for (const [uid, teams] of await visibleOwnersFor(ctx, userId)) {
-      const theirs = await ctx.db
-        .query("artifacts")
-        .withIndex("by_user", (q) => q.eq("user_id", uid))
-        .collect();
-      if (!theirs.length) continue;
-      const user = await ctx.db.get(uid);
-      const author = { name: user?.name ?? null, image: user?.image ?? null };
-      for (const row of theirs) {
-        const workspace = await pageWorkspace(ctx, row, convs);
-        if (teams.has(workspace)) rows.push({ row, workspace, author, mine: false });
-      }
-    }
-
+    const rows = await pagesVisibleTo(ctx, userId);
     const out = [];
     for (const { row, workspace, author, mine: isMine } of rows) {
       const stats = await ctx.db

@@ -36,7 +36,8 @@ export type SettingsSectionId =
   | "devices"
   | "migrate"
   | "desktop"
-  | "apps";
+  | "apps"
+  | "connected-agents";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = "general";
 
@@ -69,6 +70,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/migrate": "migrate",
   "/settings/desktop": "desktop",
   "/settings/apps": "apps",
+  "/settings/connected-agents": "connected-agents",
 };
 
 /**

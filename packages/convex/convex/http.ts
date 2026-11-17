@@ -4488,6 +4488,14 @@ cliRoute("/cli/calls/recordings", async (ctx, body) => {
   await ctx.runMutation(internal.accessLog.recordCliCallRecording, { api_token: body.api_token, call: String(body.call ?? "") });
   return await signForCli(res);
 });
+// A screen recording sent from this machine (`cast send --recording`): a
+// presigned PUT for the file, then word that it is there (screenRecordings.ts).
+cliRoute("/cli/screen-recordings/begin", async (ctx, body) => {
+  return await ctx.runMutation(api.screenRecordings.cliBegin, body);
+});
+cliRoute("/cli/screen-recordings/uploaded", async (ctx, body) => {
+  return await ctx.runMutation(api.screenRecordings.cliUploaded, body);
+});
 // `cast call snap --share`: store a frame as a public image tied to the
 // recording file it came from, so deleting the recording deletes it.
 // body: { recording_id, image_base64, at_ms? }. The picture travels in the
@@ -5392,5 +5400,25 @@ http.route({ path: "/cli/email/unsubscribe", method: "POST", handler: emailUnsub
 cliRoute("/cli/suggestion-profile", async (ctx, body) =>
   ctx.runQuery(internal.composerSuggestions.getOwnSuggestionProfile, { api_token: String(body?.api_token ?? "") }),
 );
+
+// --- Codecast for outside agents: the MCP server and its OAuth (mcpHttp.ts,
+// docs/architecture/agent-mcp.md). Each answers at its backend path
+// (MCP_ROUTES); codecast.sh forwards the public path agents see. ---
+import {
+  mcp as mcpServer,
+  protectedResourceMetadata as mcpResourceMetadata,
+  authorizationServerMetadata as mcpAuthServerMetadata,
+  register as mcpRegister,
+  token as mcpToken,
+} from "./mcpHttp";
+import { MCP_ROUTES } from "@codecast/shared/contracts";
+for (const method of ["POST", "GET", "OPTIONS"] as const) http.route({ path: MCP_ROUTES["/mcp"], method, handler: mcpServer });
+http.route({ path: MCP_ROUTES["/.well-known/oauth-protected-resource"], method: "GET", handler: mcpResourceMetadata });
+http.route({ path: MCP_ROUTES["/.well-known/oauth-protected-resource/mcp"], method: "GET", handler: mcpResourceMetadata });
+http.route({ path: MCP_ROUTES["/.well-known/oauth-authorization-server"], method: "GET", handler: mcpAuthServerMetadata });
+for (const method of ["POST", "OPTIONS"] as const) {
+  http.route({ path: MCP_ROUTES["/oauth/register"], method, handler: mcpRegister });
+  http.route({ path: MCP_ROUTES["/oauth/token"], method, handler: mcpToken });
+}
 
 export default http;
