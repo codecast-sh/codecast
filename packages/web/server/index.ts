@@ -13,6 +13,7 @@ import { createResponsePolicy } from "./responsePolicy";
 import { CONVEX_URL } from "./convexUrl";
 import { MCP_ROUTES } from "@codecast/shared/contracts/agentAccess";
 import { mcpForwardHeaders } from "./mcpForward";
+import { frameCheckResponse } from "./frameCheck";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -95,6 +96,12 @@ app.get("/api/health", async (c) =>
     prerender_routes: await prerenderedRouteCount(),
   })
 );
+
+// Whether a site lets the browser pane frame it (server/frameCheck.ts).
+app.get("/api/frame-check", async (c) => {
+  c.header("Cache-Control", "private, max-age=600");
+  return c.json(await frameCheckResponse(new URL(c.req.url).searchParams));
+});
 
 app.get("/download/mac", async (c) => {
   const version = await latestDesktopVersion();

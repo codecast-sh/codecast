@@ -19,7 +19,6 @@ import {
   ArrowUpRight,
   Check,
   CircleAlert,
-  CircleHelp,
   EyeOff,
   Globe,
   Laptop,
@@ -32,6 +31,7 @@ import {
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
+  askFraming,
   browserRoutePath,
   browserPathLabel,
   displayHost,
@@ -70,12 +70,6 @@ import { StreamBackend } from "./backends/StreamBackend";
 import { ScreenBackend } from "./backends/ScreenBackend";
 import { PaneCard, PaneCardButton } from "./backends/PaneCard";
 import type { BrowserPaneState, PaneStripAction } from "./backends/types";
-
-/** How long a cross-origin frame gets before the strip offers the "it didn't
- *  load" card. A frame that refuses can only be told apart from one that
- *  worked by a human looking at it (see FrameBackend's header), so this only
- *  ever OFFERS the explanation — it never asserts one. */
-const REFUSAL_GRACE_MS = 2500;
 
 export function BrowserPane() {
   const ctx = useTabContext();
@@ -131,8 +125,10 @@ export function BrowserPane() {
   // Verbs the backend put in the strip (backends/types.ts). The stream's drive
   // toggle and reconnect live here; a frame registers none.
   const [actions, setActions] = useState<PaneStripAction[]>([]);
-  const [askedWhy, setAskedWhy] = useState(false);
-  const [graceOver, setGraceOver] = useState(false);
+  // Whether the site refuses to be framed, from its own headers
+  // (lib/browserPane askFraming). Keyed by address, so an answer for the last
+  // page never applies to this one.
+  const [refusal, setRefusal] = useState<{ url: string; refuses: boolean } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const headRef = useRef<HTMLDivElement>(null);
 
@@ -143,15 +139,19 @@ export function BrowserPane() {
   useWatchEffect(() => {
     setLiveUrl(null);
     setLiveTitle(null);
-    setAskedWhy(false);
-    setGraceOver(false);
   }, [url, source?.kind, reloadToken]);
 
   useWatchEffect(() => {
-    if (state.kind !== "ready" || !state.opaque) return;
-    const t = setTimeout(() => setGraceOver(true), REFUSAL_GRACE_MS);
-    return () => clearTimeout(t);
-  }, [state]);
+    if (!url || source?.kind !== "url") return;
+    let live = true;
+    void askFraming(url).then((verdict) => {
+      if (live) setRefusal({ url, refuses: verdict === "refuses" });
+    });
+    return () => {
+      live = false;
+    };
+  }, [url, source?.kind]);
+  const refused = !!url && refusal?.url === url && refusal.refuses;
 
   const handleTitle = useCallback(
     (title: string | null) => {
@@ -239,14 +239,15 @@ export function BrowserPane() {
   // subscription rather than a read (NativeBackend owns the question).
   const nativeReady = useNativeBrowserPane();
 
-  // Selection is automatic, never inferred from a frame: nothing on the client
-  // can tell a refused frame from one that painted (FrameBackend's header), so
-  // `refused` is only ever what the user told us by choosing the native view.
+  // Selection is automatic. A frame cannot tell us it was refused
+  // (FrameBackend's header), so `refused` comes from the site's headers: on
+  // desktop such a page opens in the native view, where framing rules do not
+  // apply, and on the web the pane says the site refuses.
   const backendKind = source
     ? selectBackend(source, {
         desktop: isDesktop(),
         nativeAvailable: nativeReady,
-        refused: false,
+        refused,
         preferNative: wantsNative,
       })
     : "frame";
@@ -267,19 +268,21 @@ export function BrowserPane() {
   // an address this machine serves: a github.com pane has no machine to name.
   const thisMachine = useThisMachine(loopback && !servedBy);
   const machine = servedBy?.device ?? thisMachine;
+  // A refused page in a frame paints the browser's own error; the pane covers
+  // it with the reason and the ways to open it.
+  const shownState: BrowserPaneState =
+    refused && Backend === FrameBackend ? { kind: "blocked", reason: "refused" } : state;
   const overlay = paneOverlay({
-    state,
+    state: shownState,
     host: url ? displayHost(url) : "",
     loopback,
     machineName: machine ? deviceDisplayName(machine) : null,
     elsewhere: !!servedBy,
-    askedWhy,
     desktop: isDesktop(),
     onReload: reload,
     fixes: actions.filter((x) => x.card),
     onOpenOutside: openOutside,
     onNative: goNative,
-    onDismiss: () => setAskedWhy(false),
   });
 
   return (
@@ -328,25 +331,6 @@ export function BrowserPane() {
               onClick={openOutside}
             >
               <ArrowUpRight className="w-3.5 h-3.5" />
-            </button>
-          </ShortcutTooltip>
-        )}
-        {/* Only in the pane you are working in: four panes each nagging about
-            a page that may be perfectly fine is noise. */}
-        {focused && state.kind === "ready" && state.opaque && graceOver && !askedWhy && (
-          // Folds to its icon with the machine badge, never to a fragment of
-          // the question: "not showing?" alone reads as a stray word.
-          <ShortcutTooltip label="If this pane stays blank, the site may refuse to be shown inside another page">
-            <button
-              type="button"
-              onClick={() => setAskedWhy(true)}
-              className="group flex flex-shrink-0 items-center gap-1 px-1 text-meta text-sol-text-dim/70 transition-colors hover:text-sol-text-muted"
-              aria-label="Page not showing?"
-            >
-              <CircleHelp className="w-3 h-3" />
-              <span className="cq-sq1 underline decoration-dotted decoration-sol-text-dim/40 underline-offset-2 group-hover:decoration-sol-text-muted">
-                Page not showing?
-              </span>
             </button>
           </ShortcutTooltip>
         )}
@@ -454,14 +438,12 @@ function paneOverlay(a: {
   machineName: string | null;
   /** The address is served by another machine (a cloud host), not this one. */
   elsewhere: boolean;
-  askedWhy: boolean;
   desktop: boolean;
   onReload: () => void;
   /** Backend verbs that fix an error (PaneStripAction.card), offered first. */
   fixes: PaneStripAction[];
   onOpenOutside: () => void;
   onNative: () => void;
-  onDismiss: () => void;
 }) {
   const glyph = "w-5 h-5";
   const openActions = (
@@ -570,23 +552,6 @@ function paneOverlay(a: {
           ) : (
             tryAgain
           )
-        }
-      />
-    );
-  }
-
-  if (a.askedWhy) {
-    return (
-      <PaneCard
-        icon={<EyeOff className={glyph} />}
-        host={a.host}
-        headline="Some sites will not load in a pane"
-        detail="A site can ask not to be embedded, and from here that looks the same as a page still loading."
-        actions={
-          <>
-            {openActions}
-            <PaneCardButton onClick={a.onDismiss}>Keep waiting</PaneCardButton>
-          </>
         }
       />
     );

@@ -20,6 +20,7 @@ import { tailwindInWorker } from "./plugins/tailwindWorker";
 import { stallWatchdogPlugin } from "./plugins/stallWatchdog";
 import { convexPreconnectPlugin } from "./plugins/convexPreconnect";
 import { mcpProxyPlugin } from "./plugins/mcpProxy";
+import { frameCheckResponse } from "./server/frameCheck";
 import { uiFontPreloadPlugin } from "./plugins/uiFontPreload";
 import { precacheScope } from "./plugins/precacheScope";
 import autoprefixer from "autoprefixer";
@@ -90,6 +91,19 @@ export default defineConfig(({ mode, command }) => ({
     // codecast.sh/a/<slug> is a redirect to the branded artifact document the
     // Convex HTTP action serves (production: Hono route in server/index.ts).
     // Same behavior in dev so the path never falls through to the SPA shell.
+    // /api/frame-check answers in dev as server/index.ts does in production.
+    {
+      name: "frame-check",
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (!req.url?.startsWith("/api/frame-check")) return next();
+          void frameCheckResponse(new URL(req.url, "http://dev").searchParams).then((body) => {
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(body));
+          });
+        });
+      },
+    },
     {
       name: "artifact-redirect",
       configureServer(server) {

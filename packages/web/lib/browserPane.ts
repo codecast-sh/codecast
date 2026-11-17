@@ -402,6 +402,34 @@ export function readPaneMessage(
 // ---------------------------------------------------------------------------
 
 /** What a probe can prove about an address, and nothing more. */
+/**
+ * Whether a site lets this app frame it. A browser hides that from the
+ * embedding page, so the app's server reads the site's frame-ancestors and
+ * X-Frame-Options headers (server/frameCheck.ts). Only public addresses are
+ * asked: the server cannot reach this machine or its network, and a page on
+ * the app's own origin is always framable. "unknown" never blocks a page.
+ * Answers are kept for the life of the window.
+ */
+const framingAnswers = new Map<string, Promise<"allows" | "refuses" | "unknown">>();
+export function askFraming(url: string): Promise<"allows" | "refuses" | "unknown"> {
+  if (typeof window === "undefined" || isPrivateNetworkUrl(url)) return Promise.resolve("unknown");
+  try {
+    if (new URL(url).origin === window.location.origin) return Promise.resolve("allows");
+  } catch {
+    return Promise.resolve("unknown");
+  }
+  let answer = framingAnswers.get(url);
+  if (!answer) {
+    const q = new URLSearchParams({ u: url, o: window.location.origin });
+    answer = fetch(`/api/frame-check?${q}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => (body?.verdict === "allows" || body?.verdict === "refuses" ? body.verdict : "unknown"))
+      .catch(() => "unknown" as const);
+    framingAnswers.set(url, answer);
+  }
+  return answer;
+}
+
 export type ProbeVerdict = "answered" | "unreachable" | "local-network-blocked";
 
 type ProbeIo = {
