@@ -7592,6 +7592,13 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The head never wraps, so a reference in it would shrink beside a long object
+   and break its title over several lines. It holds one line; the object after
+   it takes the cut. */
+.modern-style [data-sv-feed] [data-cc-row-head] > .entity-ref {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-text] {
   flex: 0 1 auto;
   min-width: 0;

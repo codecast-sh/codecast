@@ -71,13 +71,13 @@ test("two online Macs sharing a port: authenticate local before showing controls
   expect(document.body.textContent).toContain("Signed in as local@example.com");
 }, 30_000);
 
-test("account switching and recovery changes use the same local target", async () => {
+test("account switching targets the local machine; the recovery mode is the person's", async () => {
   cache(); await mount(); await settle(); await hover();
   await act(() => button("switch →")!.click());
   expect(account.mutations.at(-1)).toEqual({ name: "accountSwitch:requestAccountSwitch", args: { device_id: "local-mac", profile: "backup", continue_blocked: false } });
   await act(() => seedAccounts([otherDevice, { ...localDevice, active_email: "backup@example.com" }]));
   await act(() => button("Continue, and switch accounts automatically")!.click());
-  expect(account.mutations.at(-1)).toEqual({ name: "accountSwitch:setRecoveryMode", args: { device_id: "local-mac", mode: "auto" } });
+  expect(account.mutations.at(-1)).toEqual({ name: "accountSwitch:setRecoveryMode", args: { mode: "auto" } });
 });
 
 test("offline local inventory stays visible without sign-in, mint or switch controls; reconnect never selects the other Mac", async () => {

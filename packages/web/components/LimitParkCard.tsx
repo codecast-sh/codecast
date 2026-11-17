@@ -7,9 +7,10 @@
 // a density toggle. Once a recovery acts on the park (lib/limitRecovery) the
 // same card follows it: which account the session moves to, the restart, the
 // "continue" landing, and finally that it resumed, so the minute a restart
-// takes reads as progress and never as a stuck error. The "what next" line reads the owner machine's recovery
-// flags (auto-switch, resume at reset) so it states what codecast will do,
-// not a generic "send a message later"; the action row offers the one manual
+// takes reads as progress and never as a stuck error. The "what next" line reads the person's recovery
+// mode (auto-switch, resume at reset) so it states what codecast will do,
+// not a generic "send a message later", and the action row carries the mode
+// picker so it can be changed right here. It also offers the one manual
 // recovery that helps NOW: continue this session on the freshest saved
 // account (a scoped account switch — never the whole blocked fleet), tracked
 // as the conversation's sessionCommands row like every daemon command.
@@ -24,6 +25,8 @@ import { DISPATCH_REFUSED, latestSessionCommand, switchPending } from "../lib/se
 import { formatResetPhrase, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
 import type { LimitRecoveryAction } from "../lib/limitRecovery";
 import { accountDisplayName, continueOnAccount, limitContinueTarget } from "../lib/limitContinue";
+import { useAccountRecoveryToggles } from "../hooks/useAccountRecoveryToggles";
+import { RecoveryModePicker } from "./RecoveryModeSelect";
 import { Button } from "./ui/button";
 
 type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
@@ -70,6 +73,9 @@ export function LimitParkCard({
   // window is unmeasured, never a confident green percent the switcher distrusts.
   const bestNote = best ? standingLabel(best.usage, now) : null;
   const canSwitch = !!best && !!device && device.online && !device.is_remote && !!conversationId;
+  // The viewer's own recovery mode; the roster only carries their machines,
+  // so a device here means the choice is theirs to change.
+  const { recovery } = useAccountRecoveryToggles(device ?? { auto_switch: false });
 
   const switchAndContinue = () => {
     if (best && conversationId) continueOnAccount(conversationId, best);
@@ -104,7 +110,7 @@ export function LimitParkCard({
       ? `window reset ${formatAgo(now - resetAt)}`
       : `resets ${formatResetPhrase(resetAt, now)}`;
 
-  // Line 2: what happens next. Reads the owner machine's flags; a viewer
+  // Line 2: what happens next. Reads the person's recovery mode; a viewer
   // whose roster does not carry the owner gets the neutral wording.
   let next: string;
   let nextIcon = <Hourglass className="h-3 w-3 shrink-0" />;
@@ -124,7 +130,7 @@ export function LimitParkCard({
     next = describeDecision(proposal) ?? "Waiting for you to approve an account switch.";
   } else if (device.ask_first) {
     nextIcon = <Zap className="h-3 w-3 shrink-0 text-sol-text-muted" />;
-    next = "This machine asks before changing accounts — nothing has been proposed yet.";
+    next = "Asks before changing accounts; nothing has been proposed yet.";
   } else if (device.auto_switch) {
     nextIcon = <Zap className="h-3 w-3 shrink-0 text-sol-cyan" />;
     next = "Auto-switch is on — moving this session to an account with room, nothing to do.";
@@ -132,7 +138,7 @@ export function LimitParkCard({
     nextIcon = <TimerReset className="h-3 w-3 shrink-0 text-sol-cyan" />;
     next = "Resumes on its own when the window resets — nothing to do.";
   } else {
-    next = "Auto-resume is off on this machine — parked until you continue it.";
+    next = "Parked until you continue it.";
   }
 
   return (
@@ -188,6 +194,7 @@ export function LimitParkCard({
                     : `Continue on ${bestLabel}${bestNote ? ` (${bestNote})` : ""}`}
               </button>
             )}
+            {device && <RecoveryModePicker control={recovery} />}
             <Link href="/settings/claude-accounts" className="text-meta text-sol-cyan hover:underline">
               Accounts
             </Link>
