@@ -10,7 +10,7 @@ import { readTree, type Tree } from './cast/tree';
 import { loadWorld, newWorld } from './cast/world';
 import { answerOf, applyPipe, callOf, capturesFrom, pairsFromJsonl, type Capture } from './capture';
 import { heldOut, scoreSession } from './fidelity';
-import { FAKE_BIN, failedWrites, fakedWrites, ranLine, seedFor } from './seed';
+import { FAKE_BIN, failedWrites, fakedWrites, fakeWorldOf, ranLine, seedFor } from './seed';
 
 const TREE_PATH = join(fixturesDir(), 'fakes', 'cli-tree.json');
 const tree = readTree(TREE_PATH) as Tree;
@@ -159,6 +159,26 @@ describe('the fake cast', () => {
     const w = newWorld({ open: true });
     expect(ask(w, ['trigger', 'add', 'Check the nightly\nthen report', '--in', '40m']).out).toBe('+ Trigger tr-7301 in 40m: Check the nightly\n');
     expect(ask(w, ['trigger', 'add', 'Later', '--at', '12:40']).out).toBe('+ Trigger tr-7302 queued now: Later\n');
+  });
+});
+
+describe('the world a run left', () => {
+  // Review (2026-11-17): the fake's process writes world.json, so a grader takes nothing from it on trust.
+  test('a grader reads the brief only as a string, from a file of sane size that parses', () => {
+    const run = join(mkdtempSync(join(tmpdir(), 'fakes-worldof-')), 'agent');
+    const world = (text: string) => {
+      mkdirSync(join(`${run}.harness`, 'fake'), { recursive: true });
+      writeFileSync(join(`${run}.harness`, 'fake', 'world.json'), text);
+      return fakeWorldOf(run);
+    };
+    expect(fakeWorldOf(run)).toBeNull();
+    expect(world(JSON.stringify({ brief: 'the brief' }))).toEqual({ brief: 'the brief' });
+    expect(world(JSON.stringify({ tasks: {} }))).toEqual({ brief: null });
+    expect(world(JSON.stringify({ brief: { toString: 'x' } }))).toBeNull();
+    expect(world(JSON.stringify({ brief: ['a'] }))).toBeNull();
+    expect(world('[1]')).toBeNull();
+    expect(world('{not json')).toBeNull();
+    expect(world(JSON.stringify({ brief: 'x'.repeat(9 << 20) }))).toBeNull();
   });
 });
 

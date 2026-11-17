@@ -1,9 +1,9 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, openSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { servedReadKey } from '../served';
 import type { Roster } from './capture';
-import { newWorld, type FakeWorld, type Role, type WorldSeed } from './cast/world';
+import { newWorld, type Role, type WorldSeed } from './cast/world';
 
 // The world a fake starts a replay from, read from the replay's own record:
 // the roster from any `org ls --json` the served dir captured (handle to
@@ -12,7 +12,7 @@ import { newWorld, type FakeWorld, type Role, type WorldSeed } from './cast/worl
 
 /** The executable that answers one call by hand, outside a harness (the guard's DRY_RUN_FAKE). */
 export const FAKE_BIN = join(import.meta.dir, 'bin.ts');
-/** The module prompt-dry-run.ts --fake loads in-process (openFake). */
+/** The module prompt-dry-run.ts --fake runs per call in the closed world (openFake, through prompt-dry-run-fake.ts). */
 export const FAKE_MODULE = join(import.meta.dir, 'cast', 'index.ts');
 
 const ID = /\bjx[0-9a-z]{5}\b|\b(?:ct|tr|sd|pl)-\d+\b/g;
@@ -122,8 +122,36 @@ export function channelsFromServed(dir: string | undefined): string[] | null {
   return null;
 }
 
-/** The world a finished agent run left, or null when it ran without the fake. */
-export function fakeWorldOf(runSubdir: string): FakeWorld | null {
-  const path = join(harnessDirOf(runSubdir), 'fake-world.json');
-  return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as FakeWorld) : null;
+/** The most a fake's world file may hold for a grader to read it. */
+const WORLD_CAP = 8 << 20;
+
+/**
+ * What a finished agent run's fake world says a grader reads, or null when it
+ * ran without the fake. The fake's own process wrote that file, so nothing in
+ * it is trusted: a file over WORLD_CAP, one that is not JSON, or one whose
+ * fields have the wrong shape reads as no world, and each field is taken only
+ * in its declared type.
+ */
+export function fakeWorldOf(runSubdir: string): { brief: string | null } | null {
+  const path = join(harnessDirOf(runSubdir), 'fake', 'world.json');
+  // A regular file only, opened without following a link and measured on the open fd: the fake wrote this file, and a
+  // link (swapped in at any moment) would have the grader read whatever it points at.
+  if (!existsSync(path)) return null;
+  let w: unknown;
+  try {
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile() || st.size > WORLD_CAP) return null;
+      w = JSON.parse(readFileSync(fd, 'utf8'));
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+  if (!w || typeof w !== 'object' || Array.isArray(w)) return null;
+  const brief = (w as { brief?: unknown }).brief;
+  if (brief !== undefined && typeof brief !== 'string') return null;
+  return { brief: brief ?? null };
 }
