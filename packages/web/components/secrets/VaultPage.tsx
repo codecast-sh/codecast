@@ -26,7 +26,7 @@ import { EntityIdPill } from "../EntityIdPill";
 import { KeyCap } from "../KeyCap";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { AddSecretDialog, type AddMode } from "./AddSecretDialog";
-import { SaveAllSignins, SaveSigninDialog } from "./SaveSignin";
+import { SaveSigninDialog, SigninAutofill } from "./SaveSignin";
 import { SecretDetail } from "./SecretDetail";
 import { DeclineRequest, ValueEditor } from "./ValueForm";
 import { CommandDisclosure, KindGlyph, RequestHead, ScopeMark } from "./parts";
@@ -641,6 +641,13 @@ function VaultBody({ fit }: { fit: Fit }) {
       Sample
     </span>
   );
+  // Sign-ins asked for here, filled from the person's Chrome while the switch is on.
+  const autofill = sample ? null : (
+    <SigninAutofill
+      team={vaultScope.team ? { id: vaultScope.team.id, name: vaultScope.team.name } : null}
+      asked={rows.filter((r) => r.kind === "signin" && r.status === "requested" && r.workspace === (keys.team ?? keys.personal)).length}
+    />
+  );
   const legacy = (
     <div ref={titlebarRef} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-sol-border/40 px-5 pb-2.5 pt-4">
       <h1 className="text-xl font-semibold text-sol-text">Vault</h1>
@@ -649,7 +656,8 @@ function VaultBody({ fit }: { fit: Fit }) {
       {rows.length > 0 && (
         <div className={`flex items-center gap-2 ${fit === "narrow" ? "flex-wrap" : ""} ${listFit === "narrow" ? "order-last basis-full" : "ml-auto"}`}>{filterBody}</div>
       )}
-      <div className={listFit === "narrow" || rows.length === 0 ? "ml-auto" : ""}>
+      <div className={`flex items-center gap-2 ${listFit === "narrow" || rows.length === 0 ? "ml-auto" : ""}`}>
+        {autofill}
         <AddMenu onPick={setAdding} compact={fit === "narrow"} />
       </div>
     </div>
@@ -662,6 +670,7 @@ function VaultBody({ fit }: { fit: Fit }) {
       actions={<>
         {sampleMark("")}
         {listFit !== "narrow" && filterGroup}
+        {autofill}
         <AddMenu onPick={setAdding} compact={fit === "narrow"} />
       </>}
     >
@@ -696,10 +705,6 @@ function VaultBody({ fit }: { fit: Fit }) {
                   <h2 className="mb-1.5 flex items-center gap-2 text-[12px] font-medium text-sol-magenta">
                     <span className="size-1.5 rounded-full bg-sol-magenta" />
                     Asked for <span className="tabular-nums">{requests.length}</span>
-                    <SaveAllSignins
-                      rows={requests.filter((r) => r.workspace === (keys.team ?? keys.personal))}
-                      team={vaultScope.team ? { id: vaultScope.team.id, name: vaultScope.team.name } : null}
-                    />
                   </h2>
                   <ul className="flex flex-col gap-2">
                     {requests.map((r, i) => (

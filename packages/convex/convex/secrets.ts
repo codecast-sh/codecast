@@ -1080,6 +1080,7 @@ export const request = mutation({
       row = (await ctx.db.get(id))!;
     }
     await recordSecretEvent(ctx, row, "requested", { actor: userId, conversation_id: conversation?._id });
+    if (kind === "signin") await ctx.scheduler.runAfter(0, internal.signinAutofill.asked, { workspace: row.workspace });
     if (conversation) {
       const people = await peopleFor(ctx, conversation);
       await emitNotification(ctx as any, {
