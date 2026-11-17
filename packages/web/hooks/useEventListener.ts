@@ -11,7 +11,7 @@ export function useEventListener<K extends keyof WindowEventMap>(
 export function useEventListener<K extends keyof DocumentEventMap>(
   event: K,
   handler: (e: DocumentEventMap[K]) => void,
-  target: Document,
+  target: Document | null,
   options?: AddEventListenerOptions
 ): void;
 export function useEventListener(
