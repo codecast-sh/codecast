@@ -20,7 +20,7 @@
 import * as net from "node:net";
 import { spawn } from "../proc.js";
 import { hostForDevice, reachableRemoteHost, sshReachable, toRemoteHost } from "../browser/cloudHost.js";
-import { sshBase, type RemoteHost } from "../remote/session-move.js";
+import { sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 
 export const FORWARD_IDLE_MS = 10 * 60_000;
 
@@ -42,7 +42,7 @@ const forwards = new Map<string, Promise<Forward>>();
 /** The `ssh` argv that carries one connection to the host's loopback port. */
 export function forwardSshArgs(host: RemoteHost, remotePort: number): string[] {
   return [...sshBase(host), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
-    "-W", `127.0.0.1:${remotePort}`, `${host.user}@${host.address}`];
+    "-W", `127.0.0.1:${remotePort}`, sshDestination(host)];
 }
 
 /**

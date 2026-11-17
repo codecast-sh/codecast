@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { execFileSync } from "../proc.js";
-import { sshBase, type RemoteHost } from "../remote/session-move.js";
+import { sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 import { HELPER_APP_BASENAME } from "../computer/helperApp.js";
 
 export function macLoginScript(user: string): string {
@@ -52,7 +52,7 @@ echo MAC-LOGIN-OK`;
 
 export function provisionMacLogin(host: RemoteHost, user: string): RemoteHost {
   if (user === host.user) return host;
-  const output = execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, "bash -s"], {
+  const output = execFileSync("ssh", [...sshBase(host), sshDestination(host), "bash -s"], {
     input: macLoginScript(user), encoding: "utf8", timeout: 120_000, maxBuffer: 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
   });
   if (!output.includes("MAC-LOGIN-OK")) throw new Error("Mac service login setup did not finish");

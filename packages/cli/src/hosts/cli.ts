@@ -35,7 +35,7 @@ import { ACCOUNT_KEY_URL, cwdGitRoot, deployKeyUrl, grantAccountKey, grantDeploy
 import { hostToolsDetailLines, parseHostToolsStamp, summarizeHostTools, type HostToolsReport } from "../cloud/hostTools.js";
 import { parseHostMcpOverrides } from "../cloud/hostMcpOverrides.js";
 import { deviceId } from "../remote/device.js";
-import { ssh, type RemoteHost } from "../remote/session-move.js";
+import { ssh, sshDestination, sshIdentity, type RemoteHost } from "../remote/session-move.js";
 import { ROOT_WORKSPACE_NAME, type AgentLoginsReport } from "../cloud/prepare.js";
 import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
 import { FIND_CAST_SH } from "../cloud/ghWrapper.js";
@@ -560,7 +560,7 @@ async function settleMacDesktop(up: CloudHost, remote: RemoteHost, report: { des
     // SIP keeps these two grants out of every script's reach: someone switches
     // them on once, on the Mac's own screen. A host imaged from this one keeps them.
     console.log(fmt.muted(`  cast computer needs ${missing.join(" and ")}, which macOS takes only from its own screen, once per machine:`));
-    console.log(fmt.muted(`    ssh -i ${remote.keyPath} -N -L 5901:localhost:5900 ${remote.user}@${remote.address} &  then open vnc://localhost:5901`));
+    console.log(fmt.muted(`    ssh ${sshIdentity(remote).join(" ")} -N -L 5901:localhost:5900 ${sshDestination(remote)} &  then open vnc://localhost:5901`));
     console.log(fmt.muted(`    sign in as ${remote.user} (its password: ~/.codecast/desktop-password on the Mac), run \`cast computer setup --yes\` over ssh, and switch on codecast computer in each pane`));
   };
   if (report.desktop === "live") {

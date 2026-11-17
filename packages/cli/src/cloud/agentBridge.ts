@@ -27,7 +27,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { CloudHost } from "../browser/cloudHost.js";
 import { isRemoteDevice } from "../remote/device.js";
-import type { RemoteHost } from "../remote/session-move.js";
+import { sshDestination, sshIdentity, type RemoteHost } from "../remote/session-move.js";
 
 /** Where the host daemon and every session on the box find the forwarded agent. */
 export const HOST_AGENT_SOCK_REL = ".codecast/ssh-agent.sock";
@@ -53,7 +53,7 @@ export const AGENT_BRIDGE_REMOTE =
  */
 export function heldSshArgs(host: RemoteHost, remoteCommand: string, opts: { forwardAgent?: boolean; extra?: string[] } = {}): string[] {
   return [
-    "-i", host.keyPath,
+    ...sshIdentity(host),
     "-o", "IdentitiesOnly=yes",
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", "BatchMode=yes",
@@ -65,7 +65,7 @@ export function heldSshArgs(host: RemoteHost, remoteCommand: string, opts: { for
     ...(opts.forwardAgent ? ["-o", "ForwardAgent=yes"] : []),
     ...(opts.extra ?? []),
     "-T",
-    `${host.user}@${host.address}`,
+    sshDestination(host),
     remoteCommand,
   ];
 }

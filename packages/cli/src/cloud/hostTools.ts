@@ -38,7 +38,7 @@ import * as path from "node:path";
 import { lastErrorLine, spawnSync } from "../proc.js";
 import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../codecastOwned.js";
 import { INSTALLABLE_CLIENTS, parseClientVersion, readInstalledClientVersions, type InstallableClient } from "../remote/agentAuth.js";
-import { remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { remoteHome, shq, sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 import { ghWrapperInstallSnippet, realGhFunction, REAL_GH_REL } from "./ghWrapper.js";
 import {
   emptyOverrides, normalizeCommand, parseHostMcpOverrides, reconcilePins, serializeHostMcpOverrides, HOST_MCP_OVERRIDES_FILE,
@@ -806,7 +806,7 @@ export function codecastFileWriteCommand(name: string): string {
 
 /** Write the manifest on the host (codecastFileWriteCommand), one ssh with the bytes on stdin. */
 export function writeHostMcpOverridesRemote(host: RemoteHost, o: HostMcpOverrides): void {
-  const r = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, codecastFileWriteCommand(HOST_MCP_OVERRIDES_FILE)], {
+  const r = spawnSync("ssh", [...sshBase(host), sshDestination(host), codecastFileWriteCommand(HOST_MCP_OVERRIDES_FILE)], {
     encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], input: serializeHostMcpOverrides(o), timeout: 30_000, env: process.env,
   });
   if (r.error) throw r.error;
@@ -1114,7 +1114,7 @@ export interface RunHostToolsOptions extends HostToolsScriptOptions {
 }
 
 function runOverSsh(host: RemoteHost, script: string, timeoutMs: number) {
-  const r = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, HOST_TOOLS_REMOTE_COMMAND], {
+  const r = spawnSync("ssh", [...sshBase(host), sshDestination(host), HOST_TOOLS_REMOTE_COMMAND], {
     encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], input: (remoteHome(host).startsWith("/Users/") ? 'export PATH="$PATH:/opt/homebrew/bin"\n' : "") + script, timeout: timeoutMs, env: process.env, maxBuffer: 16 * 1024 * 1024,
   });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", ...(r.error ? { error: r.error } : {}) };

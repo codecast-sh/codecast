@@ -2,7 +2,7 @@ import { spawnSync, type SpawnSyncReturns } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { gitSshUrl, HOST_EXCLUDES, remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { gitSshUrl, HOST_EXCLUDES, remoteHome, shq, sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 import { hostProbeOrigin } from "./hostGit.js";
 import { MANIFEST_REL_PATH } from "../workspace/resolver.js";
 import { collectCopyFiles, manifestCopyEntries, sourceStat, validateRelativePath } from "../workspace/copyFiles.js";
@@ -22,7 +22,7 @@ function checked(result: SpawnSyncReturns<string>, operation: string): string {
 
 function remote(host: RemoteHost, command: string, input?: number | Buffer): SpawnSyncReturns<string> {
   const stdin = Buffer.isBuffer(input) ? "pipe" : input ?? "ignore";
-  return spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, command], {
+  return spawnSync("ssh", [...sshBase(host), sshDestination(host), command], {
     encoding: "utf-8", stdio: [stdin, "pipe", "pipe"], timeout: 300_000, env: process.env,
     ...(Buffer.isBuffer(input) ? { input, maxBuffer: 64 * 1024 * 1024 } : {}),
   });

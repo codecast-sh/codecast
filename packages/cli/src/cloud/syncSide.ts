@@ -41,7 +41,7 @@
 import { createRequire } from "node:module";
 import * as proc from "../proc.js";
 import { promisify } from "node:util";
-import { shq, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { shq, sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 import { describeSyncSkipped, type SyncSkipReason } from "@codecast/shared/contracts";
 import { AGENT_CONTEXT_ROOTS, INSTRUCTION_FILE_RE, MEDIA_FILE_RE, NATIVE_BINARY_MAGICS } from "./mirror/discovery.js";
 
@@ -389,7 +389,7 @@ export function remoteSideCommand(req: SideRequest): string {
 /** Run one side's operation on a host over its ssh connection. */
 export async function runRemoteSide<T = unknown>(host: RemoteHost, req: SideRequest, timeoutMs = 120_000): Promise<T> {
   try {
-    const { stdout } = await execFileAsync("ssh", [...sshBase(host), `${host.user}@${host.address}`, remoteSideCommand(req)], { encoding: "utf-8", timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 });
+    const { stdout } = await execFileAsync("ssh", [...sshBase(host), sshDestination(host), remoteSideCommand(req)], { encoding: "utf-8", timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 });
     return JSON.parse(stdout.trim().split("\n").pop() || "null") as T;
   } catch (e) {
     const err = e as { stderr?: string; message?: string };

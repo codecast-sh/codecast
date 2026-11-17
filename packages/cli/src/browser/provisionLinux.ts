@@ -30,7 +30,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { installHostRelease, type CastRelease, type HostCastSource } from "../hosts/installRelease.js";
 import type { RemoteHost } from "../remote/session-move.js";
-import { copyCredentialToRemote, ensureRemoteClaudeReady, shq } from "../remote/session-move.js";
+import { copyCredentialToRemote, ensureRemoteClaudeReady, shq, sshDestination, sshIdentity } from "../remote/session-move.js";
 import { readInstalledClientVersions } from "../remote/agentAuth.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
 import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
@@ -667,8 +667,8 @@ const defaultPushDeps: PushCodecastConfigDeps = {
   ship: (host, remoteCfg) => {
     execFileSync(
       "ssh",
-      ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-       "-o", "BatchMode=yes", `${host.user}@${host.address}`,
+      [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+       "-o", "BatchMode=yes", sshDestination(host),
        "umask 077; mkdir -p ~/.codecast; cat > ~/.codecast/config.json"],
       { input: JSON.stringify(remoteCfg, null, 2), timeout: 30_000 },
     );
@@ -916,8 +916,8 @@ export function runScript(host: RemoteHost, script: string, timeoutMs: number, c
   try {
     return execFileSync(
       "ssh",
-      ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-       "-o", "BatchMode=yes", `${host.user}@${host.address}`, command],
+      [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+       "-o", "BatchMode=yes", sshDestination(host), command],
       { input: script, encoding: "utf-8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"] },
     );
   } catch (err) {

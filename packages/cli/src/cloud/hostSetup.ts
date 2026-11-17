@@ -22,7 +22,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
-import { sshBase, type RemoteHost } from "../remote/session-move.js";
+import { sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 import { parseManifest, parseManifestText } from "../workspace/manifest.js";
 import type { HostSpec } from "../workspace/types.js";
 
@@ -134,7 +134,7 @@ export function runHostSetup(host: RemoteHost, opts: { repoRoot?: string; repoPa
   const spec = opts.spec ?? resolveHostSpec({ repoRoot: opts.repoRoot });
   const repoPath = opts.repoPath;
   const script = hostSetupScript(spec, { hash: hostSpecHash(spec, repoPath), repoPath, force: opts.force });
-  const r = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, 'bash -c "$(cat)" cast-host-setup'], {
+  const r = spawnSync("ssh", [...sshBase(host), sshDestination(host), 'bash -c "$(cat)" cast-host-setup'], {
     encoding: "utf-8", input: script, timeout: opts.timeoutMs ?? 30 * 60_000, maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
   });
   if (r.error) throw new Error(`host setup on ${host.user}@${host.address} failed (${(r.error as NodeJS.ErrnoException).code ?? r.error.message})`);

@@ -35,7 +35,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { agentSpawnPath } from "../agentSpawnPath.js";
-import type { RemoteHost } from "../remote/session-move.js";
+import { sshDestination, sshIdentity, type RemoteHost } from "../remote/session-move.js";
 import { codecastPath } from "../codecastDir.js";
 import { HOST_TAILNET_COMMAND, localTailnet, readHostTailnet, tailnetDialAddress, type TailnetRecord } from "../cloud/tailnet.js";
 import type { WakePhase } from "@codecast/shared/contracts";
@@ -517,10 +517,10 @@ export async function ensureUp(
   // round trip is evicted: `-O exit` ends a HEALTHY master too, and with it
   // every transfer riding it (the daemon's mirror push died with a silent
   // exit 255 each time a spawn woke the same host, 2026-09-29).
-  const masterRunning = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "check", `${host.user}@${dial}`], { timeout: 5_000, stdio: "ignore" }).status === 0;
+  const masterRunning = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "check", sshDestination({ ...host, address: dial })], { timeout: 5_000, stdio: "ignore" }).status === 0;
   if (masterRunning) {
-    const answered = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-o", "ControlMaster=no", "-o", "BatchMode=yes", `${host.user}@${dial}`, "true"], { timeout: 10_000, stdio: "ignore" }).status === 0;
-    if (!answered) spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "exit", `${host.user}@${dial}`], { timeout: 5_000, stdio: "ignore" });
+    const answered = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-o", "ControlMaster=no", "-o", "BatchMode=yes", sshDestination({ ...host, address: dial }), "true"], { timeout: 10_000, stdio: "ignore" }).status === 0;
+    if (!answered) spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "exit", sshDestination({ ...host, address: dial })], { timeout: 5_000, stdio: "ignore" });
   }
   // A host's first boot from a machine image streams its disk in from the
   // snapshot: cloud-init finished at 140s on 2026-09-29, past the old 150s.
@@ -532,13 +532,13 @@ export async function ensureUp(
     try {
       execFileSync(
         "ssh",
-        ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+        [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
          "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
          // Keepalives on the MASTER: without them a dead link is never
          // noticed and the socket stays wedged for ControlPersist's lifetime.
          "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
          "-o", "ControlMaster=auto", "-o", `ControlPath=${socket}`, "-o", "ControlPersist=120",
-         `${host.user}@${dial}`, "true"],
+         sshDestination({ ...host, address: dial }), "true"],
         { timeout: 60_000, stdio: "ignore" },
       );
       break;
@@ -575,9 +575,9 @@ export async function ensureUp(
  * the host left the tailnet.
  */
 function learnHostTailnet(host: CloudHost, dial: string, socket: string): TailnetRecord | undefined {
-  const r = spawnSync("ssh", ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+  const r = spawnSync("ssh", [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
     "-o", "ControlMaster=auto", "-o", `ControlPath=${socket}`, "-o", "ControlPersist=120",
-    `${host.user}@${dial}`, HOST_TAILNET_COMMAND], { encoding: "utf-8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] });
+    sshDestination({ ...host, address: dial }), HOST_TAILNET_COMMAND], { encoding: "utf-8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] });
   return r.status === 0 ? readHostTailnet(r.stdout) : host.tailnet;
 }
 

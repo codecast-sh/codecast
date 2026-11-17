@@ -21,7 +21,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "../proc.js";
-import { gitSshUrl, remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { gitSshUrl, remoteHome, shq, sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 import { mergeTrees, overlayTree, sshHostSide } from "./liveSync.js";
 import type { LiveSyncJobs } from "./liveSyncJobs.js";
 import { FETCH_EXCLUDED_NAMES, homeLoginReason } from "./mirror/discovery.js";
@@ -78,7 +78,7 @@ function pipeline(line: string, env?: NodeJS.ProcessEnv): Promise<string> {
 const sshLine = (host: RemoteHost, command: string) => ["ssh", ...sshArgs(host, command)].map(shq).join(" ");
 /** Unpack a tar stream into `dir` only once all of it arrived: a cut stream leaves nothing half-written. */
 const unpackInto = (dir: string) => `d=${shq(dir)}; t=$(mktemp -d "\${TMPDIR:-/tmp}/codecast-pull.XXXXXX") && { tar -C "$t" -xf - && mkdir -p "$d" && cp -a "$t"/. "$d"/; rc=$?; rm -rf "$t"; [ $rc -eq 0 ]; }`;
-const sshArgs = (host: RemoteHost, command: string) => [...sshBase(host), `${host.user}@${host.address}`, command];
+const sshArgs = (host: RemoteHost, command: string) => [...sshBase(host), sshDestination(host), command];
 const mb = (n: number) => n >= 1048576 ? `${(n / 1048576).toFixed(n >= 10 * 1048576 ? 0 : 1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 const listed = (items: string[]) => items.length > LISTED ? [...items.slice(0, LISTED), `…and ${items.length - LISTED} more`] : items;
 

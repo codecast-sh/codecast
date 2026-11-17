@@ -58,6 +58,7 @@ import {
   shq,
   ssh,
   sshBase,
+  sshDestination,
   type AgentAuthPushOutcome,
   type CredentialPushOutcome,
   type RemoteHost,
@@ -875,7 +876,7 @@ export async function acquireRemoteWorkspace(
   // any ssh: a name git would refuse must not reserve anything on the host.
   const names = seed?.source === "checkout" ? (cloudSeedRef(name), seedBranchNames(seed.branch, name)) : null;
   const inputRoot = stageCloudInputs(host, seedCwd, repoPath, name, { warn: opts.onProgress });
-  const sshRun = (command: string) => spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, command],
+  const sshRun = (command: string) => spawnSync("ssh", [...sshBase(host), sshDestination(host), command],
     { encoding: "utf-8", stdio: "pipe", env: process.env, timeout: 15 * 60_000, maxBuffer: 64 * 1024 * 1024 });
   const acquireArgs = `--input-root ${shq(inputRoot)} --skip-pool --json`;
   const failed = (result: ReturnType<typeof sshRun>): Error => {
@@ -928,14 +929,14 @@ export async function acquireRemoteRootCheckout(host: RemoteHost, repoPath: stri
     throw new Error(`invalid shared checkout branch ${JSON.stringify(branch)}`);
   }
   const q = shq(repoPath);
-  const co = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`,
+  const co = spawnSync("ssh", [...sshBase(host), sshDestination(host),
     `cd ${q} && git checkout -q -b ${shq(branch)} refs/remotes/origin/main`,
   ], { encoding: "utf-8", stdio: "pipe", env: process.env, timeout: 300_000 });
   if (co.error || co.status !== 0) {
     throw new Error(`checkout of ${branch} from origin/main failed in the host checkout (${co.signal ?? `exit ${co.status}`})`);
   }
   const inputRoot = stageCloudInputs(host, seedCwd, repoPath, ROOT_WORKSPACE_NAME, { warn: opts.onProgress, reuse: true });
-  const result = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`,
+  const result = spawnSync("ssh", [...sshBase(host), sshDestination(host),
     `${HOST_PATH}; cd ${q} && cast ws root --input-root ${shq(inputRoot)} --json`,
   ], { encoding: "utf-8", stdio: "pipe", env: process.env, timeout: 15 * 60_000, maxBuffer: 64 * 1024 * 1024 });
   if (result.error || result.status !== 0) {
@@ -952,7 +953,7 @@ export async function acquireRemoteRootCheckout(host: RemoteHost, repoPath: stri
   // already refused a symlink anywhere in repoPath, so the two agree unless
   // the host answered for another repo.
   if (ws.path !== repoPath) throw new Error(`cast ws root on the host reported ${ws.path}, not the checkout ${repoPath}`);
-  const status = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`,
+  const status = spawnSync("ssh", [...sshBase(host), sshDestination(host),
     `cd ${q} && git status --porcelain --untracked-files=all`,
   ], { encoding: "utf-8", stdio: "pipe", env: process.env, timeout: 300_000 });
   if (status.error || status.status !== 0) throw new Error("could not read the host checkout's status after setup");
@@ -975,7 +976,7 @@ export async function acquireRemoteRootCheckout(host: RemoteHost, repoPath: stri
  * session moves either way, and the line says what the agent will find.
  */
 export function readyMovedCheckout(host: RemoteHost, remoteRoot: string, run: typeof spawnSync = spawnSync): string {
-  const r = run("ssh", [...sshBase(host), `${host.user}@${host.address}`,
+  const r = run("ssh", [...sshBase(host), sshDestination(host),
     `${HOST_PATH}; cd ${shq(remoteRoot)} && cast ws root --skip-browser --json`,
   ], { encoding: "utf-8", stdio: "pipe", env: process.env, timeout: 15 * 60_000, maxBuffer: 64 * 1024 * 1024 });
   if (!r.error && r.status === 0) return "its setup ran there (cast ws root: secret files, dependencies installed)";
@@ -991,7 +992,7 @@ export function readyMovedCheckout(host: RemoteHost, remoteRoot: string, run: ty
  * the caller prints, and an orphan is cheaper than a crashed child.
  */
 export function releaseRemoteWorkspace(host: RemoteHost, repoPath: string, name: string): { removed: boolean; error?: string } {
-  const result = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`,
+  const result = spawnSync("ssh", [...sshBase(host), sshDestination(host),
       `${HOST_PATH}; cd ${shq(repoPath)} && cast ws destroy ${shq(name)}`,
   ], { encoding: "utf-8", stdio: "pipe", env: process.env, timeout: 5 * 60_000, maxBuffer: 16 * 1024 * 1024 });
   if (result.error || result.status !== 0) {

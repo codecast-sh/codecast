@@ -28,7 +28,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile, spawn } from "../proc.js";
 import { promisify } from "node:util";
-import { shq, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { shq, sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 import { runRemoteSide, runSide, type LandResult, type SnapshotResult, type SyncScope } from "./syncSide.js";
 
 const execFileAsync = promisify(execFile);
@@ -260,7 +260,7 @@ export async function ensureSyncWorktree(repoRoot: string, name: string): Promis
  */
 function pipePack(host: RemoteHost, ssh: string[], localDir: string, remoteCwd: string, sha: string, have: string, dir: "fetch" | "send", ref: string): Promise<true> {
   if (!/^[0-9a-f]{40}$/.test(sha) || !/^[0-9a-f]{40}$/.test(have)) return Promise.reject(new Error("not a commit id"));
-  const sshCmd = (remote: string) => ["ssh", ...ssh, `${host.user}@${host.address}`, remote].map(shq).join(" ");
+  const sshCmd = (remote: string) => ["ssh", ...ssh, sshDestination(host), remote].map(shq).join(" ");
   // The walk marks the boundary it stopped at with "-<sha>" lines; pack-objects takes only the objects.
   const pack = `git rev-list --objects-edge-aggressive ${sha} ^${have} | grep -v '^-' | git pack-objects --stdout -q`;
   const line = dir === "fetch"
@@ -279,7 +279,7 @@ function pipePack(host: RemoteHost, ssh: string[], localDir: string, remoteCwd: 
 export function sshHostSide(host: RemoteHost, remoteCwd: string, name: string, localDir: string, scope?: SyncScope, log?: (line: string) => void): HostSide {
   const fellBack = (what: string) => (e: unknown) => { log?.(`[MIRROR] ${what} fell back to git: ${(e as Error).message ?? e}`); return false; };
   const ssh = sshBase(host);
-  const url = `ssh://${host.user}@${host.address}${remoteCwd}`;
+  const url = `ssh://${sshDestination(host)}${remoteCwd}`;
   const env = { GIT_SSH_COMMAND: `ssh ${ssh.map(shq).join(" ")}` };
   const hostRef = `${SYNC_REF_PREFIX}/${name}`;
   const laptopRef = `${SYNC_REF_PREFIX}/${name}-laptop`;

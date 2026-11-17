@@ -155,6 +155,10 @@ export function resolveLocalSession(sessionId: string): LocalSession {
 // SSH / rsync primitives
 // --------------------------------------------------------------------------
 
+export const sshIdentity = (host: Pick<RemoteHost, "keyPath">): string[] => ["-i", host.keyPath];
+export const sshDestination = (host: Pick<RemoteHost, "user" | "address">): string => `${host.user}@${host.address}`;
+const rsyncShell = (host: RemoteHost): string => `ssh ${sshBase(host).join(" ")}`;
+
 export function sshBase(host: RemoteHost): string[] {
   // Keepalives make a dead connection an ERROR instead of a forever-hang: on a
   // lossy mobile network a post-push ssh sat for 12 minutes mid-connection
@@ -165,7 +169,7 @@ export function sshBase(host: RemoteHost): string[] {
   // networks where one handshake was measured at 36 seconds.
   const socket = path.join(os.tmpdir(), `cast-ssh-${host.user}-${host.address.replace(/[^\w.]/g, "_")}`);
   return [
-    "-i", host.keyPath,
+    ...sshIdentity(host),
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", "ConnectTimeout=20",
     "-o", "ServerAliveInterval=15",
@@ -184,7 +188,7 @@ export function sshBase(host: RemoteHost): string[] {
  */
 export function ssh(host: RemoteHost, command: string, timeoutMs?: number, opts: { quiet?: boolean } = {}): string {
   try {
-    return execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, command], {
+    return execFileSync("ssh", [...sshBase(host), sshDestination(host), command], {
       encoding: "utf-8",
       // Hand the child the environment we hold now. bun otherwise resolves the
       // binary against the PATH it snapshotted at startup, so a PATH set after
@@ -232,32 +236,24 @@ function rsyncFolder(localDir: string, flags: string[], from: string, to: string
 }
 
 function rsyncUp(host: RemoteHost, localDir: string, remoteDir: string) {
-  rsyncFolder(localDir, ["-az", "--update", "-e", `ssh ${sshBase(host).join(" ")}`],
-    `${localDir.replace(/\/?$/, "/")}`, `${host.user}@${host.address}:${remoteDir.replace(/\/?$/, "/")}`);
+  rsyncFolder(localDir, ["-az", "--update", "-e", rsyncShell(host)],
+    `${localDir.replace(/\/?$/, "/")}`, `${sshDestination(host)}:${remoteDir.replace(/\/?$/, "/")}`);
 }
 
 function rsyncDown(host: RemoteHost, remoteDir: string, localDir: string, opts: { delete?: boolean } = {}) {
-  rsyncFolder(localDir, ["-az", ...(opts.delete ? ["--delete"] : []), "-e", `ssh ${sshBase(host).join(" ")}`],
-    `${host.user}@${host.address}:${remoteDir.replace(/\/?$/, "/")}`, `${localDir.replace(/\/?$/, "/")}`);
+  rsyncFolder(localDir, ["-az", ...(opts.delete ? ["--delete"] : []), "-e", rsyncShell(host)],
+    `${sshDestination(host)}:${remoteDir.replace(/\/?$/, "/")}`, `${localDir.replace(/\/?$/, "/")}`);
 }
 
 /** Copy ONE file into a remote directory (trailing-slash target avoids dir corruption). */
 function rsyncFileInto(host: RemoteHost, localFile: string, remoteDir: string) {
   ssh(host, `mkdir -p ${shq(remoteDir)}`);
-  const args = [
-    "-az", "-e", `ssh ${sshBase(host).join(" ")}`,
-    localFile, `${host.user}@${host.address}:${remoteDir.replace(/\/?$/, "/")}`,
-  ];
-  execFileSync("rsync", args, { stdio: "pipe" });
+  execFileSync("rsync", ["-az", "-e", rsyncShell(host), localFile, `${sshDestination(host)}:${remoteDir.replace(/\/?$/, "/")}`], { stdio: "pipe" });
 }
 
 function rsyncFileDownInto(host: RemoteHost, remoteFile: string, localDir: string) {
   fs.mkdirSync(localDir, { recursive: true });
-  const args = [
-    "-az", "-e", `ssh ${sshBase(host).join(" ")}`,
-    `${host.user}@${host.address}:${remoteFile}`, `${localDir.replace(/\/?$/, "/")}`,
-  ];
-  execFileSync("rsync", args, { stdio: "pipe" });
+  execFileSync("rsync", ["-az", "-e", rsyncShell(host), `${sshDestination(host)}:${remoteFile}`, `${localDir.replace(/\/?$/, "/")}`], { stdio: "pipe" });
 }
 
 export function shq(s: string): string {
@@ -294,13 +290,13 @@ export function isWorktree(cwd: string): boolean {
 /** SSH url for git push to a path on the remote. */
 export function gitSshUrl(host: RemoteHost, remotePath: string): string {
   // GIT_SSH_COMMAND carries the key/options; the url is plain user@host:path.
-  return `${host.user}@${host.address}:${remotePath}`;
+  return `${sshDestination(host)}:${remotePath}`;
 }
 
 export function gitEnv(host: RemoteHost): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    GIT_SSH_COMMAND: `ssh -i ${host.keyPath} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20`,
+    GIT_SSH_COMMAND: `ssh ${sshIdentity(host).join(" ")} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20`,
   };
 }
 
@@ -337,7 +333,7 @@ export function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath:
   const bundle = path.join(os.tmpdir(), `codecast-bundle-${Date.now()}.bundle`);
   git(localCwd, ["bundle", "create", bundle, "--all"]);
   const remoteBundle = `/tmp/${path.basename(bundle)}`;
-  execFileSync("scp", [...sshBase(host), bundle, `${host.user}@${host.address}:${remoteBundle}`], { stdio: "pipe" });
+  execFileSync("scp", [...sshBase(host), bundle, `${sshDestination(host)}:${remoteBundle}`], { stdio: "pipe" });
   // No repo-local identity: the host's ~/.gitconfig carries the mirrored
   // laptop identity or the global codecast placeholder (cloud/hostGit.ts,
   // run by pushSession before this), and a repo-local one would shadow it.
@@ -688,7 +684,7 @@ export function replaceFromStdin(dir: string, file: string): string {
 
 /** ssh argv that writes stdin to the remote's credential file. */
 function credentialPushArgs(host: RemoteHost): string[] {
-  return [...sshBase(host), `${host.user}@${host.address}`, `${SHARED_HOST_PUSH_GUARD}${replaceFromStdin("~/.claude", ".credentials.json")}`];
+  return [...sshBase(host), sshDestination(host), `${SHARED_HOST_PUSH_GUARD}${replaceFromStdin("~/.claude", ".credentials.json")}`];
 }
 
 export interface CredentialPushOutcome {
@@ -797,7 +793,7 @@ export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<Cre
 
 /** ssh argv that writes stdin to the remote's provider-key store. */
 function providerKeysPushArgs(host: RemoteHost): string[] {
-  return [...sshBase(host), `${host.user}@${host.address}`, `${SHARED_HOST_PUSH_GUARD}${replaceFromStdin("~/.codecast", "provider-keys.json")}`];
+  return [...sshBase(host), sshDestination(host), `${SHARED_HOST_PUSH_GUARD}${replaceFromStdin("~/.codecast", "provider-keys.json")}`];
 }
 
 export interface ProviderKeysPushOutcome {
@@ -814,7 +810,7 @@ export interface ProviderKeysPushOutcome {
 export async function copyProviderKeysToRemoteAsync(host: RemoteHost, blob: string | null): Promise<ProviderKeysPushOutcome> {
   // No local keys → remove the remote store so "cleared here" means "cleared there".
   const argv = blob === null
-    ? [...sshBase(host), `${host.user}@${host.address}`, "rm -f ~/.codecast/provider-keys.json"]
+    ? [...sshBase(host), sshDestination(host), "rm -f ~/.codecast/provider-keys.json"]
     : providerKeysPushArgs(host);
   await new Promise<void>((resolve, reject) => {
     const child = spawn("ssh", argv, { stdio: ["pipe", "ignore", "pipe"] });
@@ -842,7 +838,7 @@ export async function copyProviderKeysToRemoteAsync(host: RemoteHost, blob: stri
 
 /** ssh argv that runs the receiver with the bundle JSON on stdin. */
 function agentAuthPushArgs(host: RemoteHost): string[] {
-  return [...sshBase(host), `${host.user}@${host.address}`, `${SHARED_HOST_PUSH_GUARD}umask 077; python3 -c ${shq(AGENT_AUTH_RECEIVER)}`];
+  return [...sshBase(host), sshDestination(host), `${SHARED_HOST_PUSH_GUARD}umask 077; python3 -c ${shq(AGENT_AUTH_RECEIVER)}`];
 }
 
 export interface AgentAuthPushOutcome {
@@ -1134,11 +1130,11 @@ function seedFor(host: RemoteHost, root: string): string | undefined {
 
 /** A session's folder beside its transcript, without the subagent transcripts (large, and nothing a resume reads). */
 function rsyncSessionDir(localDir: string, remoteDir: string, host: RemoteHost, way: "up" | "down") {
-  const remote = `${host.user}@${host.address}:${remoteDir.replace(/\/?$/, "/")}`;
+  const remote = `${sshDestination(host)}:${remoteDir.replace(/\/?$/, "/")}`;
   const local = `${localDir.replace(/\/?$/, "/")}`;
   if (way === "up") ssh(host, `mkdir -p ${shq(remoteDir)}`);
   else fs.mkdirSync(localDir, { recursive: true });
-  execFileSync("rsync", ["-az", "--update", "--exclude", "/subagents/", "-e", `ssh ${sshBase(host).join(" ")}`, ...(way === "up" ? [local, remote] : [remote, local])], { stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
+  execFileSync("rsync", ["-az", "--update", "--exclude", "/subagents/", "-e", rsyncShell(host), ...(way === "up" ? [local, remote] : [remote, local])], { stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
 }
 
 /**
@@ -1195,7 +1191,7 @@ export async function pullPath(host: RemoteHost, b: BroughtPath): Promise<string
       const r = await gitPullWorktree(host, b.local, b.remote, b.head);
       return r.ff && !r.conflicts?.length ? null : (r.reason ?? `conflicts in ${r.conflicts?.join(", ")}`);
     }
-    rsyncFolder(b.local, ["-az", "--update", "-e", `ssh ${sshBase(host).join(" ")}`], `${host.user}@${host.address}:${b.remote.replace(/\/?$/, "/")}`, `${b.local.replace(/\/?$/, "/")}`);
+    rsyncFolder(b.local, ["-az", "--update", "-e", rsyncShell(host)], `${sshDestination(host)}:${b.remote.replace(/\/?$/, "/")}`, `${b.local.replace(/\/?$/, "/")}`);
     return null;
   } catch (e) {
     return (e instanceof Error ? e.message : String(e)).slice(0, 300);
@@ -1352,7 +1348,7 @@ export function copyGitignoredFiles(
       continue;
     }
     const local = path.join(root, rel);
-    const args = ["-az", "-e", `ssh ${sshBase(host).join(" ")}`, local, `${host.user}@${host.address}:${destDir}/`];
+    const args = ["-az", "-e", rsyncShell(host), local, `${sshDestination(host)}:${destDir}/`];
     try {
       if (destDir !== remoteCwd) mkdirRemote(destDir);
       rsync(args);

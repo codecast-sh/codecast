@@ -18,7 +18,7 @@ import * as os from "node:os";
 import * as net from "node:net";
 import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { RemoteHost } from "../remote/session-move.js";
+import { sshDestination, sshIdentity, type RemoteHost } from "../remote/session-move.js";
 import { HLS_PORT, NOVNC_PORT, RTSP_PORT, SCREEN_DISPLAY } from "./hostScreen.js";
 import { SHOT_TEMP_KIND } from "./shotFile.js";
 import { freePort } from "./instance.js";
@@ -53,7 +53,7 @@ export async function ensureHostTunnel(
 ): Promise<{ localPorts: number[]; tunnelPid?: number }> {
   const socket = tunnelSocket(host, kind);
   const record = `${socket}.json`;
-  const target = `${host.user}@${host.address}`;
+  const target = sshDestination(host);
   const alive = spawnSync("ssh", ["-S", socket, "-O", "check", target], { stdio: "ignore", timeout: 5_000 }).status === 0;
   if (alive) {
     try {
@@ -68,7 +68,7 @@ export async function ensureHostTunnel(
   for (const p of remotePorts) localPorts.push((await portAnswers(p)) ? await freePort() : p);
   const r = spawnSync(
     "ssh",
-    ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+    [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
      "-o", "ConnectTimeout=20", "-o", "BatchMode=yes",
      "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
      "-o", "ExitOnForwardFailure=yes",
@@ -94,7 +94,7 @@ export async function ensureHostTunnel(
 
 /** Close this host's tunnel of that kind now, rather than at its idle timeout. */
 export function closeHostTunnel(host: RemoteHost, kind: string): boolean {
-  return spawnSync("ssh", ["-S", tunnelSocket(host, kind), "-O", "exit", `${host.user}@${host.address}`], { stdio: "ignore", timeout: 5_000 }).status === 0;
+  return spawnSync("ssh", ["-S", tunnelSocket(host, kind), "-O", "exit", sshDestination(host)], { stdio: "ignore", timeout: 5_000 }).status === 0;
 }
 
 /**
@@ -147,8 +147,8 @@ export async function ensureViewTunnel(host: RemoteHost): Promise<ViewUrls> {
 export function machineShot(host: RemoteHost, display = SCREEN_DISPLAY): string {
   const png = execFileSync(
     "ssh",
-    ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-     "-o", "BatchMode=yes", `${host.user}@${host.address}`,
+    [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+     "-o", "BatchMode=yes", sshDestination(host),
      `ffmpeg -loglevel error -f x11grab -i ${display} -frames:v 1 -f image2pipe -c:v png -`],
     { timeout: 30_000, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 },
   );

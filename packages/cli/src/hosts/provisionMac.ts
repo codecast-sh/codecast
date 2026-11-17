@@ -3,7 +3,7 @@ import { remoteExec } from "../browser/remote.js";
 import { pushCodecastConfig } from "../browser/provisionLinux.js";
 import { agentCliInstallScript, parseAgentCliReport } from "../browser/provisionAgents.js";
 import { readInstalledClientVersions } from "../remote/agentAuth.js";
-import { remoteHome, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { remoteHome, sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
 import { readHostDeviceId, readyHostHome, remoteRepoPath, waitForDeviceOnline } from "../cloud/prepare.js";
@@ -125,7 +125,7 @@ exit 1`;
 }
 
 function run(host: RemoteHost, script: string, timeout: number): string {
-  return execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, "bash -s"], {
+  return execFileSync("ssh", [...sshBase(host), sshDestination(host), "bash -s"], {
     input: `${MAC_HOST_PATH}\n${script}`, encoding: "utf8", timeout, maxBuffer: 8 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
   });
 }
