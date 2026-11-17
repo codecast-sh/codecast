@@ -38,7 +38,7 @@ import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
 import { foldHostedRetries, type RetryFoldRow } from "../lib/hostedNotice";
 import { ApprovalAnswerLine, HostedNotice, MailConnectChip, RoutineOfferChip, approvalAnswerAddsToReceipt, hostedNoticeKind, offersMailConnect, routineOffer } from "./conversation/HostedNotice";
-import { sessionRoomKey, agentSupportsFork, agentForksFromAnyMessage, isHostedAgentType, isModelSwitchStdout, isForkSeedClientId, isRecoveryContinueClientId, isMidWorkReviveNotice } from "@codecast/shared/contracts";
+import { sessionRoomKey, agentSupportsFork, agentForksFromAnyMessage, isHostedAgentType, isModelSwitchStdout, isForkSeedClientId, isRecoveryContinueClientId, isMidWorkReviveNotice, isMoveInterruptNotice } from "@codecast/shared/contracts";
 import { hostedApprovalAnswer, hostedApprovalState, hostedAsks, type HostedApprovalState } from "../lib/hostedApproval";
 import { GROUP_WINDOW_MS } from "@codecast/shared/chat";
 import { useNowWhen } from "../hooks/useCoarseNow";
@@ -76,7 +76,7 @@ import { externalEventRowToExternalEvent, isQuietExternalEvent, type ExternalEve
 import { extractFileChanges } from "../lib/fileChangeExtractor";
 import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
-import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
+import { AnchorHeaderFact } from "./anchor/AnchorHeaderPill";
 import { SessionCallPill } from "./calls/SessionCallPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
@@ -136,7 +136,7 @@ import { composerPresenceEnabled, hasCoPresent } from "../lib/composerPresence";
 import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { normalizeCastCategory, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState } from "./castCommand";
-import { useInboxStore, isConvexId, isIdleLandingStub, viewerCommandsSession, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
+import { useInboxStore, isConvexId, isIdleLandingStub, newProjectStartedBy, newProjectHref, viewerCommandsSession, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
@@ -1282,10 +1282,14 @@ const ConversationViewInner = (
     requestAnimationFrame(() => scrollToBottomFnRef.current());
   }, [sendEscape, setUserScrolled]);
 
+  const sentRouter = useRouter();
   const handleMessageSent = useCallback(() => {
+    // A send that starts a new project opens the project's page.
+    const projectKey = conversation?._id ? newProjectStartedBy(conversation._id) : null;
+    if (projectKey) sentRouter.push(newProjectHref(projectKey));
     setUserScrolled(false);
     requestAnimationFrame(() => scrollToBottomFnRef.current());
-  }, [setUserScrolled]);
+  }, [setUserScrolled, conversation?._id, sentRouter]);
 
   // Double-Esc opens the unified branch map drilled straight into the current
   // branch's messages (the old standalone navigator is retired into the map).
@@ -1701,6 +1705,7 @@ const ConversationViewInner = (
         case 'agent_switch': return commandExpansionMap.consumed.has(msg._id) ? 0 : 40;
         case 'session_escalation': return kind.escalation.line ? 110 : 40;
         case 'continuation': return 30;
+        case 'screen_recording': return 480;
         case 'normal':
           if (nudgeRuns.folded.has(msg._id)) return 0;
           if (nudgeRuns.runs.has(msg._id)) return 36;
@@ -3828,7 +3833,7 @@ const ConversationViewInner = (
           if (isHostedAgentType(conversation?.agent_type)) {
             return <UserPrompt key={msg._id} content={kind.body} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={conversation?.user?.name || conversation?.user?.email?.split("@")[0]} isHighlighted={highlightedMessageId === msg._id} />;
           }
-          return <SessionMessageBlock key={msg._id} variant={kind.variant === 'agent' ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} pendingReason={(msg as any)._serverPendingReason} pendingScreen={(msg as any)._serverPendingScreen} pendingMessageId={(msg as any)._serverPendingStatus ? msg._id : undefined} recipientConversationId={conversation?._id} linkToConversationId={kind.variant === 'agent' ? agentNameToChildMap?.[kind.from] : undefined} intent={kind.intent} />;
+          return <SessionMessageBlock key={msg._id} variant={kind.variant === 'agent' ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} linkToConversationId={kind.variant === 'agent' ? agentNameToChildMap?.[kind.from] : undefined} intent={kind.intent} />;
         case 'huddle_summary':
           return <HuddleSummaryBlock key={msg._id} huddle={kind.huddle} timestamp={msg.timestamp} />;
         case 'chat_wake':
@@ -3845,6 +3850,7 @@ const ConversationViewInner = (
           return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} spawnedByConversationId={(conversation as any)?.spawned_by_conversation_id} agentNameToChildMap={agentNameToChildMap} />;
         case 'direct_user':
         case 'decision_answer':
+        case 'screen_recording':
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           if (nudgeRuns.folded.has(msg._id)) return null;
@@ -3853,6 +3859,9 @@ const ConversationViewInner = (
           // that recovery, not something the person said.
           if (kind.kind === 'normal' && isMidWorkReviveNotice(msg.content)) {
             return <ReviveDivider key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+          }
+          if (kind.kind === 'normal' && isMoveInterruptNotice(msg.content)) {
+            return <ReviveDivider key={msg._id} content={msg.content!} timestamp={msg.timestamp} cause="move" />;
           }
           if (kind.kind === 'normal' && isRecoveryContinue(msg)) {
             return <NudgeLine key={msg._id} messageId={msg._id} text={nudgeLabel(msg.content) ?? (msg.content || "")} count={1} timestamp={msg.timestamp} recovery pending={!!msg._isOptimistic || !!msg._isQueued} />;
@@ -3880,7 +3889,7 @@ const ConversationViewInner = (
           // option; the footer carries the question and the way back to the ask.
           const decision = kind.kind === 'decision_answer' ? kind.decision : undefined;
           const forkSeedParent = isForkSeedClientId(msg.client_id) ? conversation?.forked_from : undefined;
-          const userPrompt = <UserPrompt key={msg._id} bubble={foldWorkingTurns} content={kind.kind === 'direct_user' ? kind.body : decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={startShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          const userPrompt = <UserPrompt key={msg._id} bubble={foldWorkingTurns} content={kind.kind === 'direct_user' ? kind.body : kind.kind === 'screen_recording' ? kind.recording.caption : decision ? decision.answer : (msg.content || "")} screenRecording={kind.kind === 'screen_recording' ? kind.recording : undefined} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={startShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
           // A permission ask's answer reads as its one-line record instead.
           const prompt = decision ? <PermissionAnswer key={msg._id} decision={decision}>{userPrompt}</PermissionAnswer> : userPrompt;
           // A clean thread shows the agent took the message while it works on a reply.
@@ -4198,7 +4207,8 @@ const ConversationViewInner = (
                 <ChevronLeft className="h-4 w-4" aria-hidden />
               </Link>
             )}
-            {identityRow && (
+            {/* Modern's title leads with the session's mark, which is this face. */}
+            {identityRow && !modernStyle && (
               <IdentityFace
                 row={identityRow}
                 size={22}
@@ -4229,7 +4239,14 @@ const ConversationViewInner = (
               />
             ) : (
               <ConversationHeaderTitle
-                lead={modernStyle && conversation ? <SessionMark session={conversation as any} size={20} className="flex-shrink-0" /> : undefined}
+                lead={modernStyle && conversation ? (
+                  <SessionMark
+                    session={conversation as any}
+                    size={20}
+                    className="flex-shrink-0"
+                    onPick={identityRow ? (e) => headerCharacterPicker.open(e, [identityRow], { force: true }) : undefined}
+                  />
+                ) : undefined}
                 text={identityRow
                   ? <SessionIdentityLine row={identityRow} title={truncatedTitle} className="max-w-full align-bottom" />
                   : truncatedTitle}
@@ -4238,7 +4255,6 @@ const ConversationViewInner = (
               />
             )}
         titlePills={conversation && !guest && <>
-            <AnchorHeaderPill conversationId={conversation._id.toString()} />
             <SessionCallPill conversationId={conversation._id.toString()} />
             <BrowserPaneOfferChip conversationId={conversation._id.toString()} />
         </>}
@@ -4270,6 +4286,7 @@ const ConversationViewInner = (
                 {/* Ahead of the branch: on a phone the strip truncates, and what runs the session matters more than its branch.
                     A share guest gets what ran and when; the rest links into a workspace they cannot open. */}
                 {!guest && <>
+                <AnchorHeaderFact conversationId={conversation._id.toString()} />
                 <CloudAgentLink actions={cloudAgentActions} />
                 <BranchCodeLink session={conversation} />
                 <SessionWorktreePills session={conversation} repository={codeRepository} className="text-meta max-w-[180px]" />
