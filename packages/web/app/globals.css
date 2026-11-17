@@ -255,7 +255,8 @@
 }
 [data-sv-convhead] [data-cc-runner] [data-runner-device],
 [data-sv-convhead] [data-cc-runner] [data-daemon-pill],
-[data-sv-convhead] [data-cc-runner] [data-tmux-pill] {
+[data-sv-convhead] [data-cc-runner] [data-tmux-pill],
+[data-sv-convhead] [data-cc-runner] [data-sdk-pill] {
   border: 0 !important;
   border-radius: 0 !important;
   box-shadow: none !important;
@@ -7758,7 +7759,10 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   gap: 5px;
   padding: 0 9px;
 }
-.modern-style [data-sv-convhead] [data-cc-image-pill] > svg { width: 13px; height: 13px; }
+.modern-style [data-sv-convhead] [data-cc-image-pill] > svg { width: 14px; height: 14px; }
+/* Inside the runner the backend glyph is a segment: the same 14px glyph as
+   the machine, and the same spacing as the seam between machine and owner. */
+.modern-style [data-sv-convhead] [data-cc-runner] [data-sdk-pill] { height: auto; padding: 0 7px 0 4px; background: transparent; }
 .modern-style [data-sv-convhead] [data-cc-runner] { background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
 .modern-style [data-sv-convhead] [data-cc-runner] [data-runner-device] { height: 100% !important; }
 .modern-style [data-sv-convhead] [data-cc-runner] [data-runner-device] > span { align-items: center; }
@@ -8139,4 +8143,44 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
    earlier messages is loading, and not otherwise. */
 .modern-style [data-cc-edge="up"]:not([data-loading]) {
   visibility: hidden;
+}
+
+/* A mod theme's live backdrop (components/theme/ThemeBackdrop.tsx). The scene
+   sits under every layer; the window's own backgrounds turn see-through and
+   the theme's bg covers the scene once, at the theme's tint. Panels (bg-alt,
+   card) keep their own colors, which a backdrop theme gives an alpha, and
+   blur what shows through them when the theme asks for glass. Floating
+   layers (dialogs, menus, popovers) stay solid so they read over anything. */
+.cc-theme-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.cc-theme-backdrop iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color-scheme: normal;
+}
+.cc-theme-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--sol-bg) var(--theme-backdrop-tint, 15%), transparent);
+}
+html[data-theme-backdrop] body,
+html[data-theme-backdrop] :is(.bg-sol-bg, [class*="bg-sol-bg/"], .bg-background, .stage-cell) {
+  background-color: transparent;
+}
+/* The card's color laid over the opaque bg: a solid surface in the theme's own color. */
+html[data-theme-backdrop] :is([role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-radix-popper-content-wrapper] > *) {
+  background-color: var(--sol-bg);
+  background-image: linear-gradient(var(--sol-card), var(--sol-card));
+}
+html[data-theme-backdrop="glass"] :is(.bg-sol-bg-alt, .bg-sol-card) {
+  backdrop-filter: blur(var(--theme-glass)) saturate(1.2);
 }

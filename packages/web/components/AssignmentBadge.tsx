@@ -212,7 +212,7 @@ export function AssignmentBadge({
             <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing || shared ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
               {d ? (
                 <>
-                  <DeviceIcon d={d} />
+                  <DeviceIcon d={d} className="w-3.5 h-3.5" />
                   {!compact && <span className="truncate cq-sq1">{deviceDisplayName(d)}</span>}
                   {/* A worktree has its own pill beside this one (SessionWorktreePills); the main checkout has none, so it is said here. */}
                   {!compact && shared && !worktree && (

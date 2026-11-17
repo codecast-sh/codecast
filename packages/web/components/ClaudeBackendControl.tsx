@@ -78,7 +78,7 @@ export function SdkBackendPill({ conversationId, isLive, canSwitch }: { conversa
     : `border-sol-border/40 hover:bg-sol-bg-alt ${isLive ? "text-sol-text-dim hover:text-sol-text-muted" : "text-sol-text-dim/60"}`;
   const pillClass = `inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-meta font-medium transition-colors ${colors}`;
   const body = <>
-    <Plug className="h-3 w-3" />
+    <Plug className="h-3.5 w-3.5" />
     {moving && <span className="cq-sq2">Moving to terminal…</span>}
   </>;
   const tip = failed ?? "Direct connection · no terminal";
