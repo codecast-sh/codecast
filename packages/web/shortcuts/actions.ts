@@ -122,13 +122,17 @@ export function useGlobalShortcutActions() {
 
   // Jump to the first visible card of one inbox section, in render order
   // (walkOrder): the store hands back exactly the cards the panel files there,
-  // whatever view mode or old-session toggle is up. Ctrl+I is NEEDS YOU only;
-  // decisions and DONE have their own keys.
-  const jumpTo = useCallback((walk: InboxWalk) => {
-    const first = useInboxStore.getState().walkOrder(walk)[0];
-    if (first) openSession(first._id);
+  // whatever view mode or old-session toggle is up. Ctrl+I is NEEDS YOU, then
+  // DONE when nothing needs you; it never lands on a decision, which has its
+  // own key.
+  const jumpTo = useCallback((...walks: InboxWalk[]) => {
+    const store = useInboxStore.getState();
+    for (const walk of walks) {
+      const first = store.walkOrder(walk)[0];
+      if (first) return openSession(first._id);
+    }
   }, [openSession]);
-  useShortcutAction('session.jumpIdle', useCallback(() => jumpTo("needsYou"), [jumpTo]));
+  useShortcutAction('session.jumpIdle', useCallback(() => jumpTo("needsYou", "done"), [jumpTo]));
   useShortcutAction('session.jumpDecision', useCallback(() => jumpTo("decisions"), [jumpTo]));
   useShortcutAction('session.jumpDone', useCallback(() => jumpTo("done"), [jumpTo]));
 
