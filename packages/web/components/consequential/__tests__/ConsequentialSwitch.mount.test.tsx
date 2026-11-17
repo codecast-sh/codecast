@@ -135,3 +135,29 @@ test("a typed confirm: the button and the chord do nothing until the typed word 
     await done();
   }
 });
+
+test("armAfterMs: the confirm stays dead until the window has been in front that long, and again after it regains focus", async () => {
+  const { React, w, q, calls, done } = await mount();
+  const { createRoot } = await import("react-dom/client");
+  const mod = await import("../ConsequentialSwitch");
+  const host = w.document.createElement("div");
+  w.document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    await React.act(async () => root.render(<mod.SwitchReview ledger={LEDGER} armAfterMs={500} onClose={() => {}} onConfirm={() => calls.push("confirm")} />));
+    const confirm = () => q("[data-switch-confirm]") as HTMLButtonElement;
+    assert.equal(confirm().disabled, true, "a click arriving with the dialog is ignored");
+    await React.act(async () => confirm().click());
+    assert.deepEqual(calls, []);
+    await React.act(async () => { await new Promise((r) => setTimeout(r, 560)); });
+    assert.equal(confirm().disabled, false, "armed after the delay");
+    await React.act(async () => { w.dispatchEvent(new w.Event("focus")); });
+    assert.equal(confirm().disabled, true, "regaining focus disarms it again");
+    await React.act(async () => { await new Promise((r) => setTimeout(r, 560)); });
+    await React.act(async () => confirm().click());
+    assert.deepEqual(calls, ["confirm"]);
+  } finally {
+    await React.act(async () => root.unmount());
+    await done();
+  }
+});

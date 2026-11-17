@@ -94,3 +94,14 @@ test("a guest meeting link and a call's public page tell search engines not to l
   expect((await app.request("/share/calls")).headers.get("X-Robots-Tag")).toBeNull();
   expect((await app.request("/")).headers.get("X-Robots-Tag")).toBeNull();
 });
+
+test("the agent consent page cannot be framed: an enforced frame-ancestors 'none' and X-Frame-Options DENY", async () => {
+  const app = new Hono().use("*", responsePolicy).get("*", c => c.html("<div>consent</div>"));
+  const consent = await app.request("/oauth/authorize?client_id=x");
+  expect(consent.headers.get("Content-Security-Policy")).toBe("frame-ancestors 'none'");
+  expect(consent.headers.get("X-Frame-Options")).toBe("DENY");
+  // Other pages keep the report-only draft and stay embeddable by the app itself.
+  const inbox = await app.request("/inbox");
+  expect(inbox.headers.get("Content-Security-Policy")).toBeNull();
+  expect(inbox.headers.get("X-Frame-Options")).toBeNull();
+});
