@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
-import { MID_WORK_REVIVE_MESSAGE } from "@codecast/shared/contracts";
+import { MID_WORK_REVIVE_MESSAGE, MOVE_INTERRUPT_MESSAGE } from "@codecast/shared/contracts";
 
 const convexReact = await import("convex/react");
 mock.module("convex/react", () => ({
@@ -24,5 +24,13 @@ describe("revive divider", () => {
     expect(html).toContain("restarted after the agent process exited");
     expect(html).not.toContain("Pick up where you left off");
     expect(html).not.toContain("usage limit");
+  });
+
+  test("a move that cut a turn names the move, not account recovery", () => {
+    const html = renderToStaticMarkup(<MemoryRouter><ReviveDivider content={MOVE_INTERRUPT_MESSAGE} timestamp={1_790_000_000_000} cause="move" /></MemoryRouter>);
+    expect(html).toContain('data-switch-divider="move-interrupt"');
+    expect(html).toContain("machine move");
+    expect(html).not.toContain("Pick up where you left off");
+    expect(html).not.toContain("account recovery");
   });
 });
