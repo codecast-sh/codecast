@@ -245,8 +245,8 @@ function sessionPin(id: string): ResolvedPin | null {
  *  session, the person's global Executive Assistant by default, else the active
  *  workspace's agent. One glance says whether a role needs you or is
  *  working; one click opens the panel on it. A right click unpins. A person
- *  who unpinned everything gets an empty header; the panel stays on its
- *  shortcut, and its Pin button brings a face back. */
+ *  who unpinned everything gets a pin button in the faces' place, which opens
+ *  the same checklist. */
 export function HeaderPins() {
   const pins = useHeaderPins();
   const chosen = useInboxStore((st) => readHeaderPins(st) !== null);
@@ -254,7 +254,7 @@ export function HeaderPins() {
   const orgOn = useWorkspaceFeature("org");
   const menu = useContextMenu<ResolvedPin | null>();
   const reorder = usePinReorder(pins);
-  if (!orgOn || (chosen && !pins.length)) return null;
+  if (!orgOn) return null;
   return (
     // The whole row takes drops, not just its faces: in the desktop app the
     // header is the window's drag handle, and the gaps between faces would
@@ -262,7 +262,7 @@ export function HeaderPins() {
     <span className="relative inline-flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties} data-header-pins {...reorder.row}>
       {pins.length
         ? pins.map((p) => <PinChip key={p.key} pin={p} onMenu={(e) => menu.open(e, p)} drag={reorder.chip(p)} />)
-        : <HirePinChip hasRoot={!!root} onMenu={(e) => menu.open(e, null)} />}
+        : <HirePinChip hasRoot={!!root || chosen} onMenu={(e) => menu.open(e, null)} onPick={menu.openAt} />}
       {reorder.marker}
       <PinMenu state={menu} />
     </span>
@@ -555,9 +555,20 @@ function PinChip({ pin, onMenu, drag }: { pin: ResolvedPin; onMenu: (e: React.Mo
 }
 
 /** Nothing pinned and nothing to show by default: the way in. */
-function HirePinChip({ hasRoot, onMenu }: { hasRoot: boolean; onMenu: (e: React.MouseEvent) => void }) {
+function HirePinChip({ hasRoot, onMenu, onPick }: { hasRoot: boolean; onMenu: (e: React.MouseEvent) => void; onPick: (x: number, y: number, payload: null) => void }) {
   const open = useInboxStore((st) => st.anchorPanel.open);
-  const label = hasRoot ? "Pin a role or session here" : "Set up the workspace's agent";
+  if (hasRoot) {
+    const label = "Pin a role or session here";
+    const pick = (e: React.MouseEvent<HTMLElement>) => { const r = e.currentTarget.getBoundingClientRect(); onPick(r.left, r.bottom + 4, null); };
+    return (
+      <ShortcutTooltip label={label}>
+        <TopbarButton onClick={pick} onContextMenu={onMenu} aria-label={label} desktopOnly data-header-pin-empty>
+          <Pin />
+        </TopbarButton>
+      </ShortcutTooltip>
+    );
+  }
+  const label = "Set up the workspace's agent";
   return (
     <ShortcutTooltip label={label} action="anchor.toggle">
       <TopbarButton onClick={() => useInboxStore.getState().toggleAnchorPanel()} onContextMenu={onMenu} aria-label={label} aria-pressed={open} active={open} desktopOnly>
