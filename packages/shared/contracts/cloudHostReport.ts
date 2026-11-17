@@ -19,6 +19,7 @@ export interface HostReadiness {
   /** Login files present on the host that a laptop pushed (agent-auth-origin.json), as tool ids. */
   logins?: string[];
   cast_version?: string;
+  run_ends_at?: number;
   at: number;
 }
 
@@ -62,7 +63,7 @@ export interface CloudHostReport {
   instance_id: string;
   /** The instance's own name (its AWS Name tag): what tells hosts apart in a picker. */
   name?: string;
-  provider: "aws" | "scaleway-mac" | "codecast";
+  provider: "aws" | "scaleway-mac" | "codecast" | "namespace";
   region?: string;
   instance_type?: string;
   state: "running" | "stopped" | "pending" | "stopping" | "missing" | "unknown";
@@ -70,6 +71,7 @@ export interface CloudHostReport {
   disk_monthly_usd?: number;
   disk_gib?: number;
   idle_stop_minutes?: number;
+  max_run_minutes?: number;
   images: Array<{ id: string; name: string; created: string }>;
   /** Logins the laptop has but did not push, with why (a lapsed token, laptop paths). */
   logins_held: Array<{ id: string; reason: string }>;
