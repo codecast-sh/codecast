@@ -65,9 +65,21 @@ export function useFrameTheme(frameRef: RefObject<HTMLIFrameElement | null>, { b
   const { theme, visualStyle } = useTheme();
   useWatchEffect(() => {
     // The provider swaps the root's classes in its own effect, which runs
-    // after this one; read the tokens once that has painted.
-    const raf = requestAnimationFrame(() => postTheme(frameRef.current, theme, blend));
-    return () => cancelAnimationFrame(raf);
+    // after this one; read the tokens once that has painted. A colour theme
+    // writes its variables inline on the root, so a change there posts too.
+    let raf = requestAnimationFrame(() => postTheme(frameRef.current, theme, blend));
+    const observer =
+      typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver(() => {
+            cancelAnimationFrame(raf);
+            raf = requestAnimationFrame(() => postTheme(frameRef.current, theme, blend));
+          });
+    observer?.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] });
+    return () => {
+      observer?.disconnect();
+      cancelAnimationFrame(raf);
+    };
   }, [theme, visualStyle, blend]);
   const onLoad = useCallback(() => postTheme(frameRef.current, theme, blend), [frameRef, theme, blend]);
   return { theme, onLoad };

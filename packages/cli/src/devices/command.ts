@@ -164,6 +164,7 @@ export function registerDevicesCommand(program: Command): void {
         const tags = [
           d.device_id === here ? fmt.accent("this machine") : "",
           d.is_remote ? "cloud" : "",
+          d.reserved_for ? fmt.warning(`reserved: ${d.reserved_for}`) : "",
           machineOutOfService(d, own, now) ? fmt.muted("inactive") : "",
           (d.shared_team_ids?.length ?? 0) ? fmt.accent(`shared: ${sharedNames(d, teams)}`) : "",
         ].filter(Boolean).join("  ");
@@ -205,6 +206,7 @@ export function registerDevicesCommand(program: Command): void {
         return;
       }
       row("shared", (d.shared_team_ids?.length ?? 0) ? sharedNames(d, teams) : fmt.muted("private"));
+      row("placement", d.reserved_for ? fmt.warning(`reserved for ${d.reserved_for}`) : fmt.muted("any work"));
       const s = d.settings ?? {};
       const on = Object.entries(s.snippets ?? {}).filter(([, v]) => v).map(([k]) => k);
       row("settings", [
@@ -253,6 +255,28 @@ export function registerDevicesCommand(program: Command): void {
       const next = drop ? (d.shared_team_ids ?? []).filter((id: string) => !drop.has(id)) : [];
       await b.client.mutation(b.api.devices.setDeviceShares, { api_token: b.token, device_id: d.device_id, team_ids: next });
       console.log(`${fmt.success("ok")} ${deviceDisplayName(d)} ${next.length ? `is shared with ${sharedNames({ shared_team_ids: next }, teams)} only` : "is private"}`);
+    });
+
+  devices
+    .command("reserve <device> <purpose...>")
+    .description("Keep one of your machines for one job: automatic placement skips it, so work lands there only by name (--device, a move, a line slot)")
+    .action(async (needle: string, words: string[]) => {
+      const purpose = words.join(" ").trim();
+      if (!purpose) die("Name the job it is kept for, e.g. cast devices reserve <device> Union line");
+      const b = await backend();
+      const d = await ownDevice(b, needle);
+      const res = await b.client.mutation(b.api.deviceReservation.setDeviceReservation, { api_token: b.token, device_id: d.device_id, purpose });
+      console.log(`${fmt.success("ok")} ${deviceDisplayName(d)} is reserved for ${res.reserved_for}`);
+    });
+
+  devices
+    .command("unreserve <device>")
+    .description("Open a reserved machine to any work again")
+    .action(async (needle: string) => {
+      const b = await backend();
+      const d = await ownDevice(b, needle);
+      await b.client.mutation(b.api.deviceReservation.setDeviceReservation, { api_token: b.token, device_id: d.device_id, purpose: "" });
+      console.log(`${fmt.success("ok")} ${deviceDisplayName(d)} takes any work again`);
     });
 
   devices

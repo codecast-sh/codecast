@@ -970,6 +970,28 @@ test("a sign-in scoped by a token signs in only its own user's browsers until a 
   expect((await benRead("signin")).secrets).toHaveLength(1);
 });
 
+test("Run on an agent's save-signin --from-chrome card vouches for the sign-in's sites while the run is going, like Save sign-in on the Vault page", async () => {
+  const { t, ana, acme, conv } = await seed();
+  const cookie = { name: "__client", value: "clerk-client-0123456789", domain: ".clerk.zz-run.example.com", path: "/", secure: true, httpOnly: true };
+  const signin = { cookies: [cookie], captured_from: "chrome" };
+  const benRead = () => t.action(api.secrets.cliRead, { api_token: BEN_TOKEN, refs: ["zz-run"], purpose: "signin" });
+  const card = (state: string, argv: string[], resolvedAgo = 0) => t.run(async (ctx: any) => ctx.db.insert("session_decisions", {
+    conversation_id: conv, session_id: "sess-ana-1", user_id: ana, question: "Save your sign-in?", options: [{ label: "Run" }, { label: "Don't run" }],
+    blocking: true, status: "answered", answer_index: 0, created_at: Date.now(), resolved_at: Date.now() - resolvedAgo, run: { argv, state },
+  } as any));
+  const save = ["vault", "save-signin", "zz-run.example.com", "--from-chrome", "--name", "zz-run", "--team", String(acme)];
+  // A run that already finished, one for another site, and another command entirely vouch for nothing.
+  await card("done", save);
+  await card("running", ["vault", "save-signin", "other.example.com", "--from-chrome"]);
+  await card("running", ["vault", "save-signin", "zz-run.example.com"]);
+  await t.action(api.secrets.create, { api_token: ANA_TOKEN, name: "zz-run", kind: "signin", payload: signin, sites: ["zz-run.example.com"], team_id: acme });
+  expect((await benRead()).error).toMatch(/set by a teammate's agent/);
+  // The person pressed Run on the card; its child is storing the jar with their token now.
+  await card("running", save);
+  await t.action(api.secrets.rotate, { api_token: ANA_TOKEN, ref: "zz-run", payload: signin });
+  expect((await benRead()).secrets).toHaveLength(1);
+});
+
 test("every value write gets a version past the last one, even inside one millisecond", async () => {
   const { t, as, ana, acme } = await seed();
   const cookie = { name: "sid", value: "cookie-1", domain: "app.example.com", path: "/", secure: true, httpOnly: true };
