@@ -937,6 +937,7 @@ cast sim tap --label "Sign in" --shot   # captures the result
 cast sim type "hello"                   # into the focused field (- reads stdin)
 cast sim scroll down                    # or swipe --direction <finger direction> / --start-x...
 cast sim button home                    # home, lock, side-button, siri
+cast sim rotate left                    # a quarter turn (left, right) or to portrait, landscape-left, landscape-right, upside-down; no argument says which way it is
 cast sim statusbar                      # 9:41, full bars and battery for screenshots (--time, --battery; clear restores it)
 cast sim grant <bundle-id> photos location   # no permission prompt (--revoke, --reset; all for every service)
 cast sim record start                   # video in the background; record stop prints the file (or --seconds <n>)
@@ -946,6 +947,8 @@ cast sim list                           # the pool: who holds what, what is boot
 The lock frees itself when the session ends; \`--udid\` addresses another simulator only when you were told to. The machine shuts down simulators nobody holds after ten idle minutes.
 
 **Coordinates are points.** \`cast sim shot\` scales the image to the screen's points, so a position read off it is the coordinate \`tap\` takes. Prefer \`--label\` over coordinates when the element has one; when several match, the command lists them and \`--nth\` picks one. \`cast sim axe <verb> …\` reaches any other axe verb (key, gesture) on your simulator.
+
+**The person may be watching.** The \`cast sim\` rows in your thread open the device in a pane beside the conversation, live, and the person can tap and type there too while you work. Your taps, swipes and typing show there as your cursor. If the screen changed under you, they may have touched it: look again before acting on an old shot.
 
 **A cloud Mac runs the same commands.** A session moved to a cloud host keeps working there unchanged: the host has its own pool, and its screenshots land in this thread the same way. \`cast sim doctor\` says what a machine is missing; Xcode, the runtime and axe on a host come from \`cast hosts setup\`, never from installing them yourself.
 `;

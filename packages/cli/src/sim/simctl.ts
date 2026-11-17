@@ -9,7 +9,7 @@
 
 import * as fs from "node:fs";
 import { spawnSync } from "../proc.js";
-import { readPool, writePool, type PoolDevice } from "./pool.js";
+import { forgetOrientation, readPool, writePool, type PoolDevice } from "./pool.js";
 
 export interface RunResult {
   ok: boolean;
@@ -149,6 +149,8 @@ export function boot(udid: string, timeoutMs = 600_000): void {
   const state = deviceState(udid);
   if (state === undefined) throw new Error(`no simulator ${udid} on this machine`);
   if (state !== "Booted") {
+    // A fresh boot stands upright; a stale turn would show it sideways.
+    forgetOrientation(udid);
     const r = simctl(["boot", udid], { timeoutMs });
     if (!r.ok && !/current state: Booted/i.test(r.stderr)) throw new Error(`boot failed: ${why(r)}`);
   }
@@ -157,6 +159,7 @@ export function boot(udid: string, timeoutMs = 600_000): void {
 }
 
 export function shutdown(udid: string): boolean {
+  forgetOrientation(udid);
   const r = simctl(["shutdown", udid]);
   return r.ok || /current state: Shutdown/i.test(r.stderr);
 }

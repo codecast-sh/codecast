@@ -41,7 +41,10 @@ import {
   watchErrorStatus,
   watchExitStatus,
   watchUnreachableStatus,
+  frameContentRect,
   type BrowserStreamReport,
+  type SimCapture,
+  type SimDeviceState,
   type WatchConnection,
   type WatchHandlers,
   type WatchInputEvent,
@@ -74,12 +77,18 @@ export function BrowserStream({
   onReleaseControl,
   source = "browser",
   inputRef,
+  frameRef,
+  onCapture,
 }: {
   /** What to stream: the session's browser tab, or the simulator it holds. */
   source?: WatchSource;
   /** Filled with a sender while the stream is open, for a host's own buttons
    *  (a simulator's Home and Lock). */
   inputRef?: React.MutableRefObject<((events: WatchInputEvent[]) => void) | null>;
+  /** The newest frame as a data URL, for a host that saves what is on screen. */
+  frameRef?: React.MutableRefObject<string | null>;
+  /** A screenshot or recording the host asked a simulator for. */
+  onCapture?: (capture: SimCapture) => void;
   sessionUuid?: string | null;
   tmuxSession?: string | null;
   machine?: SessionMachine | null;
@@ -108,6 +117,11 @@ export function BrowserStream({
   // agent's normalized points into the letterboxed content rect with it.
   const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
   const [nav, setNav] = useState<{ url: string; at: number } | null>(null);
+  const [device, setDevice] = useState<SimDeviceState | null>(null);
+  const [transport, setTransport] = useState<"local" | "relay" | null>(null);
+  // Read at call time, so a host passing a fresh closure never redials.
+  const onCaptureRef = useRef(onCapture);
+  onCaptureRef.current = onCapture;
   const connRef = useRef<WatchConnection | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -157,10 +171,17 @@ export function BrowserStream({
       onFrame(dataUrl, w, h) {
         if (cancelled) return;
         setFrame(dataUrl);
+        if (frameRef) frameRef.current = dataUrl;
         if (w && h) setFrameSize((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }));
       },
       onTab(t) {
         if (!cancelled) setTab(t);
+      },
+      onDevice(d) {
+        if (!cancelled) setDevice(d);
+      },
+      onCapture(c) {
+        if (!cancelled) onCaptureRef.current?.(c);
       },
       onAction(a) {
         if (cancelled) return;
@@ -181,10 +202,12 @@ export function BrowserStream({
       },
       };
       if (endpoint) {
+        setTransport("local");
         connRef.current = connectBrowserWatch(endpoint, { sessionUuid, tmuxSession, control: true, source }, handlers);
       } else if (machine?.device_id && browserRelayKey({ sessionUuid, tmuxSession, source })) {
         // The agent's machine is yours but not this one: watch through the
         // relay instead of the loopback socket.
+        setTransport("relay");
         connRef.current = connectBrowserWatchRelay(
           { convex, deviceId: machine.device_id, sessionUuid, tmuxSession, source, machineName },
           handlers,
@@ -224,11 +247,15 @@ export function BrowserStream({
   // "still a picture" would be the churn this app has a rule against.
   const hasFrame = !!frame;
   useWatchEffect(() => {
-    onState({ status, tab, controlAvailable, hasFrame, nav });
-  }, [status, tab, controlAvailable, hasFrame, nav, onState]);
+    onState({ status, tab, controlAvailable, hasFrame, nav, device, transport });
+  }, [status, tab, controlAvailable, hasFrame, nav, device, transport, onState]);
 
   const live = status.kind === "live";
   const sim = source === "sim";
+  // A device's screen has rounded corners; the frame is square. Clip the
+  // letterboxed picture to the glass so it reads as the device, not a photo.
+  const boxSig = useDerivedSize(boxRef, (w, h) => `${Math.round(w)}x${Math.round(h)}`, () => "0x0");
+  const deviceClip = sim && frameSize ? glassClip(boxSig, frameSize, tab?.title ?? "") : undefined;
   const driving = live && controlAvailable && (control || sim);
   const paused = status.kind === "paused";
 
@@ -250,6 +277,7 @@ export function BrowserStream({
           className={`absolute inset-0 w-full h-full object-contain transition-opacity ${
             paused ? "opacity-40" : ""
           }`}
+          style={deviceClip ? { clipPath: deviceClip } : undefined}
           draggable={false}
         />
       )}
@@ -367,6 +395,22 @@ function GhostCursor({
   );
 }
 
+/**
+ * The clip-path that rounds a simulator frame's corners where it sits inside
+ * the box (object-contain letterboxes it). Corner radius by device family:
+ * an iPhone with a Dynamic Island or notch is about 13.5% of its short side,
+ * an iPad about 2%, a home-button iPhone (SE) square.
+ */
+export function glassClip(boxSig: string, frame: { width: number; height: number }, deviceName: string): string | undefined {
+  const [w, h] = boxSig.split("x").map(Number);
+  const rect = frameContentRect({ left: 0, top: 0, width: w, height: h }, frame);
+  if (!rect) return undefined;
+  const fraction = /\bSE\b/.test(deviceName) ? 0 : /iPad/i.test(deviceName) ? 0.02 : 0.135;
+  const r = Math.round(Math.min(rect.width, rect.height) * fraction);
+  const px = (n: number) => `${Math.max(0, Math.round(n))}px`;
+  return `inset(${px(rect.top)} ${px(w - rect.left - rect.width)} ${px(h - rect.top - rect.height)} ${px(rect.left)} round ${r}px)`;
+}
+
 function subscribeVisibility(fn: () => void): () => void {
   document.addEventListener("visibilitychange", fn);
   return () => document.removeEventListener("visibilitychange", fn);
@@ -384,6 +428,11 @@ function readVisibility(): boolean {
 // page's real viewport, so neither side needs the other's pixel size.
 
 const CDP_MOD = { alt: 1, ctrl: 2, meta: 4, shift: 8 } as const;
+
+/** A fingertip, the way Simulator.app draws the pointer over a device. */
+const TOUCH_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"><circle cx="14" cy="14" r="11" fill="rgba(128,128,128,0.35)" stroke="rgba(255,255,255,0.8)" stroke-width="1.5"/></svg>',
+)}") 14 14, pointer`;
 
 function eventModifiers(e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number {
   return (
@@ -418,6 +467,10 @@ function ControlSurface({
 }) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const lastMoveAt = useRef(0);
+  // A touchscreen shows nothing where a finger lands; a ring at each press
+  // says the tap went through, the way the agent's own ring does.
+  const [rings, setRings] = useState<{ id: number; x: number; y: number }[]>([]);
+  const ringId = useRef(0);
 
   // Keys should land in the page the moment control turns on, without an
   // extra "click to focus" step the user has no way to discover.
@@ -450,7 +503,13 @@ function ControlSurface({
     e.preventDefault();
     surfaceRef.current?.focus();
     // A drag that leaves the frame still ends: the release comes here.
-    if (touch) (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    if (touch) {
+      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+      const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const id = ++ringId.current;
+      setRings((r) => [...r.slice(-3), { id, x: e.clientX - box.left, y: e.clientY - box.top }]);
+      setTimeout(() => setRings((r) => r.filter((x) => x.id !== id)), 450);
+    }
     const p = toNorm(e.clientX, e.clientY);
     if (!p) return;
     send([{ kind: "mouse", type: "mousePressed", ...p, button: mouseButton(e.button), clickCount: Math.max(1, e.detail), modifiers: eventModifiers(e) }]);
@@ -513,8 +572,8 @@ function ControlSurface({
           ? "The simulator's screen: click to tap, drag to swipe, scroll to scroll, type once clicked"
           : "You have the wheel of the agent's browser tab: clicks and typing go to the page, Esc hands it back"
       }
-      className={touch ? "absolute inset-0 cursor-pointer outline-none" : "absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-sol-cyan/60 focus:ring-sol-cyan"}
-      style={touch ? undefined : { boxShadow: "inset 0 0 28px color-mix(in srgb, var(--sol-cyan) 18%, transparent)" }}
+      className={touch ? "absolute inset-0 outline-none" : "absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-sol-cyan/60 focus:ring-sol-cyan"}
+      style={touch ? { cursor: TOUCH_CURSOR } : { boxShadow: "inset 0 0 28px color-mix(in srgb, var(--sol-cyan) 18%, transparent)" }}
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
       onPointerMove={onPointerMove}
@@ -522,6 +581,15 @@ function ControlSurface({
       onKeyDown={onKeyDown}
       onPaste={onPaste}
       onContextMenu={(e) => e.preventDefault()}
-    />
+    >
+      {rings.map((r) => (
+        <span
+          key={r.id}
+          data-sv-touch-ring
+          className="absolute w-9 h-9 -ml-[18px] -mt-[18px] rounded-full border-2 border-sol-cyan pointer-events-none cc-ghost-ripple"
+          style={{ left: r.x, top: r.y }}
+        />
+      ))}
+    </div>
   );
 }

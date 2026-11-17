@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { actionsFor, hidForChar, sessionsOf, SimInputMapper, simWatchEngine, typeLines, type SimEngineDeps } from "./watch.js";
+import { actionsFor, captureName, hidForChar, sessionsOf, SimInputMapper, simWatchEngine, typeLines, type SimEngineDeps } from "./watch.js";
+import { toPanel, turned, uprightDegrees } from "./orientation.js";
+import { forgetOrientation, orientationPath, readOrientation } from "./pool.js";
 import { WatchOpenError, type FrameSourceHandlers, type WatchAction } from "../browser/watchSource.js";
 import { runWatchSession, type WatchServerDeps } from "../browser/watchServer.js";
 import { relaySource } from "../browser/watchRelay.js";
@@ -93,6 +95,16 @@ describe("SimInputMapper", () => {
     expect(sent).toEqual(["key 40", "key 18", "key 14", "button home"]);
   });
 
+  test("a viewer leaving mid press lifts the finger where it was; nothing down, nothing sent", () => {
+    const { m, sent } = mapper();
+    m.release();
+    m.input({ kind: "mouse", type: "mousePressed", nx: 0.5, ny: 0.5, button: "left" });
+    m.input({ kind: "mouse", type: "mouseMoved", nx: 0.25, ny: 0.5, button: "none" });
+    m.release();
+    m.release();
+    expect(sent).toEqual(["down 200 400", "down 100 400", "up 100 400"]);
+  });
+
   test("no touches before the screen size is known", () => {
     const sent: string[] = [];
     const m = new SimInputMapper((l) => sent.push(l), () => null);
@@ -123,6 +135,9 @@ function fakeSim(over: Partial<SimEngineDeps> = {}) {
   let handlers: SimStreamHandlers | null = null;
   let action: ReturnType<SimEngineDeps["readAction"]> = null;
   let now = 1_000;
+  const files = new Map<string, string>();
+  const captureFiles: string[] = [];
+  const recordCalls: string[] = [];
   const deps: SimEngineDeps = {
     held: (s) => (s.includes("u1") ? { udid: "UDID-1", name: "iPhone 17 Pro" } : null),
     available: () => true,
@@ -133,12 +148,34 @@ function fakeSim(over: Partial<SimEngineDeps> = {}) {
         interactive: true,
         send: (l) => sent.push(l),
         wake: () => { wakes++; },
+        async capture(file) {
+          captureFiles.push(file);
+          files.set(file, "PNGDATA");
+          return true;
+        },
         stop: () => { stopped = true; },
       };
       return stream;
     },
     readAction: () => action,
     now: () => now,
+    record: {
+      async start(_udid, file) {
+        recordCalls.push(`start ${file}`);
+        return { file };
+      },
+      async stop() {
+        recordCalls.push("stop");
+        files.set("/tmp/rec.mp4", "MP4DATA");
+        return { file: "/tmp/rec.mp4", bytes: 7 };
+      },
+    },
+    tempFile: (ext) => `/tmp/cap.${ext}`,
+    takeFile(file) {
+      const d = files.get(file) ?? null;
+      files.delete(file);
+      return d;
+    },
     ...over,
   };
   return {
@@ -146,6 +183,7 @@ function fakeSim(over: Partial<SimEngineDeps> = {}) {
     get wakes() { return wakes; },
     get stopped() { return stopped; },
     get handlers() { return handlers!; },
+    captureFiles, recordCalls,
     setAction(a: typeof action) { action = a; },
     advance(ms: number) { now += ms; },
   };
@@ -158,14 +196,16 @@ const openOpts = (over: Partial<Parameters<ReturnType<typeof simWatchEngine>["op
 function collect() {
   const frames: string[] = [];
   const actions: WatchAction[] = [];
+  const messages: Record<string, unknown>[] = [];
   let gone = 0;
   const h: FrameSourceHandlers = {
     onFrame: (f) => frames.push(f.data),
     onTab: () => {},
     onGone: () => { gone++; },
     onAction: (a) => actions.push(a),
+    onMessage: (m) => messages.push(m),
   };
-  return { h, frames, actions, get gone() { return gone; } };
+  return { h, frames, actions, messages, get gone() { return gone; } };
 }
 
 describe("simWatchEngine", () => {
@@ -185,7 +225,7 @@ describe("simWatchEngine", () => {
   test("touches go out in points once the helper reports the screen", async () => {
     const sim = fakeSim();
     const src = await simWatchEngine(sim.deps).open("UDID-1", openOpts(), collect().h);
-    sim.handlers.onScreen!({ widthPx: 1200, heightPx: 2400, scale: 3 });
+    sim.handlers.onScreen!({ widthPx: 1200, heightPx: 2400, scale: 3, orientation: 1 });
     src.input!({ kind: "mouse", type: "mousePressed", nx: 0.5, ny: 0.5, button: "left" });
     expect(sim.sent).toEqual(["down 200 400"]);
     expect(src.tab.id).toBe("UDID-1");
@@ -212,12 +252,76 @@ describe("simWatchEngine", () => {
     sim.setAction({ kind: "tap", x: 1, y: 1, at: 500 });
     const c = collect();
     const src = await simWatchEngine(sim.deps).open("UDID-1", openOpts(), c.h);
-    sim.handlers.onScreen!({ widthPx: 1200, heightPx: 2400, scale: 3 });
+    sim.handlers.onScreen!({ widthPx: 1200, heightPx: 2400, scale: 3, orientation: 1 });
     sim.setAction({ kind: "tap", x: 200, y: 400, at: 2_000 });
     await pollUntil(() => c.actions.length >= 3, "the agent's tap");
     expect(c.actions.map((a) => [a.kind, a.x, a.y])).toEqual([["move", 0.5, 0.5], ["down", 0.5, 0.5], ["up", 0.5, 0.5]]);
     expect(sim.wakes).toBe(1);
     src.stop();
+  });
+
+  test("the pane learns the device's orientation at once and again on every turn", async () => {
+    const sim = fakeSim();
+    const c = collect();
+    const src = await simWatchEngine(sim.deps).open("UDID-1", openOpts(), c.h);
+    expect(c.messages[0]).toMatchObject({ type: "device", recording: null, canCapture: true });
+    sim.handlers.onScreen!({ widthPx: 1200, heightPx: 2400, scale: 3, orientation: 1 });
+    const before = c.messages.length;
+    sim.handlers.onScreen!({ widthPx: 1200, heightPx: 2400, scale: 3, orientation: 1 });
+    expect(c.messages.length).toBe(before);
+    sim.handlers.onScreen!({ widthPx: 2400, heightPx: 1200, scale: 3, orientation: 3 });
+    expect(c.messages.at(-1)).toMatchObject({ type: "device", orientation: 3 });
+    src.stop();
+  });
+
+  test("rotate turns a quarter from where the device is, and touches then land in the turned picture's points", async () => {
+    const sim = fakeSim();
+    const src = await simWatchEngine(sim.deps).open("UDID-1", openOpts(), collect().h);
+    sim.handlers.onScreen!({ widthPx: 1200, heightPx: 2400, scale: 3, orientation: 1 });
+    src.input!({ kind: "rotate", direction: "left" });
+    sim.handlers.onScreen!({ widthPx: 2400, heightPx: 1200, scale: 3, orientation: 3 });
+    src.input!({ kind: "rotate", direction: "left" });
+    src.input!({ kind: "mouse", type: "mousePressed", nx: 0.5, ny: 0.25, button: "left" });
+    expect(sim.sent).toEqual(["rotate 3", "rotate 2", "down 400 100"]);
+    src.stop();
+  });
+
+  test("a screenshot comes back whole, named for the device and the moment", async () => {
+    const sim = fakeSim();
+    const c = collect();
+    const engine = simWatchEngine(sim.deps);
+    engine.resolveTab(["session:u1"]);
+    const src = await engine.open("UDID-1", openOpts(), c.h);
+    src.input!({ kind: "capture" });
+    await pollUntil(() => c.messages.some((m) => m.type === "capture"), "the screenshot");
+    const shot = c.messages.find((m) => m.type === "capture")!;
+    expect(shot).toMatchObject({ kind: "screenshot", mime: "image/png", data: "PNGDATA" });
+    expect(String(shot.name)).toMatch(/^iPhone 17 Pro \d{4}-\d\d-\d\d at \d\d\.\d\d\.\d\d\.png$/);
+    src.stop();
+  });
+
+  test("a recording starts, shows as running, and stopping sends the video", async () => {
+    const sim = fakeSim();
+    const c = collect();
+    const src = await simWatchEngine(sim.deps).open("UDID-1", openOpts(), c.h);
+    src.input!({ kind: "record", action: "start" });
+    await pollUntil(() => c.messages.some((m) => m.type === "device" && (m.recording as any)?.since), "recording on");
+    src.input!({ kind: "record", action: "stop" });
+    await pollUntil(() => c.messages.some((m) => m.type === "capture"), "the video");
+    expect(c.messages.find((m) => m.type === "capture")).toMatchObject({ kind: "video", mime: "video/mp4", data: "MP4DATA" });
+    expect(c.messages.at(-1)).toMatchObject({ type: "device", recording: null });
+    expect(sim.recordCalls).toEqual(["start /tmp/cap.mp4", "stop"]);
+    src.stop();
+  });
+
+  test("a viewer leaving mid recording stops it rather than leave it running", async () => {
+    const sim = fakeSim();
+    const c = collect();
+    const src = await simWatchEngine(sim.deps).open("UDID-1", openOpts(), c.h);
+    src.input!({ kind: "record", action: "start" });
+    await pollUntil(() => c.messages.some((m) => m.type === "device" && (m.recording as any)?.since), "recording on");
+    src.stop();
+    await pollUntil(() => sim.recordCalls.includes("stop"), "the recording stopped");
   });
 
   test("the helper exiting is the device going away", async () => {
@@ -302,5 +406,61 @@ describe("activity and the pool lookup", () => {
     expect(heldBySession(["u1"], pool, d)?.udid).toBe("B");
     expect(heldBySession(["u2"], pool, d)).toBeUndefined();
     expect(heldBySession([], pool, d)).toBeUndefined();
+  });
+});
+
+describe("orientation", () => {
+  test("a quarter turn left or right from each way the device can face", () => {
+    expect([1, 3, 2, 4].map((o) => turned(o as 1, "left"))).toEqual([3, 2, 4, 1]);
+    expect([1, 4, 2, 3].map((o) => turned(o as 1, "right"))).toEqual([4, 2, 3, 1]);
+  });
+
+  test("the orientation file reads portrait when absent or unreadable, and forgetting it stands the device upright", () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "sim-orient-"));
+    expect(readOrientation("U", d)).toBe(1);
+    fs.writeFileSync(orientationPath("U", d), "3\n");
+    expect(readOrientation("U", d)).toBe(3);
+    fs.writeFileSync(orientationPath("U", d), "9");
+    expect(readOrientation("U", d)).toBe(1);
+    fs.writeFileSync(orientationPath("U", d), "4");
+    forgetOrientation("U", d);
+    expect(readOrientation("U", d)).toBe(1);
+  });
+
+  test("captures are named the way macOS names screenshots", () => {
+    expect(captureName("iPad Pro 13", new Date(2026, 10, 17, 8, 5, 9))).toBe("iPad Pro 13 2026-11-17 at 08.05.09");
+  });
+});
+
+describe("interface and panel coordinates", () => {
+  // The panel is 400x800 points portrait; turned sideways its interface is 800x400.
+  const ui = (o: 1 | 2 | 3 | 4) => (o === 3 || o === 4 ? { width: 800, height: 400 } : { width: 400, height: 800 });
+
+  test("upright is the identity", () => {
+    expect(toPanel(10, 20, 1, ui(1))).toEqual({ x: 10, y: 20 });
+  });
+
+  test("the interface's top left corner sits where the panel's top edge turned to", () => {
+    // Landscape left: the interface's top left is the panel's top right.
+    expect(toPanel(0, 0, 3, ui(3))).toEqual({ x: 400, y: 0 });
+    // Landscape right: the panel's bottom left.
+    expect(toPanel(0, 0, 4, ui(4))).toEqual({ x: 0, y: 800 });
+    // Upside down: the panel's bottom right.
+    expect(toPanel(0, 0, 2, ui(2))).toEqual({ x: 400, y: 800 });
+  });
+
+  test("a whole turn's corners all land on the panel's corners", () => {
+    for (const o of [2, 3, 4] as const) {
+      const { width, height } = ui(o);
+      for (const [x, y] of [[0, 0], [width, 0], [0, height], [width, height]]) {
+        const p = toPanel(x, y, o, ui(o));
+        expect([0, 400]).toContain(p.x);
+        expect([0, 800]).toContain(p.y);
+      }
+    }
+  });
+
+  test("a capture stands upright by turning against the device", () => {
+    expect([1, 2, 3, 4].map((o) => uprightDegrees(o as 1))).toEqual([0, 180, 270, 90]);
   });
 });

@@ -7,7 +7,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn } from "../proc.js";
+import { execFile, spawn } from "../proc.js";
+import { readOrientation, type SimOrientation } from "./pool.js";
 import { agentTempDir } from "../tempFiles.js";
 
 interface RecordingState {
@@ -73,7 +74,29 @@ export async function stopRecording(udid: string): Promise<{ file: string; bytes
     const tail = fs.existsSync(state.log) ? fs.readFileSync(state.log, "utf-8").trim().split("\n").pop() : "";
     return { error: `the recording wrote no video${tail ? `: ${tail}` : ""}` };
   }
-  return { file: state.file, bytes };
+  await standUpright(state.file, readOrientation(udid));
+  return { file: state.file, bytes: fs.statSync(state.file).size };
+}
+
+/** ffmpeg's display rotation (degrees counterclockwise) that plays a turned device's panel upright. */
+export function displayRotation(o: SimOrientation): number {
+  return o === 3 ? 90 : o === 4 ? -90 : o === 2 ? 180 : 0;
+}
+
+/**
+ * simctl records the portrait panel, so a turned device plays sideways. Tag
+ * the file with a display rotation (no re-encode; every player honours it).
+ * Without ffmpeg the video stays as recorded.
+ */
+async function standUpright(file: string, o: SimOrientation): Promise<void> {
+  const degrees = displayRotation(o);
+  if (!degrees) return;
+  const tmp = `${file}.upright.mp4`;
+  const ok = await new Promise<boolean>((resolve) => {
+    execFile("ffmpeg", ["-y", "-v", "error", "-display_rotation", String(degrees), "-i", file, "-c", "copy", tmp], { timeout: 60_000 }, (err) => resolve(!err));
+  });
+  if (ok && fs.existsSync(tmp) && fs.statSync(tmp).size > 0) fs.renameSync(tmp, file);
+  else fs.rmSync(tmp, { force: true });
 }
 
 function readState(udid: string): RecordingState | null {

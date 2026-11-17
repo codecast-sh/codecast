@@ -10,6 +10,10 @@
  * or a fresh `axe` process takes ~400 ms each, which is fine for an agent
  * and wrong for a person dragging a finger.
  *
+ * It also turns the device (the GraphicsServices event Simulator.app's rotate
+ * menu sends) and keeps the orientation in a file beside the pool lock, so the
+ * pane's helper and a one-shot `cast sim rotate` agree on which way is up.
+ *
  * When the helper cannot be built (no clang, an axe whose frameworks moved),
  * frames come from `axe stream-video` instead: about 3 a second, and no input,
  * so the pane watches but cannot drive.
@@ -21,6 +25,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile, spawn, type ChildProcess } from "../proc.js";
 import { axeBin } from "./simctl.js";
+import { lockDir, orientationPath, type SimOrientation } from "./pool.js";
 import helperSource from "./simstream.m" with { type: "text" };
 
 export interface SimScreen {
@@ -28,7 +33,12 @@ export interface SimScreen {
   heightPx: number;
   /** Pixels per point: 3 on most iPhones, 2 on iPads and the SE. */
   scale: number;
+  /** UIDeviceOrientation: 1 portrait, 2 upside down, 3 landscape left, 4
+   *  landscape right. The size above is as shown, upright for it. */
+  orientation: SimOrientation;
 }
+
+export type { SimOrientation };
 
 export interface SimFrame {
   /** JPEG, base64. */
@@ -59,7 +69,22 @@ export interface SimStream {
   send(line: string): void;
   /** Back to full frame rate now: something is about to change. */
   wake(): void;
+  /** A full resolution PNG of the screen, upright, written to `file`. False
+   *  when the helper could not take it (or there is no helper). */
+  capture(file: string): Promise<boolean>;
   stop(): void;
+}
+
+/** Turn the device without a stream: what `cast sim rotate` runs. */
+export async function rotateDevice(udid: string, to: SimOrientation): Promise<{ ok: true } | { error: string }> {
+  const helper = await ensureHelper();
+  if (!helper) return { error: "the simulator helper could not be built here (needs Xcode's clang and axe)" };
+  fs.mkdirSync(lockDir(), { recursive: true });
+  return new Promise((resolve) => {
+    execFile(helper, [udid, "--orient", String(to), orientationPath(udid)], { timeout: 30_000 }, (err, _out, stderr) => {
+      resolve(err ? { error: lastLine(String(stderr)) || err.message } : { ok: true });
+    });
+  });
 }
 
 /** The axe install's frameworks, by following the axe binary to its libexec. */
@@ -187,12 +212,19 @@ export function jpegSize(jpeg: Buffer): { width: number; height: number } | null
   return null;
 }
 
-/** The helper's `screen <wpx> <hpx> <scale>` line. */
+/** The helper's `screen <wpx> <hpx> <scale> [orientation]` line. */
 export function parseScreenLine(line: string): SimScreen | null {
-  const m = /simstream: screen (\d+) (\d+) ([\d.]+)/.exec(line);
+  const m = /simstream: screen (\d+) (\d+) ([\d.]+)(?: ([1-4]))?/.exec(line);
   if (!m) return null;
-  const screen = { widthPx: Number(m[1]), heightPx: Number(m[2]), scale: Number(m[3]) };
+  const screen = { widthPx: Number(m[1]), heightPx: Number(m[2]), scale: Number(m[3]), orientation: (Number(m[4]) || 1) as SimOrientation };
   return screen.widthPx > 0 && screen.heightPx > 0 && screen.scale > 0 ? screen : null;
+}
+
+/** The helper's answer to `capture <path>`: the path it wrote, or null for a failure. */
+export function parseCaptureLine(line: string): { ok: boolean; path?: string } | null {
+  const m = /simstream: captured (.+)$/.exec(line);
+  if (m) return { ok: true, path: m[1].trim() };
+  return /simstream: capture failed/.test(line) ? { ok: false } : null;
 }
 
 /** The helper's last diagnostic, for why a stream ended. */
@@ -212,7 +244,8 @@ export async function startSimStream(
   let stopped = false;
   let stderrTail = "";
   if (helper) {
-    child = spawn(helper, [udid, String(opts.fps), String(opts.quality), String(opts.maxDim)], { stdio: ["pipe", "pipe", "pipe"] });
+    fs.mkdirSync(lockDir(), { recursive: true });
+    child = spawn(helper, [udid, String(opts.fps), String(opts.quality), String(opts.maxDim), orientationPath(udid)], { stdio: ["pipe", "pipe", "pipe"] });
     child.stdout!.on("data", helperFrameReader(handlers.onFrame));
     interactive = true;
   } else {
@@ -222,15 +255,24 @@ export async function startSimStream(
     child = spawn(axe, ["stream-video", "--udid", udid, "--format", "mjpeg", "--fps", String(Math.min(opts.fps, 10)), "--quality", String(Math.round(opts.quality * 100)), "--scale", scale.toFixed(2)], { stdio: ["ignore", "pipe", "pipe"] });
     child.stdout!.on("data", mjpegFrameReader(handlers.onFrame));
   }
+  // Captures answer in the order they were asked: the helper runs commands
+  // one at a time.
+  const captures: ((ok: boolean) => void)[] = [];
+  let partial = "";
   child.stderr!.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf-8");
     stderrTail = (stderrTail + text).slice(-2000);
-    for (const line of text.split("\n")) {
+    const lines = (partial + text).split("\n");
+    partial = lines.pop() ?? "";
+    for (const line of lines) {
       const screen = parseScreenLine(line);
       if (screen) handlers.onScreen?.(screen);
+      const captured = parseCaptureLine(line);
+      if (captured) captures.shift()?.(captured.ok);
     }
   });
   child.on("exit", (code, signal) => {
+    for (const done of captures.splice(0)) done(false);
     if (stopped) return;
     stopped = true;
     handlers.onExit(lastLine(stderrTail) || `stream exited (${signal ?? code})`);
@@ -252,6 +294,13 @@ export async function startSimStream(
     },
     wake() {
       write("wake");
+    },
+    capture(file) {
+      if (!interactive || stopped) return Promise.resolve(false);
+      return new Promise((resolve) => {
+        captures.push(resolve);
+        write(`capture ${file}`);
+      });
     },
     stop() {
       if (stopped) return;

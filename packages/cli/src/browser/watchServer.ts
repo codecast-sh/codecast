@@ -295,6 +295,7 @@ export function runWatchSession(
             // new one; drop our handle so it knows to reopen.
             source = null;
           },
+          onMessage: (m) => send(m),
           onAction: (a) => {
             recentActions.remember(tabId, a);
             if (readySent) send(a as unknown as Record<string, unknown>);

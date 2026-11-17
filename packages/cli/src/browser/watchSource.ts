@@ -60,6 +60,10 @@ export interface FrameSourceHandlers {
    * navigation, a scroll (watchActions.ts). Sources that cannot observe the
    * page never call it. */
   onAction?(action: WatchAction): void;
+  /** An engine's own message to the viewer (the simulator's `device` state
+   *  and `capture` results). Sent as is; a viewer ignores types it does not
+   *  know, and the relay keeps only frames, tabs and actions. */
+  onMessage?(msg: Record<string, unknown>): void;
 }
 
 export interface FrameSourceOptions {
@@ -95,8 +99,15 @@ export type WatchInput =
   | { kind: "key"; type: "keyDown" | "keyUp"; key: string; code?: string; text?: string; modifiers?: number }
   | { kind: "insertText"; text: string }
   /** A device's hardware button (the simulator engine, sim/watch.ts). A
-   *  browser has none, so the CDP source ignores it. */
-  | { kind: "button"; button: SimButton };
+   *  browser has none, so the CDP source ignores it, as it does the three
+   *  device verbs below. */
+  | { kind: "button"; button: SimButton }
+  /** Turn the device a quarter turn. */
+  | { kind: "rotate"; direction: "left" | "right" }
+  /** A full resolution screenshot, answered by a `capture` message. */
+  | { kind: "capture" }
+  /** Record the screen; stopping answers with a `capture` message holding the video. */
+  | { kind: "record"; action: "start" | "stop" };
 
 export type SimButton = "home" | "lock" | "side" | "siri" | "applepay";
 

@@ -23,6 +23,9 @@ import { describeUi, findElements, formatElement, formatTree, screenPoints, type
 import { CLEAN_STATUS_BAR, PRIVACY_SERVICES, privacyServices, statusBarArgs, type StatusBarOptions } from "./settings.js";
 import { startRecording, stopRecording } from "./record.js";
 import { noteSimAction } from "./activity.js";
+import { rotateDevice } from "./simstream.js";
+import { toPanel, turned, uprightDegrees } from "./orientation.js";
+import { readOrientation, type SimOrientation } from "./pool.js";
 
 const OK = fmt.success(icons.check);
 
@@ -75,6 +78,10 @@ function takeShot(udid: string, out?: string): { file: string; scaled: boolean; 
   let points: { width: number; height: number } | undefined;
   try { points = screenPoints(describeUi(udid).elements); } catch { return { file, scaled: false }; }
   if (!points) return { file, scaled: false };
+  // A turned device's capture is its portrait panel; stand it upright first
+  // so it matches the interface's points (sim/orientation.ts).
+  const degrees = uprightDegrees(readOrientation(udid));
+  if (degrees) spawnSync("sips", ["-r", String(degrees), file], { stdio: "ignore" });
   const r = spawnSync("sips", ["-z", String(Math.round(points.height)), String(Math.round(points.width)), file], { stdio: "ignore" });
   return { file, scaled: r.status === 0, points };
 }
@@ -93,6 +100,24 @@ function pick(elements: UiElement[], query: string, nth?: number): UiElement {
     process.exit(1);
   }
   return hits[0];
+}
+
+/**
+ * Interface points (what a shot and `ui` show) on the panel axe touches, for a
+ * turned device; unchanged when it stands upright, so the common case costs no
+ * extra describe-ui. `pts` is x,y pairs.
+ */
+function onPanel(udid: string, pts: number[]): number[] {
+  const o = readOrientation(udid);
+  if (o === 1) return pts;
+  const ui = screenPoints(attempt(() => describeUi(udid)).elements);
+  if (!ui) return pts;
+  const out: number[] = [];
+  for (let i = 0; i + 1 < pts.length; i += 2) {
+    const p = toPanel(pts[i], pts[i + 1], o, ui);
+    out.push(Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10);
+  }
+  return out;
 }
 
 function axeOrDie(args: string[]): string {
@@ -305,7 +330,8 @@ A session acquires one pool simulator and every other verb targets it:
         x = parseNum(o.x!, "-x"); y = parseNum(o.y!, "-y");
         what = `${x},${y}`;
       }
-      axeOrDie(["tap", "-x", String(x), "-y", String(y), "--udid", id]);
+      const at = onPanel(id, [x, y]);
+      axeOrDie(["tap", "-x", String(at[0]), "-y", String(at[1]), "--udid", id]);
       noteSimAction(id, { kind: "tap", x, y });
       console.log(`${OK} tapped ${what}`);
       if (o.shot) { await new Promise((r) => setTimeout(r, 600)); console.log(inlineImageMarker(attempt(() => takeShot(id)).file)); }
@@ -333,7 +359,8 @@ A session acquires one pool simulator and every other verb targets it:
     return dirs[finger]!;
   };
   const swipeAlong = (id: string, pts: number[], duration?: string): void => {
-    axeOrDie(["swipe", "--start-x", String(pts[0]), "--start-y", String(pts[1]), "--end-x", String(pts[2]), "--end-y", String(pts[3]), ...(duration ? ["--duration", duration] : []), "--udid", id]);
+    const p = onPanel(id, pts);
+    axeOrDie(["swipe", "--start-x", String(p[0]), "--start-y", String(p[1]), "--end-x", String(p[2]), "--end-y", String(p[3]), ...(duration ? ["--duration", duration] : []), "--udid", id]);
     noteSimAction(id, { kind: "swipe", x: pts[0], y: pts[1], x2: pts[2], y2: pts[3] });
   };
 
@@ -381,6 +408,23 @@ A session acquires one pool simulator and every other verb targets it:
       axeOrDie(["button", name, "--udid", id]);
       noteSimAction(id, { kind: "button", name });
       console.log(`${OK} pressed ${name}`);
+    });
+
+  const ORIENTATIONS: Record<string, SimOrientation> = { portrait: 1, "upside-down": 2, "landscape-left": 3, "landscape-right": 4 };
+  const ORIENTATION_NAMES = Object.fromEntries(Object.entries(ORIENTATIONS).map(([k, v]) => [v, k])) as Record<SimOrientation, string>;
+  sim
+    .command("rotate [to]")
+    .description("Turn the device: left or right a quarter turn, or to portrait, landscape-left, landscape-right, upside-down")
+    .option("--udid <udid>", "Target simulator")
+    .action(async (to: string | undefined, o: { udid?: string }) => {
+      const id = target(o.udid);
+      const from = readOrientation(id);
+      if (!to) { console.log(ORIENTATION_NAMES[from]); return; }
+      const next = to === "left" || to === "right" ? turned(from, to) : ORIENTATIONS[to];
+      if (!next) die(`rotate takes left, right or one of ${Object.keys(ORIENTATIONS).join(", ")}, not '${to}'`);
+      const r = await rotateDevice(id, next);
+      if ("error" in r) die(r.error);
+      console.log(`${OK} ${ORIENTATION_NAMES[next]}`);
     });
 
   sim

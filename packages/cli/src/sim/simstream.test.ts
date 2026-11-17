@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildArgs, helperFrameReader, helperPath, jpegSize, mjpegFrameReader, parseScreenLine, type SimFrame } from "./simstream.js";
+import { buildArgs, helperFrameReader, helperPath, jpegSize, mjpegFrameReader, parseCaptureLine, parseScreenLine, type SimFrame } from "./simstream.js";
 
 /** A minimal JPEG prefix: SOI, an APP0 segment, then a baseline SOF0 giving the size. */
 function fakeJpeg(width: number, height: number, tail = 10): Buffer {
@@ -54,7 +54,8 @@ describe("jpegSize", () => {
 
 describe("parseScreenLine", () => {
   test("the helper's screen line, and nothing else", () => {
-    expect(parseScreenLine("simstream: screen 1206 2622 3.00")).toEqual({ widthPx: 1206, heightPx: 2622, scale: 3 });
+    expect(parseScreenLine("simstream: screen 1206 2622 3.00")).toEqual({ widthPx: 1206, heightPx: 2622, scale: 3, orientation: 1 });
+    expect(parseScreenLine("simstream: screen 2622 1206 3.00 3")).toEqual({ widthPx: 2622, heightPx: 1206, scale: 3, orientation: 3 });
     expect(parseScreenLine("simstream: streaming X")).toBeNull();
     expect(parseScreenLine("simstream: screen 0 0 0.00")).toBeNull();
   });
@@ -72,5 +73,13 @@ describe("building the helper", () => {
   test("a different axe install builds a different binary", () => {
     expect(helperPath("/a/Frameworks", "/h")).not.toBe(helperPath("/b/Frameworks", "/h"));
     expect(helperPath("/a/Frameworks", "/h")).toMatch(/^\/h\/\.codecast\/sim\/bin\/simstream-[0-9a-f]{12}$/);
+  });
+});
+
+describe("parseCaptureLine", () => {
+  test("the path the helper wrote, a failure, or not a capture line", () => {
+    expect(parseCaptureLine("simstream: captured /tmp/a b.png")).toEqual({ ok: true, path: "/tmp/a b.png" });
+    expect(parseCaptureLine("simstream: capture failed")).toEqual({ ok: false });
+    expect(parseCaptureLine("simstream: screen 1 2 3.00")).toBeNull();
   });
 });

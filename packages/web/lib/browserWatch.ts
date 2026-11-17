@@ -49,6 +49,10 @@ export interface WatchHandlers {
   /** The agent moved, pressed, typed, scrolled or navigated. Optional: a
    *  viewer that only wants pixels leaves it out and the frames are unchanged. */
   onAction?: (action: WatchActionFrame) => void;
+  /** A simulator's orientation and recording (source "sim"). */
+  onDevice?: (device: SimDeviceState) => void;
+  /** A screenshot or recording the viewer asked a simulator for. */
+  onCapture?: (capture: SimCapture) => void;
   /** Terminal failure: the stream is over and the socket is closing. */
   onError: (code: string, message: string) => void;
   /** Orderly end: tab closed, browser gone, or the daemon's time cap. */
@@ -71,10 +75,44 @@ export type WatchInputEvent =
     }
   | { kind: "key"; type: "keyDown" | "keyUp"; key: string; code?: string; text?: string; modifiers?: number }
   | { kind: "insertText"; text: string }
-  /** A simulator's hardware button (source "sim" only). */
-  | { kind: "button"; button: SimButton };
+  /** A simulator's hardware button (source "sim" only), and its device verbs:
+   *  a quarter turn, a full resolution screenshot, a screen recording. */
+  | { kind: "button"; button: SimButton }
+  | { kind: "rotate"; direction: "left" | "right" }
+  | { kind: "capture" }
+  | { kind: "record"; action: "start" | "stop" };
 
 export type SimButton = "home" | "lock" | "side" | "siri" | "applepay";
+
+/** A simulator's state beyond its pixels (the daemon's `device` message). */
+export interface SimDeviceState {
+  /** UIDeviceOrientation: 1 portrait, 2 upside down, 3 and 4 landscape. */
+  orientation: 1 | 2 | 3 | 4;
+  /** This viewer's recording, while one runs. */
+  recording: { since: number } | null;
+  /** Screenshots and recordings come back from the device itself. */
+  canCapture: boolean;
+}
+
+/** A finished screenshot or recording (the daemon's `capture` message). */
+export type SimCapture =
+  | { kind: "screenshot" | "video"; mime: string; name: string; data: string }
+  | { kind: "screenshot" | "video"; error: string };
+
+export function parseSimDevice(msg: any): SimDeviceState | null {
+  const o = msg?.orientation;
+  if (o !== 1 && o !== 2 && o !== 3 && o !== 4) return null;
+  const since = msg?.recording?.since;
+  return { orientation: o, recording: typeof since === "number" ? { since } : null, canCapture: msg?.canCapture === true };
+}
+
+export function parseSimCapture(msg: any): SimCapture | null {
+  const kind = msg?.kind;
+  if (kind !== "screenshot" && kind !== "video") return null;
+  if (typeof msg.error === "string") return { kind, error: msg.error };
+  if (typeof msg.data !== "string" || typeof msg.mime !== "string" || typeof msg.name !== "string") return null;
+  return { kind, mime: msg.mime, name: msg.name, data: msg.data };
+}
 
 /** What a watch streams: the session's browser tab, or the simulator it holds. */
 export type WatchSource = "browser" | "sim";
@@ -234,6 +272,16 @@ export function connectBrowserWatch(
         if (action) handlers.onAction?.(action);
         break;
       }
+      case "device": {
+        const device = parseSimDevice(msg);
+        if (device) handlers.onDevice?.(device);
+        break;
+      }
+      case "capture": {
+        const capture = parseSimCapture(msg);
+        if (capture) handlers.onCapture?.(capture);
+        break;
+      }
       case "error":
         done = true;
         handlers.onError(msg.code ?? "error", msg.message ?? "watch failed");
@@ -296,11 +344,14 @@ export type WatchStatus =
       tabGone: boolean;
       /** The daemon's own time cap, not a fault: resuming is the whole fix. */
       capped: boolean;
+      /** Clears up by itself once the agent takes or boots a simulator, so a
+       *  host keeps asking rather than asking the person to. */
+      waiting?: true;
     };
 
 function failed(
   message: string,
-  opts?: { canRetry?: boolean; tabGone?: boolean; capped?: boolean },
+  opts?: { canRetry?: boolean; tabGone?: boolean; capped?: boolean; waiting?: boolean },
 ): WatchStatus {
   return {
     kind: "failed",
@@ -308,6 +359,7 @@ function failed(
     canRetry: opts?.canRetry ?? true,
     tabGone: opts?.tabGone ?? false,
     capped: opts?.capped ?? false,
+    ...(opts?.waiting ? { waiting: true as const } : {}),
   };
 }
 
@@ -321,9 +373,9 @@ export function watchExitStatus(reason: string): WatchStatus {
     case "timeout":
       return failed("stream paused after 30 minutes — resume to keep watching", { capped: true });
     case "sim-released":
-      return failed("the session released its simulator");
+      return failed("the session released its simulator", { waiting: true });
     case "sim-not-booted":
-      return failed("the session's simulator is shut down");
+      return failed("the session's simulator is shut down", { waiting: true });
     default:
       return failed("stream ended");
   }
@@ -337,11 +389,11 @@ export function watchErrorStatus(code: string, message: string): WatchStatus {
     case "no-tab":
       return failed("this session hasn't driven a browser tab yet", { tabGone: true });
     case "no-sim":
-      return failed("this session holds no simulator");
+      return failed("this session holds no simulator", { waiting: true });
     case "no-simulators":
       return failed("the agent's machine has no iOS simulators", { canRetry: false });
     case "sim-not-booted":
-      return failed("the session's simulator is shut down");
+      return failed("the session's simulator is shut down", { waiting: true });
     case "no-answer":
       // The relay asked the agent's machine and heard nothing back.
       return failed(message || "the agent's machine did not answer");
@@ -392,4 +444,9 @@ export type BrowserStreamReport = {
    *  changes. `tab.url` already carries the new address; this says WHEN, so a
    *  flash keyed on it restarts per navigation and never on a re-render. */
   nav: { url: string; at: number } | null;
+  /** A simulator's orientation and recording, once the daemon said. */
+  device?: SimDeviceState | null;
+  /** How the stream reaches the agent's machine: this machine's daemon, or
+   *  the relay (frames only, so no screenshot or recording comes back). */
+  transport?: "local" | "relay" | null;
 };

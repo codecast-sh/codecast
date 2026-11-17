@@ -68,7 +68,7 @@ import { CastBrowserRowContext, HostedAskingContext, HostedCardShownContext } fr
 import { useConversationIdentityRow } from "../../../hooks/useLiveIdentityRow";
 import { AgentSpeaker } from "../../identity/AgentSpeaker";
 import { ScheduleWakeupBlock, TeammateMessageCard } from "./systemBlocks";
-import { BrowserWatchButton, SendMessageBlock, SkillBlock, TaskCreateUpdateBlock, TaskListBlock, TaskToolBlock, TeamCreateBlock, TodoWriteBlock, StructuredResultBlock, ToolBlock, WorkflowToolBlock } from "./toolBlocks";
+import { BrowserWatchButton, SimulatorWatchButton, SendMessageBlock, SkillBlock, TaskCreateUpdateBlock, TaskListBlock, TaskToolBlock, TeamCreateBlock, TodoWriteBlock, StructuredResultBlock, ToolBlock, WorkflowToolBlock } from "./toolBlocks";
 import { isAlwaysVisibleToolCall, isSayToolCall, parseApiErrorContent, parseCastCommand, parseContextBlocks, parseSkillBlocks, parseTeammateMessages, stripSystemTags } from "../classify";
 import { copyMessageLink, formatFullTimestamp, formatMessagePartsForCopy, forwardMessageToChat, safeString, useRelativeTime } from "../../../lib/conversationFormat";
 import { MessageMarkdown, ReactMarkdown } from "../markdown";
@@ -910,7 +910,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   const hostedSteps = isHostedAgentType(agentType);
   // Modern draws the receipt as a row (ModernReceiptWords); a hosted receipt keeps its plain words.
   const modernRow = useIsModernStyle() && !hostedSteps;
-  const { summary, counted, actions, created, madeLine, sources, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
+  const { summary, counted, actions, created, madeLine, sources, screenshots, browserTabs, droveCastBrowser, droveSim } = useMemo(() => {
     const actions: { name: string; input: string }[] = [];
     const shots: { id: string; image: ImageData }[] = [];
     // The browser tabs the folded tools drove, one per distinct tab in the
@@ -918,6 +918,8 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
     // group — the same reason screenshots ride along as thumbnails.
     const tabs = new Map<string, BrowserTabRef>();
     let droveCastBrowser = false;
+    // A folded `cast sim` keeps the session's simulator one click away too.
+    let droveSim = false;
     for (const entry of entries) {
       for (const tc of entry.tools) {
         const nested = extractNestedActions(tc);
@@ -925,9 +927,11 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
         let toolImages = images?.filter(img => img.tool_use_id === tc.id) ?? [];
         if (!toolImages.length) toolImages = globalImageMap?.[tc.id] ?? [];
         toolImages.forEach((image, i) => shots.push({ id: `${tc.id}:${i}`, image }));
-        const tab = browserTabOf(tc, parseCastCommand(tc), resultFor(tc)?.content, carriedBrowserRows);
+        const cast = parseCastCommand(tc);
+        const tab = browserTabOf(tc, cast, resultFor(tc)?.content, carriedBrowserRows);
         if (tab) tabs.set(`${tab.kind}:${tab.tabId}`, tab);
         if (tab?.kind === "cast") droveCastBrowser = true;
+        if (cast?.category === "sim") droveSim = true;
       }
     }
     const hosted = isHostedAgentType(agentType) ? hostedReceipt(entries.flatMap((e) => e.tools), resultFor, { asking: hostedAsking, cardShown: hostedCardShown }) : null;
@@ -942,6 +946,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       screenshots: shots,
       browserTabs: [...tabs.values()],
       droveCastBrowser,
+      droveSim,
     };
   }, [entries, images, globalImageMap, resultFor, carriedBrowserRows, agentType, hostedAsking, hostedCardShown]);
   const header = (
@@ -970,6 +975,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       {!modernRow && <span className="min-w-0 truncate tracking-tight">{expanded ? counted : summary}</span>}
       {!expanded && browserTabs.map((tab) => <BrowserTabPill key={`${tab.kind}:${tab.tabId}`} tab={tab} />)}
       {!expanded && droveCastBrowser && conversationId && <BrowserWatchButton conversationId={conversationId} />}
+      {!expanded && droveSim && conversationId && <SimulatorWatchButton conversationId={conversationId} />}
       {!expanded && screenshots.map(({ id, image }) => <CondensedImageThumb key={id} image={image} />)}
     </div>
   );

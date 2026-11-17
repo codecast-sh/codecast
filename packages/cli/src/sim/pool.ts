@@ -65,6 +65,30 @@ export function readPool(env: NodeJS.ProcessEnv = process.env): PoolDevice[] {
   }
 }
 
+/** UIDeviceOrientation: 1 portrait, 2 upside down, 3 landscape left, 4 landscape right. */
+export type SimOrientation = 1 | 2 | 3 | 4;
+
+/** Which way a device is turned, kept beside its lock: the stream helper
+ *  (sim/simstream.m) writes it when it turns the device and reads it to stand
+ *  each frame upright. */
+export function orientationPath(udid: string, dir = lockDir()): string {
+  return path.join(dir, `${udid}.orientation`);
+}
+
+export function readOrientation(udid: string, dir = lockDir()): SimOrientation {
+  try {
+    const o = Number(fs.readFileSync(orientationPath(udid, dir), "utf-8").trim());
+    return o === 2 || o === 3 || o === 4 ? o : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/** The device was booted or shut down: it starts upright again. */
+export function forgetOrientation(udid: string, dir = lockDir()): void {
+  fs.rmSync(orientationPath(udid, dir), { force: true });
+}
+
 export function writePool(devices: PoolDevice[], home: string = process.env.HOME || os.homedir()): void {
   const file = poolFile(home);
   fs.mkdirSync(path.dirname(file), { recursive: true });

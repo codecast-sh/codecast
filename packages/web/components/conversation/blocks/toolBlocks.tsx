@@ -2,7 +2,7 @@ import { sessionRepository } from "../../../lib/repoNavigation";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { commandLeavesCheckout, gitToolOutcome } from "../../../lib/gitToolOutcome";
 import Link from "next/link";
-import { canOpenBeside, openBrowserPane } from "../../../lib/stage";
+import { canOpenBeside, openBeside, openBrowserPane } from "../../../lib/stage";
 import { useRef, useState, useMemo, type ReactNode } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { createPortal } from "react-dom";
@@ -36,7 +36,8 @@ import { addToFlowsMessage } from "../../../lib/line/flowMessages";
 import { getToolPatchInputs, parseApplyPatchSections } from "../../../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../../../lib/unifiedDiffParser";
 import { ChevronDown, ChevronUp, Workflow, MoveHorizontal, Smartphone } from "lucide-react";
-import { openSimulatorPane } from "../../../lib/simulatorPane";
+import { simulatorPanePath } from "../../../lib/simulatorPane";
+import { tabNavigate } from "../../../src/compat/tabRouting";
 import { ImageBlock } from "./interactiveBlocks";
 import { PathText, RowIcon } from "./ModernRow";
 import { modernToolHead } from "../../../lib/modernRow";
@@ -1522,7 +1523,9 @@ export function SimulatorWatchButton({ conversationId }: { conversationId: Id<"c
       data-simulator-watch
       onClick={(e) => {
         e.stopPropagation();
-        openSimulatorPane(sessionUuid);
+        // Beside the conversation when the stage has room, else in place.
+        const path = simulatorPanePath(sessionUuid);
+        if (!openBeside(path)) tabNavigate(path, "push");
       }}
       className={BROWSER_ROW_PILL}
       title="Open this agent's simulator beside the thread, live: watch it work, or tap and type into it"
