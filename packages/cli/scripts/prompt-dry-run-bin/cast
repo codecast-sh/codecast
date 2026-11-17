@@ -31,11 +31,18 @@
 # an option's value never reaches an action, and with a state directory of
 # its own, so no help call can sign in or reach anyone.
 #
+# With a fake (prompt-dry-run.ts --fake: DRY_RUN_FAKE_VIA_BROKER), the guard
+# asks the harness's fake before it decides read or write: a call the fake
+# models is answered as prod would answer it, from a world the harness keeps,
+# so a turn goes on past its first write and a later read sees what the turn
+# made. The fake answers 125 to leave a call to the guard. By hand, outside a
+# harness, DRY_RUN_FAKE names an executable that answers the same way.
+#
 # calls.log gets the argv, then one marked line per outcome: SERVED (answered
 # from the serve dir), UNSERVED (a frozen read with no capture), LIVE (passed
 # to the real CLI, its output kept under live-reads/), HELP (the CLI's help text), UNKNOWN (a command the CLI does
-# not have, answered here and run nowhere), REFUSED (a write). The eval gates
-# read these marks.
+# not have, answered here and run nowhere), FAKED (answered by the fake), CLI
+# (an argv the CLI itself refused), REFUSED (a write). The eval gates read these marks.
 #
 # calls.log keeps each argv shell-quoted: an argument that is not a plain word
 # is single-quoted ('it'\''s' for a quote inside), so a line splits back into
@@ -51,6 +58,8 @@ ARGV="$*"
 logged_argv() {
   local a q="'\\''" out=()
   for a in "$@"; do
+    # A line break is written as \n (\r): no argument can start a line of its own in calls.log.
+    a="${a//$'\n'/\\n}"; a="${a//$'\r'/\\r}"
     if [[ "$a" =~ ^[A-Za-z0-9_./:=@%+,-]+$ ]]; then out+=("$a"); else out+=("'${a//\'/$q}'"); fi
   done
   printf '%s' "${out[*]-}"
@@ -59,10 +68,24 @@ LOGGED="$(logged_argv "$@")"
 CLASSIFY="${DRY_RUN_CLASSIFY:-}"
 # Set when the harness's broker runs a live read this guard already logged.
 LIVE_READ="${DRY_RUN_LIVE_READ:-}"
-[ -n "$CLASSIFY" ] || [ -n "$LIVE_READ" ] || printf '%s\n' "$LOGGED" >> "$LOG"
+# Under the harness each call opens with the broker (/begin), whose record is
+# the calls.log the run leaves (this file sits where the agent can edit it):
+# the broker answers an id, every later request for this call carries it, and
+# a mark this guard reaches goes back as `<id>\0<MARK>`, which the broker
+# keeps only when the mark is true of the argv.
+CALL_ID=""
+BROKER_BASE="${DRY_RUN_BROKER:-}"; BROKER_BASE="${BROKER_BASE%/read}"
+if [ -z "$CLASSIFY" ] && [ -z "$LIVE_READ" ]; then
+  printf '%s\n' "$LOGGED" >> "$LOG"
+  if [ -n "${DRY_RUN_BROKER:-}" ]; then CALL_ID="$(printf '%s\0' "$@" | curl -s --max-time 10 --data-binary @- "$BROKER_BASE/begin" 2>/dev/null | head -n1 | tr -dc 'a-z0-9-')"; fi
+fi
+record() {
+  [ -n "$CALL_ID" ] || return 0
+  printf '%s\0%s' "$CALL_ID" "$1" | curl -s --max-time 10 --data-binary @- "$BROKER_BASE/mark" > /dev/null 2>&1 || true
+}
 SERVE="${DRY_RUN_SERVE_DIR:-}"
 [ -z "$CLASSIFY" ] || SERVE=""
-mark() { printf '%s %s\n' "$1" "$LOGGED" >> "$LOG"; }
+mark() { printf '%s %s\n' "$1" "$LOGGED" >> "$LOG"; record "$1"; }
 
 serve_file() {
   [ -n "$SERVE" ] && [ -f "$SERVE/$1" ] || return 0
@@ -144,8 +167,8 @@ is_read() {
     bookmark) has_flag --list "$@" ;;
     # Agent definitions and chains printed; create, edit, import, rm and run write or start sessions.
     agent|agents) case "${2:-}" in ls|list|show|export|"") return 0 ;; *) return 1 ;; esac ;;
-    # The vault's metadata only: get, env, otp and run hand out values, the rest write.
-    vault|secrets) case "${2:-}" in ls|show|"") return 0 ;; *) return 1 ;; esac ;;
+    # The vault, any verb: a replay holds no secret and names none (see the refusal below).
+    vault|secrets) return 1 ;;
     # What worktrees hold that main lacks; hold, release, level and prune change trees.
     land) case "${2:-}" in scan|diff) return 0 ;; *) return 1 ;; esac ;;
     # Replays listed and read as text; snap renders frames, repro writes a file, import starts a job.
@@ -230,13 +253,23 @@ real() {
   local bin dir key code
   dir="${RUN_DIR:-$PWD}/live-reads"; key="$(read_key "$@")"
   if [ -n "${DRY_RUN_BROKER:-}" ]; then
+    # The broker answers in its reply: the exit code, then the byte length of
+    # what the read printed to stderr, then stderr and stdout. It writes
+    # nothing here (an unsandboxed write into the run dir would follow any
+    # link the agent planted); this side, inside the sandbox, keeps the copy.
     mark LIVE
-    rm -f "$dir/$key.out" "$dir/$key.exit"
-    printf '%s\0' "$@" | curl -sS --max-time 900 -H "X-Dry-Run-Cwd: $PWD" --data-binary @- "$DRY_RUN_BROKER" >&2 \
-      || { echo "dry run: the harness that runs this run's live reads is gone, so 'cast $ARGV' reaches nothing" >&2; exit 1; }
-    [ -f "$dir/$key.exit" ] || exit 1
+    local reply="${TMPDIR:-$dir}/.live-reply.$$" n
+    # The harness made $dir; mkdir -p would probe parents the sandbox hides.
+    [ -d "$dir" ] || mkdir "$dir" 2>/dev/null
+    printf '%s\0' "$@" | curl -sS --max-time 900 -o "$reply" -H "X-Dry-Run-Call: $CALL_ID" --data-binary @- "$DRY_RUN_BROKER" \
+      || { rm -f "$reply"; echo "dry run: the harness that runs this run's live reads is gone, so 'cast $ARGV' reaches nothing" >&2; exit 1; }
+    code="$(sed -n 1p "$reply" | tr -dc 0-9)"; n="$(sed -n 2p "$reply" | tr -dc 0-9)"
+    [ "${n:-0}" -gt 0 ] && tail -n +3 "$reply" | head -c "$n" >&2
+    tail -n +3 "$reply" | tail -c "+$(( ${n:-0} + 1 ))" > "$dir/$key.out"
+    printf '%s\n' "${code:-1}" > "$dir/$key.exit"
+    rm -f "$reply"
     cat "$dir/$key.out"
-    exit "$(tr -dc 0-9 < "$dir/$key.exit")"
+    exit "${code:-1}"
   fi
   bin="$(real_bin)" || exit 1
   [ -n "$LIVE_READ" ] || mark LIVE
@@ -252,10 +285,23 @@ real() {
 # The CLI's help, under a state directory of its own so no help call can sign
 # in or reach anyone. Only the given command words go through, then one --help
 # of our own.
+# Under the harness the help comes from the broker (/help: the real CLI with no
+# sign-in, outside the sandbox, in a directory the agent cannot write), since a
+# dev checkout's cast cannot run inside the closed world.
+via_broker() {
+  local route="$1" reply="${TMPDIR:-${RUN_DIR:-$PWD}}/.cli-reply.$$" code; shift
+  printf '%s\0' "$@" | curl -sS --max-time 90 -o "$reply" -H "X-Dry-Run-Call: $CALL_ID" --data-binary @- "${DRY_RUN_BROKER%/read}/$route" || { rm -f "$reply"; return 1; }
+  code="$(sed -n 1p "$reply" | tr -dc 0-9)"
+  tail -n +2 "$reply"
+  rm -f "$reply"
+  return "${code:-1}"
+}
 show_help() {
-  local bin state; bin="$(real_bin)" || exit 1
-  state="$(help_state)"
+  local bin state
   mark HELP
+  if [ -n "${DRY_RUN_BROKER:-}" ] && [ -z "$LIVE_READ" ]; then via_broker help "$@"; exit $?; fi
+  bin="$(real_bin)" || exit 1
+  state="$(help_state)"
   exec env CODECAST_DIR="$state" CODECAST_NO_AUTO_UPDATE=1 "$bin" "$@" --help
 }
 # prompt-dry-run.ts creates this before the agent starts: inside the run's
@@ -281,9 +327,13 @@ command_tree() {
   local state tree tmp bin
   state="$(help_state)"; tree="$state/agent-context.json"
   if [ ! -s "$tree" ]; then
-    bin="$(real_bin)" || return 1
     tmp="$tree.$$"
-    if env CODECAST_DIR="$state" CODECAST_NO_AUTO_UPDATE=1 "$bin" agent-context --json > "$tmp" 2>/dev/null; then mv "$tmp" "$tree"; else rm -f "$tmp"; return 1; fi
+    if [ -n "${DRY_RUN_BROKER:-}" ] && [ -z "$LIVE_READ" ]; then
+      if via_broker tree > "$tmp" 2>/dev/null; then mv "$tmp" "$tree"; else rm -f "$tmp"; return 1; fi
+    else
+      bin="$(real_bin)" || return 1
+      if env CODECAST_DIR="$state" CODECAST_NO_AUTO_UPDATE=1 "$bin" agent-context --json > "$tmp" 2>/dev/null; then mv "$tmp" "$tree"; else rm -f "$tmp"; return 1; fi
+    fi
   fi
   printf '%s' "$tree"
 }
@@ -313,6 +363,30 @@ unknown_command() {
   ' "${command_words[@]}" < "$tree"
 }
 
+# Under the harness the fake lives in the harness process (DRY_RUN_FAKE_VIA_BROKER):
+# it holds the world and logs the calls it answered where the agent cannot
+# write, so neither can be forged. The reply is the exit code on its first
+# line, then the answer. 125 leaves the call to this guard.
+fake_via_broker() {
+  local f="" n=0 reply="${TMPDIR:-${RUN_DIR:-$PWD}}/.fake-reply.$$" code
+  if has_arg - "$@"; then f="${TMPDIR:-${RUN_DIR:-$PWD}}/.fake-stdin.$$"; cat > "$f"; n="$(wc -c < "$f" | tr -dc 0-9)"; fi
+  { [ -z "$f" ] || cat "$f"; printf '%s\0' "$@"; } | curl -sS --max-time 120 -o "$reply" -H "X-Dry-Run-Stdin-Bytes: ${n:-0}" -H "X-Dry-Run-Call: $CALL_ID" --data-binary @- "${DRY_RUN_BROKER%/read}/fake" || { rm -f "$f" "$reply"; return 125; }
+  code="$(sed -n 1p "$reply" | tr -dc 0-9)"
+  [ "${code:-125}" = 125 ] || tail -n +2 "$reply"
+  rm -f "$f" "$reply"
+  return "${code:-125}"
+}
+if [ -z "$LIVE_READ" ] && [ -n "${DRY_RUN_FAKE_VIA_BROKER:-}" ] && [ -n "${DRY_RUN_BROKER:-}" ]; then
+  fake_via_broker "$@"; fake_code=$?
+  [ "$fake_code" = 125 ] || exit "$fake_code"
+elif [ -z "$LIVE_READ" ] && [ -n "${DRY_RUN_FAKE:-}" ]; then
+  # By hand, outside a harness: the fake is an executable beside the run (packages/evals/src/fakes/bin.ts).
+  fake_tree="$(command_tree)" || fake_tree=""
+  # The trailing x keeps the answer's last newline through the substitution.
+  fake_out="$(DRY_RUN_FAKE_TREE="$fake_tree" bun "$DRY_RUN_FAKE" "$@"; c=$?; printf x; exit $c)"; fake_code=$?
+  fake_out="${fake_out%x}"
+  [ "$fake_code" = 125 ] || { mark FAKED; printf '%s' "$fake_out"; exit "$fake_code"; }
+fi
 if is_read "$@"; then
   if frozen "$@"; then
     mark UNSERVED
@@ -332,6 +406,7 @@ if hit="$(unknown_command)"; then
 fi
 mark REFUSED
 case "${1:-}" in
+  vault|secrets) echo "dry run: 'cast ${1}' is refused inside a replay: no secret, and no secret's name, reaches a replayed agent" >&2 ;;
   task|project|plan|doc|initiative|trigger|anchor|role|org) echo "dry run: 'cast $ARGV' would write, and is refused" >&2 ;;
   state) echo "dry run: cast state is refused" >&2 ;;
   read) echo "dry run: 'cast $ARGV' is refused: --ack marks the session read; read the session without it" >&2 ;;

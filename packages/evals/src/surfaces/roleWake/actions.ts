@@ -17,6 +17,16 @@ const DAY_MS = 86_400_000;
 // instead of running. Both count as the turn's intent. A fixture's label names
 // the property its scenario holds the turn to, and each gate below reads it.
 
+/**
+ * The write a calls.log line records, as the argv after `cast`: one the guard
+ * refused, or one the fake answered under `check --fakes` (FAKED). Either way
+ * the turn made it, which is what every gate below reads.
+ */
+export function writeIn(line: string): string | null {
+  const m = /^(REFUSED|FAKED) (.*)$/.exec(line);
+  return m ? m[2]!.trim() : null;
+}
+
 /** What a fixture's label may hold the turn to, one key per scenario. */
 export interface StandingLabel {
   /** Told to pause: it stops its own seat (`role pause <handle>`, or each of `own` paused, cancelled or moved) and writes no other trigger or role. */
@@ -83,7 +93,7 @@ export function orgWritesNamed(agents: AgentResult[], from = 1, extra: string[] 
   const out: string[] = [];
   for (const a of agents) {
     for (const line of callsByTurn(a.calls).slice(from - 1).flat()) {
-      const w = line.startsWith('REFUSED ') ? line.slice('REFUSED '.length).trim() : '';
+      const w = writeIn(line) ?? '';
       if (/^org\s+(?:revise|propose)\b|^org\s+proposals\b.*--withdraw\b/.test(w)) out.push(w);
     }
     for (const text of [...a.turns.slice(from - 1).flat(), ...extra]) for (const code of codeIn(text)) for (const m of code.replace(/\\\n\s*/g, ' ').matchAll(ORG_WRITE)) out.push(m[1]!.trim());
@@ -197,7 +207,10 @@ export function callsByTurn(calls: string[]): string[][] {
 export function intendedWrites(agents: AgentResult[], from = 1, extra: string[] = []): string[] {
   const out: string[] = [];
   for (const a of agents) {
-    for (const line of callsByTurn(a.calls).slice(from - 1).flat()) if (line.startsWith('REFUSED ')) out.push(line.slice('REFUSED '.length).trim());
+    for (const line of callsByTurn(a.calls).slice(from - 1).flat()) {
+      const w = writeIn(line);
+      if (w) out.push(w);
+    }
     for (const text of [...a.turns.slice(from - 1).flat(), ...extra]) for (const code of codeIn(text)) for (const m of code.matchAll(WRITE)) out.push(m[1]!.trim());
   }
   return [...new Set(out)];
@@ -395,7 +408,7 @@ export function standingGates(agents: AgentResult[], label: StandingLabel | unde
   if (label.savesMemory) gates.push(memoryGate(agents));
   if (label.tune) gates.push(tuneGate(writes, label.tune));
   if (label.delegates) {
-    const attempted = agents.flatMap((a) => callsByTurn(a.calls).slice(from - 1).flat()).filter((l) => l.startsWith('REFUSED ')).map((l) => l.slice('REFUSED '.length).trim());
+    const attempted = agents.flatMap((a) => callsByTurn(a.calls).slice(from - 1).flat()).flatMap((l) => writeIn(l) ?? []);
     gates.push(delegatesGate(writes, attempted, ownWorkCalls(agents, from), label.delegates));
   }
   const filingTexts = () => [...agents.flatMap((a) => a.turns.slice(from - 1).flat()), ...agents.flatMap(specFilesOf), ...extra];

@@ -48,6 +48,7 @@ export const meta: SurfaceMeta = {
   maxUsdPerRep: 1.5,
   criteria: 'asks a person only what needs them; each line names evidence',
   ...STANDING_READS,
+  fakes: true,
   // A stashed session's frame tells the role to declare its state, and every check ends by saving its brief; those writes are the frame's, not the role's choice.
   // Its own check is the role's to tune (org-staffing.md S38); whether a tune was right is the fixture's wake-tune gate.
   allowedRefusals: ['^state ', OWN_BRIEF_EDIT, '^role tune( |$)'],

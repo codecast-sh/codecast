@@ -17,6 +17,7 @@ import { registerBisect } from './commands/bisect';
 import { registerCapture } from './commands/capture';
 import { registerCheck } from './commands/check';
 import { registerDoctor } from './commands/doctor';
+import { registerFakes } from './commands/fakes';
 import { registerGrade, registerRescore } from './commands/grade';
 import { registerIndex } from './commands/indexCmd';
 import { registerLabel } from './commands/label';
@@ -86,6 +87,7 @@ ${fmt.cmd('./evals doctor')} says what is missing, docs/architecture/evals.md ha
   registerRescore(program);
   registerCapture(program);
   registerDoctor(program);
+  registerFakes(program);
   registerSnippet(program);
   registerPublish(program);
   registerPin(program);

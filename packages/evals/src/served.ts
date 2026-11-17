@@ -66,9 +66,9 @@ export function writeFrozenVerbs(dir: string, verbs: string[]): void {
   writeFileSync(join(dir, 'frozen'), `${verbs.join('\n')}\n`);
 }
 
-/** What a harness note says answers from a record, from the verbs a served dir freezes. */
-export function recordSentence(frozen: string[]): string {
-  const writes = 'every command that writes, posts or sends is refused.';
+/** What a harness note says answers from a record, from the verbs a served dir freezes; under --fakes the writes are the note's next sentence. */
+export function recordSentence(frozen: string[], fakes = false): string {
+  const writes = fakes ? 'commands that write are answered as below.' : 'every command that writes, posts or sends is refused.';
   if (frozen.includes(EVERY_READ)) return `Every \`cast\` read answers from a record of the workspace saved for this turn, and a read the record does not hold fails rather than reaching the live workspace; ${writes}`;
   if (!frozen.length) return `\`cast\` reads are live, and ${writes}`;
   const verbs = frozen.map((v) => `\`cast ${v}\``);

@@ -68,8 +68,8 @@ export const turnText = (turn: FixtureTurn): string =>
   'text' in turn ? turn.text : buildAnchorWake({ ...turn.chat, deadlineMinutes: turn.chat.deadlineMinutes ?? Math.round(ANCHOR_REPLY_TIMEOUT_MS / 60_000) });
 
 /** The session's messages as a moment: `first` with the harness note, then each fixture turn. */
-const momentOf = (snap: AnchorBriefSnap, first: string): ConvoMessage[] =>
-  [withHarnessNote(first, snap), ...(snap.turns ?? []).map(turnText)].map((text, i) => ({ ...describeTurn(text, snap.opening?.at ?? snap.captured_at, i ? `turn-${i + 1}` : 'opening')[0]!, n: i + 1 }));
+const momentOf = (snap: AnchorBriefSnap, first: string, fakes = false): ConvoMessage[] =>
+  [withHarnessNote(first, snap, [], fakes), ...(snap.turns ?? []).map(turnText)].map((text, i) => ({ ...describeTurn(text, snap.opening?.at ?? snap.captured_at, i ? `turn-${i + 1}` : 'opening')[0]!, n: i + 1 }));
 
 /** Who a fixture's agent is, said plainly; its judge reads this where the opening would be. */
 const agentLine = (facts: NonNullable<AnchorBriefSnap['facts']>): string =>
@@ -122,14 +122,14 @@ const impl: SurfaceImpl = {
     const serveDir = servedDirFor(snap, ctx, meta);
     const then = (snap.turns ?? []).map(turnText);
     const cwd = checkoutOf(snap, ctx.runDir);
-    const a = await ctx.agent({ prompt: withHarnessNote(openingOf(snap), snap), serveDir, model: ctx.model, maxTurns: 80, ...(then.length ? { then } : {}), ...(cwd ? { cwd } : {}) });
+    const a = await ctx.agent({ prompt: withHarnessNote(openingOf(snap), snap, [], ctx.fakes), serveDir, model: ctx.model, maxTurns: 80, seat: { handle: snap.values?.role }, ...(then.length ? { then } : {}), ...(cwd ? { cwd } : {}) });
     return { reply: a.turns.slice(gradedFrom(snap) - 1).flat().join('\n\n') };
   },
 
   // The route gates (frozen-reads, no-unexpected-writes) hold every turn; a fixture's label adds its scenario's gate over the turns after the opening.
   gates: (snap: AnchorBriefSnap, out, label?: StandingLabel) => standingGates(out.agents, label, gradedFrom(snap), [], { placeholderTurns: placeholderTurns(snap) }),
 
-  describe: (snap: AnchorBriefSnap): ConvoMessage[] => momentOf(snap, openingOf(snap)),
+  describe: (snap: AnchorBriefSnap, o?: { fakes?: boolean }): ConvoMessage[] => momentOf(snap, openingOf(snap), o?.fakes),
 
   // A fixture's opening is rendered by the builder under test, so its judge reads who the agent is in its place; a real freeze's opening is the text prod sent, the same in every arm.
   judgeMoment: (snap: AnchorBriefSnap): ConvoMessage[] => momentOf(snap, snap.opening || !snap.facts ? openingOf(snap) : agentLine(snap.facts)),

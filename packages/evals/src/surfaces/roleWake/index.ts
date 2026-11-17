@@ -9,6 +9,7 @@ import { cliFetchRead } from '../../../../cli/src/cliHttp';
 import { defaultConfigDir, readAuthConfig } from '../../../../cli/src/config/readAuthConfig';
 import { HEAD_INBOX_PROMPT, HEAD_INBOX_TITLE, ROLE_NEEDS_INPUT_SPEC, roleRoutineFor } from '../../../../convex/convex/lib/orgRoutine';
 import { apiConfig } from '../../adapters/convo';
+import { fakeWorldOf } from '../../fakes/seed';
 import { gate, type Captured, type CaptureCtx, type SurfaceImpl } from '../../surface';
 import { meta } from './meta';
 import { budgetGate, playbookGate, standingGates, type StandingLabel } from './actions';
@@ -76,7 +77,11 @@ export function frameOf(snap: RoleWakeSnap): string {
 const isMessageTurn = (snap: RoleWakeSnap): boolean => snap.fixture?.routine === 'message' || snap.fixture?.routine === 'inbox';
 
 /** What the agent gets, and what the judge reads it got: the frame, then the harness note. */
-const briefingOf = (snap: RoleWakeSnap): string => withHarnessNote(frameOf(snap), snap, isMessageTurn(snap) ? [] : [BRIEF_NOTE]);
+// Under --fakes `cast brief edit` runs against the fake, and the brief it leaves is the turn's brief.md.
+const briefingOf = (snap: RoleWakeSnap, fakes = false): string => withHarnessNote(frameOf(snap), snap, isMessageTurn(snap) || fakes ? [] : [BRIEF_NOTE], fakes);
+
+/** The role whose turn this is: a fixture names it, a capture's seat was its --role. */
+const seatOf = (snap: RoleWakeSnap): { handle?: string; title?: string } => ({ handle: snap.fixture?.role.handle ?? snap.values?.role, title: snap.fixture?.role.name });
 
 const briefOf = (out: { parsed?: unknown }): string | null => ((out.parsed as { brief?: string | null } | undefined)?.brief ?? null);
 
@@ -146,9 +151,9 @@ const impl: SurfaceImpl = {
 
   async replay(snap: RoleWakeSnap, ctx) {
     const serveDir = servedDirFor(snap, ctx, meta);
-    const a = await ctx.agent({ prompt: briefingOf(snap), serveDir, model: ctx.model, maxTurns: 80 });
+    const a = await ctx.agent({ prompt: briefingOf(snap, ctx.fakes), serveDir, model: ctx.model, maxTurns: 80, seat: seatOf(snap) });
     const written = join(a.runSubdir, 'brief.md');
-    const brief = existsSync(written) ? readFileSync(written, 'utf8') : null;
+    const brief = ctx.fakes ? fakeWorldOf(a.runSubdir)?.brief ?? null : existsSync(written) ? readFileSync(written, 'utf8') : null;
     if (brief !== null) writeFileSync(join(ctx.runDir, 'brief.md'), brief);
     return { reply: a.said.join('\n\n'), parsed: { brief } };
   },
@@ -175,7 +180,7 @@ const impl: SurfaceImpl = {
     ];
   },
 
-  describe: (snap: RoleWakeSnap) => describeTurn(briefingOf(snap), snap.captured_at, 'wake'),
+  describe: (snap: RoleWakeSnap, o?: { fakes?: boolean }) => describeTurn(briefingOf(snap, o?.fakes), snap.captured_at, 'wake'),
 
   productionReply: () => null,
 };

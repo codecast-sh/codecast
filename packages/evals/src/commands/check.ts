@@ -13,7 +13,9 @@ import { outcomeOf, prepareFreeze, repCount, replayModel, replayRep, treeFacts, 
 import { agentScratchGap } from '../adapters/dryRun';
 import { hasSnapshot, loadLabel, loadSnapshot } from '../adapters/resolver';
 import { surfaceRuns } from '../adapters/runs';
-import { loadSurface } from '../registry';
+import { UsageError } from '@platform/evals/cli';
+
+import { loadSurface, surfaces } from '../registry';
 import { homePaths } from '../paths';
 import { checkMinutes, DAILY_USD, patchSurfaceState, perRepPeakUsd, perRepUsd, readState, repCostsByModel, spentToday, staleness, suggestedBudget, type EvalsState } from '../state';
 import { evalSignals, reportSignals, type SurfaceVerdict } from '../signals';
@@ -73,6 +75,7 @@ export interface CheckFlags {
   model?: string;
   budget?: number;
   dry?: boolean;
+  fakes?: boolean;
   publish?: boolean;
   notes?: string;
   /** Name the run set, so a caller (`line`) can find it again; a set that already holds reps is resumed. */
@@ -111,7 +114,15 @@ interface Job {
 
 const surfaceOf = (f: Freeze): string => String((f.meta as { surface?: string } | undefined)?.surface ?? '');
 
-export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSources): Promise<number> {
+/**
+ * A --fakes rep ran a different turn (its writes answered, not refused), so
+ * it is stamped with a cadence of its own and weighed only against earlier
+ * --fakes batches, never against a set whose writes were refused.
+ */
+export const fakesCadence = (flags: Pick<CheckFlags, 'fakes' | 'cadence'>): string | undefined => (flags.fakes ? (flags.cadence ? `${flags.cadence}+fakes` : 'fakes') : flags.cadence);
+
+export async function runCheck(ids: string[], rawFlags: CheckFlags, sources: EvalSources): Promise<number> {
+  const flags = { ...rawFlags, cadence: fakesCadence(rawFlags) };
   if (!flags.batch) return checkBatch(ids, flags, sources);
   // A second check on a batch another is still running would see its queued reps as missing and run them too, on a budget of its own.
   const { root, ...lock } = batchLock(flags.batch);
@@ -139,6 +150,14 @@ async function checkBatch(ids: string[], flags: CheckFlags, sources: EvalSources
     const agents = metas.filter((m) => m.route === 'agent');
     if (agents.length) console.log(fmt.muted(`left out the agent surfaces (${agents.map((m) => m.id).join(', ')}): they run by hand, by name or with --route agent`));
     metas = metas.filter((m) => m.route === 'call');
+  }
+  if (flags.fakes) {
+    // A surface whose note still says writes are refused would grade a turn told one thing and handed another.
+    const unaware = metas.filter((m) => !m.fakes);
+    const aware = surfaces().filter((m) => m.fakes).map((m) => m.id).join(', ');
+    if (ids.length && unaware.length) throw new UsageError(`--fakes: ${unaware.map((m) => m.id).join(', ')} ${unaware.length === 1 ? 'tells' : 'tell'} the agent its writes are refused, so a faked run would grade a different turn; surfaces that run with the fake: ${aware}`);
+    metas = metas.filter((m) => m.fakes);
+    if (!metas.length) throw new UsageError(`--fakes runs only surfaces whose harness note knows the fake: ${aware}`);
   }
   if (!ids.length && flags.cadence && flags.cadence !== BISECT_CADENCE) {
     const off = metas.filter((m) => m.standingRuns === false);
@@ -264,7 +283,7 @@ async function checkBatch(ids: string[], flags: CheckFlags, sources: EvalSources
 
   const spent: RepLedger = { usd: 0 };
   const deadline = flags.maxMinutes ? Date.now() + flags.maxMinutes * 60_000 : null;
-  const opts = (plan: Plan, est = 0, peak = 0) => ({ reps: plan.reps, model: flags.model ?? null, dry: Boolean(flags.dry), notes: flags.notes ?? null, batch, cadence: flags.cadence ?? null, budgetUsd: stopAt, spent, estPerRep: est, peakPerRep: peak, deadline, stopFile: flags.stopFile ?? null, onLine: (l: string) => console.log(fmt.muted(l)) });
+  const opts = (plan: Plan, est = 0, peak = 0) => ({ reps: plan.reps, model: flags.model ?? null, dry: Boolean(flags.dry), fakes: Boolean(flags.fakes), notes: flags.notes ?? null, batch, cadence: flags.cadence ?? null, budgetUsd: stopAt, spent, estPerRep: est, peakPerRep: peak, deadline, stopFile: flags.stopFile ?? null, onLine: (l: string) => console.log(fmt.muted(l)) });
   // Jobs in surface order, so a stop leaves the later surfaces unreached rather than every surface half run.
   const prepared = new Map(await Promise.all(plans.flatMap((plan) => plan.freezes.map(async (f) => [f.id, await prepareFreeze(f, opts(plan), facts)] as const))));
   const runJob = (j: (typeof jobs)[number]) => replayRep(prepared.get(j.freeze.id)!, j.rep, repCount(j.plan.reps), opts(j.plan, perRepUsd(j.plan.meta, state, modelOf(j)), perRepPeakUsd(j.plan.meta, state, modelOf(j))));
@@ -396,6 +415,7 @@ triggers name them and never run them.`,
     .option('--stop-file <path>', 'start no rep once this file exists; stops like the budget (exit 3)')
     .option('--parallel <n>', `reps in flight at once, across freezes and surfaces (default ${DEFAULT_PARALLEL})`, positiveNumber('--parallel', true))
     .option('--dry', 'canned model output: proves the wiring, spends nothing')
+    .option('--fakes', "role-wake and anchor-brief: cast writes are answered by the fake built from real calls (./evals fakes) instead of refused, so a turn runs past its first write; weighed only against earlier --fakes batches")
     .option('--notes <text>', 'what changed, kept on every rep')
     .option('--publish', 'publish the report afterwards')
     .option('--batch <id>', 'name this run set (default: the start time)')

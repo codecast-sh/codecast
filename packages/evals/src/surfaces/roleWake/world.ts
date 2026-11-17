@@ -8,6 +8,7 @@ import { UsageError } from '@platform/evals/cli';
 import { briefTextLines } from '../../../../cli/src/briefLines';
 
 import { emptyOrgReads } from '../../commands/snapshot';
+import { FAKED_WRITES } from '../../fakes/cast/verbs';
 import { fixturesDir, homePaths } from '../../paths';
 import { EVERY_READ, fillAliases, readFrozenVerbs, recordSentence, servedReadKey, writeFrozenVerbs, writeServedRead } from '../../served';
 import type { ReplayCtx, SurfaceMeta } from '../../surface';
@@ -154,15 +155,17 @@ export function claudeModel(id: unknown): string | undefined {
  * the served dir freezes), the refused writes, and where the words that would
  * have been posted go instead.
  */
-export function harnessNote(frozen: string[], extra: string[] = []): string {
+export function harnessNote(frozen: string[], extra: string[] = [], fakes = false): string {
   return [
     '',
     '## Dry run (harness note)',
     '',
     [
       'This run grades how you handle this turn, so nothing you do reaches anyone.',
-      recordSentence(frozen),
-      'So run no command that writes: where you would send, post, decide, file or change something, say so in your last message instead, with the exact command you would have run.',
+      recordSentence(frozen, fakes),
+      fakes
+        ? `These commands write to a stand-in for the workspace that answers as production would and keeps what you did for the rest of this run, so run them as you would in production: ${FAKED_WRITES.map((v) => `\`cast ${v}\``).join(', ')}. Any other command that writes is refused: where you would run one, say so in your last message, with the exact command.`
+        : 'So run no command that writes: where you would send, post, decide, file or change something, say so in your last message instead, with the exact command you would have run.',
       ...extra,
       'Run every command in the foreground and wait for it; a turn that ends waiting on a background command ends this run with no message.',
       'End the turn with the message you would leave in this thread, verbatim and nothing else.',
@@ -179,7 +182,7 @@ export const frozenVerbsOf = (world: StandingWorld): string[] => (world.served ?
  * then the harness note. The replay sends it and the judge reads it, so the
  * judge knows a command the agent named stands for one it was told not to run.
  */
-export const withHarnessNote = (text: string, world: StandingWorld, extra: string[] = []): string => `${text}\n${harnessNote(frozenVerbsOf(world), extra)}`;
+export const withHarnessNote = (text: string, world: StandingWorld, extra: string[] = [], fakes = false): string => `${text}\n${harnessNote(frozenVerbsOf(world), extra, fakes)}`;
 
 /** The turn's opening as the judge and the conversation views see it. */
 export function describeTurn(text: string, at: string, id: string): ConvoMessage[] {

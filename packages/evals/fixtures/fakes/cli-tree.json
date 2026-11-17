@@ -1,0 +1,1395 @@
+{
+ "schemaVersion": 1,
+ "version": "1.1.233",
+ "commands": [
+  {
+   "command": "brief",
+   "path": [
+    "brief"
+   ],
+   "aliases": [],
+   "usage": "cast brief [options] [command] [handle]",
+   "flags": [
+    {
+     "flags": "--narrative",
+     "description": "Print only the narrative, raw and unindented: the text brief edit writes",
+     "type": "boolean",
+     "long": "--narrative"
+    },
+    {
+     "flags": "--team <name|id>",
+     "description": "Team workspace",
+     "type": "value",
+     "long": "--team"
+    },
+    {
+     "flags": "--json",
+     "description": "Machine-readable output",
+     "type": "boolean",
+     "long": "--json"
+    }
+   ],
+   "args": [
+    {
+     "name": "handle",
+     "required": false,
+     "variadic": false,
+     "description": "@handle, or-N, or id (default: the role this session speaks for)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "brief edit",
+   "path": [
+    "brief",
+    "edit"
+   ],
+   "aliases": [],
+   "usage": "cast brief edit [options] [text]",
+   "flags": [
+    {
+     "flags": "--old <text>",
+     "description": "Exact text to find in the narrative (must match once, or pass --all); '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--old"
+    },
+    {
+     "flags": "--new <text>",
+     "description": "Replacement text (empty to delete); '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--new"
+    },
+    {
+     "flags": "--all",
+     "description": "With --old/--new, replace every occurrence",
+     "type": "boolean",
+     "long": "--all"
+    },
+    {
+     "flags": "--for <handle>",
+     "description": "The role (default: the role this session speaks for; a parent may name one)",
+     "type": "value",
+     "long": "--for"
+    },
+    {
+     "flags": "--team <name|id>",
+     "description": "Team workspace",
+     "type": "value",
+     "long": "--team"
+    },
+    {
+     "flags": "--json",
+     "description": "Machine-readable output",
+     "type": "boolean",
+     "long": "--json"
+    }
+   ],
+   "args": [
+    {
+     "name": "text",
+     "required": false,
+     "variadic": false,
+     "description": "The whole narrative: state line, then Status:/Next:/Blocked:, then paragraphs; '-' reads it from stdin (heredoc-friendly)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "decide",
+   "path": [
+    "decide"
+   ],
+   "aliases": [],
+   "usage": "cast decide [options] [question] [args...]",
+   "flags": [
+    {
+     "flags": "-o, --option <label>",
+     "description": "An option; repeat 1-9 times (one option is a single course the person takes or answers in their own words). \"Label :: what happens if chosen\" adds a description",
+     "type": "value",
+     "long": "--option",
+     "short": "-o",
+     "default": []
+    },
+    {
+     "flags": "--question <text>",
+     "description": "edit: replace the question; '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--question"
+    },
+    {
+     "flags": "--context <text>",
+     "description": "Markdown context for someone who never saw this session, read alone: what went wrong (one real case), what you would pick and why, what cuts against it. Explain everything where you mention it, with no ids, file paths or rule numbers; never repeat the question or options. A cast-canvas block renders inline, so options worth comparing can sit side by side; '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--context"
+    },
+    {
+     "flags": "--report <file>",
+     "description": "HTML/markdown report published as the decision's body (reuses cast publish)",
+     "type": "value",
+     "long": "--report"
+    },
+    {
+     "flags": "--proposal <xp-N>",
+     "description": "The expectations proposal this decision settles: an answer opening with Apply lands it, one opening with Keep closes it, any other course leaves it open for you",
+     "type": "value",
+     "long": "--proposal"
+    },
+    {
+     "flags": "--run <command>",
+     "description": "Ask permission for any cast command only your person may run (a grant, a spend, a publish, a pairing, a setting on their laptop): the question says in plain words what will happen, the card asks Yes or Not now with the command only as a small terminal line at its foot, and Yes runs it as theirs; its output comes back as the answer. Never ask them to type a cast command instead",
+     "type": "value",
+     "long": "--run"
+    },
+    {
+     "flags": "--on <machine>",
+     "description": "With --run: where it runs. laptop is their own computer (from a cloud host, the laptop that manages it); or a machine's label or id. Default: this session's machine",
+     "type": "value",
+     "long": "--on"
+    },
+    {
+     "flags": "--card <card.json>",
+     "description": "A change card (cast card build) the decision is about; the queue draws it natively. Without -o the options are Ship, Revise, Drop",
+     "type": "value",
+     "long": "--card"
+    },
+    {
+     "flags": "--advisory",
+     "description": "Don't block: proceed with --default. Only when the default is cheap to undo: the answer often lands an hour later and may override you",
+     "type": "boolean",
+     "long": "--advisory"
+    },
+    {
+     "flags": "--default <n>",
+     "description": "1-based option you proceed with when --advisory (required with it)",
+     "type": "value",
+     "long": "--default"
+    },
+    {
+     "flags": "--blocking",
+     "description": "edit: turn an advisory decision into a blocking one (clears the default)",
+     "type": "boolean",
+     "long": "--blocking"
+    },
+    {
+     "flags": "--session <id>",
+     "description": "Session to attribute the decision to (default: detect current)",
+     "type": "value",
+     "long": "--session"
+    },
+    {
+     "flags": "--task <ct-N>",
+     "description": "The task this decision blocks or informs (default: the task this session is bound to)",
+     "type": "value",
+     "long": "--task"
+    },
+    {
+     "flags": "--no-task",
+     "description": "Do not bind the decision to the session's task",
+     "type": "boolean",
+     "long": "--no-task",
+     "negated": true
+    },
+    {
+     "flags": "--station <s>",
+     "description": "The task status (category or team status id) the task is held at until answered",
+     "type": "value",
+     "long": "--station"
+    },
+    {
+     "flags": "--stack <ds-N>",
+     "description": "Append to a decision stack (cast stack create); ls: list that stack's members",
+     "type": "value",
+     "long": "--stack"
+    },
+    {
+     "flags": "--category <c>",
+     "description": "Proposed category: approach|scope|priority|retry|review|allocation (the server may pin a protected one)",
+     "type": "value",
+     "long": "--category"
+    },
+    {
+     "flags": "--kind <k>",
+     "description": "single|multi|rank|form (default single)",
+     "type": "value",
+     "long": "--kind"
+    },
+    {
+     "flags": "--line <label>",
+     "description": "Ask for one line of text instead of a choice: a form with one text field (sets --kind form)",
+     "type": "value",
+     "long": "--line"
+    },
+    {
+     "flags": "--to <who>",
+     "description": "Who answers: a person's name, email or @handle in the session's workspace (repeatable; default: whoever the session reports to). pass: the one teammate it goes to",
+     "type": "value",
+     "long": "--to",
+     "default": []
+    },
+    {
+     "flags": "--doc <file>",
+     "description": "Markdown document as the decision's long body (creates a decision doc); '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--doc"
+    },
+    {
+     "flags": "--spec <file>",
+     "description": "JSON spec: { question, kind, category, options[{label,description,body_md,evidence,cost,risk,page}], form{fields}, doc_md, task, station, stack, advisory, default }",
+     "type": "value",
+     "long": "--spec"
+    },
+    {
+     "flags": "--option-body <n=file>",
+     "description": "Markdown body for option n (repeatable): --option-body 2=why-b.md",
+     "type": "value",
+     "long": "--option-body",
+     "default": []
+    },
+    {
+     "flags": "--option-page <n=file|slug|url>",
+     "description": "A page for option n (repeatable): a file publishes like --report, a slug or codecast url attaches an existing page",
+     "type": "value",
+     "long": "--option-page",
+     "default": []
+    },
+    {
+     "flags": "--mine",
+     "description": "ls: every pending decision you hold, across sessions",
+     "type": "boolean",
+     "long": "--mine"
+    },
+    {
+     "flags": "--answered-since <time>",
+     "description": "ls: the cards answered on a team's tasks after a time (epoch ms, ISO time, or 30m/24h/7d ago), oldest first; no session needed",
+     "type": "value",
+     "long": "--answered-since"
+    },
+    {
+     "flags": "--team <name|id>",
+     "description": "ls --answered-since: the team (default: the active one)",
+     "type": "value",
+     "long": "--team"
+    },
+    {
+     "flags": "-n, --limit <n>",
+     "description": "ls --answered-since: rows per page (default 50, at most 100)",
+     "type": "value",
+     "long": "--limit",
+     "short": "-n"
+    },
+    {
+     "flags": "--calibration",
+     "description": "ls --answered-since: whether the cards' confidence holds, every answer in the window grouped by the confidence its card gave",
+     "type": "boolean",
+     "long": "--calibration"
+    },
+    {
+     "flags": "--note <text>",
+     "description": "recommend / pass / escalate: one or two plain sentences the person needs that the card does not already say; never retell the card, never cite ids (escalate needs one). answer: your words with the pick, delivered with it; '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--note"
+    },
+    {
+     "flags": "--reason <text>",
+     "description": "same as --note; '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--reason",
+     "hidden": true
+    },
+    {
+     "flags": "--form <k=v>",
+     "description": "answer: a form field value (repeatable)",
+     "type": "value",
+     "long": "--form",
+     "default": []
+    },
+    {
+     "flags": "--for-human",
+     "description": "answer: from a session, answer as your human. Only when they explicitly told you in this conversation to answer this decision, or agreed to this choice; never on your own judgment",
+     "type": "boolean",
+     "long": "--for-human"
+    },
+    {
+     "flags": "--json",
+     "description": "Machine-readable output. ls: {decisions: [...], cursor?} (every ls); show: {decision, doc, task, ladder, ...}; ask, edit, answer: the row as the server returns it",
+     "type": "boolean",
+     "long": "--json"
+    },
+    {
+     "flags": "--serve",
+     "description": "kit: serve the page as it will be published on a local http address, until stopped",
+     "type": "boolean",
+     "long": "--serve"
+    }
+   ],
+   "args": [
+    {
+     "name": "question",
+     "required": false,
+     "variadic": false,
+     "description": "The decision, phrased as one question; or a subcommand: ls | show | edit | cancel | answer | recommend | pass | brief | kit"
+    },
+    {
+     "name": "args",
+     "required": false,
+     "variadic": true,
+     "description": "subcommand arguments: a decision id (sd-N) for show, answer, recommend and pass; optional for edit and cancel"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "role",
+   "path": [
+    "role"
+   ],
+   "aliases": [],
+   "usage": "cast role [options] [command]",
+   "flags": [],
+   "args": [],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": false
+  },
+  {
+   "command": "role wake",
+   "path": [
+    "role",
+    "wake"
+   ],
+   "aliases": [],
+   "usage": "cast role wake [options] <handle> <message>",
+   "flags": [
+    {
+     "flags": "--team <name|id>",
+     "description": "Team workspace",
+     "type": "value",
+     "long": "--team"
+    },
+    {
+     "flags": "--json",
+     "description": "Machine-readable output",
+     "type": "boolean",
+     "long": "--json"
+    }
+   ],
+   "args": [
+    {
+     "name": "handle",
+     "required": true,
+     "variadic": false,
+     "description": "@handle, or-N, or id"
+    },
+    {
+     "name": "message",
+     "required": true,
+     "variadic": false,
+     "description": "What to say; '-' reads it from stdin (heredoc-friendly)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "send",
+   "path": [
+    "send"
+   ],
+   "aliases": [],
+   "usage": "cast send [options] <session_id> [text]",
+   "flags": [
+    {
+     "flags": "--from <id>",
+     "description": "Override sender session (required if current session cannot be detected)",
+     "type": "value",
+     "long": "--from"
+    },
+    {
+     "flags": "--wake",
+     "description": "Deliver even when the target was killed",
+     "type": "boolean",
+     "long": "--wake"
+    },
+    {
+     "flags": "--done",
+     "description": "Close the exchange: the recipient must not reply",
+     "type": "boolean",
+     "long": "--done"
+    },
+    {
+     "flags": "--fyi",
+     "description": "For information: the recipient need not reply",
+     "type": "boolean",
+     "long": "--fyi"
+    },
+    {
+     "flags": "--status",
+     "description": "Show your recent sends to this session: when each was typed in and delivered",
+     "type": "boolean",
+     "long": "--status"
+    },
+    {
+     "flags": "--raw",
+     "description": "Deliver the text exactly as typed, without the session-message wrapper, for the agent's own slash commands (/model opus, /effort high). Own sessions only.",
+     "type": "boolean",
+     "long": "--raw"
+    }
+   ],
+   "args": [
+    {
+     "name": "session_id",
+     "required": true,
+     "variadic": false,
+     "description": "Target session short ID (e.g. jx7c6zk)"
+    },
+    {
+     "name": "text",
+     "required": false,
+     "variadic": false,
+     "description": "Message text; '-' reads it from stdin (heredoc-friendly)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "spawn",
+   "path": [
+    "spawn"
+   ],
+   "aliases": [],
+   "usage": "cast spawn [options] [prompts...]",
+   "flags": [
+    {
+     "flags": "-C, --dir <path>",
+     "description": "Working directory (default: current project)",
+     "type": "value",
+     "long": "--dir",
+     "short": "-C"
+    },
+    {
+     "flags": "--agent <type>",
+     "description": "Agent: claude, codex, cursor, opencode, pi, grok, muse, gemini (default: claude)",
+     "type": "value",
+     "long": "--agent"
+    },
+    {
+     "flags": "--as <definition>",
+     "description": "Run as a named agent definition (cast agent ls): its client, model, effort, tools and prompt; explicit flags override it",
+     "type": "value",
+     "long": "--as"
+    },
+    {
+     "flags": "--subagent [parent]",
+     "description": "Nest under a parent session as a subagent row (default parent: the session running this command; a value names another session's short ID)",
+     "type": "optional-value",
+     "long": "--subagent"
+    },
+    {
+     "flags": "--model <model>",
+     "description": "Model override (e.g. opus, sonnet)",
+     "type": "value",
+     "long": "--model"
+    },
+    {
+     "flags": "--effort <level>",
+     "description": "Reasoning effort (claude: low|medium|high|xhigh|max; varies by agent)",
+     "type": "value",
+     "long": "--effort"
+    },
+    {
+     "flags": "--account <name>",
+     "description": "Claude account profile to run on, without switching the machine's login (needs: cast accounts token <name>)",
+     "type": "value",
+     "long": "--account"
+    },
+    {
+     "flags": "--isolated",
+     "description": "Give each session its own git worktree",
+     "type": "boolean",
+     "long": "--isolated"
+    },
+    {
+     "flags": "--worktree <name>",
+     "description": "Name the worktree (implies --isolated; one task only)",
+     "type": "value",
+     "long": "--worktree"
+    },
+    {
+     "flags": "--merge-back",
+     "description": "With --subagent --isolated: bring each worker's changes into this checkout when it finishes done (an isolated definition does this by default)",
+     "type": "boolean",
+     "long": "--merge-back"
+    },
+    {
+     "flags": "--no-merge-back",
+     "description": "Leave each worker's changes in its worktree",
+     "type": "boolean",
+     "long": "--no-merge-back",
+     "negated": true
+    },
+    {
+     "flags": "--device <name>",
+     "description": "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline",
+     "type": "value",
+     "long": "--device"
+    },
+    {
+     "flags": "--cloud [host]",
+     "description": "Run each task in its own worktree on the cloud host (wakes it, syncs the repo + gitignored files over SSH); [host] = a registered instance id",
+     "type": "optional-value",
+     "long": "--cloud"
+    },
+    {
+     "flags": "--shared",
+     "description": "With --cloud: run in the host's main checkout instead of a fresh worktree (one task only; refused when that checkout is dirty or already used by a live session)",
+     "type": "boolean",
+     "long": "--shared"
+    },
+    {
+     "flags": "--from <source>",
+     "description": "With --cloud: what each worktree starts from: checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main",
+     "type": "value",
+     "long": "--from"
+    },
+    {
+     "flags": "--label <name>",
+     "description": "File each spawned session under a label (created if new)",
+     "type": "value",
+     "long": "--label"
+    },
+    {
+     "flags": "--local",
+     "description": "Start on this machine even when the load governor would send unattended work to the cloud host",
+     "type": "boolean",
+     "long": "--local"
+    },
+    {
+     "flags": "--unattended",
+     "description": "Run as an unattended principal: reversible actions proceed, protected decisions go through cast decide, no inline questions (the briefing every line hand gets)",
+     "type": "boolean",
+     "long": "--unattended"
+    },
+    {
+     "flags": "--json",
+     "description": "Machine-readable output",
+     "type": "boolean",
+     "long": "--json"
+    }
+   ],
+   "args": [
+    {
+     "name": "prompts",
+     "required": false,
+     "variadic": true,
+     "description": "One task per session; '-' reads it from stdin (several '-' split stdin on lines containing only ---)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "state",
+   "path": [
+    "state"
+   ],
+   "aliases": [],
+   "usage": "cast state [options] [args...]",
+   "flags": [
+    {
+     "flags": "--status <status>",
+     "description": "Who acts next: working (default) | blocked | done | dormant; files the session under Needs You / Done / Dormant when the turn ends",
+     "type": "value",
+     "long": "--status"
+    },
+    {
+     "flags": "--for <session>",
+     "description": "Target another session (default: the current one)",
+     "type": "value",
+     "long": "--for"
+    },
+    {
+     "flags": "--json",
+     "description": "Machine-readable output",
+     "type": "boolean",
+     "long": "--json"
+    }
+   ],
+   "args": [
+    {
+     "name": "args",
+     "required": false,
+     "variadic": true,
+     "description": "clear | show <session> | the text to pin (prose past 1200 chars is cut; a fenced json block is kept whole); '-' reads it from stdin (heredoc-friendly)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "task",
+   "path": [
+    "task"
+   ],
+   "aliases": [
+    "t"
+   ],
+   "usage": "cast task [options] [command]",
+   "flags": [],
+   "args": [],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": false
+  },
+  {
+   "command": "task comment",
+   "path": [
+    "task",
+    "comment"
+   ],
+   "aliases": [],
+   "usage": "cast task comment [options] <short_id> <text>",
+   "flags": [
+    {
+     "flags": "-t, --type <type>",
+     "description": "Comment type: note or progress (the board's record, reaches no inbox); blocker or review (reach the people following the task)",
+     "type": "value",
+     "long": "--type",
+     "short": "-t",
+     "default": "note"
+    },
+    {
+     "flags": "-a, --author <name>",
+     "description": "Ignored: the author is the identity behind your token (a role signs as the role); kept for older scripts",
+     "type": "value",
+     "long": "--author",
+     "short": "-a"
+    }
+   ],
+   "args": [
+    {
+     "name": "short_id",
+     "required": true,
+     "variadic": false,
+     "description": "Task short ID"
+    },
+    {
+     "name": "text",
+     "required": true,
+     "variadic": false,
+     "description": "Comment text; '-' reads it from stdin (heredoc-friendly)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "task create",
+   "path": [
+    "task",
+    "create"
+   ],
+   "aliases": [],
+   "usage": "cast task create [options] <title>",
+   "flags": [
+    {
+     "flags": "--team <name|id|personal>",
+     "description": "Workspace to file it in: a team, or personal (default: the session's team, else the directory's mapping)",
+     "type": "value",
+     "long": "--team"
+    },
+    {
+     "flags": "-d, --description <text>",
+     "description": "Description; '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--description",
+     "short": "-d"
+    },
+    {
+     "flags": "-t, --type <type>",
+     "description": "Type: task, feature, bug, chore",
+     "type": "value",
+     "long": "--type",
+     "short": "-t",
+     "default": "task"
+    },
+    {
+     "flags": "-p, --priority <level>",
+     "description": "Priority: urgent, high, medium, low, none (p0 to p3 map to urgent to low)",
+     "type": "value",
+     "long": "--priority",
+     "short": "-p",
+     "default": "medium"
+    },
+    {
+     "flags": "--project <ref>",
+     "description": "Project ID, short ID, or title substring",
+     "type": "value",
+     "long": "--project"
+    },
+    {
+     "flags": "--blocked-by <refs>",
+     "description": "Comma-separated blockers of any kind: a task (ct-12), a PR to merge (\"#42\", quoted since # starts a shell comment; owner/repo#42, a PR URL; add :checks to wait on green CI), a decision (sd-4) or a time (2h, 2026-10-14T09:00)",
+     "type": "value",
+     "long": "--blocked-by"
+    },
+    {
+     "flags": "--found-during <task_id>",
+     "description": "The task this was found while working on (default: the task this session is bound to); none to leave it unlinked",
+     "type": "value",
+     "long": "--found-during"
+    },
+    {
+     "flags": "--labels <labels>",
+     "description": "Comma-separated labels",
+     "type": "value",
+     "long": "--labels"
+    },
+    {
+     "flags": "--assignee <name>",
+     "description": "Assignee",
+     "type": "value",
+     "long": "--assignee"
+    },
+    {
+     "flags": "--status <status>",
+     "description": "Initial status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today",
+     "type": "value",
+     "long": "--status",
+     "default": "open"
+    },
+    {
+     "flags": "--plan <plan_id>",
+     "description": "Plan short ID to associate this task with",
+     "type": "value",
+     "long": "--plan"
+    },
+    {
+     "flags": "--parent <task_id>",
+     "description": "Nest this task under a parent task (e.g. ct-4102)",
+     "type": "value",
+     "long": "--parent"
+    },
+    {
+     "flags": "--human",
+     "description": "Put the task on the human's board \u2014 for work the human must see and manage (rare)",
+     "type": "boolean",
+     "long": "--human"
+    },
+    {
+     "flags": "--from-meeting",
+     "description": "This task came out of a meeting with people in it, not from your own work",
+     "type": "boolean",
+     "long": "--from-meeting"
+    },
+    {
+     "flags": "--from-call <call>",
+     "description": "The call this task was pulled from (cl-42, from `cast calls`); implies --from-meeting, and the task shows on the call's page",
+     "type": "value",
+     "long": "--from-call"
+    },
+    {
+     "flags": "--model <model>",
+     "description": "Model a session spawned for this task launches with",
+     "type": "value",
+     "long": "--model"
+    },
+    {
+     "flags": "--effort <level>",
+     "description": "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max",
+     "type": "value",
+     "long": "--effort"
+    },
+    {
+     "flags": "--ephemeral",
+     "description": "Bookkeeping with no value once done (a checklist, a probe): kept off the board, the feed and notifications; cast task keep undoes it",
+     "type": "boolean",
+     "long": "--ephemeral"
+    },
+    {
+     "flags": "--json",
+     "description": "Output the created task as JSON (one object for one title, an array for several)",
+     "type": "boolean",
+     "long": "--json"
+    }
+   ],
+   "args": [
+    {
+     "name": "title",
+     "required": true,
+     "variadic": false,
+     "description": "Task title, or one title per line for a bulk decomposition; '-' reads it from stdin (heredoc-friendly)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "task handoff",
+   "path": [
+    "task",
+    "handoff"
+   ],
+   "aliases": [],
+   "usage": "cast task handoff [options] <short_id>",
+   "flags": [
+    {
+     "flags": "--status <status>",
+     "description": "How the work ended: done (finished and verified), blocked or needs_context (stopped; --evidence says why). The task moves to in_review either way",
+     "type": "value",
+     "long": "--status",
+     "required": true
+    },
+    {
+     "flags": "--evidence <text>",
+     "description": "What you verified and how (or why you stopped); '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--evidence",
+     "required": true
+    },
+    {
+     "flags": "--files <paths>",
+     "description": "Comma-separated files changed",
+     "type": "value",
+     "long": "--files"
+    },
+    {
+     "flags": "--pr <url>",
+     "description": "Pull request URL",
+     "type": "value",
+     "long": "--pr"
+    },
+    {
+     "flags": "--page <slug|url>",
+     "description": "Attach a published page as evidence (repeatable; the-line.md L6)",
+     "type": "value",
+     "long": "--page",
+     "default": []
+    },
+    {
+     "flags": "--guide <markdown>",
+     "description": "Change guide: a walkthrough of the change in reading order, one heading per step with its file:start-end on the heading line and the reason under it. With --evidence - too, stdin holds one section per '-' in the order the flags are written, split by a --- line; '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--guide"
+    },
+    {
+     "flags": "--guide-base <ref>",
+     "description": "Diff the guide's hunks against this ref (default: where HEAD branched from origin/main)",
+     "type": "value",
+     "long": "--guide-base"
+    }
+   ],
+   "args": [
+    {
+     "name": "short_id",
+     "required": true,
+     "variadic": false,
+     "description": "Task short ID"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "task show",
+   "path": [
+    "task",
+    "show"
+   ],
+   "aliases": [],
+   "usage": "cast task show [options] <short_ids...>",
+   "flags": [
+    {
+     "flags": "-c, --comments",
+     "description": "Show all comments",
+     "type": "boolean",
+     "long": "--comments",
+     "short": "-c"
+    },
+    {
+     "flags": "--last <n>",
+     "description": "Show the last n comments (default 5)",
+     "type": "value",
+     "long": "--last"
+    },
+    {
+     "flags": "--only <sections>",
+     "description": "Print only these sections, comma separated, after the title line: description, criteria, steps, subtasks, details, graph, sessions, history, comments, decisions, runs, evidence",
+     "type": "value",
+     "long": "--only"
+    },
+    {
+     "flags": "--json",
+     "description": "Output as JSON (one object for a single id, an array for several)",
+     "type": "boolean",
+     "long": "--json"
+    },
+    {
+     "flags": "--fields <names>",
+     "description": "With --json, only these fields, comma separated (short_id always rides along): a caller that reads a title and a status need not carry every comment",
+     "type": "value",
+     "long": "--fields"
+    }
+   ],
+   "args": [
+    {
+     "name": "short_ids",
+     "required": true,
+     "variadic": true,
+     "description": "Task short IDs (e.g., ct-a1b2 ct-c3d4)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "task start",
+   "path": [
+    "task",
+    "start"
+   ],
+   "aliases": [],
+   "usage": "cast task start [options] <short_id>",
+   "flags": [
+    {
+     "flags": "--take",
+     "description": "Take the task from the session that owns it even while that session is still working",
+     "type": "boolean",
+     "long": "--take"
+    },
+    {
+     "flags": "--spawn",
+     "description": "Also hand the task to a fresh agent session (the server spawns it, so this works from any shell)",
+     "type": "boolean",
+     "long": "--spawn"
+    },
+    {
+     "flags": "--agent <type>",
+     "description": "Agent type for --spawn: claude (default) or codex",
+     "type": "value",
+     "long": "--agent"
+    },
+    {
+     "flags": "--message <text>",
+     "description": "First message for the spawned session (default: the task's own brief); '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--message"
+    }
+   ],
+   "args": [
+    {
+     "name": "short_id",
+     "required": true,
+     "variadic": false,
+     "description": "Task short ID"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "task verdict",
+   "path": [
+    "task",
+    "verdict"
+   ],
+   "aliases": [],
+   "usage": "cast task verdict [options] <short_id> <verdict>",
+   "flags": [
+    {
+     "flags": "--note <text>",
+     "description": "Unmet criteria or review notes; '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--note"
+    }
+   ],
+   "args": [
+    {
+     "name": "short_id",
+     "required": true,
+     "variadic": false,
+     "description": "Task short ID"
+    },
+    {
+     "name": "verdict",
+     "required": true,
+     "variadic": false,
+     "description": "approve | changes | reject"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "trigger",
+   "path": [
+    "trigger"
+   ],
+   "aliases": [
+    "schedule",
+    "sched"
+   ],
+   "usage": "cast trigger [options] [command]",
+   "flags": [],
+   "args": [],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": false
+  },
+  {
+   "command": "trigger add",
+   "path": [
+    "trigger",
+    "add"
+   ],
+   "aliases": [],
+   "usage": "cast trigger add [options] <prompt>",
+   "flags": [
+    {
+     "flags": "--in <duration>",
+     "description": "Run after delay (e.g., 30m, 2h, 4h40m, 1d); with --every, the first run, which sets the time of day",
+     "type": "value",
+     "long": "--in"
+    },
+    {
+     "flags": "--at <time>",
+     "description": "Run at a time: 06:00, 6pm, \"06:00 UTC\", \"09:00 America/New_York\" (the next time the clock reads it) or 2026-10-17T06:00:00Z; with --every, the first run",
+     "type": "value",
+     "long": "--at"
+    },
+    {
+     "flags": "--every <duration>",
+     "description": "Run on interval (e.g., 4h, 1d)",
+     "type": "value",
+     "long": "--every"
+    },
+    {
+     "flags": "--on <event>",
+     "description": "Run on event (pr_opened, pr_synchronize, pr_ready, pr_review_requested, pr_review, pr_approved, pr_changes_requested, pr_check_failed, pr_checks_green, pr_behind, pr_conflict, pr_merged, pr_closed, pr_comment, push, issue_opened, issue_assigned, issue_labeled, issue_closed, issue_commented, error_new, error_regressed, error_spike, job_failed, check_failed, check_recovered, metric_alert, metric_recovered, deploy, deploy_live, deploy_failed, call_ended, chat_message)",
+     "type": "value",
+     "long": "--on"
+    },
+    {
+     "flags": "--repo <owner/name>",
+     "description": "Only fire for this repository (pull request events default to the checkout's origin; pass \"\" for every repository)",
+     "type": "value",
+     "long": "--repo"
+    },
+    {
+     "flags": "--pr <number>",
+     "description": "Only fire for this pull request",
+     "type": "value",
+     "long": "--pr"
+    },
+    {
+     "flags": "--source <name|src-N>",
+     "description": "Only fire for this source (with --on and an event a source reports: error_new, job_failed, check_failed, ...; see cast sources ls). Checked when saved",
+     "type": "value",
+     "long": "--source"
+    },
+    {
+     "flags": "--channel <#name|id>",
+     "description": "The team channel a chat_message trigger watches (required with --on chat_message; cast chat channels lists them). Checked when saved",
+     "type": "value",
+     "long": "--channel"
+    },
+    {
+     "flags": "--title <title>",
+     "description": "Short title (defaults to first 60 chars of prompt); '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--title"
+    },
+    {
+     "flags": "--context <mode>",
+     "description": "",
+     "type": "value",
+     "long": "--context",
+     "hidden": true
+    },
+    {
+     "flags": "--safe",
+     "description": "Read-only: a spawned run gets write tools removed and state-changing commands blocked. A run that continues an existing session inherits that session's rules instead.",
+     "type": "boolean",
+     "long": "--safe"
+    },
+    {
+     "flags": "--mode <mode>",
+     "description": "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.",
+     "type": "value",
+     "long": "--mode"
+    },
+    {
+     "flags": "--project <ref>",
+     "description": "A codecast project this trigger feeds (short id, id or title substring): each run is a turn in the project's main session, found at the firing, and pausing the project pauses it. With --spawn, runs start fresh sessions instead. A path here is read as --project-path",
+     "type": "value",
+     "long": "--project"
+    },
+    {
+     "flags": "--project-path <path>",
+     "description": "Project path for agent cwd",
+     "type": "value",
+     "long": "--project-path"
+    },
+    {
+     "flags": "--device <name>",
+     "description": "Machine whose daemon runs this trigger (device id prefix, label or hostname, e.g. studio). Default: this machine. Runs wait while it is offline",
+     "type": "value",
+     "long": "--device"
+    },
+    {
+     "flags": "--agent <type>",
+     "description": "Agent type: claude (default) or codex",
+     "type": "value",
+     "long": "--agent",
+     "default": "claude"
+    },
+    {
+     "flags": "--as <definition>",
+     "description": "Spawned runs launch as this agent definition (cast agent ls): model, effort, tools and prompt",
+     "type": "value",
+     "long": "--as"
+    },
+    {
+     "flags": "--model <model>",
+     "description": "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id). Default: the agent's saved default. Ignored by runs that inject into a session.",
+     "type": "value",
+     "long": "--model"
+    },
+    {
+     "flags": "--max-runtime <duration>",
+     "description": "Max runtime (default: 10m)",
+     "type": "value",
+     "long": "--max-runtime"
+    },
+    {
+     "flags": "--precheck <command>",
+     "description": "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers and manual runs ignore it.",
+     "type": "value",
+     "long": "--precheck"
+    },
+    {
+     "flags": "--precheck-mode <mode>",
+     "description": "How --precheck is read. exit (default): exit 0 runs. changes: runs when its output differs from the last firing's, and its new output goes into the run; the first firing records it and skips, so it needs --every. state: it gets the previous state as JSON in $CAST_PRECHECK_STATE (null at first) and prints {\"wake\": true|false, \"state\": ..., \"message\": \"...\"}; the state is kept for the next firing, the message goes into the run it wakes.",
+     "type": "value",
+     "long": "--precheck-mode"
+    },
+    {
+     "flags": "--for <session>",
+     "description": "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.",
+     "type": "value",
+     "long": "--for"
+    },
+    {
+     "flags": "--parent <session>",
+     "description": "The session this trigger reports to (short id, conversation id, or Claude session uuid). Defaults to the calling session; required when no calling session can be detected (a script, ssh, tmux)",
+     "type": "value",
+     "long": "--parent"
+    },
+    {
+     "flags": "--spawn",
+     "description": "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Every run nests under this session and is read there rather than as an inbox card, and this session is woken if a run fails, dies, or asks for attention. A trigger that fires once also posts its clean result back here; a repeating one does not, since a line per firing would bury the thread.",
+     "type": "boolean",
+     "long": "--spawn"
+    },
+    {
+     "flags": "--thread",
+     "description": "Post each run's result into the current conversation as a message, without waking it. Works with --spawn; a --spawn trigger that fires once does this on its own.",
+     "type": "boolean",
+     "long": "--thread"
+    },
+    {
+     "flags": "--wake",
+     "description": "With --spawn on a trigger that fires once: wake this session with the run's report even when it completes cleanly, so this session acts on it. Costs a turn over this session's whole context; without it a clean report is posted here without a wake.",
+     "type": "boolean",
+     "long": "--wake"
+    }
+   ],
+   "args": [
+    {
+     "name": "prompt",
+     "required": true,
+     "variadic": false,
+     "description": "Instruction for the agent when the trigger fires; '-' reads it from stdin (heredoc-friendly)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "trigger complete",
+   "path": [
+    "trigger",
+    "complete"
+   ],
+   "aliases": [],
+   "usage": "cast trigger complete [options] <id>",
+   "flags": [
+    {
+     "flags": "--summary <text>",
+     "description": "Summary of what was done; '-' reads it from stdin (heredoc-friendly)",
+     "type": "value",
+     "long": "--summary"
+    },
+    {
+     "flags": "--needs-attention",
+     "description": "Flag the run for the user: it stays in the inbox instead of folding into the trigger's history, and a stashed/killed session is pulled back into the queue",
+     "type": "boolean",
+     "long": "--needs-attention"
+    },
+    {
+     "flags": "--again-in <duration>",
+     "description": "Fire this trigger once more after a delay (30m, 2h, 4h40m), whatever its schedule: a recheck booked from inside the run. A repeating trigger returns to its cadence after it",
+     "type": "value",
+     "long": "--again-in"
+    },
+    {
+     "flags": "--again-at <time>",
+     "description": "Like --again-in, at a time: 06:00, \"06:00 UTC\", 2026-10-17T06:00:00Z",
+     "type": "value",
+     "long": "--again-at"
+    }
+   ],
+   "args": [
+    {
+     "name": "id",
+     "required": true,
+     "variadic": false,
+     "description": "Trigger id: tr-42 (cast trigger ls lists them)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "chat",
+   "path": [
+    "chat"
+   ],
+   "aliases": [],
+   "usage": "cast chat [options] [command]",
+   "flags": [],
+   "args": [],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": false
+  },
+  {
+   "command": "chat dm",
+   "path": [
+    "chat",
+    "dm"
+   ],
+   "aliases": [],
+   "usage": "cast chat dm [options] <people> <text>",
+   "flags": [
+    {
+     "flags": "--thread <root_id>",
+     "description": "Reply on a thread in that conversation",
+     "type": "value",
+     "long": "--thread"
+    },
+    {
+     "flags": "--team <name|id>",
+     "description": "Team the people are in (default: your active team)",
+     "type": "value",
+     "long": "--team"
+    },
+    {
+     "flags": "--json",
+     "description": "Machine-readable output",
+     "type": "boolean",
+     "long": "--json"
+    }
+   ],
+   "args": [
+    {
+     "name": "people",
+     "required": true,
+     "variadic": false,
+     "description": "@handle, or several comma-separated (cast teams members lists them)"
+    },
+    {
+     "name": "text",
+     "required": true,
+     "variadic": false,
+     "description": "Message text; '-' reads it from stdin (heredoc-friendly)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  },
+  {
+   "command": "chat send",
+   "path": [
+    "chat",
+    "send"
+   ],
+   "aliases": [],
+   "usage": "cast chat send [options] <text>",
+   "flags": [
+    {
+     "flags": "--channel <ref>",
+     "description": "#name, @person (comma-separate for a group), or a channel id",
+     "type": "value",
+     "long": "--channel",
+     "required": true
+    },
+    {
+     "flags": "--thread <root_id>",
+     "description": "Reply on this thread instead of the channel",
+     "type": "value",
+     "long": "--thread"
+    },
+    {
+     "flags": "--local-only",
+     "description": "Keep this line out of the channel's Slack mirror",
+     "type": "boolean",
+     "long": "--local-only"
+    },
+    {
+     "flags": "--team <name|id>",
+     "description": "Team whose #names and people resolve (default: your active team)",
+     "type": "value",
+     "long": "--team"
+    },
+    {
+     "flags": "--json",
+     "description": "Machine-readable output",
+     "type": "boolean",
+     "long": "--json"
+    }
+   ],
+   "args": [
+    {
+     "name": "text",
+     "required": true,
+     "variadic": false,
+     "description": "Message text; '-' reads it from stdin (heredoc-friendly)"
+    }
+   ],
+   "hidden": false,
+   "destructive": false,
+   "runsBare": true
+  }
+ ]
+}

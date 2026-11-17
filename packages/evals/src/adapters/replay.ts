@@ -14,6 +14,7 @@ import { loggedArgv } from '../served';
 import { loadSurface, surfaceMeta } from '../registry';
 import { addSpend, dirtySurfaces, gitHead, sourceHashes } from '../state';
 import { gate, type AgentResult, type CallResult, type ReplayCtx, type ReplayResult, type SurfaceMeta } from '../surface';
+import { failedWrites, fakedWrites, ranLine, seedFor } from '../fakes/seed';
 import { assertAnswered, runAgent, runCall } from './dryRun';
 import { criteriaCheck, judgeMomentOf, judgeReply, PASS_AT } from './judge';
 import { loadLabel, loadSnapshot, SnapshotMismatch, snapshotPath, type LoadedSnapshot } from './resolver';
@@ -232,6 +233,8 @@ export const laneRepUsd = (l: LaneLedger): number => Math.max(l.est, l.done ? l.
 export const reservedUsd = (ledger: RepLedger): number => Object.values(ledger.lanes ?? {}).reduce((t, l) => t + l.running * laneRepUsd(l), 0);
 
 export interface ReplayRunOptions extends ReplayOptions {
+  /** Agent reps answer cast writes with the fake (fakes/) instead of refusing them. */
+  fakes?: boolean;
   /** The `check` invocation this belongs to; a fresh one when unset. */
   batch?: string;
   /** The standing run it belongs to (check --cadence), stamped on every rep. */
@@ -373,6 +376,7 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
       let named: string | null = null;
       const ctx: ReplayCtx = {
         dry: Boolean(o.dry),
+        fakes: Boolean(o.fakes),
         model,
         runDir: dir,
         snapshotDir: loaded.dir,
@@ -387,7 +391,8 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
         async agent(opts) {
           prompts.push(opts.prompt, ...(opts.then ?? []));
           named = opts.promptSha ?? named;
-          const a = await runAgent({ ...opts, serveDir: opts.serveDir ?? loaded.dir }, join(dir, `agent${agents.length + 1}`), { dry: Boolean(o.dry) });
+          const serveDir = opts.serveDir ?? loaded.dir;
+          const a = await runAgent({ ...opts, serveDir }, join(dir, `agent${agents.length + 1}`), { dry: Boolean(o.dry), ...(o.fakes ? { fake: seedFor(serveDir, opts.seat, [opts.prompt, ...(opts.then ?? [])].join('\n')) } : {}) });
           agents.push(a);
           assertAnswered(a, `agent${agents.length}`);
           return a;
@@ -401,8 +406,10 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
         const checks = [...(impl.checks?.(loaded.snap, result, label) ?? [])];
         let judged: { costUsd: number; model: string } | null = null;
         if (f.judge) {
-          const transcript = judgeMomentOf(impl, loaded.snap, f.asOf);
-          const texts = agents.length ? agents.flatMap((a) => a.said) : [result.reply];
+          const transcript = judgeMomentOf(impl, loaded.snap, f.asOf, { fakes: Boolean(o.fakes) });
+          const calls = agents.flatMap((a) => a.calls);
+          const [ran, failed] = [fakedWrites(calls), failedWrites(calls)];
+          const texts = [...(agents.length ? agents.flatMap((a) => a.said) : [result.reply]), ...(ran.length || failed.length ? [ranLine(ran, failed)] : [])];
           const reply = texts.map((text, i): ConvoMessage => ({ n: i + 1, id: `reply-${i + 1}`, at: f.asOf, channel: 'session', isGroup: false, direction: 'out', from: 'assistant', text }));
           const v = await judgeReply(f, transcript, reply, { dir: join(dir, 'judge'), dry: Boolean(o.dry) });
           judged = { costUsd: v.costUsd, model: v.model };

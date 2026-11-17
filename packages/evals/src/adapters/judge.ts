@@ -64,9 +64,9 @@ export function judgeText(name: string, moment: string[], reply: string[], crite
 }
 
 /** The moment the judge reads for a snapshot (SurfaceImpl.judgeMoment, else describe), up to the freeze; empty when the snapshot cannot be described. */
-export function judgeMomentOf(impl: Pick<SurfaceImpl, 'describe' | 'judgeMoment'>, snap: unknown, asOf: string): ConvoMessage[] {
+export function judgeMomentOf(impl: Pick<SurfaceImpl, 'describe' | 'judgeMoment'>, snap: unknown, asOf: string, o: { fakes?: boolean } = {}): ConvoMessage[] {
   try {
-    return (impl.judgeMoment ? impl.judgeMoment(snap) : impl.describe(snap)).filter((m) => Date.parse(m.at) <= Date.parse(asOf));
+    return (impl.judgeMoment ? impl.judgeMoment(snap) : impl.describe(snap, o)).filter((m) => Date.parse(m.at) <= Date.parse(asOf));
   } catch {
     return [];
   }

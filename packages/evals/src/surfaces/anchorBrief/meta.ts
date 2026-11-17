@@ -15,4 +15,5 @@ export const meta: SurfaceMeta = {
   maxUsdPerRep: 1.5,
   criteria: 'the opening turn orients the role to its scope and does no writes',
   ...STANDING_READS,
+  fakes: true,
 };

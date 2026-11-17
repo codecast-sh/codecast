@@ -41,6 +41,8 @@ export interface SurfaceMeta {
   servedAliases?: Array<{ serve: string[]; from: string[] }>;
   /** Agent route: REFUSED lines matching one of these are allowed by the surface's harness note. */
   allowedRefusals?: string[];
+  /** Agent route: its harness note and gates know `check --fakes` (writes answered by the fake), so a faked run grades the turn prod would run. */
+  fakes?: boolean;
   /**
    * Agent route: UNSERVED lines matching one of these do not fail
    * frozen-reads. A read the prompt itself asks for (a role's own `cast
@@ -146,6 +148,8 @@ export interface AgentOptions {
   guard?: string;
   /** The directory the agent starts in (prompt-dry-run.ts --cwd); the run dir by default. */
   cwd?: string;
+  /** Under `check --fakes`: whose turn this is, so the fake answers as that session (fakes/seed.ts). */
+  seat?: { handle?: string; session?: string; title?: string };
   /**
    * run.json.promptSha when the briefing wraps the prompt under test in text
    * of the run's own (org-review: the analyzer prompt without the harness
@@ -184,6 +188,8 @@ export interface ReplayCtx {
   agent(opts: AgentOptions): Promise<AgentResult>;
   /** Canned output, no spawn: proves the wiring, spends nothing. */
   dry: boolean;
+  /** `check --fakes`: the agent's cast writes are answered by the fake (packages/evals/src/fakes) rather than refused, so the harness note says so. */
+  fakes?: boolean;
   /** The model under test: the surface's pin, or the --model override. */
   model: string;
   runDir: string;
@@ -213,7 +219,8 @@ export interface SurfaceImpl {
   gates(snap: any, out: ReplayResult, label?: any): GateResult[];
   checks?(snap: any, out: ReplayResult, label?: any): CheckResult[];
   /** What the convo views show, and the judge unless judgeMoment says otherwise. */
-  describe(snap: any): ConvoMessage[];
+  /** The moment as a reader sees it; `fakes` when the run answered its writes with the fake, so the opening carries that run's harness note. */
+  describe(snap: any, o?: { fakes?: boolean }): ConvoMessage[];
   /**
    * The moment the judge reads, when describe would show it text the prompt
    * under test renders: that text is left out, so both arms of an ablation

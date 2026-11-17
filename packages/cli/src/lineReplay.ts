@@ -189,10 +189,11 @@ export function readDbUrl(top: string, db: ReplayDb): { url: string; port: numbe
  * dependencies. With `db`, its env file holds that one read-only URL and
  * nothing else, the only database sign-in the replay can read.
  */
-export type ReplayAt = { cwd: string; port?: number; hide?: string; serve?: string };
+export type ReplayAt = { cwd: string; port?: number; hide?: string; serve?: string; reads?: string[] };
 
 export function replayCwd(root: string, ck: Checkpoint, isolated: boolean, dir: string, db?: ReplayDb): ReplayAt | { reason: string } {
-  const project = ck.context.project_path && fs.existsSync(ck.context.project_path) ? ck.context.project_path : root;
+  // Real paths: git answers the toplevel resolved (/private/var on macOS), and a project path through a link would sit outside it, which put the replay in the real checkout.
+  const project = fs.realpathSync(ck.context.project_path && fs.existsSync(ck.context.project_path) ? ck.context.project_path : root);
   const top = git(project, ["rev-parse", "--show-toplevel"]);
   const ref = isolated ? ck.branch : "HEAD";
   const sha = ref ? spawnSync("git", ["-C", top, "rev-parse", "--verify", "--quiet", ref], { encoding: "utf8" }) : null;
@@ -203,16 +204,21 @@ export function replayCwd(root: string, ck: Checkpoint, isolated: boolean, dir: 
   const origin = spawnSync("git", ["-C", top, "rev-parse", "origin/main"], { encoding: "utf8" });
   if (origin.status === 0) git(tree, ["update-ref", "refs/remotes/origin/main", origin.stdout.trim()]);
   const installed = spawnSync("find", [top, "-maxdepth", "4", "-path", path.join(top, ".git"), "-prune", "-o", "-type", "d", "-name", "node_modules", "-print", "-prune"], { encoding: "utf8" });
+  // The linked dependencies live in the real checkout, which the replay's sandbox does not open: each is named to it, read-only (prompt-dry-run.ts --read).
+  const reads: string[] = [];
   for (const nm of installed.stdout.split("\n").filter(Boolean)) {
     const rel = path.relative(top, nm);
-    if (fs.existsSync(path.join(tree, path.dirname(rel))) && !fs.existsSync(path.join(tree, rel))) fs.symlinkSync(nm, path.join(tree, rel));
+    if (fs.existsSync(path.join(tree, path.dirname(rel))) && !fs.existsSync(path.join(tree, rel))) {
+      fs.symlinkSync(nm, path.join(tree, rel));
+      reads.push(nm);
+    }
   }
-  const cwd = path.join(tree, path.relative(top, project));
-  if (!db) return { cwd };
+  const cwd = path.join(tree, path.relative(fs.realpathSync(top), project));
+  if (!db) return { cwd, reads };
   const { url, port } = readDbUrl(top, db);
   fs.writeFileSync(path.join(tree, db.file), `${db.key}=${url}\n`);
   // Every env file of the real checkout is out of reach, so the clone's is the only sign-in there is.
-  return { cwd, port, hide: `^${fs.realpathSync(top).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(.*/)?\\.env[^/]*$` };
+  return { cwd, port, reads, hide: `^${fs.realpathSync(top).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(.*/)?\\.env[^/]*$` };
 }
 
 // ── the problem as it stood ──────────────────────────────────────────────────
@@ -293,7 +299,7 @@ export async function replayOnce(c: ReplayCase, arm: Arm, rep: number, brief: Br
   fs.writeFileSync(promptFile, brief.brief);
   const started = Date.now();
   const account = deps.account ? ["--account", deps.account] : [];
-  const code = await deps.harness([deps.harnessScript, "--run", dir, "--prompt", promptFile, "--model", brief.model, "--cwd", at.cwd, "--read-only", ...account, ...(at.port ? ["--allow-port", String(at.port)] : []), ...(at.serve ? ["--serve", at.serve] : [])], { cwd: at.cwd, timeoutMs: brief.timeoutMs, ...(at.hide ? { env: { DRY_RUN_HIDE_REGEX: at.hide } } : {}) });
+  const code = await deps.harness([deps.harnessScript, "--run", dir, "--prompt", promptFile, "--model", brief.model, "--cwd", at.cwd, "--read-only", ...(at.reads ?? []).flatMap((r) => ["--read", r]), ...account, ...(at.port ? ["--allow-port", String(at.port)] : []), ...(at.serve ? ["--serve", at.serve] : [])], { cwd: at.cwd, timeoutMs: brief.timeoutMs, ...(at.hide ? { env: { DRY_RUN_HIDE_REGEX: at.hide } } : {}) });
   let out: any = null;
   try { out = JSON.parse(readIn(dir, "out.json")); } catch { /* none */ }
   let said: string[] = [];

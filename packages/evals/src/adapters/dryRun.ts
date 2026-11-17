@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import { stripAnsi } from '@platform/cli-kit/render';
 
+import type { WorldSeed } from '../fakes/cast/world';
+import { FAKE_MODULE } from '../fakes/seed';
 import { DRY_RUN_SCRIPT } from '../paths';
 import { evalsApiKey, postCall } from './apiCall';
 import type { AgentOptions, AgentResult, CallResult, SurfaceRequest } from '../surface';
@@ -120,7 +122,7 @@ export function readCallRun(req: SurfaceRequest, run: string, exitCode: number, 
 }
 
 /** One agent turn against a served world; said.json and calls.log come back for layout.ts to fold in. */
-export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: boolean }): Promise<AgentResult> {
+export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: boolean; fake?: WorldSeed }): Promise<AgentResult> {
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, 'prompt.md');
   writeFileSync(promptFile, opts.prompt);
@@ -133,6 +135,8 @@ export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: bo
     return file;
   });
   const claudeMdFile = opts.claudeMd === undefined ? null : join(dir, 'CLAUDE.md');
+  const fakeSeedFile = flags.fake ? join(dir, 'fake-seed.json') : null;
+  if (fakeSeedFile) writeFileSync(fakeSeedFile, JSON.stringify(flags.fake, null, 1));
   if (claudeMdFile) writeFileSync(claudeMdFile, opts.claudeMd!);
   if (flags.dry) {
     return { runSubdir, said: ['(dry run: no agent ran)'], turns: [['(dry run: no agent ran)']], wrote: [[]], calls: [], costUsd: 0, modelUsage: { [opts.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: opts.model, realMs: 0 };
@@ -149,6 +153,7 @@ export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: bo
       ...(claudeMdFile ? ['--claude-md', claudeMdFile] : []),
       ...(opts.guard ? ['--guard', opts.guard] : []),
       ...(opts.cwd ? ['--cwd', opts.cwd] : []),
+      ...(fakeSeedFile ? ['--fake', FAKE_MODULE, '--fake-seed', fakeSeedFile] : []),
     ],
     dir,
   );
