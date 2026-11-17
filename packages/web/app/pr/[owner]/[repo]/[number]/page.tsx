@@ -63,6 +63,7 @@ import { accentVar } from "../../../../../lib/externalEvents";
 import { TitlebarStrip } from "../../../../../lib/pageLayout";
 import { PageHeader } from "../../../../../components/ui/page-header";
 import { ShareControl } from "../../../../../components/ShareControl";
+import { ImageGalleryProvider } from "../../../../../components/ImageGallery";
 import "../../../../../components/pr/pr.css";
 import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
 import { matchesAction, withShortcut } from "../../../../../shortcuts";
@@ -634,7 +635,9 @@ export default function PRPage() {
 
   return (
     <RepoPageShell repository={`${owner}/${repo}`}>
-      <PRContent repository={`${owner}/${repo}`} number={number} />
+      <ImageGalleryProvider key={`${owner}/${repo}#${number}`}>
+        <PRContent repository={`${owner}/${repo}`} number={number} />
+      </ImageGalleryProvider>
     </RepoPageShell>
   );
 }
