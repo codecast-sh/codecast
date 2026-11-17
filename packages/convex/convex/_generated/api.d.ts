@@ -290,6 +290,7 @@ import type * as lib_decisionAccess from "../lib/decisionAccess.js";
 import type * as lib_decisionAudience from "../lib/decisionAudience.js";
 import type * as lib_decisionCategory from "../lib/decisionCategory.js";
 import type * as lib_decisionInbox from "../lib/decisionInbox.js";
+import type * as lib_decisionMatch from "../lib/decisionMatch.js";
 import type * as lib_decisionRowFacts from "../lib/decisionRowFacts.js";
 import type * as lib_decisionTeam from "../lib/decisionTeam.js";
 import type * as lib_decisionVerdict from "../lib/decisionVerdict.js";
@@ -1074,6 +1075,7 @@ declare const fullApi: ApiFromModules<{
   "lib/decisionAudience": typeof lib_decisionAudience;
   "lib/decisionCategory": typeof lib_decisionCategory;
   "lib/decisionInbox": typeof lib_decisionInbox;
+  "lib/decisionMatch": typeof lib_decisionMatch;
   "lib/decisionRowFacts": typeof lib_decisionRowFacts;
   "lib/decisionTeam": typeof lib_decisionTeam;
   "lib/decisionVerdict": typeof lib_decisionVerdict;
