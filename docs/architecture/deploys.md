@@ -435,6 +435,13 @@ script. They are read only by the CLI; the server's copy leaves them out
 Targets run side by side except where `after` orders them; a target whose
 `after` failed is not sent. The command exits 1 when any target failed.
 
+A release pushes commits of its own (the CLI release's Finalize step commits
+the version bump to main before it publishes `latest.json`), so once its
+targets are done `cast deploy` levels the checkout it ran in onto origin
+(`land/levelSweep.ts levelOne`, under the repository's `[ship] level` opt-in)
+and prints what it moved. The checkout ends a release level with what it
+released, rather than a commit behind until the daemon's sweep comes round.
+
 A change flow's Deploy stage is the same release narrowed to one change: the
 `deploy` segment's `send` param (`deploy [flow="deploy", send="release"]`, set
 by the shipped `change` and `quick-change`) makes its wait station run

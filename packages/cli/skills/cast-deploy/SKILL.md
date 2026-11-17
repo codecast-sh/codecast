@@ -29,7 +29,7 @@ Trees often hold successive versions of the same work, and the scan names a tree
 
 ## Level the checkout
 
-The checkout's HEAD equals origin's default branch before you plan and again after you push. A HEAD left behind makes every later ship replay against a stale base, shows thousands of already-shipped files as changed, and lets old copies of files ship as reverts. `cast land level` levels it when every file merges cleanly. When it refuses, level it yourself against one pinned origin sha, file by file:
+The checkout's HEAD equals origin's default branch before you plan, after you push, and when the run ends. Deploys push commits of their own (a CLI release commits its version bump), so origin moves again after your push; the run is not over until the checkout has followed it. A HEAD left behind makes every later ship replay against a stale base, shows thousands of already-shipped files as changed, and lets old copies of files ship as reverts. `cast land level` levels it when every file merges cleanly. When it refuses, level it yourself against one pinned origin sha, file by file:
 
 - A file nobody here changed, or one byte-identical to an older upstream version of itself, takes the upstream version; one upstream deleted, and identical to what was deleted, is removed.
 - A file that is the current upstream plus edits stays as it is: those edits are someone's work.
@@ -58,6 +58,8 @@ When it stops, fix the cause and run again. A type error or failing test in ship
 `cast deploy` sends every target the pushed head moved past whose policy is `release`, each once the targets it goes after are live, and waits for the targets that deploy themselves on a push. Each send is a deploy (dp-N) whose steps (CI, send, live, finish) show on the Deploys page; read `cast deploy --dry-run` first so the report can say what was left alone and why. Targets named after the command (from the skill's arguments, or a person's ask) go out whatever their policy.
 
 When a step stops, read the deploy (`cast line deploy show dp-N`) and fix the cause: a red CI on the head is fixed forward and pushed, then `cast deploy` runs again and sends only what is still behind. An eval gate or approval step that refuses goes to the person with `cast decide`, carrying the concrete change the gate saw and what each option costs.
+
+`cast deploy` levels the checkout onto origin once its targets are done, and prints the line. Then fetch and check `git rev-list --count HEAD..origin/<default>` yourself: anything above 0 (the repository has no `[ship] level`, a deploy pushed after the release returned, `cast land level` refused) is levelled now, the way the section above says, before the report.
 
 If the repository deploys somewhere `.codecast/deploy.toml` does not declare (its instructions name a deploy script, an app store, a release workflow), deploy it by hand this time, then add it as a `[[target]]` so the next release and every change flow send it: its `run`, the paths it ships (`when`), how codecast reads what is live there (`live`), its `rollback`, `policy = "release"`, and `after`, `ci` and `finish` when it has an order, a CI gate or a follow-up. `cast line deploy targets --publish` publishes the declaration.
 

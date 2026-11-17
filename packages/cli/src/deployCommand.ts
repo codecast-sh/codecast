@@ -67,8 +67,15 @@ export function registerDeployCommand(program: Command, deps: GroupDeps): void {
         log: (target, line) => { if (!options.json) console.log(`[${target}] ${line}`); },
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       });
-      if (options.json) console.log(JSON.stringify({ sha, plan, results }, null, 2));
-      else console.log(`\n${formatResults(results)}`);
+      // A release pushes commits of its own (the CLI release's version bump), so
+      // the checkout follows origin once its targets are done, the way the
+      // daemon's sweep would a minute later ([ship] level, land/levelSweep.ts).
+      const { levelOne, describeLevel } = await import("./land/levelSweep.js");
+      const { gitTry } = await import("./wipSnapshot.js");
+      const root = await gitTry(cwd, ["rev-parse", "--show-toplevel"]);
+      const level = root ? describeLevel(await levelOne(root).catch((e) => ({ root, skipped: String((e as Error)?.message ?? e) }))) : null;
+      if (options.json) console.log(JSON.stringify({ sha, plan, results, level }, null, 2));
+      else console.log(`\n${formatResults(results)}${level ? `\n${level}` : ""}`);
       if (results.some((r) => r.status === "failed")) process.exit(1);
     });
 }
