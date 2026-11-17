@@ -27,10 +27,10 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, isFleetProfile, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, isUsageExhausted, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, isFleetProfile, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, isUsageExhausted, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
-import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
+import { contextWindowTokens, restartShareOfRemaining, formatCountdown, peggedWindow } from "@codecast/shared/contracts";
 import { fallbackProfiles, rankByHeadroom, exhaustedLabel, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
@@ -396,9 +396,12 @@ function BlockedSessionsBanner({
   // accounts render as a single select, ranked by live headroom.
   const devices = accountData?.devices ?? [];
   const deviceById = new Map(devices.map((d) => [d.device_id, d]));
+  // A remote on a pushed copy of the primary's login is revived through the
+  // primary; a cloud host on its own fleet store (the line pool) runs and is
+  // judged on its own accounts, the routing insertSwitchCommands applies.
   const executorFor = (sess: InboxSession) => {
     const owner = sess.owner_device_id ? deviceById.get(sess.owner_device_id) : undefined;
-    return owner && owner.online && !owner.is_remote ? owner : loginDevice;
+    return owner && owner.online && (!owner.is_remote || runsOwnFleet({ is_remote: true, cc_accounts: owner })) ? owner : loginDevice;
   };
   const executors = [...new Map(acted.map((sess) => executorFor(sess)).filter((d) => !!d).map((d) => [d!.device_id, d!])).values()];
   // The account each machine's sessions run on: the launch profile after a
@@ -466,7 +469,21 @@ function BlockedSessionsBanner({
   // stays, unless it is spent. Machines that disagree have no account to stay
   // on: the button moves everyone onto the saved account with the most room
   // that every executor has.
-  const activeExhausted = isUsageExhausted(activeUsage, now);
+  const activeExhausted = isUsageExhausted(activeUsage, now, parkedModels);
+  // Every account the executing machines can run is spent: a continue is
+  // refused again on arrival, so the banner shows when the first one reopens
+  // instead of a button that cannot work. Only for a pure limit incident; a
+  // dropped connection or a signed-out session still has a continue to make.
+  const noAccountHasRoom =
+    limitCount === acted.length &&
+    rankedAccounts.length === 0 &&
+    executors.length > 0 &&
+    executors.every((d) => isUsageExhausted(fleetUsageOf(d), now, parkedModels));
+  const firstReopen = noAccountHasRoom
+    ? Math.min(
+        ...executors.flatMap((d) => d.profiles.map((p) => peggedWindow(p.usage, now)?.resets_at ?? Infinity)),
+      )
+    : Infinity;
   const sharedAccounts = rankedAccounts.filter((t) => t.missingOn.length === 0);
   const splitDefault = activeEmails.length > 1 ? (sharedAccounts[0] ?? rankedAccounts[0])?.key ?? "" : "";
   const accountKey = onAccount ?? proposedOption?.key ?? (splitDefault || (activeExhausted ? rankedAccounts[0]?.key ?? "" : ""));
@@ -810,7 +827,7 @@ function BlockedSessionsBanner({
             <span className="font-semibold">Switch accounts?</span> {describeDecision(proposal)}
             {!proposedOption ? (
               <span className="ml-1.5 text-meta text-sol-text-dim">
-                {proposal.target_name ?? proposal.target_email} is not saved on{" "}
+                {proposal.target_email ?? proposal.target_name} is not saved on{" "}
                 {executors.length === 1 ? executors[0].label : "the machines owning these sessions"} — pick another
                 account below, or save it there once.
               </span>
@@ -928,7 +945,15 @@ function BlockedSessionsBanner({
             Review {safetyCount === 1 ? "safety stop" : `${safetyCount} safety stops`}
           </button>
         )}
-        {pickable.length > 0 && <>
+        {pickable.length > 0 && noAccountHasRoom && (
+          <span
+            className="text-meta font-semibold text-amber-700 dark:text-amber-500"
+            title={`Every account ${executors.map((d) => d.label).join(", ")} can run is at its limit; parked sessions continue on their own when one resets`}
+          >
+            {activeEmail ?? "account"} at limit · {firstReopen < Infinity ? `first reset in ${formatCountdown(firstReopen - now)}` : "no account has room"}
+          </span>
+        )}
+        {pickable.length > 0 && !noAccountHasRoom && <>
         <Button
           variant="amber"
           size="xs"
