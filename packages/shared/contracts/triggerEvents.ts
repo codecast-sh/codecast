@@ -91,6 +91,13 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
   // watches (`channel_id`, checked at save against what its owner can read),
   // and a burst inside the coalescing window is one run that reads them all.
   chat_message: derived("chat_message"),
+
+  // ── Derived page events ──
+  // Fired once per write to a published page's state (pageState.ts), from the
+  // page or the CLI. A trigger names the one page it watches (`page_id`,
+  // checked at save against what its owner can open) and optionally some of
+  // its collections; a burst inside the coalescing window is one run.
+  page_state: derived("page_state"),
 };
 
 /**
@@ -152,6 +159,7 @@ export const TRIGGER_EVENT_LABELS: Record<string, string> = {
   deploy_failed: "a deploy failed",
   call_ended: "call ended",
   chat_message: "message in a channel",
+  page_state: "page data changed",
   [SESSION_NEEDS_INPUT_EVENT]: "a session under the role needs input",
   [ORG_AREA_CHANGE_EVENT]: "an area of the company changed and it lasted",
 };
@@ -202,6 +210,13 @@ export function isChatTriggerEvent(name: string | undefined): boolean {
   return !!name && CHAT_TRIGGER_EVENTS.includes(name);
 }
 
+/** The events about a published page's state. A page narrows them, and must. */
+export const PAGE_TRIGGER_EVENTS = ["page_state"];
+
+export function isPageTriggerEvent(name: string | undefined): boolean {
+  return !!name && PAGE_TRIGGER_EVENTS.includes(name);
+}
+
 /**
  * The shorthand a stored filter came from, so a trigger reads back in the same
  * words it was armed with. Falls back to the raw pair for a filter nothing
@@ -233,6 +248,10 @@ export interface TriggerScopeFilter extends TriggerEventFilter {
   channel_id?: string;
   /** The channel's name, joined in at read time for display; never stored. */
   channel_name?: string;
+  page_id?: string;
+  collections?: string[];
+  /** The page's slug, joined in at read time for display; never stored. */
+  page_slug?: string;
 }
 
 /** What a trigger is watching, in one line, so nobody has to guess its scope. */
@@ -243,6 +262,10 @@ export function describeEventScope(filter: TriggerScopeFilter): string {
   }
   if (isCallTriggerEvent(filter.event_type)) return `on ${name} for every call you can read`;
   if (isChatTriggerEvent(filter.event_type)) return `on ${name} in ${filter.channel_name ? `#${filter.channel_name}` : "one channel"}`;
+  if (isPageTriggerEvent(filter.event_type)) {
+    const page = filter.page_slug ? `page ${filter.page_slug}` : "one page";
+    return `on ${name} in ${page}${filter.collections?.length ? ` (${filter.collections.join(", ")})` : ""}`;
+  }
   const where = filter.repository
     ? `${filter.repository}${filter.pr_number ? `#${filter.pr_number}` : ""}`
     : "every repository you can see";
@@ -262,8 +285,12 @@ export function eventFilterForSave(eventName: string, prior: TriggerScopeFilter 
   const out: TriggerScopeFilter = { ...base };
   if (prior && isIngestTriggerEvent(eventName) && prior.source) out.source = prior.source;
   if (prior && isChatTriggerEvent(eventName) && prior.channel_id) out.channel_id = prior.channel_id;
+  if (prior && isPageTriggerEvent(eventName) && prior.page_id) {
+    out.page_id = prior.page_id;
+    if (prior.collections?.length) out.collections = prior.collections;
+  }
   // --repo narrows every repository event (push, issue_*, pr_*); --pr only pull requests.
-  if (prior && !isIngestTriggerEvent(eventName) && !isCallTriggerEvent(eventName) && !isChatTriggerEvent(eventName) && prior.repository) out.repository = prior.repository;
+  if (prior && !isIngestTriggerEvent(eventName) && !isCallTriggerEvent(eventName) && !isChatTriggerEvent(eventName) && !isPageTriggerEvent(eventName) && prior.repository) out.repository = prior.repository;
   if (prior && isPrTriggerEvent(eventName) && prior.pr_number !== undefined) out.pr_number = prior.pr_number;
   return out;
 }

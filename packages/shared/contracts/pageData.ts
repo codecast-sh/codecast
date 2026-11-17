@@ -129,7 +129,7 @@ export function parsePageDataDeclaration(raw: unknown): { ok: true; workspace?: 
 
 /** A page that reads live data or state gets the data runtime: the two elements, the API, or a motion page's data-cast-data bindings. */
 export function pageUsesData(html: string): boolean {
-  return /<cast-(chart|stat)[\s>]|\bcast\.(data|subscribe|state|me)\s*\(|\bdata-cast-data\s*=/i.test(html);
+  return /<cast-(chart|stat|agent)[\s>]|\bcast\.(data|subscribe|state|me|agents)\s*\(|\bdata-cast-data\s*=/i.test(html);
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   triggerEventShorthand,
   eventFilterForSave,
   isChatTriggerEvent,
+  isPageTriggerEvent,
 } from "@codecast/shared/contracts";
 import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { useLaneMailAbilities } from "../../components/simple/useLaneMail";
@@ -382,7 +383,7 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
         )}
         {kind === "on" && (
           <SelectBox variant="bare" value={eventKey} onChange={(e) => setEventKey(e.target.value)}>
-            {TRIGGER_EVENT_NAMES.filter((k) => !isChatTriggerEvent(k) || k === eventKey).map((k) => (
+            {TRIGGER_EVENT_NAMES.filter((k) => !(isChatTriggerEvent(k) || isPageTriggerEvent(k)) || k === eventKey).map((k) => (
               <option key={k} value={k}>{TRIGGER_EVENT_LABELS[k] ?? k}</option>
             ))}
           </SelectBox>

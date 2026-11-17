@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PAGE_DATA_FILE, parsePageDataDeclaration } from "@codecast/shared/contracts/pageData";
 import { fmt } from "./colors.js";
+import { callerSession } from "./publishWatch.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 
 /** The bundle's declaration as sent to the server, or null without one. Throws on a file the publisher must fix. */
@@ -107,7 +108,7 @@ export async function runPublishState(deps: PublishDeps, target: string, collect
   const result = await apiPost(deps, "/cli/artifacts/state", {
     target: abs,
     ...(collection ? { collection } : {}),
-    ...(write ?? {}),
+    ...(write ? { ...write, ...callerSession() } : {}),
   });
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -123,10 +124,18 @@ export async function runPublishState(deps: PublishDeps, target: string, collect
   for (const c of collections) {
     console.log(`\n${fmt.accent(c.id)}  ${fmt.muted(`read ${c.read} · write ${c.write}${c.own ? " · own rows" : ""} · ${c.rows.length} rows · ${Math.round(c.bytes / 1024)} KB`)}`);
     const shown = c.rows.slice(-15);
+    if (c.can_read === false) console.log(fmt.muted(`  not readable by your account`));
     for (const r of shown) {
       const value = r.value_json.length > 100 ? `${r.value_json.slice(0, 100)}…` : r.value_json;
-      console.log(`  ${r.key}  ${value}  ${fmt.muted(r.by ? r.by.name : "anonymous")}`);
+      const who = r.agent ? `session ${r.agent.session}` : r.by ? r.by.name : "anonymous";
+      console.log(`  ${r.key}  ${value}  ${fmt.muted(who)}`);
     }
     if (c.rows.length > shown.length) console.log(fmt.muted(`  … ${c.rows.length - shown.length} earlier rows (--json for all)`));
   }
+  const watches: any[] = result.watches ?? [];
+  const agents = result.agents ?? { watching: 0, working: 0 };
+  console.log("");
+  if (!agents.watching) console.log(fmt.muted(`  No session watches this page. cast publish watch ${result.slug} wakes this one on each change.`));
+  for (const w of watches) console.log(`  ${fmt.accent(w.trigger)} watching${w.collections ? ` ${w.collections.join(", ")}` : ""} ${fmt.muted(`${w.session ? `from session ${w.session}${w.session_title ? ` (${w.session_title})` : ""}` : "in fresh sessions"} · ${w.status}`)}`);
+  if (agents.watching > watches.length) console.log(fmt.muted(`  ${agents.watching - watches.length} other watch${agents.watching - watches.length === 1 ? "" : "es"} by teammates`));
 }

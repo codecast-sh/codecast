@@ -14,6 +14,7 @@ import {
   isCallTriggerEvent,
   isChatTriggerEvent,
   isIngestTriggerEvent,
+  isPageTriggerEvent,
   isPrTriggerEvent,
   type TriggerScopeFilter,
 } from "@codecast/shared/contracts";
@@ -24,6 +25,8 @@ export interface EventFilterFlags {
   pr?: string;
   source?: string;
   channel?: string;
+  page?: string;
+  collection?: string;
 }
 
 function refuse(message: string): never {
@@ -65,6 +68,17 @@ export async function buildEventFilter(
     filter.channel_id = opts.channel.trim();
   }
 
+  // A page event is about one published page, and must name it; the server
+  // resolves a slug, URL or path and refuses a page or collection the caller
+  // cannot read. --collection narrows it to some of the page's collections.
+  if ((opts.page !== undefined || opts.collection !== undefined) && !isPageTriggerEvent(eventName)) refuse(`--page and --collection only narrow a page event, and ${eventName} is not one.`);
+  if (isPageTriggerEvent(eventName)) {
+    if (!opts.page?.trim()) refuse(`${eventName} watches one page: name it with --page <slug|url|path> (cast publish ls lists yours).`);
+    filter.page_id = opts.page.trim();
+    const collections = (opts.collection ?? "").split(",").map((c) => c.trim()).filter(Boolean);
+    if (collections.length) filter.collections = collections;
+  }
+
   if (opts.pr !== undefined) {
     if (!isPrTriggerEvent(eventName)) refuse(`--pr only narrows a pull request event, and ${eventName} is not one.`);
     const number = Number(opts.pr);
@@ -73,6 +87,7 @@ export async function buildEventFilter(
   }
 
   if (opts.repo && isChatTriggerEvent(eventName)) refuse(`--repo does not narrow ${eventName}: --channel does.`);
+  if (opts.repo && isPageTriggerEvent(eventName)) refuse(`--repo does not narrow ${eventName}: --page does.`);
   if (opts.repo && isCallTriggerEvent(eventName)) refuse(`--repo does not narrow ${eventName}: it fires for every call you can read.`);
 
   const repository = opts.repo !== undefined ? opts.repo : isPrTriggerEvent(eventName) ? await checkoutRepository() : undefined;
@@ -90,5 +105,5 @@ export function unknownEventMessage(eventName: string): string {
 /** The narrowing flag passed without --on, if any: it would be dropped. */
 export function narrowingWithoutOn(opts: EventFilterFlags & { on?: string }): string | undefined {
   if (opts.on) return undefined;
-  return opts.repo !== undefined ? "--repo" : opts.pr !== undefined ? "--pr" : opts.source !== undefined ? "--source" : opts.channel !== undefined ? "--channel" : undefined;
+  return opts.repo !== undefined ? "--repo" : opts.pr !== undefined ? "--pr" : opts.source !== undefined ? "--source" : opts.channel !== undefined ? "--channel" : opts.page !== undefined ? "--page" : opts.collection !== undefined ? "--collection" : undefined;
 }

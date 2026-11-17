@@ -9,6 +9,10 @@
 //     .list() .subscribe(cb, onError) .get(key) .watch(key, cb, onError)
 //     .set(key, v) .insert(v[, key]) .patch(key, partial) .remove(key) .clear()
 //   window.cast.me()              -> who this viewer is and what each collection lets them do
+//   window.cast.agents(cb)        -> unsubscribe; cb({watching, working}) live: the agent sessions
+//                                    watching this page (cast publish watch), and how many are on a change now
+//
+//   <cast-agent>                  -> "Agent watching" / "Agent working", live; empty when none watch
 //
 //   <cast-chart query="done" type="line|area|bar|table" x="day" y="done" series="group" title="…" height="220">
 //   <cast-stat query="spend" field="spend" agg="last|sum|avg|min|max|count" format="number|usd|percent" label="…">
@@ -145,7 +149,7 @@ const CAST_DATA = String.raw`(function () {
   function fn(name) { return window.convex.anyApi.pageState[name]; }
   function rowOut(r) {
     var value; try { value = JSON.parse(r.value_json); } catch (e) { value = null; }
-    return { key: r.key, value: value, by: r.by, mine: r.mine, created_at: r.created_at, updated_at: r.updated_at };
+    return { key: r.key, value: value, by: r.by, agent: r.agent || null, mine: r.mine, created_at: r.created_at, updated_at: r.updated_at };
   }
   function unwrap(ans) {
     if (ans && ans.error) throw new Error(ans.error);
@@ -191,6 +195,40 @@ const CAST_DATA = String.raw`(function () {
   }
   window.cast.state = state;
   window.cast.me = function () { return once("me", {}); };
+  window.cast.agents = function (cb, onError) { return live("me", {}, function (ans) { return ans.agents || { watching: 0, working: 0 }; }, cb, onError); };
+
+  // ── <cast-agent>: whether an agent is on this page's changes ──
+  // Watching: a session wakes on each change. Working: a change woke it and
+  // its answer has not landed. Nothing at all when no session watches, so a
+  // page can carry the tag before anyone signs up.
+  function CastAgent() { return Reflect.construct(HTMLElement, [], CastAgent); }
+  CastAgent.prototype = Object.create(HTMLElement.prototype);
+  CastAgent.prototype.constructor = CastAgent;
+  Object.setPrototypeOf(CastAgent, HTMLElement);
+  CastAgent.prototype.connectedCallback = function () {
+    var el = this;
+    if (!el._root) {
+      el._root = el.attachShadow({ mode: "open" });
+      el._root.innerHTML = "<style>:host{display:inline-flex;font:inherit;color:inherit}:host([hidden]){display:none}" +
+        ".pill{display:inline-flex;align-items:center;gap:.4em;font-size:.75rem;line-height:1;padding:.3em .6em;border-radius:999px;" +
+        "border:1px solid color-mix(in srgb,currentColor 20%,transparent)}" +
+        ".dot{width:.5em;height:.5em;border-radius:50%;background:var(--sol-green,#4a9);flex:none}" +
+        ".working .dot{background:var(--sol-yellow,#c90);animation:p 1.2s ease-in-out infinite}" +
+        "@keyframes p{50%{opacity:.35}}@media (prefers-reduced-motion:reduce){.working .dot{animation:none}}</style>" +
+        "<span class='pill' part='pill'><span class='dot'></span><span class='text'></span></span>";
+      el.setAttribute("hidden", "");
+    }
+    if (el._unsub) return;
+    el._unsub = window.cast.agents(function (a) {
+      var pill = el._root.querySelector(".pill");
+      if (!a.watching) { el.setAttribute("hidden", ""); return; }
+      el.removeAttribute("hidden");
+      pill.className = a.working ? "pill working" : "pill";
+      el._root.querySelector(".text").textContent = a.working ? (el.getAttribute("working") || "Agent working") : (el.getAttribute("watching") || "Agent watching");
+    }, function () { el.setAttribute("hidden", ""); });
+  };
+  CastAgent.prototype.disconnectedCallback = function () { if (this._unsub) { this._unsub(); this._unsub = null; } };
+  if (!customElements.get("cast-agent")) customElements.define("cast-agent", CastAgent);
 
   // ── shared bits for the two elements ──
 

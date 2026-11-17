@@ -43,6 +43,7 @@ import { CAST_PLAYER_GUIDE, describePageAnchor, pageEmbedUrl, pageIsMotion, page
 import { commandGroup } from "./commandGroups.js";
 import { addVerbHelp, type VerbHelpSpec } from "./verbHelp.js";
 import { verbTypoNextStep } from "./commandSuggestion.js";
+import { runPublishUnwatch, runPublishWatch } from "./publishWatch.js";
 import { jsonText, parseKeyValue, readInlinePageData, readPageData, runPublishData, runPublishState, type StateWrite } from "./publishData.js";
 import { PAGE_DATA_FILE } from "@codecast/shared/contracts/pageData";
 import { captureMotionThumb, renderMotion, splitMotionOutputs, staleRenderNote } from "./publishMotion.js";
@@ -838,8 +839,8 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
 
 // ── registration ─────────────────────────────────────────────────────────────
 
-const PUBLISH_VERBS = ["ls", "rm", "rollback", "open", "versions", "comments", "viewers", "links", "set", "data", "state", "video"];
-const PUBLISH_USAGE = "Usage: cast publish <file.html|file.md|dir> [--title T] [--task ct-N]; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | state | video (each takes <slug|path>; cast publish --help)";
+const PUBLISH_VERBS = ["ls", "rm", "rollback", "open", "versions", "comments", "viewers", "links", "set", "data", "state", "watch", "unwatch", "video"];
+const PUBLISH_USAGE = "Usage: cast publish <file.html|file.md|dir> [--title T] [--task ct-N]; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | state | watch | unwatch | video (each takes <slug|path>; cast publish --help)";
 
 const GATE_FLAGS = ["--password", "--password-stdin", "--no-password", "--email-gate", "--no-email-gate", "--expires", "--edit-mode", "--session", "--no-session", "--comments", "--no-comments"];
 
@@ -857,16 +858,23 @@ export const PUBLISH_VERB_HELP: Record<string, VerbHelpSpec> = {
   data: { usage: "cast publish data <slug|path> [query-id] [--refresh] [--json]", summary: "A page's live queries and their latest rows", flags: ["--refresh", "--json"] },
   state: {
     usage: "cast publish state <slug|path> [collection] [--set key=<json> | --insert <json> | --patch key=<json> | --delete key | --clear] [--json]",
-    summary: "A page's state collections and their rows; one write first when a write flag is given (as the owner)",
+    summary: "A page's state collections, their rows and who watches them; one write first when a write flag is given (as your account would in the app, stamped with this session)",
     flags: ["--set", "--insert", "--patch", "--delete", "--clear", "--json"],
   },
+  watch: {
+    usage: "cast publish watch <slug|url|path> [collection...] [--prompt <text>] [--spawn]",
+    summary: "Wake this session when people change the page's state: each burst of writes is one turn listing what changed",
+    flags: ["--prompt", "--spawn"],
+    note: "An event trigger (cast trigger ls shows it). --prompt replaces the default brief; --spawn runs each wake in a fresh session instead.",
+  },
+  unwatch: { usage: "cast publish unwatch <slug|url|path> [--all]", summary: "Stop this session's watch of a page (--all: every watch of yours on it)", flags: ["--all"] },
   video: { usage: "cast publish video", summary: "How a page plays video in the cast player: chapters, styling, and hosting", note: "Run it bare to print the guide. A page with a <video> or <cast-player> publishes like any other." },
 };
 
 export function registerPublishCommand(program: Command, deps: PublishDeps): void {
   addVerbHelp(program.command("publish"), PUBLISH_VERB_HELP)
     .description(commandGroup("publish").description)
-    .argument("[target]", "file.html, file.md, or a directory; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | video")
+    .argument("[target]", "file.html, file.md, or a directory; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | state | watch | unwatch | video")
     .argument("[args...]", "subcommand arguments")
     .option("--title <title>", stdinText("Override the page title (default: <title> tag / first heading / filename)"))
     .option("--new", "Publish under a fresh URL even if this path was published before")
@@ -897,6 +905,9 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     .option("--patch <key=json>", "state: merge an object into a row")
     .option("--delete <key>", "state: delete one row")
     .option("--clear", "state: delete every row of the collection")
+    .option("--prompt <text>", stdinText("watch: the brief each wake starts with (default: answer on the page)"))
+    .option("--spawn", "watch: run each wake in a fresh session instead of this one")
+    .option("--all", "unwatch: stop every watch of yours on the page, not only this session's")
     .action(async (target: string | undefined, args: string[], options: PublishOptions) => {
       const json = !!options.json;
       if (!target) {
@@ -971,6 +982,16 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
           process.exit(1);
         }
         return runPublishState(deps, args[0], args[1], write, { json });
+      }
+      if ((target === "watch" || target === "unwatch") && !fs.existsSync(target)) {
+        if (!args[0]) {
+          console.error(fmt.error(`Usage: ${PUBLISH_VERB_HELP[target].usage}`));
+          process.exit(1);
+        }
+        const page = fs.existsSync(args[0]) ? path.resolve(args[0]) : args[0];
+        const o = options as { prompt?: string; spawn?: boolean; all?: boolean };
+        if (target === "watch") return runPublishWatch(program, deps, page, args.slice(1), { prompt: o.prompt, spawn: o.spawn });
+        return runPublishUnwatch(program, deps, page, { all: o.all });
       }
       if (target === "open" && !fs.existsSync(target)) {
         if (!args[0]) {

@@ -43,6 +43,15 @@ describe("buildEventFilter", () => {
     expect(errors[1]).toContain('Unknown event "nope"');
   });
 
+  test("page_state watches the one page --page names, narrowed by --collection, and needs it", async () => {
+    expect(await buildEventFilter("page_state", { page: " abc123 " }, noCheckout)).toEqual({ event_type: "page_state", page_id: "abc123" });
+    expect(await buildEventFilter("page_state", { page: "abc123", collection: "requests, answers" }, noCheckout)).toEqual({ event_type: "page_state", page_id: "abc123", collections: ["requests", "answers"] });
+    await expect(buildEventFilter("page_state", {}, noCheckout)).rejects.toThrow(/exit 1/);
+    expect(errors[0]).toContain("--page");
+    await expect(buildEventFilter("chat_message", { channel: "#x", page: "abc" }, noCheckout)).rejects.toThrow(/exit 1/);
+    expect(narrowingWithoutOn({ page: "abc" })).toBe("--page");
+  });
+
   test("chat_message watches the one channel --channel names, and needs it", async () => {
     expect(await buildEventFilter("chat_message", { channel: "#intake" }, noCheckout)).toEqual({ event_type: "chat_message", channel_id: "#intake" });
     await expect(buildEventFilter("chat_message", {}, noCheckout)).rejects.toThrow(/exit 1/);

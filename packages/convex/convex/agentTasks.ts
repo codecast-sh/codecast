@@ -22,7 +22,7 @@ import { mainSessionFor, mainSessionRefusal } from "./lib/projectMainSession";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
-import { isHostedAgentType, triggerFiringSource, triggerFiringContinues, TRIGGER_PRECHECK_MESSAGE_CHARS, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, isChatTriggerEvent, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
+import { isHostedAgentType, triggerFiringSource, triggerFiringContinues, TRIGGER_PRECHECK_MESSAGE_CHARS, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, isChatTriggerEvent, isPageTriggerEvent, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
 import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
 import { isOrgReviewFocusKey, type OrgReviewFocusKey } from "@codecast/shared/contracts/orgReview";
 import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, roleMachineAway, type RoleEventSpec } from "./lib/orgRoutine";
@@ -33,7 +33,8 @@ import { performSetThreadState } from "./conversations";
 import { createDataContext } from "./data";
 import { triggerSourceName } from "./ingest";
 import { canReadCall } from "./transcripts";
-import { armedTriggers, channelTriggers } from "./lib/triggerMatch";
+import { armedTriggers, channelTriggers, pageTriggers } from "./lib/triggerMatch";
+import { watchedPageFilter, watcherMayRead } from "./pageState";
 import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, hostedWallCadence, type HostedRoutine } from "./assistant/routines";
 import { nextCadenceRun } from "@platform/assistant/cadence";
 import { startHostedConversationFor } from "./assistant/start";
@@ -2836,6 +2837,10 @@ export async function storedEventFilter(ctx: TaskCtx, userId: Id<"users">, proje
     if (!filter.channel_id?.trim()) throw new Error("A chat_message trigger watches one channel: name it with --channel <#name|id>");
     filter = { ...filter, channel_id: String((await triggerChannel(ctx, userId, filter.channel_id))._id) };
   }
+  if (filter && isPageTriggerEvent(filter.event_type)) {
+    if (!filter.page_id?.trim()) throw new Error("A page_state trigger watches one page: name it by slug, URL or path (cast publish watch <page>)");
+    filter = { ...filter, ...(await watchedPageFilter(ctx, userId, filter.page_id, filter.collections)) };
+  }
   if (!filter || filter.source === undefined) return filter;
   if (!filter.source.trim()) {
     const { source: _blank, ...rest } = filter;
@@ -2884,6 +2889,10 @@ async function triggerChannel(ctx: TaskCtx, userId: Id<"users">, ref: string): P
  *  inside the window rides the one run (pending_events). */
 export const CHAT_COALESCE_MS = 20_000;
 
+/** How long a page_state firing waits for the rest of its burst (a form's
+ *  several writes, a few votes landing together) before its one run. */
+export const PAGE_COALESCE_MS = 5_000;
+
 export const matchTaskTriggers = internalMutation({
   args: {
     event_type: v.string(),
@@ -2915,6 +2924,11 @@ export const matchTaskTriggers = internalMutation({
     // The channel a chat event landed in: only a trigger watching it fires,
     // and only for an owner who can still read it (canAccessChannel).
     channel_id: v.optional(v.id("chat_channels")),
+    // The published page a page_state event is about, and the collection the
+    // write landed in: only a trigger watching that page (and, when it names
+    // collections, that one) fires, for an owner who may read it there.
+    page_id: v.optional(v.id("artifacts")),
+    collection: v.optional(v.string()),
     // The session that wrote the line, when one did: it never wakes itself.
     origin_conversation_id: v.optional(v.string()),
     // What fired, appended to each matched trigger's pending_events so the
@@ -2936,7 +2950,9 @@ export const matchTaskTriggers = internalMutation({
     const armed = async (status: "scheduled" | "running"): Promise<Doc<"agent_tasks">[]> =>
       args.channel_id
         ? ((await channelTriggers(ctx, status, String(args.channel_id)).collect()) as Doc<"agent_tasks">[]).filter((t) => t.event_filter?.event_type === args.event_type)
-        : armedTriggers(ctx, status, args.event_type).collect();
+        : args.page_id
+          ? ((await pageTriggers(ctx, status, String(args.page_id)).collect()) as Doc<"agent_tasks">[]).filter((t) => t.event_filter?.event_type === args.event_type)
+          : armedTriggers(ctx, status, args.event_type).collect();
     const tasks = [...(await armed("scheduled")), ...(args.event_ref ? await armed("running") : [])];
 
     // A call event whose call is gone wakes nobody.
@@ -2944,12 +2960,14 @@ export const matchTaskTriggers = internalMutation({
     if (args.call_id && !call) return 0;
     const channel = args.channel_id ? await ctx.db.get(args.channel_id) : null;
     if (isChatTriggerEvent(args.event_type) && !channel) return 0;
+    const page = args.page_id ? await ctx.db.get(args.page_id) : null;
+    if (isPageTriggerEvent(args.event_type) && !page) return 0;
 
     // One lookup per distinct owner, not per task: a user with several armed
     // triggers is the normal case.
     const ownerVerdicts = new Map<string, boolean>();
     const ownerMayBeWoken = async (userId: Id<"users">): Promise<boolean> => {
-      if (!args.team_id && !args.workspace && !call && !channel) return true;
+      if (!args.team_id && !args.workspace && !call && !channel && !page) return true;
       const key = String(userId);
       const known = ownerVerdicts.get(key);
       if (known !== undefined) return known;
@@ -2957,7 +2975,8 @@ export const matchTaskTriggers = internalMutation({
         (!args.team_id || (await isTeamMember(ctx, userId, args.team_id))) &&
         (!args.workspace || (await workspaceGrantsAccess(ctx, userId, args.workspace))) &&
         (!call || (await canReadCall(ctx, userId, call))) &&
-        (!channel || (await canAccessChannel(ctx as any, userId, channel)));
+        (!channel || (await canAccessChannel(ctx as any, userId, channel))) &&
+        (!page || (await watcherMayRead(ctx, page, userId, args.collection)));
       ownerVerdicts.set(key, verdict);
       return verdict;
     };
@@ -2972,6 +2991,8 @@ export const matchTaskTriggers = internalMutation({
       if (task.event_filter.pr_number != null && task.event_filter.pr_number !== args.pr_number) continue;
       if (!sourceFilterAdmits(task.event_filter.source, args.source)) continue;
       if (channel && task.event_filter.channel_id !== String(channel._id)) continue;
+      if (page && task.event_filter.page_id !== String(page._id)) continue;
+      if (page && task.event_filter.collections?.length && !task.event_filter.collections.includes(args.collection ?? "")) continue;
       if (args.origin_conversation_id && String(task.originating_conversation_id ?? "") === args.origin_conversation_id) continue;
       // Last, because they are the only checks that read the database.
       if (!(await ownerMayBeWoken(task.user_id))) continue;
@@ -2982,8 +3003,11 @@ export const matchTaskTriggers = internalMutation({
       // window keeps its end, so a steady channel still fires.
       // A window stays open until its firing takes the events, even if the
       // firing runs late: a line landing then joins it instead of moving it.
-      const windowOpen = !!channel && task.run_at !== undefined && (task.run_at > now || (task.pending_events?.length ?? 0) > 0);
-      const runAt = channel ? (windowOpen ? task.run_at! : now + CHAT_COALESCE_MS) : now;
+      // A page's writes coalesce the same way, on a shorter window: a person
+      // who just pressed a button on the page is watching for the answer.
+      const coalesceMs = channel ? CHAT_COALESCE_MS : page ? PAGE_COALESCE_MS : 0;
+      const windowOpen = coalesceMs > 0 && task.run_at !== undefined && (task.run_at > now || (task.pending_events?.length ?? 0) > 0);
+      const runAt = coalesceMs > 0 ? (windowOpen ? task.run_at! : now + coalesceMs) : now;
       const patch: Partial<Doc<"agent_tasks">> = running ? {} : { run_at: runAt };
       if (args.event_ref) {
         const event: PendingEvent = { ...args.event_ref, event_type: args.event_type, at: now, ...(running ? { after_claim: true } : {}), ...(args.origin_conversation_id ? { origin_conversation_id: args.origin_conversation_id } : {}) };

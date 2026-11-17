@@ -10,7 +10,8 @@ import { v, type Infer } from "convex/values";
 // source narrows the ingestion events to one event_sources name
 // (docs/architecture/external-data.md X4); channel_id names the one team
 // channel a chat_message trigger watches (an id once stored; a "#name" ref is
-// resolved and access-checked at save by agentTasks.storedEventFilter).
+// resolved and access-checked at save by agentTasks.storedEventFilter);
+// page_id names the one published page a page_state trigger watches.
 export const eventFilterValidator = v.object({
   event_type: v.string(),
   action: v.optional(v.string()),
@@ -18,6 +19,11 @@ export const eventFilterValidator = v.object({
   pr_number: v.optional(v.number()),
   source: v.optional(v.string()),
   channel_id: v.optional(v.string()),
+  // The published page a page_state trigger watches (an artifact id once
+  // stored; a slug or path is resolved and access-checked at save), and the
+  // collections it narrows to: absent means every collection the owner reads.
+  page_id: v.optional(v.string()),
+  collections: v.optional(v.array(v.string())),
 });
 
 export type EventFilter = Infer<typeof eventFilterValidator>;

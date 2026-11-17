@@ -20,6 +20,13 @@ export function channelTriggers(ctx: { db: any }, status: "scheduled" | "running
     .withIndex("by_channel_status", (q: any) => q.eq("event_filter.channel_id", channelId).eq("status", status));
 }
 
+/** The standing triggers watching one published page, in one status. */
+export function pageTriggers(ctx: { db: any }, status: "scheduled" | "running", pageId: string) {
+  return ctx.db
+    .query("agent_tasks")
+    .withIndex("by_page_status", (q: any) => q.eq("event_filter.page_id", pageId).eq("status", status));
+}
+
 export type TriggerMatchArgs = {
   event_type: string;
   action?: string;
@@ -30,6 +37,8 @@ export type TriggerMatchArgs = {
   workspace?: string;
   call_id?: Id<"transcripts">;
   channel_id?: Id<"chat_channels">;
+  page_id?: Id<"artifacts">;
+  collection?: string;
   origin_conversation_id?: string;
   event_ref?: {
     external_event_id?: Id<"external_events">;
@@ -46,14 +55,19 @@ export type TriggerMatchArgs = {
  * spent a scheduler slot to read an empty index range. A running trigger counts
  * only for an event that carries a ref, matching what the firing reads. A
  * chat line asks by its channel, so a busy team whose one channel has a source
- * schedules nothing for lines in its other channels.
+ * schedules nothing for lines in its other channels. A page-state write asks
+ * by its page the same way, so a busy poll nobody watches schedules nothing.
  */
 export async function scheduleTriggerMatch(
   ctx: { db: any; scheduler: { runAfter: (ms: number, fn: any, args: any) => Promise<any> } },
   args: TriggerMatchArgs,
 ): Promise<void> {
   const range = (status: "scheduled" | "running") =>
-    args.channel_id ? channelTriggers(ctx, status, String(args.channel_id)) : armedTriggers(ctx, status, args.event_type);
+    args.channel_id
+      ? channelTriggers(ctx, status, String(args.channel_id))
+      : args.page_id
+        ? pageTriggers(ctx, status, String(args.page_id))
+        : armedTriggers(ctx, status, args.event_type);
   const armed =
     (await range("scheduled").first()) ??
     (args.event_ref ? await range("running").first() : null);

@@ -157,8 +157,8 @@ describe("declaration lifecycle", () => {
 
   test("the owner's CLI writes as an editor and reads every collection", async () => {
     const { t, owner } = await setup();
-    expect(await t.mutation(internal.pageState.ownerWrite, { owner, target: SLUG, collection: "config", op: "set", key: "seed", value_json: "[1,2]" })).toEqual({ key: "seed" });
-    const read: any = await t.query(internal.pageState.ownerRead, { owner, target: SLUG });
+    expect(await t.mutation(internal.pageState.accountWrite, { user: owner, target: SLUG, collection: "config", op: "set", key: "seed", value_json: "[1,2]" })).toEqual({ key: "seed" });
+    const read: any = await t.query(internal.pageState.accountRead, { user: owner, target: SLUG });
     expect(read.collections.map((c: any) => c.id)).toEqual(["votes", "notes", "answers", "config"]);
     expect(read.collections[3]).toMatchObject({ bytes: 5, rows: [{ key: "seed", value_json: "[1,2]" }] });
   });

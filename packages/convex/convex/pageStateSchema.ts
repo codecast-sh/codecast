@@ -27,6 +27,8 @@ export const pageStateTables = {
     value_json: v.string(),
     /** The signed-in author, stamped by the server; absent for anonymous rows and the owner's CLI writes carry the owner. */
     author_user_id: v.optional(v.id("users")),
+    /** The agent session that last wrote the row through the CLI, so the page can show an agent's answer as the agent's. */
+    author_conversation_id: v.optional(v.id("conversations")),
     created_at: v.number(),
     updated_at: v.number(),
   }).index("by_artifact_collection_key", ["artifact_id", "collection", "key"]),
