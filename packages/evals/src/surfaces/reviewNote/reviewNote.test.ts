@@ -40,6 +40,11 @@ describe('reading the verdict', () => {
     expect(verdictOfCommand(`cast task verdict ct-2 changes --note "Fails \\"x\\"."`)).toEqual({ task: 'ct-2', verdict: 'changes', note: 'Fails "x".' });
   });
 
+  test('a note written to a file by a heredoc, then read on stdin', () => {
+    const cmd = `S=/tmp/s; cat > $S/note.md <<'EOF'\nShip it?\n\nBody.\nEOF\nwc -c $S/note.md; cd /r && cast task verdict ct-3 approve --note - < $S/note.md 2>&1 | tail -5`;
+    expect(verdictOfCommand(cmd)).toEqual({ task: 'ct-3', verdict: 'approve', note: 'Ship it?\n\nBody.' });
+  });
+
   test('no verdict', () => {
     expect(verdictOfCommand('cast task show ct-1')).toBeNull();
   });

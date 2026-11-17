@@ -90,12 +90,23 @@ export function verdictOfCommand(text: string): Verdict | null {
   const head = /cast task verdict\s+(\S+)\s+(approve|changes|reject)\b([^\n]*)/.exec(text);
   if (!head) return null;
   const [, task, verdict, rest] = head as unknown as [string, string, Verdict['verdict'], string];
+  const heredoc = (after: string, tag: string): string | null => {
+    const body = after.split('\n');
+    const end = body.findIndex((l) => l.trim() === tag);
+    return end < 0 ? null : body.slice(0, end).join('\n').trim();
+  };
   const doc = /--note\s+-\s*<<-?\s*(['"]?)([A-Za-z_]\w*)\1/.exec(rest);
   if (doc) {
-    const body = text.slice(head.index + head[0].length + 1).split('\n');
-    const end = body.findIndex((l) => l.trim() === doc[2]);
-    if (end < 0) return null;
-    return { task, verdict, note: body.slice(0, end).join('\n').trim() };
+    const note = heredoc(text.slice(head.index + head[0].length + 1), doc[2]!);
+    return note === null ? null : { task, verdict, note };
+  }
+  // The note written to a file by a heredoc earlier in the same command, then read on stdin.
+  const file = /--note\s+-\s*<\s*(\S+)/.exec(rest);
+  if (file) {
+    const path = file[1]!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const write = new RegExp(`cat\\s*>\\s*${path}\\s*<<-?\\s*(['"]?)([A-Za-z_]\\w*)\\1[^\\n]*\\n`).exec(text.slice(0, head.index));
+    const note = write ? heredoc(text.slice(write.index + write[0].length), write[2]!) : null;
+    return note === null ? null : { task, verdict, note };
   }
   const quoted = /--note\s+(["'])((?:\\.|(?!\1)[\s\S])*)\1/.exec(text.slice(head.index));
   return quoted ? { task, verdict, note: quoted[2]!.replace(/\\(["\\$`])/g, '$1').trim() } : null;
