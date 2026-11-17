@@ -1,4 +1,5 @@
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useDeferredValue, useRef, useState } from "react";
+import { useWatchEffect } from "./useWatchEffect";
 
 /**
  * useDeferredValue with a deadline. React gives the deferred render a fresh
@@ -30,7 +31,7 @@ export function useBoundedDeferredValue<T>(value: T, maxMs = 1000): T {
   const behind = !Object.is(deferred, value);
   if (!behind) t.floor = null;
   const since = t.since;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!behind) return;
     const timer = setTimeout(() => kick((n) => n + 1), Math.max(0, since + maxMs - performance.now()));
     return () => clearTimeout(timer);

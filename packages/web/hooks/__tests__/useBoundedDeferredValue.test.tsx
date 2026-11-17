@@ -19,12 +19,10 @@ const Body = memo(function Body({ id }: { id: string }) {
   return <div data-body={id}>{Array.from({ length: 150 }, (_, i) => <Row key={id + i} id={id} />)}</div>;
 });
 let setId: any; let snap = 0; const subs = new Set<() => void>(); const sub = (f: () => void) => { subs.add(f); return () => subs.delete(f); }; const tick = () => { snap++; subs.forEach((f) => f()); };
-function Pane({ live }: { live: string }) {
-  if (!sibling) React.useSyncExternalStore(sub, () => snap); else React.useSyncExternalStore(sub, () => 0);   // stands in for a store subscription of the streaming session
-  paneRenders++; const id = bounded ? useBoundedDeferredValue(live, 500) : useDeferredValue(live);
-  return <Body id={id} />;
-}
-function App() { const [id, s] = useState("A"); setId = s; return <><b data-live={id} /><Pane live={id} /><Sib /></>; }
+function usePaneStore() { React.useSyncExternalStore(sub, () => (sibling ? 0 : snap)); paneRenders++; }   // stands in for a store subscription of the streaming session
+function PlainPane({ live }: { live: string }) { usePaneStore(); return <Body id={useDeferredValue(live)} />; }
+function BoundedPane({ live }: { live: string }) { usePaneStore(); return <Body id={useBoundedDeferredValue(live, 500)} />; }
+function App() { const [id, s] = useState("A"); setId = s; const Pane = bounded ? BoundedPane : PlainPane; return <><b data-live={id} /><Pane live={id} /><Sib /></>; }
 
 async function run(tickEveryMs: number | null, waitMs: number, m = 0) {
   micro = m;
