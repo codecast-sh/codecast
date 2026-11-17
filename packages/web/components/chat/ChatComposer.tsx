@@ -18,6 +18,7 @@ import { chatDraftKey } from "../../lib/chatDraftKey";
 import { sentChatMessageId } from "../../store/chatSlice";
 import { isConvexId } from "../../lib/entityLinks";
 import { HandToAgentReview } from "./HandToAgent";
+import { MAX_CHAT_CONTENT } from "@codecast/convex/convex/chatText";
 import "./chat.css";
 
 // The chat composer.
@@ -140,6 +141,7 @@ export const ChatComposer = memo(function ChatComposer({
         mentionTeamId={teamId}
         composerPlaceholder={placeholder}
         autoFocusInput={autoFocus}
+        maxLength={MAX_CHAT_CONTENT}
         onDropFiles={dropRef}
         onGateSend={async (text: string, images) => {
           typing.stop();

@@ -517,6 +517,33 @@ function settleSend(clientId: string, outcome: string | Error) {
   if (settledSends.size > 50) settledSends.delete(settledSends.keys().next().value!);
 }
 
+/**
+ * The one way a chat send leaves this window: a first send, a retry and an
+ * edit of a line that never left all go through here. `dispatchChatSend`
+ * hands back the server's answer, and a refusal (too long, an archived room)
+ * rejects it. The dispatch error hook has already marked the row failed with
+ * the server's reason by then, so the rejection is settled here and never
+ * reaches the window as an unhandled one: a retry that dropped it showed the
+ * raw Convex error and stack as a crash toast.
+ */
+function driveChatSend(
+  get: () => { dispatchChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => unknown },
+  channelId: string,
+  content: string,
+  clientId: string,
+  opts?: ChatSendOptions,
+): Promise<ChatSendResult | undefined> | undefined {
+  // (The impl type says void because the BODY returns nothing; the middleware
+  // wraps an asyncAction to resolve with the dispatch result.)
+  const sent = get().dispatchChatSend(channelId, content, clientId, opts) as Promise<ChatSendResult | undefined> | undefined;
+  if (!sent || typeof sent.then !== "function") return undefined;
+  sent.then(
+    (res) => settleSend(clientId, res?.message_id ? String(res.message_id) : new Error("The message was not delivered")),
+    (e) => settleSend(clientId, e instanceof Error ? e : new Error(String(e))),
+  );
+  return sent;
+}
+
 /** The server id of a line this window sent, once it lands. */
 export function sentChatMessageId(clientId: string, timeoutMs = HAND_SEND_WAIT_MS): Promise<string> {
   const settled = settledSends.get(clientId);
@@ -833,22 +860,10 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       const clientId = newChatMessageClientId();
       const { onSent, ...journaled } = opts ?? {};
       const deliver = (text: string, sendOpts: ChatSendOptions | undefined) => {
-        const sent = get().dispatchChatSend(channelId, text, clientId, sendOpts) as
-          | Promise<ChatSendResult | undefined>
-          | undefined;
-        if (sent && typeof sent.then === "function") {
-          sent.then(
-            (res) => settleSend(clientId, res?.message_id ? String(res.message_id) : new Error("The message was not delivered")),
-            (e) => settleSend(clientId, e instanceof Error ? e : new Error(String(e))),
-          );
-        }
-        // (The impl type says void because the BODY returns nothing; the
-        // middleware wraps an asyncAction to resolve with the dispatch result.)
-        if (onSent && sent && typeof sent.then === "function") {
-          // Delivery is the outbox's problem (a failed send marks the row); the
-          // callback only ever hears a success.
-          sent.then((res) => onSent(res && typeof res === "object" ? res : undefined), () => {});
-        }
+        const sent = driveChatSend(get, channelId, text, clientId, sendOpts);
+        // Delivery is the outbox's problem (a failed send marks the row); the
+        // callback only ever hears a success.
+        if (onSent) sent?.then((res) => onSent(res && typeof res === "object" ? res : undefined), () => {});
       };
       if (!hasPendingUploads(journaled.attachments)) {
         deliver(content, opts ? journaled : undefined);
@@ -961,7 +976,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     retryChatSend: (rowId: string) => {
       const row = get().chatMessages[rowId] as ChatMessageRow | undefined;
       if (!row || isConvexId(row._id)) return;
-      get().dispatchChatSend(row.channel_id, row.content, rowId, {
+      driveChatSend(get, row.channel_id, row.content, rowId, {
         threadRootId: row.thread_root_id,
         broadcast: row.broadcast,
         attachments: deliverableAttachments(row.attachments),
@@ -1073,7 +1088,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       // Still uploading: the deferred send reads the row's content when it leaves.
       else if (hasPendingUploads(row.attachments) && !row._failedAt) get().paintChatSend(row.channel_id, content, messageId);
       else {
-        get().dispatchChatSend(row.channel_id, content, messageId, {
+        driveChatSend(get, row.channel_id, content, messageId, {
           threadRootId: row.thread_root_id,
           broadcast: row.broadcast,
           attachments: deliverableAttachments(row.attachments),

@@ -105,3 +105,54 @@ test("for a local agent the same image rides the gate send", async () => {
   useInboxStore.setState({ drafts: { [CONV_ID]: { draft_image_storage_ids: [image] } } } as any);
   expect(await submitGated("claude_code")).toEqual([""]);
 });
+
+// A composer with a length limit (team chat: the server refuses a message over
+// MAX_CHAT_CONTENT). Past the limit the send is held BEFORE the composer
+// clears, so the text is still in the box to trim, send is disabled, and the
+// count stands beside it. Before this the box emptied, the message painted as
+// sent, and the server's refusal came back as an error toast.
+// Each run gets a draft key of its own: the composer restores the text a key
+// last held, so a shared key would hand one test the other's message.
+let limitedRun = 0;
+async function submitLimited(text: string, maxLength: number) {
+  const draftKey = `chat-draft:limit-${++limitedRun}`;
+  const sent: string[] = [];
+  const { MessageInput } = await import("../MessageInput");
+  const container = w.document.createElement("div");
+  w.document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <ConvexProvider client={fakeConvex()}>
+        <MessageInput conversationId={draftKey} bareComposer initialDraft={text} maxLength={maxLength} onGateSend={(content) => { sent.push(content); }} />
+      </ConvexProvider>,
+    );
+  });
+  const count = container.querySelector("[data-cc-over-limit]")?.textContent ?? null;
+  const sendDisabled = (container.querySelector('button[type="submit"]') as HTMLButtonElement | null)?.disabled ?? null;
+  const form = container.querySelector("form")!;
+  await act(async () => { form.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true })); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+  const left = container.querySelector("textarea")?.value ?? null;
+  await act(async () => { root.unmount(); });
+  container.remove();
+  return { sent, count, sendDisabled, left };
+}
+
+test("a message over the limit is held: nothing sent, text kept, count beside a disabled send", async () => {
+  const text = "x".repeat(1201);
+  const r = await submitLimited(text, 1200);
+  expect(r.sent).toEqual([]);
+  expect(r.left).toBe(text);
+  expect(r.count).toBe("1,201 / 1,200");
+  expect(r.sendDisabled).toBe(true);
+});
+
+test("a message at the limit sends and shows no count", async () => {
+  const text = "x".repeat(1200);
+  const r = await submitLimited(text, 1200);
+  expect(r.sent).toEqual([text]);
+  expect(r.left).toBe("");
+  expect(r.count).toBeNull();
+  expect(r.sendDisabled).toBe(false);
+});
