@@ -93,6 +93,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationAssignmentBadge } from "./AssignmentBadge";
 import { LocalMirrorChip } from "./LocalMirror";
 import { AssignedToYouBanner, useOwnersFromStore, type HandoffInfo } from "./OwnersBadge";
+import { ThreadSuggestions } from "./org/SuggestionSet";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
 import { SessionDaemonChip, SessionHooksOffChip } from "./DaemonStatusChip";
@@ -4953,6 +4954,12 @@ const ConversationViewInner = (
           view however far the feed is scrolled; the chronological lead (the
           proposal letter) stays inside it at the transcript's start. */}
       {leadNode && leadPinned && <div className="shrink-0 border-b" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} data-lead-pinned>{leadNode}</div>}
+      {/* Open proposals this session posted, pinned over the transcript wherever the thread is opened. A pinned lead (the org drawer's set) already shows them. */}
+      {conversation && !guest && !(leadNode && leadPinned) && (
+        <ErrorBoundary name="ThreadSuggestions" level="inline" fallback={null}>
+          <ThreadSuggestions conversationId={conversation._id.toString()} />
+        </ErrorBoundary>
+      )}
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>
       {(isJumpingToTarget || (targetMessageId && timeline.length === 0)) && (
         <div

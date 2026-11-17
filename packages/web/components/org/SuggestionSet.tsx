@@ -115,8 +115,9 @@ function GroupPiece({ piece, batch, now, open, onOpen }: { piece: Extract<Piece,
   );
 }
 
-/** The set, its pieces and "Accept all". */
-function SetBody({ rows, name }: { rows: OrgProposalListRow[]; name: string }) {
+/** The set, its pieces and "Accept all". `folded`: the pieces hide under the
+ *  header, which then names the author and opens them (`onFold`). */
+function SetBody({ rows, name, folded, onFold }: { rows: OrgProposalListRow[]; name: string; folded?: boolean; onFold?: (folded: boolean) => void }) {
   const items = useSetChanges(rows);
   const sets = useProposalSetEntries(items);
   const batch = useProposalBatch(rows[0]);
@@ -132,25 +133,37 @@ function SetBody({ rows, name }: { rows: OrgProposalListRow[]; name: string }) {
   const waiting = sets.flatMap((s) => waitingChanges(s.changes));
   const summary = pieces.length > 1 ? proposalTotals(waiting, sets[0]?.entries.names).line?.replace(/^\d+ changes: /, "").replace(/\.$/, "") : null;
   const answerable = !!batch.key;
-  const label = acceptAll.answers.length === 0 && acceptAll.rest.length === pieces.length ? `${ORG_REPLY_WORDS.approve.act} all ${pieces.length}` : `${ORG_REPLY_WORDS.approve.act} the rest`;
+  const label = acceptAll.answers.length > 0 ? `${ORG_REPLY_WORDS.approve.act} the rest`
+    : acceptAll.rest.length === pieces.length ? `${ORG_REPLY_WORDS.approve.act} all ${pieces.length}`
+    : `${ORG_REPLY_WORDS.approve.act} ${acceptAll.rest.length}`;
   return (
     <div className={cn("not-prose", LEDGER_INKS)} data-suggestion-set={pieces.length}>
       <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-[13.5px] font-semibold" style={{ color: "var(--sol-text)" }}>Suggests {pieces.length === 1 ? "one change" : `${pieces.length} changes`}</div>
-          {summary && <div className="mt-0.5 text-[12px] leading-[17px]" style={{ color: "var(--sol-text-muted)" }} data-suggestion-summary>{summary}</div>}
-        </div>
+        {onFold ? (
+          <button type="button" onClick={() => onFold(!folded)} aria-expanded={!folded} className="flex min-w-0 flex-1 items-center gap-2 text-left" data-suggestion-fold>
+            <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !folded && "rotate-90")} style={{ color: "var(--sol-text-dim)" }} aria-hidden />
+            <span className="shrink-0 text-[13px] font-semibold" style={{ color: "var(--sol-text)" }}>{name} suggests {pieces.length === 1 ? "one change" : `${pieces.length} changes`}</span>
+            {summary && <span className="min-w-0 truncate text-[12px]" style={{ color: "var(--sol-text-muted)" }} data-suggestion-summary>{summary}</span>}
+          </button>
+        ) : (
+          <div className="min-w-0 flex-1">
+            <div className="text-[13.5px] font-semibold" style={{ color: "var(--sol-text)" }}>Suggests {pieces.length === 1 ? "one change" : `${pieces.length} changes`}</div>
+            {summary && <div className="mt-0.5 text-[12px] leading-[17px]" style={{ color: "var(--sol-text-muted)" }} data-suggestion-summary>{summary}</div>}
+          </div>
+        )}
         {answerable && pieces.length > 1 && (acceptAll.rest.length > 0 || acceptAll.pressed) && (
           <Button variant={acceptAll.pressed ? "outline" : "green"} size="xs" aria-pressed={acceptAll.pressed} onClick={() => acceptAll.press()} data-suggestion-accept-all={acceptAll.rest.length}>
             {acceptAll.pressed && <Check aria-hidden />}{acceptAll.pressed ? `${acceptAll.answers.length} staged` : label}
           </Button>
         )}
       </div>
-      <ol className="m-0 mt-2 list-none p-0">
-        {pieces.map((p, i) => p.kind === "card"
-          ? <CardPiece key={p.key} piece={p} n={i + 1} batch={batch} now={now} open={open === p.key} onOpen={(v) => setOpen(v ? p.key : null)} />
-          : <GroupPiece key={p.key} piece={p} batch={batch} now={now} open={open === p.key} onOpen={(v) => setOpen(v ? p.key : null)} />)}
-      </ol>
+      {!folded && (
+        <ol className="m-0 mt-2 list-none p-0">
+          {pieces.map((p, i) => p.kind === "card"
+            ? <CardPiece key={p.key} piece={p} n={i + 1} batch={batch} now={now} open={open === p.key} onOpen={(v) => setOpen(v ? p.key : null)} />
+            : <GroupPiece key={p.key} piece={p} batch={batch} now={now} open={open === p.key} onOpen={(v) => setOpen(v ? p.key : null)} />)}
+        </ol>
+      )}
       {acceptAll.element}
     </div>
   );
@@ -196,5 +209,29 @@ export function SuggestionSet({ workspace, headRoleId, name, onOpen }: { workspa
       {split.replaced.map((r) => <Replaced key={r._id} row={r} />)}
       {split.others.length > 0 && <Others rows={split.others} onOpen={onOpen} now={now} />}
     </PinnedLead>
+  );
+}
+
+/** The open proposals a conversation posted, as a bar over its transcript:
+ *  wherever the person opens the thread, what waits on them shows there,
+ *  folded to one line until they open it. Answers go to this conversation's
+ *  composer, the same batch the org drawer stages into. */
+export function ThreadSuggestions({ conversationId }: { conversationId: string }) {
+  const rows = useInboxStore((s) => s.orgProposals) as Record<string, OrgProposalListRow> | undefined;
+  const set = useMemo(() => {
+    const open = Object.values(rows ?? {}).filter((p) => p.status === "open" && p.thread?.conversation_id === conversationId);
+    // A proposal a newer open one replaced is the drawer's to withdraw, not a piece to decide.
+    return open.filter((p) => !p.superseded_by || !open.some((q) => q._id === p.superseded_by!.id)).sort((a, b) => a.created_at - b.created_at);
+  }, [rows, conversationId]);
+  const [folded, setFolded] = useState(true);
+  if (set.length === 0) return null;
+  const name = set[0].author?.name ?? set[0].author?.handle ?? "This session";
+  return (
+    <div className="shrink-0 border-b" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>
+    <PinnedLead share={folded ? 1 : 0.45} data-thread-suggestions={set.length}>
+      {set.map((r) => <Feed key={r._id} refId={r.short_id} />)}
+      <SetBody rows={set} name={name} folded={folded} onFold={setFolded} />
+    </PinnedLead>
+    </div>
   );
 }
