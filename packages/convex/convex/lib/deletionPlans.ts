@@ -348,7 +348,6 @@ export const LEFT_OUT: Record<string, string> = {
   decision_grants: "per-person grant",
   // No index leads on the key, so reaching them means a table scan (open follow-up: add an index).
   public_conversations: "no conversation index; holds a preview of a directory-published session (open follow-up: index it, or gate publishToDirectory for regulated teams)",
-  suggestion_outcomes: "no conversation index",
   project_updates: "no conversation index",
   project_update_comments: "no conversation index",
   wallet_ledger: "no conversation index (hosted assistant spend)",
