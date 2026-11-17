@@ -21,7 +21,7 @@ import { batchSendWords } from '@codecast/web/lib/reviewActions';
 import { ledgerLines, newRolesLedger } from '@codecast/web/components/consequential/roleOnline';
 import { changeReply, fieldText, proposalProgressWords, subjectStatusWords, type RecordGroupCard, type SubjectCard } from '@codecast/web/components/org/proposalSubjects';
 import {
-  FIELD_ASKS, cardRef, groupRef, newRolesOf, stagedWords, useAcceptRest, useCardAnswer, useEntryAnswer, useProposalEntries,
+  FIELD_ASKS, cardEntry, groupEntry, groupRef, newRolesOf, stagedWords, useAcceptRest, useCardAnswer, useEntryAnswer, useProposalEntries,
   type BatchEntry, type HireReview, type Proposal, type ProposalBatch, type SubjectAnswer,
 } from '@codecast/web/components/org/proposalLedgerModel';
 import { ORG_REPLY_WORDS, isOrgChangeApprovable, type OrgReplyVerdict } from '@codecast/shared/contracts/orgProposal';
@@ -86,8 +86,8 @@ export function ProposalBody({ proposal, changes, bare, readonlyWords }: { propo
   const totals = entries.records && entries.groups.length === 1 ? null : entries.totals.line;
   const summary = proposal.summary_md?.trim();
   const list: BatchEntry[] = entries.records
-    ? entries.groups.map((g) => ({ waiting: g.waiting, ref: groupRef(proposal, g), changes: [] }))
-    : entries.cards.map((c, i) => ({ waiting: c.waiting, ref: cardRef(proposal, c, i + 1), changes: c.changes }));
+    ? entries.groups.map((g) => groupEntry(proposal, g))
+    : entries.cards.map((c, i) => cardEntry(proposal, c, i + 1));
   const rest = useAcceptRest(list, batch, review);
   const waiting = list.filter((e) => e.waiting > 0).length;
   const answerable = !!batch.key && open && waiting > 0;
