@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +16,7 @@ import { CALL_MODEL, PROD_DEFAULT_MODEL, PROSE_MODEL, sendsThinkingOff, STRONG_M
 import { DRY_RUN_SCRIPT, homePaths, LABELS_REMOTE, REPO_ROOT } from '../paths';
 import { surfaces } from '../registry';
 import type { SurfaceMeta } from '../surface';
+import { SHARED_DIRS, syncDataHome } from '../dataHome';
 import { labelsRemoteProblem, labelsRepoVisibility } from '../labels';
 import { snippetInstalled } from '../snippet';
 
@@ -59,7 +60,9 @@ function labelsCheck(): ReturnType<DoctorCheck['run']> {
   const dirty = git(dir, ['status', '--porcelain']).stdout.trim();
   const ahead = git(dir, ['rev-list', '--count', '@{u}..HEAD']).stdout.trim();
   if (dirty || (ahead && ahead !== '0')) return { ok: false, detail: `labels have ${dirty ? 'uncommitted changes' : ''}${dirty && ahead !== '0' ? ' and ' : ''}${ahead && ahead !== '0' ? `${ahead} unpushed commit(s)` : ''}`, fix: `git -C ${dir} add -A && git -C ${dir} commit -m labels && git -C ${dir} push` };
-  return { ok: true, detail: `${dir} tracks ${LABELS_REMOTE}, clean and pushed` };
+  const unlinked = SHARED_DIRS.filter((d) => !lstatSync(join(homePaths().root, d), { throwIfNoEntry: false })?.isSymbolicLink());
+  if (unlinked.length) return { ok: false, detail: `EVALS_HOME/${unlinked.join(' and ')} stay on this machine: not linked into ${dir}`, fix: './evals doctor --init' };
+  return { ok: true, detail: `${dir} tracks ${LABELS_REMOTE}, clean and pushed; freezes and snapshots sync through it` };
 }
 
 export const CHECKS: DoctorCheck[] = [
@@ -137,11 +140,11 @@ export const CHECKS: DoctorCheck[] = [
   { name: 'agent snippet', run: () => (snippetInstalled() === 'current' ? { ok: true, detail: 'AGENTS.md carries the current reference' } : { ok: false, warn: true, detail: `AGENTS.md section ${snippetInstalled()}`, fix: './evals snippet install' }) },
 ];
 
-/** Makes EVALS_HOME and its labels repo: clone the private remote, or create it private first. */
+/** Makes EVALS_HOME and its shared data repo (labels, freezes, snapshots): clone the private remote, or create it private first. */
 function init(): void {
   const home = homePaths();
-  for (const d of [home.root, home.freezes, home.snapshots, home.runs, home.html]) mkdirSync(d, { recursive: true });
-  if (existsSync(join(home.labels, '.git'))) return;
+  for (const d of [home.root, home.runs, home.html]) mkdirSync(d, { recursive: true });
+  if (existsSync(join(home.labels, '.git'))) return syncDataHome({ push: true });
   const visibility = labelsRepoVisibility();
   if (visibility === null) {
     console.log(`creating the private repo ${LABELS_REMOTE}`);
@@ -150,15 +153,17 @@ function init(): void {
   } else if (visibility !== 'PRIVATE') {
     throw new Error(`${LABELS_REMOTE} exists and is ${visibility}: labels go only to a private repo`);
   }
-  const cloned = spawnSync('gh', ['repo', 'clone', LABELS_REMOTE, home.labels], { stdio: 'inherit' });
-  if (cloned.status !== 0) throw new Error(`cloning ${LABELS_REMOTE} into ${home.labels} failed`);
+  // The clone, and moving this machine's freezes and snapshots into it, are the sync every run does.
+  rmSync(join(home.root, 'locks', 'data-clone-failed'), { force: true });
+  syncDataHome({ push: true });
+  if (!existsSync(join(home.labels, '.git'))) throw new Error(`cloning ${LABELS_REMOTE} into ${home.labels} failed`);
 }
 
 export function registerDoctor(program: Command): void {
   program
     .command('doctor')
     .description('what the evals need here, and what is missing')
-    .option('--init', 'create EVALS_HOME and clone (or create, private) the labels repo')
+    .option('--init', 'create EVALS_HOME and clone (or create, private) the repo its labels, freezes and snapshots sync through')
     .action(async (flags: { init?: boolean }) => {
       if (flags.init) init();
       const report = await runDoctor(CHECKS, { product: 'evals', version: '0.1.0', onCheck: (c) => console.log(formatCheckLine(c, { color: { success: fmt.success, warning: fmt.warning, error: fmt.error, muted: fmt.muted } })) });
