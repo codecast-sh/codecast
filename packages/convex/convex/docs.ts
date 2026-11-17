@@ -2011,50 +2011,25 @@ export const expandMentions = query({
             .withIndex("by_short_id", (q: any) => q.eq("short_id", mention.shortId))
             .first();
           if (sess && (await canAccessConversation(ctx, userId, sess))) {
-            let md = `\n\n---\n### Session: ${sess.title || "Untitled"}\n`;
+            // A short card, not a transcript: the agent opens the session with
+            // `cast read` when it needs more than who this is and where it stands.
+            let md = `\n\n---\n### Session: ${inlineForeignText(sess.title || "Untitled")}\n`;
             md += `\`${(sess as any).short_id}\` | ${(sess as any).message_count || 0} messages | ${sess.status || "active"}`;
             if ((sess as any).project_path) md += ` | ${(sess as any).project_path}`;
             if ((sess as any).agent_type) md += ` | Agent: ${(sess as any).agent_type}`;
             md += `\n\n`;
-            if ((sess as any).idle_summary) {
-              md += `#### Summary\n\n${(sess as any).idle_summary}\n\n`;
-            }
-            // Fetch messages — get a mix of user and assistant
-            const messages = await ctx.db.query("messages")
-              .withIndex("by_conversation_id", (m: any) => m.eq("conversation_id", sess._id))
-              .order("asc")
-              .take(50);
-            const significant = messages.filter((m: any) =>
-              m.role === "user" || (m.role === "assistant" && (m.content?.length || 0) > 100)
-            );
-            if (significant.length > 0) {
-              md += `#### Conversation Highlights\n\n`;
-              // First user message in full
-              const firstUser = significant.find((m: any) => m.role === "user");
-              if (firstUser) {
-                md += `**User** (initial):\n${(firstUser as any).content?.slice(0, 800) || ""}${((firstUser as any).content?.length || 0) > 800 ? "..." : ""}\n\n`;
-              }
-              // Last few exchanges
-              const recent = significant.slice(-8);
-              for (const m of recent) {
-                if (m === firstUser) continue;
-                const role = (m as any).role === "user" ? "**User**" : "**Assistant**";
-                const content = (m as any).content || "";
-                const limit = (m as any).role === "user" ? 500 : 800;
-                md += `${role}:\n${content.slice(0, limit)}${content.length > limit ? "..." : ""}\n\n`;
-              }
-            }
+            if ((sess as any).idle_summary) md += `Summary: ${inlineForeignText((sess as any).idle_summary)}\n\n`;
             // Active task/plan context
             if ((sess as any).active_task_id) {
               const t = await ctx.db.get((sess as any).active_task_id);
               if (t && (await canAccessTask(ctx, userId, t))) {
-                md += `Active task: **${(t as any).title}** \`${(t as any).short_id}\`\n\n`;
+                md += `Active task: **${inlineForeignText((t as any).title)}** \`${(t as any).short_id}\`\n\n`;
               }
             }
             if ((sess as any).active_plan_id) {
               const p = await ctx.db.get((sess as any).active_plan_id);
               if (p && (await canAccessPlan(ctx, userId, p))) {
-                md += `Active plan: **${(p as any).title}** \`${(p as any).short_id}\`\n\n`;
+                md += `Active plan: **${inlineForeignText((p as any).title)}** \`${(p as any).short_id}\`\n\n`;
               }
             }
             md += `> \`cast read ${(sess as any).short_id}\` for full conversation transcript\n---\n`;
