@@ -121,6 +121,11 @@ export function ensureHelper(log: (m: string) => void = () => {}): Promise<strin
     }
     fs.renameSync(tmp, bin);
     log(`[SIM-STREAM] built ${bin}`);
+    // Builds for an older CLI or axe are never run again.
+    const dir = path.dirname(bin);
+    for (const name of fs.readdirSync(dir)) {
+      if (name.startsWith("simstream-") && name !== path.basename(bin)) fs.rmSync(path.join(dir, name), { force: true });
+    }
     return bin;
   })().then((bin) => {
     // A failed build is retried by the next stream, not remembered forever.
@@ -131,7 +136,7 @@ export function ensureHelper(log: (m: string) => void = () => {}): Promise<strin
 
 /** Split the helper's stdout into frames: 12-byte header, then the JPEG. */
 export function helperFrameReader(onFrame: (f: SimFrame) => void): (chunk: Buffer) => void {
-  let buf = Buffer.alloc(0);
+  let buf: Buffer = Buffer.alloc(0);
   return (chunk) => {
     buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
     while (buf.length >= 12) {
@@ -145,7 +150,7 @@ export function helperFrameReader(onFrame: (f: SimFrame) => void): (chunk: Buffe
 
 /** Split `axe stream-video --format mjpeg` (multipart, a Content-Length per part) into frames. */
 export function mjpegFrameReader(onFrame: (f: SimFrame) => void): (chunk: Buffer) => void {
-  let buf = Buffer.alloc(0);
+  let buf: Buffer = Buffer.alloc(0);
   const header = /Content-Length: (\d+)\r\n\r\n/;
   return (chunk) => {
     buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;

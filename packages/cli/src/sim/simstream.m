@@ -92,6 +92,12 @@ static int buttonNamed(NSString *name) {
   return 0;
 }
 
+// iOS ignores a touch lifted the instant it landed, and a click relayed
+// through the daemon arrives as a down and an up back to back. A finger stays
+// down at least this long.
+#define MIN_TOUCH_SECONDS 0.06
+static CFAbsoluteTime touchDownAt = 0;
+
 // One command line from the daemon, run on the HID queue so a burst of moves
 // lands in order.
 static void runCommand(FBSimulatorHID *hid, NSString *line) {
@@ -101,6 +107,13 @@ static void runCommand(FBSimulatorHID *hid, NSString *line) {
   NSError *err = nil;
   if (([verb isEqualToString:@"down"] || [verb isEqualToString:@"up"]) && f.count >= 3) {
     FBSimulatorHIDDirection dir = [verb isEqualToString:@"down"] ? FBSimulatorHIDDirectionDown : FBSimulatorHIDDirectionUp;
+    if (dir == FBSimulatorHIDDirectionDown) {
+      if (touchDownAt == 0) touchDownAt = CFAbsoluteTimeGetCurrent();
+    } else {
+      double held = CFAbsoluteTimeGetCurrent() - touchDownAt;
+      if (touchDownAt > 0 && held < MIN_TOUCH_SECONDS) usleep((useconds_t)((MIN_TOUCH_SECONDS - held) * 1e6));
+      touchDownAt = 0;
+    }
     [[hid sendTouchWithType:dir x:f[1].doubleValue y:f[2].doubleValue] await:&err];
   } else if ([verb isEqualToString:@"key"] && f.count >= 2) {
     unsigned int code = (unsigned int)f[1].intValue;
