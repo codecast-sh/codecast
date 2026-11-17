@@ -160,6 +160,8 @@ const taskHandoff: Handler = (p, ctx) => {
   if (!t) return null;
   if (t === 'missing') return fail(`Error: Task not found: ${id}`);
   const status = String(p.opts.status ?? 'done');
+  // Blocked evidence leaves the task where it is, held by whatever blocks it: the world does not hold that.
+  if (status === 'blocked') return null;
   if (t !== 'outside') t.status = 'in_review';
   let steps = 0;
   if (p.opts.guide !== undefined) {
@@ -202,7 +204,7 @@ const taskShow: Handler = (p, ctx) => {
 const triggerAdd: Handler = (p, ctx) => {
   const prompt = text(p.args[0]);
   const first = prompt.split('\n').find((l) => l.trim()) ?? prompt;
-  const title = p.opts.title !== undefined ? text(p.opts.title) : first.trim().slice(0, 60);
+  const title = p.opts.title !== undefined ? text(p.opts.title) : first.trim().replace(/^[#*\s]+/, '').slice(0, 60);
   const id = mint(ctx.w, 'tr-');
   // As prod prints it: --at falls through to "queued now", the receipt names only every, an event and in.
   const schedule = p.opts.every ? `every ${p.opts.every}` : p.opts.in ? `in ${p.opts.in}` : 'queued now';
@@ -262,6 +264,39 @@ const roleWake: Handler = (p, ctx) => {
   return sendTo(ctx, 'role wake', `@${handle}`, body, session ? `@${handle} (${session})` : `@${handle}`);
 };
 
+const splitOptions = (raw: unknown): Array<{ label: string; description?: string }> =>
+  ((raw as string[] | undefined) ?? []).map((o) => {
+    const [label, description] = o.split('::').map((s) => s.trim());
+    return { label: label!, description };
+  });
+
+const seeLines = (context: string): string[] => ['', '  ── what they will see ──', ...(context.length > 400 ? `${context.slice(0, 400)}…` : context).split('\n').map((l) => `  ${l}`)];
+
+const NO_CONSEQUENCE = '  Note: no option carries a consequence. "Label :: what happens if chosen" is what makes a choice decidable at a glance.';
+
+/** `decide edit` on a decision the world can vouch for: its question, options and context, as prod lists what changed. */
+function decideEdit(p: Parsed, ctx: Ctx, id: string | undefined): Answer | null {
+  const { w } = ctx;
+  if (!id || !DECISION.test(id)) return null;
+  const d = own(w.decisions, id);
+  if (exists(w, id, !!d) !== 'yes') return null;
+  const { question, option, context, ...others } = p.opts as { question?: string; option?: string[]; context?: string };
+  if (Object.values(others).some((v) => v !== undefined && v !== false && !(Array.isArray(v) && !v.length))) return null;
+  const options = splitOptions(option);
+  const changed = [...(question !== undefined ? ['question'] : []), ...(options.length ? ['options'] : []), ...(context !== undefined ? ['context_md'] : [])];
+  if (!changed.length) return null;
+  if (d) {
+    if (question !== undefined) d.question = text(question);
+    if (options.length) d.options = options.map((o) => o.label);
+  }
+  const lines = [`Decision updated: ${id}`, `  changed: ${changed.join(', ')}`];
+  options.forEach((o, i) => lines.push(`  ${i + 1}. ${o.label}${o.description ? `: ${o.description}` : ''}`));
+  if (context !== undefined) lines.push(...seeLines(text(context)));
+  if (options.every((o) => !o.description)) lines.push(NO_CONSEQUENCE);
+  lines.push('The card in the conversation and the queue now show the new text. Do not restate it in prose.');
+  return ok(...lines);
+}
+
 const DECIDE_READS = new Set(['ls', 'show', 'brief', 'kit']);
 
 const decide: Handler = (p, ctx) => {
@@ -298,12 +333,10 @@ const decide: Handler = (p, ctx) => {
     const mine = ownRole(w);
     return mine ? fail(`${mine.title} does not hold this decision; recommend instead (cast decide recommend), or a person answers it`) : null;
   }
-  if (q === 'pass' || q === 'edit') return null;
+  if (q === 'edit') return decideEdit(p, ctx, rest[0]);
+  if (q === 'pass') return null;
   const question = q;
-  const options = ((p.opts.option as string[] | undefined) ?? []).map((o) => {
-    const [label, description] = o.split('::').map((s) => s.trim());
-    return { label: label!, description };
-  });
+  const options = splitOptions(p.opts.option);
   const context = p.opts.context !== undefined ? text(p.opts.context) : undefined;
   if (p.opts.advisory && p.opts.default === undefined) return fail('--advisory requires --default <n>: say which option you are proceeding with.');
   if (!context && !p.opts.report && !p.opts.doc && !p.opts.card) return fail('A bare question is not decidable. Pass --context (or --report, --doc or --card) with the reasoning and the tradeoff.');
@@ -313,28 +346,31 @@ const decide: Handler = (p, ctx) => {
   const task = p.opts.task as string | undefined;
   const lines = [`Decision posted: ${question}`, `  id: ${id}`, `  category: ${p.opts.category ?? 'unknown'}`, ...(task ? [`  task: ${task} held at ${(TASK.test(task) ? own(w.tasks, task)?.status : undefined) ?? 'in_progress'}`] : [])];
   options.forEach((o, i) => lines.push(`  ${i + 1}. ${o.label}${o.description ? `: ${o.description}` : ''}${def === i ? '  (your default)' : ''}`));
-  if (context) {
-    lines.push('', '  ── what they will see ──');
-    for (const l of (context.length > 400 ? `${context.slice(0, 400)}…` : context).split('\n')) lines.push(`  ${l}`);
-  }
+  if (context) lines.push(...seeLines(context));
   const chars = (context ?? '').trim().length;
   if (!p.opts.report && chars < 200) lines.push('', `  Note: ${chars} characters of context. They will probably have to open the session to answer this.`, '  Open with what you would pick and why, in words someone who never saw this session follows, then the finding that forces the choice, or attach --report.');
-  if (options.length && options.every((o) => !o.description)) lines.push('  Note: no option carries a consequence. "Label :: what happens if chosen" is what makes a choice decidable at a glance.');
+  if (options.length && options.every((o) => !o.description)) lines.push(NO_CONSEQUENCE);
   lines.push('', 'This renders as a card in the conversation and in their queue. Do not repeat the question, options, or reasoning in prose.', 'If the facts change: cast decide edit, never a second decision. If it no longer applies: cast decide cancel.');
   lines.push(p.opts.advisory ? 'Advisory: continue with your default. The human\'s answer arrives as a message and may override you.' : 'Blocking: end your turn now. The answer arrives as a user message.');
   return ok(...lines);
 };
 
 /**
- * One chat line as the CLI reports it (index.ts sendChatLine): its id, the
- * roles its @mentions woke, and the workspace agent left asleep, since every
- * line an agent writes is agent_authored.
+ * One chat line as the CLI reports it (index.ts sendChatLine): its id, and
+ * the roles its @mentions woke or, in a direct message that woke none, the
+ * workspace agent left asleep, since every line an agent writes is
+ * agent_authored. In an open world any @handle that is not a person is a role.
  */
-function chatLine(ctx: Ctx, kind: string, channel: string, body: string): string[] {
-  const id = `j1${mint(ctx.w, 'msg').slice('msg'.length).padStart(30, '0')}`;
-  ctx.w.sent.push({ seq: ctx.w.seq, kind, to: channel, text: body });
-  const roles = new Set([...body.matchAll(/(?:^|[\s(])@([a-z][a-z0-9-]*)/g)].map((m) => m[1]!).filter((h) => own(ctx.w.roles, h)));
-  return [`✓ sent ${id}`, ...(roles.size ? [`  mentions: woke ${roles.size} role${roles.size === 1 ? '' : 's'}`] : []), "• the workspace's agent was not woken: agent_authored"];
+function chatLine(ctx: Ctx, kind: string, channel: string, body: string, to: string[] = []): string[] {
+  const { w } = ctx;
+  const id = `j1${mint(w, 'msg').slice('msg'.length).padStart(30, '0')}`;
+  w.sent.push({ seq: w.seq, kind, to: channel, text: body });
+  const isRole = (h: string) => !!own(w.roles, h) || (!!w.open && !own(w.people, h) && !to.includes(h));
+  const roles = new Set([...body.matchAll(/(?:^|[\s(])@([a-z][a-z0-9-]*)/g)].map((m) => m[1]!).filter(isRole));
+  return [
+    `✓ sent ${id}`,
+    ...(roles.size ? [`  mentions: woke ${roles.size} role${roles.size === 1 ? '' : 's'}`] : to.length ? ["• the workspace's agent was not woken: agent_authored"] : []),
+  ];
 }
 
 /** The people a direct message names, as prod checks them: an answer when the world knows the team's people, else null. */
@@ -349,8 +385,9 @@ function dmCheck(ctx: Ctx, handles: string[]): Answer | 'ok' | null {
 
 const chatSend: Handler = (p, ctx) => {
   const channel = String(p.opts.channel);
+  const dm = channel.startsWith('@') ? channel.split(',').map((h) => h.trim().replace(/^@/, '')).filter(Boolean) : [];
   if (channel.startsWith('@')) {
-    const check = dmCheck(ctx, channel.split(',').map((h) => h.trim().replace(/^@/, '')).filter(Boolean));
+    const check = dmCheck(ctx, dm);
     if (check !== 'ok') return check;
   } else if (!ctx.w.open) {
     // A #name the record's channel list holds; a bare id the fake cannot check.
@@ -358,7 +395,7 @@ const chatSend: Handler = (p, ctx) => {
     if (!ctx.w.channels || !channel.startsWith('#')) return null;
     if (!ctx.w.channels.includes(name)) return fail(`No channel named #${name}. See: cast chat channels`);
   }
-  return ok(...chatLine(ctx, 'chat', channel, text(p.args[0])));
+  return ok(...chatLine(ctx, 'chat', channel, text(p.args[0]), dm));
 };
 
 const chatDm: Handler = (p, ctx) => {
@@ -366,7 +403,7 @@ const chatDm: Handler = (p, ctx) => {
   const check = dmCheck(ctx, handles);
   if (check !== 'ok') return check;
   const ref = handles.map((h) => `@${h}`).join(',');
-  return ok(`to ${handles.map((h) => own(ctx.w.people, h) ?? h).join(', ')}`, ...chatLine(ctx, 'dm', ref, text(p.args[1])), `  their replies: cast chat read --channel ${ref}`);
+  return ok(`to ${handles.map((h) => own(ctx.w.people, h) ?? h).join(', ')}`, ...chatLine(ctx, 'dm', ref, text(p.args[1]), handles), `  their replies: cast chat read --channel ${ref}`);
 };
 
 /** The writes the fake answers, as an agent types them: what a harness note under --fakes tells the agent it may run. */

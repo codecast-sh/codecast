@@ -103,6 +103,8 @@ export function verbOf(argv: string[]): string | null {
 export interface Oracles {
   /** Whether the guard takes an argv for a read. */
   isRead?: (argv: string[]) => boolean;
+  /** The fake to score: the one in src/fakes/cast unless a candidate is given (grow.ts). */
+  answer?: typeof answer;
 }
 
 export function scoreSession(caps: Capture[], tree: Tree, seed: { roles?: Record<string, Role>; people?: Record<string, string> } = {}, oracles: Oracles = {}): CallScore[] {
@@ -124,7 +126,7 @@ export function scoreSession(caps: Capture[], tree: Tree, seed: { roles?: Record
     knownReal.add(w.self);
     knownFake.add(w.self);
     const verb = verbOf(c.argv);
-    const a = answer(argv, stdin, w, tree);
+    const a = (oracles.answer ?? answer)(argv, stdin, w, tree);
     const real = cleanOut(c.out);
     const fake = a ? cleanOut(applyPipe(a.out, c.pipe)) : '';
     const nr = normalize(real, knownReal);
