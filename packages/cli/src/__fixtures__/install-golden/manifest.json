@@ -205,7 +205,7 @@
   "skills": {
     "config": {
       "skills_enabled": true,
-      "skills_version": "3"
+      "skills_version": "4"
     },
     "stdout": "* Skills — installed in ~/.claude/skills/cast-*/SKILL.md\n",
     "wroteClaudeMd": false,
@@ -214,11 +214,12 @@
       ".claude/skills/cast-bakeoff/SKILL.md": "239dea95d76a77ba",
       ".claude/skills/cast-conflicts/SKILL.md": "4a63a90a825ac77c",
       ".claude/skills/cast-dashboard/SKILL.md": "d773eac32b2c7fd5",
+      ".claude/skills/cast-deploy/SKILL.md": "8e33a5526f26fdab",
       ".claude/skills/cast-eod/SKILL.md": "6af05f0d09b5b709",
       ".claude/skills/cast-from-call/SKILL.md": "c6a14a0dad51e599",
       ".claude/skills/cast-handoff/SKILL.md": "88b146158c6bff9b",
       ".claude/skills/cast-learn/SKILL.md": "fad1dd5e32cec40e",
-      ".claude/skills/cast-lessons/SKILL.md": "c6c32b387a43b94f",
+      ".claude/skills/cast-lessons/SKILL.md": "6421f3b9fe6ac4b8",
       ".claude/skills/cast-loop/SKILL.md": "114f522e3c81dd5c",
       ".claude/skills/cast-mod/SKILL.md": "7d08734ca6145bda",
       ".claude/skills/cast-morning/SKILL.md": "90faab6e129bae46",
