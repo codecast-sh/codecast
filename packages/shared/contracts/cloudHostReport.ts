@@ -19,8 +19,14 @@ export interface HostReadiness {
   /** Login files present on the host that a laptop pushed (agent-auth-origin.json), as tool ids. */
   logins?: string[];
   cast_version?: string;
+  run_ends_at?: number;
   at: number;
 }
+
+export const RUN_LIMIT_WARN_MINUTES = 30;
+export const RUN_LIMIT_HOLD_MINUTES = 10;
+export const runEndsAt = (startedAt: number, maxRunMinutes: number): number => startedAt + maxRunMinutes * 60_000;
+export const runMinutesLeft = (endsAt: number, now: number): number => Math.max(0, Math.floor((endsAt - now) / 60_000));
 
 export const CLOUD_HOST_ACTIONS = ["wake", "sleep", "setup", "image", "delete_image", "clone"] as const;
 
@@ -62,7 +68,7 @@ export interface CloudHostReport {
   instance_id: string;
   /** The instance's own name (its AWS Name tag): what tells hosts apart in a picker. */
   name?: string;
-  provider: "aws" | "scaleway-mac" | "codecast";
+  provider: "aws" | "scaleway-mac" | "codecast" | "namespace";
   region?: string;
   instance_type?: string;
   state: "running" | "stopped" | "pending" | "stopping" | "missing" | "unknown";
@@ -70,6 +76,7 @@ export interface CloudHostReport {
   disk_monthly_usd?: number;
   disk_gib?: number;
   idle_stop_minutes?: number;
+  max_run_minutes?: number;
   images: Array<{ id: string; name: string; created: string }>;
   /** Logins the laptop has but did not push, with why (a lapsed token, laptop paths). */
   logins_held: Array<{ id: string; reason: string }>;

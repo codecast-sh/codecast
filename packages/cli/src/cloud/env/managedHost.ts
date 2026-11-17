@@ -11,7 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "../../proc.js";
 import { readHosts, upsertHost, type CloudHost } from "../../browser/cloudHost.js";
-import { codecastMachine } from "../../browser/codecastMachine.js";
+import { codecastMachine } from "../../hosts/providers/codecast.js";
 
 export const CODECAST_REGION = "us-west-2";
 

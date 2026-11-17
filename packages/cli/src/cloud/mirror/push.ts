@@ -13,7 +13,7 @@ import { defaultConfigDir } from "../../config/configDir.js";
 import { isCloudMirrorEnabled, type Config } from "../../config/types.js";
 import { deviceId as localDeviceId } from "../../remote/device.js";
 import { claudeProjectDirName } from "../../projectPathResolver.js";
-import { remoteHome, sshBase, type RemoteHost } from "../../remote/session-move.js";
+import { remoteHome, sshBase, sshDestination, type RemoteHost } from "../../remote/session-move.js";
 import { featureSwitches, withMirrorLock, type ApplyResult, type MirrorStamp } from "./apply.js";
 import { pullHostMemory, sshMemoryReader, type PulledMemory } from "./memoryBack.js";
 import { buildMirrorBundle, sha256, type BuiltBundle } from "./bundle.js";
@@ -53,7 +53,7 @@ export function failureRetryDelayMs(reason: string): number {
 }
 
 export function hostKey(host: RemoteHost): string {
-  return `${host.user}@${host.address}`;
+  return sshDestination(host);
 }
 
 // ---------------------------------------------------------------------------

@@ -28,17 +28,18 @@
  * same act whether the machine happens to be awake.
  */
 
-import { codecastMachine } from "./codecastMachine.js";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
-import * as os from "node:os";
 import * as path from "node:path";
-import { agentSpawnPath } from "../agentSpawnPath.js";
-import type { RemoteHost } from "../remote/session-move.js";
+import { sshControlPath, sshDestination, sshIdentity, type RemoteHost } from "../remote/session-move.js";
 import { codecastPath } from "../codecastDir.js";
+import { hostProvider, hostSleeps, isMacHost } from "../hosts/providers/registry.js";
 import { HOST_TAILNET_COMMAND, localTailnet, readHostTailnet, tailnetDialAddress, type TailnetRecord } from "../cloud/tailnet.js";
 import type { WakePhase } from "@codecast/shared/contracts";
+import type { HostFacts, HostInspection } from "../hosts/providers/types.js";
+
+export { AwsCliFailed, instanceNameTag } from "../hosts/providers/aws.js";
 
 export type HostState = "running" | "stopped" | "pending" | "missing";
 
@@ -46,13 +47,15 @@ export interface CloudHost {
   /** Stable id: an EC2 instance id, or a Scaleway server uuid. */
   id: string;
   /** codecast: an EC2 machine in codecast's own account (`cast cloud`), woken and stopped through the backend. */
-  provider: "aws" | "scaleway-mac" | "codecast";
+  provider: "aws" | "scaleway-mac" | "codecast" | "namespace";
   region: string;
   profile?: string;
   platform?: "linux" | "darwin";
   /** SSH user for this image. Ubuntu images use `ubuntu`, Scaleway Macs `m1`. */
   user: string;
   keyPath: string;
+  proxyCommand?: string;
+  maxRunMinutes?: number;
   /** Last known address. Re-read on every boot: a stopped instance loses it. */
   address?: string;
   /** The host's node on the laptop's tailnet, learned over SSH by ensureUp.
@@ -268,52 +271,13 @@ export function patchHost(id: string, patch: Partial<CloudHost>): CloudHost | un
   }
 }
 
-/** The aws CLI failed to RUN (not an AWS "no" — the binary or its execution). */
-export class AwsCliFailed extends Error {
-  constructor(detail: string) {
-    super(detail);
-    this.name = "AwsCliFailed";
-  }
-}
-
-function aws(args: string[], region: string, profile?: string): any {
-  try {
-    const out = execFileSync("aws", [...args, "--region", region, ...(profile ? ["--profile", profile] : []), "--output", "json"], {
-      encoding: "utf-8",
-      timeout: 120_000,
-      stdio: ["ignore", "pipe", "pipe"],
-      // agentSpawnPath, not process.env.PATH: under launchd the daemon gets a
-      // bare system PATH, and a child that cannot find `aws` used to cascade
-      // into "host no longer exists" (ENOENT → catch → "missing" → HostGone)
-      // — a wrong diagnosis three layers from the cause. Seen live when the
-      // web's "Move to Cloud Linux" ran this through the daemon.
-      env: { ...process.env, PATH: agentSpawnPath(), AWS_PAGER: "" },
-    });
-    return out.trim() ? JSON.parse(out) : null;
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException & { stderr?: string | Buffer };
-    if (e.code === "ENOENT") {
-      throw new AwsCliFailed("the aws CLI is not installed (or not on any known PATH) on this machine");
-    }
-    const stderr = String(e.stderr ?? "").trim();
-    // The instance genuinely not existing is an ANSWER, not a failure —
-    // callers map it to "missing". Everything else (bad credentials, expired
-    // SSO, network) must surface as itself.
-    if (/InvalidInstanceID\.NotFound/.test(stderr)) return null;
-    throw new AwsCliFailed(stderr.split("\n")[0] || e.message || "aws CLI failed");
-  }
-}
-
 /** An EC2 machine, in the person's account or codecast's: it has a state, sleeps and wakes. */
 export function isEc2Host(host: Pick<CloudHost, "provider">): boolean {
-  return host.provider === "aws" || host.provider === "codecast";
+  return hostSleeps(host);
 }
 
 export function describeInstance(host: CloudHost): any {
-  const r = host.provider === "codecast"
-    ? codecastMachine("describe")
-    : aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region, host.profile);
-  return r?.Reservations?.[0]?.Instances?.[0];
+  return hostProvider(host).describe(host);
 }
 
 /**
@@ -325,22 +289,8 @@ export function describeInstance(host: CloudHost): any {
  * and the resulting HostGone advice ("remove it with hosts rm") would have
  * had the user delete a perfectly good registration.
  */
-export function hostState(host: CloudHost): { state: HostState; address?: string } {
-  if (!isEc2Host(host)) return { state: "running", address: host.address };
-  const inst = describeInstance(host);
-  return inst ? instanceFacts(inst) : { state: "missing" };
-}
-
-function instanceFacts(inst: any): { state: HostState; address?: string } {
-  const name = inst.State?.Name;
-  const state: HostState =
-    name === "running" ? "running" : name === "stopped" ? "stopped" : name === "terminated" ? "missing" : "pending";
-  return { state, address: inst.PublicIpAddress };
-}
-
-/** The instance's Name tag, the name a person gave the box (union-line-1), or undefined. */
-export function instanceNameTag(inst: { Tags?: Array<{ Key?: string; Value?: string }> } | null | undefined): string | undefined {
-  return inst?.Tags?.find((t) => t.Key === "Name")?.Value?.trim() || undefined;
+export function hostState(host: CloudHost): HostFacts {
+  return hostProvider(host).state(host);
 }
 
 /**
@@ -357,95 +307,8 @@ export function instanceNameTag(inst: { Tags?: Array<{ Key?: string; Value?: str
  * A volumes call that fails only costs the disk size: the rest of the answer
  * still returns, and the caller prints the size as unknown.
  */
-export function inspectHost(host: CloudHost): {
-  state: HostState;
-  address?: string;
-  instanceType?: string;
-  name?: string;
-  platform?: "linux" | "darwin";
-  volumeGiB?: number;
-} {
-  if (!isEc2Host(host)) return { state: "running", address: host.address };
-  const inst = describeInstance(host);
-  if (!inst) return { state: "missing" };
-  let volumeGiB: number | undefined;
-  if (host.provider === "aws") try {
-    const vols = aws(
-      ["ec2", "describe-volumes", "--filters", `Name=attachment.instance-id,Values=${host.id}`],
-      host.region, host.profile,
-    );
-    const sizes: number[] = (vols?.Volumes ?? []).map((v: any) => Number(v.Size) || 0);
-    if (sizes.length) volumeGiB = sizes.reduce((a, b) => a + b, 0);
-  } catch { /* the disk size is the only field this loses */ }
-  const name = instanceNameTag(inst);
-  return { ...instanceFacts(inst), instanceType: inst.InstanceType, ...(name ? { name } : {}), platform: /^mac\d|^mac-/.test(inst.InstanceType ?? "") ? "darwin" : "linux", ...(volumeGiB === undefined ? {} : { volumeGiB }) };
-}
-
-/**
- * Make sure the host's security group admits SSH from wherever we are.
- *
- * The group used to pin port 22 to the laptop's /32. That failed twice in one
- * afternoon, and the second failure is the instructive one: on a mobile
- * network the address a web probe reports (checkip: 172.56.161.83) was NOT
- * the address the SSH flow left from (sshd saw 172.56.35.173) — carrier NAT
- * hands out egress addresses per flow, so no probe can learn the right /32
- * and the rule cannot be made to converge. Both times the symptom was an SSH
- * timeout that read as "the host is broken".
- *
- * So the rule is key-only SSH from anywhere — the ordinary EC2 posture. The
- * key is the boundary (the Ubuntu image ships with password auth off), and
- * nothing else on the box listens publicly: CDP and the screen stream bind to
- * loopback and are reached through that same SSH. Manual entries in the group
- * are left alone; only our own tagged rules are managed.
- */
-const AUTO_RULE_TAG = "codecast-auto";
-const ANYWHERE = "0.0.0.0/0";
-
-export function healSecurityGroup(host: CloudHost, onProgress: (m: string) => void = () => {}, described?: any): void {
-  if (host.provider !== "aws" || host.platform === "darwin") return;
-  try {
-    // A caller that has just described the instance (ensureUp) hands it over.
-    const inst = described ?? describeInstance(host);
-    const groupId = inst?.SecurityGroups?.[0]?.GroupId;
-    if (!groupId) return;
-
-    const sg = aws(["ec2", "describe-security-groups", "--group-ids", groupId], host.region, host.profile);
-    const sshRules = (sg?.SecurityGroups?.[0]?.IpPermissions ?? []).filter(
-      (p: any) => p.IpProtocol === "tcp" && p.FromPort === 22 && p.ToPort === 22,
-    );
-    const ranges: Array<{ CidrIp: string; Description?: string }> = sshRules.flatMap((p: any) => p.IpRanges ?? []);
-
-    if (!ranges.some((x) => x.CidrIp === ANYWHERE)) {
-      onProgress("allowing key-only SSH from anywhere (a pinned address cannot follow a laptop across networks)");
-      aws(
-        ["ec2", "authorize-security-group-ingress", "--group-id", groupId, "--ip-permissions",
-         JSON.stringify([{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: [{ CidrIp: ANYWHERE, Description: AUTO_RULE_TAG }] }])],
-        host.region, host.profile,
-      );
-    }
-    // Retire the per-network /32s this code added before it learned better.
-    const stale = ranges.filter((x) => x.Description === AUTO_RULE_TAG && x.CidrIp !== ANYWHERE);
-    if (stale.length) {
-      aws(
-        ["ec2", "revoke-security-group-ingress", "--group-id", groupId, "--ip-permissions",
-         JSON.stringify([{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: stale.map((x) => ({ CidrIp: x.CidrIp })) }])],
-        host.region, host.profile,
-      );
-    }
-  } catch {
-    // Healing is best-effort: if the rule is already right, SSH works anyway,
-    // and if AWS says no we will find out from the SSH wait loop's error.
-  }
-}
-
-export class HostGone extends Error {
-  constructor(host: CloudHost) {
-    super(
-      `host ${host.id} no longer exists (terminated, or deleted outside codecast).\n` +
-        `  Remove it with: cast hosts rm ${host.id}`,
-    );
-    this.name = "HostGone";
-  }
+export function inspectHost(host: CloudHost): HostInspection {
+  return hostProvider(host).inspect(host);
 }
 
 /**
@@ -463,35 +326,10 @@ export async function ensureUp(
   // waiting on this host shows each one as it passes.
   onPhase: (phase: WakePhase) => void = () => {},
 ): Promise<CloudHost> {
-  if (!isEc2Host(host)) return host;
+  const provider = hostProvider(host);
+  if (!provider.start) return host;
 
-  let inst = describeInstance(host);
-  let { state, address } = inst ? instanceFacts(inst) : { state: "missing" as HostState, address: undefined };
-  if (state === "missing") throw new HostGone(host);
-  const wasRunning = state === "running";
-
-  if (state === "stopped") {
-    onProgress(`starting ${host.id}`);
-    if (host.provider === "codecast") codecastMachine("start");
-    else aws(["ec2", "start-instances", "--instance-ids", host.id], host.region, host.profile);
-    state = "pending";
-    onPhase("booting");
-  }
-
-  const bootMinutes = host.platform === "darwin" ? 25 : 3;
-  const deadline = Date.now() + bootMinutes * 60_000;
-  while (state !== "running") {
-    if (Date.now() > deadline) throw new Error(`${host.id} did not reach "running" within ${bootMinutes} minutes`);
-    await new Promise((r) => setTimeout(r, 4000));
-    inst = describeInstance(host);
-    ({ state, address } = inst ? instanceFacts(inst) : { state: "missing" as HostState, address: undefined });
-    if (state === "missing") throw new HostGone(host);
-  }
-
-  if (!address) throw new Error(`${host.id} is running but has no public address`);
-  if (!wasRunning) onPhase("running");
-
-  healSecurityGroup(host, onProgress, inst);
+  const { address, wasRunning } = await provider.start(host, { onProgress, onPhase });
 
   // Running is not the same as accepting SSH: sshd comes up seconds later, and
   // a connection attempted in that window fails in a way that reads as a key
@@ -508,7 +346,7 @@ export async function ensureUp(
   // public address. A tailnet dial that fails once drops to public for the
   // rest of this wait: the tailnet is an optimisation, never the only way in.
   let dial = tailnetDialAddress(host.tailnet) ?? address;
-  const socketFor = (a: string) => path.join(os.tmpdir(), `cast-ssh-${host.user}-${a.replace(/[^\w.]/g, "_")}`);
+  const socketFor = (a: string) => sshControlPath({ user: host.user, address: a });
   let socket = socketFor(dial);
   // Evict a wedged master first. A master whose link died silently (mobile
   // network flap) still owns the socket, and every client that attaches to
@@ -517,10 +355,10 @@ export async function ensureUp(
   // round trip is evicted: `-O exit` ends a HEALTHY master too, and with it
   // every transfer riding it (the daemon's mirror push died with a silent
   // exit 255 each time a spawn woke the same host, 2026-09-29).
-  const masterRunning = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "check", `${host.user}@${dial}`], { timeout: 5_000, stdio: "ignore" }).status === 0;
+  const masterRunning = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "check", sshDestination({ ...host, address: dial })], { timeout: 5_000, stdio: "ignore" }).status === 0;
   if (masterRunning) {
-    const answered = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-o", "ControlMaster=no", "-o", "BatchMode=yes", `${host.user}@${dial}`, "true"], { timeout: 10_000, stdio: "ignore" }).status === 0;
-    if (!answered) spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "exit", `${host.user}@${dial}`], { timeout: 5_000, stdio: "ignore" });
+    const answered = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-o", "ControlMaster=no", "-o", "BatchMode=yes", sshDestination({ ...host, address: dial }), "true"], { timeout: 10_000, stdio: "ignore" }).status === 0;
+    if (!answered) spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "exit", sshDestination({ ...host, address: dial })], { timeout: 5_000, stdio: "ignore" });
   }
   // A host's first boot from a machine image streams its disk in from the
   // snapshot: cloud-init finished at 140s on 2026-09-29, past the old 150s.
@@ -532,13 +370,13 @@ export async function ensureUp(
     try {
       execFileSync(
         "ssh",
-        ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-         "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+        [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+         "-o", `ConnectTimeout=${host.proxyCommand ? 30 : 10}`, "-o", "BatchMode=yes",
          // Keepalives on the MASTER: without them a dead link is never
          // noticed and the socket stays wedged for ControlPersist's lifetime.
          "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
          "-o", "ControlMaster=auto", "-o", `ControlPath=${socket}`, "-o", "ControlPersist=120",
-         `${host.user}@${dial}`, "true"],
+         sshDestination({ ...host, address: dial }), "true"],
         { timeout: 60_000, stdio: "ignore" },
       );
       break;
@@ -575,22 +413,15 @@ export async function ensureUp(
  * the host left the tailnet.
  */
 function learnHostTailnet(host: CloudHost, dial: string, socket: string): TailnetRecord | undefined {
-  const r = spawnSync("ssh", ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+  const r = spawnSync("ssh", [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
     "-o", "ControlMaster=auto", "-o", `ControlPath=${socket}`, "-o", "ControlPersist=120",
-    `${host.user}@${dial}`, HOST_TAILNET_COMMAND], { encoding: "utf-8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] });
+    sshDestination({ ...host, address: dial }), HOST_TAILNET_COMMAND], { encoding: "utf-8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] });
   return r.status === 0 ? readHostTailnet(r.stdout) : host.tailnet;
 }
 
 /** Put a host to sleep. This is what makes idle cost nothing. */
 export function stopHost(host: CloudHost): void {
-  if (host.provider === "codecast") { codecastMachine("stop"); return; }
-  if (host.provider !== "aws") {
-    throw new Error(
-      `${host.id} is an Apple silicon Mac and cannot be stopped — Apple's licensing has a 24-hour ` +
-        `minimum lease, so the only "off" is deleting it. Use the Scaleway console.`,
-    );
-  }
-  aws(["ec2", "stop-instances", "--instance-ids", host.id], host.region, host.profile);
+  hostProvider(host).stop(host);
 }
 
 /**
@@ -618,16 +449,96 @@ export async function reachableRemoteHosts(also: RemoteHost[] = [], reach = sshR
 export async function reachableRemoteHost(
   host: CloudHost,
   deps: { toRemoteHost: (h: CloudHost) => RemoteHost; sshReachable: (h: RemoteHost) => Promise<boolean> },
+  now = Date.now(),
 ): Promise<RemoteHost | null> {
   const first = deps.toRemoteHost(host);
+  if (host.proxyCommand) return (await proxyHostUp(host, first, deps.sshReachable, now)) ? first : null;
   if (await deps.sshReachable(first)) return first;
   if (!host.address || first.address === host.address) return null;
   const pub = deps.toRemoteHost({ ...host, tailnet: undefined });
   return (await deps.sshReachable(pub)) ? pub : null;
 }
 
+const muxCheckArgs = (host: RemoteHost): string[] => ["-o", `ControlPath=${sshControlPath(host)}`, "-O", "check", sshDestination(host)];
+
+const MASTER_LOST_HOLD_OFF_MS = 90_000;
+const NSC_RUNNING_TTL_MS = 10_000;
+const NSC_NOT_RUNNING_TTL_MS = 30_000;
+
+const masterSeen = new Map<string, { alive: boolean; lostAt?: number }>();
+const proxyStateAt = new Map<string, { at: number; up: boolean }>();
+const proxyReads = new Map<string, Promise<boolean>>();
+
+function noteMaster(hostId: string, alive: boolean, now: number): void {
+  if (alive) masterSeen.set(hostId, { alive: true });
+  else if (masterSeen.get(hostId)?.alive) {
+    masterSeen.set(hostId, { alive: false, lostAt: now });
+    proxyStateAt.delete(hostId);
+  }
+}
+
+function masterLostLately(hostId: string, now: number): boolean {
+  const seen = masterSeen.get(hostId);
+  return !!seen && !seen.alive && seen.lostAt !== undefined && now - seen.lostAt < MASTER_LOST_HOLD_OFF_MS;
+}
+
+function cachedProxyRunning(hostId: string, now: number): boolean | undefined {
+  const seen = proxyStateAt.get(hostId);
+  return seen && now - seen.at < (seen.up ? NSC_RUNNING_TTL_MS : NSC_NOT_RUNNING_TTL_MS) ? seen.up : undefined;
+}
+
+function readProxyRunning(host: CloudHost, now: number): Promise<boolean> {
+  const pending = proxyReads.get(host.id);
+  if (pending) return pending;
+  const read = (async () => {
+    try { return !!(await hostProvider(host).describeAsync?.(host)); } catch { return false; }
+  })()
+    .then((up) => { proxyStateAt.set(host.id, { at: now, up }); return up; })
+    .finally(() => { proxyReads.delete(host.id); });
+  proxyReads.set(host.id, read);
+  return read;
+}
+
+async function controlMasterAlive(host: CloudHost, remote: RemoteHost, reach: (h: RemoteHost) => Promise<boolean>, now = Date.now()): Promise<boolean> {
+  const alive = await reach(remote);
+  noteMaster(host.id, alive, now);
+  return alive;
+}
+
+async function proxyHostUp(host: CloudHost, remote: RemoteHost, reach: (h: RemoteHost) => Promise<boolean>, now: number): Promise<boolean> {
+  if (await controlMasterAlive(host, remote, reach, now)) return true;
+  if (masterLostLately(host.id, now)) return false;
+  return cachedProxyRunning(host.id, now) ?? (await readProxyRunning(host, now));
+}
+
+export function dialsWithoutWaking(host: CloudHost, now = Date.now()): boolean {
+  if (!host.proxyCommand) return true;
+  const alive = spawnSync("ssh", muxCheckArgs(toRemoteHost(host)), { timeout: 5_000, stdio: "ignore", env: process.env }).status === 0;
+  noteMaster(host.id, alive, now);
+  if (alive) return true;
+  if (masterLostLately(host.id, now)) return false;
+  const cached = cachedProxyRunning(host.id, now);
+  if (cached === undefined) void readProxyRunning(host, now);
+  return cached ?? false;
+}
+
+export async function dialsWithoutWakingNow(host: CloudHost, now = Date.now()): Promise<boolean> {
+  return !host.proxyCommand || proxyHostUp(host, toRemoteHost(host), sshReachable, now);
+}
+
+export async function connectedRemoteHost(host: CloudHost, reach = sshReachable): Promise<RemoteHost | null> {
+  if (!host.proxyCommand) return probedRemoteHost(host, reach);
+  const remote = toRemoteHost(host);
+  return (await controlMasterAlive(host, remote, reach)) ? remote : null;
+}
+
 /** Does anything answer SSH there right now? Cheap, no AWS API call. */
 export function sshReachable(host: RemoteHost, timeoutMs = 4000): Promise<boolean> {
+  if (host.proxyCommand) {
+    return new Promise((resolve) => {
+      execFile("ssh", muxCheckArgs(host), { timeout: timeoutMs, env: process.env }, (err) => resolve(!err));
+    });
+  }
   return new Promise((resolve) => {
     const sock = net.connect({ host: host.address, port: 22 });
     const done = (up: boolean) => { sock.destroy(); resolve(up); };
@@ -644,13 +555,14 @@ export function sshReachable(host: RemoteHost, timeoutMs = 4000): Promise<boolea
  */
 export function toRemoteHost(host: CloudHost): RemoteHost {
   if (!host.address) throw new Error(`host ${host.id} has no address — start it first`);
-  const home = host.platform === "darwin" || host.provider === "scaleway-mac" ? `/Users/${host.user}` : `/home/${host.user}`;
+  const home = isMacHost(host) ? `/Users/${host.user}` : `/home/${host.user}`;
   return {
     address: tailnetDialAddress(host.tailnet) ?? host.address,
     user: host.user,
     keyPath: host.keyPath,
     remoteBaseDir: `${home}/work`,
     homeDir: home,
+    ...(host.proxyCommand ? { proxyCommand: host.proxyCommand } : {}),
   };
 }
 
@@ -691,4 +603,7 @@ export async function probedRemoteHost(host: CloudHost, reach = sshReachable): P
 
 export function resetDialFailuresForTests(): void {
   tailnetFailedAt.clear();
+  proxyStateAt.clear();
+  proxyReads.clear();
+  masterSeen.clear();
 }

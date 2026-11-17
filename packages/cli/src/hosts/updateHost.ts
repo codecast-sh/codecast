@@ -12,6 +12,8 @@
  * retrying undeliverable station wakes after 1.1.179 shipped, 2026-10-16).
  */
 import { compareVersions } from "../browser/engine.js";
+import { hostHasSystemd, isMacHost } from "./providers/registry.js";
+import { restartDevboxDaemon } from "./providers/namespaceProvision.js";
 import { cliSourceVersion, hasHostBuildSource, installLinuxCast, restartHostDaemon } from "../browser/provisionLinux.js";
 import { HostCastBehind, latestReleaseVersion, releaseFor, type CastRelease, type HostCastSource } from "./installRelease.js";
 import { getVersion } from "../cliVersion.js";
@@ -20,11 +22,11 @@ import type { RemoteHost } from "../remote/session-move.js";
 import { installMacCast } from "./updateMac.js";
 import { MAC_HOST_PATH, macServiceLabel } from "./provisionMac.js";
 
-export type HostCastPlatform = "linux" | "darwin";
+export type HostCastPlatform = "linux" | "darwin" | "devbox";
 
 /** Which build a registered host takes. */
 export function hostCastPlatform(entry: { platform?: string; provider?: string }): HostCastPlatform {
-  return entry.platform === "darwin" || entry.provider === "scaleway-mac" ? "darwin" : "linux";
+  return isMacHost(entry) ? "darwin" : hostHasSystemd(entry) ? "linux" : "devbox";
 }
 
 export interface HostCastUpdate {
@@ -62,7 +64,7 @@ export function updateHostCast(host: RemoteHost, platform: HostCastPlatform, opt
   const { version } = installLinuxCast(host, log, source, opts.release);
   if (!opts.restart) return { version };
   try {
-    return { version, restart: restartHostDaemon(host, { force: opts.force }) };
+    return { version, restart: platform === "devbox" ? restartDevboxDaemon(host) : restartHostDaemon(host, { force: opts.force }) };
   } catch (err) {
     if (opts.force) throw err;
     return { version, restart: { refused: err instanceof Error ? err.message : String(err) } };
@@ -105,7 +107,7 @@ export function castForPrepare(
   let up: HostCastUpdate;
   try {
     // A Mac restart ends the sessions it runs, so only Linux, whose restart refuses that, moves its daemon here.
-    up = (deps.update ?? updateHostCast)(host, platform, { restart: platform === "linux", release }, log);
+    up = (deps.update ?? updateHostCast)(host, platform, { restart: platform !== "darwin", release }, log);
   } catch (err) {
     throw fail(`installing ${laptop} failed: ${err instanceof Error ? err.message : String(err)}`);
   }

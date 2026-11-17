@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "../../proc.js";
-import { ensureRemoteRepo, gitEnv, gitSshUrl, pushPath, remoteHome, remoteRepoPath, shq, ssh, sshBase, type RemoteHost } from "../../remote/session-move.js";
+import { ensureRemoteRepo, gitEnv, gitSshUrl, pushPath, remoteHome, remoteRepoPath, shq, ssh, sshBase, sshDestination, type RemoteHost } from "../../remote/session-move.js";
 import { readyHostHome, type ReadyHostHomeReport } from "../prepare.js";
 import { refreshRemoteCheckout } from "../transfer.js";
 import { describeHostSetup, runHostSetup, resolveHostSpec } from "../hostSetup.js";
@@ -85,7 +85,7 @@ export function sameBytesOnHost(host: RemoteHost, home: string, rels: string[]):
   }
   if (!local.size) return new Set();
   const hostHome = remoteHome(host);
-  const out = execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, "xargs -0 sha256sum 2>/dev/null; true"],
+  const out = execFileSync("ssh", [...sshBase(host), sshDestination(host), "xargs -0 sha256sum 2>/dev/null; true"],
     { input: [...local.keys()].map((r) => path.posix.join(hostHome, r)).join("\0"), encoding: "utf-8", maxBuffer: 64 * 1024 * 1024, timeout: 300_000 });
   const same = new Set<string>();
   for (const line of out.split("\n")) {
@@ -204,7 +204,7 @@ export interface ProbeOutput {
 export function probeHost(host: RemoteHost, input: ProbeInput): ProbeOutput {
   const home = remoteHome(host);
   const list = [...input.files.map((f) => path.posix.join(home, f)), ...input.paths].join("\0");
-  const out = execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`,
+  const out = execFileSync("ssh", [...sshBase(host), sshDestination(host),
     `xargs -0 -n 200 sh -c 'for p; do [ -e "$p" ] || [ -L "$p" ] || printf "%s\\0" "$p"; done' sh; printf '\\036'; "\${SHELL:-/bin/bash}" -lic 'env -0' 2>/dev/null </dev/null`],
   { input: list, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024, timeout: 300_000, stdio: ["pipe", "pipe", "ignore"] });
   const [missing = "", env = ""] = out.split("\x1e");
@@ -293,7 +293,7 @@ export async function applyEnvironment(ledger: ParityLedger, plan: EnvPlan, deps
         await (deps.reconnect ?? (async () => {
           // The shared connection can still answer a quick check while refusing
           // new sessions (after a long transfer): close it, then open a fresh one.
-          try { execFileSync("ssh", [...sshBase(host), "-O", "exit", `${host.user}@${host.address}`], { stdio: "ignore", timeout: 10_000 }); } catch { /* no shared connection open */ }
+          try { execFileSync("ssh", [...sshBase(host), "-O", "exit", sshDestination(host)], { stdio: "ignore", timeout: 10_000 }); } catch { /* no shared connection open */ }
           const { ensureUp, resolveCloudHost } = await import("../../browser/cloudHost.js");
           await ensureUp(resolveCloudHost(deps.cloudId));
         }))();

@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { claudeProjectDirName } from "../../projectPathResolver.js";
-import { sshBase, type RemoteHost } from "../../remote/session-move.js";
+import { sshBase, sshDestination, type RemoteHost } from "../../remote/session-move.js";
 import { execFile } from "../../proc.js";
 import { promisify } from "node:util";
 import type { MirrorStamp } from "./apply.js";
@@ -58,7 +58,7 @@ export type HostMemoryReader = (dirs: string[], withContent: string[]) => Promis
 
 export function sshMemoryReader(host: RemoteHost): HostMemoryReader {
   return async (dirs, withContent) => {
-    const { stdout } = await execFileAsync("ssh", [...sshBase(host), `${host.user}@${host.address}`, hostMemoryScript(dirs, withContent)], { encoding: "utf-8", timeout: 60_000, maxBuffer: 64 * 1024 * 1024 });
+    const { stdout } = await execFileAsync("ssh", [...sshBase(host), sshDestination(host), hostMemoryScript(dirs, withContent)], { encoding: "utf-8", timeout: 60_000, maxBuffer: 64 * 1024 * 1024 });
     const line = stdout.trim().split("\n").pop() ?? "[]";
     return (JSON.parse(line) as HostMemoryFile[]).map((f) => ({ ...f, ...(f.content !== undefined ? { content: Buffer.from(f.content, "base64").toString("utf-8") } : {}) }));
   };

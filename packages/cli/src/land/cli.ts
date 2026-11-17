@@ -127,17 +127,17 @@ async function scanLocal(opts: ScanOpts): Promise<LandScan> {
 const HOST_SCAN_BUDGET_MS = 5 * 60_000;
 
 async function onHosts(args: string): Promise<HostScan[]> {
-  const { readHosts, toRemoteHost } = await import("../browser/cloudHost.js");
-  const { sshBase } = await import("../remote/session-move.js");
+  const { dialsWithoutWakingNow, readHosts, toRemoteHost } = await import("../browser/cloudHost.js");
+  const { sshBase, sshDestination } = await import("../remote/session-move.js");
   // Asynchronous ssh, so the hosts scan side by side: a synchronous one ran
   // them in turn, each allowed 15 minutes, and a caller's timeout killed the
   // whole scan before anything printed.
   return Promise.all(readHosts().map(async (h) => {
     const label = `${h.user}@${h.address ?? "?"}`;
-    if (!h.address) return { id: h.id, label, error: "no address (asleep?): cast hosts wake it first" };
+    if (!h.address || !(await dialsWithoutWakingNow(h))) return { id: h.id, label, error: "no address (asleep?): cast hosts wake it first" };
     const remote = toRemoteHost(h);
     try {
-      const { stdout } = await execFileAsync("ssh", [...sshBase(remote), `${remote.user}@${remote.address}`, `bash -lc 'cast land ${args} --json'`], { encoding: "utf-8", timeout: HOST_SCAN_BUDGET_MS, maxBuffer: 256 * 1024 * 1024, env: process.env });
+      const { stdout } = await execFileAsync("ssh", [...sshBase(remote), sshDestination(remote), `bash -lc 'cast land ${args} --json'`], { encoding: "utf-8", timeout: HOST_SCAN_BUDGET_MS, maxBuffer: 256 * 1024 * 1024, env: process.env });
       const out = String(stdout);
       return { id: h.id, label, result: JSON.parse(out.slice(out.indexOf("{"))) as LandScan };
     } catch (err: any) {

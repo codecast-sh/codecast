@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { copyToClipboard } from "../lib/utils";
 import { useDaemonHealth, blocksDelivery } from "../hooks/useDaemonHealth";
+import { beating } from "../lib/hostWake";
 import { useLocalDaemonHealth } from "../hooks/useLocalDaemonHealth";
 import { useLocalDeviceId } from "../hooks/useLocalDeviceId";
 import { useSyncDevices } from "../hooks/useSyncDevices";
@@ -15,9 +16,9 @@ import { deviceDisplayName, isRemoteHost } from "@codecast/shared/contracts";
 import { HoverCard } from "./ui/HoverCard";
 import { StatusPanelHeader, StatusPanelSection } from "./StatusPanel";
 import { useHooksReminderHidden } from "../lib/hooksReminder";
-import { useHostWake } from "../hooks/useHostWake";
+import { useHostRunLimit, useHostWake } from "../hooks/useHostWake";
 import { useConversationOwnerDevice } from "../hooks/useConversationOwnerDevice";
-import { SessionHostWakeChip } from "./HostWakeStatus";
+import { SessionHostWakeChip, SessionRunLimitChip } from "./HostWakeStatus";
 
 // Two shapes for one story. The pill, with its glow and pulsing dot, is for a
 // daemon that is making a message late right now: it has to be seen. The
@@ -121,6 +122,8 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
   });
   const health = useDaemonHealth(ownerDeviceId);
   const wake = useHostWake(ownerDeviceId);
+  const minutesLeft = useHostRunLimit(beating(health) ? ownerDeviceId : null);
+  const limitChip = minutesLeft === null ? null : <SessionRunLimitChip minutesLeft={minutesLeft} />;
   const { offline: appOffline } = useAppOffline();
   const [mounted, setMounted] = useState(false);
 
@@ -134,12 +137,12 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
   // blocksDelivery, not merely degraded: this chip sits on ONE session and says
   // its messages are running late, so it may only fire on a live symptom. An
   // hour total past the SLO belongs on the header chip and the devices page.
-  if (!blocksDelivery(health)) return null;
+  if (!blocksDelivery(health)) return limitChip;
 
   const view = describeDaemonHealth(health);
-  if (!view) return null;
+  if (!view) return limitChip;
 
-  return <DaemonHealthPill view={view} machine={ownerName} />;
+  return <>{limitChip}<DaemonHealthPill view={view} machine={ownerName} /></>;
 }
 
 /**

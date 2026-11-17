@@ -24,6 +24,9 @@ import {
   type MoveResult,
   type RemoteHost,
   type SyncVerification,
+  sshDestination,
+  sshIdentity,
+  sshShell,
 } from "./session-move.js";
 import { reorientationNotice, type ReorientationFacts } from "../sessionMoveNotice.js";
 import { deviceInfo, deviceId } from "./device.js";
@@ -297,7 +300,7 @@ export function registerRemoteCommand(program: Command): void {
     .option("--destroy", "Also request Scaleway host deletion (if past 24h commitment)")
     .action(async (_opts: { host?: string; destroy?: boolean }) => {
       const { host } = await resolveTransferHost(_opts.host);
-      const SSH = `ssh -i ${host.keyPath} -o StrictHostKeyChecking=accept-new ${host.user}@${host.address}`;
+      const SSH = sshShell([...sshIdentity(host), "-o", "StrictHostKeyChecking=accept-new", sshDestination(host)]);
       console.log(`tearing down ${host.user}@${host.address}`);
       const { execSync } = await import("../proc.js");
       execSync(`${SSH} 'rm -f ~/.claude/.credentials.json ~/.codecast/config.json; pkill -f "index.ts _daemon" 2>/dev/null; echo "credentials wiped, daemon stopped"'`, { stdio: "inherit" });

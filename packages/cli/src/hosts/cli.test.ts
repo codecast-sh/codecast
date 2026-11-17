@@ -3,11 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  AGENT_BRIDGE_SECURITY_NOTE, briefError, EC2_HOURLY_USD, estimateHostCost, idleStopLine, forwardAgentRefusal, gitStatusLine,
+  AGENT_BRIDGE_SECURITY_NOTE, briefError, estimateHostCost, idleStopLine, forwardAgentRefusal, gitStatusLine,
   GP3_USD_PER_GIB_MONTH, GH_NOT_LOGGED_IN_MESSAGE, grantAccountKey, grantDeployKey, hostGitReport, KEY_ALREADY_IN_USE_MESSAGE, keyReportLines, markOrphanWorktrees,
   parseDanglingSeeds, parseRemoteWorkspaceList, readRemoteWorktrees, REMOTE_DANGLING_SEEDS_SCRIPT, worktreeGitLabel, REMOTE_WORKSPACE_LIST_SCRIPT, sessionLine, sessionSeed, sessionWhere, worktreeNote, type HostSession, type RemoteWorktree,
 } from "./cli.js";
 import { execFileSync } from "node:child_process";
+import { EC2_HOURLY_USD } from "./providers/aws.js";
 import type { CloudHost } from "../browser/cloudHost.js";
 import type { HostGitState } from "../cloud/hostGit.js";
 

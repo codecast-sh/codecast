@@ -6,7 +6,7 @@
 import { Check, Moon } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { WAKE_STEPS, wakeElapsed } from "../lib/hostWake";
-import { WAKE_PHASES } from "@codecast/shared/contracts";
+import { RUN_LIMIT_HOLD_MINUTES, WAKE_PHASES } from "@codecast/shared/contracts";
 import type { HostWake } from "../hooks/useHostWake";
 import { StatusDot } from "./StatusDot";
 import { TopbarChip } from "./TopbarButton";
@@ -192,3 +192,13 @@ export function SessionHostWakeChip({ wake }: { wake: HostWake }) {
   );
 }
 
+export function SessionRunLimitChip({ minutesLeft }: { minutesLeft: number }) {
+  const color = minutesLeft < RUN_LIMIT_HOLD_MINUTES ? "var(--sol-red)" : "var(--sol-yellow)";
+  const label = `stops in ${minutesLeft < 1 ? "<1" : minutesLeft} min · run limit`;
+  return (
+    <TopbarChip data-host-run-limit={minutesLeft} aria-label={label} tone={color} alert className="hidden md:flex">
+      <StatusDot color={color} />
+      <span className="max-w-[160px] truncate">{label}</span>
+    </TopbarChip>
+  );
+}

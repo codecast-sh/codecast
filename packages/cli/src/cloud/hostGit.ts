@@ -53,7 +53,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import { DEVICE_GIT_KEY_REL, deviceKeyComment, isGitAuthError } from "../gitIdentity.js";
-import { shq, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { shq, sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 import { FIND_CAST_SH, ghWrapperInstallSnippet } from "./ghWrapper.js";
 import { ACCOUNT_KEY_URL, githubRepo, hostAppOrigin, hostProbeOrigin, isGitHubHost, originHost } from "./gitOrigin.js";
 
@@ -532,7 +532,7 @@ export interface EnsureHostGitOptions {
 export const HOST_GIT_REMOTE_COMMAND = 'bash -c "$(cat)"';
 
 function runOverSsh(host: RemoteHost, script: string) {
-  const r = spawnSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, HOST_GIT_REMOTE_COMMAND], {
+  const r = spawnSync("ssh", [...sshBase(host), sshDestination(host), HOST_GIT_REMOTE_COMMAND], {
     encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], input: script, timeout: 120_000, env: process.env, maxBuffer: 16 * 1024 * 1024,
   });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", ...(r.error ? { error: r.error } : {}) };

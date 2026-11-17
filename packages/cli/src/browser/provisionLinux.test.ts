@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { REACH_MIN_WATCHDOG } from "../cloud/reach.js";
 import { BROWSER_LINK_MIN_WATCHDOG } from "../cloud/browserLink.js";
-import { A11Y_ANNOUNCE_PATH, baseProvisionScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, pushCodecastConfig, DAEMON_CGROUP_TMUX_SCRIPT, DAEMON_KEEP_SESSIONS_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport, type PushCodecastConfigDeps, idleWatchdogScript } from "./provisionLinux.js";
+import { A11Y_ANNOUNCE_PATH, baseProvisionScript, idleConfigScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, pushCodecastConfig, DAEMON_CGROUP_TMUX_SCRIPT, DAEMON_KEEP_SESSIONS_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport, type PushCodecastConfigDeps, idleWatchdogScript } from "./provisionLinux.js";
 import { encryptToken } from "../tokenEncryption.js";
 import { DEVICE_BOUND_TOKEN_PREFIX } from "@platform/auth/cli";
 import * as remote from "./remote.js";
@@ -383,7 +383,7 @@ describe("restartHostDaemon", () => {
 describe("idle watchdog and the daemon's activity stamp", () => {
   const script = idleWatchdogScript();
   test("a fresh stamp keeps the box awake; a stale one lets it sleep", () => {
-    expect(script).toContain("STAMP=/home/ubuntu/.codecast/host-active");
+    expect(script).toContain("STAMP=$HOME_DIR/.codecast/host-active");
     expect(script).toContain('[ -f "$STAMP" ]');
     expect(script).toMatch(/stat -c %Y "\$STAMP".*-lt 180/);
   });
@@ -417,10 +417,161 @@ describe("idle watchdog and the daemon's activity stamp", () => {
   });
 
   test("the watchdog versions the bridge and reach need are ones provisioning installs", () => {
-    expect(IDLE_WATCHDOG_VERSION).toBe(4);
+    expect(IDLE_WATCHDOG_VERSION).toBe(5);
     expect(AGENT_BRIDGE_MIN_WATCHDOG).toBeLessThanOrEqual(IDLE_WATCHDOG_VERSION);
     expect(REACH_MIN_WATCHDOG).toBeLessThanOrEqual(IDLE_WATCHDOG_VERSION);
-    expect(BROWSER_LINK_MIN_WATCHDOG).toBe(IDLE_WATCHDOG_VERSION);
+    expect(BROWSER_LINK_MIN_WATCHDOG).toBeLessThanOrEqual(IDLE_WATCHDOG_VERSION);
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("idle watchdog actions", () => {
+  const roots: string[] = [];
+  afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+
+  function watchdog(data: { minutes?: string; action?: string; home?: string } = {}) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "idle-actions-"));
+    roots.push(root);
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    const fake = (name: string, body: string) => fs.writeFileSync(path.join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
+    fake("ss", "exit 0");
+    fake("pgrep", "exit 1");
+    fake("logger", "exit 0");
+    fake("timeout", 'shift; exec "$@"');
+    fake("systemctl", `printf '%s\\n' "$*" >> '${root}/systemctl'`);
+    fake("python3", `printf '%s' "$*" > '${root}/probe-args'; exit $(cat '${root}/probe-code')`);
+    const at = (name: string) => path.join(root, name);
+    const put = (name: string, value: string | undefined) => { if (value !== undefined) fs.writeFileSync(at(name), value); };
+    put("minutes", data.minutes ?? "5");
+    put("action", data.action);
+    put("home", data.home);
+    put("uptime", "100.25 400.50");
+    put("probe-code", "0");
+    const script = idleWatchdogScript()
+      .replaceAll("/etc/cast-idle-minutes", at("minutes"))
+      .replaceAll("/etc/cast-idle-action", at("action"))
+      .replaceAll("/etc/cast-idle-home", at("home"))
+      .replaceAll("/.namespace/tasks/cast-idle", at("marker"))
+      .replaceAll("/proc/uptime", at("uptime"))
+      .replaceAll("/run/cast-last-active", at("state"))
+      .replaceAll("/run/cast-idle-work.json", at("work.json"))
+      .replaceAll("/usr/local/lib/codecast/idle-probe.py", at("probe.py"));
+    fs.writeFileSync(at("check.sh"), script);
+    const nowSec = () => Math.floor(Date.now() / 1000);
+    return {
+      at,
+      put,
+      nowSec,
+      busy: () => put("probe-code", "1"),
+      idleSince: (secondsAgo: number) => put("state", String(nowSec() - secondsAgo)),
+      markerMtime: (secondsAgo: number) => { fs.writeFileSync(at("marker"), ""); fs.utimesSync(at("marker"), nowSec() - secondsAgo, nowSec() - secondsAgo); },
+      run: () => childProcess.execFileSync("bash", [at("check.sh")], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, timeout: 20_000 }),
+      poweredOff: () => fs.existsSync(at("systemctl")) && fs.readFileSync(at("systemctl"), "utf8").trim().split("\n"),
+      marker: () => fs.existsSync(at("marker")),
+    };
+  }
+
+  test("with no action file the watchdog powers off once idle, as before", () => {
+    const w = watchdog();
+    w.idleSince(240);
+    w.run();
+    expect(w.poweredOff()).toBe(false);
+    w.idleSince(301);
+    w.run();
+    expect(w.poweredOff()).toEqual(["poweroff"]);
+    expect(w.marker()).toBe(false);
+  }, 30_000);
+
+  test("an explicit poweroff action behaves the same and never touches a marker", () => {
+    const w = watchdog({ action: "poweroff\n" });
+    w.busy();
+    w.run();
+    expect(w.marker()).toBe(false);
+    expect(w.poweredOff()).toBe(false);
+  }, 30_000);
+
+  test("marker mode holds the marker while active and never powers off", () => {
+    const w = watchdog({ action: "marker\n" });
+    w.busy();
+    w.idleSince(9999);
+    w.run();
+    expect(w.marker()).toBe(true);
+    expect(w.poweredOff()).toBe(false);
+  }, 30_000);
+
+  test("marker mode removes the marker only after the idle window, without powering off", () => {
+    const w = watchdog({ action: "marker\n" });
+    w.busy();
+    w.run();
+    w.put("probe-code", "0");
+    w.idleSince(200);
+    w.run();
+    expect(w.marker()).toBe(true);
+    w.idleSince(301);
+    w.run();
+    expect(w.marker()).toBe(false);
+    expect(w.poweredOff()).toBe(false);
+  }, 30_000);
+
+  test("a marker older than this boot is cleared, a newer one is kept", () => {
+    const w = watchdog({ action: "marker\n" });
+    w.idleSince(10);
+    w.markerMtime(50);
+    w.run();
+    expect(w.marker()).toBe(true);
+    w.markerMtime(1000);
+    w.run();
+    expect(w.marker()).toBe(false);
+  }, 30_000);
+
+  test("a busy run replaces a pre-boot marker with a fresh one", () => {
+    const w = watchdog({ action: "marker\n" });
+    w.markerMtime(1000);
+    w.busy();
+    w.run();
+    expect(w.marker()).toBe(true);
+    expect(fs.statSync(w.at("marker")).mtimeMs / 1000).toBeGreaterThan(w.nowSec() - 50);
+  }, 30_000);
+
+  test("minutes 0 disables the watchdog and holds no marker", () => {
+    const w = watchdog({ action: "marker\n", minutes: "0" });
+    w.markerMtime(10);
+    w.busy();
+    w.run();
+    expect(w.marker()).toBe(false);
+    expect(w.poweredOff()).toBe(false);
+  }, 30_000);
+
+  test("the probe and the daemon stamp use the home from /etc/cast-idle-home", () => {
+    const w = watchdog({ action: "marker\n" });
+    const home = w.at("devbox-home");
+    fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".codecast/host-active"), "");
+    w.put("home", `${home}\n`);
+    w.run();
+    expect(fs.readFileSync(w.at("probe-args"), "utf8")).toBe(`${w.at("probe.py")} ${home}`);
+    expect(w.marker()).toBe(true);
+  }, 30_000);
+
+  test("with no home file the probe gets /home/ubuntu", () => {
+    const w = watchdog();
+    w.run();
+    expect(fs.readFileSync(w.at("probe-args"), "utf8")).toBe(`${w.at("probe.py")} /home/ubuntu`);
+  }, 30_000);
+});
+
+describe("idleConfigScript", () => {
+  test("the minutes alone are the line the AWS provisioning always wrote", () => {
+    expect(idleConfigScript(20)).toBe('echo "20" | sudo tee /etc/cast-idle-minutes >/dev/null');
+    expect(baseProvisionScript(20)).toContain(`${idleConfigScript(20)}\n`);
+  });
+
+  test("the action and home follow when given", () => {
+    expect(idleConfigScript(15, { action: "marker", home: "/home/devbox" }).split("\n")).toEqual([
+      'echo "15" | sudo tee /etc/cast-idle-minutes >/dev/null',
+      'echo "marker" | sudo tee /etc/cast-idle-action >/dev/null',
+      'echo "/home/devbox" | sudo tee /etc/cast-idle-home >/dev/null',
+    ]);
   });
 });
 

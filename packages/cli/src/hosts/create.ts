@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Option, type Command } from "commander";
 import { describeInstance, readHosts, upsertHost, type CloudHost } from "../browser/cloudHost.js";
+import { hostProvider } from "./providers/registry.js";
 import { readRepoNeed } from "../repoNeed.js";
 import { sizeFor } from "../cloud/hostHeadroom.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
@@ -29,6 +30,8 @@ export interface CreateHostOptions {
   /** Registered as autoscale's own, before provisioning, so a concurrent placement counts it. */
   autoscaled?: boolean;
   idle?: string;
+  provider?: string;
+  maxRun?: string;
 }
 
 /** Idle minutes as `cast hosts provision --idle` takes them: a nonnegative whole number. */
@@ -86,7 +89,7 @@ export function createHostPlan(platform: string, options: CreateHostOptions) {
  * EC2 description, for tests.
  */
 export function optionsLike(options: Partial<CreateHostOptions>, host: CloudHost, inst: any, platform: string, suffix: string): CreateHostOptions {
-  if (host.provider !== "aws") throw new Error(`${host.id} is not an AWS host`);
+  if (!hostProvider(host).clones) throw new Error(`${host.id} is not an AWS host`);
   if (!inst) throw new Error(`AWS has no instance ${host.id}`);
   const sg = inst.SecurityGroups?.[0]?.GroupId;
   if (!inst.SubnetId || !sg || !inst.KeyName) throw new Error(`${host.id} has no subnet, security group or key pair to copy`);
@@ -122,7 +125,11 @@ export function registerHostCreateCommand(hosts: Command): void {
     .option("--no-provision", "Register the instance without installing Codecast")
     .addOption(new Option("--autoscaled", "Mark the host as added by autoscale").hideHelp())
     .option("--idle <minutes>", "Provision with this idle auto-stop, in minutes (0 disables; default 20)")
+    .addOption(new Option("--provider <name>", "Where the host runs").choices(["aws", "namespace"]).default("aws"))
+    .option("--max-run <duration>", "With --provider namespace, the hard run limit of the account's Devbox, e.g. 4h, 90m, 1h30m")
     .action(async (platform: string, given: CreateHostOptions) => {
+      if (given.provider === "namespace") return (await import("./namespaceCli.js")).createNamespaceHost(hosts, platform, given);
+      if (given.maxRun !== undefined) throw new Error("--max-run is for --provider namespace");
       let options = given;
       if (given.like) {
         const like = readHosts().find((h) => h.id === given.like);

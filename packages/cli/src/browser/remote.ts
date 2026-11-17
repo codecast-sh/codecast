@@ -22,7 +22,7 @@ import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isCdpAlive } from "./cdp.js";
 import { freePort } from "./instance.js";
-import type { RemoteHost } from "../remote/session-move.js";
+import { sshDestination, sshIdentity, type RemoteHost } from "../remote/session-move.js";
 
 /** The profile the remote browser uses. Never a copy of ours. `$HOME`, not
  *  `~`: a tilde after `--user-data-dir=` is not expanded, so Chrome took it
@@ -89,7 +89,7 @@ export function detectRemoteOs(host: RemoteHost): RemoteOs {
 function sshArgs(host: RemoteHost): string[] {
   const socket = path.join(os.tmpdir(), `cast-ssh-${host.user}-${host.address.replace(/[^\w.]/g, "_")}`);
   return [
-    "-i", host.keyPath,
+    ...sshIdentity(host),
     "-o", "IdentitiesOnly=yes",
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", "ConnectTimeout=20",
@@ -115,7 +115,7 @@ function sshArgs(host: RemoteHost): string[] {
  */
 export function remoteExec(host: RemoteHost, command: string, timeoutMs = 30_000): string {
   try {
-    return execFileSync("ssh", [...sshArgs(host), `${host.user}@${host.address}`, command], {
+    return execFileSync("ssh", [...sshArgs(host), sshDestination(host), command], {
       encoding: "utf-8",
       timeout: timeoutMs,
       stdio: ["ignore", "pipe", "pipe"],
@@ -137,7 +137,7 @@ export function remoteExec(host: RemoteHost, command: string, timeoutMs = 30_000
  */
 export function remoteExecAsync(host: RemoteHost, command: string, opts: { input?: string; timeoutMs?: number } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("ssh", [...sshArgs(host), `${host.user}@${host.address}`, command], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("ssh", [...sshArgs(host), sshDestination(host), command], { stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     let err = "";
     child.stdout?.on("data", (d: Buffer) => { out += d; });
@@ -165,7 +165,7 @@ export function remoteExecAsync(host: RemoteHost, command: string, opts: { input
  * checks directly.
  */
 function launchDetached(host: RemoteHost, command: string): void {
-  const child = spawn("ssh", [...sshArgs(host), "-n", `${host.user}@${host.address}`, command], {
+  const child = spawn("ssh", [...sshArgs(host), "-n", sshDestination(host), command], {
     stdio: ["ignore", "ignore", "ignore"],
     detached: true,
   });
@@ -183,7 +183,7 @@ function launchDetached(host: RemoteHost, command: string): void {
 export function scpTo(host: RemoteHost, localPath: string, remotePath: string): void {
   execFileSync(
     "scp",
-    [...sshArgs(host), localPath, `${host.user}@${host.address}:${remotePath}`],
+    [...sshArgs(host), localPath, `${sshDestination(host)}:${remotePath}`],
     { timeout: 600_000, stdio: ["ignore", "ignore", "pipe"] },
   );
 }
@@ -332,7 +332,7 @@ export async function startRemoteBrowser(
  */
 export function cdpTunnelArgs(host: RemoteHost, localPort: number, remotePort: number): string[] {
   return [
-    "-i", host.keyPath,
+    ...sshIdentity(host),
     "-o", "IdentitiesOnly=yes",
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", "ConnectTimeout=20",
@@ -349,7 +349,7 @@ export function cdpTunnelArgs(host: RemoteHost, localPort: number, remotePort: n
     "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
     // Fail loudly if the port is taken rather than running a tunnel to nowhere.
     "-o", "ExitOnForwardFailure=yes",
-    `${host.user}@${host.address}`,
+    sshDestination(host),
   ];
 }
 

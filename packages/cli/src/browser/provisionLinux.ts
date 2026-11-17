@@ -30,7 +30,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { installHostRelease, type CastRelease, type HostCastSource } from "../hosts/installRelease.js";
 import type { RemoteHost } from "../remote/session-move.js";
-import { copyCredentialToRemote, ensureRemoteClaudeReady, shq } from "../remote/session-move.js";
+import { copyCredentialToRemote, ensureRemoteClaudeReady, shq, sshDestination, sshIdentity } from "../remote/session-move.js";
 import { readInstalledClientVersions } from "../remote/agentAuth.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
 import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
@@ -64,7 +64,102 @@ const MEDIAMTX_VERSION = "v1.20.1";
  * Version 4 subtracts the laptop Chrome link (cloud/browserLink.ts); the
  * laptop daemon holds no link to a host below it.
  */
-export const IDLE_WATCHDOG_VERSION = 4;
+export const IDLE_WATCHDOG_VERSION = 5;
+
+export interface IdleConfig {
+  action?: "poweroff" | "marker";
+  home?: string;
+}
+
+export function idleConfigScript(minutes: number, { action, home }: IdleConfig = {}): string {
+  return Object.entries({ minutes, action, home })
+    .filter(([, value]) => value !== undefined)
+    .map(([name, value]) => `echo "${value}" | sudo tee /etc/cast-idle-${name} >/dev/null`)
+    .join("\n");
+}
+
+export function idleInstallScript(): string {
+  return `sudo mkdir -p /usr/local/lib/codecast
+sudo tee /usr/local/lib/codecast/idle-probe.py >/dev/null <<'IDLE_PROBE'
+${cloudIdleProbeScript}
+IDLE_PROBE
+sudo chmod 644 /usr/local/lib/codecast/idle-probe.py
+sudo tee /usr/local/bin/cast-idle-check >/dev/null <<'IDLE'
+#!/bin/bash
+# Power off after N idle minutes. EC2 turns an OS shutdown into a stopped
+# instance, so this is what makes idle time cost only the disk.
+# "Active" means someone or something is genuinely using the machine:
+#   - an inbound SSH connection (a person, a CDP tunnel, a stream viewer),
+#     minus the laptop daemon's agent bridge: that connection exists only to
+#     forward the laptop's ssh-agent and would otherwise hold the box awake
+#     forever. Each bridge runs one sleeper with argv0 exactly
+#     "cast-agent-bridge" (exec -a), and pgrep's anchored match counts only
+#     those — the bash wrapper sshd runs also has the literal in its cmdline
+#     and must not be counted, or a real session could read as idle. A
+#     reached laptop folder (cast hosts reach) is the same: one connection
+#     per folder, whose sshfs runs as "cast-reach :<path> <mountpoint> ...".
+#     So is the laptop's Chrome link (one sleeper "cast-browser-link"),
+#     which only lets this box's sessions reach the laptop's browser.
+#   - the encoder running (someone is literally watching the screen)
+#   - the codecast daemon's activity stamp is fresh: it touches
+#     ~/.codecast/host-active when a message is delivered, a transcript grows
+#     or a session launches. A dormant session's claude process is alive but
+#     idle, so counting processes kept the box awake and billing forever;
+#     the stamp lets it sleep, and the queued work that wakes it resumes the
+#     session (its worktree and transcript are on this disk).
+# Until the daemon has written a stamp at all (a box provisioned before this
+# rule) the old process rules apply, so an upgrade never sleeps under a live
+# session. The daemon's own outbound websocket deliberately does NOT count.
+MINUTES=$(cat /etc/cast-idle-minutes 2>/dev/null || echo 0)
+ACTION=$(cat /etc/cast-idle-action 2>/dev/null)
+HOME_DIR=$(cat /etc/cast-idle-home 2>/dev/null)
+[ -n "$HOME_DIR" ] || HOME_DIR=/home/ubuntu
+MARKER=/.namespace/tasks/cast-idle
+if [ "$ACTION" = marker ] && [ -e "$MARKER" ]; then
+  boot=$(( $(date +%s) - $(cut -d. -f1 /proc/uptime) ))
+  if [ "$MINUTES" -le 0 ] || [ "$(stat -c %Y "$MARKER")" -lt "$boot" ]; then rm -f "$MARKER"; fi
+fi
+[ "$MINUTES" -le 0 ] && exit 0
+STATE=/run/cast-last-active
+STAMP=$HOME_DIR/.codecast/host-active
+active=0
+conns=$(ss -Htn state established '( sport = :22 )' | wc -l)
+bridges=$(pgrep -c -f '^cast-agent-bridge$' 2>/dev/null)
+[ -n "$bridges" ] || bridges=0
+reaches=$(pgrep -c -f '^cast-reach :' 2>/dev/null)
+[ -n "$reaches" ] || reaches=0
+links=$(pgrep -c -f '^cast-browser-link$' 2>/dev/null)
+[ -n "$links" ] || links=0
+[ $(( conns - bridges - reaches - links )) -gt 0 ] && active=1
+pgrep -f 'x11grab' >/dev/null 2>&1 && active=1
+if ! timeout 15s python3 /usr/local/lib/codecast/idle-probe.py "$HOME_DIR" > /run/cast-idle-work.json; then
+  active=1
+fi
+if [ -f "$STAMP" ]; then
+  [ $(( $(date +%s) - $(stat -c %Y "$STAMP") )) -lt 180 ] && active=1
+else
+  pgrep -f 'chrome' >/dev/null 2>&1 && active=1
+  pgrep -x claude >/dev/null 2>&1 && active=1
+fi
+now=$(date +%s)
+if [ "$active" = 1 ]; then
+  echo "$now" > "$STATE"
+  [ "$ACTION" = marker ] && touch "$MARKER"
+  exit 0
+fi
+last=$(cat "$STATE" 2>/dev/null || echo "$now")
+[ -f "$STATE" ] || echo "$now" > "$STATE"
+if [ $(( now - last )) -ge $(( MINUTES * 60 )) ]; then
+  if [ "$ACTION" = marker ]; then
+    rm -f "$MARKER"
+  else
+    logger -t cast-idle "idle for $MINUTES minutes — powering off"
+    systemctl poweroff
+  fi
+fi
+IDLE
+sudo chmod 755 /usr/local/bin/cast-idle-check`;
+}
 
 /** Where provisioning installs announce-a11y-bus.py, which cast-display.service runs as Xvfb starts. */
 export const A11Y_ANNOUNCE_PATH = "/usr/local/lib/codecast/announce-a11y-bus.py";
@@ -219,71 +314,8 @@ echo "[4c/6] computer use (a user bus that outlives logins)"
 sudo loginctl enable-linger ubuntu
 
 echo "[5/6] idle watchdog (${idleStopMinutes}m)"
-echo "${idleStopMinutes}" | sudo tee /etc/cast-idle-minutes >/dev/null
-sudo mkdir -p /usr/local/lib/codecast
-sudo tee /usr/local/lib/codecast/idle-probe.py >/dev/null <<'IDLE_PROBE'
-${cloudIdleProbeScript}
-IDLE_PROBE
-sudo chmod 644 /usr/local/lib/codecast/idle-probe.py
-sudo tee /usr/local/bin/cast-idle-check >/dev/null <<'IDLE'
-#!/bin/bash
-# Power off after N idle minutes. EC2 turns an OS shutdown into a stopped
-# instance, so this is what makes idle time cost only the disk.
-# "Active" means someone or something is genuinely using the machine:
-#   - an inbound SSH connection (a person, a CDP tunnel, a stream viewer),
-#     minus the laptop daemon's agent bridge: that connection exists only to
-#     forward the laptop's ssh-agent and would otherwise hold the box awake
-#     forever. Each bridge runs one sleeper with argv0 exactly
-#     "cast-agent-bridge" (exec -a), and pgrep's anchored match counts only
-#     those — the bash wrapper sshd runs also has the literal in its cmdline
-#     and must not be counted, or a real session could read as idle. A
-#     reached laptop folder (cast hosts reach) is the same: one connection
-#     per folder, whose sshfs runs as "cast-reach :<path> <mountpoint> ...".
-#     So is the laptop's Chrome link (one sleeper "cast-browser-link"),
-#     which only lets this box's sessions reach the laptop's browser.
-#   - the encoder running (someone is literally watching the screen)
-#   - the codecast daemon's activity stamp is fresh: it touches
-#     ~/.codecast/host-active when a message is delivered, a transcript grows
-#     or a session launches. A dormant session's claude process is alive but
-#     idle, so counting processes kept the box awake and billing forever;
-#     the stamp lets it sleep, and the queued work that wakes it resumes the
-#     session (its worktree and transcript are on this disk).
-# Until the daemon has written a stamp at all (a box provisioned before this
-# rule) the old process rules apply, so an upgrade never sleeps under a live
-# session. The daemon's own outbound websocket deliberately does NOT count.
-MINUTES=$(cat /etc/cast-idle-minutes 2>/dev/null || echo 0)
-[ "$MINUTES" -le 0 ] && exit 0
-STATE=/run/cast-last-active
-STAMP=/home/ubuntu/.codecast/host-active
-active=0
-conns=$(ss -Htn state established '( sport = :22 )' | wc -l)
-bridges=$(pgrep -c -f '^cast-agent-bridge$' 2>/dev/null)
-[ -n "$bridges" ] || bridges=0
-reaches=$(pgrep -c -f '^cast-reach :' 2>/dev/null)
-[ -n "$reaches" ] || reaches=0
-links=$(pgrep -c -f '^cast-browser-link$' 2>/dev/null)
-[ -n "$links" ] || links=0
-[ $(( conns - bridges - reaches - links )) -gt 0 ] && active=1
-pgrep -f 'x11grab' >/dev/null 2>&1 && active=1
-if ! timeout 15s python3 /usr/local/lib/codecast/idle-probe.py /home/ubuntu > /run/cast-idle-work.json; then
-  active=1
-fi
-if [ -f "$STAMP" ]; then
-  [ $(( $(date +%s) - $(stat -c %Y "$STAMP") )) -lt 180 ] && active=1
-else
-  pgrep -f 'chrome' >/dev/null 2>&1 && active=1
-  pgrep -x claude >/dev/null 2>&1 && active=1
-fi
-now=$(date +%s)
-if [ "$active" = 1 ]; then echo "$now" > "$STATE"; exit 0; fi
-last=$(cat "$STATE" 2>/dev/null || echo "$now")
-[ -f "$STATE" ] || echo "$now" > "$STATE"
-if [ $(( now - last )) -ge $(( MINUTES * 60 )) ]; then
-  logger -t cast-idle "idle for $MINUTES minutes — powering off"
-  systemctl poweroff
-fi
-IDLE
-sudo chmod 755 /usr/local/bin/cast-idle-check
+${idleConfigScript(idleStopMinutes)}
+${idleInstallScript()}
 sudo tee /etc/systemd/system/cast-idle.service >/dev/null <<'UNIT'
 [Unit]
 Description=codecast idle check
@@ -316,6 +348,19 @@ echo PROVISION-BASE-OK`;
   // to its own runtime.
 }
 
+export function remoteDaemonEnv(home: string): Array<[string, string]> {
+  return [
+    ["CODECAST_REMOTE_DEVICE", "1"],
+    ["CODECAST_CLOUD", "1"],
+    ["HOME", home],
+    ["PATH", `/usr/local/bin:/usr/bin:/bin:${home}/.local/bin`],
+  ];
+}
+
+export function remoteDeviceMarkerCommand(home: string): string {
+  return `install -d -m 700 ${home}/.codecast && : > ${home}/${REMOTE_DEVICE_MARKER_REL}`;
+}
+
 /**
  * The daemon systemd unit; installed after the cast binary and config exist.
  * On a shared host (sharedHost.ts) the owner's daemon is a peer like every
@@ -330,16 +375,13 @@ export function daemonUnitScript(opts: { shared?: boolean } = {}): string {
 install -d -m 700 /home/ubuntu/.codecast && rm -f /home/ubuntu/${REMOTE_DEVICE_MARKER_REL}`
     : `# The marker makes the box a remote device for any daemon started here, not
 # only the one this unit starts (remote/device.ts).
-install -d -m 700 /home/ubuntu/.codecast && : > /home/ubuntu/${REMOTE_DEVICE_MARKER_REL}`;
+${remoteDeviceMarkerCommand("/home/ubuntu")}`;
   const env = opts.shared
     ? `Environment=CODECAST_CLOUD=1
 Environment=HOME=/home/ubuntu
 Environment=PATH=${userToolPath("/home/ubuntu")}
 EnvironmentFile=-/home/ubuntu/.codecast/claude.env`
-    : `Environment=CODECAST_REMOTE_DEVICE=1
-Environment=CODECAST_CLOUD=1
-Environment=HOME=/home/ubuntu
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/ubuntu/.local/bin`;
+    : remoteDaemonEnv("/home/ubuntu").map(([name, value]) => `Environment=${name}=${value}`).join("\n");
   return `set -euo pipefail
 tmux_pids=$(bash -c ${shq(DAEMON_CGROUP_TMUX_SCRIPT)})
 if [ -n "$tmux_pids" ]; then
@@ -667,8 +709,8 @@ const defaultPushDeps: PushCodecastConfigDeps = {
   ship: (host, remoteCfg) => {
     execFileSync(
       "ssh",
-      ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-       "-o", "BatchMode=yes", `${host.user}@${host.address}`,
+      [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+       "-o", "BatchMode=yes", sshDestination(host),
        "umask 077; mkdir -p ~/.codecast; cat > ~/.codecast/config.json"],
       { input: JSON.stringify(remoteCfg, null, 2), timeout: 30_000 },
     );
@@ -756,6 +798,47 @@ export async function provisionLinuxHost(
   // Before any credential step: from here on the host itself refuses every laptop's pushes.
   if (opts.shared && !runScript(host, sharedHostMarkScript(), 60_000).includes("SHARED-MARK-OK")) throw new Error("could not mark the host shared");
 
+  const { agents, mirror, git, tools } = await provisionHostCast(host, opts, onProgress);
+
+  let device = "daemon skipped";
+  if (!opts.skipDaemon) {
+    onProgress("starting the daemon service…");
+    const unit = runScript(host, daemonUnitScript({ shared: opts.shared }), 60_000);
+    if (!unit.includes("DAEMON-UNIT-OK")) throw new Error(`daemon unit install failed:\n${unit.slice(-400)}`);
+    device = remoteExec(host, "systemctl is-active codecast-daemon.service", 20_000);
+  }
+
+  if (opts.shared) {
+    onProgress("shared host: per-user daemon units, no links into homes, claude first-run answered…");
+    const shared = runScript(host, sharedHostSetupScript(), 60_000);
+    if (!shared.includes("SHARED-HOST-OK")) throw new Error(`shared host setup did not complete:\n${shared.slice(-400)}`);
+  }
+
+  const services = remoteExec(
+    host,
+    "for s in cast-display cast-stream cast-vnc cast-novnc codecast-daemon; do printf '%s=%s ' $s $(systemctl is-active $s.service 2>/dev/null); done; printf 'idle-timer=%s' $(systemctl is-active cast-idle.timer)",
+    20_000,
+  );
+  // novnc is the reason apt's node stays: say so when its service is not up.
+  if (!/\bcast-novnc=active\b/.test(services)) onProgress(`  (cast-novnc is not active: ${services.trim()} — the machine-level VNC view will not work until it is)`);
+
+  return {
+    chrome: remoteExec(host, "google-chrome --version 2>/dev/null || echo \"none ($(dpkg --print-architecture): no host browser)\"", 20_000),
+    ...hostCastVersions(host),
+    services,
+    device,
+    mirror,
+    git,
+    agents,
+    tools,
+  };
+}
+
+export async function provisionHostCast(
+  host: RemoteHost,
+  opts: { gitIdentity?: string },
+  onProgress: (m: string) => void,
+): Promise<Pick<ProvisionReport, "agents" | "mirror" | "git" | "tools">> {
   onProgress("installing bun runtime…");
   remoteExec(
     host,
@@ -832,39 +915,13 @@ export async function provisionLinuxHost(
       onProgress("  (could not confirm the acceptance — the first moved session may need one manual Enter)");
     }
   }
+  return { agents, mirror, git, tools };
+}
 
-  let device = "daemon skipped";
-  if (!opts.skipDaemon) {
-    onProgress("starting the daemon service…");
-    const unit = runScript(host, daemonUnitScript({ shared: opts.shared }), 60_000);
-    if (!unit.includes("DAEMON-UNIT-OK")) throw new Error(`daemon unit install failed:\n${unit.slice(-400)}`);
-    device = remoteExec(host, "systemctl is-active codecast-daemon.service", 20_000);
-  }
-
-  if (opts.shared) {
-    onProgress("shared host: per-user daemon units, no links into homes, claude first-run answered…");
-    const shared = runScript(host, sharedHostSetupScript(), 60_000);
-    if (!shared.includes("SHARED-HOST-OK")) throw new Error(`shared host setup did not complete:\n${shared.slice(-400)}`);
-  }
-
-  const services = remoteExec(
-    host,
-    "for s in cast-display cast-stream cast-vnc cast-novnc codecast-daemon; do printf '%s=%s ' $s $(systemctl is-active $s.service 2>/dev/null); done; printf 'idle-timer=%s' $(systemctl is-active cast-idle.timer)",
-    20_000,
-  );
-  // novnc is the reason apt's node stays: say so when its service is not up.
-  if (!/\bcast-novnc=active\b/.test(services)) onProgress(`  (cast-novnc is not active: ${services.trim()} — the machine-level VNC view will not work until it is)`);
-
+export function hostCastVersions(host: RemoteHost): Pick<ProvisionReport, "cast" | "claude"> {
   return {
-    chrome: remoteExec(host, "google-chrome --version 2>/dev/null || echo \"none ($(dpkg --print-architecture): no host browser)\"", 20_000),
     cast: remoteExec(host, "cast --version 2>/dev/null || /usr/local/bin/cast --version", 60_000),
     claude: remoteExec(host, "claude --version", 60_000),
-    services,
-    device,
-    mirror,
-    git,
-    agents,
-    tools,
   };
 }
 
@@ -916,8 +973,8 @@ export function runScript(host: RemoteHost, script: string, timeoutMs: number, c
   try {
     return execFileSync(
       "ssh",
-      ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-       "-o", "BatchMode=yes", `${host.user}@${host.address}`, command],
+      [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+       "-o", "BatchMode=yes", sshDestination(host), command],
       { input: script, encoding: "utf-8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"] },
     );
   } catch (err) {

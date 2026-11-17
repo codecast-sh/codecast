@@ -3,7 +3,7 @@
 // Subscribes to a short signature of the fields the stage reads, so a host
 // beating every 30s re-renders nothing while its wake has not changed.
 import { useMemo } from "react";
-import { deviceDisplayName } from "@codecast/shared/contracts";
+import { RUN_LIMIT_WARN_MINUTES, deviceDisplayName, runMinutesLeft } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "./useCoarseNow";
 import { useDaemonHealth, useObserverSettling } from "./useDaemonHealth";
@@ -12,7 +12,7 @@ import { hostWakeStage, type HostWakeDevice, type HostWakeStage } from "../lib/h
 /** A manager whose minute-floored beat is this recent is online (DEVICE_ONLINE_MS plus the floor). */
 const MANAGER_ONLINE_MS = 3 * 60_000;
 
-type RosterRow = HostWakeDevice & { device_id: string; label?: string };
+type RosterRow = HostWakeDevice & { device_id: string; label?: string; host_readiness?: { run_ends_at?: number } };
 
 export type HostWake = HostWakeStage & { deviceId: string; host: string; now: number };
 
@@ -50,4 +50,16 @@ export function useHostWake(deviceId: string | null | undefined): HostWake | nul
     if (!stage || (stage.stage === "asleep" && settling)) return null;
     return { ...stage, deviceId, host: deviceDisplayName({ label: label ?? "", platform: platform ?? "", is_remote: true }), now };
   }, [parsed, deviceId, health, now, settling]);
+}
+
+export function useHostRunLimit(deviceId: string | null | undefined): number | null {
+  const endsAt = useInboxStore((s) => {
+    if (!deviceId || !s.machineRosterLive) return 0;
+    const d = (s.machineRoster as RosterRow[]).find((r) => r.device_id === deviceId);
+    return d?.is_remote ? d.host_readiness?.run_ends_at ?? 0 : 0;
+  });
+  const now = useCoarseNow(endsAt ? 30_000 : 600_000);
+  if (!endsAt || endsAt <= now) return null;
+  const left = runMinutesLeft(endsAt, now);
+  return left < RUN_LIMIT_WARN_MINUTES ? left : null;
 }

@@ -10,7 +10,7 @@ import { codecastPath } from "../codecastDir.js";
 
 export interface RunRecord {
   id: string;
-  host: { id: string; address: string; user: string; keyPath: string; homeDir?: string; local?: string };
+  host: { id: string; address: string; user: string; keyPath: string; homeDir?: string; proxyCommand?: string; local?: string };
   repo: string;
   seedCwd: string;
   cwdRel: string;

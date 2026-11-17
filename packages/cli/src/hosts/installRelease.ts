@@ -1,7 +1,7 @@
 import { execFileSync } from "../proc.js";
 import { MANIFEST_SIGNED_SH, RELEASE_MANIFEST_SIGNING, manifestSignedByPinnedKey } from "../releaseTrust.js";
 import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
-import { sshBase, type RemoteHost } from "../remote/session-move.js";
+import { sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
 
 /**
  * What a host runs: the published release (the default), which updates itself
@@ -185,7 +185,7 @@ export function installHostRelease(host: RemoteHost, platform: "linux" | "darwin
   // exactly the verified manifest.
   const release = pinned ?? latestRelease();
   if (!release) throw new Error("The published Codecast release could not be read or carries no valid signature; the host's CLI is unchanged");
-  const output = execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, "bash -s"], {
+  const output = execFileSync("ssh", [...sshBase(host), sshDestination(host), "bash -s"], {
     input: hostReleaseScript(platform, true, release), encoding: "utf8", timeout: 300_000, maxBuffer: 1024 * 1024,
     stdio: ["pipe", "pipe", "pipe"],
   });

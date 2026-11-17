@@ -47,6 +47,16 @@ function assertOffGraph(entry: string) {
   return graph;
 }
 
+const LAZY_PROVIDER_MODULES = ["hosts/providers/ec2Start.ts", "hosts/providers/namespaceStart.ts", "hosts/providers/namespaceProvision.ts", "hosts/namespaceCli.ts"].map((file) => path.join(SRC, file));
+
+function assertLazyProviderModulesOffGraph(graph: ReturnType<typeof buildBootGraph>, entry: string) {
+  const onGraph = LAZY_PROVIDER_MODULES.filter((file) => graph.nodes.has(file)).map((file) => {
+    const chain = importChain(graph, file)?.map(rel).join("\n    -> ") ?? "?";
+    return `${rel(file)} reached by:\n    ${chain}`;
+  });
+  expect(onGraph.join("\n\n"), `lazily loaded host provider modules on the static graph of ${rel(entry)}`).toBe("");
+}
+
 describe("command groups stay off the boot graph", () => {
   test("every listed group resolves to a module that exists", () => {
     for (const m of GROUP_MODULES) {
@@ -57,6 +67,7 @@ describe("command groups stay off the boot graph", () => {
 
   test("index.ts, the CLI's command tree, statically imports no command group", () => {
     const graph = assertOffGraph(path.join(SRC, "index.ts"));
+    assertLazyProviderModulesOffGraph(graph, path.join(SRC, "index.ts"));
     // Budgets, set at the measurement so they ratchet. index.ts was 260 files
     // and 5.5 MB with the groups inlined. Lifted to 205 when ct-49546 landed on
     // a tree 35 commits newer than the one it was measured on, because the
@@ -466,6 +477,7 @@ describe("command groups stay off the boot graph", () => {
 
   test("the daemon carries no CLI command group either", () => {
     const graph = assertOffGraph(path.join(SRC, "daemon.ts"));
+    assertLazyProviderModulesOffGraph(graph, path.join(SRC, "daemon.ts"));
     // 273 measured on the union (ct-49848). The daemon is the process that RUNS
     // the workers, so all 26 `workers/*` modules are work it actually does
     // rather than a graph it carries by accident (ct-49758) — but the command
@@ -651,7 +663,9 @@ describe("command groups stay off the boot graph", () => {
     // contracts/sendArrival.ts, max-lines splits, no new code. 604 on
     // 2026-11-16: ccFleetState.ts, out of ccAccounts.ts, the same split. 605
     // the same day: contracts/screenRecording.ts, for the screen recording brief.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(605);
+    // 608 on 2026-11-17: hosts/providers/registry.ts, aws.ts and scalewayMac.ts, the HostProvider registry and the per-provider describe/inspect/stop modules (GitHub #93).
+    // 609 the same day: hosts/providers/namespace.ts, the Namespace provider's describe/inspect/stop module (GitHub #93).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(609);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
