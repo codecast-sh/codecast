@@ -5,52 +5,34 @@
 // so with the inbox list on screen there was nothing to press. "row" heads
 // the rail under the workspace switcher; "icon" heads the inbox list, which
 // is on screen in zen too.
-//
-// The row is the rail's one filled button and carries its key on its face.
-// Drawn as an outlined card it read as one more row of the list under it
-// (Inbox, Decisions, Threads, ...), and its key was only in a hover tooltip.
 
 import { SquarePen } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
-import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { formatAcceleratorParts, useShortcutParts } from "../../shortcuts";
-import { isDesktopShell } from "../../lib/desktop";
+import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { Button } from "../ui/button";
 
-/** The key that starts a session here. The desktop app's File › New Session
- *  takes Cmd+N (Ctrl+N off a Mac) before the page sees it; a browser keeps
- *  Cmd+N for itself, so the page's own binding (Ctrl+N) is the key there. */
-function useNewSessionKeys(): string[] | null {
-  const pageKeys = useShortcutParts("session.compose");
-  return isDesktopShell() ? formatAcceleratorParts("CommandOrControl+N") : pageKeys;
-}
+const RING = "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sol-cyan";
 
 export function NewSessionButton({ variant }: { variant: "row" | "icon" }) {
   const openCompose = useInboxStore((s) => s.openCompose);
-  const keys = useNewSessionKeys();
   if (variant === "row") {
     return (
-      <Button
-        type="button"
-        variant="primary"
-        size="md"
-        data-new-session="row"
-        onClick={() => openCompose()}
-        className="w-full justify-start gap-2 px-2.5"
-      >
-        <SquarePen aria-hidden />
-        <span className="min-w-0 flex-1 truncate text-left">New session</span>
-        {keys && (
-          <span aria-hidden className="flex shrink-0 items-center gap-[2px]">
-            {keys.map((part, i) => <KeyCap key={i} size="xs" tone="ink">{part}</KeyCap>)}
-          </span>
-        )}
-      </Button>
+      <ShortcutTooltip label="New session" action="session.compose" side="right">
+        <button
+          type="button"
+          data-new-session="row"
+          onClick={() => openCompose()}
+          className={`flex h-8 w-full items-center gap-2 rounded-control border border-sol-border bg-sol-card px-2.5 text-ui font-medium text-sol-text shadow-sm transition-colors duration-press hover:border-sol-cyan/60 hover:text-sol-cyan ${RING}`}
+        >
+          <SquarePen aria-hidden className="size-4 shrink-0 text-sol-cyan" />
+          <span className="min-w-0 truncate">New session</span>
+        </button>
+      </ShortcutTooltip>
     );
   }
   return (
-    <ShortcutTooltip label="New session" {...(isDesktopShell() ? { accel: "CommandOrControl+N" } : { action: "session.compose" as const })} side="bottom">
+    <ShortcutTooltip label="New session" action="session.compose" side="bottom">
       <Button
         type="button"
         variant="primary"

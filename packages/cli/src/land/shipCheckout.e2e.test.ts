@@ -229,6 +229,28 @@ describe("cast ship checkout, direct mode", () => {
     expect(w.originFile("edit.ts")).not.toContain("core3 = 3");
   });
 
+  test("a session that writes an older version back after the newer commit landed is reverting it, and the revert ships", async () => {
+    const lines = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `export const ${tag}${i} = ${i};`).join("\n") + "\n";
+    const base = lines(8, "core");
+    const w = world({ "button.ts": base, "copy.ts": base }, DIRECT);
+    const { shared } = w;
+    w.upstream({ "button.ts": base + lines(5, "loud"), "copy.ts": base + lines(5, "later") }, "feat: loud button");
+    sh(shared, "pull", "-q", "--rebase");
+    // Both files go back to the version before that commit; only button.ts is a session's doing, written after it landed.
+    write(shared, "button.ts", base);
+    write(shared, "copy.ts", base);
+    transcript("sess-r", "jx7rrrrrrrrrrrrrrrrrrrrrrrrrrrrr", [bash(shared, "git checkout HEAD~1 -- button.ts", -5_000)]);
+
+    const plan = await makePlan(shared, {});
+    expect(plan.groups.find((g) => g.id === "stale")!.paths).toEqual(["copy.ts"]);
+    expect(plan.groups.find((g) => g.id === "s:jx7rrrr")!.paths).toEqual(["button.ts"]);
+
+    const r = await runPlan(plan);
+    expect(r.ok).toBe(true);
+    expect(w.originFile("button.ts")).not.toContain("loud0");
+    expect(w.originFile("copy.ts")).toContain("later4");
+  });
+
   test("a big genuine edit with a stale hunk inside is held and names the commit it reverts; a partial removal from a new file ships", async () => {
     const base = Array.from({ length: 20 }, (_, i) => `export const l${i} = ${i};`);
     const w = world({ "outreach.ts": base.join("\n") + "\n" }, DIRECT);

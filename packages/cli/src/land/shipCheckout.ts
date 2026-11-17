@@ -205,7 +205,7 @@ export async function freezeAndAttribute(root: string, upstream: string, log: Lo
     const reason = credentialReason(change.path, change.blob ? texts.get(change.blob) ?? null : null);
     if (reason) credentials.set(change.path, reason);
   }
-  const stale = await findStaleCopies(root, { base: frozen.base, tree: frozen.tree, upstream, changes: frozen.changes.filter((c) => !credentials.has(c.path)), claimed: (p) => attribution.owners.has(p) });
+  const stale = await findStaleCopies(root, { base: frozen.base, tree: frozen.tree, upstream, changes: frozen.changes.filter((c) => !credentials.has(c.path)), wroteAt: (p) => attribution.owners.get(p)?.edits.get(p) });
   if (stale.size) log(`holding ${stale.size} stale cop${stale.size === 1 ? "y" : "ies"} of older versions`);
   return { frozen, paths, attribution, credentials, stale };
 }

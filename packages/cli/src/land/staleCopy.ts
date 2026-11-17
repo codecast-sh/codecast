@@ -51,7 +51,7 @@ export interface StaleFile {
 
 /** One `-U0` hunk, as the content lines it removes and adds (see `significant`). */
 export interface Hunk { removed: string[]; added: string[] }
-interface Touch { commit: string; subject: string; src: string | null; dst: string | null; hunks: Hunk[] }
+interface Touch { commit: string; subject: string; /** Committer time, ms. */ at: number; src: string | null; dst: string | null; hunks: Hunk[] }
 
 /** A line that carries content: blank lines and lone brackets match anywhere, so they prove nothing. */
 function significant(raw: string): string | null {
@@ -62,12 +62,13 @@ function significant(raw: string): string | null {
 /**
  * `git log --raw -p -U0` (or `git diff-tree` of the same shape) read line by
  * line into touches per path. A commit header line starts with \x01 and
- * carries "<sha> <subject>".
+ * carries "<sha> <committer unix time> <subject>".
  */
 function patchParser(paths: ReadonlySet<string>): { line: (line: string) => void; touches: Map<string, Touch[]> } {
   const touches = new Map<string, Touch[]>();
   let commit = "";
   let subject = "";
+  let at = 0;
   let raw = new Map<string, { src: string | null; dst: string | null }>();
   let file: Touch | null = null;
   let hunk: Hunk | null = null;
@@ -78,7 +79,7 @@ function patchParser(paths: ReadonlySet<string>): { line: (line: string) => void
     let t = list.find((x) => x.commit === commit);
     if (!t) {
       const ids = raw.get(p) ?? { src: null, dst: null };
-      t = { commit, subject, ...ids, hunks: [] };
+      t = { commit, subject, at, ...ids, hunks: [] };
       list.push(t);
       touches.set(p, list);
     }
@@ -87,7 +88,9 @@ function patchParser(paths: ReadonlySet<string>): { line: (line: string) => void
   const line = (line: string) => {
     if (line.startsWith("\x01")) {
       commit = line.slice(1, 41);
-      subject = line.slice(42);
+      const m = /^(\d+) (.*)$/.exec(line.slice(42));
+      at = m ? Number(m[1]) * 1000 : 0;
+      subject = m ? m[2] : line.slice(42);
       raw = new Map();
       file = null;
       return;
@@ -130,7 +133,7 @@ async function streamPatches(root: string, args: string[], parser: ReturnType<ty
   if (code !== 0) throw new Error(`git ${args[0]} failed reading history for stale copies: ${err.trim() || `exit ${code}`}`);
 }
 
-const LOG_FORMAT = "--format=%x01%H %s";
+const LOG_FORMAT = "--format=%x01%H %ct %s";
 const QUOTE_OFF = ["-c", "core.quotePath=off"];
 
 /** Every commit in HEAD's recent history that changed one of `paths`, newest first, with its hunks. */
@@ -143,7 +146,7 @@ async function touchesOf(root: string, base: string, paths: Set<string>): Promis
 /** The frozen diff's hunks per path, HEAD to the frozen tree. */
 async function frozenHunks(root: string, base: string, tree: string, paths: Set<string>): Promise<Map<string, Hunk[]>> {
   const parser = patchParser(paths);
-  parser.line(`\x01${"0".repeat(40)} frozen`);
+  parser.line(`\x01${"0".repeat(40)} 0 frozen`);
   await streamPatches(root, ["diff-tree", "-r", "--no-renames", "-p", "-U0", "--no-color", "--no-ext-diff", base, tree, "--", ...paths], parser);
   return new Map([...parser.touches].map(([p, list]) => [p, list.flatMap((t) => t.hunks)]));
 }
@@ -214,12 +217,18 @@ export function undoneHunks(frozenHunks: Hunk[], gone: ReadonlyMap<string, numbe
 
 /**
  * The frozen changes that are stale copies, by path: `tree` is the frozen
- * tree and `base` the HEAD it was frozen on. `claimed` says whether a
- * session's transcript wrote the path (attribute.ts): an absent file nobody
- * removed is the only deletion this can call stale.
+ * tree and `base` the HEAD it was frozen on. `wroteAt` is when a session's
+ * transcript last wrote the path (attribute.ts), or undefined: an absent file
+ * nobody removed is the only deletion this can call stale. A session that
+ * wrote an older version back after the commits it undoes had landed chose
+ * to undo them (a revert), so that copy is its work, not a leftover.
  */
-export async function findStaleCopies(root: string, opts: { base: string; tree: string; upstream: string; changes: Frozen["changes"]; claimed: (path: string) => boolean }): Promise<Map<string, StaleFile>> {
+export async function findStaleCopies(root: string, opts: { base: string; tree: string; upstream: string; changes: Frozen["changes"]; wroteAt: (path: string) => number | undefined }): Promise<Map<string, StaleFile>> {
   const stale = new Map<string, StaleFile>();
+  const revertedOnPurpose = (path: string, undone: Touch[]) => {
+    const wrote = opts.wroteAt(path);
+    return wrote !== undefined && undone.length > 0 && undone.every((t) => t.at > 0 && t.at < wrote);
+  };
   // A file HEAD lacks has no older version to be a copy of.
   const candidates = opts.changes.filter((c) => c.from);
   if (!candidates.length) return stale;
@@ -233,7 +242,7 @@ export async function findStaleCopies(root: string, opts: { base: string; tree: 
     if (change.blob === upstreamBlobs.get(change.path)) continue;  // upstream's own content (or its own deletion): the replay drops it
     if (!change.blob) {
       const added = history.findIndex((t) => !t.src);
-      if (added >= 0 && !opts.claimed(change.path)) {
+      if (added >= 0 && opts.wroteAt(change.path) === undefined) {
         stale.set(change.path, { reason: `absent as it was before ${history[added].commit.slice(0, 10)} added it, and no session removed it`, reverts: history.slice(0, added + 1).map(label) });
       }
       continue;
@@ -241,6 +250,7 @@ export async function findStaleCopies(root: string, opts: { base: string; tree: 
     const made = history.findIndex((t) => t.dst === change.blob);
     if (made >= 0) {
       const later = history.slice(0, made);
+      if (revertedOnPurpose(change.path, later)) continue;
       stale.set(change.path, { reason: `an exact copy of the version ${history[made].commit.slice(0, 10)} left; ${later.length} later commit(s) changed it`, reverts: later.map(label) });
       continue;
     }
@@ -287,6 +297,7 @@ export async function findStaleCopies(root: string, opts: { base: string; tree: 
       const n = size(unseen);
       if (n >= 2 && n * 2 >= size(gone)) {
         const reverts = history.slice(0, grewFrom.at).filter((t) => t.hunks.some((k) => k.added.some((l) => unseen.has(l))));
+        if (revertedOnPurpose(change.path, reverts)) continue;
         stale.set(change.path, { reason: `grew from the version ${history[grewFrom.at].commit.slice(0, 10)} left and would remove ${n} of ${size(gone)} removed line(s) that later commits added`, reverts: reverts.map(label) });
         continue;
       }
@@ -296,6 +307,7 @@ export async function findStaleCopies(root: string, opts: { base: string; tree: 
     const undone = undoneHunks(hunksOf.get(change.path) ?? [], gone, frozen, history, movedOutOf(change.path));
     if (undone.length) {
       const commits = [...new Map(undone.map((u) => [u.touch.commit, u.touch])).values()];
+      if (revertedOnPurpose(change.path, commits)) continue;
       const lines = undone.reduce((n, u) => n + u.hunk.added.length, 0);
       stale.set(change.path, { reason: `undoes ${undone.length} hunk(s) of ${commits.length} later commit(s), ${lines} line(s) they added; that part is an older copy`, reverts: commits.map(label) });
     }

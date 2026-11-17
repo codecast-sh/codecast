@@ -22,7 +22,7 @@ Trees often hold successive versions of the same work, and the scan names a tree
 
 ## Safety rails
 
-- **Never undo the default branch.** A file, or a hunk, whose change is an older copy of work the default branch already holds in a newer form (its diff mostly removes lines upstream added since its base, or re-adds code upstream deleted on purpose) is dropped from the commit, not shipped: that is not holding work, it is not reverting someone else's. Check with `git log --oneline <base>..origin/<default> -- <path>` when a diff deletes recent upstream lines.
+- **Never undo the default branch.** A file, or a hunk, whose change is an older copy of work the default branch already holds in a newer form (its diff mostly removes lines upstream added since its base, or re-adds code upstream deleted on purpose) is dropped from the commit, not shipped: that is not holding work, it is not reverting someone else's. A revert a session made on purpose (it wrote the file after those commits landed, and the plan files it under that session) is that session's work and ships. Check with `git log --oneline <base>..origin/<default> -- <path>` when a diff deletes recent upstream lines.
 - **Data has a way back.** A migration that only adds ships. One that drops or rewrites existing data (dropping a table or column, a destructive update or delete, a type change that loses values) ships only after a fresh backup of that database exists, taken the way the repository's instructions say; name the backup in the report.
 - **Rollback is one command.** `cast deploy` records what each target ran before it (its previous deploy, dp-N) and the target's declared `rollback`; put the rollback for each production deploy in the report (`cast line deploy --target <name> --rollback --go`).
 - **Secrets stay out** (below), and the checks, tests and gates always run.
@@ -31,7 +31,7 @@ Trees often hold successive versions of the same work, and the scan names a tree
 
 The checkout's HEAD equals origin's default branch before you plan, after you push, and when the run ends. Deploys push commits of their own (a CLI release commits its version bump), so origin moves again after your push; the run is not over until the checkout has followed it. A HEAD left behind makes every later ship replay against a stale base, shows thousands of already-shipped files as changed, and lets old copies of files ship as reverts. `cast land level` levels it when every file merges cleanly. When it refuses, level it yourself against one pinned origin sha, file by file:
 
-- A file nobody here changed, or one byte-identical to an older upstream version of itself, takes the upstream version; one upstream deleted, and identical to what was deleted, is removed.
+- A file nobody here changed, or one byte-identical to an older upstream version of itself, takes the upstream version; one upstream deleted, and identical to what was deleted, is removed. The exception is a revert: a session that wrote the file after the newer commits landed (its transcript shows the write, `cast ship checkout --dry-run` files it under that session rather than as stale) put the older version back on purpose, so it stays and ships.
 - A file that is the current upstream plus edits stays as it is: those edits are someone's work.
 - A file that is an older upstream version plus edits gets those edits merged onto upstream (`git merge-file`, with that older version as the base); resolve any conflict by hand.
 
