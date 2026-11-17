@@ -1,4 +1,5 @@
 import { v, type ObjectType, type Validator } from "convex/values";
+import { predictionPatch } from "./predictions";
 import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./functions";
 import { verifyApiToken } from "./apiTokens";
@@ -1038,7 +1039,7 @@ async function cascadeClose(ctx: any, ids: Id<"tasks">[], newStatus: string, use
     if (!t || !isSameWorkspace(t, scope)) continue;
     // status_id cleared: the cascade moves the subtree to a terminal category,
     // so any custom-status refinement from the old category is stale.
-    await patchTask(ctx, t, { status: newStatus, status_id: undefined, closed_at: now, updated_at: now });
+    await patchTask(ctx, t, { status: newStatus, status_id: undefined, ...(t.status === newStatus ? {} : { closed_at: now }), updated_at: now });
     await releaseBoundSessions(ctx, t);
     await recordTaskChange(ctx, id, { user_id: userId, actor_type: "system" }, [["status", t.status, newStatus]], now);
     // The parent's own release (afterStatusMove) runs after this one.
@@ -1197,6 +1198,9 @@ export const create = mutation({
     // the task's origin, so the one notice is the whole hand-off.
     assignment_note: v.optional(v.string()),
     assignment_from: v.optional(v.string()),
+    // `cast task create --goal-ref in-9:key --predict "<line>"` (predictions.ts).
+    goal_ref: v.optional(v.string()),
+    predict: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1329,6 +1333,8 @@ export const create = mutation({
       steps: args.steps,
       acceptance_criteria: args.acceptance_criteria,
       estimated_minutes: args.estimated_minutes,
+      goal_ref: args.goal_ref?.trim() || undefined,
+      ...(args.predict?.trim() ? await predictionPatch(ctx, { workspace: db.workspaceKey, short_id }, args.predict, now) : {}),
     } as any);
 
     for (const dep of args.blocked_by || []) {
@@ -2110,6 +2116,8 @@ export const update = mutation({
     // The watch after ship (LE12): days from now until a quiet cause closes
     // as resolved; 0 ends the watch.
     watch_days: v.optional(v.number()),
+    // A predicted effect on a goal metric (predictions.ts); "" clears it.
+    predict: v.optional(v.string()),
     // model, effort and ephemeral (TG8, TG9); ephemeral:false is `cast task keep`.
     ...executionHintArgs,
   },
@@ -2252,13 +2260,16 @@ export const update = mutation({
       }
     }
     Object.assign(updates, groundPatch(args), executionHintPatch(args));
+    // Judged against the status this same call sets: `--status open --predict` on a shipped task is a reopen, then a prediction.
+    if (args.predict !== undefined) Object.assign(updates, await predictionPatch(ctx, { ...task, status: nextStatus ?? task.status }, args.predict, now));
     if (args.watch_days !== undefined) {
       // The watch station runs right after the ship: the fix is live from now, and older evidence never reopens it.
       updates.watch_until = watchUntilFor(args.watch_days, now);
       updates.watch_from = updates.watch_until ? now : undefined;
     }
 
-    if (nextStatus === "done" || nextStatus === "dropped") {
+    // Only a move into a closed status stamps when it closed: a repeat "done" keeps the close it had.
+    if ((nextStatus === "done" || nextStatus === "dropped") && nextStatus !== task.status) {
       updates.closed_at = now;
     }
 
@@ -3837,7 +3848,7 @@ export async function updateTaskAs(ctx: MutationCtx, userId: Id<"users">, args: 
     if (args.triage_status === "active") updates.promoted = true;
   }
 
-  if (nextStatus === "done" || nextStatus === "dropped") {
+  if ((nextStatus === "done" || nextStatus === "dropped") && nextStatus !== task.status) {
     updates.closed_at = now;
   }
   if (nextStatus === "in_progress") {

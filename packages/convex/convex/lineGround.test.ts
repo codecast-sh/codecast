@@ -111,6 +111,34 @@ describe("lineGround.sweep (LE5)", () => {
   });
 
   // pl-882: ct-59578's note said "All 3 reports show ..." at 65 findings.
+  test("a prediction on a goal metric is recorded with the grounding; one it cannot read is named and dropped", async () => {
+    const { add, task, sweep, t, person, team, workspace, checkout } = await setup();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("initiatives", { user_id: person, team_id: team, workspace, short_id: "in-1", title: "More orders", status: "active", project_ids: [checkout], health: "none", created_at: T0, updated_at: T0, metrics: [{ key: "orders_a_week", name: "Orders a week", target: "at least 500" }] } as any);
+    });
+    const kept = await add({ fingerprint: "err-p1", title: "Checkout throws on coupons", project: "pr-1" });
+    stub.state.replies.push(ground({ goal_ref: "in-1:orders_a_week", prediction: "in-1:orders_a_week +3% in 14d :: 12 failed coupon checkouts a day" }));
+    await sweep();
+    expect((await task(kept.task_id)).predicted).toMatchObject({ goal_ref: "in-1:orders_a_week", direction: "up", size: 3, relative: true, read_days: 14, basis: "12 failed coupon checkouts a day" });
+
+    const unread = await add({ fingerprint: "err-p2", title: "Checkout slow on Safari", project: "pr-1" });
+    stub.state.replies.push(ground({ goal_ref: "in-1:orders_a_week", prediction: "in-1:orders_a_week a lot more soon" }));
+    await sweep();
+    const t2 = await task(unread.task_id);
+    expect(t2).toMatchObject({ goal_ref: "in-1:orders_a_week", readiness: "ready" });
+    expect(t2.predicted).toBeUndefined();
+    const comments = await t.run(async (ctx) => await ctx.db.query("task_comments").collect());
+    expect(comments.some((c: any) => c.text.includes("Predicts in-1:orders_a_week +3% in 14d"))).toBe(true);
+    expect(comments.some((c: any) => c.text.includes("Prediction not kept (A prediction reads"))).toBe(true);
+
+    // A prediction on a metric the brief does not offer is ignored, the grounding stands.
+    const other = await add({ fingerprint: "err-p3", title: "Checkout typo", project: "pr-1" });
+    stub.state.replies.push(ground({ goal_ref: "pr-1", prediction: "in-7:visits +5% in 7d :: guess" }));
+    await sweep();
+    expect(await task(other.task_id)).toMatchObject({ goal_ref: "pr-1", readiness: "ready" });
+    expect((await task(other.task_id)).predicted).toBeUndefined();
+  });
+
   test("a cause whose findings doubled since its note is grounded again over what it holds now", async () => {
     const { add, task, sweep } = await setup();
     const first = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart", project: "pr-1" });
