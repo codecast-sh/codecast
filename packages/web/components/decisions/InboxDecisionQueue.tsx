@@ -36,6 +36,7 @@ export function InboxDecisionQueue({
   activeSessionId,
   extraSessions,
   onSelectSession,
+  matches,
 }: {
   collapsed: boolean;
   onToggle: () => void;
@@ -43,16 +44,22 @@ export function InboxDecisionQueue({
   /** Sessions the inbox files as asking that hold nothing in the viewer's queue. */
   extraSessions: InboxSession[];
   onSelectSession: (session: InboxSession, e?: React.MouseEvent) => void;
+  /** The inbox's chip filter, by the asking session: under a chip the section
+   *  lists only the decisions of sessions that pass it. Each keeps its place
+   *  number in the whole queue, the one the stepper walks. */
+  matches?: (conversationId: string) => boolean;
 }) {
-  const queue = useDecisionQueue();
+  const fullQueue = useDecisionQueue();
+  const numbered = useMemo(() => fullQueue.map((item, i) => ({ item, n: i + 1 })).filter(({ item }) => !matches || matches(item.conversationId)), [fullQueue, matches]);
+  const queue = useMemo(() => numbered.map(({ item }) => item), [numbered]);
   const cursor = useDecisionQueueCursor();
   const meId = useInboxStore((s) => s.currentUser?._id as string | undefined);
   const advisoryRows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: advisoryWhere, sig: advisorySig });
-  const advisory = useMemo(() => advisoryRows.filter((d) => askedOfViewer(d, meId)).length, [advisoryRows, meId]);
+  const advisory = useMemo(() => advisoryRows.filter((d) => askedOfViewer(d, meId) && (!matches || matches(d.conversation_id))).length, [advisoryRows, meId, matches]);
 
   const groups = useMemo(() => {
     const byConv = new Map<string, Group>();
-    queue.forEach((item, i) => {
+    numbered.forEach(({ item, n }) => {
       let g = byConv.get(item.conversationId);
       if (!g) {
         g = {
@@ -64,10 +71,10 @@ export function InboxDecisionQueue({
         };
         byConv.set(item.conversationId, g);
       }
-      g.asks.push({ item, n: i + 1 });
+      g.asks.push({ item, n });
     });
     return [...byConv.values()];
-  }, [queue]);
+  }, [numbered]);
   // The first groups up to SHOWN_ASKS decisions, plus the lit one wherever it sits.
   const isLit = (g: Group) => (cursor ? g.asks.some((a) => a.item.key === cursor) : g.conversationId === activeSessionId);
   const shown: Group[] = [];

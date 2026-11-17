@@ -19,7 +19,7 @@ import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
 import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -2027,12 +2027,15 @@ function SessionListPanelImpl({
   // chips are mutually exclusive (the setters clear each other) but apply both
   // defensively. Mid-create stubs pass the bucket filter so the session you
   // just summoned inside a focused bucket doesn't vanish before assignment.
+  // A matching row nested under a card the chip drops stands in its place
+  // (chipFilterSection, which the keyboard order shares).
   const filterByChip = useCallback(
-    (items: InboxSession[]) =>
-      items.filter((sess) =>
-        chipMatchesSession(sess, chipFilterOpts(s, bucketByConv)),
-      ),
-    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
+    (items: InboxSession[]) => {
+      const opts = chipFilterOpts(s, bucketByConv);
+      if (!opts.projectFilters?.length && !opts.bucketFilters?.length) return items;
+      return chipFilterSection(items, globalSubByParent, (sess) => chipMatchesSession(sess, opts));
+    },
+    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv, globalSubByParent],
   );
 
   // The Stashed / Killed buckets' open state is ephemeral and CLOSED by
@@ -2071,6 +2074,16 @@ function SessionListPanelImpl({
   // section reads first. The chokepoint already lifted rows from outside the
   // rail's scope; they still honor the active chip here.
   const statusQuestions = useMemo(() => filterByChip(placedQuestions), [filterByChip, placedQuestions]);
+  // The active chip by session id, undefined with no chip: the Decisions
+  // section keeps the asks whose session passes it.
+  const chipMatchesId = useMemo(() => {
+    const opts = chipFilterOpts(s, bucketByConv);
+    if (!opts.projectFilters?.length && !opts.bucketFilters?.length) return undefined;
+    return (id: string) => {
+      const sess = useInboxStore.getState().sessions[id];
+      return !!sess && chipMatchesSession(sess, opts);
+    };
+  }, [filterByChip]);
   // The placed sections ARE the status view: the buckets are mutually
   // exclusive (questions rows never sit in another section), and trigger
   // absorption is no longer a client pass — an armed inject trigger or a live
@@ -3610,8 +3623,9 @@ function SessionListPanelImpl({
           collapsed={!!s.collapsedSections.questions}
           onToggle={() => s.toggleCollapsedSection("questions")}
           activeSessionId={activeSessionId}
-          extraSessions={placedQuestions}
+          extraSessions={statusQuestions}
           onSelectSession={handleQuestionSelect}
+          matches={chipMatchesId}
         />
         {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, placed.counts.pinned) })}
         {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", floor: true, count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
@@ -3699,8 +3713,9 @@ function SessionListPanelImpl({
           // are one click away. Chip filters apply to shelf rows like any other.
           // For an account no machine has connected to yet, the list waits for
           // something to hold: an empty "Killed" under a newcomer's first
-          // screen offers nothing.
-          footer: noMachineYet && filteredDismissed.length === 0 && s.killedShelf.ids.length === 0 ? undefined : s.killedShelf.complete ? (
+          // screen offers nothing, and neither does an empty one under a chip
+          // (a project's page): older kills page in for the whole inbox.
+          footer: (noMachineYet && filteredDismissed.length === 0 && s.killedShelf.ids.length === 0) || (chipMatchesId && filteredDismissed.length === 0) ? undefined : s.killedShelf.complete ? (
             s.killedShelf.ids.length > 0 && (
               <div className="w-full px-3 py-1.5 text-meta text-sol-text-dim/60 border-b border-sol-border/30">No older kills</div>
             )

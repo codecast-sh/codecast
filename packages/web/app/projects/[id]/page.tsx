@@ -2,8 +2,8 @@
 // A project's page: where its work happens. One header row (the way up to
 // the Projects list, its name, status, lead, Share, and the menu of its views)
 // over the view picked. It opens on Session, the project's default session,
-// with the rest of its sessions in the inbox beside it (the Inbox toggle
-// filters it to the project). The other views sit in the menu: Tasks, the
+// with the rest of its sessions in the inbox beside it, which the page scopes
+// to the project while it is open. The other views sit in the menu: Tasks, the
 // list /tasks uses; Outputs, what its work produced; Timeline, everything that happened with the update
 // composer on top; About, what it is for, its charter, deadline, the goals it
 // serves and its repositories; Flow, how its problems run; and Expectations,
@@ -39,8 +39,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { ProjectSession } from "../../../components/projects/ProjectSession";
 import { ProjectOutputs } from "../../../components/projects/ProjectOutputs";
 import { ProjectPinButton } from "../../../components/projects/ProjectPinButton";
-import { projectDefaultSessionOf } from "../../../lib/projectDefaultSession";
-import { ProjectInboxFilter } from "../../../components/projects/ProjectInboxFilter";
+import { useProjectInboxScope } from "../../../components/projects/useProjectInboxScope";
 import { ProjectLineTab } from "../../../components/line/ProjectLineTab";
 import { ExpectationsTab } from "../../../components/expectations/ExpectationsTab";
 import { ForeignWorkspaceNotice } from "../../../components/ForeignWorkspaceNotice";
@@ -56,7 +55,7 @@ import { TaskHrefProvider } from "../../../lib/taskHrefContext";
 import { findEntityInStore } from "../../../lib/liveEntities";
 import { PageHeader } from "../../../components/ui/page-header";
 import { PlaceCrumbs } from "../../../components/nav/PlaceCrumbs";
-import { windowOrgTree } from "../../../store/orgSlice";
+import { BackControl } from "../../../components/nav/BackControl";
 
 const api = _api as any;
 
@@ -159,8 +158,6 @@ function ProjectDetailContent() {
 
   const updateProject = useInboxStore((s) => s.updateProject);
   const taskPlace = useProjectTaskPlace(projectRef);
-  // Whether the project has a main session (its Inbox count leaves it out).
-  const hasMain = useInboxStore((s) => (storeProject ? !!projectDefaultSessionOf(storeProject, s.sessions, windowOrgTree(s)?.roles as any) : false));
   // Open tasks, for the Tasks row of the views menu.
   const openTasks = useInboxStore((s) => openTaskCount(s.tasks, projectId));
   // A project opened from another workspace: its tasks, plans, docs and line
@@ -171,6 +168,8 @@ function ProjectDetailContent() {
   // The org tree feeds the store per view, the way the org page mounts it:
   // the lead chip reads its roles from there.
   useSyncOrgTreeFeeder();
+  // The inbox beside the page lists this project's sessions while it is open.
+  useProjectInboxScope(project?._id);
 
   const handleStatusChange = useCallback((status: string) => {
     updateProject(projectId, { status });
@@ -209,7 +208,6 @@ function ProjectDetailContent() {
         </button>
       )}
       <ProjectViewMenu tabs={tabs} active={tab} onTab={setTab} counts={{ tasks: openTasks }} shortId={project.short_id} />
-      <ProjectInboxFilter projectId={project._id} hasMain={hasMain} />
       <ProjectPinButton projectId={project._id} title={project.title} />
   </>);
   const actions = <>{verbs}{share}</>;
@@ -244,14 +242,18 @@ function ProjectDetailContent() {
         renameLabel="Project title"
         glyph={glyph}
         // With a task open the task's own header holds the way back.
-        back={taskRef ? false : undefined}
+        // The arrow alone: the crumbs already name the place, its tooltip names where back goes.
+        back={taskRef ? false : <BackControl compact divider />}
         // Projects ›, never the project twice while a task inside it is open.
         crumbs={<PlaceCrumbs crumbs={[{ label: "Projects", href: "/projects" }]} trailing={false} />}
-        status={project.short_id ? <IntentIdChip id={project.short_id} /> : null}
+        // On the session the status and lead sit beside the name, one row; the
+        // id is in the views menu. The other views add the id, the deadline
+        // and the goals it serves on a row of their own.
+        status={tab === "sessions" ? <div className="flex items-center gap-2 text-meta">{chips}</div> : project.short_id ? <IntentIdChip id={project.short_id} /> : null}
         actions={verbs}
         share={share}
       >
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-meta">{chips}</div>
+        {tab !== "sessions" && <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-meta">{chips}</div>}
       </PageHeader>
 
       {/* The Line and Expectations tabs read where the project lives, so they

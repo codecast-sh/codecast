@@ -71,6 +71,10 @@ async function verifyProjectHeader() {
       writeAsServerShape(row, fields);
       state.projects = { ...state.projects, [id]: row };
     },
+    // The page scopes the inbox beside it to the project (useProjectInboxScope).
+    activeProjectFilter: null,
+    setActiveProjectFilter: (key: string | null) => { state.activeProjectFilter = key; },
+    setActiveBucketFilter: () => {},
   };
   const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
   mock.module("../../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
@@ -169,6 +173,8 @@ async function verifyProjectHeader() {
   assert.equal(q("[data-project-pick='target']"), null, "and the deadline to the other views");
   assert.equal(q("[data-project-back-to-session]"), null, "already on the session");
   assert.ok(q("[data-project-view='sessions']"), "the views menu");
+  assert.equal(state.activeProjectFilter, `pj:${PID}`, "the inbox beside the page lists the project's sessions");
+  assert.equal(q("[data-project-inbox-filter]"), null, "so the page needs no inbox toggle");
   assert.equal(q("[data-share]")!.getAttribute("data-share"), "/projects/pj-agentorg");
 
   // ── another view, kept in the URL: the facts come back, and one press returns to the session ──
