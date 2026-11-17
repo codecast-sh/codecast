@@ -264,7 +264,8 @@ function DecisionNext({ decisionId, step, openSession }: { decisionId: string; s
   const queued = queue.find((q) => q.decisionId && q.decisionId !== decisionId);
   const next = step.pos?.next ?? (queued ? queued.shortId ?? queued.decisionId ?? null : null);
   return (
-    <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-next>
+    // Pinned to the bottom of the page's scroll, so the next step shows where the answer was given.
+    <div className="decision-next-bar mt-4 flex items-center gap-2.5 flex-wrap" data-decision-next>
       <Button type="button" variant="outline" size="sm" onClick={() => void openSession()} data-decision-next-session>
         <MessagesSquare />Open the session
       </Button>
