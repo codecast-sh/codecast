@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { commandGroup } from "../commandGroups.js";
 import { ensureUp, openCloudHosts, readHosts, resolveCloudHost, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
+import { isMacHost } from "../hosts/providers/registry.js";
 import { remoteRepoPath } from "../remote/session-move.js";
 import { resolveSeedRoots } from "../cloud/prepare.js";
 import { createWipSnapshotStrict, CLOUD_SEED_EXCLUDES } from "../wipSnapshot.js";
@@ -185,7 +186,7 @@ async function chooseHost(flag: string | true | undefined, needGb: number, log: 
   }
   // Picking on its own, cast sends runs to Linux hosts (the default a cloud session gets); a Mac host is used when named.
   // A host reserved for one job (devices.reserved_for) takes runs only when named with --host.
-  const cands = (await openCloudHosts()).filter((h) => h.address && h.platform !== "darwin" && h.provider !== "scaleway-mac");
+  const cands = (await openCloudHosts()).filter((h) => h.address && !isMacHost(h));
   const last = listRecords().find((r) => r.seedCwd === seedCwd && !r.host.local);
   // A host this checkout used in the last half hour without a tool failure holds its warm dependencies and slots:
   // go there without probing (the host's own queue handles a full host), so a loaded laptop's slow ssh cannot move the run.

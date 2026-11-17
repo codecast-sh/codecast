@@ -12,6 +12,7 @@
  * retrying undeliverable station wakes after 1.1.179 shipped, 2026-10-16).
  */
 import { compareVersions } from "../browser/engine.js";
+import { isMacHost } from "./providers/registry.js";
 import { cliSourceVersion, hasHostBuildSource, installLinuxCast, restartHostDaemon } from "../browser/provisionLinux.js";
 import { HostCastBehind, latestReleaseVersion, releaseFor, type CastRelease, type HostCastSource } from "./installRelease.js";
 import { getVersion } from "../cliVersion.js";
@@ -24,7 +25,7 @@ export type HostCastPlatform = "linux" | "darwin";
 
 /** Which build a registered host takes. */
 export function hostCastPlatform(entry: { platform?: string; provider?: string }): HostCastPlatform {
-  return entry.platform === "darwin" || entry.provider === "scaleway-mac" ? "darwin" : "linux";
+  return isMacHost(entry) ? "darwin" : "linux";
 }
 
 export interface HostCastUpdate {

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Option, type Command } from "commander";
 import { describeInstance, readHosts, upsertHost, type CloudHost } from "../browser/cloudHost.js";
+import { hostProvider } from "./providers/registry.js";
 import { readRepoNeed } from "../repoNeed.js";
 import { sizeFor } from "../cloud/hostHeadroom.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
@@ -86,7 +87,7 @@ export function createHostPlan(platform: string, options: CreateHostOptions) {
  * EC2 description, for tests.
  */
 export function optionsLike(options: Partial<CreateHostOptions>, host: CloudHost, inst: any, platform: string, suffix: string): CreateHostOptions {
-  if (host.provider !== "aws") throw new Error(`${host.id} is not an AWS host`);
+  if (!hostProvider(host).clones) throw new Error(`${host.id} is not an AWS host`);
   if (!inst) throw new Error(`AWS has no instance ${host.id}`);
   const sg = inst.SecurityGroups?.[0]?.GroupId;
   if (!inst.SubnetId || !sg || !inst.KeyName) throw new Error(`${host.id} has no subnet, security group or key pair to copy`);

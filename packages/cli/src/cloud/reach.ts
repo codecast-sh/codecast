@@ -32,6 +32,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { CloudHost } from "../browser/cloudHost.js";
+import { isMacHost } from "../hosts/providers/registry.js";
 import { shq, type RemoteHost } from "../remote/session-move.js";
 import { codecastPath } from "../codecastDir.js";
 import { heldSshArgs } from "./agentBridge.js";
@@ -92,7 +93,7 @@ export function reachRefusal(code: number | null, hostId: string, mountpoint: st
 export function reachHostRefusal(host: CloudHost): string | null {
   // A Mac host never stops itself (no idle watchdog to keep awake); whether it
   // has FUSE-T and sshfs is answered by the host itself (REACH_NO_SSHFS_EXIT).
-  if (host.platform === "darwin" || host.provider === "scaleway-mac") return null;
+  if (isMacHost(host)) return null;
   if ((host.watchdogVersion ?? 0) < REACH_MIN_WATCHDOG) return `run \`cast hosts provision ${host.id}\` first: it installs sshfs and an idle watchdog that ignores the reach's own connection (its watchdog is version ${host.watchdogVersion ?? 1}, reach needs ${REACH_MIN_WATCHDOG})`;
   return null;
 }

@@ -10,6 +10,7 @@
 
 import type { CloudHost } from "../browser/cloudHost.js";
 import { inspectHost } from "../browser/cloudHost.js";
+import { hostProvider } from "../hosts/providers/registry.js";
 import { estimateHostCost } from "../hosts/cli.js";
 import { listImages } from "../hosts/image.js";
 import { collectAgentAuthBundle, laptopHome } from "../remote/agentAuth.js";
@@ -21,7 +22,7 @@ export function buildCloudHostReport(host: CloudHost, managedBy: string, now = D
   const facts = inspectHost(host);
   const cost = estimateHostCost({ instanceType: facts.instanceType, volumeGiB: facts.volumeGiB, state: facts.state });
   let images: CloudHostReport["images"] = [];
-  if (host.provider === "aws") {
+  if (hostProvider(host).images) {
     try { images = listImages({ region: host.region ?? "us-west-2", profile: host.profile }, host.platform ?? facts.platform ?? "linux").slice(0, 10).map(({ id, name, created }) => ({ id, name, created })); } catch { /* no image permission: none shown */ }
   }
   let held: CloudHostReport["logins_held"] = [];

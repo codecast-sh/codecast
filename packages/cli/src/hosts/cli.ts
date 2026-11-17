@@ -30,6 +30,7 @@ import {
   type CloudHost, type HostState,
 } from "../browser/cloudHost.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
+import { hostProvider, isMacHost } from "./providers/registry.js";
 import { normalizeReachFolder, reachHostRefusal, reachLine, readReachStatus, type ReachFolder, type ReachStatus } from "../cloud/reach.js";
 import { ACCOUNT_KEY_URL, cwdGitRoot, deployKeyUrl, grantAccountKey, grantDeployKey, hostAccessPath, repoOrigin, type HostAccessPath, type HostGitState } from "../cloud/hostGit.js";
 import { hostToolsDetailLines, parseHostToolsStamp, summarizeHostTools, type HostToolsReport } from "../cloud/hostTools.js";
@@ -1114,7 +1115,7 @@ export function buildHostsCommand(parent: Command): Command {
         return;
       }
       if (o.idle !== undefined && (!/^\d+$/.test(o.idle) || !Number.isSafeInteger(parseInt(o.idle, 10)))) die("Idle minutes must be a nonnegative whole number");
-      if (o.shared && (h.platform === "darwin" || h.provider === "scaleway-mac")) die("--shared is for Linux hosts");
+      if (o.shared && isMacHost(h)) die("--shared is for Linux hosts");
       // A shared host's owner daemon must be rewritten as a peer, or it stays a remote device on the laptop's logins.
       if (o.shared && !o.daemon) die("--shared needs the daemon step: it turns the owner's daemon into a peer");
       const { provisionLinuxHost, IDLE_WATCHDOG_VERSION } = await import("../browser/provisionLinux.js");
@@ -1122,7 +1123,7 @@ export function buildHostsCommand(parent: Command): Command {
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       // Shared stays shared, even provisioned from a laptop that never knew: the host keeps the record.
       const shared = o.shared === true || h.shared === true ||
-        (up.platform !== "darwin" && up.provider !== "scaleway-mac" && remoteExec(dialRemoteHost(up), `test -e ${SHARED_HOST_MARKER} && echo shared || true`, 30_000).trim() === "shared");
+        (!isMacHost(up) && remoteExec(dialRemoteHost(up), `test -e ${SHARED_HOST_MARKER} && echo shared || true`, 30_000).trim() === "shared");
       const idle = parseInt(o.idle ?? (shared ? "0" : "20"), 10);
       // The idle watchdog sees only the host's own login, so it would power off under everyone else.
       if (shared && idle !== 0) die("A shared host never auto-stops: its idle watchdog cannot see the other people's sessions", "drop --idle, or pass --idle 0");
@@ -1136,7 +1137,7 @@ export function buildHostsCommand(parent: Command): Command {
           console.log(fmt.muted(`  once both grants are on: cast hosts image ${up.id} --base`));
           return;
         }
-        if (up.platform === "darwin" || up.provider === "scaleway-mac") {
+        if (isMacHost(up)) {
           const { provisionMacHost } = await import("./provisionMac.js");
           let remote = dialRemoteHost(up);
           if (o.serviceUser) {
@@ -1326,7 +1327,7 @@ export function buildHostsCommand(parent: Command): Command {
     .option("--publish-base", "Make the newest base image public, copying it to every base region (rerun until each is public)")
     .action(async (id: string | undefined, o: { list?: boolean; delete?: string; base?: boolean; publishBase?: boolean }) => {
       const h = pick(id, "no host registered");
-      if (h.provider !== "aws") die("images are for AWS hosts");
+      if (!hostProvider(h).images) die("images are for AWS hosts");
       const { aws, createImageArgs, imageName, listImages } = await import("./image.js");
       const platform = h.platform ?? "linux";
       const opts = { region: h.region ?? "us-west-2", profile: h.profile };

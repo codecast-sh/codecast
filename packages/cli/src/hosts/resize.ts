@@ -8,6 +8,7 @@
 import type { Command } from "commander";
 import { CLOUD_HOST_SIZES } from "@codecast/shared/contracts";
 import { describeInstance, ensureUp, readHosts, stopHost, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
+import { hostProvider } from "./providers/registry.js";
 import { ssh } from "../remote/session-move.js";
 import { readRepoNeed, tooSmallFor } from "../repoNeed.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
@@ -33,7 +34,7 @@ export interface ResizePlan {
 
 /** The resize as a person decides it. Pure over the registry entry, its EC2 description and the price table. */
 export function resizePlan(host: CloudHost, inst: any, to: string, prices: Record<string, number>, opts: { sessions?: number; needBytes?: number } = {}): ResizePlan {
-  if (host.provider !== "aws") throw new Error(`${host.id} is not an AWS host`);
+  if (!hostProvider(host).resizes) throw new Error(`${host.id} is not an AWS host`);
   if (host.platform === "darwin") throw new Error(`${host.id} is a Mac on a dedicated host: its size is the dedicated host's, so resizing means a new host`);
   if (!inst) throw new Error(`AWS has no instance ${host.id}`);
   if (!/^[a-z0-9-]+\.[a-z0-9]+$/.test(to) || /^mac/.test(to)) throw new Error(`not a Linux instance type: ${to}`);
