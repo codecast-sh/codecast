@@ -218,6 +218,7 @@ timeout and its resume, and the deploy's page shows them.
 | Gate | `[line.deploy] gate`, the eval gate's verdict | passes with a note |
 | Roll out | `[line.deploy] rollout` | passes with a note |
 | Live | `[line.deploy] live`, production answering with `$sha` | passes with a note |
+| Finish | a target's `finish` (DP15), once it is live: the deploy is reported live first, so a failure here only notes it and files the finding | passes with a note |
 | Watch | `cast line deploy watch`: the deploy is live, and every carried fix that shipped is watched for the profile's `watch_days` from now, never shortened (LE12) | |
 
 Each step station is `cast line deploy step <step> dp-N`. A team whose path
@@ -281,7 +282,9 @@ desktop app. They are declared once, in the checkout:
   codecast reads what runs there (below), `rollback` the command that puts
   the previous version back, and `policy` who starts it (`press`, a person's
   Deploy, the default; `auto`, it goes out by itself when CI on main's head
-  is green). `ship = "<step>"` ties it to the `[[ship.deploy]]` step of
+  is green; `release`, it goes out with every release, DP15). `after`,
+  `ci` and `finish` give a release its order and steps (DP15).
+  `ship = "<step>"` ties it to the `[[ship.deploy]]` step of
   workspace.toml that sends it at a ship: the target takes that step's `run`
   and `when` (unless it gives its own), and the ship records a deploy of it.
   A target with no `ship` step is never sent by a ship: only a deploy from
@@ -389,3 +392,58 @@ order with their files and sessions (main_at), the workflow runs and other
 apps' suites on them (commit_ci), and the commit statuses its github-status
 targets name (their deploys). A json reader records its target's live sha on
 its first read.
+
+## DP15. A release: every target main moved past, in order
+
+A team ships main many times a day; each push leaves some targets behind
+(a CLI release not cut, an app update not published). A release sends them:
+
+```
+cast deploy                 every `release` target main moved past, and the push targets it waits on
+cast deploy cli mobile      those targets, whatever their policy
+cast deploy --dry-run       what it would send, wait for and leave alone, and why
+cast deploy --files "<paths>" --sha <sha> [--except <targets>]   only what one landed change touches
+```
+
+`deployRelease.ts planRelease` reads the checkout's targets (the file is the
+authority) and what the server records live on each. A target is behind when
+no live deploy holds the release's sha (git ancestry, as the Deploy stage
+decides it, FL4) and a commit since its live deploy touches its paths; one
+whose live sha is not in the checkout's history counts as behind. Then:
+
+- `send`: a `here` target whose policy is `release`, or any target named on
+  the command line. It is asked for like the Deploy button (`deployTargets.request`)
+  and its line-deploy graph runs on this machine when this machine publishes it,
+  in the checkout that published it; else its publishing machine runs it and the
+  release waits on the dp-N. A target whose deploy another release is already
+  sending waits for that one, and sends again only when it did not carry the sha.
+- `wait`: a `push` target that is behind deploys itself; the release waits
+  until a live deploy holds the sha.
+- `skip`: `press` and `auto` targets the command did not name, with why.
+
+Four keys of a `[[target]]` make the release a declaration rather than a
+script. They are read only by the CLI; the server's copy leaves them out
+(`publishableTarget`).
+
+| Key | What it does |
+|---|---|
+| `policy = "release"` | the target goes out with every release, and with a change flow's Deploy stage when the change touches it |
+| `after = ["backend"]` | sent only once those targets are live with this release; an `after` the release does not touch is not waited on; a cycle or an unknown name refuses the file |
+| `ci = "<command>"` | the line-deploy graph's CI station: the deploy sha's verdict before the send (`cast line deploy ci --workflow ci.yml`) |
+| `finish = "<command>"` | the Finish station once live; `$version` is what went out (`cast force-update $version` after a CLI release) |
+
+Targets run side by side except where `after` orders them; a target whose
+`after` failed is not sent. The command exits 1 when any target failed.
+
+A change flow's Deploy stage is the same release narrowed to one change: the
+`deploy` segment's `send` param (`deploy [flow="deploy", send="release"]`, set
+by the shipped `change` and `quick-change`) makes its wait station run
+`cast deploy --files <the change's files> --sha <its landed commit>` once the
+change lands, then wait as before. A flow that composes the segment without
+`send` only waits, so a team's own fix flows (Union's) keep deploying on their
+role's or person's clock.
+
+The `cast-deploy` skill ships everything uncommitted in a shared checkout and
+ends with `cast deploy`, so what a project deploys, in what order and with what
+follow-ups lives in its `.codecast/deploy.toml`, not in the skill.
+

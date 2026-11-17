@@ -29,8 +29,8 @@ describe("the line-deploy graph", () => {
     const next = (from: string, outcome: string) => g.edges.find((e) => e.from === from && e.condition === `outcome = ${outcome}`)?.to;
     const order = ["ci"];
     while (next(order[order.length - 1], "success")) order.push(next(order[order.length - 1], "success")!);
-    expect(order).toEqual(["ci", "send", "gate", "rollout", "live", "watch"]);
-    for (const s of ["ci", "send", "gate", "rollout", "live"]) expect(next(s, "failure")).toBe("returned");
+    expect(order).toEqual(["ci", "send", "gate", "rollout", "live", "finish", "watch"]);
+    for (const s of ["ci", "send", "gate", "rollout", "live", "finish"]) expect(next(s, "failure")).toBe("returned");
   });
 });
 
@@ -54,6 +54,29 @@ function fakeServer(deploy: Record<string, any>) {
 }
 
 describe("a deploy step", () => {
+  test("finish runs on a live deploy with the version that went out, and marks a marker target live first", async () => {
+    const live = fakeServer({ sha: "abc1234def", status: "live", version: "1.2.3" });
+    const out: string[] = [];
+    const r = await runDeployStep({ step: "finish", deploy: "dp-3", root: tmp(), profile: { command: "x", finish: "echo floor $version $CAST_DEPLOY_VERSION" }, read: live.read, post: live.post, log: (l) => out.push(l) });
+    expect(r.code).toBe(0);
+    expect(out.join("")).toContain("floor 1.2.3 1.2.3");
+    expect(live.posts).toEqual([]);
+
+    const marker = fakeServer({ sha: "abc1234def", status: "running" });
+    await runDeployStep({ step: "finish", deploy: "dp-3", root: tmp(), profile: { command: "x", finish: "true" }, read: marker.read, post: marker.post, log: () => {} });
+    expect(marker.posts[0][1]).toMatchObject({ status: "live", sha: "abc1234def" });
+    expect(marker.row.status).toBe("live");
+  });
+
+  test("finish that needs a version refuses when none was recorded; other steps still skip a live deploy", async () => {
+    const s = fakeServer({ sha: "abc1234def", status: "live" });
+    const r = await runDeployStep({ step: "finish", deploy: "dp-3", root: tmp(), profile: { command: "x", finish: "cast force-update $version" }, read: s.read, post: s.post, log: () => {} });
+    expect(r.code).toBe(1);
+    expect(r.note).toContain("no version recorded");
+    const send = await runDeployStep({ step: "send", deploy: "dp-3", root: tmp(), profile: { command: "exit 9" }, read: s.read, post: s.post, log: () => {} });
+    expect(send.code).toBe(0);
+  });
+
   test("the first step fixes the sha and names the run; the next reads that sha back", async () => {
     const s = fakeServer({});
     const out: string[] = [];

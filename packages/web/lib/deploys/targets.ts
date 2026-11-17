@@ -3,7 +3,7 @@
 // and what derives from them at read time. A target's live deploy, the one
 // going out and its history are read from its deploys, never stored on it.
 // Pure: no store, no React.
-import type { CommitCiState, QueueGroup } from "@codecast/shared/contracts/deployTargets";
+import type { CommitCiState, DeployTargetPolicy, QueueGroup } from "@codecast/shared/contracts/deployTargets";
 import type { DeployView } from "@codecast/shared/contracts/deploys";
 import type { TargetState } from "../ship/journey";
 
@@ -14,7 +14,7 @@ export type DeployTargetRow = {
   name: string;
   repository: string;
   runs: "here" | "push";
-  policy: "press" | "auto";
+  policy: DeployTargetPolicy;
   command: string | null;
   rollback: string | null;
   paths: string[];

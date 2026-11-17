@@ -62,7 +62,7 @@ const targetValidator = v.object({
   runs: v.union(v.literal("here"), v.literal("push")),
   live: liveReaderValidator,
   rollback: v.optional(v.string()),
-  policy: v.union(v.literal("press"), v.literal("auto")),
+  policy: v.union(v.literal("press"), v.literal("release"), v.literal("auto")),
   paths: v.array(v.string()),
   ship_stage: v.optional(v.union(v.literal("before_push"), v.literal("after_push"), v.literal("press"))),
 });

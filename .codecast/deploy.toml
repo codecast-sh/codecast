@@ -11,7 +11,12 @@
 #   live      how codecast reads what runs there: marker (the deploy path records
 #             it), github-status:<context>, or json:<url>#<sha field>[,<version field>]
 #   rollback  the command that puts the previous version back
-#   policy    press (a person's Deploy, the default) or auto (CI on main going green)
+#   policy    press (a person sends it by name, the default), release (it also goes out
+#             with every release: `cast deploy`, and a change flow's Deploy stage when
+#             the change touches it) or auto (the server sends it when CI on main is green)
+#   after     targets that must be live with the same commit first
+#   ci        before the send: the deploy sha's CI verdict
+#   finish    once live: what follows the deploy ($version is what went out)
 #
 # These live apart from workspace.toml because every released CLI validates that
 # file strictly and refuses keys it does not know.
@@ -20,6 +25,7 @@
 name = "backend"
 ship = "convex"
 live = "marker"                       # deploy.sh and the ship record each deploy
+policy = "release"
 
 # Railway builds every push to main and posts a commit status per deploy.
 [[target]]
@@ -28,17 +34,25 @@ runs = "push"
 when = ["packages/web/**", "packages/shared/**", "platform/**"]
 live = "github-status:codecast - web"
 
-# Cut in CI; live once dl.codecast.sh/latest.json names the commit (CLAUDE.md, CLI releases).
+# Cut in CI once CI on the commit is green; live once dl.codecast.sh/latest.json names
+# the commit (CLAUDE.md, CLI releases). Then every machine is made to update to it.
 [[target]]
 name = "cli"
 when = ["packages/cli/**", "packages/shared/**", "platform/**"]
-run = "gh workflow run cut-cli-release.yml -R codecast-sh/codecast"
+run = "scripts/cut-cli-release.sh"
 live = "json:https://dl.codecast.sh/latest.json#sourceCommit,version"
+policy = "release"
+ci = "cast line deploy ci --workflow ci.yml"
+finish = "cast force-update $version"
 
+# An OTA update to every channel, after the backend it calls is live. The app bundles
+# shared and web code too, so those paths ship it.
 [[target]]
 name = "mobile"
-when = ["packages/mobile/**", "packages/shared/**"]
-run = "cd packages/mobile && eas update --branch production --message \"$(git log -1 --format=%s -- .)\" --non-interactive"
+when = ["packages/mobile/**", "packages/shared/**", "packages/web/**", "platform/**"]
+run = "packages/mobile/scripts/ota.sh $sha"
+policy = "release"
+after = ["backend"]
 
 [[target]]
 name = "desktop"

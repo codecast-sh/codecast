@@ -11,7 +11,7 @@ describe("a flow as a diagram", () => {
   test("the change line reads as its five segments, each holding its own steps, ending at Live", () => {
     const d = flowDiagram(change);
     expect(d.steps.map((s) => s.label)).toEqual(["Check", "Review", "Decide", "Land", "Deploy"]);
-    expect(d.steps.map((s) => s.inner.map((i) => i.label))).toEqual([["Verify"], ["Review"], ["Decide"], ["Rebase", "Land"], ["Wait for live"]]);
+    expect(d.steps.map((s) => s.inner.map((i) => i.label))).toEqual([["Verify"], ["Review"], ["Decide"], ["Rebase", "Land"], ["Go live"]]);
     expect(d.end).toBe("Live");
     expect(d.steps[3].inner[0].id).toBe("ship__rebase");
   });

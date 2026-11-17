@@ -1,6 +1,7 @@
 // A line for a change made in a session (flows.md FL4): checked, reviewed by an
 // independent session, decided by the person who answers for it, landed, then
-// watched until the deploy that carries it is live on every target it touches.
+// deployed: the repository's release targets the change touches are sent
+// (deploys.md DP15), and the run waits until it is live on every target it touches.
 // Each station is a segment from the pool, so a fix to one reaches every flow
 // that uses it. Check is a slot: a flow that extends this one may prove its
 // change with steps of its own (subgraph check { ... }); the project's checks
@@ -13,8 +14,9 @@
 // note, a rebase conflict. The session fixes it in its own checkout and ends
 // its turn; the run freezes the session's change again and takes it through
 // Check, then every stage after, so what ships is the snapshot Review approved
-// and Decide accepted. Deploy then waits, holding no slot and no session, for
-// the deploy that carries the landed commit, and the session hears the dp-N
+// and Decide accepted. Deploy then sends the release targets the change
+// touches and waits, holding no slot and no session, for the deploy that
+// carries the landed commit, and the session hears the dp-N
 // it went live in, or that the deploy failed. Each way back runs at most three times; the fourth ends
 // the run, and the session hears why. A task, branch or pull request named from
 // inside a session has that session as its subject; named from a plain shell it
@@ -31,7 +33,7 @@ digraph change {
   review [flow="review"]
   decide [flow="decide", answerer="review__review"]
   ship   [flow="ship", label="Land"]
-  deploy [flow="deploy"]
+  deploy [flow="deploy", send="release"]
   exit [shape=Msquare, label="Live"]
 
   fix_check [label="Fix check", backend=subject, max_visits=3,

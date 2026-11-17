@@ -159,7 +159,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
       <header className="dpp-head">
         <div className="dpp-head-name">
           <h2>{t.name}</h2>
-          <span className="dpp-policy" data-policy={t.policy}>{t.record_only ? "from its deploy records" : t.runs === "push" ? "on every push" : t.policy === "auto" ? "on green CI" : "on a press"}</span>
+          <span className="dpp-policy" data-policy={t.policy}>{t.record_only ? "from its deploy records" : t.runs === "push" ? "on every push" : t.policy === "auto" ? "on green CI" : t.policy === "release" ? "with every release" : "on a press"}</span>
         </div>
         <div className="dpp-live">
           <span className="dpp-head-sub">{t.repository}</span>

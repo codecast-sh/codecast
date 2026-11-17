@@ -295,6 +295,18 @@ Examples:
     load: () => import("./signalCommand.js").then((m) => m.registerSignalCommand),
   },
   {
+    token: "deploy",
+    args: ["[targets...]"],
+    hasOptions: true,
+    description: `Release: send every deploy target main has moved past, in the order .codecast/deploy.toml declares, and wait until each is live
+
+  cast deploy                   every release target main moved past, and the push targets it waits on
+  cast deploy cli mobile        just those targets, whatever their policy
+  cast deploy --dry-run         what it would send, wait for and leave alone, and why
+  cast deploy --files "<paths>" only the targets these files touch`,
+    load: () => import("./deployCommand.js").then((m) => m.registerDeployCommand),
+  },
+  {
     token: "line",
     hidden: true,
     description: "The older name for cast flow's working commands: the same subcommands, the same output",

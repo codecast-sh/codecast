@@ -44,10 +44,10 @@ export function deployEnv(base: NodeJS.ProcessEnv, vars: Record<string, string>)
   return env;
 }
 
-/** `$sha`, `$deploy` and `$actor` in the profile's command, quoted for the shell. */
-export function expandDeployCommand(command: string, vars: { sha: string; deploy: string; actor: string }): string {
+/** `$sha`, `$deploy`, `$actor` and `$version` (what went out, once known) in a step's command, quoted for the shell. */
+export function expandDeployCommand(command: string, vars: { sha: string; deploy: string; actor: string; version?: string }): string {
   const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-  return command.replace(/\$(sha|deploy|actor)\b/g, (_, k: keyof typeof vars) => q(vars[k]));
+  return command.replace(/\$(sha|deploy|actor|version)\b/g, (_, k: keyof typeof vars) => q(vars[k] ?? ""));
 }
 
 /** The default branch's head on origin, after a fetch: what a deploy of main puts out. */
@@ -114,6 +114,24 @@ export function runDeployGraph(deploy: string, root: string): number {
   return ran.status ?? 1;
 }
 
+/** The same, side by side with other deploys: each line of the run's output goes to `onLine`. */
+export function runDeployGraphAsync(deploy: string, root: string, onLine: (line: string) => void): Promise<number> {
+  const { cmd, prefixArgs } = resolveCastInvocation();
+  return new Promise((resolve) => {
+    const child = spawn(cmd, [...prefixArgs, "workflow", "run", LINE_DEPLOY_GRAPH, "--goal", deploy], { cwd: root, env: { ...process.env, CODECAST_CWD: root }, stdio: ["ignore", "pipe", "pipe"] });
+    let partial = "";
+    const feed = (b: Buffer) => {
+      const lines = (partial + String(b)).split("\n");
+      partial = lines.pop() ?? "";
+      for (const l of lines) if (l.trim()) onLine(l);
+    };
+    child.stdout.on("data", feed);
+    child.stderr.on("data", feed);
+    child.on("close", (code) => { if (partial.trim()) onLine(partial); resolve(code ?? 1); });
+    child.on("error", (err) => { onLine(err.message); resolve(1); });
+  });
+}
+
 function shellExec(command: string, env: NodeJS.ProcessEnv, cwd: string, onData: (chunk: string) => void): Promise<number> {
   return new Promise((resolve) => {
     const child = spawn("bash", ["-c", command], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
@@ -151,7 +169,8 @@ export async function runDeployStep(opts: {
   const log = opts.log ?? ((l) => process.stdout.write(l));
   const d = await opts.read(opts.deploy);
   if (!d) return { code: 1, note: `No deploy ${opts.deploy} you can read` };
-  if (d.status === "live" || d.status === "cancelled") {
+  // Finish follows a live deploy, so it alone runs on one; every other step has nothing left to do there.
+  if (d.status === "cancelled" || (d.status === "live" && opts.step !== "finish")) {
     log(`${opts.deploy} is already ${d.status}; ${LINE_DEPLOY_STEP_LABELS[opts.step]} has nothing to do\n`);
     return { code: 0, note: null };
   }
@@ -163,6 +182,8 @@ export async function runDeployStep(opts: {
     await opts.post("/cli/line/deploy/report", { deploy: opts.deploy, status: "running", sha, ...(opts.runId ? { run_id: opts.runId } : {}) });
   }
   const command = deployStepCommand(opts.profile, opts.step);
+  // Live passed, so the target runs the deploy: say so before Finish, which a failure then only notes.
+  if (opts.step === "finish" && command && d.status !== "live") await opts.post("/cli/line/deploy/report", { deploy: opts.deploy, status: "live", sha });
   if (!command) {
     const note = `No ${opts.step === "send" ? "command" : opts.step} in [line.deploy]: ${LINE_DEPLOY_STEP_LABELS[opts.step]} passes.`;
     log(`${note}\n`);
@@ -171,8 +192,11 @@ export async function runDeployStep(opts: {
   const actor = d.started_by?.name ?? "cast";
   let tail = "";
   const onData = (chunk: string) => { log(chunk); tail = (tail + chunk).slice(-4000); };
-  const env = deployEnv(process.env, { sha, id: opts.deploy, actor, ...(d.url ? { url: d.url } : {}) });
-  const code = await (opts.exec ?? shellExec)(expandDeployCommand(command, { sha, deploy: opts.deploy, actor }), env, opts.root, onData);
+  // What went out is named by the time Finish runs (a release's latest.json version); read it fresh.
+  const version = opts.step === "finish" ? ((await opts.read(opts.deploy))?.version ?? d.version ?? "") : (d.version ?? "");
+  if (opts.step === "finish" && /\$version\b/.test(command) && !version) return { code: 1, note: `${opts.deploy} went live with no version recorded, so "${command}" has nothing to name` };
+  const env = deployEnv(process.env, { sha, id: opts.deploy, actor, ...(d.url ? { url: d.url } : {}), ...(version ? { version } : {}) });
+  const code = await (opts.exec ?? shellExec)(expandDeployCommand(command, { sha, deploy: opts.deploy, actor, version }), env, opts.root, onData);
   // The path's run page, named on the deploy so the steps after can follow it.
   const url = tail.match(/https:\/\/github\.com\/[^\s]+\/actions\/runs\/\d+/)?.[0];
   if (url && url !== d.url) await opts.post("/cli/line/deploy/report", { deploy: opts.deploy, status: "running", url });
@@ -418,7 +442,15 @@ export async function checkoutTargets(root: string): Promise<DeployTarget[]> {
  */
 export function targetDeployProfile(t: DeployTarget, action: "deploy" | "redeploy" | "rollback"): Partial<LineDeployProfile> {
   const command = action === "rollback" ? t.rollback ?? null : t.command ?? null;
-  return { command, target: t.name, trigger: "person", ...(t.live.kind !== "marker" ? { live: "cast line deploy await-live $deploy" } : {}) };
+  return {
+    command,
+    target: t.name,
+    trigger: "person",
+    ...(t.live.kind !== "marker" ? { live: "cast line deploy await-live $deploy" } : {}),
+    // A rollback puts an earlier version back: what a release waits on and follows with does not apply to it.
+    ...(action !== "rollback" && t.ci ? { ci: t.ci } : {}),
+    ...(action !== "rollback" && t.finish ? { finish: t.finish } : {}),
+  };
 }
 
 /**

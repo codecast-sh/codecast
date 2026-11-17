@@ -140,7 +140,8 @@ export async function publishDeployTargets(deps: PublishDeps, root: string, targ
   const { deviceId } = await import("./remote/device.js");
   const repository = readLocalGitContext(root).repository;
   if (!repository) throw new LineProfileError(`${root} has no GitHub origin, so its targets name no repository`);
-  const r = await apiPost(deps, "/cli/deploys/targets/publish", { repository, targets, device_id: deviceId(), root, ...(teamId ? { team_id: teamId } : {}) });
+  const { publishableTarget } = await import("@codecast/shared/contracts/deployTargets");
+  const r = await apiPost(deps, "/cli/deploys/targets/publish", { repository, targets: targets.map(publishableTarget), device_id: deviceId(), root, ...(teamId ? { team_id: teamId } : {}) });
   // A repository GitHub does not report (a local remote) gets main's order from its checkout; the server skips one it hears from GitHub.
   const main = mainCommitsOf(root);
   if (main) r.commits = await apiPost(deps, "/cli/deploys/main-commits", { team_id: r.team_id, repository, branch: main.branch, commits: main.commits }, { exitOnError: false }).catch(() => null);

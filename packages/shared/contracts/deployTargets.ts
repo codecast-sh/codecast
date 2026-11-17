@@ -17,8 +17,14 @@ export const DEPLOY_TARGET_RUNS = ["here", "push"] as const;
  */
 export type DeployTargetRuns = (typeof DEPLOY_TARGET_RUNS)[number];
 
-/** Who starts a target's deploy: a person's press (the default), or CI on main going green. */
-export const DEPLOY_TARGET_POLICIES = ["press", "auto"] as const;
+/**
+ * Who starts a target's deploy:
+ * - `press` (the default): a person sends it by name (its Deploy button, `cast deploy <name>`).
+ * - `release`: it goes out with every release of main (`cast deploy`, which /cast-deploy runs) and when a change flow
+ *   lands a change that touches it (the Deploy segment with `send="release"`). A person may still send it by name.
+ * - `auto`: the server sends it from its publishing machine once CI on main's head is green.
+ */
+export const DEPLOY_TARGET_POLICIES = ["press", "release", "auto"] as const;
 export type DeployTargetPolicy = (typeof DEPLOY_TARGET_POLICIES)[number];
 
 /**
@@ -52,7 +58,22 @@ export type DeployTarget = {
    * deploys before), or `press`, never at a ship: only a deploy from codecast or a release script sends it.
    */
   ship_stage?: "before_push" | "after_push" | "press";
+  /** Targets that must be live with the same commit before this one is sent (a mobile update after the backend it calls). */
+  after?: string[];
+  /** Before the send: the deploy sha's verdict, as the line-deploy graph's CI station runs it (`cast line deploy ci`). */
+  ci?: string;
+  /** Once live: what follows a deploy (raising the fleet's minimum CLI to the version that went out). `$version` expands. */
+  finish?: string;
 };
+
+/** The keys a target holds that only the CLI reads: the server stores the rest. */
+export const CLI_ONLY_TARGET_KEYS = ["after", "ci", "finish"] as const;
+
+/** A target as the server's publish takes it. */
+export function publishableTarget(t: DeployTarget): Omit<DeployTarget, (typeof CLI_ONLY_TARGET_KEYS)[number]> {
+  const { after: _a, ci: _c, finish: _f, ...rest } = t;
+  return rest;
+}
 
 export const DEPLOY_TARGET_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
@@ -101,7 +122,7 @@ export function readJsonLive(r: Extract<DeployLiveReader, { kind: "json" }>, doc
 /** A `[[ship.deploy]]` step of .codecast/workspace.toml, as far as a target needs it. */
 export type ShipStepRef = { name: string; when: string[]; run: string; stage: "before_push" | "after_push" };
 
-const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy"] as const;
+const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "finish"] as const;
 
 /**
  * The `[[target]]` tables of .codecast/deploy.toml as targets. The file is the targets' own: workspace.toml keeps
@@ -132,6 +153,31 @@ export function parseDeployTargetEntries(raw: unknown, ship: readonly ShipStepRe
       throw err instanceof DeployTargetError ? new DeployTargetError(`${at}: ${err.message}`) : err;
     }
   });
+  releaseOrder(out.map((o) => o.target));
+  return out;
+}
+
+/**
+ * Targets in the order a release sends them: each after every target its `after` names. Throws DeployTargetError on a
+ * name no target declares, and on a cycle.
+ */
+export function releaseOrder<T extends Pick<DeployTarget, "name" | "after">>(targets: readonly T[]): T[] {
+  const byName = new Map(targets.map((t) => [t.name, t]));
+  const out: T[] = [];
+  const state = new Map<string, "visiting" | "done">();
+  const visit = (t: T, path: string[]) => {
+    if (state.get(t.name) === "done") return;
+    if (state.get(t.name) === "visiting") throw new DeployTargetError(`targets wait on each other: ${[...path, t.name].join(" after ")}`);
+    state.set(t.name, "visiting");
+    for (const a of t.after ?? []) {
+      const dep = byName.get(a);
+      if (!dep) throw new DeployTargetError(`target ${t.name}: after names ${a}, which is not a target`);
+      visit(dep, [...path, t.name]);
+    }
+    state.set(t.name, "done");
+    out.push(t);
+  };
+  for (const t of targets) visit(t, []);
   return out;
 }
 
@@ -139,7 +185,7 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
   if (!e || typeof e !== "object" || Array.isArray(e)) throw new DeployTargetError("must be a table");
   const r = e as Record<string, unknown>;
   for (const key of Object.keys(r)) if (!(TARGET_KEYS as readonly string[]).includes(key)) throw new DeployTargetError(`unknown key '${key}'`);
-  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy"]) {
+  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy", "ci", "finish"]) {
     if (r[key] !== undefined && typeof r[key] !== "string") throw new DeployTargetError(`'${key}' must be a string`);
   }
   const name = String(r["name"] ?? "").trim().toLowerCase();
@@ -155,6 +201,10 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
   if (runs === "here" && !command) throw new DeployTargetError(`target ${name}: runs = "here" needs run (or ship), the command that sends it`);
   const policy = (r["policy"] ?? "press") as DeployTargetPolicy;
   if (!(DEPLOY_TARGET_POLICIES as readonly string[]).includes(policy)) throw new DeployTargetError(`target ${name}: policy must be one of ${DEPLOY_TARGET_POLICIES.join(", ")}`);
+  const afterRaw = r["after"] ?? [];
+  const after = typeof afterRaw === "string" ? [afterRaw] : afterRaw;
+  if (!Array.isArray(after) || after.some((a) => typeof a !== "string")) throw new DeployTargetError(`target ${name}: 'after' must be a target name or a list of them`);
+  if (runs === "push" && (r["ci"] || r["finish"])) throw new DeployTargetError(`target ${name}: runs = "push" sends nothing, so it has no ci or finish step`);
   return {
     name,
     ...(command ? { command } : {}),
@@ -164,6 +214,9 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
     policy,
     paths: when as string[],
     ship_stage: step?.stage ?? "press",
+    ...(after.length ? { after: (after as string[]).map((a) => a.trim().toLowerCase()) } : {}),
+    ...(typeof r["ci"] === "string" && r["ci"].trim() ? { ci: r["ci"].trim() } : {}),
+    ...(typeof r["finish"] === "string" && r["finish"].trim() ? { finish: r["finish"].trim() } : {}),
   };
 }
 

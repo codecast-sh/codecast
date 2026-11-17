@@ -5,7 +5,7 @@
 // rebase conflict come back to the session that made the change, it fixes them
 // in its own checkout, and the run freezes its change again and takes it
 // through Check and every stage after. What lands is the snapshot Review
-// approved, and Deploy waits for the deploy that carries it, as in `change`.
+// approved, and Deploy sends and waits for the deploy that carries it, as in `change`.
 // Each way back runs at most three times.
 //
 //   cast flow run quick-change      # this session's own edits
@@ -16,7 +16,7 @@ digraph "quick-change" {
   check  [flow="check", slot="Prove the change does what it should"]
   review [flow="review"]
   ship   [flow="ship", label="Land"]
-  deploy [flow="deploy"]
+  deploy [flow="deploy", send="release"]
   exit [shape=Msquare, label="Live"]
 
   fix_check [label="Fix check", backend=subject, max_visits=3,

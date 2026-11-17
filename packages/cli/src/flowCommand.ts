@@ -429,11 +429,13 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--node <id>", "That station's id in the run")
     .option("--files <paths>", "The change's files, space-separated (the run's $change_files); else read from git")
     .option("--except <targets>", "Targets the change does not wait for, space- or comma-separated")
-    .action(async (opts: { branch: string; base: string; interval: string; once?: boolean; run?: string; node?: string; files?: string; except?: string }) => {
+    .option("--send <policy>", "Once the change lands, send the targets it touches whose policy this names (release) with cast deploy, then wait")
+    .action(async (opts: { branch: string; base: string; interval: string; once?: boolean; run?: string; node?: string; files?: string; except?: string; send?: string }) => {
       const { landedCommit, targetTouches, targetState, deployWords, holds } = await import("./workflow/awaitDeploy.js");
       const cwd = deps.realCwd();
       const every = Math.max(5, Number(opts.interval) || 60) * 1000;
       let said = "";
+      let sent = false;
       // Inside a run the waiting lines go to the station on the card, and only the verdict is the station's output,
       // which is what a stop and the session's end message quote. At a terminal every line prints.
       const say = (line: string, verdict = false) => {
@@ -450,6 +452,16 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
           const read = await cast(["line", "deploy", "targets", "--json"], cwd);
           let targets: import("./workflow/awaitDeploy.js").DeployTargetRow[] | null = null;
           try { targets = JSON.parse(read.out).targets ?? []; } catch { say(`Waiting to read the deploy targets: ${(read.err || read.out).trim().split("\n").pop()}`); }
+          // The flow sends what the repository says goes out with a release (deploys.md DP15), once, then waits like any change.
+          if (targets && opts.send === "release" && !sent && !opts.once) {
+            sent = true;
+            say(`${landed.sha.slice(0, 10)} landed; sending the release targets it touches.`);
+            const release = await cast(["deploy", "--sha", landed.sha, "--files", landed.files.join(" "), ...(opts.except ? ["--except", opts.except] : [])], cwd);
+            const last = (release.out + release.err).trim().split("\n").filter(Boolean);
+            if (release.code !== 0) say(`cast deploy stopped: ${last.slice(-3).join(" | ")}`);
+            const reread = await cast(["line", "deploy", "targets", "--json"], cwd);
+            try { targets = JSON.parse(reread.out).targets ?? targets; } catch { /* keep the first read */ }
+          }
           if (targets) {
             const skipped = new Set((opts.except ?? "").split(/[\s,]+/).filter(Boolean));
             const touched = targets.filter((t) => !skipped.has(t.name) && targetTouches(t.paths, landed.files));

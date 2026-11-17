@@ -29,7 +29,7 @@ export const deployTables = {
     runs: v.union(v.literal("here"), v.literal("push")),
     live: liveReader,
     rollback: v.optional(v.string()),
-    policy: v.union(v.literal("press"), v.literal("auto")),
+    policy: v.union(v.literal("press"), v.literal("release"), v.literal("auto")),
     paths: v.array(v.string()),
     ship_stage: v.optional(v.union(v.literal("before_push"), v.literal("after_push"), v.literal("press"))),
     // The checkout that published it and the machine it is on: where a deploy of it runs.

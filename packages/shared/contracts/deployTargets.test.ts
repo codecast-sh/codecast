@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commitCiState, commitTouchesTarget, DeployTargetError, groupQueueBySession, parseLiveReader, readJsonLive, parseDeployTargetEntries, parseDeployTargets, targetFromLineDeploy, type QueueCommit } from "./deployTargets";
+import { commitCiState, commitTouchesTarget, DeployTargetError, groupQueueBySession, parseLiveReader, readJsonLive, parseDeployTargetEntries, parseDeployTargets, publishableTarget, releaseOrder, targetFromLineDeploy, type QueueCommit } from "./deployTargets";
 
 describe("deploy targets from config (deploys.md DP10)", () => {
   const SHIP = [{ name: "convex", when: ["api/**"], run: "deploy.sh", stage: "before_push" as const }];
@@ -58,5 +58,38 @@ describe("what waits on a target (DP12)", () => {
     const c = (sha: string, at: number, conv: string | null, ci: QueueCommit["ci"]): QueueCommit => ({ sha, subject: sha, at, author: null, session: conv ? { conversation_id: conv, short_id: conv.slice(0, 7), title: conv } : null, tasks: [], ci, ci_url: null });
     const groups = groupQueueBySession([c("a", 1, "s1", "passed"), c("b", 2, null, "passed"), c("c", 3, "s2", "running"), c("d", 4, "s1", "failed")]);
     expect(groups.map((g) => [g.key, g.commits.map((x) => x.sha), g.ci])).toEqual([["s:s1", ["d", "a"], "failed"], ["s:s2", ["c"], "running"], ["none", ["b"], "passed"]]);
+  });
+});
+
+describe("a release's order and steps (DP15)", () => {
+  const parse = (targets: Array<Record<string, unknown>>) => parseDeployTargets({ target: targets }, []);
+
+  test("after, ci and finish are read; release is a policy", () => {
+    const [backend, mobile] = parse([
+      { name: "backend", run: "./deploy.sh", policy: "release" },
+      { name: "mobile", run: "./ota.sh $sha", policy: "release", after: "Backend", ci: "cast line deploy ci", finish: "echo $version" },
+    ]);
+    expect(backend.policy).toBe("release");
+    expect(mobile).toMatchObject({ after: ["backend"], ci: "cast line deploy ci", finish: "echo $version" });
+  });
+
+  test("targets come out after the ones they wait on, whatever order they are declared in", () => {
+    const order = releaseOrder(parse([
+      { name: "mobile", run: "x", after: ["backend", "cli"] },
+      { name: "cli", run: "x", after: "backend" },
+      { name: "backend", run: "x" },
+    ])).map((t) => t.name);
+    expect(order).toEqual(["backend", "cli", "mobile"]);
+  });
+
+  test("an after naming no target, or a cycle, refuses the file", () => {
+    expect(() => parse([{ name: "mobile", run: "x", after: "api" }])).toThrow("after names api, which is not a target");
+    expect(() => parse([{ name: "a", run: "x", after: "b" }, { name: "b", run: "x", after: "a" }])).toThrow("wait on each other");
+    expect(() => parse([{ name: "web", runs: "push", finish: "x" }])).toThrow("no ci or finish step");
+  });
+
+  test("the server is sent the target without the keys only the CLI reads", () => {
+    const [t] = parse([{ name: "cli", run: "x", policy: "release", after: [], ci: "c", finish: "f" }]);
+    expect(Object.keys(publishableTarget(t)).sort()).toEqual(["command", "live", "name", "paths", "policy", "runs", "ship_stage"]);
   });
 });

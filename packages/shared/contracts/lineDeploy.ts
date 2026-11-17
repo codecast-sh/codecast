@@ -11,10 +11,11 @@ export type LineDeployTrigger = (typeof LINE_DEPLOY_TRIGGERS)[number];
  * A deploy's steps, in order (deploys.md DP8): each a station of the shipped
  * `line-deploy` graph and a command of `[line.deploy]`. `send` is the team's
  * deploy path (`command`); a step whose command is left out passes with a
- * note. `watch` is codecast's own: the deploy goes live and its fixes are
+ * note. `finish` runs once the deploy is live (a target's `finish`, deploys.md
+ * DP15). `watch` is codecast's own: the deploy goes live and its fixes are
  * watched from then.
  */
-export const LINE_DEPLOY_STEPS = ["ci", "send", "gate", "rollout", "live"] as const;
+export const LINE_DEPLOY_STEPS = ["ci", "send", "gate", "rollout", "live", "finish"] as const;
 export type LineDeployStep = (typeof LINE_DEPLOY_STEPS)[number];
 export const LINE_DEPLOY_STEP_LABELS: Record<LineDeployStep | "watch", string> = {
   ci: "CI",
@@ -22,6 +23,7 @@ export const LINE_DEPLOY_STEP_LABELS: Record<LineDeployStep | "watch", string> =
   gate: "Gate",
   rollout: "Roll out",
   live: "Live",
+  finish: "Finish",
   watch: "Watch",
 };
 
@@ -45,6 +47,8 @@ export type LineDeployProfile = {
   rollout?: string | null;
   /** After the rollout: production answering with the deploy sha. */
   live?: string | null;
+  /** Once live: what follows the deploy. A deploy target's `finish`; a line profile names none. */
+  finish?: string | null;
 };
 
 export const LINE_DEPLOY_KEYS = ["command", "target", "trigger", "role", "ci", "gate", "rollout", "live"] as const;
