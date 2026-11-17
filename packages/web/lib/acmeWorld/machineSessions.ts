@@ -581,7 +581,7 @@ export const MACHINE_SESSIONS_PART: AcmePart = {
     "secrets:versions": (args) => SECRET_VERSIONS(String(args?.ref), Date.now()),
     "accountSwitch:listAccountProfiles": () => ACCOUNT_PROFILES(Date.now()),
     "accountPool:listPool": () => [],
-    // Choosing a recovery mode: the laptop's flags change the way the server's next push carries them.
+    // Choosing a recovery mode: every local machine's flags change the way the server's next push carries them.
     "accountSwitch:setRecoveryMode": (args) => {
       const st = ((globalThis as any).__inboxStore ?? useInboxStore).getState() as any;
       const key = Object.keys(st.settingsData ?? {}).find((k) => k.endsWith("accountProfiles"));
@@ -589,7 +589,7 @@ export const MACHINE_SESSIONS_PART: AcmePart = {
       if (!key || !value) return null;
       const mode = String(args?.mode);
       const flags = { ask_first: mode === "ask", auto_switch: mode === "auto", auto_continue: mode !== "off" };
-      const devices = value.devices.map((d: any) => (d.device_id === args?.device_id ? { ...d, ...flags } : d));
+      const devices = value.devices.map((d: any) => (d.is_remote ? d : { ...d, ...flags }));
       st.syncRecord("settingsData", key, { _id: key, value: { ...value, devices } });
       return null;
     },

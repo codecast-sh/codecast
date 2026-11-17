@@ -92,3 +92,41 @@ describe("the inbox panel's Decisions section is the stepper's queue", () => {
     expect(litRow(container)).toBeUndefined();
   });
 });
+
+// The advisory row said "Going ahead on a default 13" and opened every
+// decision. It opens the list filtered to the advisory asks, and its count is
+// what that list shows.
+describe("the advisory row opens the list it counts", () => {
+  test("its count is the Mine tab under the advisory filter, and it links there", async () => {
+    const { useInboxStore } = await import("../../../store/inboxStore");
+    const { decisionView, filterCounts, inTab, passesFilters } = await import("../../../lib/decisions/decisionRows");
+    const dec = (id: string, extra: Record<string, unknown>) => ({ _id: id, status: "pending", question: id, options: [], created_at: 1, asked_user_ids: ["me"], ...extra });
+    const decisions = {
+      adv: dec("adv", { blocking: false }),
+      advStacked: dec("advStacked", { blocking: false, stack_id: "st1" }),
+      advOther: dec("advOther", { blocking: false, asked_user_ids: ["someone"] }),
+      advTrial: dec("advTrial", { blocking: false, trial: true }),
+      blocked: dec("blocked", { blocking: true }),
+      answered: dec("answered", { blocking: false, status: "answered" }),
+    };
+    useInboxStore.setState({ sessionDecisions: decisions, currentUser: { _id: "me" } } as any);
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => root.render(<MemoryRouter><InboxDecisionQueue collapsed={false} onToggle={() => {}} extraSessions={[]} onSelectSession={() => {}} /></MemoryRouter>));
+    const link = container.querySelector<HTMLAnchorElement>("[data-decision-advisory]")!;
+    expect(link.textContent).toContain("Not blocking");
+    expect(link.getAttribute("href")).toBe("/decisions?blocking=advisory");
+
+    const listed = Object.values(decisions).filter((d: any) => !d.trial);
+    const view = decisionView({ blocking: "advisory" });
+    const shown = listed.filter((d: any) => inTab(d, "mine", "me") && passesFilters(d, view, 0)).length;
+    expect(shown).toBe(2);
+    expect(filterCounts(listed as any, view, "me", 0, "blocking").get("advisory")).toBe(shown);
+    expect(link.getAttribute("data-decision-advisory")).toBe(String(shown));
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+});
