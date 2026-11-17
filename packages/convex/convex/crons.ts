@@ -247,6 +247,16 @@ crons.interval(
 );
 
 crons.interval(
+  // A shipped task's predicted effect on a goal metric is read at its read
+  // time against the window before ship (predictions.ts). One empty index
+  // read while nothing is due.
+  "read predicted effects",
+  { hours: 1 },
+  internal.predictions.sweep,
+  {}
+);
+
+crons.interval(
   // A judge's finding marked wrong waits for its project's line to diagnose
   // it (learning-loop.md LL11): the sweep starts waiting diagnoses while the
   // line is on and retries one whose run ended without an answer. Two empty

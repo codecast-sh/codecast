@@ -17,6 +17,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { parseJsonBlock, STRONG_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import { runModelCall, type CallScope } from "./modelCalls";
 import { patchTask } from "./lib/taskWrite";
+import { predictionPatch } from "./predictions";
 import { budgetHasRoom } from "./lib/teamBudget";
 import { insertTaskComment } from "./tasks";
 import { causeBrief } from "./goals";
@@ -135,10 +136,12 @@ export async function recordGroundCore(ctx: any, taskId: Id<"tasks">, outcome: {
   const task: Doc<"tasks"> | null = await ctx.db.get(taskId);
   if (!isUngroundedCause(task)) return "skipped";
   if ("fields" in outcome) {
-    const { project, ...f } = outcome.fields;
+    const { project, prediction, ...f } = outcome.fields;
     const placed = project && needsPlacing(task) ? await placeCause(ctx, task, project) : null;
+    const predicted = prediction ? await predictionPatch(ctx, task, prediction, now).catch((err: Error) => err) : null;
     await patchTask(ctx, task, {
       ...f,
+      ...(predicted && !(predicted instanceof Error) ? predicted : {}),
       ...(placed ? { project_id: placed.to?._id } : {}),
       ...(task.cause ? { cause: { ...task.cause, grounded_count: task.cause.signal_count, ...(placed ? { placed: "ground" as const } : {}) } } : {}),
       updated_at: now,
@@ -146,7 +149,7 @@ export async function recordGroundCore(ctx: any, taskId: Id<"tasks">, outcome: {
     await insertTaskComment(ctx, task._id, {
       author: GROUND_AUTHOR,
       comment_type: "note",
-      text: `${groundedWords(f)}${placed ? ` ${placedWords(placed)}` : ""}`,
+      text: `${groundedWords(f)}${placed ? ` ${placedWords(placed)}` : ""}${predicted ? predicted instanceof Error ? ` Prediction not kept (${predicted.message}): ${prediction}` : ` Predicts ${prediction}` : ""}`,
     });
     return "grounded";
   }
@@ -210,6 +213,7 @@ const groundFieldsValidator = v.object({
   risk: v.union(v.literal("low"), v.literal("review"), v.literal("plan")),
   readiness: v.union(v.literal("ready"), v.literal("needs_context"), v.literal("not_actionable")),
   readiness_note: v.string(),
+  prediction: v.optional(v.string()),
   project: v.optional(v.string()),
 });
 

@@ -448,7 +448,11 @@ describe("command groups stay off the boot graph", () => {
     // on demand), usageLimits.ts +1, commandGroups.ts and snippets.ts +1 each.
     // 4757 the same day: the `cast guide sim` text in snippets.ts (the rotate
     // verb and its paragraph); the verb loads simstream.ts on demand.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4757);
+    // 4760 the same day: a task's predicted effect (ct-96177): --predict and
+    // --goal-ref in index.ts, the goal's Predictions lines in
+    // initiativeCommand.ts and ground's prediction field in goalsBrief.ts; the
+    // grammar and the judge (predictedEffect.ts) load on demand.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4760);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

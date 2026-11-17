@@ -1,4 +1,5 @@
 import { v, type ObjectType, type Validator } from "convex/values";
+import { predictionPatch } from "./predictions";
 import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./functions";
 import { verifyApiToken } from "./apiTokens";
@@ -1197,6 +1198,9 @@ export const create = mutation({
     // the task's origin, so the one notice is the whole hand-off.
     assignment_note: v.optional(v.string()),
     assignment_from: v.optional(v.string()),
+    // `cast task create --goal-ref in-9:key --predict "<line>"` (predictions.ts).
+    goal_ref: v.optional(v.string()),
+    predict: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1329,6 +1333,8 @@ export const create = mutation({
       steps: args.steps,
       acceptance_criteria: args.acceptance_criteria,
       estimated_minutes: args.estimated_minutes,
+      goal_ref: args.goal_ref?.trim() || undefined,
+      ...(args.predict?.trim() ? await predictionPatch(ctx, { workspace: db.workspaceKey, short_id }, args.predict, now) : {}),
     } as any);
 
     for (const dep of args.blocked_by || []) {
@@ -2110,6 +2116,8 @@ export const update = mutation({
     // The watch after ship (LE12): days from now until a quiet cause closes
     // as resolved; 0 ends the watch.
     watch_days: v.optional(v.number()),
+    // A predicted effect on a goal metric (predictions.ts); "" clears it.
+    predict: v.optional(v.string()),
     // model, effort and ephemeral (TG8, TG9); ephemeral:false is `cast task keep`.
     ...executionHintArgs,
   },
@@ -2252,6 +2260,7 @@ export const update = mutation({
       }
     }
     Object.assign(updates, groundPatch(args), executionHintPatch(args));
+    if (args.predict !== undefined) Object.assign(updates, await predictionPatch(ctx, task, args.predict, now));
     if (args.watch_days !== undefined) {
       // The watch station runs right after the ship: the fix is live from now, and older evidence never reopens it.
       updates.watch_until = watchUntilFor(args.watch_days, now);
