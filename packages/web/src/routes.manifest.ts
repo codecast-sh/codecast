@@ -155,6 +155,7 @@ const ModObject = lazy(() => import("@/app/o/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const SessionMap = lazy(() => import("@/app/map/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
+const Simulator = lazy(() => import("@/app/simulator/page"));
 const Org = lazy(() => import("@/app/org/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
@@ -381,6 +382,8 @@ export const ROUTES: RouteEntry[] = [
   // A web page as a pane. Full-bleed via pageLayout FULL_WIDTH_PATTERNS (like
   // /chat), so no fullWidth flag here.
   { path: "browser", component: cast(Browser), layout: "dashboardShell", tab: "/browser" },
+  // A session's iOS simulator as a pane. Full-bleed via pageLayout FULL_WIDTH_PATTERNS.
+  { path: "simulator", component: cast(Simulator), layout: "dashboardShell", tab: "/simulator" },
   // Full-bleed via pageLayout FULL_WIDTH_PATTERNS, like /chat: no fullWidth flag here.
   { path: "org", component: cast(Org), layout: "dashboardShell", tab: "/org", fullWidth: true },
   { path: "org/:id", component: cast(OrgScope), layout: "dashboardShell", tab: "/org/:id", fullWidth: true },

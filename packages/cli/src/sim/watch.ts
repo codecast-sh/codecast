@@ -245,10 +245,16 @@ export function simWatchEngine(deps: SimEngineDeps = realDeps): WatchEngine {
     return availableCache.value;
   };
 
+  // The device's name, learned when its lock was read, for the pane's title.
+  const names = new Map<string, string>();
+
   return {
     resolveTab(candidates) {
       const held = deps.held(sessionsOf(candidates));
-      if (held) return { tabId: held.udid };
+      if (held) {
+        names.set(held.udid, held.name);
+        return { tabId: held.udid };
+      }
       return { error: available() ? "no-sim" : "no-simulators" };
     },
 
@@ -318,14 +324,6 @@ export function simWatchEngine(deps: SimEngineDeps = realDeps): WatchEngine {
       }, ACTION_POLL_MS);
       actionTimer.unref?.();
 
-      const name = (() => {
-        try {
-          return readPool().find((d) => d.udid === udid)?.name ?? "iOS Simulator";
-        } catch {
-          return "iOS Simulator";
-        }
-      })();
-
       function cleanup() {
         if (stopped) return;
         stopped = true;
@@ -336,7 +334,7 @@ export function simWatchEngine(deps: SimEngineDeps = realDeps): WatchEngine {
       }
 
       return {
-        tab: { id: udid, title: name, url: "" },
+        tab: { id: udid, title: names.get(udid) ?? "iOS Simulator", url: "" },
         ...(stream.interactive
           ? {
               input(ev: WatchInput) {

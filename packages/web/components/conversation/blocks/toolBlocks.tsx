@@ -35,7 +35,8 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { addToFlowsMessage } from "../../../lib/line/flowMessages";
 import { getToolPatchInputs, parseApplyPatchSections } from "../../../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../../../lib/unifiedDiffParser";
-import { ChevronDown, ChevronUp, Workflow, MoveHorizontal } from "lucide-react";
+import { ChevronDown, ChevronUp, Workflow, MoveHorizontal, Smartphone } from "lucide-react";
+import { openSimulatorPane } from "../../../lib/simulatorPane";
 import { ImageBlock } from "./interactiveBlocks";
 import { PathText, RowIcon } from "./ModernRow";
 import { modernToolHead } from "../../../lib/modernRow";
@@ -1506,6 +1507,29 @@ export function BrowserWatchButton({ conversationId }: { conversationId: Id<"con
         </button>
       )}
     </span>
+  );
+}
+
+/** On a `cast sim` row: the session's simulator, live and touchable, in a
+ *  pane beside the thread. Addressed by the agent's session uuid, the name
+ *  the simulator's lock records. */
+export function SimulatorWatchButton({ conversationId }: { conversationId: Id<"conversations"> }) {
+  const sessionUuid = useInboxStore((s) => s.sessions[conversationId.toString()]?.session_id ?? null);
+  if (!sessionUuid) return null;
+  return (
+    <button
+      type="button"
+      data-simulator-watch
+      onClick={(e) => {
+        e.stopPropagation();
+        openSimulatorPane(sessionUuid);
+      }}
+      className={BROWSER_ROW_PILL}
+      title="Open this agent's simulator beside the thread, live: watch it work, or tap and type into it"
+    >
+      <Smartphone className="w-3 h-3" />
+      <span>simulator</span>
+    </button>
   );
 }
 

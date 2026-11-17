@@ -19,8 +19,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ChildProcess } from "node:child_process";
-import { execFile, spawn } from "../proc.js";
+import { execFile, spawn, type ChildProcess } from "../proc.js";
 import { axeBin } from "./simctl.js";
 import helperSource from "./simstream.m" with { type: "text" };
 

@@ -240,7 +240,7 @@ describe("runWatchSession with source sim", () => {
   test("streams from the simulator engine, never the browser's", async () => {
     const sim = fakeSim();
     const s = sink();
-    const deps: WatchServerDeps = { engine: browserEngine as any, simEngine: simWatchEngine(sim.deps), paneIdFor: async () => null };
+    const deps: WatchServerDeps = { engine: browserEngine as any, loadSimEngine: async () => simWatchEngine(sim.deps), paneIdFor: async () => null };
     const h = runWatchSession({ source: "sim", session_uuid: "u1", minIntervalMs: 0, control: true, quality: 60, maxDim: 1280, log: () => {} }, s.sink, deps);
     await pollUntil(() => s.msgs.some((m) => m.type === "ready"), "ready");
     expect(s.msgs.find((m) => m.type === "ready")).toMatchObject({ targetId: "UDID-1", title: "iPhone 17 Pro", control: true });
@@ -249,7 +249,7 @@ describe("runWatchSession with source sim", () => {
 
   test("a session holding no simulator gets that sentence", async () => {
     const s = sink();
-    const deps: WatchServerDeps = { engine: browserEngine as any, simEngine: simWatchEngine(fakeSim().deps), paneIdFor: async () => null };
+    const deps: WatchServerDeps = { engine: browserEngine as any, loadSimEngine: async () => simWatchEngine(fakeSim().deps), paneIdFor: async () => null };
     runWatchSession({ source: "sim", session_uuid: "u9", minIntervalMs: 0, control: true, quality: 60, maxDim: 1280, log: () => {} }, s.sink, deps);
     await pollUntil(() => s.end !== null, "the ending");
     expect(s.end).toEqual({ type: "error", code: "no-sim", message: "this session holds no simulator" });

@@ -70,7 +70,14 @@ export type WatchInputEvent =
       modifiers?: number;
     }
   | { kind: "key"; type: "keyDown" | "keyUp"; key: string; code?: string; text?: string; modifiers?: number }
-  | { kind: "insertText"; text: string };
+  | { kind: "insertText"; text: string }
+  /** A simulator's hardware button (source "sim" only). */
+  | { kind: "button"; button: SimButton };
+
+export type SimButton = "home" | "lock" | "side" | "siri" | "applepay";
+
+/** What a watch streams: the session's browser tab, or the simulator it holds. */
+export type WatchSource = "browser" | "sim";
 
 export interface FrameBox {
   left: number;
@@ -179,7 +186,7 @@ export function watchWsUrl(ep: TerminalEndpoint): string {
 
 export function connectBrowserWatch(
   ep: TerminalEndpoint,
-  session: { sessionUuid?: string | null; tmuxSession?: string | null; control?: boolean },
+  session: { sessionUuid?: string | null; tmuxSession?: string | null; control?: boolean; source?: WatchSource },
   handlers: WatchHandlers,
 ): WatchConnection {
   const ws = new WebSocket(watchWsUrl(ep));
@@ -193,10 +200,13 @@ export function connectBrowserWatch(
         ...(session.sessionUuid ? { session_uuid: session.sessionUuid } : {}),
         ...(session.tmuxSession ? { tmux_session: session.tmuxSession } : {}),
         ...(session.control ? { control: true } : {}),
+        ...(session.source === "sim" ? { source: "sim" } : {}),
         // The newest protocol this viewer speaks (the CLI's WATCH_PROTOCOL_VERSION):
         // 2 adds action messages. Informational; the daemon sends its own in ready.
         protocol: 2,
-        fps: 3,
+        // A simulator is touched, so it streams as fast as the daemon allows
+        // (its frames only come when the screen changed); a page is watched.
+        fps: session.source === "sim" ? 15 : 3,
       }),
     );
   };
@@ -310,6 +320,10 @@ export function watchExitStatus(reason: string): WatchStatus {
       return failed("the managed browser is no longer running", { tabGone: true });
     case "timeout":
       return failed("stream paused after 30 minutes — resume to keep watching", { capped: true });
+    case "sim-released":
+      return failed("the session released its simulator");
+    case "sim-not-booted":
+      return failed("the session's simulator is shut down");
     default:
       return failed("stream ended");
   }
@@ -322,6 +336,12 @@ export function watchErrorStatus(code: string, message: string): WatchStatus {
       return failed("no managed browser is running on the agent's machine", { tabGone: true });
     case "no-tab":
       return failed("this session hasn't driven a browser tab yet", { tabGone: true });
+    case "no-sim":
+      return failed("this session holds no simulator");
+    case "no-simulators":
+      return failed("the agent's machine has no iOS simulators", { canRetry: false });
+    case "sim-not-booted":
+      return failed("the session's simulator is shut down");
     case "no-answer":
       // The relay asked the agent's machine and heard nothing back.
       return failed(message || "the agent's machine did not answer");

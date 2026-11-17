@@ -21,6 +21,13 @@
 // action beside the frames and the arrow glides there, rings on a press and
 // captions what is typed. It hides while the human has the wheel: one hand on
 // the page at a time, and the human's is the real pointer.
+//
+// A simulator (source "sim") streams the same way with two differences. Its
+// screen is a touchscreen a person came to touch, so input is on from the
+// start with no wheel to take, and nothing grabs the keyboard until the
+// screen is clicked. And the agent's finger stays drawn while the person
+// touches too, with a badge while the agent is acting, since both hands share
+// the one device.
 
 import { useCallback, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
@@ -38,6 +45,7 @@ import {
   type WatchConnection,
   type WatchHandlers,
   type WatchInputEvent,
+  type WatchSource,
   type WatchStatus,
   type WatchTabInfo,
 } from "../../lib/browserWatch";
@@ -64,7 +72,14 @@ export function BrowserStream({
   onTitle,
   onUrl,
   onReleaseControl,
+  source = "browser",
+  inputRef,
 }: {
+  /** What to stream: the session's browser tab, or the simulator it holds. */
+  source?: WatchSource;
+  /** Filled with a sender while the stream is open, for a host's own buttons
+   *  (a simulator's Home and Lock). */
+  inputRef?: React.MutableRefObject<((events: WatchInputEvent[]) => void) | null>;
   sessionUuid?: string | null;
   tmuxSession?: string | null;
   machine?: SessionMachine | null;
@@ -166,12 +181,12 @@ export function BrowserStream({
       },
       };
       if (endpoint) {
-        connRef.current = connectBrowserWatch(endpoint, { sessionUuid, tmuxSession, control: true }, handlers);
-      } else if (machine?.device_id && browserRelayKey({ sessionUuid, tmuxSession })) {
+        connRef.current = connectBrowserWatch(endpoint, { sessionUuid, tmuxSession, control: true, source }, handlers);
+      } else if (machine?.device_id && browserRelayKey({ sessionUuid, tmuxSession, source })) {
         // The agent's machine is yours but not this one: watch through the
         // relay instead of the loopback socket.
         connRef.current = connectBrowserWatchRelay(
-          { convex, deviceId: machine.device_id, sessionUuid, tmuxSession, machineName },
+          { convex, deviceId: machine.device_id, sessionUuid, tmuxSession, source, machineName },
           handlers,
         );
       } else {
@@ -186,6 +201,7 @@ export function BrowserStream({
     };
   }, [
     convex,
+    source,
     ghost,
     sessionUuid,
     tmuxSession,
@@ -212,8 +228,17 @@ export function BrowserStream({
   }, [status, tab, controlAvailable, hasFrame, nav, onState]);
 
   const live = status.kind === "live";
-  const driving = live && control && controlAvailable;
+  const sim = source === "sim";
+  const driving = live && controlAvailable && (control || sim);
   const paused = status.kind === "paused";
+
+  useWatchEffect(() => {
+    if (!inputRef) return;
+    inputRef.current = driving ? (events) => connRef.current?.sendInput(events) : null;
+    return () => {
+      inputRef.current = null;
+    };
+  }, [inputRef, driving]);
 
   return (
     <div ref={boxRef} className="absolute inset-0">
@@ -221,7 +246,7 @@ export function BrowserStream({
         <img
           ref={imgRef}
           src={frame}
-          alt={tab?.title ? `Live view of ${tab.title}` : "Live view of the agent's browser tab"}
+          alt={tab?.title ? `Live view of ${tab.title}` : sim ? "Live view of the agent's simulator" : "Live view of the agent's browser tab"}
           className={`absolute inset-0 w-full h-full object-contain transition-opacity ${
             paused ? "opacity-40" : ""
           }`}
@@ -229,12 +254,12 @@ export function BrowserStream({
         />
       )}
       {frame && (
-        <GhostCursor store={ghost} boxRef={boxRef} imgRef={imgRef} frameSize={frameSize} hidden={driving} />
+        <GhostCursor store={ghost} boxRef={boxRef} imgRef={imgRef} frameSize={frameSize} hidden={driving && !sim} badge={sim} />
       )}
       {driving && (
-        <ControlSurface imgRef={imgRef} connRef={connRef} onRelease={onReleaseControl} />
+        <ControlSurface imgRef={imgRef} connRef={connRef} onRelease={sim ? undefined : onReleaseControl} touch={sim} />
       )}
-      {driving && <DrivingHint />}
+      {driving && !sim && <DrivingHint />}
       {paused && frame && (
         <span className="absolute bottom-2 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-sol-bg/80 border border-sol-border/40 text-meta font-mono tracking-wider text-sol-text-dim">
           paused
@@ -266,6 +291,7 @@ function GhostCursor({
   imgRef,
   frameSize,
   hidden,
+  badge = false,
 }: {
   store: GhostStore;
   boxRef: React.RefObject<HTMLDivElement | null>;
@@ -278,6 +304,9 @@ function GhostCursor({
    *  live is not hidden here: with no actions arriving the arrow freezes where
    *  it was and fades on the idle window, like an agent that went still. */
   hidden: boolean;
+  /** Say in words that the agent is acting, while its cursor is fresh: on a
+   *  shared device the person should hold off until it settles. */
+  badge?: boolean;
 }) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   // A fade is a question of time, not of a new action: wake exactly when the
@@ -301,6 +330,15 @@ function GhostCursor({
 
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
+      {badge && (
+        <span
+          data-sv-agent-badge
+          className="absolute top-2 left-1/2 -translate-x-1/2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sol-bg/90 border border-sol-violet/50 text-meta font-mono text-sol-violet whitespace-nowrap"
+          style={{ opacity: visible ? 1 : 0, transition: "opacity 300ms ease" }}
+        >
+          agent driving
+        </span>
+      )}
       <div
         data-sv-ghost-cursor
         data-visible={visible ? "true" : "false"}
@@ -367,9 +405,13 @@ function ControlSurface({
   imgRef,
   connRef,
   onRelease,
+  touch = false,
 }: {
   imgRef: React.RefObject<HTMLImageElement | null>;
   connRef: React.RefObject<WatchConnection | null>;
+  /** A touchscreen: always on, so it draws no "you have the wheel" ring and
+   *  takes the keyboard only when clicked. */
+  touch?: boolean;
   /** Esc hands the keyboard back instead of reaching the page. A capture
    *  surface with no way out is a trap, and Esc is the way out people try. */
   onRelease?: () => void;
@@ -380,7 +422,7 @@ function ControlSurface({
   // Keys should land in the page the moment control turns on, without an
   // extra "click to focus" step the user has no way to discover.
   useMountEffect(() => {
-    surfaceRef.current?.focus();
+    if (!touch) surfaceRef.current?.focus();
   });
 
   const toNorm = useCallback(
@@ -407,6 +449,8 @@ function ControlSurface({
   const onPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
     surfaceRef.current?.focus();
+    // A drag that leaves the frame still ends: the release comes here.
+    if (touch) (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     const p = toNorm(e.clientX, e.clientY);
     if (!p) return;
     send([{ kind: "mouse", type: "mousePressed", ...p, button: mouseButton(e.button), clickCount: Math.max(1, e.detail), modifiers: eventModifiers(e) }]);
@@ -464,9 +508,13 @@ function ControlSurface({
       ref={surfaceRef}
       tabIndex={0}
       role="application"
-      aria-label="You have the wheel of the agent's browser tab: clicks and typing go to the page, Esc hands it back"
-      className="absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-sol-cyan/60 focus:ring-sol-cyan"
-      style={{ boxShadow: "inset 0 0 28px color-mix(in srgb, var(--sol-cyan) 18%, transparent)" }}
+      aria-label={
+        touch
+          ? "The simulator's screen: click to tap, drag to swipe, scroll to scroll, type once clicked"
+          : "You have the wheel of the agent's browser tab: clicks and typing go to the page, Esc hands it back"
+      }
+      className={touch ? "absolute inset-0 cursor-pointer outline-none" : "absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-sol-cyan/60 focus:ring-sol-cyan"}
+      style={touch ? undefined : { boxShadow: "inset 0 0 28px color-mix(in srgb, var(--sol-cyan) 18%, transparent)" }}
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
       onPointerMove={onPointerMove}

@@ -75,6 +75,7 @@ const ModObject = lazy(() => import("@/app/o/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const SessionMap = lazy(() => import("@/app/map/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
+const Simulator = lazy(() => import("@/app/simulator/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
 const Community = lazy(() => import("@/app/community/page"));
@@ -307,6 +308,7 @@ export function App() {
               <Route path="crosstalk" element={<E name="Crosstalk"><Crosstalk /></E>} />
               <Route path="map" element={<E name="Session Map"><SessionMap /></E>} />
               <Route path="browser" element={<E name="Browser"><Browser /></E>} />
+              <Route path="simulator" element={<E name="Simulator"><Simulator /></E>} />
               <Route path="org" element={<E name="OrgScope"><OrgScope /></E>} />
               <Route path="org/:id" element={<E name="OrgScope"><OrgScope /></E>} />
               <Route path="org/:view/:id" element={<E name="OrgScope"><OrgScope /></E>} />

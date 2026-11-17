@@ -38,7 +38,6 @@ import {
 } from "../terminal/terminalServer.js";
 import { tmuxRunAsync } from "../tmux.js";
 import { cdpWatchEngine, WatchOpenError, type FrameSource, type WatchEngine, type WatchResolveError } from "./watchSource.js";
-import { simWatchEngine } from "../sim/watch.js";
 import { RecentActions, WATCH_PROTOCOL_VERSION } from "./watchActions.js";
 import { paneOwnerId } from "../tmuxRoute.js";
 import * as path from "node:path";
@@ -137,15 +136,21 @@ const GONE_REASONS: Record<WatchResolveError, string> = {
 
 export interface WatchServerDeps {
   engine: WatchEngine;
-  /** The simulator engine, for a hello with source "sim". */
-  simEngine?: WatchEngine;
+  /** The simulator engine, for a hello with source "sim". Loaded on first
+   *  use: the daemon boots without the simulator code (bench/bootGraph). */
+  loadSimEngine?: () => Promise<WatchEngine>;
   paneIdFor(tmuxSession: string): Promise<string | null>;
 }
 
 let realDeps: WatchServerDeps | null = null;
 /** The real engine and pane lookup, shared by the socket and the relay. */
 export function defaultWatchDeps(): WatchServerDeps {
-  return (realDeps ??= { engine: cdpWatchEngine(), simEngine: simWatchEngine(), paneIdFor: tmuxPaneId });
+  return (realDeps ??= { engine: cdpWatchEngine(), loadSimEngine: loadRealSimEngine, paneIdFor: tmuxPaneId });
+}
+
+let simEngine: Promise<WatchEngine> | null = null;
+function loadRealSimEngine(): Promise<WatchEngine> {
+  return (simEngine ??= import("../sim/watch.js").then((m) => m.simWatchEngine()));
 }
 
 export function attachWatchServer(
@@ -214,7 +219,7 @@ export function runWatchSession(
   sink: WatchSink,
   deps: WatchServerDeps,
 ): WatchSessionHandle {
-  const engine = opts.source === "sim" ? deps.simEngine : deps.engine;
+  let engine: WatchEngine | null = null;
   let source: FrameSource | null = null;
   let candidates: string[] = [];
   let ownerTimer: NodeJS.Timeout | null = null;
@@ -251,14 +256,13 @@ export function runWatchSession(
     sink.finish({ type: "error", code, message });
   };
 
-  if (!engine) {
-    // Fail after the caller has the handle, as every other ending does.
-    queueMicrotask(() => fail("no-simulators", RESOLVE_MESSAGES["no-simulators"]));
-    return { input() {}, stop: cleanup };
-  }
+  const loadEngine: Promise<WatchEngine | null> =
+    opts.source === "sim" ? (deps.loadSimEngine?.() ?? Promise.resolve(null)) : Promise.resolve(deps.engine);
 
-  void ownerCandidates(opts, deps.paneIdFor).then((keys) => {
-    if (closed) return; // the viewer left during the pane lookup
+  void Promise.all([loadEngine, ownerCandidates(opts, deps.paneIdFor)]).then(([loaded, keys]) => {
+    if (closed) return; // the viewer left during the lookups
+    if (!loaded) return fail("no-simulators", RESOLVE_MESSAGES["no-simulators"]);
+    engine = loaded;
     candidates = keys;
     const resolved = engine.resolveTab(candidates);
     if ("error" in resolved) {

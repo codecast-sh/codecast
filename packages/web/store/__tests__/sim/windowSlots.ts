@@ -233,6 +233,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/browserPane.ts:titles": { shared: "page titles a browser pane reports; the sim opens no pane" },
   "lib/browserPane.ts:listeners": NO_REACT,
   "lib/browserPane.ts:APP_HOSTS": CONSTANT,
+  "lib/browserPane.ts:framingAnswers": { shared: "whether a site allows framing is decided by its own headers, the same answer for every window; the sim asks none" },
   "lib/calls/recordingPress.ts:presses": { shared: "a Record press's own dispatch state, written only by a press; the sim presses no Record, so it stays empty" },
   "lib/calls/recordingPress.ts:pressedRuns": { shared: "the recording runs a press started, written only by a press; the sim presses no Record, so it stays empty" },
   "lib/calls/recordingPress.ts:pressListeners": NO_REACT,

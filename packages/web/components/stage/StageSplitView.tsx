@@ -30,6 +30,7 @@ import { StageRail } from "./StageRail";
 import { paneSessionId, stageClose, stageExpand, stageFocus, stageNavigateLeaf, startPaneDrag } from "../../lib/stage";
 import { pathLabel } from "../../lib/pathLabel";
 import { browserPathLabel, isBrowserRoutePath, subscribeBrowserTitles } from "../../lib/browserPane";
+import { isSimulatorRoutePath } from "../../lib/simulatorPane";
 import { chatTabTitle, recordTabTitle } from "../../lib/tabTitle";
 import { RoutePane, usePaneScope } from "../RoutePane";
 import { TabParamsCtx } from "../../lib/tabParams";
@@ -157,7 +158,7 @@ const StageCell = memo(function StageCell({
     stageFocus(leafId);
   }, [leafId]);
   // Panes that draw their own 32px header get no PaneStrip stacked on top.
-  const ownsHeader = isBrowserRoutePath(path);
+  const ownsHeader = isBrowserRoutePath(path) || isSimulatorRoutePath(path);
   const leafNavigate = useCallback(
     (p: string, mode: "push" | "replace") => stageNavigateLeaf(leafId, p, mode),
     [leafId],

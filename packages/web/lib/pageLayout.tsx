@@ -50,6 +50,7 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/crosstalk$/,
   // A browser pane is all content: its own 32px address strip, then the page.
   /^\/browser$/,
+  /^\/simulator$/,
   /^\/org(\/|$)/,
   // The daily edition sets its own 1180px column and scrolls itself.
   /^\/changes$/,

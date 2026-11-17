@@ -30,7 +30,7 @@ import { CastBrowserRowContext, ChatWakeContext } from "../../../lib/conversatio
 import { NestedStepList } from "./shared";
 import { ChatChannelPill } from "./systemBlocks";
 import { chatHref } from "../../../lib/chatHref";
-import { BrowserWatchButton } from "./toolBlocks";
+import { BrowserWatchButton, SimulatorWatchButton } from "./toolBlocks";
 import { decideOutputId, parseCastCommand } from "../classify";
 import { renderAnsi } from "../../../lib/conversationFormat";
 import { failureLine } from "../../../lib/modernRow";
@@ -898,6 +898,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
         {cat === "browser" && conversationId && (
           <BrowserWatchButton conversationId={conversationId} />
         )}
+        {cat === "sim" && conversationId && <SimulatorWatchButton conversationId={conversationId} />}
       </div>
 
       {(() => {

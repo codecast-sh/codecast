@@ -13,14 +13,16 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import {
   BROWSER_RELAY_RENEW_MS,
   BROWSER_RELAY_START_TIMEOUT_MS,
+  SIM_RELAY_KEY_PREFIX,
 } from "@codecast/shared/contracts";
-import { parseWatchAction, type WatchConnection, type WatchHandlers, type WatchInputEvent } from "./browserWatch";
+import { parseWatchAction, type WatchConnection, type WatchHandlers, type WatchInputEvent, type WatchSource } from "./browserWatch";
 
 export interface BrowserRelaySource {
   convex: ConvexReactClient;
   deviceId: string;
   sessionUuid?: string | null;
   tmuxSession?: string | null;
+  source?: WatchSource;
   /** For the sentence when the machine never answers. */
   machineName?: string | null;
 }
@@ -46,8 +48,11 @@ const DRIVING_WINDOW_MS = 10_000;
 const INPUT_COALESCE_MS = 50;
 
 /** The relay row a session's stream lives under: its uuid, else its tmux
- *  session. Null when there is neither, and nothing to watch. */
-export function browserRelayKey(s: { sessionUuid?: string | null; tmuxSession?: string | null }): string | null {
+ *  session. A simulator stream is its own row, keyed by the prefix and the
+ *  uuid (the simulator lock names the session by uuid alone). Null when there
+ *  is nothing to watch. */
+export function browserRelayKey(s: { sessionUuid?: string | null; tmuxSession?: string | null; source?: WatchSource }): string | null {
+  if (s.source === "sim") return s.sessionUuid ? `${SIM_RELAY_KEY_PREFIX}${s.sessionUuid}` : null;
   return s.sessionUuid || s.tmuxSession || null;
 }
 
