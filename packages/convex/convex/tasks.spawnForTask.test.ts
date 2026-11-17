@@ -4,7 +4,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
-import { worktreeNameFor } from "./tasks";
+import { worktreeNameFor } from "./lib/taskLaunch";
 
 const TOKEN = "e".repeat(64);
 const T0 = 1_790_000_000_000;

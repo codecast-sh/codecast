@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveTaskGitContext } from "./tasks";
+import { resolveTaskGitContext } from "./lib/taskLaunch";
 import { makeFakeDb } from "./testDb";
 
 // THE WRONG-REPO LAUNCH BUG: the task page's ContextChatInput sent the task's
