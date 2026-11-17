@@ -387,3 +387,36 @@ describe("pickOwnerDevice — a quiet laptop still outranks a remote without the
     expect(pickOwnerDevice([laptop, mini], { projectPath: "/Users/ashot/src/other" }, NOW)).toBe("laptop");
   });
 });
+
+describe("pickOwnerDevice — a reserved machine takes only work sent to it by name", () => {
+  // jx7fj18, 2026-11-17: a plain `cast spawn` from a cloud session, path
+  // /home/ubuntu/work/union-mobile, landed on a Union line host because every
+  // line host holds that checkout and heartbeated last.
+  const path = "/home/ubuntu/work/union-mobile";
+  const offload = local("offload", { platform: "linux", last_seen: fresh - 5_000, local_project_roots: [path] });
+  const line = local("line-4", { platform: "linux", local_project_roots: [path], reserved_for: "Union line" });
+
+  test("a checkout holder that is reserved never wins on recency", () => {
+    expect(pickOwnerDevice([line, offload], { projectPath: path }, NOW)).toBe("offload");
+  });
+
+  test("an explicit pick still lands on the reserved machine", () => {
+    expect(pickOwnerDevice([line, offload], { projectPath: path, targetDeviceId: "line-4" }, NOW)).toBe("line-4");
+  });
+
+  test("a session it already owns stays there", () => {
+    expect(pickOwnerDevice([line, offload], { projectPath: path, ownerDeviceId: "line-4" }, NOW)).toBe("line-4");
+    const asleep = { ...line, last_seen: stale };
+    expect(pickOwnerDevice([asleep], { projectPath: path, ownerDeviceId: "line-4" }, NOW)).toBe("line-4");
+  });
+
+  test("with only reserved machines left, nothing is picked", () => {
+    expect(pickOwnerDevice([line], { projectPath: path }, NOW)).toBeNull();
+    expect(pickOwnerDevice([remote("box", { reserved_for: "evals" })], {}, NOW)).toBeNull();
+  });
+
+  test("a blank purpose is no reservation", () => {
+    const blank = { ...line, reserved_for: "  " };
+    expect(pickOwnerDevice([blank, offload], { projectPath: path }, NOW)).toBe("line-4");
+  });
+});

@@ -7,7 +7,7 @@ import { verifyApiToken } from "./apiTokens";
 import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { inheritedChildPrivacy, resolveCreationPrivacy } from "./privacy";
 import { admitSubagent, startSpawnedSession, type QueuedStart } from "./subagentFleet";
-import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, isHostedAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
+import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, isHostedAgentType, isReservedDevice, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
@@ -33,6 +33,15 @@ async function getAuthenticatedUserId(
     if (result) return result.userId;
   }
   return null;
+}
+
+/** Is the machine a worker is being spawned from reserved for one job (devices.reserved_for)? */
+async function spawnsFromReservedDevice(ctx: { db: any }, userId: Id<"users">, deviceId: string): Promise<boolean> {
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
+    .first();
+  return !!device && isReservedDevice(device);
 }
 
 /**
@@ -438,6 +447,10 @@ export const createSessionFromCli = mutation({
       // on its machine, and path routing alone can pick another machine that
       // merely shares the path shape (/home/ubuntu/...).
       targetDeviceId = handoffFrom.owner_device_id;
+    } else if (args.spawn_device_id && !args.cloud_device_id && !args.cloud_seed && await spawnsFromReservedDevice(ctx, userId, args.spawn_device_id)) {
+      // A worker of a session on a reserved machine is that machine's work:
+      // path routing skips reserved machines, so name it.
+      targetDeviceId = args.spawn_device_id;
     } else if (!args.parent_session && !args.worktree_path && !args.cloud_device_id && !args.cloud_seed) {
       // No machine named: the person's saved default, when it can take the
       // work now. A worker stays beside its spawner's checkout, and a

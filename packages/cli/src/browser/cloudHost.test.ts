@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { instanceNameTag, patchHost, readHosts, registryLockPath, writeHosts, type CloudHost } from "./cloudHost";
+import { instanceNameTag, patchHost, readHosts, registryLockPath, resolveCloudHost, writeHosts, type CloudHost } from "./cloudHost";
 
 let dir: string, prev: string | undefined;
 const base: CloudHost = { id: "i-1", provider: "aws", region: "us-west-2", user: "ubuntu", keyPath: "/k", address: "1.1.1.1", forwardAgent: true, idleStopMinutes: 20 };
@@ -116,5 +116,15 @@ describe("instanceNameTag", () => {
     expect(instanceNameTag({ Tags: [{ Key: "Name", Value: "  " }] })).toBeUndefined();
     expect(instanceNameTag({})).toBeUndefined();
     expect(instanceNameTag(null)).toBeUndefined();
+  });
+});
+
+describe("resolveCloudHost — the default skips a host reserved for one job", () => {
+  test("no host named: the first open host; named: the reserved one too; all reserved: refused", () => {
+    patchHost("i-1", { reservedFor: "Union line" });
+    expect(resolveCloudHost().id).toBe("i-2");
+    expect(resolveCloudHost("i-1").id).toBe("i-1");
+    patchHost("i-2", { reservedFor: "evals" });
+    expect(() => resolveCloudHost()).toThrow("every registered cloud host is reserved for one job (i-1: Union line, i-2: evals)");
   });
 });

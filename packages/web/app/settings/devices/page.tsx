@@ -21,6 +21,7 @@ import { describeDeviceFreeze } from "../../../lib/daemonHealthCopy";
 import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { Bot, Users } from "lucide-react";
 import { DeviceShareControl } from "../../../components/settings/DeviceShareControl";
+import { DeviceReservationControl } from "../../../components/settings/DeviceReservationControl";
 import { ManagedDevicePill } from "../../../components/settings/ManagedDevicePill";
 import { useSharedWithLabel } from "../../../hooks/useDeviceSharing";
 import { CloudHostPanel } from "../../../components/settings/CloudHostPanel";
@@ -430,6 +431,7 @@ function InactiveDeviceRow({ d }: { d: Device }) {
       {open && (
         <div className="pb-1.5 pl-9">
           <DeviceShareControl d={d} />
+          <DeviceReservationControl d={d} />
           <DeviceDetails d={d} />
         </div>
       )}
@@ -498,6 +500,7 @@ function DeviceRow({ d }: { d: Device }) {
         <div className="min-w-0 flex-1">
           <DevicePanelHeader selected={d} note="seen" />
           <DeviceShareControl d={d} />
+          <DeviceReservationControl d={d} />
           <MachineTailnet device={d} />
           <DeviceDetails d={d} />
           <div className="mt-3 flex justify-end empty:hidden">

@@ -810,9 +810,8 @@ export default defineSchema({
     // The owner lets anonymous viewers of the share link suggest messages
     // (guestSuggestions.ts). Each one waits for the owner to send it.
     guest_suggestions: v.optional(v.boolean()),
-    // false: teammates send straight in even while the owner is in the
-    // session. Absent: a teammate's message waits as a suggestion while an
-    // owner is attending the session (teamSuggestions.ts).
+    // Unread: kept only because older rows carry it. A teammate's message
+    // always waits as a suggestion while an owner is attending (teamSuggestions.ts).
     team_suggestions: v.optional(v.boolean()),
     parent_message_uuid: v.optional(v.string()),
     parent_conversation_id: v.optional(v.id("conversations")),
@@ -3318,6 +3317,11 @@ export default defineSchema({
     // An operator's hold on this device's line slots (linePool.holdLine): its checkouts stay in the pool with no room,
     // whatever the heartbeat reports, for a machine that cannot finish a run (no Codex for Review) and cannot be reached.
     line_hold: v.optional(v.object({ why: v.string(), at: v.number() })),
+    // The one job this machine is kept for (e.g. "Union line"), set by its owner in Settings → Machines or
+    // `cast devices reserve`. Automatic placement never picks it (deviceRouting.pickOwnerDevice and every
+    // other picker go through isReservedDevice): work reaches it only by name (a --device pick, a move, a
+    // line slot) or because it already runs there. Absent means any work may land here.
+    reserved_for: v.optional(v.string()),
     // Git-plane health per repo with live sessions on this device (gitPlane.ts),
     // heartbeat-reported: is origin a real rendezvous URL, does fetch succeed,
     // how far HEAD sits from upstream. Metadata only — never file content or

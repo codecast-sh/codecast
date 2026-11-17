@@ -240,6 +240,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setCloudSharedCheckout: SETTINGS,
   setDefaultModel: SETTINGS,
   setDeviceShares: SETTINGS,
+  setDeviceReservation: SETTINGS,
   setDeviceDirectLinks: SETTINGS,
   setDeviceAppearance: SETTINGS,
   setAccountShares: SETTINGS,
@@ -325,7 +326,6 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setObjectShareLink: SHARING,
   setShareLink: SHARING,
   setGuestSuggestions: SHARING,
-  setTeamSuggestions: SHARING,
   setTeamMembershipVisibility: SHARING,
 
   // The project's line.toml, written on the checkout's machine by the daemon

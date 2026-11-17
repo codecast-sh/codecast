@@ -6,6 +6,7 @@ export { isWorkflowRunLog };
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import {
+  isReservedDevice,
   blockedKindsForAgent,
   fallbackProfiles,
   isUsageExhausted,
@@ -1038,8 +1039,9 @@ export async function listOnlineDevices(
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
   const online = devices.filter((d) => isDeviceOnline(d, now));
+  // A machine reserved for one job never takes a revive or a restart on another's behalf.
   const primary = online
-    .filter((d) => !d.is_remote)
+    .filter((d) => !d.is_remote && !isReservedDevice(d))
     .sort((a, b) => b.last_seen - a.last_seen)[0];
   return { online, primary };
 }

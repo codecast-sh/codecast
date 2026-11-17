@@ -24,7 +24,7 @@ import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { performSetDeviceDirectLinks } from "./peerLinks";
 import { performSetDeviceAppearance, type DeviceAppearanceChange } from "./deviceAppearance";
-import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, performSetDeviceSnippet, performRequestDeviceUpdate, performSetProviderKey } from "./devices";
+import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, performSetDeviceReservation, performSetDeviceSnippet, performRequestDeviceUpdate, performSetProviderKey } from "./devices";
 import { performJoinTeamHost, performRemoveTeamHostMember, performRenameTeamHost, performUnregisterTeamHost } from "./teamHosts";
 import { performSetAccountDevices, performSetAccountShares } from "./accountPool";
 import { cancelBot, requestBot } from "./meetingBots";
@@ -99,7 +99,7 @@ import { askLineAgentCore, editLineGraphCore, reaskTrialRunCore, tryLineStepCore
 import { cancelRunByPerson, landAgainCore, resumeRunCore } from "./workflow_runs";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { dismissGuestSuggestionFor, sendGuestSuggestionFor, writeGuestSuggestions } from "./guestSuggestions";
-import { proposeAnswerFor, proposePermissionFor, sendMineNowFor, withdrawTeamSuggestionFor, writeTeamSuggestions } from "./teamSuggestions";
+import { proposeAnswerFor, proposePermissionFor, sendMineNowFor, withdrawTeamSuggestionFor } from "./teamSuggestions";
 import { answerPresence, charterWire, deepMergeField, isServerId, linkConversationToObject, liveSecretWrite, opsRowId, type HandlerCtx } from "./dispatchHelpers";
 import { assertMayBind, handIsPrivate, handThreadToSession, handableThread } from "./chatHandoff";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
@@ -1402,6 +1402,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // direct_links_off; the device row is what folderSync reads.
   setDeviceDirectLinks: async (ctx, userId, [deviceId, enabled]: [string, boolean]) =>
     performSetDeviceDirectLinks(ctx as any, userId, deviceId, enabled),
+  // Settings > Machines' "Reserved for": the web writes the roster row's
+  // reserved_for; the device row is what every automatic placement reads.
+  setDeviceReservation: async (ctx, userId, [deviceId, purpose]: [string, string]) =>
+    performSetDeviceReservation(ctx as any, userId, deviceId, purpose),
   // Settings > Claude Accounts' pool pill: the web writes the account's team
   // set on the accountPool draft; account_shares is the server home.
   setAccountShares: async (ctx, userId, [deviceId, email, teamIds]: [string, string, string[]]) =>
@@ -1536,9 +1540,6 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   proposePermission: async (ctx, userId, [_convId, permissionId, decision, clientKey]: [string, string, "approved" | "denied", string?]) => {
     return await proposePermissionFor(ctx, userId, permissionId, decision, clientKey);
-  },
-  setTeamSuggestions: async (ctx, userId, [convId, enabled]: [string, boolean]) => {
-    await writeTeamSuggestions(ctx, userId, convId, !!enabled);
   },
 
   // The same switch for docs, plans, tasks and calls (publicShare.ts).

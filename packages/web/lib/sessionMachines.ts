@@ -1,5 +1,5 @@
 import type { Device } from "../components/DeviceBadge";
-import { cloudHostManaged, cloudHostRetired, cloudPlacementFor, deviceDisplayName, type CloudHostReport, type CloudStartFrom } from "@codecast/shared/contracts";
+import { cloudHostManaged, cloudHostRetired, cloudPlacementFor, deviceDisplayName, isReservedDevice, type CloudHostReport, type CloudStartFrom } from "@codecast/shared/contracts";
 import { defaultMachineId, intendedMachineId, type MachineCandidate } from "./machinePicker";
 import { compactAge } from "./threadState";
 
@@ -47,7 +47,8 @@ export function sleepingCloudHost(d: Candidate, roster: Candidate[]): boolean {
  * several belongs in the machine row, which already lists them.
  */
 export function cloudHostOf<T extends Candidate>(devices: T[]): T | null {
-  return devices.find((d) => sleepingCloudHost(d, devices)) ?? null;
+  // A host reserved for one job (devices.reserved_for) is picked by name, never by the toggle.
+  return devices.find((d) => !isReservedDevice(d) && sleepingCloudHost(d, devices)) ?? null;
 }
 
 type SelectionOpts = Parameters<typeof defaultMachineId>[1];

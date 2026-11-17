@@ -27,7 +27,7 @@ import {
 } from "./session-move.js";
 import { reorientationNotice, type ReorientationFacts } from "../sessionMoveNotice.js";
 import { deviceInfo, deviceId } from "./device.js";
-import { ensureUp, hostState, isEc2Host, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
+import { ensureUp, hostState, isEc2Host, openCloudHosts, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
 import { sshTmuxAttachCommand } from "@codecast/shared/contracts";
 import { learnHostDeviceId } from "../cloud/prepare.js";
 import { commandGroup } from "../commandGroups.js";
@@ -45,7 +45,7 @@ import { defaultConfigDir } from "../config/configDir.js";
  */
 async function resolveTransferHost(hostId?: string): Promise<{ host: RemoteHost; cloudId?: string; deviceId?: string }> {
   const cloud = readCloudHosts();
-  const pick = hostId ? cloud.find((h) => h.id === hostId) : cloud.find((h) => isEc2Host(h));
+  const pick = hostId ? cloud.find((h) => h.id === hostId) : (await openCloudHosts()).find((h) => isEc2Host(h));
   if (pick) {
     const up = await ensureUp(pick, (m) => console.log(`  ${m}`));
     const host = toRemoteHost(up);
@@ -220,7 +220,7 @@ export function registerRemoteCommand(program: Command): void {
       for (const h of cloud) {
         try {
           const s = hostState(h);
-          console.log(`  ${h.id}  ${h.user}@${s.address ?? "(asleep — wakes on use)"}  ${h.provider} ${s.state}  [default]`);
+          console.log(`  ${h.id}  ${h.user}@${s.address ?? "(asleep — wakes on use)"}  ${h.provider} ${s.state}  ${h.reservedFor ? `[reserved: ${h.reservedFor}]` : "[default]"}`);
         } catch (err) {
           console.log(`  ${h.id}  ${h.user}@?  ${h.provider} state unknown — ${(err as Error).message}`);
         }
@@ -332,14 +332,14 @@ export function registerRemoteCommand(program: Command): void {
         const devices = await client.query(api.devices.listDevices, { api_token: token });
         macDevice = targetDevice
           ? devices.find((d: any) => d.device_id === targetDevice)
-          : devices.find((d: any) => d.is_remote && d.online);
+          : devices.find((d: any) => d.is_remote && d.online && !d.reserved_for);
         if (macDevice || Date.now() > pickDeadline) break;
         console.log("  waiting for the remote daemon to come online…");
         await new Promise((r) => setTimeout(r, 5000));
       }
       if (!macDevice && !targetDevice) {
         const devices = await client.query(api.devices.listDevices, { api_token: token });
-        macDevice = devices.find((d: any) => d.is_remote);
+        macDevice = devices.find((d: any) => d.is_remote && !d.reserved_for);
       }
       if (!macDevice) {
         console.error(targetDevice ? `Device ${targetDevice} not found` : "No online remote device found (is the remote daemon provisioned? `cast browser hosts provision`)");

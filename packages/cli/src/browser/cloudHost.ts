@@ -67,6 +67,9 @@ export interface CloudHost {
    * first time a session is placed there (cloud/prepare.ts). Lets the daemon
    * map a wake request (a device id) back to an instance it can boot. */
   deviceId?: string;
+  /** The job this host's daemon is kept for (devices.reserved_for), as last read
+   *  from the server by openCloudHosts. Automatic host picks skip it. */
+  reservedFor?: string;
   /** The host's git device key (~/.codecast/git/id_ed25519.pub), as last read by the host git setup. */
   gitPubkey?: string;
   /** What the host's key could do against the origin last probed (cloud/hostGit.ts). */
@@ -119,17 +122,57 @@ export interface HostGitAccessRecord {
  */
 export function resolveCloudHost(hostArg?: string): CloudHost {
   const hosts = readHosts();
-  const pick = hostArg
-    ? hosts.find((h) => h.id === hostArg)
-    : hosts.find((h) => isEc2Host(h) && h.platform !== "darwin") ?? hosts[0];
-  if (!pick) {
-    throw new Error(
-      hostArg
-        ? `no cloud host ${hostArg} is registered (cast hosts ls)`
-        : "no cloud host is registered — cast hosts add <instance-id> --key <pem>, then cast hosts provision",
-    );
+  if (hostArg) {
+    const named = hosts.find((h) => h.id === hostArg);
+    if (!named) throw new Error(`no cloud host ${hostArg} is registered (cast hosts ls)`);
+    return named;
   }
-  return pick;
+  return defaultHostOf(hosts);
+}
+
+/** The default among hosts automatic placement may use: a Linux EC2 host, else the first. */
+function defaultHostOf(hosts: CloudHost[]): CloudHost {
+  const open = hosts.filter((h) => !h.reservedFor);
+  const pick = open.find((h) => isEc2Host(h) && h.platform !== "darwin") ?? open[0];
+  if (pick) return pick;
+  throw new Error(
+    hosts.length
+      ? `every registered cloud host is reserved for one job (${hosts.map((h) => `${h.id}: ${h.reservedFor}`).join(", ")}); name one to use it anyway`
+      : "no cloud host is registered — cast hosts add <instance-id> --key <pem>, then cast hosts provision",
+  );
+}
+
+/**
+ * The registered hosts automatic placement may use: those whose daemon is not
+ * reserved for one job (devices.reserved_for). Reads the reservations from the
+ * server and records each on its registry entry, so a laptop that cannot reach
+ * the server decides from the last answer. A host named by hand skips this.
+ */
+export async function openCloudHosts(): Promise<CloudHost[]> {
+  const hosts = readHosts();
+  if (hosts.some((h) => h.deviceId)) {
+    try {
+      const { convexClient } = await import("../remote/convexClient.js");
+      const cc = await convexClient({ timeoutMs: 5000 });
+      const devices: Array<{ device_id: string; reserved_for?: string }> = await cc.client.query(cc.api.devices.listDevices, { api_token: cc.token });
+      const reserved = new Map(devices.map((d) => [d.device_id, d.reserved_for?.trim() || undefined]));
+      for (const h of hosts) {
+        if (!h.deviceId || !reserved.has(h.deviceId)) continue;
+        const now = reserved.get(h.deviceId);
+        if (h.reservedFor !== now) patchHost(h.id, { reservedFor: now });
+        h.reservedFor = now;
+      }
+    } catch {
+      // The server is out of reach: the reservations last recorded stand.
+    }
+  }
+  return hosts.filter((h) => !h.reservedFor);
+}
+
+/** resolveCloudHost with no host named, from fresh reservations. */
+export async function defaultCloudHost(): Promise<CloudHost> {
+  await openCloudHosts();
+  return defaultHostOf(readHosts());
 }
 
 /** The registered host whose daemon is this device, if we have learned it. */

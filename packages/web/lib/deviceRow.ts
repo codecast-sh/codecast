@@ -84,6 +84,8 @@ export type Device = {
   cloud_agent_blocks?: import("@codecast/shared/contracts").CloudAgentSetupBlock[];
   tailnet?: import("@codecast/shared/contracts/peerTransport").PeerTailnet;
   direct_links_off?: boolean;
+  /** The one job this machine is kept for; automatic placement skips it (devices.reserved_for). */
+  reserved_for?: string;
   /** Outcomes with this machine as the source. */
   peer_links?: Array<import("@codecast/shared/contracts/peerTransport").PeerLinkOutcome & { to_device_id: string; last_relay_ok_at?: number }>;
   online: boolean;

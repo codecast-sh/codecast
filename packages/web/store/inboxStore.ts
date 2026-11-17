@@ -2,6 +2,7 @@ import { resourceOffloadStubs, cancelResourceBatch, requeueMigrationBatch } from
 import { approvesCommandRun } from "@codecast/shared/contracts/commandRun";
 import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, GOAL_RESUME_RESET, goalCanPause, goalCanResume, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
+import { cleanReservationPurpose } from "@codecast/shared/contracts";
 import type { InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
@@ -6294,8 +6295,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   proposeAnswer: (conversationId: string, toolUseId: string, body: string, clientKey: string, authorName: string) => Promise<unknown>;
   /** A teammate's allow or deny on a pending permission, for the owner to press. */
   proposePermission: (conversationId: string, permissionId: string, decision: "approved" | "denied", clientKey: string, authorName: string) => Promise<unknown>;
-  /** Owner: whether teammates' messages wait as suggestions while they are in the session. */
-  setTeamSuggestions: (id: string, enabled: boolean) => void;
   setObjectShareLink: (kind: PublicShareKind, id: string, token: string | null) => void;
   setWeeklyCardEnabled: (enabled: boolean) => void;
   setWeeklyCardOptions: (cardId: string, opts: { show_projects?: boolean; show_tokens?: boolean }) => void;
@@ -6717,6 +6716,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Open one of your machines to exactly these teams (empty = private).
    *  Settings > Machines; the server home is device_shares. */
   setDeviceShares: (deviceId: string, teamIds: string[]) => void;
+  setDeviceReservation: (deviceId: string, purpose: string) => void;
   /** Settings > Machines' "Accept direct links" (peer-transport.md); the server home is devices.direct_links_off. */
   setDeviceDirectLinks: (deviceId: string, enabled: boolean) => void;
   setDeviceAppearance: (deviceId: string, change: { display_name?: string; icon?: string; icon_color?: string }, ownerUserId?: string) => void;
@@ -10118,6 +10118,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.shared_team_ids = [...teamIds].sort();
   }),
+  // Mirrors performSetDeviceReservation (convex/devices.ts): an empty purpose opens the machine again.
+  setDeviceReservation: action(function (this: Draft, deviceId: string, purpose: string) {
+    const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
+    if (row) row.reserved_for = cleanReservationPurpose(purpose) ?? undefined;
+  }),
   setDeviceDirectLinks: action(function (this: Draft, deviceId: string, enabled: boolean) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.direct_links_off = enabled ? undefined : true;
@@ -11563,11 +11568,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
       _id: clientKey, client_key: clientKey, conversation_id: conversationId, author_user_id: me, guest_name: authorName,
       kind: "permission", permission_id: permissionId, decision, body: decision === "approved" ? "Allow" : "Deny", status: "pending", created_at: Date.now(),
     };
-  }),
-  setTeamSuggestions: action(function (this: Draft, id: string, enabled: boolean) {
-    patchConversationRows(this, id, (c) => {
-      c.team_suggestions = enabled ? null : false;
-    });
   }),
 
   // The same switch for every other shareable kind (convex publicShare.ts),

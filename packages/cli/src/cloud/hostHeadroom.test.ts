@@ -156,3 +156,13 @@ test("autoscale launches a host big enough for the repo; a shared checkout lands
   expect(shared).toMatchObject({ host: host("small"), moved: false });
   expect(shared.small).toContain("needs 12.0 GB");
 });
+
+test("a host reserved for one job is never the fallback, awake or asleep", () => {
+  const roomy = { fit: true, memoryAvailable: 30 * 1024 ** 3 };
+  const d = deps([host("full"), host("line", { reservedFor: "Union line" }), host("line-asleep", { reservedFor: "Union line" })], {
+    full: { fit: false, why: "memory pressure critical" },
+    line: roomy,
+  }, ["line-asleep"]);
+  expect(() => chooseCloudHost("full", () => {}, { fallback: true, autoscale: { maxExtra: 0, size: "small", template: host("full") } as any }, d)).toThrow("no other awake cloud host has room");
+  expect(d.probed).toEqual(["full"]);
+});

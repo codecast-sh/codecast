@@ -16,7 +16,7 @@ import { internalMutation, mutation } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { isBelowMinimum } from "@platform/flags";
-import { cloudHostBootable, deviceWakesOnUse } from "@codecast/shared/contracts";
+import { cloudHostBootable, deviceWakesOnUse, isReservedDevice } from "@codecast/shared/contracts";
 import { chainHeadOf } from "@codecast/shared/contracts/orgAssignee";
 import { ROLE_FAILOVER_QUIET_MS, moveBackRefusal, roleFailoverLine, roleHostQuiet, roleMoveBackState, type RoleFailover, type RoleFailoverReason } from "@codecast/shared/contracts/roleFailover";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
@@ -41,7 +41,7 @@ const SWEEP_ROLES_CAP = 1000;
 /** A message that has not reached the agent yet. */
 const QUEUED_STATUSES = ["pending", "held"] as const;
 
-type Probe = { device_id: string; last_seen: number; is_remote?: boolean; platform?: string; cloud_host?: any; cli_version?: string; loop_freeze_1h_ms?: number; cloud_wake?: { status: string } };
+type Probe = { device_id: string; last_seen: number; is_remote?: boolean; platform?: string; cloud_host?: any; cli_version?: string; loop_freeze_1h_ms?: number; cloud_wake?: { status: string }; reserved_for?: string };
 
 const online = (d: { last_seen: number }, now: number) => now - d.last_seen < DEVICE_ONLINE_MS;
 const probesOf = (rows: Probe[], now: number) => rows.map((d) => ({ ...d, online: online(d, now) }));
@@ -84,6 +84,7 @@ export function pickFailoverHost<T extends Probe>(candidates: T[], fromDeviceId:
   const probes = probesOf(candidates, now);
   const fit = candidates.filter((d, i) =>
     d.device_id !== fromDeviceId
+    && !isReservedDevice(d)
     && deviceWakesOnUse(d)
     && (probes[i].online || cloudHostBootable(probes[i], probes))
     && !(d.cli_version && isBelowMinimum(d.cli_version, opts.minCliVersion))

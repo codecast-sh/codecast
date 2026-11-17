@@ -28,7 +28,7 @@ import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { verifyApiToken } from "./apiTokens";
 import { findSessionCommandByRequest, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
-import { DAEMON_COMMAND_TTL_MS, isUnattendedConversation, isTestArtifactPath, repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { DAEMON_COMMAND_TTL_MS, WORK_STARTING_DAEMON_COMMANDS, isReservedDevice, isUnattendedConversation, isTestArtifactPath, repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import { activeTeamMembershipFor, canAccessTask, canAccessDoc, workspaceGrantsAccess } from "./lib/access";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
@@ -3578,6 +3578,12 @@ export const getMyPendingCommands = query({
         q.eq("user_id", auth.userId).eq("executed_at", undefined)
       )
       .collect();
+    // A reserved machine takes work only by name: untargeted starts are for the rest.
+    const self = args.device_id === undefined ? null : await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", auth.userId).eq("device_id", args.device_id))
+      .first();
+    const reserved = !!self && isReservedDevice(self);
 
     return commands
       .filter((c) => now - c._creationTime < COMMAND_TTL_MS)
@@ -3588,6 +3594,7 @@ export const getMyPendingCommands = query({
           c.target_device_id === undefined ||
           c.target_device_id === args.device_id,
       )
+      .filter((c) => !(reserved && c.target_device_id === undefined && WORK_STARTING_DAEMON_COMMANDS.has(c.command)))
       .filter((c) => commandVisibleToClaimer(c, args.boot_id, args.device_id, now))
       .map((c) => ({
         id: c._id,

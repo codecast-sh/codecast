@@ -1,4 +1,4 @@
-import { UNCONFIRMED_DELIVERY_REASON } from "@codecast/shared/contracts";
+import { UNCONFIRMED_DELIVERY_REASON, isReservedDevice } from "@codecast/shared/contracts";
 import { noteScreenRecordingSent } from "./lib/screenRecordingSent";
 import { steeringOwnerFor, suggestFromTeammate } from "./teamSuggestions";
 import { unreachableTerminalOf } from "@codecast/shared/contracts/deliveryHold";
@@ -268,6 +268,15 @@ export function canDaemonSeePendingMessage(
   return !conversation.owner_device_id || conversation.owner_device_id === deviceId;
 }
 
+/** A machine reserved for one job never adopts an unowned conversation: work reaches it only by name. */
+async function reservedAdopter(ctx: { db: any }, userId: Id<"users">, deviceId: string): Promise<boolean> {
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
+    .first();
+  return !!device && isReservedDevice(device);
+}
+
 export async function claimPendingMessageForDaemon(
   ctx: { db: any },
   messageId: Id<"pending_messages">,
@@ -285,6 +294,7 @@ export async function claimPendingMessageForDaemon(
     if (!target || target.user_id !== userId || isConversationSafetyBlocked(target)) return null;
   }
   if (!conversation.owner_device_id) {
+    if (await reservedAdopter(ctx, userId, deviceId)) return null;
     await ctx.db.patch(message.conversation_id, { owner_device_id: deviceId });
   }
   return message;
@@ -306,6 +316,7 @@ async function daemonCanMutatePendingMessage(
   const owner = conversation.owner_device_id as string | undefined;
   if (owner && owner !== deviceId) return false;
   if (!owner) {
+    if (await reservedAdopter(ctx, userId, deviceId)) return false;
     await ctx.db.patch(message.conversation_id, { owner_device_id: deviceId });
   }
   return true;
@@ -324,6 +335,7 @@ async function daemonCanMutateConversation(
   const owner = conversation.owner_device_id as string | undefined;
   if (owner && owner !== deviceId) return false;
   if (!owner) {
+    if (await reservedAdopter(ctx, userId, deviceId)) return false;
     await ctx.db.patch(conversationId, { owner_device_id: deviceId });
   }
   return true;

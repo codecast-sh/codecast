@@ -163,7 +163,8 @@ export function chooseCloudHost(
   }
   const platform = (h: CloudHost) => h.platform ?? "linux";
   const samePlatformFirst = (a: CloudHost, b: CloudHost) => Number(platform(b) === platform(asked)) - Number(platform(a) === platform(asked));
-  const others = deps.hosts().filter((h) => h.id !== asked.id && h.deviceId);
+  // A host reserved for one job (devices.reserved_for) is never a fallback; it takes work only when named.
+  const others = deps.hosts().filter((h) => h.id !== asked.id && h.deviceId && !h.reservedFor);
   const best = others
     .filter((h) => h.address && awake(h))
     .map((h) => ({ h, room: deps.probe(h) }))

@@ -24,7 +24,7 @@ export const DEVICE_ONLINE_MS = 2 * 60 * 1000;
 // ladder answer "can this machine open that folder" identically. Re-exported
 // so every existing importer keeps its path.
 export { pathUnderRoot, platformCanOpenPath, pathHome } from "@codecast/shared/contracts";
-import { pathUnderRoot, platformCanOpenPath, deviceServesPath, machineGoneQuiet, cloudHostBootable } from "@codecast/shared/contracts";
+import { pathUnderRoot, platformCanOpenPath, deviceServesPath, machineGoneQuiet, cloudHostBootable, isReservedDevice } from "@codecast/shared/contracts";
 
 /** Minimal device shape the routing decision needs (a subset of the `devices` row). */
 export type RoutableDevice = {
@@ -36,6 +36,8 @@ export type RoutableDevice = {
   platform?: string;
   /** A cloud host's last report from the laptop that manages it (cloudHostRetired). */
   cloud_host?: { managed_by: string; state: string; at: number } | null;
+  /** The job this machine is kept for; automatic placement skips it (schema.ts devices.reserved_for). */
+  reserved_for?: string | null;
 };
 
 /**
@@ -121,6 +123,11 @@ export function pickOwnerDevice(
   if (opts.ownerDeviceId && online.some((d) => d.device_id === opts.ownerDeviceId)) {
     return opts.ownerDeviceId;
   }
+
+  // A reserved machine takes work only by name (rungs 1 and 1b) or because the
+  // session is already its own: a sleeping owner still gets its queued work.
+  // Nothing below may choose one, even when it is the only machine left (8).
+  devices = devices.filter((d) => !isReservedDevice(d) || d.device_id === opts.ownerDeviceId);
 
   // Narrow to the machines that can open the path, but only on the word of
   // one that holds it or is still in service: a long-dead Linux VM must not

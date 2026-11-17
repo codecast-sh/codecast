@@ -141,6 +141,21 @@ export function pathHome(p: string): string | null {
 }
 
 /**
+ * Is this machine kept for one job (devices.reserved_for)? Every automatic
+ * placement skips a reserved machine; it takes work only when named (a
+ * --device pick, a move, a line slot) or when the work already runs there.
+ */
+export function isReservedDevice(d: { reserved_for?: string | null }): boolean {
+  return !!d.reserved_for?.trim();
+}
+
+/** The cleaned purpose a person typed for a reservation, or null to clear it. */
+export function cleanReservationPurpose(raw: string | null | undefined): string | null {
+  const purpose = (raw ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+  return purpose || null;
+}
+
+/**
  * Does this machine have the files behind one of these paths: a project root
  * covering it, or the same home as one of its projects (a worktree under
  * ~/.intern-data while the machine reports ~/src/<repo>)? A machine that runs

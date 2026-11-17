@@ -34,6 +34,7 @@ import {
   ensureUp,
   patchHost,
   readHosts,
+  defaultCloudHost,
   resolveCloudHost,
   toRemoteHost,
   type CloudHost,
@@ -627,7 +628,7 @@ export interface PrepareCloudHostOptions {
 export async function wakeCloudHost(opts: PrepareCloudHostOptions): Promise<PreparedHost> {
   const log = opts.onProgress ?? (() => {});
   cloudCopyFiles(opts.seedCwd);
-  const cloud = resolveCloudHost(opts.hostArg);
+  const cloud = opts.hostArg ? resolveCloudHost(opts.hostArg) : await defaultCloudHost();
   opts.onStep?.("wake");
   const up = await ensureUp(cloud, log);
   const host = toRemoteHost(up);

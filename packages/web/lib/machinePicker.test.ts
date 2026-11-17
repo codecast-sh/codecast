@@ -355,3 +355,18 @@ describe("defaultMachineId — dead VMs and sleeping cloud hosts (jx7bt5n)", () 
     expect(listedMachines([laptop, vm, host], "vm", NOW).map((d) => d.device_id)).toEqual(["laptop", "vm", "host"]);
   });
 });
+
+describe("defaultMachineId with a machine reserved for one job", () => {
+  const path = "/home/ubuntu/work/union-mobile";
+  const line = dev("line-4", { platform: "linux", last_seen: 9000, local_project_roots: [path], reserved_for: "Union line" });
+  const offload = dev("offload", { platform: "linux", last_seen: 5000, local_project_roots: [path] });
+
+  it("never defaults to it, however fresh its checkout", () => {
+    expect(defaultMachineId([line, offload], { projectPath: path })).toBe("offload");
+    expect(defaultMachineId([line, offload], { projectPath: path, defaultDevice: "line-4", lastPicked: "line-4", localDeviceId: "line-4" })).toBe("offload");
+  });
+
+  it("keeps a conversation it already owns", () => {
+    expect(defaultMachineId([line, offload], { projectPath: path, ownerDeviceId: "line-4" })).toBe("line-4");
+  });
+});

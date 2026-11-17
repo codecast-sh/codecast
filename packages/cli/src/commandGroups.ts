@@ -183,6 +183,7 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
   cast devices                          every machine of yours and every team machine opened to you
   cast devices show <device>            one machine: version, sharing, settings, keys, repos
   cast devices share <device> [team]    let a team start sessions on it (they run as you); unshare closes it
+  cast devices reserve <device> <job>   keep it for one job: only work sent by name lands there; unreserve opens it
   cast devices update <device>|--all    update codecast there now
   cast devices rm <device>|--stale      clear offline machines from the list
   cast devices set <device> hooks off   a snippet or machine setting; stable solo|team|off

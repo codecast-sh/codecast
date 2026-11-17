@@ -23,7 +23,7 @@
  * Kept pure, and out of the component, so the ladder is testable.
  */
 
-import { cloudHostBootable, deviceServesPath, deviceWakesOnUse, machineGoneQuiet, machineOutOfService, platformCanOpenPath, THIS_DEVICE, type CloudHostReport } from "@codecast/shared/contracts";
+import { cloudHostBootable, deviceServesPath, deviceWakesOnUse, isReservedDevice, machineGoneQuiet, machineOutOfService, platformCanOpenPath, THIS_DEVICE, type CloudHostReport } from "@codecast/shared/contracts";
 
 export type MachineCandidate = {
   device_id: string;
@@ -33,6 +33,8 @@ export type MachineCandidate = {
   local_project_roots?: string[];
   platform?: string;
   cloud_host?: CloudHostReport | null;
+  /** Kept for one job (devices.reserved_for): never a default, only a hand pick. */
+  reserved_for?: string | null;
 };
 
 /**
@@ -228,6 +230,8 @@ export type MachineIntentOpts = {
  * the next rung rather than highlight a chip that can't run anything.
  */
 export function intendedMachineId(devices: MachineCandidate[], opts: MachineIntentOpts): string | null {
+  // A machine reserved for one job is chosen by hand each time, never by default.
+  devices = devices.filter((d) => !isReservedDevice(d));
   // A saved default waits for a sleeping cloud host to boot. A last pick of one
   // waits only where there is no machine here (phone, plain web): at a laptop,
   // a host asleep for days must not pull new sessions off it.
@@ -258,6 +262,10 @@ export function defaultMachineId(
   //    opening it. A standing preference is about where NEW work starts.
   const owner = ownerDeviceId ? devices.find((d) => d.device_id === ownerDeviceId) : undefined;
   if (owner && canServe(owner)) return owner.device_id;
+
+  // Past the owner, a machine reserved for one job is never the default: it
+  // takes new work only when the person picks it.
+  devices = devices.filter((d) => !isReservedDevice(d));
 
   // 2. Your intent: saved default, last hand pick, the machine you are at.
   const intended = intendedMachineId(devices, opts);

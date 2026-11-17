@@ -4,7 +4,7 @@ import { selfUpdateBlocked } from "./lib/deviceUpdate";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
-import { settingsAfterSnippet, stableModeOf, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, isAgentSetupTool, type AgentToolSetupStatus, cloudAgentProviderOfSession, isCloudAgentActionName, isCloudAgentLoginState, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
+import { cleanReservationPurpose, isReservedDevice, settingsAfterSnippet, stableModeOf, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, isAgentSetupTool, type AgentToolSetupStatus, cloudAgentProviderOfSession, isCloudAgentActionName, isCloudAgentLoginState, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -628,8 +628,8 @@ export const moveToRemote = mutation({
     const mostRecent = (a: any, b: any) => b.last_seen - a.last_seen;
     const dest = args.to_device_id
       ? devices.find((d: any) => d.device_id === args.to_device_id)
-      : online.find((d: any) => d.is_remote) ??
-        [...devices].sort(mostRecent).find((d: any) => d.is_remote);
+      : online.find((d: any) => d.is_remote && !isReservedDevice(d)) ??
+        [...devices].sort(mostRecent).find((d: any) => d.is_remote && !isReservedDevice(d));
     if (!dest) throw new Error("No destination device (provision one: cast browser hosts provision)");
     // Early refusal, before a command is queued: the move would land in the
     // destination's main checkout of this repo, which a shared session may hold.
@@ -1268,6 +1268,7 @@ export const listDevices = query({
         // Owner-only, like ssh_host (peer-transport.md).
         tailnet: d.tailnet ?? undefined,
         direct_links_off: d.direct_links_off ?? undefined,
+        reserved_for: d.reserved_for ?? undefined,
         peer_links: peerLinksFrom(d.device_id),
         online: now - d.last_seen < DEVICE_ONLINE_MS,
       }))
@@ -1592,6 +1593,30 @@ export const setDeviceSshHost = mutation({
     }
     await ctx.db.patch(device._id, { ssh_host: cleaned ?? undefined });
     return { ssh_host: cleaned };
+  },
+});
+
+/**
+ * Keep one of the caller's machines for one job (purpose), or open it again
+ * (empty purpose). A reserved machine is skipped by every automatic placement
+ * and takes work only by name: a --device pick, a move, a line slot. Sessions
+ * already running there stay. Settings → Machines writes it through the
+ * setDeviceReservation dispatch, the CLI through `cast devices reserve`.
+ */
+export async function performSetDeviceReservation(ctx: any, userId: Id<"users">, deviceId: string, purpose: string) {
+  const device = await ownDevice(ctx, userId, deviceId);
+  if (!device) throw new Error("Unknown device");
+  const reserved_for = cleanReservationPurpose(purpose);
+  await ctx.db.patch(device._id, { reserved_for: reserved_for ?? undefined });
+  return { reserved_for };
+}
+
+export const setDeviceReservation = mutation({
+  args: { api_token: v.optional(v.string()), device_id: v.string(), purpose: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    return performSetDeviceReservation(ctx, userId, args.device_id, args.purpose);
   },
 });
 
@@ -2047,6 +2072,8 @@ export const claimConversationForStart = mutation({
     // remote only runs sessions explicitly moved to it (which stamp ownership up
     // front, so owner === device_id and we never reach here). This stops a remote
     // from winning a broadcast start_session and stranding it (the core deadlock).
+    // A machine reserved for one job is held to the same rule: work reaches it
+    // only by name, so it never wins a race or adopts an offline owner's session.
     if (owner !== args.device_id) {
       const me = await ctx.db
         .query("devices")
@@ -2054,7 +2081,7 @@ export const claimConversationForStart = mutation({
           q.eq("user_id", userId).eq("device_id", args.device_id),
         )
         .first();
-      if (me?.is_remote) return { won: false as const, owner };
+      if (me?.is_remote || (me && isReservedDevice(me))) return { won: false as const, owner };
     }
     await ctx.db.patch(convId, { owner_device_id: args.device_id });
     return { won: true as const };
