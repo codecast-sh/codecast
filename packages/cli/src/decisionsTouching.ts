@@ -4,7 +4,7 @@
 // commit's Codecast-Session trailer back to its conversation, so a decision
 // made in that conversation is found even when it named no files.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "./proc.js";
 
 export type ChangeEvidence = {
   root: string;

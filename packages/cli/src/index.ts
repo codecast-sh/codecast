@@ -29,7 +29,6 @@ import open from "open";
 import * as fs from "fs";
 import { selfExecInfo } from "./selfExec.js";
 import * as path from "path";
-import { gitRepoContext } from "./decisionsTouching.js";
 import * as os from "os";
 import { spawn, spawnSync, execSync } from "./proc.js";
 import { buildWslAutostartTaskRun, daemonSupportedOnPlatform, isWSL, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
@@ -11510,6 +11509,7 @@ program
       const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
       // Where it was decided and what it governs, stamped at write time: the
       // calling session, the repo, and the given paths made repo-relative.
+      const { gitRepoContext } = await import("./decisionsTouching.js");
       const repo = gitRepoContext(getRealCwd());
       const files = options.files
         ? String(options.files).split(",").map((f: string) => f.trim()).filter(Boolean)

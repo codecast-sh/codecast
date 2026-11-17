@@ -443,7 +443,10 @@ describe("command groups stay off the boot graph", () => {
     // 4750 (2026-11-16): the deploy of 458b815d8: contracts/screenRecording.ts
     // +8 for the daemon's screen recording brief, page-data trigger events and
     // their filter +2, the snippets text the guidance budget trimmed +2.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4750);
+    // 4755 (2026-11-17): the decisions command's --touching, --files and
+    // --supersedes options in index.ts +2 (decisionsTouching.ts itself loads
+    // on demand), usageLimits.ts +1, commandGroups.ts and snippets.ts +1 each.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4755);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
