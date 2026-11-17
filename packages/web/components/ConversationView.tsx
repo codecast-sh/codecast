@@ -120,7 +120,6 @@ import { TaskContextPanel } from "./work/TaskContextPanel";
 import { ContextRail } from "./ContextRail";
 import { EntityIdPill } from "./EntityIdPill";
 import { ThreadStatePanel } from "./ThreadStatePanel";
-import { WhatItRanChip } from "./conversation/WhatItRanChip";
 import { HighlightContext } from "./HighlightContext";
 import { instancesFromMatches, planActivation, skipDeadHit, stepIndex, walkSearchPages, type MatchInstance, type PendingHit } from "../lib/conversationSearch";
 import { FilePathContext } from "../lib/filePathLinks";
@@ -4370,18 +4369,6 @@ const ConversationViewInner = (
                     </button>
                   );
                 })()}
-
-                {/* Every shell call it made, the risky ones named (lib/whatItRan). */}
-                {!guest && <WhatItRanChip
-                  key={String(conversation._id)}
-                  messages={messages}
-                  hasMoreAbove={hasMoreAbove}
-                  hasMoreBelow={hasMoreBelow}
-                  isLoadingOlder={isLoadingOlder}
-                  onLoadOlder={onLoadOlder}
-                  onJumpToEnd={onJumpToEnd}
-                  onJump={scrollToMessageById}
-                />}
 
                 {/* Run this session's change through a flow of the pool (flows.md FL4). */}
                 {!guest && isOwner && conversation?._id && (
