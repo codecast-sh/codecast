@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { predictionWords } from "@codecast/shared/contracts/predictedEffect";
 import { targetDayStamp } from "@codecast/shared/time";
 import { metricReadings, metricTrends } from "@codecast/shared/contracts/initiative";
 import {
@@ -418,6 +419,28 @@ describe("cast initiative: what a record write answers", () => {
 
 describe("cast initiative show", () => {
   const show = (row: any) => initiativeShowLines(c, row, { now: NOW, ago: (at) => `${Math.round((NOW - at) / DAY)} days ago`, projectIcons: { active: "◉", planning: "○" } }).join("\n");
+  test("its tasks' predictions: a hit rate, each read with what the metric did, each open one with when it reads", () => {
+    const base = { goal_ref: "in-3:weekly_active_teams", relative: true, set_at: NOW - 30 * DAY };
+    const read = { value_before: 380, value_after: 412, delta: 32, within_noise: false, band: 12, shipped_at: NOW - 20 * DAY, from: 0, to: 0, read_at: NOW - DAY, note: "" };
+    const predictions = {
+      rows: [
+        { short_id: "ct-7", title: "Invite flow", status: "done", unit: null, predicted: { ...base, direction: "up", size: 5, read_days: 14, basis: "replay +6 on L2" }, realised: { ...read, verdict: "held" } },
+        { short_id: "ct-8", title: "Onboarding copy", status: "open", unit: null, predicted: { ...base, direction: "up", size: 2, read_at: Date.parse("2026-12-16T00:00:00Z"), basis: "labelled set" }, realised: null },
+      ].map((r: any) => ({ ...r, ...predictionWords(r.predicted, r.realised, r.unit) })),
+      tally: { open: 1, held: 1, not_shown: 0, opposite: 0, unreadable: 0 },
+      hit_rate: "1 of 1 prediction held, 1 open",
+    };
+    const text = show({ ...FULL, predictions });
+    expect(text).toContain(`
+  Predictions 1 of 1 prediction held, 1 open
+  ct-7 held 380 → 412 (+32; predicted +5%), outside ±12 · Invite flow
+    in-3:weekly_active_teams +5% in 14d; basis: replay +6 on L2
+  ct-8 open in-3:weekly_active_teams +2% by 2026-12-15 · Onboarding copy
+    basis: labelled set
+`);
+    expect(text.indexOf("Predictions")).toBeGreaterThan(text.indexOf("Report a value"));
+    expect(show(FULL)).not.toContain("Predictions");
+  });
   test("the whole record, in the order a person asks about it", () => {
     expect(show(FULL)).toBe(`
   ◉ Win the private network  in-3
