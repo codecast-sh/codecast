@@ -2153,12 +2153,10 @@ export const STUCK_SEND_NOTIFY_DEADLINE_MS = 3 * 60_000;
 export type TargetReach = "busy" | "stuck" | "offline" | "gone" | "unconfirmed" | "terminal" | "refused";
 export type StuckSendNotify = { kind: "skip" } | { kind: "notify"; reach: TargetReach };
 
-// Pure decision: should the sending session be told its message is stuck? Fires at most once
-// (gated on sender_notified_at). The message itself is kept unless its target session no longer
-// exists: a busy session takes it when idle, and an offline one (its machine asleep or its daemon
-// down) takes it when that daemon returns. Waiting on a busy session of the sender's own is the
-// ordinary case and is not said; a teammate's sender hears every reason. Rows with no sender
-// session are never notified.
+// Pure decision: should the sending session be told about a send that has not arrived? Fires at
+// most once (gated on sender_notified_at), and only when the sender has something to do: the
+// target no longer exists (the message is dropped) or runs in a terminal codecast cannot type
+// into. Rows with no sender session are never notified.
 export function planStuckSendNotify(
   msg: {
     status: string;
@@ -2184,7 +2182,9 @@ export function planStuckSendNotify(
   if (msg.sender_notified_at) return { kind: "skip" }; // already told them once
   if (!msg.owner_user_id) return { kind: "skip" }; // legacy/unknown owner
   if (now - msg.created_at < STUCK_SEND_NOTIFY_DEADLINE_MS) return { kind: "skip" };
-  if (reach === "busy" && msg.from_user_id.toString() === msg.owner_user_id.toString()) return { kind: "skip" };
+  // A message still on its way (target busy, offline, or idle and retried) needs nothing from the
+  // sender: it is kept and delivered. Only an outcome the sender must act on is said.
+  if (reach === "busy" || reach === "offline" || reach === "stuck") return { kind: "skip" };
   return { kind: "notify", reach };
 }
 
@@ -2227,17 +2227,11 @@ export async function notifyStuckSend(
   const preview = flat.length > 140 ? `${flat.slice(0, 139).trimEnd()}…` : flat;
   const body = reach === "gone"
     ? `Your message to session ${targetLabel} could not be delivered — that session no longer exists, so the message was dropped.\n\n> ${preview}`
-    : reach === "offline"
-    ? `Your message to session ${targetLabel} hasn't been delivered yet — it has no live daemon right now (its machine may be asleep or offline). It stays queued and is delivered when that daemon comes back; no action needed unless it is urgent.\n\n> ${preview}`
     : reach === "terminal"
     ? `Your message to session ${targetLabel} is held: that session ${msg.delivery_disposition_reason}. Its machine is up and keeps the message queued. It goes in once that terminal can be scripted, or once the agent there exits and codecast resumes the session in its own tmux.\n\n> ${preview}`
     : reach === "refused"
     ? `Your message to session ${targetLabel} never reached it: its terminal did not take the message after repeated tries, so it was dropped. That session needs a restart or a move to a healthier machine; send the message again after.\n\n> ${preview}`
-    : reach === "unconfirmed"
-    ? `Your message to session ${targetLabel} was typed into it, but its arrival was never confirmed. It may have landed: read that session before sending it again.\n\n> ${preview}`
-    : reach === "stuck"
-    ? `Your message to session ${targetLabel} hasn't been delivered yet. The session is idle, but its machine has not managed to put the message in front of it, and it keeps retrying. If it is urgent, check that machine's load or its daemon.\n\n> ${preview}`
-    : `Your message to session ${targetLabel} hasn't been delivered yet — the session is busy. It stays queued and will be delivered automatically the moment the session goes idle; no action needed.\n\n> ${preview}`;
+    : `Your message to session ${targetLabel} was typed into it, but its arrival was never confirmed. It may have landed: read that session before sending it again.\n\n> ${preview}`;
 
   // The receipt goes into the sender's OWN conversation, so from_user == owner == the sender:
   // it's a normal self-scoped message (never itself a cross-user send), and enqueue wakes the
@@ -2426,9 +2420,8 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
         }
         continue;
       }
-      // Sender feedback runs regardless of the target's readiness: a message stuck past the
-      // deadline tells its sending session why. planStuckSendNotify no-ops on already-notified
-      // rows and on the sender's own busy session.
+      // Sender feedback runs regardless of the target's readiness: a send past the deadline that
+      // the sender must act on (target gone, or held in a terminal) tells its sending session.
       const reach = stuckSendReach(msg, { gone: gone.has(conversationId), live: live.has(conversationId), ready: ready.has(conversationId) });
       const senderNotify = planStuckSendNotify(msg, reach, now);
       if (senderNotify.kind === "notify") {

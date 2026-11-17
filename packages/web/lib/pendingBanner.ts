@@ -9,7 +9,7 @@
 // (or gone) and STILL hasn't taken the message is a restart the right escalation.
 
 import { UNCONFIRMED_DELIVERY_REASON } from "@codecast/shared/contracts";
-import { MID_TURN_AGENT_STATUSES, isRecoveryContinueClientId } from "@codecast/shared/contracts";
+import { MID_TURN_AGENT_STATUSES, isRecoveryContinueClientId, isSessionMessage } from "@codecast/shared/contracts";
 
 export type LiveAgentStatus =
   | "working"
@@ -55,19 +55,6 @@ export const isAliveIdleStatus = (s?: LiveAgentStatus): boolean =>
   s === "waiting" || s === "dormant" || s === "done";
 
 export type PendingBannerState = "none" | "queued" | "stuck";
-
-export function sessionMessageQueueLabel(status?: string, reason?: string, recipientStatus?: string): string | null {
-  if (!status) return null;
-  // Typed into the session and never seen to arrive: nothing retries it.
-  if (status === "failed" && reason === UNCONFIRMED_DELIVERY_REASON) return "not confirmed";
-  if (reason) return `queued · ${reason}`;
-  if (status === "failed" || status === "undeliverable") return "queued · retrying";
-  if (recipientStatus === "permission_blocked") return "queued · waiting for an answer";
-  if (recipientStatus === "stopped") return "queued · recipient offline";
-  if (status === "injected") return "queued · awaiting confirmation";
-  if (MID_TURN_AGENT_STATUSES.has(recipientStatus ?? "")) return "queued · recipient busy";
-  return "queued · awaiting delivery";
-}
 
 export function pendingMessageCanRetry(content: string): boolean {
   return !/^(?:\[Request (?:interrupted|cancelled)|<turn_aborted>)/.test(content.trimStart());
@@ -177,6 +164,9 @@ export function serverPendingBubbles(
     // Queued for the end of the turn: it shows in the shared queue above the
     // composer, and becomes a bubble when the turn ends and it goes in.
     if (row.status === "held") continue;
+    // Another session's message enters the transcript when the session takes
+    // it, like any turn; until then it is nothing for the reader to act on.
+    if (row.status !== "delivered" && isSessionMessage(row.content)) continue;
     if (!serverPendingBubbleVisible(row, timeline)) continue;
     const id = row.client_id;
     if (id && (timeline.seen.has(id) || timeline.local.some((m) => m._id === id || m._clientId === id))) continue;
@@ -194,8 +184,6 @@ export function serverPendingBubbles(
       ...(row.from_user_id ? { from_user_id: row.from_user_id } : {}),
       ...(row.status === "delivered" ? {} : { _isOptimistic: true }),
       _serverPendingStatus: row.status,
-      _serverPendingReason: row.hold_reason,
-      _serverPendingScreen: row.hold_screen,
       _recoveryContinue: isRecoveryContinueClientId(row.client_id),
     });
   }

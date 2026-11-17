@@ -27,13 +27,9 @@ import { CLOUD_AGENT_ACTION_SUBTYPE, stripCompactionProvenance, parseHuddleDiges
 import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { CallVideoStretchChip } from "../../calls/CallVideoStretchChip";
-import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
-import { agentStatusAt } from "../../../lib/liveness";
+import { useInboxStore } from "../../../store/inboxStore";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
-import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud, Info, CircleSlash } from "lucide-react";
-import { pendingCancelRef, sessionMessageQueueLabel } from "../../../lib/pendingBanner";
-import { cancelPendingSend } from "../../../lib/cancelPendingSend";
-import { HeldTerminalScreen } from "../HeldTerminalScreen";
+import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud, Info, CircleSlash } from "lucide-react";
 import { PlanBlock } from "./planBlock";
 import { DeliveryFailedBlock } from "./deliveryFailedBlock";
 import { DELIVERY_FAILED_SUBTYPE, parseDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
@@ -377,22 +373,24 @@ export function NudgeLine({ messageId, text, count, timestamp, userName, avatarU
     : count > 1 ? `${userName ?? "You"} sent "${text}" ${count} times in a row · last at ${formatFullTimestamp(timestamp)}` : `${userName ?? "You"} · ${formatFullTimestamp(timestamp)}`;
   return (
     <div data-cc-message="user" data-recovery-continue={recovery || undefined} id={`msg-${messageId}`} className="my-3 flex items-center gap-3 scroll-mt-20" title={title}>
-      <span className={`inline-flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-full border text-xs ${recovery ? "border-sol-cyan/30 bg-sol-cyan/[0.06] text-sol-text-muted" : "border-sol-border/70 bg-sol-bg-alt/60 text-sol-text-muted"}`}>
+      <span className={`inline-flex items-start gap-2 min-w-0 pl-1 pr-2.5 py-1 rounded-2xl border text-xs leading-4 ${recovery ? "border-sol-cyan/30 bg-sol-cyan/[0.06] text-sol-text-muted" : "border-sol-border/70 bg-sol-bg-alt/60 text-sol-text-muted"}`}>
         {recovery
-          ? <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-sol-cyan/20 text-sol-cyan"><RefreshCw className="w-2.5 h-2.5" strokeWidth={2.5} /></span>
-          : <UserIcon avatarUrl={avatarUrl} size="w-4 h-4" />}
+          ? <span className="inline-flex items-center justify-center w-4 h-4 shrink-0 rounded-full bg-sol-cyan/20 text-sol-cyan"><RefreshCw className="w-2.5 h-2.5" strokeWidth={2.5} /></span>
+          : <UserIcon avatarUrl={avatarUrl} size="w-4 h-4 shrink-0" />}
         {!recovery && (
-          <svg className="w-3 h-3 text-sol-text-dim" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+          <svg className="w-3 h-3 mt-0.5 shrink-0 text-sol-text-dim" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14m0 0l-5-5m5 5l-5 5" />
           </svg>
         )}
-        <span className="font-medium">{text}</span>
+        <span className="min-w-0">
+          <span className="font-medium">{text}</span>
+          {recovery && <span className="text-sol-text-dim whitespace-nowrap"> · account recovery</span>}
+        </span>
         {count > 1 && (
-          <span className="ml-0.5 px-1.5 rounded-full bg-sol-blue/15 text-sol-blue text-meta font-semibold tabular-nums">×{count}</span>
+          <span className="shrink-0 ml-0.5 px-1.5 rounded-full bg-sol-blue/15 text-sol-blue text-meta font-semibold tabular-nums">×{count}</span>
         )}
-        {recovery && <span className="text-sol-text-dim">· sent by account recovery after the usage limit</span>}
       </span>
-      <span className="text-meta text-sol-text-dim">{pending ? "sending…" : formatRelativeTime(timestamp)}</span>
+      <span className="shrink-0 whitespace-nowrap text-meta text-sol-text-dim">{pending ? "sending…" : formatRelativeTime(timestamp)}</span>
     </div>
   );
 }
@@ -486,11 +484,13 @@ export function EscalationDivider({ escalation, conversationShortId, timestamp }
 
 // The watchdog's revive of a session whose process died mid-work: a rule
 // saying what happened, with the note the agent was given behind a click.
-export function ReviveDivider({ content, timestamp }: { content: string; timestamp: number }) {
+// `cause` says what cut the turn: the agent process exiting (the watchdog's
+// revive) or a move to another machine (convex devices.ts queueMoveContinue).
+export function ReviveDivider({ content, timestamp, cause = "exit" }: { content: string; timestamp: number; cause?: "exit" | "move" }) {
   return (
     <SwitchDivider
-      testId="mid-work-revive"
-      caption="restarted after the agent process exited"
+      testId={cause === "move" ? "move-interrupt" : "mid-work-revive"}
+      caption={cause === "move" ? "turn cut by the machine move · continued" : "restarted after the agent process exited"}
       content="Codecast sent the agent:"
       extra={content}
       timestamp={timestamp}
@@ -765,51 +765,15 @@ export function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCal
   );
 }
 
-// What the recipient agent is doing now, the verdict its queue label reads.
-function recipientStatusOf(row: Parameters<typeof agentStatusAt>[0] | undefined): string | undefined {
-  return row ? agentStatusAt(row, Date.now()) : undefined;
-}
-
 // What a `cast send --fyi` / `--done` asks back, on the card's header.
 const SESSION_INTENT_TAG: Record<string, { label: string; tip: string }> = {
   inform: { label: "FYI", tip: "Sent for information: needs no reply" },
   done: { label: "Done", tip: "Closes the exchange: not to be answered" },
 };
 
-export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendingReason, pendingScreen, pendingMessageId, recipientConversationId, variant = "session", color, summary, linkToConversationId, intent }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; pendingReason?: string; pendingScreen?: string; pendingMessageId?: string; recipientConversationId?: string; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string; intent?: string }) {
+export function SessionMessageBlock({ from, name, body, timestamp, variant = "session", color, summary, linkToConversationId, intent }: { from: string; name?: string; body: string; timestamp?: number; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string; intent?: string }) {
   const intentTag = intent ? SESSION_INTENT_TAG[intent] : undefined;
   const relativeTime = useRelativeTime();
-  // A queued card is never a dead end: the person can send it again, cancel
-  // it, and, when the daemon held it for a dialog, open the terminal rows it
-  // read and send past them. A card with no way out sat for three days
-  // behind a dialog nobody was shown (jx78gaw, 2026-10-13).
-  const [screenOpen, setScreenOpen] = useState(false);
-  const [acting, setActing] = useState<"send" | "cancel" | null>(null);
-  const canAct = !!pendingStatus && !!pendingMessageId && !!recipientConversationId;
-  const actOnQueued = async (kind: "send" | "cancel", force = false) => {
-    if (!canAct || acting) return;
-    setActing(kind);
-    try {
-      const ref = pendingCancelRef(pendingMessageId!);
-      const status = kind === "cancel"
-        // No text goes back to the composer: this was another session's message, not the reader's draft.
-        ? await cancelPendingSend(recipientConversationId!, ref, null)
-        : await useInboxStore.getState().retryPendingMessage(recipientConversationId!, { ...ref, force });
-      if (status === "delivered" || status === "injected") toast.info("This message has already reached the session");
-      else if (kind === "send" && status !== "pending") toast.info("This message is no longer queued");
-      else if (kind === "send") setScreenOpen(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : kind === "cancel" ? "Failed to cancel message" : "Failed to send message");
-    } finally {
-      setActing(null);
-    }
-  };
-  const s = useTrackedStore([
-    st => pendingStatus && recipientConversationId ? recipientStatusOf(st.sessions[recipientConversationId]) : undefined,
-  ]);
-  const recipientStatus = recipientConversationId ? recipientStatusOf(s.sessions[recipientConversationId]) : undefined;
-  const isPending = !!pendingStatus;
-  const queueLabel = sessionMessageQueueLabel(pendingStatus, pendingReason, recipientStatus);
   // The SAME card renders an inter-agent teammate broadcast and a subagent's report to the
   // session that launched it — only slightly distinct: a Users icon + "From teammate" + the
   // sender's own color, or a Bot icon + "Report from" + violet, vs. cast send's
@@ -824,30 +788,26 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
   const badgeColor = isAgentReport
     ? agentColorMap.purple
     : agentColorMap[color || "blue"] || agentColorMap.blue;
-  const accent = isPending
-    ? "border-amber-500/50 bg-amber-500/5"
-    : isTeammate
+  const accent = isTeammate
     ? `${agentBorderMap[color || "blue"] || agentBorderMap.blue} bg-sol-bg-alt/30`
     : isAgentReport
     ? "border-sol-violet/60 bg-sol-violet/5"
     : "border-sol-cyan/60 bg-sol-cyan/5";
-  const labelText = isPending ? "text-amber-400/80" : isTeammate ? "text-sol-text-dim/70" : isAgentReport ? "text-sol-violet/70" : "text-sol-cyan/70";
-  const iconText = isPending ? "text-amber-400/70" : isTeammate ? "text-sol-text-dim/60" : isAgentReport ? "text-sol-violet/70" : "text-sol-cyan/70";
+  const labelText = isTeammate ? "text-sol-text-dim/70" : isAgentReport ? "text-sol-violet/70" : "text-sol-cyan/70";
+  const iconText = isTeammate ? "text-sol-text-dim/60" : isAgentReport ? "text-sol-violet/70" : "text-sol-cyan/70";
   // Where the message was WRITTEN. A named sender carries its conversation on
   // linkToConversationId; a `cast send` names its sender by short id, which the
   // server resolves. Either way the jump lands on the turn that ran the send,
   // not at the tail of the sender's thread — see useJumpToSendingMessage.
   const senderRef = linkToConversationId ?? (!namedSender && from && from !== "unknown" ? from : undefined);
   const jumpToSendingMessage = useJumpToSendingMessage(senderRef, timestamp, body);
-  const linkText = isPending
-    ? "text-amber-400"
-    : isTeammate
+  const linkText = isTeammate
     ? agentTextMap[color || "blue"] || agentTextMap.blue
     : isAgentReport
     ? "text-sol-violet"
     : "text-sol-cyan";
   return (
-    <div data-cc-session-msg className={`mb-2 mx-1 rounded border-l-2 ${accent}`} data-cc-row="message" data-cc-row-tone={isPending ? "warn" : undefined}>
+    <div data-cc-session-msg className={`mb-2 mx-1 rounded border-l-2 ${accent}`} data-cc-row="message">
       <div className="flex items-center flex-wrap gap-x-2 gap-y-1 px-3 pt-2 pb-1" data-cc-row-head>
         <HeaderIcon data-cc-row-icon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
         <span data-cc-row-verb className={`text-mark font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : isAgentReport ? "Report from" : "Message from"}</span>
@@ -894,50 +854,14 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
         {intentTag && (
           <span data-cc-row-tag data-intent={intent} title={intentTag.tip} className={`text-mark uppercase tracking-wider font-medium rounded border px-1.5 py-0.5 shrink-0 ${intent === "done" ? "text-sol-green/80 border-sol-green/30 bg-sol-green/10" : "text-sol-text-dim/70 border-sol-border/60"}`}>{intentTag.label}</span>
         )}
-        {queueLabel && (pendingScreen ? (
-          <button
-            type="button"
-            onClick={() => setScreenOpen(!screenOpen)}
-            aria-expanded={screenOpen}
-            data-testid="queued-message-screen-toggle"
-            className="inline-flex items-center gap-1 text-meta font-mono text-amber-400 bg-amber-500/15 border border-amber-500/25 hover:bg-amber-500/25 rounded px-1.5 py-0.5 shrink-0 transition-colors"
-          >
-            <Clock className="w-2.5 h-2.5" />{queueLabel}
-            {screenOpen ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
-          </button>
-        ) : (
-          <span className="inline-flex items-center gap-1 text-meta font-mono text-amber-400 bg-amber-500/15 border border-amber-500/25 rounded px-1.5 py-0.5 shrink-0">
-            <Clock className="w-2.5 h-2.5" />{queueLabel}
-          </span>
-        ))}
-        {canAct && !pendingScreen && pendingStatus !== "injected" && (
-          <button type="button" onClick={() => { void actOnQueued("send"); }} disabled={!!acting} data-testid="queued-message-send"
-            className="text-meta text-amber-400 hover:text-amber-300 underline underline-offset-2 transition-colors disabled:opacity-60 shrink-0">
-            {acting === "send" ? "Sending…" : "Send now"}
-          </button>
-        )}
-        {canAct && (
-          <button type="button" onClick={() => { void actOnQueued("cancel"); }} disabled={!!acting} data-testid="queued-message-cancel"
-            className="text-meta text-sol-text-dim/70 hover:text-sol-orange underline underline-offset-2 transition-colors disabled:opacity-60 shrink-0">
-            {acting === "cancel" ? "Cancelling…" : "Cancel"}
-          </button>
-        )}
-        {/* A queued message renders at the tail of the transcript, below turns
-            that arrived after it, because it has not entered the thread yet —
-            it is still waiting to be delivered. Its time is therefore how long
-            it has waited, not where it belongs, and saying so is what stops
-            the row reading as history that jumped out of order. */}
         {timestamp != null && timestamp > 0 && (
-          <span data-cc-row-meta className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{isPending ? `waiting ${relativeTime(timestamp)}` : relativeTime(timestamp)}</span>
+          <span data-cc-row-meta className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{relativeTime(timestamp)}</span>
         )}
       </div>
-      {screenOpen && pendingScreen && (
-        <HeldTerminalScreen className="mx-3 mb-2" screen={pendingScreen} onSendAnyway={canAct ? () => { void actOnQueued("send", true); } : undefined} sending={acting === "send"} />
-      )}
       {/* A message from another session is someone else's context, not this
           thread's — it starts clipped so a long handoff doesn't bury the reply. */}
       <CollapsibleBody className="px-3 pb-2 modern:ml-6 modern:mt-0.5 modern:mb-2 modern:rounded-card modern:border modern:border-sol-border modern:bg-[var(--cc-m-tint)] modern:px-4 modern:py-3" toggleClassName="mt-1">
-        <div data-cc-prose className={`text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
+        <div data-cc-prose className={`text-sm text-sol-text prose prose-invert prose-sm max-w-none`}>
           {/* The header just named the sender, so its mentions in the body are
               repeats and render as the short name. */}
           <EstablishedRefsProvider ids={[namedSender ? null : from]}>

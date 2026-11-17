@@ -535,7 +535,7 @@ describe("settled recipient recovery end to end", () => {
     expect((await db.get(msg._id))?.sender_notified_at).toBeDefined();
   });
 
-  test("a sender told its send is waiting gets that receipt rewritten when the send turns unconfirmed, quoted on one line", async () => {
+  test("a send waiting on a busy session says nothing; once it turns unconfirmed the sender hears it once, quoted on one line", async () => {
     const now = Date.now();
     const { ctx, db, tables } = world({ now });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "Heads-up from Alice.\n\nRoot cause: the verifier pressed Enter on a stale frame." });
@@ -544,8 +544,7 @@ describe("settled recipient recovery end to end", () => {
     await db.patch("msBob", { agent_status: "working" });
     await healAndNotifyStuckMessages(ctx as any, now);
     const receipts = () => tables.pending_messages.filter((r: any) => r.conversation_id === "convAlice");
-    expect(receipts()).toHaveLength(1);
-    expect(receipts()[0].content).toContain("> Heads-up from Alice. Root cause: the verifier");
+    expect(receipts()).toHaveLength(0);
 
     await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob");
     await updatePendingMessageStatusForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", { status: "injected", paste_verified_at: now - 9 * 60_000 });
@@ -554,6 +553,7 @@ describe("settled recipient recovery end to end", () => {
     expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ failedUnconfirmed: 1 });
     expect(receipts()).toHaveLength(1);
     expect(receipts()[0].content).toMatch(/never confirmed/);
+    expect(receipts()[0].content).toContain("> Heads-up from Alice. Root cause: the verifier");
   });
 
   test("an unconfirmed send is not typed again by a resume, not merged into by a new trigger wake, and expires after a day", async () => {
@@ -708,30 +708,16 @@ describe("remote not responding — feedback to the sending session", () => {
       .toContain("could not be delivered");
   });
 
-  test("target OFFLINE past the deadline: Alice is told it's queued, and the message is KEPT for when the daemon returns", async () => {
+  test("target OFFLINE past the deadline: nothing is said, and the message is KEPT for when the daemon returns", async () => {
     const now = 1_000_000_000_000;
     const { ctx, tables } = world({ bobLive: false, now });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "urgent" });
     const msg = tables.pending_messages[0];
     msg.created_at = now - (STUCK_SEND_NOTIFY_DEADLINE_MS + 60_000);
 
-    const summary = await healAndNotifyStuckMessages(ctx as any, now);
-    expect(summary.notified).toBe(1);
-
-    // Never dropped: an offline daemon delivers it when it comes back.
+    expect((await healAndNotifyStuckMessages(ctx as any, now)).notified).toBe(0);
     expect(msg.status).toBe("pending");
-    expect(typeof msg.sender_notified_at).toBe("number");
-
-    // A receipt was injected back into Alice's OWN session (owner == Alice, so her daemon delivers it).
-    const receipt = tables.pending_messages.find(
-      (m) => m.conversation_id === "convAlice" && m.owner_user_id === "uAlice"
-    );
-    expect(receipt).toBeTruthy();
-    expect(receipt!.content).toContain("stays queued");
-    expect(receipt!.content).toContain("no live daemon");
-    expect(receipt!.content).toContain("jxbob01");
-    // The receipt is a self-scoped message (from == owner) so it can never itself trigger a notify.
-    expect(receipt!.from_conversation_id).toBeUndefined();
+    expect(tables.pending_messages.filter((m) => m.conversation_id === "convAlice")).toHaveLength(0);
 
     // Bob's daemon returns and the session settles: the cron's readiness gate is all that held it.
     tables.managed_sessions.push({ _id: "msBobBack", conversation_id: "convBob", agent_status: "idle", last_heartbeat: now + 60_000 });
@@ -740,35 +726,32 @@ describe("remote not responding — feedback to the sending session", () => {
     expect(msg.status).toBe("pending");
   });
 
-  test("target BUSY (alive but not idle) past the deadline: Alice is told it's delayed, message KEPT", async () => {
+  test("target BUSY past the deadline: nothing is said, message KEPT", async () => {
     const now = 1_000_000_000_000;
-    const { ctx, db, tables } = world({ bobLive: true, bobIdle: false, now });
+    const { ctx, tables } = world({ bobLive: true, bobIdle: false, now });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "later" });
     const msg = tables.pending_messages[0];
     msg.created_at = now - (STUCK_SEND_NOTIFY_DEADLINE_MS + 60_000);
 
-    const summary = await healAndNotifyStuckMessages(ctx as any, now);
-    expect(summary.notified).toBe(1);
-
-    // NOT cancelled — a busy session will still get it when idle.
+    expect((await healAndNotifyStuckMessages(ctx as any, now)).notified).toBe(0);
     expect(msg.status).toBe("pending");
-    const receipt = tables.pending_messages.find((m) => m.conversation_id === "convAlice");
-    expect(receipt!.content).toContain("hasn't been delivered yet");
-    expect(receipt!.content).toContain("busy");
+    expect(tables.pending_messages.filter((m) => m.conversation_id === "convAlice")).toHaveLength(0);
   });
 
-  test("the sender is notified at most once (sender_notified_at gates re-runs)", async () => {
+  test("a send held in a terminal codecast cannot type into tells the sender once (sender_notified_at gates re-runs)", async () => {
     const now = 1_000_000_000_000;
-    const { ctx, db, tables } = world({ bobLive: true, bobIdle: false, now });
+    const { ctx, tables } = world({ bobLive: true, bobIdle: false, now });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "later" });
     tables.pending_messages[0].created_at = now - (STUCK_SEND_NOTIFY_DEADLINE_MS + 60_000);
+    tables.pending_messages[0].delivery_disposition_reason = "runs in Ghostty, which Codecast can't type into";
 
     const first = await healAndNotifyStuckMessages(ctx as any, now);
     const second = await healAndNotifyStuckMessages(ctx as any, now + 60_000);
     expect(first.notified).toBe(1);
     expect(second.notified).toBe(0);
-    // Exactly one receipt was ever produced.
-    expect(tables.pending_messages.filter((m) => m.conversation_id === "convAlice")).toHaveLength(1);
+    const receipts = tables.pending_messages.filter((m) => m.conversation_id === "convAlice");
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].content).toContain("is held");
   });
 
   test("before the deadline, nothing is sent to Alice", async () => {
@@ -784,23 +767,19 @@ describe("remote not responding — feedback to the sending session", () => {
   });
 });
 
-describe("a session's own agents: the sender hears only a stuck wait", () => {
+describe("a session's own agents: a wait is never reported", () => {
   // An orchestrator's workers reported into it and sat undelivered for an hour
   // while the senders read "sent" (jx77xjt, 2026-10-16).
-  test("idle live target past the deadline: the sending session is told, message KEPT", async () => {
+  test("idle live target past the deadline: nothing is said, message KEPT", async () => {
     const now = 1_000_000_000_000;
     const { ctx, tables } = world({ bobLive: true, bobIdle: true, now });
     await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", from: "jxbobpv", body: "plan is ready" });
     const msg = tables.pending_messages[0];
-    expect(msg.from_conversation_id).toBe("convBobPriv");
     msg.created_at = now - (STUCK_SEND_NOTIFY_DEADLINE_MS + 60_000);
 
-    expect((await healAndNotifyStuckMessages(ctx as any, now)).notified).toBe(1);
+    expect((await healAndNotifyStuckMessages(ctx as any, now)).notified).toBe(0);
     expect(msg.status).not.toBe("cancelled");
-    const receipt = tables.pending_messages.find((m) => m.conversation_id === "convBobPriv");
-    expect(receipt!.content).toContain("hasn't been delivered yet");
-    expect(receipt!.content).toContain("idle");
-    expect(receipt!.content).toContain("jxbob01");
+    expect(tables.pending_messages.filter((m) => m.conversation_id === "convBobPriv")).toHaveLength(0);
   });
 
   test("busy target: nothing is said", async () => {
@@ -847,38 +826,34 @@ describe("planStuckSendNotify — pure decision", () => {
     owner_user_id: "uBob" as any,
   };
 
-  test("offline target → notify, message kept", () => {
-    expect(planStuckSendNotify(base, "offline", now)).toEqual({ kind: "notify", reach: "offline" });
+  test("a send still on its way (busy, offline, or idle and retried) → skip: nothing for the sender to do", () => {
+    for (const reach of ["busy", "offline", "stuck"] as const) {
+      expect(planStuckSendNotify(base, reach, now).kind).toBe("skip");
+      expect(planStuckSendNotify({ ...base, owner_user_id: "uAlice" as any }, reach, now).kind).toBe("skip");
+    }
   });
-  test("busy teammate target → notify", () => {
-    expect(planStuckSendNotify(base, "busy", now)).toEqual({ kind: "notify", reach: "busy" });
-  });
-  test("own busy session → skip: it takes the message when its turn ends", () => {
-    expect(planStuckSendNotify({ ...base, owner_user_id: "uAlice" as any }, "busy", now).kind).toBe("skip");
-  });
-  test("own session idle or offline with the message still out → notify", () => {
-    const own = { ...base, owner_user_id: "uAlice" as any };
-    expect(planStuckSendNotify(own, "stuck", now)).toEqual({ kind: "notify", reach: "stuck" });
-    expect(planStuckSendNotify(own, "offline", now)).toEqual({ kind: "notify", reach: "offline" });
+  test("target gone or held in a terminal → notify", () => {
+    expect(planStuckSendNotify(base, "gone", now)).toEqual({ kind: "notify", reach: "gone" });
+    expect(planStuckSendNotify(base, "terminal", now)).toEqual({ kind: "notify", reach: "terminal" });
   });
   test("typed in and awaiting its echo → skip: the unconfirmed path tells the sender", () => {
-    expect(planStuckSendNotify({ ...base, status: "injected" }, "stuck", now).kind).toBe("skip");
-    expect(planStuckSendNotify({ ...base, status: "injected", owner_user_id: "uAlice" as any }, "stuck", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, status: "injected" }, "gone", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, status: "injected", owner_user_id: "uAlice" as any }, "gone", now).kind).toBe("skip");
   });
   test("no sender conversation → skip", () => {
-    expect(planStuckSendNotify({ ...base, from_conversation_id: undefined }, "offline", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, from_conversation_id: undefined }, "gone", now).kind).toBe("skip");
   });
   test("already notified → skip", () => {
-    expect(planStuckSendNotify({ ...base, sender_notified_at: now - 1 } as any, "offline", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, sender_notified_at: now - 1 } as any, "gone", now).kind).toBe("skip");
   });
   test("before deadline → skip", () => {
-    expect(planStuckSendNotify({ ...base, created_at: now - 1_000 }, "offline", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, created_at: now - 1_000 }, "gone", now).kind).toBe("skip");
   });
   test("terminal (delivered) → skip", () => {
-    expect(planStuckSendNotify({ ...base, status: "delivered" }, "offline", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, status: "delivered" }, "gone", now).kind).toBe("skip");
   });
   test("legacy row without owner_user_id → skip", () => {
-    expect(planStuckSendNotify({ ...base, owner_user_id: undefined }, "offline", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, owner_user_id: undefined }, "gone", now).kind).toBe("skip");
   });
 });
 

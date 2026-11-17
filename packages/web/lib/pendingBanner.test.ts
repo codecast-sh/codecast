@@ -1,22 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { inFlightPending, pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, pendingMessageHoldScreen, serverPendingBubbles, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
-
-describe("session message queue labels", () => {
-  test.each([undefined, "idle", "waiting", "dormant", "done", "connected", "starting", "resuming"])("does not call a %s recipient busy", status => {
-    expect(sessionMessageQueueLabel("pending", undefined, status)).toBe("queued · awaiting delivery");
-  });
-  test.each(["working", "thinking", "compacting"])("reports observed %s activity", status => {
-    expect(sessionMessageQueueLabel("pending", undefined, status)).toBe("queued · recipient busy");
-  });
-  test("distinguishes a missing receipt, a stopped recipient, and a prompt hold", () => {
-    expect(sessionMessageQueueLabel("injected", undefined, "dormant")).toBe("queued · awaiting confirmation");
-    expect(sessionMessageQueueLabel("pending", undefined, "stopped")).toBe("queued · recipient offline");
-    expect(sessionMessageQueueLabel("pending", undefined, "permission_blocked")).toBe("queued · waiting for an answer");
-    expect(sessionMessageQueueLabel("injected", "waiting for terminal input confirmation", "thinking")).toBe("queued · waiting for terminal input confirmation");
-    expect(sessionMessageQueueLabel("failed", undefined, "dormant")).toBe("queued · retrying");
-    expect(sessionMessageQueueLabel(undefined, undefined, "thinking")).toBeNull();
-  });
-});
+import { inFlightPending, pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, pendingMessageHoldScreen, serverPendingBubbles, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
 
 const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean; messageReachedSession: boolean }> = {}) => ({
   retryEligible: true,
@@ -225,6 +208,16 @@ describe("serverPendingBubbles", () => {
       .toEqual(["serverpending_task", "serverpending_photo", "serverpending_buy", "serverpending_buy2"]);
   });
 
+  // Another session's message enters the transcript when the session takes it,
+  // never as a queued card at the tail.
+  test("another session's message renders only once delivered", () => {
+    const msg = '<session-message from="jx7aw4z" name="Scout">\nChecked the fee proposals\n</session-message>';
+    const waiting = row("s", msg);
+    expect(serverPendingBubbles({ ...waiting, inflight: [waiting, row("i", msg, { status: "injected" }), row("f", msg, { status: "failed" })] }, timeline())).toEqual([]);
+    const delivered = row("s", msg, { status: "delivered", created_at: 10, delivered_at: 20 });
+    expect(serverPendingBubbles({ ...delivered, delivered: [delivered] }, timeline()).map((b) => b._id)).toEqual(["serverpending_s"]);
+  });
+
   test("a row already on screen, synced or local, adds nothing", () => {
     const pending = { ...row("a", "one"), inflight: [row("a", "one"), row("b", "two"), row("c", "three")] };
     const bubbles = serverPendingBubbles(pending, timeline({ seen: new Set(["c_a"]), local: [{ _id: "c_b" }] }));
@@ -269,7 +262,6 @@ describe("serverPendingBubbles", () => {
     const held = row("c", "three", { hold_reason: "answer the dialog", hold_screen: "❯ 1. Yes\n  2. No" });
     const pending = { ...held, inflight: [held] };
     expect(pendingMessageHoldScreen("serverpending_c", pending)).toBe("❯ 1. Yes\n  2. No");
-    expect(serverPendingBubbles(pending, timeline())[0]).toMatchObject({ _serverPendingReason: "answer the dialog", _serverPendingScreen: "❯ 1. Yes\n  2. No" });
     // The screen belongs to the hold: once the row is in the pane it says nothing.
     expect(pendingMessageHoldScreen("serverpending_c", { ...held, status: "injected" })).toBeUndefined();
   });
@@ -281,11 +273,6 @@ test("a message waiting on a cloud placement never offers kill and restart: ther
   expect(pendingBannerState(undefined, { ...late, cloudPlacing: true })).toBe("none");
   // A restart the person already pressed keeps its progress.
   expect(pendingBannerState(undefined, { ...late, cloudPlacing: true, restartInFlight: true })).toBe("stuck");
-});
-
-test("a send that failed as unconfirmed reads as not confirmed, never as retrying", () => {
-  expect(sessionMessageQueueLabel("failed", "unconfirmed", "idle")).toBe("not confirmed");
-  expect(sessionMessageQueueLabel("failed", undefined, "idle")).toBe("queued · retrying");
 });
 
 test("an unconfirmed row is not in flight for the composer, so it never reads as lost or resumes the session", () => {
