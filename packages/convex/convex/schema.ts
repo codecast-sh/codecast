@@ -1049,10 +1049,14 @@ export default defineSchema({
     last_user_message_at: v.optional(v.number()),
     // Who started the latest turn: a person's own send ("person") or a
     // machine-delivered one (a wake, a session message, a program's send).
-    // Written by messages.ts through lib/userSend.turnOrigin; tool results and
+    // Written by messages.ts through lib/userSend.turnOpener; tool results and
     // noise leave it alone. A standing session's turn a person started files
     // in the inbox like any session's (inboxProjection placeInboxRow).
     last_turn_origin: v.optional(v.union(v.literal("person"), v.literal("machine"))),
+    // The person whose send started that turn, set only while last_turn_origin
+    // is "person" (lib/userSend.turnOpenerPatch). A brief the session writes
+    // while working on it is theirs (actingPersonOf), not its runner's.
+    last_turn_by: v.optional(v.id("users")),
     is_subagent: v.optional(v.boolean()),
     // Started with nobody watching (`cast spawn --unattended`, a role's hand).
     // Read through isUnattendedConversation (@codecast/shared), which also
@@ -2655,6 +2659,15 @@ export default defineSchema({
     conversation_id: v.optional(v.id("conversations")),
     message_index: v.optional(v.number()),
     tags: v.optional(v.array(v.string())),
+    // The repository the decision governs ("owner/name", getRepoKeyFromRemote)
+    // and the paths in it, repo-relative files or directories ending in "/".
+    // `cast decisions --touching` matches a diff against these, so a reviewer
+    // finds the decisions a change could break.
+    repo: v.optional(v.string()),
+    files: v.optional(v.array(v.string())),
+    // A later decision that reversed this one. A superseded decision binds
+    // nothing; it stays for the history.
+    superseded_by: v.optional(v.id("decisions")),
     // "automatic" when consolidated from a session insight (projectMemory.ts);
     // absent when a person or agent recorded it with `cast decisions add`.
     source: v.optional(v.literal("automatic")),

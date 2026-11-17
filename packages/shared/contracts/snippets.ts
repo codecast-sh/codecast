@@ -145,7 +145,7 @@ export const MEMORY_SNIPPET_END = "<!-- /codecast-memory -->";
 export const MEMORY_SNIPPET = `
 ## Memory
 
-You are one session among many. Past conversations hold the decisions, patterns and prior work you need, so search them before you rebuild context: when starting a task, when debugging, and whenever the user refers to earlier work. Run several searches in parallel for different angles. When the question is what happened or what was decided before, search sessions first; your harness's own memory notes supplement that record and never replace it. To learn what one session concluded, including this one, ask it instead of paging through it: the answer cites its lines and flags anything reversed later. Agent commits carry a \`Codecast-Session\` trailer, so \`git log\` and \`cast blame\` lead from code back to the conversation that wrote it.
+You are one session among many. Past conversations hold the decisions, patterns and prior work you need, so search them before you rebuild context: when starting a task, when debugging, and whenever the user refers to earlier work. Run several searches in parallel for different angles. When the question is what happened or what was decided before, search sessions first; your harness's own memory notes supplement that record and never replace it. To learn what one session concluded, including this one, ask it instead of paging through it: the answer cites its lines and flags anything reversed later. Agent commits carry a \`Codecast-Session\` trailer, so \`git log\` and \`cast blame\` lead from code back to the conversation that wrote it. Record each decision once settled, with the files it governs.
 
 \`\`\`bash
 cast search "auth"                 # filters: file:<path> commit:<sha> pr:<n> label: author: after:7d; --mine, -g all teams
@@ -155,7 +155,7 @@ cast context "implement auth"      # prior sessions relevant to a task
 cast feed                          # what the team is doing now
 cast sessions <id>… --until        # wait until they settle
 cast diff <id> | summary <id> | blame <file>
-cast decisions list | add "title" --reason "why"
+cast decisions --touching [range] | add "title" --reason "why" --files <paths>
 \`\`\`
 
 States: \`needs-input\` (a human acts), \`working\`, \`dormant\` (waiting on an automatic wake), \`done\` (delivered), \`idle\` (unused). \`cast guide memory\` has the full command reference.
@@ -200,7 +200,7 @@ cast ask "how does X work"        # query across sessions
 cast handoff                      # context transfer doc
 cast handoff --to codex           # continue in a new session on another agent (or --model opus); links both, pins this one done
 cast bookmark <id> <msg> --name x # shareable link
-cast decisions list | add "title" --reason "why"
+cast decisions [--search q] | --touching [range] | add "title" --reason "why" --files a.ts,dir/ [--supersedes <id>]
 \`\`\`
 
 Watch JSON spells the needs-input state \`needs_input\`. Common options: --mine, -m <name>, --label <name>, -g (all teams), -s/-e (time range), -p (page), -n (limit).
@@ -1858,6 +1858,16 @@ export function guideTopics(): SnippetDescriptor[] {
  * guidance eval loads this as the agent's global instructions, so it grades
  * the text an install would put on disk.
  */
+/**
+ * The installed file's budget: every session on the machine reads every byte.
+ * Raise it only with a held-out eval showing the words pay. 37k: the decision
+ * card guidance, which took cards a cold reader could follow from 1 of 30 to
+ * 20 of 30 (./evals check decide).
+ */
+export const GUIDANCE_MAX_CHARS = 37_000;
+/** Each section body's budget, so detail stays in the reference `cast guide` serves. */
+export const GUIDANCE_SECTION_MAX_CHARS = 4_000;
+
 export function renderGuidanceFile(mode: GuidanceMode, version: string): string {
   const parts: string[] = [];
   let references = false;

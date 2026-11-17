@@ -6,6 +6,8 @@ import {
   FORKS_SNIPPET,
   guideText,
   guideTopics,
+  GUIDANCE_MAX_CHARS,
+  GUIDANCE_SECTION_MAX_CHARS,
   renderGuidanceFile,
   stubSectionBody,
 } from "./snippets";
@@ -115,12 +117,11 @@ describe("guidance size", () => {
   // repo. The body carries behavior and the reference (served by `cast guide`)
   // carries flags and rare paths; these budgets keep detail from creeping
   // back into the file. Raise one only with an eval showing the words pay
-  // (./evals check guidance). 37k: the decision card guidance, which took
-  // cards a cold reader could follow from 1 of 30 to 20 of 30 (./evals check decide).
+  // (./evals check guidance). The reason for each raise sits on GUIDANCE_MAX_CHARS.
   it("keeps the whole installed guidance and each section under budget", () => {
-    expect(renderGuidanceFile("full", "0.0.0").length).toBeLessThan(37_000);
+    expect(renderGuidanceFile("full", "0.0.0").length).toBeLessThan(GUIDANCE_MAX_CHARS);
     for (const topic of guideTopics()) {
-      expect(`${topic.slug} ${topic.section!.body.length < 4_000}`).toBe(`${topic.slug} true`);
+      expect(`${topic.slug} ${topic.section!.body.length < GUIDANCE_SECTION_MAX_CHARS}`).toBe(`${topic.slug} true`);
     }
   });
 

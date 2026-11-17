@@ -4,6 +4,8 @@ import { verifyApiToken } from "./apiTokens";
 import { teamVisibleConvTeam } from "./privacy";
 import { computeWorkspaceKey, resolveSessionConversation } from "./lib/access";
 import { heldKeysFor } from "./lib/accessKeys";
+import { getRepoKeyFromRemote } from "./projectPaths";
+import { decisionTouches, normalizeDecisionFiles, type DecisionTouch } from "./lib/decisionMatch";
 import type { Doc, Id } from "./_generated/dataModel";
 
 export const create = mutation({
@@ -16,11 +18,22 @@ export const create = mutation({
     message_index: v.optional(v.number()),
     tags: v.optional(v.array(v.string())),
     project_path: v.optional(v.string()),
+    git_remote: v.optional(v.string()),
+    files: v.optional(v.array(v.string())),
+    // The decision this one reverses, by full id or the 7-character prefix
+    // the list prints; it is marked superseded and stops binding.
+    supersedes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const result = await verifyApiToken(ctx, args.api_token);
     if (!result) {
       return { error: "Unauthorized" };
+    }
+
+    let reversed: Doc<"decisions"> | null = null;
+    if (args.supersedes) {
+      reversed = await findReadableDecision(ctx, result.userId, args.supersedes);
+      if (!reversed) return { error: `No decision ${args.supersedes} you can read` };
     }
 
     let sourceConv = null;
@@ -37,8 +50,11 @@ export const create = mutation({
       tags: args.tags,
       project_path: args.project_path,
       session_id: args.session_id,
+      repo: getRepoKeyFromRemote(args.git_remote) ?? reversed?.repo,
+      files: args.files?.length ? normalizeDecisionFiles(args.files) : reversed?.files,
     }, sourceConv);
     if (!id) return { error: "User not found" };
+    if (reversed) await ctx.db.patch(reversed._id, { superseded_by: id, updated_at: Date.now() });
 
     return { id, success: true };
   },
@@ -61,6 +77,8 @@ export async function insertDecision(
     tags?: string[];
     project_path?: string;
     session_id?: string;
+    repo?: string;
+    files?: string[];
     source?: "automatic";
   },
   sourceConv: Doc<"conversations"> | null,
@@ -85,6 +103,8 @@ export async function insertDecision(
     conversation_id: sourceConv?._id,
     message_index: fields.message_index,
     tags: fields.tags,
+    repo: fields.repo,
+    files: fields.files,
     source: fields.source,
     created_at: now,
     updated_at: now,
@@ -132,9 +152,58 @@ export async function listDecisionsForViewer(
   return rows.slice(opts.offset, opts.offset + opts.limit);
 }
 
+/** Every decision the viewer can read, newest first: the touching scan's input. */
+async function allReadableDecisions(ctx: { db: any }, userId: Id<"users">): Promise<Doc<"decisions">[]> {
+  const held = await heldKeysFor(ctx, userId);
+  const perKey = await Promise.all(
+    [...held].map((key) =>
+      ctx.db.query("decisions").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).order("desc").take(2000),
+    ),
+  );
+  return (perKey.flat() as Doc<"decisions">[]).sort((a, b) => b.created_at - a.created_at);
+}
+
+/** A decision by full id or the 7-character prefix the list prints, only when the viewer can read it. */
+async function findReadableDecision(ctx: { db: any }, userId: Id<"users">, ref: string): Promise<Doc<"decisions"> | null> {
+  const held = await heldKeysFor(ctx, userId);
+  const readable = (d: Doc<"decisions"> | null) => (d && d.workspace && held.has(d.workspace) ? d : null);
+  const exact = ctx.db.normalizeId("decisions", ref);
+  if (exact) return readable(await ctx.db.get(exact));
+  const hits = (await allReadableDecisions(ctx, userId)).filter((d) => String(d._id).startsWith(ref));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+function formatDecision(d: Doc<"decisions">, touch?: DecisionTouch) {
+  return {
+    id: d._id,
+    title: d.title,
+    rationale: d.rationale,
+    alternatives: d.alternatives,
+    tags: d.tags,
+    repo: d.repo,
+    files: d.files,
+    superseded_by: d.superseded_by,
+    session_id: d.session_id,
+    conversation_id: d.conversation_id,
+    message_index: d.message_index,
+    project_path: d.project_path,
+    source: d.source,
+    created_at: new Date(d.created_at).toISOString(),
+    ...(touch ? { touches: touch } : {}),
+  };
+}
+
 export const list = mutation({
   args: {
     api_token: v.string(),
+    // Touching mode: the decisions that bear on a change, given the paths it
+    // changes (repo-relative, in the repo `git_remote` names) and the
+    // conversations that wrote the lines it changes. Superseded ones are left out.
+    touching: v.optional(v.object({
+      git_remote: v.optional(v.string()),
+      files: v.array(v.string()),
+      conversation_ids: v.array(v.string()),
+    })),
     project_path: v.optional(v.string()),
     tags: v.optional(v.array(v.string())),
     search: v.optional(v.string()),
@@ -150,6 +219,23 @@ export const list = mutation({
     const limit = args.limit ?? 20;
     const offset = args.offset ?? 0;
 
+    if (args.touching) {
+      const change = {
+        repo: getRepoKeyFromRemote(args.touching.git_remote),
+        files: normalizeDecisionFiles(args.touching.files),
+        conversationIds: new Set(args.touching.conversation_ids),
+      };
+      const hits = (await allReadableDecisions(ctx, result.userId)).flatMap((d) => {
+        const touch = decisionTouches(d, change);
+        return touch ? [{ touch, row: formatDecision(d, touch) }] : [];
+      });
+      // Every decision governing a changed path, then up to `limit` of the
+      // ones matched only by the session that wrote the changed lines.
+      const governing = hits.filter((h) => h.touch.files.length).map((h) => h.row);
+      const bySession = hits.filter((h) => !h.touch.files.length).slice(0, limit).map((h) => h.row);
+      return { decisions: [...governing, ...bySession], count: governing.length + bySession.length, repo: change.repo };
+    }
+
     let decisions = await listDecisionsForViewer(ctx, result.userId, {
       project_path: args.project_path,
       search: args.search,
@@ -163,19 +249,7 @@ export const list = mutation({
       );
     }
 
-    const formatted = decisions.map((d) => ({
-      id: d._id,
-      title: d.title,
-      rationale: d.rationale,
-      alternatives: d.alternatives,
-      tags: d.tags,
-      session_id: d.session_id,
-      conversation_id: d.conversation_id,
-      message_index: d.message_index,
-      project_path: d.project_path,
-      source: d.source,
-      created_at: new Date(d.created_at).toISOString(),
-    }));
+    const formatted = decisions.map((d) => formatDecision(d));
 
     return { decisions: formatted, count: formatted.length };
   },

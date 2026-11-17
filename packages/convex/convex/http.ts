@@ -1312,7 +1312,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, project_path, tags, search, limit, offset } = body;
+      const { api_token, project_path, tags, search, limit, offset, touching } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -1323,6 +1323,7 @@ http.route({
 
       const result = await ctx.runMutation(api.decisions.list, {
         api_token,
+        touching,
         project_path,
         tags,
         search,
@@ -1378,7 +1379,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, title, rationale, alternatives, session_id, message_index, tags, project_path } = body;
+      const { api_token, title, rationale, alternatives, session_id, message_index, tags, project_path, git_remote, files, supersedes } = body;
 
       if (!api_token || !title || !rationale) {
         return new Response(JSON.stringify({ error: "Missing required fields: api_token, title, rationale" }), {
@@ -1396,6 +1397,9 @@ http.route({
         message_index,
         tags,
         project_path,
+        git_remote,
+        files,
+        supersedes,
       });
 
       if (result.error) {

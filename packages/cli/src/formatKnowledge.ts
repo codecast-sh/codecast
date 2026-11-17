@@ -12,6 +12,10 @@ interface Decision {
   conversation_id?: string;
   message_index?: number;
   project_path?: string;
+  files?: string[];
+  superseded_by?: string;
+  // Touching mode: why this decision bears on the change.
+  touches?: { files: string[]; session: boolean };
   created_at: string;
 }
 
@@ -42,6 +46,9 @@ export function formatDecisionsResults(result: DecisionsResult): string {
     if (decision.tags && decision.tags.length > 0) {
       lines.push(`  Tags: ${decision.tags.join(", ")}`);
     }
+    if (decision.files?.length) lines.push(`  Governs: ${decision.files.join(", ")}`);
+    if (decision.superseded_by) lines.push(`  Superseded by: decision ${truncateId(decision.superseded_by)}`);
+    if (decision.touches?.files.length) lines.push(`  Changed here: ${decision.touches.files.join(", ")}`);
 
     // The conversation's short id is what `cast read` takes; session_id is the
     // agent's own uuid, which no command accepts, so a row without a
@@ -56,6 +63,39 @@ export function formatDecisionsResults(result: DecisionsResult): string {
 
   lines.push("</DECISIONS>");
 
+  return lines.join("\n");
+}
+
+/**
+ * `cast decisions --touching`: the decisions governing a path the change
+ * edits, in full, then the decisions made in the sessions that wrote the lines
+ * it rewrites, one line each. A long session records dozens of decisions and
+ * most have nothing to do with a given hunk, so those are leads to open
+ * (`cast decisions --search`, `cast read <session> --ask`), not rules.
+ */
+export function formatTouchingResults(result: DecisionsResult): string {
+  const governing = result.decisions.filter((d) => d.touches?.files.length);
+  const bySession = result.decisions.filter((d) => !d.touches?.files.length);
+  const lines: string[] = [];
+  lines.push(`<DECISIONS_TOUCHING governing=${governing.length} from_sessions=${bySession.length}>`);
+  if (governing.length === 0 && bySession.length === 0) lines.push("No standing decision touches this change.");
+  if (governing.length) {
+    lines.push("Governing the paths this change edits:", "");
+    lines.push(formatDecisionsResults({ decisions: governing, count: governing.length }).split("\n").slice(1, -1).join("\n"));
+  }
+  if (bySession.length) {
+    lines.push("Made in the sessions that wrote the lines this change rewrites (open one if its title bears on the diff):");
+    const groups = new Map<string, Decision[]>();
+    for (const d of bySession) {
+      const key = d.conversation_id ? truncateId(d.conversation_id) : "?";
+      groups.set(key, [...(groups.get(key) ?? []), d]);
+    }
+    for (const [session, ds] of groups) {
+      lines.push(`  session ${session}:`);
+      for (const d of ds) lines.push(`    [decision ${truncateId(d.id)}] ${d.created_at.slice(0, 10)} ${d.title}`);
+    }
+  }
+  lines.push("</DECISIONS_TOUCHING>");
   return lines.join("\n");
 }
 

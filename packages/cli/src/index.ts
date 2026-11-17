@@ -29,6 +29,7 @@ import open from "open";
 import * as fs from "fs";
 import { selfExecInfo } from "./selfExec.js";
 import * as path from "path";
+import { gitRepoContext } from "./decisionsTouching.js";
 import * as os from "os";
 import { spawn, spawnSync, execSync } from "./proc.js";
 import { buildWslAutostartTaskRun, daemonSupportedOnPlatform, isWSL, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
@@ -11462,11 +11463,18 @@ program
     "  cast decisions --tags db,arch             # filter by tags\n" +
     "  cast decisions add \"Use Convex\" --reason \"Better TypeScript\"  # add decision\n" +
     "  cast decisions add \"Cursor pagination\" --reason \"Better for realtime\" --tags api,perf\n" +
+    "  cast decisions add \"Breadth gets 20% of buy budget\" --reason \"...\" --files outreach/engine/,outreach/CLAUDE.md\n" +
+    "  cast decisions add \"Breadth gets 30%\" --reason \"...\" --supersedes qd776aw   # reverse an earlier one\n" +
+    "  cast decisions --touching main...HEAD    # decisions a change could break: the paths it changes and the sessions that wrote the lines it changes\n" +
+    "  cast decisions --touching                # the same for uncommitted work\n" +
     "  cast decisions delete qd7c4py             # delete one by the id the list prints as [decision qd7c4py]\n\n" +
     "These are recorded architecture decisions. They are not cast decide's sd-N cards, which are questions put to a person."
   )
-  .argument("[action]", "Action: add, delete, or omit to list")
+  .argument("[action]", "Action: add, delete, or list (the default)")
   .argument("[title-or-id]", "Title for add; for delete, the id the list prints as [decision <id>]")
+  .option("--touching [range]", "List the standing decisions a change bears on: a git range (main...HEAD), a ref, or nothing for uncommitted work")
+  .option("--files <paths>", "With add: comma-separated files or directories (dir/) the decision governs")
+  .option("--supersedes <id>", "With add: the decision this one reverses; it stops binding")
   .option("--project <path>", "Filter by project path (use . for current)")
   .option("--search <query>", "Search decisions by title")
   .option("--tags <tags>", "Comma-separated tags: filters the list, or tags a decision with add")
@@ -11482,7 +11490,8 @@ program
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const unknown = unknownActionError("decisions", action, ["add", "delete"]);
+    if (action === "list") action = undefined;
+    const unknown = unknownActionError("decisions", action, ["add", "delete", "list"]);
     if (unknown) {
       console.error(unknown);
       process.exit(1);
@@ -11499,6 +11508,13 @@ program
       }
 
       const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
+      // Where it was decided and what it governs, stamped at write time: the
+      // calling session, the repo, and the given paths made repo-relative.
+      const repo = gitRepoContext(getRealCwd());
+      const files = options.files
+        ? String(options.files).split(",").map((f: string) => f.trim()).filter(Boolean)
+            .map((f: string) => repo ? path.relative(repo.root, path.resolve(getRealCwd(), f)) + (f.endsWith("/") ? "/" : "") : f)
+        : undefined;
 
       try {
         const response = await cliFetch(`${siteUrl}/cli/decisions/add`, {
@@ -11509,6 +11525,10 @@ program
             title: titleOrId,
             rationale: options.reason,
             tags,
+            files,
+            supersedes: options.supersedes,
+            git_remote: repo?.gitRemote ?? undefined,
+            session_id: ownSessionId(repo?.root ?? getRealCwd()) ?? undefined,
             project_path: options.project === "." ? process.cwd() : options.project,
           }),
         });
@@ -11584,6 +11604,17 @@ program
     const offset = (page - 1) * limit;
     const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
     const projectPath = options.project === "." ? process.cwd() : options.project;
+    let touching: { git_remote?: string; files: string[]; conversation_ids: string[] } | undefined;
+    if (options.touching !== undefined) {
+      const { changeEvidence } = await import("./decisionsTouching.js");
+      try {
+        const ev = changeEvidence(getRealCwd(), options.touching === true ? undefined : String(options.touching));
+        touching = { git_remote: ev.gitRemote ?? undefined, files: ev.files, conversation_ids: ev.conversationIds };
+      } catch (error) {
+        console.error(`Error: --touching needs a git repository and a valid range: ${error instanceof Error ? error.message : error}`);
+        process.exit(1);
+      }
+    }
 
     try {
       const response = await cliFetchRead(`${siteUrl}/cli/decisions`, {
@@ -11591,6 +11622,7 @@ program
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
+          touching,
           project_path: projectPath,
           tags,
           search: options.search,
@@ -11607,8 +11639,8 @@ program
       }
 
       if (options.json) { console.log(JSON.stringify(result)); return; }
-      const { formatDecisionsResults } = await import("./formatKnowledge.js");
-      console.log(formatDecisionsResults(result));
+      const { formatDecisionsResults, formatTouchingResults } = await import("./formatKnowledge.js");
+      console.log(touching ? formatTouchingResults(result) : formatDecisionsResults(result));
     } catch (error) {
       console.error("Decisions failed:", error instanceof Error ? error.message : error);
       process.exit(1);
