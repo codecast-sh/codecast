@@ -7,6 +7,8 @@ crons.interval("recover pending sync delivery", { minutes: 1 }, (internal as any
 
 // Read Expo push receipts, where a revoked APNs key shows (pushReceipts.ts).
 crons.interval("check push receipts", { minutes: 30 }, (internal as any).pushReceipts.sweep, {});
+// Sign-in requests filled from a person's Chrome: laptops back online, signed-out sites due again (signinAutofill.ts).
+crons.interval("sign-in autofill", { minutes: 10 }, (internal as any).signinAutofill.sweep, {});
 // Meeting bots from connected calendars: read each a week ahead, schedule
 // the bots people switched on (meetingCalendar.ts).
 crons.interval("meeting bot calendars", { minutes: 10 }, (internal as any).meetingCalendar.syncAll, {});

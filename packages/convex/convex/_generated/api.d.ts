@@ -650,6 +650,7 @@ import type * as savedViews from "../savedViews.js";
 import type * as searchCore from "../searchCore.js";
 import type * as searchMirror from "../searchMirror.js";
 import type * as secrets from "../secrets.js";
+import type * as signinAutofill from "../signinAutofill.js";
 import type * as sendBackfill from "../sendBackfill.js";
 import type * as sessionAsk from "../sessionAsk.js";
 import type * as sessionAssignmentNotifications from "../sessionAssignmentNotifications.js";
@@ -1417,6 +1418,7 @@ declare const fullApi: ApiFromModules<{
   searchCore: typeof searchCore;
   searchMirror: typeof searchMirror;
   secrets: typeof secrets;
+  signinAutofill: typeof signinAutofill;
   sendBackfill: typeof sendBackfill;
   sessionAsk: typeof sessionAsk;
   sessionAssignmentNotifications: typeof sessionAssignmentNotifications;
