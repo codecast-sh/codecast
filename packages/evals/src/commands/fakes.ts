@@ -8,6 +8,7 @@ import type { Command } from 'commander';
 import { readTree } from '../fakes/cast/tree';
 import { captureRoster, capturesDir, type Roster, capturesFrom, localTranscripts, pairsFromJsonl, readCaptures, remotePairs, writeCaptures, type Capture } from '../fakes/capture';
 import { byVerb, CONTEXT, heldOut, scoreSession, type CallScore } from '../fakes/fidelity';
+import { grow } from '../fakes/grow';
 import { evalsHome, GUARD_CAST, writeJsonAtomic } from '../paths';
 
 // `./evals fakes`: the record a fake `cast` is written from, and how faithful
@@ -97,10 +98,11 @@ export function registerFakes(program: Command): void {
     .option('--split <split>', 'test (held-out sessions, the score), train (the sessions a fake is grown on: read misses here), or all', 'test')
     .option('--from <source>', "local (this machine's transcripts), remote (sessions read with cast read), or all", 'all')
     .option('--since <days>', 'only calls from the last N days (the fake follows the CLI as it is now)')
+    .option('--after <time>', "only calls made after this ISO time: a grow's `at`, so the score is on calls captured after the edit")
     .option('--verb <verb>', 'one verb, with each miss shown')
     .option('--misses <n>', 'show up to n misses', '0')
     .option('--json', 'machine-readable')
-    .action((opts: { split: string; from: string; since?: string; verb?: string; misses: string; json?: boolean }) => {
+    .action((opts: { split: string; from: string; since?: string; after?: string; verb?: string; misses: string; json?: boolean }) => {
       const tree = readTree(treePath());
       if (!tree) throw new Error(`no command tree at ${treePath()}: run ./evals fakes capture first`);
       const all = readCaptures();
@@ -114,6 +116,7 @@ export function registerFakes(program: Command): void {
       const calls: CallScore[] = test
         .flatMap((s) => scoreSession(s, tree, roster, { isRead }))
         .filter((c) => !since || (c.at ?? '') >= since)
+        .filter((c) => !opts.after || (c.at ?? '') > opts.after)
         .filter((c) => !opts.verb || c.verb === opts.verb);
       const verbs = byVerb(calls);
       if (opts.json) {
@@ -132,6 +135,29 @@ export function registerFakes(program: Command): void {
         console.log(`\n── ${m.session} #${m.seq}: cast ${m.argv.join(' ').slice(0, 160)}`);
         console.log(`real │ ${m.real.slice(0, 600).split('\n').join('\n     │ ')}`);
         console.log(`fake │ ${m.answered ? m.fake.slice(0, 600).split('\n').join('\n     │ ') : '(declined)'}`);
+      }
+    });
+
+  fakes
+    .command('grow')
+    .description('a model edits a copy of verbs.ts from the train misses; scored and tested in a sandbox, the edit is kept (as a patch in the grow record, for a person to apply) only if it carries no real data, train fidelity rises, held-out does not drop and the tests pass')
+    .option('--model <id>', 'the model that edits', 'claude-opus-5-5')
+    .option('--misses <n>', 'train misses shown to it', '40')
+    .option('--since <days>', 'learn from and score only calls of the last N days (the CLI as it is now)', '7')
+    .option('--dry', 'write the brief and the misses, run no model')
+    .action(async (opts: { model: string; misses: string; since: string; dry?: boolean }) => {
+      const tree = readTree(treePath());
+      if (!tree) throw new Error(`no command tree at ${treePath()}: run ./evals fakes capture first`);
+      const roster: Roster = existsSync(rosterPath()) ? JSON.parse(readFileSync(rosterPath(), 'utf8')) : { roles: {}, people: {} };
+      const r = await grow({ tree, treeFile: treePath(), roster, model: opts.model, misses: Number(opts.misses), isRead: guardIsRead(), sinceDays: Number(opts.since), dry: opts.dry });
+      console.log(`before: train ${r.before.train.core}/${r.before.train.n} core, held-out ${r.before.test.core}/${r.before.test.n}`);
+      if (r.after) console.log(`after:  train ${r.after.train.core}/${r.after.train.n} core, held-out ${r.after.test.core}/${r.after.test.n}`);
+      console.log(`${r.accepted ? 'kept' : 'not kept'}: ${r.why}${r.costUsd ? ` ($${r.costUsd.toFixed(2)})` : ''}`);
+      console.log(`record: ${r.dir}`);
+      if (r.leaks?.length) for (const l of r.leaks) console.log(`  leak ${l.token} │ ${l.line.slice(0, 160)}`);
+      if (r.accepted) {
+        console.log(`the edit is not applied: read ${r.patch}, then apply it from the repo root with git apply ${r.patch}`);
+        console.log(`the honest score comes later, on calls captured after the edit: ./evals fakes capture, then ./evals fakes fidelity --split all --after ${r.at}`);
       }
     });
 }

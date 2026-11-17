@@ -55,7 +55,7 @@ export function useComposerSuggestion({ conversationId, idle, hidden, enabled = 
   const where = useMemo(() => (r: SuggestionRow) => isRealId && String(r.conversation_id) === conversationId, [isRealId, conversationId]);
   const row = useCollectionRows<SuggestionRow>("composerSuggestions", { where, sig: rowSig })[0] ?? null;
   const generate = useAction(api.composerSuggestions.generateComposerSuggestions);
-  const recordOutcome = useMutation(api.composerSuggestions.recordSuggestionOutcome);
+  const recordOutcome = useMutation((api as any).suggestionOutcomes.record);
   const attemptedRef = useRef<string | null>(null);
   // The suggestion the user accepted, held until the send settles its outcome.
   const acceptedRef = useRef<Offer | null>(null);
@@ -135,6 +135,7 @@ export function suggestionOutcome(accepted: Offer | null, shown: Offer | null, t
       suggestion: accepted.text,
       outcome: sent === accepted.text.trim() ? ("sent" as const) : ("edited" as const),
       shown: [accepted.text],
+      typed_length: sent.length,
     };
   }
   if (shown && shown.anchor === tailKey) {
@@ -143,6 +144,7 @@ export function suggestionOutcome(accepted: Offer | null, shown: Offer | null, t
       suggestion: shown.text,
       outcome: "ignored" as const,
       shown: [shown.text],
+      typed_length: sent.length,
     };
   }
   return null;

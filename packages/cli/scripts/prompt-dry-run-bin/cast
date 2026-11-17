@@ -53,6 +53,14 @@
 # gates ask it this way, so a REFUSED line in an old calls.log is judged by
 # today's read list and a read once refused by mistake regrades on rescore.
 set -u
+# A run's own copy of this guard (prompt-dry-run.ts writes it beside the run,
+# where the agent can read it but not edit it) carries the harness's broker,
+# its served record and whether a fake answers, on the line below. The agent's
+# environment then decides nothing about where a call goes or whether the
+# record sees it: a blanked DRY_RUN_BROKER, a DRY_RUN_LIVE_READ set by hand,
+# or an unset DRY_RUN_SERVE_DIR changes nothing.
+BAKED_BROKER=""; BAKED_SERVE=""; BAKED_FAKE=""
+if [ -n "$BAKED_BROKER" ]; then DRY_RUN_BROKER="$BAKED_BROKER"; DRY_RUN_SERVE_DIR="$BAKED_SERVE"; DRY_RUN_FAKE_VIA_BROKER="$BAKED_FAKE"; DRY_RUN_LIVE_READ=""; DRY_RUN_FAKE=""; fi
 LOG="${RUN_DIR:-$PWD}/calls.log"
 ARGV="$*"
 logged_argv() {

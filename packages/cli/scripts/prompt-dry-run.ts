@@ -216,7 +216,7 @@ function credentialDirs(): string[] {
  * parameters, so no path is ever quoted into the profile; ports are numbers
  * this process chose.
  */
-function scratchProfile(o: { hidden: number; readable: number; files: number; closed: number; ports: number[] }): string {
+function scratchProfile(o: { hidden: number; readable: number; files: number; closed: number; deny: number; ports: number[] }): string {
   return [
     "(version 1)",
     "(allow default)",
@@ -226,10 +226,14 @@ function scratchProfile(o: { hidden: number; readable: number; files: number; cl
     // resolved (as under the home folder), so a tree allowed below one, a checkout git resolves by realpath, works.
     '(deny file-read-data file-write* (regex #"^/private/(var/)?tmp/" #"^/private/var/folders/[^/]+/[^/]+/T/"))',
     '(deny file-read-data (subpath (param "HOME_DIR")))',
-    ...Array.from({ length: o.closed }, (_, i) => `(deny file-read* file-read-data (subpath (param "CLOSED_${i}")))`),
+    // Contents and listings only: a path through them must still resolve, since the run dir and its baked guard sit
+    // inside the evals home (denying their metadata too left /usr/bin/env spinning on every #!/usr/bin/env script there).
+    ...Array.from({ length: o.closed }, (_, i) => `(deny file-read-data (subpath (param "CLOSED_${i}")))`),
     // Each allowance names file-read-data too: a rule on the specific operation outranks a wildcard one, whatever their order.
     ...Array.from({ length: o.files }, (_, i) => `(allow file-read* file-read-data (literal (param "FILE_${i}")))`),
     ...Array.from({ length: o.readable }, (_, i) => `(allow file-read* file-read-data (subpath (param "READ_${i}")))`),
+    // Paths inside an allowed tree that stay closed: the stash ref files. The stash's objects stay readable (gitStoresOf says why).
+    ...Array.from({ length: o.deny }, (_, i) => `(deny file-read* file-read-data (subpath (param "DENY_${i}")))`),
     "(deny network-bind)", "(deny network-inbound)",
     "(deny network-outbound)",
     ...[...o.ports, ...allowedPorts()].map((port) => `(allow network-outbound (remote ip "localhost:${port}"))`),
@@ -325,45 +329,66 @@ const evalsHome = (): string => process.env.CODECAST_EVALS_HOME || path.join(rea
 const closedHomes = (): string[] => [evalsHome(), path.join(realHome(), ".local", "share"), path.join(realHome(), ".local", "state")].map(realOf);
 
 /**
- * Where git keeps a checkout's objects when they are not inside it, read-only:
- * a worktree's common dir (its .git file points into the main checkout's
- * .git), and every alternates target (a `git clone --shared` borrows the
- * source repository's objects). Without them git log and show fail in the
- * closed world.
+ * What git needs, read-only, of the repository a --cwd checkout belongs to,
+ * and no more. A worktree's .git is a file pointing into the main checkout's
+ * .git, which also holds other sessions' stashes and tools' data: of that
+ * common dir only the object store, the refs, packed-refs, HEAD, config,
+ * info/exclude and shallow, plus this worktree's own git dir. A clone made
+ * with --shared borrows another store (its alternates): that store's objects.
+ * The stash ref files (refs/stash and its log) are denied wherever they sit,
+ * the cwd's own .git included, so `git stash list` finds nothing. That does
+ * NOT close the stash: its commits are objects in the store the agent must
+ * read for git to work, packed-refs can name them, and `git cat-file
+ * --batch-all-objects` lists every object regardless. No path rule can hide
+ * one object while the store is readable, so another session's stashed work
+ * in this repository is readable by a replay that looks for it.
  */
-function gitStoresOf(cwd: string): string[] {
+function gitStoresOf(cwd: string): { dirs: string[]; files: string[]; deny: string[] } {
   const git = (args: string[]) => spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
   const common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   const gitDir = git(["rev-parse", "--path-format=absolute", "--git-dir"]);
-  if (common.status !== 0) return [];
-  const dirs = new Set<string>([common.stdout.trim(), gitDir.stdout.trim()].filter(Boolean));
-  for (const d of [...dirs]) {
-    const alternates = path.join(d, "objects", "info", "alternates");
-    if (fs.existsSync(alternates)) for (const line of fs.readFileSync(alternates, "utf8").split("\n")) if (line.trim() && !line.startsWith("#")) dirs.add(path.resolve(path.join(d, "objects"), line.trim()));
+  if (common.status !== 0 || gitDir.status !== 0) return { dirs: [], files: [], deny: [] };
+  const c = realOf(common.stdout.trim());
+  const own = realOf(gitDir.stdout.trim());
+  const dirs = new Set<string>();
+  const files = new Set<string>();
+  if (own !== c) {
+    dirs.add(path.join(c, "objects")).add(path.join(c, "refs")).add(own);
+    for (const f of ["packed-refs", "HEAD", "config", path.join("info", "exclude"), "shallow"]) files.add(path.join(c, f));
   }
-  return [...dirs].filter((d) => fs.existsSync(d)).map(realOf);
+  for (const store of [c, own]) {
+    const alternates = path.join(store, "objects", "info", "alternates");
+    if (fs.existsSync(alternates)) for (const line of fs.readFileSync(alternates, "utf8").split("\n")) if (line.trim() && !line.startsWith("#")) dirs.add(realOf(path.resolve(path.join(store, "objects"), line.trim())));
+  }
+  const deny = [path.join(c, "refs", "stash"), path.join(c, "logs", "refs", "stash")];
+  return { dirs: [...dirs].filter((d) => fs.existsSync(d)), files: [...files].filter((f) => fs.existsSync(f)), deny };
 }
 
 /** The argv prefix that runs a command in the closed world, and the env it needs. */
-function scratchSandbox(run: string, o: { guard: string; serve?: string; read?: string[]; ports?: number[] }) {
+function scratchSandbox(run: string, o: { guard: string; serve?: string; read?: string[]; readFiles?: string[]; deny?: string[]; ports?: number[] }) {
   const scratch = path.join(run, "tmp");
   fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
   // DRY_RUN_HIDE: more paths (colon separated) the agent must not read, such as a
   // checkout's real .env or a cloud login, when the replayed work runs project code.
   const hidden = [...credentialDirs(), ...(process.env.DRY_RUN_HIDE ?? "").split(":").filter(Boolean)].map(realOf);
   const tools = toolInstalls();
+  const files = [...new Set([...tools.files, ...(o.readFiles ?? []).map(realOf)])];
+  const deny = (o.deny ?? []).map((d) => path.resolve(d));
   const readable = [...new Set([...tools.dirs, ...(o.read ?? [])].map(realOf))];
   const closed = closedHomes();
   const prefix = [
     "sandbox-exec", "-D", `RUN_DIR=${realOf(run)}`, "-D", `GUARD_DIR=${realOf(o.guard)}`, "-D", `SERVE_DIR=${realOf(o.serve ?? run)}`, "-D", `HOME_DIR=${realHome()}`,
-    ...tools.files.flatMap((file, i) => ["-D", `FILE_${i}=${file}`]),
+    ...files.flatMap((file, i) => ["-D", `FILE_${i}=${file}`]),
+    ...deny.flatMap((d, i) => ["-D", `DENY_${i}=${d}`]),
     ...readable.flatMap((dir, i) => ["-D", `READ_${i}=${dir}`]),
     ...closed.flatMap((dir, i) => ["-D", `CLOSED_${i}=${dir}`]),
     ...hidden.flatMap((dir, i) => ["-D", `HIDDEN_${i}=${dir}`]),
-    "-p", scratchProfile({ hidden: hidden.length, readable: readable.length, files: tools.files.length, closed: closed.length, ports: o.ports ?? [] }),
+    "-p", scratchProfile({ hidden: hidden.length, readable: readable.length, files: files.length, closed: closed.length, deny: deny.length, ports: o.ports ?? [] }),
   ];
   // xcrun_db: Apple's /usr/bin/git and friends are xcrun shims that cache in the per-user temp dir, which is closed.
-  return { prefix, hidden, env: { TMPDIR: `${scratch}/`, TMP: scratch, TEMP: scratch, CLAUDE_CODE_TMPDIR: scratch, xcrun_db: path.join(scratch, "xcrun_db") } };
+  // GIT_CEILING_DIRECTORIES: git looking for a repository stops at the run dir, so a run dir inside some other
+  // repository (an evals home under a dotfiles checkout) never has git walk that repository's closed files.
+  return { prefix, hidden, env: { TMPDIR: `${scratch}/`, TMP: scratch, TEMP: scratch, CLAUDE_CODE_TMPDIR: scratch, xcrun_db: path.join(scratch, "xcrun_db"), GIT_CEILING_DIRECTORIES: realOf(run) } };
 }
 
 /** Exits 0 when it can read the arguments and environment of the pid it is given (sysctl KERN_PROCARGS2). */
@@ -415,6 +440,63 @@ if (process.argv.includes("--isolation-check")) {
   fs.rmSync(probeRun, { recursive: true, force: true });
   console.log(gap ? `not isolated: ${gap}` : "isolated");
   process.exit(gap ? 3 : 0);
+}
+
+// After the group, every process carrying the run's tag ($3) or standing in the run dir ($4): what left the group (setsid, nohup) dies too (runPids).
+const WATCHDOG = 'while kill -0 "$1" 2>/dev/null; do sleep 2; done; kill -TERM -"$2" 2>/dev/null; sleep 5; kill -KILL -"$2" 2>/dev/null; { /bin/ps -xEwwo pid=,command= | awk -v t="DRY_RUN_TAG=$3" \'index($0, t) { print $1 }\'; /usr/sbin/lsof -a -d cwd -u "$(id -u)" -Fpn | awk -v r="$4" \'/^p/ { p = substr($0, 2) } /^n/ { n = substr($0, 2); if (n == r || index(n, r "/") == 1) print p }\'; } | grep -vx "$$" | xargs kill -KILL 2>/dev/null';
+
+/**
+ * `--exec`: one command, not an agent, in the same closed world: writes only
+ * in --run, reads only what that world allows plus --cwd and each --read,
+ * no network at all, no listening, a home of its own and no credentials. For
+ * running code nobody vouches for, such as a model's edit being scored
+ * (evals grow.ts). Its stdout and stderr land in exec.out and exec.err in the
+ * run dir, its exit code in exit.txt (124 when --timeout ran out), and the
+ * harness exits with it. Whatever it left running is killed when it ends.
+ *
+ *   bun prompt-dry-run.ts --exec --run <dir> [--cwd <dir>] [--read <dir>]... [--timeout <s>] -- <command...>
+ */
+if (process.argv.includes("--exec")) {
+  const sep = process.argv.indexOf("--");
+  const command = sep >= 0 ? process.argv.slice(sep + 1) : [];
+  const flags = sep >= 0 ? process.argv.slice(0, sep) : process.argv;
+  const flag = (name: string) => { const i = flags.indexOf(`--${name}`); return i >= 0 ? flags[i + 1] : undefined; };
+  const run = flag("run");
+  if (!run || !command.length) refuse("usage: prompt-dry-run.ts --exec --run <dir> [--cwd <dir>] [--read <dir>]... [--timeout <s>] -- <command...>");
+  const execRun = path.resolve(run!);
+  fs.mkdirSync(execRun, { recursive: true });
+  const execCwd = path.resolve(flag("cwd") ?? execRun);
+  const reads = flags.flatMap((a, i) => (a === "--read" && flags[i + 1] ? [path.resolve(flags[i + 1]!)] : []));
+  const guard = path.join(import.meta.dir, "prompt-dry-run-bin");
+  const gap = scratchIsolationGap(execRun, guard, fs.realpathSync(execCwd));
+  if (gap) refuse(`--exec needs its sandbox, and this machine cannot give it one (${gap})`);
+  const sb = scratchSandbox(execRun, { guard, read: [execCwd, ...reads], ports: [] });
+  const home = path.join(execRun, "home");
+  fs.mkdirSync(home, { recursive: true });
+  // Output goes to files, never pipes: a child that detaches holding a pipe would keep the read, and so the harness, waiting past the timeout.
+  // Tagged and in a session of its own, with the watchdog behind it, so what it leaves running dies with it however it detached.
+  const tag = `dry-run-exec-${crypto.randomUUID()}`;
+  const [outFd, errFd] = ["exec.out", "exec.err"].map((f) => fs.openSync(path.join(execRun, f), "w"));
+  const child = spawn(sb.prefix[0]!, [...sb.prefix.slice(1), ...command], {
+    cwd: execCwd,
+    env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: process.env.LANG ?? "en_US.UTF-8", HOME: home, PWD: fs.realpathSync(execCwd), DRY_RUN_TAG: tag, ...sb.env },
+    stdio: ["ignore", outFd, errFd], detached: true,
+  });
+  const dog = spawn("/bin/sh", ["-c", WATCHDOG, "watchdog", String(process.pid), String(child.pid), tag, fs.realpathSync(execRun)], { detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } });
+  dog.unref();
+  const group = (sig: NodeJS.Signals) => { try { process.kill(-child.pid!, sig); } catch { /* gone */ } };
+  let timedOut = false;
+  const code = await new Promise<number>((resolve) => {
+    const t = setTimeout(() => { timedOut = true; group("SIGKILL"); }, Number(flag("timeout") ?? 600) * 1000);
+    child.on("exit", (c, sig) => { clearTimeout(t); resolve(timedOut ? 124 : c ?? (sig ? 128 + (os.constants.signals[sig] ?? 0) : 1)); });
+  });
+  group("SIGKILL");
+  const swept = pidsOf(tag, execRun);
+  for (const pid of swept) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
+  dog.kill("SIGKILL");
+  fs.writeFileSync(path.join(execRun, "exit.txt"), `${code}\n`);
+  fs.writeFileSync(path.join(execRun, "swept.txt"), `${swept.length}\n`);
+  process.exit(code);
 }
 
 const runDir = path.resolve(arg("run") ?? "");
@@ -521,19 +603,21 @@ env.RUN_DIR = runDir;
 if (serveDir) env.DRY_RUN_SERVE_DIR = serveDir;
 // The fake answers from this process (the broker's /fake), never from a file the agent's guard would run.
 if (fakeBin) env.DRY_RUN_FAKE_VIA_BROKER = "1";
-env.PATH = `${guardDir}:${env.PATH ?? ""}`;
+// The agent runs a copy of the guard with this run's broker baked in (bakeGuard); the original stays the broker's.
+const agentGuardDir = call ? guardDir : path.join(`${runDir}.harness`, "guard");
+env.PATH = `${agentGuardDir}:${env.PATH ?? ""}`;
 // The Bash tool runs each command over a snapshot of the user's shell, and a
 // snapshot cut short under load carries no PATH line, so the command sources
 // the profile and its `~/.local/bin` puts the real cast first (7 of 8 parallel
 // runs at load 650, 2026-10-02). Claude Code sources CLAUDE_ENV_FILE before
 // every command, after the profile, so the guard is first on every call.
 const envFile = path.join(configDir, "dry-run-env.sh");
-fs.writeFileSync(envFile, `export PATH='${guardDir.replace(/'/g, `'\\''`)}':"$PATH"\n`);
+fs.writeFileSync(envFile, `export PATH='${agentGuardDir.replace(/'/g, `'\\''`)}':"$PATH"\n`);
 env.CLAUDE_ENV_FILE = envFile;
 // A `cast` reached around the guard anyway, by an absolute path or a login
 // shell, finds the empty state directory and hands the call to the guard
 // (src/main.ts), so no call leaves the served world whatever PATH it took.
-env.DRY_RUN_GUARD = path.join(guardDir, "cast");
+env.DRY_RUN_GUARD = path.join(agentGuardDir, "cast");
 env.DRY_RUN_EMPTY_CODECAST_DIR = noCast;
 
 /**
@@ -573,9 +657,12 @@ if (!call) {
  * the harness's loopback ports close when the harness exits.
  */
 function runPids(): number[] {
+  return pidsOf(RUN_TAG, runDir);
+}
+function pidsOf(tag: string, dir: string): number[] {
   // -x: a process that left its session (setsid) has no controlling terminal, and ps lists none of those without it.
-  const tagged = (spawnSync("/bin/ps", ["-xEwwo", "pid=,command="], { encoding: "utf8", maxBuffer: 256 << 20 }).stdout ?? "").split("\n").filter((l) => l.includes(`DRY_RUN_TAG=${RUN_TAG}`)).map((l) => Number(l.trim().split(/\s+/, 1)[0]));
-  const run = fs.realpathSync(runDir);
+  const tagged = (spawnSync("/bin/ps", ["-xEwwo", "pid=,command="], { encoding: "utf8", maxBuffer: 256 << 20 }).stdout ?? "").split("\n").filter((l) => l.includes(`DRY_RUN_TAG=${tag}`)).map((l) => Number(l.trim().split(/\s+/, 1)[0]));
+  const run = fs.realpathSync(dir);
   const inRun: number[] = [];
   let pid = 0;
   for (const l of (spawnSync("/usr/sbin/lsof", ["-a", "-d", "cwd", "-u", String(process.getuid?.() ?? ""), "-Fpn"], { encoding: "utf8", maxBuffer: 64 << 20 }).stdout ?? "").split("\n")) {
@@ -745,7 +832,8 @@ let fakeAnswer: ((argv: string[], stdin: string) => { out: string; exit: number;
  * nothing live at all.
  */
 function startBroker(): string {
-  const brokerEnv: Record<string, string> = { ...env, HOME: realEnvHome, RUN_DIR: harnessDir, DRY_RUN_LIVE_READ: "1", DRY_RUN_BROKER: "", DRY_RUN_REAL_CODECAST_DIR: process.env.CODECAST_DIR ?? "" };
+  // The shell's PATH, not the agent's: the agent's leads with the baked guard, which would send the broker's read back to the broker.
+  const brokerEnv: Record<string, string> = { ...env, PATH: process.env.PATH ?? "", HOME: realEnvHome, RUN_DIR: harnessDir, DRY_RUN_LIVE_READ: "1", DRY_RUN_BROKER: "", DRY_RUN_REAL_CODECAST_DIR: process.env.CODECAST_DIR ?? "" };
   // The real CLI reads its config where the shell keeps it, not in the agent's home.
   for (const k of ["DRY_RUN_FAKE", "DRY_RUN_FAKE_SEED", "DRY_RUN_FAKE_VIA_BROKER", "DRY_RUN_SERVE_DIR", "DRY_RUN_TAG", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]) delete brokerEnv[k];
   for (const k of ["XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]) if (process.env[k]) brokerEnv[k] = process.env[k]!;
@@ -831,7 +919,7 @@ async function cliHelp(words: string[]): Promise<Response> {
 function realCast(): string | null {
   for (const dir of (process.env.PATH ?? "").split(":")) {
     const p = path.join(dir, "cast");
-    if (dir && path.resolve(dir) !== guardDir && fs.existsSync(p)) return p;
+    if (dir && path.resolve(dir) !== guardDir && path.resolve(dir) !== agentGuardDir && fs.existsSync(p)) return p;
   }
   return null;
 }
@@ -852,13 +940,14 @@ async function loadFake(): Promise<void> {
 }
 
 /**
- * Every `cast` call the agent's Bash commands made, from the turn's stream
- * (kept where the agent cannot edit it), set against the record: a call the
- * record lacks went around the broker (a stripped DRY_RUN_BROKER, a copy of
- * the guard), so it joins the record with the mark it earns. A write is
- * REFUSED and a frozen read the record does not hold UNSERVED, which is what
- * the gates count; a command whose words the shell would expand is read by
- * its leading command words alone.
+ * Every `cast` call the agent's Bash commands name, from the turn's stream
+ * (kept where the agent cannot edit it), set against the record. The guard
+ * the agent runs records every call it gets whatever the agent's environment
+ * says (bakeGuard), so a name the record lacks never reached the guard: the
+ * shell never ran it (`a && cast send x` after `a` failed), or the agent went
+ * around the guard, where nothing it does reaches anything. Each joins the
+ * record as UNRECORDED, which no gate counts as a call made; a command whose
+ * words the shell would expand is read by its leading command words alone.
  */
 async function reconcileRecord(): Promise<void> {
   const { splitShellCommand } = await import("../../shared/contracts/permissionRules.ts");
@@ -887,9 +976,8 @@ async function reconcileRecord(): Promise<void> {
     }
     for (const argv of missing) {
       const kind = await classify(argv);
-      const mark = kind === "write" ? "REFUSED" : frozen(argv) && !served(argv) ? "UNSERVED" : null;
-      if (!mark) continue;
-      answered.push({ turn, line: loggedArgv(argv) }, { turn, line: `${mark} ${loggedArgv(argv)}` });
+      if (kind !== "write" && !(frozen(argv) && !served(argv))) continue;
+      answered.push({ turn, line: `UNRECORDED ${loggedArgv(argv)}` });
       have.add(loggedArgv(argv));
     }
   }
@@ -914,6 +1002,34 @@ function mergeAnswered(): void {
 
 if (!call) env.DRY_RUN_BROKER = startBroker();
 if (!call) await loadFake();
+
+/**
+ * The guard the agent runs: a copy of this run's guard directory with the
+ * broker's address, the served record and the fake's flag written into it,
+ * beside the run where the agent cannot edit it (the sandbox lets it read and
+ * run the copy, never write it). Its environment no longer decides where a
+ * call is recorded, so a write run through a script, eval or a subprocess
+ * with DRY_RUN_BROKER blanked is recorded all the same.
+ */
+function bakeGuard(): void {
+  const quote = (v: string) => {
+    if (/['\n]/.test(v)) refuse(`a path the guard is baked with holds a quote or a line break: ${v}`);
+    return `'${v}'`;
+  };
+  fs.mkdirSync(agentGuardDir, { recursive: true });
+  for (const f of fs.readdirSync(guardDir)) {
+    const from = path.join(guardDir, f);
+    if (!fs.statSync(from).isFile()) continue;
+    let text = fs.readFileSync(from, "utf8");
+    if (f === "cast") {
+      const line = 'BAKED_BROKER=""; BAKED_SERVE=""; BAKED_FAKE=""';
+      // A launcher's own guard (--guard) without the line runs as it is: it never reaches the broker.
+      text = text.replace(line, `BAKED_BROKER=${quote(env.DRY_RUN_BROKER!)}; BAKED_SERVE=${quote(serveDir ?? "")}; BAKED_FAKE=${quote(fakeBin ? "1" : "")}`);
+    }
+    fs.writeFileSync(path.join(agentGuardDir, f), text, { mode: 0o755 });
+  }
+}
+if (!call) bakeGuard();
 const portOf = (url: string | undefined) => (url ? Number(new URL(url).port) : 0);
 
 /** The hosts an agent may open a tunnel to: the model's API and Claude Code's own sign-in. */
@@ -1070,7 +1186,10 @@ if (!call) {
 }
 
 // The closed world, built once the harness knows the loopback ports it serves the run on.
-const sandbox = call ? null : scratchSandbox(runDir, { guard: guardDir, serve: serveDir, read: [...(agentCwd ? [agentCwd, ...gitStoresOf(agentCwd)] : []), ...extraReads], ports: [portOf(env.DRY_RUN_BROKER), portOf(proxyUrl), portOf(modelUrl)] });
+const sandbox = call ? null : scratchSandbox(runDir, { guard: agentGuardDir, serve: serveDir, ...((): { read: string[]; readFiles: string[]; deny: string[] } => {
+  const g = agentCwd ? gitStoresOf(agentCwd) : { dirs: [], files: [], deny: [] };
+  return { read: [...(agentCwd ? [agentCwd] : []), ...g.dirs, ...extraReads], readFiles: g.files, deny: g.deny };
+})(), ports: [portOf(env.DRY_RUN_BROKER), portOf(proxyUrl), portOf(modelUrl)] });
 if (sandbox) Object.assign(env, sandbox.env);
 
 /**
@@ -1120,8 +1239,6 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.exit(sig === "SIGINT" ? 130 : 143);
   });
 }
-// After the group, every process carrying the run's tag ($3) or standing in the run dir ($4): what left the group (setsid, nohup) dies too (runPids).
-const WATCHDOG = 'while kill -0 "$1" 2>/dev/null; do sleep 2; done; kill -TERM -"$2" 2>/dev/null; sleep 5; kill -KILL -"$2" 2>/dev/null; { /bin/ps -xEwwo pid=,command= | awk -v t="DRY_RUN_TAG=$3" \'index($0, t) { print $1 }\'; /usr/sbin/lsof -a -d cwd -u "$(id -u)" -Fpn | awk -v r="$4" \'/^p/ { p = substr($0, 2) } /^n/ { n = substr($0, 2); if (n == r || index(n, r "/") == 1) print p }\'; } | grep -vx "$$" | xargs kill -KILL 2>/dev/null';
 function watchChild(pid: number | undefined) {
   if (!pid) return null;
   const w = spawn("/bin/sh", ["-c", WATCHDOG, "watchdog", String(process.pid), String(pid), RUN_TAG, fs.realpathSync(runDir)], { detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } });

@@ -523,7 +523,8 @@ describe("prompt-dry-run.ts", () => {
     expect(argv.join(" ")).not.toContain(h.prompt);
     expect(JSON.parse(fs.readFileSync(path.join(h.runDir, "said.json"), "utf8"))).toEqual(["First.\n\n────────\n\nstill first", "Second."]);
     // The guard stays first on every Bash command even when the profile puts the real cast ahead of it.
-    expect(h.recorded("path-first")).toBe(path.join(path.dirname(HARNESS), "prompt-dry-run-bin"));
+    // The run's own copy of the guard, with its broker baked in (prompt-dry-run.ts bakeGuard).
+    expect(h.recorded("path-first")).toBe(path.join(`${h.runDir}.harness`, "guard"));
   }, 30_000);
 
   test("a cast the agent reaches around the guard, by an absolute path with no guard on PATH, still answers from the guard", () => {
@@ -887,11 +888,70 @@ describe("prompt-dry-run.ts", () => {
     expect(r.err).toBe("");
     expect(r.code).toBe(0);
     for (const name of ["clone-log", "clone-deps", "clone-env"]) expect(h.recorded("bash")).toContain(`${name} 0`);
-    // A Try station in a worktree of the real checkout: its .git is a file pointing into the main checkout's .git.
+    // A Try station in a worktree of the real checkout: its .git is a file pointing into the main checkout's .git,
+    // which also holds another session's stash and tools' data (round-4 review): git works, those stay closed.
+    write(path.join(main, "a.txt"), "someone else's uncommitted work\n");
+    git(main, "stash", "-q");
+    write(path.join(main, ".git", "codecast-tool", "state.json"), '{"tool":"data"}\n');
+    const common = fs.realpathSync(path.join(main, ".git"));
     const h2 = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
-    const r2 = h2.runWith({ FAKE_CLAUDE_BASH: `echo "worktree-msg $(git log -1 --format=%s 2>&1)"` }, "--run", h2.runDir, "--prompt", h2.prompt, "--model", "m", "--account", "fake", "--cwd", path.join(repos, "wt"));
+    const wtBash = [
+      `echo "worktree-msg $(git log -1 --format=%s 2>&1)"`,
+      t("read-stash-ref", `cat '${common}/refs/stash'`),
+      t("git-stash-list", "git stash list | grep -q ."),
+      t("list-common", `ls '${common}'`),
+      t("read-tool-data", `cat '${common}/codecast-tool/state.json'`),
+    ].join("; ");
+    const r2 = h2.runWith({ FAKE_CLAUDE_BASH: wtBash }, "--run", h2.runDir, "--prompt", h2.prompt, "--model", "m", "--account", "fake", "--cwd", path.join(repos, "wt"));
     expect(r2.err).toBe("");
-    expect(h2.recorded("bash")).toContain("worktree-msg first-commit");
+    const wtSaid = h2.recorded("bash")!;
+    expect(wtSaid).toContain("worktree-msg first-commit");
+    for (const name of ["read-stash-ref", "git-stash-list", "list-common", "read-tool-data"]) expect({ name, ok: wtSaid.includes(`${name} 0`) }).toEqual({ name, ok: false });
+  }, 60_000);
+
+  // An evals run's dir and its baked guard sit inside the evals home, a closed data home: a path through it must still
+  // resolve (round 5 found /usr/bin/env spinning on the guard's #!/usr/bin/env shebang there), and git must not climb
+  // out of the run into whatever repository holds the evals home.
+  test.if(process.platform === "darwin")("a run inside the evals home runs its guard, cast and git, and still lists nothing of the home", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    const home = h.dir;
+    Bun.spawnSync(["git", "init", "-q", home]);
+    const run = path.join(home, ".local", "share", "codecast", "evals", "runs", "r1", "agent");
+    fs.mkdirSync(path.join(run, ".rec"), { recursive: true });
+    write(path.join(run, ".rec", "stream.jsonl"), JSON.stringify({ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }) + "\n");
+    const bash = [
+      `/usr/bin/perl -e 'alarm 20; exec @ARGV' git status --short > /dev/null 2>&1; echo "git $?"`,
+      `/usr/bin/perl -e 'alarm 20; exec @ARGV' cast task ls > /dev/null 2>&1; echo "cast $?"`,
+      `ls '${path.join(home, ".local", "share")}' > /dev/null 2>&1; echo "list-share $?"`,
+    ].join("; ");
+    const r = h.runWith({ FAKE_CLAUDE_BASH: bash, FAKE_CLAUDE_REC: path.join(run, ".rec"), FAKE_CLAUDE_STREAM: path.join(run, ".rec", "stream.jsonl") }, "--run", run, "--prompt", h.prompt, "--model", "m", "--account", "fake");
+    expect(r.err).toBe("");
+    const said = fs.readFileSync(path.join(run, ".rec", "bash"), "utf8");
+    // Not a repository: git stopped at the run dir rather than walking the home's repository (128), and did not hang (142).
+    expect(said).toContain("git 128");
+    expect(said).toContain("cast 0");
+    expect(said).not.toContain("list-share 0");
+  }, 60_000);
+
+  // Round-4 review (2026-11-16): a write run through a layer the end-of-run parse cannot see (a script, eval, a
+  // subprocess) with DRY_RUN_BROKER blanked left no line; and a cast the shell never ran was counted as REFUSED.
+  test.if(process.platform === "darwin" && !!PYTHON)("every call reaches the record whatever the agent's environment says, and a call never run is not a refusal", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    write(path.join(h.rec, "stream.jsonl"), [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "false && cast send jx7nope never-ran" } }] } }),
+      JSON.stringify({ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }),
+    ].join("\n") + "\n");
+    const bash = [
+      `printf 'DRY_RUN_BROKER= DRY_RUN_LIVE_READ=1 DRY_RUN_FAKE_VIA_BROKER= cast task create via-script\\n' > s.sh; bash s.sh > /dev/null 2>&1`,
+      `eval 'DRY_RUN_BROKER= DRY_RUN_LIVE_READ=1 cast trigger add via-eval' > /dev/null 2>&1`,
+      `'${PYTHON}' -c "import os, subprocess; e = dict(os.environ, DRY_RUN_BROKER='', DRY_RUN_LIVE_READ='1'); subprocess.run(['cast', 'task', 'create', 'via-python'], env=e, capture_output=True)"`,
+      "false && cast send jx7nope never-ran",
+    ].join("; ");
+    expect(h.runWith({ FAKE_CLAUDE_BASH: bash }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake").code).toBe(0);
+    const log = fs.readFileSync(path.join(h.runDir, "calls.log"), "utf8");
+    for (const write of ["task create via-script", "trigger add via-eval", "task create via-python"]) expect(log).toContain(`REFUSED ${write}`);
+    expect(log).toContain("UNRECORDED send jx7nope never-ran");
+    expect(log).not.toContain("REFUSED send jx7nope");
   }, 60_000);
 
   // End to end (round-3 review): a line replay's clone and a Try station's worktree through the closed world, with
@@ -1037,6 +1097,40 @@ describe("prompt-dry-run.ts", () => {
     if (process.platform === "darwin") expect({ code: r.exitCode, out: r.stdout.toString() }).toEqual({ code: 0, out: "isolated\n" });
     else expect(r.exitCode).toBe(3);
   }, 30_000);
+
+  // evals grow scores and tests a model's edit this way: code nobody vouches for, written from prod text.
+  test.skipIf(process.platform !== "darwin")("--exec runs one command in the closed world: no network, no home, no env, writes only in its run dir, its exit code passed back", () => {
+    const run = path.join(tmpRoot, "exec-run");
+    const outside = fs.mkdtempSync(path.join(tmpRoot, "exec-outside-"));
+    const home = fs.realpathSync(os.homedir());
+    const probe = [
+      `: > "${run}/inside" && echo run-write`,
+      `( : > "${outside}/x" ) 2>/dev/null && echo outside-write`,
+      `ls "${home}" >/dev/null 2>&1 && echo home-read`,
+      `/usr/bin/nc -z -G 3 1.1.1.1 443 >/dev/null 2>&1 && echo network`,
+      `[ -n "$EXEC_SECRET" ] && echo env`,
+      "exit 7",
+    ].join("; ");
+    const r = Bun.spawnSync(["bun", HARNESS, "--exec", "--run", run, "--", "/bin/sh", "-c", probe], { env: { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: os.homedir(), EXEC_SECRET: "s3cret" } });
+    expect({ code: r.exitCode, out: fs.readFileSync(path.join(run, "exec.out"), "utf8"), exit: fs.readFileSync(path.join(run, "exit.txt"), "utf8") }).toEqual({ code: 7, out: "run-write\n", exit: "7\n" });
+    expect(fs.readdirSync(outside)).toEqual([]);
+  }, 60_000);
+
+  // A child that detaches (nohup, its own session, a pipe held open) is killed when --exec ends, and --timeout ends it however it hangs.
+  test.skipIf(process.platform !== "darwin")("--exec leaves nothing running: a detached child dies with it, and --timeout ends a hung command", () => {
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const env = { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: os.homedir() };
+    const left = path.join(tmpRoot, "exec-left");
+    const r = Bun.spawnSync(["bun", HARNESS, "--exec", "--run", left, "--", "/bin/sh", "-c", 'nohup /bin/sleep 300 & echo $! > child.pid; /usr/bin/perl -e "use POSIX; POSIX::setsid(); exec q{/bin/sleep}, 301" & echo $! > setsid.pid; exit 0'], { env, timeout: 30_000 });
+    expect(r.exitCode).toBe(0);
+    for (const f of ["child.pid", "setsid.pid"]) expect(alive(Number(fs.readFileSync(path.join(left, f), "utf8")))).toBe(false);
+    const hung = path.join(tmpRoot, "exec-hung");
+    const started = Date.now();
+    const h = Bun.spawnSync(["bun", HARNESS, "--exec", "--run", hung, "--timeout", "2", "--", "/bin/sh", "-c", "echo $$ > sh.pid; /bin/sleep 300 | /bin/cat"], { env, timeout: 30_000 });
+    expect({ code: h.exitCode, exit: fs.readFileSync(path.join(hung, "exit.txt"), "utf8") }).toEqual({ code: 124, exit: "124\n" });
+    expect(Date.now() - started).toBeLessThan(20_000);
+    expect(alive(Number(fs.readFileSync(path.join(hung, "sh.pid"), "utf8")))).toBe(false);
+  }, 60_000);
 
   test("each --then is one more turn resumed into the same session, in order, with a turn line in calls.log", () => {
     const h = harnessWorld([
