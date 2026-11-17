@@ -30,7 +30,7 @@ export function answer(argv: string[], stdin: string, w: FakeWorld, tree: Tree):
 /**
  * The fake as its holder keeps it: a world file that only the holder can
  * write, loaded, answered and saved under a lock for each call. The harness
- * holds one in-process for a run (prompt-dry-run.ts --fake), so the agent
+ * runs one per call in the closed world (prompt-dry-run.ts --fake), so the agent
  * can neither edit the world nor forge an answer; bin.ts holds one for a
  * call made by hand.
  */

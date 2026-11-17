@@ -206,6 +206,17 @@ export function staticCheck(original: string, candidate: string): string | null 
   if (syntax.length) return `it does not parse: ${ts.flattenDiagnosticMessageText(syntax[0]!.messageText, ' ')}`;
   const [was, now] = [importsOf(a), importsOf(b)];
   if (was.join('\n') !== now.join('\n')) return `its imports differ from the original's: ${now.filter((i) => !was.includes(i)).join('; ') || 'one was dropped'}`;
+  // own() is the one lookup by a computed key a new handler may make, so it stays exactly as written: an own of the candidate's own could be map[key].
+  const ownOf = (src: ts.SourceFile) => src.statements.filter((st) => ts.isVariableStatement(st) && st.declarationList.declarations.some((d) => ts.isIdentifier(d.name) && d.name.text === 'own')).map((st) => st.getText(src));
+  const pinned = ownOf(a);
+  if (pinned.length === 1 && ownOf(b).join('\n') !== pinned[0]) return 'it changes own(), the one lookup by a computed key a handler may make';
+  let owns = 0;
+  const countOwn = (n: ts.Node): void => {
+    if (ts.isIdentifier(n) && n.text === 'own' && n.parent && 'name' in n.parent && (n.parent as { name?: ts.Node }).name === n && !ts.isPropertyAccessExpression(n.parent)) owns++;
+    ts.forEachChild(n, countOwn);
+  };
+  countOwn(b);
+  if (pinned.length === 1 && owns !== 1) return 'it binds the name own a second time';
   const [r0, r1] = [reach(a), reach(b)];
   if ('refused' in r1) return `it reaches past the fake: ${r1.refused}`;
   if ('refused' in r0) return `the original itself fails the check: ${r0.refused}`;

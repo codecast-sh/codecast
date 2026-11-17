@@ -41,7 +41,7 @@ const DECISION = /^sd-\d+$/;
 const HANDLE = /^[a-z][a-z0-9-]*$/;
 
 /** A map's own entry, never one inherited: an id the agent types (`__proto__`) must not reach Object.prototype. */
-const own = <T>(map: Record<string, T>, key: string): T | undefined => (Object.hasOwn(map, key) ? map[key] : undefined);
+const own = <T>(map: Record<string, T>, key: string): T | undefined => (typeof map === 'object' && map !== null && Object.hasOwn(map, key) ? map[key] : undefined);
 
 const ASSIGNEE_NOTE = 'An assignee is who answers for the task being done, never who may work on it: any session may work any task.';
 const STATE_TAG: Record<string, string> = { working: 'in progress', blocked: 'needs you', done: 'complete', dormant: 'dormant' };
