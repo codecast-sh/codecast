@@ -1030,7 +1030,10 @@ export const searchMessages = query({
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
-    if (!userId || !args.q.trim()) return { results: [] };
+    // Words, a filter, or both. Filters alone ("from:@ana", "in:#design")
+    // list that sender's or room's newest lines.
+    const words = args.q.trim();
+    if (!userId || (!words && !args.from_user_id && !args.channel_id)) return { results: [] };
     let teamId: Id<"teams">;
     try {
       teamId = await resolveTeamForRead(ctx, userId, args.team_id);
@@ -1056,13 +1059,27 @@ export const searchMessages = query({
     // A session's search drops its person's DM hits post-index too.
     const narrowed = !!args.from_user_id || parseQueryTerms(args.q).phrases.length > 0 || !!scope;
     const take = limit * (narrowed ? 6 : 2);
-    const hits = await ctx.db
-      .query("chat_messages")
-      .withSearchIndex("search_content", (q: any) => {
-        const scoped = q.search("content", args.q).eq("team_id", teamId);
-        return args.channel_id ? scoped.eq("channel_id", args.channel_id) : scoped;
-      })
-      .take(take);
+    const fromId = args.from_user_id;
+    const hits = words
+      ? await ctx.db
+          .query("chat_messages")
+          .withSearchIndex("search_content", (q: any) => {
+            const scoped = q.search("content", words).eq("team_id", teamId);
+            return args.channel_id ? scoped.eq("channel_id", args.channel_id) : scoped;
+          })
+          .take(take)
+      : fromId
+        ? await ctx.db
+            .query("chat_messages")
+            .withIndex("by_team_user_created", (q) => q.eq("team_id", teamId).eq("user_id", fromId))
+            .order("desc")
+            .filter((q) => (args.channel_id ? q.eq(q.field("channel_id"), args.channel_id) : q.eq(1, 1)))
+            .take(take)
+        : await ctx.db
+            .query("chat_messages")
+            .withIndex("by_channel_created", (q) => q.eq("channel_id", args.channel_id!))
+            .order("desc")
+            .take(take);
 
     // The channel NAME travels with each hit: a result list is read far from the
     // rail (a terminal, a notification), where a channel id names nothing. A DM

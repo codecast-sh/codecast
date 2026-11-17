@@ -884,6 +884,22 @@ describe("searchMessages", () => {
     expect(bobs.results[0].user_id).toBe(BOB);
   });
 
+  test("a filter with no words lists that sender's newest lines", async () => {
+    const ctx = context(ALICE);
+    setSystemTime(new Date(1_000_000));
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "alice line" });
+    setSystemTime(new Date(2_000_000));
+    await call(sendMessage, as(ctx, BOB), { channel_id: CHANNEL, content: "older bob line" });
+    setSystemTime(new Date(3_000_000));
+    await call(sendMessage, as(ctx, BOB), { channel_id: CHANNEL, content: "newer bob line" });
+    setSystemTime();
+    const bobs = await call(searchMessages, ctx, { team_id: TEAM, q: "", from_user_id: BOB });
+    expect(bobs.results.map((r: any) => r.snippet)).toEqual(["newer bob line", "older bob line"]);
+    const room = await call(searchMessages, ctx, { team_id: TEAM, q: " ", channel_id: CHANNEL });
+    expect(room.results.length).toBe(3);
+    expect((await call(searchMessages, ctx, { team_id: TEAM, q: "" })).results).toEqual([]);
+  });
+
   test("a DM hit carries kind and dm_key so the client can name it", async () => {
     const ctx = context(ALICE);
     const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });

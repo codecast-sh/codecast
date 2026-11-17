@@ -154,7 +154,9 @@ export function ChatSearch({
     [debounced, channels, teamMembers],
   );
 
-  const ready = parsed.q.length >= 2 && !!teamId && isConvexId(teamId);
+  // Words, or a filter on its own: "from:@ana" lists that person's newest lines.
+  const filtered = !!parsed.fromId || !!(parsed.channelId && isConvexId(parsed.channelId));
+  const ready = (parsed.q.length >= 2 || (filtered && !parsed.q)) && !!teamId && isConvexId(teamId);
   const { data, error } = useQueryNoThrow(
     api.chat.searchMessages,
     ready
