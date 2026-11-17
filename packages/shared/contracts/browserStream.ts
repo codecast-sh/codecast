@@ -75,8 +75,13 @@ export const BROWSER_RELAY_MAX_PENDING_INPUT = 256;
 /** The agent actions kept on the row for the cursor overlay. */
 export const BROWSER_RELAY_RECENT_ACTIONS = 8;
 
+/** The relay key of a session's simulator stream is this prefix and the
+ *  session uuid; the daemon streams the simulator for such a key. */
+export const SIM_RELAY_KEY_PREFIX = "sim:";
+
 /** Args of the `stream_browser` daemon command. `key` names the relay row:
- *  the session uuid when known, else the tmux session. */
+ *  the session uuid when known, else the tmux session, or
+ *  SIM_RELAY_KEY_PREFIX + the session uuid for its simulator. */
 export interface StreamBrowserArgs {
   key: string;
   session_uuid?: string;

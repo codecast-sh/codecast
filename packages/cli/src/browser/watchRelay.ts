@@ -23,9 +23,17 @@ import {
   BROWSER_RELAY_QUALITY,
   BROWSER_RELAY_RECENT_ACTIONS,
   type BrowserRelayEnd,
+  SIM_RELAY_KEY_PREFIX,
   type StreamBrowserArgs,
 } from "@codecast/shared/contracts";
 import type { WatchSessionHandle, WatchSessionOptions, WatchSink } from "./watchServer.js";
+
+/** A relay row streams the simulator when its key names one (`sim:<session>`),
+ *  else the session's browser tab: the key already separates the two rows, so
+ *  the server needs no field of its own for it. */
+export function relaySource(key: string): "browser" | "sim" {
+  return key.startsWith(SIM_RELAY_KEY_PREFIX) ? "sim" : "browser";
+}
 
 export interface RelayPush {
   key: string;
@@ -73,6 +81,7 @@ export async function runWatchRelay(args: StreamBrowserArgs, deps: WatchRelayDep
 
   const session = deps.startSession(
     {
+      source: relaySource(args.key),
       session_uuid: args.session_uuid,
       tmux_session: args.tmux_session,
       minIntervalMs: BROWSER_RELAY_FRAME_INTERVAL_MS,

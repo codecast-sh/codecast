@@ -25,3 +25,8 @@ declare module "*.css" {
   const text: string;
   export default text;
 }
+
+declare module "*.m" {
+  const text: string;
+  export default text;
+}

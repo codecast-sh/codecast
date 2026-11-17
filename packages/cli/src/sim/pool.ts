@@ -133,7 +133,8 @@ function readNum(file: string): number | undefined {
   }
 }
 
-export function readLock(udid: string, dir = lockDir()): Omit<PoolEntry, "index" | "name" | "udid"> {
+/** `withOwner: false` skips the `ps` that names the owner's program: the daemon polls this. */
+export function readLock(udid: string, dir = lockDir(), opts: { withOwner?: boolean } = {}): Omit<PoolEntry, "index" | "name" | "udid"> {
   const p = lockPath(udid, dir);
   if (!fs.existsSync(p)) return { state: "free" };
   const pid = readNum(path.join(p, "pid"));
@@ -145,7 +146,7 @@ export function readLock(udid: string, dir = lockDir()): Omit<PoolEntry, "index"
     pid,
     session,
     since: readNum(path.join(p, "since")),
-    owner: alive && pid ? path.basename(psField(pid, "comm")) || undefined : undefined,
+    owner: alive && pid && opts.withOwner !== false ? path.basename(psField(pid, "comm")) || undefined : undefined,
   };
 }
 
@@ -199,6 +200,19 @@ export function acquire(opts: { pool?: PoolDevice[]; preferred?: number; owner?:
     return { device, index: i, ...(reclaimed ? { reclaimed } : {}) };
   }
   return null;
+}
+
+/**
+ * The pool simulator one of these sessions holds, read without spawning
+ * anything, so the daemon can ask on a timer (sim/watch.ts).
+ */
+export function heldBySession(sessions: string[], pool = readPool(), dir = lockDir()): PoolEntry | undefined {
+  if (!sessions.length) return undefined;
+  for (const [index, d] of pool.entries()) {
+    const lock = readLock(d.udid, dir, { withOwner: false });
+    if (lock.state === "held" && lock.session && sessions.includes(lock.session)) return { ...d, index, ...lock };
+  }
+  return undefined;
 }
 
 /**

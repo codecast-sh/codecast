@@ -37,7 +37,8 @@ import {
   type TerminalServerOptions,
 } from "../terminal/terminalServer.js";
 import { tmuxRunAsync } from "../tmux.js";
-import { cdpWatchEngine, type FrameSource, type WatchEngine } from "./watchSource.js";
+import { cdpWatchEngine, WatchOpenError, type FrameSource, type WatchEngine, type WatchResolveError } from "./watchSource.js";
+import { simWatchEngine } from "../sim/watch.js";
 import { RecentActions, WATCH_PROTOCOL_VERSION } from "./watchActions.js";
 import { paneOwnerId } from "../tmuxRoute.js";
 import * as path from "node:path";
@@ -47,8 +48,10 @@ export { resolveOwnedTab as resolveWatchTarget } from "./watchSource.js";
 const WS_PATH = "/watch/ws";
 
 // ~3fps: enough to see a page move, cheap enough to forget about. The client
-// may ask for less, never for more.
+// may ask for less, never for more. A simulator is watched to be touched, so
+// it runs at the helper's 15: its frames only come when the screen changed.
 const MIN_FRAME_INTERVAL_MS = 333;
+const MIN_SIM_FRAME_INTERVAL_MS = 66;
 // Streaming stops on its own after this long even with the pane still open —
 // a tab forgotten over lunch should not screencast all afternoon.
 const MAX_WATCH_MS = 30 * 60 * 1000;
@@ -77,6 +80,9 @@ interface WatchHello {
   /** Ask to send input back (mouse/keys). Granted when the frame source can
    * dispatch it; the viewer is told via the ready message. */
   control?: boolean;
+  /** What to watch: the session's browser tab (the default) or the
+   *  simulator it holds (sim/watch.ts). */
+  source?: WatchSourceKind;
   /** The newest protocol the viewer understands (WATCH_PROTOCOL_VERSION).
    * Informational: the server sends its own version in ready and never
    * withholds anything, since unknown message types are ignored. */
@@ -111,15 +117,35 @@ export async function tmuxPaneId(tmuxSession: string): Promise<string | null> {
   return /^%\d+$/.test(pane ?? "") ? paneOwnerId(pane, path.basename(socket ?? "") || "default") : null;
 }
 
+export type WatchSourceKind = "browser" | "sim";
+
+/** The viewer-facing sentence for each way a session has nothing to stream. */
+const RESOLVE_MESSAGES: Record<WatchResolveError, string> = {
+  "no-browser": "no managed browser is running on this machine",
+  "no-tab": "this session has not driven a browser tab",
+  "no-simulators": "this machine has no iOS simulators",
+  "no-sim": "this session holds no simulator",
+};
+
+/** The exit reason when a stream's target goes away mid watch. */
+const GONE_REASONS: Record<WatchResolveError, string> = {
+  "no-browser": "browser-closed",
+  "no-tab": "tab-closed",
+  "no-simulators": "sim-released",
+  "no-sim": "sim-released",
+};
+
 export interface WatchServerDeps {
   engine: WatchEngine;
+  /** The simulator engine, for a hello with source "sim". */
+  simEngine?: WatchEngine;
   paneIdFor(tmuxSession: string): Promise<string | null>;
 }
 
 let realDeps: WatchServerDeps | null = null;
 /** The real engine and pane lookup, shared by the socket and the relay. */
 export function defaultWatchDeps(): WatchServerDeps {
-  return (realDeps ??= { engine: cdpWatchEngine(), paneIdFor: tmuxPaneId });
+  return (realDeps ??= { engine: cdpWatchEngine(), simEngine: simWatchEngine(), paneIdFor: tmuxPaneId });
 }
 
 export function attachWatchServer(
@@ -159,6 +185,7 @@ export interface WatchSink {
 }
 
 export interface WatchSessionOptions {
+  source?: WatchSourceKind;
   session_uuid?: string;
   tmux_session?: string;
   minIntervalMs: number;
@@ -187,7 +214,7 @@ export function runWatchSession(
   sink: WatchSink,
   deps: WatchServerDeps,
 ): WatchSessionHandle {
-  const { engine } = deps;
+  const engine = opts.source === "sim" ? deps.simEngine : deps.engine;
   let source: FrameSource | null = null;
   let candidates: string[] = [];
   let ownerTimer: NodeJS.Timeout | null = null;
@@ -224,17 +251,18 @@ export function runWatchSession(
     sink.finish({ type: "error", code, message });
   };
 
+  if (!engine) {
+    // Fail after the caller has the handle, as every other ending does.
+    queueMicrotask(() => fail("no-simulators", RESOLVE_MESSAGES["no-simulators"]));
+    return { input() {}, stop: cleanup };
+  }
+
   void ownerCandidates(opts, deps.paneIdFor).then((keys) => {
     if (closed) return; // the viewer left during the pane lookup
     candidates = keys;
     const resolved = engine.resolveTab(candidates);
     if ("error" in resolved) {
-      fail(
-        resolved.error,
-        resolved.error === "no-browser"
-          ? "no managed browser is running on this machine"
-          : "this session has not driven a browser tab",
-      );
+      fail(resolved.error, RESOLVE_MESSAGES[resolved.error]);
       return;
     }
     void open(resolved.tabId, true);
@@ -245,7 +273,7 @@ export function runWatchSession(
     opening = true;
     let next: FrameSource;
     try {
-      next = await engine.open(
+      next = await engine!.open(
         tabId,
         {
           minIntervalMs: opts.minIntervalMs,
@@ -273,6 +301,7 @@ export function runWatchSession(
       opening = false;
       if (closed) return;
       const msg = err instanceof Error ? err.message : "";
+      if (err instanceof WatchOpenError) return first ? fail(err.code, err.message) : exit(err.code);
       if (first) {
         return fail(
           msg === "no-browser" ? "no-browser" : "no-tab",
@@ -312,10 +341,8 @@ export function runWatchSession(
   /** Follow the session: ownership moves, tabs close. */
   function followOwner(): void {
     if (closed || opening) return;
-    const resolved = engine.resolveTab(candidates);
-    if ("error" in resolved) {
-      return exit(resolved.error === "no-browser" ? "browser-closed" : "tab-closed");
-    }
+    const resolved = engine!.resolveTab(candidates);
+    if ("error" in resolved) return exit(GONE_REASONS[resolved.error]);
     if (source && resolved.tabId === source.tab.id) return;
     // The session moved to another tab, or its tab died and it opened a new
     // one — or died with no replacement (then open() fails → tab-closed).
@@ -362,7 +389,8 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
     }
     if (hello.type !== "hello") return fail("bad-hello", "bad hello");
     if (!tokenMatches(hello.token, opts)) return fail("forbidden", "forbidden");
-    let minInterval = MIN_FRAME_INTERVAL_MS;
+    const source: WatchSourceKind = hello.source === "sim" ? "sim" : "browser";
+    let minInterval = source === "sim" ? MIN_SIM_FRAME_INTERVAL_MS : MIN_FRAME_INTERVAL_MS;
     if (typeof hello.fps === "number" && hello.fps > 0) {
       minInterval = Math.max(minInterval, Math.floor(1000 / hello.fps));
     }
@@ -384,6 +412,7 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
     }
     session = runWatchSession(
       {
+        source,
         session_uuid: hello.session_uuid,
         tmux_session: hello.tmux_session,
         minIntervalMs: minInterval,

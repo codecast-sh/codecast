@@ -22,6 +22,7 @@ import { axe, axeBin, boot, bundleIdOf, DEFAULT_POOL_SIZE, ensurePool, hasSimctl
 import { describeUi, findElements, formatElement, formatTree, screenPoints, type UiElement } from "./ui.js";
 import { CLEAN_STATUS_BAR, PRIVACY_SERVICES, privacyServices, statusBarArgs, type StatusBarOptions } from "./settings.js";
 import { startRecording, stopRecording } from "./record.js";
+import { noteSimAction } from "./activity.js";
 
 const OK = fmt.success(icons.check);
 
@@ -305,6 +306,7 @@ A session acquires one pool simulator and every other verb targets it:
         what = `${x},${y}`;
       }
       axeOrDie(["tap", "-x", String(x), "-y", String(y), "--udid", id]);
+      noteSimAction(id, { kind: "tap", x, y });
       console.log(`${OK} tapped ${what}`);
       if (o.shot) { await new Promise((r) => setTimeout(r, 600)); console.log(inlineImageMarker(attempt(() => takeShot(id)).file)); }
     });
@@ -315,7 +317,9 @@ A session acquires one pool simulator and every other verb targets it:
     .option("--udid <udid>", "Target simulator")
     .action((text: string | undefined, o: { udid?: string }) => {
       const body = readTextArg(text);
-      axeOrDie(["type", body, "--udid", target(o.udid)]);
+      const id = target(o.udid);
+      axeOrDie(["type", body, "--udid", id]);
+      noteSimAction(id, { kind: "type", text: body });
       console.log(`${OK} typed ${body.length} character(s)`);
     });
 
@@ -330,6 +334,7 @@ A session acquires one pool simulator and every other verb targets it:
   };
   const swipeAlong = (id: string, pts: number[], duration?: string): void => {
     axeOrDie(["swipe", "--start-x", String(pts[0]), "--start-y", String(pts[1]), "--end-x", String(pts[2]), "--end-y", String(pts[3]), ...(duration ? ["--duration", duration] : []), "--udid", id]);
+    noteSimAction(id, { kind: "swipe", x: pts[0], y: pts[1], x2: pts[2], y2: pts[3] });
   };
 
   sim
@@ -372,7 +377,9 @@ A session acquires one pool simulator and every other verb targets it:
     .action((name: string, o: { udid?: string }) => {
       const buttons = ["home", "lock", "side-button", "siri", "apple-pay"];
       if (!buttons.includes(name)) die(`no hardware button '${name}'`, `one of: ${buttons.join(", ")}`);
-      axeOrDie(["button", name, "--udid", target(o.udid)]);
+      const id = target(o.udid);
+      axeOrDie(["button", name, "--udid", id]);
+      noteSimAction(id, { kind: "button", name });
       console.log(`${OK} pressed ${name}`);
     });
 

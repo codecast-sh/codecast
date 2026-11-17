@@ -93,7 +93,12 @@ export type WatchInput =
       modifiers?: number;
     }
   | { kind: "key"; type: "keyDown" | "keyUp"; key: string; code?: string; text?: string; modifiers?: number }
-  | { kind: "insertText"; text: string };
+  | { kind: "insertText"; text: string }
+  /** A device's hardware button (the simulator engine, sim/watch.ts). A
+   *  browser has none, so the CDP source ignores it. */
+  | { kind: "button"; button: SimButton };
+
+export type SimButton = "home" | "lock" | "side" | "siri" | "applepay";
 
 /** A running stream of frames for one tab. */
 export interface FrameSource {
@@ -105,7 +110,17 @@ export interface FrameSource {
   stop(): void;
 }
 
-export type WatchResolveError = "no-browser" | "no-tab";
+/** no-browser / no-tab: the browser engine. no-simulators / no-sim: the
+ *  simulator engine (this machine runs none; the session holds none). */
+export type WatchResolveError = "no-browser" | "no-tab" | "no-simulators" | "no-sim";
+
+/** An engine's own reason a stream could not open; the watch session sends
+ *  its code and message to the viewer as they are. */
+export class WatchOpenError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+  }
+}
 
 export interface WatchEngine {
   /**
