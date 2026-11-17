@@ -30,10 +30,10 @@ export type PickedRecording = { uri: string; mime: string; durationMs: number; w
 
 export type BegunRecording = { transcriptId: string; call: string };
 
-/** Pick one video from the library: a screen recording, as the system saved
- *  it. Null when cancelled. The system picker runs out of process and needs
- *  no Photos permission in its automatic mode (asking for the asset's
- *  current representation made iOS ask for full library access). */
+/** Pick one video from the library: a screen recording. Null when
+ *  cancelled. The file comes from the system picker's own copy, so iOS asks
+ *  for no Photos access, re-encoded at full resolution as H.264, which every
+ *  browser plays. */
 export async function pickScreenRecording(): Promise<PickedRecording | null> {
   if (!ImagePicker) {
     appAlert('Not available', 'Sending a recording needs a build with expo-image-picker.');
@@ -43,6 +43,12 @@ export async function pickScreenRecording(): Promise<PickedRecording | null> {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['videos'],
       allowsMultipleSelection: false,
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      // Not passthrough: in passthrough the picker fetches the original from
+      // the library by its identifier (expo-image-picker MediaHandler), and
+      // that read is what makes iOS ask for full Photos access. Any other
+      // preset takes the picker's own copy; this one keeps full resolution.
+      videoExportPreset: ImagePicker.VideoExportPreset.HighestQuality,
     });
     if (result.canceled || !result.assets[0]) return null;
     const a = result.assets[0];
