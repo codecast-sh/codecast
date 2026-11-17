@@ -1268,8 +1268,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   }, [conversationId]);
   const [selectedQueueIndex, setSelectedQueueIndex] = useState<number | null>(null);
   // The ghost suggestion in the empty composer (components/ComposerSuggestion):
-  // the composer drives it through this handle from its keydown (Tab accepts,
-  // ↑/↓ cycle) and blanks its own placeholder while the ghost is showing.
+  // the composer drives it through this handle from its keydown (Tab accepts)
+  // and blanks its own placeholder while the ghost is showing.
   const suggestionRef = useRef<ComposerSuggestionHandle | null>(null);
   const [ghostText, setGhostText] = useState<string | null>(null);
   const ghostVisible = ghostText !== null;
@@ -1345,9 +1345,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // width against the room beside the controls rather than reading the
   // rendered height: tucking widens the field, which can make the same text
   // fit on one line again, and a height check would then pull the controls
-  // back up, wrap the text, and repeat forever. A measurement that undershoots
-  // (an unparsed font, say) only leaves the text wrapping beside the controls
-  // as before; it can never oscillate.
+  // back up, wrap the text, and repeat forever. The room must not depend on
+  // the outcome either: the expand button exists only while the box is
+  // multiline, so the room always reserves its slot. Counting it only when
+  // present grew the box (wrap, button arrives, room shrinks, tuck, one line,
+  // button leaves, room grows, untuck, wrap) in a loop every frame.
   const controlsRowRef = useRef<HTMLDivElement>(null);
   // Measured from a layout effect after every keystroke: set only on a change.
   const [fitsBesideControls, setFitsBesideControls] = useChangedState(true);
@@ -1366,10 +1368,17 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const ghostTextRef = useRef<string | null>(null);
   ghostTextRef.current = ghostText;
   const measureFitsBesideControls = useCallback(() => {
-    const text = messageRef.current || ghostTextRef.current || textareaRef.current?.placeholder || "";
+    const typed = messageRef.current;
+    const text = typed || ghostTextRef.current || textareaRef.current?.placeholder || "";
     let fits = !text.includes("\n");
     const ctx = measureCtxRef.current;
-    const room = controlsRoomRef.current;
+    let room = controlsRoomRef.current;
+    // The ghost shares its line with its Tab chip (gap-2 between them). Only
+    // an empty box shows it, so this layout read never runs on a keystroke.
+    if (!typed && ghostTextRef.current && room != null) {
+      const chip = controlsRowRef.current?.querySelector<HTMLElement>("[data-composer-ghost] > :last-child");
+      if (chip) room -= chip.offsetWidth + 8;
+    }
     // One character of slack so subpixel rounding never lets the browser
     // wrap text we measured as fitting.
     if (fits && text && ctx && room != null) fits = ctx.measureText(text).width <= room - ctx.measureText("M").width;
@@ -1386,8 +1395,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // The cluster's own box is useless here: tucked, it spans the row. Sum
     // the buttons instead (gap-1 between them), so the reading is the same in
     // either state. gap-x-2 sits between the field and the cluster.
-    const buttons = Array.from(sendRef.current?.children ?? []) as HTMLElement[];
-    const controls = buttons.reduce((w, b) => w + b.offsetWidth, 0) + Math.max(0, buttons.length - 1) * 4;
+    // The expand button is left out and its w-7 slot plus gap always counted.
+    const buttons = (Array.from(sendRef.current?.children ?? []) as HTMLElement[]).filter((b) => !b.querySelector("[data-composer-expand]") && !b.matches("[data-composer-expand]"));
+    const controls = buttons.reduce((w, b) => w + b.offsetWidth, 0) + Math.max(0, buttons.length - 1) * 4 + 28 + 4;
     controlsRoomRef.current = row.clientWidth - controls - 8;
     measureFitsBesideControls();
   }, [measureFitsBesideControls]);
@@ -1733,7 +1743,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       submitRefusedRef.current = true;
       return false;
     }
-    suggestionRef.current?.settleSend(message);
+    // What the person typed, before quotes and joint parts fold in: the
+    // suggestion outcome is reported against it once the send is committed.
+    const typed = message;
     if (onGateSend) {
       // The pending batch rides a gate send the way it rides the main one:
       // the quotes, and a proposal's answers (org-staffing.md S39), lead the
@@ -1867,6 +1879,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       submitRefusedRef.current = true;
       return false;
     }
+    suggestionRef.current?.settleSend(typed);
     cancelPendingDraft();
     soundSend();
     setMessage("");
@@ -2184,20 +2197,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return;
     }
 
-    // The ghost suggestion in an empty composer: Tab takes it, ↓ steps through
-    // the alternatives (it wraps). Typing anything replaces it, so no key is
-    // spent on dismissing. ↑ is not the ghost's: from the input it climbs into
-    // the transcript (climbIntoTranscript below).
+    // The ghost suggestion in an empty composer: Tab takes it. Typing anything
+    // replaces it, so no key is spent on dismissing.
     const ghost = suggestionRef.current;
     if (ghost?.visible() && !message) {
       if (e.key === "Tab" && !e.shiftKey) {
         e.preventDefault();
         ghost.accept();
-        return;
-      }
-      if (e.key === "ArrowDown" && ghost.count() > 1) {
-        e.preventDefault();
-        ghost.cycle(1);
         return;
       }
     }
@@ -2529,6 +2535,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           <button
             type="button"
             onClick={toggleCompose}
+            data-composer-expand
             className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center text-sol-text-dim/30 hover:text-sol-text-dim hover:bg-sol-bg/50 ${hostedConversation ? "max-md:hidden" : ""}`}
             aria-label="Expand editor"
           >

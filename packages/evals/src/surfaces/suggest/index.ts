@@ -198,7 +198,9 @@ Grade with ONE of:
 - partial: a suggestion heads the same direction but its content differs materially (asks for something else, adds or drops a real requirement, answers a different question).
 - miss: no suggestion matches. Includes: the developer corrected the agent or changed course while the suggestions assumed the agent was right; the developer asked something the suggestions do not touch.
 
-Return ONLY JSON: {"grade": "hit" | "partial" | "miss", "why": "one short sentence"}`;
+For hit and partial, "at" is the number of the suggestion that matches best.
+
+Return ONLY JSON: {"grade": "hit" | "partial" | "miss", "at": number | null, "why": "one short sentence"}`;
 }
 
 export interface SuggestOutcome {
@@ -206,27 +208,30 @@ export interface SuggestOutcome {
   error?: 'provider_failed' | 'invalid_json';
   /** null when the grader returned no grade. */
   grade: Grade | null;
+  /** For hit and partial: the 1-based position of the matching suggestion (the ghost shows 1; ↓ steps on). */
+  at?: number;
   why: string;
 }
 
 /** Grades the pills against the truth; only a moment with pills and a substantive truth needs the grader. */
-export async function gradeMoment(snap: SuggestSnap, suggestions: string[], ctx: Pick<ReplayCtx, 'call'>): Promise<{ grade: Grade | null; why: string }> {
+export async function gradeMoment(snap: SuggestSnap, suggestions: string[], ctx: Pick<ReplayCtx, 'call'>): Promise<{ grade: Grade | null; at?: number; why: string }> {
   if (isGenericNudge(snap.truth)) return { grade: suggestions.length ? 'nudge-shown' : 'nudge-silent', why: 'the truth is a bare nudge' };
   if (!suggestions.length) return { grade: 'silent', why: 'no pills' };
   const agentTail = [...contextOf(snap).turns].reverse().find((t) => t.role === 'assistant')?.content ?? '';
   const r = await ctx.call({ model: JUDGE_MODEL, prompt: graderPrompt(agentTail, snap.truth, suggestions), max_tokens: JUDGE_MAX_TOKENS }, { grader: true });
-  const parsed = parseJsonBlock(r.text) as { grade?: unknown; why?: unknown } | null;
+  const parsed = parseJsonBlock(r.text) as { grade?: unknown; at?: unknown; why?: unknown } | null;
   const grade = parsed?.grade;
   if (grade !== 'hit' && grade !== 'partial' && grade !== 'miss') return { grade: null, why: `the grader returned no grade: ${r.text.slice(0, 160)}` };
-  return { grade, why: String(parsed?.why ?? '') };
+  const at = typeof parsed?.at === 'number' && parsed.at >= 1 && parsed.at <= suggestions.length ? Math.round(parsed.at) : undefined;
+  return { grade, ...(grade !== 'miss' && at ? { at } : {}), why: String(parsed?.why ?? '') };
 }
 
 const gate = (id: string, pass: boolean, summary: string): GateResult => ({ id, pass, decidedBy: 'mechanical', evidence: { summary } });
 const outcomeOf = (out: ReplayResult): SuggestOutcome => out.parsed as SuggestOutcome;
-const GRADE_EVIDENCE = /^grade=([a-z-]+)/;
+const GRADE_EVIDENCE = /^grade=([a-z-]+)(?:@(\d+))?/;
 
-/** Precision and coverage over a set of graded reps: the cost side and the value side of showing pills. */
-export function gradeTotals(grades: Grade[]) {
+/** Precision and coverage over a set of graded reps: the cost side and the value side of showing suggestions. `hitAt` holds each hit's position, when the grader named it. */
+export function gradeTotals(grades: Grade[], hitAt: number[] = []) {
   const count = (g: Grade) => grades.filter((x) => x === g).length;
   const hit = count('hit'), partial = count('partial'), miss = count('miss'), silent = count('silent');
   const shown = hit + partial + miss;
@@ -237,6 +242,9 @@ export function gradeTotals(grades: Grade[]) {
     precision: shown ? hit / shown : 0,
     // Of all substantive moments, how many got a right pill: the value side.
     coverage: n ? hit / n : 0,
+    // Hits on the ghost itself, no key pressed, vs one or more presses of ↓.
+    hitFirst: hitAt.filter((a) => a === 1).length,
+    hitLater: hitAt.filter((a) => a > 1).length,
   };
 }
 
@@ -279,18 +287,19 @@ const impl: SurfaceImpl = {
   checks(snap: SuggestSnap, out): CheckResult[] {
     const o = outcomeOf(out);
     if (!o.grade) return [];
-    return [{ id: 'grade', ask: 'the pills against what the developer typed next', weight: 1, score: GRADE_SCORE[o.grade], reasoning: o.why, evidence: `grade=${o.grade}; typed: ${snap.truth.slice(0, 160)}` }];
+    return [{ id: 'grade', ask: 'the pills against what the developer typed next', weight: 1, score: GRADE_SCORE[o.grade], reasoning: o.why, evidence: `grade=${o.grade}${o.at ? `@${o.at}` : ''}; typed: ${snap.truth.slice(0, 160)}` }];
   },
 
   summarize(scores: Score[]): string[] {
-    const grades = scores.flatMap((s) => {
+    const parsed = scores.flatMap((s) => {
       const m = GRADE_EVIDENCE.exec(s.checks.find((c) => c.id === 'grade')?.evidence ?? '');
-      return m ? [m[1] as Grade] : [];
+      return m ? [{ grade: m[1] as Grade, at: m[2] ? Number(m[2]) : undefined }] : [];
     });
-    if (!grades.length) return ['grades: none graded'];
-    const t = gradeTotals(grades);
+    if (!parsed.length) return ['grades: none graded'];
+    const grades = parsed.map((p) => p.grade);
+    const t = gradeTotals(grades, parsed.flatMap((p) => (p.grade === 'hit' && p.at ? [p.at] : [])));
     const pct = (x: number) => `${Math.round(x * 100)}%`;
-    return [`grades: hit ${t.hit} partial ${t.partial} miss ${t.miss} silent ${t.silent} | precision ${pct(t.precision)} coverage ${pct(t.coverage)} | nudge moments: silent ${t.nudgeSilent} shown ${t.nudgeShown}`];
+    return [`grades: hit ${t.hit} partial ${t.partial} miss ${t.miss} silent ${t.silent} | precision ${pct(t.precision)} coverage ${pct(t.coverage)} | hit on the ghost ${t.hitFirst}, after ↓ ${t.hitLater} | nudge moments: silent ${t.nudgeSilent} shown ${t.nudgeShown}`];
   },
 
   describe(snap: SuggestSnap): ConvoMessage[] {

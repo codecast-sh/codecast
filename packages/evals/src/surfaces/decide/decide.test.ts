@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 
-import { bashBlock, cardOfCommand, contextWords, renderCard, sessionText, shellWords } from './index';
+import { formatDecisionAnswer } from '../../../../shared/contracts/decisionAnswers';
+
+import { answerIn, bashBlock, cardOfCommand, contextWords, renderCard, sessionText, shellWords } from './index';
 
 // sd-1098's command as the session ran it (jx7c5mj:86).
 const REAL = `cast decide "Test 'warm a cold A before pitching' with a randomized holdout?" \\
@@ -66,4 +68,14 @@ test('a four-backtick block closes on its own fence', () => {
 
 test('context words leave a cast-canvas out', () => {
   expect(contextWords('one two\n```cast-canvas\n<div>a b c d</div>\n```\nthree')).toBe(3);
+});
+
+describe('the answer a freeze records', () => {
+  const card = { question: 'Ship the rollout tonight?', options: [{ label: 'Ship tonight' }, { label: 'Wait for Monday' }], context: '' };
+  test('a chosen label is a pick; typed words are not; another question is skipped', () => {
+    const tagged = (answer: string, question = card.question) => ({ role: 'user', content: formatDecisionAnswer({ id: 'k1', question, answer }) });
+    expect(answerIn([tagged('Wait for Monday')], card)).toEqual({ text: 'Wait for Monday', picked: true });
+    expect(answerIn([tagged('Ship, but only to the beta cohort')], card)).toEqual({ text: 'Ship, but only to the beta cohort', picked: false });
+    expect(answerIn([tagged('Yes', 'Another question?'), { role: 'assistant', content: 'Decision: Ship tonight' }], card)).toBeNull();
+  });
 });

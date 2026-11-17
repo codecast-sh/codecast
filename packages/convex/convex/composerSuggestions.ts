@@ -8,6 +8,7 @@ import { verifyApiToken } from "./apiTokens";
 import { CHEAP_MODEL, parseJsonBlock, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
 import { openaiFetch } from "./lib/openai";
 import { NO_TEAM_CONTENT_GATE, vendorAllowedFor, vendorRefusalFromDb, type VendorGate } from "./lib/vendorGuard";
+import { stripInjectionNoise } from "@codecast/shared/contracts";
 
 // Suggested replies for the composer ("suggestion pills"). Fourth member of
 // the Haiku family (titleGeneration, idleSummary, sessionInsights): an
@@ -18,11 +19,16 @@ import { NO_TEAM_CONTENT_GATE, vendorAllowedFor, vendorRefusalFromDb, type Vendo
 // like a model.
 
 const PROFILE_TTL_MS = 12 * 60 * 60 * 1000;
-const MAX_SUGGESTIONS = 3;
-// The model's confidence that the developer would send a pill. Below the
-// floor a pill is dropped; a third pill needs the higher bar.
+// One reply, drawn as ghost text in the empty composer. Alternatives behind a
+// key were tried (Nov 2026) and matched what people typed in 0 of 180 eval
+// replays, so the suggester makes its one prediction or none.
+export const MAX_SUGGESTIONS = 1;
+// The model's probability that the developer sends the reply. Below it the
+// ghost stays empty: a wrong ghost costs a glance and teaches people to stop
+// reading it, and silence is right when the session gives no basis.
 const MIN_CONFIDENCE = 0.5;
-const THIRD_PILL_CONFIDENCE = 0.7;
+// Recent outcomes the suggester reads back, newest first.
+const OUTCOMES_FOR_PROMPT = 12;
 // A pill may carry a full working prompt (a reusable multi-sentence
 // directive), not just a verdict — so the cap is "not a pasted wall", not
 // "fits on one line". The row truncates visually; the send carries it whole.
@@ -119,6 +125,25 @@ export const getComposerSuggestions = query({
       anchor_message_uuid: row.anchor_message_uuid,
       generated_at: row.generated_at,
     };
+  },
+});
+
+// The feeder for the client store (web store/clientSyncRegistry,
+// `composerSuggestions`): this conversation's suggestion row, as a list of at
+// most one, for its owner only. getComposerSuggestions above stays for clients
+// built before the store read it.
+export const forConversation = query({
+  args: { conversation_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    const id = ctx.db.normalizeId("conversations", args.conversation_id);
+    if (!userId || !id) return [];
+    const row = await ctx.db
+      .query("composer_suggestions")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", id))
+      .first();
+    if (!row || row.user_id !== userId) return [];
+    return [{ _id: row._id, conversation_id: row.conversation_id, anchor_message_uuid: row.anchor_message_uuid, suggestions: row.suggestions, generated_at: row.generated_at }];
   },
 });
 
@@ -331,30 +356,72 @@ export const storeSuggestionProfile = internalMutation({
   },
 });
 
-// Client-reported fate of a shown pill. Owner-gated; append-only. A dismissal
-// covers the whole row, so the client sends one event per pill it hid.
+// Client-reported fate of the suggestions shown for one agent turn. Owner-
+// gated; append-only. `shown` is optional so a client built before it
+// existed still records.
 export const recordSuggestionOutcome = mutation({
   args: {
     conversation_id: v.id("conversations"),
     anchor_message_uuid: v.string(),
     suggestion: v.string(),
-    outcome: v.union(v.literal("sent"), v.literal("edited"), v.literal("dismissed")),
+    outcome: v.union(v.literal("sent"), v.literal("edited"), v.literal("ignored"), v.literal("dismissed")),
+    shown: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return;
-    // Pills are shown to the session's owner only (getComposerSuggestions), so
-    // only the owner can report what became of one.
+    // Suggestions are shown to the session's owner only (getComposerSuggestions),
+    // so only the owner can report what became of them.
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv || String(conv.user_id) !== String(userId)) return;
+    const cap = (t: string) => t.slice(0, MAX_SUGGESTION_CHARS);
     await ctx.db.insert("suggestion_outcomes", {
       user_id: userId,
       conversation_id: args.conversation_id,
       anchor_message_uuid: args.anchor_message_uuid,
-      suggestion: args.suggestion.slice(0, MAX_SUGGESTION_CHARS),
+      suggestion: cap(args.suggestion),
       outcome: args.outcome,
+      ...(args.shown ? { shown: args.shown.slice(0, MAX_SUGGESTIONS).map(cap) } : {}),
       created_at: Date.now(),
     });
+  },
+});
+
+// The composer take rate, from the outcome log: per person and ISO week, of
+// the replies typed in the codecast composer while a suggestion was on show,
+// how many took it. Replies from a terminal, a decision card, or a client
+// that was not showing the suggestion are not in it, so it reads high for
+// people who answer elsewhere. Only rows that carry `shown` count, so the
+// rate starts with the clients that report "ignored".
+// `npx convex run composerSuggestions:suggestionFunnel '{"since_days":14}'`
+export function funnelOf(rows: Array<{ user_id: string; outcome: string; shown?: string[]; created_at: number }>) {
+  const out = new Map<string, { user: string; week: string; replied: number; sent: number; edited: number; ignored: number }>();
+  for (const r of rows) {
+    if (!r.shown) continue;
+    const d = new Date(r.created_at);
+    const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - ((d.getUTCDay() + 6) % 7)));
+    const week = monday.toISOString().slice(0, 10);
+    const key = `${r.user_id}|${week}`;
+    const row = out.get(key) ?? { user: String(r.user_id), week, replied: 0, sent: 0, edited: 0, ignored: 0 };
+    row.replied++;
+    if (r.outcome === "sent" || r.outcome === "edited") row[r.outcome]++;
+    else row.ignored++;
+    out.set(key, row);
+  }
+  return [...out.values()]
+    .sort((a, b) => (a.week === b.week ? a.user.localeCompare(b.user) : a.week.localeCompare(b.week)))
+    .map((r) => ({ ...r, composer_take_rate: r.replied ? Math.round(((r.sent + r.edited) / r.replied) * 100) / 100 : 0 }));
+}
+
+export const suggestionFunnel = internalQuery({
+  args: { since_days: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const since = Date.now() - (args.since_days ?? 28) * 86_400_000;
+    const rows = await ctx.db
+      .query("suggestion_outcomes")
+      .withIndex("by_created", (q) => q.gte("created_at", since))
+      .collect();
+    return funnelOf(rows as any);
   },
 });
 
@@ -494,18 +561,21 @@ export function normalizeForMatch(text: string): string {
 }
 
 // Output guards: press-send-ready strings only. Refusal/meta prose from the
-// model must never render as a pill. Selectivity lives here too: candidates
-// carry a model-reported confidence, anything under MIN_CONFIDENCE is
-// dropped, and the row shows at most TWO pills — a third only above
-// THIRD_PILL_CONFIDENCE (an explicit multi-choice moment). Legacy bare
-// strings score 0.6.
-// `bannedVerbatim` holds the user's own historical messages and mined
-// examples (normalized): a suggestion equal to one is a replayed quote, the
-// exact failure the pattern mining exists to prevent — drop it.
+// model must never render as a suggestion. Selectivity lives here too:
+// each candidate carries a model-reported probability, the likeliest shows
+// only at MIN_CONFIDENCE or above, and at most MAX_SUGGESTIONS come back.
+// Legacy bare strings score 0.6.
+// `bannedVerbatim` holds the user's own historical messages, mined examples
+// and what they typed after past suggestions (normalized): a suggestion that
+// repeats one, word for word or nearly (nearlyRepeats), is a replayed quote,
+// the exact failure the pattern mining exists to prevent — drop it. A
+// suggestion that repeats one of `resendable` (the reusable prompts the user
+// sends again on purpose) is exempt.
 export function sanitizeSuggestions(
   parsed: unknown,
   lastUserText: string | null,
   bannedVerbatim?: Set<string>,
+  resendable: string[] = [],
 ): string[] {
   const rawList: unknown[] = Array.isArray(parsed) ? parsed : [];
   const seen = new Set<string>();
@@ -521,18 +591,46 @@ export function sanitizeSuggestions(
     const key = normalizeForMatch(text);
     if (GENERIC_NUDGES.has(key)) continue;
     if (seen.has(key) || key === lastKey) continue;
-    if (bannedVerbatim?.has(key)) continue;
+    if (bannedVerbatim && nearlyRepeats(key, bannedVerbatim) && !nearlyRepeats(key, resendable)) continue;
     seen.add(key);
     const rawConf = (item as any)?.confidence;
     const conf = typeof rawConf === "number" && rawConf >= 0 && rawConf <= 1 ? rawConf : 0.6;
     scored.push({ text, conf });
   }
-  const kept = scored.filter((s) => s.conf >= MIN_CONFIDENCE).sort((a, b) => b.conf - a.conf);
-  const out = kept.slice(0, 2).map((s) => s.text);
-  if (kept.length > 2 && kept[2].conf >= THIRD_PILL_CONFIDENCE && out.length < MAX_SUGGESTIONS) {
-    out.push(kept[2].text);
+  return scored
+    .filter((s) => s.conf >= MIN_CONFIDENCE)
+    .sort((a, b) => b.conf - a.conf)
+    .slice(0, MAX_SUGGESTIONS)
+    .map((s) => s.text);
+}
+
+// Whether normalized text `key` repeats one of `others`: the same, an
+// unbroken run of REPEAT_RUN words in common, or (for texts of five words or
+// more) REPEAT_OVERLAP of their distinct words shared. A replay with a word
+// changed or a clause added still counts.
+const REPEAT_RUN = 8;
+const REPEAT_OVERLAP = 0.8;
+export function nearlyRepeats(key: string, others: Iterable<string>): boolean {
+  const words = key.split(" ").filter(Boolean);
+  const runs = (w: string[]) => {
+    const out = new Set<string>();
+    for (let i = 0; i + REPEAT_RUN <= w.length; i++) out.add(w.slice(i, i + REPEAT_RUN).join(" "));
+    return out;
+  };
+  const mine = runs(words);
+  const set = new Set(words);
+  for (const other of others) {
+    if (other === key) return true;
+    const theirs = other.split(" ").filter(Boolean);
+    for (const r of runs(theirs)) if (mine.has(r)) return true;
+    if (words.length >= 5 && theirs.length >= 5) {
+      const otherSet = new Set(theirs);
+      let shared = 0;
+      for (const w of set) if (otherSet.has(w)) shared++;
+      if (shared / (set.size + otherSet.size - shared) >= REPEAT_OVERLAP) return true;
+    }
   }
-  return out;
+  return false;
 }
 
 export type MinedProfile = {
@@ -636,6 +734,23 @@ export async function minePatternsWithLLM(
   return mined ? { ...mined, usage: completion.usage } : null;
 }
 
+// One past suggestion and what the developer did with it, as the suggester
+// reads it back (recentOutcomes).
+export type SuggestionOutcome = {
+  outcome: "sent" | "edited" | "ignored";
+  suggestion: string;
+  // What they sent instead, read from the transcript (edited and ignored).
+  reply?: string;
+};
+
+const clip = (t: string, n: number) => (t.length > n ? t.slice(0, n) + " […]" : t);
+
+export function renderOutcome(o: SuggestionOutcome): string {
+  if (o.outcome === "sent") return `- took as written: "${clip(o.suggestion, 200)}"`;
+  if (o.outcome === "edited") return `- took and rewrote: "${clip(o.suggestion, 200)}"\n    they sent: "${clip(o.reply ?? "", 200)}"`;
+  return `- passed over: "${clip(o.suggestion, 200)}"\n    typed instead: "${clip(o.reply ?? "", 200)}"`;
+}
+
 export function buildPrompt(
   context: {
     conversation: {
@@ -654,6 +769,7 @@ export function buildPrompt(
     patterns: Array<{ pattern: string; example: string; count: number }>;
     prompts: Array<{ text: string; count: number }>;
     recent: string[];
+    outcomes?: SuggestionOutcome[];
   },
 ): string {
   const turns = context.turns;
@@ -694,6 +810,10 @@ export function buildPrompt(
         .join("\n")
     : "- none";
 
+  const outcomesText = profile.outcomes?.length
+    ? profile.outcomes.map(renderOutcome).join("\n")
+    : "- none recorded yet";
+
   const c = context.conversation;
   const meta = [
     c.title && `- session: ${c.title}`,
@@ -707,11 +827,11 @@ export function buildPrompt(
 
   return `You predict what a developer will type next into their coding-agent session. You see the session so far, plus a profile of this developer's HABITS — the things they recurrently ask for, learned across their history. Your job is to apply those habits to THIS conversation's specifics and predict the message they will send next.
 
-Return ONLY a JSON array: [{"text": string, "confidence": number}] — 0 to 2 entries (a third only for an explicit multi-choice moment). "confidence" is your probability (0..1) that the developer would send this pill, as written or lightly edited, rather than type something else; omit anything below ${MIN_CONFIDENCE}. No wrapper object, no markdown, no commentary.
+Return ONLY a JSON array: [] or [{"text": string, "confidence": number}] — your one prediction or nothing. "confidence" is your probability (0..1) that the developer sends it, as written or lightly edited, rather than anything else. It shows as dim text in their empty composer, one key from being theirs; return [] unless you would put it at ${MIN_CONFIDENCE} or more. No wrapper object, no markdown, no commentary.
 
 The test for every suggestion: the developer reads it and thinks "I was just about to type that." You are predicting what THEY would type, not what would be sensible to do next — a reasonable engineering step they would never have asked for is a miss, however good it is.
 
-A wrong pill costs the developer a glance; a right one saves them typing the message. So when the session gives you a real basis for what they will say next, make your best prediction. Return [] when the reply depends on something the session does not show.
+A wrong suggestion costs the developer a glance; a right one saves them typing the message. So when the session gives you a real basis for what they will say next, make your best prediction. Return [] when the reply depends on something the session does not show.
 
 Read the moment — the agent's final message decides everything:
 - The agent asked a direct question with a small answer space (yes or no, which of these, confirm this) → suggest the most likely answers, phrased the way this developer would phrase them. This is where predictable replies live.
@@ -725,14 +845,15 @@ The profile has two kinds of evidence, and they work differently:
 - HABITS are generalized tendencies, each with one example quote for voice. Apply the TENDENCY to what is on the table right now, filling in this session's actual subject — the feature, file, bug, or decision in front of them. The example shows HOW they talk, not WHAT to say: a suggestion that repeats a habit's example is wrong by definition, because it is about some other conversation. A habit predicts only at the kind of moment it shows up in; a habit you could attach to any moment says nothing about this one.
 - REUSABLE PROMPTS are standing instructions this developer deliberately sends again and again, in nearly the same words, whenever the moment fits — a quality bar, a way of working, an iteration loop. These you MAY suggest close to verbatim: keep their wording and force, and adapt only what the moment needs (name the actual feature, file, or task in front of them; drop a clause that does not apply). When the agent has just finished or proposed something and one of these prompts is what this developer typically sends next, it is the best suggestion you can make. Prefer the full prompt over a shortened gist: the length is part of what makes it work.
 
-Voice: copy the developer's register from the prompts, examples and recent messages — casing, punctuation, brevity, bluntness. If they write terse lowercase commands, so do you. Every suggestion must read like THEY typed it, about THIS conversation, and be sendable exactly as written; each will be sent with one click.
+The suggestion record (below the recent messages) shows your own past predictions for this developer and what became of them: which they took as written, which they took and rewrote, and which they passed over to type their own reply. Learn from it which kinds of replies they take and how they reword them. When they typed their own reply, that text shows what they wanted instead; learn the direction it took, never send those words back.
+
+Voice: copy the developer's register from the prompts, examples and recent messages — casing, punctuation, brevity, bluntness. If they write terse lowercase commands, so do you. Every suggestion must read like THEY typed it, about THIS conversation, and be sendable exactly as written; each is one key away from being sent.
 
 Hard rules:
 - Every pill must be a message this developer would plausibly send at this exact moment; a generic step that would fit any session is not one.
 - Never suggest a bare continuation nudge — "continue", "go", "proceed", "do it", "yes", or anything the developer could type in one keystroke. A suggestion earns its place by carrying content: a concrete directive, answer, or decision specific to this moment.
-- Never replay a habit's example quote or an ordinary past message verbatim or near-verbatim; only its habit transfers. Reusable prompts are the one exception — they are meant to be resent.
+- Never replay a habit's example quote, an ordinary past message, or a reply from the suggestion record verbatim or near-verbatim; only its habit transfers. Reusable prompts are the one exception — they are meant to be resent.
 - Every suggestion is the developer speaking to the agent: never the agent's voice ("I'll handle…", "Sending you…"), and never the developer restating or summarizing what the agent just said — people do not type recaps back to the agent.
-- Suggestions must differ in intent, not phrasing.
 - Length follows the moment: a verdict or an answer stays short; a full working prompt can run several sentences. Never pad, never truncate a reusable prompt to make it look tidy.
 - Never repeat what has already been said, asked, or done in the session; never contradict the developer's last instruction. Do not suggest a reusable prompt the developer already sent in this session unless the agent has since completed a full round of work that invites it again.
 - Never invent file paths, commands, names, or ids that do not appear in the session.
@@ -748,6 +869,9 @@ ${promptsText}
 
 Their most recent messages, for voice only (newest first):
 ${recentText}
+
+What they did with recent suggestions (newest first):
+${outcomesText}
 
 Conversation:
 ${excerpt}`;
@@ -811,6 +935,9 @@ export type StoredProfile = {
   prompts?: Array<{ text: string; count: number }>;
   recent: string[];
   generated_at: number;
+  // Read fresh from suggestion_outcomes at suggest time, not stored with the
+  // mined profile: the record moves with every send.
+  outcomes?: SuggestionOutcome[];
 };
 
 function profileForPrompt(profile: StoredProfile) {
@@ -820,7 +947,68 @@ function profileForPrompt(profile: StoredProfile) {
     patterns: profile.patterns ?? [],
     prompts: profile.prompts ?? [],
     recent: profile.recent,
+    outcomes: profile.outcomes ?? [],
   };
+}
+
+// The newest outcomes, each with what the developer sent instead when they
+// rewrote or passed over the suggestion. That reply is read from the
+// transcript (the first user row after the anchor), never stored with the
+// outcome: a deleted or redacted session takes it along. A regulated team's
+// conversation stays out, as in getRecentUserInputs, because this goes to the
+// suggester's vendor. Rows from before `shown` existed carry no ignored
+// record, so they are left out rather than read as a stream of takes.
+export const getRecentOutcomes = internalQuery({
+  args: { user_id: v.id("users") },
+  handler: async (ctx, args): Promise<SuggestionOutcome[]> => {
+    const rows = await ctx.db
+      .query("suggestion_outcomes")
+      .withIndex("by_user_created", (q) => q.eq("user_id", args.user_id))
+      .order("desc")
+      .take(OUTCOMES_FOR_PROMPT * 3);
+    const refused = new Map<string, boolean>();
+    const out: SuggestionOutcome[] = [];
+    for (const r of rows) {
+      if (out.length >= OUTCOMES_FOR_PROMPT) break;
+      if (!r.shown || r.outcome === "dismissed") continue;
+      const conv = String(r.conversation_id);
+      if (!refused.has(conv)) refused.set(conv, !!(await vendorRefusalFromDb(ctx, { conversationId: r.conversation_id }, "anthropic")));
+      if (refused.get(conv)) continue;
+      const outcome = r.outcome as SuggestionOutcome["outcome"];
+      if (outcome === "sent") {
+        out.push({ outcome, suggestion: r.suggestion });
+        continue;
+      }
+      const reply = await replyAfter(ctx, r.conversation_id, r.anchor_message_uuid);
+      // Gone (deleted, redacted, encrypted) or not words they typed: the
+      // outcome has nothing to teach without it.
+      if (reply) out.push({ outcome, suggestion: r.suggestion, reply });
+    }
+    return out;
+  },
+});
+
+// The first message the developer typed after the agent turn `anchor` (a
+// message_uuid, or a message id for rows that have none), or null.
+async function replyAfter(ctx: any, conversationId: Id<"conversations">, anchor: string): Promise<string | null> {
+  const byUuid = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_uuid", (q: any) => q.eq("conversation_id", conversationId).eq("message_uuid", anchor))
+    .first();
+  const id = byUuid ? null : ctx.db.normalizeId("messages", anchor);
+  const at = byUuid ?? (id ? await ctx.db.get(id) : null);
+  if (!at || String(at.conversation_id) !== String(conversationId)) return null;
+  const next = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_role_timestamp", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("role", "user").gt("timestamp", at.timestamp)
+    )
+    .filter((q: any) => q.eq(q.field("tool_results"), undefined))
+    .first();
+  if (!next || next.is_encrypted) return null;
+  const text = stripInjectionNoise(next.content ?? "").trim();
+  if (!text || text.startsWith("/") || /^<command-/.test(text) || isMachineCarrierText(text)) return null;
+  return text;
 }
 
 // Rebuild one user's profile from their input history: collect, rank, mine,
@@ -876,11 +1064,14 @@ export async function predictSuggestions(
     ...profile.frequent.map((f) => normalizeForMatch(f.text)),
     ...(profile.patterns ?? []).map((p) => normalizeForMatch(p.example)),
     ...context.turns.filter((t) => t.role === "user").map((t) => normalizeForMatch(t.content)),
+    // What they typed after past suggestions teaches direction, never words.
+    ...(profile.outcomes ?? []).flatMap((o) => (o.reply && o.outcome !== "sent" ? [normalizeForMatch(o.reply)] : [])),
   ]);
   // …except a reusable prompt, which the user resends on purpose. The
   // last-user-message check in sanitizeSuggestions still stops an
   // immediate echo.
-  for (const p of profile.prompts ?? []) bannedVerbatim.delete(normalizeForMatch(p.text));
+  const resendable = (profile.prompts ?? []).map((p) => normalizeForMatch(p.text));
+  for (const p of resendable) bannedVerbatim.delete(p);
 
   const completion = await complete({ provider, prompt: req.prompt, maxTokens: req.max_tokens, gate });
   if (!completion) return { suggestions: [], error: "provider_failed" };
@@ -888,7 +1079,7 @@ export async function predictSuggestions(
   if (parsed === null) return { suggestions: [], error: "invalid_json", raw: completion.text };
   const lastUser = [...context.turns].reverse().find((t) => t.role === "user");
   return {
-    suggestions: sanitizeSuggestions(parsed, lastUser?.content ?? null, bannedVerbatim),
+    suggestions: sanitizeSuggestions(parsed, lastUser?.content ?? null, bannedVerbatim, resendable),
     raw: completion.text,
   };
 }
@@ -941,8 +1132,9 @@ export const generateComposerSuggestions = action({
       profile = await refreshProfile(ctx, user._id, now);
     }
 
+    const outcomes = await ctx.runQuery(internal.composerSuggestions.getRecentOutcomes, { user_id: user._id });
     try {
-      const predicted = await predictSuggestions(context, profile, provider, gate);
+      const predicted = await predictSuggestions(context, { ...profile, outcomes }, provider, gate);
       if (predicted.error) return { status: "error", reason: predicted.error };
       const suggestions = predicted.suggestions;
 

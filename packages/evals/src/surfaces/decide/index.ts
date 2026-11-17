@@ -3,8 +3,9 @@ import { UsageError } from '@platform/evals/cli';
 
 import { parseJsonBlock } from '../../../../convex/convex/lib/anthropic';
 import { renderGuidanceFile } from '../../../../shared/contracts/snippets';
-import type { MessageRow } from '../../adapters/convo';
 import { readSessionMoment, SESSION_LINE_FORMS } from '../../adapters/moment';
+import { readConversation, toRows, type MessageRow } from '../../adapters/convo';
+import { parseDecisionAnswer } from '../../../../shared/contracts/decisionAnswers';
 import { JUDGE_MODEL } from '../../models';
 import { gate, type SurfaceImpl, type SurfaceRequest } from '../../surface';
 import { describeTurn } from '../roleWake/world';
@@ -29,6 +30,13 @@ export interface DecideSnap {
   captured_at: string;
   /** The card the session actually posted. */
   production: DecisionCard;
+  /**
+   * What the person answered, as it reached the session (a chosen label, or
+   * the words they typed when no answer fit), and whether it was one of the
+   * production card's answers. Never shown to the asking model. Absent on
+   * freezes captured before it was recorded, and on asks nobody answered.
+   */
+  answer?: { text: string; picked: boolean };
 }
 
 export interface DecisionCard {
@@ -277,6 +285,7 @@ interface Parsed {
   card: DecisionCard | null;
   cold: ColdRead | null;
   unsupported: string[] | null;
+  covers?: { one_press: boolean; which: number | null; why: string } | null;
 }
 
 function graderRequest(prompt: string): SurfaceRequest {
@@ -292,6 +301,43 @@ export const bashBlock = (text: string): string => {
   return close < 0 ? body : body.slice(0, close);
 };
 
+/** Lines read after the ask for its answer: an answer that comes later than this is a different moment. */
+const ANSWER_WINDOW = 400;
+
+/** The person's answer to `card`, from the answer message the session received after `line`. */
+export function answerIn(rows: Array<Pick<Row, 'role' | 'content'>>, card: DecisionCard): DecideSnap['answer'] | null {
+  for (const r of rows) {
+    if (r.role !== 'user') continue;
+    const a = parseDecisionAnswer(r.content);
+    if (!a) continue;
+    if (a.question && a.question.trim() !== card.question.trim()) continue;
+    const label = a.answer.trim();
+    const picked = card.options.some((o) => o.label.trim() === label);
+    return { text: [label, a.detail].filter(Boolean).join('\n\n'), picked };
+  }
+  return null;
+}
+
+async function answerAfter(conversation: string, line: number, card: DecisionCard): Promise<DecideSnap['answer'] | null> {
+  const read = await readConversation(conversation, { from: line + 1, to: line + ANSWER_WINDOW });
+  return answerIn(toRows(read.messages), card);
+}
+
+// Whether the card would have taken the person's real answer in one press.
+// The value of asking is that the answer settles something; a card whose
+// answers miss what the person wanted makes them type it out instead.
+const COVERS = (card: string, answer: string) => `An AI agent put the decision below to the person it works for. Here is the card, and then what the person actually answered.
+
+<card>
+${card}
+</card>
+
+<their_answer>
+${answer}
+</their_answer>
+
+Could the person have given that answer by pressing one of the card's answers, as written, with nothing to type? An answer that matches one in substance counts, even in other words; an answer that adds a real condition, picks a mix, or goes somewhere the card does not offer does not. Return ONLY a JSON object: {"one_press": true or false, "which": the number of the matching answer or null, "why": "one short sentence"}`;
+
 const impl: SurfaceImpl = {
   refForms: REF_FORMS,
 
@@ -301,11 +347,13 @@ const impl: SurfaceImpl = {
     const production = command ? cardOfCommand(command) : null;
     if (!production) throw new UsageError(`line ${m.line} of ${m.conversation.id} runs no cast decide ask: ${REF_FORMS}`);
     const rows = m.rows.filter((r) => r.line < m.line);
+    const answer = await answerAfter(m.conversation.id, m.line, production);
     const snapshot: DecideSnap = {
       title: m.conversation.title ?? m.conversation.id,
       rows: rows.map((r) => ({ line: r.line, role: r.role, content: r.content, timestamp: r.timestamp, ...(r.tool_calls?.length ? { tool_calls: r.tool_calls } : {}), ...(r.tool_results?.length ? { tool_results: r.tool_results } : {}) })),
       captured_at: new Date(m.at.timestamp).toISOString(),
       production,
+      ...(answer ? { answer } : {}),
     };
     return {
       snapshot,
@@ -323,12 +371,14 @@ const impl: SurfaceImpl = {
     const parsed: Parsed = { card, cold: null, unsupported: null };
     if (card) {
       const shown = renderCard(card);
-      const [cold, faithful] = await Promise.all([
+      const [cold, faithful, covers] = await Promise.all([
         ctx.call(graderRequest(COLD_READ(shown)), { label: 'cold-read', grader: true }),
         ctx.call(graderRequest(FAITHFUL(sessionText(snap.rows), shown)), { label: 'faithful', grader: true }),
+        snap.answer ? ctx.call(graderRequest(COVERS(shown, snap.answer.text)), { label: 'covers-answer', grader: true }) : null,
       ]);
       parsed.cold = parseJsonBlock(cold.text) as ColdRead | null;
       parsed.unsupported = (parseJsonBlock(faithful.text) as { unsupported?: string[] } | null)?.unsupported ?? null;
+      if (covers) parsed.covers = parseJsonBlock(covers.text) as Parsed['covers'];
     }
     return { reply: card ? renderCard(card) : r.text, parsed };
   },
@@ -338,7 +388,7 @@ const impl: SurfaceImpl = {
     return [gate('parse', Boolean(p?.card), p?.card ? `${p.card.options.length} answers, ${p.card.context.length} characters of context` : `no cast decide ask in the reply: ${out.reply.slice(0, 160)}`)];
   },
 
-  checks(_snap: DecideSnap, out): CheckResult[] {
+  checks(snap: DecideSnap, out): CheckResult[] {
     const p = out.parsed as Parsed | undefined;
     if (!p?.card) return [];
     const checks: CheckResult[] = [];
@@ -352,6 +402,9 @@ const impl: SurfaceImpl = {
     if (p.unsupported) {
       const n = p.unsupported.length;
       checks.push({ id: 'faithful', ask: 'every claim on the card is borne out by the session', weight: 1, score: Math.max(0, 1 - n / 8), evidence: n ? p.unsupported.join(' | ').slice(0, 600) : 'none' });
+    }
+    if (snap.answer && p.covers && typeof p.covers.one_press === 'boolean') {
+      checks.push({ id: 'covers-answer', ask: "the person's real answer is one press on the card", weight: 1, score: p.covers.one_press ? 1 : 0, reasoning: p.covers.why, evidence: `${p.covers.one_press ? `answer ${p.covers.which ?? '?'}` : 'typed'}; they answered: ${snap.answer.text.slice(0, 200)}` });
     }
     return checks;
   },

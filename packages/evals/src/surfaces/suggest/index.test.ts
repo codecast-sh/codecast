@@ -173,12 +173,13 @@ describe('replay', () => {
 
 describe('what check prints and the views show', () => {
   test('grade totals: precision over shown pills, coverage over substantive moments', () => {
-    expect(gradeTotals(['hit', 'miss', 'silent', 'silent', 'nudge-silent'])).toEqual({ n: 4, hit: 1, partial: 0, miss: 1, silent: 2, nudgeSilent: 1, nudgeShown: 0, precision: 0.5, coverage: 0.25 });
+    expect(gradeTotals(['hit', 'miss', 'silent', 'silent', 'nudge-silent'])).toEqual({ n: 4, hit: 1, partial: 0, miss: 1, silent: 2, nudgeSilent: 1, nudgeShown: 0, precision: 0.5, coverage: 0.25, hitFirst: 0, hitLater: 0 });
+    expect(gradeTotals(['hit', 'hit', 'miss'], [1, 3])).toMatchObject({ hitFirst: 1, hitLater: 1 });
   });
 
   test('summarize reads the grade from each rep', () => {
     const score = (g: string) => ({ checks: [{ id: 'grade', weight: 1, score: 1, evidence: `grade=${g}; typed: x` }] }) as never;
-    expect(impl.summarize!([score('hit'), score('partial'), score('silent')])).toEqual(['grades: hit 1 partial 1 miss 0 silent 1 | precision 50% coverage 33% | nudge moments: silent 0 shown 0']);
+    expect(impl.summarize!([score('hit@2'), score('partial'), score('silent')])).toEqual(['grades: hit 1 partial 1 miss 0 silent 1 | precision 50% coverage 33% | hit on the ghost 0, after ↓ 1 | nudge moments: silent 0 shown 0']);
   });
 
   test('describe shows the context, then the truth after the moment', () => {

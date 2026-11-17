@@ -20,16 +20,22 @@ import { ImageGallery } from '@/components/ImageGallery';
 import { useInboxStore, type OptimisticImage } from '@codecast/web/store/inboxStore';
 import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
-import { startUpload, forgetUpload, chooseAndPickImages } from '@/components/chat/chatUpload';
+import { startUpload, forgetUpload, chooseImageSource, pickImages } from '@/components/chat/chatUpload';
+import { beginScreenRecording, pickScreenRecording, recordingUpload, screenRecordingContent, type BegunRecording, type PickedRecording } from '@/lib/screenRecordingSend';
+import { formatCallTime } from '@codecast/shared/contracts';
 import type { useComposerField } from '@/lib/composerField';
 import { appAlert } from '@/lib/popups';
 
 // A send with attachments and no text carries this as its content.
 export const IMAGE_ONLY_CONTENT = '[image]';
 
-export type ComposerSuggestion = { text: string; index: number; count: number; onUse: () => void; onNext: () => void };
+export type ComposerSuggestion = { text: string; onUse: () => void };
 
 export type ComposerImage = { uri: string; mime: string; storageId?: string; uploading: boolean };
+
+/** A screen recording attached to the turn: named by the server once
+ *  `begun`, its bytes on their way until `uploaded`. */
+export type ComposerRecording = PickedRecording & { begun: BegunRecording | null; uploaded: boolean };
 
 // The optimistic-send core behind the composer's send button: pending row
 // in the store instantly, fire-and-forget delivery via the outbox (after the
@@ -62,7 +68,9 @@ export function dispatchComposerSend(conversationId: string, content: string, im
 
 /** The images attached to the turn being written, uploading as soon as they
  *  are picked, each with an `[Image N]` token in the text. */
-export function useComposerImages(setMessage: (update: (text: string) => string) => void) {
+export function useComposerImages(setMessage: (update: (text: string) => string) => void, opts: { recordingsTo?: string } = {}) {
+  // The session a screen recording would go to; none offers no recording.
+  const allowRecording = !!opts.recordingsTo;
   const convex = useConvex();
   const [selectedImages, setSelectedImages] = useState<ComposerImage[]>([]);
   // Mirrors the web composer's pastedImagesRef: the `[Image N]` token paths
@@ -108,8 +116,28 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
     }
   };
 
+  // One screen recording per turn: a second pick replaces the first.
+  const [recording, setRecording] = useState<ComposerRecording | null>(null);
+  const attachRecording = async () => {
+    const picked = await pickScreenRecording();
+    if (!picked) return;
+    setRecording({ ...picked, begun: null, uploaded: false });
+    const begun = await beginScreenRecording(convex, picked, opts.recordingsTo!);
+    const mine = (r: ComposerRecording | null) => r?.uri === picked.uri;
+    if (!begun) {
+      setRecording((r) => (mine(r) ? null : r));
+      return;
+    }
+    setRecording((r) => (mine(r) ? { ...r!, begun } : r));
+    const ok = await recordingUpload(picked.uri);
+    setRecording((r) => (mine(r) ? (ok ? { ...r!, uploaded: true } : null) : r));
+  };
+
   const pickImage = async () => {
-    const picked = await chooseAndPickImages();
+    const source = await chooseImageSource({ screenRecording: allowRecording });
+    if (!source) return;
+    if (source === 'screen-recording') return void attachRecording();
+    const picked = await pickImages(source);
     if (picked.length) attachImages(picked);
   };
 
@@ -119,7 +147,16 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
     ? { media_type: img.mime, storage_id: img.storageId }
     : { media_type: img.mime, preview_url: img.uri, uploading: true });
 
-  return { selectedImages, pickImage, attachImages, removeImage, optimisticImages, clearImages: () => setSelectedImages([]) };
+  /** The turn's text with its recording, when one is attached and named. */
+  const withRecording = (text: string) => (recording?.begun ? screenRecordingContent(recording.begun, recording, text) : text);
+
+  return {
+    selectedImages, pickImage, attachImages, removeImage, optimisticImages,
+    recording, removeRecording: () => setRecording(null), withRecording,
+    /** Something besides text the send would carry. */
+    attached: selectedImages.length > 0 || !!recording?.begun,
+    clearImages: () => { setSelectedImages([]); setRecording(null); },
+  };
 }
 
 export type ComposerStatus = { color: string; dot?: string; label: string };
@@ -182,8 +219,30 @@ export function MessageComposer({
 
   // 'always', as every strip in the composer: a tap here never puts the
   // keyboard away, even on a preview between its remove buttons.
-  const imageStripEl = images.selectedImages.length > 0 ? (
+  const rec = images.recording;
+  const imageStripEl = images.selectedImages.length > 0 || rec ? (
     <ScrollView horizontal style={styles.imagePreviewContainer} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always">
+      {rec && (
+        <RNView style={[styles.imagePreview, styles.recordingTile]} accessibilityLabel={`Screen recording, ${formatCallTime(rec.durationMs)}`}>
+          <Feather name="video" size={18} color={Theme.text} />
+          <RNText style={styles.recordingTileTime}>{formatCallTime(rec.durationMs)}</RNText>
+          {!rec.uploaded && (
+            <RNView style={styles.imageUploadingOverlay}>
+              <ActivityIndicator size="small" color="#fff" />
+            </RNView>
+          )}
+          <TouchableOpacity
+            style={styles.removeImageButton}
+            onPress={images.removeRecording}
+            activeOpacity={0.7}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Remove recording"
+          >
+            <Feather name="x" size={12} color="#fff" />
+          </TouchableOpacity>
+        </RNView>
+      )}
       {images.selectedImages.map((img, index) => (
         <RNView key={index} style={styles.imagePreview}>
           <TouchableOpacity activeOpacity={0.8} onPress={() => setViewing(index)} accessibilityRole="imagebutton" accessibilityLabel="View image">
@@ -240,12 +299,6 @@ export function MessageComposer({
       </RNView>
       {ghost && (
         <RNView style={styles.suggestionActions}>
-          {ghost.count > 1 && (
-            <TouchableOpacity style={styles.suggestionChip} onPress={ghost.onNext} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Next suggestion">
-              <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.suggestionChipText, styles.suggestionCount]}>{ghost.index + 1}/{ghost.count}</RNText>
-              <Feather name="chevron-right" size={13} color={Theme.textMuted} />
-            </TouchableOpacity>
-          )}
           <TouchableOpacity style={styles.suggestionChip} onPress={ghost.onUse} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Use suggestion">
             <Feather name="corner-down-left" size={12} color={Theme.text} />
             <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.suggestionChipText, { color: Theme.text }]}>Use</RNText>
@@ -401,6 +454,22 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
+  recordingTile: {
+    width: 80,
+    height: 80,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bgAlt,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 4,
+  },
+  recordingTileTime: {
+    fontSize: 11,
+    color: Theme.textDim,
+    fontVariant: ['tabular-nums'],
+  },
   imageUploadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -459,9 +528,6 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   suggestionChipText: {
     ...chipText,
     color: Theme.textMuted,
-  },
-  suggestionCount: {
-    fontVariant: ['tabular-nums'],
   },
   textInput: {
     ...S.textInput,

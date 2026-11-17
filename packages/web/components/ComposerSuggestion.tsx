@@ -19,22 +19,18 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 // the session is waiting on the user — a stale suggestion is worse than none.
 //
 // Tab (or a click on the ghost) drops the text into the composer; Enter then
-// sends it like anything typed. Up and down step through the alternatives
-// while the composer is empty. Typing anything replaces the ghost, which is
+// sends it like anything typed. Typing anything replaces the ghost, which is
 // the whole dismissal — no gesture to learn. Outcome telemetry settles on
-// send: verbatim is "sent", changed is "edited".
+// send: verbatim is "sent", changed is "edited", own words are "ignored".
 
-// Imperative surface for the composer's keydown handler. Selection state
-// lives in here (the list is this component's server row), but the keys
-// arrive on the composer textarea, which keeps DOM focus the whole time.
+// Imperative surface for the composer's keydown handler: the suggestion
+// lives in here (it is this component's server row), but the keys arrive on
+// the composer textarea, which keeps DOM focus the whole time.
 export interface ComposerSuggestionHandle {
   // The ghost is showing.
   visible(): boolean;
-  count(): number;
   // Put the shown suggestion into the composer; false when nothing is shown.
   accept(): boolean;
-  // Step to the previous/next suggestion (wraps).
-  cycle(delta: 1 | -1): boolean;
   // The composer just sent `text`: report the outcome if it descends from an
   // accepted suggestion.
   settleSend(text: string): void;
@@ -52,7 +48,7 @@ export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
   // ghost's words as it would for typed ones.
   onShownChange?: (text: string | null) => void;
 }>(function ComposerSuggestion({ conversationId, idle, hidden, onAccept, onShownChange }, ref) {
-  const { text, index, count, accept: take, cycle, settleSend } = useComposerSuggestion({ conversationId, idle, hidden });
+  const { text, accept: take, settleSend } = useComposerSuggestion({ conversationId, idle, hidden });
   const visible = text !== null;
   useWatchEffect(() => { onShownChange?.(text); }, [text, onShownChange]);
 
@@ -63,15 +59,13 @@ export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
     return true;
   }, [take, onAccept]);
 
-  const countRef = useRef(count);
-  countRef.current = count;
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   useImperativeHandle(ref, () => ({
-    visible: () => countRef.current > 0,
-    count: () => countRef.current,
+    visible: () => visibleRef.current,
     accept,
-    cycle,
     settleSend,
-  }), [accept, cycle, settleSend]);
+  }), [accept, settleSend]);
 
   if (!visible) return null;
 
@@ -85,7 +79,6 @@ export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
     <div data-composer-ghost className="pointer-events-none [grid-area:1/1] flex items-start gap-2 py-1 min-w-0 text-sm leading-relaxed animate-in fade-in-0 duration-200">
       <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sol-text-dim">{text}</span>
       <span className="shrink-0 flex items-center gap-1.5 h-[calc(0.875rem*1.625)] text-meta text-sol-text-dim/70 select-none">
-        {count > 1 && <span className="tabular-nums">{index + 1}/{count}</span>}
         <button
           type="button"
           // preventDefault so the composer keeps focus through the click.

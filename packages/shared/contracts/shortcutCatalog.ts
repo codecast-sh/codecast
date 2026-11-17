@@ -92,6 +92,7 @@ export type ShortcutAction =
   | 'review.undoVerdict'
   | 'compose.focus'
   | 'compose.richToggle'
+  | 'compose.suggestionTake'
   | 'sidebar.toggleLeft'
   | 'sidebar.back'
   | 'sidebar.toggleRight'
@@ -195,7 +196,7 @@ export interface ShortcutDef<A extends string = ShortcutAction> {
 export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+j', action: 'session.next', skipInputCheck: true, description: 'Next session' },
   { key: 'ctrl+k', action: 'session.prev', skipInputCheck: true, description: 'Previous session' },
-  { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to the top Needs You session' },
+  { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to the top Needs You session, else Done' },
   { key: 'ctrl+shift+d', action: 'session.jumpDecision', skipInputCheck: true, description: 'Jump to the top decision' },
   { key: 'ctrl+shift+o', action: 'session.jumpDone', skipInputCheck: true, description: 'Jump to the top Done session' },
   // Y is approve inside a conversation; with Ctrl+Shift it finds the prompt
@@ -411,6 +412,11 @@ export const SHORTCUTS: ShortcutDef[] = [
   // meta with no ctrl variant on purpose: ctrl+shift+e is session.rename,
   // which wins at the capture listener.
   { key: 'meta+shift+e', action: 'compose.richToggle', when: 'conversation', skipInputCheck: true, fixed: true, description: 'Toggle rich compose editor' },
+  // The suggested reply drawn as ghost text in an empty composer
+  // (components/ComposerSuggestion): Tab takes it into the box. Read inside
+  // MessageInput's keydown handler only while a ghost is on show and the box
+  // is empty, so Tab is never taken from typing or the mention menu.
+  { key: 'tab', action: 'compose.suggestionTake', when: 'conversation', skipInputCheck: true, fixed: true, description: 'Use the suggested reply' },
 
   // Codex's effort keys: one level up or down for the session the focused
   // composer belongs to, the conversation's or a compose popup's (modal) or

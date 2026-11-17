@@ -32,6 +32,7 @@ import { publishedLineProfileValidator } from "./lib/lineProfileValidator";
 import { signalPlacedValidator } from "./lib/signalPlacedValidator";
 import { callTables } from "./callsSchema";
 import { googleOAuthTables } from "./googleOAuthSchema";
+import { mcpTables } from "./mcpSchema";
 import { roleIconValidator } from "./lib/roleIconValidator";
 import { assistantTables } from "./assistantSchema";
 import { castMachineTables } from "./castMachinesSchema";
@@ -139,6 +140,7 @@ export default defineSchema({
   ...accountPoolTables,
   ...managedDeviceTables,
   ...googleOAuthTables,
+  ...mcpTables,
   ...oauthConnectorTables,
   // External data: sources, groups, samples, replays, metric watches, app calls (external-data.md).
   ...ingestTables,
@@ -4625,18 +4627,28 @@ export default defineSchema({
     generated_at: v.number(),
   }).index("by_conversation_id", ["conversation_id"]),
 
-  // Append-only record of what happened to each shown suggestion: sent as-is,
-  // edited first, or dismissed. This is the ground truth for judging (and
-  // later calibrating) the suggester — the model's self-reported confidence
-  // is uncalibrated until measured against these.
+  // Append-only record of what the person did with the suggestion shown for
+  // one agent turn: sent it as-is, edited it first, or passed it over for
+  // their own words ("dismissed" is a retired literal on old rows). It holds
+  // no text of theirs: what they sent is read from the transcript after the
+  // anchor (getRecentOutcomes), so deleting or redacting the session reaches
+  // it. Rows belong to their conversation (conversationRows) and account
+  // (accountDelete).
   suggestion_outcomes: defineTable({
     user_id: v.id("users"),
     conversation_id: v.id("conversations"),
     anchor_message_uuid: v.string(),
+    // The suggestion taken; for "ignored", the one on show when they typed.
     suggestion: v.string(),
-    outcome: v.union(v.literal("sent"), v.literal("edited"), v.literal("dismissed")),
+    outcome: v.union(v.literal("sent"), v.literal("edited"), v.literal("ignored"), v.literal("dismissed")),
+    // What was offered for the turn. Absent on rows recorded before Nov 2026,
+    // which never reported "ignored" and so stay out of the take rate.
+    shown: v.optional(v.array(v.string())),
     created_at: v.number(),
-  }),
+  })
+    .index("by_user_created", ["user_id", "created_at"])
+    .index("by_conversation_id", ["conversation_id"])
+    .index("by_created", ["created_at"]),
 
   // Per-user mined composer-input corpus: how this user actually talks to
   // their agents. `phrases` are recurring multi-word fragments mined across
@@ -6006,6 +6018,8 @@ export default defineSchema({
     .index("by_status_event_type", ["status", "event_filter.event_type"])
     // A chat line asks only for the triggers watching its channel (lib/triggerMatch).
     .index("by_channel_status", ["event_filter.channel_id", "status"])
+    // A page-state write asks only for the triggers watching its page (lib/triggerMatch).
+    .index("by_page_status", ["event_filter.page_id", "status"])
     .index("by_short_id", ["short_id"])
     // Anchor lookups for conversation-scoped visibility (webListForConversation):
     // a trigger armed from a session is findable from that session even when a
@@ -8225,6 +8239,25 @@ export default defineSchema({
     // keep. Best effort by design — the transcript is the artifact, and a
     // failed upload must never cost anyone their words.
     recording_storage_id: v.optional(v.id("_storage")),
+    // A SCREEN RECORDING: a video somebody recorded on their own screen while
+    // talking and sent to a session (screenRecordings.ts). The file is its
+    // call_recordings row (kind "screen") once uploaded; until then this
+    // holds the object key the client is uploading to. `no_audio` marks a
+    // video with no sound track (the microphone was off), so the surfaces
+    // can say that instead of "no words".
+    // `conversation_id` is the session it was sent to: who can read that
+    // session can read the recording (canReadRoomlessCall), and it stays out
+    // of everyone's call history, triggers and pushes (a message in a
+    // session, not a call anybody held).
+    screen_recording: v.optional(v.object({
+      conversation_id: v.optional(v.id("conversations")),
+      r2_key: v.string(),
+      requested_at: v.number(),
+      mime: v.string(),
+      width: v.optional(v.number()),
+      height: v.optional(v.number()),
+      no_audio: v.optional(v.boolean()),
+    })),
     // Reading the words back OUT of that audio, for a recorder that had no
     // recognizer of its own. A phone cannot stream microphone audio to the live
     // recognizer — React Native has no AudioContext — so its recording arrives
@@ -9263,6 +9296,9 @@ export default defineSchema({
     sync_local_only: v.optional(v.boolean()),
   })
     .index("by_channel_created", ["channel_id", "created_at"])
+    // A sender's newest lines across the team: chat search's "from:@person"
+    // with no words.
+    .index("by_team_user_created", ["team_id", "user_id", "created_at"])
     .index("by_thread_created", ["thread_root_id", "created_at"])
     .index("by_channel_client_id", ["channel_id", "client_id"])
     // A session's open "thinking" rows (chatSessionReplies): found when its

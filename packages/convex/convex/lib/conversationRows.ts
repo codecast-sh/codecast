@@ -23,6 +23,7 @@ export const CONVERSATION_ROW_TABLES: ReadonlyArray<readonly [string, string]> =
   ["public_comments", "by_conversation_id"],
   ["review_comments", "by_conversation"],
   ["composer_suggestions", "by_conversation_id"],
+  ["suggestion_outcomes", "by_conversation_id"],
   ["pending_messages", "by_conversation_id"],
   ["pending_permissions", "by_conversation_status"],
   ["session_decisions", "by_conversation_status"],

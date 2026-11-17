@@ -252,43 +252,26 @@ describe("rankInputs", () => {
 });
 
 describe("sanitizeSuggestions", () => {
-  test("legacy strings and {text} objects pass, capped at 2 by default", () => {
-    expect(
-      sanitizeSuggestions(["alpha one", { text: "beta two" }, "gamma three", "delta four"], null),
-    ).toEqual(["alpha one", "beta two"]);
-  });
-
-  test("confidence gates: <0.5 dropped, third pill needs >=0.7", () => {
+  test("one reply at most: the likeliest, and only at 0.5 or above", () => {
+    expect(sanitizeSuggestions(["alpha one", { text: "beta two" }], null)).toEqual(["alpha one"]);
     expect(
       sanitizeSuggestions(
         [
-          { text: "low ball guess", confidence: 0.45 },
-          { text: "solid answer", confidence: 0.9 },
-          { text: "decent answer", confidence: 0.55 },
+          { text: "ship it to staging tonight", confidence: 0.2 },
+          { text: "add the regression test first", confidence: 0.6 },
         ],
         null,
       ),
-    ).toEqual(["solid answer", "decent answer"]);
+    ).toEqual(["add the regression test first"]);
     expect(
       sanitizeSuggestions(
         [
-          { text: "option a", confidence: 0.95 },
-          { text: "option b", confidence: 0.9 },
-          { text: "option c", confidence: 0.72 },
+          { text: "option a", confidence: 0.45 },
+          { text: "option b", confidence: 0.4 },
         ],
         null,
       ),
-    ).toEqual(["option a", "option b", "option c"]);
-    expect(
-      sanitizeSuggestions(
-        [
-          { text: "option a", confidence: 0.95 },
-          { text: "option b", confidence: 0.9 },
-          { text: "option c", confidence: 0.65 },
-        ],
-        null,
-      ),
-    ).toEqual(["option a", "option b"]);
+    ).toEqual([]);
   });
 
   test("drops refusal prose, dupes, quotes, and the last user message", () => {
@@ -297,7 +280,10 @@ describe("sanitizeSuggestions", () => {
         ['"deploy the fix"', "Deploy the fix", "I cannot predict this", "run tests now", "commit it all"],
         "run tests now",
       ),
-    ).toEqual(["deploy the fix", "commit it all"]);
+    ).toEqual(["deploy the fix"]);
+    expect(
+      sanitizeSuggestions(['"run tests now"', "I cannot predict this", "commit it all"], "run tests now"),
+    ).toEqual(["commit it all"]);
   });
 
   test("drops bare continuation nudges", () => {
@@ -602,5 +588,62 @@ describe("suggest request seams", () => {
     expect((await handler({ db }, { api_token: "secret-a" }))._id).toBe("p1");
     await expect(handler({ db }, { api_token: "wrong" })).rejects.toThrow("Unauthorized");
     await expect(handler({ db }, { api_token: "" })).rejects.toThrow("Unauthorized");
+  });
+});
+
+// The suggester reads back what the developer typed after past suggestions so
+// it can learn the direction they took; it must never hand those words back.
+describe("the suggestion record never comes back verbatim", () => {
+  const profile = {
+    frequent: [], phrases: [], patterns: [], prompts: [], recent: [], generated_at: 0,
+    outcomes: [
+      { outcome: "ignored", suggestion: "ship it", reply: "Revert the flag and rerun the soak test" },
+      { outcome: "edited", suggestion: "add a test", reply: "add a test for the cookie race, then ship" },
+      { outcome: "sent", suggestion: "deploy the fix" },
+    ],
+  };
+  const ctx = { conversation: {}, turns: [{ role: "assistant", content: "The soak test is green. Ship it?" }] };
+
+  test("an echo of what they typed is dropped; a suggestion they took as written may return", async () => {
+    const reply = JSON.stringify([
+      { text: "revert the flag and rerun the soak test.", confidence: 0.7 },
+      { text: "Add a test for the cookie race, then ship", confidence: 0.3 },
+      { text: "deploy the fix", confidence: 0.3 },
+    ]);
+    const out = await predictSuggestions(ctx as any, profile as any, "anthropic", NO_TEAM_CONTENT_GATE, async () => ({ text: reply }));
+    expect(out.suggestions).toEqual([]);
+    const withNew = JSON.stringify([
+      { text: "revert the flag and rerun the soak test", confidence: 0.4 },
+      { text: "deploy the fix", confidence: 0.6 },
+      { text: "ship it and watch the error rate", confidence: 0.3 },
+    ]);
+    const out2 = await predictSuggestions(ctx as any, profile as any, "anthropic", NO_TEAM_CONTENT_GATE, async () => ({ text: withNew }));
+    expect(out2.suggestions).toEqual(["deploy the fix"]);
+  });
+
+  test("the prompt shows the record with its outcome, and the rule against replaying it", () => {
+    const prompt = suggestRequest(ctx as any, profile as any).prompt;
+    expect(prompt).toContain('- passed over: "ship it"\n    typed instead: "Revert the flag and rerun the soak test"');
+    expect(prompt).toContain('- took and rewrote: "add a test"');
+    expect(prompt).toContain("a reply from the suggestion record verbatim");
+  });
+});
+
+describe("near-verbatim replays are dropped too", () => {
+  const said = new Set([normalizeForMatch("Revert the flag on the checkout page and rerun the soak test before anything ships tonight")]);
+  test("a replay with a clause changed shares an 8-word run and is dropped", () => {
+    expect(sanitizeSuggestions([{ text: "revert the flag on the checkout page and rerun the soak test first", confidence: 0.9 }], null, said)).toEqual([]);
+  });
+  test("the same words reordered still overlap and are dropped", () => {
+    const short = new Set([normalizeForMatch("rerun the soak test after the revert")]);
+    expect(sanitizeSuggestions([{ text: "after the revert rerun the soak test", confidence: 0.9 }], null, short)).toEqual([]);
+  });
+  test("a new reply on the same subject survives", () => {
+    expect(sanitizeSuggestions([{ text: "ship it to staging and watch the error rate for an hour", confidence: 0.9 }], null, said)).toEqual(["ship it to staging and watch the error rate for an hour"]);
+  });
+  test("a reusable prompt may come back close to its own words", () => {
+    const prompt = normalizeForMatch("find 10 ways it can be clearer, fix them, verify, and repeat that 5 times");
+    const banned = new Set([normalizeForMatch("on the checkout page: find 10 ways it can be clearer, fix them, verify, and repeat that 5 times")]);
+    expect(sanitizeSuggestions([{ text: "on the export flow: find 10 ways it can be clearer, fix them, verify, and repeat that 5 times", confidence: 0.9 }], null, banned, [prompt])).toHaveLength(1);
   });
 });

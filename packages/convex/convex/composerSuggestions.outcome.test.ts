@@ -34,4 +34,14 @@ describe("composerSuggestions.recordSuggestionOutcome", () => {
     expect(db._tables.suggestion_outcomes.length).toBe(1);
     expect(db._tables.suggestion_outcomes[0].user_id).toBe(ANA);
   });
+
+  test("an ignored turn keeps what was shown and none of the person's words", async () => {
+    const db = world();
+    await (recordSuggestionOutcome as any)._handler(
+      { db, auth: { getUserIdentity: async () => ({ subject: `${ANA}|sess`, tokenIdentifier: "x" }) } },
+      { conversation_id: "conv_1", anchor_message_uuid: "m2", suggestion: "ship it", outcome: "ignored", shown: ["ship it"] },
+    );
+    expect(db._tables.suggestion_outcomes[0]).toMatchObject({ outcome: "ignored", shown: ["ship it"] });
+    expect("sent" in db._tables.suggestion_outcomes[0]).toBe(false);
+  });
 });
