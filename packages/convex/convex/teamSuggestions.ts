@@ -146,7 +146,6 @@ export async function attendingOwner(ctx: Ctx, conversation: Doc<"conversations"
 
 /** Whom a teammate's words go to as a suggestion, or null to send them straight in. */
 export async function steeringOwnerFor(ctx: Ctx, conversation: Doc<"conversations">, senderId: Id<"users">, now: number): Promise<Id<"users"> | null> {
-  if ((conversation as any).team_suggestions === false) return null;
   if ((conversation as any).standing_role_id || isHostedAgentType((conversation as any).agent_type)) return null;
   // Teammates only: an owner's words are their own, and a share link's
   // grantee sees no roster to tell them the owner is here.
@@ -413,17 +412,6 @@ export async function withdrawTeamSuggestionFor(ctx: Ctx, userId: Id<"users">, s
   if (row.status !== "pending") return { status: row.status };
   await ctx.db.patch(row._id, { status: "withdrawn", decided_at: Date.now() });
   return { status: "withdrawn" };
-}
-
-/** Owner: let teammates send straight in even while they are here (false),
- *  or go back to suggestions while attending (true). */
-export async function writeTeamSuggestions(ctx: Ctx, userId: Id<"users">, conversationId: string, enabled: boolean) {
-  const id = ctx.db.normalizeId("conversations", conversationId);
-  const conversation = id ? await ctx.db.get(id) : null;
-  if (!conversation || (await checkConversationAccess(ctx, userId, conversation)) !== "owner") {
-    throw new Error("Only the session's owner can do this");
-  }
-  await ctx.db.patch(conversation._id, { team_suggestions: enabled ? undefined : false });
 }
 
 /** The viewer's own recent suggestions in one session, oldest first, with

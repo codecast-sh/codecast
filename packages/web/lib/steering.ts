@@ -6,11 +6,11 @@
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { memberPresenceState, viewersOf } from "../components/presence/memberPresence";
 
-type SteeredConversation = { _id: unknown; user_id?: unknown; owner_user_id?: unknown; team_suggestions?: boolean | null; standing_role_id?: unknown; agent_type?: string };
+type SteeredConversation = { _id: unknown; user_id?: unknown; owner_user_id?: unknown; standing_role_id?: unknown; agent_type?: string };
 
 /** The id of the owner attending this session right now, or null. */
 export function attendingOwnerId(members: any[] | null | undefined, conversation: SteeredConversation | null | undefined, meId: string | null): string | null {
-  if (!conversation || conversation.team_suggestions === false) return null;
+  if (!conversation) return null;
   if (conversation.standing_role_id || isHostedAgentType(conversation.agent_type)) return null;
   const owners = new Set([conversation.user_id, conversation.owner_user_id].filter(Boolean).map(String));
   if (meId && owners.has(meId)) return null;

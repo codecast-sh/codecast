@@ -2621,7 +2621,6 @@ export const getConversationWithMeta = query({
       // turned off on another device would otherwise stay "on" in an open tab.
       share_token: (conversationLight as any).share_token ?? null,
       guest_suggestions: (conversationLight as any).guest_suggestions ?? null,
-      team_suggestions: (conversationLight as any).team_suggestions ?? null,
       // The same for the header's git line: a field can be unset (a cloud
       // agent's branch its provider no longer names, a local stamp cleared).
       git_branch: (conversationLight as any).git_branch ?? null,

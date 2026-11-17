@@ -15,7 +15,6 @@ import {
   proposePermissionFor,
   settlePermissionProposals,
   withdrawTeamSuggestionFor,
-  writeTeamSuggestions,
 } from "./teamSuggestions";
 
 const run = (fn: any) => fn._handler ?? fn.handler;
@@ -105,14 +104,11 @@ describe("a teammate's message while the owner is in the session", () => {
     }
   });
 
-  test("goes straight in when the owner turned suggestions off, and for the owner's own words", async () => {
+  test("waits even on a session an older client switched off, and the owner's own words go straight in", async () => {
     const w = world();
-    await writeTeamSuggestions(w.as("uRiley") as any, "uRiley" as any, "c1", false);
-    expect((await send(w, "uJordan", "a")).message_id).toBeTruthy();
-    await writeTeamSuggestions(w.as("uRiley") as any, "uRiley" as any, "c1", true);
-    expect((await send(w, "uJordan", "b")).message_id).toBeNull();
+    await w.db.patch("c1", { team_suggestions: false });
+    expect((await send(w, "uJordan", "a")).message_id).toBeNull();
     expect((await send(w, "uRiley", "c")).message_id).toBeTruthy();
-    await expect(writeTeamSuggestions(w.as("uJordan") as any, "uJordan" as any, "c1", false)).rejects.toThrow(/owner/);
   });
 
   test("the primary owner counts as attending; a teammate or an assigned owner viewing does not", async () => {
