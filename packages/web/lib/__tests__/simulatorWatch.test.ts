@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseSimCapture, parseSimDevice, watchErrorStatus, watchExitStatus } from "../browserWatch";
+import { glassClip, parseSimCapture, parseSimDevice, watchErrorStatus, watchExitStatus } from "../browserWatch";
 import { browserRelayKey } from "../browserWatchRelay";
 import { isSimulatorRoutePath, simulatorPanePath, simulatorPaneSession } from "../simulatorPane";
 
@@ -65,5 +65,21 @@ describe("simulator device messages", () => {
     expect(parseSimCapture({ kind: "video", error: "no" })).toEqual({ kind: "video", error: "no" });
     expect(parseSimCapture({ kind: "screenshot", mime: "image/png", data: "AA==" })).toBeNull();
     expect(parseSimCapture({ kind: "audio", error: "x" })).toBeNull();
+  });
+});
+
+describe("glassClip", () => {
+  test("rounds the letterboxed picture, not the box around it", () => {
+    // A 1:2 phone in a 400x400 box sits 200 wide, centered: 100px bands each side.
+    expect(glassClip("400x400", { width: 589, height: 1178 }, "iPhone 17 Pro")).toBe("inset(0px 100px 0px 100px round 27px)");
+  });
+
+  test("an iPad barely rounds and a home-button iPhone not at all", () => {
+    expect(glassClip("400x400", { width: 400, height: 400 }, "iPad Pro 13")).toBe("inset(0px 0px 0px 0px round 8px)");
+    expect(glassClip("400x400", { width: 400, height: 400 }, "iPhone SE (3rd generation)")).toBe("inset(0px 0px 0px 0px round 0px)");
+  });
+
+  test("no box yet, no clip", () => {
+    expect(glassClip("0x0", { width: 589, height: 1280 }, "iPhone 17 Pro")).toBeUndefined();
   });
 });

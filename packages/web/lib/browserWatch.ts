@@ -160,6 +160,22 @@ export function mapToFrame(
 }
 
 /**
+ * The clip-path that rounds a simulator frame's corners where it sits inside
+ * the box (object-contain letterboxes it). Corner radius by device family:
+ * an iPhone with a Dynamic Island or notch is about 13.5% of its short side,
+ * an iPad about 2%, a home-button iPhone (SE) square.
+ */
+export function glassClip(boxSig: string, frame: { width: number; height: number }, deviceName: string): string | undefined {
+  const [w, h] = boxSig.split("x").map(Number);
+  const rect = frameContentRect({ left: 0, top: 0, width: w, height: h }, frame);
+  if (!rect) return undefined;
+  const fraction = /\bSE\b/.test(deviceName) ? 0 : /iPad/i.test(deviceName) ? 0.02 : 0.135;
+  const r = Math.round(Math.min(rect.width, rect.height) * fraction);
+  const px = (n: number) => `${Math.max(0, Math.round(n))}px`;
+  return `inset(${px(rect.top)} ${px(w - rect.left - rect.width)} ${px(h - rect.top - rect.height)} ${px(rect.left)} round ${r}px)`;
+}
+
+/**
  * The other direction: a normalized page point to a pixel offset inside the
  * box, for drawing the agent's cursor over the frame. A point outside 0..1 is
  * clamped to the content edge rather than dropped: an arrow that vanished

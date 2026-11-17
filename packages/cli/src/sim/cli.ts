@@ -23,7 +23,6 @@ import { describeUi, findElements, formatElement, formatTree, screenPoints, type
 import { CLEAN_STATUS_BAR, PRIVACY_SERVICES, privacyServices, statusBarArgs, type StatusBarOptions } from "./settings.js";
 import { startRecording, stopRecording } from "./record.js";
 import { noteSimAction } from "./activity.js";
-import { rotateDevice } from "./simstream.js";
 import { toPanel, turned, uprightDegrees } from "./orientation.js";
 import { readOrientation, type SimOrientation } from "./pool.js";
 
@@ -422,6 +421,9 @@ A session acquires one pool simulator and every other verb targets it:
       if (!to) { console.log(ORIENTATION_NAMES[from]); return; }
       const next = to === "left" || to === "right" ? turned(from, to) : ORIENTATIONS[to];
       if (!next) die(`rotate takes left, right or one of ${Object.keys(ORIENTATIONS).join(", ")}, not '${to}'`);
+      // Loaded here: the stream helper's source rides simstream.ts, and the
+      // CLI's boot graph carries no more than a verb needs (bench/bootGraph).
+      const { rotateDevice } = await import("./simstream.js");
       const r = await rotateDevice(id, next);
       if ("error" in r) die(r.error);
       console.log(`${OK} ${ORIENTATION_NAMES[next]}`);
