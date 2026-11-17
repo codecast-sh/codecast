@@ -23,9 +23,9 @@ import { RecordGroupRow } from "./RecordGroupRow";
 import { LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerClosingRow, LedgerWord, ProposalSubjectCard } from "./ProposalSubjectCard";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { newRolesLedger } from "../consequential/roleOnline";
-import { cardRef, groupRef, newRolesOf, useAcceptRest as useAcceptRestModel, useCardAnswer, useEntryAnswer, type BatchEntry, type Proposal, type ProposalBatch, type ProposalEntryModel, type SubjectAnswer } from "./proposalLedgerModel";
+import { cardEntry, cardRef, groupEntry, groupRef, newRolesOf, useAcceptRest as useAcceptRestModel, useCardAnswer, useEntryAnswer, type BatchEntry, type Proposal, type ProposalBatch, type ProposalEntryModel, type SubjectAnswer } from "./proposalLedgerModel";
 
-export { cardRef, groupRef, useProposalEntries, useProposalSetEntries, type BatchEntry, type CardMembers, type ProposalBatch, type ProposalEntryModel } from "./proposalLedgerModel";
+export { cardEntry, cardRef, groupEntry, groupRef, useProposalEntries, useProposalSetEntries, type BatchEntry, type CardMembers, type ProposalBatch, type ProposalEntryModel } from "./proposalLedgerModel";
 
 // ---------------------------------------------------------------- the batch
 
@@ -187,8 +187,8 @@ export function ProposalFoot({ proposal, entries, batch, onMap, takeover, classN
   const [leaveLocal, setLeaveLocal] = useState(false);
   const withdrawn = proposal.status === "withdrawn";
   const list: BatchEntry[] = entries.records
-    ? entries.groups.map((g) => ({ waiting: g.waiting, ref: groupRef(proposal, g), changes: [] }))
-    : entries.cards.map((c, i) => ({ waiting: c.waiting, ref: cardRef(proposal, c, i + 1), changes: c.changes }));
+    ? entries.groups.map((g) => groupEntry(proposal, g))
+    : entries.cards.map((c, i) => cardEntry(proposal, c, i + 1));
   const open = list.filter((e) => e.waiting > 0).length;
   const acceptRest = useAcceptRest(list, batch);
   const { rest, pressed, answers } = acceptRest;

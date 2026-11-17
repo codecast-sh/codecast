@@ -19,7 +19,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { pendingAnswerOf } from "../../lib/reviewActions";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import { AnsweredCard, AnsweredGroup, cardRef, groupRef, useAcceptRest, useProposalBatch, useProposalSetEntries, type BatchEntry, type ProposalBatch } from "./ProposalLedger";
+import { AnsweredCard, AnsweredGroup, cardEntry, groupEntry, useAcceptRest, useProposalBatch, useProposalSetEntries, type BatchEntry, type ProposalBatch } from "./ProposalLedger";
 import { PinnedLead } from "./PinnedLead";
 import { LEDGER_HAIR, LEDGER_INKS } from "./ProposalSubjectCard";
 import type { SubjectCard } from "./proposalSubjects";
@@ -95,7 +95,7 @@ function CardPiece({ piece, n, batch, now, open, onOpen }: { piece: Extract<Piec
         <button type="button" onClick={() => onOpen(true)} aria-expanded={false} className="flex w-full items-baseline gap-2.5 py-2 text-left">
           <span className="w-4 shrink-0 text-right text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{n}</span>
           <span className="min-w-0 flex-1 text-[13px] leading-[19px] [text-wrap:pretty]" style={{ color: "var(--sol-text-muted)" }}><Sentence card={piece.card} /></span>
-          {staged && <StagedWord verdict={staged} />}
+          {staged ? <StagedWord verdict={staged} /> : piece.entry.approvable === 0 && <span className="shrink-0 text-meta font-medium" style={{ color: "var(--ink-red)" }} data-piece-failed>Failed</span>}
           <Age at={piece.at} now={now} />
           <ChevronRight className="h-3.5 w-3.5 shrink-0 self-center" style={{ color: "var(--sol-text-dim)" }} aria-hidden />
         </button>
@@ -123,8 +123,8 @@ function SetBody({ rows, name }: { rows: OrgProposalListRow[]; name: string }) {
   const now = useCoarseNow(60_000);
   const [open, setOpen] = useState<string | null>(null);
   const pieces = useMemo<Piece[]>(() => sets.flatMap(({ proposal, entries }) => entries.records
-    ? entries.groups.filter((g) => g.waiting > 0).map((group): Piece => ({ kind: "group", key: `${proposal._id}|${group.key}`, proposal, group, at: pieceAge(proposal.created_at, group.rows.map((r) => r.change)), entry: { waiting: group.waiting, ref: groupRef(proposal, group), changes: [] } }))
-    : entries.cards.filter((c) => c.waiting > 0).map((card): Piece => ({ kind: "card", key: `${proposal._id}|${card.key}`, proposal, card, at: pieceAge(proposal.created_at, [...card.changes, ...card.carried, ...card.riders]), entry: { waiting: card.waiting, ref: cardRef(proposal, card), changes: card.changes } })),
+    ? entries.groups.filter((g) => g.waiting > 0).map((group): Piece => ({ kind: "group", key: `${proposal._id}|${group.key}`, proposal, group, at: pieceAge(proposal.created_at, group.rows.map((r) => r.change)), entry: groupEntry(proposal, group) }))
+    : entries.cards.filter((c) => c.waiting > 0).map((card): Piece => ({ kind: "card", key: `${proposal._id}|${card.key}`, proposal, card, at: pieceAge(proposal.created_at, [...card.changes, ...card.carried, ...card.riders]), entry: cardEntry(proposal, card) })),
   ).sort((a, b) => a.at - b.at), [sets]);
   const acceptAll = useAcceptRest(pieces.map((p) => p.entry), batch);
   const loading = items.some((i) => i.changes.length === 0);
@@ -132,7 +132,7 @@ function SetBody({ rows, name }: { rows: OrgProposalListRow[]; name: string }) {
   const waiting = sets.flatMap((s) => waitingChanges(s.changes));
   const summary = pieces.length > 1 ? proposalTotals(waiting, sets[0]?.entries.names).line?.replace(/^\d+ changes: /, "").replace(/\.$/, "") : null;
   const answerable = !!batch.key;
-  const label = acceptAll.answers.length === 0 ? `${ORG_REPLY_WORDS.approve.act} all ${pieces.length}` : `${ORG_REPLY_WORDS.approve.act} the rest`;
+  const label = acceptAll.answers.length === 0 && acceptAll.rest.length === pieces.length ? `${ORG_REPLY_WORDS.approve.act} all ${pieces.length}` : `${ORG_REPLY_WORDS.approve.act} the rest`;
   return (
     <div className={cn("not-prose", LEDGER_INKS)} data-suggestion-set={pieces.length}>
       <div className="flex items-center gap-3">

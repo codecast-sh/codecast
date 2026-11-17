@@ -2,6 +2,7 @@ import { labelsOf, noteOrgChange, recordSubject, roleSubject, whereOfRecord, whe
 import { syncProjectTriggers } from "./lib/agentTaskRows";
 import { applyFile, applyFileSession, looseSessionsOf } from "./lib/orgSessionFiling";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
+import { matchHandle } from "@codecast/shared/chat";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { action, mutation, query } from "./functions";
 import { api, internal } from "./_generated/api";
@@ -1114,12 +1115,13 @@ async function resolveReportsTo(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   if (!trimmed || trimmed.toLowerCase() === "me") return { kind: "user" as const, user_id: userId };
   const role = roleByRef(await rolesInBoundary(ctx, boundary), trimmed);
   if (role) return { kind: "role" as const, role_id: role._id as Id<"org_roles"> };
-  // A person: a member by name or email inside the boundary.
-  const candidates: any[] = boundary.team_id
+  // A person inside the boundary: by id, name or email, else by the handle
+  // the roster shows them under (@ashot), read the way chat mentions read it.
+  const candidates: any[] = (boundary.team_id
     ? await Promise.all((await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", boundary.team_id)).collect()).map((m: any) => ctx.db.get(m.user_id)))
-    : [await ctx.db.get(userId)];
+    : [await ctx.db.get(userId)]).filter(Boolean);
   const lc = trimmed.toLowerCase();
-  const person = candidates.find((u) => u && (String(u._id) === trimmed || (u.name ?? "").toLowerCase() === lc || (u.email ?? "").toLowerCase() === lc));
+  const person = candidates.find((u) => String(u._id) === trimmed || (u.name ?? "").toLowerCase() === lc || (u.email ?? "").toLowerCase() === lc) ?? matchHandle(candidates, trimmed);
   if (person) return { kind: "user" as const, user_id: person._id as Id<"users"> };
   throw new Error(`reports_to "${trimmed}" is neither a role nor a member of this workspace`);
 }

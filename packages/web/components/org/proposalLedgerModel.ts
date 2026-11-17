@@ -6,7 +6,7 @@
 // (`reviewComments[key]`) and the send applies it (lib/reviewActions).
 import { useMemo, useState } from "react";
 import { proposalTotals } from "@codecast/shared/contracts/orgChangeWords";
-import { isOrgChangeDecidable, orgProposalWork, type OrgAskNames, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
+import { isOrgChangeApprovable, isOrgChangeDecidable, orgProposalWork, type OrgAskNames, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
 import type { PendingComment, PendingProposalAnswer } from "../../lib/quoteFormat";
 import { answerProposalCard, pendingAnswerOf, type ProposalCardRef } from "../../lib/reviewActions";
 import { useInboxStore } from "../../store/inboxStore";
@@ -170,8 +170,24 @@ export function newRolesOf(changes: readonly OrgProposalChange[]) {
     : []));
 }
 
-/** What "Accept all" counts: every entry that can still be answered, with the changes a hire review reads. */
-export type BatchEntry = { waiting: number; ref: ProposalCardRef; changes: readonly OrgProposalChange[] };
+/** One answerable entry of a ledger, with the changes a hire review reads.
+ *  "Accept all" counts the entries with an `approvable` change, one an accept
+ *  can apply. A failed change waits too, but approving it again fails
+ *  the same way, so "Accept all" leaves it to its own card (reject, or wait
+ *  for its author to revise it). */
+export type BatchEntry = { waiting: number; approvable: number; ref: ProposalCardRef; changes: readonly OrgProposalChange[] };
+export const cardEntry = (proposal: ProposalRef, card: SubjectCard, number?: number): BatchEntry => ({
+  waiting: card.waiting,
+  approvable: [...card.changes, ...card.carried, ...card.riders].filter((c) => isOrgChangeApprovable(c.status)).length,
+  ref: cardRef(proposal, card, number),
+  changes: card.changes,
+});
+export const groupEntry = (proposal: ProposalRef, group: RecordGroupCard): BatchEntry => ({
+  waiting: group.waiting,
+  approvable: group.rows.filter((r) => isOrgChangeApprovable(r.status)).length,
+  ref: groupRef(proposal, group),
+  changes: [],
+});
 const entryId = (proposalId: string, key: string) => `${proposalId}|${key}`;
 
 /**
@@ -187,7 +203,7 @@ export function useAcceptRest(list: readonly BatchEntry[], batch: ProposalBatch,
   const answers = (batch.comments ?? []).filter((c): c is PendingComment & { proposal: PendingProposalAnswer } => !!c.proposal && proposals.has(c.proposal.id));
   const idOf = (a: { proposal: PendingProposalAnswer }) => entryId(a.proposal.id, a.proposal.card);
   const answered = new Set(answers.map(idOf));
-  const rest = list.filter((e) => e.waiting > 0 && !answered.has(entryId(e.ref.proposal.id, e.ref.key)));
+  const rest = list.filter((e) => e.approvable > 0 && !answered.has(entryId(e.ref.proposal.id, e.ref.key)));
   const putStill = put.filter((id) => answers.some((a) => idOf(a) === id && a.proposal.verdict === "approve"));
   const write = (ref: ProposalCardRef, answer: SubjectAnswer | null) => { if (batch.key) answerProposalCard(batch.key, ref, answer); };
   const approve = (tick: boolean): SubjectAnswer => ({ verdict: "approve", ...(tick ? { leave_sessions: true } : {}) });

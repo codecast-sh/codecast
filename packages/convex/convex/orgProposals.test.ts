@@ -1675,21 +1675,41 @@ describe("record groups, charter edits and charter lists", () => {
       change({ kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "on budget", after: "under budget" }, { op: "add", line: "Reports spend every Monday." }] }, "The lead now reports spend."),
     ]) });
     const r2 = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([
-      change({ kind: "charter_edit", handle: "growth", edits: [{ op: "remove", before: "Reads the ads account every evening." }] }, "Stale line."),
+      change({ kind: "charter_edit", handle: "growth", edits: [{ op: "remove", before: "Reads the ads account every morning." }] }, "Stale line."),
     ]) });
     expect((await readProposal(ctxOf(db), ME as any, r.short_id)).asks.map((a: any) => [a.title, a.effect])).toEqual([
       ["Change what growth's charter says", "growth's charter changes in 2 places; each passage is shown before and after. Its area and its reporting line stay as they are."],
     ]);
     expect((await readProposal(ctxOf(db), ME as any, r2.short_id)).asks[0].effect).toBe("growth's charter changes in one place; each passage is shown before and after. Its area and its reporting line stay as they are.");
+    // A passage the charter does not hold, or an edit past the cap, is the author's to fix: refused at post, never put to the person.
+    await expect(performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([
+      change({ kind: "charter_edit", handle: "growth", edits: [{ op: "remove", before: "Reads the ads account every evening." }] }, "Stale line."),
+    ]) })).rejects.toThrow('@growth\'s charter: the passage "Reads the ads account every evening." is not in the charter as it stands; quote it exactly');
+    await expect(performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([
+      change({ kind: "charter_edit", handle: "growth", edits: [{ op: "add", line: "x".repeat(280) }, { op: "add", line: "y".repeat(280) }, { op: "add", line: "z".repeat(280) }] }, "Longer."),
+    ]) })).rejects.toThrow("@growth's charter: the charter would be");
     const ok = await performDecideChange(ctxOf(db), ME as any, { change_id: String(r.changes[0].id), verdict: "accept", provision: false });
     expect([ok.status, ok.note]).toEqual(["applied", "@growth: charter a passage rewritten, a line added (128 characters)"]);
     expect((await db.get(GROWTH as any)).charter).toBe("Keeps paid acquisition under budget and pointed at the funnel. Reads the ads account every morning.\n\nReports spend every Monday.");
     // The accepted row stamps the charter before and after (S39), so the card draws the real passages after apply.
     const stamp = (await readProposal(ctxOf(db), ME as any, r.short_id)).changes[0].applied_diff;
     expect(stamp).toMatchObject([{ kind: "charter_edit", before: { charter: "Keeps paid acquisition on budget and pointed at the funnel. Reads the ads account every morning." }, after: { charter: "Keeps paid acquisition under budget and pointed at the funnel. Reads the ads account every morning.\n\nReports spend every Monday." } }]);
+    // The first edit rewrote the charter under the second: its passage is gone now, so the apply refuses it.
+    await db.patch(GROWTH as any, { charter: "Keeps paid acquisition under budget." });
     const miss = await performDecideChange(ctxOf(db), ME as any, { change_id: String(r2.changes[0].id), verdict: "accept", provision: false });
     expect(miss.status).toBe("failed");
-    expect(miss.note ?? miss.error).toContain('@growth\'s charter: the passage "Reads the ads account every evening." is not in the charter as it stands; quote it exactly');
+    expect(miss.note ?? miss.error).toContain('@growth\'s charter: the passage "Reads the ads account every morning." is not in the charter as it stands; quote it exactly');
+  });
+  test("a new role reports to a member named by the handle the roster shows them under", async () => {
+    const db = fixtures();
+    await db.patch(MATE as any, { github_username: "matey" });
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([
+      change({ kind: "role", name: "Ops hand", handle: "ops-hand", reports_to: "matey" }),
+      change({ kind: "role", name: "Docs hand", handle: "docs-hand", reports_to: "@matey" }),
+    ]) });
+    for (const c of r.changes) expect((await performDecideChange(ctxOf(db), ME as any, { change_id: String(c.id), verdict: "accept", provision: false })).status).toBe("applied");
+    const made = (await db.query("org_roles").collect()).filter((x: any) => x.handle.endsWith("-hand"));
+    expect(made.map((x: any) => x.reports_to)).toEqual([{ kind: "user", user_id: MATE }, { kind: "user", user_id: MATE }]);
   });
   test("a project charter change adds to the lists the project holds and replaces its single values", async () => {
     const db = fixtures();

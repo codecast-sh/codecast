@@ -14,7 +14,7 @@ import { resolveActor } from "./lib/actor";
 import { computeOrgHealth } from "./orgHealth";
 import { userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { requireWorkspaceCaller } from "./org";
-import { applyOrgChange, type ApplyResult, type Boundary } from "./orgInit";
+import { applyOrgChange, roleByRef, type ApplyResult, type Boundary } from "./orgInit";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { filesOnlyOwnSessions } from "./lib/orgSessionFiling";
 import { STABILITY } from "@codecast/shared/contracts/orgCapacity";
@@ -23,6 +23,7 @@ import { setInboxStatus } from "./sessionDecisions";
 import { scheduleDecisionSettle } from "./taskWaits";
 import {
   andList,
+  applyCharterEdits,
   changeSentence,
   describeOrgChange, orgChangeDependencies, orgChangeTakesOver,
   editedOrgChange,
@@ -119,7 +120,18 @@ async function requireAdmin(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow
  * than at accept, where it could only fail; a ref that is not a short id is
  * left as written for the apply step to resolve.
  */
-async function checkedRecordChange<T extends OrgChange>(ctx: Ctx, change: T, wsKey: string): Promise<T> {
+async function checkedRecordChange<T extends OrgChange>(ctx: Ctx, change: T, seat: Boundary): Promise<T> {
+  // A charter edit is checked against the charter as it stands now, so a
+  // passage that is missing or an edit that breaks the cap is the author's
+  // to fix before the person sees it, not a refusal at their approval. A
+  // role this proposal creates has no charter yet; its apply checks it.
+  if (change.kind === "charter_edit") {
+    const role = roleByRef(await rolesInBoundary(ctx, seat), change.handle);
+    const edited = role ? applyCharterEdits(role.charter ?? "", change.edits) : null;
+    if (edited?.error !== undefined) throw new Error(`@${role.handle}'s charter: ${edited.error}`);
+    return change;
+  }
+  const wsKey = workspaceKey(seat.team_id ? { type: "team", teamId: seat.team_id } : { type: "personal", userId: seat.scope_user_id! });
   if (change.kind !== "plan_status" && change.kind !== "task_status" && change.kind !== "project_status" && change.kind !== "initiative_projects" && change.kind !== "initiative_owner" && change.kind !== "initiative_shape") return change;
   const table = change.kind === "plan_status" ? "plans" : change.kind === "task_status" ? "tasks" : change.kind === "project_status" ? "projects" : "initiatives";
   const ref = (change.kind === "plan_status" ? change.plan : change.kind === "task_status" ? change.task : change.kind === "project_status" ? change.project : change.initiative).trim();
@@ -229,9 +241,9 @@ export async function performCreateProposal(
   }
 
   const changes = [];
-  const wsKey = workspaceKey(args.team_id ? { type: "team", teamId: args.team_id } : { type: "personal", userId });
+  const seat: Boundary = args.team_id ? { team_id: args.team_id } : { scope_user_id: userId };
   const checked: OrgChange[] = [];
-  for (const c of spec.changes) checked.push(await checkedRecordChange(ctx, c.change, wsKey));
+  for (const c of spec.changes) checked.push(await checkedRecordChange(ctx, c.change, seat));
   // A task the author did not place under its plan may still sit under one
   // this proposal closes: the records say so, and the refusal is the parser's.
   const covered = orgRecordRedundancyErrors(checked.map((change) => ({ change })));
@@ -1014,7 +1026,7 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
       writes.push(() => ctx.db.patch(c._id, { status: "removed", revision }));
     } else if (op.op === "amend") {
       const c = undecided(op.seq, "amend");
-      const merged = editedChange(c.change, op.edits);
+      const merged = await checkedRecordChange(ctx, editedChange(c.change, op.edits), boundaryOf(proposal));
       release(c.change, c.seq);
       claim(merged, c.seq, "amend");
       const was = describeOrgChange(c.change);
@@ -1028,7 +1040,7 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
       writes.push(() => ctx.db.patch(c._id, patch));
     } else {
       const added = normalizeOrgSpecChange(op.change);
-      added.change = await checkedRecordChange(ctx, added.change, workspaceKey(proposal.team_id ? { type: "team", teamId: proposal.team_id } : { type: "personal", userId: proposal.scope_user_id ?? userId }));
+      added.change = await checkedRecordChange(ctx, added.change, boundaryOf(proposal));
       const seq = nextSeq++;
       claim(added.change, seq, "add");
       const line = describeOrgChange(added.change);
