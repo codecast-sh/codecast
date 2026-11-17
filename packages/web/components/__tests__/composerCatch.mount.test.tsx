@@ -27,11 +27,14 @@ afterAll(() => {
 let run = 0;
 const KEY = `sk_test_${"a1B2c3D4e5".repeat(3)}`;
 
+// Every action's args, so a test can read what Save to Vault created.
+const actions: any[] = [];
+
 function fakeConvex() {
   const client = offlineConvexClient("https://example.convex.cloud");
   (client as any).mutation = async () => null;
   (client as any).query = async () => null;
-  (client as any).action = async () => ({ short_id: "sec-1" });
+  (client as any).action = async (_ref: unknown, args: unknown) => (actions.push(args), { short_id: "sec-1" });
   (client as any).watchQuery = () => ({ onUpdate: () => () => {}, localQueryResult: () => undefined, localQueryLogs: () => undefined, journal: () => undefined });
   return client;
 }
@@ -166,4 +169,28 @@ test("Save to Vault and send sends a reference in place of the value", async () 
   expect(r.sent).toHaveLength(1);
   expect(r.sent[0]).toContain("[vault secret stripe-test");
   expect(r.sent[0]).not.toContain(KEY);
+});
+
+test("a name typed as an env var saves as its slug and fills that env var", async () => {
+  actions.length = 0;
+  const r = await submit("", async ({ container: c }) => {
+    const input = c.querySelector("[data-composer-catch-name]") as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, "value")!.set!.call(input, "MERCURY_API_KEY");
+      (input as any)[Object.keys(input).find((k) => k.startsWith("__reactProps"))!].onChange({ target: input, currentTarget: input });
+    });
+    expect(input.value).toBe("MERCURY_API_KEY");
+    await act(async () => { (c.querySelector("[data-composer-catch-save]") as HTMLButtonElement).click(); });
+    await settle(100);
+  }, {
+    before: async ({ textarea }) => {
+      await act(async () => { typeInto(textarea(), `use ${KEY} for checkout`); });
+      await settle(400);
+    },
+  });
+  expect(r.sent).toHaveLength(1);
+  expect(r.sent[0]).toContain("[vault secret mercury-api-key");
+  expect(r.sent[0]).toContain("MERCURY_API_KEY");
+  expect(r.sent[0]).not.toContain(KEY);
+  expect(JSON.stringify(actions)).toContain('"env":["MERCURY_API_KEY"]');
 });
