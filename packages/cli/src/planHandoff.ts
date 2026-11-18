@@ -1,15 +1,18 @@
 // A session started from an accepted plan opens with a pointer to the
 // planning session's transcript; the daemon links the two and sends the
 // planner's messages on to the session doing the work. A compaction summary
-// uses the same wording to point at the session's OWN transcript, which
-// must never link a session to itself.
+// uses the same pointer, and a fork or a reconstituted copy carries its
+// source's summary, so only a pointer that says it was written on leaving
+// plan mode counts. If Claude Code rewords that sentence, handoffs stop
+// linking and messages stay where they were sent; nothing is misdelivered.
 
 /** The parent session a user message hands off from: null when the message
- *  carries no transcript pointer, "" when it carries one that names no other
+ *  carries no transcript pointer, "" when its pointer is not a plan handoff or names no other
  *  session. */
 export function handoffParentSessionId(content: string, ownSessionId: string): string | null {
-  const pointer = content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
-  if (!pointer) return null;
+  if (!/read the full transcript at:\s*\S+\.jsonl/i.test(content)) return null;
+  const pointer = content.match(/before exiting plan mode\b[^\n]*?read the full transcript at:\s*(\S+\.jsonl)/i);
+  if (!pointer) return "";
   const parent = pointer[1].match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/)?.[1] ?? "";
   return parent === ownSessionId ? "" : parent;
 }

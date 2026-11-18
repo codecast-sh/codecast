@@ -5,12 +5,20 @@ const OWN = "b6f02af8-bae7-476b-8d14-d130da0af41a";
 const PARENT = "2e7dee08-e873-4f7e-b68e-e2607999b559";
 
 describe("handoffParentSessionId", () => {
-  test("a plan handoff names its parent", () => {
-    expect(handoffParentSessionId(`Implement the following plan: …\nread the full transcript at: /Users/x/.claude/projects/-p/${PARENT}.jsonl`, OWN)).toBe(PARENT);
+  test("a pointer that does not say it left plan mode names no parent", () => {
+    expect(handoffParentSessionId(`Implement the following plan: …\nread the full transcript at: /Users/x/.claude/projects/-p/${PARENT}.jsonl`, OWN)).toBe("");
   });
 
   test("a compaction summary pointing at the session's own transcript names no parent", () => {
     expect(handoffParentSessionId(`If you need specific details from before compaction, read the full transcript at: /home/jason/.claude/projects/-home-jason/${OWN}.jsonl\nContinue`, OWN)).toBe("");
+  });
+
+  test("a compaction summary a fork inherited names no parent", () => {
+    expect(handoffParentSessionId(`If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/x/.claude/projects/-p/${PARENT}.jsonl\nContinue`, OWN)).toBe("");
+  });
+
+  test("a plan handoff names its parent", () => {
+    expect(handoffParentSessionId(`Implement the following plan:\n\n# Plan\n\nIf you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/x/.claude/projects/-p/${PARENT}.jsonl`, OWN)).toBe(PARENT);
   });
 
   test("a pointer without a session id names no parent", () => {
@@ -56,7 +64,7 @@ describe("linkPlanHandoffChild", () => {
   test("a pointer to an older session id of the same conversation leaves its real child alone", () => {
     const cache: Record<string, string> = { [PARENT]: "c", [OWN]: "c" };
     const children = new Map([["c", "real-child"]]);
-    const parent = handoffParentSessionId(`read the full transcript at: /x/${PARENT}.jsonl`, OWN)!;
+    const parent = handoffParentSessionId(`If you need specific details from before exiting plan mode, read the full transcript at: /x/${PARENT}.jsonl`, OWN)!;
     expect(linkPlanHandoffChild(children, cache[parent], cache[OWN])).toBe(false);
     expect(children.get("c")).toBe("real-child");
   });
