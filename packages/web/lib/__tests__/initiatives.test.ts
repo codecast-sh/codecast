@@ -61,6 +61,8 @@ test("the wake signature ignores a bare updated_at and sees a health change", ()
   const r = row("in-1");
   expect(initiativeSig({ ...r, updated_at: r.updated_at + 1 })).toBe(initiativeSig(r));
   expect(initiativeSig({ ...r, health: "off_track" })).not.toBe(initiativeSig(r));
+  // A goal naming its environments repaints the page (GoalEnvLevels).
+  expect(initiativeSig({ ...r, envs: [{ env: "union/replay", level: "L2" }] } as any)).not.toBe(initiativeSig(r));
   // The number, its history and the record are painted by the list and the page (I4, I5).
   expect(initiativeSig({ ...r, metrics: [{ key: "k", name: "K", target: "10" }] })).not.toBe(initiativeSig(r));
   expect(initiativeSig({ ...r, scoreboard: { k: { value: "4", observed_at: 1, source: "s" } } })).not.toBe(initiativeSig(r));

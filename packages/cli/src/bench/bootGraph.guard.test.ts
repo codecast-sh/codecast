@@ -322,8 +322,10 @@ describe("command groups stay off the boot graph", () => {
     // 366 on 2026-11-16: ccFleetState.ts, the fleet state record split out of
     // ccAccounts.ts for its max-lines pin, no new code. 367 the same day:
     // contracts/screenRecording.ts, which the daemon reads to expand a screen
-    // recording into its brief.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(367);
+    // recording into its brief. 368 on 2026-11-17: contracts/metricStanding.ts,
+    // a goal metric read over a window with a noise band, which initiative.ts
+    // reads for every standing (and pure: no imports).
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(368);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -459,7 +461,17 @@ describe("command groups stay off the boot graph", () => {
     // on demand), usageLimits.ts +1, commandGroups.ts and snippets.ts +1 each.
     // 4757 the same day: the `cast guide sim` text in snippets.ts (the rotate
     // verb and its paragraph); the verb loads simstream.ts on demand.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4757);
+    // 4784 the same day: contracts/metricStanding.ts +25 (a goal metric read
+    // over a window with a noise band: the bands, the detectable change and the
+    // executable done-when), reached through initiative.ts, plus its callers +2.
+    // 4788 on 2026-11-18 (ct-96177): a task's predicted effect: --predict and
+    // --goal-ref in index.ts, the goal's Predictions lines in
+    // initiativeCommand.ts and ground's prediction field in goalsBrief.ts; the
+    // grammar and the judge (predictedEffect.ts) load on demand.
+    // 4790 the same day (ct-96178): `cast env`, its group help line in
+    // commandGroups.ts and `cast goal envs` in index.ts +2; the bodies load
+    // dynamically (envCommand.ts).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4790);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

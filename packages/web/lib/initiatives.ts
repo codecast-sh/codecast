@@ -100,7 +100,7 @@ export const initiativeSig = (r: InitiativeRow): string =>
 /** The numbers and the intent record (I4, I5): a list row paints the metric
  *  with its trend and the next milestone, and the page paints all of it. */
 const recordSig = (r: InitiativeRow): string =>
-  JSON.stringify([r.metrics ?? 0, r.scoreboard ?? 0, r.score_history ?? 0, r.why ?? 0, r.done_when ?? 0, r.milestones ?? 0, r.questions ?? 0, r.decisions ?? 0, r.sources ?? 0]);
+  JSON.stringify([r.metrics ?? 0, (r as { envs?: unknown }).envs ?? 0, r.scoreboard ?? 0, r.score_history ?? 0, r.why ?? 0, r.done_when ?? 0, r.milestones ?? 0, r.questions ?? 0, r.decisions ?? 0, r.sources ?? 0]);
 
 /** The key a create or an update stub is born with, and the server row
  *  carries back: never a Convex id, so nothing mistakes the stub for a row. */

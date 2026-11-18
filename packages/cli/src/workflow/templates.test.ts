@@ -388,7 +388,7 @@ describe("line.cast station scripts", () => {
     const bin = path.join(tmp, "bin");
     fs.mkdirSync(bin);
     log = path.join(tmp, "cast.log");
-    fs.writeFileSync(path.join(bin, "cast"), `#!/bin/bash\nif [ "$1 $2" = "ws path" ]; then echo "${repo}"; exit 0; fi\nfor a in "$@"; do printf '%s\\n' "$a"; done >> "${log}"\necho --- >> "${log}"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "cast"), `#!/bin/bash\nif [ "$1 $2" = "ws path" ]; then echo "${repo}"; exit 0; fi\nfor a in "$@"; do printf '%s\\n' "$a"; done >> "${log}"\necho --- >> "${log}"\nif [ "$1 $2" = "env eval" ] && [ -n "$FAKE_ENV_EVAL" ]; then echo "$FAKE_ENV_EVAL"; fi\n`, { mode: 0o755 });
     env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -401,6 +401,8 @@ describe("line.cast station scripts", () => {
     const r = spawnSync("bash", ["-c", expandScriptVars(graph.nodes.get(id)!.script!, ctx)], { cwd: tmp, env: { ...env, ...lineCommandEnv(ctx) }, encoding: "utf-8" });
     return { code: r.status, out: r.stdout, json: extractJsonOutput(r.stdout) as any };
   };
+  // The eval station asks for the goal's environments first; with none it prints nothing.
+  const envEvalCall = (dir: string) => ["env", "eval", "--task", "ct-1", "--out", `${dir}/env-eval.json`];
   const calls = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf-8").split("---\n").filter(Boolean).map((c) => c.trimEnd().split("\n")) : []);
 
   test("red: no reproduction, a passing one, and a failing one", () => {
@@ -527,7 +529,21 @@ describe("line.cast station scripts", () => {
     const evalCmd = { "line.commands.eval": 'pwd > "$run_dir/where"; echo "{}" > "$run_dir/reps.json"; exit 1' };
     expect(run("eval", evalCmd).code).toBe(0);
     expect(fs.realpathSync(fs.readFileSync(path.join(dir, "where"), "utf-8").trim())).toBe(fs.realpathSync(repo));
-    expect(calls()).toEqual([["line", "eval-result", "--reps", `${dir}/reps.json`, "--out", `${dir}/eval-result.json`]]);
+    expect(calls()).toEqual([envEvalCall(dir), ["line", "eval-result", "--reps", `${dir}/reps.json`, "--out", `${dir}/eval-result.json`]]);
+  });
+
+  test("eval reports the goal's environments, branch against base, on the task and in its output, and never decides its exit on them", () => {
+    const dir = runDir();
+    env.FAKE_ENV_EVAL = "L0 acme/smoke: +0.225 [+0.130, +0.320] over 4 cases, better (base ea-2, branch ea-1)";
+    const out = run("eval", { "line.commands.eval": 'echo "{}" > "$run_dir/reps.json"' });
+    delete env.FAKE_ENV_EVAL;
+    expect(out.code).toBe(0);
+    expect(out.out).toContain("L0 acme/smoke: +0.225");
+    expect(calls()).toEqual([
+      envEvalCall(dir),
+      ["task", "comment", "ct-1", "Environments, the branch against its base:", "L0 acme/smoke: +0.225 [+0.130, +0.320] over 4 cases, better (base ea-2, branch ea-1)", "-t", "progress"],
+      ["line", "eval-result", "--reps", `${dir}/reps.json`, "--out", `${dir}/eval-result.json`],
+    ]);
   });
 
   test("eval fails when the command wrote no reps, never reading a stale file, and passes with a note when the project has none", () => {
@@ -537,9 +553,9 @@ describe("line.cast station scripts", () => {
     const crashed = run("eval", { "line.commands.eval": "echo boom; exit 2" });
     expect(crashed.code).toBe(2);
     expect(crashed.out).toContain(`the eval command exited 2 and wrote no ${dir}/reps.json`);
-    expect(calls()).toEqual([]);
+    expect(calls()).toEqual([envEvalCall(dir)]);
     expect(run("eval", {}).code).toBe(0);
-    expect(calls()).toEqual([["task", "comment", "ct-1", "This project's flow profile names no eval command, so the eval station passed without evals and the change is unscored.", "-t", "progress"]]);
+    expect(calls()).toEqual([envEvalCall(dir), envEvalCall(dir), ["task", "comment", "ct-1", "This project's flow profile names no eval command, so the eval station passed without evals and the change is unscored.", "-t", "progress"]]);
   });
 
   test("ship runs the project's ship command and puts the one line it prints on the task; without one it runs Ship, which never merges on its own", () => {

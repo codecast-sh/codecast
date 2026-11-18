@@ -624,6 +624,17 @@ export const CLIENT_SYNC_REGISTRY = {
     unprotectedFields: ["health_at", "latest_update_id", "updated_at", "milestones", "questions", "decisions", "sources", "scoreboard", "score_history"],
     feeds: ["initiatives.webList"],
   },
+  // Each environment a goal names, with its latest attempt and link (convex
+  // envs.workspaceStandings), one row per env keyed workspace|env. The level
+  // and note live on the goal row (initiatives.envs); the goal page joins them.
+  envStandings: {
+    persistence: { kind: "collection", key: "envStandings" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    // The attempt and the link are objects: a new run must replace them.
+    sync: { deepFields: ["attempt", "link"] },
+    feeds: ["envs.workspaceStandings"],
+  },
   // One initiative's updates, newest first, fed for the initiative on screen.
   // Delta: each page feeds its own initiative's rows and must not evict the
   // others. NOT localFirst, for chat's reason: an update is append only and
@@ -2087,6 +2098,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   plans: "shared",
   projects: "shared",
   initiatives: "shared",
+  envStandings: "shared",
   initiativeUpdates: "shared",
   buckets: "shared",
   bucketAssignments: "shared",

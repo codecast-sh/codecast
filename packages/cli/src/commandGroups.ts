@@ -377,6 +377,15 @@ is grounded against: its own project's, else its workspace's.`,
     load: () => import("./goalsCommand.js").then((m) => m.registerGoalsCommand),
   },
   {
+    token: "env",
+    aliases: ["envs"],
+    description: `Environments: the worlds a repo declares (.codecast/envs.toml) that predict a goal, by level L0..L5, and the attempts run on them
+
+  cast env ls | run <key> [--candidate <label>] [--split dev|held] | show <key|ea-N> | link <key> --to L5:<metric> ...
+  cast goal envs <in-N> set L0=<key> L2=<key>`,
+    load: () => import("./envCommand.js").then((m) => m.registerEnvCommand),
+  },
+  {
     token: "expectations",
     aliases: ["expectation", "expect"],
     description: `Expectations: how a project should behave, each line with its sources, versioned and changed only through proposals

@@ -7,6 +7,17 @@
 wt="$(cast ws path $worktree)"
 [ -n "$wt" ] && cd "$wt" || exit 1
 dir=$run_dir
+mkdir -p "$dir"
+# The environments the task's goal names at L0..L2 with a dev split
+# (contracts/envs.ts): each runs on the base and on the branch, both attempts
+# are filed, and the paired delta is reported here and on the task. It never
+# decides the station's exit. A goal with no such envs prints nothing.
+envs=$(cast env eval --task $task_id --out "$dir/env-eval.json" 2>"$dir/env-eval.log")
+if [ -n "$envs" ]; then
+  echo "$envs"
+  cast task comment $task_id "Environments, the branch against its base:
+$envs" -t progress
+fi
 cmd=$line.commands.eval
 if [ -z "$cmd" ]; then
   cast task comment $task_id "This project's flow profile names no eval command, so the eval station passed without evals and the change is unscored." -t progress
