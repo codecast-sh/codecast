@@ -1,3 +1,4 @@
+import type { OrgUnplaced } from "./lib/orgCoverage";
 import { action, query } from "./functions";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { api } from "./_generated/api";
@@ -7,7 +8,7 @@ import { scopedFetch } from "./data";
 import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, stateOf, waitingSinceOf, type OrgScan, type ResolvedScope } from "./org";
 import { findRoleRoutineInAnyStatus } from "./lib/orgRoutine";
 import { parseStandingSection } from "@codecast/shared/contracts/briefStanding";
-import { areaSignalsOf, areaStatusLine, areaStatusOf, emptyReached, handRouteOf, newestStandingFirst, type AreaGoal, type AreaInitiative, type AreaInput, type AreaReached, type AreaSession, type AreaStandingLine, type AreaWaitingSession, type RoleArea } from "@codecast/shared/contracts/orgAreas";
+import { areaSignalsOf, areaStatusLine, areaStatusOf, checkFaultOf, emptyReached, handRouteOf, newestStandingFirst, type AreaCheck, type AreaGoal, type AreaInitiative, type AreaInput, type AreaReached, type AreaSession, type AreaStandingLine, type AreaWaitingSession, type RoleArea } from "@codecast/shared/contracts/orgAreas";
 import { readWorkspaceInitiatives, servedInitiatives } from "./lib/roleInitiatives";
 import { seriesLookup } from "./lib/metricSeries";
 import { planProjectsOf } from "./orgRoles";
@@ -400,7 +401,7 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
 
 export type OrgHealth = Awaited<ReturnType<typeof computeOrgHealth>>;
 
-export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, opts?: { decisions?: HealthDecisions; work?: WorkTasks }) {
+export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, opts?: { decisions?: HealthDecisions; work?: WorkTasks; unplaced?: OrgUnplaced | null }) {
   const cut7 = now - HEALTH_WINDOW_7D_MS;
   const scan: OrgScan = await collectOrgSessions(ctx, userId, teamId, now);
   const roles: any[] = scan.roles;
@@ -734,9 +735,11 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     });
     const initiatives: AreaInitiative[] = servedInitiatives(initiativeRows, { role_id: rid, project_ids: items.projectIds }, undefined, initiativeSeries).map(({ _id, trends: _trends, target_date: _date, ...i }) => ({ id: _id, ...i }));
     const routine: any = standingRaw ? await findRoleRoutineInAnyStatus(ctx, role, standingRaw) : null;
+    const check: AreaCheck | null = routine ? { trigger_id: String(routine._id), short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, last_run_summary: routine.last_run_summary ?? null, interval_ms: routine.interval_ms ?? null, last_run_failed: !!routine.last_run_failed } : null;
     const areaInput: AreaInput = {
       role_status: role.status,
       has_standing: !!standingRaw,
+      check_fault: checkFaultOf(check),
       standing_waits_on_person: standingWaits,
       standing_state_line: standingState?.state_line ?? null,
       waiting_unanswered: unseenWaits,
@@ -764,7 +767,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       reached,
       sessions: sessionsReached,
       checked_at: role.checked_at ?? null,
-      check: routine ? { trigger_id: String(routine._id), short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, last_run_summary: routine.last_run_summary ?? null, interval_ms: routine.interval_ms ?? null } : null,
+      check,
       standing_conversation_id: standingConvId,
       standing_short_id: standingRaw?.short_id ?? null,
     };
@@ -859,13 +862,19 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     const c = capsFor(r);
     for (const k of DAILY_CAP_KEYS) { const cap = c[k]; const sum = caps_total[k]; caps_total[k] = sum === null || cap === undefined ? null : sum + cap; }
   }
+  const planIdByShort = new Map<string, string>(plans.map((p) => [p.short_id, String(p._id)]));
   const company = {
     caps_total,
     unowned_projects,
     watched_without_lead,
     unfiled_tasks: tasks.filter((t) => isOpen(t) && !t.project_id && !t.plan_id).length,
-    unfiled_plans: plans.filter((p) => !p.project_id && !PLAN_CLOSED.has(p.status) && (openByPlan.get(String(p._id)) ?? 0) > 0)
-      .map((p) => ({ id: String(p._id), title: p.title, short_id: p.short_id ?? undefined, open_tasks: openByPlan.get(String(p._id))! })),
+    // Counted per plan by index when the unplaced reading came with the call
+    // (healthReport, the area watch); the task sample misses a plan whose
+    // open tasks fall outside the capped read.
+    unfiled_plans: opts?.unplaced
+      ? opts.unplaced.plans.filter((p) => p.open_tasks > 0).map((p) => ({ id: planIdByShort.get(p.short_id) ?? p.short_id, title: p.title, short_id: p.short_id, open_tasks: p.open_tasks }))
+      : plans.filter((p) => !p.project_id && !PLAN_CLOSED.has(p.status) && (openByPlan.get(String(p._id)) ?? 0) > 0)
+        .map((p) => ({ id: String(p._id), title: p.title, short_id: p.short_id ?? undefined, open_tasks: openByPlan.get(String(p._id))! })),
     plans_without_goal: plans.filter((p) => p.status === "active" && !(p.goal ?? "").trim()).map((p) => ({ id: String(p._id), title: p.title })),
     projects_without_charter: liveProjects.filter((p) => !(p.goal ?? "").trim()).map((p) => ({ id: String(p._id), title: p.title })),
     // The records the evidence says are finished (org-staffing.md S9): the
@@ -877,7 +886,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     workspace: teamId ? { kind: "team" as const, id: String(teamId) } : { kind: "user" as const, id: String(userId) },
     roles: roleRows,
     people,
-    company: { ...company, flags: capacityFlags({ kind: "company", ...company }) },
+    company: { ...company, flags: capacityFlags({ kind: "company", ...company }), ...(opts?.unplaced ? { unplaced: opts.unplaced } : {}) },
     truncated: { sessions: scan.truncated, tasks: tasksTruncated, plans: plans.length >= HEALTH_CAPS.plans, projects: projects.length >= HEALTH_CAPS.projects, decisions: decisionsTruncated },
     generated_at: now,
   };
@@ -921,11 +930,11 @@ export const healthWorkPart = query({
 });
 
 export const healthCorePart = query({
-  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), now: v.optional(v.number()), decisions: v.optional(v.any()), work: v.optional(v.any()) },
+  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), now: v.optional(v.number()), decisions: v.optional(v.any()), work: v.optional(v.any()), unplaced: v.optional(v.any()) },
   handler: async (ctx, args): Promise<any> => {
     const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
     if (!userId) return null;
-    return computeOrgHealth(ctx, userId, args.team_id, args.now ?? Date.now(), { decisions: args.decisions as HealthDecisions | undefined, work: args.work as WorkTasks | undefined });
+    return computeOrgHealth(ctx, userId, args.team_id, args.now ?? Date.now(), { decisions: args.decisions as HealthDecisions | undefined, work: args.work as WorkTasks | undefined, unplaced: args.unplaced as OrgUnplaced | undefined });
   },
 });
 
@@ -933,12 +942,14 @@ export const healthReport = action({
   args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")) },
   handler: async (ctx, args): Promise<any> => {
     const now = Date.now();
-    const [decisions, work] = await Promise.all([
+    const [decisions, work, unplaced] = await Promise.all([
       ctx.runQuery((api as any).orgHealth.healthDecisionsPart, { ...args, now }),
       ctx.runQuery((api as any).orgHealth.healthWorkPart, { ...args, now }),
+      // What reaches no goal (ct-95900), counted from whole tables in its own budget.
+      ctx.runQuery((api as any).orgUnplaced.part, { ...args, now }),
     ]);
     if (decisions === null || work === null) return null;
-    return ctx.runQuery((api as any).orgHealth.healthCorePart, { ...args, now, decisions, work });
+    return ctx.runQuery((api as any).orgHealth.healthCorePart, { ...args, now, decisions, work, unplaced });
   },
 });
 

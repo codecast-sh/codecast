@@ -1,4 +1,9 @@
 import { cleanMetrics, metricArgValidator, requireSeries, seriesLookup, type MetricArg } from "./lib/metricSeries";
+import { openPlansOf } from "@codecast/shared/contracts/openPlans";
+import { openPlanLine } from "./lib/orgCoverage";
+import { planDriver, sessionRefs } from "./lib/planDriver";
+import { metricDenominatorRef } from "@codecast/shared/contracts/metricStanding";
+import { goalPredictions } from "./lib/goalPredictions";
 import { labelsOf, noteOrgChange, partyRef, recordSubject, whereOfRecord, withOrgChange } from "./lib/orgChangeLog";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { v, type Validator } from "convex/values";
@@ -41,6 +46,8 @@ import {
   workspaceGrantsAccess,
 } from "./lib/access";
 import { findInitiative, requireInitiative } from "./lib/initiativeRef";
+import { goalEnvValidator } from "./envSchema";
+import { normalizeGoalEnvs, type GoalEnv } from "@codecast/shared/contracts/envs";
 import { projectProgress } from "./lib/projectWork";
 
 // Initiatives (docs/architecture/initiatives-projects-role-page.md I1): a goal
@@ -197,6 +204,8 @@ type Fields = {
   position?: number | null;
   /** Replaces the list; an empty list clears it. */
   metrics?: MetricArg[];
+  /** The environments that predict it; replaces the list, an empty list clears it. */
+  envs?: GoalEnv[];
   why?: string | null;
   done_when?: string | null;
   /** Entries to ADD to the record's lists, never a replacement: each is one `add` of applyRecordOp. */
@@ -235,6 +244,11 @@ async function fieldsPatch(ctx: Ctx, userId: Id<"users">, row: any, fields: Fiel
     Object.assign(patch, metricsPatch(fields.metrics, row));
     await requireSeries(ctx, row.workspace, patch.metrics ?? []);
   }
+  if (fields.envs !== undefined) {
+    const envs = normalizeGoalEnvs(fields.envs);
+    if ("error" in envs) throw new Error(envs.error);
+    patch.envs = envs.length ? envs : undefined;
+  }
   if (fields.why !== undefined) patch.why = (fields.why && clean(fields.why, MAX_DESCRIPTION)) || undefined;
   if (fields.done_when !== undefined) patch.done_when = (fields.done_when && clean(fields.done_when, MAX_DESCRIPTION)) || undefined;
   for (const list of INITIATIVE_RECORD_LISTS) {
@@ -248,6 +262,7 @@ async function fieldsPatch(ctx: Ctx, userId: Id<"users">, row: any, fields: Fiel
 
 const fieldArgs = {
   metrics: v.optional(v.array(metricArgValidator)),
+  envs: v.optional(v.array(goalEnvValidator)),
   description: v.optional(v.union(v.string(), v.null())),
   status: v.optional(statusArg),
   owner: v.optional(v.union(ownerArg, v.null())),
@@ -293,7 +308,7 @@ async function applyRecord(ctx: Ctx, userId: Id<"users">, initiative: any, prior
 const labelIds = (row: any, patch: Record<string, any> = {}) => [row?.owner?.role_id, row?.owner?.user_id, patch.owner?.role_id, patch.owner?.user_id, ...(row?.project_ids ?? []), ...(patch.project_ids ?? [])];
 
 /** A goal's shape as the log reads it: where it sits, how it is measured, and its intent record. */
-const SHAPE_FIELDS = ["parent_initiative_id", "metrics", "why", "done_when", ...INITIATIVE_RECORD_LISTS] as const;
+const SHAPE_FIELDS = ["parent_initiative_id", "metrics", "envs", "why", "done_when", ...INITIATIVE_RECORD_LISTS] as const;
 const shapeOf = (r: any) => ({
   ...Object.fromEntries(SHAPE_FIELDS.map((k) => [k, r[k] ?? null])),
   parent_initiative_id: r.parent_initiative_id ? String(r.parent_initiative_id) : null,
@@ -697,13 +712,23 @@ export async function ownerLabel(ctx: Ctx, owner: Owner | undefined): Promise<st
   return user?.name || user?.github_username || user?.email || undefined;
 }
 
+/** A project's plans read for its open ones; past this the oldest are not seen. */
+const OPEN_PLANS_READ = 300;
 async function projectSummaries(ctx: Ctx, userId: Id<"users">, initiative: any) {
+  const refOf = sessionRefs(ctx);
   const out = [];
   for (const id of initiative.project_ids) {
     const project = await ctx.db.get(id);
     if (!project) continue;
     const lead = project.owner_role_id ? await ctx.db.get(project.owner_role_id) : null;
-    out.push({ _id: project._id, title: project.title, status: project.status, lead: lead ? `@${lead.handle}` : undefined, task_counts: await projectProgress(ctx, userId, id) });
+    // Its open plans, newest activity first (ct-95899): the unit people think in.
+    // Only plans the caller may read: the goal's workspace, or their own.
+    const plans: any[] = (await ctx.db.query("plans").withIndex("by_project_id", (q: any) => q.eq("project_id", id)).take(OPEN_PLANS_READ))
+      .filter((p: any) => p.workspace === initiative.workspace || p.workspace === `user:${userId}`);
+    const open = openPlansOf(plans, String(id));
+    const open_plans = [];
+    for (const p of open.plans) open_plans.push({ ...openPlanLine(p), driver: await planDriver(refOf, p, []) });
+    out.push({ _id: project._id, short_id: project.short_id ?? undefined, title: project.title, status: project.status, lead: lead ? `@${lead.handle}` : undefined, task_counts: await projectProgress(ctx, userId, id), open_plans, more_plans: open.more });
   }
   return out;
 }
@@ -712,7 +737,7 @@ async function forTerminal(ctx: Ctx, userId: Id<"users">, initiative: any) {
   const projects = await projectSummaries(ctx, userId, initiative);
   // The live series its numbers read, by short id, so a terminal reads the value the page shows.
   const lookup = await seriesLookup(ctx, initiative.workspace, [initiative]);
-  const series = Object.fromEntries((initiative.metrics ?? []).flatMap((m: InitiativeMetric) => { const found = m.series ? lookup(m.series) : undefined; return found ? [[m.series!, found]] : []; }));
+  const series = Object.fromEntries((initiative.metrics ?? []).flatMap((m: InitiativeMetric) => [m.series, metricDenominatorRef(m)]).filter((r: string | undefined): r is string => !!r).flatMap((ref: string) => { const found = lookup(ref); return found ? [[ref, found]] : []; }));
   return {
     ...initiative,
     ...(Object.keys(series).length ? { series } : {}),
@@ -753,6 +778,8 @@ export const get = query({
       // Each metric's history read as a direction, and the first milestone not reached.
       trends: metricTrends(initiative),
       next_milestone: nextMilestone(initiative),
+      // What its tasks predicted for its metrics, and what the metric did after each shipped.
+      predictions: await goalPredictions(ctx, initiative),
       parent: parent ? brief(parent) : undefined,
       sub_initiatives: children.map(brief),
       updates: await Promise.all(updates.map(async (u: any) => ({ ...u, by_label: await ownerLabel(ctx, u.by) }))),

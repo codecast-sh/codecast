@@ -71,6 +71,8 @@ function WaitingSessionLine({ waiting: w, firedAt, words, wordsClass = "text-sol
 /** The change the area watch fired for (org-staffing.md S29), in a few words on the closed line. */
 function changeWords(c: NonNullable<ScheduledTaskFrame["change"]>): string {
   if (c.kind === "unowned_project") return `"${c.project_title}" has no owner`;
+  if (c.kind === "plan_without_project") return `${c.record} "${c.record_title}" has no project`;
+  if (c.kind === "project_without_goal") return `"${c.record_title}" serves no goal`;
   return `@${c.role_handle} has read ${AREA_STATUS_WORDS[c.to]} at two checks in a row`;
 }
 

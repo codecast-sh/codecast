@@ -8,14 +8,16 @@
 // Pure: no reads, no clock. The server hands it the counts it already holds.
 import type { InitiativeLink, InitiativeRow, MetricReading } from "./initiative";
 
-export const AREA_STATUSES = ["waiting_on_you", "stuck", "overloaded", "quiet", "on_track", "paused", "not_started"] as const;
+export const AREA_STATUSES = ["down", "waiting_on_you", "stuck", "overloaded", "off", "quiet", "on_track", "paused", "not_started"] as const;
 export type AreaStatus = (typeof AREA_STATUSES)[number];
 
 /** The status as one or two words a person reads. */
 export const AREA_STATUS_WORDS: Record<AreaStatus, string> = {
+  down: "down",
   waiting_on_you: "waiting on you",
   stuck: "stuck",
   overloaded: "overloaded",
+  off: "check off",
   quiet: "quiet",
   on_track: "on track",
   paused: "paused",
@@ -25,9 +27,11 @@ export const AREA_STATUS_WORDS: Record<AreaStatus, string> = {
 /** Whether a status asks a person for anything; the panel sorts nothing by
  *  it, the watch fires on the two that last. */
 export const AREA_STATUS_ATTENTION: Record<AreaStatus, "person" | "head" | "none"> = {
+  down: "head",
   waiting_on_you: "person",
   stuck: "head",
   overloaded: "head",
+  off: "none",
   quiet: "none",
   on_track: "none",
   paused: "none",
@@ -141,7 +145,26 @@ export type AreaCheck = {
   last_run_at: number | null;
   last_run_summary: string | null;
   interval_ms: number | null;
+  /** Its last run failed; absent on rows from before the field. */
+  last_run_failed?: boolean;
 };
+
+/** Why the role's check does not wake it, or null when it does. "down"
+ *  is a fault nobody chose: no check at all, one that stopped, or one whose
+ *  last run failed; it presses on the Head of People (AREA_STATUS_ATTENTION).
+ *  "off" is a check a person cancelled: their call (S25), shown, never
+ *  pressed. A paused check is the person's hold and reads as neither. The
+ *  label fits a chip; the reason is the whole of it. */
+export type CheckFault = { status: "down" | "off"; label: string; reason: string };
+export function checkFaultOf(check: AreaCheck | null): CheckFault | null {
+  if (!check) return { status: "down", label: "no check", reason: "it has no check" };
+  if (check.status === "completed" || check.status === "cancelled") return { status: "off", label: "check off", reason: "its check was cancelled" };
+  const why = String(check.last_run_summary ?? "").split("\n")[0].replace(/^Failed:\s*/, "").trim().slice(0, 160);
+  const because = (lead: string) => (why ? `${lead}: ${why}` : lead);
+  if (check.status === "failed") return { status: "down", label: "check stopped", reason: because("its check stopped after failing") };
+  if (check.last_run_failed) return { status: "down", label: "last check failed", reason: because("its last check failed") };
+  return null;
+}
 
 export type RoleArea = {
   status: AreaStatus;
@@ -170,6 +193,8 @@ export type RoleArea = {
 export type AreaInput = {
   role_status: "active" | "paused" | "retired";
   has_standing: boolean;
+  /** Why its check does not wake it (checkFaultOf); null or absent when it does. */
+  check_fault?: Pick<CheckFault, "status" | "reason"> | null;
   /** The standing session has declared it waits on a person, or is asking one. */
   standing_waits_on_person: boolean;
   /** What it pinned when it did, first line. */
@@ -202,9 +227,13 @@ const n = (count: number, one: string, many = `${one}s`) => `${count} ${count ==
 export function areaStatusOf(a: AreaInput): AreaStatus {
   if (a.role_status === "paused") return "paused";
   if (!a.has_standing) return "not_started";
+  if (a.check_fault?.status === "down") return "down";
   if (a.standing_waits_on_person) return "waiting_on_you";
   if (a.waiting_unanswered > 0 || a.review_stalls > 0 || a.blocked_sessions > 0) return "stuck";
   if (a.overloaded) return "overloaded";
+  // A check a person turned off: nothing presses, but nothing wakes the role
+  // either, so it never reads as on track.
+  if (a.check_fault?.status === "off") return "off";
   if (a.idle) return "quiet";
   return "on_track";
 }
@@ -214,6 +243,8 @@ export function areaStatusLine(a: AreaInput, status: AreaStatus): string {
   switch (status) {
     case "paused": return "Paused: its checks hold until you resume it.";
     case "not_started": return "Not started: it has no session yet.";
+    case "down": return `Down: ${a.check_fault?.reason ?? "its check does not run"}.`;
+    case "off": return `Check off: ${a.check_fault?.reason ?? "it has no check running"}.`;
     case "waiting_on_you": return a.standing_state_line ? `Waiting on you: ${a.standing_state_line}` : "Waiting on you.";
     case "stuck": {
       const parts: string[] = [];
@@ -264,11 +295,16 @@ export function newestStandingFirst<L extends { written_at: number | null }>(lin
  *  trigger frame as its own block (machineMessages AreaChange). */
 export type AreaChange =
   | { kind: "status"; role_handle: string; role_name: string; from: AreaStatus | null; to: AreaStatus; since: number; line: string }
-  | { kind: "unowned_project"; project_id: string; project_title: string; since: number; line: string };
+  | { kind: "unowned_project"; project_id: string; project_title: string; since: number; line: string }
+  /** Work that reaches no goal (ct-95901): an open plan filed under no project, or an active project with open work that no open goal carries. `record` is its short id. */
+  | { kind: "plan_without_project"; record: string; record_title: string; since: number; line: string }
+  | { kind: "project_without_goal"; record: string; record_title: string; since: number; line: string };
 
 /** One line that says the change in words, for the frame and the thread. */
 export function areaChangeLine(c: AreaChange): string {
   if (c.kind === "unowned_project") return `The project "${c.project_title}" has work and no role looking after it.`;
+  if (c.kind === "plan_without_project") return `The plan "${c.record_title}" (${c.record}) is open and filed under no project, so it reaches no goal. ${c.line}`.trim();
+  if (c.kind === "project_without_goal") return `The project "${c.record_title}"${c.record ? ` (${c.record})` : ""} has open work and no open goal carries it. ${c.line}`.trim();
   const was = c.from ? `, was ${AREA_STATUS_WORDS[c.from]}` : "";
   return `${c.role_name} (@${c.role_handle}) has read ${AREA_STATUS_WORDS[c.to]} at two checks in a row${was}. ${c.line}`.trim();
 }

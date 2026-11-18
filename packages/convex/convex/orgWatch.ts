@@ -1,8 +1,9 @@
 // The area watch (docs/architecture/org-staffing.md S29): the loop keeps
 // itself current. Every few hours one pass reads org.health for each
 // workspace with a Head of People, remembers each area's status on its role
-// row, and when a pressing status has held across two passes in a row, or a
-// project with work has no owner, tells the Head of People once per episode
+// row, and when a pressing status has held across two passes in a row, a
+// project with work has no owner, a plan with open work has no project, or a
+// project with open work serves no open goal (ct-95901), tells the Head of People once per episode
 // through its own event trigger (lib/orgRoutine HEAD_AREA_CHANGE_SPEC), the
 // same machinery a waiting session uses to reach a lead (S28): one trigger on
 // the Head of People, visible and controllable on its page, the change in its frame.
@@ -21,6 +22,7 @@ import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
 import { computeOrgHealth, HEALTH_CAPS, HEALTH_WINDOW_7D_MS, healthMembersAndRoles, readHealthDecisions, readWorkTasks, slimWorkTasks, type HealthDecisions, type WorkTasks } from "./orgHealth";
 import { fireRoleEvent } from "./agentTasks";
 import { HEAD_AREA_CHANGE_SPEC } from "./lib/orgRoutine";
+import type { OrgUnplaced } from "./lib/orgCoverage";
 
 /** How often a pass runs (crons.ts). Two passes in a row is the bar an area
  *  status clears before it reaches the Head of People, so a status must hold this long. */
@@ -37,12 +39,27 @@ export type WatchInput = {
   roles: WatchRoleInput[];
   head: { role_id: string; unowned_told: UnownedTold[] };
   unowned: Array<{ id: string; title: string }>;
+  /** What reaches no goal (orgUnplaced): its open plans with no project and active projects no open goal carries. */
+  unplaced?: Pick<OrgUnplaced, "plans" | "projects"> | null;
 };
 export type WatchPlan = {
   role_writes: Array<{ role_id: string; area_watch: AreaWatch }>;
   head_write: { role_id: string; unowned_told: UnownedTold[] } | null;
   changes: Array<{ change: AreaChange; client_id: string }>;
 };
+
+/** How old an open plan or project must be before the watch tells of its gap: time for the session that made it to file it. */
+export const UNPLACED_GRACE_MS = 24 * 60 * 60 * 1000;
+/** Told-list keys of the unplaced kinds; an unowned project's key is its bare id. */
+export const UNPLACED_TOLD_PREFIX = { plan: "plan_without_project:", project: "project_without_goal:" } as const;
+
+/** The facts the Head of People acts on: its open work, when it last moved, who drives it. */
+function unplacedLine(p: { open_tasks: number; open_plans?: number; last_activity_at: number; driver: { short_id: string } | null; lead?: string | null }, now: number): string {
+  const days = (at: number) => Math.max(0, Math.floor((now - at) / 86_400_000));
+  const work = [`${p.open_tasks} open task${p.open_tasks === 1 ? "" : "s"}`, ...(p.open_plans ? [`${p.open_plans} open plan${p.open_plans === 1 ? "" : "s"}`] : [])].join(", ");
+  const moved = p.last_activity_at ? `, last moved ${days(p.last_activity_at)}d ago` : "";
+  return `${work}${moved}${p.driver ? `; driven by ${p.driver.short_id}` : ""}${p.lead ? `; lead ${p.lead}` : ""}.`;
+}
 
 /** What this pass writes and what it tells the Head of People. Pure. */
 export function planAreaWatch(input: WatchInput): WatchPlan {
@@ -66,16 +83,31 @@ export function planAreaWatch(input: WatchInput): WatchPlan {
     }
     if (!prev || prev.status !== next.status || prev.passes !== next.passes || prev.told !== next.told) role_writes.push({ role_id: r.role_id, area_watch: next });
   }
-  // A project with work and no owner is told once, and again only after it
-  // gained an owner and lost it: the told list is pruned to the projects
-  // still unowned.
-  const current = new Map(input.unowned.map((p) => [p.id, p]));
-  const told = input.head.unowned_told.filter((t) => current.has(t.id));
-  for (const p of input.unowned) {
-    if (told.some((t) => t.id === p.id)) continue;
-    told.push({ id: p.id, since: now });
-    const change: AreaChange = { kind: "unowned_project", project_id: p.id, project_title: p.title, since: now, line: "No role's area includes it." };
-    changes.push({ change, client_id: `area-change:project:${p.id}:${now}` });
+  // A project with work and no owner, a plan with open work and no project,
+  // and a project with open work no goal carries are each told once, and
+  // again only after the gap closed and reopened: the told list (one list,
+  // keyed per kind) is pruned to the gaps still open. A plan or project
+  // younger than the grace is not told yet, so a session can file what it
+  // just made.
+  const gaps: Array<{ key: string; change: AreaChange }> = [
+    ...input.unowned.map((p) => ({ key: p.id, change: { kind: "unowned_project", project_id: p.id, project_title: p.title, since: now, line: "No role's area includes it." } as AreaChange })),
+    ...(input.unplaced?.plans ?? []).filter((p) => p.open_tasks > 0 && now - p.created_at >= UNPLACED_GRACE_MS).map((p) => ({
+      key: `${UNPLACED_TOLD_PREFIX.plan}${p.short_id}`,
+      change: { kind: "plan_without_project", record: p.short_id, record_title: p.title, since: now, line: unplacedLine(p, now) } as AreaChange,
+    })),
+    ...(input.unplaced?.projects ?? []).filter((p) => now - p.created_at >= UNPLACED_GRACE_MS).map((p) => ({
+      key: `${UNPLACED_TOLD_PREFIX.project}${p.short_id ?? p.title}`,
+      change: { kind: "project_without_goal", record: p.short_id ?? "", record_title: p.title, since: now, line: unplacedLine(p, now) } as AreaChange,
+    })),
+  ];
+  const current = new Set(gaps.map((g) => g.key));
+  // A pass that could not read the unplaced kinds keeps what it told of them.
+  const unread = (id: string) => !input.unplaced && Object.values(UNPLACED_TOLD_PREFIX).some((prefix) => id.startsWith(prefix));
+  const told = input.head.unowned_told.filter((t) => current.has(t.id) || unread(t.id));
+  for (const g of gaps) {
+    if (told.some((t) => t.id === g.key)) continue;
+    told.push({ id: g.key, since: now });
+    changes.push({ change: g.change, client_id: `area-change:${g.key.includes(":") ? g.key : `project:${g.key}`}:${now}` });
   }
   const before = input.head.unowned_told;
   const changed = told.length !== before.length || told.some((t, i) => before[i]?.id !== t.id || before[i]?.since !== t.since);
@@ -112,7 +144,7 @@ export const workPart = internalQuery({
 
 /** The plan for one workspace: health computed, the rows' watch state read
  *  beside it, the rule applied. */
-export async function performPlanAreaWatch(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams"> | undefined, headId: Id<"org_roles">, now: number, parts?: { decisions?: HealthDecisions; work?: WorkTasks }): Promise<WatchPlan> {
+export async function performPlanAreaWatch(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams"> | undefined, headId: Id<"org_roles">, now: number, parts?: { decisions?: HealthDecisions; work?: WorkTasks; unplaced?: OrgUnplaced | null }): Promise<WatchPlan> {
   const health = await computeOrgHealth(ctx, userId, teamId, now, parts);
   const roles: WatchRoleInput[] = [];
   for (const row of health.roles as any[]) {
@@ -121,13 +153,13 @@ export async function performPlanAreaWatch(ctx: { db: any }, userId: Id<"users">
     roles.push({ role_id: String(row.role_id), handle: row.handle, name: row.name, status: row.area.status, status_line: row.area.status_line, area_watch: role.area_watch ?? null });
   }
   const head = await ctx.db.get(headId);
-  return planAreaWatch({ now, roles, head: { role_id: String(headId), unowned_told: head?.unowned_told ?? [] }, unowned: health.company.unowned_projects });
+  return planAreaWatch({ now, roles, head: { role_id: String(headId), unowned_told: head?.unowned_told ?? [] }, unowned: health.company.unowned_projects, unplaced: parts?.unplaced ?? null });
 }
 
 export const planPart = internalQuery({
-  args: { user_id: v.id("users"), team_id: v.optional(v.id("teams")), head_of_people_id: v.id("org_roles"), now: v.number(), decisions: v.optional(v.any()), work: v.optional(v.any()) },
+  args: { user_id: v.id("users"), team_id: v.optional(v.id("teams")), head_of_people_id: v.id("org_roles"), now: v.number(), decisions: v.optional(v.any()), work: v.optional(v.any()), unplaced: v.optional(v.any()) },
   handler: async (ctx, args): Promise<WatchPlan> =>
-    performPlanAreaWatch(ctx, args.user_id, args.team_id, args.head_of_people_id, args.now, { decisions: args.decisions as HealthDecisions | undefined, work: args.work as WorkTasks | undefined }),
+    performPlanAreaWatch(ctx, args.user_id, args.team_id, args.head_of_people_id, args.now, { decisions: args.decisions as HealthDecisions | undefined, work: args.work as WorkTasks | undefined, unplaced: args.unplaced as OrgUnplaced | undefined }),
 });
 
 /** Write the plan: the watch state on each role, and one firing of the
@@ -160,11 +192,13 @@ export const sweep = internalAction({
     for (const w of watched) {
       const now = Date.now();
       try {
-        const [decisions, work] = await Promise.all([
+        const [decisions, work, unplaced] = await Promise.all([
           ctx.runQuery(internal.orgWatch.decisionsPart, { user_id: w.user_id, team_id: w.team_id, now }),
           ctx.runQuery(internal.orgWatch.workPart, { user_id: w.user_id, team_id: w.team_id, now }),
+          // A failed unplaced read leaves those kinds untold this pass; the rest still runs.
+          ctx.runQuery(internal.orgUnplaced.internalPart, { user_id: w.user_id, team_id: w.team_id, now }).catch((e: unknown) => { console.warn("org_area_watch_unplaced_failed", { error: e instanceof Error ? e.message : String(e) }); return null; }),
         ]);
-        const plan: WatchPlan = await ctx.runQuery(internal.orgWatch.planPart, { user_id: w.user_id, team_id: w.team_id, head_of_people_id: w.head_of_people_id, now, decisions, work });
+        const plan: WatchPlan = await ctx.runQuery(internal.orgWatch.planPart, { user_id: w.user_id, team_id: w.team_id, head_of_people_id: w.head_of_people_id, now, decisions, work, unplaced });
         told += await ctx.runMutation(internal.orgWatch.apply, { head_of_people_id: w.head_of_people_id, plan });
       } catch (e) {
         // One workspace's read past its budget must not stop the rest.

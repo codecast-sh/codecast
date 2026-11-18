@@ -2,6 +2,7 @@
 // Kept out of index.ts so a test can pin the field names against the
 // server's BriefHand shape (org.ts): `state` is the work state, and the task
 // carries its handoff status and review verdict.
+import { unplacedLines } from "./orgUnplacedLines.js";
 import { c } from "./colors.js";
 import { goalStateLine, type GoalProgress } from "@codecast/shared/contracts/roleGoals";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
@@ -172,6 +173,8 @@ export function briefTextLines(brief: any, now: number): string[] {
     ...briefPlanLines(f.plans),
     ...briefInitiativeLines(f.initiatives ?? [], now),
     ...briefProjectNumberLines(f.project_numbers ?? []),
+    // A whole workspace role places what reaches no goal (ct-95900).
+    ...unplacedLines(f.unplaced, now),
     `  decisions: ${f.decisions.open} open, ${f.decisions.answered_today} answered today`,
     // What moved since the role last read this (S25): the section its scheduled check acts on.
     `  changed since ${formatDateSmart(f.changed_since, now)}:${f.changed.length ? "" : " nothing"}`,

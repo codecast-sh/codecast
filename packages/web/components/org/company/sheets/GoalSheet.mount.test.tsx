@@ -76,6 +76,7 @@ async function verifySheets() {
     initiativeUpdates: byId(collections.initiativeUpdates),
     projects: byId(collections.projects),
     tasks: byId(collections.tasks),
+    plans: byId(collections.plans),
     syncMeta: { 'tasks:v2:{"workspace":"team","team_id":"fixture-team"}': { backfilledAt: 1 } },
     updateInitiative: (id: string, fields: any) => { calls.push(`update:${id}:${JSON.stringify(fields)}`); patchRow("initiatives", id, fields); },
     recordInitiativeEntry: (id: string, op: any) => calls.push(`record:${id}:${JSON.stringify(op)}`),
@@ -189,6 +190,9 @@ async function verifySheets() {
   assert.match(carried.querySelector("[data-initiative-project='proj-inbox'] [data-line-state] [data-initiative-project-trouble]")!.textContent!, /past its target/);
   assert.equal(carried.querySelector("[data-initiative-project='proj-inbox'] .ol-sub"), null);
   assert.equal(carried.querySelector("[data-initiative-project] [data-project-status='active']"), null, "no line says active");
+  // Under each project, its open plans (ct-95899): the done one is not listed.
+  assert.deepEqual(Array.from(carried.querySelectorAll("[data-initiative-project-plans='proj-org'] [data-initiative-plan]")).map((l) => l.getAttribute("data-initiative-plan")), ["pl-715"]);
+  assert.equal(carried.querySelector("[data-initiative-project-plans='proj-inbox']"), null, "a project with no open plan lists none");
   assert.ok(carried.querySelector("[data-initiative-projects-edit]"), "+ Project");
   // A new project by name lands under the goal at once, with no wait on the server.
   await type(q("[data-initiative-new-project]"), "Launch kit");

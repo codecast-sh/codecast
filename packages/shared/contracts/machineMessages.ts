@@ -538,7 +538,9 @@ export function formatScheduledTask(f: ScheduledTaskFrame): string {
   const change = c
     ? `\n<area-change ${tagAttrs(c.kind === "status"
         ? [["kind", c.kind], ["role", c.role_handle], ["name", c.role_name], ["from", c.from ?? undefined], ["to", c.to], ["since", String(c.since)]]
-        : [["kind", c.kind], ["project", c.project_id], ["title", c.project_title], ["since", String(c.since)]])}>${c.line.trim()}</area-change>\n\n`
+        : c.kind === "unowned_project"
+          ? [["kind", c.kind], ["project", c.project_id], ["title", c.project_title], ["since", String(c.since)]]
+          : [["kind", c.kind], ["record", c.record], ["title", c.record_title], ["since", String(c.since)]])}>${c.line.trim()}</area-change>\n\n`
     : "";
   const workers = f.workers?.length
     ? `\n${f.workers.map((w) => `<worker-report ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)]])}>${w.state.trim()}</worker-report>`).join("\n")}\n\n`
@@ -602,8 +604,11 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
     body = body.slice(ch[0].length);
     const at = (k: string) => tagAttr(ch[1], k);
     const since = Number(at("since")) || 0;
-    change = at("kind") === "unowned_project"
+    const kind = at("kind");
+    change = kind === "unowned_project"
       ? { kind: "unowned_project", project_id: at("project"), project_title: at("title"), since, line: ch[2].trim() }
+      : kind === "plan_without_project" || kind === "project_without_goal"
+      ? { kind, record: at("record"), record_title: at("title"), since, line: ch[2].trim() }
       : { kind: "status", role_handle: at("role"), role_name: at("name"), from: (at("from") || null) as Extract<AreaChange, { kind: "status" }>["from"], to: at("to") as Extract<AreaChange, { kind: "status" }>["to"], since, line: ch[2].trim() };
   }
   const workers: WaitingSession[] = [];

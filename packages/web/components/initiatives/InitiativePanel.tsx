@@ -12,13 +12,16 @@
 //
 // A section with nothing in it is not drawn: the sheet's menu offers what
 // starts it (a number, the first update), and the record folds below.
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import { Pencil, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { INITIATIVE_HEALTH_LABEL, INITIATIVE_UPDATE_HEALTHS, initiativeChain, metricReadings, metricTrends, parseIntentSource, type InitiativeMetric, type InitiativeRow, type InitiativeUpdateHealth, type InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
 import { objectHref } from "@codecast/shared/entities";
-import { useInboxStore, type ProjectItem } from "../../store/inboxStore";
+import { useInboxStore, type PlanItem, type ProjectItem } from "../../store/inboxStore";
+import { openPlansOf } from "@codecast/shared/contracts/openPlans";
+import { formatRelative } from "@codecast/shared/time";
+import { EntityIdPill } from "../EntityIdPill";
 import { undoAsOne } from "../../store/undoActions";
 import { quoted } from "../../store/undo/labels";
 import { useInitiativeUpdates } from "../../hooks/useInitiatives";
@@ -39,6 +42,7 @@ import { carriedProjects } from "../goals/goalsOutline";
 import { HealthChip, MetricTile, OwnerChip, SourceLink } from "./InitiativeAtoms";
 import { FormButtons, GhostButton } from "./formBits";
 import { MetricsEditor } from "./MetricsEditor";
+import { GoalEnvLevels } from "./GoalEnvLevels";
 import { useMetricSeries } from "../../hooks/useMetricSeries";
 import { RecordSection as Section, Written } from "./InitiativeRecord";
 
@@ -77,7 +81,7 @@ export function GoalMeasures({ goal, all, now, editing, onEditing }: { goal: Ini
   const readings = metricReadings(goal, lookup);
   const trends = metricTrends(goal, lookup);
   const chain = useMemo(() => initiativeChain(goal, (id) => all.find((r) => r._id === id)), [goal, all]);
-  if (!readings.length && !editing) return null;
+  if (!readings.length && !editing) return <GoalEnvLevels goal={goal} now={now} />;
   const save = (metrics: InitiativeMetric[]) => {
     useInboxStore.getState().updateInitiative(goal._id, { metrics });
     onEditing(false);
@@ -111,6 +115,7 @@ export function GoalMeasures({ goal, all, now, editing, onEditing }: { goal: Ini
           </div>
         )}
       </Section>
+      <GoalEnvLevels goal={goal} now={now} />
     </div>
   );
 }
@@ -133,6 +138,7 @@ const ghostOf = (change: DocChange | undefined): LineGhost | undefined => (chang
 export function GoalCarriedBy({ goal, doc, now, adding, onAdding }: { goal: InitiativeRow; doc: DocGoal | undefined; now: number; /** The menu asked to add the first project. */ adding: boolean; onAdding: (on: boolean) => void }) {
   // Every project it carries, in the owner's order, those a proposal would bring last.
   const projects = useMemo<DocProject[]>(() => (doc ? carriedProjects(doc, goal.project_ids).map((c) => c.project) : []), [doc, goal.project_ids]);
+  const plans = useWorkspaceCollection<PlanItem>("plans", openPlanSig);
   const subs = doc?.goals ?? [];
   const empty = projects.length === 0 && subs.length === 0;
   if (empty && !adding) return null;
@@ -148,7 +154,7 @@ export function GoalCarriedBy({ goal, doc, now, adding, onAdding }: { goal: Init
             // trouble, its live sessions, or a status other than active.
             const live = !!p.sessions && !!(p.sessions.working || p.sessions.needs_input);
             const quiet = !trouble && !live && (p.status ?? "active") === "active";
-            return (
+            const line = (
               <ProjectLine
                 key={p.id}
                 project={p}
@@ -159,12 +165,39 @@ export function GoalCarriedBy({ goal, doc, now, adding, onAdding }: { goal: Init
                 data-initiative-project={p.id}
               />
             );
+            return p.ghost ? line : <Fragment key={p.id}>{line}<ProjectOpenPlans plans={plans} projectId={p.id} now={now} /></Fragment>;
           })}
           {subs.map((g) => g.row
             ? <GoalLine key={g.id} goal={g.row} now={now} data-initiative-sub={g.short_id || g.id} />
             : <ObjectLine key={g.id} kind="goal" id={g.id} glyph={<GoalGlyph ghost />} title={g.title} sub="a goal under this one" ghost={ghostOf(g.proposed)} />)}
         </div>
       </Section>
+    </div>
+  );
+}
+
+const openPlanSig = (p: PlanItem) => `${p.short_id}|${p.title}|${p.status}|${p.project_id ?? ""}|${p.updated_at}|${p.progress?.done ?? ""}/${p.progress?.total ?? ""}|${(p as { current_session_id?: string }).current_session_id ?? ""}`;
+
+/** A project's open plans under its line on a goal (ct-95899): what is in
+ *  flight there, newest activity first, each with its progress, when it last
+ *  moved and the session driving it. */
+function ProjectOpenPlans({ plans, projectId, now }: { plans: PlanItem[]; projectId: string; now: number }) {
+  const open = useMemo(() => openPlansOf(plans, projectId), [plans, projectId]);
+  if (open.plans.length === 0) return null;
+  return (
+    <div className="pl-[42px] pr-2 pb-1.5 -mt-0.5 flex flex-col gap-0.5" data-initiative-project-plans={projectId}>
+      {open.plans.map((p) => {
+        const driver = (p as { current_session_id?: string }).current_session_id;
+        return (
+          <div key={p._id} className="flex min-w-0 items-center gap-2 text-[12px]" data-initiative-plan={p.short_id}>
+            <span className="min-w-0 flex-1 truncate"><EntityIdPill type="plan" shortId={p.short_id} label={p.title} wide /></span>
+            {p.progress && p.progress.total > 0 && <span className="shrink-0 tabular-nums" style={{ color: "var(--sol-text-muted)" }} title={`${p.progress.done} of ${p.progress.total} tasks done`}>{p.progress.done}/{p.progress.total}</span>}
+            <span className="shrink-0 w-[64px] text-right tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={`Last activity ${new Date(p.updated_at).toLocaleString()}`}>{formatRelative(p.updated_at, now)}</span>
+            <span className="shrink-0 w-[120px] truncate">{driver ? <EntityIdPill type="session" id={driver} compact /> : <span style={{ color: "var(--sol-text-dim)" }}>no session</span>}</span>
+          </div>
+        );
+      })}
+      {open.more > 0 && <Link href={`/projects/${encodeURIComponent(projectId)}`} className="text-[11.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }}>{open.more} more open {open.more === 1 ? "plan" : "plans"}</Link>}
     </div>
   );
 }

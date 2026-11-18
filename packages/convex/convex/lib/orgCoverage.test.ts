@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { computeCoverage, type CoverageInputs } from "./orgCoverage";
+import { computeCoverage, computeUnplaced, withUnplaced, type CoverageInputs, type UnplacedInputs } from "./orgCoverage";
 
 // Coverage (docs/architecture/initiatives-projects-role-page.md I1, I2): pure
 // over rows, so the before count the analyzer states, the work outside any
@@ -156,5 +156,88 @@ describe("coverage", () => {
     // A goal with no record says so with absences and empties, never a guess.
     expect(bare).toMatchObject({ trends: {}, milestones: [{ title: "Done", done: true }], open_questions: [], answered_questions: [], decisions: [], sources: [] });
     expect([bare.why, bare.done_when, bare.next_milestone]).toEqual([undefined, undefined, undefined]);
+  });
+});
+
+describe("open plans under a goal's projects (ct-95899)", () => {
+  test("each project lists its open plans, newest activity first, capped, with progress and driver", () => {
+    const plans = [
+      ...Array.from({ length: 7 }, (_, i) => ({ _id: `pl_${i}`, short_id: `pl-${i}`, title: `Plan ${i}`, status: i === 6 ? "done" : "active", project_id: "p_brand", updated_at: 100 + i, progress: { total: 4, done: i % 4, in_progress: 0, open: 4 - (i % 4) }, driver: i === 5 ? { short_id: "jx7d", title: "Driver", last_active_at: 9 } : null })),
+    ];
+    const c = computeCoverage(base({ plans, initiatives: [{ _id: "i1", short_id: "in-1", title: "Grow", status: "active", owner: undefined, health: "on_track", project_ids: ["p_brand"], metrics: [] } as any] }));
+    const brand = c.initiatives[0].projects[0];
+    expect(brand.open_plans.map((p) => p.short_id)).toEqual(["pl-5", "pl-4", "pl-3", "pl-2", "pl-1"]);
+    expect(brand.more_plans).toBe(1);
+    expect(brand.open_plans[0]).toEqual({ short_id: "pl-5", title: "Plan 5", status: "active", progress: { done: 1, total: 4 }, last_activity_at: 105, driver: { short_id: "jx7d", title: "Driver", last_active_at: 9 } });
+  });
+});
+
+describe("unplaced work (ct-95900)", () => {
+  const NOW = 1_800_000_000_000;
+  const D = 86_400_000;
+  const s = (short_id: string) => ({ short_id, title: `Session ${short_id}`, last_active_at: NOW - D });
+  const inputs = (over: Partial<UnplacedInputs> = {}): UnplacedInputs => ({
+    now: NOW,
+    plans: [
+      { short_id: "pl-1043", title: "Onboarding conversion", status: "active", created_at: NOW - 5 * D, updated_at: NOW - 3 * D, tasks: { open: 9, done: 7, last_at: NOW - D }, driver: s("jx1") },
+      { short_id: "pl-792", title: "WhatsApp channel", status: "draft", created_at: NOW - 40 * D, updated_at: NOW - 20 * D, tasks: { open: 2, done: 3, last_at: NOW - 20 * D }, driver: null },
+      { short_id: "pl-5", title: "Old empty draft", status: "draft", created_at: NOW - 90 * D, updated_at: NOW - 60 * D, tasks: { open: 0, done: 0, last_at: null }, driver: null },
+      { short_id: "pl-6", title: "Fresh idea", status: "draft", created_at: NOW - 2 * D, updated_at: NOW - 2 * D, tasks: { open: 0, done: 0, last_at: null }, driver: null },
+      { short_id: "pl-7", title: "Closed", status: "done", created_at: NOW - D, updated_at: NOW - D, tasks: { open: 1, done: 0, last_at: null }, driver: null },
+    ],
+    projects: [
+      { short_id: "pj-9", title: "Trade budget allocation", status: "active", created_at: NOW - 10 * D, updated_at: NOW - 9 * D, open_tasks: 3, open_plans: 0, lead: "@head-of-growth", has_goal: false, last_at: NOW - 2 * D, driver: null },
+      { short_id: "pj-1", title: "Carried", status: "active", created_at: NOW - 10 * D, updated_at: NOW - D, open_tasks: 3, open_plans: 0, lead: null, has_goal: true, last_at: null, driver: null },
+      { short_id: "pj-2", title: "No work", status: "active", created_at: NOW - 10 * D, updated_at: NOW - D, open_tasks: 0, open_plans: 0, lead: null, has_goal: false, last_at: null, driver: null },
+      { short_id: "pj-3", title: "Paused", status: "paused", created_at: NOW - 10 * D, updated_at: NOW - D, open_tasks: 2, open_plans: 0, lead: null, has_goal: false, last_at: null, driver: null },
+    ],
+    loose_tasks: [
+      { short_id: "ct-1", title: "a", created_at: NOW - 6 * D, updated_at: NOW - 2 * D, session: s("jx1") },
+      { short_id: "ct-2", title: "b", created_at: NOW - 2 * D, updated_at: NOW - D, session: s("jx1") },
+      { short_id: "ct-3", title: "c", created_at: NOW - D, updated_at: NOW - D, session: null },
+      { short_id: "ct-4", title: "old", created_at: NOW - 20 * D, updated_at: NOW - 10 * D, session: null },
+    ],
+    sessions: [
+      { short_id: "jx1", title: "Long, unplaced", started_at: NOW - 9 * D, updated_at: NOW - D, bound: [{ kind: "plan", short_id: "pl-1043", title: "Onboarding", project: null, reaches_goal: false }] },
+      { short_id: "jx2", title: "Long, project with no goal", started_at: NOW - 9 * D, updated_at: NOW - D, bound: [{ kind: "task", short_id: "ct-9", title: "t", project: "p9", reaches_goal: false }] },
+      { short_id: "jx3", title: "Long, reaches a goal", started_at: NOW - 9 * D, updated_at: NOW - D, bound: [{ kind: "task", short_id: "ct-8", title: "t", project: "p1", reaches_goal: true }, { kind: "plan", short_id: "pl-1", title: "p", project: null, reaches_goal: false }] },
+      { short_id: "jx4", title: "Young", started_at: NOW - 2 * D, updated_at: NOW - D, bound: [{ kind: "plan", short_id: "pl-1043", title: "Onboarding", project: null, reaches_goal: false }] },
+      { short_id: "jx5", title: "Gone quiet", started_at: NOW - 30 * D, updated_at: NOW - 8 * D, bound: [{ kind: "plan", short_id: "pl-1043", title: "Onboarding", project: null, reaches_goal: false }] },
+    ],
+    ...over,
+  });
+
+  test("lists open plans with no project from their own counts, newest activity first, an old empty draft left out", () => {
+    const u = computeUnplaced(inputs());
+    expect(u.plans.map((p) => p.short_id)).toEqual(["pl-1043", "pl-6", "pl-792"]);
+    expect(u.plans[0]).toEqual({ short_id: "pl-1043", title: "Onboarding conversion", status: "active", open_tasks: 9, done_tasks: 7, created_at: NOW - 5 * D, age_days: 5, last_activity_at: NOW - D, driver: s("jx1") });
+  });
+
+  test("lists active projects with open work that no open goal carries", () => {
+    const u = computeUnplaced(inputs());
+    expect(u.projects).toEqual([{ short_id: "pj-9", title: "Trade budget allocation", open_tasks: 3, open_plans: 0, lead: "@head-of-growth", created_at: NOW - 10 * D, age_days: 10, last_activity_at: NOW - 2 * D, driver: null }]);
+  });
+
+  test("groups the week's loose tasks by the session that made them", () => {
+    const u = computeUnplaced(inputs());
+    expect(u.loose_tasks.total).toBe(3);
+    expect(u.loose_tasks.by_session).toEqual([
+      { session: s("jx1"), tasks: 2, examples: [{ short_id: "ct-2", title: "b" }, { short_id: "ct-1", title: "a" }], age_days: 6, last_activity_at: NOW - D },
+      { session: null, tasks: 1, examples: [{ short_id: "ct-3", title: "c" }], age_days: 1, last_activity_at: NOW - D },
+    ]);
+  });
+
+  test("lists sessions running a week or more, still moving, whose bound work reaches no goal", () => {
+    const u = computeUnplaced(inputs());
+    expect(u.sessions.map((x) => [x.short_id, x.reason])).toEqual([["jx1", "no project"], ["jx2", "project with no goal"]]);
+    expect(u.sessions[0]).toMatchObject({ age_days: 9, last_activity_at: NOW - D, bound: [{ kind: "plan", short_id: "pl-1043", title: "Onboarding" }] });
+    expect(u.truncated).toBe(false);
+  });
+
+  test("withUnplaced reads outside.plans from the index counts, not the task sample", () => {
+    // The sample holds no task of pl-1043 (it fell outside the capped read): the plan still lists.
+    const c = withUnplaced(computeCoverage(base()), computeUnplaced(inputs()));
+    expect(c.outside.plans).toEqual([{ short_id: "pl-1043", title: "Onboarding conversion", open_tasks: 9 }, { short_id: "pl-792", title: "WhatsApp channel", open_tasks: 2 }]);
+    expect(c.unplaced?.projects[0].title).toBe("Trade budget allocation");
   });
 });

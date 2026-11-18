@@ -1626,7 +1626,7 @@ export const brief = query({
     return {
       role: {
         _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, status: role.status,
-        icon: role.icon ?? null,
+        icon: role.icon ?? null, team_id: role.team_id ?? null,
         trust: trustOf(role), reports_to: role.reports_to, review_backend: role.review_backend ?? null,
         authority: role.authority ?? [],
         standing_short_id: standing?.short_id ?? null, standing_conversation_id: standing?._id ?? null,

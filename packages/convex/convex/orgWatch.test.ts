@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { AREA_WATCH_PASSES, performApplyAreaWatch, planAreaWatch, type WatchInput, type WatchPlan } from "./orgWatch";
-import { parseScheduledTask } from "@codecast/shared/contracts";
+import { formatScheduledTask, parseScheduledTask } from "@codecast/shared/contracts";
 import { ORG_AREA_CHANGE_EVENT } from "@codecast/shared/contracts";
 import { HEAD_AREA_CHANGE_TITLE } from "./lib/orgRoutine";
 
@@ -142,5 +142,46 @@ describe("performApplyAreaWatch", () => {
     await db.patch(TEAM, { features: { org: false } });
     await db.patch(db._tables.agent_tasks[0]._id, { status: "scheduled" });
     expect(await performApplyAreaWatch(ctx, HEAD as any, plan([{ ...changes[0], client_id: "area-change:z" }]))).toBe(0);
+  });
+});
+
+describe("planAreaWatch: unplaced work (ct-95901)", () => {
+  const D = 24 * H;
+  const driver = { short_id: "jx7abc", title: "Budget work", last_active_at: NOW - H };
+  const plan = (over: Record<string, unknown> = {}) => ({ short_id: "pl-1043", title: "Onboarding conversion", status: "active", open_tasks: 9, done_tasks: 7, created_at: NOW - 3 * D, age_days: 3, last_activity_at: NOW - 2 * H, driver, ...over });
+  const project = (over: Record<string, unknown> = {}) => ({ short_id: "pj-9", title: "Trade budget allocation", open_tasks: 4, open_plans: 1, lead: "@head-of-growth", created_at: NOW - 10 * D, age_days: 10, last_activity_at: NOW - D, driver: null, ...over });
+
+  test("a plan with no project and a project with no goal are each told once per episode, past the grace", () => {
+    const p1 = planAreaWatch(input([], { unplaced: { plans: [plan(), plan({ short_id: "pl-2000", title: "Just made", created_at: NOW - H })], projects: [project()] } }));
+    expect(p1.changes.map((c) => c.change)).toEqual([
+      { kind: "plan_without_project", record: "pl-1043", record_title: "Onboarding conversion", since: NOW, line: "9 open tasks, last moved 0d ago; driven by jx7abc." },
+      { kind: "project_without_goal", record: "pj-9", record_title: "Trade budget allocation", since: NOW, line: "4 open tasks, 1 open plan, last moved 1d ago; lead @head-of-growth." },
+    ]);
+    expect(p1.changes.map((c) => c.client_id)).toEqual([`area-change:plan_without_project:pl-1043:${NOW}`, `area-change:project_without_goal:pj-9:${NOW}`]);
+    const told = p1.head_write!.unowned_told;
+    expect(told.map((t) => t.id)).toEqual(["plan_without_project:pl-1043", "project_without_goal:pj-9"]);
+
+    // Next pass, the same gaps: nothing said, nothing written. The new plan is past its grace now.
+    const p2 = planAreaWatch(input([], { now: NOW + 24 * H, head: { role_id: "org_roles_head", unowned_told: told }, unplaced: { plans: [plan(), plan({ short_id: "pl-2000", title: "Just made", created_at: NOW - H })], projects: [project()] } }));
+    expect(p2.changes.map((c) => (c.change as any).record)).toEqual(["pl-2000"]);
+
+    // The plan is filed and the project gains a goal: both leave the told list, so a reopened gap is told again.
+    const p3 = planAreaWatch(input([], { now: NOW + 30 * H, head: { role_id: "org_roles_head", unowned_told: p2.head_write!.unowned_told }, unplaced: { plans: [], projects: [] } }));
+    expect(p3.changes).toEqual([]);
+    expect(p3.head_write!.unowned_told).toEqual([]);
+  });
+
+  test("a plan with no open task is not told; a pass that could not read unplaced work keeps what it told", () => {
+    expect(planAreaWatch(input([], { unplaced: { plans: [plan({ open_tasks: 0 })], projects: [] } })).changes).toEqual([]);
+    const told = [{ id: "plan_without_project:pl-1043", since: NOW }, { id: "projects_platform", since: NOW }];
+    const p = planAreaWatch(input([], { head: { role_id: "org_roles_head", unowned_told: told }, unowned: [{ id: "projects_platform", title: "Platform" }], unplaced: null }));
+    expect(p.changes).toEqual([]);
+    expect(p.head_write).toBeNull();
+  });
+
+  test("the change rides the frame and reads back whole", () => {
+    const change = planAreaWatch(input([], { unplaced: { plans: [plan()], projects: [] } })).changes[0].change;
+    const frame = parseScheduledTask(formatScheduledTask({ title: HEAD_AREA_CHANGE_TITLE, event: ORG_AREA_CHANGE_EVENT, waiting: null, change, body: "x" }));
+    expect(frame?.change).toEqual(change);
   });
 });

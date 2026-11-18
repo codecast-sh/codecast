@@ -5,7 +5,9 @@
 // of it, which entry a person means by a number or a few words, and the op
 // each record command sends. The network calls and the exits live in index.ts.
 
+import type { GoalPredictionRow } from "@codecast/shared/contracts/predictedEffect";
 import { targetDayOf, targetDayStamp, targetDayPassed } from "@codecast/shared/time";
+import { STANDING_WORD, doneWhenPredicate } from "@codecast/shared/contracts/metricStanding";
 import {
   INITIATIVE_HEALTH_LABEL,
   INITIATIVE_RECORD_LISTS,
@@ -14,8 +16,11 @@ import {
   INITIATIVE_STATUS_LABEL,
   INITIATIVE_UPDATE_HEALTHS,
   applyRecordOp,
+  formatMetricNumber,
+  formatSeriesValue,
   initiativeStanding,
   intentSourceLine,
+  metricDirection,
   metricLine,
   metricReadings,
   metricTrends,
@@ -78,11 +83,11 @@ export function healthText(c: Palette, health: InitiativeHealth, at?: number): s
   return `${healthColor(c, health)}${INITIATIVE_HEALTH_LABEL[health]}${c.reset}${when}`;
 }
 
-const standingColor = (c: Palette, standing: MetricStanding) => (standing === "met" ? c.green : standing === "behind" ? c.yellow : c.dim);
+const standingColor = (c: Palette, standing: MetricStanding) => (standing === "met" ? c.green : standing === "behind" ? c.yellow : standing === "within_noise" ? c.cyan : c.dim);
 
 /** A metric's standing against its target, as the one word the page uses. */
 export function metricStandingText(c: Palette, standing: MetricStanding): string {
-  return `${standingColor(c, standing)}${standing === "unknown" ? "unread" : standing}${c.reset}`;
+  return `${standingColor(c, standing)}${STANDING_WORD[standing] || "unread"}${c.reset}`;
 }
 
 export function progressText(counts?: { total: number; done: number }): string {
@@ -458,6 +463,17 @@ export function recordWriteLines(c: Palette, verb: string, result: any, list: In
   ];
 }
 
+/** One task's prediction on a goal: its verdict and what the metric did, or when it will be read. */
+export function predictionLines(c: Palette, p: Pick<GoalPredictionRow, "short_id" | "title" | "predicted" | "realised" | "said" | "reading">): string[] {
+  const r = p.realised;
+  const color = !r ? c.dim : r.verdict === "held" ? c.green : r.verdict === "opposite" ? c.red : c.yellow;
+  const what = p.reading ?? `${p.said}${p.predicted.read_at ? "" : " after ship"}`;
+  return [
+    `  ${c.cyan}${p.short_id}${c.reset} ${color}${r ? r.verdict.replace("_", " ") : "open"}${c.reset} ${what} ${c.dim}· ${p.title}${c.reset}`,
+    `    ${c.dim}${r ? `${p.said}; ` : ""}basis: ${p.predicted.basis}${c.reset}`,
+  ];
+}
+
 const indented = (text: string, by = "  "): string[] => text.split("\n").map((l) => `${by}${l}`);
 
 /**
@@ -469,7 +485,7 @@ const indented = (text: string, by = "  "): string[] => text.split("\n").map((l)
  * `ago` words an update's age and `projectIcons` a project's status: both are
  * the caller's, which prints every other command with them.
  */
-export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; ago: (at: number) => string; projectIcons?: Record<string, string> }): string[] {
+export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; ago: (at: number) => string; projectIcons?: Record<string, string>; /** Lines that read after the metrics: the goal's environments. */ afterMetrics?: string[] }): string[] {
   const now = opts.now ?? Date.now();
   const icon = (status: string) => INITIATIVE_STATUS_ICONS[status as InitiativeStatus] ?? "?";
   const head = (title: string, note = "") => `\n  ${c.bold}${title}${c.reset}${note ? ` ${c.dim}${note}${c.reset}` : ""}`;
@@ -485,15 +501,27 @@ export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; 
   if (row.description) out.push("", ...indented(row.description));
 
   if (row.why) out.push(head("Why"), ...indented(row.why));
+  const readings = metricReadings(row, liveSeries(row));
   if (row.done_when) out.push(head("Done when"), ...indented(row.done_when));
+  const predicate = doneWhenPredicate(readings, metricDirection, (r, n) => { const u = (r as MetricReading).unit; return u ? formatSeriesValue(n, u) : formatMetricNumber(Math.round(n * 100) / 100); });
+  if (predicate) {
+    out.push(`${head("Done when, as checked")}: ${metricStandingText(c, predicate.verdict)}`);
+    for (const k of predicate.clauses) out.push(`  ${standingColor(c, k.standing)}${k.text}${c.reset}`);
+  }
   out.push(`${head("Owner")} ${row.owner_label ?? `${c.yellow}none${c.reset}`}`);
 
-  const readings = metricReadings(row, liveSeries(row));
   if (readings.length) {
     const trends = metricTrends(row, liveSeries(row));
     out.push(head("Metrics", "each number against its target"));
     for (const m of readings) out.push(`  ${metricRecordLine(c, m, trends[m.key], now)} ${c.dim}· ${m.key}${m.source ? ` · ${m.source}` : ""}${c.reset}`);
     out.push(hint(`Report a value: cast goal report ${row.short_id} ${readings[0].key}=<value> --source <link or short id>`));
+  }
+  if (opts.afterMetrics?.length) out.push(...opts.afterMetrics);
+
+  const predictions = row.predictions?.rows ?? [];
+  if (predictions.length) {
+    out.push(head("Predictions", `${row.predictions.hit_rate ?? ""}${row.predictions.partial ? `, over the first ${predictions.length}` : ""}`));
+    for (const p of predictions) out.push(...predictionLines(c, p));
   }
 
   const section = (list: InitiativeRecordList, title: string, entries: RecordEntry[]) => {
@@ -515,6 +543,13 @@ export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; 
   if (!projects.length) out.push(hint(`None yet: cast goal add-project ${row.short_id} <project>`));
   for (const p of projects) {
     out.push(`  ${opts.projectIcons?.[p.status] ?? "?"} ${c.bold}${p.title}${c.reset} ${c.dim}${p.status} | lead ${p.lead ?? `${c.yellow}none${c.reset}${c.dim}`} | ${progressText(p.task_counts)}${c.reset}`);
+    // Its open plans (ct-95899): what is in flight under the project.
+    for (const pl of p.open_plans ?? []) {
+      const progress = pl.progress ? `${pl.progress.done}/${pl.progress.total} done` : "no tasks";
+      const driver = pl.driver ? `${c.reset}${c.cyan}${pl.driver.short_id}${c.reset}${c.dim}` : "no session";
+      out.push(`      ${c.cyan}${pl.short_id}${c.reset} ${pl.title} ${c.dim}· ${pl.status} · ${progress} · moved ${opts.ago(pl.last_activity_at)} · ${driver}${c.reset}`);
+    }
+    if (p.more_plans) out.push(`      ${c.dim}+${p.more_plans} more open plans: cast plan ls --project ${p.short_id ?? p._id}${c.reset}`);
   }
 
   const updates: any[] = row.updates ?? [];

@@ -16,6 +16,8 @@
 
 import { matchHandle, memberHandle } from "../chat/handles";
 import { parseEntityUrl } from "../entities";
+import { bandWords, metricBand, STANDING_WORD, type WindowRead } from "./metricStanding";
+export { metricSpec, parseMetricSpec } from "./metricStanding";
 
 export const INITIATIVE_STATUSES = ["proposed", "planned", "active", "completed", "cancelled"] as const;
 export type InitiativeStatus = (typeof INITIATIVE_STATUSES)[number];
@@ -79,10 +81,14 @@ export type InitiativeMetric = {
    * rest, and never the number a role climbs.
    */
   guardrail?: boolean;
+  /** Read over this many periods ("3w", "14d") rather than one value (contracts/metricStanding). */
+  window?: string;
+  /** Its noise model: "poisson", "binomial:<n or mw-N>", "aa:<sd>". With a window, met means the whole 80% band clears the target. */
+  noise?: string;
 };
 
 /** A live series as a reading needs it: the watch's name, unit and points, oldest first. */
-export type MetricSeries = { short_id: string; name: string; unit?: string | null; points: Array<{ at: number; value: number }>; last_error?: string | null };
+export type MetricSeries = { short_id: string; name: string; unit?: string | null; points: Array<{ at: number; value: number }>; last_error?: string | null; history?: Array<{ at: number; value: number }> };
 export const INITIATIVE_METRICS_MAX = 4;
 /** A reported value: the template scoreboard's own shape (orgTemplateState.ScoreState). */
 export type InitiativeScore = { value: string; observed_at: number; source: string };
@@ -116,7 +122,7 @@ export function metricNumber(text: string | null | undefined): number | null {
 /** The way a target is to be met: reach it (the default), or stay under it ("< 5%", "under 3", "at most 10"). */
 export const metricDirection = (target: string): "at_least" | "at_most" => /^\s*(?:<=?|(?:under|below|at most|no more than|max(?:imum)?)\b)/i.test(target) || /\bor (?:less|fewer|under)\b/i.test(target) ? "at_most" : "at_least";
 
-export type MetricStanding = "met" | "behind" | "unknown";
+export type MetricStanding = "met" | "within_noise" | "behind" | "unknown";
 export type MetricReading = InitiativeMetric & {
   /** The reported value as written, or null before one was reported. */
   value: string | null;
@@ -130,42 +136,22 @@ export type MetricReading = InitiativeMetric & {
   live: boolean;
   /** The live series' unit, for a surface that prints its other values. */
   unit: string | null;
+  /** With a window: the mean, the 80% band and what it can detect; the standing is the band's. */
+  band?: WindowRead | null;
 };
 
-/**
- * A metric as a person types it on the command line: `name=target`, then
- * `@mw-N` to read it live from a series and `guardrail` to mark it one:
- * "Dollars per intro=under $250 @mw-12", "Bounce rate=under 3% @mw-14 guardrail".
- * Null when it is not that shape.
- */
-export function parseMetricSpec(text: string): { name: string; target: string; series?: string; guardrail?: boolean } | null {
-  const at = text.indexOf("=");
-  if (at <= 0) return null;
-  let rest = text.slice(at + 1);
-  const series = rest.match(/(?:^|\s)@(mw-\d+)\b/i)?.[1]?.toLowerCase();
-  rest = rest.replace(/(?:^|\s)@mw-\d+\b/i, " ");
-  const guardrail = /\s+guardrail\s*$/i.test(` ${rest}`);
-  rest = rest.replace(/\s*\bguardrail\s*$/i, "");
-  const name = text.slice(0, at).trim(), target = rest.trim();
-  if (!name || !target) return null;
-  return { name, target, ...(series ? { series } : {}), ...(guardrail ? { guardrail: true } : {}) };
-}
-/** A metric back in the shape parseMetricSpec reads. */
-export const metricSpec = (m: Pick<InitiativeMetric, "name" | "target" | "series" | "guardrail">): string => `${m.name}=${m.target}${m.series ? ` @${m.series}` : ""}${m.guardrail ? " guardrail" : ""}`;
-
 /** One metric read against its target: from its live series when it names one that has a point, else from its last report. */
-export function metricReading(metric: InitiativeMetric, score?: InitiativeScore | null, series?: MetricSeries | null): MetricReading {
+export function metricReading(metric: InitiativeMetric, score?: InitiativeScore | null, series?: MetricSeries | null, lookup?: (ref: string) => MetricSeries | null | undefined): MetricReading {
   const last = series?.points[series.points.length - 1];
-  if (metric.series && series && last) {
-    return {
-      ...readAgainst(metric, formatSeriesValue(last.value, series.unit)),
-      observed_at: last.at,
-      source: `${series.short_id} ${series.name}`,
-      live: true,
-      unit: series.unit ?? null,
-    };
-  }
-  return { ...readAgainst(metric, score?.value ?? null), observed_at: score?.observed_at ?? null, source: score?.source ?? null, live: false, unit: null };
+  const live = !!(metric.series && series && last);
+  const r: MetricReading = live
+    ? { ...readAgainst(metric, formatSeriesValue(last!.value, series!.unit)), observed_at: last!.at, source: `${series!.short_id} ${series!.name}`, live: true, unit: series!.unit ?? null }
+    : { ...readAgainst(metric, score?.value ?? null), observed_at: score?.observed_at ?? null, source: score?.source ?? null, live: false, unit: null };
+  if (!metric.window) return r;
+  const n = metricNumber(r.value);
+  const band = metricBand(metric, metricNumber(metric.target), metricDirection(metric.target), live ? series : null, !live && n !== null && r.observed_at ? { value: n, at: r.observed_at } : null, lookup);
+  const t = metricNumber(metric.target);
+  return band ? { ...r, band, standing: band.standing, progress: r.progress === null || t === null ? null : Math.max(0, Math.min(1, band.mean / t)) } : r;
 }
 
 function readAgainst(metric: InitiativeMetric, value: string | null): Omit<MetricReading, "observed_at" | "source" | "live" | "unit"> {
@@ -178,7 +164,7 @@ function readAgainst(metric: InitiativeMetric, value: string | null): Omit<Metri
 }
 /** A row's metrics read against their targets; `series` finds a metric's live series by its short id. */
 export const metricReadings = (row: { metrics?: InitiativeMetric[]; scoreboard?: Record<string, InitiativeScore> }, series?: (ref: string) => MetricSeries | null | undefined): MetricReading[] =>
-  (row.metrics ?? []).map((m) => metricReading(m, row.scoreboard?.[m.key], m.series ? series?.(m.series) : null));
+  (row.metrics ?? []).map((m) => metricReading(m, row.scoreboard?.[m.key], m.series ? series?.(m.series) : null, series));
 
 /** Whether a value reads "of" its target: a number to reach. A number to stay under ("under 20") and a target that is not a number are named as the target instead. */
 export const metricReaches = (target: string): boolean => metricDirection(target) === "at_least" && metricNumber(target) !== null;
@@ -195,11 +181,12 @@ export function metricAgainst(r: Pick<MetricReading, "value" | "target">): strin
  */
 export function metricLine(r: MetricReading, now = Date.now(), trend?: MetricTrend | null): string {
   if (r.value === null) return `${r.name}: ${r.series ? "no reading yet from its live series" : "not reported yet"}, ${metricAgainst(r)}`;
-  const word = r.standing === "met" ? "met" : r.standing === "behind" ? "behind" : "";
+  const word = STANDING_WORD[r.standing];
   const moved = trend ? trendWords(trend, r.unit) : "";
   const when = r.observed_at ? dayWord(r.observed_at, now) : "";
   const tail = r.live ? ` (live ${r.series}${when ? `, ${when}` : ""})` : when ? ` (${when})` : "";
-  return `${r.name}: ${metricAgainst(r)}${word ? `, ${word}` : ""}${r.guardrail ? ", a guardrail" : ""}${moved ? `; ${moved}` : ""}${tail}`;
+  const band = r.band ? ` ${bandWords(r.band, (x) => (r.unit ? formatSeriesValue(x, r.unit) : formatMetricNumber(Math.round(x * 100) / 100)))}` : "";
+  return `${r.name}: ${metricAgainst(r)}${word ? `, ${word}` : ""}${band}${r.guardrail ? ", a guardrail" : ""}${moved ? `; ${moved}` : ""}${tail}`;
 }
 function dayWord(at: number, now: number): string {
   // Calendar days, not elapsed 24 hour blocks: a report at noon yesterday reads "yesterday" this morning.
@@ -212,10 +199,11 @@ function dayWord(at: number, now: number): string {
   return `${d.getDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()]}`;
 }
 
-/** The goal's standing against its numbers as one word: behind if any metric is, met if every reported one is, else unknown. */
+/** The goal's standing against its numbers as one word: behind if any metric is, met if every one is, within noise if every one is met or within noise, else unknown. */
 export function initiativeStanding(readings: MetricReading[]): MetricStanding {
   if (readings.some((r) => r.standing === "behind")) return "behind";
   if (readings.length && readings.every((r) => r.standing === "met")) return "met";
+  if (readings.length && readings.every((r) => r.standing === "met" || r.standing === "within_noise")) return "within_noise";
   return "unknown";
 }
 

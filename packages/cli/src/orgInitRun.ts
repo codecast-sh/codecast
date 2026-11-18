@@ -7,6 +7,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawn } from "./proc.js";
 import { fmt } from "./colors.js";
+import { unplacedLines } from "./orgUnplacedLines.js";
 import { headOfPeoplePrompt } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import {
   ORG_CHANGE_KINDS,
@@ -178,6 +179,7 @@ export async function showInputs(deps: OrgInitDeps, options: any): Promise<void>
     if (numbers) console.log(`    ${fmt.muted(numbers)}`);
   }
   if (s.coverage) console.log(`  ${fmt.muted("coverage:")} ${coverageLine(s.coverage)}`);
+  for (const line of unplacedLines(inputs.coverage?.unplaced, Date.now())) console.log(line);
   // Where the work is (S9): the busiest areas and the records behind them.
   for (const a of (inputs.activity?.areas ?? []).slice(0, 8)) console.log(`  ${fmt.muted("area")} ${a.repository ? `${a.repository}${a.path_prefix ? "/" : ""}` : ""}${a.path_prefix || fmt.muted(" (commits with no file list: could not verify)")} ${fmt.muted(`· ${a.commits_30d} commits · ${a.sessions_30d} sessions${a.authors?.length ? ` · ${a.authors.slice(0, 3).map((x: any) => x.name).join(", ")}` : ""}`)}`);
   if (s.stale.plans + s.stale.tasks + s.stale.projects) console.log(`  ${fmt.muted("stale:")} ${s.stale.plans} plans · ${s.stale.tasks} tasks · ${s.stale.projects} projects ${fmt.muted("(records behind the activity; a review proposes their status changes first)")}`);
@@ -530,7 +532,8 @@ export async function health(deps: OrgInitDeps, options: any): Promise<void> {
     const a = r.area ?? {};
     const check = a.check ?? {};
     const checked = a.checked_at ? `checked ${formatRelative(a.checked_at, now)}` : "never checked";
-    const nextCheck = check.status === "paused" ? "check paused" : check.run_at ? `next check ${formatRelative(check.run_at, now)}` : check.status ? `check ${check.status}` : "no check";
+    // A next run is only one while the check is armed; a stopped check's run_at is when it died.
+    const nextCheck = check.status === "paused" ? "check paused" : check.status === "scheduled" && check.run_at ? `next check ${formatRelative(check.run_at, now)}` : check.status ? `check ${check.status}` : "no check";
     console.log(`  ${fmt.accent(`@${r.handle}`)}${r.short_id ? ` ${fmt.muted(r.short_id)}` : ""} ${fmt.highlight(String(a.status ?? "").replace(/_/g, " "))} ${fmt.muted(`· ${checked} · ${nextCheck}`)}`);
     if (a.status_line && a.status !== "on_track") console.log(`    ${a.status_line}`);
     if (a.reached && reachedTotal(a.reached) > 0) console.log(`    ${fmt.muted("reached")} ${reachedBreakdown(a.reached)}`);
@@ -553,6 +556,7 @@ export async function health(deps: OrgInitDeps, options: any): Promise<void> {
   // Warnings and blockers print one per line; info flags (a charter missing on
   // each of forty plans) collapse to one line per code with a few examples,
   // and --json keeps every row.
+  for (const line of unplacedLines(company.unplaced, now, "    ")) console.log(line);
   const info = flags(company.flags).filter((f) => f.severity === "info");
   for (const fl of flags(company.flags).filter((f) => f.severity !== "info")) console.log(flagLine(fl, "    "));
   const byCode = new Map<string, any[]>();

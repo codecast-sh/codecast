@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AREA_STATUSES, AREA_STATUS_WORDS, areaChangeLine, areaSignalsOf, areaStatusLine, areaStatusOf, handRouteOf, newestStandingFirst, reachedBreakdown, reachedSentence, type AreaInput } from "./orgAreas";
+import { AREA_STATUSES, AREA_STATUS_WORDS, areaChangeLine, checkFaultOf, AREA_STATUS_ATTENTION, areaSignalsOf, areaStatusLine, areaStatusOf, handRouteOf, newestStandingFirst, reachedBreakdown, reachedSentence, type AreaInput } from "./orgAreas";
 
 // An area as a person reads it (docs/architecture/org-staffing.md S29): the
 // status word the signals add up to, most pressing first; the sentence it
@@ -122,5 +122,44 @@ describe("how the sessions reached the role", () => {
     // A row from before the field, or with nothing under it, reads as before.
     expect(areaStatusLine(on({ overloaded: true, overloaded_by: ["9 decisions a day"] }), "overloaded")).toBe("Overloaded: 9 decisions a day.");
     expect(areaStatusLine(on({ overloaded: true, overloaded_by: ["9 decisions a day"], reached: { task: 0, plan: 0, filed: 0, folder: 0 } }), "overloaded")).toBe("Overloaded: 9 decisions a day.");
+  });
+});
+
+// A role whose check does not run hears nothing of its area (ct-95585): a
+// check that died or never existed reads "down" and presses; one a person
+// cancelled reads "check off" and presses on nobody; a stopped check never
+// reads as a next check that is overdue.
+describe("a role whose check does not run", () => {
+  const check = (over: Record<string, unknown>) => ({ trigger_id: "t", short_id: "tr-1154", title: "Check Agent Quality lead's area", status: "scheduled", run_at: 1, last_run_at: 1, last_run_summary: null, interval_ms: 86_400_000, ...over });
+  const refused = "Failed: Injection failed: Unauthorized: can only send messages to your own conversations\n    at handler";
+
+  test("no check, a stopped check and a failed last run are down, with why; a cancelled one is off", () => {
+    expect(checkFaultOf(null)).toEqual({ status: "down", label: "no check", reason: "it has no check" });
+    expect(checkFaultOf(check({ status: "failed", last_run_summary: refused }))).toEqual({ status: "down", label: "check stopped", reason: "its check stopped after failing: Injection failed: Unauthorized: can only send messages to your own conversations" });
+    expect(checkFaultOf(check({ last_run_failed: true, last_run_summary: refused }))).toMatchObject({ status: "down", label: "last check failed" });
+    expect(checkFaultOf(check({ status: "completed", last_run_failed: true }))).toEqual({ status: "off", label: "check off", reason: "its check was cancelled" });
+  });
+
+  test("a running or paused check is neither", () => {
+    expect(checkFaultOf(check({}))).toBeNull();
+    expect(checkFaultOf(check({ status: "paused" }))).toBeNull();
+  });
+
+  test("down outranks what the area says; off only outranks quiet and on track; neither outranks a paused role or one with no session", () => {
+    const down = checkFaultOf(null)!;
+    const off = checkFaultOf(check({ status: "completed" }))!;
+    expect(areaStatusOf(on({ check_fault: down, standing_waits_on_person: true, review_stalls: 2 }))).toBe("down");
+    expect(areaStatusOf(on({ check_fault: down, role_status: "paused" }))).toBe("paused");
+    expect(areaStatusOf(on({ check_fault: down, has_standing: false }))).toBe("not_started");
+    expect(areaStatusLine(on({ check_fault: down }), "down")).toBe("Down: it has no check.");
+    expect(areaStatusOf(on({ check_fault: off }))).toBe("off");
+    expect(areaStatusOf(on({ check_fault: off, idle: true }))).toBe("off");
+    expect(areaStatusOf(on({ check_fault: off, review_stalls: 1 }))).toBe("stuck");
+    expect(areaStatusLine(on({ check_fault: off }), "off")).toBe("Check off: its check was cancelled.");
+  });
+
+  test("only down presses on the Head of People", () => {
+    expect(AREA_STATUS_ATTENTION.down).toBe("head");
+    expect(AREA_STATUS_ATTENTION.off).toBe("none");
   });
 });

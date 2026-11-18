@@ -3976,6 +3976,14 @@ for (const [verb, fn] of [
 cliRoute("/cli/initiatives/list", async (ctx, body) => ctx.runQuery(api.initiatives.list, body));
 cliRoute("/cli/initiatives/get", async (ctx, body) => ctx.runQuery(api.initiatives.get, body));
 
+// Environments and attempts (contracts/envs.ts): `cast env`, `cast goal envs`.
+cliRoute("/cli/envs/record", async (ctx, body) => ctx.runMutation(api.envs.record, body));
+cliRoute("/cli/envs/link", async (ctx, body) => ctx.runMutation(api.envs.link, body));
+cliRoute("/cli/envs/list", async (ctx, body) => ctx.runQuery(api.envs.list, body));
+cliRoute("/cli/envs/standings", async (ctx, body) => ctx.runQuery(api.envs.standings, body));
+cliRoute("/cli/envs/get", async (ctx, body) => ctx.runQuery(api.envs.get, body));
+cliRoute("/cli/envs/goal-levels", async (ctx, body) => ctx.runQuery(api.envs.goalLevels, body));
+
 // The workspace's standing agent. Creating one is seating the root role
 // (org-staffing.md S22): the route an older CLI posts to runs the same staff
 // mutation `cast org staff` does, so no workspace is born with a bare anchor.
@@ -4128,7 +4136,12 @@ cliRoute("/cli/role/handoff", async (ctx, body) => ctx.runMutation(api.orgHandof
 cliRoute("/cli/role/handoff/settle", async (ctx, body) => ctx.runMutation(api.orgHandoff.settle, body));
 cliRoute("/cli/role/split", async (ctx, body) => ctx.runMutation(api.orgSplit.split, body));
 cliRoute("/cli/brief/get", async (ctx, { from_session, ...body }) => {
-  const brief = await ctx.runQuery(api.org.brief, body);
+  const brief: any = await ctx.runQuery(api.org.brief, body);
+  // A whole workspace role places what reaches no goal (ct-95900): the read
+  // runs in its own query budget beside the brief's.
+  if (brief?.facts?.scope?.whole_workspace) {
+    brief.facts.unplaced = await ctx.runQuery((api as any).orgUnplaced.part, { api_token: body.api_token, ...(brief.role.team_id ? { team_id: brief.role.team_id } : {}) }).catch(() => null);
+  }
   // Read from the role's own session, the brief's "changed since" clock moves
   // to now (org-staffing.md S25); a person reading it moves nothing.
   if (brief && from_session) await ctx.runMutation(internal.orgRoles.markBriefRead, { role_id: brief.role._id, session: from_session });
