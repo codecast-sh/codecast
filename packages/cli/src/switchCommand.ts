@@ -35,6 +35,22 @@ export function parseSwitchAgentArg(raw: string): ConvexAgentType {
   }
 }
 
+/**
+ * What a switch did, in the words the command prints. A same-agent model or
+ * effort change is sent to the running session as slash commands that wait in
+ * its queue like any message, so it has not taken effect when this returns.
+ * It printed "applied" for a `/model opus` that sat behind a blocked queue,
+ * and the session stayed on the model whose limit it had hit (2026-11-17).
+ */
+export function switchOutcome(result: { reconstituted?: boolean; blank?: boolean; live_commands?: string[] }): string {
+  if (result.reconstituted) return "this session will resume as the new agent";
+  if (result.blank) return "blank session relaunched";
+  const sent = result.live_commands ?? [];
+  return sent.length > 0
+    ? `sent ${sent.join(" and ")} to the session; it changes when the session reads ${sent.length > 1 ? "them" : "it"}`
+    : "recorded for the session's next launch; nothing was sent to the running session";
+}
+
 export function registerSwitchCommand(program: Command, deps: PublishDeps): void {
   program
     .command("switch")
@@ -106,11 +122,7 @@ export function registerSwitchCommand(program: Command, deps: PublishDeps): void
         return;
       }
       const who = options.agent || options.model || options.effort;
-      const how = result.reconstituted
-        ? "this session will resume as the new agent"
-        : result.blank
-          ? "blank session relaunched"
-          : "applied";
+      const how = switchOutcome(result);
       console.log(
         `${c.green}ok${c.reset} switched ${c.cyan}${result.short_id}${c.reset} ${fmt.muted(`— ${who} (${how})`)}`,
       );
