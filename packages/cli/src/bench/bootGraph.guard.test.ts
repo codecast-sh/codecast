@@ -328,8 +328,9 @@ describe("command groups stay off the boot graph", () => {
     // orgUnplacedLines.ts, the unplaced-work lines a role brief prints, which
     // briefLines.ts reads synchronously (planPlacement.ts loads on demand).
     // 370 the same day: contracts/roleCard.ts, out of contracts/machineMessages.ts
-    // for max-lines, no new code.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(370);
+    // for max-lines, no new code. 371 the same day: contracts/messagingPolicy.ts,
+    // the messaging policy registry orgWhere.ts builds its guidance from (no imports).
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(371);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -479,7 +480,9 @@ describe("command groups stay off the boot graph", () => {
     // 4292f45cc: orgUnplacedLines.ts +4 (the unplaced-work lines a role brief
     // prints), index.ts +6 and initiativeCommand.ts +3 beyond the notes above,
     // goalsBrief.ts +1.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4799);
+    // 4803 the same day: contracts/messagingPolicy.ts (the lead text, moved out
+    // of orgWhere.ts, and the shared-log text), `--policy` and `--type` in index.ts.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4803);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -687,7 +690,8 @@ describe("command groups stay off the boot graph", () => {
     // 609 the same day: hosts/providers/namespace.ts, the Namespace provider's describe/inspect/stop module (GitHub #93).
     // 610 on 2026-11-18: contracts/roleCard.ts, out of contracts/machineMessages.ts
     // for max-lines, no new code.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(610);
+    // 611 the same day: contracts/messagingPolicy.ts, through orgWhere.ts (no imports).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(611);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

@@ -11,6 +11,7 @@ import {
   renderGuidanceFile,
   stubSectionBody,
 } from "./snippets";
+import { MESSAGING_POLICIES } from "./messagingPolicy";
 
 describe("snippet catalog", () => {
   it("has unique slugs", () => {
@@ -109,6 +110,16 @@ describe("delegated worker guidance", () => {
     expect(guide).toContain('cast spawn --subagent --label rollout "<task>" "<task>"');
     expect(guide).toContain("A label or a task/plan binding does not nest it");
     expect(FORKS_SNIPPET).not.toContain("Use it to hand off self-contained work — a parallel audit");
+  });
+});
+
+describe("the shared-log policy", () => {
+  // The installed body is the lead policy for everyone; only `cast guide
+  // messaging` carries the shared log, for agents whose plan chose it.
+  it("is served by cast guide messaging and never installed", () => {
+    const log = MESSAGING_POLICIES["shared-log"].guidance;
+    expect(guideText(snippetBySlug("messaging")!)).toContain(log);
+    expect(renderGuidanceFile("full", "0.0.0")).not.toContain(log);
   });
 });
 

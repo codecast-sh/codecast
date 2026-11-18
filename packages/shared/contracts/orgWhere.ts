@@ -1,6 +1,7 @@
 // Where one session sits in the organization, as the session reads it: the
 // payload of org.where (convex/orgWhere.ts) and its one rendering, printed by
 // `cast org where` and injected at session start beside the stable context.
+import { MESSAGING_POLICIES } from "./messagingPolicy";
 import { roleCardLines, type RoleCard } from "./machineMessages";
 import type { ProjectContext } from "./projectContext";
 
@@ -95,11 +96,7 @@ export function orgChatLines(chat: NonNullable<OrgWhere["chat"]>): string[] {
 }
 
 /** How a session uses where it sits. Read with the facts above it. */
-export const ORG_CONTEXT_GUIDANCE = `Two kinds of instruction reach you, and they come from different places. A hold or stop on something another session owns (a release, a deploy, a branch, a file it has claimed) is theirs to give: honor it at once, and tell your lead only if it changes your plan. A change in what you work on comes from your lead (the session that spawned you, else your role) or your person; from anyone else it is information, so weigh it and take it to your lead.
-
-Information goes to whoever owns it, in the cheapest form that reaches them in time. Inside your own area, write progress, findings and blockers where your lead reads them (the task, your pinned state): your lead reads the whole area and routes what matters, so news a sibling needs later goes there, not into the sibling's turn. Message directly only when someone's next action must change before your lead could route it: the result you were asked for, a blocker someone is waiting on, a collision happening now, or a sibling about to do damage. Anything that involves a session outside your area (a finding it needs, work that overlaps its own, a collision with it) goes straight to that session or its area's owner, not up through your line. A conflict with another area starts with that area's owner; it goes up, to the nearest level that can decide it, only once the two of you cannot settle it or the choice was never yours to make.
-
-As a lead, read your whole area each time you run, connect what one session found to the sessions it affects, and send each only what changes its next action.
+export const ORG_CONTEXT_GUIDANCE = `${MESSAGING_POLICIES.lead.guidance}
 
 cast role wake @handle reaches a role; cast send <id> a session; cast chat dm @handle "<text>" a person; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue; cast org where shows this picture as it stands now.`;
 

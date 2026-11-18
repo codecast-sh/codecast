@@ -15,6 +15,7 @@ import { changeGuideStepValidator, changeGuideValidator } from "./lib/changeGuid
 import { followViewValidator } from "./lib/followView";
 import { TASK_EFFORTS, TASK_PRIORITIES, TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { taskWaitValidator } from "./lib/taskWaitValidator";
+import { messagingPolicyValidator } from "./lib/messagingPolicyValidator";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { LINE_CATEGORIES } from "@codecast/shared/contracts/goalsBrief";
 import { proseAnchorValidator } from "./lib/proseAnchorValidator";
@@ -6811,6 +6812,10 @@ export default defineSchema({
         v.literal("reference"),
         v.literal("blocker"),
         v.literal("note"),
+        // The shared log's entries (cast plan comment --type fail|interface);
+        // a fact is stored as "discovery".
+        v.literal("fail"),
+        v.literal("interface"),
       ),
       timestamp: v.number(),
       session_id: v.optional(v.string()),
@@ -6863,6 +6868,8 @@ export default defineSchema({
       v.literal("quorum"),
     )),
     join_k: v.optional(v.number()),
+    // How the plan's agents share findings; absent = "lead" (lib/messagingPolicyValidator).
+    messaging_policy: v.optional(messagingPolicyValidator),
     orchestration_metadata: v.optional(
       v.object({
         wave_count: v.optional(v.number()),
@@ -6910,6 +6917,15 @@ export default defineSchema({
     .index("by_created_from_conversation_id", ["created_from_conversation_id"])
     .index("by_project_id", ["project_id"])
     .index("by_doc_id", ["doc_id"]),
+
+  // How far each session has read its plan's shared log (plans with
+  // messaging_policy "shared-log"): planLog.unread delivers each fact, fail and
+  // interface entry once per session, then moves read_at past it.
+  plan_log_reads: defineTable({
+    conversation_id: v.id("conversations"),
+    plan_id: v.id("plans"),
+    read_at: v.number(),
+  }).index("by_conversation_plan", ["conversation_id", "plan_id"]),
 
   tasks: defineTable({
     user_id: v.id("users"),

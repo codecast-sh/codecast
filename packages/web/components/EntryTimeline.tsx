@@ -20,6 +20,8 @@ const TYPE_STYLES: Record<string, string> = {
   reference: "text-sol-cyan",
   blocker: "text-sol-red",
   note: "text-sol-text-dim",
+  fail: "text-sol-orange",
+  interface: "text-sol-violet",
 };
 
 const TYPE_ICONS: Record<string, string> = {
@@ -29,6 +31,8 @@ const TYPE_ICONS: Record<string, string> = {
   reference: "→",
   blocker: "!",
   note: "·",
+  fail: "✕",
+  interface: "⇄",
 };
 
 function formatTimestamp(ts: number): string {

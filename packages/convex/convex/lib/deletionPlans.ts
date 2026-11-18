@@ -98,6 +98,7 @@ function plans() {
     under("tree_snapshots", "by_conversation_taken", "conversation_id", HEAVY),
     under("conversation_events", "by_conversation_ts", "conversation_id"),
     under("session_starts", "by_conversation", "conversation_id"),
+    under("plan_log_reads", "by_conversation_plan", "conversation_id"),
     under("session_guests", "by_conversation_created", "conversation_id"),
     under("guest_suggestions", "by_conversation_status", "conversation_id"),
     under("usage_pending", "by_conversation_day", "conversation_id"),

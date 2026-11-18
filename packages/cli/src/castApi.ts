@@ -68,7 +68,7 @@ export async function apiPost(
   body: Record<string, unknown>,
   /** `describeError` turns a refusal code into words before it is shown.
    *  `retries` re-sends a write that is safe to repeat (setting a value, not creating one) on a timeout or 5xx. */
-  opts: { read?: boolean; exitOnError?: boolean; describeError?: (error: string) => string; retries?: number } = {},
+  opts: { read?: boolean; exitOnError?: boolean; describeError?: (error: string) => string; retries?: number; timeoutMs?: number } = {},
 ): Promise<any> {
   const { siteUrl, apiToken } = deps.getCliEndpoint();
   const doFetch = opts.read ? cliFetchRead : cliFetch;
@@ -76,7 +76,10 @@ export async function apiPost(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: apiToken, ...body }),
-  }, opts.retries !== undefined ? { retries: opts.retries } : {});
+  }, {
+    ...(opts.retries !== undefined ? { retries: opts.retries } : {}),
+    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+  });
   return readApiResult(response, urlPath, opts);
 }
 

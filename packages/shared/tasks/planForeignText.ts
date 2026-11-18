@@ -118,6 +118,9 @@ export type PlanBodyOptions = {
   formatAge?: (timestamp: number) => string;
 };
 
+/** The shared log's entry kinds, tagged so a reader tells a fact from a fail or an interface. */
+const LOG_ENTRY_TAGS: Record<string, string> = { discovery: "fact", fail: "fail", interface: "interface" };
+
 function commentLine(entry: ForeignPlanComment, opts: PlanBodyOptions): string {
   const age = opts.formatAge && typeof entry.timestamp === "number" && entry.timestamp > 0
     ? `[${opts.formatAge(entry.timestamp)} ago] `
@@ -127,7 +130,8 @@ function commentLine(entry: ForeignPlanComment, opts: PlanBodyOptions): string {
   const text = foreignProse(entry.content, FOREIGN_TEXT_CAPS.commentChars) || "";
   const why = inlineForeignText(entry.rationale);
   const ref = inlineForeignText(entry.path_or_url);
-  return `- ${age}${who}${text}${why ? ` (${why})` : ""}${ref ? ` → ${ref}` : ""}`;
+  const tag = entry.type && LOG_ENTRY_TAGS[entry.type] ? `[${LOG_ENTRY_TAGS[entry.type]}] ` : "";
+  return `- ${age}${tag}${who}${text}${why ? ` (${why})` : ""}${ref ? ` → ${ref}` : ""}`;
 }
 
 /** The foreign body, before it is fenced. Exported so a test can pin the per-field caps. */

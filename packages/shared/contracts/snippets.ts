@@ -27,6 +27,7 @@ import { manifestHash } from "./capabilities";
 import { ASSIGNEE_MEANS } from "./orgAssignee";
 import { agentSetupPageUrl } from "./agentToolSetup";
 import { BROWSER_EXTENSION_STORE_URL } from "./browserExtension";
+import { MESSAGING_POLICIES } from "./messagingPolicy";
 
 export type SnippetCategory = "context" | "together" | "work" | "show" | "hands";
 
@@ -595,6 +596,12 @@ cast kill <session_id>         # tear down, mark completed, cancel its triggers;
 \`\`\`
 
 A plain stash returns to the inbox when a trigger fires into it. \`--hide\` resurfaces it only for asks: a \`--status blocked\`, a run completing \`--needs-attention\`, or a stall (permission prompt, open question, dead process). Use it for a loop the human has reviewed and wants quiet.
+
+### Plans with a shared log
+
+A plan made with \`--policy shared-log\` replaces the lead's routing for its agents:
+
+${MESSAGING_POLICIES["shared-log"].guidance}
 `;
 
 export const PUBLISH_SNIPPET_END = "<!-- /codecast-publish -->";
