@@ -53,6 +53,13 @@ export async function linearDeliveryServesSource(ctx: any, source: SourceKeys, p
   return true;
 }
 
+export async function delegatedToSourceApp(ctx: any, source: SourceKeys, delegateId: string | undefined): Promise<boolean> {
+  if (!delegateId) return false;
+  const connection = await connectionForWork(ctx, "linear", { team_id: source.team_id, user_id: source.user_id });
+  const appUserId = connection?.app_user_id;
+  return typeof appUserId === "string" && appUserId !== "" && appUserId === delegateId;
+}
+
 /** Does a connection of `teamId`, or the caller's own, reach this container? (addSourceFor) */
 export async function connectionReaches(
   ctx: any,

@@ -153,6 +153,39 @@ describe("normalizeLinearIssue", () => {
     expect(fromQuery).toEqual(fromWebhook);
   });
 
+  test("assignee and delegate ids come from a GraphQL node", () => {
+    const issue = normalizeLinearIssue(
+      linearIssueNode({ assignee: { id: "user_1", name: "Ada", email: "ada@acme.dev" }, delegate: { id: "app_1", name: "Codecast" } }),
+      { now: T0 },
+    );
+    expect(issue.assignee_id).toBe("user_1");
+    expect(issue.delegate_id).toBe("app_1");
+  });
+
+  test("assignee and delegate ids come from webhook ids alone", () => {
+    const issue = normalizeLinearIssue(
+      linearIssue({ assignee: undefined, assigneeId: "user_2", delegate: undefined, delegateId: "app_2" }),
+      { now: T0 },
+    );
+    expect(issue.assignee_id).toBe("user_2");
+    expect(issue.delegate_id).toBe("app_2");
+  });
+
+  test("no assignee and no delegate leave both ids undefined", () => {
+    const issue = normalizeLinearIssue(linearIssue({ assignee: null }), { now: T0 });
+    expect(issue.assignee_id).toBeUndefined();
+    expect(issue.delegate_id).toBeUndefined();
+  });
+
+  test("null assignee and delegate ids leave both ids undefined", () => {
+    const issue = normalizeLinearIssue(
+      linearIssue({ assignee: null, assigneeId: null, delegate: null, delegateId: null }),
+      { now: T0 },
+    );
+    expect(issue.assignee_id).toBeUndefined();
+    expect(issue.delegate_id).toBeUndefined();
+  });
+
   test("identifier falls back to team key and number when absent", () => {
     const issue = normalizeLinearIssue(linearIssue({ identifier: undefined }), { now: T0 });
     expect(issue.identifier).toBe("LIN-482");

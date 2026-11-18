@@ -390,7 +390,7 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
     .description("Change a source's delegation convention")
     .argument("<id>", "Source ID")
     .option("--delegate-label <label>", "Provider label that means 'hand this to an agent'")
-    .option("--delegate-assignee <who>", "Provider user (id or login) that means 'hand this to an agent'")
+    .option("--delegate-assignee <who>", "Linear user id, email or name, or GitHub login, that means 'hand this to an agent'")
     .option("--auto-spawn <on|off>", "Spawn a session as soon as the delegation signal appears")
     .option("--push-new-tasks <on|off>", "Create tasks made in this project on the provider too")
     .option("--isolated <on|off>", "Give each auto-spawned session its own git worktree (on unless set off)")

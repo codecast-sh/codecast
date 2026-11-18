@@ -26,6 +26,7 @@ const ISSUE_FIELDS = `
   project { id }
   parent { id }
   assignee { id name email }
+  delegate { id name }
   labels { nodes { id name } }
 `;
 

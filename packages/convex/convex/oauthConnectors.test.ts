@@ -32,7 +32,7 @@ describe("PROVIDERS", () => {
     // Linear: read + write + comment. `write` is what issue sync's outbound
     // needs to change a title or move a state (issue-sync.md S5); it is not
     // admin, and there is no delete scope in the set.
-    expect(PROVIDERS.linear.scopes).toEqual(["read", "write", "comments:create"]);
+    expect(PROVIDERS.linear.scopes).toEqual(["read", "write", "comments:create", "app:assignable"]);
     expect(PROVIDERS.linear.scopes).not.toContain("admin");
     // Notion: access is per-page the user shares; the OAuth has no scope string.
     expect(PROVIDERS.notion.scopes).toEqual([]);
@@ -84,7 +84,7 @@ describe("connect state", () => {
     expect(payload!.user_id).toBe(OWNER);
     expect(payload!.team_id).toBe(TEAM);
 
-    expect(url.searchParams.get("scope")).toBe("read,write,comments:create");
+    expect(url.searchParams.get("scope")).toBe("read,write,comments:create,app:assignable");
     expect(url.searchParams.get("actor")).toBe("app");
   });
 
@@ -133,6 +133,12 @@ describe("storeConnection + finishConfirm", () => {
     const ok = await (finishConfirm as any)._handler(c, { user_id: OWNER, installation_id: stored.id, token_hash: "hash-1" });
     expect(ok.ok).toBe(true);
     expect(t.app_installations[0].pending_confirm_hash).toBeUndefined();
+  });
+
+  test("the app user id is stored on first connect", async () => {
+    const t = t0();
+    await (storeConnection as any)._handler(ctx(t), { ...base, app_user_id: "app_1" });
+    expect(t.app_installations[0].app_user_id).toBe("app_1");
   });
 
   test("re-connecting an UNCONFIRMED row upserts it whole — there is no live grant to protect", async () => {
@@ -695,6 +701,18 @@ describe("reconnecting a confirmed connection", () => {
     // The work path sees the connection it always saw, never the replacement.
     const found = await connectionForWork(c, "linear", { team_id: TEAM });
     expect(found?.access_token_enc).toBe("live-enc");
+  });
+
+  test("a reconnect stages the app user id and the live one stays until promotion", async () => {
+    const t = t0();
+    t.app_installations[0].app_user_id = "app_old";
+    const c = ctx(t);
+    await restore(c, { app_user_id: "app_new" });
+    expect(live(t).app_user_id).toBe("app_old");
+    expect(live(t).pending_replacement.app_user_id).toBe("app_new");
+    const res = await (finishConfirm as any)._handler(c, { user_id: MATE, installation_id: "ai_live", token_hash: "hash-new" });
+    expect(res.ok).toBe(true);
+    expect(live(t).app_user_id).toBe("app_new");
   });
 
   test("only the person who started the reconnect can promote it", async () => {

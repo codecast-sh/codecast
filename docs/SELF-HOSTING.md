@@ -568,6 +568,13 @@ Each is off until its variables are set on the Convex deployment (`npx convex en
 | Signed outbound requests | `CODECAST_SIGNING_KEY` (generate with `bun packages/convex/scripts/codecast-signing-key.ts`) |
 | Sentry issue webhooks | `SENTRY_WEBHOOK_SECRET` |
 
+### Linear
+
+1. In Linear, create an OAuth application (Settings > API > OAuth applications). Its callback URL is `https://convex.yourdomain.com/api/webhooks/oauth-connector/callback`, that is `CONVEX_SITE_URL` plus the path.
+2. Codecast requests the scopes `read`, `write`, `comments:create` and `app:assignable`, and installs as the app (`actor=app`). `app:assignable` lets people delegate an issue to the Codecast app. A workspace connected before it was requested gets it by reconnecting Linear in Codecast.
+3. Enable webhooks on the application with URL `https://convex.yourdomain.com/api/webhooks/linear` and resource types Issue and Comment.
+4. Set the application's client id and secret as `LINEAR_OAUTH_CLIENT_ID` and `LINEAR_OAUTH_CLIENT_SECRET`, and its webhook signing secret as `LINEAR_WEBHOOK_SECRET`.
+
 ### Embeddings (grouping findings)
 
 Session search is full text and needs no key. `OPENAI_API_KEY` lets Codecast group similar findings with OpenAI `text-embedding-3-small`:

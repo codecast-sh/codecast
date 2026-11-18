@@ -81,7 +81,7 @@ function DelegationSettings({ source }: { source: any }) {
           <input
             type="text"
             defaultValue={source.delegate_assignee ?? ""}
-            placeholder={source.provider === "github" ? "github login" : "linear email"}
+            placeholder={source.provider === "github" ? "github login" : "linear user id, email or name"}
             onBlur={(e) => {
               const value = e.target.value.trim();
               if (value !== (source.delegate_assignee ?? "")) set({ delegate_assignee: value });
