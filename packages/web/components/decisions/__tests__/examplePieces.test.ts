@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { changedPieces, wholeSentences } from "../ChangeCardView";
+import { wholeSentences } from "../ChangeCardView";
+import { changedPieces } from "../../../lib/conversationFence";
 
 const marked = (text: string, other: string) => changedPieces(text, other).filter((p) => p.changed).map((p) => p.text);
 

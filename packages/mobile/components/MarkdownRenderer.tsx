@@ -25,6 +25,8 @@ import { CastDiff } from './CastDiff';
 import { DIFF_FENCE } from '@codecast/web/lib/castDiff';
 import { FLOW_FENCE_LANG, readFlowFence } from '@codecast/web/lib/line/flowFence';
 import { FlowCard, FlowRunCard } from './session/FlowCard';
+import { CONVERSATION_FENCE_LANG } from '@codecast/web/lib/conversationFence';
+import { ConversationFence } from './ConversationFence';
 import { EntityPill } from './EntityPill';
 import { ProposalCard } from './org/ProposalCard';
 import { DecisionCard } from './decisions/DecisionCard';
@@ -491,6 +493,7 @@ function renderBlock(node: Nodes, ctx: MdCtx, k: string, first: boolean): React.
         const read = readFlowFence(node.value);
         if (read.ok) return read.spec.run ? <FlowRunCard key={k} runId={read.spec.run} /> : <FlowCard key={k} slug={read.spec.flow!} />;
       }
+      if (language === CONVERSATION_FENCE_LANG) return <ConversationFence key={k} code={node.value} fallback={<CodeBlockWithCopy content={node.value} language="json" />} />;
       if (language === DIFF_FENCE) return <CastDiff key={k} raw={node.value} fallback={<CodeBlockWithCopy content={node.value} language="diff" />} />;
       // Words quoted exactly (an approval's draft): plain lines, with no
       // highlighting, expand or copy, because they are not code.

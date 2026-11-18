@@ -1,0 +1,27 @@
+/* The `conversation` fence (ConversationFence): a thread drawn as a back and
+   forth, the agent on the right, then the change card's before and after
+   tiles. Themed only with --sol-* tokens and the change card's tones. */
+.cv-fence { container: cc / inline-size; margin: 0.75rem 0; max-width: 860px; display: flex; flex-direction: column; gap: 0.5rem; }
+.cv-title { font-size: 12px; font-weight: 600; color: var(--sol-text-muted); }
+.cv-thread { display: flex; flex-direction: column; gap: 0.5rem; }
+.cv-earlier { align-self: center; font-size: 12px; color: var(--sol-text-dim); border-radius: 4px; padding: 0.1rem 0.4rem; }
+.cv-earlier:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-bg-alt) 70%, transparent); }
+.cv-msg { display: flex; flex-direction: column; gap: 0.2rem; max-width: 82%; align-self: flex-start; }
+.cv-msg.is-agent { align-self: flex-end; align-items: flex-end; }
+.cv-meta { display: flex; gap: 0.4rem; font-size: 11.5px; color: var(--sol-text-dim); }
+.cv-from { color: var(--sol-text-muted); font-weight: 600; }
+.cv-bubble {
+  text-align: left; white-space: pre-line; font-size: 13px; line-height: 1.45; color: var(--sol-text);
+  padding: 0.45rem 0.7rem; border-radius: 12px; border-top-left-radius: 4px;
+  background: color-mix(in srgb, var(--sol-bg-alt) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+}
+.cv-msg.is-agent .cv-bubble {
+  border-radius: 12px; border-top-right-radius: 4px;
+  background: color-mix(in srgb, var(--sol-blue) 10%, transparent);
+  border-color: color-mix(in srgb, var(--sol-blue) 25%, transparent);
+}
+button.cv-bubble { cursor: pointer; }
+.cv-bubble.is-clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.cv-fence .cc-side-text { white-space: pre-line; }
+.cv-fence .cc-pair { margin-top: 0.25rem; }

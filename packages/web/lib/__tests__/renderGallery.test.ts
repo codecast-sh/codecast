@@ -18,6 +18,7 @@ import { DELIVERY_FAILED_SUBTYPE } from "@codecast/shared/contracts/deliveryFail
 import { LINE_FENCE_LANG } from "@codecast/shared/contracts/lineChat";
 import { VIEW_FENCE_LANG } from "../productViewRefs";
 import { FLOW_FENCE_LANG } from "../line/flowFence";
+import { CONVERSATION_FENCE_LANG } from "../conversationFence";
 import { DIFF_FENCE } from "../castDiff";
 
 const ROOT = join(import.meta.dir, "../../..");
@@ -91,6 +92,7 @@ describe("render gallery", () => {
       LINE_FENCE_LANG,
       VIEW_FENCE_LANG,
       FLOW_FENCE_LANG,
+      CONVERSATION_FENCE_LANG,
       tryRenderCanvas: "cast-canvas",
       tryRenderCastDiff: DIFF_FENCE,
     };

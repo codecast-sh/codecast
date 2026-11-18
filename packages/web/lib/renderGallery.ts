@@ -38,6 +38,7 @@ import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/s
 import { formatJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { LINE_FENCE_LANG } from "@codecast/shared/contracts/lineChat";
 import { FLOW_FENCE_LANG } from "./line/flowFence";
+import { CONVERSATION_FENCE_LANG } from "./conversationFence";
 import { DIFF_FENCE } from "./castDiff";
 
 /** Every gallery row's id starts with this, so a loader can replace an earlier copy. */
@@ -317,6 +318,48 @@ A flow from the pool:
 
 \`\`\`${FLOW_FENCE_LANG}
 {"flow":"change"}
+\`\`\`
+
+A conversation, with a reply before and with a change:
+
+\`\`\`${CONVERSATION_FENCE_LANG}
+{
+ "title": "Mira, a founder looking for a studio partner",
+ "agent": "Broker",
+ "thread": [
+  {
+   "from": "Broker",
+   "at": "Sep 28",
+   "text": "Three producers for your series: Leo Abara, Jan Smit and Ruth Kale. Each conversation still depends on the other person agreeing to speak."
+  },
+  {
+   "from": "Mira",
+   "at": "Sep 28",
+   "text": "I'm very open to speaking with as many as possible."
+  },
+  {
+   "from": "Mira",
+   "at": "Oct 1",
+   "text": "Thank you for the meeting. Please prioritize a funding partner or studio for the next rounds."
+  },
+  {
+   "from": "Broker",
+   "at": "Oct 2",
+   "text": "Noted: funding partners and studios come first. I'll review the pools and come back."
+  }
+ ],
+ "before": "Mira,\\n\\nFollowing your note, here is the strongest studio fit I have.\\n\\n**Dana Moss**, Executive Producer at North Shelter\\nRuns a production company making high-end TV rooted in local storytelling.\\n\\nShould I ask Dana whether she is open to a conversation?",
+ "after": "Mira,\\n\\nFollowing your note, here is the strongest studio fit I have. She hasn't been approached about your series yet.\\n\\n**Dana Moss**, Executive Producer at North Shelter\\nRuns a production company making high-end TV rooted in local storytelling.\\n\\nShould I find out whether Dana is open to a conversation?",
+ "mark": {
+  "before": [
+   "Should I ask Dana whether she is open to a conversation?"
+  ],
+  "after": [
+   "She hasn't been approached about your series yet."
+  ]
+ },
+ "note": "Before names Dana and never says she has not been asked; with the change it says so in one sentence."
+}
 \`\`\`
 
 A connected app's view:

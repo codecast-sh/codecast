@@ -35,6 +35,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useGoalChip } from "../../hooks/useGoalChip";
 import { lineRefHref } from "../../lib/line/lineWorkspaceUrl";
 import "./changeCard.css";
+import { replyPieces, squash } from "../../lib/conversationFence";
 import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 import { ChangeGuideWalkthrough } from "../tasks/ChangeGuideWalkthrough";
 import { keyScopeHasFocus, keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
@@ -508,40 +509,12 @@ export function CheckRow({ check, detail }: { check: CardCheck; detail?: string 
   );
 }
 
-const squash = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 /** Whether an example's input says anything its Before does not: one whose Before is the input's opening (or any run of it) only repeats it, so it is dropped. */
 export function exampleInputAdds(input: string, before: string): boolean {
   const i = squash(input);
   const b = squash(before);
   return !!i && !(b && i.includes(b));
-}
-
-// A reply split into its sentences and list items, separators kept, so the
-// text renders as written and a changed piece can be marked.
-const PIECE = /((?<=[.!?])\s+(?=\S)|\s+-\s+|\n+)/;
-
-const wordsOf = (t: string) => new Set(squash(t).split(" ").filter(Boolean));
-/** Two pieces say the same thing when most of their words are shared ("Add the button" and "Added the button"). */
-const samePiece = (a: Set<string>, b: Set<string>) => {
-  let shared = 0;
-  for (const w of a) if (b.has(w)) shared++;
-  return shared / (a.size + b.size - shared) >= 0.5;
-};
-
-/** The pieces of `text` with `changed` set on each one `other` does not say.
- *  Nothing is marked when most pieces changed: a reply marked nearly whole
- *  says nothing a reader cannot see. */
-export function changedPieces(text: string, other: string): Array<{ text: string; changed: boolean }> {
-  const parts = text.split(PIECE);
-  const theirs = other.split(PIECE).filter((_, i) => i % 2 === 0).map(wordsOf).filter((w) => w.size > 0);
-  const out = parts.map((t, i) => {
-    const mine = i % 2 === 0 ? wordsOf(t) : null;
-    return { text: t, changed: !!mine && mine.size > 0 && !theirs.some((w) => samePiece(mine, w)) };
-  });
-  const pieces = out.filter((p, i) => i % 2 === 0 && squash(p.text));
-  const changed = pieces.filter((p) => p.changed).length;
-  return changed > 0 && changed <= pieces.length / 2 ? out : out.map((p) => ({ ...p, changed: false }));
 }
 
 /** A note cut short where it was stored ends at its last whole sentence, so it never stops mid-thought. */
@@ -552,8 +525,10 @@ export function wholeSentences(note: string): string {
   return end > 0 ? t.slice(0, end + 1) : t;
 }
 
-function SideText({ text, other, tone }: { text: string; other: string; tone: "before" | "after" }) {
-  const pieces = useMemo(() => changedPieces(text, other), [text, other]);
+const NO_MARKS: string[] = [];
+/** A reply with what matters marked (see replyPieces). */
+function SideText({ text, other, tone, marks = NO_MARKS }: { text: string; other: string; tone: "before" | "after"; marks?: string[] }) {
+  const pieces = useMemo(() => replyPieces(text, other, marks), [text, other, marks]);
   return <>{pieces.map((p, i) => (p.changed ? <mark key={i} className={`cc-changed cc-changed-${tone}`}>{p.text}</mark> : <span key={i}>{p.text}</span>))}</>;
 }
 
@@ -561,8 +536,8 @@ function SideText({ text, other, tone }: { text: string; other: string; tone: "b
 const longSide = (t: string) => t.length > 220 || t.split("\n").length > 4;
 
 /** One before and after pair: two tiles of one height, the input as a small "for:" caption inside Before that opens in full, the note under both. What one side says that the other does not is marked. `clamp` holds each side to four lines with a toggle that opens both. The Evals pages show eval flips with it too. */
-/** `afterLabel`: "Expected" when the after side is what the fix should do, not what a replay observed. */
-export function ExamplePair({ ex, clamp = false, afterLabel = "After" }: { ex: ChangeCard["examples"][number]; clamp?: boolean; afterLabel?: string }) {
+/** `afterLabel`: "Expected" when the after side is what the fix should do, not what a replay observed. `marks`: phrases to mark on each side in place of the computed difference. */
+export function ExamplePair({ ex, clamp = false, beforeLabel = "Before", afterLabel = "After", marks }: { ex: ChangeCard["examples"][number]; clamp?: boolean; beforeLabel?: string; afterLabel?: string; marks?: { before: string[]; after: string[] } }) {
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -572,18 +547,18 @@ export function ExamplePair({ ex, clamp = false, afterLabel = "After" }: { ex: C
     <div className="cc-example">
       <div className="cc-pair">
         <div className="cc-side cc-before">
-          <span className="cc-side-label">Before</span>
+          <span className="cc-side-label">{beforeLabel}</span>
           {/* What the pair answers belongs to the pair, not above it as a quote competing with the tiles. */}
           {exampleInputAdds(ex.input, ex.before) && (
             <button type="button" className={`cc-example-input ${open ? "is-open" : ""}`} onClick={() => setOpen((o) => !o)} aria-expanded={open} title={open ? undefined : "Show the full input"}>
               <span className="cc-example-for">for:</span> {ex.input}
             </button>
           )}
-          <span className={`cc-side-text ${clamped ? "is-clamped" : ""}`}><SideText text={ex.before} other={ex.after} tone="before" /></span>
+          <span className={`cc-side-text ${clamped ? "is-clamped" : ""}`}><SideText text={ex.before} other={ex.after} tone="before" marks={marks?.before} /></span>
         </div>
         <div className="cc-side cc-after">
           <span className="cc-side-label">{afterLabel}</span>
-          <span className={`cc-side-text ${clamped ? "is-clamped" : ""}`}><SideText text={ex.after} other={ex.before} tone="after" /></span>
+          <span className={`cc-side-text ${clamped ? "is-clamped" : ""}`}><SideText text={ex.after} other={ex.before} tone="after" marks={marks?.after} /></span>
         </div>
       </div>
       {clamp && (longSide(ex.before) || longSide(ex.after)) && (

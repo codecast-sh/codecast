@@ -22,7 +22,17 @@ The note has two readers, and it has two parts for them, split by a line holding
 
 The part above that line is the card the person answers when you approve, and it may be all they read: someone who runs the product and knows its people and features, but not its code, and who never saw the session that made the change. Its first line is the card's question: a short plain question, a dozen words or so, about what the change does for the people it reaches. Under it, in under a hundred words: what the change does for those people; what this review saw for itself, with any measured result as its numbers; what rests on the implementer's word or went unchecked; and what could still go wrong for people, a deferred finding included. Short lines or a short list read faster than a paragraph. These words are the product's people's words; a name that only the code or this review explains (a function, a file, a principle id, a commit, a rubric number) has no place above the line. Every claim there is one this review bears out, or is marked as resting on someone else's word.
 
-When the change alters what an agent writes to people (a prompt, an instruction, a template), the person judges it by what people receive, and counts of replies cannot show them that. Read the replies themselves from the runs that measured the change, and put them on the card: under the summary, the one conversation that shows the difference most plainly, as the message being answered followed by the reply sent before the change and the reply sent with it, each quoted whole and labeled. Then publish every reply you read, before and after, grouped by conversation with the thread that led to it (`cast publish`), and put its address alone on its own line on the card. The quoted replies and the page are not part of the hundred words.
+When the change alters what an agent writes to people (a prompt, an instruction, a template), the person judges it by what people receive, and counts of replies cannot show them that. Read the replies themselves from the runs that measured the change, and put them on the card: under the summary, the one conversation that shows the difference most plainly, as a `conversation` block. The app draws that block as the thread, back and forth, followed by the reply sent before the change beside the reply sent with it, and highlights the words you mark in each. Its body is JSON:
+
+```conversation
+{"title": "<who, and what they were after>", "agent": "<the agent's name as it signs>",
+ "thread": [{"from": "<sender>", "at": "<date>", "text": "<message, whole>"}],
+ "before": "<the reply sent before the change, whole>", "after": "<the reply sent with it, whole>",
+ "mark": {"before": ["<words that show the problem>"], "after": ["<words that show the fix>"]},
+ "note": "<what the difference is, in one sentence>"}
+```
+
+The thread is the few messages that make the reply make sense, oldest first; mark the exact words, copied from the reply, where the difference shows. Then publish every reply you read, before and after, grouped by conversation with the thread that led to it (`cast publish`), and put its address alone on its own line on the card. The block and the page are not part of the hundred words.
 
 The part below the line is the record, for the implementer and whoever checks your work: each unmet point as `<id>: <what fails, and where>`, with a principle id or a P-section, then the ids you checked and passed.
 
