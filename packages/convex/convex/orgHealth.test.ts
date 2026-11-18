@@ -188,7 +188,7 @@ describe("org.health", () => {
     expect(growth.area.standing).toEqual({ project: "Launch", text: "two pages shipped this week.", written_on: "2026-09-20", written_at: Date.parse("2026-09-20T00:00:00Z") });
     expect(growth.area.standing_lines.map((l) => l.project)).toEqual(["Launch", "Growth"]);
     expect(growth.area.checked_at).toBe(NOW - 2 * H);
-    expect(growth.area.check).toEqual({ trigger_id: "agent_tasks_check", short_id: "tr-7", title: "Check Growth lead's area", status: "paused", run_at: NOW + 3 * H, last_run_at: NOW - 21 * H, last_run_summary: "Nothing needed doing.", interval_ms: D });
+    expect(growth.area.check).toEqual({ trigger_id: "agent_tasks_check", short_id: "tr-7", title: "Check Growth lead's area", status: "paused", run_at: NOW + 3 * H, last_run_at: NOW - 21 * H, last_run_summary: "Nothing needed doing.", interval_ms: D, last_run_failed: false });
     // The standing session raising something for the person outranks the rest.
     await db.patch(S_GROWTH as any, { thread_state: "Needs your call on the price band", thread_state_status: "blocked", thread_state_at: NOW - H });
     const raised = (await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW)).roles.find((x) => x.handle === "growth")!;
@@ -198,7 +198,9 @@ describe("org.health", () => {
   });
 
   test("an overloaded role and an idle one, each with its signals and flags", async () => {
-    const r = await computeOrgHealth(ctxOf(fixtures()), ME as any, TEAM, NOW);
+    // The idle role's check runs, so its area reads on what moved in it.
+    const billingCheck = { _id: "agent_tasks_billing_check", user_id: ME, short_id: "tr-8", title: "Check Billing lead's area", prompt: "Check.", originating_conversation_id: S_BILLING, schedule_type: "recurring", interval_ms: D, run_at: NOW + 3 * H, last_run_at: NOW - 21 * H, status: "scheduled", role_id: BILLING, run_count: 3, retry_count: 0, created_at: 1 };
+    const r = await computeOrgHealth(ctxOf(fixtures({ agent_tasks: [billingCheck] })), ME as any, TEAM, NOW);
     expect(r.workspace).toEqual({ kind: "team", id: TEAM });
     const growth = r.roles.find((x) => x.handle === "growth")!;
     // The ledger is what the scope holds; the load is what reached the seat
@@ -237,11 +239,11 @@ describe("org.health", () => {
     expect(growth.breaches).toBe(0);
     expect(growth.overloaded_now).toBe(true);
     expect(growth.flags.find((f) => f.code === "overloaded")!.detail).not.toContain("earlier review");
-    // The area as a person reads it (S29): stuck, because three reviews and
-    // one blocked task wait on nobody; its one project with the goal and the
-    // counts; no line, no check and no read of its brief yet.
-    expect(growth.area).toMatchObject({ status: "stuck", standing: null, standing_lines: [], checked_at: null, check: null, standing_conversation_id: S_GROWTH, standing_short_id: S_GROWTH.slice(-7) });
-    expect(growth.area.status_line).toBe("Stuck: 3 tasks stuck in review, 1 task blocked.");
+    // The area as a person reads it (S29): down, because it has no check to
+    // wake it, over the three reviews and one blocked task that wait on
+    // nobody (ct-95585); its one project with the goal and the counts; no
+    // line, no check and no read of its brief yet.
+    expect(growth.area).toMatchObject({ status: "down", status_line: "Down: it has no check.", standing: null, standing_lines: [], checked_at: null, check: null, standing_conversation_id: S_GROWTH, standing_short_id: S_GROWTH.slice(-7) });
     // Six hands wait an hour old (young, so not a stall, but listed); the
     // three signals a row shows are the first three that matter.
     expect(growth.area.waiting).toHaveLength(6);

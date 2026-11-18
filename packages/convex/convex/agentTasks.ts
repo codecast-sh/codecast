@@ -40,7 +40,7 @@ import { nextCadenceRun } from "@platform/assistant/cadence";
 import { startHostedConversationFor } from "./assistant/start";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
-import { type TaskCtx, projectQuiet, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill, projectRunsInline, scheduleProjectFire } from "./lib/agentTaskRows";
+import { type TaskCtx, roleSeatOf, roleTriggerRunnerOf, handRoleTriggersToRunner, projectQuiet, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill, projectRunsInline, scheduleProjectFire } from "./lib/agentTaskRows";
 export { refreshArmedTriggerKind, patchTask, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill };
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -424,6 +424,8 @@ async function wakeRunOwner(
   outcome: RunOutcome,
   detail: string | undefined,
   now: number,
+  // For a failed run, whether the trigger stopped or stays armed at its next slot.
+  spent: SpentNotice = "stopped",
 ): Promise<boolean> {
   const ownerId = runOwnerWakeOf(task, outcome);
   const owner = ownerId ? await ctx.db.get(ownerId) : null;
@@ -439,7 +441,9 @@ async function wakeRunOwner(
   const read = runRef ? ` Read it with cast read ${runRef}.` : "";
   const body =
     outcome === "failed"
-      ? `${run} failed and the trigger is retired${detail ? `: ${detail}` : ""}.${read} This trigger is yours: re-arm it with a better brief, or file what the run found. Nobody else will act on it.`
+      ? spent === "first_slot"
+        ? `${run} failed after its retries${detail ? `: ${detail}` : ""}.${read} The trigger stays armed and runs again at its next slot; after ${FAILED_SLOTS_TO_STOP} failed runs in a row it stops. It is yours: fix its brief or what it depends on before then. Do not arm a second one.`
+        : `${run} failed and the trigger stopped${task.schedule_type === "recurring" ? ` after ${FAILED_SLOTS_TO_STOP} failed runs in a row` : ""}${detail ? `: ${detail}` : ""}.${read} This trigger is yours: re-arm it with a better brief, or file what the run found. Nobody else will act on it.`
       : outcome === "unreported_exit"
         ? `${run} ended without reporting.${read} If the work is done, use or file its result; if the run died, re-arm the trigger.`
         : outcome === "attention"
@@ -1281,6 +1285,13 @@ export const claimTask = mutation({
     if (await cloudTriggerConversation(ctx, task)) return null;
     if (await roleTriggerHeld(ctx, task)) return null;
     if (projectRunsInline(task)) return null;
+    // A role trigger whose session another account now runs: whatever moved
+    // the session, the firing is that account's, so the trigger goes to it
+    // and its daemon claims it on its next poll (roleTriggerRunnerOf).
+    if (task.originating_conversation_id && await roleTriggerRunnerOf(ctx, task)) {
+      await handRoleTriggersToRunner(ctx, task.originating_conversation_id);
+      return null;
+    }
 
     const now = Date.now();
     const sourceFields = claimRunSourceFields(task);
@@ -1350,6 +1361,7 @@ function completedTaskRunFields(
     last_run_summary: args.summary,
     last_run_failed: false,
     retry_count: 0,
+    failed_slots: undefined,
     last_run_conversation_id: args.conversation_id
       ? args.conversation_id as Id<"conversations">
       : undefined,
@@ -1421,6 +1433,32 @@ export function nextArmingAfterRun(task: Pick<Doc<"agent_tasks">, "schedule_type
   // A one-shot keeps its run_at: nothing reads it once the status is terminal,
   // and it is the record of when this trigger actually fired.
   return { status: "completed" };
+}
+
+// A firing whose retries ran out. A one-shot or an event trigger had its
+// firing and ends failed. A recurring trigger loses only this slot: the run
+// counts as failed and it takes its next slot with fresh retries, until
+// FAILED_SLOTS_TO_STOP slots in a row have failed, when it ends failed.
+// Ending it at the first bad slot stopped a role's daily check for good, and
+// nothing re-armed it (ct-95585); never ending it would page the owner every
+// slot of a trigger that cannot work. The owner hears the first failed slot
+// of a streak and the stop, nothing between.
+export const FAILED_SLOTS_TO_STOP = 3;
+export type SpentNotice = "stopped" | "first_slot" | null;
+export function retriesSpentFields(task: Pick<Doc<"agent_tasks">, "schedule_type" | "interval_ms" | "run_at" | "cadence_slot_at" | "run_count"> & Partial<Pick<Doc<"agent_tasks">, "cadence" | "failed_slots">>, now: number): { fields: Record<string, any>; notice: SpentNotice } {
+  if (task.schedule_type !== "recurring") return { fields: { status: "failed", precheck_message: undefined }, notice: "stopped" };
+  const failed_slots = (task.failed_slots ?? 0) + 1;
+  if (failed_slots >= FAILED_SLOTS_TO_STOP) return { fields: { status: "failed", failed_slots, last_run_at: now, precheck_message: undefined }, notice: "stopped" };
+  return {
+    fields: { ...nextArmingAfterRun(task, now), retry_count: 0, run_count: task.run_count + 1, last_run_at: now, failed_slots, precheck_message: undefined },
+    notice: failed_slots === 1 ? "first_slot" : null,
+  };
+}
+
+/** The first words of the notice a spent firing sends its owner. */
+function retriesSpentLead(task: Pick<Doc<"agent_tasks">, "schedule_type">, notice: Exclude<SpentNotice, null>): string {
+  if (notice === "first_slot") return "This run failed after its retries; the trigger stays armed and runs again at its next slot.";
+  return task.schedule_type === "recurring" ? `Stopped after ${FAILED_SLOTS_TO_STOP} failed runs in a row.` : "Stopped after retries.";
 }
 
 // What a finished run does to the conversations around it.
@@ -1658,31 +1696,34 @@ export const failTaskRun = mutation({
         last_run_session_uuid: runUuid,
       });
     } else {
+      const spent = retriesSpentFields(task, Date.now());
       await patchTask(ctx, task, {
-        status: "failed",
         retry_count: newRetryCount,
         lease_holder: undefined,
         lease_expires_at: undefined,
         last_run_summary: args.error ? `Failed: ${args.error}` : "Failed (max retries)",
         last_run_failed: true,
         last_run_session_uuid: runUuid,
-        precheck_message: undefined,
+        ...spent.fields,
       });
 
-      // Retries exhausted = the loop is dead, and a hidden home must not stay
-      // hidden with a dead loop inside it — the stall rule ("stash hides work,
-      // not stalls"), same clear the --needs-attention claim uses. Transient
+      // A trigger that stopped = the loop is dead, and a hidden home must not
+      // stay hidden with a dead loop inside it — the stall rule ("stash hides
+      // work, not stalls"), same clear the --needs-attention claim uses. A
+      // recurring trigger still armed goes on at its next slot. Transient
       // failures above stay quiet: the retry is still progress.
-      if (task.originating_conversation_id) {
+      if (spent.notice === "stopped" && task.originating_conversation_id) {
         const home = await ctx.db.get(task.originating_conversation_id);
         if (home) await restoreToInbox(ctx, home);
       }
       // A fresh run's death is its owner's to act on: the run is nested under
       // it and out of the inbox, so the owner is told, not the human.
-      const ownerNotified = await wakeRunOwner(ctx, task, runConv, "failed", args.error, Date.now());
-      if (!ownerNotified) {
-        await notifyRunAttention(ctx, task, runNoticeConversationId(task, runConv), "task_failed",
-          `Stopped after retries. ${args.error || "Review the run before restarting it."}`, Date.now());
+      if (spent.notice) {
+        const ownerNotified = await wakeRunOwner(ctx, task, runConv, "failed", args.error, Date.now(), spent.notice);
+        if (!ownerNotified) {
+          await notifyRunAttention(ctx, task, runNoticeConversationId(task, runConv), "task_failed",
+            `${retriesSpentLead(task, spent.notice)} ${args.error || "Review the run before restarting it."}`, Date.now());
+        }
       }
     }
 
@@ -1743,8 +1784,12 @@ export const skipTaskRun = mutation({
       ...nextArmingAfterRun(task, now),
       last_precheck_skip_at: now,
       last_precheck_skip_reason: args.reason,
-      // A firing that recorded its skip worked: retries count failures in a row, never across healthy firings.
+      // A firing that recorded its skip worked: retries and failed slots count
+      // failures in a row, never across healthy firings, and the run before it
+      // is no longer the last word on the trigger.
       retry_count: 0,
+      failed_slots: undefined,
+      last_run_failed: false,
       ...(args.precheck_state !== undefined && sameGate(task, args.command, args.precheck_mode) ? { precheck_state: args.precheck_state } : {}),
       lease_holder: undefined,
       lease_expires_at: undefined,
@@ -2571,6 +2616,11 @@ export async function applyTaskUpdate(
   // patchTask reads the binding off the PRE-edit row and so cannot see a
   // home this edit is moving the trigger TO.
   if (args.originating_conversation_id !== undefined) {
+    // A role's trigger lives on its seat and follows whoever runs it
+    // (roleTriggerRunnerOf); moving it would take it out of the role.
+    if (task.role_id && String(args.originating_conversation_id ?? "") !== String(task.originating_conversation_id ?? "")) {
+      throw new Error("This trigger belongs to a role and runs in the role's own session; it cannot move to another one");
+    }
     patch.originating_conversation_id = args.originating_conversation_id ?? undefined;
   }
   // Every trigger keeps its parent. The session a trigger was bound to is the
@@ -2680,6 +2730,24 @@ const TASK_UPDATE_ARG_VALIDATORS = {
   wake_creator: v.optional(v.boolean()),
 };
 
+// What a trigger runs and where are its owner's (ct-96220): the precheck is a
+// shell command the owner's daemon runs, and the home is the session it
+// injects into and whose machine runs it. Anyone who may manage a trigger
+// still pauses, cancels, runs and retitles it; changing the precheck or the
+// home is for the owner, or for a role's trigger the account running its seat.
+// The role's own tune door (orgRoles.applyRoutineTune) has its own rule.
+async function assertMayChangeGateOrHome(ctx: TaskCtx, task: Doc<"agent_tasks">, update: TaskUpdateArgs, userId: Id<"users">): Promise<void> {
+  const precheckMoves = (update.precheck !== undefined && (update.precheck.trim() || undefined) !== task.precheck)
+    || (update.precheck_mode !== undefined && (update.precheck_mode || undefined) !== task.precheck_mode);
+  const homeMoves = update.originating_conversation_id !== undefined && String(update.originating_conversation_id ?? "") !== String(task.originating_conversation_id ?? "");
+  if (!precheckMoves && !homeMoves) return;
+  if (String(task.user_id) === String(userId)) return;
+  if (task.role_id && String((await roleSeatOf(ctx, task.role_id))?.user_id ?? "") === String(userId)) return;
+  throw new Error(precheckMoves
+    ? "Only the trigger's owner can change its precheck: it runs as a shell command on their machine"
+    : "Only the trigger's owner can change the session it runs in");
+}
+
 export const webUpdate = mutation({
   args: { task_id: v.id("agent_tasks"), ...TASK_UPDATE_ARG_VALIDATORS },
   handler: async (ctx, args) => {
@@ -2689,6 +2757,7 @@ export const webUpdate = mutation({
     if (!task) return false;
     const { task_id: _id, ...rest } = args;
     await requireTriggerConversations(ctx, userId, rest);
+    await assertMayChangeGateOrHome(ctx, task, rest, userId);
     const result = await applyTaskUpdate(ctx, task, rest, { userId, source: "web" });
     return result.ok;
   },
@@ -2733,6 +2802,7 @@ export const updateTask = mutation({
       if (!conv) throw new Error(`No session of yours matches "${created_by_session_ref}"`);
       update.created_by_conversation_id = conv._id;
     }
+    await assertMayChangeGateOrHome(ctx, task, update, auth.userId);
     return await applyTaskUpdate(ctx, task, update, { userId: auth.userId, source: "cli" });
   },
 });
@@ -3085,18 +3155,21 @@ export const reclaimStaleTasks = internalMutation({
           });
           reclaimed++;
         } else {
+          const spent = retriesSpentFields(task, now);
           await patchTask(ctx, task, {
-            status: "failed",
             lease_holder: undefined,
             lease_expires_at: undefined,
             last_run_summary: "Lease expired, max retries exceeded",
-            precheck_message: undefined,
+            last_run_failed: true,
+            ...spent.fields,
           });
 
-          const detail = `Stopped after ${task.retry_count} retries because the runner stopped responding. Review the run before restarting it.`;
-          const ownerNotified = await wakeRunOwner(ctx, task, runConv, "failed", detail, now);
-          if (!ownerNotified) {
-            await notifyRunAttention(ctx, task, runNoticeConversationId(task, runConv), "task_failed", detail, now);
+          if (spent.notice) {
+            const detail = `${retriesSpentLead(task, spent.notice)} The runner stopped responding after ${task.retry_count} retries. Review the run before restarting it.`;
+            const ownerNotified = await wakeRunOwner(ctx, task, runConv, "failed", detail, now, spent.notice);
+            if (!ownerNotified) {
+              await notifyRunAttention(ctx, task, runNoticeConversationId(task, runConv), "task_failed", detail, now);
+            }
           }
         }
       }

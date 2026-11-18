@@ -100,3 +100,37 @@ test("a health read that could not happen is said, with Retry; a clean read says
   expect(m.el.textContent).toBe("");
   await m.unmount();
 });
+
+// A role whose check stopped hears nothing of its area (ct-95585): its card
+// reads "down" in its colour, and the chip names what stopped with the full
+// reason on it, never an overdue "next check". A check a person cancelled is
+// their call: "check off", dim.
+const stoppedCheck = { trigger_id: "t", short_id: "tr-1154", title: "Check Growth lead's area", status: "failed", run_at: now - 45 * 86_400_000, last_run_at: now - 45 * 86_400_000, last_run_summary: "Failed: Injection failed: Unauthorized.", interval_ms: 86_400_000 };
+
+test("a role whose check stopped reads down, with what stopped on its card", async () => {
+  const { RoleWeekBody } = await import("./orgFlowViz");
+  const { AREA_STATUS_COLOR } = await import("./staffingModel");
+  const area = { ...growth.area!, status: "down" as const, status_line: "Down: its check stopped after failing: Injection failed: Unauthorized.", check: stoppedCheck };
+  const down = { ...growth, area, status: "down" as const, statusWord: "down", color: AREA_STATUS_COLOR.down };
+  const m = await mount(h(RoleWeekBody, { f: down, days: flowDays(now) }));
+  const chip = q("[data-week-signal=down]", m.el)!;
+  expect(chip.textContent).toBe("check stopped");
+  expect(chip.getAttribute("title")).toBe("its check stopped after failing: Injection failed: Unauthorized.");
+  expect(chip.getAttribute("style")).toContain("--sol-red");
+  expect(m.el.textContent).toContain("down");
+  expect(m.el.textContent).not.toMatch(/next check/);
+  await m.unmount();
+});
+
+test("a role whose check a person cancelled reads check off, dim, with why on hover", async () => {
+  const { RoleWeekBody } = await import("./orgFlowViz");
+  const { AREA_STATUS_COLOR } = await import("./staffingModel");
+  const area = { ...growth.area!, status: "off" as const, status_line: "Check off: its check was cancelled.", check: { ...stoppedCheck, status: "completed" } };
+  const off = { ...growth, area, status: "off" as const, statusWord: "check off", color: AREA_STATUS_COLOR.off };
+  const m = await mount(h(RoleWeekBody, { f: off, days: flowDays(now) }));
+  const chip = q("[data-week-signal=off]", m.el)!;
+  expect(chip.textContent).toBe("check off");
+  expect(chip.getAttribute("title")).toBe("its check was cancelled");
+  expect(chip.getAttribute("style")).not.toContain("--sol-red");
+  await m.unmount();
+});

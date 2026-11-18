@@ -3,6 +3,7 @@ import { roleRunner } from "./lib/seatPlace";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
+import { handRoleTriggersToRunner } from "./lib/agentTaskRows";
 import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, andList, lineSlugOf, orgAuthorityGrantsError, authorityWords, orgEveryToMs, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
@@ -1319,6 +1320,8 @@ async function refreshRoutine(ctx: Ctx, role: any, standing: any, live: any | nu
 
 export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, everyMs?: number): Promise<{ id: Id<"agent_tasks">; short_id?: string; created: boolean }> {
   const spec = roleRoutineFor(role);
+  // The seat's triggers fire as whoever runs it now (roleTriggerRunnerOf).
+  await handRoleTriggersToRunner(ctx, standing._id);
   // The morning agenda (S33) and the Head of People's inbox look (S43) arm with the routine, from every door.
   await syncRoleAgenda(ctx, role, standing);
   await syncInboxLook(ctx, role, standing);

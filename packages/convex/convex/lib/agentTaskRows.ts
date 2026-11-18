@@ -83,6 +83,9 @@ export async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
     // its gate asks again from nothing (a change the dead run never acted on
     // must not read as "unchanged").
     retry_count: 0,
+    // Nor is it failing: the dead run stops being its last word (ct-95585).
+    last_run_failed: false,
+    failed_slots: undefined,
     precheck_message: undefined,
     precheck_state: undefined,
     cadence_slot_at: undefined,
@@ -198,6 +201,44 @@ export async function tasksOriginatedBy(ctx: TaskCtx, conversationId: Id<"conver
 
 export async function runnerTasksOriginatedBy(ctx: TaskCtx, userId: Id<"users">, conversationId: Id<"conversations">) {
   return (await tasksOriginatedBy(ctx, conversationId)).filter((task) => task.user_id.toString() === userId.toString());
+}
+
+/** The session a role is seated in: its anchor's conversation, read as a
+ *  leaf (orgRoles.standingConversationOf reaches the big import cycle). */
+export async function roleSeatOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefined): Promise<Doc<"conversations"> | null> {
+  const role = roleId ? await ctx.db.get(roleId) : null;
+  const anchor = role?.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+  return anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+}
+
+// A role's triggers belong to its standing session, so they fire as the
+// account that runs it: that account's daemon claims them (getDueTasks reads
+// by user_id), runs their precheck on the session's machine and injects as
+// the session's owner (sendMessageToSession). The session changes hands when
+// it moves across accounts (a role move, a failover, a device claim), and a
+// trigger left under the old account fired from the wrong daemon and was
+// refused at every firing (ct-95585). Only a trigger whose home IS its role's
+// seat follows the seat: a role trigger pointed anywhere else is never handed
+// to whoever owns that session, so nobody can choose a teammate's machine to
+// run it on. A person's own trigger on a session is theirs and keeps its owner.
+export async function roleTriggerRunnerOf(ctx: TaskCtx, task: Pick<Doc<"agent_tasks">, "role_id" | "user_id" | "originating_conversation_id">): Promise<Id<"users"> | null> {
+  if (!task.role_id || !task.originating_conversation_id) return null;
+  const seat = await roleSeatOf(ctx, task.role_id);
+  if (!seat || String(seat._id) !== String(task.originating_conversation_id)) return null;
+  return String(seat.user_id) !== String(task.user_id) ? seat.user_id : null;
+}
+
+/** Hand every role trigger seated on a conversation to the account that runs
+ *  it. Returns how many changed hands. */
+export async function handRoleTriggersToRunner(ctx: TaskCtx, conversationId: Id<"conversations">): Promise<number> {
+  let handed = 0;
+  for (const task of await tasksOriginatedBy(ctx, conversationId)) {
+    const runner = await roleTriggerRunnerOf(ctx, task);
+    if (!runner) continue;
+    await patchTask(ctx, task, { user_id: runner });
+    handed++;
+  }
+  return handed;
 }
 
 /** Cancel every open task a conversation originated (a retired standing role's

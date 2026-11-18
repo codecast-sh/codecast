@@ -354,9 +354,11 @@ export function relatedFlags(flags: HealthFlagRow[], changes: OrgProposalChange[
 /** The status word's colour: what needs a person is warm, what needs the
  *  head is yellow, a quiet or paused area is dim, on track is green. */
 export const AREA_STATUS_COLOR: Record<AreaStatus, string> = {
+  down: "var(--sol-red)",
   waiting_on_you: "var(--sol-orange)",
   stuck: "var(--sol-yellow)",
   overloaded: "var(--sol-magenta)",
+  off: "var(--sol-text-dim)",
   quiet: "var(--sol-text-dim)",
   on_track: "var(--sol-green)",
   paused: "var(--sol-text-dim)",
