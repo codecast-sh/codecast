@@ -1,11 +1,11 @@
 "use client";
 
-// The Claude backend control: where a session runs (a tmux pane or an Agent
-// SDK host) and the move to the other, keeping the same session. Two
+// The backend control of a Claude or Grok session: where it runs (a tmux pane
+// or a direct host) and the move to the other, keeping the same session. Two
 // surfaces: the "Runs in" rows of the session control panel, and the header
-// pill an SDK session shows where a tmux session shows its terminal pill.
+// pill a direct session shows where a tmux session shows its terminal pill.
 
-import { Plug, SquareTerminal } from "lucide-react";
+import { SquareTerminal, Zap } from "lucide-react";
 import type { ClaudeBackend } from "@codecast/shared/contracts";
 import { useClaudeBackend } from "../hooks/useSessionCommands";
 import { useManagedSessionFields } from "../hooks/useManagedSessionFields";
@@ -14,7 +14,7 @@ import { backendRows, type BackendRow } from "../lib/claudeBackendControl";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
-const BACKEND_ICON: Record<ClaudeBackend, typeof Plug> = { tmux: SquareTerminal, sdk: Plug };
+const BACKEND_ICON: Record<ClaudeBackend, typeof Zap> = { tmux: SquareTerminal, sdk: Zap };
 
 function press(conversationId: string, row: BackendRow) {
   if (!row.action) return;
@@ -64,7 +64,7 @@ export function BackendRunsInRows({ conversationId, sectionLabelClassName }: { c
 }
 
 /**
- * The header pill of a session running in an Agent SDK host: a plug, for the
+ * The header pill of a session running in a direct host: a bolt, for the
  * direct connection, where a tmux session shows its terminal pill. It opens
  * the move to a terminal; after the move the terminal pill takes its place.
  */
@@ -78,7 +78,7 @@ export function SdkBackendPill({ conversationId, isLive, canSwitch }: { conversa
     : `border-sol-border/40 hover:bg-sol-bg-alt ${isLive ? "text-sol-text-dim hover:text-sol-text-muted" : "text-sol-text-dim/60"}`;
   const pillClass = `inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-meta font-medium transition-colors ${colors}`;
   const body = <>
-    <Plug className="h-3.5 w-3.5" />
+    <Zap className="h-3.5 w-3.5" />
     {moving && <span className="cq-sq2">Moving to terminal…</span>}
   </>;
   const tip = failed ?? "Direct connection · no terminal";

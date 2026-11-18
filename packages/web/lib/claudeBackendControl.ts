@@ -1,8 +1,8 @@
-// What the "Runs in" control offers for a Claude session: tmux or the Agent
-// SDK, which one it is on, and what pressing the other does. Pure, so the
-// header pill and the session control panel say the same thing.
+// What the "Runs in" control offers for a Claude or Grok session: tmux or a
+// direct host, which one it is on, and what pressing the other does. Pure, so
+// the header pill and the session control panel say the same thing.
 
-import { CLAUDE_BACKEND_LABELS, MID_TURN_AGENT_STATUSES, isHostedAgentType, type ClaudeBackend } from "@codecast/shared/contracts";
+import { CLAUDE_BACKEND_LABELS, MID_TURN_AGENT_STATUSES, hasDirectBackend, isHostedAgentType, type ClaudeBackend } from "@codecast/shared/contracts";
 
 export type BackendSwitching = { moving: ClaudeBackend } | { failed: string } | null;
 
@@ -24,9 +24,9 @@ const HINTS: Record<ClaudeBackend, string> = {
   sdk: "Never parked when idle",
 };
 
-/** Only a started local Claude session has a backend to move. */
+/** Only a started local Claude or Grok session has a backend to move. */
 export function canSwitchClaudeBackend(agentType: string | undefined, sessionId: string | null | undefined, messageCount: number | undefined): boolean {
-  if (isHostedAgentType(agentType) || (agentType && agentType !== "claude_code")) return false;
+  if (isHostedAgentType(agentType) || !hasDirectBackend(agentType)) return false;
   return !!sessionId && (messageCount ?? 0) > 0;
 }
 

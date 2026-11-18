@@ -159,9 +159,29 @@ export function isCodexLoginScreen(text: string): boolean {
     && /Press enter to continue|Sign in another way|Provide your own API key/i.test(text);
 }
 
+// Grok's device-code sign-in, drawn when its stored login is gone (grok 1.0.88
+// empties ~/.grok/auth.json after a revoked refresh token, jx71x5f 2026-11-18):
+//
+//   Approve in your browser to finish signing in.
+//                     DBHE-S5FR
+//   Make sure your browser shows this code.
+//   ...
+//   Waiting for approval…
+export function isGrokLoginScreen(text: string): boolean {
+  return /Approve in your browser to finish signing in/i.test(text);
+}
+
+/** Which agent's own login screen the pane shows, or null. */
+export function agentAtLoginScreen(text: string): "cursor" | "codex" | "grok" | null {
+  if (isCursorLoginScreen(text)) return "cursor";
+  if (isCodexLoginScreen(text)) return "codex";
+  if (isGrokLoginScreen(text)) return "grok";
+  return null;
+}
+
 // The agent's own login screen, whichever agent draws it.
 export function isAgentLoginScreen(text: string): boolean {
-  return isCursorLoginScreen(text) || isCodexLoginScreen(text);
+  return agentAtLoginScreen(text) !== null;
 }
 
 // How many tmux history rows a grok classifier must see to reach the y/n

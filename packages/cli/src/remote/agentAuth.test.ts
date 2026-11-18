@@ -86,7 +86,13 @@ describe("geminiAuthHealth — refresh_token is the whole test", () => {
   });
 });
 
-describe("grokAuthHealth — a scope-keyed map with no expiry", () => {
+describe("grokAuthHealth — a scope-keyed map", () => {
+  test("keeps a grok.com sign-in (rotating refresh token) on this machine", () => {
+    const oauth = { key: "t", auth_mode: "oidc", refresh_token: "rt", expires_at: "2026-11-18T05:30:48.584101Z" };
+    expect(grokAuthHealth(JSON.stringify({ "https://auth.x.ai::client": oauth }), NOW).ship).toBeNull();
+    // Beside an API key the whole file stays: shipping the key alone would overwrite the host's own sign-in.
+    expect(grokAuthHealth(JSON.stringify({ a: { key: "k" }, b: oauth }), NOW).ship).toBeNull();
+  });
   test("ships xAI's documented shape", () => {
     expect(grokAuthHealth(JSON.stringify({ "https://accounts.x.ai/sign-in": { key: "t" } }), NOW).ship).not.toBeNull();
   });

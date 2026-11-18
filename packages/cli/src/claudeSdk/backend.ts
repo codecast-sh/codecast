@@ -25,7 +25,7 @@ export interface ClaudeSdkBackendDeps {
   /** argv that runs cast itself (resolveCastInvocation). */
   castArgv: () => string[];
   /** The account and provider-key prefix a tmux launch line would start with. */
-  shellPrefix: (account: string | undefined) => string;
+  shellPrefix: (account: string | undefined, agent: "claude" | "grok") => string;
   /** What the status hook would have posted. */
   activity: (conversationId: string, sessionId: string, activity: SdkActivity, launchToken: string | undefined) => void;
   /**
@@ -51,8 +51,8 @@ export interface ClaudeSdkBackendDeps {
    * Each as `["--model", "x"]`, empty when the transcript names none.
    */
   resumeModelEffort: (sessionId: string, cwd: string) => { model: string[]; effort: string[] };
-  /** Has Claude written a transcript for this session? A session nobody typed into has none, and starts fresh. */
-  transcriptExists: (sessionId: string, cwd: string) => boolean;
+  /** Has the agent written a transcript for this session? A session nobody typed into has none, and starts fresh. */
+  transcriptExists: (sessionId: string, cwd: string, agent: "claude" | "grok") => boolean;
   /** Does the session's transcript already hold this prompt, written since `since` (ms)? Guards a resend of a message already sent. */
   /** Whether Claude already recorded the user line it was sent under `uuid` (a retried delivery after a host death or daemon restart). */
   transcriptHas: (sessionId: string, uuid: string) => Promise<boolean>;
@@ -241,12 +241,14 @@ export class ClaudeSdkBackend {
 
   /** The model and effort the transcript last ran replace the launch's (an empty answer keeps them). */
   private withResumeModelEffort(spec: SdkLaunchSpec): SdkLaunchSpec {
+    // Grok keeps its model and effort in the session it loads; only Claude's resume reads them back.
+    if (spec.agent === "grok") return spec;
     const { model, effort } = this.deps.resumeModelEffort(spec.sessionId, spec.cwd);
     return { ...spec, args: withFlags(withFlags(spec.args, "--model", model), "--effort", effort) };
   }
 
   private async launch(conversationId: string, spec: SdkLaunchSpec, account?: string): Promise<SdkHostClient> {
-    const client = await launchSdkHost(spec, { castArgv: this.deps.castArgv(), shellPrefix: this.deps.shellPrefix(account), dir: this.dir, log: this.deps.log, noLaunchd: this.launchOpts.noLaunchd, startTimeoutMs: this.launchOpts.startTimeoutMs });
+    const client = await launchSdkHost(spec, { castArgv: this.deps.castArgv(), shellPrefix: this.deps.shellPrefix(account, spec.agent ?? "claude"), dir: this.dir, log: this.deps.log, noLaunchd: this.launchOpts.noLaunchd, startTimeoutMs: this.launchOpts.startTimeoutMs });
     this.adopt(conversationId, client);
     // Up means Claude answered initialize. A Claude that never does (a stuck MCP server, a login
     // wait) is a failed start, so the caller falls back to tmux or retries, instead of every
@@ -347,7 +349,7 @@ export class ClaudeSdkBackend {
         throw new Error(`the Claude SDK session for ${conversationId} may not be resumed now`);
       }
       cleanupDeadHost(binding.hostId, this.dir);
-      const resume = this.deps.transcriptExists(binding.sessionId, binding.spec.cwd);
+      const resume = this.deps.transcriptExists(binding.sessionId, binding.spec.cwd, binding.spec.agent ?? "claude");
       this.deps.log(`[claude-sdk] ${resume ? "resuming" : "starting"} ${binding.sessionId.slice(0, 8)} for ${conversationId.slice(0, 12)} in a new host`);
       const base = { ...binding.spec, sessionId: binding.sessionId, resume };
       const spec = resume ? this.withResumeModelEffort(base) : base;

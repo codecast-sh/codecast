@@ -31,6 +31,7 @@ describe("Runs in rows", () => {
     expect(canSwitchClaudeBackend("claude_code", "s", 3)).toBe(true);
     expect(canSwitchClaudeBackend(undefined, "s", 3)).toBe(true);
     expect(canSwitchClaudeBackend("codex", "s", 3)).toBe(false);
+    expect(canSwitchClaudeBackend("grok", "s", 3)).toBe(true);
     expect(canSwitchClaudeBackend("claude_code", "s", 0)).toBe(false);
     expect(canSwitchClaudeBackend("claude_code", null, 3)).toBe(false);
   });

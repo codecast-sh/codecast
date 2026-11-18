@@ -12,12 +12,13 @@
  * (`readClaudeSettingsEnvForMirror`).
  *
  * One-way by design, like the Claude credential push: the laptop is
- * canonical, the host never originates a login. Each gate mirrors what the
- * harness does with the grant — codex rotates its refresh token on refresh
- * (so only a live access-token JWT ships), Google does not rotate gemini's
- * refresh token (so `refresh_token` present is the whole test), grok's file
- * is a scope-keyed map with no expiry, opencode/pi carry per-provider
- * entries with their own `expires`.
+ * canonical for what it ships, and a login made on the host is never
+ * overwritten by a file the gate refuses. Each gate mirrors what the harness
+ * does with the grant — codex rotates its refresh token on refresh (so only a
+ * live access-token JWT ships), Google does not rotate gemini's refresh token
+ * (so `refresh_token` present is the whole test), grok ships only API-key
+ * entries (its grok.com sign-in rotates, so each host signs in itself),
+ * opencode/pi carry per-provider entries with their own `expires`.
  */
 
 import { createHash } from "node:crypto";
@@ -128,15 +129,23 @@ function expiryMs(v: unknown): number | undefined {
 }
 
 /**
- * grok ~/.grok/auth.json: `{ "<scope url>": { "key": "<token>" }, … }` per
- * xAI's installer — no expiry field. Ship iff some scope entry has a
- * non-empty string `key`; an entry that does carry `expires`/`expires_at`
- * (seconds or ms) is honored.
+ * grok ~/.grok/auth.json: `{ "<scope url>": { "key": "<token>", … }, … }`.
+ * An API-key entry is a static key and ships. A grok.com sign-in (grok ≥1.0.5x)
+ * is OAuth: its entry carries a `refresh_token` that xAI rotates on every
+ * refresh, so a copy on a host revokes the laptop's grant the first time either
+ * side refreshes (jx71x5f, 2026-11-18: hosts refreshed at 05:25Z and 11:20Z,
+ * the laptop's next refresh got invalid_grant and grok emptied its store). A
+ * file holding any such entry stays on this machine whole: shipping the rest
+ * would overwrite the host's own sign-in. Each host signs in with `grok login`.
+ * An entry that carries a numeric `expires`/`expires_at` (seconds or ms) is honored.
  */
 export function grokAuthHealth(raw: string | null, now = Date.now()): AuthGate {
   if (raw === null) return { ship: null, reason: "no grok login" };
   const parsed = parseJson(raw);
   if (!isObject(parsed)) return { ship: null, reason: "malformed" };
+  if (Object.values(parsed).some((entry) => isObject(entry) && typeof entry.refresh_token === "string" && entry.refresh_token)) {
+    return { ship: null, reason: "grok.com sign-in rotates its refresh token; each host signs in itself" };
+  }
   let expired = false;
   for (const entry of Object.values(parsed)) {
     if (!isObject(entry) || typeof entry.key !== "string" || !entry.key) continue;

@@ -15,6 +15,8 @@ export { SDK_SESSION_ENV };
 
 
 export interface SdkLaunchSpec {
+  /** Which agent the host drives: Claude through the Agent SDK (the default), or Grok over ACP (grokSession.ts). */
+  agent?: "claude" | "grok";
   /** The conversation this session belongs to, for the daemon's bookkeeping. */
   conversationId: string | null;
   /** The Claude session id: a fresh id to create, or the saved session to resume. */

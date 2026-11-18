@@ -1,6 +1,6 @@
-// Which backend a Claude session runs in: a tmux pane the daemon types into,
-// or an Agent SDK host process (docs/architecture/claude-sdk-backend.md).
-// Pure data, shared by the daemon, Convex and the apps.
+// Which backend a session runs in: a tmux pane the daemon types into, or a
+// direct host process (docs/architecture/claude-sdk-backend.md): Claude through
+// the Agent SDK, Grok over ACP. Pure data, shared by the daemon, Convex and the apps.
 
 export type ClaudeBackend = "tmux" | "sdk";
 
@@ -11,6 +11,11 @@ export const CLAUDE_BACKEND_LABELS: Record<ClaudeBackend, string> = {
   sdk: "No terminal",
   tmux: "Terminal",
 };
+
+/** The conversation agent types (Convex spelling) that can run in a direct host as well as a pane. */
+export function hasDirectBackend(agentType: string | null | undefined): boolean {
+  return (agentType || "claude_code") === "claude_code" || agentType === "grok";
+}
 
 export function asClaudeBackend(v: unknown): ClaudeBackend | undefined {
   return v === "sdk" || v === "tmux" ? v : undefined;

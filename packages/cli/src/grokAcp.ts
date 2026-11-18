@@ -10,8 +10,8 @@
 // this way — so transcript ingest stays file-based and this client only carries
 // control: start, load, prompt, cancel, permissions, status.
 //
-// Not yet wired into the daemon's launch/delivery/kill paths (that is the codex
-// integration's 250-site footprint); see ct-49358.
+// The direct backend runs it inside the per-session host the Claude SDK
+// backend uses (claudeSdk/grokSession.ts, docs/architecture/claude-sdk-backend.md).
 import { spawn } from "./proc.js";
 import { type ChildProcess } from "./proc.js";
 import { EventEmitter } from "events";
@@ -29,12 +29,26 @@ export interface GrokAcpOptions {
   agentArgs?: string[];
   spawnFn?: typeof spawn;
   cwd?: string;
+  /** The agent's environment; the host's own when absent. */
+  env?: Record<string, string | undefined>;
+  /** argv prefix for the grok process (the TCC disclaim wrapper), empty for none. */
+  spawnPrefix?: string[];
   /**
    * Answer a `session/request_permission` request. Return the optionId to
    * select; the default picks the first `allow_*` option (bypassPermissions
    * parity, the mode every daemon-managed grok pane already runs in).
    */
   onPermission?: (sessionId: string, request: GrokPermissionRequest) => Promise<string | null>;
+}
+
+/** grok's session `_meta` options (its docs: agent mode, "Session _meta options"). */
+export interface GrokSessionMeta {
+  /** Extra rules appended to the system prompt; session/new only, kept by later loads. */
+  rules?: string;
+  /** Always-approve for this session. */
+  yoloMode?: boolean;
+  /** Auto permission mode. */
+  autoMode?: boolean;
 }
 
 export interface GrokPermissionOption {
@@ -94,9 +108,13 @@ export class GrokAcpClient extends EventEmitter {
   private readonly agentArgs: string[];
   private readonly spawnFn: typeof spawn;
   private readonly cwd?: string;
+  private readonly env?: Record<string, string | undefined>;
+  private readonly spawnPrefix: string[];
   private readonly onPermission?: GrokAcpOptions["onPermission"];
   /** What `initialize` reported: loadSession, session capabilities, x.ai extensions. */
   agentCapabilities: Record<string, unknown> = {};
+  /** `initialize`'s own `_meta`: agentVersion, modelState. */
+  agentMeta: Record<string, unknown> = {};
 
   constructor(opts: GrokAcpOptions) {
     super();
@@ -105,6 +123,8 @@ export class GrokAcpClient extends EventEmitter {
     this.agentArgs = opts.agentArgs ?? ["--always-approve"];
     this.spawnFn = opts.spawnFn ?? spawn;
     this.cwd = opts.cwd;
+    this.env = opts.env;
+    this.spawnPrefix = opts.spawnPrefix ?? [];
     this.onPermission = opts.onPermission;
   }
 
@@ -121,10 +141,11 @@ export class GrokAcpClient extends EventEmitter {
     if (this.process) return;
     this.stopped = false;
     const args = ["agent", ...this.agentArgs, "stdio"];
+    const argv = [...this.spawnPrefix, this.grokBinary, ...args];
     this.log(`[grok-acp] spawning: ${this.grokBinary} ${args.join(" ")}`);
     let child: ChildProcess;
     try {
-      child = this.spawnFn(this.grokBinary, args, { stdio: ["pipe", "pipe", "pipe"], cwd: this.cwd, env: process.env });
+      child = this.spawnFn(argv[0], argv.slice(1), { stdio: ["pipe", "pipe", "pipe"], cwd: this.cwd, env: (this.env ?? process.env) as NodeJS.ProcessEnv });
     } catch (err) {
       this.markSpawnFailure(err);
       throw err instanceof Error ? err : new Error(String(err));
@@ -157,8 +178,9 @@ export class GrokAcpClient extends EventEmitter {
     const resp = (await this.sendRequest("initialize", {
       protocolVersion: GROK_ACP_PROTOCOL_VERSION,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-    })) as { agentCapabilities?: Record<string, unknown> };
+    })) as { agentCapabilities?: Record<string, unknown>; _meta?: Record<string, unknown> };
     this.agentCapabilities = resp?.agentCapabilities ?? {};
+    this.agentMeta = resp?._meta ?? {};
     this.initialized = true;
     this.emit("ready");
   }
@@ -173,25 +195,41 @@ export class GrokAcpClient extends EventEmitter {
     if (child && child.exitCode === null) child.kill("SIGTERM");
   }
 
-  /** A fresh session in `cwd`; grok persists it under ~/.grok/sessions as usual. */
-  async sessionNew(params: { cwd: string; mcpServers?: unknown[] }): Promise<{ sessionId: string }> {
-    return (await this.sendRequest("session/new", { cwd: params.cwd, mcpServers: params.mcpServers ?? [] })) as { sessionId: string };
+  /**
+   * A fresh session in `cwd`; grok persists it under ~/.grok/sessions as usual.
+   * `meta` is grok's session `_meta` (rules, yoloMode, autoMode): rules set here
+   * stay with the session across every later load.
+   */
+  async sessionNew(params: { cwd: string; mcpServers?: unknown[]; meta?: GrokSessionMeta }): Promise<{ sessionId: string }> {
+    return (await this.sendRequest("session/new", { cwd: params.cwd, mcpServers: params.mcpServers ?? [], ...(params.meta ? { _meta: params.meta } : {}) })) as { sessionId: string };
   }
 
   /**
    * Load an existing session (any session grok wrote, TUI or ACP). Its history
    * arrives as `update` events with `isReplay: true` before this resolves.
    */
-  async sessionLoad(params: { sessionId: string; cwd: string; mcpServers?: unknown[] }): Promise<void> {
-    await this.sendRequest("session/load", { sessionId: params.sessionId, cwd: params.cwd, mcpServers: params.mcpServers ?? [] }, GROK_ACP_PROMPT_TIMEOUT_MS);
+  async sessionLoad(params: { sessionId: string; cwd: string; mcpServers?: unknown[]; meta?: Pick<GrokSessionMeta, "yoloMode" | "autoMode"> }): Promise<void> {
+    await this.sendRequest("session/load", { sessionId: params.sessionId, cwd: params.cwd, mcpServers: params.mcpServers ?? [], ...(params.meta ? { _meta: params.meta } : {}) }, GROK_ACP_PROMPT_TIMEOUT_MS);
   }
 
-  /** One user turn; resolves when grok ends the turn. Streams `update` events meanwhile. */
-  async prompt(params: { sessionId: string; text: string }): Promise<GrokPromptResult> {
+  /** Change a live session option (`model`, `reasoning_effort`). */
+  async setConfigOption(sessionId: string, configId: string, value: string): Promise<void> {
+    await this.sendRequest("session/set_config_option", { sessionId, configId, value: { value } });
+  }
+
+  /**
+   * One user turn; resolves when grok ends the turn. Streams `update` events
+   * meanwhile. A prompt sent while a turn runs waits and runs as the next turn.
+   */
+  async prompt(params: { sessionId: string; text: string; images?: Array<{ mediaType: string; data: string }> }): Promise<GrokPromptResult> {
     this.turnText.set(params.sessionId, "");
+    const blocks = [
+      ...(params.images ?? []).map((img) => ({ type: "image", mimeType: img.mediaType, data: img.data })),
+      ...(params.text ? [{ type: "text", text: params.text }] : []),
+    ];
     const resp = (await this.sendRequest("session/prompt", {
       sessionId: params.sessionId,
-      prompt: [{ type: "text", text: params.text }],
+      prompt: blocks,
     }, GROK_ACP_PROMPT_TIMEOUT_MS)) as { stopReason?: string };
     const text = this.turnText.get(params.sessionId) ?? "";
     this.turnText.delete(params.sessionId);
@@ -298,7 +336,8 @@ export class GrokAcpClient extends EventEmitter {
       } catch (err) {
         this.log(`[grok-acp] permission handler failed: ${err instanceof Error ? err.message : String(err)}`);
       }
-      if (!optionId) optionId = defaultPermissionChoice(request.options);
+      // A handler that answers nothing (its card was aborted) cancels the call; only no handler at all auto-allows.
+      if (!optionId && !this.onPermission) optionId = defaultPermissionChoice(request.options);
       this.writeMessage({
         jsonrpc: "2.0",
         id,

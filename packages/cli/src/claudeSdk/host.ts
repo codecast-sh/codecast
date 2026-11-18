@@ -15,6 +15,7 @@ import * as net from "node:net";
 import { spawn } from "../proc.js";
 import type { Options, SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSdkSession, MINIMUM_CLAUDE_VERSION, versionAtLeast } from "./session.js";
+import { GrokAcpSession } from "./grokSession.js";
 import { sdkQueryOptions, type SdkLaunchSpec } from "./options.js";
 import { sdkHostPaths, writeFileAtomic, type SdkHostPaths } from "./paths.js";
 import { encodeFrame, frameReader, type ClientFrame, type HostFrame, type SdkHostState } from "./protocol.js";
@@ -57,7 +58,10 @@ function socketAnswers(socket: string): Promise<boolean> {
   });
 }
 
-export async function runClaudeSdkHost(opts: RunHostOptions): Promise<{ stop: () => Promise<void>; session: ClaudeSdkSession }> {
+/** The session a host drives, whichever agent runs in it. */
+export type HostSession = ClaudeSdkSession | GrokAcpSession;
+
+export async function runClaudeSdkHost(opts: RunHostOptions): Promise<{ stop: () => Promise<void>; session: HostSession }> {
   const { spec } = opts;
   const paths = opts.paths ?? sdkHostPaths(spec.sessionId);
   const log = opts.log ?? ((line: string) => console.log(`${new Date().toISOString()} ${line}`));
@@ -68,11 +72,15 @@ export async function runClaudeSdkHost(opts: RunHostOptions): Promise<{ stop: ()
     fs.rmSync(paths.socket, { force: true });
   }
 
-  const queryFn = opts.query ?? (await import("@anthropic-ai/claude-agent-sdk")).query;
-  const options = sdkQueryOptions(spec, opts.env ?? process.env);
-  if (spec.spawnPrefix?.length) options.spawnClaudeCodeProcess = prefixedSpawn(spec.spawnPrefix);
-  options.stderr = (data) => log(`[claude] ${data.trimEnd()}`);
-  const session = new ClaudeSdkSession(options, queryFn);
+  const session: HostSession = spec.agent === "grok"
+    ? new GrokAcpSession(spec, opts.env ?? process.env, { log })
+    : await (async () => {
+      const queryFn = opts.query ?? (await import("@anthropic-ai/claude-agent-sdk")).query;
+      const options = sdkQueryOptions(spec, opts.env ?? process.env);
+      if (spec.spawnPrefix?.length) options.spawnClaudeCodeProcess = prefixedSpawn(spec.spawnPrefix);
+      options.stderr = (data) => log(`[claude] ${data.trimEnd()}`);
+      return new ClaudeSdkSession(options, queryFn);
+    })();
   const startedAt = Date.now();
   const clients = new Set<net.Socket>();
   const handledSends = new Map<string, Promise<string>>();
@@ -136,7 +144,7 @@ export async function runClaudeSdkHost(opts: RunHostOptions): Promise<{ stop: ()
   });
   session.on("init", (info) => {
     changed();
-    if (!tooOld && info.version && !versionAtLeast(info.version, MINIMUM_CLAUDE_VERSION)) {
+    if (spec.agent !== "grok" && !tooOld && info.version && !versionAtLeast(info.version, MINIMUM_CLAUDE_VERSION)) {
       tooOld = true;
       log(`Claude Code ${info.version} is older than ${MINIMUM_CLAUDE_VERSION}; stopping`);
       broadcast({ type: "too_old", version: info.version, minimum: MINIMUM_CLAUDE_VERSION });
@@ -208,7 +216,7 @@ export async function runClaudeSdkHost(opts: RunHostOptions): Promise<{ stop: ()
     fs.chmodSync(paths.socket, 0o600);
   } catch {}
   persist();
-  log(`host ${process.pid} up for ${spec.sessionId} (${spec.resume ? "resume" : "new"}) cwd=${spec.cwd}`);
+  log(`host ${process.pid} up for ${spec.agent ?? "claude"} ${spec.sessionId} (${spec.resume ? "resume" : "new"}) cwd=${spec.cwd}`);
 
   let stopping: Promise<void> | null = null;
   async function stop(): Promise<void> {
@@ -237,7 +245,7 @@ export async function runClaudeSdkHost(opts: RunHostOptions): Promise<{ stop: ()
       exit(0);
     }, 200);
   });
-  session.ready.catch((err) => log(`claude did not start: ${(err as Error).message}`));
+  session.ready.catch((err) => log(`${spec.agent ?? "claude"} did not start: ${(err as Error).message}`));
 
   return { stop, session };
 }

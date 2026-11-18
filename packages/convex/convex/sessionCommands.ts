@@ -1,4 +1,4 @@
-import { REWIND_FILES_OPS } from "@codecast/shared/contracts";
+import { REWIND_FILES_OPS, hasDirectBackend } from "@codecast/shared/contracts";
 import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -26,7 +26,7 @@ export const hibernate = mutation({
 });
 
 /**
- * Move a Claude conversation between the terminal (tmux) and the Agent SDK,
+ * Move a Claude or Grok conversation between the terminal (tmux) and a direct host,
  * keeping its session id and transcript. The runner's daemon does the move
  * (switch_claude_backend, cli/src/claudeSdk/switchBackend.ts) and reports on
  * the request's row: it refuses while a turn runs unless `interrupt` says the
@@ -44,7 +44,7 @@ export const switchBackend = mutation({
     if (!user) throw new Error("Not authenticated");
     validateSessionCommandRequestId(args.request_id);
     const conv = await requireSessionCommandTarget(ctx, user, args.conversation_id);
-    if ((conv.agent_type || "claude_code") !== "claude_code") throw new Error("Only Claude sessions have a backend to switch");
+    if (!hasDirectBackend(conv.agent_type)) throw new Error("Only Claude and Grok sessions have a backend to switch");
     if (!conv.session_id) throw new Error("This session has not started yet");
     const existing = await findSessionCommandByRequest(ctx, conv.user_id, args.request_id);
     if (existing) {
