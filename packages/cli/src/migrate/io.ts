@@ -78,6 +78,11 @@ export function sameOrigin(a: string | null | undefined, b: string | null | unde
  * repository's top) lands in the same subfolder here. Among checkouts with the
  * same origin, the one with the repository's own folder name is preferred.
  *
+ * A host folder that is in no git repository (`remoteRoot` unset: a few
+ * loose files the config mirror left, say) names no repository to match, so it
+ * lands in the folder at the same place under this machine's home when one
+ * exists.
+ *
  * Returns the path and, when it must be created, the local repo root to
  * create it in. Pure over its inputs so the rule is testable.
  */
@@ -90,8 +95,13 @@ export function resolveLocalDestination(opts: {
   recordedLocalCwd: string | null;
   localRoots: Array<{ root: string; origin: string | null }>;
   exists: (p: string) => boolean;
+  homes?: { remote: string; local: string };
 }): { localCwd: string; worktree?: string; createIn?: string } {
   if (opts.recordedLocalCwd && opts.exists(opts.recordedLocalCwd)) return { localCwd: opts.recordedLocalCwd };
+  if (!opts.remoteRoot && opts.homes && opts.remoteCwd.startsWith(`${opts.homes.remote}/`)) {
+    const same = path.join(opts.homes.local, opts.remoteCwd.slice(opts.homes.remote.length + 1));
+    if (opts.exists(same)) return { localCwd: same };
+  }
   const top = opts.remoteRoot && opts.remoteCwd.startsWith(`${opts.remoteRoot}/`) ? opts.remoteRoot : opts.remoteCwd;
   const sub = top === opts.remoteCwd ? "" : opts.remoteCwd.slice(top.length + 1);
   const remoteBase = path.posix.basename(top);
@@ -299,10 +309,12 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       let remoteOrigin: string | null = null;
       let remoteBranch: string | null = null;
       let remoteRoot: string | undefined;
+      let probedHost = false;
       try {
         remoteOrigin = ssh(host, `git -C ${shq(remoteCwd)} remote get-url origin 2>/dev/null || true`).trim() || null;
         remoteBranch = ssh(host, `git -C ${shq(remoteCwd)} rev-parse --abbrev-ref HEAD 2>/dev/null || true`).trim() || null;
         remoteRoot = ssh(host, `git -C ${shq(remoteCwd)} rev-parse --show-toplevel 2>/dev/null || true`).trim() || undefined;
+        probedHost = true;
       } catch { /* not a repo on the host: rsync fallback below */ }
       const me = (await listDevices()).find((d: any) => d.device_id === myDeviceId);
       const roots: string[] = Array.isArray(me?.local_project_roots) ? me.local_project_roots : [];
@@ -322,6 +334,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
         recordedLocalCwd: readMoves()[facts.session_id]?.localCwd ?? null,
         localRoots,
         exists: (p) => fs.existsSync(p),
+        homes: { remote: remoteHome(host), local: os.homedir() },
       });
       if (dest.createIn) {
         if (!remoteBranch || remoteBranch === "HEAD") throw new Error("the session's worktree on the host is not on a branch; check it out there first");
@@ -340,7 +353,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       const recordedMove = readMoves()[facts.session_id];
       const move: MoveResult = { sessionId: facts.session_id, localCwd: dest.localCwd, remoteCwd, remoteRoot, remoteProjectDir, pushedHead: recordedMove?.pushedHead ?? recordedMove?.verification?.remoteHead ?? undefined, ...(recordedMove?.brought ? { brought: recordedMove.brought } : {}) };
       const { checkoutAloneProbe } = await import("../cloud/prepare.js");
-      const pulled = await pullSession(facts.session_id, host, move, { aloneInCheckout: checkoutAloneProbe(client, api, token, facts.owner_device_id, facts.conversation_id) });
+      const pulled = await pullSession(facts.session_id, host, move, { hostFolderInRepo: probedHost ? !!remoteRoot : undefined, aloneInCheckout: checkoutAloneProbe(client, api, token, facts.owner_device_id, facts.conversation_id) });
       if (!pulled.ff) throw new Error(`CONFLICT: ${pulled.reason}`);
       let verification = FOLDER_COPY_VERIFICATION;
       let gitRoot: string | undefined;

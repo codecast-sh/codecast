@@ -73,6 +73,23 @@ describe("resolveLocalDestination", () => {
     expect(r).toEqual({ localCwd: "/Users/me/src/repo/.codecast/worktrees/w/outreach", worktree: "/Users/me/src/repo/.codecast/worktrees/w", createIn: "/Users/me/src/repo" });
   });
 
+  test("a host folder in no repository lands at the same place under this home, even inside a differently named repo", () => {
+    const r = resolveLocalDestination({
+      sessionId: "s", remoteCwd: "/home/ubuntu/src/repo/outreach", remoteOrigin: null, worktreeName: null,
+      recordedLocalCwd: null, localRoots: roots, exists: exists(["/Users/me/src/repo/outreach"]),
+      homes: { remote: "/home/ubuntu", local: "/Users/me" },
+    });
+    expect(r).toEqual({ localCwd: "/Users/me/src/repo/outreach" });
+  });
+
+  test("a host folder in no repository with no twin here still falls back to the name match", () => {
+    expect(() => resolveLocalDestination({
+      sessionId: "s", remoteCwd: "/home/ubuntu/src/repo/outreach", remoteOrigin: null, worktreeName: null,
+      recordedLocalCwd: null, localRoots: roots, exists: exists([]),
+      homes: { remote: "/home/ubuntu", local: "/Users/me" },
+    })).toThrow(/no local checkout of outreach/);
+  });
+
   test("a session that ran in the host's main checkout comes back to the local root itself", () => {
     const r = resolveLocalDestination({
       sessionId: "s", remoteCwd: "/home/ubuntu/work/repo", remoteOrigin: "git@github.com:acme/repo.git",
