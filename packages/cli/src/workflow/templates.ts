@@ -39,6 +39,7 @@ import climbFrame from "./templates/climb/frame.md" with { type: "text" };
 import climbPropose from "./templates/climb/propose.md" with { type: "text" };
 import climbReview from "./templates/climb/review.md" with { type: "text" };
 import climbPromote from "./templates/climb/promote.md" with { type: "text" };
+import climbPromoteLine from "./templates/climb/promote_line.md" with { type: "text" };
 import climbRecord from "./templates/climb/record.sh" with { type: "text" };
 import changeFixCheck from "./templates/change/fix_check.md" with { type: "text" };
 import changeFixReview from "./templates/change/fix_review.md" with { type: "text" };
@@ -89,6 +90,7 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "climb/propose.md": climbPropose,
   "climb/review.md": climbReview,
   "climb/promote.md": climbPromote,
+  "climb/promote_line.md": climbPromoteLine,
   "climb/record.sh": climbRecord,
 };
 

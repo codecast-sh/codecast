@@ -15,8 +15,8 @@ import { BUILTIN_WORKFLOW_TEMPLATES, LINE_TEMPLATE_FILES, resolveWorkflowSource 
 import { describeFlow } from "./flowPool";
 
 const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.climb);
-const AGENTS = ["frame", "propose", "review", "promote"];
-const SCRIPTS = ["gauge", "admit", "screen", "confirm", "guard", "evidence", "approve", "drop", "record"];
+const AGENTS = ["frame", "propose", "review", "promote", "promote_line"];
+const SCRIPTS = ["gauge", "admit", "screen", "confirm", "guard", "hold", "mode", "filed", "evidence", "approve", "drop", "record"];
 const fired = (id: string, context: Record<string, string>) => graph.edges.filter((e) => e.from === id && (!e.condition || evalCondition(e.condition, context))).map((e) => e.to);
 
 describe("climb.cast", () => {
@@ -86,8 +86,19 @@ describe("climb.cast", () => {
     for (const id of ["screen", "confirm"]) for (const code of ["3", "4"]) expect(fired(id, { outcome: "failure", [`${id}.exit_code`]: code })).toEqual(["record"]);
     expect(fired("screen", { outcome: "success" })).toEqual(["confirm"]);
     expect(fired("confirm", { outcome: "success" })).toEqual(["guard"]);
-    expect(fired("guard", { outcome: "success" })).toEqual(["promote"]);
-    expect(fired("guard", { outcome: "failure" })).toEqual(["record"]);
+    expect(fired("guard", { outcome: "success" })).toEqual(["mode"]);
+    expect(fired("guard", { outcome: "failure", "guard.exit_code": "3" })).toEqual(["record"]);
+    // A void verdict is pending, never a pass: the run parks at Hold, and only a real verdict moves it on.
+    expect(fired("guard", { outcome: "failure", "guard.exit_code": "6" })).toEqual(["hold"]);
+    expect(graph.nodes.get("hold")!.parks).toBe(true);
+    expect(graph.nodes.get("hold")!.script).toContain("cast climb guard --dir \"$run_dir/climb\" --hold");
+    expect(fired("hold", { outcome: "success" })).toEqual(["mode"]);
+    expect(fired("hold", { outcome: "failure", "hold.exit_code": "6" })).toEqual(["record"]);
+    // The repo's promote mode picks the path: its own change line, or a production experiment put to a person.
+    expect(fired("mode", { "mode.json": JSON.stringify({ mode: "line" }) })).toEqual(["promote_line"]);
+    expect(fired("mode", { "mode.json": JSON.stringify({ mode: "experiment" }) })).toEqual(["promote"]);
+    expect(fired("promote_line", {})).toEqual(["filed"]);
+    expect(fired("filed", {})).toEqual(["record"]);
     expect(fired("admit", { outcome: "failure" })).toEqual(["record"]);
     expect(graph.nodes.get("frame")!.max_visits).toBe(2);
   });
@@ -134,6 +145,19 @@ exit 0
     expect(run("gauge", {}, { FAKE_EXIT: "5" }).code).toBe(5);
     expect(calls()[0]).toEqual(["climb", "gauge", "--dir", d(), "--card", `${d()}/card.json`, "--task", "ct-1", "--goal", "in-9:yes_rate"]);
     expect(fs.existsSync(d())).toBe(true);
+  });
+
+  test("hold says on the task why promotion waits, then re-runs the void checks; mode asks the repo; filed puts the record on the promoted task", () => {
+    run("hold", {});
+    expect(calls()[0].slice(0, 3)).toEqual(["task", "comment", "ct-1"]);
+    expect(calls()[1]).toEqual(["climb", "guard", "--dir", d(), "--hold", "--every", "3h", "--for", "3d"]);
+    fs.rmSync(log);
+    run("mode", {});
+    expect(calls()).toEqual([["climb", "promote-mode", "--dir", d()]]);
+    fs.rmSync(log);
+    run("filed", {}, { FAKE_TASK: "ct-77", FAKE_SUMMARY: "Climb on in-9: cand-1 promoted." });
+    expect(calls().find((c) => c[0] === "task")).toEqual(["task", "comment", "ct-77", "What the climb ct-1 measured (computed from its filed runs):", "Climb on in-9: cand-1 promoted.", "-t", "progress"]);
+    expect(calls().at(-1)).toEqual(["climb", "outcome", "--dir", d(), "Filed for the product's change line as ct-77."]);
   });
 
   test("guard names no command: the gate is the line profile's eval command as committed at the base", () => {

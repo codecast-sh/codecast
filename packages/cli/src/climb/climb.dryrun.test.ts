@@ -12,8 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runEnv, withTreeAt } from "../envCommand";
-import { ClimbStop, admit, bindPromoted, confirm, gauge, guard, readState, refuse, screen, type ClimbIo } from "./engine";
-import { summaryText } from "./report";
+import { ClimbStop, admit, bindPromoted, confirm, gauge, guard, promoteMode, readState, refuse, screen, type ClimbIo } from "./engine";
+import { statusText, summaryText } from "./report";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
 isolateCodecastDirEachTest("climb-dry-state-");
 
@@ -37,7 +37,7 @@ if (fs.existsSync("effect.txt")) for (const l of fs.readFileSync("effect.txt", "
 const version = createHash("sha256").update(fs.readFileSync("evals/grader.txt")).digest("hex").slice(0, 12);
 const cases = [];
 if (env === "fake/floor") {
-  for (let i = 1; i <= 5; i++) cases.push({ id: "f" + i, score: i === 3 && fs.existsSync("pressure.txt") ? 0 : 1 });
+  for (let i = 1; i <= (process.env.FAKE_VOID ? 4 : 5); i++) cases.push({ id: "f" + i, score: i === 3 && fs.existsSync("pressure.txt") ? 0 : 1 });
 } else {
   const wide = env === "fake/noisy" ? 0.1 : 0.005;
   const count = split === "held" ? 30 : 40;
@@ -49,7 +49,7 @@ if (env === "fake/floor") {
 const mean = cases.reduce((a, c) => a + c.score, 0) / cases.length;
 const now = new Date().toISOString();
 fs.writeFileSync(out, JSON.stringify({ env, env_version: version, level: env === "fake/floor" ? "L0" : env === "fake/noisy" ? "L1" : "L2",
-  candidate: { label: process.env.CODECAST_ENV_CANDIDATE }, split, cases, summary: { n: cases.length, mean }, cost_usd: env === "fake/floor" ? 0 : 0.25, started_at: now, finished_at: now }));
+  candidate: { label: process.env.CODECAST_ENV_CANDIDATE }, split, cases, summary: { n: cases.length, mean, ...(process.env.FAKE_VOID && env === "fake/floor" ? { unscored: 1 } : {}) }, cost_usd: env === "fake/floor" ? 0 : 0.25, started_at: now, finished_at: now }));
 `;
 
 const ENVS = `
@@ -80,7 +80,7 @@ protects = ["evals/**"]
 `;
 
 const CARD = {
-  goal: "in-1", metric: "yes_rate", target: "matched to opted in, furthest behind its trajectory",
+  goal: "in-1", metric: "yes_rate", production_lift: 0.04, target: "matched to opted in, furthest behind its trajectory",
   levels: [{ env: "fake/noisy", plausible_effect: 0.05 }, { env: "fake/replay", plausible_effect: 0.04 }],
   budget: { usd: 1000, runs: 500 }, candidates: 6, hypotheses: ["lead with the need", "shorter pitch"],
 };
@@ -95,6 +95,8 @@ describe("the climb's dry run", () => {
   const g = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
   // The registry: every filed attempt as the server keeps it.
   let registry = new Map<string, any>();
+  /** The goal row `/cli/initiatives/get` serves; null unless a test gives the goal a metric to read. */
+  let goalRow: any = null;
   const TASK_AT = 1000;
   const io = (): ClimbIo => ({
     root: repo,
@@ -102,6 +104,7 @@ describe("the climb's dry run", () => {
       if (url === "/cli/work/get") return { short_id: body.short_id, created_at: TASK_AT, goal_ref: body.short_id === "ct-9" ? "in-1:m" : body.short_id === "ct-12" ? "in-12:m" : null, parent: body.short_id === "ct-9" || body.short_id === "ct-12" ? { short_id: "ct-1" } : null };
       if (url === "/cli/envs/list") return [...registry.values()].filter((a) => a.env === body.env).reverse();
       if (url === "/cli/envs/get") return registry.get(String(body.id)) ?? null;
+      if (url === "/cli/initiatives/get") return goalRow;
       if (url === "/cli/envs/goal-levels") return body.goal === "in-1" ? { goal: { short_id: "in-1" }, levels: [{ env: "fake/floor", level: "L0" }, { env: "fake/noisy", level: "L1" }, { env: "fake/replay", level: "L2" }] } : null;
       throw new Error(`unexpected ${url}`);
     },
@@ -111,11 +114,12 @@ describe("the climb's dry run", () => {
       if (!r.ok) return r;
       filed.push(`${o.label} ${decl.key} ${o.split}`);
       const short_id = `ea-${registry.size + 1}`;
-      registry.set(short_id, { short_id, ...r.result, task_id: o.task, created_at: Date.now() });
+      // As the server files it: the summary's counts sit on the attempt itself (convex/envs.ts record).
+      registry.set(short_id, { short_id, ...r.result, ...(r.result.summary.unscored !== undefined ? { unscored: r.result.summary.unscored } : {}), task_id: o.task, created_at: Date.now() });
       return { ok: true, result: r.result, short_id };
     },
     tree: (sha, fn) => withTreeAt(repo, sha, fn),
-    evalResult: (reps) => (JSON.parse(fs.readFileSync(reps, "utf8")).worse ? 1 : 0),
+    evalResult: (reps) => { const r = JSON.parse(fs.readFileSync(reps, "utf8")); return r.void ? 2 : r.worse ? 1 : 0; },
     log: () => {},
   });
   /** A filed base run from before the climb, as another session would have left it. */
@@ -148,7 +152,7 @@ describe("the climb's dry run", () => {
     fs.writeFileSync(path.join(repo, "prompt.txt"), "pitch\n");
     // The product's eval gate, as the line profile names it: FAKE_GATE=worse makes it refuse.
     fs.mkdirSync(path.join(repo, "scripts"));
-    fs.writeFileSync(path.join(repo, "scripts/gate.sh"), `[ "$FAKE_GATE" = worse ] && w=true || w=false; echo "{\\"worse\\": $w}" > "$run_dir/reps.json"\n`);
+    fs.writeFileSync(path.join(repo, "scripts/gate.sh"), `[ "$FAKE_GATE" = void ] && { echo '{"void": true}' > "$run_dir/reps.json"; exit 0; }; [ "$FAKE_GATE" = worse ] && w=true || w=false; echo "{\\"worse\\": $w}" > "$run_dir/reps.json"\n`);
     fs.writeFileSync(path.join(repo, ".codecast/line.toml"), `[line.commands]\neval = "bash scripts/gate.sh"\n`);
     process.env.FAKE_COUNTER = path.join(tmp, "counter");
     execFileSync("git", ["init", "-q", "-b", "main", repo]);
@@ -163,6 +167,7 @@ describe("the climb's dry run", () => {
     runs = 0;
     filed.length = 0;
     registry = new Map();
+    goalRow = null;
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -434,5 +439,71 @@ describe("the climb's dry run", () => {
     await admit(io(), dir, [{ branch: "climb/gatehack", hypothesis: "h", predicted_delta: 0.2 }]);
     await expect(guard(io(), dir)).rejects.toThrow("every survivor failed the guard");
     expect(readState(dir)!.candidates[0].guard!.why).toContain("changes the files the product's eval command starts");
+  });
+
+  // From the first real climb (Union in-9).
+  test("a void L0 check is pending, never a pass: nothing is promoted until a re-run lands a real verdict", async () => {
+    await gauge(io(), dir, { card: CARD, base });
+    await admit(io(), dir, proposed);
+    process.env.FAKE_VOID = "1";
+    try {
+      const err = await guard(io(), dir).catch((e) => e);
+      expect(err).toBeInstanceOf(ClimbStop);
+      expect(err.code).toBe(6);
+      const s = readState(dir)!;
+      expect(s.candidates.some((c) => c.status === "promoted")).toBe(false);
+      expect(s.pending).toContain("unscored");
+      // The pushy candidate fails at once on the cases both sides scored: a void never hides a real failure.
+      expect(s.candidates.find((c) => c.branch === "climb/pushy")!.status).toBe("guard_failed");
+      expect(summaryText(s)).toContain("held, ");
+      // Reading it back costs nothing and stays void.
+      const before = runs;
+      await guard(io(), dir).catch(() => {});
+      expect(runs).toBe(before);
+    } finally { delete process.env.FAKE_VOID; }
+    const s = await guard(io(), dir, { rerunVoid: true });
+    expect(s.candidates.find((c) => c.status === "promoted")!.branch).toBe("climb/good");
+    expect(s.pending).toBeUndefined();
+  });
+
+  test("a void eval gate holds promotion too, and its re-run counts against the run limit", async () => {
+    await gauge(io(), dir, { card: CARD, base });
+    await admit(io(), dir, proposed);
+    process.env.FAKE_GATE = "void";
+    try { expect((await guard(io(), dir).catch((e) => e)).code).toBe(6); } finally { delete process.env.FAKE_GATE; }
+    const voidRuns = readState(dir)!.gate_runs!;
+    const s = await guard(io(), dir, { rerunVoid: true });
+    expect(s.candidates.find((c) => c.status === "promoted")).toBeTruthy();
+    expect(s.gate_runs).toBe(voidRuns + 1);
+  });
+
+  test("the repo's climb.toml at the base says how a promoted change ships", async () => {
+    expect(promoteMode(repo, base)).toBe("experiment");
+    fs.writeFileSync(path.join(repo, ".codecast/climb.toml"), `[promote]\nmode = "line"\n`);
+    g("add", "-A"); g("commit", "-q", "-m", "line mode");
+    expect(promoteMode(repo, g("rev-parse", "HEAD"))).toBe("line");
+    expect(promoteMode(repo, base)).toBe("experiment");
+    fs.writeFileSync(path.join(repo, ".codecast/climb.toml"), `[promote]\nmode = "ab"\n`);
+    g("add", "-A"); g("commit", "-q", "-m", "bad mode");
+    expect(() => promoteMode(repo, g("rev-parse", "HEAD"))).toThrow('"line" or "experiment"');
+  });
+
+  test("before anything is spent, the card says whether production can confirm one change of its size", async () => {
+    const WEEK = 7 * 24 * 3600 * 1000, monday = Date.UTC(2026, 8, 7);
+    goalRow = {
+      short_id: "in-1",
+      metrics: [{ key: "yes_rate", name: "Yes rate", noise: "poisson:1.75", series: "mw-1", target: "at least 16", window: "3w" }],
+      series: { "mw-1": { short_id: "mw-1", name: "Yes rate", unit: "/week", cohorts: [30, 17, 22, 19, 25, 16, 21, 18].map((value, i) => ({ at: monday + i * WEEK, value })), points: [{ at: monday + 10 * WEEK, value: 18 }] } },
+    };
+    const s = await gauge(io(), dir, { card: CARD, base });
+    const r = s.readability as any;
+    expect(r.readable).toBe(false);
+    expect(r.weeks).toBeNull();
+    expect(r.evidence).toContain("predictions read back over many climbs");
+    expect(statusText(s)).toContain("production cannot confirm one change of +4% on yes_rate");
+    const big = await gauge(io(), `${dir}-big`, { card: { ...CARD, production_lift: 3 }, base });
+    expect((big.readability as any).readable).toBe(true);
+    // A card that names the metric without a plausible lift is sent back to Frame.
+    await expect(gauge(io(), `${dir}-none`, { card: { ...CARD, production_lift: undefined }, base })).rejects.toThrow("production_lift");
   });
 });

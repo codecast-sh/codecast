@@ -5,6 +5,17 @@
 import type { Cand, ClimbState, Cut } from "./engine.js";
 import { sign } from "./engine.js";
 
+/** What production can read of one change, in one line: the card says it before the climb spends. */
+export function readabilityLine(s: ClimbState): string | null {
+  const r = s.readability;
+  if (!r) return s.card.metric ? `Production read: not sized (the card names no production_lift for ${s.card.metric})` : null;
+  if ("unread" in r) return `Production read: ${r.metric} cannot be sized: ${r.unread}`;
+  const lift = `+${(r.lift * 100).toFixed(0)}%`;
+  return r.readable
+    ? `Production read: one change of ${lift} on ${r.metric} at ${r.level} is readable in a ${r.weeks}-week holdout`
+    : `Production read: production cannot confirm one change of ${lift} on ${r.metric} at ${r.level}. The evidence is ${r.evidence}`;
+}
+
 const usd = (x: number) => `$${x.toFixed(2)}`;
 const cutText = (env: string, k: Cut) => `${env} ${sign(k.delta)}${k.ci95 ? ` [${sign(k.ci95[0])}, ${sign(k.ci95[1])}]` : ""}${k.attempt ? ` ${k.attempt}` : ""}`;
 
@@ -15,7 +26,7 @@ function candLine(c: Cand): string[] {
   if (dev.length) out.push(`  dev: ${dev.join("; ")}`);
   const held = Object.entries(c.held).map(([e, k]) => cutText(e, k));
   if (held.length) out.push(`  held: ${held.join("; ")}`);
-  if (c.guard) out.push(`  guard: ${c.guard.pass ? "pass" : "fail"}, ${c.guard.why}`);
+  if (c.guard) out.push(`  guard: ${c.guard.pass ? "pass" : c.guard.why.startsWith("void") ? "pending" : "fail"}, ${c.guard.why}`);
   if (c.why) out.push(`  why: ${c.why}`);
   return out;
 }
@@ -26,6 +37,7 @@ export function statusText(s: ClimbState): string {
   const lines = [
     `Climb on ${s.card.goal}${s.card.metric ? `:${s.card.metric}` : ""} from base ${s.base.slice(0, 12)}`,
     `Target: ${s.card.target}`,
+    ...(readabilityLine(s) ? [readabilityLine(s)!] : []),
     `Budget: ${usd(s.ledger.usd)} of ${usd(b.usd)}, ${s.ledger.runs} of ${b.runs} runs; up to ${s.card.candidates} candidates${s.notes.length ? ` (${s.notes.join("; ")})` : ""}`,
     "",
     "Levels:",
@@ -35,6 +47,7 @@ export function statusText(s: ClimbState): string {
   if (s.candidates.length) lines.push("", "Candidates:", ...s.candidates.flatMap(candLine));
   const top = s.candidates.find((c) => c.status === "promoted");
   if (top) lines.push("", `Promoted: ${top.id} (${top.branch})`);
+  if (s.pending) lines.push("", `Pending: ${s.pending}`);
   if (s.stopped) lines.push("", `Stopped: ${s.stopped}`);
   if (s.outcome) lines.push("", `Outcome: ${s.outcome}`);
   return lines.join("\n");
@@ -49,8 +62,9 @@ export function summaryText(s: ClimbState): string {
   const separated = s.candidates.filter((c) => Object.entries(c.dev).some(([env, k]) => scoring.has(env) && k.keep));
   const top = by("promoted")[0];
   const lines = [
-    `Climb on ${s.card.goal}${s.card.metric ? `:${s.card.metric}` : ""}${s.task ? ` (${s.task})` : ""}: ${top ? `${top.id} promoted${s.promoted_task ? ` as ${s.promoted_task}` : ""}${s.outcome ? `; ${s.outcome}` : ""}` : s.stopped ? `stopped, ${s.stopped}` : "unfinished"}.`,
+    `Climb on ${s.card.goal}${s.card.metric ? `:${s.card.metric}` : ""}${s.task ? ` (${s.task})` : ""}: ${top ? `${top.id} promoted${s.promoted_task ? ` as ${s.promoted_task}` : ""}${s.outcome ? `; ${s.outcome}` : ""}` : s.stopped ? `stopped, ${s.stopped}` : s.pending ? `held, ${s.pending}` : "unfinished"}.`,
     `Target: ${s.card.target}`,
+    ...(readabilityLine(s) ? [readabilityLine(s)!] : []),
     `Levels: ${s.levels.map((l) => `${l.level} ${l.env} ${l.kept ? `kept (MDE ${l.noise?.mde.toFixed(3) ?? "0"})` : `refused (${l.why})`}`).join("; ")}.`,
     `Candidates: ${proposed} proposed, ${admitted} admitted, ${separated.length} separated from base on dev.`,
   ];

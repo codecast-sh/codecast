@@ -34,6 +34,8 @@ export type ClimbCardLevel = { env: string; level: EnvLevel; plausible_effect?: 
 export type ClimbCard = {
   goal: string;
   metric?: string;
+  /** The plausible relative lift of one change on the goal metric in production (0.04 = 4%): what Gauge reads against the metric's detectable change before the climb spends. */
+  production_lift?: number;
   target: string;
   levels: ClimbCardLevel[];
   budget: ClimbBudget;
@@ -78,7 +80,9 @@ export function readClimbCard(raw: unknown, goal: { short_id: string; budget?: P
   if (askedN !== null && askedN > CLIMB_CANDIDATES.max) notes.push(`candidates held to ${CLIMB_CANDIDATES.max}`);
   const hypotheses = Array.isArray(raw.hypotheses) ? raw.hypotheses.filter((h: unknown): h is string => typeof h === "string" && !!h.trim()).map((h: string) => h.trim().slice(0, 400)) : [];
   const metric = typeof raw.metric === "string" && raw.metric.trim() ? raw.metric.trim() : undefined;
-  return { ok: true, card: { goal: goal.short_id, ...(metric ? { metric } : {}), target: target.slice(0, 600), levels, budget, candidates, hypotheses }, notes };
+  const lift = posNum(raw.production_lift);
+  if (metric && lift === null) return { ok: false, error: `say production_lift: the plausible relative lift one change could make on ${metric} in production (0.04 = 4%), so the climb can say before it spends whether production can read it` };
+  return { ok: true, card: { goal: goal.short_id, ...(metric ? { metric } : {}), ...(lift !== null ? { production_lift: Math.min(lift, 10) } : {}), target: target.slice(0, 600), levels, budget, candidates, hypotheses }, notes };
 }
 
 // ── noise and what a level can see ──

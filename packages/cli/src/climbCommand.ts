@@ -7,15 +7,13 @@
 import fs from "node:fs";
 import { spawnSync } from "./proc.js";
 import type { Command } from "commander";
-import { CLIMB_EXPERIMENT_MAX_WEEKS, experimentWeeks } from "@codecast/shared/contracts/climb";
-import { formatSeriesValue, metricReadings } from "@codecast/shared/contracts/initiative";
-import { MDE_WEEKS, mdeWords } from "@codecast/shared/contracts/metricStanding";
-import { liveSeries } from "./initiativeCommand.js";
+import { MetricUnread, experimentWords } from "./climb/readability.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { baseSha, recordRun, runEnv, runWithCases, withTreeAt } from "./envCommand.js";
 import { repoRoot } from "./envDeclaration.js";
-import { ClimbStop, admit, bindPromoted, confirm, gauge, guard, readState, refuse, screen, setOutcome, type ClimbIo, type RunOut } from "./climb/engine.js";
+import { parseDuration } from "@codecast/shared/time";
+import { ClimbStop, STOP, admit, bindPromoted, promoteMode, confirm, gauge, guard, readState, refuse, screen, setOutcome, type ClimbIo, type RunOut } from "./climb/engine.js";
 import { LINE_COMMAND_VARS } from "./lineProfile.js";
 import { statusText, summaryText } from "./climb/report.js";
 
@@ -100,19 +98,7 @@ async function station(name: string, fn: () => Promise<string>): Promise<void> {
 export async function experimentLine(post: ClimbIo["post"], goalRef: string, key: string, lift: number): Promise<string> {
   const goal = await post("/cli/initiatives/get", { id: goalRef }, true);
   if (!goal) throw new ClimbStop(`goal ${goalRef} not found or not visible`, 3);
-  const r = metricReadings(goal, liveSeries(goal)).find((x) => x.key === key || x.name === key);
-  if (!r) throw new ClimbStop(`${goalRef} has no metric ${key} (${(goal.metrics ?? []).map((x: any) => x.key).join(", ") || "none"})`, 3);
-  const b = r.band;
-  if (!b) throw new ClimbStop(`${key} is read without a window and a noise model, so no test can be sized from it (cast goal set --metric "... window 4w noise poisson")`, 3);
-  if (b.mde === null) throw new ClimbStop(`${key}'s reading has no detectable change to size a test from${b.note ? `: ${b.note}` : ""}`, 3);
-  const level = r.unit ? formatSeriesValue(b.mean, r.unit) : String(Math.round(b.mean * 100) / 100);
-  const how = `${b.pooling === "pooled" ? "pooled" : "mean"} over ${b.periods} ${b.cohort ? "cohort " : ""}${b.period}s, ${b.spread ?? "model"} spread`;
-  const pct = `${(lift * 100).toFixed(0)}%`;
-  const weeks = experimentWeeks(b.mde, r.noise, lift);
-  const four = `${MDE_WEEKS} weeks detect ${mdeWords(b.mde)}`;
-  return weeks === null
-    ? `${key} at ${level} (${how}): a 50/50 test cannot detect ${pct} within ${CLIMB_EXPERIMENT_MAX_WEEKS} weeks (${four})`
-    : `${key} at ${level} (${how}): a 50/50 test detects ${pct} in ${weeks} week${weeks === 1 ? "" : "s"} (${four})`;
+  try { return experimentWords(goal, key, lift); } catch (err) { if (err instanceof MetricUnread) throw new ClimbStop(err.message, 3); throw err; }
 }
 
 export function registerClimbCommand(program: Command, deps: PublishDeps): void {
@@ -157,13 +143,34 @@ export function registerClimbCommand(program: Command, deps: PublishDeps): void 
       return `${s.candidates.filter((c) => c.status === "survivor").length} confirmed on held; overfit: ${s.candidates.filter((c) => c.status === "overfit").map((c) => c.id).join(", ") || "none"}`;
     }));
 
-  dirOpt(climb.command("guard").description("The goal's L0 checks and the product's eval gate (the line profile's commands.eval, as committed at the base) on each survivor, best first; the first to pass is promoted"))
+  dirOpt(climb.command("guard").description("The goal's L0 checks and the product's eval gate (the line profile's commands.eval, as committed at the base) on each survivor, best first; the first to pass is promoted. A void verdict (an outage, a capped pool, unscored cases) exits 6 and promotes nothing"))
+    .option("--hold", "On a void verdict, re-run the void checks every --every until a real verdict lands or --for runs out (the Hold station)")
+    .option("--every <duration>", "How long to wait between re-runs of a void check", "3h")
+    .option("--for <duration>", "How long to hold for a real verdict before stopping the climb", "3d")
     .action((o) => station("guard", async () => {
       const io = defaultIo(deps);
-      const s = await guard(io, o.dir, { env: scrubRunValues() });
+      const every = parseDuration(o.every), until = Date.now() + parseDuration(o.for);
+      let s;
+      // The first pass reads the void verdict back at no cost; each pass after a wait re-runs the void checks.
+      for (let rerun = false; ; rerun = true) {
+        try { s = await guard(io, o.dir, { env: scrubRunValues(), rerunVoid: rerun }); break; } catch (err) {
+          if (!(o.hold && err instanceof ClimbStop && err.code === STOP.pending)) throw err;
+          if (Date.now() + every > until) throw new ClimbStop(`still void after holding for ${o.for}: ${err.message}`, STOP.pending);
+          console.log(`${new Date().toISOString()} guard void, re-running in ${o.every}: ${err.message}`);
+          await new Promise((r) => setTimeout(r, every));
+        }
+      }
       const top = s.candidates.find((c) => c.status === "promoted")!;
       return `${top.id} promoted; guard refused: ${s.candidates.filter((c) => c.status === "guard_failed").map((c) => c.id).join(", ") || "none"}`;
     }));
+
+  dirOpt(climb.command("promote-mode").description("How this repo ships a promoted change, from .codecast/climb.toml at the climb's base ([promote] mode = \"line\" | \"experiment\"), as one JSON line for the graph to route on"))
+    .action((o) => {
+      const s = readState(o.dir);
+      if (!s) { console.log(JSON.stringify({ mode: "experiment" })); return; }
+      const root = repoRoot(cwd());
+      try { console.log(JSON.stringify({ mode: root ? promoteMode(root, s.base) : "experiment" })); } catch (err) { console.log(JSON.stringify({ mode: "experiment", why: err instanceof Error ? err.message : String(err) })); }
+    });
 
   dirOpt(climb.command("promote").description("Record the task Promote filed for the promoted change: the only task Approve and Drop act on"))
     .requiredOption("--task <ct-N>", "The promoted change's task: a subtask of the climb's task, under the climb's goal")

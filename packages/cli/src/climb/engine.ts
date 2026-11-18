@@ -29,6 +29,7 @@ import { CLIMB_AA_RUNS, baseMeanCases, halve, levelCanSee, levelNoise, readClimb
 import { parseEnvsText } from "../envDeclaration.js";
 import { parseLineProfileText, resolveLineProfile } from "../lineProfile.js";
 import { StoreTampered, readSealed, writeSealed } from "./store.js";
+import { MetricUnread, readability as readabilityOf, type Readability } from "./readability.js";
 import { commandFiles, gradingGlobs, inadmissible, packagesPrint, pinsAScript, protectedDigest, tryGit } from "./protect.js";
 
 export type RunOut = { ok: true; result: EnvResult; short_id?: string } | { ok: false; error: string };
@@ -72,12 +73,20 @@ export type ClimbState = {
   packages: string;
   levels: LevelState[]; candidates: Cand[];
   ledger: { usd: number; runs: number; done: Record<string, Done>; failed: Record<string, Failed> };
-  /** The product eval gate's verdict per candidate sha (on trust: it is not filed anywhere). */
+  /** The product eval gate's verdict per candidate sha (on trust: it is not filed anywhere); a void verdict is never kept here. */
   gates: Record<string, number>;
+  /** How many times the eval gate ran, void runs included: each counts against the run limit. */
+  gate_runs?: number;
+  /** Per candidate and check (`cand-1|env` or `cand-1|gate`), the round its void verdict is on: a re-run files under a new key. */
+  guard_rounds?: Record<string, number>;
+  /** Why promotion is held: the best survivor's guard came back void (an outage, a capped pool), never a verdict. */
+  pending?: string;
+  /** Whether production can read one change of the card's plausible lift (readability.ts), read before any spend. */
+  readability?: Readability | { metric: string; unread: string };
   promoted_task?: string; stopped?: string; outcome?: string;
 };
 
-export const STOP = { none: 3, budget: 4, card: 5 } as const;
+export const STOP = { none: 3, budget: 4, card: 5, pending: 6 } as const;
 export class ClimbStop extends Error { constructor(message: string, readonly code: number) { super(message); } }
 
 export function readState(dir: string): ClimbState | null {
@@ -109,6 +118,25 @@ export function repoCeiling(root: string, base: string, goal: string): { usd?: n
   return b && typeof b === "object" ? { ...(typeof b.usd === "number" ? { usd: b.usd } : {}), ...(typeof b.runs === "number" ? { runs: b.runs } : {}) } : null;
 }
 
+export type PromoteMode = "line" | "experiment";
+/**
+ * How the repo ships a promoted change, from `.codecast/climb.toml` at the
+ * base, `[promote] mode`: "line" files it as a task for the product's own
+ * change line (a product that ships approved work live and runs a split test
+ * only when a person asks), "experiment" puts a holdout experiment to a
+ * person. Experiment when the file says nothing.
+ */
+export function promoteMode(root: string, base: string): PromoteMode {
+  const text = tryGit(root, ["show", `${base}:.codecast/climb.toml`]);
+  if (!text) return "experiment";
+  let raw: any;
+  try { raw = Bun.TOML.parse(text); } catch { throw new ClimbStop(".codecast/climb.toml at the base is not valid TOML", STOP.none); }
+  const mode = raw?.promote?.mode;
+  if (mode === undefined) return "experiment";
+  if (mode !== "line" && mode !== "experiment") throw new ClimbStop(`.codecast/climb.toml [promote] mode is "${mode}"; it is "line" or "experiment"`, STOP.none);
+  return mode;
+}
+
 /** The product's eval command as the line profile committed at the base names it: the gate no station or candidate can swap. */
 export function baseEvalCommand(root: string, base: string): string {
   const text = tryGit(root, ["show", `${base}:.codecast/line.toml`]);
@@ -124,7 +152,7 @@ type View = {
   /** Lazily: the grading files' digest at the base. */
   digest?: string;
   /** Attempts read back this station, by id. */
-  read: Map<string, { cases: EnvCase[]; version: string; cost: number; aa_sd?: number }>;
+  read: Map<string, { cases: EnvCase[]; version: string; cost: number; unscored: number; aa_sd?: number }>;
 };
 
 async function load(io: ClimbIo, dir: string): Promise<View> {
@@ -153,7 +181,7 @@ async function verified(v: View, key: string, d: Done, want: { env: string; spli
     const at = Number(a.created_at ?? a.finished_at);
     if (d.reused ? !(Number(a.finished_at) < v.s.reuse_before) : a.task_id !== v.s.task || !(at >= v.s.reuse_before)) lie(d.reused ? "it was filed after the climb began" : "it was not filed by this climb");
   }
-  const out = { cases: a.cases as EnvCase[], version: String(a.env_version), cost: Number(a.cost_usd ?? 0), ...(a.noise?.aa_sd ? { aa_sd: a.noise.aa_sd } : {}) };
+  const out = { cases: a.cases as EnvCase[], version: String(a.env_version), cost: Number(a.cost_usd ?? 0), unscored: Number(a.unscored ?? 0) || 0, ...(a.noise?.aa_sd ? { aa_sd: a.noise.aa_sd } : {}) };
   v.read.set(d.attempt, out);
   return out;
 }
@@ -166,7 +194,7 @@ function spent(v: View): { usd: number; runs: number } {
   const done = Object.values(v.s.ledger.done).filter((d) => !d.reused);
   const failed = Object.values(v.s.ledger.failed ?? {});
   const usd = [...done.map((d) => d.usd ?? 0), ...failed.map((f) => f.usd)].reduce((x, y) => x + y, 0);
-  return { usd: Math.round(usd * 1e6) / 1e6, runs: done.length + failed.length + Object.keys(v.s.gates).length };
+  return { usd: Math.round(usd * 1e6) / 1e6, runs: done.length + failed.length + (v.s.gate_runs ?? Object.keys(v.s.gates).length) };
 }
 
 async function stopForBudget(v: View, est: number, what: string): Promise<void> {
@@ -197,10 +225,10 @@ async function treeGuard(v: View, tree: string): Promise<string | null> {
 }
 
 /** One env run, once: a key the cache names is read back from the registry and checked; otherwise it runs, under the budget, and is filed. */
-async function runOnce(v: View, key: string, decl: EnvDeclaration, opts: { label: string; split: EnvSplit; sha: string }): Promise<{ cases: EnvCase[]; version: string; attempt?: string } | { error: string }> {
+async function runOnce(v: View, key: string, decl: EnvDeclaration, opts: { label: string; split: EnvSplit; sha: string }): Promise<{ cases: EnvCase[]; version: string; attempt?: string; unscored: number } | { error: string }> {
   const want = { env: decl.key, split: opts.split, label: opts.label, sha: opts.sha };
   const done = v.s.ledger.done[key];
-  if (done) { const r = await verified(v, key, done, want); return { cases: r.cases, version: r.version, attempt: done.attempt }; }
+  if (done) { const r = await verified(v, key, done, want); return { cases: r.cases, version: r.version, attempt: done.attempt, unscored: r.unscored }; }
   const failed = v.s.ledger.failed?.[key];
   if (failed) return { error: failed.why };
   await stopForBudget(v, estimate(v, decl), `${opts.label} on ${decl.key} ${opts.split}`);
@@ -220,7 +248,7 @@ async function runOnce(v: View, key: string, decl: EnvDeclaration, opts: { label
   save(v.dir, v.s);
   const r = await verified(v, key, v.s.ledger.done[key], want);
   v.io.log(`${opts.label} ${decl.key} ${opts.split}: mean ${out.result.summary.mean.toFixed(3)} n=${r.cases.length} (${out.short_id})`);
-  return { cases: r.cases, version: r.version, attempt: out.short_id };
+  return { cases: r.cases, version: r.version, attempt: out.short_id, unscored: r.unscored };
 }
 
 // ── gauge: the card held to the caps, what grades pinned, and what each level can see ──
@@ -244,9 +272,16 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
     const task = opts.task ? await io.post("/cli/work/get", { short_id: opts.task }, true).catch(() => null) : null;
     const decls = baseDecls(io.root, opts.base);
     const notes = [...read.notes];
+    // Before anything is spent: can production confirm one change of the size the card expects? When it cannot, the card says so and names what stands in.
+    let readability: ClimbState["readability"];
+    if (read.card.metric && read.card.production_lift) {
+      const row = await io.post("/cli/initiatives/get", { id: goalRef }, true).catch(() => null);
+      try { readability = readabilityOf(row, read.card.metric, read.card.production_lift); } catch (err) { readability = { metric: read.card.metric, unread: err instanceof MetricUnread ? err.message : String(err) }; }
+    }
     save(dir, {
       base: opts.base, ...(opts.task ? { task: opts.task } : {}), card: read.card, notes,
       reuse_before: Number(task?.created_at ?? task?._creationTime) || 0,
+      ...(readability ? { readability } : {}),
       checks: goalLevels.filter((l) => l.level === "L0").map((l) => l.env),
       packages: packagesPrint(io.root),
       levels: [], candidates: [], ledger: { usd: 0, runs: 0, done: {}, failed: {} }, gates: {},
@@ -443,30 +478,75 @@ export async function confirm(io: ClimbIo, dir: string): Promise<ClimbState> {
 
 // ── guard: the goal's L0 checks and the product's eval gate on each survivor, best first ──
 
-async function guardView(v: View, opts: { env?: Record<string, string> }): Promise<void> {
+type CheckVerdict = { verdict: "pass" | "fail" | "void"; why: string };
+
+/**
+ * One L0 check, candidate against base, where a check can come back void: an
+ * outage, a capped pool, a runner that could not run, or cases left unscored
+ * on either side. A case that got worse, or that the base scored and the
+ * candidate lost with nothing unscored, fails at once; a void with no failure
+ * among the cases both sides scored holds the verdict open. A candidate whose
+ * tree changes what grades it fails, never holds.
+ */
+async function checkVerdict(v: View, c: Cand, d: EnvDeclaration, round: number): Promise<CheckVerdict> {
+  const tag = round ? `|r${round}` : "";
+  const b = await runOnce(v, `base|${d.key}|dev|${round ? `r${round}` : 0}`, d, { label: "base", split: "dev", sha: v.s.base });
+  const k = await runOnce(v, `${c.id}|${d.key}|dev${tag}`, d, { label: c.id, split: "dev", sha: c.sha! });
+  if ("error" in k && k.error.startsWith("GRADER:")) return { verdict: "fail", why: `${d.key}: changes the env itself: ${k.error.slice(8)}` };
+  if ("error" in b) return { verdict: "void", why: `${d.key}: the base could not run (${b.error})` };
+  if ("error" in k) return { verdict: "void", why: `${d.key}: the candidate's run could not run (${k.error})` };
+  if (k.version !== b.version) return { verdict: "fail", why: `${d.key}: changes the env itself (version ${k.version}, base ${b.version})` };
+  const base = new Map(b.cases.map((x) => [x.id, x.score]));
+  const cand = new Map(k.cases.map((x) => [x.id, x.score]));
+  const worse = [...cand].filter(([id, sc]) => base.has(id) && sc < base.get(id)!).map(([id]) => id);
+  if (worse.length) return { verdict: "fail", why: `${d.key}: ${worse.length} case${worse.length === 1 ? "" : "s"} worse (${worse.slice(0, 3).join(", ")})` };
+  const lost = [...base.keys()].filter((id) => !cand.has(id));
+  const unscored = b.unscored + k.unscored;
+  if (lost.length && !k.unscored) return { verdict: "fail", why: `${d.key}: ${lost.length} case${lost.length === 1 ? "" : "s"} the base scored and the candidate lost` };
+  if (unscored || lost.length) return { verdict: "void", why: `${d.key}: ${b.unscored} case${b.unscored === 1 ? "" : "s"} unscored on the base and ${k.unscored} on the candidate; the ${Math.min(base.size, cand.size)} both scored agree` };
+  return { verdict: "pass", why: `${d.key}: no case worse over ${cand.size}` };
+}
+
+const GATE_WORDS: Record<number, string> = {
+  1: "the product's eval gate scored it worse than the base",
+  [-2]: "it changes the files the product's eval command starts",
+  [-3]: "the product's eval command reaches no script file the climb can hold still (through a package script or directly), so its verdict could be the candidate's own",
+};
+/** The eval gate's exit read as a verdict: 0 passes, 1 and the climb's own refusals fail, and an unscored gate (exit 2, or no reps written) is void. */
+const gateVerdict = (code: number): CheckVerdict => (code === 0 ? { verdict: "pass", why: "the product's eval gate passed" } : GATE_WORDS[code] ? { verdict: "fail", why: GATE_WORDS[code] } : { verdict: "void", why: code === -1 ? "the product's eval command wrote no reps" : "the product's eval gate could not score it" });
+
+async function guardView(v: View, opts: { env?: Record<string, string>; rerunVoid?: boolean }): Promise<void> {
   await confirmView(v);
   const s = v.s;
+  delete s.pending;
+  // Each check's round: n is current; -(n+1) means round n came back void and waits for a re-run, which moves it to n+1 and files new runs.
+  const rounds = (s.guard_rounds ??= {});
+  const roundOf = (key: string) => { const r = rounds[key] ?? 0; return r < 0 ? -r - 1 : r; };
+  const markVoid = (key: string) => { rounds[key] = -(roundOf(key) + 1); };
+  if (opts.rerunVoid) for (const [key, r] of Object.entries(rounds)) if (r < 0) rounds[key] = -r;
   const checks = s.checks.map((k) => declOf(v.decls, k)).filter((d): d is EnvDeclaration => !!d && d.splits.includes("dev"));
   const unheld = checks.filter((d) => !d.protects?.length).map((d) => d.key);
   const command = baseEvalCommand(v.io.root, s.base);
   const heldScore = (c: Cand) => { const x = Object.values(c.held); return x.reduce((a, k) => a + k.delta, 0) / (x.length || 1); };
   for (const c of live(s).sort((a, b) => heldScore(b) - heldScore(a))) {
-    const fails: string[] = unheld.map((k) => `${k} declares no protects, so the check itself could be the candidate's`);
+    const verdicts: CheckVerdict[] = unheld.map((k) => ({ verdict: "fail" as const, why: `${k} declares no protects, so the check itself could be the candidate's` }));
     for (const d of checks) {
-      const l: LevelState = s.levels.find((x) => x.env === d.key) ?? { env: d.key, level: "L0", title: d.title, kept: true, why: "", cost_usd: d.cost_usd ?? 0, held: false, base_attempts: [] };
-      const b = await runOnce(v, `base|${d.key}|dev|0`, d, { label: "base", split: "dev", sha: s.base });
-      if ("error" in b) { fails.push(`${d.key}: the base could not run (${b.error})`); continue; }
-      const k = await cut(v, l, c, "dev", d, b.cases, b.version);
-      if (!k.keep) fails.push(`${d.key}: ${k.why}`);
+      const key = `${c.id}|${d.key}`;
+      const r = await checkVerdict(v, c, d, roundOf(key));
+      if (r.verdict === "void") markVoid(key);
+      verdicts.push(r);
     }
-    if (!fails.length && command) {
+    if (!verdicts.some((x) => x.verdict === "fail") && command) {
       let code = s.gates[c.sha!];
+      const key = `${c.id}|gate`;
+      if (code === undefined && (rounds[key] ?? 0) < 0) code = 2; // came back void, not re-run yet
       if (code === undefined) {
         // What the eval command starts grades as much as the envs do: the candidate's tree must hold those files as the base does.
         const evalFiles = commandFiles(v.io.root, s.base, command, { ...process.env, ...opts.env });
         if (!pinsAScript(evalFiles)) code = -3;
         else {
           await stopForBudget(v, 0, `the eval gate on ${c.id}`);
+          s.gate_runs = (s.gate_runs ?? Object.keys(s.gates).length) + 1;
           const evalDigest = await v.io.tree(s.base, async (t) => protectedDigest(t, evalFiles));
           const gdir = fs.mkdtempSync(path.join((process.env.TMPDIR || "/tmp").replace(/\/$/, ""), "climb-guard-"));
           code = await v.io.tree(c.sha!, async (tree) => {
@@ -477,10 +557,21 @@ async function guardView(v: View, opts: { env?: Record<string, string> }): Promi
           });
           fs.rmSync(gdir, { recursive: true, force: true });
         }
-        s.gates[c.sha!] = code;
+        if (gateVerdict(code).verdict === "void") markVoid(key);
+        else s.gates[c.sha!] = code;
         save(v.dir, s);
       }
-      if (code !== 0) fails.push(code === 1 ? "the product's eval gate scored it worse than the base" : code === -1 ? "the product's eval command wrote no reps" : code === -2 ? "it changes the files the product's eval command starts" : code === -3 ? "the product's eval command reaches no script file the climb can hold still (through a package script or directly), so its verdict could be the candidate's own" : "the product's eval gate could not score it");
+      verdicts.push(gateVerdict(code));
+    }
+    const fails = verdicts.filter((x) => x.verdict === "fail").map((x) => x.why);
+    const voids = verdicts.filter((x) => x.verdict === "void").map((x) => x.why);
+    if (!fails.length && voids.length) {
+      // Promotion waits on the best survivor's real verdict: a lesser one is never promoted past a void.
+      c.guard = { pass: false, why: `void: ${voids.join("; ")}` };
+      c.why = `guard pending: ${voids.join("; ")}`;
+      s.pending = `${c.id}'s guard came back void, not a verdict: ${voids.join("; ")}`;
+      save(v.dir, s);
+      throw new ClimbStop(s.pending, STOP.pending);
     }
     c.guard = fails.length ? { pass: false, why: fails.join("; ") } : { pass: true, why: command ? "L0 checks and the product's eval gate passed" : `L0 checks passed${checks.length ? "" : " (none named)"}; the project names no eval command` };
     c.status = fails.length ? "guard_failed" : "promoted";
@@ -494,7 +585,7 @@ async function guardView(v: View, opts: { env?: Record<string, string> }): Promi
   throw new ClimbStop(s.stopped, STOP.none);
 }
 
-export async function guard(io: ClimbIo, dir: string, opts: { env?: Record<string, string> } = {}): Promise<ClimbState> {
+export async function guard(io: ClimbIo, dir: string, opts: { env?: Record<string, string>; rerunVoid?: boolean } = {}): Promise<ClimbState> {
   const v = await load(io, dir);
   await guardView(v, opts);
   return v.s;

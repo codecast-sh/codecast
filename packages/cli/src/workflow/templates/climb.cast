@@ -29,15 +29,23 @@
 //   review    an independent reviewer refuses candidates that game the climb
 //   screen    dev split, cheapest level first, successive halving
 //   confirm   held split; a dev gain that vanishes there is logged as overfit
-//   guard     the goal's L0 checks and the product's eval gate, best first
-//   promote   the survivor as a task with a predicted effect, and the decision
-//             proposing the production experiment, sized by the metric's MDE
+//   guard     the goal's L0 checks and the product's eval gate, best first; a
+//             void verdict (an outage, a capped pool) is pending, never a pass
+//   hold      parks while the void checks are re-run, until a real verdict
+//             lands or the hold runs out; promotion waits on it
+//   mode      how the repo ships a promoted change (.codecast/climb.toml at
+//             the base, [promote] mode): "line" or "experiment"
+//   promote_line  line mode: the survivor as a task for the product's own
+//             change line, carrying its predicted effect and the evidence
+//   filed     the computed record on that task; the line takes it from there
+//   promote   experiment mode: the survivor as a task with a predicted effect,
+//             and the question proposing a holdout sized by the metric's MDE
 //   evidence  the computed summary: the decision's document and a comment on the task
 //   decide    nothing goes to production without the answer; Approve and Drop
 //             act only on the task `cast climb promote` recorded
 //   record    the summary on the goal: tried, separated, overfit, cost
 digraph climb {
-  graph [kind="line", label="Climb", description="Hill-climb one goal metric through its environments: many cheap candidates on dev, survivors on held, one promoted to a production experiment", takes="task", goal="$task_title", on_failure=stop]
+  graph [kind="line", label="Climb", description="Hill-climb one goal metric through its environments: many cheap candidates on dev, survivors on held, one promoted to the product's change line or a production experiment", takes="task", goal="$task_title", on_failure=stop]
   rankdir=LR
 
   start [shape=Mdiamond, label="Start"]
@@ -65,6 +73,19 @@ digraph climb {
   // The product's eval gate (the line profile's eval command, as committed at the base) on each survivor, as the line's Eval runs it.
   guard [label="Guard", shape=parallelogram, timeout=21600,
     script="cast climb guard --dir \"$run_dir/climb\""]
+
+  // A void guard re-runs its void checks every 3 hours for up to 3 days. The station parks: it holds no slot and no session while it waits.
+  hold [label="Hold", shape=parallelogram, parks=true, timeout=280800,
+    script="cast task comment $task_id \"Promotion held: the guard came back void, not a verdict. Its void checks re-run every 3h for up to 3 days.\" -t progress >/dev/null; cast climb guard --dir \"$run_dir/climb\" --hold --every 3h --for 3d"]
+
+  mode [label="Mode", shape=parallelogram, timeout=120,
+    script="cast climb promote-mode --dir \"$run_dir/climb\""]
+
+  promote_line [label="Promote", backend=session, agent=claude, max_visits=2, prompt="@climb/promote_line.md"]
+
+  filed [label="Filed", shape=parallelogram, timeout=600,
+    script="d=\"$run_dir/climb\"; t=$(cast climb status --dir \"$d\" --field task); if [ -n \"$t\" ]; then sum=$(cast climb status --dir \"$d\" --summary); cast task comment \"$t\" \"What the climb $task_id measured (computed from its filed runs):
+$sum\" -t progress >/dev/null; cast climb outcome --dir \"$d\" \"Filed for the product's change line as $t.\"; else cast climb outcome --dir \"$d\" \"Promote recorded no task, so nothing was filed.\"; fi; exit 0"]
 
   promote [label="Promote", backend=session, agent=claude, max_visits=3, prompt="@climb/promote.md"]
 
@@ -98,8 +119,15 @@ $sum\" -t progress >/dev/null; exit 0"]
   screen -> record  [condition="outcome = failure", label="none separated, or the spending limit reached"]
   confirm -> guard  [condition="outcome = success"]
   confirm -> record [condition="outcome = failure", label="overfit, or the spending limit reached"]
-  guard -> promote  [condition="outcome = success"]
-  guard -> record   [condition="outcome = failure", label="every survivor refused"]
+  guard -> mode     [condition="outcome = success"]
+  guard -> hold     [condition="outcome = failure and guard.exit_code = 6", label="void, not a verdict"]
+  guard -> record   [condition="outcome = failure and guard.exit_code != 6", label="every survivor refused"]
+  hold -> mode      [condition="outcome = success"]
+  hold -> record    [condition="outcome = failure", label="refused, or still void"]
+  mode -> promote_line [condition="mode.json.mode = line"]
+  mode -> promote      [condition="mode.json.mode != line"]
+  promote_line -> filed
+  filed -> record
   promote -> evidence
   evidence -> decide
   decide -> approve [label="[S] Start :: Open the production experiment the card proposes"]
