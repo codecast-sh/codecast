@@ -36,6 +36,8 @@ const restoreGlobals = replaceGlobals({
   ResizeObserver: class { observe() {} disconnect() {} },
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} },
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+  requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 // jsdom lays nothing out, so it has no element scrolling.

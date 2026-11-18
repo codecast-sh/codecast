@@ -320,7 +320,7 @@ test("a retirement: the role as its one row, struck, with its face and nothing a
   m.done();
 });
 
-test("every text field clamps at two lines with show all and show less, except the purpose's Says", () => {
+test("every text field clamps at two lines with show all and show less, except the purpose's Says", async () => {
   const kid = change("g3", 3, { kind: "initiative", title: "Fundraise", description: "Raise the round that funds the next year.", why: "Runway.", done_when: "The money is in the bank.", owner: "me", parent: PURPOSE, projects: ["Growth"] });
   const purpose = mount({ card: cardOf([G1, kid], PURPOSE), ordinal: 1, onAnswer });
   expect(field("says").textContent).toBe("The business earns its fee when an introduction becomes a transaction.");
@@ -335,6 +335,8 @@ test("every text field clamps at two lines with show all and show less, except t
   child.done();
   // op-903's charter runs to 1449 characters: the word appears, and opens the whole text.
   const long = mount({ card: cardOf(ORG_LONG_CHARTER_FIXTURE_PROPOSAL.changes, "Partnerships lead", ORG_RECORDS_FIXTURE_LIVE), ordinal: 2, onAnswer });
+  // The clamp measures in a microtask after the commit (hooks/useOverflows).
+  await React.act(async () => {});
   const charter = field("charter");
   expect(charter.previousElementSibling!.textContent).toBe("Charter");
   const more = () => charter.querySelector<HTMLElement>("[data-field-more]")!;
