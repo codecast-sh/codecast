@@ -23098,6 +23098,19 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   }
 });
 
+// Shared-log plans (messagingPolicy.ts): the plan's log entries new to this
+// agent session follow the command's output, once. Only an agent's own env
+// names the session, so a person's shell never pays the round-trip.
+program.hook('postAction', async (_thisCommand, actionCommand) => {
+  const sessionId = sessionIdFromEnv();
+  if (!sessionId) return;
+  let top = actionCommand;
+  while (top.parent && top.parent !== program) top = top.parent;
+  const json = !!actionCommand.opts().json || process.argv.includes("--json");
+  const { deliverPlanLog } = await import("./planLogDelivery.js");
+  await deliverPlanLog({ getCliEndpoint }, { command: top.name(), json, sessionId, stateDir: CONFIG_DIR });
+});
+
 // Fast path for the vim-fugitive git shim: it invokes `cast __fugitive_blame@@
 // <git args…>`. The git argv carries flags commander would mis-parse, and this
 // runs on every :Gblame, so bypass commander (and its daemon/alias side
