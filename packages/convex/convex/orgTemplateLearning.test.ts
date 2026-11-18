@@ -287,6 +287,20 @@ describe("canary rollout", () => {
     expect(row.version_at).not.toBe(NOW - 9 * DAY);
     expect(await performRollout(ctx(db), ME, { template_id: "growth" })).toMatchObject({ on_release: 1, queued: 0 });
   });
+  test("a failed upgrade step shows with its machine and error, makes the rollout due again, and the rollout queues it anew", async () => {
+    const db = withCanary();
+    await performRollout(ctx(db), ME, { template_id: "growth" });
+    let status = await performLearnStatus(ctx(db), ME, { template_id: "growth", now: NOW });
+    expect(status.canary!.instances[0]).toMatchObject({ instance: "acme-growth", pending: true, upgrade: { state: "pending", machine: "MacBook" } });
+    expect(status.due.rollout).toBe(false);
+    const [command] = await db.query("daemon_commands").collect();
+    await db.patch(command._id, { executed_at: NOW, error: "Instance acme-growth already exists on this project under another host" });
+    status = await performLearnStatus(ctx(db), ME, { template_id: "growth", now: NOW });
+    expect(status.canary!.instances[0].upgrade).toEqual({ state: "failed", machine: "MacBook", error: "Instance acme-growth already exists on this project under another host" });
+    expect(status.due.rollout).toBe(true);
+    expect(await performRollout(ctx(db), ME, { template_id: "growth" })).toMatchObject({ queued: 1, already_pending: 0 });
+    expect(await db.query("daemon_commands").collect()).toHaveLength(2);
+  });
   test("an instance with no machine to run on is counted, and keeps its pending upgrade for the next bind", async () => {
     const db = withCanary();
     await db.delete("devices_mbp");
