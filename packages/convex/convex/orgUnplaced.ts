@@ -17,7 +17,7 @@ import { WORK_STATUSES } from "./orgHealth";
 import { readWorkspaceInitiatives } from "./lib/roleInitiatives";
 import { computeUnplaced, INITIATIVE_OPEN, UNPLACED_RECENT_MS, type OrgUnplaced, type SessionRef, type UnplacedInputs } from "./lib/orgCoverage";
 import { isOpenPlan, openPlansOf } from "@codecast/shared/contracts/openPlans";
-import { isOnProjectBoard } from "@codecast/shared/tasks";
+import { isActiveTask, isOnProjectBoard } from "@codecast/shared/tasks";
 import { planDriver, sessionRefs, taskSession } from "./lib/planDriver";
 
 type Ctx = { db: any };
@@ -36,7 +36,11 @@ export const UNPLACED_READ = {
   sessions: 60,
 } as const;
 
-const isOpenTask = (t: any) => isOnProjectBoard(t) && t.status !== "done";
+const isOpen = (t: any) => t.status !== "done" && t.status !== "dropped";
+/** A plan's own work and a loose task: every real task (isActiveTask), agent-filed ones included, the rows a plan's progress counts. A plan an agent filled is still work in flight. */
+const isOpenWork = (t: any) => isActiveTask(t) && isOpen(t);
+/** A project's open work as its board lists it, the rule coverage.projects counts by. */
+const isOpenOnBoard = (t: any) => isOnProjectBoard(t) && isOpen(t);
 
 /** The driving session of each open plan a goal lists under its projects
  *  (openPlansOf), by plan id: the plan's own session fields, no task read. */
@@ -85,8 +89,8 @@ export async function readUnplaced(ctx: Ctx, userId: Id<"users">, teamId: Id<"te
   if (loosePlans.length > UNPLACED_READ.plans) truncated = true;
   const planFacts: UnplacedInputs["plans"] = [];
   for (const p of loosePlans.slice(0, UNPLACED_READ.plans)) {
-    const tasks = (await take(ctx.db.query("tasks").withIndex("by_plan_id", (q: any) => q.eq("plan_id", p._id)), UNPLACED_READ.tasks_per_record)).filter(isOnProjectBoard);
-    const open = tasks.filter(isOpenTask);
+    const tasks = (await take(ctx.db.query("tasks").withIndex("by_plan_id", (q: any) => q.eq("plan_id", p._id)), UNPLACED_READ.tasks_per_record)).filter((t) => isActiveTask(t) && t.status !== "dropped");
+    const open = tasks.filter(isOpenWork);
     planFacts.push({
       short_id: p.short_id, title: p.title, status: p.status,
       created_at: p.created_at ?? p._creationTime, updated_at: p.updated_at ?? p._creationTime,
@@ -103,7 +107,7 @@ export async function readUnplaced(ctx: Ctx, userId: Id<"users">, teamId: Id<"te
     if (p.status !== "active" || goalProjects.has(String(p._id))) continue;
     const open: any[] = [];
     for (const status of WORK_STATUSES) {
-      open.push(...(await take(ctx.db.query("tasks").withIndex("by_project_status", (q: any) => q.eq("project_id", p._id).eq("status", status)), UNPLACED_READ.tasks_per_record)).filter(isOpenTask));
+      open.push(...(await take(ctx.db.query("tasks").withIndex("by_project_status", (q: any) => q.eq("project_id", p._id).eq("status", status)), UNPLACED_READ.tasks_per_record)).filter(isOpenOnBoard));
     }
     const itsPlans = openPlansByProject.get(String(p._id)) ?? [];
     if (!open.length && !itsPlans.length) continue;
@@ -128,7 +132,7 @@ export async function readUnplaced(ctx: Ctx, userId: Id<"users">, teamId: Id<"te
   const recent = await take(ctx.db.query("tasks").withIndex("by_workspace_updated", (q: any) => q.eq("workspace", workspace).gte("updated_at", now - UNPLACED_RECENT_MS)).order("desc"), UNPLACED_READ.recent_tasks);
   const looseTasks: UnplacedInputs["loose_tasks"] = [];
   for (const t of recent) {
-    if (t.plan_id || t.project_id || !isOpenTask(t)) continue;
+    if (t.plan_id || t.project_id || !isOpenWork(t)) continue;
     looseTasks.push({ short_id: t.short_id, title: String(t.title ?? "").slice(0, 120), created_at: t.created_at ?? t._creationTime, updated_at: t.updated_at ?? t._creationTime, session: await refOf(t.created_from_conversation ?? t.first_linked_conversation) });
   }
 

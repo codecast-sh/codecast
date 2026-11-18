@@ -508,6 +508,23 @@ describe("org.analysisInputs", () => {
     expect((await readGoalCandidates(ctxOf(db), ME as any, undefined, NOW)).candidates).toEqual([]);
   });
 
+  test("unplaced: a plan with no project counts the work agents filed under it (Union pl-1048, 2026-11-18)", async () => {
+    const agentTask = (n: number, status: string) => ({ _id: `tasks_a${n}`, user_id: ME, team_id: TEAM, workspace: WS, plan_id: "plans_loose", short_id: `ct-a${n}`, source: "agent", triage_status: "active", title: `Agent step ${n}`, task_type: "task", status, created_at: NOW - D, updated_at: NOW - H });
+    const db = fixtures({
+      plans: [
+        { _id: PLAN, user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: "pl-1", title: "Launch", status: "active", created_at: 1, updated_at: NOW - 3 * H },
+        { _id: "plans_loose", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-2", title: "Remove the extraction layer", status: "active", created_at: NOW - D, updated_at: NOW - H, current_session_id: S1 },
+      ],
+      tasks: [
+        agentTask(1, "open"), agentTask(2, "in_progress"), agentTask(3, "done"), agentTask(4, "dropped"),
+        // A mined suggestion is nobody's claim: not counted.
+        { ...agentTask(5, "open"), triage_status: "suggested" },
+      ],
+    });
+    const u = await readUnplaced(ctxOf(db), ME as any, TEAM, NOW);
+    expect(u.plans.map((p) => [p.short_id, p.open_tasks, p.done_tasks, p.driver?.short_id])).toEqual([["pl-2", 2, 1, "jx1"]]);
+  });
+
   test("the three slices merge to the one process read, and the org slice never reads tasks", async () => {
     const db = fixtures();
     const ctx = ctxOf(db);
