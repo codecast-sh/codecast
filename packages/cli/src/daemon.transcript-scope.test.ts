@@ -250,3 +250,20 @@ test("Codex: a conversation gets no more messages once its folder leaves the sel
   expect(server.calls).toContain("addMessages");
   expect(server.calls).not.toContain("createConversation");
 }, 90_000);
+
+test("Codex: a rollout's cwd is read once per file, and again when the file is replaced", async () => {
+  const { sessionId, file, pass } = codexSession(OUTSIDE);
+  const server = recordingServer();
+  setActiveConfigForTests(ONLY_SELECTED);
+  await pass(server.syncService);
+  const inScope = codexRows(sessionId, SELECTED).map(row => JSON.stringify(row)).join("\n") + "\n";
+
+  fs.writeFileSync(file, inScope + JSON.stringify(codexUserMessage("m2", "Now cover the timeout.")) + "\n");
+  await pass(server.syncService);
+  expect(server.calls).toEqual([]);
+
+  fs.writeFileSync(`${file}.tmp`, inScope);
+  fs.renameSync(`${file}.tmp`, file);
+  await pass(server.syncService);
+  expectUploaded(server.calls);
+}, 90_000);

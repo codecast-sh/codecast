@@ -13537,6 +13537,22 @@ async function processCursorTranscriptFilePass(
 }
 
 const codexModelPositions = new Map<string, { offset: number; model?: string }>();
+// A rollout's cwd never changes, so memoize it per file once its head records it.
+const codexRolloutCwdCache = new Map<string, { identity: ReturnType<typeof ingestIdentity>; cwd: string }>();
+
+function knownCodexRolloutCwd(filePath: string, identity: ReturnType<typeof ingestIdentity>): string | undefined {
+  const entry = codexRolloutCwdCache.get(filePath);
+  return entry && sameIngestFile(entry.identity, identity) ? entry.cwd : undefined;
+}
+
+async function codexRolloutCwd(filePath: string): Promise<string | undefined> {
+  const identity = ingestIdentity(await fs.promises.stat(filePath));
+  const known = knownCodexRolloutCwd(filePath, identity);
+  if (known !== undefined) return known;
+  const cwd = extractCodexCwd(await readCodexSessionMetaHeadAsync(filePath));
+  if (cwd) codexRolloutCwdCache.set(filePath, { identity, cwd });
+  return cwd;
+}
 
 export async function processCodexSession(...args: Parameters<typeof processCodexSessionPass>): Promise<void> {
   return runTranscriptPass(args[1], path.resolve(args[0]), () => processCodexSessionPass(...args));
@@ -13558,6 +13574,8 @@ async function processCodexSessionPass(
   const stats = await ingestStat(filePath, getPosition(filePath), "codex", sessionId);
   if (!stats || stats.size <= stats.lastPosition) return;
   const lastPosition = stats.lastPosition;
+  const knownCwd = knownCodexRolloutCwd(filePath, stats.identity);
+  if (knownCwd && transcriptOutOfScope("Codex", sessionId, knownCwd)) return;
 
   try {
     // Windowed like claude ingest: one pass per window, continuation below.
@@ -13586,6 +13604,7 @@ async function processCodexSessionPass(
     }
     // The ingest reads the folder from the head of the rollout, whichever
     // window this pass holds.
+    if (metadata.cwd) codexRolloutCwdCache.set(filePath, { identity: stats.identity, cwd: metadata.cwd });
     if (transcriptOutOfScope("Codex", sessionId, metadata.cwd)) return;
     const codexMetadata = metadata.codex;
     const nativeParentSessionId = codexMetadata?.parentThreadId;
@@ -30922,7 +30941,7 @@ function startWatchdog(
       );
       const sessionId = match ? match[1] : filename;
       // An out-of-scope rollout never gets a position, so it is stale on every tick.
-      if (transcriptScopeRefusal(extractCodexCwd(await readCodexSessionMetaHeadAsync(filePath)) ?? null, deps.config)) return;
+      if (transcriptScopeRefusal(await codexRolloutCwd(filePath) ?? null, deps.config)) return;
 
       log(`Watchdog: Syncing stale Codex session ${sessionId}`);
 
