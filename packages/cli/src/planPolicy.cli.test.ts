@@ -42,7 +42,7 @@ async function withStub(args: string[]): Promise<{ code: number | null; stderr: 
       auth_token: "test-token", convex_url: `http://127.0.0.1:${address.port}`, auto_update: false,
     }));
     const { code, stderr } = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
-      const env = { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), NO_COLOR: "1" };
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), NO_COLOR: "1" };
       delete env.CLAUDE_CODE_SESSION_ID;
       const child = spawn(process.execPath, [processEntry, ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
       let err = "";
