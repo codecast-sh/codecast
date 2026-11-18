@@ -30,6 +30,7 @@ import { externalAuthorValidator } from "./lib/externalAuthor";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { publishedLineProfileValidator } from "./lib/lineProfileValidator";
 import { signalPlacedValidator } from "./lib/signalPlacedValidator";
+import { predictedValidator, realisedValidator } from "./lib/predictionValidators";
 import { callTables } from "./callsSchema";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { mcpTables } from "./mcpSchema";
@@ -45,6 +46,7 @@ import { teamHostTables } from "./teamHostsSchema";
 import { accountPoolTables } from "./accountPoolSchema";
 import { managedDeviceTables, teamPolicyValidator } from "./managedDevicesSchema";
 import { externalEventDataValidator, ingestTables } from "./ingestSchema";
+import { envTables, goalEnvValidator } from "./envSchema";
 import { momentsTables } from "./momentsSchema";
 import { liveArtifactTables } from "./liveArtifactsSchema";
 import { pageStateTables } from "./pageStateSchema";
@@ -144,6 +146,7 @@ export default defineSchema({
   ...oauthConnectorTables,
   // External data: sources, groups, samples, replays, metric watches, app calls (external-data.md).
   ...ingestTables,
+  ...envTables,
   ...momentsTables,
   ...liveArtifactTables,
   ...pageStateTables,
@@ -5985,6 +5988,11 @@ export default defineSchema({
     // color and gates run auto-fold: a failed previous run must stay visible in
     // the inbox (escalation), only a clean run folds when the next one starts.
     last_run_failed: v.optional(v.boolean()),
+    // A recurring trigger's firings in a row that failed after all their
+    // retries (agentTasks.retriesSpentFields): it goes on at its next slot
+    // until FAILED_SLOTS_TO_STOP, then ends failed. A clean run, a precheck
+    // skip or a re-arm clears it.
+    failed_slots: v.optional(v.number()),
     // Agent's explicit escalation from `cast trigger complete --needs-attention`:
     // the run neither auto-folds nor collapses under the schedule's standing row —
     // it stays a real inbox card until the user triages it.
@@ -6285,6 +6293,8 @@ export default defineSchema({
     // `scoreboard` by key, the template scoreboard's own shape, written by
     // the same recordScores path `cast org template report` uses.
     metrics: v.optional(v.array(metricValidator)),
+    // The environments that predict it, ordered by level (contracts/envs GoalEnv).
+    envs: v.optional(v.array(goalEnvValidator)),
     scoreboard: v.optional(v.record(v.string(), scoreValidator)),
     // The intent record (I5, lib/initiativeValidators): every reported value
     // by metric key oldest first, written only with `scoreboard`; why it
@@ -7188,6 +7198,11 @@ export default defineSchema({
     resolved_at: v.optional(v.number()),
     // The change card's published page (LE10).
     card_slug: v.optional(v.string()),
+    // The effect on a goal metric this change is expected to have, and what
+    // the metric did after ship (shared/contracts/predictedEffect.ts). A goal
+    // reads its predictions from here (by_workspace_prediction).
+    predicted: v.optional(predictedValidator),
+    realised: v.optional(realisedValidator),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
@@ -7218,6 +7233,8 @@ export default defineSchema({
     // Sparse in practice: only causes in watch (LE12) carry watch_until;
     // signals.sweepWatches reads the ended ones.
     .index("by_watch_until", ["watch_until"])
+    .index("by_prediction_due", ["predicted.due_at"])
+    .index("by_workspace_prediction", ["workspace", "predicted.goal_ref"])
     // Sparse in effect: a problem whose fix landed on its default branch (tasks.landed). The deploy stage reads a
     // workspace's landed fixes here beside the line runs' merges (deploys.md DP2).
     .index("by_workspace_landed", ["workspace", "landed.at"])
