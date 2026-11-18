@@ -22,6 +22,7 @@ import {
   judgeProcessIdentity,
   registrationPredatesProcess,
   agentBinaryFromPsRow,
+  headlessAgentOfCommand,
 } from "./sessionProcessMatcher.js";
 
 describe("isRecognizedAgentComm", () => {
@@ -566,6 +567,22 @@ describe("processDeclaredSessionId / judgeProcessIdentity", () => {
   test("no signal at all: unknown, so callers keep their current answer", () => {
     expect(judgeProcessIdentity({ sessionId: S, argvId: null, claims: [], processStartSec: start }))
       .toEqual({ verdict: "unknown", declared: null });
+  });
+});
+
+describe("headlessAgentOfCommand", () => {
+  test("a -p inside grok's --rules text is not a headless run (jx7c12d, 2026-11-18)", () => {
+    const rules = "<org-context> Use: cast read jx70dwp <range> cast feed -p 2 # next page </org-context>";
+    expect(headlessAgentOfCommand(`grok --resume 3800b3f5-fca1-48da-94bb-d0e08ad2f634 --permission-mode bypassPermissions --rules ${rules}`)).toBeNull();
+    expect(headlessAgentOfCommand(`claude --resume abc --append-system-prompt ${rules}`)).toBeNull();
+    expect(headlessAgentOfCommand(`claude --resume abc --system-prompt=${rules}`)).toBeNull();
+  });
+
+  test("a -p before any prose-valued flag still reads as headless", () => {
+    expect(headlessAgentOfCommand("grok -p do the thing --rules be brief")).toBe("grok -p");
+    expect(headlessAgentOfCommand("claude -p [Codecast Task: X] --dangerously-skip-permissions --append-system-prompt mandate")).toBe("claude -p");
+    expect(headlessAgentOfCommand("claude --model opus --print hi")).toBe("claude -p");
+    expect(headlessAgentOfCommand("codex exec do it")).toBe("codex exec");
   });
 });
 

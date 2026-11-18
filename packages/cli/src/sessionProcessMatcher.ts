@@ -50,9 +50,16 @@ export function isRecognizedAgentComm(comm: string): boolean {
   return AGENT_INTERPRETERS.some((i) => lower.includes(i));
 }
 
+/** Flags whose value is free prose (a system prompt, grok's rules). A ps line
+ *  joins argv with spaces, so the value's end is unknowable: every token after
+ *  one of these may be its text, which quotes commands like `cast feed -p 2`. */
+const PROSE_VALUE_FLAGS = new Set(["--rules", "--append-system-prompt", "--system-prompt"]);
+
 /** The agent binary of a headless run (`claude -p`, `codex exec`) from its full
  *  `ps -o command=` line, or null for an interactive agent or any other process.
- *  A headless run draws no composer, so nothing can be typed into its pane. */
+ *  A headless run draws no composer, so nothing can be typed into its pane.
+ *  Only the flags before the first prose-valued flag are read: past it, a `-p`
+ *  may be text inside that flag's value. */
 export function headlessAgentOfCommand(command: string): string | null {
   const tokens = command.trim().split(/\s+/);
   const at = tokens.slice(0, 2).findIndex((t) => AGENT_BINARY_BASENAMES.has(agentBasename(t)));
@@ -60,7 +67,9 @@ export function headlessAgentOfCommand(command: string): string | null {
   const bin = agentBasename(tokens[at]);
   const args = tokens.slice(at + 1);
   if (bin === "codex") return args[0] === "exec" ? "codex exec" : null;
-  return args.includes("-p") || args.includes("--print") ? `${bin} -p` : null;
+  const prose = args.findIndex((t) => PROSE_VALUE_FLAGS.has(t.split("=")[0]));
+  const flags = prose < 0 ? args : args.slice(0, prose);
+  return flags.includes("-p") || flags.includes("--print") ? `${bin} -p` : null;
 }
 
 // Legacy alias: installs whose ps comm still reports gemini's old binary name.

@@ -26301,7 +26301,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         mapSessionToConversation(sessionId, conversationId);
       }
       sessionId = reconId;
-      sessionFile = await awaitRecentSessionFile(reconId);
+      sessionFile = rebuiltSessionFile(await awaitRecentSessionFile(reconId), result.filePath, reconAgentType, fs.existsSync);
+      if (sessionFile) learnSessionFile(reconId, sessionFile);
       if (!sessionFile && !isStoreOwnedResume) {
         logDelivery(`Reconstituted file not found at expected path: ${result.filePath}`);
         return false;
@@ -26704,6 +26705,20 @@ export function conversationUsesCodexAppServer(agentType: string | null | undefi
 
 // A leftover transcript from the previous agent after an in-place switch.
 // Resume must ignore it and rebuild as the conversation's declared agent.
+/** The transcript a rebuilt session resumes from. The rebuild keeps the
+ *  session id, so the index can still name the old agent's transcript for it
+ *  (a grok session switched to Claude, jx7c12d 2026-11-18), and resuming that
+ *  file relaunches the agent the switch just left. What was written wins. */
+export function rebuiltSessionFile(
+  found: SessionFileInfo | null,
+  writtenPath: string,
+  agentType: AgentClientId,
+  exists: (p: string) => boolean,
+): SessionFileInfo | null {
+  if (found && !sessionFileStaleForAgent(found.agentType, agentType)) return found;
+  return writtenPath && exists(writtenPath) ? { path: writtenPath, agentType } : null;
+}
+
 export function sessionFileStaleForAgent(
   fileAgent: AgentClientId | undefined | null,
   conversationAgent: AgentClientId | undefined | null,
@@ -32878,6 +32893,10 @@ async function main(): Promise<void> {
     sessionChanged: (convId, _previous, next) => {
       const cwd = claudeSdkBackend?.specFor(convId)?.cwd;
       if (cwd) void bindSdkSession(convId, next, cwd).catch((err) => log(`[claude-sdk] rebind failed: ${err instanceof Error ? err.message : String(err)}`));
+    },
+    resumed: (convId, sessionId) => {
+      const cwd = claudeSdkBackend?.specFor(convId)?.cwd;
+      if (cwd) void bindSdkSession(convId, sessionId, cwd).catch((err) => log(`[claude-sdk] rebind after resume failed: ${err instanceof Error ? err.message : String(err)}`));
     },
     resumeModelEffort: (sessionId, cwd) => {
       const file = claudeTranscriptFor(sessionId) ?? path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(cwd), `${sessionId}.jsonl`);
