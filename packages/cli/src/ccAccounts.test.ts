@@ -1260,13 +1260,13 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
 
   it("files a post under the account whose windows it carries, named or not", async () => {
     await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
-    expect((await ingestStatusLineUsage(statusLinePayload(11, 12, "b"), { account: "b", now: NOW + 1000 }))?.key).toBe("uuid-b");
+    expect((await ingestStatusLineUsage(statusLinePayload(91, 42, "b"), { account: "b", now: NOW + 1000 }))?.key).toBe("uuid-b");
     // No account name: a session on the keychain login, recognised all the same.
-    expect((await ingestStatusLineUsage(statusLinePayload(13, 14, "a"), { account: undefined, now: NOW + 1000 }))?.key).toBe("uuid-a");
+    expect((await ingestStatusLineUsage(statusLinePayload(33, 44, "a"), { account: undefined, now: NOW + 1000 }))?.key).toBe("uuid-a");
     expect(await ingestStatusLineUsage(statusLinePayload(1, 2), { account: "../x", now: NOW })).toBeNull();
     const cache = readUsageCache();
-    expect(cache.accounts["uuid-b"]?.session?.percent).toBe(11);
-    expect(cache.accounts["uuid-a"]?.session?.percent).toBe(13);
+    expect(cache.accounts["uuid-b"]?.session?.percent).toBe(91);
+    expect(cache.accounts["uuid-a"]?.session?.percent).toBe(33);
   });
 
   // 2026-09-15: sessions keep the profile name they launched under, but the
@@ -1289,10 +1289,10 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
   // that neither could be told from the other.
   it("takes percentages from a live post and leaves the reset times to the poll", async () => {
     await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
-    await ingestStatusLineUsage(statusLinePayload(12, 34, "b"), { account: "b", now: NOW + 1000 });
+    await ingestStatusLineUsage(statusLinePayload(92, 54, "b"), { account: "b", now: NOW + 1000 });
     const b = readUsageCache().accounts["uuid-b"];
-    expect(b?.session?.percent).toBe(12);
-    expect(b?.weekly?.percent).toBe(34);
+    expect(b?.session?.percent).toBe(92);
+    expect(b?.weekly?.percent).toBe(54);
     expect(b?.session?.resets_at).toBe(SESSION_RESET_S * 1000);
     expect(b?.weekly?.resets_at).toBe(WEEKLY_RESET_S.b * 1000);
 
@@ -1336,10 +1336,10 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
 
   it("carries the live reading to the heartbeat without the local source marker", async () => {
     await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
-    await ingestStatusLineUsage(statusLinePayload(44, 55), { account: "b", now: NOW + 1000 });
+    await ingestStatusLineUsage(statusLinePayload(94, 55), { account: "b", now: NOW + 1000 });
     invalidateAccountsCache();
     const b = (getAccountsHeartbeatPayload()?.profiles ?? []).find((p) => p.name === "b");
-    expect(b?.usage?.session?.percent).toBe(44);
+    expect(b?.usage?.session?.percent).toBe(94);
     // Convex's ccUsageValidator accepts no unknown field: a daemon that sent
     // this would have its whole account inventory rejected.
     expect(b?.usage && "source" in b.usage).toBe(false);
@@ -1367,7 +1367,7 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     const cache = readUsageCache();
     cache.accounts["uuid-b"]!.weekly_scoped = { percent: 100, resets_at: NOW + 3600_000, label: "Fable" };
     fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify(cache));
-    await ingestStatusLineUsage(statusLinePayload(2, 3), { account: "b", now: NOW + 1000 });
+    await ingestStatusLineUsage(statusLinePayload(92, 43), { account: "b", now: NOW + 1000 });
     // Dropping it would read as headroom on an account whose Fable window is
     // pegged, and auto-switch would send sessions there.
     expect(readUsageCache().accounts["uuid-b"]?.weekly_scoped?.percent).toBe(100);
@@ -1375,13 +1375,13 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
 
   it("suppresses the poll for an account a live session is feeding, and resumes when it goes quiet", async () => {
     await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
-    await ingestStatusLineUsage(statusLinePayload(60, 61), { account: "b", now: NOW + 60_000 });
+    await ingestStatusLineUsage(statusLinePayload(95, 61), { account: "b", now: NOW + 60_000 });
 
     const during: string[] = [];
     const res = await refreshUsageSnapshots({ now: NOW + 5 * 60_000, fetchImpl: usageFetch(during) });
     expect(during).not.toContain("at-b");
     expect(res.skipped).toContain("b");
-    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(60);
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(95);
 
     // Five minutes past the last post the feed counts as gone and the endpoint
     // is the only reading left.
@@ -1398,7 +1398,7 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
   it("polls anyway once the endpoint has been silent for half an hour", async () => {
     await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
     const post = async (at: number) => {
-      await ingestStatusLineUsage(statusLinePayload(3, 4), { account: "b", now: at });
+      await ingestStatusLineUsage(statusLinePayload(93, 44), { account: "b", now: at });
       const calls: string[] = [];
       await refreshUsageSnapshots({ now: at + 60_000, fetchImpl: usageFetch(calls) });
       return calls;
@@ -1411,14 +1411,14 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
 
   it("never lets a failed or slow poll overwrite a live reading", async () => {
     await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
-    await ingestStatusLineUsage(statusLinePayload(70, 71), { account: "b", now: NOW + 6 * 60_000 });
+    await ingestStatusLineUsage(statusLinePayload(96, 71), { account: "b", now: NOW + 6 * 60_000 });
 
     // A poll that fails leaves the live reading standing.
     await refreshUsageSnapshots({
       now: NOW + 12 * 60_000,
       fetchImpl: (async () => new Response("overloaded", { status: 529 })) as any,
     });
-    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(70);
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(96);
 
     // And a post that lands WHILE the probes run is not written back over: the
     // pass re-reads the cache instead of flushing the copy it started with.
@@ -1428,20 +1428,37 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
       fetchImpl: (async (url: any, init: any) => {
         if (!posted) {
           posted = true;
-          await ingestStatusLineUsage(statusLinePayload(80, 81), { account: "b", now: NOW + 20 * 60_000 + 1 });
+          await ingestStatusLineUsage(statusLinePayload(97, 81), { account: "b", now: NOW + 20 * 60_000 + 1 });
         }
         return usageFetch([])(url, init);
       }) as any,
     });
-    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(80);
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(97);
   });
 
   it("does not rewrite the cache for an unchanged reading", async () => {
     await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
-    expect((await ingestStatusLineUsage(statusLinePayload(5, 6), { account: "b", now: NOW + 1000 }))?.wrote).toBe(true);
-    expect((await ingestStatusLineUsage(statusLinePayload(5, 6), { account: "b", now: NOW + 16_000 }))?.wrote).toBe(false);
+    expect((await ingestStatusLineUsage(statusLinePayload(91, 46), { account: "b", now: NOW + 1000 }))?.wrote).toBe(true);
+    expect((await ingestStatusLineUsage(statusLinePayload(91, 46), { account: "b", now: NOW + 16_000 }))?.wrote).toBe(false);
     // A real move is always written, however soon it arrives.
-    expect((await ingestStatusLineUsage(statusLinePayload(6, 6), { account: "b", now: NOW + 31_000 }))?.wrote).toBe(true);
+    expect((await ingestStatusLineUsage(statusLinePayload(92, 46), { account: "b", now: NOW + 31_000 }))?.wrote).toBe(true);
+  });
+
+  // 2026-11-18: with the machine's sessions on another account, frame's week
+  // read 26, 27, 42, 5, 27, 13 over four hours while the API said 42 to 44.
+  // Each idle session re-posted the numbers of its own last request.
+  it("drops a live post that reports less than the cache holds inside an open window", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    await ingestStatusLineUsage(statusLinePayload(95, 60), { account: "b", now: NOW + 1_000 });
+    expect((await ingestStatusLineUsage(statusLinePayload(91, 45), { account: "b", now: NOW + 60_000 }))?.wrote).toBe(false);
+    const b = readUsageCache().accounts["uuid-b"];
+    expect([b?.session?.percent, b?.weekly?.percent, b?.fetched_at]).toEqual([95, 60, NOW + 1_000]);
+    // One window newer is enough to file the post; the older one keeps its reading.
+    await ingestStatusLineUsage(statusLinePayload(96, 45), { account: "b", now: NOW + 120_000 });
+    expect([readUsageCache().accounts["uuid-b"]?.session?.percent, readUsageCache().accounts["uuid-b"]?.weekly?.percent]).toEqual([96, 60]);
+    // The poll still decides: it reads the account itself.
+    await refreshUsageSnapshots({ now: NOW + 31 * 60_000, fetchImpl: usageFetch([]) });
+    expect(readUsageCache().accounts["uuid-b"]?.weekly?.percent).toBe(40);
   });
 
   it("keeps an exhausted session or week closed when a delayed live post reports less usage", async () => {

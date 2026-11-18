@@ -2926,15 +2926,20 @@ function mergeLiveUsage(
   // two accounts look alike, after which neither can be told apart again. A
   // window whose stored reset has since passed reads as rolled (livePercent),
   // which is the safe way to be stale — it never invents a limit.
+  // Usage only rises inside a window, so a lower reading is an older one: an
+  // idle session re-posts the numbers of its last request, hours old. With the
+  // machine's sessions on another account, frame read 13% at 44% (2026-11-18).
+  const older = (live: CcUsageWindow | undefined, polled: CcUsageWindow | undefined): boolean =>
+    !!live && !!polled && live.percent < polled.percent &&
+    (polled.resets_at === undefined ? polled.percent >= 100 : polled.resets_at > snap.fetched_at);
+  // A post with nothing newer is dropped whole: filing it would stamp the old
+  // numbers as fresh and hold the poll off.
+  if ((!snap.session || older(snap.session, prev?.session)) && (!snap.weekly || older(snap.weekly, prev?.weekly))) return null;
   const carryReset = (
     live: CcUsageWindow | undefined,
     polled: CcUsageWindow | undefined,
   ): CcUsageWindow | undefined => {
-    if (!live) return polled;
-    if (
-      polled && polled.percent >= 100 && live.percent < polled.percent &&
-      (polled.resets_at === undefined || polled.resets_at > snap.fetched_at)
-    ) return polled;
+    if (!live || older(live, polled)) return polled;
     return polled?.resets_at !== undefined
       ? { ...live, resets_at: polled.resets_at }
       : { percent: live.percent };
