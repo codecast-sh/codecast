@@ -21,30 +21,25 @@ export const listMislinkedForks = internalQuery({
   },
 });
 
-/** A fork's branch point: its last message the source also holds. The
- *  shared history is a prefix of the fork, so a binary search over the
- *  fork's timestamps finds the boundary in a few dozen indexed reads. */
+/** A fork's branch point: its newest message the source also holds. Read
+ *  newest first, since a fork's own messages can carry timestamps older
+ *  than its shared history; rows without a uuid say nothing either way. */
 export const findForkPoint = internalQuery({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, { conversation_id }) => {
     const fork = await ctx.db.get(conversation_id);
     if (!fork?.forked_from) throw new Error("Not a fork");
     const source = fork.forked_from;
-    const at = (q: any) => ctx.db.query("messages").withIndex("by_conversation_timestamp", q);
-    const shared = async (m: any) => !!m?.message_uuid && !!(await ctx.db.query("messages")
-      .withIndex("by_conversation_uuid", (q) => q.eq("conversation_id", source).eq("message_uuid", m.message_uuid)).first());
-    const first = await at((q: any) => q.eq("conversation_id", conversation_id)).order("asc").first();
-    if (!first || !(await shared(first))) return null;
-    let lo = first.timestamp;
-    const last = await at((q: any) => q.eq("conversation_id", conversation_id)).order("desc").first();
-    let hi = last!.timestamp + 1;
-    while (hi - lo > 1) {
-      const mid = Math.floor((lo + hi) / 2);
-      const m = await at((q: any) => q.eq("conversation_id", conversation_id).gte("timestamp", mid)).order("asc").first();
-      if (m && (await shared(m))) lo = m.timestamp; else hi = mid;
+    let scanned = 0;
+    for await (const m of ctx.db.query("messages").withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conversation_id)).order("desc")) {
+      if (++scanned > 3000) return { fork_point_uuid: null, scanned };
+      if (!m.message_uuid) continue;
+      const held = await ctx.db.query("messages")
+        .withIndex("by_conversation_uuid", (q) => q.eq("conversation_id", source).eq("message_uuid", m.message_uuid))
+        .first();
+      if (held) return { fork_point_uuid: m.message_uuid, scanned, preview: (m.content ?? "").slice(0, 80) };
     }
-    const point = await at((q: any) => q.eq("conversation_id", conversation_id).lte("timestamp", lo)).order("desc").first();
-    return { fork_point_uuid: point!.message_uuid, timestamp: point!.timestamp, preview: (point!.content ?? "").slice(0, 80) };
+    return { fork_point_uuid: null, scanned };
   },
 });
 
