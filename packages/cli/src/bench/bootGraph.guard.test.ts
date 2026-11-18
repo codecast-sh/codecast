@@ -331,8 +331,10 @@ describe("command groups stay off the boot graph", () => {
     // for max-lines, no new code. 371 the same day: contracts/messagingPolicy.ts,
     // the messaging policy registry orgWhere.ts builds its guidance from (no imports).
     // 372 the same day: ccRateLimitHeaders.ts, the rate-limit header parsers
-    // split out of ccAccounts.ts for its max-lines pin, no new code.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(372);
+    // split out of ccAccounts.ts for its max-lines pin, no new code. 369 the
+    // same day: `plan verify` loads workspace/detect.ts on demand, which took
+    // detect.ts, share.ts, manifest.ts and contracts/dataSync.ts off the graph.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(369);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.

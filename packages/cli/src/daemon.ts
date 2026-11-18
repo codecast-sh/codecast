@@ -34,7 +34,6 @@ import { registerAppServerSpawnTracking, TmuxSpawnRegistry } from "./tmuxSpawns.
 import { countTrackedFleet, type FleetCounts } from "./fleetCounts.js";
 import { deadTranscriptBeats, strikeUnknownBeats } from "./heartbeatMembership.js";
 import * as fs from "fs";
-import { heicToJpeg, isHeicImage } from "./heicImage.js";
 import * as path from "path";
 import * as os from "os";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
@@ -27460,6 +27459,7 @@ async function downloadImage(storageId: string, syncService: SyncService): Promi
   const resp = await fetch(imageUrl);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const bytes = Buffer.from(await resp.arrayBuffer());
+  const { isHeicImage } = await import("./heicImage.js");
   const ext = isHeicImage(bytes) ? "heic" : imageExtForContentType(resp.headers.get("content-type"));
   const destPath = `${dir}/${storageId}.${ext}`;
   fs.writeFileSync(destPath, bytes);
@@ -27478,6 +27478,7 @@ async function readableImage(file: string, base: string): Promise<string> {
   } catch {
     return file;
   }
+  const { heicToJpeg, isHeicImage } = await import("./heicImage.js");
   if (!isHeicImage(head)) return file;
   const jpg = `${base}.jpg`;
   if (!(await heicToJpeg(file, jpg))) return file;

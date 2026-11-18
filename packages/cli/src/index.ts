@@ -13,7 +13,6 @@ import { randomUUID } from "node:crypto";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
 import type { GroupDeps } from "./commandGroups.js";
 import { activateGroup, groupTokenInArgv, registerGroupStubs } from "./commandGroupActivation.js";
-import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
 import { CODECAST_HOOK_SCRIPTS, CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } from "./codecastOwned.js";
@@ -21467,6 +21466,7 @@ plan
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
     const cwd = (await repoRootFor(getRealCwd())) ?? getRealCwd();
+    const { detectJsPackageManager } = await import("./workspace/detect.js");
     const pm = detectJsPackageManager(cwd);
     if (!pm) {
       console.error(`No package.json at ${cwd}; nothing to verify`);
