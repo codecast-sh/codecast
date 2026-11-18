@@ -569,7 +569,10 @@ NODE_ENV = "test"
     const r = await acquireWorkspace(repoRoot, "feat-full");
     expect(r.created).toBe(true);
     expect(r.workspace.state).toBe("ready");
-    expect(r.workspace.ports.web).toBe(39500);
+    // The allocator skips a slot whose port is busy, and 39500 sits in Linux's
+    // ephemeral range, so the test asserts the slot it picked, not slot 0.
+    const webPort = 39500 + r.workspace.resourceIndex * 100;
+    expect(r.workspace.ports.web).toBe(webPort);
 
     // Copy happened
     expect(fs.readFileSync(path.join(r.workspace.path, ".env"), "utf-8")).toContain(
@@ -582,7 +585,7 @@ NODE_ENV = "test"
     // Hook happened with env injection
     expect(
       fs.readFileSync(path.join(r.workspace.path, "hook-out.txt"), "utf-8").trim(),
-    ).toBe("feat-full 39500");
+    ).toBe(`feat-full ${webPort}`);
   });
 
   test("setup failure marks workspace broken and rethrows", async () => {
