@@ -144,6 +144,19 @@ const answeredScope = (d: any) => {
 export const LINK_OPTS = { select: selectCardLinks, syncOpts: answeredScope };
 export const CARD_PR_OPTS = { select: selectCardPRs };
 
+// The selector runs on every store write; counting thousands of keys each
+// time is the cost, so the count is kept per sessions object.
+const sessionCounts = new WeakMap<object, number>();
+function sessionCountOf(sessions: Record<string, unknown>): number {
+  let n = sessionCounts.get(sessions);
+  if (n === undefined) {
+    n = 0;
+    for (const _ in sessions) n++;
+    sessionCounts.set(sessions, n);
+  }
+  return n;
+}
+
 /**
  * The sessions the inbox chip feed asks about, in CARD_BUCKETS stable groups
  * by id: the inbox can list (pinned first, then newest; rankCardSessions),
@@ -158,7 +171,7 @@ export const CARD_PR_OPTS = { select: selectCardPRs };
  */
 export function useSessionCardBuckets(): readonly (readonly string[])[] {
   const now = useCoarseNow(20_000);
-  const sessionCount = useInboxStore((s) => { let n = 0; for (const _ in s.sessions) n++; return n; });
+  const sessionCount = useInboxStore((s) => sessionCountOf(s.sessions));
   const workspace = useInboxStore((s) => activeWorkspaceKeyOf(s as any));
   const [held, setHeld] = useState<{ ids: string[]; buckets: string[][] }>(NONE_HELD);
   useWatchEffect(() => {

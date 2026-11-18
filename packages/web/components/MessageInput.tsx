@@ -1454,18 +1454,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // An open dialog owns focus — never yank it down to the composer behind it.
     if (hasOpenModal(textareaRef.current) || inRevealBand) return;
     if (textareaRef.current) {
+      // The composer sits in the conversation's footer, always in view, so
+      // focus never needs to scroll it there; a scrolling focus laid out the
+      // whole conversation that had just been swapped in, on every switch.
+      const focus = () => textareaRef.current?.focus({ preventScroll: true });
       const isIdTransition = mountConvIdRef.current !== conversationId;
       mountConvIdRef.current = conversationId;
       if (isIdTransition) {
-        if (autoFocusInput) textareaRef.current.focus();
+        if (autoFocusInput) focus();
         return;
       }
       const len = textareaRef.current.value.length;
       if (len > 0) {
-        textareaRef.current.focus();
+        focus();
         textareaRef.current.setSelectionRange(len, len);
       } else if (autoFocusInput) {
-        textareaRef.current.focus();
+        focus();
       }
     }
   }, [autoFocusInput, conversationId]);

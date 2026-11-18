@@ -56,6 +56,23 @@ describe("conversation header squeeze", () => {
     expect(row.attr()).toBe("1 2 3");
   });
 
+  // The search starts from the last answer; it must land on the same level
+  // from anywhere, and a pass where nothing moved must measure only twice.
+  test("applySqueeze finds the same level from any starting level", () => {
+    for (let from = 0; from <= 7; from++) {
+      const row = fakeRow(500, (l) => 800 - l * 100);
+      expect(applySqueeze(row as unknown as HTMLElement, 7, from)).toBe(3);
+      expect(row.attr()).toBe("1 2 3");
+    }
+  });
+
+  test("applySqueeze measures twice when the last answer still holds", () => {
+    let reads = 0;
+    const row = fakeRow(500, (l) => { reads++; return 800 - l * 100; });
+    expect(applySqueeze(row as unknown as HTMLElement, 7, 3)).toBe(3);
+    expect(reads).toBe(2);
+  });
+
   test("applySqueeze clears the attribute when the row already fits", () => {
     const row = fakeRow(900, () => 800);
     row.setAttribute("data-squeeze", "1 2 3 4");

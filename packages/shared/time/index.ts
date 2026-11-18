@@ -31,6 +31,19 @@ export function isKnownTimeZone(timeZone: string): boolean {
 export const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+// One formatter per option set. Each toLocaleDateString(locale, options) and
+// each new Intl.DateTimeFormat builds a formatter, and these run for every
+// stamp a transcript or list draws. Keyed by the process zone too: a test (or
+// a server) may change TZ while running, and a formatter keeps the zone it was
+// built in; a browser cannot change its zone mid-session.
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function formatterFor(key: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const k = `${(globalThis as { process?: { env?: { TZ?: string } } }).process?.env?.TZ ?? ""}\u0000${key}`;
+  let f = formatters.get(k);
+  if (!f) formatters.set(k, (f = new Intl.DateTimeFormat("en-US", options)));
+  return f;
+}
+
 /** The wall clock `ts` reads in `timeZone` (month 1-12). Without a zone it is
  *  Date's own local getters, so the phone's path (Hermes) leans on no Intl
  *  option an engine may print its own way. */
@@ -40,7 +53,7 @@ export function wallClock(ts: number, timeZone: string | undefined) {
     return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), hour: d.getHours(), minute: d.getMinutes(), second: d.getSeconds() };
   }
   const p = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" })
+    formatterFor(`wall:${timeZone}`, { timeZone, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" })
       .formatToParts(ts)
       .map((x) => [x.type, Number(x.value)]),
   );
@@ -120,17 +133,17 @@ export function formatRelative(ts: number, now: number = Date.now()): string {
 export function formatShortDate(ts: number, now: number = Date.now()): string {
   const d = new Date(ts);
   const sameYear = d.getFullYear() === new Date(now).getFullYear();
-  return d.toLocaleDateString("en-US", sameYear
-    ? { month: "short", day: "numeric" }
-    : { month: "short", day: "numeric", year: "numeric" });
+  return (sameYear
+    ? formatterFor("short", { month: "short", day: "numeric" })
+    : formatterFor("shortYear", { month: "short", day: "numeric", year: "numeric" })).format(d);
 }
 
 /** The long form a relative stamp's tooltip shows. */
 export function formatDateFull(ts: number): string {
-  return new Date(ts).toLocaleDateString("en-US", {
+  return formatterFor("full", {
     weekday: "long", month: "long", day: "numeric", year: "numeric",
     hour: "2-digit", minute: "2-digit",
-  });
+  }).format(ts);
 }
 
 /** The one rule for a human-facing stamp: relative while it is recent

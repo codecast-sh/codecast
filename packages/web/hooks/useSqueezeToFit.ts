@@ -28,13 +28,28 @@ import { useLayoutEffect, type RefObject } from "react";
  * One measured pass: the smallest level whose content fits, applied to the row.
  * Exported so a harness (and a test) can drive the real logic, not a copy.
  */
-export function applySqueeze(row: HTMLElement, maxLevel: number): number {
-  for (let level = 0; level <= maxLevel; level++) {
+export function applySqueeze(row: HTMLElement, maxLevel: number, from = 0): number {
+  // Each trial restyles the page and reads a width back, a full style and
+  // layout pass, so the search starts at the last answer instead of zero:
+  // shedding more never widens the row, so the smallest level that fits is
+  // found by walking down while the level below still fits, or up until one
+  // does. A pass where nothing moved costs two trials, not every level.
+  let applied = -1;
+  const apply = (level: number) => {
     const tokens = Array.from({ length: level }, (_, i) => String(i + 1)).join(" ");
     if (tokens) row.setAttribute("data-squeeze", tokens);
     else row.removeAttribute("data-squeeze");
-    if (row.scrollWidth <= row.clientWidth + 1) return level;
+    applied = level;
+  };
+  const fits = (level: number) => { apply(level); return row.scrollWidth <= row.clientWidth + 1; };
+  let level = Math.max(0, Math.min(from, maxLevel));
+  if (fits(level)) {
+    while (level > 0 && fits(level - 1)) level--;
+    // The last trial may have been the level below, which did not fit.
+    if (applied !== level) apply(level);
+    return level;
   }
+  while (level < maxLevel) if (fits(++level)) return level;
   return maxLevel;
 }
 
@@ -48,10 +63,11 @@ export function useSqueezeToFit(
     if (!row) return;
     let raf = 0;
     let lastWidth = -1;
+    let lastLevel = 0;
 
     const fit = () => {
       raf = 0;
-      applySqueeze(row, maxLevel);
+      lastLevel = applySqueeze(row, maxLevel, lastLevel);
     };
     const schedule = () => {
       if (!raf) raf = requestAnimationFrame(fit);
