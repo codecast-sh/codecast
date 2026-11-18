@@ -113,6 +113,8 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "tasks.webMentionList": listArgs,
   "docs.webMentionList": listArgs,
   "plans.webMentionList": listArgs,
+  // One standing per env a goal names, keyed workspace|env.
+  "envs.workspaceStandings": listArgs,
 };
 
 // Feeds outside the registry: the table whose seeded rows they return.
@@ -174,7 +176,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     };
     let n = 0;
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
-    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, messageFeed: {}, workflowRuns: {} };
+    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, messageFeed: {}, workflowRuns: {}, envStandings: {} };
     const groupRefs: Record<string, string> = {};
     for (const [place, p] of Object.entries(placements)) {
       rows.tasks[place] = await db.insert("tasks", { ...p, ...base(place), short_id: `ct-${++n}`, task_type: "task", priority: "medium", source: "human", status: "open" });
@@ -189,6 +191,10 @@ async function seed(t: ReturnType<typeof convexTest>) {
       if (place !== "personal") rows.liveFlows[place] = await db.insert("live_flows", { ...p, workflow_id, on: false, changed_by: p.user_id, changed_at: now, created_at: now });
       // A flow map is one per workspace, so the private and personal placements share one.
       if (place !== "private") rows.flowMaps[place] = p.workspace;
+      // A goal naming one env: its standing's id is the goal's workspace and the env.
+      const env = `acme/${place}`;
+      await db.insert("initiatives", { ...p, ...base(place), short_id: `in-${++n}`, status: "active", project_ids: [], health: "none", envs: [{ env, level: "L0" }] } as any);
+      rows.envStandings[place] = `${p.workspace}|${env}`;
       rows.teamKitItems[place] = await db.insert("team_kit_items", { slug: `authored/${p.user_id}/skill/${place}-kit`, ...(p.team_id ? { team_id: p.team_id } : {}), workspace: p.workspace, kind: "skill", name: `${place}-kit`, author_user_id: p.user_id, current_version: 1, current_hash: `h-${place}`, surfaces: [], created_at: now, updated_at: now } as any);
     }
     // A session per placement, each with one typed prompt: the message feed's rows.
