@@ -123,6 +123,7 @@
     "./contracts/initiative": "./contracts/initiative.ts",
     "./contracts/envs": "./contracts/envs.ts",
     "./contracts/envCases": "./contracts/envCases.ts",
+    "./contracts/decisionImpact": "./contracts/decisionImpact.ts",
     "./contracts/climb": "./contracts/climb.ts",
     "./contracts/metricStanding": "./contracts/metricStanding.ts",
     "./contracts/openPlans": "./contracts/openPlans.ts",
