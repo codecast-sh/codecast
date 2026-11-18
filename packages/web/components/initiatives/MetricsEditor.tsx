@@ -8,7 +8,7 @@ import { Plus, X } from "lucide-react";
 import { INITIATIVE_METRICS_MAX, formatSeriesValue, type InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import type { OpsWatch } from "../ops/opsTypes";
 import { FormButtons, GhostButton } from "./formBits";
-import { draftOf, metricsOfDraft, type Draft } from "./metricsDraft";
+import { draftOf, EMPTY_DRAFT, metricsOfDraft, type Draft } from "./metricsDraft";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
 const DIM = "var(--sol-text-dim)";
@@ -59,7 +59,7 @@ export function MetricsEditor({ metrics, watches, onSave, onCancel }: { metrics:
         );
       })}
       <div className="flex items-center gap-1.5">
-        {draft.length < INITIATIVE_METRICS_MAX && <GhostButton icon={Plus} onClick={() => setDraft([...draft, { name: "", target: "", series: "", guardrail: false }])}>Another number</GhostButton>}
+        {draft.length < INITIATIVE_METRICS_MAX && <GhostButton icon={Plus} onClick={() => setDraft([...draft, EMPTY_DRAFT])}>Another number</GhostButton>}
         <span className="flex-1" />
         <FormButtons submit="Save" onCancel={onCancel} onSubmit={save} />
       </div>

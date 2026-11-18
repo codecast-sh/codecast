@@ -58,6 +58,12 @@ export function useHeldSeries(watchId: string | null, spec: SeriesSpec | null): 
 }
 
 function ManyChunk({ ids, range, kind }: { ids: string[]; range: MetricRange; kind: "range" | "prev" }) {
+  useSyncSeriesMany(ids, range, kind);
+  return null;
+}
+
+/** Feeds several watches' values for one range at card size (metrics.seriesMany); no ids skips the read. */
+export function useSyncSeriesMany(ids: string[], range: MetricRange, kind: "range" | "prev" = "range") {
   const scope = useOpsScope();
   const joined = ids.join(",");
   const windowArgs = useMemo(() => {
@@ -66,7 +72,7 @@ function ManyChunk({ ids, range, kind }: { ids: string[]; range: MetricRange; ki
     return ms === null ? { buckets: CARD_BUCKETS } : { span_ms: ms, buckets: CARD_BUCKETS };
   }, [kind, range]);
   const args = useMemo(
-    () => withScope(scope, { watches: ids, ...windowArgs }),
+    () => withScope(scope, ids.length ? { watches: ids, ...windowArgs } : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- joined spells the ids
     [scope, joined, windowArgs],
   );
@@ -75,7 +81,6 @@ function ManyChunk({ ids, range, kind }: { ids: string[]; range: MetricRange; ki
     [kind, range],
   );
   useSyncCollection("opsWatchSeries", api.metrics.seriesMany, args, select);
-  return null;
 }
 
 /**

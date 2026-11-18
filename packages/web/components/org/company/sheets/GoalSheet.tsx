@@ -7,6 +7,7 @@
 // A section with nothing in it is not drawn: while a goal is thin, one dim
 // line under the head names what is still to write, and each phrase opens
 // its editor.
+import { GoalPredictions } from "../../../initiatives/GoalPredictions";
 import { Fragment, useMemo, useState } from "react";
 import { metricReadings, type InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { useInboxStore } from "../../../../store/inboxStore";
@@ -112,6 +113,7 @@ function GoalBody({ goal, rows, now, ancestors, sessions, docGoal }: {
         <StillToWrite items={missing} />
         <GoalWhy goal={goal} writing={writingWhy} onWriting={setWritingWhy} />
         <GoalMeasures goal={goal} all={rows.goals} now={now} editing={measuring} onEditing={setMeasuring} />
+        <GoalPredictions goal={goal} />
         <NowBlock subject={{ keys: [`goal:${goal._id}`, ...(goal.short_id ? [`goal:${goal.short_id}`] : [])], refs: goal.short_id ? [goal.short_id] : [] }} sessions={sessions} rows={rows} />
         <GoalCarriedBy goal={goal} doc={docGoal} now={now} adding={carrying} onAdding={setCarrying} />
         <GoalLatest goal={goal} now={now} writing={writing} onWriting={setWriting} />

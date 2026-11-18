@@ -60,6 +60,28 @@ async function verifyAtoms() {
   const SIZES = ["tile", "line", "chip"] as const;
   const tile = async (reading: any, size: (typeof SIZES)[number], trend?: any, extra: any = {}) => show(h(A.MetricTile, { reading, trend, now: NOW, size, ...extra }));
 
+  // ── a number read over a window: within noise is its own state, never the met green, and the tile names the band ──
+  {
+    const WEEK = 7 * DAY;
+    const series = { short_id: "mw-14", name: "Intros a week", unit: "/week", points: [{ at: NOW - 2 * WEEK, value: 30 }, { at: NOW - WEEK, value: 37 }, { at: NOW, value: 37 }] };
+    const intros = (target: string) => metricReading({ key: "intros", name: "Intros a week", target, series: "mw-14", window: "3w", noise: "poisson" }, null, series);
+    let el = await tile(intros("at least 35"), "tile");
+    assert.equal(el.querySelector("[data-metric-size='tile']")!.getAttribute("data-metric-standing"), "within_noise");
+    assert.equal(text(el.querySelector("[data-metric-verdict]")), "Within noise");
+    assert.match(text(el.querySelector("[data-metric-band]")), /^3 weeks : mean 34\.7\/week 80% 30\.4–39\.4\/week detects ±54% in 4 wk$/);
+    const dot = el.querySelector("span[data-metric-standing='within_noise']") as HTMLElement;
+    assert.equal(dot.getAttribute("aria-label"), "within noise");
+    assert.ok(!dot.style.background.includes("var(--sol-green)"), "within noise never paints the met green");
+    el = await tile(intros("at least 28"), "tile");
+    assert.equal(text(el.querySelector("[data-metric-verdict]")), "Met");
+    el = await tile(intros("at least 60"), "line");
+    assert.ok(el.querySelector("[data-metric-standing='behind']"));
+    // A metric without a window draws exactly as before: no band.
+    el = await tile(metricReading({ key: "intros", name: "Intros a week", target: "at least 35", series: "mw-14" }, null, series), "tile");
+    assert.equal(el.querySelector("[data-metric-band]"), null);
+    assert.equal(text(el.querySelector("[data-metric-verdict]")), "Met");
+  }
+
   // ── a metric with no value yet: the target is named as a target, at every size ──
   const teams = { key: "teams", name: "Weekly active teams", target: "1,000" };
   for (const size of SIZES) {

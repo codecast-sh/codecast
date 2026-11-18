@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { predictionWords } from "@codecast/shared/contracts/predictedEffect";
 import { targetDayStamp } from "@codecast/shared/time";
 import { metricReadings, metricTrends } from "@codecast/shared/contracts/initiative";
 import {
@@ -418,6 +419,28 @@ describe("cast initiative: what a record write answers", () => {
 
 describe("cast initiative show", () => {
   const show = (row: any) => initiativeShowLines(c, row, { now: NOW, ago: (at) => `${Math.round((NOW - at) / DAY)} days ago`, projectIcons: { active: "◉", planning: "○" } }).join("\n");
+  test("its tasks' predictions: a hit rate, each read with what the metric did, each open one with when it reads", () => {
+    const base = { goal_ref: "in-3:weekly_active_teams", relative: true, set_at: NOW - 30 * DAY };
+    const read = { value_before: 380, value_after: 412, delta: 32, within_noise: false, band: 12, shipped_at: NOW - 20 * DAY, from: 0, to: 0, read_at: NOW - DAY, note: "" };
+    const predictions = {
+      rows: [
+        { short_id: "ct-7", title: "Invite flow", status: "done", unit: null, predicted: { ...base, direction: "up", size: 5, read_days: 14, basis: "replay +6 on L2" }, realised: { ...read, verdict: "held" } },
+        { short_id: "ct-8", title: "Onboarding copy", status: "open", unit: null, predicted: { ...base, direction: "up", size: 2, read_at: Date.parse("2026-12-16T00:00:00Z"), basis: "labelled set" }, realised: null },
+      ].map((r: any) => ({ ...r, ...predictionWords(r.predicted, r.realised, r.unit) })),
+      tally: { open: 1, held: 1, not_shown: 0, opposite: 0, unreadable: 0 },
+      hit_rate: "1 of 1 prediction held, 1 open",
+    };
+    const text = show({ ...FULL, predictions });
+    expect(text).toContain(`
+  Predictions 1 of 1 prediction held, 1 open
+  ct-7 held 380 → 412 (+32; predicted +5%), outside ±12 · Invite flow
+    in-3:weekly_active_teams +5% in 14d; basis: replay +6 on L2
+  ct-8 open in-3:weekly_active_teams +2% by 2026-12-15 · Onboarding copy
+    basis: labelled set
+`);
+    expect(text.indexOf("Predictions")).toBeGreaterThan(text.indexOf("Report a value"));
+    expect(show(FULL)).not.toContain("Predictions");
+  });
   test("the whole record, in the order a person asks about it", () => {
     expect(show(FULL)).toBe(`
   ◉ Win the private network  in-3
@@ -480,5 +503,39 @@ describe("cast initiative show", () => {
     expect(text).toContain("  Not on the record yet: why, done when, milestones, sources. cast goal --help lists the commands that write them.");
     expect(text).toContain("  None yet: cast goal add-project in-1 <project>");
     for (const absent of ["Why", "Done when", "Metrics", "Milestones", "questions", "Decisions", "Sources (", "Goals under it"]) expect(text).not.toContain(absent);
+  });
+});
+
+describe("cast goal show with numbers read over a window", () => {
+  const WEEK = 7 * DAY;
+  const points = Array.from({ length: 40 }, (_, i) => ({ at: NOW - (39 - i) * 6 * 3600_000, value: 37 }));
+  const history = [{ at: NOW - 2 * WEEK, value: 30 }, { at: NOW - 3 * WEEK, value: 20 }];
+  const row = {
+    short_id: "in-9", title: "Decrease cost per match", status: "active", health: "off_track", owner_label: "@head-of-growth",
+    done_when: "Introductions cost under $250 at a volume that holds.",
+    metrics: [
+      { key: "intros_a_week", name: "Intros a week", target: "at least 30", series: "mw-14", window: "3w", noise: "poisson:1.75" },
+      { key: "bounce", name: "Bounce rate", target: "under 3%", guardrail: true },
+    ],
+    series: { "mw-14": { short_id: "mw-14", name: "Intros a week", unit: "/week", points, history } },
+    projects: [],
+  };
+  const show = (r: any) => initiativeShowLines(c, r, { now: NOW, ago: () => "" }).join("\n");
+
+  test("prints the predicate as checked, its verdict, and the band on the metric line", () => {
+    const text = show(row);
+    expect(text).toContain("  Done when\n  Introductions cost under $250 at a volume that holds.\n\n  Done when, as checked: within noise\n  Intros a week at least 30, at the lower edge of its 80% band over 3w, noise poisson:1.75: within noise (lower bound now 29/week)");
+    expect(text).toMatch(/Intros a week: 37\/week of at least 30, within noise over 3 weeks \(mean 34\.7\/week, 80% band 29\/week to 41\.2\/week, detects ±\d+% in 4 weeks\) \(live mw-14, today\)/);
+  });
+
+  test("met when the lower bound clears; no predicate when a climbed number has no window", () => {
+    expect(show({ ...row, metrics: [{ ...row.metrics[0], target: "at least 25" }, row.metrics[1]] })).toContain("Done when, as checked: met");
+    const plain = show({ ...row, metrics: [{ key: "intros_a_week", name: "Intros a week", target: "at least 30", series: "mw-14" }] });
+    expect(plain).not.toContain("as checked");
+    expect(plain).toContain("Intros a week: 37/week of at least 30, met (live mw-14, today)");
+  });
+
+  test("a goal list row says within noise", () => {
+    expect(initiativeLine(c, { ...row, metrics: [row.metrics[0]], project_ids: [] })).toContain("within noise against its target");
   });
 });

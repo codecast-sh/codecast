@@ -7,7 +7,8 @@
 import { useCallback } from "react";
 import Link from "next/link";
 import { ArrowDownRight, ArrowUpRight, CheckCircle2, Circle, CircleDashed, CircleDot, Flag, Minus, XCircle, type LucideIcon } from "lucide-react";
-import { INITIATIVE_HEALTH_LABEL, INITIATIVE_STATUS_LABEL, formatMetricNumber, intentSourceLabel, metricAgainst, metricLine, metricNumber, metricReaches, trendWords, type InitiativeHealth, type InitiativeMilestone, type InitiativeOwner, type InitiativeStatus, type InitiativeUpdateHealth, type IntentSource, type MetricReading, type MetricStanding, type MetricTrend } from "@codecast/shared/contracts/initiative";
+import { mdeWords, STANDING_WORD, type WindowRead } from "@codecast/shared/contracts/metricStanding";
+import { INITIATIVE_HEALTH_LABEL, INITIATIVE_STATUS_LABEL, formatMetricNumber, formatSeriesValue, intentSourceLabel, metricAgainst, metricLine, metricNumber, metricReaches, trendWords, type InitiativeHealth, type InitiativeMilestone, type InitiativeOwner, type InitiativeStatus, type InitiativeUpdateHealth, type IntentSource, type MetricReading, type MetricStanding, type MetricTrend } from "@codecast/shared/contracts/initiative";
 import { memberHandle } from "@codecast/shared/chat";
 import { stripMachineText, stripMarkdown } from "@codecast/shared/contracts/plainText";
 import { formatShortDate, formatTargetDay, targetDayPassed } from "@codecast/shared/time";
@@ -107,9 +108,12 @@ export function TargetDate({ ts, now, done, local, className }: { ts?: number; n
 /** A metric read against its target (I4): one word in a health colour, met or
  *  behind, and a hollow dot while nobody has reported a value. Beside the
  *  owner's word so the two can disagree visibly. */
+/** Within noise is its own colour, never the met green: the band still holds the target. */
+export const STANDING_COLOR: Record<MetricStanding, string> = { met: HEALTH_COLOR.on_track, within_noise: "var(--sol-blue)", behind: HEALTH_COLOR.at_risk, unknown: "var(--sol-text-dim)" };
 export function MetricStandingDot({ standing, className }: { standing: MetricStanding; className?: string }) {
-  const color = standing === "met" ? HEALTH_COLOR.on_track : standing === "behind" ? HEALTH_COLOR.at_risk : "var(--sol-text-dim)";
-  return <span className={cn("inline-block w-[7px] h-[7px] rounded-full shrink-0", className)} style={standing === "unknown" ? { border: `1px solid ${color}` } : { background: color }} aria-label={standing} data-metric-standing={standing} />;
+  const color = STANDING_COLOR[standing];
+  const style = standing === "unknown" ? { border: `1px solid ${color}` } : standing === "within_noise" ? { border: `1px solid ${color}`, background: `linear-gradient(90deg, ${color} 50%, transparent 50%)` } : { background: color };
+  return <span className={cn("inline-block w-[7px] h-[7px] rounded-full shrink-0", className)} style={style} aria-label={STANDING_WORD[standing] || "unread"} data-metric-standing={standing} />;
 }
 
 /** A metric as one row where the caller holds no history: MetricTile's line, which draws the bar toward a reach target in the sparkline's place. */
@@ -133,7 +137,7 @@ function MetricBar({ reading, className }: { reading: MetricReading; className?:
   if (reading.progress === null) return null;
   return (
     <span className={cn("h-[4px] rounded-full overflow-hidden", className)} style={{ background: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} aria-hidden data-metric-bar>
-      <span className="block h-full rounded-full" style={{ width: `${Math.round(reading.progress * 100)}%`, background: reading.standing === "met" ? HEALTH_COLOR.on_track : INITIATIVE_ACCENT }} />
+      <span className="block h-full rounded-full" style={{ width: `${Math.round(reading.progress * 100)}%`, background: reading.standing === "met" || reading.standing === "within_noise" ? STANDING_COLOR[reading.standing] : INITIATIVE_ACCENT }} />
     </span>
   );
 }
@@ -150,7 +154,7 @@ function MetricBar({ reading, className }: { reading: MetricReading; className?:
  * target.
  */
 export function MetricTile({ reading, trend, now, size = "tile", named = true, className }: { reading: MetricReading; trend?: MetricTrend; now: number; size?: "tile" | "line" | "chip"; named?: boolean; className?: string }) {
-  const standingColor = reading.standing === "met" ? HEALTH_COLOR.on_track : reading.standing === "behind" ? HEALTH_COLOR.at_risk : "var(--sol-text-dim)";
+  const standingColor = STANDING_COLOR[reading.standing];
   const unreported = reading.value === null;
   const reaches = metricReaches(reading.target);
   const series = trend?.series.map((p) => p.n) ?? [];
@@ -198,10 +202,32 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
       </div>
       <MetricBar reading={reading} className="mt-2 block w-full" />
       <div className="mt-1.5 text-meta flex items-center gap-2" style={{ color: "var(--sol-text-dim)" }}>
-        <span>{reading.standing === "met" ? "Met" : reading.standing === "behind" ? "Behind" : unreported ? "Not reported yet" : metricNumber(reading.value) === null ? "Not a number" : "No number in the target"}</span>
+        <span style={reading.band ? { color: standingColor } : undefined} data-metric-verdict>{reading.standing !== "unknown" ? capitalize(STANDING_WORD[reading.standing]) : unreported ? "Not reported yet" : metricNumber(reading.value) === null ? "Not a number" : "No number in the target"}</span>
         {reading.observed_at && !reading.live ? <span>read {shortDate(reading.observed_at, now)}</span> : null}
-        {trend?.delta !== null && trend?.delta !== undefined && trend.direction !== "flat" && <span className="tabular-nums">{trend.delta > 0 ? "+" : ""}{formatMetricNumber(trend.delta)} since last</span>}
+        {!reading.band && trend?.delta !== null && trend?.delta !== undefined && trend.direction !== "flat" && <span className="tabular-nums">{trend.delta > 0 ? "+" : ""}{formatMetricNumber(trend.delta)} since last</span>}
       </div>
+      {reading.band && <MetricBandLine reading={reading} band={reading.band} />}
+    </div>
+  );
+}
+
+const capitalize = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
+/** "30.4–39.4/week": a unit both ends share is said once, at the end. */
+const rangeWords = (low: string, high: string): string => {
+  const unit = high.match(/[^\d.,]+$/)?.[0] ?? "";
+  return `${unit && low.endsWith(unit) ? low.slice(0, -unit.length) : low}–${high}`;
+};
+
+/** A number read over a window: the window's mean and its 80% band, and the smallest change it can show in 4 weeks. */
+function MetricBandLine({ reading, band }: { reading: MetricReading; band: WindowRead }) {
+  const say = (n: number) => (reading.unit ? formatSeriesValue(n, reading.unit) : formatMetricNumber(Math.round(n * 100) / 100));
+  const span = band.periods < band.of ? `${band.periods} of ${band.of} ${band.period}s` : `${band.of} ${band.period}${band.of === 1 ? "" : "s"}`;
+  const mde = mdeWords(band.mde);
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-2 text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={metricLine(reading, Date.now())} data-metric-band>
+      <span>{span}: mean {say(band.mean)}</span>
+      {band.low !== null && band.high !== null && <span data-metric-band-range>80% {rangeWords(say(band.low), say(band.high))}</span>}
+      {mde && <span data-metric-mde>detects {mde} in 4 wk</span>}
     </div>
   );
 }

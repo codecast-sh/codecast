@@ -7,10 +7,13 @@
 // active initiatives that carry it, and nothing else.
 import { v } from "convex/values";
 import type { GoalsBrief, GoalsBriefProject } from "@codecast/shared/contracts/goalsBrief";
+import type { InitiativeMetric, MetricSeries } from "@codecast/shared/contracts/initiative";
+import { metricDenominatorRef } from "@codecast/shared/contracts/metricStanding";
 import { query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { createWorkContext, scopedFetch } from "./data";
 import { readWorkspaceInitiatives } from "./lib/roleInitiatives";
+import { seriesLookup } from "./lib/metricSeries";
 import { ownerLabel } from "./initiatives";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 
@@ -24,6 +27,11 @@ const hasCharter = (p: any) => !!(p.goal?.trim() || p.success_metrics?.length ||
  * carrying them (just `only`, when given). `projectRows` are the workspace's
  * projects as the caller may read them; `teamId` names the team for the title.
  */
+const seriesOf = (metrics: InitiativeMetric[], lookup: (ref: string) => MetricSeries | undefined): { series?: Record<string, MetricSeries> } => {
+  const found = Object.fromEntries([...new Set(metrics.flatMap((m) => [m.series, metricDenominatorRef(m)]).filter((r): r is string => !!r))].flatMap((ref) => { const s = lookup(ref); return s ? [[ref, s]] : []; }));
+  return Object.keys(found).length ? { series: found } : {};
+};
+
 export async function gatherGoalsBrief(ctx: { db: any }, args: { workspaceKey: string; teamId?: any; only: any | null; projectRows: any[] }): Promise<GoalsBrief> {
   const { workspaceKey, teamId, only } = args;
   const [initiativeRows, team] = await Promise.all([
@@ -35,6 +43,7 @@ export async function gatherGoalsBrief(ctx: { db: any }, args: { workspaceKey: s
   const projectsById = new Map(projectRows.map((p: any) => [String(p._id), p]));
   const projectRef = (p: any) => p.short_id ?? String(p._id);
   const carried = new Set(active.flatMap((r: any) => r.project_ids.map(String)));
+  const lookup = await seriesLookup(ctx, workspaceKey, active);
 
   const initiatives = await Promise.all(active.map(async (r: any) => ({
     short_id: r.short_id,
@@ -46,6 +55,7 @@ export async function gatherGoalsBrief(ctx: { db: any }, args: { workspaceKey: s
     description: r.description,
     metrics: r.metrics ?? [],
     scoreboard: r.scoreboard,
+    ...seriesOf(r.metrics ?? [], lookup),
     project_short_ids: r.project_ids.map((id: any) => projectsById.get(String(id))).filter(Boolean).map(projectRef),
   })));
 
