@@ -7,6 +7,7 @@
 
 import agentSnippets from "./content/agent-snippets.md?raw";
 import memory from "./content/memory.md?raw";
+import connectAgents from "./content/connect-agents.md?raw";
 import messaging from "./content/messaging.md?raw";
 import ambientAwareness from "./content/ambient-awareness.md?raw";
 import forksAndSpawn from "./content/forks-and-spawn.md?raw";
@@ -41,6 +42,7 @@ import codexCloud from "./content/codex-cloud.md?raw";
 const CONTENT: Record<string, string> = {
   "agent-snippets": agentSnippets,
   "memory": memory,
+  "connect-agents": connectAgents,
   "messaging": messaging,
   "ambient-awareness": ambientAwareness,
   "forks-and-spawn": forksAndSpawn,

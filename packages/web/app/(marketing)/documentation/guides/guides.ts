@@ -62,6 +62,13 @@ export const GUIDES: Guide[] = [
     feature: "memory",
   },
   {
+    slug: "connect-agents",
+    published: "2026-11-17",
+    title: "Let Claude, Cursor and Codex read your codecast",
+    dek: "Add codecast.sh/mcp to an agent that runs outside codecast, sign in once, and it reads your docs, tasks, plans, pages and sessions as you, read only.",
+    category: "Recall",
+  },
+  {
     slug: "search-sessions-across-machines",
     published: "2026-09-25",
     title: "Search your history across every machine",
