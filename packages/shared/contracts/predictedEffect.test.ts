@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readingPeriodMs, hitRateWords, judgePrediction, parsePrediction, predictionReadAt, predictionTally, predictionText, predictionWindows, realisedLine, type RealisedEffect } from "./predictedEffect";
+import { detectsWords, envMde, judgeEnvPrediction, predictionWords, readability, readMde, targetKind, unreadableWords, readingPeriodMs, hitRateWords, judgePrediction, parsePrediction, predictionReadAt, predictionTally, predictionText, predictionWindows, realisedLine, type RealisedEffect } from "./predictedEffect";
 
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-11-17T12:00:00Z");
@@ -25,7 +25,8 @@ describe("parsePrediction", () => {
     }
   });
   test.each([
-    ["intros_a_week +5% in 7d :: x", "not a goal metric ref"],
+    ["intros_a_week +5% in 7d :: x", "is not a place an effect is read"],
+    ["env:notakey +0.02 :: x", "is not a place an effect is read"],
     ["in-9:intros_a_week +5% in 7d", "names its basis"],
     ["in-9:intros_a_week +5% in 7d ::  ", "names its basis"],
     ["in-9:intros_a_week +0 in 7d :: x", "more than 0"],
@@ -33,7 +34,7 @@ describe("parsePrediction", () => {
     ["in-9:intros_a_week +5% by 2026-11-16 :: x", "has passed"],
     ["in-9:intros_a_week +5% by 2027-02-30 :: x", "is not a date"],
     ["in-9:intros_a_week 5% in 7d :: x", "A prediction reads"],
-    ["in-9:intros_a_week +5%", "A prediction reads"],
+    ["in-9:intros_a_week +5%", "names its basis"],
     ["", "A prediction reads"],
   ])("refuses %p", (line, words) => {
     const r = parsePrediction(line, NOW);
@@ -141,4 +142,77 @@ describe("words", () => {
     expect(hitRateWords(t)).toBe("2 of 4 predictions held (1 opposite), 1 open, 1 unreadable");
     expect(hitRateWords(predictionTally([]))).toBe("");
   });
+});
+
+describe("targets", () => {
+  test("a series and an env are places an effect is read; a metric or series without a time reads after four weeks, an env at its next attempt", () => {
+    expect(targetKind("in-9:intros_a_week")).toBe("metric");
+    expect(targetKind("mw-17")).toBe("series");
+    expect(targetKind("env:union/second-side-replay")).toBe("env");
+    const series = parsePrediction("mw-17 +3pt :: replay", NOW);
+    expect("prediction" in series && series.prediction).toMatchObject({ goal_ref: "mw-17", size: 3, relative: false, read_days: 28 });
+    const env = parsePrediction("env:union/second-side-replay +0.02 :: held-out run", NOW);
+    expect("prediction" in env && env.prediction).toMatchObject({ goal_ref: "env:union/second-side-replay", size: 0.02, relative: false });
+    expect("prediction" in env && env.prediction.read_days).toBeUndefined();
+    expect("prediction" in env && predictionText(env.prediction)).toBe("env:union/second-side-replay +0.02 :: held-out run");
+  });
+});
+
+describe("readability", () => {
+  test("37 intros a week over a four-week read on each side detects about ±35%, so +3% is unreadable and +80% is readable", () => {
+    const mde = readMde({ mean: 37, mde: null }, "poisson", 7 * DAY, 28 * DAY)!;
+    expect(mde).toBeGreaterThan(0.3);
+    expect(mde).toBeLessThan(0.4);
+    // Overdispersed counts see less.
+    expect(readMde({ mean: 37, mde: null }, "poisson:10", 7 * DAY, 28 * DAY)!).toBeGreaterThan(1);
+    expect(readability({ goal_ref: "in-9:intros_a_week", size: 3, relative: true }, mde, 37)).toEqual({ readable: false, mde });
+    expect(readability({ goal_ref: "in-9:intros_a_week", size: 80, relative: true }, mde, 37)).toEqual({ readable: true, mde });
+  });
+  test("a longer read sees a smaller change; a binomial with its n in a series rescales the band's own figure", () => {
+    expect(readMde({ mean: 37, mde: null }, "poisson", 7 * DAY, 56 * DAY)!).toBeLessThan(readMde({ mean: 37, mde: null }, "poisson", 7 * DAY, 28 * DAY)!);
+    // The band's four-week figure is a 50/50 over 4 weeks; a read of 2 weeks a side carries the same.
+    expect(readMde({ mean: 15, mde: 0.4 }, "binomial:mw-15", 7 * DAY, 14 * DAY)).toBeCloseTo(0.4, 6);
+    expect(readMde({ mean: 15, mde: 0.4 }, "binomial:mw-15", 7 * DAY, 56 * DAY)).toBeCloseTo(0.2, 6);
+  });
+  test("no noise model, no number, and no readability claimed", () => {
+    expect(readMde({ mean: 37, mde: null }, undefined, 7 * DAY, 28 * DAY)).toBeNull();
+    expect(readability({ goal_ref: "mw-17", size: 3, relative: false }, null, 15)).toEqual({});
+  });
+  test("an absolute move on a metric is taken as a share of its level", () => {
+    expect(readability({ goal_ref: "mw-17", size: 3, relative: false }, 0.12, 15)).toEqual({ readable: true, mde: 0.12 });
+    expect(readability({ goal_ref: "mw-17", size: 1, relative: false }, 0.12, 15)).toEqual({ readable: false, mde: 0.12 });
+  });
+  test("an env detects from its paired interval, else twice its A/A spread", () => {
+    const paired = envMde({ paired_ci95: [-0.02, 0.02] })!;
+    expect(paired).toBeCloseTo((0.02 / 1.96) * (1.959963984540054 + 0.8416212335729143), 6);
+    expect(envMde({ noise: { aa_sd: 0.01 } })!).toBeCloseTo(0.01 * Math.SQRT2 * (1.959963984540054 + 0.8416212335729143), 6);
+    expect(envMde({})).toBeNull();
+    expect(readability({ goal_ref: "env:union/x", size: 0.05, relative: false }, paired, 0.7)).toEqual({ readable: true, mde: paired });
+  });
+  test("the words say where and how much it can see", () => {
+    expect(unreadableWords({ goal_ref: "in-9:intros_a_week", readable: false, mde: 1.64 })).toBe("unreadable at this metric (detects ±164%)");
+    expect(unreadableWords({ goal_ref: "env:union/x", readable: false, mde: 0.031 })).toBe("unreadable at this environment (detects ±0.031)");
+    expect(unreadableWords({ goal_ref: "mw-17", readable: true, mde: 0.1 })).toBeNull();
+    expect(detectsWords("series", 0.12)).toBe("±12%");
+    const p = { goal_ref: "in-9:intros_a_week", direction: "up" as const, size: 3, relative: true, read_days: 28, basis: "b", set_at: NOW, readable: false, mde: 1.64 };
+    expect(predictionWords(p, null, null).said).toBe("in-9:intros_a_week +3% in 28d after ship, unreadable at this metric (detects ±164%)");
+  });
+});
+
+describe("judgeEnvPrediction", () => {
+  const up = { direction: "up" as const, size: 0.02, relative: false };
+  test("a paired gain past its interval and half the predicted size held", () => {
+    expect(judgeEnvPrediction(up, { before: 0.70, after: 0.73, delta: 0.03, half: 0.01, note: "" })).toMatchObject({ verdict: "held", within_noise: false, band: 0.01 });
+  });
+  test("inside the interval is not shown; a drop past it is opposite", () => {
+    expect(judgeEnvPrediction(up, { before: 0.70, after: 0.705, delta: 0.005, half: 0.01, note: "" }).verdict).toBe("not_shown");
+    expect(judgeEnvPrediction(up, { before: 0.70, after: 0.68, delta: -0.02, half: 0.01, note: "" }).verdict).toBe("opposite");
+  });
+});
+
+test("a reading too small for its place shows what it did and why it counts for nothing", () => {
+  const p = { goal_ref: "in-9:intros_a_week", direction: "up" as const, size: 3, relative: true, readable: false, mde: 0.56 };
+  const r: RealisedEffect = { verdict: "unreadable", value_before: 28, value_after: 29.1, delta: 1.1, within_noise: true, band: 4.2, shipped_at: 0, from: 0, to: 0, read_at: 0, note: "x" };
+  expect(realisedLine(p, r, "/week")).toBe("unreadable: 28/week → 29.1/week (+1.1; predicted +3%), inside ±4.2; unreadable at this metric (detects ±56%)");
+  expect(realisedLine(p, { ...r, value_before: null }, "/week")).toBe("unreadable: x");
 });

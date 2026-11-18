@@ -634,6 +634,17 @@ export const ingestTables = {
     }))),
     /** Failed reads in a row, for no_data_after. */
     missed: v.optional(v.number()),
+    /** A reader's own dated series as it last answered (cohort periods, dated as the source dates them), current version only: what a goal's window reads. Polls only feed the live value. */
+    source_points: v.optional(v.array(v.object({ at: v.number(), value: v.number() }))),
+    /** The definition the watch's values are read under (contracts/metricStanding MetricDefinition): the version a reader last answered or a person declared, when it was set, and the time it covers from (untagged values read earlier are an older definition). */
+    version: v.optional(v.string()),
+    version_at: v.optional(v.number()),
+    version_since: v.optional(v.number()),
+    /** Why a person declared the definition (cast metrics redefine), and who. */
+    version_note: v.optional(v.string()),
+    version_by: v.optional(v.id("users")),
+    /** Points a person removed (cast metrics points rm), newest last: what, why, who. */
+    point_removals: v.optional(v.array(v.object({ at: v.number(), value: v.number(), reason: v.optional(v.string()), by: v.id("users"), removed_at: v.number() }))),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -649,6 +660,8 @@ export const ingestTables = {
     watch_id: v.id("metric_watches"),
     at: v.number(),
     value: v.number(),
+    /** The definition version the reader answered it under; absent before readers sent one. */
+    version: v.optional(v.string()),
   }).index("by_watch_at", ["watch_id", "at"]),
 
   // X7. A watch's values per hour (count, sum, min, max), recounted whenever

@@ -34,6 +34,12 @@ import changeCast from "./templates/change.cast" with { type: "text" };
 import quickChangeCast from "./templates/quick-change.cast" with { type: "text" };
 import judgeCast from "./templates/judge.cast" with { type: "text" };
 import judgeRisk from "./templates/judge/risk.md" with { type: "text" };
+import climbCast from "./templates/climb.cast" with { type: "text" };
+import climbFrame from "./templates/climb/frame.md" with { type: "text" };
+import climbPropose from "./templates/climb/propose.md" with { type: "text" };
+import climbReview from "./templates/climb/review.md" with { type: "text" };
+import climbPromote from "./templates/climb/promote.md" with { type: "text" };
+import climbRecord from "./templates/climb/record.sh" with { type: "text" };
 import changeFixCheck from "./templates/change/fix_check.md" with { type: "text" };
 import changeFixReview from "./templates/change/fix_review.md" with { type: "text" };
 import changeRevise from "./templates/change/revise.md" with { type: "text" };
@@ -78,6 +84,12 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "change/fix_conflict.md": changeFixConflict,
   // What the blind risk judge reads (judge.cast).
   "judge/risk.md": judgeRisk,
+  // The climb's stations (climb.cast, flows.md FL10).
+  "climb/frame.md": climbFrame,
+  "climb/propose.md": climbPropose,
+  "climb/review.md": climbReview,
+  "climb/promote.md": climbPromote,
+  "climb/record.sh": climbRecord,
 };
 
 /** Replace each quoted `"@<file>"` value naming one of `files` with that file's text as a DOT string. */
@@ -106,6 +118,8 @@ export const BUILTIN_WORKFLOW_TEMPLATES: Readonly<Record<string, string>> = {
   "prove-implement": inlineTemplateFiles(proveImplementCast, LINE_TEMPLATE_FILES),
   change: inlineTemplateFiles(changeCast, LINE_TEMPLATE_FILES),
   "quick-change": inlineTemplateFiles(quickChangeCast, LINE_TEMPLATE_FILES),
+  // Hill-climbing one goal metric through its environments (flows.md FL10).
+  climb: inlineTemplateFiles(climbCast, LINE_TEMPLATE_FILES),
   feature: featureCast,
   "plan-autopilot": planAutopilotCast,
 };

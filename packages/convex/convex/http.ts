@@ -3977,12 +3977,10 @@ cliRoute("/cli/initiatives/list", async (ctx, body) => ctx.runQuery(api.initiati
 cliRoute("/cli/initiatives/get", async (ctx, body) => ctx.runQuery(api.initiatives.get, body));
 
 // Environments and attempts (contracts/envs.ts): `cast env`, `cast goal envs`.
-cliRoute("/cli/envs/record", async (ctx, body) => ctx.runMutation(api.envs.record, body));
-cliRoute("/cli/envs/link", async (ctx, body) => ctx.runMutation(api.envs.link, body));
-cliRoute("/cli/envs/list", async (ctx, body) => ctx.runQuery(api.envs.list, body));
-cliRoute("/cli/envs/standings", async (ctx, body) => ctx.runQuery(api.envs.standings, body));
-cliRoute("/cli/envs/get", async (ctx, body) => ctx.runQuery(api.envs.get, body));
-cliRoute("/cli/envs/goal-levels", async (ctx, body) => ctx.runQuery(api.envs.goalLevels, body));
+// Environments and attempts (envs.ts).
+for (const [path, fn, write] of [["record", api.envs.record, true], ["link", api.envs.link, true], ["list", api.envs.list, false], ["standings", api.envs.standings, false], ["get", api.envs.get, false], ["goal-levels", api.envs.goalLevels, false]] as const) cliRoute(`/cli/envs/${path}`, async (ctx, body) => write ? ctx.runMutation(fn as any, body) : ctx.runQuery(fn as any, body));
+// Case sets (envCases.ts): put from a runner, open + page from `cast env run`; /cli/envs/held/* is the CLI's first name for them.
+for (const base of ["/cli/envs/cases", "/cli/envs/held"]) for (const [verb, fn, write] of [["put", api.envCases.put, true], ["open", api.envCases.open, true], ["page", api.envCases.page, false], ["log", api.envCases.log, false]] as const) cliRoute(`${base}/${verb}`, async (ctx, body) => write ? ctx.runMutation(fn as any, body) : ctx.runQuery(fn as any, body));
 
 // The workspace's standing agent. Creating one is seating the root role
 // (org-staffing.md S22): the route an older CLI posts to runs the same staff
@@ -5315,6 +5313,7 @@ cliRoute("/cli/metrics/get", async (ctx, body) => ctx.runQuery(api.metrics.getWa
 cliRoute("/cli/metrics/create", async (ctx, body) => ctx.runMutation(api.metrics.createWatch, body));
 cliRoute("/cli/metrics/update", async (ctx, body) => ctx.runMutation(api.metrics.updateWatch, body));
 cliRoute("/cli/metrics/remove", async (ctx, body) => ctx.runMutation(api.metrics.removeWatch, body));
+for (const [path, fn] of [["/cli/metrics/points-rm", api.metrics.removePoints], ["/cli/metrics/redefine", api.metrics.redefine]] as const) cliRoute(path, async (ctx, body) => ctx.runMutation(fn, body));
 cliRoute("/cli/metrics/backfill", async (ctx, body) => ctx.runMutation(api.metrics.loadHistory, body));
 cliRoute("/cli/metrics/query", async (ctx, body) => ctx.runAction(api.sources.posthog.query, body));
 cliRoute("/cli/connector/capabilities", async (ctx, body) => ctx.runQuery(api.sources.app.capabilities, body));

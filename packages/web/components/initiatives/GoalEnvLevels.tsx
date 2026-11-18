@@ -48,7 +48,31 @@ function LinkCell({ s, now }: { s: EnvStanding; now: number }) {
   );
 }
 
-/** One environment per row: level, title, score, noise, link, cost. */
+/** The env's case sets in codecast: each split's size, with the held set's fetches; versions and last scores on hover. Never a case. */
+function CaseSetsCell({ s, now }: { s: EnvStanding; now: number }) {
+  const sets = (["dev", "held"] as const).flatMap((split) => (s[split] ? [{ split, h: s[split]! }] : []));
+  if (!sets.length) return <span />;
+  const tip = sets
+    .map(({ split, h }) => {
+      const last = h.last_attempt;
+      return [`${split === "dev" ? "Dev" : "Held"} set ${h.version}${h.label ? ` · ${h.label}` : ""}, uploaded ${compactAge(now - h.uploaded_at)} ago`, last ? `last ${split} ${last.short_id} ${n3(last.mean)} n${last.n} ${last.candidate}, ${compactAge(now - last.finished_at)} ago` : `no ${split} run yet`, `${h.reads} fetch${h.reads === 1 ? "" : "es"}${h.last_read_at ? `, last ${compactAge(now - h.last_read_at)} ago` : ""}${h.unfiled ? `, ${h.unfiled} with no attempt filed` : ""}`].join("\n");
+    })
+    .join("\n\n");
+  return (
+    <span className="tabular-nums" style={{ color: MUTED }} title={tip} data-env-case-sets>
+      {sets.map(({ split, h }, i) => (
+        <span key={split} data-env-case-set={split}>
+          {i ? <span style={{ color: DIM }}> · </span> : null}
+          {split} {h.size}
+          {split === "held" ? <span style={{ color: DIM }}> {h.reads} read{h.reads === 1 ? "" : "s"}</span> : null}
+          {h.unfiled ? <span style={{ color: "var(--sol-yellow)" }}> {h.unfiled} unfiled</span> : null}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** One environment per row: level, title, score, noise, link, case sets, cost. */
 export function GoalEnvLevels({ goal, now }: { goal: InitiativeRow; now: number }) {
   const envs = (goal as InitiativeRow & { envs?: GoalEnv[] }).envs;
   const levels = useGoalEnvLevels(envs, (goal as any).workspace);
@@ -56,7 +80,7 @@ export function GoalEnvLevels({ goal, now }: { goal: InitiativeRow; now: number 
   return (
     <div className="mt-5" data-goal-env-levels>
       <Section name="envs" label="Predicted by" count={levels.length}>
-        <div className="grid items-baseline gap-x-3 gap-y-1.5 text-[12.5px]" style={{ gridTemplateColumns: "auto minmax(0,1fr) auto auto auto auto" }}>
+        <div className="grid items-baseline gap-x-3 gap-y-1.5 text-[12.5px]" style={{ gridTemplateColumns: "auto minmax(0,1fr) auto auto auto auto auto" }}>
           {levels.map((s) => (
             <div key={s.env} className="contents" data-goal-env={s.env} data-level={s.level}>
               <span className="font-mono text-xs px-1 rounded-sm" style={{ color: "var(--sol-cyan)", background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)" }} title={ENV_LEVEL_NAME[s.level]}>{s.level}</span>
@@ -64,6 +88,7 @@ export function GoalEnvLevels({ goal, now }: { goal: InitiativeRow; now: number 
               <Score s={s} />
               <Noise s={s} />
               <LinkCell s={s} now={now} />
+              <CaseSetsCell s={s} now={now} />
               <span className="tabular-nums text-right" style={{ color: DIM }}>{standingCost(s) ?? ""}</span>
             </div>
           ))}

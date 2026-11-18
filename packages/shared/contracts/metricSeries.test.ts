@@ -14,9 +14,12 @@ describe("a metric reader's answer", () => {
   });
   test("reads the number, the unit and the dated points, oldest first, dropping what is not a number", () => {
     expect(readMetricAnswer({ value: 382, unit: "$", points: [{ at: "2026-10-20T00:00:00Z", value: 395 }, { at: 1, value: 1 }, { at: "nope", value: 3 }, { at: 2, value: null }] }))
-      .toEqual({ value: 382, unit: "$", points: [{ at: 1, value: 1 }, { at: Date.parse("2026-10-20T00:00:00Z"), value: 395 }] });
-    expect(readMetricAnswer(12)).toEqual({ value: 12, unit: null, points: [] });
-    expect(readMetricAnswer({ value: "12" })).toEqual({ value: null, unit: null, points: [] });
+      .toEqual({ value: 382, unit: "$", points: [{ at: 1, value: 1 }, { at: Date.parse("2026-10-20T00:00:00Z"), value: 395 }], version: null });
+    expect(readMetricAnswer(12)).toEqual({ value: 12, unit: null, points: [], version: null });
+    expect(readMetricAnswer({ value: "12" })).toEqual({ value: null, unit: null, points: [], version: null });
+    // The definition version rides along when the reader names one.
+    expect(readMetricAnswer({ value: 49.5, version: " need-v2 " }).version).toBe("need-v2");
+    expect(readMetricAnswer({ value: 49.5, version: 3 }).version).toBeNull();
   });
   test("writes a value in its unit the way a person does", () => {
     expect(formatSeriesValue(382.4, "$")).toBe("$382");

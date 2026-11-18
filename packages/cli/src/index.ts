@@ -17831,8 +17831,9 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   if (t.assignee && want("details")) console.log(`  ${c.dim}Assignee: ${t.assignee_name || t.assignee}${c.reset}`);
   if (t.created_at && want("details")) console.log(`  ${c.dim}Created: ${new Date(t.created_at).toLocaleString()}${t.creator_name ? ` by ${t.creator_name}` : ""}${c.reset}`);
   if (t.predicted && want("details")) {
-    const { predictionText, realisedLine } = await import("@codecast/shared/contracts/predictedEffect");
-    console.log(`  ${c.dim}Predicts: ${predictionText(t.predicted)}${t.realised ? `; ${realisedLine(t.predicted, t.realised)}` : ""}${c.reset}`);
+    const { predictionWords, PREDICTION_VERDICT_WORDS } = await import("@codecast/shared/contracts/predictedEffect");
+    const w = predictionWords(t.predicted, t.realised ?? null, null);
+    console.log(`  ${c.dim}Predicts: ${w.said}${t.realised ? `; ${PREDICTION_VERDICT_WORDS[t.realised.verdict as keyof typeof PREDICTION_VERDICT_WORDS]}: ${w.reading}` : ""} :: ${t.predicted.basis}${c.reset}`);
   }
   // The graph in the web's order and words (task-graph.md TG12).
   for (const s of want("graph") ? taskGraphSections(t, t.links, { waitId: fmt.muted, ...checkoutWords(getRealCwd()) }) : []) {
@@ -19257,9 +19258,9 @@ initiativeCmd
   .action(async (ref: string, options: any) => {
     const [row, levels] = await Promise.all([cliPost("/cli/initiatives/get", { id: ref }), tryCliPost("/cli/envs/goal-levels", { goal: ref })]);
     if (!row) exitNotFound("goal", ref, "cast goal ls");
-    if (options.json) { printJson(levels ? { ...row, env_levels: levels.levels } : row); return; }
-    const { goalLevelLines } = await import("./envCommand.js");
-    const envLines = levels ? goalLevelLines(c, levels.levels, row.short_id) : [];
+    if (options.json) { printJson({ ...(levels ? { ...row, env_levels: levels.levels } : row), readings: metricReadings(row, liveSeries(row)) }); return; }
+    const { goalLevelLines, localEnvTitles } = await import("./envCommand.js");
+    const envLines = levels ? goalLevelLines(c, levels.levels, row.short_id, Date.now(), localEnvTitles()) : [];
     for (const line of initiativeShowLines(c, row, { ago: formatRelativeTime, projectIcons: PROJECT_STATUS_ICONS, afterMetrics: envLines })) console.log(line);
   });
 

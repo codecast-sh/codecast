@@ -92,7 +92,12 @@ export type GoalsBriefInitiative = {
   series?: Record<string, MetricSeries>;
   /** Short ids of the projects it carries, in its own order. */
   project_short_ids: string[];
+  /** Where its effects can be read and the smallest change a read detects there (null: no noise model to say). */
+  read_at?: GoalReadTarget[];
 };
+
+/** A place a predicted effect is read (`in-N:key`, `mw-N`, `env:<key>`), and what a read of the default span on each side of ship detects there. */
+export type GoalReadTarget = { ref: string; name: string; detects: string | null };
 
 export type GoalsBriefProject = {
   short_id: string;
@@ -126,6 +131,7 @@ const byPriorityThenId = (a: { priority?: string; short_id: string }, b: { prior
 
 const HEALTH_WORD: Record<InitiativeHealth, string | null> = { none: null, on_track: "on track", at_risk: "at risk", off_track: "off track" };
 const DESCRIPTION_CHARS = 280;
+const READ_SPAN_WORDS = "four-week";
 // Room for the shared set and one project's own as ids and titles (about 50).
 const PRINCIPLES_CHARS = 3000;
 const LIST_ITEMS = 5;
@@ -177,6 +183,8 @@ export function renderGoalsBrief(data: GoalsBrief, opts: RenderGoalsBriefOptions
       }
       if (!i.metrics.length) out.push("- no metrics");
       if (i.project_short_ids.length) out.push(`- projects: ${i.project_short_ids.join(", ")}`);
+      // One plain line, so a place to read a prediction never reads as a goal_ref.
+      if (i.read_at?.length) out.push(`- predictions read at (smallest change a ${READ_SPAN_WORDS} read each side of ship detects): ${i.read_at.map((t) => `${t.ref} ${t.detects ?? "unknown"} (${oneLine(t.name)})`).join("; ")}`);
     }
   }
 
@@ -260,7 +268,7 @@ export const GROUND_FIELDS = `- goal_ref: the metric ref or project short id fro
 - category: where the fix will live. \`code\`, \`ux\` (what a person sees or does in the product), \`infra\` (build, deploy, runtime), \`data\` (stored rows that are wrong), \`prompt\` (a model prompt produces the behavior, and the fix is rewriting it), or \`line\` (the project's flow itself: its profile, its graph or a station's prompt, which is how a subject starting with \`line:\` reads).
 - risk: \`low\` when a reviewer can judge the diff alone; \`review\` when it needs a careful look; \`plan\` when it changes architecture, a schema, billing or auth, or a design across several systems, so the approach is planned and written down before anything is built.
 - readiness: \`ready\` when a session could start now. Nobody is asked anything before the work is done, so a cause is ready whenever what is unknown about it can be found by reading the code, the data or the product's own record: finding it is the next stations' work, and the note says what to find. \`needs_context\` when the work turns on something written nowhere a session can read, named in the note; the cause then waits, open, with that reason on it. \`not_actionable\` when there is nothing to change (a duplicate, intended behavior, noise).
-- prediction: when goal_ref is a metric ref, what fixing this cause should do to that metric, or to a higher metric in the brief it feeds, once it ships, in one line: \`<metric ref> <+|-><size>[%] in <N>d :: <basis>\`, e.g. \`in-9:intros_a_week +5% in 21d :: 40 of the week's failed intros come from this cause\`. Size the move from the cause's own evidence (how many reports, what share of the metric's events they touch) and give the days after ship the metric needs to show it; the basis names that evidence in one line. After ship the metric is read against it and the result is kept as the record of how well grounding predicts, so a small honest number beats none and beats a large hopeful one. Leave it empty only when goal_ref is not a metric (a project, \`line\`, \`none\`).`;
+- prediction: the effect fixing this cause should have once it ships, in one line: \`<where> <+|-><size>[%|pt] [in <N>d] :: <basis>\`. Size the effect first, from the cause's own evidence alone. Then name where that size can be read: each initiative in the brief lists the places its effects can be read (its metrics, the stage series of its projects, its environments) with the smallest change a read there detects. Choose the place closest to what the change touches whose detectable change the size clears; an initiative's own metric only when the effect is that large, and never a place whose detectable change is unknown, since its read could not tell the effect from noise. Never size an effect to fit a place: when the evidence carries less than every place can detect, leave the prediction empty. Give the days after ship a metric or series needs to show the effect (an environment is read at its next attempt and needs none), and name the evidence in the basis. After ship the place is read against this, and a prediction smaller than what its place detects is recorded as unreadable and teaches nothing. goal_ref is chosen exactly as above, whatever the prediction names. Leave it empty when goal_ref is \`line\` or \`none\`.`;
 
 /**
  * The fifth field, asked only of a cause nothing has placed (the-line-model.md
@@ -304,12 +312,14 @@ export const GROUND_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 /** The answer's shape for a cause being placed: the base shape plus a project, one of the brief's. */
-export function groundOutputSchema(placing: readonly string[] | null): Record<string, unknown> {
-  if (!placing?.length) return GROUND_OUTPUT_SCHEMA;
+export function groundOutputSchema(placing: readonly string[] | null, goalRefs?: readonly string[]): Record<string, unknown> {
   const base = GROUND_OUTPUT_SCHEMA as { properties: Record<string, unknown>; required: string[] };
+  // goal_ref is held to the refs the brief offers, so a reply never names a place to read a prediction, or an initiative, in its stead.
+  const properties = goalRefs?.length ? { ...base.properties, goal_ref: { type: "string", enum: [...goalRefs] } } : base.properties;
+  if (!placing?.length) return goalRefs?.length ? { ...GROUND_OUTPUT_SCHEMA, properties } : GROUND_OUTPUT_SCHEMA;
   return {
     ...GROUND_OUTPUT_SCHEMA,
-    properties: { ...base.properties, project: { type: "string", enum: [...placing, NO_GOAL] } },
+    properties: { ...properties, project: { type: "string", enum: [...placing, NO_GOAL] } },
     required: [...base.required.slice(0, -1), "project", "note"],
   };
 }
@@ -318,6 +328,16 @@ export function groundOutputSchema(placing: readonly string[] | null): Record<st
 export function groundPlacingProjects(cause: Pick<GroundCauseInput, "placing">, brief: GoalsBrief): string[] | null {
   if (!cause.placing || !brief.projects.length) return null;
   return brief.projects.map((p) => p.short_id);
+}
+
+/** Every place the brief offers to read a predicted effect: each goal's metrics, its projects' series and its environments. */
+export function briefReadTargets(brief: GoalsBrief): Set<string> {
+  const refs = new Set<string>();
+  for (const i of brief.initiatives) {
+    for (const r of metricReadings(i)) refs.add(metricGoalRef(i.short_id, r.key));
+    for (const t of i.read_at ?? []) refs.add(t.ref);
+  }
+  return refs;
 }
 
 /** Every goal_ref a brief offers: each initiative metric's ref, each project's short id, the line, and none. */
@@ -394,7 +414,7 @@ export function groundCausePrompt(cause: GroundCauseInput, brief: GoalsBrief, no
 export type GroundFields = { goal_ref: string; category: LineCategory; risk: LineRisk; readiness: LineReadiness; readiness_note: string; prediction?: string; project?: string };
 
 /** The four fields and the note from a ground reply (and the project, when `placing` lists where it may go), or the one line saying why it cannot be read. */
-export function parseGroundReply(parsed: unknown, refs: ReadonlySet<string>, placing: readonly string[] | null = null): { fields: GroundFields } | { error: string } {
+export function parseGroundReply(parsed: unknown, refs: ReadonlySet<string>, placing: readonly string[] | null = null, readTargets: ReadonlySet<string> = refs): { fields: GroundFields } | { error: string } {
   if (!parsed || typeof parsed !== "object") return { error: "the reply was not a JSON object" };
   const r = parsed as Record<string, unknown>;
   const str = (k: string) => (typeof r[k] === "string" ? (r[k] as string).trim() : "");
@@ -409,9 +429,9 @@ export function parseGroundReply(parsed: unknown, refs: ReadonlySet<string>, pla
   if (!(LINE_READINESS as readonly string[]).includes(readiness)) return { error: `readiness "${readiness}" is not one of ${LINE_READINESS.join(", ")}` };
   const project = str("project").toLowerCase() === NO_GOAL ? NO_GOAL : str("project");
   if (placing && project !== NO_GOAL && !placing.includes(project)) return { error: `project "${project}" is not a project the brief lists` };
-  // A prediction rides only a metric the brief offers; any other is dropped, never the grounding.
+  // A prediction rides only a place the brief offers to read it; any other is dropped, never the grounding.
   const stated = oneLine(str("prediction"));
-  const prediction = /^in-\d+:\S+\s/.test(stated) && refs.has(stated.split(" ")[0]) ? stated : "";
+  const prediction = /^\S+\s/.test(stated) && readTargets.has(stated.split(" ")[0]) ? stated : "";
   return { fields: { goal_ref: goalRef, category: category as LineCategory, risk: risk as LineRisk, readiness: readiness as LineReadiness, readiness_note: noteWhole(oneLine(str("note"))), ...(prediction ? { prediction } : {}), ...(placing ? { project } : {}) } };
 }
 

@@ -7216,7 +7216,8 @@ export default defineSchema({
     card_slug: v.optional(v.string()),
     // The effect on a goal metric this change is expected to have, and what
     // the metric did after ship (shared/contracts/predictedEffect.ts). A goal
-    // reads its predictions from here (by_workspace_prediction).
+    // reads its predictions from here, by the goal each one serves
+    // (by_workspace_prediction).
     predicted: v.optional(predictedValidator),
     realised: v.optional(realisedValidator),
   })
@@ -7250,7 +7251,7 @@ export default defineSchema({
     // signals.sweepWatches reads the ended ones.
     .index("by_watch_until", ["watch_until"])
     .index("by_prediction_due", ["predicted.due_at"])
-    .index("by_workspace_prediction", ["workspace", "predicted.goal_ref"])
+    .index("by_workspace_prediction", ["workspace", "predicted.goal"])
     // Sparse in effect: a problem whose fix landed on its default branch (tasks.landed). The deploy stage reads a
     // workspace's landed fixes here beside the line runs' merges (deploys.md DP2).
     .index("by_workspace_landed", ["workspace", "landed.at"])

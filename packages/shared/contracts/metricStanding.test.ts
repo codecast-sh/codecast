@@ -1,18 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { initiativeStanding, metricLine, metricReading, metricReadings, type InitiativeMetric, type MetricSeries } from "./initiative";
+import { initiativeStanding, metricLine, metricReading, metricReadings, paceWords, type InitiativeMetric, type MetricSeries } from "./initiative";
 import {
+  BAND_Z,
   doneWhenPredicate,
   gammaQuantile,
   isExecutableDoneWhen,
+  metricDenominatorRef,
   metricPeriodMs,
   metricSpec,
   metricWindowNoiseError,
   minimumDetectableLift,
   noiseSd,
+  parseMetricTarget,
+  targetAt,
+  TRAJECTORY_TARGET_MAX,
   parseMetricNoise,
   parseMetricSpec,
   parseMetricWindow,
+  periodsWords,
   poissonBand,
+  tQuantile,
   wilsonBand,
   windowSamples,
 } from "./metricStanding";
@@ -217,9 +224,10 @@ describe("standing over a window", () => {
 
 describe("the executable done-when", () => {
   test("only when every climbed number names a window and a noise model", () => {
-    expect(isExecutableDoneWhen([{ window: "3w", noise: "poisson" }, { guardrail: true }])).toBe(true);
-    expect(isExecutableDoneWhen([{ window: "3w", noise: "poisson" }, { window: "3w" }])).toBe(false);
-    expect(isExecutableDoneWhen([{ guardrail: true, window: "3w", noise: "poisson" }])).toBe(false);
+    const m = (x: object) => ({ name: "n", target: "at least 5", ...x });
+    expect(isExecutableDoneWhen([m({ window: "3w", noise: "poisson" }), m({ guardrail: true })])).toBe(true);
+    expect(isExecutableDoneWhen([m({ window: "3w", noise: "poisson" }), m({ window: "3w" })])).toBe(false);
+    expect(isExecutableDoneWhen([m({ guardrail: true, window: "3w", noise: "poisson" })])).toBe(false);
     expect(isExecutableDoneWhen([])).toBe(false);
   });
 
@@ -230,14 +238,14 @@ describe("the executable done-when", () => {
       { key: "g", name: "Bounce", target: "under 3%", guardrail: true },
     ] as InitiativeMetric[] };
     const say = (_r: unknown, n: number) => n.toFixed(1);
-    const p = doneWhenPredicate(metricReadings(row, () => s), metricDirection, say)!;
+    const p = doneWhenPredicate(metricReadings(row, () => s), say)!;
     expect(p.verdict).toBe("met");
     expect(p.clauses).toHaveLength(1);
     expect(p.clauses[0]!.text).toMatch(/^Intros a week at least 28, at the lower edge of its 80% band over 3w, noise poisson: met \(lower bound now 30\.\d\)$/);
     row.metrics[0]!.target = "at least 35";
-    expect(doneWhenPredicate(metricReadings(row, () => s), metricDirection, say)!.verdict).toBe("within_noise");
+    expect(doneWhenPredicate(metricReadings(row, () => s), say)!.verdict).toBe("within_noise");
     row.metrics[0]!.window = undefined;
-    expect(doneWhenPredicate(metricReadings(row, () => s), metricDirection, say)).toBeNull();
+    expect(doneWhenPredicate(metricReadings(row, () => s), say)).toBeNull();
   });
 });
 
@@ -291,5 +299,167 @@ describe("what the review tried to break", () => {
   test("non-finite values are dropped", () => {
     const r = read({ target: "at least 10", noise: "poisson" }, weekly([NaN, 20, Infinity], null, "Intros a week"));
     expect(r.band?.periods).toBe(1);
+  });
+});
+
+describe("what real use on a goal found", () => {
+  const weekly = (vals: number[], name: string, unit: string | null, ref = "mw-1"): MetricSeries => ({ short_id: ref, name, unit, points: vals.map((value, i) => ({ at: NOW - (vals.length - 1 - i) * WEEK, value })) });
+
+  test("Student's t quantiles against the table", () => {
+    for (const [df, t] of [[1, 3.0777], [2, 1.8856], [3, 1.6377], [5, 1.4759], [10, 1.3722], [30, 1.3104]] as const) expect(tQuantile(0.9, df)).toBeCloseTo(t, 3);
+  });
+
+  test("the band is never narrower than the periods' own spread", () => {
+    // Weekly cost per intro swinging 400 to 1,700 against a declared spread of 77.
+    const s = weekly([700, 1700, 1000, 400], "Dollars per intro", "$");
+    const r = metricReading({ key: "d", name: "Dollars per intro", target: "under $250", series: "mw-1", window: "4w", noise: "aa:77" }, null, s);
+    const sd = Math.sqrt([700, 1700, 1000, 400].reduce((a, v) => a + (v - 950) ** 2, 0) / 3);
+    expect(r.band!.spread).toBe("observed");
+    expect(r.band!.high! - r.band!.mean).toBeCloseTo(tQuantile(0.9, 3) * (sd / 2), 6);
+    // The detectable change uses the wider spread too.
+    expect(r.band!.mde!).toBeCloseTo(minimumDetectableLift(950, { kind: "aa", sd }, 4)!, 6);
+    // A steady series keeps the model's band.
+    expect(metricReading({ key: "d", name: "Dollars per intro", target: "under $250", series: "mw-1", window: "4w", noise: "aa:77" }, null, weekly([950, 960, 940, 950], "Dollars per intro", "$")).band!.spread).toBe("model");
+  });
+
+  test("two periods far apart already widen the band: t with one degree of freedom", () => {
+    const r = metricReading({ key: "n", name: "Replied to explicit need", target: "at least 51.2%", series: "mw-1", window: "2w", noise: "binomial:300" }, null, weekly([62.9, 49.5], "Replied to explicit need", "%"));
+    expect(r.band!.spread).toBe("observed");
+    expect(r.band!.high! - r.band!.mean).toBeCloseTo(tQuantile(0.9, 1) * 6.7, 6);
+    expect(r.standing).toBe("within_noise");
+    // The detectable change reads the same spread, even when the spec fixes n.
+    const steady = metricReading({ key: "n", name: "Replied to explicit need", target: "at least 51.2%", series: "mw-1", window: "2w", noise: "binomial:300" }, null, weekly([56.2, 56.2], "Replied to explicit need", "%"));
+    expect(r.band!.mde!).toBeGreaterThan(steady.band!.mde! * 3);
+  });
+
+  test("an overdispersed count keeps its skewed band at the dispersion the weeks show", () => {
+    const r = metricReading({ key: "i", name: "Intros a week", target: "at least 16", series: "mw-1", window: "3w", noise: "poisson:1.75" }, null, weekly([13, 22, 37], "Intros a week", "/week"));
+    expect(r.band!.spread).toBe("observed");
+    expect(r.band!.low!).toBeGreaterThan(0);
+    expect(r.band!.mean - r.band!.low!).toBeLessThan(r.band!.high! - r.band!.mean);
+    expect(r.standing).toBe("within_noise");
+  });
+
+  test("a ratio pools total over total, weighted by its denominator series", () => {
+    const cost = weekly([900, 800, 400], "Dollars per intro", "$", "mw-13");
+    const intros = weekly([10, 20, 40], "Intros a week", "/week", "mw-14");
+    const m: InitiativeMetric = { key: "d", name: "Dollars per intro", target: "under $250", series: "mw-13", window: "3w", noise: "ratio:mw-14" };
+    const r = metricReading(m, null, cost, (ref) => (ref === "mw-14" ? intros : ref === "mw-13" ? cost : undefined));
+    expect(r.band!.pooling).toBe("pooled");
+    expect(r.band!.mean).toBeCloseTo((900 * 10 + 800 * 20 + 400 * 40) / 70, 6);
+    expect(r.band!.read.map((p) => p.weight)).toEqual([40, 20, 10]);
+    expect(metricLine(r, NOW)).toContain("pooled total over total by mw-14 $586");
+    // A steady ratio over plenty of events keeps the denominator's Poisson floor: relative error 1/√total.
+    const flat = weekly([500, 500, 500], "Dollars per intro", "$", "mw-13");
+    const many = weekly([400, 400, 400], "Intros a week", "/week", "mw-14");
+    const f = metricReading({ ...m, target: "under $600" }, null, flat, (ref) => (ref === "mw-14" ? many : flat));
+    expect(f.band!.spread).toBe("model");
+    expect(f.band!.high! - 500).toBeCloseTo(BAND_Z * 500 / Math.sqrt(1200), 6);
+    expect(f.standing).toBe("met");
+    expect(parseMetricNoise("ratio:mw-14")).toEqual({ kind: "ratio", series: "mw-14" });
+    expect(metricDenominatorRef({ noise: "ratio:mw-14" })).toBe("mw-14");
+  });
+
+  test("each period read is listed with its dates; a value far from its slot is not read", () => {
+    const s = weekly([13, 22, 37], "Intros a week", "/week");
+    s.points[0] = { at: s.points[0]!.at - 2 * DAY, value: 13 };
+    const r = metricReading({ key: "i", name: "Intros a week", target: "at least 16", series: "mw-1", window: "3w", noise: "poisson" }, null, s);
+    expect(r.band!.periods).toBe(2);
+    expect(r.band!.read.map((p) => [p.to - p.from, p.value])).toEqual([[WEEK, 37], [WEEK, 22]]);
+    expect(periodsWords(r.band!, String)).toBe("11-10 to 11-17 37 · 11-03 to 11-10 22");
+  });
+
+  test("a series of the current period so far reads it as partial and never counts it", () => {
+    const s = weekly([20, 25, 30, 6], "Intros this week so far", null);
+    const r = metricReading({ key: "i", name: "Intros this week", target: "at least 20", series: "mw-1", window: "3w", noise: "poisson" }, null, s);
+    expect(r.band!.periods).toBe(3);
+    expect(r.band!.mean).toBe(25);
+    expect(r.band!.read[0]).toMatchObject({ value: 6, partial: true });
+    expect(metricLine(r, NOW)).toContain("the current week so far not counted");
+  });
+});
+
+describe("a target reads only when it is a number with a direction", () => {
+  test("the narrow grammar", () => {
+    const read = (t: string) => { const r = parseMetricTarget(t); return r && r.kind === "number" ? [r.value, r.direction, r.unit] : r; };
+    expect(read("at least 60")).toEqual([60, "at_least", null]);
+    expect(read("under $250")).toEqual([250, "at_most", "$"]);
+    expect(read("0.2%")).toEqual([0.2, "at_least", "%"]);
+    expect(read("10,000")).toEqual([10000, "at_least", null]);
+    expect(read("16/week or more")).toEqual([16, "at_least", "/week"]);
+    expect(read("3 a day or less")).toEqual([3, "at_most", "/day"]);
+    expect(read("$50k")).toEqual([50000, "at_least", "$"]);
+    expect(read("2.5M")).toEqual([2500000, "at_least", null]);
+    expect(read("> 5")).toEqual([5, "at_least", null]);
+    expect(read("<5%")).toEqual([5, "at_most", "%"]);
+    expect(read("no more than 3")).toEqual([3, "at_most", null]);
+    for (const bad of ["1% higher (Cameron)", "judged per matured sending week, see dec", "51.2% wk of 11-16 rising to 59.1% by 12-", "1000 teams", "shipped", "at least 60 or less", "at least", "", "60 intros a week", "1%-2%", "about 40"]) expect(parseMetricTarget(bad)).toBeNull();
+  });
+
+  test("a dated trajectory, linear between its points", () => {
+    const t = parseMetricTarget("at least 51.2%@2026-11-16 53.1%@2026-11-30 56.6%@2026-12-14 59.1%@2026-12-28")!;
+    expect(t.kind).toBe("trajectory");
+    expect(t.unit).toBe("%");
+    const d = (s: string) => Date.parse(`${s}T00:00:00Z`);
+    expect(targetAt(t, d("2026-11-01"))).toBe(51.2);
+    expect(targetAt(t, d("2026-11-23"))).toBeCloseTo((51.2 + 53.1) / 2, 10);
+    expect(targetAt(t, d("2026-12-28"))).toBe(59.1);
+    expect(targetAt(t, d("2027-02-01"))).toBe(59.1);
+    expect(parseMetricTarget("51.2%@2026-11-16, 53.1%@2026-11-30")?.kind).toBe("trajectory");
+    expect(parseMetricTarget("51.2%@2026-11-16 → 53.1%@2026-11-30")?.kind).toBe("trajectory");
+    for (const bad of ["51.2%@2026-11-30 53.1%@2026-11-16", "51.2%@2026-02-30", "51.2%@2026-11-16 53@2026-11-30", "51.2%@2026-11-16 rising"]) expect(parseMetricTarget(bad)).toBeNull();
+  });
+
+  test("a trajectory round-trips through the spec", () => {
+    const spec = "Replied to explicit need=at least 51.2%@2026-11-16 53.1%@2026-11-30 56.6%@2026-12-14 59.1%@2026-12-28 @mw-16 window 2w noise binomial:300";
+    const m = parseMetricSpec(spec)!;
+    expect(m).toEqual({ name: "Replied to explicit need", target: "at least 51.2%@2026-11-16 53.1%@2026-11-30 56.6%@2026-12-14 59.1%@2026-12-28", series: "mw-16", window: "2w", noise: "binomial:300" });
+    expect(metricSpec(m)).toBe(spec);
+    expect(m.target.length).toBeLessThanOrEqual(TRAJECTORY_TARGET_MAX);
+  });
+
+  test("an unreadable target reads unknown, and old numeric targets read as before", () => {
+    const r = metricReading({ key: "r", name: "Cold email reply rate", target: "1% higher (Cameron)", series: "mw-1", window: "1w", noise: "binomial:15000" }, null, { short_id: "mw-1", name: "Emailed to replied", unit: "%", points: [{ at: NOW, value: 0.92 }] });
+    expect(r.standing).toBe("unknown");
+    expect(r.target_unread).toBe("target isn't a number");
+    expect(r.band).toBeUndefined();
+    expect(metricLine(r, NOW)).toBe("Cold email reply rate: 0.92%, target 1% higher (Cameron), unknown: target isn't a number (live mw-1, today)");
+    expect(metricLine(metricReading({ key: "t", name: "Weekly active teams", target: "1,000" }, { value: "412", observed_at: NOW, source: "x" }), NOW)).toBe("Weekly active teams: 412 of 1,000, behind (today)");
+  });
+});
+
+describe("a metric read against its trajectory", () => {
+  const d = (s: string) => Date.parse(`${s}T00:00:00Z`);
+  const target = "at least 51.2%@2026-11-16 53.1%@2026-11-30 56.6%@2026-12-14 59.1%@2026-12-28";
+  const at = d("2026-11-23");
+  const weeklyAt = (vals: number[]) => ({ short_id: "mw-16", name: "Replied to explicit need", unit: "%", points: vals.map((value, i) => ({ at: at - (vals.length - 1 - i) * WEEK, value })) });
+
+  test("on trajectory against the target in force, and done only at its last point", () => {
+    const on = metricReading({ key: "n", name: "Replied to explicit need", target, series: "mw-16" }, null, weeklyAt([53]));
+    expect(on.trajectory!.in_force).toBeCloseTo(52.15, 10);
+    expect(on.standing).toBe("met");
+    expect(on.trajectory!.final_standing).toBe("behind");
+    expect(metricLine(on, at)).toBe("Replied to explicit need: 53%, trajectory 52.2% now, 59.1% by 28 Dec, on trajectory (live mw-16, today)");
+    const behind = metricReading({ key: "n", name: "Replied to explicit need", target, series: "mw-16" }, null, weeklyAt([49.5]));
+    expect(metricLine(behind, at)).toContain("behind trajectory");
+    // The pace heads for the next point, by its day.
+    expect(paceWords(behind, null, null, at)).toBe("needs +3.6% a week to reach 53.1% (its trajectory) by 30 Nov");
+  });
+
+  test("over a window: the band against the target in force, and the done-when against the last point", () => {
+    const m: InitiativeMetric = { key: "n", name: "Replied to explicit need", target, series: "mw-16", window: "2w", noise: "binomial:300" };
+    const r = metricReading(m, null, weeklyAt([56, 56]));
+    expect(r.band!.periods).toBe(2);
+    expect(r.standing).toBe("met");
+    expect(r.trajectory!.final_standing).toBe("behind");
+    const p = doneWhenPredicate([r, { ...metricReading({ key: "c", name: "Cold email reply rate", target: "1% higher (Cameron)", series: "mw-1", window: "1w", noise: "binomial:15000" }, null, null) }], (_r, n) => `${n.toFixed(1)}%`)!;
+    expect(p.verdict).toBe("behind");
+    expect(p.clauses).toHaveLength(1);
+    expect(p.clauses[0]!.text).toMatch(/^Replied to explicit need at least 59\.1% by 2026-12-28, the end of its trajectory, at the lower edge of its 80% band over 2w, noise binomial:300: behind \(lower bound now 5\d\.\d%\)$/);
+    expect(p.left_out).toEqual([{ name: "Cold email reply rate", why: 'target isn\'t a number ("1% higher (Cameron)")' }]);
+  });
+
+  test("a goal whose only climbed numbers do not read has no executable done-when", () => {
+    expect(isExecutableDoneWhen([{ name: "a", target: "1% higher (Cameron)", window: "1w", noise: "poisson" }, { name: "g", target: "at least 16", guardrail: true, window: "3w", noise: "poisson" }])).toBe(false);
   });
 });

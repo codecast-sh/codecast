@@ -434,7 +434,7 @@ describe("cast initiative show", () => {
     expect(text).toContain(`
   Predictions 1 of 1 prediction held, 1 open
   ct-7 held 380 → 412 (+32; predicted +5%), outside ±12 · Invite flow
-    in-3:weekly_active_teams +5% in 14d; basis: replay +6 on L2
+    in-3:weekly_active_teams +5% in 14d after ship; basis: replay +6 on L2
   ct-8 open in-3:weekly_active_teams +2% by 2026-12-15 · Onboarding copy
     basis: labelled set
 `);
@@ -526,6 +526,10 @@ describe("cast goal show with numbers read over a window", () => {
     const text = show(row);
     expect(text).toContain("  Done when\n  Introductions cost under $250 at a volume that holds.\n\n  Done when, as checked: within noise\n  Intros a week at least 30, at the lower edge of its 80% band over 3w, noise poisson:1.75: within noise (lower bound now 29/week)");
     expect(text).toMatch(/Intros a week: 37\/week of at least 30, within noise over 3 weeks \(mean 34\.7\/week, 80% band 29\/week to 41\.2\/week, detects ±\d+% in 4 weeks\) \(live mw-14, today\)/);
+  });
+
+  test("lists each period read with its dates", () => {
+    expect(show(row)).toContain("    periods read (UTC): 09-27 to 10-04 37/week · 09-20 to 09-27 37/week · 09-13 to 09-20 30/week");
   });
 
   test("met when the lower bound clears; no predicate when a climbed number has no window", () => {

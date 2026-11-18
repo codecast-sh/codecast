@@ -27,9 +27,11 @@ import { appendMetricPoint, mergeMetricHistory, mergeReaderSeries } from "./lib/
 import { connFor, fetchMetricHistory, fetchMetricValue } from "./sources/posthog";
 import { readAppMetric } from "./sources/appMetrics";
 import { isTokenRefusal } from "./lib/sourceHealth";
-import { INGEST_LIMITS, INGEST_SHORT_ID_PREFIX, METRIC_WATCH_LIMITS, WATCH_KINDS_BY_PROVIDER, watchProblem } from "@codecast/shared/contracts/ingest";
+import { GROUP_RULES, INGEST_LIMITS, INGEST_SHORT_ID_PREFIX, METRIC_WATCH_LIMITS, READER_LIVE_SLACK_MS, WATCH_KINDS_BY_PROVIDER, watchProblem } from "@codecast/shared/contracts/ingest";
 import { watchDirectionValidator as directionValidator, watchKindValidator } from "./ingestSchema";
-import { METRIC_SERIES, holdsPoints, oldestHeld, purgePoints, readSeries, writePoints } from "./lib/metricPoints";
+import { METRIC_SERIES, holdsPoints, oldestHeld, purgePoints, readSeries, recountRollupPage, removePointsBetween, writePoints } from "./lib/metricPoints";
+import { isTeamAdmin } from "./privacy";
+import { definitionOf, notRemoved, ofVersion } from "@codecast/shared/contracts/metricStanding";
 import { MONITOR_LIMITS, isMuted, monitorProblem, nextMonitorState, normalizeNotify, notifyProblem, promoteFor, renotifyDue } from "@codecast/shared/contracts/metricMonitor";
 import { deliverWatchAlert } from "./metricAlerts";
 import { parseVolumeQuery, volumeHistory, volumeValue, type VolumeInput } from "@codecast/shared/contracts/volumeWatch";
@@ -227,6 +229,81 @@ export const removeWatch = mutation({
   },
 });
 
+/** Every rollup of a watch recounted under its current version, a page at a time (after a definition change). */
+export const recountRollups = internalMutation({
+  args: { watch_id: v.id("metric_watches"), after_hour: v.number() },
+  handler: async (ctx, args) => {
+    const watch = await ctx.db.get(args.watch_id);
+    if (!watch) return;
+    const next = await recountRollupPage(ctx, watch._id, definitionOf(watch), args.after_hour);
+    if (next !== null) await ctx.scheduler.runAfter(0, internal.metrics.recountRollups, { watch_id: watch._id, after_hour: next });
+  },
+});
+
+/**
+ * `cast metrics redefine`: declares that the watch's values read before
+ * `since` were under an older definition. They stay stored, and windows,
+ * bands and the chart leave them out (the chart's rollups are recounted);
+ * values read since count. For a reader that sends no version of its own.
+ * The watch's creator or a team admin only.
+ */
+export const redefine = mutation({
+  args: { ...scopeArgs, watch: v.string(), since: v.number(), name: v.optional(v.string()), reason: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const row = await watchByRef(ctx, userId, args.watch);
+    const admin = row.team_id ? await isTeamAdmin(ctx, userId, row.team_id) : false;
+    if (String(row.created_by) !== String(userId) && !admin) invalidScope(`Only ${row.short_id}'s creator or a team admin redefines it`);
+    const now = Date.now();
+    if (!Number.isFinite(args.since) || args.since > now) invalidScope("--since is a time that has passed");
+    const version = args.name?.trim().slice(0, 64) || `since ${new Date(args.since).toISOString().slice(0, 16)}Z`;
+    if (version === row.version) invalidScope(`${row.short_id} already reads ${version}`);
+    const reason = args.reason?.trim().slice(0, 200) || undefined;
+    await ctx.db.patch(row._id, {
+      version, version_at: now, version_since: args.since, version_by: userId, version_note: reason,
+      points: row.points.filter((p) => p.at >= args.since),
+      updated_at: now,
+    });
+    await ctx.scheduler.runAfter(0, internal.metrics.recountRollups, { watch_id: row._id, after_hour: -1 });
+    return { watch: row.short_id, version, since: args.since, left_out: row.points.filter((p) => p.at < args.since).length };
+  },
+});
+
+const REMOVALS_KEPT = 50;
+/**
+ * `cast metrics points rm`: removes a watch's stored values at one time (to
+ * the minute when the time names no seconds), from its history, its row and
+ * its reader series, and logs what went, why and who. The watch's creator or
+ * a team admin only: a person's correction of a stale or wrong value, until
+ * the reader says which definition each point was read under.
+ */
+export const removePoints = mutation({
+  args: { ...scopeArgs, watch: v.string(), at: v.number(), to: v.optional(v.number()), reason: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const row = await watchByRef(ctx, userId, args.watch);
+    const admin = row.team_id ? await isTeamAdmin(ctx, userId, row.team_id) : false;
+    if (String(row.created_by) !== String(userId) && !admin) invalidScope(`Only ${row.short_id}'s creator or a team admin removes its points`);
+    const to = args.to ?? args.at;
+    if (!(to >= args.at) || to - args.at > 3_600_000) invalidScope("Remove points at one time, or within one hour at most");
+    const inside = (p: { at: number }) => p.at >= args.at && p.at <= to;
+    const removed = await removePointsBetween(ctx, row._id, args.at, to, definitionOf(row));
+    const fromRow = [...row.points, ...(row.source_points ?? [])].filter(inside);
+    const gone = [...new Map([...removed, ...fromRow].map((p) => [p.at, p])).values()].sort((a, b) => a.at - b.at);
+    if (!gone.length) invalidScope(`${row.short_id} holds no value between ${new Date(args.at).toISOString()} and ${new Date(to).toISOString()}`);
+    const now = Date.now();
+    const reason = args.reason?.trim().slice(0, 200) || undefined;
+    const log = gone.map((p) => ({ at: p.at, value: p.value, ...(reason ? { reason } : {}), by: userId, removed_at: now }));
+    await ctx.db.patch(row._id, {
+      points: row.points.filter((p) => !inside(p)),
+      ...(row.source_points ? { source_points: row.source_points.filter((p) => !inside(p)) } : {}),
+      point_removals: [...(row.point_removals ?? []), ...log].slice(-REMOVALS_KEPT),
+      updated_at: now,
+    });
+    return { watch: row.short_id, removed: gone };
+  },
+});
+
 /** A removed watch's history (metric_points, metric_rollups), a batch at a time. */
 export const purgeWatchPoints = internalMutation({
   args: { watch_id: v.id("metric_watches") },
@@ -406,7 +483,7 @@ export const pollWatch = internalAction({
       const at = Date.now();
       const read = await readAppMetric(ctx, watch.source_id, watch.query, fetch);
       const result = read.ok
-        ? read.value === null ? { error: "The reader has no value yet" } : { value: read.value, ...(read.unit ? { unit: read.unit } : {}), ...(read.points.length ? { series: read.points } : {}) }
+        ? read.value === null ? { error: "The reader has no value yet" } : { value: read.value, ...(read.unit ? { unit: read.unit } : {}), ...(read.points.length ? { series: read.points } : {}), ...(read.version ? { version: read.version } : {}) }
         : { error: read.error };
       await ctx.runMutation(internal.metrics.recordPoint, { watch_id: args.watch_id, at, ...result });
       if (!read.ok && read.lost) await ctx.runMutation(internal.ingest.sourceConnectionLost, { source_id: watch.source_id, error: read.error });
@@ -436,6 +513,8 @@ export const recordPoint = internalMutation({
     watch_id: v.id("metric_watches"), at: v.number(), value: v.optional(v.number()), error: v.optional(v.string()), unit: v.optional(v.string()),
     /** A metric reader's own dated series (mergeReaderSeries): kept as it answers it, in place of one point for this read. */
     series: v.optional(v.array(v.object({ at: v.number(), value: v.number() }))),
+    /** The definition version the reader answered (contracts/ingest MetricReaderAnswer). */
+    version: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const watch = await ctx.db.get(args.watch_id);
@@ -473,9 +552,22 @@ export const recordPoint = internalMutation({
     // Every value goes into the watch's history; a watch made before the
     // table carries its row's values over with its first write.
     if (!(await holdsPoints(ctx, watch._id))) await writePoints(ctx, watch._id, watch.points);
-    await writePoints(ctx, watch._id, args.series?.length ? args.series : [{ at: args.at, value }]);
-    const points = args.series?.length ? mergeReaderSeries(watch.points, args.series) : appendMetricPoint(watch.points, { at: args.at, value });
-    const read = { points, last_error: undefined, missed: undefined, ...(unit ? { unit } : {}), updated_at: now };
+    // A new definition: the row's points and the reader's series start over, and every rollup is recounted under it.
+    const changed = !!args.version && args.version !== watch.version;
+    const def = changed ? { version: args.version, since: now } : definitionOf(watch);
+    // A value a person removed stays removed, however often the reader sends it again.
+    const series = args.series?.filter(notRemoved(watch.point_removals));
+    const held = changed ? [] : watch.points;
+    await writePoints(ctx, watch._id, series?.length ? series : [{ at: args.at, value }], args.version, def);
+    const points = series?.length ? mergeReaderSeries(held, series) : appendMetricPoint(held, { at: args.at, value });
+    // The reader's dated periods (a cohort week, a day), apart from its live value dated at the read.
+    const dated = (series ?? []).filter((p) => p.at < args.at - READER_LIVE_SLACK_MS).slice(-GROUP_RULES.metric_points);
+    const read = {
+      points, last_error: undefined, missed: undefined, ...(unit ? { unit } : {}), updated_at: now,
+      ...(dated.length ? { source_points: dated } : changed ? { source_points: undefined } : {}),
+      ...(changed ? { version: args.version, version_at: now, version_since: now, version_note: undefined, version_by: undefined } : {}),
+    };
+    if (changed) await ctx.scheduler.runAfter(0, internal.metrics.recountRollups, { watch_id: watch._id, after_hour: -1 });
     if (watch.threshold === undefined) {
       // A plain series: the point is kept, and nothing is announced.
       await ctx.db.patch(watch._id, { ...read, state: "ok" });
@@ -655,7 +747,7 @@ async function readOneHistory(ctx: ActionCtx, args: { watch_id: Id<"metric_watch
       await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note });
       return { note };
     }
-    return await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, points: read.points });
+    return await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, points: read.points, ...(read.version ? { version: read.version } : {}) });
   }
   const source = await ctx.runQuery(internal.sources.posthog.sourceForPoll, { source_id: watch.source_id });
   if (!source || source.status !== "active") {
@@ -678,11 +770,16 @@ async function readOneHistory(ctx: ActionCtx, args: { watch_id: Id<"metric_watch
 }
 
 export const recordHistory = internalMutation({
-  args: { watch_id: v.id("metric_watches"), points: v.optional(v.array(v.object({ at: v.number(), value: v.number() }))), note: v.optional(v.string()) },
+  args: { watch_id: v.id("metric_watches"), points: v.optional(v.array(v.object({ at: v.number(), value: v.number() }))), note: v.optional(v.string()), version: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const watch = await ctx.db.get(args.watch_id);
     if (!watch) return null;
     const now = Date.now();
+    // A reader's history under another definition than the watch reads now is not its history.
+    if (args.points && args.version && watch.version && args.version !== watch.version) {
+      await ctx.db.patch(watch._id, { history: { at: now, added: 0, note: `The reader answered version ${args.version}; the watch reads ${watch.version}` }, updated_at: now });
+      return { added: 0 };
+    }
     if (!args.points) {
       await ctx.db.patch(watch._id, { history: { at: now, added: 0, note: (args.note ?? "No history").slice(0, INGEST_LIMITS.message_chars) }, updated_at: now });
       return { added: 0 };
@@ -690,8 +787,11 @@ export const recordHistory = internalMutation({
     // History goes under what the watch holds, never over a value it read itself.
     if (!(await holdsPoints(ctx, watch._id))) await writePoints(ctx, watch._id, watch.points);
     const oldest = await oldestHeld(ctx, watch);
-    const added = await writePoints(ctx, watch._id, args.points.filter((p) => oldest === null || p.at < oldest));
-    const merged = mergeMetricHistory(watch.points, args.points);
+    // A backfill tags only what a reader tagged, never brings back a removed value, and counts under the watch's definition.
+    const kept = args.points.filter(notRemoved(watch.point_removals));
+    const added = await writePoints(ctx, watch._id, kept.filter((p) => oldest === null || p.at < oldest), args.version, definitionOf(watch));
+    const current = ofVersion(definitionOf(watch));
+    const merged = mergeMetricHistory(watch.points, kept.filter((p) => current({ at: p.at, ...(args.version ? { version: args.version } : {}) })));
     const note = args.note?.slice(0, INGEST_LIMITS.message_chars);
     await ctx.db.patch(watch._id, { points: merged.points, history: { at: now, added, ...(note ? { note } : {}) }, updated_at: now });
     return { added };

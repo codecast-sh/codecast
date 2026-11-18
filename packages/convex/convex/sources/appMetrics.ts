@@ -23,7 +23,7 @@ export async function readAppMetric(
   query: string,
   fetchImpl: FetchLike,
   opts: { days?: number } = {},
-): Promise<{ ok: true; value: number | null; unit: string | null; points: Array<{ at: number; value: number }> } | { ok: false; error: string; lost?: boolean }> {
+): Promise<{ ok: true; value: number | null; unit: string | null; points: Array<{ at: number; value: number }>; version: string | null } | { ok: false; error: string; lost?: boolean }> {
   const parsed = parseReaderQuery(query);
   if ("error" in parsed) return { ok: false, error: parsed.error };
   const found = await ctx.runQuery(internal.sources.app.sourceForPoll, { source_id: sourceId });

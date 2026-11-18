@@ -7,7 +7,7 @@
 import { useCallback } from "react";
 import Link from "next/link";
 import { ArrowDownRight, ArrowUpRight, CheckCircle2, Circle, CircleDashed, CircleDot, Flag, Minus, XCircle, type LucideIcon } from "lucide-react";
-import { mdeWords, STANDING_WORD, type WindowRead } from "@codecast/shared/contracts/metricStanding";
+import { mdeWords, periodsWords, pointDay, STANDING_WORD, standingWord, type WindowRead } from "@codecast/shared/contracts/metricStanding";
 import { INITIATIVE_HEALTH_LABEL, INITIATIVE_STATUS_LABEL, formatMetricNumber, formatSeriesValue, intentSourceLabel, metricAgainst, metricLine, metricNumber, metricReaches, trendWords, type InitiativeHealth, type InitiativeMilestone, type InitiativeOwner, type InitiativeStatus, type InitiativeUpdateHealth, type IntentSource, type MetricReading, type MetricStanding, type MetricTrend } from "@codecast/shared/contracts/initiative";
 import { memberHandle } from "@codecast/shared/chat";
 import { stripMachineText, stripMarkdown } from "@codecast/shared/contracts/plainText";
@@ -156,7 +156,11 @@ function MetricBar({ reading, className }: { reading: MetricReading; className?:
 export function MetricTile({ reading, trend, now, size = "tile", named = true, className }: { reading: MetricReading; trend?: MetricTrend; now: number; size?: "tile" | "line" | "chip"; named?: boolean; className?: string }) {
   const standingColor = STANDING_COLOR[reading.standing];
   const unreported = reading.value === null;
-  const reaches = metricReaches(reading.target);
+  const traj = reading.trajectory;
+  const reaches = !traj && !reading.target_unread && metricReaches(reading.target);
+  // The target a value is read against now: a trajectory's number in force, else the target's own.
+  const targetNow = traj ? traj.in_force : reading.target_unread ? null : metricNumber(reading.target);
+  const targetWords = traj ? `${formatSeriesValue(traj.in_force, traj.unit)} now, ${formatSeriesValue(traj.final.value, traj.unit)} by ${pointDay(traj.final.at)}` : reading.target;
   const series = trend?.series.map((p) => p.n) ?? [];
   if (size === "chip") {
     return (
@@ -165,7 +169,7 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
         {named && <span className="truncate max-w-[18ch]" style={{ color: "var(--sol-text-muted)" }} data-metric-name>{reading.name}</span>}
         {unreported
           ? <span style={{ color: "var(--sol-text-dim)" }}>{metricAgainst(reading)}</span>
-          : <><span style={{ color: "var(--sol-text)" }}>{reading.value}</span><span style={{ color: "var(--sol-text-dim)" }}>{reaches ? "/" : "·"} {reading.target}</span></>}
+          : <><span style={{ color: "var(--sol-text)" }}>{reading.value}</span><span style={{ color: "var(--sol-text-dim)" }}>{reaches ? "/" : "·"} {traj ? formatSeriesValue(traj.in_force, traj.unit) : reading.target}</span></>}
         {trend && <TrendGlyph trend={trend} />}
       </span>
     );
@@ -178,7 +182,7 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
         <span className="tabular-nums whitespace-nowrap" style={{ color: unreported ? "var(--sol-text-dim)" : "var(--sol-text-secondary)" }}>{metricAgainst(reading)}</span>
         {trend && <TrendGlyph trend={trend} />}
         {series.length >= 2
-          ? <SparkLine values={series} target={metricNumber(reading.target)} width={48} height={14} tone={standingColor} className="text-sol-text-dim" />
+          ? <SparkLine values={series} target={targetNow} width={48} height={14} tone={standingColor} className="text-sol-text-dim" />
           : <MetricBar reading={reading} className="w-[56px] shrink-0" />}
         {reading.guardrail && <GuardrailMark />}
         {reading.live ? <LiveMark reading={reading} now={now} /> : named && reading.observed_at ? <span className="whitespace-nowrap text-meta" style={{ color: "var(--sol-text-dim)" }}>{shortDate(reading.observed_at, now)}</span> : null}
@@ -195,14 +199,14 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
       </div>
       <div className="mt-1 flex items-end gap-2 min-w-0">
         <span className="text-[22px] leading-none font-semibold tabular-nums tracking-tight" style={{ color: unreported ? "var(--sol-text-dim)" : "var(--sol-text)" }} data-metric-now>{unreported ? "not reported" : reading.value}</span>
-        <span className="text-[12px] pb-[2px] tabular-nums whitespace-nowrap" style={{ color: "var(--sol-text-dim)" }} data-metric-target>{!unreported && reaches ? "of" : "target"} {reading.target}</span>
+        <span className="text-[12px] pb-[2px] tabular-nums whitespace-nowrap" style={{ color: "var(--sol-text-dim)" }} data-metric-target>{traj ? "trajectory" : !unreported && reaches ? "of" : "target"} {targetWords}</span>
         {trend && <TrendGlyph trend={trend} className="mb-[3px]" />}
         <span className="flex-1" />
-        {series.length >= 2 && <SparkLine values={series} target={metricNumber(reading.target)} width={72} height={20} tone={standingColor} className="text-sol-text-dim" />}
+        {series.length >= 2 && <SparkLine values={series} target={targetNow} width={72} height={20} tone={standingColor} className="text-sol-text-dim" />}
       </div>
       <MetricBar reading={reading} className="mt-2 block w-full" />
       <div className="mt-1.5 text-meta flex items-center gap-2" style={{ color: "var(--sol-text-dim)" }}>
-        <span style={reading.band ? { color: standingColor } : undefined} data-metric-verdict>{reading.standing !== "unknown" ? capitalize(STANDING_WORD[reading.standing]) : unreported ? "Not reported yet" : metricNumber(reading.value) === null ? "Not a number" : "No number in the target"}</span>
+        <span style={reading.band ? { color: standingColor } : undefined} data-metric-verdict>{reading.target_unread ? "Unknown: target isn't a number" : reading.standing !== "unknown" ? capitalize(standingWord(reading.standing, traj)) : unreported ? "Not reported yet" : metricNumber(reading.value) === null ? "Not a number" : "No number in the target"}</span>
         {reading.observed_at && !reading.live ? <span>read {shortDate(reading.observed_at, now)}</span> : null}
         {!reading.band && trend?.delta !== null && trend?.delta !== undefined && trend.direction !== "flat" && <span className="tabular-nums">{trend.delta > 0 ? "+" : ""}{formatMetricNumber(trend.delta)} since last</span>}
       </div>
@@ -224,10 +228,11 @@ function MetricBandLine({ reading, band }: { reading: MetricReading; band: Windo
   const span = band.periods < band.of ? `${band.periods} of ${band.of} ${band.period}s` : `${band.of} ${band.period}${band.of === 1 ? "" : "s"}`;
   const mde = mdeWords(band.mde);
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-x-2 text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={metricLine(reading, Date.now())} data-metric-band>
-      <span>{span}: mean {say(band.mean)}</span>
+    <div className="mt-1 flex flex-wrap items-center gap-x-2 text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={`${metricLine(reading, Date.now())}\nPeriods read (UTC): ${periodsWords(band, say)}`} data-metric-band>
+      <span>{span}: {band.pooling === "pooled" ? "pooled" : "mean"} {say(band.mean)}</span>
       {band.low !== null && band.high !== null && <span data-metric-band-range>80% {rangeWords(say(band.low), say(band.high))}</span>}
       {mde && <span data-metric-mde>detects {mde} in 4 wk</span>}
+      {band.failing && <span style={{ color: "var(--sol-red)" }} title={band.failing} data-metric-failing>from polls, source failing</span>}
     </div>
   );
 }

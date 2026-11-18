@@ -6,7 +6,7 @@
 // readings from, so a role and the page read the same value.
 import { v } from "convex/values";
 import { INITIATIVE_METRICS_MAX, metricKeyOf, type InitiativeMetric, type MetricSeries } from "@codecast/shared/contracts/initiative";
-import { metricDenominatorRef, metricPeriodMs, metricWindowNoiseError, parseMetricWindow, windowSlotTimes } from "@codecast/shared/contracts/metricStanding";
+import { definitionOf, metricDenominatorRef, ofVersion, metricWindowNoiseError, parseMetricTarget, TRAJECTORY_TARGET_MAX, seriesPool, SLOT_TOLERANCE, windowPlan, windowSamples, windowSlotTimes } from "@codecast/shared/contracts/metricStanding";
 
 export const metricValidator = v.object({ key: v.string(), name: v.string(), target: v.string(), series: v.optional(v.string()), guardrail: v.optional(v.boolean()), window: v.optional(v.string()), noise: v.optional(v.string()) });
 export const metricArgValidator = v.object({ key: v.optional(v.string()), name: v.string(), target: v.string(), series: v.optional(v.union(v.string(), v.null())), guardrail: v.optional(v.boolean()), window: v.optional(v.union(v.string(), v.null())), noise: v.optional(v.union(v.string(), v.null())) });
@@ -20,7 +20,8 @@ export function cleanMetrics(raw: MetricArg[]): InitiativeMetric[] {
   const metrics: InitiativeMetric[] = [];
   for (const m of raw) {
     const name = clean(String(m.name ?? ""), 80);
-    const target = clean(String(m.target ?? ""), 40);
+    // A dated trajectory reads whole (contracts/metricStanding parseMetricTarget); any other target keeps the short cap.
+    const target = clean(String(m.target ?? ""), parseMetricTarget(String(m.target ?? ""))?.kind === "trajectory" ? TRAJECTORY_TARGET_MAX : 40);
     const key = metricKeyOf(m.key?.trim() || name);
     const series = m.series?.trim().toLowerCase() || undefined;
     const window = m.window?.trim().toLowerCase() || undefined;
@@ -67,32 +68,51 @@ export async function seriesLookup(ctx: { db: any }, workspace: string, rows: Re
     const w = await watchIn(ctx, workspace, ref);
     if (!w) continue;
     rowsByRef.set(ref, w);
-    found.set(ref, { short_id: w.short_id, name: w.name, unit: w.unit ?? null, points: w.points, last_error: w.last_error ?? null });
+    found.set(ref, {
+      short_id: w.short_id, name: w.name, unit: w.unit ?? null, points: w.points, last_error: w.last_error ?? null,
+      ...(w.source_points?.length ? { cohorts: w.source_points } : {}),
+      ...(w.version ? { version: w.version } : {}),
+    });
   }
   for (const m of metrics) {
-    const window = parseMetricWindow(m.window);
     const main = m.series ? found.get(m.series) : undefined;
+    const plan = main ? windowPlan(m, main) : null;
     const latest = main?.points[main.points.length - 1]?.at;
-    if (!window || !main || latest === undefined) continue;
-    const period = metricPeriodMs(`${m.name} ${main.name} ${main.unit ?? ""}`, window);
-    const slots = windowSlotTimes(latest, period, Math.max(1, Math.round(window.ms / period)));
-    for (const ref of seriesRefs(m)) {
-      const s = found.get(ref);
-      if (s) s.history = await slotHistory(ctx, rowsByRef.get(ref), s, slots, period);
-    }
+    // A reader that dates its own periods is read by them (cohorts); polls only feed its live value.
+    if (!plan || !main || latest === undefined || main.cohorts?.length) continue;
+    main.history = await slotHistory(ctx, rowsByRef.get(m.series!), main, windowSlotTimes(latest, plan.periodMs, plan.slots), plan.periodMs);
+    // A denominator is read where the metric's own values sit, not at the nominal slots: a sparse pair could otherwise miss each other.
+    const by = metricDenominatorRef(m);
+    const denom = by ? found.get(by) : undefined;
+    if (denom) denom.history = await slotHistory(ctx, rowsByRef.get(by!), denom, windowSamples(seriesPool(main), plan.periodMs, plan.slots).map((p) => p.at), plan.periodMs);
   }
   return (ref) => found.get(ref);
 }
 
-/** The stored value nearest each slot within half a period, for slots the row's own points do not already answer. */
+/**
+ * The stored value nearest each time within the slot tolerance (contracts/
+ * metricStanding SLOT_TOLERANCE), for times the row's own points do not
+ * already answer. Only values of the watch's current definition count; how
+ * many older ones sat nearer a slot is kept on the series (`dropped`), so
+ * the reading can say they were left out.
+ */
 async function slotHistory(ctx: { db: any }, watch: any, s: MetricSeries, slots: number[], period: number): Promise<MetricSeries["points"]> {
   const out = new Map<number, { at: number; value: number }>((s.history ?? []).map((p) => [p.at, p]));
+  const near = period * SLOT_TOLERANCE;
+  const current = ofVersion(definitionOf(watch));
+  const dropped = new Set<number>();
+  const nearest = async (t: number, side: "before" | "after") => {
+    const rows: any[] = await ctx.db.query("metric_points").withIndex("by_watch_at", (q: any) => (side === "before" ? q.eq("watch_id", watch._id).gte("at", t - near).lte("at", t) : q.eq("watch_id", watch._id).gt("at", t).lte("at", t + near))).order(side === "before" ? "desc" : "asc").take(SLOT_SCAN);
+    for (const r of rows) if (!current(r)) dropped.add(r.at);
+    return rows.find(current);
+  };
   for (const t of slots) {
-    if (s.points.some((p) => Math.abs(p.at - t) < period / 2)) continue;
-    const before = await ctx.db.query("metric_points").withIndex("by_watch_at", (q: any) => q.eq("watch_id", watch._id).lte("at", t)).order("desc").first();
-    const after = await ctx.db.query("metric_points").withIndex("by_watch_at", (q: any) => q.eq("watch_id", watch._id).gt("at", t)).order("asc").first();
-    const near = [before, after].filter((p: any) => p && Math.abs(p.at - t) < period / 2).sort((a: any, b: any) => Math.abs(a.at - t) - Math.abs(b.at - t))[0];
-    if (near) out.set(near.at, { at: near.at, value: near.value });
+    if (s.points.some((p) => Math.abs(p.at - t) <= near)) continue;
+    const hit = [await nearest(t, "before"), await nearest(t, "after")].filter(Boolean).sort((a: any, b: any) => Math.abs(a.at - t) - Math.abs(b.at - t))[0];
+    if (hit) out.set(hit.at, { at: hit.at, value: hit.value });
   }
+  if (dropped.size) s.dropped = (s.dropped ?? 0) + dropped.size;
   return [...out.values()].sort((a, b) => a.at - b.at);
 }
+/** Stored values one slot looks through, each side, for one of the current definition. */
+const SLOT_SCAN = 50;

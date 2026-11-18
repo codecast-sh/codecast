@@ -1,0 +1,111 @@
+// The climb (docs/architecture/flows.md FL10; design "Goals that agents can
+// climb" §4): an agent hill-climbs one goal metric through the goal's
+// environments, wide and cheap at the bottom, one candidate at the top.
+//
+//   cast task create "Climb in-9" --goal-ref in-9[:<metric key>]
+//   cast flow run climb --task ct-N
+//
+// The task names the goal (and optionally the metric) in its goal_ref. Agents
+// write two things, the climb card (Frame) and the candidates (Propose); every
+// number after that is computed by `cast climb` (climbCommand.ts) under the
+// rules in contracts/climb.ts, which no station can bend: the budget is the
+// smaller of the card's and the goal's (or the default), a level whose
+// minimum detectable change is larger than one change could move is refused,
+// a candidate that touches what grades it is refused, the base's own env
+// declaration runs both sides, held cases are run only through `cast env run
+// --split held` and come back as scores on hashed ids, and the budget stops
+// the climb when it is spent. All state lives in $run_dir/climb, and every
+// script skips work already filed there, so a resumed run pays for nothing
+// twice. Every way the climb ends passes through Record, which leaves the
+// summary on the goal and the task.
+//
+// Stations:
+//   frame     picks the target and the levels, writes the climb card
+//   gauge     the card under the caps; base runs measure each level's noise;
+//             levels that cannot see one change are refused (exit 3: none
+//             can; exit 5: the card itself is refused, back to Frame once)
+//   propose   N candidates, one change each on its own branch from the base
+//   admit     the diff rules: from the base, changing something, nothing graded
+//   review    an independent reviewer refuses candidates that game the climb
+//   screen    dev split, cheapest level first, successive halving
+//   confirm   held split; a dev gain that vanishes there is logged as overfit
+//   guard     the goal's L0 checks and the product's eval gate, best first
+//   promote   the survivor as a task with a predicted effect, and the decision
+//             proposing the production experiment, sized by the metric's MDE
+//   evidence  the computed summary: the decision's document and a comment on the task
+//   decide    nothing goes to production without the answer; Approve and Drop
+//             act only on the task `cast climb promote` recorded
+//   record    the summary on the goal: tried, separated, overfit, cost
+digraph climb {
+  graph [kind="line", label="Climb", description="Hill-climb one goal metric through its environments: many cheap candidates on dev, survivors on held, one promoted to a production experiment", takes="task", goal="$task_title", on_failure=stop]
+  rankdir=LR
+
+  start [shape=Mdiamond, label="Start"]
+  exit  [shape=Msquare,  label="Exit"]
+
+  frame [label="Frame", backend=session, agent=claude, max_visits=2, prompt="@climb/frame.md"]
+
+  // Base runs: three per scoring level, each as long as one env run.
+  gauge [label="Gauge", shape=parallelogram, timeout=21600,
+    script="d=\"$run_dir/climb\"; mkdir -p \"$d\"; cast climb gauge --dir \"$d\" --card \"$d/card.json\" --task $task_id --goal $goal_ref"]
+
+  propose [label="Propose", backend=session, agent=claude, isolated=true, timeout=10800, prompt="@climb/propose.md"]
+
+  admit [label="Admit", shape=parallelogram, timeout=300,
+    script="d=\"$run_dir/climb\"; cast climb admit --dir \"$d\" --candidates \"$d/candidates.json\""]
+
+  review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@climb/review.md"]
+
+  screen [label="Screen", shape=parallelogram, timeout=43200,
+    script="cast climb screen --dir \"$run_dir/climb\""]
+
+  confirm [label="Confirm", shape=parallelogram, timeout=21600,
+    script="cast climb confirm --dir \"$run_dir/climb\""]
+
+  // The product's eval gate (the line profile's eval command, as committed at the base) on each survivor, as the line's Eval runs it.
+  guard [label="Guard", shape=parallelogram, timeout=21600,
+    script="cast climb guard --dir \"$run_dir/climb\""]
+
+  promote [label="Promote", backend=session, agent=claude, max_visits=3, prompt="@climb/promote.md"]
+
+  // What the climb measured, computed from the filed runs: the decision's document, so the person answers from it, not from Promote's words alone.
+  evidence [label="Evidence", shape=parallelogram, timeout=600,
+    script="why=$promote.json.why; sum=$(cast climb status --dir \"$run_dir/climb\" --summary); printf '%s\\n\\nPromote recommends: %s\\n' \"$sum\" \"$why\"; cast task comment $task_id \"What the climb measured (computed from its filed runs):
+$sum\" -t progress >/dev/null; exit 0"]
+
+  decide [label="Decide", shape=hexagon, category=review,
+    prompt="$promote.json.question",
+    doc="$evidence.output"]
+
+  approve [label="Approve", shape=parallelogram, timeout=120,
+    script="t=$(cast climb status --dir \"$run_dir/climb\" --field task); note=$human_message; cast climb outcome --dir \"$run_dir/climb\" \"Production experiment approved: $t.${note:+ $note}\"; [ -n \"$t\" ] && cast task update \"$t\" -s open && cast task comment \"$t\" \"Approved for a production experiment at the climb's decision.${note:+ $note}\" -t progress; exit 0"]
+
+  drop [label="Drop", shape=parallelogram, timeout=120,
+    script="t=$(cast climb status --dir \"$run_dir/climb\" --field task); note=$human_message; cast climb outcome --dir \"$run_dir/climb\" \"Dropped at the decision.${note:+ $note}\"; [ -n \"$t\" ] && cast task drop \"$t\" -m \"Dropped at the climb's decision.${note:+ $note}\"; exit 0"]
+
+  record [label="Record", shape=parallelogram, timeout=300, script="@climb/record.sh"]
+
+  start -> frame
+  frame -> gauge
+  gauge -> propose [condition="outcome = success"]
+  gauge -> frame   [condition="outcome = failure and gauge.exit_code = 5", label="card refused"]
+  gauge -> record  [condition="outcome = failure and gauge.exit_code != 5", label="no level can see it"]
+  propose -> admit
+  admit -> review  [condition="outcome = success"]
+  admit -> record  [condition="outcome = failure", label="every candidate refused"]
+  review -> screen
+  screen -> confirm [condition="outcome = success"]
+  screen -> record  [condition="outcome = failure", label="none separated, or budget spent"]
+  confirm -> guard  [condition="outcome = success"]
+  confirm -> record [condition="outcome = failure", label="overfit, or budget spent"]
+  guard -> promote  [condition="outcome = success"]
+  guard -> record   [condition="outcome = failure", label="every survivor refused"]
+  promote -> evidence
+  evidence -> decide
+  decide -> approve [label="[S] Start :: Open the production experiment the card proposes"]
+  decide -> drop    [label="[D] Drop :: Close the candidate's task; nothing goes to production"]
+  decide -> promote [condition="outcome = success"]
+  approve -> record
+  drop -> record
+  record -> exit
+}

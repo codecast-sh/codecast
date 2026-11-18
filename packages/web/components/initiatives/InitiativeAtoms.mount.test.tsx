@@ -82,6 +82,18 @@ async function verifyAtoms() {
     assert.equal(text(el.querySelector("[data-metric-verdict]")), "Met");
   }
 
+  // ── a dated trajectory reads against the target in force; a target that is not a number says so ──
+  {
+    const at = Date.UTC(2026, 10, 23);
+    const s16 = { short_id: "mw-16", name: "Replied to explicit need", unit: "%", points: [{ at, value: 53 }] };
+    let el = await tile(metricReading({ key: "n", name: "Replied to explicit need", target: "at least 51.2%@2026-11-16 53.1%@2026-11-30 59.1%@2026-12-28", series: "mw-16" }, null, s16), "tile");
+    assert.equal(text(el.querySelector("[data-metric-target]")), "trajectory 52.2% now, 59.1% by 28 Dec");
+    assert.equal(text(el.querySelector("[data-metric-verdict]")), "On trajectory");
+    el = await tile(metricReading({ key: "c", name: "Cold email reply rate", target: "1% higher (Cameron)", series: "mw-16" }, null, s16), "tile");
+    assert.equal(text(el.querySelector("[data-metric-verdict]")), "Unknown: target isn't a number");
+    assert.ok(el.querySelector("span[data-metric-standing='unknown']"));
+  }
+
   // ── a metric with no value yet: the target is named as a target, at every size ──
   const teams = { key: "teams", name: "Weekly active teams", target: "1,000" };
   for (const size of SIZES) {
@@ -132,7 +144,7 @@ async function verifyAtoms() {
   const shipped = metricReading({ key: "ship", name: "Launch", target: "shipped" }, score("3", 1));
   el = await tile(shipped, "tile");
   assert.equal(text(el.querySelector("[data-metric-target]")), "target shipped");
-  assert.match(text(el), /No number in the target/);
+  assert.match(text(el), /Unknown: target isn't a number/);
   assert.doesNotMatch(text(el), /Not a number/);
   assert.match(text(await tile(shipped, "line")), /3, target shipped/);
   assert.equal(text(await tile(shipped, "chip")), "Launch 3 · shipped");

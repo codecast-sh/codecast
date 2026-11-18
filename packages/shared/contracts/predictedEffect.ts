@@ -1,18 +1,24 @@
-// A task's predicted effect on a goal metric, and what the metric did after
-// the task shipped (ct-96177; design "Goals agents can climb" section 4). The
-// prediction is stated before the work, in one line a person or a station
-// writes:
+// A task's predicted effect, and what it did after the task shipped
+// (ct-96177; design "Goals agents can climb" section 4). The prediction is
+// stated before the work, in one line a person or a station writes, and names
+// where the effect is read: a goal metric (`in-N:key`), a metric series
+// directly (`mw-N`), or an environment (`env:<product>/<name>`):
 //
-//   in-9:intros_a_week +5% by 2026-12-15 :: replay env score +6 on L2
-//   in-9:dollars_per_intro -$40 in 21d :: sim-forward arm vs base
+//   in-9:intros_a_week +5% by 2026-12-15 :: <basis>
+//   mw-17 +3pt in 21d :: <basis>
+//   env:union/second-side-replay +0.02 :: <basis>
 //
-// After ship, at the read time, the server reads the metric over the window
-// after ship against the same length before it (convex/predictions.ts) and
-// judges it here. Both halves live on the task; a goal reads them from its
-// tasks, so the record has one home. Pure: the CLI, the web and the server
-// parse, judge and word it the same way.
+// A metric or series is read over the window after ship against as long
+// before it; an env, as its first attempt after ship paired against its last
+// before (convex/predictions.ts). When it is set, a prediction is checked
+// against what its target can detect over that read (`readable`, `mde`): one
+// smaller than that is recorded, read, and always judged unreadable, since no
+// outcome of it could teach anything. Both halves live on the task; a goal
+// reads them from its tasks, so the record has one home. Pure: the CLI, the
+// web and the server parse, judge and word it the same way.
 import { formatSeriesValue } from "./initiative";
-import { metricPeriodMs, noiseSd, parseMetricWindow } from "./metricStanding";
+import { MDE_WEEKS, mdeWords, metricPeriodMs, minimumDetectableLift, noiseSd, parseMetricNoise, parseMetricWindow } from "./metricStanding";
+import { isEnvKey } from "./envs";
 
 const DAY = 86_400_000;
 
@@ -20,14 +26,28 @@ export const PREDICTION_VERDICTS = ["held", "not_shown", "opposite", "unreadable
 export type PredictionVerdict = (typeof PREDICTION_VERDICTS)[number];
 export const PREDICTION_VERDICT_WORDS: Record<PredictionVerdict, string> = { held: "held", not_shown: "not shown", opposite: "opposite", unreadable: "unreadable" };
 
+/** Where an effect is read: a goal metric, a metric series, or an environment. */
+export type PredictionTarget = "metric" | "series" | "env";
+export function targetKind(ref: string): PredictionTarget | null {
+  if (/^in-\d+:[a-z0-9_]+$/.test(ref)) return "metric";
+  if (/^mw-\d+$/.test(ref)) return "series";
+  return ref.startsWith("env:") && isEnvKey(ref.slice(4)) ? "env" : null;
+}
+const TARGET_NOUN: Record<PredictionTarget, string> = { metric: "metric", series: "series", env: "environment" };
+
 export type PredictedEffect = {
-  /** The goal metric, `in-N:key` (metricGoalRef). */
+  /** Where it is read: `in-N:key`, `mw-N` or `env:<product>/<name>` (the field keeps its first name). */
   goal_ref: string;
+  /** The goal it serves (`in-N`), so the goal lists it whatever its target. */
+  goal?: string;
+  /** Whether the target can detect a move this size over the read, and what it can detect: a share of its level for a metric or series, a score for an env. Absent when the target has no noise model to say. */
+  readable?: boolean;
+  mde?: number;
   direction: "up" | "down";
   /** How far, always positive: a share of the value before ship when `relative`, else in the metric's own unit. */
   size: number;
   relative: boolean;
-  /** When to read it: a date, or a number of days after ship. Exactly one is set. */
+  /** When to read it: a date, or a number of days after ship. An env without either is read at its first attempt after ship. */
   read_at?: number;
   read_days?: number;
   /** Which check or evidence predicted it, one line. */
@@ -68,15 +88,16 @@ export const PREDICTION_READ = {
 } as const;
 
 const BASIS_MAX = 240;
-const PREDICT_RE = /^(\S+)\s+([+-])\s*(\$)?\s*(\d+(?:\.\d+)?)\s*(%|pp|pts?|points?)?\s+(?:by\s+(\d{4}-\d{2}-\d{2})|in\s+(\d+)\s*(d|days?|w|weeks?))\s*(?:::\s*([\s\S]*))?$/i;
-export const PREDICT_FORMAT = "<in-N:metric_key> <+|-><size>[%] (by YYYY-MM-DD | in <N>d|w) :: <basis>, e.g. \"in-9:intros_a_week +5% by 2026-12-15 :: replay env +6 on L2\"";
+const PREDICT_RE = /^(\S+)\s+([+-])\s*(\$)?\s*(\d+(?:\.\d+)?)\s*(%|pp|pts?|points?)?(?:\s+(?:by\s+(\d{4}-\d{2}-\d{2})|in\s+(\d+)\s*(d|days?|w|weeks?)))?\s*(?:::\s*([\s\S]*))?$/i;
+export const PREDICT_FORMAT = "<in-N:metric_key | mw-N | env:<product>/<name>> <+|-><size>[%|pt] [by YYYY-MM-DD | in <N>d|w] :: <basis>, e.g. \"mw-17 +3pt in 21d :: <basis>\"";
 
 /** Read one prediction line. `%` is relative to the value before ship; `pt`/`pp` or a bare number moves the metric itself. */
 export function parsePrediction(text: string, now: number): { prediction: PredictedEffect } | { error: string } {
   const m = (text ?? "").trim().replace(/\s+/g, " ").match(PREDICT_RE);
   if (!m) return { error: `A prediction reads ${PREDICT_FORMAT}` };
   const [, ref, sign, , num, unit, date, count, span, basisRaw] = m;
-  if (!/^in-\d+:[a-z0-9_]+$/i.test(ref)) return { error: `"${ref}" is not a goal metric ref (in-N:key, from cast goals)` };
+  const kind = targetKind(ref.toLowerCase());
+  if (!kind) return { error: `"${ref}" is not a place an effect is read: a goal metric (in-N:key), a metric series (mw-N) or an environment (env:<product>/<name>), from cast goals --brief` };
   const size = Number(num);
   if (!(size > 0)) return { error: "A prediction moves the metric by more than 0" };
   const basis = (basisRaw ?? "").trim();
@@ -89,11 +110,11 @@ export function parsePrediction(text: string, now: number): { prediction: Predic
     const at = day + DAY;
     if (at <= now) return { error: `The read date ${date} has passed` };
     out.read_at = at;
-  } else {
+  } else if (count) {
     const days = Number(count) * (/^w/i.test(span) ? 7 : 1);
     if (!(days > 0)) return { error: "Read it at least one day after ship" };
     out.read_days = days;
-  }
+  } else if (kind !== "env") out.read_days = PREDICTION_READ.max_window_days;
   return { prediction: out };
 }
 
@@ -101,14 +122,21 @@ const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 /** The prediction back in the line parsePrediction reads. */
 export function predictionText(p: PredictedEffect): string {
-  const when = p.read_at !== undefined ? `by ${isoDay(p.read_at - DAY)}` : `in ${p.read_days}d`;
-  return `${p.goal_ref} ${p.direction === "up" ? "+" : "-"}${p.size}${p.relative ? "%" : ""} ${when} :: ${p.basis}`;
+  const when = p.read_at !== undefined ? ` by ${isoDay(p.read_at - DAY)}` : p.read_days !== undefined ? ` in ${p.read_days}d` : "";
+  return `${p.goal_ref} ${p.direction === "up" ? "+" : "-"}${p.size}${p.relative ? "%" : ""}${when} :: ${p.basis}`;
 }
 
-/** When a shipped task's prediction is read: its date or days after ship, never sooner than min_after_days after ship. */
+/** When a shipped task's prediction is read: its date or days after ship, never sooner than min_after_days after ship. One with neither (an env) is read from ship on, at its first attempt after it. */
 export function predictionReadAt(p: Pick<PredictedEffect, "read_at" | "read_days">, shippedAt: number): number {
-  const stated = p.read_at ?? shippedAt + (p.read_days ?? PREDICTION_READ.max_window_days) * DAY;
+  if (p.read_at === undefined && p.read_days === undefined) return shippedAt;
+  const stated = p.read_at ?? shippedAt + p.read_days! * DAY;
   return Math.max(stated, shippedAt + PREDICTION_READ.min_after_days * DAY);
+}
+
+/** How long a read runs on each side of ship, as known before ship: the stated days, the time to the stated date, capped at the read window. */
+export function predictionSpanMs(p: Pick<PredictedEffect, "read_at" | "read_days">, now: number): number {
+  const cap = PREDICTION_READ.max_window_days * DAY;
+  return Math.min(cap, p.read_days !== undefined ? p.read_days * DAY : p.read_at !== undefined ? Math.max(DAY, p.read_at - now) : cap);
 }
 
 /** The two windows a read compares: after ship up to the read, capped, and as long before ship. */
@@ -177,13 +205,16 @@ export function judgePrediction(
 const round = (n: number) => (Math.abs(n) >= 100 ? Math.round(n) : Math.round(n * 100) / 100);
 
 /** "held: 37/week → 43/week (+6; predicted +5%), outside ±4" for a terminal, a brief or a card. */
-export function realisedLine(p: Pick<PredictedEffect, "direction" | "size" | "relative">, r: RealisedEffect, unit?: string | null): string {
+export function realisedLine(p: Pick<PredictedEffect, "direction" | "size" | "relative"> & Partial<Pick<PredictedEffect, "goal_ref" | "readable" | "mde">>, r: RealisedEffect, unit?: string | null): string {
   const said = `predicted ${p.direction === "up" ? "+" : "-"}${p.relative ? `${p.size}%` : formatSeriesValue(p.size, unit === "$" ? "$" : null)}`;
-  if (r.verdict === "unreadable" || r.value_before === null || r.value_after === null || r.delta === null) return `${PREDICTION_VERDICT_WORDS.unreadable}: ${r.note}`;
+  if (r.value_before === null || r.value_after === null || r.delta === null) return `${PREDICTION_VERDICT_WORDS.unreadable}: ${r.note}`;
+  // Read, but smaller than its place detects: what it did, and why it counts for nothing.
+  const tooSmall = r.verdict === "unreadable" && p.goal_ref ? unreadableWords(p as Pick<PredictedEffect, "goal_ref" | "readable" | "mde">) : null;
+  if (r.verdict === "unreadable" && !tooSmall) return `${PREDICTION_VERDICT_WORDS.unreadable}: ${r.note}`;
   const f = (n: number) => formatSeriesValue(n, unit);
   const d = `${r.delta >= 0 ? "+" : "-"}${formatSeriesValue(Math.abs(r.delta), unit === "$" ? "$" : null)}`;
   const band = r.band === null ? "" : r.within_noise ? `, inside ±${formatSeriesValue(r.band, null)}` : `, outside ±${formatSeriesValue(r.band, null)}`;
-  return `${PREDICTION_VERDICT_WORDS[r.verdict]}: ${f(r.value_before)} → ${f(r.value_after)} (${d}; ${said})${band}`;
+  return `${PREDICTION_VERDICT_WORDS[r.verdict]}: ${f(r.value_before)} → ${f(r.value_after)} (${d}; ${said})${band}${tooSmall ? `; ${tooSmall}` : ""}`;
 }
 
 /** One task's prediction as a goal lists it, with the unit of the metric it names. */
@@ -195,7 +226,9 @@ export type GoalPredictionRow = {
 
 /** The words a goal's list prints for one prediction. */
 export function predictionWords(p: PredictedEffect, r: RealisedEffect | null, unit: string | null): Pick<GoalPredictionRow, "said" | "reading"> {
-  return { said: predictionText(p).split(" :: ")[0], reading: r ? realisedLine(p, r, unit).replace(/^[a-z ]+: /, "") : null };
+  const unreadable = unreadableWords(p);
+  const when = p.read_days !== undefined ? " after ship" : p.read_at === undefined ? " at the first attempt after ship" : "";
+  return { said: `${predictionText(p).split(" :: ")[0]}${when}${unreadable ? `, ${unreadable}` : ""}`, reading: r ? realisedLine(p, r, unit).replace(/^[a-z ]+: /, "") : null };
 }
 
 export type PredictionTally = { open: number; held: number; not_shown: number; opposite: number; unreadable: number };
@@ -214,4 +247,82 @@ export function hitRateWords(t: PredictionTally): string {
     t.unreadable ? `${t.unreadable} unreadable` : "",
   ].filter(Boolean);
   return parts.join(", ");
+}
+
+// ── Whether a prediction can be read at its target ──
+
+const WEEK = 7 * DAY;
+
+/**
+ * The smallest relative change a before/after read detects at a metric (80%
+ * power, two-sided 5%), from its windowed reading: `span` of the read on each
+ * side, the metric's `period`. A read with a span of S on each side carries the
+ * information of a 50/50 test over 2S, so this is metricStanding's
+ * minimumDetectableLift over that many periods; a binomial whose n lives in a
+ * denominator series rescales the band's own four-week figure by the same
+ * ratio. Null when the metric has no noise model to say.
+ */
+export function readMde(band: { mean: number; mde: number | null } | null | undefined, noise: string | null | undefined, periodMs: number, spanMs: number, scale?: number): number | null {
+  if (!band || !(periodMs > 0) || !(spanMs > 0)) return null;
+  const periods = (2 * spanMs) / periodMs;
+  const model = parseMetricNoise(noise);
+  const direct = model && (model.kind !== "binomial" || model.n) ? minimumDetectableLift(band.mean, model, periods, { scale }) : null;
+  if (direct !== null) return direct;
+  return band.mde !== null ? band.mde * Math.sqrt((MDE_WEEKS * WEEK) / periodMs / periods) : null;
+}
+
+/**
+ * The smallest score change a paired read of an env detects: from its latest
+ * attempt's paired interval, else twice its A/A spread, else its own interval
+ * taken twice. Expressed through the A/A form of minimumDetectableLift (at
+ * level 1 over 4 periods it is the z sum times one standard error).
+ */
+export function envMde(a: { paired_ci95?: number[]; ci95?: number[]; noise?: { aa_sd: number } } | null | undefined): number | null {
+  if (!a) return null;
+  const half = (ci?: number[]) => (ci && ci.length === 2 ? (ci[1]! - ci[0]!) / 2 / 1.96 : null);
+  const se = half(a.paired_ci95) ?? (a.noise ? a.noise.aa_sd * Math.SQRT2 : null) ?? (half(a.ci95) !== null ? half(a.ci95)! * Math.SQRT2 : null);
+  return se && se > 0 ? minimumDetectableLift(1, { kind: "aa", sd: se }, 4) : null;
+}
+
+/** How far the prediction moves its target, in the unit its detectable change is in: a share of the level for a metric or series, a score for an env. Null when that cannot be taken. */
+export function predictedMove(p: Pick<PredictedEffect, "size" | "relative">, kind: PredictionTarget, level: number | null): number | null {
+  if (kind === "env") return p.relative ? (level === null ? null : (Math.abs(level) * p.size) / 100) : p.size;
+  if (p.relative) return p.size / 100;
+  return level ? p.size / Math.abs(level) : null;
+}
+
+/** The readability a prediction carries: readable when its move reaches what the target detects, nothing when the target cannot say. */
+export function readability(p: Pick<PredictedEffect, "size" | "relative" | "goal_ref">, mde: number | null, level: number | null): Pick<PredictedEffect, "readable" | "mde"> {
+  const kind = targetKind(p.goal_ref);
+  const move = kind ? predictedMove(p, kind, level) : null;
+  return mde === null || move === null ? {} : { readable: move >= mde, mde };
+}
+
+/** "±164%" for a metric or series, "±0.031" for an env. */
+export const detectsWords = (kind: PredictionTarget, mde: number): string => (kind === "env" ? `±${mde.toFixed(3)}` : mdeWords(mde) ?? `±${mde}`);
+
+/** "unreadable at this metric (detects ±164%)" when the prediction is smaller than its target can see; null otherwise. */
+export function unreadableWords(p: Pick<PredictedEffect, "goal_ref" | "readable" | "mde">): string | null {
+  const kind = targetKind(p.goal_ref);
+  return p.readable === false && kind && p.mde !== undefined ? `unreadable at this ${TARGET_NOUN[kind]} (detects ${detectsWords(kind, p.mde)})` : null;
+}
+
+/**
+ * Judge an env prediction from its last attempt before ship and first after:
+ * the paired delta over the cases both scored when there is one, else the
+ * difference of means. Held, opposite and not shown as for a metric, against
+ * the paired interval's half width.
+ */
+export function judgeEnvPrediction(
+  p: Pick<PredictedEffect, "direction" | "size" | "relative">,
+  read: { before: number; after: number; delta: number; half: number | null; note: string },
+): Pick<RealisedEffect, "verdict" | "value_before" | "value_after" | "delta" | "within_noise" | "band" | "note"> {
+  const toward = p.direction === "up" ? read.delta : -read.delta;
+  const predicted = p.relative ? (Math.abs(read.before) * p.size) / 100 : p.size;
+  const band = read.half && read.half > 0 ? read.half : null;
+  const verdict: PredictionVerdict =
+    toward > 0 && toward > (band ?? 0) && toward >= predicted / 2 ? "held"
+    : toward < 0 && -toward > (band ?? predicted / 2) ? "opposite"
+    : "not_shown";
+  return { verdict, value_before: read.before, value_after: read.after, delta: read.delta, within_noise: band === null ? null : Math.abs(read.delta) <= band, band, note: read.note };
 }

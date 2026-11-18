@@ -6,6 +6,9 @@ import { PREDICTION_VERDICTS } from "@codecast/shared/contracts/predictedEffect"
 
 export const predictedValidator = v.object({
   goal_ref: v.string(),
+  goal: v.optional(v.string()),
+  readable: v.optional(v.boolean()),
+  mde: v.optional(v.number()),
   direction: v.union(v.literal("up"), v.literal("down")),
   size: v.number(),
   relative: v.boolean(),

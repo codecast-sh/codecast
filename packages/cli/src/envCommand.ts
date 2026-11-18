@@ -32,6 +32,11 @@ import { commandGroup } from "./commandGroups.js";
 import { c } from "./colors.js";
 import { fillCommand, loadEnvDeclarations, parseEnvsText, repoIdentity, resultText } from "./envDeclaration.js";
 import { scopeFor } from "./lineScope.js";
+import { caseSetLines, fetchCaseSet, heldTreeProblem, putCaseSet, putCaseSetMeta, readCaseSetInput, withCaseFile, type CaseSetLog } from "./envCases.js";
+import { CASES_FILE_ENV, isCaseSetSplit } from "@codecast/shared/contracts/envCases";
+
+/** Set on a dev run told to read the runner's own local corpus instead of codecast's dev set. */
+export const LOCAL_CASES_ENV = "CODECAST_ENV_LOCAL_CASES";
 
 /** How long a runner may take when its declaration says nothing. */
 export const ENV_TIMEOUT_DEFAULT_S = 1800;
@@ -60,7 +65,7 @@ export function ago(at: number, now = Date.now()): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
-function gitSha(dir: string, ref = "HEAD"): string | null {
+export function gitSha(dir: string, ref = "HEAD"): string | null {
   try { return execFileSync("git", ["rev-parse", ref], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null; } catch { return null; }
 }
 
@@ -82,22 +87,33 @@ function declared(key: string): { decl: EnvDeclaration; root: string } {
 export type EnvRun = { ok: true; result: EnvResult; warnings: string[]; code: number; ms: number } | { ok: false; error: string; code: number; ms: number };
 
 /** Run a declared env once in `dir` (the repo root, or a base tree) and read its result against the contract. */
-export async function runEnv(decl: EnvDeclaration, opts: { dir: string; candidate: string; split: EnvSplit; /** The commit the tree is; null when the tree has uncommitted changes, so no attempt claims a sha it is not. */ sha?: string | null; quiet?: boolean }): Promise<EnvRun> {
+export async function runEnv(decl: EnvDeclaration, opts: { dir: string; candidate: string; split: EnvSplit; /** The commit the tree is; null when the tree has uncommitted changes, so no attempt claims a sha it is not. */ sha?: string | null; quiet?: boolean; /** The split's case-set file from codecast (envCases.ts withCaseFile), named to the runner in CODECAST_ENV_CASES. */ casesFile?: string; /** Dev only: the runner may read its own local corpus (CODECAST_ENV_LOCAL_CASES=1). */ localCases?: boolean }): Promise<EnvRun> {
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cast-env-")), "result.json");
   const command = fillCommand(decl.command, { candidate: opts.candidate, split: opts.split, out, sha: opts.sha ?? "", root: opts.dir });
   const started = Date.now();
+  const env: NodeJS.ProcessEnv = { ...process.env, CODECAST_ENV: decl.key, CODECAST_ENV_CANDIDATE: opts.candidate, CODECAST_ENV_SPLIT: opts.split, CODECAST_ENV_OUT: out, CODECAST_ENV_SHA: opts.sha ?? "" };
+  delete env[CASES_FILE_ENV];
+  delete env[LOCAL_CASES_ENV];
+  if (opts.casesFile) env[CASES_FILE_ENV] = opts.casesFile;
+  if (opts.localCases && opts.split === "dev") env[LOCAL_CASES_ENV] = "1";
   // Its own process group, so a timeout stops the runner's children too
   // (a `bun run` script, forked workers), not only the shell holding the pipe.
   const proc = spawn("sh", ["-c", command], {
     cwd: opts.dir,
     detached: true,
-    stdio: ["ignore", "pipe", opts.quiet ? "ignore" : "inherit"],
-    env: { ...process.env, CODECAST_ENV: decl.key, CODECAST_ENV_CANDIDATE: opts.candidate, CODECAST_ENV_SPLIT: opts.split, CODECAST_ENV_OUT: out, CODECAST_ENV_SHA: opts.sha ?? "" },
+    // A held runner's stderr can carry what it read (a stack, a log line), and the caller's output is a synced transcript: count it, never show it.
+    stdio: ["ignore", "pipe", opts.quiet ? "ignore" : opts.split === "held" ? "pipe" : "inherit"],
+    env,
   });
   const limit = (decl.timeout_s ?? ENV_TIMEOUT_DEFAULT_S) * 1000;
   let timedOut = false;
   let stdout = "";
   proc.stdout!.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+  let withheld = 0;
+  proc.stderr?.on("data", (chunk: Buffer) => { withheld += chunk.toString("utf8").split("\n").length - 1; });
+  // The runner has its own process group: when this process ends, it ends too, so it reads no held file past its run.
+  const killGroup = () => { try { process.kill(-proc.pid!, "SIGKILL"); } catch {} };
+  process.once("exit", killGroup);
   const code = await new Promise<number>((resolve) => {
     const timer = setTimeout(() => {
       timedOut = true;
@@ -105,9 +121,14 @@ export async function runEnv(decl: EnvDeclaration, opts: { dir: string; candidat
       proc.stdout?.destroy();
       resolve(-1);
     }, limit);
+    // When the runner itself exits, whatever it left in its group (a forked worker, a detached copy holding the pipe) ends with it.
+    proc.on("exit", killGroup);
     proc.on("close", (c) => { clearTimeout(timer); resolve(c ?? -1); });
     proc.on("error", () => { clearTimeout(timer); resolve(-1); });
   });
+  killGroup();
+  process.removeListener("exit", killGroup);
+  if (withheld && !opts.quiet) console.error(`${decl.key}: ${withheld} line${withheld === 1 ? "" : "s"} of runner output withheld on the held split (run --split dev to see it)`);
   const ms = Date.now() - started;
   if (timedOut) return { ok: false, error: `${decl.key} ran past its ${limit / 1000}s limit and was stopped (timeout_s in envs.toml)`, code, ms };
   const fromFile = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : null;
@@ -115,18 +136,45 @@ export async function runEnv(decl: EnvDeclaration, opts: { dir: string; candidat
   const text = fromFile?.trim() ? fromFile : resultText(stdout);
   if (!text) return { ok: false, error: `${decl.key} exited ${code} and printed no result (one JSON object on stdout, or written to {out})`, code, ms };
   const parsed = parseEnvResult(text, { env: decl.key, level: decl.level, split: opts.split });
-  if (!parsed.ok) return { ok: false, error: `${decl.key}'s result breaks the contract: ${parsed.error}`, code, ms };
+  // A held result's error would quote what the runner printed, which may be what it read: say only that it broke.
+  if (!parsed.ok) return { ok: false, error: opts.split === "held" ? `${decl.key}'s held result breaks the contract (the details would quote the runner, so they are withheld: run --split dev to see the same error)` : `${decl.key}'s result breaks the contract: ${parsed.error}`, code, ms };
   const result = parsed.result;
   // A held case is filed by a hash of its id, never its id (contracts/envs heldCaseId).
-  if (result.split === "held") result.cases = await Promise.all(result.cases.map(async (k) => ({ id: await heldCaseId(decl.key, k.id), score: k.score })));
+  // A runner that already files hashed ids (h: and 16 hex, the same hash) keeps them.
+  if (result.split === "held") result.cases = await Promise.all(result.cases.map(async (k) => ({ id: /^h:[0-9a-f]{16}$/.test(k.id) ? k.id : await heldCaseId(decl.key, k.id), score: k.score })));
   // The sha is what codecast knows the tree to be, never what the runner says.
   const { sha: _said, ...rest } = result.candidate;
   result.candidate = opts.sha ? { ...rest, sha: opts.sha } : rest;
   return { ok: true, result, warnings: parsed.warnings, code, ms };
 }
 
+/**
+ * Run an env with its split's cases from codecast. A held run always fetches
+ * them, and only on a committed tree whose runner is the base's (heldTreeProblem). A dev run fetches the live dev set
+ * when there is one and runs with none when the env keeps no dev set here, so
+ * an env without case sets is unaffected; `localCases` skips the fetch and
+ * tells the runner to read its own corpus. The fetch's id goes back so the
+ * attempt is filed against it.
+ */
+export async function runWithCases(post: Post, decl: EnvDeclaration, run: Parameters<typeof runEnv>[1], fetch: { goal?: string; scope?: Record<string, unknown>; session_id?: string | null; task_id?: string }): Promise<{ run: EnvRun; read?: string }> {
+  if (!isCaseSetSplit(run.split) || (run.split === "dev" && run.localCases)) return { run: await runEnv(decl, run) };
+  if (run.split === "held") {
+    const problem = heldTreeProblem(run.dir, decl, baseSha(run.dir));
+    if (problem) throw new Error(problem);
+  }
+  let read: string | undefined;
+  try {
+    const out = await withCaseFile(post, decl.key, run.split, { ...fetch, ttl_s: (decl.timeout_s ?? ENV_TIMEOUT_DEFAULT_S) + 600 }, (casesFile, f) => { read = f.read; return runEnv(decl, { ...run, casesFile }); });
+    return { run: out, read };
+  } catch (err) {
+    const msg = errText(err);
+    if (run.split === "dev" && /has no dev set/.test(msg)) return { run: await runEnv(decl, run) };
+    throw new Error(run.split === "dev" ? `${msg} (to run on the corpus this machine holds, pass --local-cases)` : msg);
+  }
+}
+
 /** File a result. The server reads the same JSON again; the result's cases go as the runner wrote them. */
-export async function recordRun(post: Post, decl: EnvDeclaration, root: string, result: EnvResult, extra: { goal?: string; task_id?: string; session_id?: string | null; scope?: Record<string, unknown> }): Promise<{ short_id: string; warnings?: string[] }> {
+export async function recordRun(post: Post, decl: EnvDeclaration, root: string, result: EnvResult, extra: { goal?: string; task_id?: string; session_id?: string | null; scope?: Record<string, unknown>; cases_read?: string }): Promise<{ short_id: string; warnings?: string[] }> {
   const wire = { ...result, started_at: new Date(result.started_at).toISOString(), finished_at: new Date(result.finished_at).toISOString(), ...(result.link ? { link: { ...result.link, measured_at: new Date(result.link.measured_at).toISOString() } } : {}) };
   return await post("/cli/envs/record", {
     ...(extra.goal ? {} : extra.scope ?? {}),
@@ -138,6 +186,7 @@ export async function recordRun(post: Post, decl: EnvDeclaration, root: string, 
     ...(extra.goal ? { goal: extra.goal } : {}),
     ...(extra.task_id ? { task_id: extra.task_id } : {}),
     ...(extra.session_id ? { session_id: extra.session_id } : {}),
+    ...(extra.cases_read ? { cases_read: extra.cases_read } : {}),
   });
 }
 
@@ -147,11 +196,23 @@ const secs = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}
 // ── a goal's levels, printed ──
 
 /** A goal's levels as `cast goal show` and `cast goal envs` print them. */
-export function goalLevelLines(p: Palette, levels: EnvStanding[], goalRef: string, now = Date.now()): string[] {
+/** The titles this checkout's envs.toml declares, by key; none when it declares none or does not read. */
+export function localEnvTitles(): (key: string) => string | undefined {
+  try {
+    const envs = loadEnvDeclarations(cwd()).envs;
+    return (key) => envs.find((e) => e.key === key)?.title;
+  } catch {
+    return () => undefined;
+  }
+}
+
+/** A goal's environments by level. An env shows its declared title (an attempt's, else this checkout's declaration) with its key beside it, or its key once. */
+export function goalLevelLines(p: Palette, levels: EnvStanding[], goalRef: string, now = Date.now(), declaredTitle: (key: string) => string | undefined = () => undefined): string[] {
   const out = [`\n  ${p.bold}Environments${p.reset} ${p.dim}what predicts it, by level${p.reset}`];
   if (!levels.length) return [...out, `  ${p.dim}None yet: cast goal envs ${goalRef} set L0=<product>/<name> L2=...${p.reset}`];
   for (const s of levels) {
-    out.push(`  ${p.cyan}${s.level}${p.reset} ${p.bold}${s.title ?? s.env}${p.reset} ${p.dim}${s.env} · ${ENV_LEVEL_NAME[s.level]}${s.note ? ` · ${s.note}` : ""}${p.reset}`);
+    const title = s.title ?? declaredTitle(s.env);
+    out.push(`  ${p.cyan}${s.level}${p.reset} ${p.bold}${title ?? s.env}${p.reset} ${p.dim}${title && title !== s.env ? `${s.env} · ` : ""}${ENV_LEVEL_NAME[s.level]}${s.note ? ` · ${s.note}` : ""}${p.reset}`);
     const a = s.attempt;
     const facts = [a ? `${standingScore(s)} ${a.candidate.label} ${a.split} ${a.short_id} ${ago(a.finished_at, now)}` : `${p.yellow}no attempt yet${p.reset}${p.dim}`, standingNoise(s) ?? "noise unmeasured", standingCost(s)].filter(Boolean);
     out.push(`     ${p.dim}${facts.join(" · ")}${p.reset}`);
@@ -167,7 +228,7 @@ export async function goalEnvsAction(post: Post, ref: string, action: string | u
     if (!out) fail(`Goal not found (or not visible to you): ${ref}`);
     if (opts.json) { console.log(JSON.stringify(out, null, 2)); return; }
     console.log(`\n  ${c.bold}${out.goal.title}${c.reset}  ${c.cyan}${out.goal.short_id}${c.reset}`);
-    for (const line of goalLevelLines(c, out.levels, out.goal.short_id)) console.log(line);
+    for (const line of goalLevelLines(c, out.levels, out.goal.short_id, Date.now(), localEnvTitles())) console.log(line);
     console.log("");
   };
   if (!action || action === "ls" || action === "show") return show();
@@ -204,8 +265,8 @@ export async function goalEnvsAction(post: Post, ref: string, action: string | u
 
 // ── the line's eval station ──
 
-/** The env's base run: a detached tree at the base sha, with the checkout's node_modules linked in. */
-function withBaseTree<T>(root: string, sha: string, fn: (dir: string) => Promise<T>): Promise<T> {
+/** A detached tree at a sha (the base, or a climb candidate), with the checkout's node_modules linked in, removed after `fn`. */
+export function withTreeAt<T>(root: string, sha: string, fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-env-base-"));
   const cleanup = () => {
     try { execFileSync("git", ["worktree", "remove", "--force", dir], { cwd: root, stdio: "ignore" }); } catch { fs.rmSync(dir, { recursive: true, force: true }); try { execFileSync("git", ["worktree", "prune"], { cwd: root, stdio: "ignore" }); } catch {} }
@@ -232,7 +293,7 @@ function withBaseTree<T>(root: string, sha: string, fn: (dir: string) => Promise
 }
 
 /** An env as the base declared it: the base grades both sides, so a branch cannot rewrite its own test. */
-function declarationAt(root: string, sha: string, key: string): EnvDeclaration | null | "unreadable" {
+export function declarationAt(root: string, sha: string, key: string): EnvDeclaration | null | "unreadable" {
   let text: string;
   try { text = execFileSync("git", ["show", `${sha}:.codecast/envs.toml`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch { return null; }
   try { return parseEnvsText(text).find((e) => e.key === key) ?? null; } catch { return "unreadable"; }
@@ -241,7 +302,7 @@ function declarationAt(root: string, sha: string, key: string): EnvDeclaration |
 export type EnvEvalRow = { env: string; level: string; title: string; base?: string; candidate?: string; delta?: ReturnType<typeof pairedDelta>; phrase?: string; note?: string; skipped?: string; error?: string };
 
 /** The base sha a branch is compared against: its merge base with origin's default branch. */
-function baseSha(root: string, explicit?: string): string | null {
+export function baseSha(root: string, explicit?: string): string | null {
   if (explicit) return gitSha(root, explicit);
   for (const ref of ["origin/HEAD", "origin/main", "origin/master"]) {
     try { return execFileSync("git", ["merge-base", "HEAD", ref], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch {}
@@ -292,10 +353,12 @@ export async function envEval(post: Post, opts: { task: string; base?: string; o
         if (baseDecl.level !== s.level) { row.skipped = `declared at ${baseDecl.level}, the goal names it at ${s.level}`; continue; }
         if (!baseDecl.splits.includes("dev")) { row.skipped = "declares no dev split"; continue; }
         if (branchDecl && (branchDecl.command !== baseDecl.command || branchDecl.level !== baseDecl.level)) row.note = "the branch changes this env's declaration; the base's was run on both sides";
-        const cand = await runEnv(baseDecl, { dir: root, candidate: opts.task, split: "dev", sha: head });
+        const fetchFor = { goal, task_id: opts.task, session_id: opts.sessionId };
+        const candRun = await runWithCases(post, baseDecl, { dir: root, candidate: opts.task, split: "dev", sha: head }, fetchFor);
+        const cand = candRun.run;
         if (!cand.ok) { row.error = cand.error; continue; }
         if (cand.code !== 0) row.note = [row.note, `the runner exited ${cand.code} on the branch`].filter(Boolean).join("; ");
-        row.candidate = (await recordRun(post, baseDecl, root, cand.result, { goal, task_id: opts.task, session_id: opts.sessionId })).short_id;
+        row.candidate = (await recordRun(post, baseDecl, root, cand.result, { ...fetchFor, cases_read: candRun.read })).short_id;
         const prior = ((await post("/cli/envs/list", { goal, env: baseDecl.key, limit: 50 }, true).catch(() => [])) as any[])
           .find((a) => a.short_id !== row.candidate && a.candidate?.label === "base" && a.candidate?.sha === base && a.env_version === cand.result.env_version && a.split === "dev");
         let baseCases: EnvCase[];
@@ -305,9 +368,10 @@ export async function envEval(post: Post, opts: { task: string; base?: string; o
           baseVersion = prior.env_version;
           baseCases = (await post("/cli/envs/get", { id: prior.short_id }, true)).cases;
         } else {
-          const b = await withBaseTree(root, base, (dir) => runEnv(baseDecl, { dir, candidate: "base", split: "dev", sha: base }));
+          const baseRun = await withTreeAt(root, base, (dir) => runWithCases(post, baseDecl, { dir, candidate: "base", split: "dev", sha: base }, fetchFor));
+          const b = baseRun.run;
           if (!b.ok) { row.error = `base: ${b.error}`; continue; }
-          row.base = (await recordRun(post, baseDecl, root, b.result, { goal, task_id: opts.task, session_id: opts.sessionId })).short_id;
+          row.base = (await recordRun(post, baseDecl, root, b.result, { ...fetchFor, cases_read: baseRun.read })).short_id;
           baseVersion = b.result.env_version;
           baseCases = b.result.cases;
         }
@@ -375,8 +439,9 @@ export function registerEnvCommand(program: Command, deps: PublishDeps): void {
     .option("--task <ct-N>", "The task the attempt serves")
     .option("--team <name|id|personal>", "Workspace to file in when no --goal names one")
     .option("--no-record", "Run and check only; file nothing")
+    .option("--local-cases", "Dev only: run on the corpus this machine holds, not codecast's dev set")
     .option("--json", "Print the checked result as JSON")
-    .action(async (key: string, o: { candidate?: string; split?: string; sha?: string; goal?: string; task?: string; team?: string; record: boolean; json?: boolean }) => {
+    .action(async (key: string, o: { candidate?: string; split?: string; sha?: string; goal?: string; task?: string; team?: string; record: boolean; localCases?: boolean; json?: boolean }) => {
       const { decl, root } = declared(key);
       const split = (o.split ?? decl.splits[0]) as EnvSplit;
       if (!decl.splits.includes(split)) fail(`${key} declares the ${decl.splits.join(", ")} split${decl.splits.length > 1 ? "s" : ""}, not ${split}`);
@@ -387,12 +452,19 @@ export function registerEnvCommand(program: Command, deps: PublishDeps): void {
       const said = o.sha ? gitSha(root, o.sha) ?? o.sha : null;
       if (candidate === "base" && said && said !== head) fail(`--sha ${o.sha} is not this tree (HEAD ${head?.slice(0, 8)}): a base run is the tree it runs on; check that commit out, or name the candidate`);
       const sha = said ?? head;
-      const run = await runEnv(decl, { dir: root, candidate, split, sha });
+      if (o.localCases && split !== "dev") fail("--local-cases is for the dev split: held cases come only from codecast");
+      const sessionId = deps.detectCurrentSessionId();
+      // Offline is fine for a local dev run that files nothing.
+      const scope = o.goal || (o.localCases && !o.record) ? undefined : await scopeFor(deps, o.team, true);
+      // A run reads its split's cases from codecast through a logged fetch, into a file removed after the run.
+      // A held run runs only a committed tree with the base's runner, and files what it fetched.
+      if (split === "held" && !o.record) fail("a held run files its attempt: every fetch of the held set is answered by one (drop --no-record)");
+      const { run, read: casesRead } = await runWithCases(post, decl, { dir: root, candidate, split, sha, localCases: o.localCases }, { goal: o.goal, scope, session_id: sessionId, task_id: o.task }).catch((err) => fail(errText(err)));
       if (!run.ok) fail(run.error);
       for (const w of run.warnings) console.error(`${c.yellow}warning${c.reset} ${w}`);
       if (run.code !== 0) console.error(`${c.yellow}warning${c.reset} ${key} exited ${run.code}; its result is filed as printed`);
       const r = run.result;
-      const filed = o.record ? await recordRun(post, decl, root, r, { goal: o.goal, task_id: o.task, session_id: deps.detectCurrentSessionId(), scope: o.goal ? undefined : await scopeFor(deps, o.team, true) }) : null;
+      const filed = o.record ? await recordRun(post, decl, root, r, { goal: o.goal, task_id: o.task, session_id: sessionId, scope, cases_read: casesRead }) : null;
       if (o.json) { console.log(JSON.stringify({ ...(filed ? { short_id: filed.short_id } : {}), result: r }, null, 2)); return; }
       const s = r.summary;
       console.log(`${c.green}ok${c.reset} ${filed ? `${c.cyan}${filed.short_id}${c.reset} ` : ""}${r.level} ${c.bold}${key}${c.reset} ${r.split} ${r.candidate.label}${r.candidate.sha ? `@${r.candidate.sha.slice(0, 8)}` : ""}: ${score(s)}${s.unscored ? ` (${s.unscored} unscored)` : ""}`);
@@ -423,14 +495,58 @@ export function registerEnvCommand(program: Command, deps: PublishDeps): void {
       }
       const { envs } = loadOrFail();
       const decl = envs.find((e) => e.key === ref);
-      const rows: any[] = await post("/cli/envs/list", { ...(await scopeFor(deps, o.team, false)), env: ref, limit: 15 }, true);
-      if (o.json) { console.log(JSON.stringify({ declaration: decl ?? null, attempts: rows }, null, 2)); return; }
+      const scope = await scopeFor(deps, o.team, false);
+      const [rows, caseSets]: [any[], CaseSetLog | null] = await Promise.all([post("/cli/envs/list", { ...scope, env: ref, limit: 15 }, true), apiPost(deps, "/cli/envs/cases/log", { ...scope, env: ref, limit: 10 }, { read: true, exitOnError: false }).catch(() => null)]);
+      if (o.json) { console.log(JSON.stringify({ declaration: decl ?? null, attempts: rows, case_sets: caseSets }, null, 2)); return; }
       if (decl) console.log(`\n  ${c.cyan}${decl.level}${c.reset} ${c.bold}${decl.title}${c.reset} ${c.dim}${decl.key}${c.reset}\n  ${c.dim}${decl.command}${c.reset}\n  ${c.dim}splits ${decl.splits.join(", ")}${decl.cost_usd !== undefined ? ` · ~$${decl.cost_usd} a run` : ""}${decl.predicts ? ` · predicts ${decl.predicts}` : ""}${c.reset}`);
       else console.log(`\n  ${c.bold}${ref}${c.reset} ${c.yellow}not declared in this repo${c.reset}`);
       console.log(`\n  ${c.bold}Attempts (${rows.length})${c.reset}`);
       if (!rows.length) console.log(`  ${c.dim}None yet: cast env run ${ref}${c.reset}`);
       for (const a of rows) console.log(`  ${c.cyan}${a.short_id}${c.reset} ${score(a)} ${c.dim}${a.split} ${a.candidate.label}${a.candidate.sha ? `@${a.candidate.sha.slice(0, 8)}` : ""} · ${ago(a.finished_at)}${a.task_id ? ` · ${a.task_id}` : ""}${c.reset}`);
+      if (caseSets && (caseSets.dev || caseSets.held || caseSets.reads.length)) for (const line of caseSetLines(c, caseSets, (at) => ago(at))) console.log(line);
       console.log("");
+    });
+
+  const cases = env.command("cases").description("An env's dev and held cases kept in codecast, so a run works on any machine: dev is readable by anyone in the workspace, held only by cast env run --split held");
+  cases
+    .command("put")
+    .description("Upload this env's case set for a split ({ label?, meta?, cases: [{ id, payload }] })")
+    .argument("<key>", "The env's key")
+    .requiredOption("--split <dev|held>", "Which split the cases are")
+    .requiredOption("--file <path|->", "The case set as JSON, or - for stdin; with --keep-cases, { meta, label? } only")
+    .option("--keep-cases", "Replace only the live set's meta (a recalibration): codecast keeps its cases, so none need be at hand")
+    .option("--goal <in-N>", "File it under this goal's workspace")
+    .option("--team <name|id|personal>", "Workspace to file in when no --goal names one")
+    .option("--replace", "Supersede the split's live set")
+    .option("--task <ct-N>", "The task this upload serves")
+    .action(async (key: string, o: { split: string; file: string; keepCases?: boolean; goal?: string; team?: string; replace?: boolean; task?: string }) => {
+      if (!isCaseSetSplit(o.split)) fail(`--split must be dev or held, not ${o.split}`);
+      let text: string;
+      try { text = readCaseSetInput(o.file); } catch (err) { fail(`could not read ${o.file}: ${errText(err)}`); }
+      try {
+        const where = { goal: o.goal, scope: o.goal ? undefined : await scopeFor(deps, o.team, true), session_id: deps.detectCurrentSessionId(), task_id: o.task };
+        const out = o.keepCases ? await putCaseSetMeta(post, key, o.split, text, where) : await putCaseSet(post, key, o.split, text, { ...where, replace: o.replace });
+        console.log(`${c.green}ok${c.reset} ${key} ${o.split} set ${out.version}: ${out.size} cases, live in ${out.workspace}`);
+      } catch (err) {
+        fail(errText(err));
+      }
+    });
+  cases
+    .command("get")
+    .description("Download this env's dev set (the held set is never downloaded)")
+    .argument("<key>", "The env's key")
+    .option("--out <file>", "Write it here (default: stdout)")
+    .option("--goal <in-N>", "Read from this goal's workspace")
+    .option("--team <name|id|personal>", "Workspace to read from when no --goal names one")
+    .action(async (key: string, o: { out?: string; goal?: string; team?: string }) => {
+      try {
+        const { file } = await fetchCaseSet(post, key, "dev", { goal: o.goal, scope: o.goal ? undefined : await scopeFor(deps, o.team, false), session_id: deps.detectCurrentSessionId() });
+        const text = JSON.stringify(file);
+        if (o.out) { fs.writeFileSync(o.out, text); console.error(`${c.green}ok${c.reset} ${key} dev set ${file.version}: ${file.cases.length} cases to ${o.out}`); }
+        else process.stdout.write(`${text}\n`);
+      } catch (err) {
+        fail(errText(err));
+      }
     });
 
   env

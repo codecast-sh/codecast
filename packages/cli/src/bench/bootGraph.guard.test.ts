@@ -487,7 +487,16 @@ describe("command groups stay off the boot graph", () => {
     // 4806 the same day: 1328df1d0's reading of the Fable probe (the scoped
     // window's headers and the empty-429 rule) +2 in ccAccounts.ts, and
     // ccRateLimitHeaders.ts's header and imports when the parsers moved out +1.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4806);
+    // 4815 the same day (ct-96176): contracts/metricStanding.ts +16, the
+    // periods' own spread, ratio pooling and the periods read (+9), then the
+    // narrow target grammar, dated trajectories and the predicate's left-out
+    // numbers (+7). 4818 the same day: cohort periods a reader dates itself,
+    // definition versions, and `cast metrics points rm` (+3). 4820 the same
+    // day: `cast metrics redefine`, a failing source named on a window (+2).
+    // 4830 on 2026-11-18, measured with all of pl-1049 on main: the climb's
+    // and env cases' command-group lines and `cast goal envs`, prediction
+    // readability lines in initiativeCommand.ts (+10); bodies load on demand.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4830);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

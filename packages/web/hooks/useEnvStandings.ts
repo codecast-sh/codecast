@@ -18,7 +18,7 @@ export function useSyncEnvStandings() {
   return useSyncCollection("envStandings", api.envs.workspaceStandings, scope === "skip" ? "skip" : scope);
 }
 
-const sig = (r: StandingRow) => `${r.env}|${r.title ?? ""}|${r.attempt?.short_id ?? ""}|${r.attempt?.mean ?? ""}|${r.attempt?.ci95?.join(",") ?? ""}|${r.link?.measured_at ?? ""}|${r.link?.value ?? ""}`;
+const sig = (r: StandingRow) => `${r.env}|${r.title ?? ""}|${r.attempt?.short_id ?? ""}|${r.attempt?.mean ?? ""}|${r.attempt?.ci95?.join(",") ?? ""}|${r.link?.measured_at ?? ""}|${r.link?.value ?? ""}|${r.dev?.version ?? ""}|${r.dev?.reads ?? ""}|${r.dev?.last_attempt?.short_id ?? ""}|${r.held?.version ?? ""}|${r.held?.reads ?? ""}|${r.held?.unfiled ?? ""}|${r.held?.last_attempt?.short_id ?? ""}`;
 
 /** The goal's envs in its order, each with the standing the store holds (none yet: the env alone). */
 export function useGoalEnvLevels(envs: readonly GoalEnv[] | undefined, workspace: string | undefined): EnvStanding[] {

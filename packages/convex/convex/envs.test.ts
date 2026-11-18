@@ -43,6 +43,7 @@ function fixtures() {
     env_attempts: [],
     env_links: [],
     env_attempt_cases: [],
+    env_heldout_reads: [],
   });
 }
 
@@ -93,7 +94,9 @@ describe("envs: attempts", () => {
     await expect(file(db, { ...H })).rejects.toThrow(/held-split case is its id and score only/);
     await expect(file(db, { ...H, cases: [{ id: ha, score: 1 }], summary: { n: 1, mean: 1 }, transcript: "the case text" })).rejects.toThrow(/field .*transcript.* may not carry/);
     await expect(file(db, { ...H, cases: [{ id: "Jane.Roe.wants.refund", score: 1 }, { id: hb, score: 0.5 }], summary: { n: 2, mean: 0.75 } })).rejects.toThrow(/h: and 16 hex/);
-    const ok = await file(db, { ...H, cases: [{ id: ha, score: 1 }, { id: hb, score: 0.5 }], summary: { n: 2, mean: 0.75 } });
+    // A held attempt is filed against the run's fetch of the held set (envHeld.test.ts covers the rules).
+    db._tables.env_heldout_reads.push({ _id: "read1", workspace: WS, env: "union/unit-smoke", set_id: "set1", split: "held", version: "0123456789abcdef", kind: "run", by_user: ME, at: 1, expires_at: Date.now() + 3600_000 });
+    const ok = await file(db, { ...H, cases: [{ id: ha, score: 1 }, { id: hb, score: 0.5 }], summary: { n: 2, mean: 0.75 } }, { cases_read: "read1" });
     expect((await run(get, db, { id: ok.short_id })).cases).toEqual([{ id: ha, score: 1 }, { id: hb, score: 0.5 }]);
   });
 
@@ -145,6 +148,15 @@ describe("envs: a goal's levels", () => {
     await expect(run(update, db, { id: "in-1", envs: [{ env: "Not A Key", level: "L2" }] })).rejects.toThrow(/not an env key/);
     await run(update, db, { id: "in-1", envs: [] });
     expect((await run(getGoal, db, { id: "in-1" })).envs).toBeUndefined();
+  });
+
+  test("a level keeps the title an earlier run declared when a later run carries none", async () => {
+    const db = fixtures();
+    await run(create, db, { ...inTeam, title: "Intros a week" });
+    await run(update, db, { id: "in-1", envs: [{ env: "union/unit-smoke", level: "L0" }] });
+    await file(db, {}, { goal: "in-1" });
+    await file(db, {}, { goal: "in-1", title: undefined });
+    expect((await run(goalLevels, db, { goal: "in-1" })).levels[0].title).toBe("Unit smoke");
   });
 
   test("each level reads its latest base attempt (else the latest) and its link; an env removed from the repo still reads", async () => {

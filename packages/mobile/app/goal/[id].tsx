@@ -20,8 +20,8 @@ import { goalScopeProjectIds, initiativeEnded, initiativeProgress, subInitiative
 import { sessionsUnder } from '@codecast/web/components/org/goalsLayout';
 import type { OrgTree } from '@codecast/web/components/org/orgTypes';
 import { agoOf } from '@codecast/web/lib/threadState';
-import { mdeWords, STANDING_WORD } from '@codecast/shared/contracts/metricStanding';
-import { INITIATIVE_STATUSES, INITIATIVE_UPDATE_HEALTHS, metricReadings, type InitiativeRow, type InitiativeUpdateHealth } from '@codecast/shared/contracts/initiative';
+import { mdeWords, standingWord } from '@codecast/shared/contracts/metricStanding';
+import { INITIATIVE_STATUSES, INITIATIVE_UPDATE_HEALTHS, metricAgainst, metricReadings, type InitiativeRow, type InitiativeUpdateHealth } from '@codecast/shared/contracts/initiative';
 import { isOnProjectBoard, projectTaskCounts } from '@codecast/shared/tasks';
 import { TaskItemRow, showTaskActions } from '@/components/TaskItem';
 import { PlanItemRow } from '@/components/PlanItem';
@@ -153,7 +153,7 @@ function GoalBody({ goal, goals }: { goal: InitiativeRow; goals: InitiativeRow[]
                     <RNText style={styles.metricName} numberOfLines={2}>{r.name}{r.guardrail ? ' · guardrail' : ''}</RNText>
                     <RNText style={[styles.metricValue, { color: r.value === null ? Theme.textDim : Theme.text }]} numberOfLines={1}>{r.value ?? '—'}</RNText>
                     <RNText style={[styles.metricTarget, { color }]} numberOfLines={1}>
-                      {`target ${r.target}${r.value !== null && r.standing !== 'unknown' ? ` · ${STANDING_WORD[r.standing]}` : ''}${r.band?.mde ? ` · detects ${mdeWords(r.band.mde)} in 4 wk` : ''}`}
+                      {`${metricAgainst({ ...r, value: null })}${r.target_unread ? ` · unknown: ${r.target_unread}` : r.value !== null && r.standing !== 'unknown' ? ` · ${standingWord(r.standing, r.trajectory)}` : ''}${r.band?.mde ? ` · detects ${mdeWords(r.band.mde)} in 4 wk` : ''}`}
                     </RNText>
                     {r.progress !== null && (
                       <RNView style={styles.metricBar}><RNView style={[styles.metricFill, { width: `${Math.min(1, r.progress) * 100}%` as any, backgroundColor: color }]} /></RNView>

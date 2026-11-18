@@ -223,6 +223,9 @@ export type OpsReplayTimeline = {
 };
 
 export type OpsWatch = {
+  /** A reader's own dated periods (cohort weeks) and the definition version its points are read under (metric_watches). */
+  source_points?: { at: number; value: number }[];
+  version?: string;
   _id: string;
   workspace: string;
   source_id: string;

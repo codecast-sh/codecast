@@ -25,6 +25,7 @@ export { causeBrief };
 import { isPlaced } from "./lib/signalPlacement";
 import {
   briefGoalRefs,
+  briefReadTargets,
   groundCausePrompt,
   groundOutputSchema,
   groundPlacingProjects,
@@ -50,7 +51,7 @@ export const GROUND_MAX_TOKENS = 2000;
 /** The request one cause's ground call posts; ./evals replays exactly it. */
 export function groundRequest(cause: GroundCauseInput, brief: GoalsBrief, now: number): SurfaceRequest {
   const { system, prompt } = groundCausePrompt(cause, brief, now);
-  return { model: STRONG_MODEL, system, prompt, max_tokens: GROUND_MAX_TOKENS, output_schema: groundOutputSchema(groundPlacingProjects(cause, brief)) };
+  return { model: STRONG_MODEL, system, prompt, max_tokens: GROUND_MAX_TOKENS, output_schema: groundOutputSchema(groundPlacingProjects(cause, brief), [...briefGoalRefs(brief)]) };
 }
 
 /** An open cause no one has grounded and no run holds. */
@@ -138,7 +139,7 @@ export async function recordGroundCore(ctx: any, taskId: Id<"tasks">, outcome: {
   if ("fields" in outcome) {
     const { project, prediction, ...f } = outcome.fields;
     const placed = project && needsPlacing(task) ? await placeCause(ctx, task, project) : null;
-    const predicted = prediction ? await predictionPatch(ctx, task, prediction, now).catch((err: Error) => err) : null;
+    const predicted = prediction ? await predictionPatch(ctx, { ...task, goal_ref: f.goal_ref }, prediction, now).catch((err: Error) => err) : null;
     await patchTask(ctx, task, {
       ...f,
       ...(predicted && !(predicted instanceof Error) ? predicted : {}),
@@ -243,7 +244,7 @@ export const sweep = internalAction({
       const req = groundRequest(job.cause, job.brief, now);
       const reply = await runModelCall(ctx, job.scope, "grouping", { model: req.model, system: req.system, prompt: req.prompt, max_tokens: req.max_tokens, output: "text", output_schema: req.output_schema }, "Line ground", 60_000);
       if (!reply.ok) { if (reply.reason === "budget") result.unbudgeted++; else result.unanswered++; return; }
-      const outcome = parseGroundReply(parseJsonBlock(reply.text), briefGoalRefs(job.brief), groundPlacingProjects(job.cause, job.brief));
+      const outcome = parseGroundReply(parseJsonBlock(reply.text), briefGoalRefs(job.brief), groundPlacingProjects(job.cause, job.brief), briefReadTargets(job.brief));
       const status: string = await ctx.runMutation(internal.lineGround.record, "fields" in outcome ? { task_id: job.task_id, fields: outcome.fields } : { task_id: job.task_id, error: outcome.error });
       if (status === "grounded") result.grounded++;
       else if (status === "unreadable") result.unreadable++;

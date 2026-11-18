@@ -42,6 +42,8 @@ describe("goals.brief", () => {
       short_id: "in-1", title: "Retention", priority: "p0", owner: "@growth", target_date: undefined, health: "at_risk", description: undefined,
       metrics: [{ key: "w4", name: "Week 4", target: "40%" }], scoreboard: { w4: { value: "31%", observed_at: 1, source: "posthog" } },
       project_short_ids: ["pj-a", "pj-b"],
+      // A metric with no noise model can say nothing about what a read detects.
+      read_at: [{ ref: "in-1:w4", name: "Week 4", detects: null }],
     }]);
     expect(out.projects.map((p: any) => p.short_id).sort()).toEqual(["pj-a", "pj-b"]);
     expect(out.projects.find((p: any) => p.short_id === "pj-a")).toMatchObject({ goal: "Day one agent run", priority: "p1", owner_role: "@growth" });

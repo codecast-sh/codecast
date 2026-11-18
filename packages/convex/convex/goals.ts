@@ -6,7 +6,9 @@
 // project (line-profile.md LP1) it gathers that project's charter and the
 // active initiatives that carry it, and nothing else.
 import { v } from "convex/values";
-import type { GoalsBrief, GoalsBriefProject } from "@codecast/shared/contracts/goalsBrief";
+import { metricGoalRef, type GoalReadTarget, type GoalsBrief, type GoalsBriefProject } from "@codecast/shared/contracts/goalsBrief";
+import { detectsWords, type PredictionTarget } from "@codecast/shared/contracts/predictedEffect";
+import { DEFAULT_READ_SPAN_MS, envSense, metricSense, recentAttempts } from "./lib/predictionTargets";
 import type { InitiativeMetric, MetricSeries } from "@codecast/shared/contracts/initiative";
 import { metricDenominatorRef } from "@codecast/shared/contracts/metricStanding";
 import { query } from "./functions";
@@ -31,6 +33,28 @@ const seriesOf = (metrics: InitiativeMetric[], lookup: (ref: string) => MetricSe
   const found = Object.fromEntries([...new Set(metrics.flatMap((m) => [m.series, metricDenominatorRef(m)]).filter((r): r is string => !!r))].flatMap((ref) => { const s = lookup(ref); return s ? [[ref, s]] : []; }));
   return Object.keys(found).length ? { series: found } : {};
 };
+
+/**
+ * Where a goal's effects can be read, each with the smallest change a read of
+ * the default span on each side of ship detects there (lib/predictionTargets):
+ * its own metrics, the series of the metrics its projects decompose it into,
+ * and the environments it lists. What a prediction is checked against when set.
+ */
+async function readTargets(ctx: { db: any }, workspace: string, goal: any, lookup: (ref: string) => MetricSeries | undefined, allProjects: any[]): Promise<GoalReadTarget[]> {
+  const out: GoalReadTarget[] = [];
+  const detects = (kind: PredictionTarget, mde: number | null) => (mde === null ? null : detectsWords(kind, mde));
+  for (const m of goal.metrics ?? []) out.push({ ref: metricGoalRef(goal.short_id, m.key), name: m.name, detects: detects("metric", (await metricSense(ctx, workspace, m, goal, lookup, DEFAULT_READ_SPAN_MS)).mde) });
+  const carried = allProjects.filter((p: any) => goal.project_ids.some((id: any) => String(id) === String(p._id)) && (p.metrics ?? []).some((m: InitiativeMetric) => m.series));
+  const projectLookup = carried.length ? await seriesLookup(ctx, workspace, carried) : () => undefined;
+  for (const p of carried) {
+    for (const m of p.metrics as InitiativeMetric[]) {
+      if (!m.series || out.some((t) => t.ref === m.series)) continue;
+      out.push({ ref: m.series, name: `${p.title}: ${m.name}`, detects: detects("series", (await metricSense(ctx, workspace, m, p, projectLookup, DEFAULT_READ_SPAN_MS)).mde) });
+    }
+  }
+  for (const e of goal.envs ?? []) out.push({ ref: `env:${e.env}`, name: e.env, detects: detects("env", envSense(await recentAttempts(ctx, workspace, e.env)).mde) });
+  return out;
+}
 
 export async function gatherGoalsBrief(ctx: { db: any }, args: { workspaceKey: string; teamId?: any; only: any | null; projectRows: any[] }): Promise<GoalsBrief> {
   const { workspaceKey, teamId, only } = args;
@@ -57,6 +81,7 @@ export async function gatherGoalsBrief(ctx: { db: any }, args: { workspaceKey: s
     scoreboard: r.scoreboard,
     ...seriesOf(r.metrics ?? [], lookup),
     project_short_ids: r.project_ids.map((id: any) => projectsById.get(String(id))).filter(Boolean).map(projectRef),
+    read_at: await readTargets(ctx, workspaceKey, r, lookup, args.projectRows),
   })));
 
   const roleIds = [...new Set(projectRows.map((p: any) => p.owner_role_id).filter(Boolean).map(String))];

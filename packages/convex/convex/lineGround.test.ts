@@ -90,7 +90,10 @@ describe("lineGround.sweep (LE5)", () => {
     expect(await sweep()).toMatchObject({ grounded: 1, unreadable: 0, unanswered: 0 });
 
     const call = stub.state.calls.at(-1);
-    expect(call.output_config).toEqual({ format: { type: "json_schema", schema: GROUND_OUTPUT_SCHEMA } });
+    // The base shape, with goal_ref held to the refs this cause's brief offers.
+    const schema = call.output_config.format.schema;
+    expect({ ...schema, properties: { ...schema.properties, goal_ref: { type: "string" } } }).toEqual(GROUND_OUTPUT_SCHEMA);
+    expect(schema.properties.goal_ref.enum.sort()).toEqual(["line", "none", "pr-1"]);
     expect(call.system).toContain(GROUND_PURPOSE);
     expect(call.system).toContain(GROUND_FIELDS);
     const prompt: string = call.messages[0].content;

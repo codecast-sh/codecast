@@ -46,6 +46,8 @@ function api(levels: any[], goalRef = "in-9:intros_a_week", refuse?: (body: any)
     }
     if (p === "/cli/envs/list") return filed.map((r, i) => ({ short_id: `ea-${i + 1}`, candidate: r.candidate, env_version: r.env_version, split: r.split })).reverse();
     if (p === "/cli/envs/get") { const r = filed[Number(String(body.id).slice(3)) - 1]; return { cases: r.cases }; }
+    // These envs keep no case sets in codecast: the server's answer, and the run goes on with none.
+    if (p === "/cli/envs/cases/open") throw new Error(`${body.env} has no ${body.split} set in this workspace`);
     throw new Error(`unplanned ${p}`);
   };
   return { post, calls, filed };
@@ -152,12 +154,18 @@ describe("goalLevelLines", () => {
       "  L0 Unit smoke union/smoke · Deterministic checks",
       "     0.900 [0.850, 0.950] n=40 base dev ea-3 1h ago · noise unmeasured · $0.00",
       "     link to the level above: not measured",
-      "  L2 union/replay union/replay · Outcome-labelled replay · second side",
+      "  L2 union/replay Outcome-labelled replay · second side",
       "     0.310 n=300 base held ea-4 just now · A/A sd 0.012 over 3 runs · $4",
       "     link auc 0.66 to L4:matched_to_opted_in (n=300, 2d ago)",
-      "  L3 union/sim union/sim · Forward simulation",
+      "  L3 union/sim Forward simulation",
       "     no attempt yet · noise unmeasured",
       "     link to the level above: not measured",
     ].join("\n"));
+  });
+
+  test("an env with no title on its attempts takes this checkout's declared title, else prints its key once", () => {
+    const lines = goalLevelLines(plain, [{ env: "union/second-side-replay", level: "L2" }, { env: "union/sim", level: "L3" }], "in-8", 0, (k) => (k === "union/second-side-replay" ? "Second side replay" : undefined));
+    expect(lines[1]).toBe("  L2 Second side replay union/second-side-replay · Outcome-labelled replay");
+    expect(lines[4]).toBe("  L3 union/sim Forward simulation");
   });
 });

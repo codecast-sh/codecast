@@ -10,11 +10,13 @@
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
 import { ENV_LEVELS, ENV_SPLITS } from "@codecast/shared/contracts/envs";
+import { CASE_SET_SPLITS } from "@codecast/shared/contracts/envCases";
 
 const literals = <T extends string>(values: readonly T[]) => v.union(...values.map((value) => v.literal(value)));
 
 export const envLevelValidator = literals(ENV_LEVELS);
 export const envSplitValidator = literals(ENV_SPLITS);
+export const caseSetSplitValidator = literals(CASE_SET_SPLITS);
 export const goalEnvValidator = v.object({ env: v.string(), level: envLevelValidator, note: v.optional(v.string()) });
 const interval = v.array(v.number());
 
@@ -46,6 +48,10 @@ export const envTables = {
     session_id: v.optional(v.string()),
     task_id: v.optional(v.string()),
     goal_id: v.optional(v.id("initiatives")),
+    /** The case set the attempt ran on, when codecast supplied it (env_heldout.version). */
+    cases_version: v.optional(v.string()),
+    /** The same, as held attempts filed before dev sets were recorded: read-only, never written. */
+    held_version: v.optional(v.string()),
     created_at: v.number(),
   })
     .index("by_short_id", ["short_id"])
@@ -60,6 +66,59 @@ export const envTables = {
     workspace: v.string(),
     cases: v.string(),
   }).index("by_attempt", ["attempt_id"]),
+
+  // An env's case set for one split (envCases.ts, contracts/envCases.ts); the
+  // tables keep their first name, from when they held only held sets, and a
+  // row with no split is a held set. The newest committed set per workspace,
+  // env and split is live. Its cases sit
+  // apart, one row each, and leave only through a fetch (env_heldout_reads);
+  // a held set's fetch only through a held run.
+  env_heldout: defineTable({
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    env: v.string(),
+    split: v.optional(caseSetSplitValidator),
+    version: v.string(),
+    label: v.optional(v.string()),
+    /** Opaque to codecast, handed to the runner beside the cases (a split seed, a calibration). */
+    meta: v.optional(v.string()),
+    size: v.number(),
+    /** Cases written so far; the set is live once it equals size. */
+    written: v.number(),
+    committed_at: v.optional(v.number()),
+    by_user: v.id("users"),
+    session_id: v.optional(v.string()),
+    created_at: v.number(),
+  }).index("by_workspace_env", ["workspace", "env", "created_at"]),
+
+  env_heldout_cases: defineTable({
+    set_id: v.id("env_heldout"),
+    workspace: v.string(),
+    idx: v.number(),
+    case_id: v.string(),
+    payload: v.string(),
+  }).index("by_set", ["set_id", "idx"]),
+
+  // The access log: one row per upload and per run's fetch. A fetch row also
+  // opens the set's pages to its caller until expires_at.
+  env_heldout_reads: defineTable({
+    workspace: v.string(),
+    env: v.string(),
+    set_id: v.id("env_heldout"),
+    split: v.optional(caseSetSplitValidator),
+    version: v.string(),
+    kind: v.union(v.literal("put"), v.literal("run")),
+    by_user: v.id("users"),
+    session_id: v.optional(v.string()),
+    task_id: v.optional(v.string()),
+    at: v.number(),
+    expires_at: v.optional(v.number()),
+    /** The attempt this fetch's run filed (envs.record cases_read). */
+    attempt_id: v.optional(v.id("env_attempts")),
+  })
+    .index("by_workspace_env", ["workspace", "env", "at"])
+    .index("by_session_env", ["session_id", "env"])
+    .index("by_set", ["set_id", "at"]),
 
   env_links: defineTable({
     workspace: v.string(),

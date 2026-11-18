@@ -356,6 +356,14 @@ is grounded against: its own project's, else its workspace's.`,
     load: () => import("./envCommand.js").then((m) => m.registerEnvCommand),
   },
   {
+    token: "climb",
+    description: `The climb's stations: hill-climb one goal metric through its environments (the climb flow, cast flow run climb --task <ct-N>)
+
+  cast climb gauge|admit|screen|confirm|guard --dir <run_dir/climb>   each exits 0 go on, 3 nothing to promote, 4 budget spent
+  cast climb status --dir <dir> [--summary|--json] | refuse <cand-N> -m <why> | experiment --goal <in-N> --metric <key> --lift 0.08`,
+    load: () => import("./climbCommand.js").then((m) => m.registerClimbCommand),
+  },
+  {
     token: "expectations",
     aliases: ["expectation", "expect"],
     description: `Expectations: how a project should behave, each line with its sources, versioned and changed only through proposals

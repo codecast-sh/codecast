@@ -280,7 +280,16 @@ export type WatchKind = (typeof WATCH_KINDS)[number];
  * yet. `at` is an ISO time or epoch ms. The same reader answers both the poll
  * and the history read, so an app writes one route.
  */
-export type MetricReaderAnswer = { value: number | null; unit?: string; points?: Array<{ at: string | number; value: number | null }> };
+export type MetricReaderAnswer = {
+  value: number | null;
+  unit?: string;
+  /** The reader's own series, each point dated as the source dates it (a cohort week's start, a day); a point dated at the read itself is the live value. */
+  points?: Array<{ at: string | number; value: number | null }>;
+  /** Changes whenever the metric's definition changes: points of an older version are left out of windows, bands and charts. */
+  version?: string;
+};
+/** How close to the read a reader's point may be dated and still be its live value rather than a dated period. */
+export const READER_LIVE_SLACK_MS = 3_600_000;
 
 /** A `reader` watch's query read back: the reader's name and the args it passes. */
 export function parseReaderQuery(query: string): { reader: string; args: Record<string, unknown> } | { error: string } {
@@ -298,7 +307,7 @@ export function parseReaderQuery(query: string): { reader: string; args: Record<
 }
 
 /** One answer of a metric reader read as its number and its dated points; null fields when the answer holds none. */
-export function readMetricAnswer(body: unknown): { value: number | null; unit: string | null; points: Array<{ at: number; value: number }> } {
+export function readMetricAnswer(body: unknown): { value: number | null; unit: string | null; points: Array<{ at: number; value: number }>; version: string | null } {
   const b = (body && typeof body === "object" ? body : {}) as Partial<MetricReaderAnswer>;
   const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
   const when = (x: unknown) => (typeof x === "number" ? x : typeof x === "string" ? Date.parse(x) : NaN);
@@ -306,7 +315,8 @@ export function readMetricAnswer(body: unknown): { value: number | null; unit: s
     .map((p) => ({ at: when(p?.at), value: num(p?.value) }))
     .filter((p): p is { at: number; value: number } => Number.isFinite(p.at) && p.value !== null)
     .sort((x, y) => x.at - y.at);
-  return { value: typeof body === "number" ? num(body) : num(b.value), unit: typeof b.unit === "string" && b.unit.trim() ? b.unit.trim().slice(0, 12) : null, points };
+  const version = typeof b.version === "string" && b.version.trim() ? b.version.trim().slice(0, 64) : null;
+  return { value: typeof body === "number" ? num(body) : num(b.value), unit: typeof b.unit === "string" && b.unit.trim() ? b.unit.trim().slice(0, 12) : null, points, version };
 }
 
 

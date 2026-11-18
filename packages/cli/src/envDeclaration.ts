@@ -13,6 +13,7 @@
 //   cost_usd = 0                      # declared cost of one run
 //   predicts = "L5:intros_a_week"     # what it predicts, a level above
 //   timeout_s = 1800                  # stopped, with its children, past this
+//   protects = ["evals/graders/**"]   # its grader, cases and checks: no climb candidate may change them
 //
 // Each placeholder is filled shell-quoted, so write it bare: one inside
 // quotes is refused, and one handed to eval or `sh -c` runs as code (that is
@@ -45,7 +46,7 @@ export class EnvDeclarationError extends Error {
   }
 }
 
-const ENV_KEYS = ["key", "title", "level", "command", "splits", "cost_usd", "predicts", "timeout_s"] as const;
+const ENV_KEYS = ["key", "title", "level", "command", "splits", "cost_usd", "predicts", "timeout_s", "protects"] as const;
 const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && !(x instanceof Date);
 const text = (x: unknown, where: string): string => {
   if (typeof x !== "string" || !x.trim()) throw new EnvDeclarationError(`${where} must be a non-empty string`);
@@ -130,6 +131,10 @@ export function parseEnvsText(source: string, file?: string): EnvDeclaration[] {
       if (e.timeout_s !== undefined) {
         if (typeof e.timeout_s !== "number" || !Number.isInteger(e.timeout_s) || e.timeout_s < 1) throw new EnvDeclarationError(`${at} timeout_s must be a whole number of seconds`);
         decl.timeout_s = e.timeout_s;
+      }
+      if (e.protects !== undefined) {
+        if (!Array.isArray(e.protects) || !e.protects.length) throw new EnvDeclarationError(`${at} protects must be a list of path globs`);
+        decl.protects = e.protects.map((g, j) => text(g, `${at} protects[${j}]`));
       }
       return decl;
     });

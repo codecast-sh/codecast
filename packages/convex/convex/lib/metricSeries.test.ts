@@ -38,6 +38,12 @@ describe("metrics as a write gives them", () => {
     expect(cleanMetrics([{ name: "A", target: "1", window: null, noise: "" }])).toEqual([{ key: "a", name: "A", target: "1" }]);
   });
 
+  test("a dated trajectory keeps its whole target; any other target keeps the short cap", () => {
+    const trajectory = "at least 51.2%@2026-11-16 53.1%@2026-11-30 56.6%@2026-12-14 59.1%@2026-12-28";
+    expect(cleanMetrics([{ name: "Replied to explicit need", target: trajectory }])[0]!.target).toBe(trajectory);
+    expect(cleanMetrics([{ name: "Replied to explicit need", target: "51.2% wk of 11-16 rising to 59.1% by 12-28" }])[0]!.target).toBe("51.2% wk of 11-16 rising to 59.1% by 12-");
+  });
+
   test("a binomial denominator series must be a watch in the workspace too", async () => {
     const ctx = { db: world() };
     await requireSeries(ctx, WS, [{ key: "r", name: "R", target: "50%", series: "mw-14", noise: "binomial:mw-17" }]);
@@ -70,6 +76,29 @@ describe("the series a windowed metric reads", () => {
     const lookup = await seriesLookup(ctx, WS, [{ metrics: [m] }]);
     expect(lookup("mw-17")!.history?.map((p) => p.at)).toEqual([NOW - 3 * WEEK]);
     expect(lookup("mw-99")).toBeUndefined();
+  });
+});
+
+describe("a ratio's denominator", () => {
+  test("is read where the metric's own values sit, not at the nominal slots", async () => {
+    const off = NOW - WEEK - 1.5 * DAY;
+    const db = makeFakeDb({
+      metric_watches: [
+        { _id: "c", short_id: "mw-13", workspace: WS, name: "Dollars per intro", unit: "$", points: [{ at: NOW, value: 400 }] },
+        { _id: "n", short_id: "mw-14", workspace: WS, name: "Intros a week", unit: "/week", points: [{ at: NOW, value: 40 }] },
+      ],
+      metric_points: [
+        { _id: "c1", watch_id: "c", at: off, value: 800 },
+        { _id: "n1", watch_id: "n", at: off + HOUR, value: 20 },
+        { _id: "n2", watch_id: "n", at: NOW - WEEK + 1.5 * DAY, value: 99 },
+      ],
+    });
+    const m = { key: "d", name: "Dollars per intro", target: "under $250", series: "mw-13", window: "2w", noise: "ratio:mw-14" };
+    const lookup = await seriesLookup({ db }, WS, [{ metrics: [m] }]);
+    expect(lookup("mw-14")!.history).toEqual([{ at: off + HOUR, value: 20 }]);
+    const [r] = metricReadings({ metrics: [m] }, lookup);
+    expect(r!.band?.read.map((p) => p.weight)).toEqual([40, 20]);
+    expect(r!.band?.mean).toBeCloseTo((400 * 40 + 800 * 20) / 60, 6);
   });
 });
 

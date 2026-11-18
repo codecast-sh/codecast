@@ -15,12 +15,18 @@ import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { metricNumber, type InitiativeMetric } from "@codecast/shared/contracts/initiative";
+import { deltaPhrase, expandCases, pairedDelta } from "@codecast/shared/contracts/envs";
 import {
+  judgeEnvPrediction,
   judgePrediction,
   parsePrediction,
   predictionReadAt,
   predictionWindows,
+  predictionSpanMs,
+  readability,
   readingPeriodMs,
+  targetKind,
+  unreadableWords,
   PREDICTION_READ,
   type PredictedEffect,
   type RealisedEffect,
@@ -29,6 +35,7 @@ import {
 import { readSeries } from "./lib/metricPoints";
 import { watchIn } from "./lib/metricSeries";
 import { patchTask } from "./lib/taskWrite";
+import { DEFAULT_READ_SPAN_MS, metricPeriodOf, targetSense } from "./lib/predictionTargets";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -55,23 +62,26 @@ export const shippedAt = (task: Pick<Doc<"tasks">, "status" | "closed_at">): num
 
 /**
  * The patch that sets (or with "" clears) a task's prediction, after checking
- * it names a metric of a goal in the task's own workspace. A prediction is
- * stated before ship: one written after would be scored on what already
- * happened. A new prediction drops any earlier reading.
+ * its target is in the task's own workspace. It records the goal the target
+ * serves (else the goal the task is grounded on) and whether the target can
+ * detect a move this size over the read. A prediction is stated before ship:
+ * one written after would be scored on what already happened. A new
+ * prediction drops any earlier reading.
  */
-export async function predictionPatch(ctx: { db: any }, task: Pick<Doc<"tasks">, "workspace" | "short_id"> & Partial<Pick<Doc<"tasks">, "status" | "closed_at">>, text: string, now: number): Promise<{ predicted: StoredPrediction | undefined; realised: undefined }> {
+export async function predictionPatch(ctx: { db: any }, task: Pick<Doc<"tasks">, "workspace" | "short_id"> & Partial<Pick<Doc<"tasks">, "status" | "closed_at" | "goal_ref">>, text: string, now: number): Promise<{ predicted: StoredPrediction | undefined; realised: undefined }> {
   if (!text.trim()) return { predicted: undefined, realised: undefined };
   const parsed = parsePrediction(text, now);
   if ("error" in parsed) throw new Error(parsed.error);
   const shipped = task.status ? shippedAt(task as Pick<Doc<"tasks">, "status" | "closed_at">) : null;
   if (shipped !== null) throw new Error(`${task.short_id} shipped ${isoDay(shipped)}; a prediction is stated before ship, so the read cannot see the result first`);
   const p = parsed.prediction;
-  const goal = await goalIn(ctx, task.workspace, p.goal_ref);
-  if (!goal) throw new Error(`No goal ${initiativeOf(p.goal_ref)} in ${task.short_id}'s workspace (cast goals lists them)`);
-  const metric = (goal.metrics ?? []).find((m: InitiativeMetric) => m.key === keyOf(p.goal_ref));
-  if (!metric) throw new Error(`${goal.short_id} has no metric "${keyOf(p.goal_ref)}"; its metrics: ${(goal.metrics ?? []).map((m: InitiativeMetric) => m.key).join(", ") || "none"}`);
-  const due_at = p.read_at ?? now + p.read_days! * DAY;
-  return { predicted: { ...p, ...(metric.series ? { series: metric.series } : {}), due_at }, realised: undefined };
+  if (!task.workspace) throw new Error(`${task.short_id} has no workspace to read a prediction in`);
+  const sense = await targetSense(ctx, task.workspace, p.goal_ref, predictionSpanMs(p, now));
+  if ("error" in sense) throw new Error(sense.error);
+  const grounded = /^in-\d+:/.test(task.goal_ref ?? "") ? task.goal_ref!.split(":")[0] : undefined;
+  const goal = sense.goal ?? grounded;
+  const due_at = p.read_at ?? (p.read_days !== undefined ? now + p.read_days * DAY : now + PREDICTION_READ.recheck_days * DAY);
+  return { predicted: { ...p, ...(sense.series ? { series: sense.series } : {}), ...(goal ? { goal } : {}), ...readability(p, sense.mde, sense.level), due_at }, realised: undefined };
 }
 
 /** The metric's values in [from, to]: its live series' points, else the goal's reported values. */
@@ -106,25 +116,73 @@ export async function readPrediction(ctx: { db: any }, task: Doc<"tasks">, now: 
   }
   const readAt = predictionReadAt(p, shipped);
   if (readAt > now) return { due_at: readAt };
-  const goal = await goalIn(ctx, task.workspace, p.goal_ref);
-  if (!goal) return unreadable(`Goal ${initiativeOf(p.goal_ref)} is gone from this workspace`, shipped);
-  const metric = (goal.metrics ?? []).find((m: Metric) => m.key === keyOf(p.goal_ref)) as Metric | undefined;
+  const kind = targetKind(p.goal_ref);
+  const read = kind === "env" ? await readEnv(ctx, task, p, shipped, now) : await readSeriesTarget(ctx, task, p, shipped, readAt);
+  if (!("judged" in read)) {
+    if ("wait" in read) return now - shipped > PREDICTION_READ.never_shipped_days * DAY ? unreadable(read.wait, shipped) : { due_at: now + PREDICTION_READ.recheck_days * DAY };
+    return unreadable(read.missing, shipped);
+  }
+  const realised: RealisedEffect = { ...read.judged, shipped_at: shipped, from: read.from, to: read.to, read_at: now, source: read.source };
+  // Smaller than the target can see: what it did is kept, and it teaches nothing either way.
+  const unreadableHere = unreadableWords(p);
+  return { realised: unreadableHere ? { ...realised, verdict: "unreadable", note: `${capital(unreadableHere)}; ${realised.note}` } : realised };
+}
+
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+type Read = { judged: ReturnType<typeof judgePrediction>; from: number | null; to: number | null; source: string } | { missing: string } | { wait: string };
+
+/** A goal metric or a series: the window after ship against as long before it, from the live series (else the goal's reports). */
+async function readSeriesTarget(ctx: { db: any }, task: Doc<"tasks">, p: StoredPrediction, shipped: number, readAt: number): Promise<Read> {
+  const ws = task.workspace!;
+  let metric: Metric | undefined;
+  let history: Array<{ value: string; observed_at: number }> = [];
+  let owner = p.goal_ref;
+  if (targetKind(p.goal_ref) === "metric") {
+    const goal = await goalIn(ctx, ws, p.goal_ref);
+    if (!goal) return { missing: `Goal ${initiativeOf(p.goal_ref)} is gone from this workspace` };
+    owner = goal.short_id;
+    metric = (goal.metrics ?? []).find((m: Metric) => m.key === keyOf(p.goal_ref)) as Metric | undefined;
+    history = metric ? goal.score_history?.[metric.key] ?? [] : [];
+    if (!metric && !p.series) return { missing: `${goal.short_id} no longer has the metric ${keyOf(p.goal_ref)}` };
+  } else {
+    // A series reads the noise model of the metric that names it.
+    const sense = await targetSense(ctx, ws, p.goal_ref, DEFAULT_READ_SPAN_MS);
+    if (!("error" in sense)) metric = sense.metric;
+  }
   // The series the prediction was made against wins over whatever the metric reads now.
   const seriesRef = p.series ?? metric?.series;
-  const watch = seriesRef ? await watchIn(ctx, goal.workspace, seriesRef) : null;
-  const history = metric ? goal.score_history?.[metric.key] ?? [] : [];
-  if (!watch && !history.length) {
-    return unreadable(metric || seriesRef ? `${goal.short_id}'s ${metric?.name ?? seriesRef} has no live series or reported values to read` : `${goal.short_id} no longer has the metric ${keyOf(p.goal_ref)}`, shipped);
-  }
+  const watch = seriesRef ? await watchIn(ctx, ws, seriesRef) : null;
+  if (!watch && !history.length) return { missing: `${owner}'s ${metric?.name ?? seriesRef ?? p.goal_ref} has no live series or reported values to read` };
   const source = watch
     ? { watch }
-    : { reports: history.flatMap((s: { value: string; observed_at: number }) => { const n = metricNumber(s.value); return n === null ? [] : [{ at: s.observed_at, value: n }]; }) };
+    : { reports: history.flatMap((s) => { const n = metricNumber(s.value); return n === null ? [] : [{ at: s.observed_at, value: n }]; }) };
   const windows = predictionWindows(shipped, readAt);
   const before = await windowPoints(ctx, source, [windows.before[0], windows.before[1] - 1]);
   const after = await windowPoints(ctx, source, windows.after);
-  const independent = (windows.after[1] - windows.after[0]) / readingPeriodMs(metric, watch?.unit);
+  const independent = (windows.after[1] - windows.after[0]) / (metric ? metricPeriodOf(metric, watch) : readingPeriodMs(undefined, watch?.unit));
   const judged = judgePrediction(p, { before, after, noise: metric?.noise ?? null, independent });
-  return { realised: { ...judged, shipped_at: shipped, from: windows.after[0], to: windows.after[1], read_at: now, source: watch ? watch.short_id : `${goal.short_id} reports` } };
+  return { judged, from: windows.after[0], to: windows.after[1], source: watch ? watch.short_id : `${owner} reports` };
+}
+
+/** An env: its first attempt after ship paired against its last attempt before, over the cases both scored when both kept them. */
+async function readEnv(ctx: { db: any }, task: Doc<"tasks">, p: StoredPrediction, shipped: number, now: number): Promise<Read> {
+  const env = p.goal_ref.slice(4);
+  const rows: Doc<"env_attempts">[] = await ctx.db.query("env_attempts").withIndex("by_workspace_env", (q: any) => q.eq("workspace", task.workspace).eq("env", env).lte("finished_at", now)).order("desc").take(200);
+  const before = rows.find((a) => a.finished_at <= shipped);
+  const after = [...rows].reverse().find((a) => a.finished_at > shipped && (!before || a.split === before.split));
+  if (!before) return { missing: `${env} has no attempt before ship to compare with` };
+  if (!after) return { wait: `${env} had no attempt after ship within ${PREDICTION_READ.never_shipped_days} days` };
+  const cases = async (a: Doc<"env_attempts">) => {
+    const stored = await ctx.db.query("env_attempt_cases").withIndex("by_attempt", (q: any) => q.eq("attempt_id", a._id)).first();
+    return stored ? expandCases(JSON.parse(stored.cases)) : [];
+  };
+  const [b, c] = await Promise.all([cases(before), cases(after)]);
+  const paired = b.length && c.length ? pairedDelta(b, c) : null;
+  const half = (ci?: number[]) => (ci && ci.length === 2 ? (ci[1]! - ci[0]!) / 2 : null);
+  const read = paired && paired.n > 0
+    ? { before: before.mean, after: after.mean, delta: paired.delta, half: half(paired.ci95), note: `${deltaPhrase(paired)} (${before.short_id} to ${after.short_id})` }
+    : { before: before.mean, after: after.mean, delta: after.mean - before.mean, half: half(before.ci95) !== null && half(after.ci95) !== null ? Math.hypot(half(before.ci95)!, half(after.ci95)!) : null, note: `means ${before.mean.toFixed(3)} to ${after.mean.toFixed(3)}, unpaired (${before.short_id} to ${after.short_id})` };
+  return { judged: judgeEnvPrediction(p, read), from: after.finished_at, to: after.finished_at, source: `env:${env} ${before.short_id}→${after.short_id}` };
 }
 
 /** Read one leased prediction and write what the read says. */
@@ -169,5 +227,25 @@ export const readOne = internalMutation({
   args: { task_id: v.id("tasks") },
   handler: async (ctx, { task_id }) => {
     await readOnePrediction(ctx, task_id, Date.now());
+  },
+});
+
+/**
+ * One pass of the backfill for predictions written before they named their
+ * goal: a goal metric's goal is its initiative. Run until it reports 0:
+ * `npx convex run predictions:backfillGoal` (or the dashboard).
+ */
+export const backfillGoal = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_prediction_due", (q: any) => q.gt("predicted.due_at", 0)).take(2000);
+    let fixed = 0;
+    for (const t of rows) {
+      const p = t.predicted as StoredPrediction;
+      if (p.goal || targetKind(p.goal_ref) !== "metric") continue;
+      await ctx.db.patch(t._id, { predicted: { ...p, goal: initiativeOf(p.goal_ref) } });
+      fixed++;
+    }
+    return { fixed };
   },
 });

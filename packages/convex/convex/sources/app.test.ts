@@ -552,7 +552,7 @@ describe("metric readers (reader watches)", () => {
     expect(made.threshold).toBeUndefined();
 
     const read = await (await import("./appMetrics")).readAppMetric(w.actionCtx(), w.source._id, made.query, w.fetchImpl, { days: 30 });
-    expect(read).toEqual({ ok: true, value: 382, unit: "$", points: [{ at: Date.parse("2026-10-13T00:00:00Z"), value: 410 }, { at: Date.parse("2026-10-20T00:00:00Z"), value: 395 }, { at: 1793100000000, value: 382 }] });
+    expect(read).toEqual({ ok: true, value: 382, unit: "$", points: [{ at: Date.parse("2026-10-13T00:00:00Z"), value: 410 }, { at: Date.parse("2026-10-20T00:00:00Z"), value: 395 }, { at: 1793100000000, value: 382 }], version: null });
     // The args ride the query string, `days` too because the reader declares it.
     const call = w.calls.find((c) => c.url.includes("/codecast/metrics/read"))!;
     expect(new URL(call.url).searchParams.get("key")).toBe("dollars_per_intro");

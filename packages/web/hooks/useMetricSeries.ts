@@ -12,7 +12,7 @@
 // edge right at the target can read differently here than in a brief.
 import { useMemo } from "react";
 import type { MetricSeries } from "@codecast/shared/contracts/initiative";
-import { metricDenominatorRef, metricPeriodMs, parseMetricWindow } from "@codecast/shared/contracts/metricStanding";
+import { metricDenominatorRef, windowPlan } from "@codecast/shared/contracts/metricStanding";
 import { useOpsWatches, useSyncOpsWatches } from "./useSyncOps";
 import { useSyncEnvStandings } from "./useEnvStandings";
 import { useSyncSeriesMany, useWatchSeriesMap } from "./useSyncOpsMetrics";
@@ -28,7 +28,10 @@ const RECENT_MS = 29 * 86_400_000;
 const asSeries = (w: OpsWatch, recent?: OpsWatchSeries, all?: OpsWatchSeries): MetricSeries => {
   const older = all && recent ? all.points.filter((p) => p.at < recent.from) : all?.points ?? [];
   const history = [...older, ...(recent?.points ?? [])].map((p) => ({ at: p.at, value: p.value }));
-  return { short_id: w.short_id, name: w.name, unit: w.unit ?? null, points: w.points, last_error: w.last_error ?? null, ...(history.length ? { history } : {}) };
+  return {
+    short_id: w.short_id, name: w.name, unit: w.unit ?? null, points: w.points, last_error: w.last_error ?? null, ...(history.length ? { history } : {}),
+    ...(w.source_points?.length ? { cohorts: w.source_points } : {}), ...(w.version ? { version: w.version } : {}),
+  };
 };
 
 /** The workspace's watches, and the standing of every environment its goals name, kept fed. Mount it where numbers are shown. */
@@ -45,11 +48,10 @@ export function useSyncMetricWindows() {
     const byRef = new Map(watches.map((w) => [w.short_id, w]));
     const near = new Set<string>(), long = new Set<string>();
     for (const m of initiatives.flatMap((r) => r.metrics ?? [])) {
-      const window = parseMetricWindow(m.window);
       const main = m.series ? byRef.get(m.series) : undefined;
-      if (!window || !main) continue;
-      const period = metricPeriodMs(`${m.name} ${main.name} ${main.unit ?? ""}`, window);
-      const reach = (Math.max(1, Math.round(window.ms / period)) - 1) * period;
+      const plan = main ? windowPlan(m, main) : null;
+      if (!plan) continue;
+      const reach = (plan.slots - 1) * plan.periodMs;
       for (const ref of [m.series, metricDenominatorRef(m)]) {
         const w = ref ? byRef.get(ref) : undefined;
         if (w) (reach > RECENT_MS ? long : near).add(w._id);

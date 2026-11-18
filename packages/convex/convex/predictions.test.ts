@@ -64,7 +64,7 @@ describe("setting a prediction", () => {
   test.each([
     ["in-8:intros_a_week +5% in 7d :: x", "No goal in-8"],
     ["in-9:weekly_users +5% in 7d :: x", 'has no metric "weekly_users"'],
-    ["in-9:intros_a_week +5%", "A prediction reads"],
+    ["in-9:intros_a_week +5%", "names its basis"],
   ])("refuses %p", async (line, words) => {
     await expect(predictionPatch(ctxOf(db()), { workspace: WS, short_id: "ct-1" }, line, NOW)).rejects.toThrow(words);
   });
@@ -78,7 +78,7 @@ describe("setting a prediction", () => {
   });
 });
 
-const predicted = (extra: Record<string, any> = {}) => ({ goal_ref: "in-9:intros_a_week", direction: "up", size: 5, relative: true, read_days: 14, basis: "replay", set_at: NOW - 40 * DAY, series: "mw-14", due_at: NOW - HOUR, ...extra });
+const predicted = (extra: Record<string, any> = {}) => ({ goal_ref: "in-9:intros_a_week", goal: "in-9", direction: "up", size: 5, relative: true, read_days: 14, basis: "replay", set_at: NOW - 40 * DAY, series: "mw-14", due_at: NOW - HOUR, ...extra });
 const SHIP = NOW - 15 * DAY;
 
 describe("the read", () => {
@@ -238,7 +238,7 @@ describe("a goal's predictions", () => {
         task(2, { status: "done", predicted: predicted({ due_at: undefined }), realised: read("held", NOW - DAY) }),
         task(3, { status: "done", predicted: predicted({ due_at: undefined }), realised: read("opposite", NOW - 2 * DAY) }),
         task(4, { workspace: OTHER, predicted: predicted() }),
-        task(5, { predicted: predicted({ goal_ref: "in-90:intros_a_week" }) }),
+        task(5, { predicted: predicted({ goal_ref: "in-90:intros_a_week", goal: "in-90" }) }),
         task(6, {}),
       ],
     });

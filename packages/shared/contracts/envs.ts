@@ -19,6 +19,8 @@
 // env` only files a `base` for a clean tree at HEAD, but the registry records
 // what it is sent; it does not prove it.
 
+import type { EnvCaseSetStanding } from "./envCases";
+
 export const ENV_LEVELS = ["L0", "L1", "L2", "L3", "L4", "L5"] as const;
 export type EnvLevel = (typeof ENV_LEVELS)[number];
 export const ENV_LEVEL_NAME: Record<EnvLevel, string> = {
@@ -189,7 +191,7 @@ export function parseEnvResult(raw: unknown, expect: { env?: string; level?: Env
       } else keys(c, CASE_KEYS, where, false, warnings);
       // A held case id is opaque, so a sealed case cannot ride out in its own name.
       const id = !held ? str(c.id, `${where}.id`, ENV_LIMITS.case_id_chars) : expect.heldIdsHashed ? token(c.id, `${where}.id`, HELD_ID_RE, "h: and 16 hex, as cast env files it") : token(c.id, `${where}.id`);
-      if (seen.has(id)) fail(`${where}.id "${id}" appears twice`);
+      if (seen.has(id)) fail(held ? `${where}.id repeats an earlier case's id` : `${where}.id "${id}" appears twice`);
       seen.add(id);
       const out: EnvCase = { id, score: unit(c.score, `${where}.score`) };
       if (c.draws !== undefined) { out.draws = count(c.draws, `${where}.draws`); if (out.draws < 1) fail(`${where}.draws must be at least 1`); }
@@ -352,6 +354,8 @@ export type EnvDeclaration = {
   predicts?: string;
   /** How long one run may take before it is stopped, in seconds. */
   timeout_s?: number;
+  /** Path globs this env's grader, cases, held data and checks live in: a climb candidate may not change them (contracts/climb.ts). */
+  protects?: string[];
 };
 
 // ── a goal's environments ──
@@ -403,6 +407,9 @@ export type EnvStanding = {
     finished_at: number;
   };
   link?: EnvLink;
+  /** The env's case sets kept by codecast (contracts/envCases.ts): size, version, fetches, last attempt per split; never a case. */
+  dev?: EnvCaseSetStanding;
+  held?: EnvCaseSetStanding;
 };
 
 const pct = (x: number) => x.toFixed(3);

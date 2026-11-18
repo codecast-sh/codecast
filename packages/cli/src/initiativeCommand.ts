@@ -7,7 +7,7 @@
 
 import type { GoalPredictionRow } from "@codecast/shared/contracts/predictedEffect";
 import { targetDayOf, targetDayStamp, targetDayPassed } from "@codecast/shared/time";
-import { STANDING_WORD, doneWhenPredicate } from "@codecast/shared/contracts/metricStanding";
+import { STANDING_WORD, doneWhenPredicate, periodsWords } from "@codecast/shared/contracts/metricStanding";
 import {
   INITIATIVE_HEALTH_LABEL,
   INITIATIVE_RECORD_LISTS,
@@ -20,7 +20,6 @@ import {
   formatSeriesValue,
   initiativeStanding,
   intentSourceLine,
-  metricDirection,
   metricLine,
   metricReadings,
   metricTrends,
@@ -467,7 +466,7 @@ export function recordWriteLines(c: Palette, verb: string, result: any, list: In
 export function predictionLines(c: Palette, p: Pick<GoalPredictionRow, "short_id" | "title" | "predicted" | "realised" | "said" | "reading">): string[] {
   const r = p.realised;
   const color = !r ? c.dim : r.verdict === "held" ? c.green : r.verdict === "opposite" ? c.red : c.yellow;
-  const what = p.reading ?? `${p.said}${p.predicted.read_at ? "" : " after ship"}`;
+  const what = p.reading ?? p.said;
   return [
     `  ${c.cyan}${p.short_id}${c.reset} ${color}${r ? r.verdict.replace("_", " ") : "open"}${c.reset} ${what} ${c.dim}· ${p.title}${c.reset}`,
     `    ${c.dim}${r ? `${p.said}; ` : ""}basis: ${p.predicted.basis}${c.reset}`,
@@ -503,17 +502,21 @@ export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; 
   if (row.why) out.push(head("Why"), ...indented(row.why));
   const readings = metricReadings(row, liveSeries(row));
   if (row.done_when) out.push(head("Done when"), ...indented(row.done_when));
-  const predicate = doneWhenPredicate(readings, metricDirection, (r, n) => { const u = (r as MetricReading).unit; return u ? formatSeriesValue(n, u) : formatMetricNumber(Math.round(n * 100) / 100); });
+  const predicate = doneWhenPredicate(readings, (r, n) => { const u = (r as MetricReading).unit; return u ? formatSeriesValue(n, u) : formatMetricNumber(Math.round(n * 100) / 100); });
   if (predicate) {
     out.push(`${head("Done when, as checked")}: ${metricStandingText(c, predicate.verdict)}`);
     for (const k of predicate.clauses) out.push(`  ${standingColor(c, k.standing)}${k.text}${c.reset}`);
+    for (const l of predicate.left_out) out.push(hint(`Left out: ${l.name}, ${l.why}`));
   }
   out.push(`${head("Owner")} ${row.owner_label ?? `${c.yellow}none${c.reset}`}`);
 
   if (readings.length) {
     const trends = metricTrends(row, liveSeries(row));
     out.push(head("Metrics", "each number against its target"));
-    for (const m of readings) out.push(`  ${metricRecordLine(c, m, trends[m.key], now)} ${c.dim}· ${m.key}${m.source ? ` · ${m.source}` : ""}${c.reset}`);
+    for (const m of readings) {
+      out.push(`  ${metricRecordLine(c, m, trends[m.key], now)} ${c.dim}· ${m.key}${m.source ? ` · ${m.source}` : ""}${c.reset}`);
+      if (m.band?.read.length) out.push(hint(`  ${m.band.cohort ? `cohort ${m.band.period}s read, as the source dates them` : m.band.failing ? `periods read from stored polls (UTC), its source failing: ${m.band.failing}` : "periods read (UTC)"}: ${periodsWords(m.band, (n) => (m.unit ? formatSeriesValue(n, m.unit) : formatMetricNumber(Math.round(n * 100) / 100)))}`));
+    }
     out.push(hint(`Report a value: cast goal report ${row.short_id} ${readings[0].key}=<value> --source <link or short id>`));
   }
   if (opts.afterMetrics?.length) out.push(...opts.afterMetrics);

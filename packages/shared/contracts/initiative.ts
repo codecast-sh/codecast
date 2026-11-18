@@ -16,7 +16,7 @@
 
 import { matchHandle, memberHandle } from "../chat/handles";
 import { parseEntityUrl } from "../entities";
-import { bandWords, metricBand, STANDING_WORD, type WindowRead } from "./metricStanding";
+import { bandWords, metricBand, nextTrajectoryPoint, parseMetricTarget, pointDay, standingWord, TARGET_UNREAD, targetAt, type MetricTrajectory, type WindowRead } from "./metricStanding";
 export { metricSpec, parseMetricSpec } from "./metricStanding";
 
 export const INITIATIVE_STATUSES = ["proposed", "planned", "active", "completed", "cancelled"] as const;
@@ -67,7 +67,7 @@ export type InitiativeMetric = {
   /** A slug (metricKeyOf(name)); the scoreboard's key. */
   key: string;
   name: string;
-  /** The number to reach, as written: "1000", "$50k", "< 5%", "at least 40". */
+  /** The number to reach, as written: "1000", "$50k", "< 5%", "at least 40", or a dated trajectory "at least 51.2%@2026-11-16 59.1%@2026-12-28" (contracts/metricStanding parseMetricTarget); any other words read as unknown. */
   target: string;
   /**
    * The live series it reads (a metric watch's short id, `mw-N`): its latest
@@ -88,7 +88,14 @@ export type InitiativeMetric = {
 };
 
 /** A live series as a reading needs it: the watch's name, unit and points, oldest first. */
-export type MetricSeries = { short_id: string; name: string; unit?: string | null; points: Array<{ at: number; value: number }>; last_error?: string | null; history?: Array<{ at: number; value: number }> };
+export type MetricSeries = {
+  short_id: string; name: string; unit?: string | null; points: Array<{ at: number; value: number }>; last_error?: string | null; history?: Array<{ at: number; value: number }>;
+  /** A reader's own dated periods (cohort weeks): a window reads these, not polls. */
+  cohorts?: Array<{ at: number; value: number }>;
+  /** The definition version the points are read under, and how many older ones a window left out. */
+  version?: string;
+  dropped?: number;
+};
 export const INITIATIVE_METRICS_MAX = 4;
 /** A reported value: the template scoreboard's own shape (orgTemplateState.ScoreState). */
 export type InitiativeScore = { value: string; observed_at: number; source: string };
@@ -138,29 +145,41 @@ export type MetricReading = InitiativeMetric & {
   unit: string | null;
   /** With a window: the mean, the 80% band and what it can detect; the standing is the band's. */
   band?: WindowRead | null;
+  /** Why the standing cannot be read: the target's words are not a number with a direction. */
+  target_unread?: string;
+  /** A dated target: the number in force when the value was read, what it heads for, and the standing against its last point. */
+  trajectory?: MetricTrajectory | null;
 };
 
 /** One metric read against its target: from its live series when it names one that has a point, else from its last report. */
 export function metricReading(metric: InitiativeMetric, score?: InitiativeScore | null, series?: MetricSeries | null, lookup?: (ref: string) => MetricSeries | null | undefined): MetricReading {
   const last = series?.points[series.points.length - 1];
   const live = !!(metric.series && series && last);
+  const at = live ? last!.at : score?.observed_at ?? Date.now();
   const r: MetricReading = live
-    ? { ...readAgainst(metric, formatSeriesValue(last!.value, series!.unit)), observed_at: last!.at, source: `${series!.short_id} ${series!.name}`, live: true, unit: series!.unit ?? null }
-    : { ...readAgainst(metric, score?.value ?? null), observed_at: score?.observed_at ?? null, source: score?.source ?? null, live: false, unit: null };
-  if (!metric.window) return r;
+    ? { ...readAgainst(metric, formatSeriesValue(last!.value, series!.unit), at), observed_at: last!.at, source: `${series!.short_id} ${series!.name}`, live: true, unit: series!.unit ?? null }
+    : { ...readAgainst(metric, score?.value ?? null, at), observed_at: score?.observed_at ?? null, source: score?.source ?? null, live: false, unit: null };
+  const target = parseMetricTarget(metric.target);
+  if (!metric.window || !target) return r;
   const n = metricNumber(r.value);
-  const band = metricBand(metric, metricNumber(metric.target), metricDirection(metric.target), live ? series : null, !live && n !== null && r.observed_at ? { value: n, at: r.observed_at } : null, lookup);
-  const t = metricNumber(metric.target);
-  return band ? { ...r, band, standing: band.standing, progress: r.progress === null || t === null ? null : Math.max(0, Math.min(1, band.mean / t)) } : r;
+  const bandAt = (t: (end: number) => number) => metricBand(metric, t, target.direction, live ? series : null, !live && n !== null && r.observed_at ? { value: n, at: r.observed_at } : null, lookup);
+  const band = bandAt((end) => targetAt(target, end));
+  const finalValue = r.trajectory?.final.value;
+  const final = finalValue !== undefined ? bandAt(() => finalValue) : null;
+  const trajectory = r.trajectory && final ? { ...r.trajectory, final_standing: final.standing, final_band: final } : r.trajectory;
+  const goal = r.trajectory?.final.value ?? targetAt(target, at);
+  return band ? { ...r, band, trajectory, standing: band.standing, progress: r.progress === null || goal <= 0 ? null : Math.max(0, Math.min(1, band.mean / goal)) } : r;
 }
 
-function readAgainst(metric: InitiativeMetric, value: string | null): Omit<MetricReading, "observed_at" | "source" | "live" | "unit"> {
+function readAgainst(metric: InitiativeMetric, value: string | null, at: number): Omit<MetricReading, "observed_at" | "source" | "live" | "unit"> {
   const n = metricNumber(value);
-  const t = metricNumber(metric.target);
-  const direction = metricDirection(metric.target);
-  const standing: MetricStanding = n === null || t === null ? "unknown" : direction === "at_most" ? (n <= t ? "met" : "behind") : (n >= t ? "met" : "behind");
-  const progress = n === null || t === null || t <= 0 || direction === "at_most" ? null : Math.max(0, Math.min(1, n / t));
-  return { ...metric, value, standing, progress };
+  const target = parseMetricTarget(metric.target);
+  if (!target) return { ...metric, value, standing: "unknown", progress: null, target_unread: TARGET_UNREAD };
+  const vs = (t: number): MetricStanding => (n === null ? "unknown" : target.direction === "at_most" ? (n <= t ? "met" : "behind") : n >= t ? "met" : "behind");
+  const final = target.kind === "trajectory" ? target.points[target.points.length - 1]! : { value: target.value, at };
+  const trajectory = target.kind === "trajectory" ? { in_force: targetAt(target, at), at, next: nextTrajectoryPoint(target, at), final, final_standing: vs(final.value), unit: target.unit } : null;
+  const progress = n === null || final.value <= 0 || target.direction === "at_most" ? null : Math.max(0, Math.min(1, n / final.value));
+  return { ...metric, value, standing: vs(targetAt(target, at)), progress, ...(trajectory ? { trajectory } : {}) };
 }
 /** A row's metrics read against their targets; `series` finds a metric's live series by its short id. */
 export const metricReadings = (row: { metrics?: InitiativeMetric[]; scoreboard?: Record<string, InitiativeScore> }, series?: (ref: string) => MetricSeries | null | undefined): MetricReading[] =>
@@ -169,7 +188,11 @@ export const metricReadings = (row: { metrics?: InitiativeMetric[]; scoreboard?:
 /** Whether a value reads "of" its target: a number to reach. A number to stay under ("under 20") and a target that is not a number are named as the target instead. */
 export const metricReaches = (target: string): boolean => metricDirection(target) === "at_least" && metricNumber(target) !== null;
 /** The value against its target, in the words every surface uses: "412 of 1,000", "34, target under 20", and "target 1,000" before a value is reported. */
-export function metricAgainst(r: Pick<MetricReading, "value" | "target">): string {
+export function metricAgainst(r: Pick<MetricReading, "value" | "target"> & Partial<Pick<MetricReading, "trajectory" | "target_unread">>): string {
+  const lead = r.value === null ? "" : `${r.value}, `;
+  if (r.target_unread) return `${lead}target ${r.target}`;
+  const t = r.trajectory;
+  if (t) return `${lead}trajectory ${formatSeriesValue(t.in_force, t.unit)} now, ${formatSeriesValue(t.final.value, t.unit)} by ${pointDay(t.final.at)}`;
   if (r.value === null) return `target ${r.target}`;
   return metricReaches(r.target) ? `${r.value} of ${r.target}` : `${r.value}, target ${r.target}`;
 }
@@ -181,11 +204,14 @@ export function metricAgainst(r: Pick<MetricReading, "value" | "target">): strin
  */
 export function metricLine(r: MetricReading, now = Date.now(), trend?: MetricTrend | null): string {
   if (r.value === null) return `${r.name}: ${r.series ? "no reading yet from its live series" : "not reported yet"}, ${metricAgainst(r)}`;
-  const word = STANDING_WORD[r.standing];
+  const word = r.target_unread ? `unknown: ${r.target_unread}` : standingWord(r.standing, r.trajectory);
   const moved = trend ? trendWords(trend, r.unit) : "";
   const when = r.observed_at ? dayWord(r.observed_at, now) : "";
   const tail = r.live ? ` (live ${r.series}${when ? `, ${when}` : ""})` : when ? ` (${when})` : "";
-  const band = r.band ? ` ${bandWords(r.band, (x) => (r.unit ? formatSeriesValue(x, r.unit) : formatMetricNumber(Math.round(x * 100) / 100)))}` : "";
+  const say = (x: number) => (r.unit ? formatSeriesValue(x, r.unit) : formatMetricNumber(Math.round(x * 100) / 100));
+  // A trajectory's window is judged against the target in force at its end, which a cohort window's end can sit well before today's.
+  const against = r.trajectory && r.band?.against != null && Math.abs(r.band.against - r.trajectory.in_force) > 1e-9 ? `, judged against ${say(r.band.against)} in force at the window's end` : "";
+  const band = r.band ? ` ${bandWords(r.band, say)}${against}` : "";
   return `${r.name}: ${metricAgainst(r)}${word ? `, ${word}` : ""}${band}${r.guardrail ? ", a guardrail" : ""}${moved ? `; ${moved}` : ""}${tail}`;
 }
 function dayWord(at: number, now: number): string {
@@ -660,15 +686,17 @@ export function trendWords(t: MetricTrend, unit?: string | null): string {
  * at: "needs +1,070 a week to reach 10,000 by 1 Jan; moving +210 a week".
  * Empty when it is met, has no date, or either side is not a number.
  */
-export function paceWords(r: Pick<MetricReading, "value" | "target" | "standing" | "unit">, trend: MetricTrend | null | undefined, targetDate: number | null | undefined, now = Date.now()): string {
-  const n = metricNumber(r.value), t = metricNumber(r.target);
-  if (r.standing !== "behind" || n === null || t === null || !targetDate) return "";
-  const weeks = (targetDate - now) / (7 * 86_400_000);
+export function paceWords(r: Pick<MetricReading, "value" | "target" | "standing" | "unit"> & Partial<Pick<MetricReading, "trajectory">>, trend: MetricTrend | null | undefined, targetDate: number | null | undefined, now = Date.now()): string {
+  // Against a trajectory the pace is toward its next point, by that point's day.
+  const next = r.trajectory?.next;
+  const n = metricNumber(r.value), t = next ? next.value : parseMetricTarget(r.target)?.kind === "number" ? metricNumber(r.target) : null;
+  const date = next ? next.at : targetDate;
+  if (r.standing !== "behind" || n === null || t === null || !date) return "";
+  const weeks = (date - now) / (7 * 86_400_000);
   const say = (x: number) => `${x >= 0 ? "+" : "-"}${r.unit ? formatSeriesValue(Math.abs(x), r.unit) : formatMetricNumber(Math.abs(x))}`;
-  const d = new Date(targetDate);
-  const by = `${d.getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()]}`;
+  const by = pointDay(date);
   if (weeks <= 0) return `past its date (${by})`;
-  const need = `needs ${say((t - n) / weeks)} a week to reach ${r.target} by ${by}`;
+  const need = `needs ${say((t - n) / weeks)} a week to reach ${next ? `${formatSeriesValue(t, r.trajectory!.unit)} (its trajectory)` : r.target} by ${by}`;
   const s = trend?.series ?? [];
   const span = s.length >= 2 ? (s[s.length - 1].at - s[0].at) / (7 * 86_400_000) : 0;
   return span > 0.2 ? `${need}; moving ${say((s[s.length - 1].n - s[0].n) / span)} a week` : need;

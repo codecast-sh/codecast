@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { briefGoalRefs, compactPrinciples, GROUND_NOTE_MAX, goalRefLabel, groundUpdateBody, parseGroundReply, renderGoalsBrief, type GoalsBrief } from "./goalsBrief";
+import { briefReadTargets, briefGoalRefs, compactPrinciples, GROUND_NOTE_MAX, goalRefLabel, groundUpdateBody, parseGroundReply, renderGoalsBrief, type GoalsBrief } from "./goalsBrief";
 
 const NOW = Date.UTC(2026, 9, 2, 12);
 const DAY = 86_400_000;
@@ -155,5 +155,33 @@ describe("parseGroundReply", () => {
     const kept = "fields" in r ? r.fields.readiness_note : "";
     expect(kept.length).toBeLessThanOrEqual(GROUND_NOTE_MAX);
     expect(kept.endsWith("here.")).toBe(true);
+  });
+});
+
+describe("where an effect can be read", () => {
+  const brief: GoalsBrief = {
+    workspace: "team:t",
+    initiatives: [{
+      short_id: "in-9", title: "Cost per match", health: "none", metrics: [{ key: "intros_a_week", name: "Intros a week", target: "at least 60" }], project_short_ids: [],
+      read_at: [
+        { ref: "in-9:intros_a_week", name: "Intros a week", detects: "±164%" },
+        { ref: "mw-17", name: "Funnel: Need to matched", detects: "±12%" },
+        { ref: "env:union/second-side-replay", name: "union/second-side-replay", detects: null },
+      ],
+    }],
+    projects: [],
+  };
+  test("the brief lists each place under its goal with what a read there detects", () => {
+    const text = renderGoalsBrief(brief, { brief: true });
+    expect(text).toContain("- predictions read at (smallest change a four-week read each side of ship detects): in-9:intros_a_week ±164% (Intros a week); mw-17 ±12% (Funnel: Need to matched); env:union/second-side-replay unknown (union/second-side-replay)");
+  });
+  test("a ground prediction may name any of those places, and nothing else", () => {
+    const targets = briefReadTargets(brief);
+    expect([...targets].sort()).toEqual(["env:union/second-side-replay", "in-9:intros_a_week", "mw-17"]);
+    const reply = (prediction: string) => ({ goal_ref: "in-9:intros_a_week", category: "code", risk: "low", readiness: "ready", note: "n", prediction });
+    const kept = parseGroundReply(reply("mw-17 +5pt in 28d :: evidence"), briefGoalRefs(brief), null, targets);
+    expect("fields" in kept && kept.fields.prediction).toBe("mw-17 +5pt in 28d :: evidence");
+    const dropped = parseGroundReply(reply("mw-99 +5pt :: evidence"), briefGoalRefs(brief), null, targets);
+    expect("fields" in dropped && "prediction" in dropped.fields).toBe(false);
   });
 });

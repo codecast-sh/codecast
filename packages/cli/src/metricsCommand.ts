@@ -37,6 +37,12 @@ export interface WatchRow {
   last_error?: string;
   history?: { at: number; added: number; note?: string; reading?: boolean };
   points: { at: number; value: number }[];
+  source_points?: { at: number; value: number }[];
+  version?: string;
+  version_at?: number;
+  version_since?: number;
+  version_note?: string;
+  point_removals?: { at: number; value: number; reason?: string; removed_at: number }[];
   last_value: number | null;
   last_at: number | null;
   source_name: string | null;
@@ -123,6 +129,26 @@ export function formatQueryResult(res: { columns: unknown[]; results: unknown[];
   return lines.join("\n");
 }
 
+/**
+ * A point's time as a person types it: an ISO time read as UTC unless it
+ * names a zone, covering the minute it names when it names no seconds, the
+ * second when it names no fraction. A bare day is too wide to remove by.
+ */
+export function parsePointTime(text: string): { from: number; to: number } | { error: string } {
+  const t = text.trim();
+  const m = t.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/i);
+  if (!m) return { error: `--at takes an ISO time to the minute or finer, like 2026-11-11T12:31 (UTC unless it names a zone), not "${text}"` };
+  const at = Date.parse(`${m[1]}T${m[2]}${m[3] ?? ":00"}${m[5] ?? "Z"}`);
+  if (!Number.isFinite(at)) return { error: `"${text}" is not a time` };
+  const width = !m[3] ? 60_000 : !m[4] ? 1_000 : 1;
+  return { from: at, to: at + width - 1 };
+}
+
+/** What a removal answered: each value removed, at its time. */
+export function formatPointRemoval(res: { watch: string; removed: Array<{ at: number; value: number }> }): string {
+  return [`${fmt.success("removed")} ${res.removed.length} value${res.removed.length === 1 ? "" : "s"} from ${res.watch}`, ...res.removed.map((p) => fmt.muted(`  ${new Date(p.at).toISOString()} ${p.value}`))].join("\n");
+}
+
 export function registerMetricsCommand(program: Command, deps: PublishDeps): void {
   const metrics = program.command("metrics").description(commandGroup("metrics").description);
 
@@ -179,6 +205,9 @@ export function registerMetricsCommand(program: Command, deps: PublishDeps): voi
         const history = formatHistoryLine(w);
         if (history) lines.push(fmt.muted(`  ${history}`));
         if (res.group) lines.push(fmt.muted(`  group ${res.group.short_id} ${res.group.status}${res.group.last_transition ? `, last ${res.group.last_transition} ${ago(res.group.last_transition_at)}` : ""}`));
+        if (w.version) lines.push(fmt.muted(`  definition ${w.version}, values read from ${new Date(w.version_since ?? w.version_at ?? 0).toISOString().slice(0, 16)}Z${w.version_note ? `: ${w.version_note}` : ""}; older values are kept and left out`));
+        if (w.source_points?.length) lines.push(fmt.muted(`  ${w.source_points.length} periods dated by the source, newest ${new Date(w.source_points[w.source_points.length - 1]!.at).toISOString().slice(0, 10)}`));
+        for (const r of (w.point_removals ?? []).slice(-3)) lines.push(fmt.muted(`  removed ${new Date(r.at).toISOString()} ${r.value}${r.reason ? `: ${r.reason}` : ""} (${ago(r.removed_at)})`));
         return lines.join("\n");
       });
     });
@@ -192,6 +221,38 @@ export function registerMetricsCommand(program: Command, deps: PublishDeps): voi
     .action(async (ref: string, o: { json?: boolean }) => {
       const res = await postOrFail(deps, "/cli/metrics/remove", { watch: shortRef("mw", ref) });
       emit(o.json, res, () => `${fmt.success("removed")} ${res.removed}`);
+    });
+
+  const points = metrics.command("points").description("A watch's stored values");
+  points
+    .command("rm")
+    .alias("remove")
+    .description("Remove a watch's stored value at one time (a stale or wrong read), from its history, its chart and every window that reads it; logged on the watch. Its creator or a team admin only")
+    .argument("<watch>", "mw-N")
+    .requiredOption("--at <time>", "When it was read: an ISO time to the minute or finer, UTC unless it names a zone (2026-11-11T12:31)")
+    .option("--reason <text>", "Why it goes, kept in the watch's log")
+    .option(...JSON_OPTION)
+    .action(async (ref: string, o: { at: string; reason?: string; json?: boolean }) => {
+      const span = parsePointTime(o.at);
+      if ("error" in span) fail(span.error);
+      const { from, to } = span as { from: number; to: number };
+      const res = await postOrFail(deps, "/cli/metrics/points-rm", { watch: shortRef("mw", ref), at: from, to, ...(o.reason ? { reason: o.reason } : {}) });
+      emit(o.json, res, () => formatPointRemoval(res));
+    });
+
+  metrics
+    .command("redefine")
+    .description("Declare that the watch's values read before a time were under an older definition: they stay stored, and windows, bands and the chart leave them out. For a source that sends no version of its own. Its creator or a team admin only")
+    .argument("<watch>", "mw-N")
+    .requiredOption("--since <time>", "When the current definition began: an ISO time, UTC unless it names a zone (2026-11-13T00:00)")
+    .option("--name <version>", "What to call the definition (default: since <time>)")
+    .option("--reason <text>", "Why, shown on the watch")
+    .option(...JSON_OPTION)
+    .action(async (ref: string, o: { since: string; name?: string; reason?: string; json?: boolean }) => {
+      const span = parsePointTime(o.since);
+      if ("error" in span) fail(span.error.replace("--at", "--since"));
+      const res = await postOrFail(deps, "/cli/metrics/redefine", { watch: shortRef("mw", ref), since: (span as { from: number }).from, ...(o.name ? { name: o.name } : {}), ...(o.reason ? { reason: o.reason } : {}) });
+      emit(o.json, res, () => `${fmt.success("redefined")} ${res.watch} as ${res.version}: values read before ${new Date(res.since).toISOString().slice(0, 16)}Z are left out of windows, bands and the chart (kept, not deleted)`);
     });
 
   metrics

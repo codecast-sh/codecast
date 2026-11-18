@@ -107,12 +107,14 @@ describe("loading and running in a repo", () => {
     const dir = repo();
     const leak = declare(dir, `echo '${result("").replace('"env_version":"v1"', '"env_version":"9f3a2c1d"').replace('"score":0}', '"score":0,"note":"the pitch text"}')}' | sed "s/\\$1/$1/; s/\\$2/$2/"`);
     const held = await runEnv(leak.envs[0], { dir: leak.root!, candidate: "base", split: "held", quiet: true });
-    expect(!held.ok && held.error).toMatch(/held-split case is its id and score only/);
+    // The reason would quote the runner, so a held run says only that it broke; dev shows the reason.
+    expect(!held.ok && held.error).toMatch(/held result breaks the contract .*withheld/);
+    expect(!held.ok && held.error).not.toContain("the pitch text");
     const bad = declare(dir, `echo '{"env": "acme/smoke",'; exit 1`);
     const broken = await runEnv(bad.envs[0], { dir: bad.root!, candidate: "base", split: "dev", quiet: true });
     expect(!broken.ok && broken.error).toMatch(/exited 1 and printed no result/);
     const wrongSplit = declare(dir, `echo '${result("")}' | sed "s/\\$1/$1/; s/\\$2/dev/"`);
     const ws = await runEnv(wrongSplit.envs[0], { dir: wrongSplit.root!, candidate: "base", split: "held", quiet: true });
-    expect(!ws.ok && ws.error).toMatch(/dev split, but held was asked for/);
+    expect(!ws.ok && ws.error).toMatch(/held result breaks the contract/);
   });
 });

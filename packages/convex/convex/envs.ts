@@ -18,6 +18,7 @@ import { scopeArgs, scopeOf } from "./lib/ingestScope";
 import { workspaceGrantsAccess } from "./lib/accessKeys";
 import { findInitiative, requireInitiative } from "./lib/initiativeRef";
 import { envLevelValidator } from "./envSchema";
+import { caseSetStandingOf } from "./envCases";
 import {
   ENV_ATTEMPT_PREFIX,
   compactCases,
@@ -69,15 +70,18 @@ const linkView = (l: Doc<"env_links">): EnvLink => ({ to: l.to, measure: l.measu
 
 /** An env's standing: its latest base attempt (else its latest of any candidate) and its latest link. */
 async function standingOf(ctx: any, workspace: string, e: GoalEnv): Promise<EnvStanding> {
-  const [recent, link] = await Promise.all([latestAttempts(ctx, workspace, e.env), latestLink(ctx, workspace, e.env)]);
+  const [recent, link, dev, held] = await Promise.all([latestAttempts(ctx, workspace, e.env), latestLink(ctx, workspace, e.env), caseSetStandingOf(ctx, workspace, e.env, "dev"), caseSetStandingOf(ctx, workspace, e.env, "held")]);
   const a = recent.find((r) => r.candidate.label === "base") ?? recent[0];
   return {
     env: e.env,
     level: e.level,
     ...(e.note ? { note: e.note } : {}),
-    ...(recent[0]?.title ? { title: recent[0].title } : {}),
+    // Any recent attempt's declared title: one run recorded without it (another checkout, --allow-undeclared) does not drop it.
+    ...(recent.find((r) => r.title)?.title ? { title: recent.find((r) => r.title)!.title } : {}),
     ...(a ? { attempt: { short_id: a.short_id, candidate: a.candidate, split: a.split, n: a.n, mean: a.mean, ...(a.ci95 ? { ci95: a.ci95 as [number, number] } : {}), ...(a.noise ? { noise: a.noise } : {}), ...(a.cost_usd !== undefined ? { cost_usd: a.cost_usd } : {}), finished_at: a.finished_at } } : {}),
     ...(link ? { link: linkView(link) } : {}),
+    ...(dev ? { dev } : {}),
+    ...(held ? { held } : {}),
   };
 }
 
@@ -100,6 +104,10 @@ export const record = mutation({
     session_id: v.optional(v.string()),
     task_id: v.optional(v.string()),
     goal: v.optional(v.string()),
+    /** The run's case-set fetch (envCases.open): the attempt takes its set version from it. A held attempt without one is refused. */
+    cases_read: v.optional(v.id("env_heldout_reads")),
+    /** cases_read as CLIs sent it before dev sets. */
+    held_read: v.optional(v.id("env_heldout_reads")),
   },
   handler: async (ctx, args) => {
     if (!isEnvKey(args.env)) invalidScope(`"${args.env}" is not an env key (<product>/<name>)`);
@@ -107,6 +115,12 @@ export const record = mutation({
     if (!parsed.ok) invalidScope(`The result for ${args.env} breaks the contract: ${parsed.error}`);
     const result = (parsed as Extract<typeof parsed, { ok: true }>).result;
     const { userId, workspace, goal } = await writeScope(ctx, args);
+    // An attempt is filed against the fetch that fed it, once, and only for its own split. Held must have one; dev may run on local cases.
+    const readId = args.cases_read ?? args.held_read;
+    const fetched: Doc<"env_heldout_reads"> | null = readId ? await ctx.db.get(readId) : null;
+    const fits = !!fetched && fetched.kind === "run" && fetched.by_user === userId && fetched.env === result.env && fetched.workspace === workspace && (fetched.split ?? "held") === result.split && !fetched.attempt_id && (result.split !== "held" || (fetched.expires_at ?? 0) >= Date.now());
+    if (result.split === "held" && !fits) invalidScope(`A held attempt is filed by the run that fetched the held set: run cast env run ${result.env} --split held`);
+    if (readId && !fits) invalidScope(`That case-set fetch does not belong to this ${result.split} run: file it from the run that fetched it`);
     // One key, one repo: every recent attempt that names its repo must name this one.
     // The client names its repo, so this guards against a mistake, not an adversary.
     const repo = args.repo?.trim() || undefined;
@@ -144,9 +158,11 @@ export const record = mutation({
       ...(args.session_id ? { session_id: args.session_id } : {}),
       ...(args.task_id ? { task_id: args.task_id } : {}),
       ...(goal ? { goal_id: goal._id } : {}),
+      ...(fetched ? { cases_version: fetched.version } : {}),
       created_at: Date.now(),
     });
     await ctx.db.insert("env_attempt_cases", { attempt_id: id, workspace, cases });
+    if (fetched) await ctx.db.patch(fetched._id, { attempt_id: id });
     // A result that carries a measured link files it as the env's link, with the attempt as evidence.
     if (result.link) await insertLink(ctx, userId, workspace, result.env, { ...result.link, evidence: result.link.evidence ?? short_id });
     return { id, short_id, workspace, warnings: parsed.warnings };

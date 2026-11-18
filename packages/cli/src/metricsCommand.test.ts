@@ -1,7 +1,7 @@
 // `cast metrics` (external-data.md X7, X10): the watch body and what each verb posts.
 import { describe, expect, test } from "bun:test";
 import { SCOPE, useCliHarness } from "./externalDataCli.testHarness.js";
-import { formatHistoryLine, formatQueryResult, formatWatchLine, metricAddBody, type WatchRow } from "./metricsCommand.js";
+import { formatHistoryLine, formatPointRemoval, formatQueryResult, formatWatchLine, metricAddBody, parsePointTime, type WatchRow } from "./metricsCommand.js";
 
 describe("metricAddBody", () => {
   test("needs a source, one query and at most one direction", () => {
@@ -104,5 +104,19 @@ describe("a reader watch, and a series with no line", () => {
     const line = formatWatchLine({ _id: "w", short_id: "mw-12", name: "Dollars per intro", query_kind: "reader", query: "metrics.read", direction: "below", unit: "$", interval_ms: 3600_000, status: "active", points: [{ at: 1, value: 410 }, { at: 2, value: 382 }], last_value: 382, last_at: 2, source_name: "union" } as WatchRow, 2);
     expect(line).toContain("$382");
     expect(line).toContain("(series)");
+  });
+});
+
+describe("cast metrics points rm --at", () => {
+  test("covers the minute, the second or the instant the time names, in UTC unless it names a zone", () => {
+    const at = Date.parse("2026-11-11T12:31:00Z");
+    expect(parsePointTime("2026-11-11T12:31")).toEqual({ from: at, to: at + 59_999 });
+    expect(parsePointTime("2026-11-11T12:31:07Z")).toEqual({ from: at + 7_000, to: at + 7_999 });
+    expect(parsePointTime("2026-11-11T12:31:07.250Z")).toEqual({ from: at + 7_250, to: at + 7_250 });
+    expect(parsePointTime("2026-11-11T13:31+01:00")).toEqual({ from: at, to: at + 59_999 });
+    for (const bad of ["2026-11-11", "yesterday", "2026-11-11T25:00"]) expect("error" in parsePointTime(bad)).toBe(true);
+  });
+  test("says each value it removed", () => {
+    expect(formatPointRemoval({ watch: "mw-16", removed: [{ at: Date.parse("2026-11-11T12:31:07Z"), value: 62.87 }] }).replace(/\x1b\[[0-9;]*m/g, "")).toBe("removed 1 value from mw-16\n  2026-11-11T12:31:07.000Z 62.87");
   });
 });
