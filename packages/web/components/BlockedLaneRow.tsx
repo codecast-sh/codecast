@@ -52,11 +52,12 @@ export function BlockedLaneRow({
   recoveryDevice?: RecoveryDevice;
 }) {
   const n = lane.sessionIds.length;
+  const isThisMachine = lane.devices.length === 1 && lane.devices[0].device_id === localDeviceId;
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5" data-blocked-lane={lane.state}>
       {showLabel && (
         <span className="min-w-0 truncate text-meta text-sol-text-muted" title={lane.devices.map((d) => d.label).join(", ")}>
-          <span className="font-medium text-sol-text">{lane.label}</span>
+          <span className="font-medium text-sol-text">{isThisMachine ? "This machine" : lane.label}</span>
           <span className="tabular-nums"> · {n}</span>
         </span>
       )}
@@ -66,23 +67,26 @@ export function BlockedLaneRow({
             {busy ? (target ? "Switching…" : "Continuing…") : continueLabel}
           </Button>
           {lane.accounts.length > 0 && (
-            <ContinueAccountPicker
-              machines={lane.devices.map((d) => ({
-                deviceId: d.device_id,
-                label: d.label,
-                isLocal: d.device_id === localDeviceId,
-                email: lane.fleetEmails.length === 1 ? lane.fleetEmails[0] : d.active_email,
-                usage: lane.fleetUsage,
-                sessions: n,
-              }))}
-              accounts={lane.accounts}
-              unavailable={lane.unavailable}
-              value={target?.key ?? ""}
-              recommendedKey={recommendedKey}
-              onChange={onPick}
-              disabled={busy}
-              now={now}
-            />
+            <>
+              <span className="-mx-0.5 text-meta text-sol-text-dim">on</span>
+              <ContinueAccountPicker
+                machines={lane.devices.map((d) => ({
+                  deviceId: d.device_id,
+                  label: d.label,
+                  isLocal: d.device_id === localDeviceId,
+                  email: lane.fleetEmails.length === 1 ? lane.fleetEmails[0] : d.active_email,
+                  usage: lane.fleetUsage,
+                  sessions: n,
+                }))}
+                accounts={lane.accounts}
+                unavailable={lane.unavailable}
+                value={target?.key ?? ""}
+                recommendedKey={recommendedKey}
+                onChange={onPick}
+                disabled={busy}
+                now={now}
+              />
+            </>
           )}
         </>
       )}
@@ -110,55 +114,53 @@ function openWhereAccountsRun() {
 
 function WaitLane({ lane, now, recoveryDevice }: { lane: BlockedLane; now: number; recoveryDevice?: RecoveryDevice }) {
   const resumesIn = lane.resumesAt ? formatCountdown(lane.resumesAt - now) : null;
-  const spent = lane.fleetEmails.length === 1 ? short(lane.fleetEmails[0]) : `${lane.fleetEmails.length} accounts`;
+  const spent = lane.heldAccounts > 1 ? `all ${lane.heldAccounts} accounts spent` : `${lane.fleetEmails.length === 1 ? short(lane.fleetEmails[0]) : "account"} spent`;
+  const accounts = [...lane.fleetEmails, ...lane.unavailable.map(([e, why]) => `${e} (${why})`)].join(", ");
   return (
     <>
       <span
-        className="text-meta font-semibold text-amber-700 dark:text-amber-500"
-        title={`Every account ${lane.label} can run is at its limit: ${[...lane.fleetEmails, ...lane.unavailable.map(([e, why]) => `${e} (${why})`)].join(", ")}`}
+        className="text-meta text-amber-700 dark:text-amber-500"
+        title={`${accounts}${resumesIn ? `. ${lane.resumesOn} resets first.` : ""}${lane.arriving.length > 0 ? ` Arriving: ${lane.arriving.join(", ")}.` : ""}`}
       >
-        {lane.heldAccounts > 1 ? `all ${lane.heldAccounts} accounts spent` : `${spent} spent`}
+        {spent}
       </span>
-      {resumesIn && (
-        <span className="text-meta tabular-nums text-sol-text-muted" title={`${lane.resumesOn} is the first of them to reset`}>
-          {short(lane.resumesOn)} resets in {resumesIn}
-        </span>
+      {resumesIn && (recoveryDevice ? <ResetLine device={recoveryDevice} resumesIn={resumesIn} /> : <ResetText verb="resets" resumesIn={resumesIn} />)}
+      {lane.keptOff[0] ? (
+        <OpenAccountHere lane={lane} now={now} resumesIn={resumesIn} />
+      ) : (
+        <button
+          type="button"
+          onClick={openWhereAccountsRun}
+          className="text-meta text-sol-text-dim underline decoration-dotted hover:text-sol-text"
+        >
+          Accounts
+        </button>
       )}
-      {recoveryDevice && <ResumeAtReset device={recoveryDevice} />}
-      {lane.arriving.map((email) => (
-        <span key={email} className="text-meta text-sol-text-muted" title={`${email} is open to these machines; its copy lands on their next pool pass`}>
-          {short(email)} arriving
-        </span>
-      ))}
-      {lane.keptOff[0] && <OpenAccountHere lane={lane} now={now} resumesIn={resumesIn} />}
-      <button
-        type="button"
-        onClick={openWhereAccountsRun}
-        className="text-meta text-sol-text-dim underline decoration-dotted hover:text-sol-text"
-        title="Which accounts each of your machines can run"
-      >
-        accounts per machine
-      </button>
     </>
   );
 }
 
-/** Off: the sessions sit until someone continues them, so the lane offers the one mode that resumes them at the reset. */
-function ResumeAtReset({ device }: { device: RecoveryDevice }) {
+function ResetText({ verb, resumesIn }: { verb: string; resumesIn: string }) {
+  return <span className="text-meta tabular-nums text-sol-text-muted">{verb} in {resumesIn}</span>;
+}
+
+/** With recovery on the lane comes back by itself at the reset; off, it offers the one mode that does. */
+function ResetLine({ device, resumesIn }: { device: RecoveryDevice; resumesIn: string }) {
   const { recovery } = useAccountRecoveryToggles(device);
-  if (recovery.mode !== "off") {
-    return <span className="rounded border border-sol-cyan/30 px-1 text-meta text-sol-cyan" title="Your recovery mode continues them when an account reopens">resumes itself</span>;
-  }
+  if (recovery.mode !== "off") return <ResetText verb="resumes" resumesIn={resumesIn} />;
   return (
-    <button
-      type="button"
-      onClick={() => void recovery.set("resume")}
-      disabled={recovery.pending}
-      className="rounded border border-sol-border/60 px-1.5 text-meta text-sol-text-muted hover:text-sol-text disabled:opacity-60"
-      title="Recovery is off, so nothing continues them at the reset. Turn on continue-after-reset for your machines."
-    >
-      Resume at reset
-    </button>
+    <>
+      <ResetText verb="resets" resumesIn={resumesIn} />
+      <button
+        type="button"
+        onClick={() => void recovery.set("resume")}
+        disabled={recovery.pending}
+        className="rounded border border-sol-border/60 px-1.5 text-meta text-sol-text-muted hover:text-sol-text disabled:opacity-60"
+        title="Turn on continue-after-reset for your machines"
+      >
+        Resume at reset
+      </button>
+    </>
   );
 }
 
@@ -188,7 +190,7 @@ function OpenAccountHere({ lane, now, resumesIn }: { lane: BlockedLane; now: num
           className="rounded border border-amber-500/40 px-2 py-0.5 text-meta font-medium text-amber-700 hover:bg-amber-500/10 dark:text-amber-500"
           title={`${account.email} has room but is kept off ${lane.label}`}
         >
-          Open {short(account.email)} here{percent != null ? ` · ${Math.round(percent)}%` : ""}
+          Run on {short(account.email)}{percent != null ? ` · ${Math.round(percent)}% used` : ""}
         </button>
       )}
     />
