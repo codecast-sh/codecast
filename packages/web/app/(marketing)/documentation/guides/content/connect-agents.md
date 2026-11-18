@@ -39,4 +39,4 @@ What it reads from codecast is your team's writing, so the agent is told to trea
 
 ## See and stop connections
 
-**Connected** at the bottom of the same page lists every agent you've connected, with when it connected and when it last read. **Disconnect** ends a connection at once: the agent's next request is refused, and it has to ask you again to come back. Connecting the same agent again replaces its earlier connection rather than adding a second one.
+**Connected** at the bottom of the same page lists every agent you've connected, with the site it returns to and when it last read (or when it connected, until its first read). **Disconnect** ends a connection at once: the agent's next request is refused, and it has to ask you again to come back. Connecting the same agent again replaces its earlier connection rather than adding a second one.
