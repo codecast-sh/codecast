@@ -3,7 +3,7 @@ import { RunThroughFlow } from "./line/widgets/RunThroughFlow";
 import { RunLogEndedBar, isEndedRunLog } from "./conversation/RunLogEndedBar";
 import { CloudAgentLink, CloudAgentMenuItems } from "./cloudAgents";
 import { useCloudAgentActions } from "./cloudAgents/sessionAgent";
-import { familyHeading, firstUserPromptOf } from "../hooks/useForkTree";
+import { firstUserPromptOf, forkFamilyOf } from "../hooks/useForkTree";
 import { conversationTitle, hostedTitle } from "../lib/conversationTitle";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
@@ -142,7 +142,7 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline, mergeTimelineMessages } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
-import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
+import { ForkMapBox, ForkMapFallback, BranchMapLayers } from "./ForkTreePanel";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
@@ -1048,7 +1048,6 @@ const ConversationViewInner = (
   // branch's messages (mapDrill = current conversation id).
   const [treePopoverOpen, setTreePopoverOpen] = useState(false);
   const [mapDrill, setMapDrill] = useState<string | null>(null);
-  const treeChipRef = useRef<HTMLButtonElement>(null);
 
   const timelineRef = useRef<any[]>([]);
   // "Send and stash" outside the inbox queue (the conversation page, a stage
@@ -2179,6 +2178,13 @@ const ConversationViewInner = (
   // the Ctrl+B shortcut. Always available — even a single-branch session opens
   // the map (its own branch + drillable message list); only suppressed while a
   // message-fork selection is active.
+  // The fork family this session belongs to, from its own details payload
+  // (no store sub); null when it has no forks. Names the header chip and the
+  // composer's branch control.
+  const forkFamily = useMemo(
+    () => (conversation ? forkFamilyOf(conversation as any) : null),
+    [conversation?.forked_from, conversation?.fork_children, conversation?.fork_siblings, conversation?.agent_type, conversation?.session_id],
+  );
   const toggleMap = useCallback(() => {
     if (!isOwner || forkSelectionIdx !== null) return;
     setMapDrill(null); // open at the branch tree
@@ -4347,29 +4353,19 @@ const ConversationViewInner = (
                   <HandoffLinkChip details={handedOffTo} direction="to" convLink={convLink} navigateToSession={navigateToSession} />
                 )}
 
-                {!guest && ((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (() => {
-                  // Family size from the details payload alone (no store sub):
-                  // me + my children, plus parent + my siblings when forked.
-                  const familyCount =
-                    1 +
-                    (conversation.fork_children?.length ?? 0) +
-                    (conversation.forked_from ? 1 + (conversation.fork_siblings?.length ?? 0) : 0);
-                  // A cloud agent's attempts count as attempts (the branches off the family's origin line).
-                  const heading = familyHeading(conversation.forked_from ? [conversation, ...(conversation.fork_siblings ?? [])] : conversation.fork_children ?? [], familyCount);
-                  return (
-                    <button
-                      ref={treeChipRef}
-                      onClick={toggleMap}
-                      className={`cq-sq6 ${HEADER_CHIP} ${treePopoverOpen ? "bg-sol-bg-alt text-sol-text" : ""}`}
-                      title={withShortcut(`Branch map: ${heading}`, "conv.toggleTree")}
-                    >
-                      <Split className="w-3 h-3" />
-                      {familyCount > 1 && (
-                        <span className="tabular-nums">{familyCount}</span>
-                      )}
-                    </button>
-                  );
-                })()}
+                {!guest && forkFamily && (
+                  <button
+                    data-branch-map-toggle
+                    onClick={toggleMap}
+                    className={`cq-sq6 ${HEADER_CHIP} ${treePopoverOpen ? "bg-sol-bg-alt text-sol-text" : ""}`}
+                    title={withShortcut(`Branch map: ${forkFamily.heading}`, "conv.toggleTree")}
+                  >
+                    <Split className="w-3 h-3" />
+                    {forkFamily.count > 1 && (
+                      <span className="tabular-nums">{forkFamily.count}</span>
+                    )}
+                  </button>
+                )}
 
                 {/* Run this session's change through a flow of the pool (flows.md FL4). */}
                 {!guest && isOwner && conversation?._id && (
@@ -5315,12 +5311,13 @@ const ConversationViewInner = (
                 )}
                 <CollabRequestBanner conversationId={conversation._id.toString()} />
                 {composerNode}
-              </>} composerPlaceholder={newSessionPage && roleSend.recipient ? `Ask ${roleSend.recipient.name} for anything…` : composerPlaceholder} skills={newSessionPage || onSendOverride ? sessionSkills : composerSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
+              </>} composerPlaceholder={newSessionPage && roleSend.recipient ? `Ask ${roleSend.recipient.name} for anything…` : composerPlaceholder} skills={newSessionPage || onSendOverride ? sessionSkills : composerSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchControl={forkFamily && !newSessionPage && !onSendOverride ? (
+                <BranchMapLayers heading={forkFamily.heading} count={forkFamily.count} open={treePopoverOpen} onToggle={toggleMap} />
+              ) : undefined} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open
                   className="max-h-[55vh]"
-                  getIgnore={() => treeChipRef.current}
                   conversation={conversation}
                   conversationId={conversation._id.toString()}
                   currentBranchId={conversation._id.toString()}

@@ -426,6 +426,22 @@ export function familyHeading(branches: ReadonlyArray<{ agent_type?: string | nu
   return attemptsHeading(branches) ?? `${count} branch${count === 1 ? "" : "es"}`;
 }
 
+/** The fork family a conversation's own details payload names (me, my children, and my parent plus siblings when forked); null when it has no forks. */
+export function forkFamilyOf(conv: {
+  forked_from?: unknown;
+  fork_children?: ReadonlyArray<{ agent_type?: string | null; session_id?: string | null }>;
+  fork_siblings?: ReadonlyArray<{ agent_type?: string | null; session_id?: string | null }>;
+  agent_type?: string | null;
+  session_id?: string | null;
+}): { count: number; heading: string } | null {
+  const children = conv.fork_children ?? [];
+  if (children.length === 0 && !conv.forked_from) return null;
+  const siblings = conv.fork_siblings ?? [];
+  const count = 1 + children.length + (conv.forked_from ? 1 + siblings.length : 0);
+  // A cloud agent's attempts count as attempts (the branches off the family's origin line).
+  return { count, heading: familyHeading(conv.forked_from ? [conv, ...siblings] : children, count) };
+}
+
 // Unread mirror of BranchSelector.unreadOf: baseline is your seen count or the
 // inherited history, so never-opened branches read fully unread.
 export function branchUnread(

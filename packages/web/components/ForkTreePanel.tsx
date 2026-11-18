@@ -4,6 +4,7 @@ import { useRef, useState, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Split, Search, GitFork, ChevronRight } from "lucide-react";
+import { withShortcut } from "../shortcuts";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -593,7 +594,7 @@ function ForkTreeContent({
 //  - floating: a standalone bordered card with a shadow — used by the fixed
 //    fallback when there's no composer to meld into.
 export function ForkMapBox({
-  conversation, conversationId, currentBranchId, open, initialDrillId, className, getIgnore, onClose,
+  conversation, conversationId, currentBranchId, open, initialDrillId, className, onClose,
   onSwitchToConversation, onForkFromBranch, forkAnyMessage, onRewindCurrent, tray,
 }: {
   conversation: ForkConversationLike;
@@ -602,7 +603,6 @@ export function ForkMapBox({
   open: boolean;
   initialDrillId?: string | null;
   className?: string;
-  getIgnore?: () => HTMLElement | null;
   tray?: boolean;
   onClose: () => void;
   onSwitchToConversation: (convId: string) => void;
@@ -620,14 +620,15 @@ export function ForkMapBox({
     typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null,
   );
   useWatchEffect(() => () => restoreFocusRef.current?.focus?.(), []);
-  // Close on a press outside the box (and outside the toggle control, so a
-  // click on the header icon toggles rather than close-then-reopen).
+  // Close on a press outside the box and outside every control that toggles
+  // it ([data-branch-map-toggle]), so a press on one toggles rather than
+  // closing and reopening.
   useWatchEffect(() => {
     if (!open) return;
     const handle = (e: PointerEvent) => {
       const t = e.target as Node;
       if (boxRef.current?.contains(t)) return;
-      if (getIgnore?.()?.contains(t)) return;
+      if ((t as Element).closest?.("[data-branch-map-toggle]")) return;
       onClose();
     };
     // The press itself, in the capture phase: a surface that cancels its own
@@ -635,7 +636,7 @@ export function ForkMapBox({
     // event cannot keep the map open.
     const raf = requestAnimationFrame(() => document.addEventListener("pointerdown", handle, true));
     return () => { cancelAnimationFrame(raf); document.removeEventListener("pointerdown", handle, true); };
-  }, [open, onClose, getIgnore]);
+  }, [open, onClose]);
   // The tray grows the composer upward, and the session's column scrolls as a
   // whole once its fixed parts outgrow the window: with a task or plan detail
   // open above, the map's own header slid out of view and the composer below
@@ -702,6 +703,55 @@ export function ForkMapBox({
         onRewindCurrent={onRewindCurrent}
       />
     </div>
+  );
+}
+
+// The branch map's handle: the composer drawn as the top card of a stack,
+// one layer peeking out behind its top edge per other branch (two at most).
+// It sits in the gap above the box, so it takes no height. Hover or focus
+// lifts the front layer to name the family; a press opens the map upward into
+// the composer, and the layers fold down into the box while it is open (the
+// map's own close and Esc take it back). Positioned against ComposerShell's
+// zero-height anchor at the field's top edge; z-[25] clears the thread state
+// panel (relative z-20), whose padding covers that gap.
+export function BranchMapLayers({ heading, count, open, onToggle }: { heading: string; count: number; open: boolean; onToggle: () => void }) {
+  const back = count > 2;
+  const radius = { borderRadius: "10px 10px 0 0" };
+  const ease = "duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none";
+  return (
+    <button
+      type="button"
+      data-branch-map-toggle
+      aria-expanded={open}
+      aria-label={`Branch map: ${heading}`}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onToggle}
+      title={withShortcut("Branch map", "conv.toggleTree")}
+      tabIndex={open ? -1 : undefined}
+      className={`group absolute inset-x-3 bottom-0 z-[25] h-[10px] outline-none ${open ? "pointer-events-none" : ""}`}
+    >
+      {back && (
+        <span
+          aria-hidden
+          style={radius}
+          className={`absolute inset-x-3 transition-[bottom,height,opacity] ${open ? "bottom-0 h-0 opacity-0" : "bottom-[4px] h-[5px]"} border border-b-0 border-[color-mix(in_srgb,var(--sol-text)_12%,var(--sol-border))] bg-[color-mix(in_srgb,var(--sol-text)_8%,var(--sol-bg))] ${ease} group-hover:opacity-0 group-focus-visible:opacity-0`}
+        />
+      )}
+      <span
+        aria-hidden
+        style={radius}
+        className={`absolute inset-x-0 bottom-0 flex items-center justify-center overflow-hidden border border-b-0 transition-[height,background-color,border-color] ${ease} ${
+          open
+            ? "h-0 border-transparent"
+            : "h-[6px] group-hover:h-[12px] group-focus-visible:h-[12px] border-[color-mix(in_srgb,var(--sol-text)_16%,var(--sol-border))] bg-[color-mix(in_srgb,var(--sol-text)_5%,var(--sol-bg))] group-hover:border-sol-cyan/40 group-hover:bg-[color-mix(in_srgb,var(--sol-cyan)_7%,var(--sol-bg))] group-focus-visible:border-sol-cyan/60 group-focus-visible:bg-[color-mix(in_srgb,var(--sol-cyan)_7%,var(--sol-bg))]"
+        }`}
+      >
+        <span className={`flex items-center gap-1 text-[10px] leading-none text-sol-cyan opacity-0 transition-opacity ${ease} group-hover:opacity-100 group-hover:delay-75 group-focus-visible:opacity-100`}>
+          <Split className="h-2.5 w-2.5" />
+          {heading}
+        </span>
+      </span>
+    </button>
   );
 }
 
