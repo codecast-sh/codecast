@@ -29,7 +29,7 @@ import { ForeignWriterHoldError } from "./foreignSessionWriter";
 import { BackendSwitchHoldError } from "./claudeSdk/switchBackend";
 import { ghosttyPane } from "./ghostty";
 import { unreachableTerminalOf } from "../../shared/contracts/deliveryHold";
-import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, isClaudeRewindDialog } from "./tmuxPaneState.js";
+import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, isClaudeRewindDialog } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
 import { planHandoffTarget } from "./planHandoff";
@@ -198,7 +198,9 @@ function fixture(transport = "tmux", cached = true) {
     ensureTmuxPaneWide: async () => {}, glyphlessPromptPattern: () => null,
     classifyGlyphlessClientPaneState: fail("glyphless classification"), paneHasNoAgent: async () => false,
     acceptTrustPrompt: fail("trust input"), answerResumeCwdPicker: fail("cwd input"), DEAD_PANE_ERROR: "dead",
-    CLAUDE_OVERPAINTED_RULE,
+    CLAUDE_OVERPAINTED_RULE, composerScrolledPastCaret,
+    // An agent is alive in the pane and it is not a headless run: the unknown-screen path's two questions.
+    panePresenceVerdict: async () => "live", paneHeadlessAgent: async () => null,
     CLAUDE_TURN_STATUS_LINE,
     CLAUDE_COMPOSER_SCROLLED_ABOVE,
     CLAUDE_COMPOSER_SCROLLED_BELOW,
@@ -300,7 +302,7 @@ function fixture(transport = "tmux", cached = true) {
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho", "heldFatal",
     ];
     const constants = [
-      "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
+      "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "UNREADABLE_SCREEN_HOLD_REASON", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "PANE_REBUILD_THRESHOLD", "PANE_REBUILD_WINDOW_MS", "PANE_REBUILD_MIN_GAP_MS", "unresolvablePanes", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
       "ANSI_ESCAPE_RE", "MACHINE_WAKE_IDLE_RESUME_CHOICE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME", "STARTED_FATAL_CONFIRM_MS", "fatalPaneSince",
     ].map(name => {
@@ -328,6 +330,7 @@ function fixture(transport = "tmux", cached = true) {
     };
     const code = [
       blockAt(source, source.indexOf("class InputBlockedError")).text,
+      blockAt(source, source.indexOf("class UnreadableScreenError")).text,
       blockAt(source, source.indexOf("const WEZTERM_KEY_SEQUENCES:")).text.replace(/},?$/, "};"),
       "class UndeliverableMessageError extends Error {}",
       source.slice(fatalStart, source.indexOf("];", fatalStart) + 2),
@@ -681,6 +684,26 @@ describe("machine prompt delivery safety", () => {
     await f.scan([{ _id: "held", content: "please continue", delivery_force: true }]);
     expect(f.bodies).toEqual(["please continue"]);
     expect(f.events.filter((e: string) => e.startsWith("hold:"))).toEqual(["hold:held"]);
+  });
+
+  // jx783qs (2026-11-17): a pane the classifier could not read held its
+  // session's messages for 11 hours under "waiting for terminal input
+  // confirmation", which told the sender nothing. The hold now says the screen
+  // is unreadable and carries it, so the sender can look and Send anyway.
+  test("a screen the classifier cannot read is named and shown on the held message", async () => {
+    const f = fixture();
+    f.pendingInteractivePrompts.clear();
+    f.state.menu = "  a screen with no composer, no rule and no dialog footer\n  that no rule in the classifier knows";
+    await f.scan([{ _id: "held", content: "please continue" }]);
+    expect(f.bodies).toEqual([]);
+    // The hold re-pends on its own timer, at the hold pace rather than the retry ladder.
+    await f.timers.find((timer: { ms: number }) => timer.ms === 5000)!.fn();
+    expect(f.holds[0]?.holdReason).toBe("the terminal shows a screen Codecast can't read");
+    expect(f.holds[0]?.holdScreen).toContain("that no rule in the classifier knows");
+    // Send anyway on that screen writes the message instead of holding it again.
+    f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = null; };
+    await f.scan([{ _id: "held", content: "please continue", delivery_force: true }]);
+    expect(f.bodies).toEqual(["please continue"]);
   });
 
   // The held screen syncs beside the message and goes to daemon.log, so a

@@ -263,6 +263,15 @@ export function composerTextStart(pane: string): number {
   return glyphAt === -1 ? -1 : glyphAt + 1;
 }
 
+// True when the composer in view is scrolled past its ❯ row, so its text
+// starts under an "↑ N more" rule and the start of the draft is off the screen.
+export function composerScrolledPastCaret(pane: string): boolean {
+  const start = composerTextStart(pane);
+  if (start === -1) return false;
+  const above = pane.slice(0, start).replace(/\n$/, "");
+  return CLAUDE_COMPOSER_SCROLLED_ABOVE.test(above.slice(above.lastIndexOf("\n") + 1));
+}
+
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
 // list, so check Rewind first). Idle is a positive whitelist — never inferred from

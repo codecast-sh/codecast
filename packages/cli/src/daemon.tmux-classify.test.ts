@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { isTitledRule } from "./interactivePrompt.js";
 import { tmuxComposerHoldsPayload, tmuxComposerText, autoContinueArmedOnPane, inputGuard, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, clearUnresolvablePane, extractTmuxLiveRegion, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
-import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isClaudeIdleResumeDialog, isClaudeRewindDialog, isGrokTrustDialog, isIdleResumeOptionRow } from "./tmuxPaneState.js";
+import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, composerScrolledPastCaret, GROK_TRUST_PANE_CAPTURE_LINES, isClaudeIdleResumeDialog, isClaudeRewindDialog, isGrokTrustDialog, isIdleResumeOptionRow } from "./tmuxPaneState.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { CLAUDE_BYPASS_WARNING_PANE, CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
@@ -1336,5 +1336,52 @@ describe("a composer scrolled past its ❯ row", () => {
   test("a bottom rule counting lines below ends the composer", () => {
     const head = pane(rule, `─── ↓ 5 more ${"─".repeat(100)}`).replace("❯ continue\n", "").replace(draft[0], `❯ ${draft[0].trim()}`);
     expect(tmuxComposerText(head)).toBe([` ${draft[0].trim()}`, ...draft.slice(1)].join("\n"));
+  });
+});
+
+// Claude Code 2.1.326 in fullscreen mode, 220x50, holding a 71-row typed draft
+// (captured from a real pane on 2026-11-17): the composer shows its last 20
+// rows, the ❯ row is off the screen, and the top rule counts the hidden rows.
+// Ten sessions held their queues behind this pane, one for 11 hours.
+describe("a fullscreen composer whose draft overflows the box", () => {
+  const rule = "─".repeat(220);
+  const overflowRule = (hidden: number) => `─── ↑ ${hidden} more ${"─".repeat(203)}`;
+  const shown = Array.from({ length: 19 }, (_, i) => `  line ${i + 52} of the long typed message, with enough words to look like real text`);
+  const pane = (footer: string[], above = ["❯ <scheduled-task title=\"Worker jx74bhg ended its turn\">", "⏺ This notice is from the worker's restart turn.", "✻ Cogitated for 15s · done 11:30 PM"]) => [
+    ...above,
+    overflowRule(51),
+    ...shown,
+    "  </session-message>",
+    rule,
+    ...footer,
+  ].join("\n");
+  const FOOTER = ["  [someone] ~/code/project (main) Opus 5.5 | ctx 20% | 7d:70%", "  ⏵⏵ bypass permissions on (shift+tab to cycle)"];
+
+  test("reads as the idle composer", () => {
+    const region = extractTmuxLiveRegion(pane(FOOTER));
+    expect(region).toContain("↑ 51 more");
+    expect(region).not.toContain("scheduled-task");
+    expect(classifyTmuxLiveState(region)).toBe("idle");
+  });
+
+  test("reads as busy while a turn runs above it", () => {
+    const region = extractTmuxLiveRegion(pane(FOOTER, ["⏺ Reading the report", "✶ Spelunking… (39s · ↓ 2.6k tokens · thought for 1s)"]));
+    expect(classifyTmuxLiveState(region)).toBe("busy");
+  });
+
+  test("a taller window, where the box outgrows the live tail, reads the same", () => {
+    const tall = pane(FOOTER).replace(shown[0], Array.from({ length: 30 }, (_, i) => `  earlier row ${i}`).join("\n") + "\n" + shown[0]);
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(tall))).toBe("idle");
+  });
+
+  test("the composer text is the visible end of the draft, and only this box counts as scrolled", () => {
+    expect(tmuxComposerText(pane(FOOTER))?.split("\n")).toEqual([...shown, "  </session-message>"]);
+    expect(composerScrolledPastCaret(pane(FOOTER))).toBe(true);
+    // A quoted overflow rule in the transcript above a plain composer is not the box.
+    const quoted = [overflowRule(48), "  ## Service tiers", rule, "❯ ", rule, ...FOOTER].join("\n");
+    expect(composerScrolledPastCaret(quoted)).toBe(false);
+    expect(composerScrolledPastCaret(["⏺ Done.", rule, "❯ short draft", rule, ...FOOTER].join("\n"))).toBe(false);
+    // A select list's own overflow marker is not a composer.
+    expect(composerScrolledPastCaret(["   ↑ 16 more above", " ❯ option", rule, " Esc to cancel"].join("\n"))).toBe(false);
   });
 });

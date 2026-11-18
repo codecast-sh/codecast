@@ -18,8 +18,14 @@ export type TmuxPasteReceipt = TmuxDeliveryIdentity & {
 };
 
 export class TmuxDeliveryUncertainError extends Error {
-  constructor(reason: string) {
+  // What the held message shows its sender, and the pane rows it was decided
+  // on, when the cause is something the person can see and clear.
+  readonly holdReason?: string;
+  readonly screen?: string;
+  constructor(reason: string, hold?: { holdReason: string; screen?: string }) {
     super(`INJECT_UNVERIFIED: ${reason}; preserving the original terminal write`);
+    this.holdReason = hold?.holdReason;
+    this.screen = hold?.screen;
   }
 }
 

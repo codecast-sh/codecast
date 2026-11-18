@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DRAIN_MAX_CYCLES, awaitTmuxComposerPayload, composerReadHeight, drainTmuxComposer, tmuxComposerHoldsPayload, tmuxComposerText, tmuxWatchablePrefix } from "./daemon.js";
+import { DRAIN_MAX_CYCLES, awaitTmuxComposerPayload, composerReadHeight, drainTmuxComposer, tmuxComposerHoldsPayload, tmuxComposerText, tmuxPromptStillHasInput, tmuxWatchablePrefix } from "./daemon.js";
 
 // ct-40212 / ct-47277: a painted composer does not prove stdin is being read,
 // and a foreign probe character typed to prove it can outrace any screen-based
@@ -729,5 +729,71 @@ describe("awaitTmuxComposerPayload in a short window", () => {
       exec: pane.exec,
     })).rejects.toThrow(/INJECT_UNVERIFIED|AGENT_STDIN_NOT_READY/);
     expect(pane.isManual()).toBe(false);
+  });
+});
+
+// Claude Code 2.1.326, fullscreen: a draft taller than the composer box shows
+// only its last rows under "─── ↑ N more ───", with no ❯ on screen. The last
+// glyph on the pane is then a transcript row, and the gate read everything
+// from there down as the composer: a typed 68-row report never got its Enter
+// and held its session's queue for 11 hours (jx783qs, 2026-11-17).
+describe("an overflowed fullscreen composer", () => {
+  const rule = "─".repeat(120);
+  const lines = Array.from({ length: 71 }, (_, i) => `line ${i + 1} of the long typed message, with enough words to look like real text`);
+  const payload = `<session-message from="jx704ck">\n${lines.join("\n")}\n</session-message>`;
+  const rows = payload.split("\n");
+  // The box shows half the window less five rows, as measured on the real client.
+  const screen = (height: number, draft = rows) => {
+    const fits = Math.floor(height / 2) - 5;
+    const box = draft.length > fits
+      ? [`─── ↑ ${draft.length - fits} more ${"─".repeat(100)}`, ...draft.slice(-fits).map(row => `  ${row}`)]
+      : [rule, `❯ ${draft[0]}`, ...draft.slice(1).map(row => `  ${row}`)];
+    return ["❯ <scheduled-task title=\"Worker ended its turn\">", "⏺ This notice is from the worker's restart turn.", "✻ Cogitated for 15s · done 11:30 PM", ...box, rule, "  ⏵⏵ bypass permissions on (shift+tab to cycle)"].join("\n");
+  };
+
+  test("a typed payload whose end fills the box is matched without a second write", async () => {
+    expect(await awaitTmuxComposerPayload("t:0.0", payload, {
+      typed: true, allowRePaste: false, budgetMs: 1_000,
+      rePaste: async () => { throw new Error("must not type the message again"); },
+      exec: async () => ({ stdout: screen(50), stderr: "" }),
+    })).toBe("matched");
+  });
+
+  test("an earlier attempt's draft is read at full window size and matched", async () => {
+    let height = 50;
+    const calls: Args[] = [];
+    const exec = (async (args: Args) => {
+      calls.push(args);
+      if (args[0] === "display-message") return { stdout: `220|${height}\n` };
+      if (args[0] === "resize-window") height = Number(args[args.indexOf("-y") + 1]);
+      if (args[0] === "set-option") height = 50;
+      return { stdout: args[0] === "capture-pane" ? screen(height) : "" };
+    }) as any;
+    expect(await awaitTmuxComposerPayload("t:0.0", payload, {
+      allowRePaste: false, budgetMs: 2_000,
+      rePaste: async () => { throw new Error("must not type the message again"); },
+      exec,
+    })).toBe("matched");
+    expect(calls.some(c => c[0] === "resize-window")).toBe(true);
+    expect(height).toBe(50);
+  });
+
+  test("someone else's long draft is not taken for the payload", async () => {
+    const other = rows.map(row => row.replace("typed message", "private note"));
+    await expect(awaitTmuxComposerPayload("t:0.0", payload, {
+      typed: true, allowRePaste: false, budgetMs: 1_000,
+      rePaste: async () => { throw new Error("must not type over a draft"); },
+      exec: async () => ({ stdout: screen(50, other), stderr: "" }),
+    })).rejects.toThrow(/INJECT_UNVERIFIED|AGENT_STDIN_NOT_READY|not appeared intact/);
+  });
+
+  test("the draft reads as text at the prompt, before and after an Enter", () => {
+    expect(tmuxComposerText(screen(50))).toContain("line 71 of the long typed message");
+    expect(tmuxComposerText(screen(50))).not.toContain("Cogitated");
+    expect(tmuxComposerHoldsPayload(screen(50), payload)).toBe(false);
+    expect(tmuxComposerHoldsPayload(screen(200), payload)).toBe(true);
+    // The submit check knows only the payload's first line, which is off the screen.
+    expect(tmuxPromptStillHasInput(screen(50), rows[0].slice(0, 40))).toBe(true);
+    expect(tmuxPromptStillHasInput(screen(50, ["short"]), rows[0].slice(0, 40))).toBe(false);
   });
 });

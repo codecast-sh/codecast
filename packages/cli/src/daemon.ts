@@ -413,7 +413,7 @@ import { setBackgroundSessions, setGovernorBackground, holdForDelivery, isDelive
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { followsCredentialStore, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
+import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -16078,6 +16078,10 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
   if (!normalizedInput) return false;
   const fromPrompt = tmuxComposerRegion(paneContent);
   if (fromPrompt === null) return false;
+  // A composer scrolled past its ❯ row holds a draft whose start is off the
+  // screen, so the input's first line cannot show there. The box itself is the
+  // evidence: it scrolls only while a long draft is unsent.
+  if (composerScrolledPastCaret(paneContent) && fromPrompt.trim()) return true;
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
 
@@ -16221,7 +16225,9 @@ export function extractTmuxLiveRegion(paneContent: string): string {
       const bottom = lines.length - tail.length + sepIdx[0];
       for (let i = bottom - 1; i >= 0; i--) {
         if (!isSep(lines[i])) continue;
-        if (COMPOSER_CARET_ROW.test(lines[i + 1] ?? "")) { rows = lines; boxTop = i; }
+        // A composer scrolled past its ❯ row opens onto the end of its draft,
+        // not the caret; its own top rule names it.
+        if (COMPOSER_CARET_ROW.test(lines[i + 1] ?? "") || CLAUDE_COMPOSER_SCROLLED_ABOVE.test(lines[i])) { rows = lines; boxTop = i; }
         break;
       }
     }
@@ -17641,6 +17647,21 @@ class InputBlockedError extends Error {
   }
 }
 
+// A live agent whose screen matches nothing the classifier knows. The message
+// stays "AGENT_UNKNOWN_STATE" for the pane-rebuild count; the screen rides
+// along so the held message can show its sender what the terminal shows.
+// Without it the sender read "waiting for terminal input confirmation" for 11
+// hours while the pane held an unsent draft one Enter would have sent
+// (jx783qs, 2026-11-17).
+export const UNREADABLE_SCREEN_HOLD_REASON = "the terminal shows a screen Codecast can't read";
+export class UnreadableScreenError extends Error {
+  readonly screen: string;
+  constructor(screen: string) {
+    super("AGENT_UNKNOWN_STATE: deferring");
+    this.screen = screen;
+  }
+}
+
 // An agent at its own login screen: nothing typed into the pane can sign it
 // in, so the message is held with the one step that frees it.
 function signedOutError(agentType: string | undefined, screen?: string): InputBlockedError {
@@ -17895,8 +17916,11 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
       // resumes the session interactively and delivers it.
       const headless = await paneHeadlessAgent(target);
       if (headless) throw new TerminalHoldError(`a headless ${headless} run`, "it goes out when the run ends");
+      // The sender saw this screen on the held message and chose Send anyway:
+      // the message goes in, as it does past a dialog they chose to send past.
+      if (pastDialog) return { busy: false };
       log(`Unrecognized live UI in ${target}, deferring: ${region.replace(/\s+/g, " ").slice(0, 240)}`);
-      throw new Error("AGENT_UNKNOWN_STATE: deferring");
+      throw new UnreadableScreenError(holdScreen(stdout));
     }
 
     if (state === "cwd_picker") {
@@ -18685,7 +18709,9 @@ export async function injectViaTmux(target: string, content: string, agentType?:
     return await withTmuxLock(target, () => injectViaTmuxInner(target, content, agentType, opts));
   } catch (error) {
     if (!opts?.delivery || isDeliveryVerdict(error)) throw error;
-    throw new TmuxDeliveryUncertainError(String(error));
+    throw new TmuxDeliveryUncertainError(String(error), error instanceof UnreadableScreenError
+      ? { holdReason: UNREADABLE_SCREEN_HOLD_REASON, screen: error.screen }
+      : undefined);
   }
 }
 
@@ -34048,7 +34074,8 @@ async function main(): Promise<void> {
             }).catch(logConvexFailure);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|TMUX_SERVER_BUSY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
-            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "waiting for terminal input confirmation");
+            const hold = err instanceof TmuxDeliveryUncertainError ? err : null;
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, hold?.holdReason ?? "waiting for terminal input confirmation", undefined, hold?.screen);
           } else if (err instanceof UndeliverableMessageError || err instanceof CloudAgentUnsentError) {
             // Terminal by construction: cancel (a status the server never
             // re-pends) instead of burning the retry ladder. A cloud agent
