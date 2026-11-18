@@ -30,15 +30,15 @@ import { registerSnapshot } from './commands/snapshot';
 import { registerSnippet } from './commands/snippetCmd';
 import { registerStale } from './commands/stale';
 import { registerStatus } from './commands/status';
-import { syncDataHome } from './dataHome';
+import { restoreDataDirs } from './dataDirs';
 import { homePaths } from './paths';
 import { writeCheckoutPointer } from './provenance';
 
 export async function main(): Promise<number> {
   // The daemon's evals bridge runs the code of the checkout that last ran ./evals.
   writeCheckoutPointer();
-  // Freezes and snapshots made on any machine are here before a command reads them (dataHome.ts).
-  syncDataHome();
+  // Freezes and snapshots are plain folders that cast datasync shares between machines (dataDirs.ts).
+  restoreDataDirs();
   const program = new Command()
     .name('evals')
     .description('Freeze codecast moments, replay the prompts in this tree against them, grade and publish the result')
@@ -52,8 +52,8 @@ The loop: ${fmt.cmd('./evals freeze create title@jx7c6zk:142')} → ${fmt.cmd('.
 A surface is one prod prompt; ${fmt.cmd('./evals')} lists them. A ref names its surface and a moment, ${fmt.cmd('<surface>@<ref>')}: a session
 and line (title@jx7c6zk:142), a call, a trigger, a snapshot, or ${fmt.cmd('<surface>@fixture:<case>')}. A bad ref lists every form.
 Find moments with ${fmt.cmd('./evals convo inbox')} and ${fmt.cmd('./evals convo find "<text>"')}. Reads change nothing and take --json.
-Real data (private freezes, snapshots, runs, labels) lives in EVALS_HOME (~/.local/share/codecast/evals); labels, freezes
-and snapshots sync between machines through a private repo. Only synthetic fixtures under packages/evals enter git. ${fmt.cmd('./evals check --help')} explains the verdict,
+Real data (private freezes, snapshots, runs, labels) lives in EVALS_HOME (~/.local/share/codecast/evals); labels push to
+a private repo. Only synthetic fixtures under packages/evals enter git. ${fmt.cmd('./evals check --help')} explains the verdict,
 ${fmt.cmd('./evals doctor')} says what is missing, docs/architecture/evals.md has the design.`,
     );
 
@@ -112,8 +112,5 @@ ${fmt.cmd('./evals doctor')} says what is missing, docs/architecture/evals.md ha
     // A refusal or a missing input is one line; EVALS_DEBUG=1 shows where it came from.
     process.stderr.write(`evals: ${e instanceof Error ? (process.env.EVALS_DEBUG ? e.stack : e.message) : String(e)}\n`);
     return 1;
-  } finally {
-    // What this run froze or captured leaves the machine now, not at some later run.
-    syncDataHome({ push: true });
   }
 }
