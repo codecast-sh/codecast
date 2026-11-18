@@ -162,3 +162,30 @@ describe("leaving the host checkout clean", () => {
     expect(read(hostRepo, "new.txt")).toBe("made on the host\n");
   });
 });
+
+describe("sessions sharing a host checkout come home one by one", () => {
+  test("the host's work comes home once, so a later sibling leaves what was settled here alone", async () => {
+    // Two sessions leave in one move; the second shares the first's landing.
+    const { head } = await gitPushWorktree(host, laptop, hostRepo);
+    write(hostRepo, "decisions.ts", lines("v1"));
+    expect(await gitPullWorktree(host, laptop, hostRepo, head)).toMatchObject({ ff: true, conflicts: [] });
+    expect(read(laptop, "decisions.ts")).toBe(lines("v1"));
+    // Here the file lands on main and moves on; the host still holds its old copy.
+    commit(laptop, "decisions.ts", lines("v1", "v2"));
+
+    expect(await gitPullWorktree(host, laptop, hostRepo, head)).toMatchObject({ ff: true, conflicts: [] });
+    expect(read(laptop, "decisions.ts")).toBe(lines("v1", "v2"));
+    expect(git(laptop, "status", "--porcelain")).toBe("");
+  });
+
+  test("a later sibling still brings what the host changed after the first came home", async () => {
+    const { head } = await gitPushWorktree(host, laptop, hostRepo);
+    write(hostRepo, "b.txt", lines("b1", "first", "b3"));
+    await gitPullWorktree(host, laptop, hostRepo, head);
+    write(hostRepo, "a.txt", lines("a1", "second", "a3"));
+
+    expect(await gitPullWorktree(host, laptop, hostRepo, head)).toMatchObject({ ff: true, conflicts: [] });
+    expect(read(laptop, "a.txt")).toBe(lines("a1", "second", "a3"));
+    expect(read(laptop, "b.txt")).toBe(lines("b1", "first", "b3"));
+  });
+});

@@ -20,6 +20,7 @@
  */
 
 import { execFileSync, spawn, spawnSync } from "../proc.js";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -465,6 +466,7 @@ export async function gitPushWorktree(
     if (landing.commit !== snap.sha) push(landing.commit);
     try {
       ssh(host, landing.apply);
+      markSynced(localRoot, host, remotePath, landing.commit);
       return { branch, head: landing.commit };
     } catch (e) {
       if (attempt >= 3) throw new Error(`the host checkout ${remotePath} kept changing under the move: ${((e as { stderr?: string }).stderr ?? String(e)).trim().slice(0, 300)}`);
@@ -623,6 +625,23 @@ export function clearHostLeftovers(host: RemoteHost, localRoot: string, remoteRo
   }
 }
 
+/**
+ * The last state this folder and one host checkout agreed on: the commit a
+ * landing left the host at, or the host snapshot that last came home. Sessions
+ * sharing a host checkout each come home on their own, and the host checkout's
+ * work comes home only once: the next one brings what the host changed since,
+ * not the whole checkout again from a start it recorded when it left (a batch
+ * of 14 sessions from one shared cloud checkout rewrote the same conflict
+ * markers here after the first one had resolved them, 2026-11-18).
+ */
+export function syncedRef(host: Pick<RemoteHost, "user" | "address">, remotePath: string): string {
+  return `refs/codecast/synced/${createHash("sha256").update(`${host.user}@${host.address}:${remotePath}`).digest("hex").slice(0, 16)}`;
+}
+
+function markSynced(localRoot: string, host: RemoteHost, remotePath: string, commit: string): void {
+  gitSafe(localRoot, ["update-ref", syncedRef(host, remotePath), commit]);
+}
+
 /** Ref the remote parks its snapshot on for us to fetch. Per-branch so two
  * sessions coming back from the same remote can't tread on each other. */
 function remoteBackRef(branch: string): string {
@@ -668,8 +687,10 @@ export async function gitPullWorktree(
     const err = e as { stderr?: Buffer; message?: string };
     return { ff: false, reason: `could not fetch the remote snapshot: ${(err.stderr?.toString() || err.message || String(e)).slice(0, 200)}` };
   }
-  const applied = await applySnapshotFastForward(localCwd, ref, { start, skip });
+  const synced = gitSafe(localCwd, ["rev-parse", "--verify", "-q", `${syncedRef(host, remotePath)}^{commit}`]);
+  const applied = await applySnapshotFastForward(localCwd, ref, { start: synced.ok && synced.out ? synced.out : start, skip });
   if (!applied.ok) return { ff: false, reason: applied.reason };
+  markSynced(localCwd, host, remotePath, git(localCwd, ["rev-parse", ref]));
   return { ff: true, appliedWork: applied.appliedWork, conflicts: applied.conflicts };
 }
 
