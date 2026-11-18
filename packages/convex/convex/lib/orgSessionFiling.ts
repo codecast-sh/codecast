@@ -4,6 +4,7 @@ import { workspaceForResource, workspaceKey } from "./access";
 import { checkConversationAccess } from "../privacy";
 import { addConversationToWorkItem } from "../conversationLinks";
 import { claimTaskOwnership } from "./taskOwner";
+import { filePlanUnderProject } from "./planFiling";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
 import { performReparentSession } from "../sessionOwnership";
 import { resolveScopeRef, rolesInBoundary } from "../orgRoles";
@@ -23,12 +24,12 @@ export async function applyFile(ctx: Ctx, _userId: Id<"users">, boundary: Bounda
   const plan = planRef.kind === "plan" ? await ctx.db.get(planRef.id) : null;
   const project = projectRef.kind === "project" ? await ctx.db.get(projectRef.id) : null;
   if (!plan || !project) throw new Error(`No ${!plan ? `plan "${p.plan}"` : `project "${p.project}"`} in this workspace`);
-  if (String(plan.project_id ?? "") === String(project._id)) return { status: "applied", note: `${plan.short_id} is already under "${project.title}"` };
-  const now = Date.now();
-  await ctx.db.patch(plan._id, { project_id: project._id, updated_at: now });
-  if (plan.doc_id) { const doc = await ctx.db.get(plan.doc_id); if (doc) await ctx.db.patch(doc._id, { project_id: project._id, updated_at: now }); }
+  const already = String(plan.project_id ?? "") === String(project._id);
+  const { tasks_moved } = await filePlanUnderProject(ctx, plan, project._id);
+  const moved = tasks_moved ? ` with ${tasks_moved} open task${tasks_moved === 1 ? "" : "s"}` : "";
+  if (already) return { status: "applied", note: `${plan.short_id} is already under "${project.title}"${tasks_moved ? `; ${tasks_moved} of its open tasks joined it` : ""}` };
   await noteOrgChange(ctx, _userId, whereOfRecord(plan), { kind: "file", subject: recordSubject("plan", plan), before: { project_id: plan.project_id ?? null }, after: { project_id: String(project._id) }, labels: await labelsOf(ctx, [plan.project_id, project._id]) });
-  return { status: "applied", note: `filed ${plan.short_id} "${plan.title}" under "${project.title}"` };
+  return { status: "applied", note: `filed ${plan.short_id} "${plan.title}" under "${project.title}"${moved}` };
 }
 
 // ── The person's sessions, filed where they belong (org-staffing.md S43) ────
