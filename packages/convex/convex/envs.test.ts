@@ -51,8 +51,6 @@ const ctxOf = (db: any, who: string | null = ME) => ({ db, auth: { getUserIdenti
 const run = (fn: any, db: any, args: Record<string, any>, who: string | null = ME) => fn._handler(ctxOf(db, who), args);
 const inTeam = { workspace: "team" as const, team_id: TEAM };
 
-// A ticking fake clock for this file's tests only. Bun runs every test file in
-// one process, so the real clock goes back after each test.
 let clock = 1_790_000_000_000;
 // A ticking fake clock for this file only: bun runs every test file in one
 // process, so the real clock goes back after each test.
