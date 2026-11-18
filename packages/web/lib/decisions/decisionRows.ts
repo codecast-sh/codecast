@@ -4,10 +4,11 @@
 // so the two lists agree on every row's owner, group and order. Pure.
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { decisionOwnerOf, type DecisionOwnerRef } from "@codecast/shared/contracts/decisionAreas";
+import { byImpact } from "@codecast/shared/contracts/decisionImpact";
 import type { SessionDecisionItem } from "../../store/inboxStore";
 
 type Row = Pick<SessionDecisionItem, "_id" | "status" | "blocking" | "created_at" | "category" | "workflow_run_id" | "gate_node_id" | "task_id" | "trial" | "card"
-  | "holder" | "passed_to" | "asked_user_ids" | "user_id" | "escalated" | "area_project_id" | "source_flow" | "problem_severity" | "problem_findings" | "problem_reach" | "resolved_at">;
+  | "holder" | "passed_to" | "asked_user_ids" | "user_id" | "escalated" | "area_project_id" | "source_flow" | "problem_severity" | "problem_findings" | "problem_reach" | "resolved_at" | "impact">;
 
 export type DecisionOwner = DecisionOwnerRef;
 
@@ -165,8 +166,8 @@ export function filterCounts(rows: ReadonlyArray<Row>, view: DecisionView, me: s
   return out;
 }
 
-/** Impact: escalated first, then blocking, then the people its problem reached, its findings and the worst one's
- *  severity, then the oldest. Another sort leads with its own fact and falls back on the same order. */
+/** Impact: escalated first, then blocking, then the asker's 1-5 impact score, then the people its problem reached,
+ *  its findings and the worst one's severity, then the oldest. Another sort leads with its own fact and falls back on the same order. */
 function compare(sort: DecisionSort, dir: "asc" | "desc", me: string | null) {
   const flip = dir === defaultDir(sort) ? 1 : -1;
   const age = (a: Row, b: Row) => a.created_at - b.created_at;
@@ -177,7 +178,7 @@ function compare(sort: DecisionSort, dir: "asc" | "desc", me: string | null) {
     const esc = (d: Row) => (isEscalated(d) ? (me && d.escalated?.to?.includes(me) ? 2 : 1) : 0);
     return esc(b) - esc(a) || Number(!!b.blocking) - Number(!!a.blocking);
   };
-  const impact = (a: Row, b: Row) => urgent(a, b) || reach(a, b) || findings(a, b) || sev(a, b) || age(a, b);
+  const impact = (a: Row, b: Row) => urgent(a, b) || byImpact(a, b) || reach(a, b) || findings(a, b) || sev(a, b) || age(a, b);
   return (a: Row, b: Row): number => {
     if (sort === "age") return flip * age(a, b) || urgent(a, b);
     if (sort === "severity") return flip * sev(a, b) || impact(a, b);

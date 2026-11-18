@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, formatSpan, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, parseOptionPageArg, pageRefToSlug, attachOptionPages, parseAnsweredSince, formatAnsweredList, formatCalibration, answeredVerdict, type DecideOption, type DecisionRow } from "./decideCommand.js";
+import { parseDecideOption, parseImpact, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, formatSpan, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, parseOptionPageArg, pageRefToSlug, attachOptionPages, parseAnsweredSince, formatAnsweredList, formatCalibration, answeredVerdict, type DecideOption, type DecisionRow } from "./decideCommand.js";
 
 describe("cast decide option parsing", () => {
   it("keeps a bare label as a label", () => {
@@ -43,6 +43,16 @@ const row = (over: Partial<DecisionRow>): DecisionRow => ({
   status: "pending",
   created_at: 1,
   ...over,
+});
+
+describe("cast decide --impact", () => {
+  it("reads the score and its why, the same \"a :: b\" shape as an option", () => {
+    expect(parseImpact("4 :: the release waits on it")).toEqual({ impact: 4, impact_reason: "the release waits on it" });
+    expect(parseImpact("2")).toEqual({ impact: 2 });
+  });
+  it("refuses a score off the 1-5 scale", () => {
+    for (const bad of ["0", "6", "3.5", "high", ""]) expect(() => parseImpact(bad)).toThrow("whole number from 1 to 5");
+  });
 });
 
 describe("cast decide edit/cancel target", () => {

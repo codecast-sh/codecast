@@ -100,6 +100,18 @@ describe("sortQueue", () => {
     sortQueue(input);
     expect(input.map((i) => i.key)).toEqual(["new", "old"]);
   });
+
+  it("orders by impact inside a tier, never across one, and counts an unscored ask as 3", () => {
+    const live = session();
+    const out = sortQueue([
+      item({ key: "advisory-5", blocking: false, session: live, impact: 5, createdAt: T0 - 9000 }),
+      item({ key: "live-2-old", session: live, impact: 2, createdAt: T0 - 8000 }),
+      item({ key: "live-unscored", session: live, createdAt: T0 - 100 }),
+      item({ key: "live-4-new", session: live, impact: 4, createdAt: T0 + 500 }),
+      item({ key: "live-4-old", session: live, impact: 4, createdAt: T0 }),
+    ]);
+    expect(out.map((i) => i.key)).toEqual(["live-4-old", "live-4-new", "live-unscored", "live-2-old", "advisory-5"]);
+  });
 });
 
 describe("decisionQueueItems", () => {

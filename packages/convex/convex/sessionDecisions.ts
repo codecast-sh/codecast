@@ -50,6 +50,7 @@ import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./
 import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
 import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, type CommandRun } from "@codecast/shared/contracts/commandRun";
 import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
+import { invalidImpact } from "@codecast/shared/contracts/decisionImpact";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
@@ -1034,6 +1035,9 @@ export type AskArgs = {
    *  asking session (a staffing proposal's queue card, org-staffing.md S4). */
   silent?: boolean;
   default_option?: number;
+  /** How much getting it answered matters, 1-5, and the one-line why (shared/contracts/decisionImpact.ts). */
+  impact?: number;
+  impact_reason?: string;
   kind?: DecisionKind;
   category?: string;
   doc_md?: string;
@@ -1138,7 +1142,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   if (parsedRun && "error" in parsedRun) return { error: parsedRun.error };
   if (parsedRun) args = { ...args, options: RUN_OPTIONS.map((o) => ({ ...o })), kind: "single", form: undefined, default_option: undefined, blocking: true };
   const kind: DecisionKind = args.kind ?? "single";
-  const shapeError = validateShape(kind, args) ?? (await missingOptionPage(ctx, args.options));
+  const shapeError = validateShape(kind, args) ?? invalidImpact(args.impact) ?? (await missingOptionPage(ctx, args.options));
   if (shapeError) return { error: shapeError };
 
   const conversation = await ctx.db
@@ -1239,6 +1243,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       run,
       blocking: args.blocking ?? true,
       default_option: args.default_option,
+      impact: args.impact ?? existing.impact,
+      impact_reason: args.impact !== undefined ? args.impact_reason : existing.impact_reason,
       kind,
       category,
       category_proposed: args.category,
@@ -1298,6 +1304,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     silent: args.silent || undefined,
     ...(trialProject ? { trial: true } : {}),
     default_option: args.default_option,
+    ...(args.impact !== undefined ? { impact: args.impact, impact_reason: args.impact_reason } : {}),
     status: "pending",
     task_id: task?._id,
     station: task ? args.station ?? task.status_id ?? task.status : args.station,
@@ -1355,6 +1362,8 @@ export const ask = mutation({
     run: v.optional(v.string()),
     blocking: v.optional(v.boolean()),
     default_option: v.optional(v.number()),
+    impact: v.optional(v.number()),
+    impact_reason: v.optional(v.string()),
     kind: v.optional(kindValidator),
     category: v.optional(v.string()),
     doc_md: v.optional(v.string()),
@@ -1445,6 +1454,8 @@ export const edit = mutation({
     station: v.optional(v.string()),
     stack: v.optional(v.string()),
     category: v.optional(v.string()),
+    impact: v.optional(v.number()),
+    impact_reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1467,7 +1478,7 @@ export const edit = mutation({
     const kind = (args.kind ?? row.kind ?? "single") as DecisionKind;
     const form = args.form ?? row.form;
     let defaultOption = args.clear_default ? undefined : args.default_option ?? row.default_option;
-    const shapeError = validateShape(kind, { question, options, default_option: defaultOption, form, card: args.card }) ?? (await missingOptionPage(ctx, options));
+    const shapeError = validateShape(kind, { question, options, default_option: defaultOption, form, card: args.card }) ?? invalidImpact(args.impact) ?? (await missingOptionPage(ctx, options));
     if (shapeError) return { error: shapeError };
     // A proposal's decision keeps answers that can settle it (expectationsApply.proposalToAsk).
     if (args.options && (await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first())) {
@@ -1506,6 +1517,8 @@ export const edit = mutation({
       form,
       category,
       category_proposed: proposed,
+      // A new score replaces the old one and its why; a why alone rewrites only the why.
+      ...(args.impact !== undefined ? { impact: args.impact, impact_reason: args.impact_reason } : args.impact_reason !== undefined ? { impact_reason: args.impact_reason } : {}),
       ...(docId ? { doc_id: docId } : {}),
       ...(task ? { task_id: task._id, station: args.station ?? task.status_id ?? task.status } : args.station ? { station: args.station } : {}),
       ...joined,
@@ -1635,6 +1648,8 @@ function cliRowShape(r: DecisionRow, conversation?: any) {
     form: r.form,
     blocking: r.blocking,
     default_option: r.default_option,
+    impact: r.impact,
+    impact_reason: r.impact_reason,
     task_id: r.task_id,
     station: r.station,
     stack_id: r.stack_id,

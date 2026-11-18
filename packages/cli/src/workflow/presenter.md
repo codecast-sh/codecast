@@ -70,7 +70,7 @@ works means its picture is missing. The case for your lean is argued on the
 card.
 
 **The card** is the page's top in small, and for a decision with no page it
-is the whole of it. It has three parts, each said once:
+is the whole of it. It has four parts, each said once:
 
 - The question: the choice about how people are treated, in a few plain
   words; never adopting the change or one of your courses. Where courses
@@ -86,6 +86,9 @@ is the whole of it. It has three parts, each said once:
   does to people, then `::` and the fact that sizes it. An answer other than
   the change as built says that nothing ships yet. No two leave people in the
   same place.
+- The impact (`--impact`), 1 to 5: how much stays stuck or at stake for
+  people until this is answered, set against the other decisions they hold,
+  then `::` and the fact from the record that sizes it.
 
 Read the finished card cold, as someone new to the product and its people,
 and rewrite any word, name or sentence they would stop on.

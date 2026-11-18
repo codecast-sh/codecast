@@ -96,6 +96,8 @@ export type LineNeed = {
   assignee?: string | null;
   reach?: number | null;
   severity?: number | null;
+  /** How much getting it answered matters, 1-5, as the asking station judged it (shared/contracts/decisionImpact.ts). */
+  impact?: number | null;
   /** For a decision: what its run recommends (ship, revise, drop, ...), when its card says. */
   recommend?: string | null;
 };
@@ -210,7 +212,7 @@ export function lineNeeds(groups: ReadonlyArray<InboxGroup>, of?: ProcessOf): Li
       title: r.title, name: r.name ?? null, problemRef: r.ref, caseId: r.caseId, projectId: r.projectId, process: of?.row(r) ?? null, since: r.at, runId: r.runId,
       decisionRef, cardRef, trial: !!r.trial, ...(r.publishes ? { publishes: true } : {}), note: r.note ?? null, fail: kind === "stopped" || kind === "review" ? r.fail ?? null : null, why: kind === "reask" ? r.hold ?? null : null, findings: r.findings ?? null, sha: kind === "fixed" ? r.sha ?? null : null,
       aliases: [r.cardId, r.cardRef, r.decisionRef].filter((x): x is string => !!x && x !== ref),
-      ...(kind === "decision" ? { decisionId: r.decisionId ?? null, change: r.change ?? "other", assignee: r.assignee ?? null, reach: r.reach ?? null, severity: r.severity ?? null, recommend: r.recommend ?? null } : {}),
+      ...(kind === "decision" ? { decisionId: r.decisionId ?? null, change: r.change ?? "other", assignee: r.assignee ?? null, reach: r.reach ?? null, severity: r.severity ?? null, impact: r.impact ?? null, recommend: r.recommend ?? null } : {}),
     });
   }
   return out;

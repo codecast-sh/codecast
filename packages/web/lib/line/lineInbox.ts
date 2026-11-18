@@ -80,6 +80,8 @@ export type InboxRow = {
   reach?: number | null;
   /** For a fix to decide: the worst finding's severity on its problem, 1 to 10, when a judge scored one. */
   severity?: number | null;
+  /** For a fix to decide: how much getting it answered matters, 1-5, as the asking station judged it. */
+  impact?: number | null;
 };
 
 /** The commit a park note says main already carries the fix in ("Already fixed on main by fc0d85ba65"). */
@@ -358,12 +360,13 @@ export function buildLineInbox(input: LineInboxInput): InboxGroup[] {
   // its trial card's, listed below in the same group.
   // What every fix to decide shows at a glance: who holds it, how many it reaches, how bad its worst finding is (the
   // decision row carries its problem's, convex decisionRowsForViewer).
-  type FactRow = Parameters<typeof decisionAssignee>[0] & { problem_severity?: number | null };
+  type FactRow = Parameters<typeof decisionAssignee>[0] & { problem_severity?: number | null; impact?: number | null };
   const facts = (t: LineCauseTask | undefined, d: FactRow, more?: { findings?: number | null; reach?: number | null }) => ({
     assignee: decisionAssignee(d),
     findings: mostOf(t?.cause?.signal_count, more?.findings) ?? undefined,
     reach: mostOf(contactsOf(t?.cause?.fingerprints), more?.reach),
     severity: d?.problem_severity ?? null,
+    impact: d?.impact ?? null,
   });
   const isFix = (x: (typeof input.decisions)[number]) => isLineCard(x) || (x.status === "pending" && !!x.workflow_run_id && !!x.task_id && byId.has(x.task_id));
   for (const d of input.decisions.filter((x) => isFix(x) && !x.trial).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0))) {

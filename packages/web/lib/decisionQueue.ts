@@ -22,23 +22,17 @@
 //           and kept working. Your answer can still redirect it, so it is
 //           worth reading, but it is never urgent.
 //
-// WITHIN a tier: OLDEST FIRST. Deliberately not newest-first, and not any
-// cleverness about "importance". Two reasons. First, an agent parked on a
-// question is idle, so the cost of a pending decision grows with its age —
-// oldest-first minimizes total fleet idle time, and it is the same argument
-// that makes FIFO right for a work queue. Second, a queue that reorders
-// itself while you are in it is unusable: newest-first means a decision you
-// are about to answer gets pushed down by an unrelated agent, and no
-// prioritization heuristic survives the founder disagreeing with it once.
-// Age is the one signal that is monotone, legible, and never surprises you.
-//
-// What is deliberately NOT in the ranking: any per-session or per-project
-// weighting, any model-guessed urgency score, and any "this looks important"
-// text heuristic. Those all fail the same way — the moment the ranking is
-// wrong once, the founder stops trusting the order, and an untrusted queue is
-// worse than a list, because a list at least admits it is unsorted.
+// WITHIN a tier: HIGHEST IMPACT, then OLDEST. Impact is the 1-5 score the
+// asking agent gave (`cast decide --impact`, shared/contracts/decisionImpact.ts),
+// with its one-line why on the card so the order explains itself; a row with
+// no score (an AskUserQuestion, a permission, an unscored ask) counts as 3.
+// The tiers stay above it: an agent parked on you is idle machine time
+// whatever its score, so blocked-and-reachable always leads (sd-3584).
+// Among equal scores the oldest leads: a parked agent's cost grows with its
+// age, so oldest-first minimizes fleet idle time.
 import { BLOCKED_BANNER_KINDS, isHostedAgentType, isStackedAsk } from "@codecast/shared/contracts";
 import { APPROVAL_ANSWERS } from "@codecast/shared/contracts/assistant";
+import { byImpact } from "@codecast/shared/contracts/decisionImpact";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import type { DecisionKind, DecisionOption, InboxSession, SessionDecisionItem } from "../store/inboxStore";
 import { agentStatusAt } from "./liveness";
@@ -72,6 +66,9 @@ export type QueueItem = {
   docId?: string;
   blocking: boolean;
   defaultOption?: number;
+  // How much getting it answered matters, 1-5, and why, as the asker judged it (source "decide" only).
+  impact?: number;
+  impactReason?: string;
   createdAt: number;
   // conversation.message_count at ask time (source "decide") — with the live
   // session row's count, "messages since the ask".
@@ -279,9 +276,7 @@ export function waitingOnPerson(items: readonly QueueItem[]): QueueItem[] {
 
 export function sortQueue(items: QueueItem[]): QueueItem[] {
   return [...items].sort((a, b) => {
-    const t = queueTier(a) - queueTier(b);
-    if (t !== 0) return t;
-    return a.createdAt - b.createdAt;
+    return queueTier(a) - queueTier(b) || byImpact(a, b) || a.createdAt - b.createdAt;
   });
 }
 
@@ -319,6 +314,8 @@ export function decisionQueueItems(
       docId: d.doc_id,
       blocking: d.blocking,
       defaultOption: d.default_option,
+      impact: d.impact,
+      impactReason: d.impact_reason,
       createdAt: d.created_at,
       askedMessageCount: d.asked_message_count,
       decisionId: d._id,

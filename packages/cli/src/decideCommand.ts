@@ -32,6 +32,7 @@
 // Registered from index.ts via registerDecideCommand(program, deps), with the publish command's deps
 // contract, so it reuses cliFetch auth and the artifact publish payload builder rather than its own plumbing.
 import { RUN_OPTIONS, commandLine, parseRunCommand } from "@codecast/shared/contracts/commandRun";
+import { invalidImpact } from "@codecast/shared/contracts/decisionImpact";
 import * as fs from "fs";
 import * as http from "http";
 import * as path from "path";
@@ -95,6 +96,8 @@ export interface DecideSpec {
   stack?: string;
   advisory?: boolean;
   default?: number; // 1-based, as on the command line
+  impact?: number;
+  impact_reason?: string;
 }
 
 export function parseDecideSpec(text: string): DecideSpec {
@@ -269,6 +272,8 @@ export interface DecisionRow {
   answer_json?: any;
   blocking: boolean;
   default_option?: number;
+  impact?: number;
+  impact_reason?: string;
   status: "pending" | "answered" | "dismissed" | "withdrawn";
   answer_index?: number;
   answer_text?: string;
@@ -368,7 +373,7 @@ export function formatDecisionList(rows: DecisionRow[], now: number = Date.now()
   if (rows.length === 0) return empty;
   const body = rows
     .map((r) => {
-      const head = `${r.status === "pending" ? "●" : "○"} ${decisionHandle(r)}  ${r.question}${r.kind && r.kind !== "single" ? `  [${r.kind}]` : ""}${r.category ? `  (${r.category})` : ""}`;
+      const head = `${r.status === "pending" ? "●" : "○"} ${decisionHandle(r)}  ${r.question}${r.kind && r.kind !== "single" ? `  [${r.kind}]` : ""}${r.category ? `  (${r.category})` : ""}${r.impact ? `  impact ${r.impact}` : ""}`;
       const age =
         r.status === "pending"
           ? `, asked ${formatAge(now - r.created_at)}${r.messages_since !== undefined ? `, ${r.messages_since} message${r.messages_since === 1 ? "" : "s"} since` : ""}`
@@ -398,6 +403,27 @@ export function formatDecisionList(rows: DecisionRow[], now: number = Date.now()
 function fail(message: string): never {
   console.error(fmt.error(message));
   process.exit(1);
+}
+
+/** `--impact "4 :: two runs wait on it"`: the 1-5 score and its one-line why, the same "a :: b" shape as an option. */
+export function parseImpact(raw: string): { impact: number; impact_reason?: string } {
+  const [score, ...why] = raw.split("::");
+  const impact = Number(score.trim());
+  const error = invalidImpact(impact);
+  if (error) throw new Error(`--impact: ${error}, then optionally " :: why" (got "${raw}")`);
+  const reason = why.join("::").trim();
+  return { impact, ...(reason ? { impact_reason: reason } : {}) };
+}
+
+/** The impact a flag or a spec gives, flag first. */
+function resolveImpact(flag: string | undefined, spec: DecideSpec | null | undefined): { impact?: number; impact_reason?: string } {
+  try {
+    if (flag !== undefined) return parseImpact(flag);
+    if (spec?.impact === undefined) return {};
+    return parseImpact(spec.impact_reason ? `${spec.impact} :: ${spec.impact_reason}` : String(spec.impact));
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
 }
 
 // Validates the advisory/default pair the same way for ask and edit.
@@ -667,7 +693,7 @@ function runDecisionKit(args: string[], serve = false): void {
 export const DECIDE_VERB_HELP: Record<string, VerbHelpSpec> = {
   ls: { usage: "cast decide ls [--mine | --stack <ds-N> | --answered-since <time>] [--json]", summary: "This session's decisions with their answers; --mine every pending one you hold; --answered-since a team's answered cards", flags: ["--mine", "--stack", "--answered-since", "--team", "--limit", "--calibration", "--session", "--json"] },
   show: { usage: "cast decide show <sd-N> [--json]", summary: "One decision with its document, ladder and answer", flags: ["--json"] },
-  edit: { usage: "cast decide edit [sd-N] [--question …] [--context …] [-o … ]", summary: "Rewrite this session's open decision in place, keeping its spot in the queue (default: the open one)", flags: ["--question", "--context", "--option", "--option-body", "--option-page", "--report", "--doc", "--category", "--kind", "--advisory", "--default", "--blocking", "--session", "--json"] },
+  edit: { usage: "cast decide edit [sd-N] [--question …] [--context …] [-o … ]", summary: "Rewrite this session's open decision in place, keeping its spot in the queue (default: the open one)", flags: ["--question", "--context", "--option", "--option-body", "--option-page", "--report", "--doc", "--category", "--kind", "--impact", "--advisory", "--default", "--blocking", "--session", "--json"] },
   cancel: { usage: "cast decide cancel [sd-N]", summary: "Withdraw this session's open decision when it no longer applies (default: the open one)", flags: ["--session", "--json"] },
   answer: { usage: 'cast decide answer <sd-N> <n | "1,3" | "2>1>3"> [--note -] [--form k=v]', summary: "Answer a decision: as a person at a plain shell, as the holder role under a grant, or for your human at their explicit word", flags: ["--note", "--form", "--for-human", "--json"] },
   recommend: { usage: "cast decide recommend <sd-N> <n> [--note -]", summary: "As a role on the decision's ladder, recommend an option to the people who decide", flags: ["--note", "--session", "--json"] },
@@ -704,12 +730,13 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--no-task", "Do not bind the decision to the session's task")
     .option("--station <s>", "The task status (category or team status id) the task is held at until answered")
     .option("--stack <ds-N>", "Append to a decision stack (cast stack create); ls: list that stack's members")
+    .option("--impact <n :: why>", 'How much getting this answered matters, 1-5, with a one-line why: "4 :: the release waits on it". 1 little rides on it; 3 ordinary; 5 work or money is stuck or at risk until it is answered. Orders the queue inside blocked and advisory')
     .option("--category <c>", "Proposed category: approach|scope|priority|retry|review|allocation (the server may pin a protected one)")
     .option("--kind <k>", `single|multi|rank|form (default single)`)
     .option("--line <label>", "Ask for one line of text instead of a choice: a form with one text field (sets --kind form)")
     .option("--to <who>", "Who answers: a person's name, email or @handle in the session's workspace (repeatable; default: whoever the session reports to). pass: the one teammate it goes to", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--doc <file>", stdinText("Markdown document as the decision's long body (creates a decision doc)"))
-    .option("--spec <file>", "JSON spec: { question, kind, category, options[{label,description,body_md,evidence,cost,risk,page}], form{fields}, doc_md, task, station, stack, advisory, default }")
+    .option("--spec <file>", "JSON spec: { question, kind, category, options[{label,description,body_md,evidence,cost,risk,page}], form{fields}, doc_md, task, station, stack, advisory, default, impact, impact_reason }")
     .option(
       "--option-body <n=file>",
       "Markdown body for option n (repeatable): --option-body 2=why-b.md",
@@ -931,6 +958,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         if (options.station ?? spec?.station) changes.station = options.station ?? spec?.station;
         if (options.stack ?? spec?.stack) changes.stack = options.stack ?? spec?.stack;
         if (options.category ?? spec?.category) changes.category = options.category ?? spec?.category;
+        Object.assign(changes, resolveImpact(options.impact, spec));
         if (options.report) {
           const report = await publishReport(deps, options.report, sessionId);
           changes.report_slug = report.slug;
@@ -949,7 +977,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         }
         const { report_url: reportUrl, ...payload } = changes as any;
         if (Object.keys(payload).length === 0) {
-          fail("Nothing to change. Pass --question, -o, --context, --report, --card, --doc, --kind, --task, --station, --stack, --category, --option-page, --advisory --default <n>, or --blocking.");
+          fail("Nothing to change. Pass --question, -o, --context, --report, --card, --doc, --kind, --task, --station, --stack, --category, --impact, --option-page, --advisory --default <n>, or --blocking.");
         }
         const result = await decideApi(deps, { action: "edit", session_id: sessionId, decision_id: target, ...payload });
         if (options.json) {
@@ -1013,6 +1041,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         default_option: defaultOption,
         kind,
         category,
+        ...resolveImpact(options.impact, spec),
         doc_md: docMd,
         form: lineForm ?? spec?.form,
         task,

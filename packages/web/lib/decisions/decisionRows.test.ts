@@ -82,6 +82,17 @@ describe("arrangeDecisions", () => {
     expect(by("findings")).toEqual(["few", "bad", "found", "many", "calm"]);
   });
 
+  test("most impact: the asker's score leads the problem facts, never the blocking tier", () => {
+    const flows = [
+      row("reach", { problem_reach: 9 }),
+      row("scored", { impact: 5, problem_reach: 1 }),
+      row("low", { impact: 1, problem_reach: 20 }),
+      row("advisory", { blocking: false, impact: 5 }),
+    ];
+    const by = arrangeDecisions(flows, decisionView({ tab: "team", group: "none", sort: "impact" }), ctx).items.map((d) => d._id);
+    expect(by).toEqual(["scored", "reach", "low", "advisory"]);
+  });
+
   test("sorts by age or severity on request, either way", () => {
     expect(arrangeDecisions(rows, decisionView({ tab: "team", group: "none", sort: "age" }), ctx).items.map((d) => d._id)).toEqual(["old", "sev", "adv", "esc"]);
     expect(arrangeDecisions(rows, decisionView({ tab: "team", group: "none", sort: "age", dir: "desc" }), ctx).items[0]._id).toBe("esc");

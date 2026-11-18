@@ -6,8 +6,9 @@
 // count says what picking it would show. Pure.
 import { DECISION_CHANGES, DECISION_CHANGE_LABEL, type DecisionChange } from "./decisionFacts";
 import type { LineNeed } from "./lineNeeds";
+import { byImpact } from "@codecast/shared/contracts/decisionImpact";
 
-/** How the list is ordered: impact (people reached, then findings, then severity) by default, or by one column. */
+/** How the list is ordered: impact (the asker's 1-5 score, people reached, findings, severity) by default, or by one column. */
 export type InboxOrder = "impact" | "severity" | "age" | "findings" | "kind" | "area" | "assignee";
 export type InboxGroupBy = "area" | "kind" | "who" | "none";
 /** Who holds it: everyone's, the viewer's, nobody's, or one teammate's (their user id). */
@@ -29,15 +30,15 @@ export function inboxView(sel: { who?: string | null; kind?: string | null; area
   };
 }
 
-type Need = Pick<LineNeed, "key" | "projectId" | "since" | "findings"> & Partial<Pick<LineNeed, "change" | "assignee" | "reach" | "severity">>;
+type Need = Pick<LineNeed, "key" | "projectId" | "since" | "findings"> & Partial<Pick<LineNeed, "change" | "assignee" | "reach" | "severity" | "impact">>;
 
 export const changeOf = (n: Need): DecisionChange => n.change ?? "other";
 
 const holds = (who: InboxWho, n: Need, viewer: string | null): boolean =>
   who === "all" ? true : who === "me" ? !!viewer && n.assignee === viewer : who === "none" ? !n.assignee : n.assignee === who;
 
-/** Impact: the people it reaches, then its findings, then how bad the worst is. */
-const impact = (a: Need, b: Need) => (b.reach ?? 0) - (a.reach ?? 0) || (b.findings ?? 0) - (a.findings ?? 0) || (b.severity ?? 0) - (a.severity ?? 0);
+/** Impact: the asker's 1-5 score, then the people it reaches, its findings, and how bad the worst is. */
+const impact = (a: Need, b: Need) => byImpact(a, b) || (b.reach ?? 0) - (a.reach ?? 0) || (b.findings ?? 0) - (a.findings ?? 0) || (b.severity ?? 0) - (a.severity ?? 0);
 const oldest = (a: Need, b: Need) => (a.since ?? Infinity) - (b.since ?? Infinity);
 const byText = (x: string, y: string) => (x && !y ? -1 : !x && y ? 1 : x.localeCompare(y));
 const compareBy = (order: InboxOrder, ctx: ArrangeCtx): ((a: Need, b: Need) => number) => {

@@ -391,6 +391,15 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
       {item.trial && (
         <span className="inline-block whitespace-nowrap text-meta px-1.5 py-0.5 rounded border border-sol-magenta/30 text-sol-magenta shrink-0" data-decision-trial>trial · nothing ships</span>
       )}
+      {item.impact !== undefined && (
+        <span
+          className={`inline-block whitespace-nowrap text-meta px-1.5 py-0.5 rounded border shrink-0 ${item.impact >= 4 ? "border-sol-orange/30 text-sol-orange" : "border-sol-border text-sol-text-dim"}`}
+          title={item.impactReason}
+          data-decision-impact={item.impact}
+        >
+          impact {item.impact}/5
+        </span>
+      )}
       {tier === 3 && (
         <span className="inline-block whitespace-nowrap text-meta px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue shrink-0">advisory</span>
       )}

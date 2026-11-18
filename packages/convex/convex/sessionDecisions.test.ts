@@ -63,6 +63,18 @@ describe("ask: people, inbox, ladder, holder", () => {
     expect(none.error).toBe("At least one option required");
   });
 
+  test("stores the asker's impact and its why, keeps it across a re-ask that names none, and refuses one off the scale", async () => {
+    const { ctx, tables } = seed();
+    const ask = (extra: Record<string, unknown>) => askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Ship the fix?", options: twoOptions, context_md: "x", category: "approach", ...extra });
+    expect((await ask({ impact: 4, impact_reason: "two runs wait on it" })).error).toBeUndefined();
+    expect(tables.session_decisions[0]).toMatchObject({ impact: 4, impact_reason: "two runs wait on it" });
+    await ask({});
+    expect(tables.session_decisions).toHaveLength(1);
+    expect(tables.session_decisions[0]).toMatchObject({ impact: 4, impact_reason: "two runs wait on it" });
+    expect((await ask({ impact: 7 })).error).toBe("impact is a whole number from 1 to 5");
+    expect(tables.session_decisions[0].impact).toBe(4);
+  });
+
   test("materializes one inbox row per person and records the ladder up to the first person", async () => {
     const { ctx, tables } = seed();
     const r = await askApproach(ctx);

@@ -26,7 +26,12 @@ export function QueueChip({ item, now }: { item: QueueItem; now: number }) {
       <View style={[chipShell, chipTint(color)]}>
         <Text style={[chipText, { color }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</Text>
       </View>
-      {item.shortId ? <Text style={[styles.dim, codeFont, { color: Theme.textMuted0 }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{item.shortId}</Text> : null}
+      {item.impact !== undefined ? (
+        <View style={[chipShell, chipTint(item.impact >= 4 ? Theme.orange : Theme.textMuted0)]}>
+          <Text style={[chipText, { color: item.impact >= 4 ? Theme.orange : Theme.textMuted0 }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>impact {item.impact}/5</Text>
+        </View>
+      ) : null}
+      {item.shortId ?<Text style={[styles.dim, codeFont, { color: Theme.textMuted0 }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{item.shortId}</Text> : null}
       <Text style={[styles.dim, { color: Theme.textMuted0 }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{formatTimeAgo(item.createdAt, now)}</Text>
     </View>
   );
