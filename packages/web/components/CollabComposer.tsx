@@ -29,7 +29,7 @@ import type { ChatMember } from "../lib/chatViews";
 import { AvatarImg } from "../lib/avatarCache";
 import type { ConversationData } from "./conversation/types";
 import type { ReactNode } from "react";
-import { useSharedDraft, useSharedDraftStatus, inSharedDraft, typingEditors } from "../hooks/useSharedDraft";
+import { useSharedDraft, useSharedDraftStatus, typingEditors } from "../hooks/useSharedDraft";
 import { SharedCarets } from "./SharedCarets";
 import { ConversationChat } from "./conversation/ConversationChat";
 import { useConversationChatPeople } from "../hooks/useConversationChatPeople";
@@ -131,9 +131,10 @@ export function CollabPresenceBar({ present, showHere, boxed = false, joint, sha
   const roster = useInboxStore((s) => rosterIdentity(teamMembersOf(s))) as ChatMember[];
   const typing = shared ? [] : typingRows(present);
   const writer = typing[0];
-  const coWriters = shared ? present.filter(inSharedDraft) : [];
   const typists = shared ? present.filter((p) => typingEditors(shared.editors).includes(p.user_id)) : [];
-  const open = !!writer || coWriters.length > 0 || !!chat || (showHere && present.length > 0);
+  // A shared draft nobody is typing in is just people with the page open: their
+  // faces are already on the header, so the strip waits for someone to type.
+  const open = !!writer || typists.length > 0 || !!chat || (showHere && present.length > 0);
   const names = present.map((p) => p.user_name).join(", ");
   return (
     <div
@@ -143,14 +144,12 @@ export function CollabPresenceBar({ present, showHere, boxed = false, joint, sha
     >
       <div className="min-h-0 overflow-hidden">
         {open && (
-          <div className={`flex items-center gap-2 px-4 py-1 text-meta text-sol-text-muted min-w-0 ${!writer || coWriters.length > 0 ? "mb-0.5" : boxed ? "mb-1 rounded-xl border border-sol-cyan/25 bg-sol-cyan/5" : "border-t border-sol-border/20 bg-sol-bg-alt/30"}`}>
-            {coWriters.length > 0 ? (
-              // One draft, several hands: who is in it, and who is typing now.
+          <div className={`flex items-center gap-2 px-4 py-1 text-meta text-sol-text-muted min-w-0 ${!writer || typists.length > 0 ? "mb-0.5" : boxed ? "mb-1 rounded-xl border border-sol-cyan/25 bg-sol-cyan/5" : "border-t border-sol-border/20 bg-sol-bg-alt/30"}`}>
+            {typists.length > 0 ? (
+              // One draft, several hands: who is typing into it now.
               <span data-sv-shared-draft className="inline-flex items-center gap-2 min-w-0">
-                <PresenceFacepile present={coWriters} size={18} />
-                {typists.length > 0
-                  ? <TypingIndicator members={typists.map((p) => presenceMember(p, roster))} />
-                  : <span className="text-sol-cyan/80 font-medium">Shared draft</span>}
+                <PresenceFacepile present={typists} size={18} />
+                <TypingIndicator members={typists.map((p) => presenceMember(p, roster))} />
               </span>
             ) : writer ? (
               <>
