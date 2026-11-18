@@ -2,13 +2,13 @@
 // comes from a person, and people state direction in many places: a chat
 // line, a turn on a call, the answer to a decision an agent asked, a decision
 // recorded on a plan, the brief that opened a long running session. The
-// readers in orgInit gather those as candidates; a small model reads them
+// readers in orgInit gather those as candidates; a model reads them
 // and picks the lines that set direction, quoting the words that do. No
 // keyword decides: "breadth gets about 20% of the buy budget" names no goal
 // word and is one.
 
 import type { SurfaceRequest } from "./anthropic";
-import { CHEAP_MODEL, parseJsonBlock } from "./anthropic";
+import { STRONG_MODEL, parseJsonBlock } from "./anthropic";
 
 export type GoalSourceKind = "decision" | "plan" | "session" | "chat" | "call";
 /** One line a person wrote, said or answered, and where to read it whole. */
@@ -18,25 +18,35 @@ export type GoalCandidate = { kind: GoalSourceKind; at: number; by: string; wher
 export type StatedGoal = { at: number; by: string; line: string; where: string; kind?: GoalSourceKind };
 export type StatedGoals = { lines: StatedGoal[]; truncated: boolean };
 
+/** The model the read runs on. Measured on 110 hand-labelled Union lines
+ *  (packages/evals/scripts/stated-goals-measure.ts, 2026-11-17, 3 runs each):
+ *  this prompt on Sonnet picked direction at precision 0.81 to 0.94 and
+ *  recall 0.73 to 0.82; the keyword-free prompt first written for Haiku, on
+ *  Haiku, at precision 0.22 to 0.42. This prompt was tuned on Sonnet, so
+ *  Haiku's numbers on it (precision 0.25 to 0.67) are not a fair test of
+ *  Haiku. */
+export const STATED_GOALS_MODEL = STRONG_MODEL;
+
 export const STATED_GOAL_CAPS = {
   /** One candidate's text: enough for a long turn or a decision with its why. */
   candidate_chars: 1500,
-  /** Every candidate of the window, read in chunks; Haiku reads 300k chars for about two cents. */
+  /** Every candidate of the window, read in chunks: at the cap about 90k input tokens over eight calls, about half a dollar a review. */
   candidate_bytes: 300_000,
-  chunk_chars: 75_000,
-  max_tokens: 4000,
+  /** A chunk's reading: Sonnet thinks before it answers, and its thinking
+   *  bills against max_tokens (a 35k char chunk spent up to 3.7k tokens), so
+   *  chunks stay near that size with room for a long list of picks. */
+  chunk_chars: 40_000,
+  max_tokens: 16_000,
   /** The lines handed to the reviewer, and one line's length. */
   goal_bytes: 32_000,
   goal_line_chars: 500,
 } as const;
 
-export const STATED_GOALS_SYSTEM = `You read what the people of one company wrote, said and decided over the past month, and pick the lines that state where the company is going.
+export const STATED_GOALS_SYSTEM = `You read what the people of one company wrote, said and decided over the past month, and find the few lines where a person set the company's direction: what the company or one of its efforts is for, a goal, priority or number to reach, where money or people go and why, a product, market or capability a person sets out to build and what it is for, an effort started, held or dropped for the company's sake. Founders often say this in an answer to a decision, a decision recorded on a plan, or the brief that opens a long running session, and rarely use the word "goal".
 
-A line states direction when a person sets what the company or one of its efforts is for: a goal, a priority, a target or number to reach, what gets the budget or the people, what is held, dropped or started and the reason it matters to the company. A founder's answer to a decision, a decision a person recorded on a plan, and the brief a person opened a long running session with are where much of this is said, often without the word "goal". A line restating a goal someone stated elsewhere still counts; keep the clearest wording.
+Most lines set no direction, and that includes most decisions. Approving a fix, a ship or a deploy, a rule for how a tool, a test, a call card or a process works, a spend for one task, a status report or a progress note keeps the work moving without saying where the company is going. Pick a line only when someone writing down the company's goals would miss something without it. A line restating direction someone set elsewhere still counts; keep the clearest wording.
 
-Leave out progress reports, status, review verdicts, task and code mechanics, scheduling, and questions nobody answered. When a line mixes direction with mechanics, the direction is what you quote.
-
-For each line you pick, return its number and the words from it that state the direction, copied exactly, under 450 characters. Pick nothing from a chunk that sets no direction.`;
+For each line you pick, return its number, the direction it sets in a few words of your own, and the words from it that state that direction, copied exactly, under 450 characters. A chunk that sets no direction gets an empty list.`;
 
 export const STATED_GOALS_SCHEMA = {
   type: "object",
@@ -45,8 +55,8 @@ export const STATED_GOALS_SCHEMA = {
       type: "array",
       items: {
         type: "object",
-        properties: { i: { type: "integer" }, quote: { type: "string" } },
-        required: ["i", "quote"],
+        properties: { i: { type: "integer" }, sets: { type: "string" }, quote: { type: "string" } },
+        required: ["i", "sets", "quote"],
         additionalProperties: false,
       },
     },
@@ -91,7 +101,7 @@ export function statedGoalsRequests(candidates: GoalCandidate[], workspace: stri
       from,
       to,
       req: {
-        model: CHEAP_MODEL,
+        model: STATED_GOALS_MODEL,
         max_tokens: STATED_GOAL_CAPS.max_tokens,
         system: STATED_GOALS_SYSTEM,
         prompt: `The company: ${workspace || "this workspace"}.\n\n${body}`,
@@ -103,21 +113,22 @@ export function statedGoalsRequests(candidates: GoalCandidate[], workspace: stri
   return out;
 }
 
-/** The picks in one reply that name a candidate of its chunk. A quote is
- *  matched against the candidate with whitespace folded (a model re-flows a
- *  bullet list onto one line); the line kept is the candidate's own span. One
- *  that is not the candidate's words is replaced by the candidate's opening, so a line in said.goals is always
- *  what the person said. */
-export function picksOf(text: string | null, candidates: GoalCandidate[], from: number, to: number): StatedGoal[] {
+/** The picks in one reply that name a candidate of its chunk, each kept as
+ *  the span of the candidate its quote copies (whitespace folded: a model
+ *  re-flows a bullet list onto one line), so a line in said.goals is always
+ *  what the person said and only the part the model read as direction. */
+export function picksOf(text: string | null, candidates: GoalCandidate[], from: number, to: number): StatedGoal[] | null {
   const raw = text ? (parseJsonBlock(text) as any) : null;
+  if (!Array.isArray(raw?.goals)) return null;
   const out: StatedGoal[] = [];
   const seen = new Set<number>();
-  for (const g of Array.isArray(raw?.goals) ? raw.goals : []) {
+  for (const g of raw.goals) {
     const i = Number(g?.i);
     if (!Number.isInteger(i) || i < from || i >= to || seen.has(i)) continue;
-    seen.add(i);
     const c = candidates[i];
-    const line = ownWords(c.text, typeof g.quote === "string" ? g.quote : "") ?? c.text;
+    const line = ownWords(c.text, typeof g.quote === "string" ? g.quote : "");
+    if (!line) continue;
+    seen.add(i);
     out.push({ at: c.at, by: c.by, line: line.slice(0, STATED_GOAL_CAPS.goal_line_chars), where: c.where, kind: c.kind });
   }
   return out;
@@ -143,10 +154,15 @@ export async function pickStatedGoals(candidates: GoalCandidate[], truncatedBefo
   const { kept, truncated: cut } = boundCandidates(candidates);
   const chunks = statedGoalsRequests(kept, workspace);
   const replies = await Promise.all(chunks.map((c) => ask(c.req).catch(() => null)));
-  const picks = chunks.flatMap((c, k) => picksOf(replies[k], kept, c.from, c.to));
+  const read = chunks.map((c, k) => picksOf(replies[k], kept, c.from, c.to));
+  // A chunk with no readable answer (the call failed, or the answer ran out of
+  // room before its list closed) lost its lines: the read says so.
+  const unread = read.filter((r) => r === null).length;
+  if (unread) console.error(`stated goals: ${unread} of ${chunks.length} chunks gave no readable answer`);
+  const picks = read.flatMap((r) => r ?? []);
   const lines: StatedGoal[] = [];
   let bytes = 0;
-  let truncated = truncatedBefore || cut;
+  let truncated = truncatedBefore || cut || unread > 0;
   for (const l of picks) {
     const size = JSON.stringify(l).length;
     if (bytes + size > STATED_GOAL_CAPS.goal_bytes) { truncated = true; break; }

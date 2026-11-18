@@ -9,14 +9,16 @@ import { join } from 'node:path';
 // founders asked for (ct-56727, ct-95902) is otherwise judged by eye.
 
 export interface GoalTreeLabel {
-  /** The goals people stated. `match` holds phrases one of which a goal's title carries (any case); `existing` is its in-N when the workspace already holds it; `parent` another label goal's id, absent for the mission or a top level goal; `number` true when a person named a number for it, so a target is theirs to carry. */
-  goals: Array<{ id: string; match: string[]; existing?: string; parent?: string; number?: boolean }>;
+  /** The goals people stated. `match` holds phrases one of which a goal's title carries (any case); `existing` is its in-N when the workspace already holds it; `parent` another label goal's id, absent for the mission or a top level goal; `number` true when a person named a number for it, so a target is theirs to carry; `optional` when a goal of its own is one right reading and placing its work under another goal is the other, so its absence is no miss. */
+  goals: Array<{ id: string; match: string[]; existing?: string; parent?: string; number?: boolean; optional?: boolean }>;
   /** Live work (a plan's pl-N, a project's short id or title) and the label goals it may reach; ["any"] takes any goal. */
   place: Record<string, string[]>;
 }
 
 export interface GoalTreeGrade {
   found: string[];
+  /** The goals the tree must hold: every label goal but the optional ones. */
+  expected: number;
   missing: string[];
   parents: { right: string[]; wrong: string[] };
   invented: string[];
@@ -106,7 +108,8 @@ export function gradeGoalTree(changes: any[], inputs: any, label: GoalTreeLabel)
   }
   return {
     found: label.goals.filter((g) => nodeOf.has(g.id)).map((g) => g.id),
-    missing: label.goals.filter((g) => !nodeOf.has(g.id)).map((g) => g.id),
+    expected: label.goals.filter((g) => !g.optional).length,
+    missing: label.goals.filter((g) => !nodeOf.has(g.id) && !g.optional).map((g) => g.id),
     parents,
     invented: nodes.filter((n) => n.isNew && !labelOf.has(n)).map((n) => n.title),
     third_level: nodes.filter((n) => depth(n) >= 2).map((n) => n.title),

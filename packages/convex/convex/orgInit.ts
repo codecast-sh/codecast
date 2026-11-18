@@ -17,7 +17,7 @@ import { collectOrgSessions, requireWorkspaceCaller, resolveScope, sessionsInSco
 import { sessionsOwnedBy, tasksOwnedBy } from "./lib/orgOwnership";
 import { performRehomeSessions, type RehomeResult } from "./sessionOwnership";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
-import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity } from "./orgHealth";
+import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity, slimWorkTasks, type WorkTasks } from "./orgHealth";
 import { activityPlanOf, computeOrgActivity, isLandedCommit, landingFor, namedTextOf, namesRecord, recordWords, type OrgActivity, type RecordRef } from "./lib/orgActivity";
 import { canAccessChannel } from "./chatAccess";
 import { userMayRead } from "./lib/decisionAccess";
@@ -580,12 +580,19 @@ export async function readActivityPlans(ctx: Ctx, fetchOpts: { userId: Id<"users
   return Array.from(byId.values());
 }
 
-export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
+/** The open tasks and the month's changes the activity part reads, cut to the
+ *  fields it uses (slimWorkTasks). Read in a query of its own on the fanned
+ *  path: with the session scan beside it, Union's activity part passed the
+ *  4096 read limit (one conversation read per linked task, 2026-11-17). */
+export const readActivityWork = async (ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number): Promise<WorkTasks> =>
+  slimWorkTasks(await readWorkTasks(ctx, userId, teamId, { perStatus: ANALYSIS_CAPS.tasks, updatedSince: now - ANALYSIS_WINDOW_MS, recentCap: ANALYSIS_CAPS.tasks }));
+
+export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, given?: { work?: WorkTasks }) {
   const fetchOpts = teamId ? { userId, workspace: "team" as const, teamId } : { userId, workspace: "personal" as const };
   const [projects, plans, work, scan, initiatives] = await Promise.all([
     scopedFetch(ctx, "projects", { ...fetchOpts, limit: ANALYSIS_CAPS.projects }).then((r) => r.records),
     readActivityPlans(ctx, fetchOpts),
-    readWorkTasks(ctx, userId, teamId, { perStatus: ANALYSIS_CAPS.tasks, updatedSince: now - ANALYSIS_WINDOW_MS, recentCap: ANALYSIS_CAPS.tasks }),
+    given?.work ?? readActivityWork(ctx, userId, teamId, now),
     collectOrgSessions(ctx, userId, teamId, now),
     scopedFetch(ctx, "initiatives", { ...fetchOpts, limit: ANALYSIS_CAPS.initiatives }).then((r) => r.records),
   ]);
@@ -863,7 +870,7 @@ export async function readSaid(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"
 // At Union the founders set most direction in the last three. The readers
 // here gather the window's candidates from each, highest signal first
 // (answered decisions, plan decisions, session openings, chat, then calls,
-// each newest first); lib/statedGoals has a small model pick the lines that
+// each newest first); lib/statedGoals has a model pick the lines that
 // state direction. The session openings come from the org slice's long
 // running rows, so they are added where both slices meet.
 /** The window's goal candidates from decisions, plans, chat and calls. */
@@ -1014,7 +1021,7 @@ export const analysisPart = query({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
-    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity"), v.literal("use"), v.literal("landing"), v.literal("goals")),
+    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity"), v.literal("worktasks"), v.literal("use"), v.literal("landing"), v.literal("goals")),
     work: v.optional(v.any()),
     now: v.optional(v.number()),
     session: v.optional(v.id("conversations")),
@@ -1022,6 +1029,8 @@ export const analysisPart = query({
     projects: v.optional(v.any()),
     repos: v.optional(v.array(v.string())),
     records: v.optional(v.any()),
+    /** The activity part's tasks, read by the "worktasks" part in their own budget. */
+    tasks: v.optional(v.any()),
   },
   handler: async (ctx, args): Promise<any> => {
     const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
@@ -1039,7 +1048,8 @@ export const analysisPart = query({
     }
     if (args.part === "work") return computeAnalysisWork(ctx, userId, args.team_id);
     if (args.part === "signals") return { ...(await computeAnalysisSignals(ctx, userId, args.team_id, now, args.work as AnalysisHandoff | undefined)), label: await workspaceLabelOf(ctx, userId, args.team_id), user_id: userId };
-    if (args.part === "activity") return computeAnalysisActivity(ctx, userId, args.team_id, now);
+    if (args.part === "worktasks") return readActivityWork(ctx, userId, args.team_id, now);
+    if (args.part === "activity") return computeAnalysisActivity(ctx, userId, args.team_id, now, { work: args.tasks as WorkTasks | undefined });
     if (args.part === "goals") return readGoalCandidates(ctx, userId, args.team_id, now);
     if (args.part === "landing") return readLanding(ctx, userId, args.team_id, now, args.repos ?? [], (args.records as RecordRef[] | undefined) ?? []);
     if (!args.work) throw new Error("the org slice needs the work slice's handoff");
@@ -1054,9 +1064,12 @@ export const analysisInputs = action({
     const part = (api as any).orgInit.analysisPart;
     // The work slice first: the org and signals slices read its handoff (the
     // projects, for the chat threads that name one and a session's work share).
+    // The activity part's tasks first, in their own read budget.
+    const tasks = await ctx.runQuery(part, { ...args, part: "worktasks", now });
+    if (!tasks) return null;
     const [work, activity, unplaced] = await Promise.all([
       ctx.runQuery(part, { ...args, part: "work", now }),
-      ctx.runQuery(part, { ...args, part: "activity", now }),
+      ctx.runQuery(part, { ...args, part: "activity", now, tasks }),
       // What reaches no goal, from whole tables, in its own read budget (ct-95900).
       ctx.runQuery((api as any).orgUnplaced.part, { ...args, now }),
     ]);
