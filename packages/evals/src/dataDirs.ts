@@ -76,7 +76,10 @@ export function restoreDataDirs(o: RestoreOptions = {}): void {
       const remoteProblem = o.remoteProblem ?? labelsRemoteProblem;
       assertLabelsPushable(labels, o.visibility, remoteProblem);
       git('rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', ...DIRS);
-      git('commit', '-qm', `${hostname().split('.')[0]}: freezes and snapshots leave the labels repo (cast datasync carries them)`, '--', ...DIRS);
+      const host = hostname().split('.')[0];
+      // A fresh cloud host or a CI runner may have no git identity; the commit then carries the host's name.
+      const who = spawnSync('git', ['config', 'user.email'], { cwd: labels, encoding: 'utf8' }).stdout.trim() ? [] : ['-c', `user.name=${host}`, '-c', `user.email=evals@${host}`];
+      git(...who, 'commit', '-qm', `${host}: freezes and snapshots leave the labels repo (cast datasync carries them)`, '--', ...DIRS);
       pushLabels(labels);
       // The replay may have brought another machine's copies in under the old paths; they join the plain folders next run.
     }
