@@ -28,6 +28,8 @@ import * as path from "path";
 import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { createMtimeGatedCache } from "./mtimeGatedCache.js";
+import { parseRateLimitFingerprint, parseScopedRateLimitWindow, type RateLimitFingerprint } from "./ccRateLimitHeaders.js";
+export { parseRateLimitFingerprint, parseScopedRateLimitWindow, type RateLimitFingerprint };
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { fleetStatePath, fleetStoreDir, readFleetState, type FleetState } from "./ccFleetState.js";
@@ -1847,28 +1849,6 @@ export function extractSetupToken(text: string): string | null {
 // token itself can't say whose it is).
 // ---------------------------------------------------------------------------
 
-export interface RateLimitFingerprint {
-  five_hour_reset: number | null;
-  seven_day_reset: number | null;
-  five_hour_utilization: number | null;
-  seven_day_utilization: number | null;
-}
-
-export function parseRateLimitFingerprint(headers: { get(name: string): string | null }): RateLimitFingerprint {
-  const num = (name: string): number | null => {
-    const raw = headers.get(name);
-    if (raw == null || raw === "") return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
-  };
-  return {
-    five_hour_reset: num("anthropic-ratelimit-unified-5h-reset"),
-    seven_day_reset: num("anthropic-ratelimit-unified-7d-reset"),
-    five_hour_utilization: num("anthropic-ratelimit-unified-5h-utilization"),
-    seven_day_utilization: num("anthropic-ratelimit-unified-7d-utilization"),
-  };
-}
-
 /** Same account iff both reset timestamps are known and identical. Utilization
  *  is deliberately ignored — it moves between two probes seconds apart. */
 export function sameAccountFingerprint(a: RateLimitFingerprint, b: RateLimitFingerprint): boolean {
@@ -1917,27 +1897,6 @@ const CC_PROBE_MODEL = process.env.CODECAST_CC_PROBE_MODEL || "claude-haiku-4-5-
 
 /** One-token model call whose only purpose is the rate-limit headers. Costs a
  *  handful of input tokens on the account; never touches the credential store. */
-/**
- * The model-scoped weekly window a response's headers carry, or null when they
- * carry none. A request for a model with its own weekly window answers with
- * that window beside the unified ones (measured 2026-11-17 on Fable 5.2:
- * `…-7d_oi-utilization: 0.31`, `…-7d_oi-status: allowed`, `…-7d_oi-reset`).
- */
-export function parseScopedRateLimitWindow(headers: { get(name: string): string | null }): CcUsageWindow | null {
-  const num = (name: string): number | null => {
-    const raw = headers.get(name);
-    if (raw == null || raw === "") return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
-  };
-  const util = num("anthropic-ratelimit-unified-7d_oi-utilization");
-  const status = headers.get("anthropic-ratelimit-unified-7d_oi-status");
-  if (util == null && !status) return null;
-  const reset = num("anthropic-ratelimit-unified-7d_oi-reset");
-  const percent = status === "rejected" ? 100 : Math.min(100, Math.round((util ?? 0) * 100));
-  return { percent, ...(reset != null && { resets_at: reset * 1000 }) };
-}
-
 async function probeModel(
   bearerToken: string,
   model: string,

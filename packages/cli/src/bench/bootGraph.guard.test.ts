@@ -330,7 +330,9 @@ describe("command groups stay off the boot graph", () => {
     // 370 the same day: contracts/roleCard.ts, out of contracts/machineMessages.ts
     // for max-lines, no new code. 371 the same day: contracts/messagingPolicy.ts,
     // the messaging policy registry orgWhere.ts builds its guidance from (no imports).
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(371);
+    // 372 the same day: ccRateLimitHeaders.ts, the rate-limit header parsers
+    // split out of ccAccounts.ts for its max-lines pin, no new code.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(372);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -482,7 +484,10 @@ describe("command groups stay off the boot graph", () => {
     // goalsBrief.ts +1.
     // 4803 the same day: contracts/messagingPolicy.ts (the lead text, moved out
     // of orgWhere.ts, and the shared-log text), `--policy` and `--type` in index.ts.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4803);
+    // 4806 the same day: 1328df1d0's reading of the Fable probe (the scoped
+    // window's headers and the empty-429 rule) +2 in ccAccounts.ts, and
+    // ccRateLimitHeaders.ts's header and imports when the parsers moved out +1.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4806);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -691,7 +696,8 @@ describe("command groups stay off the boot graph", () => {
     // 610 on 2026-11-18: contracts/roleCard.ts, out of contracts/machineMessages.ts
     // for max-lines, no new code.
     // 611 the same day: contracts/messagingPolicy.ts, through orgWhere.ts (no imports).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(611);
+    // 612 the same day: ccRateLimitHeaders.ts, out of ccAccounts.ts, the same split.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(612);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
