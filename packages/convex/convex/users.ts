@@ -52,7 +52,7 @@ import { readLocalViewRevision } from "./localFirstCommands";
 import { daemonLastSeenStale } from "./lib/daemonLiveness";
 import { linkTeamHostBeat } from "./teamHosts";
 import { dropLateExportAnswer } from "./folderSync";
-import { scheduleSwitchAhead } from "./lib/hostRecovery";
+import { scheduleRecoveryOnNewAccount, scheduleSwitchAhead } from "./lib/hostRecovery";
 import { ensurePersonalShares } from "./accountPool";
 import {
   CURRENT_USER_GRANT_KEY,
@@ -737,6 +737,7 @@ export const daemonHeartbeat = mutation({
       const localDevice = !(args.is_remote_device ?? existingDevice?.is_remote ?? false);
       // The fleet's account may be about to run out (lib/hostRecovery).
       await scheduleSwitchAhead(ctx, auth.userId, { deviceId: args.device_id, local: localDevice, ccAccounts: args.cc_accounts, previous: existingDevice?.cc_accounts, seenStale });
+      await scheduleRecoveryOnNewAccount(ctx, auth.userId, { ccAccounts: args.cc_accounts, previous: existingDevice?.cc_accounts });
       await ensurePersonalShares(ctx, auth.userId, args.device_id, args.cc_accounts ?? existingDevice?.cc_accounts, existingDevice?.cc_accounts, existingDevice?.last_seen, now);
       if (cameOnline && localDevice) {
         await ctx.scheduler.runAfter(0, internal.users.catchUpCameOnline, { user_id: auth.userId, device_id: args.device_id });

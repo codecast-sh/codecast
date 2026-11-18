@@ -44,7 +44,7 @@ import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/Re
 import { useMachineAccountSwitch } from "../../../hooks/useMachineAccountSwitch";
 import { machineSwitchBlock, profileIsCurrentLogin } from "../../../lib/machineAccountSwitch";
 import { AccountPoolPill } from "../../../components/settings/AccountPoolPill";
-import { AccountMachinesControl } from "../../../components/settings/AccountMachinesControl";
+import { AccountMachineGrid } from "../../../components/settings/AccountMachineGrid";
 import { useAccountPool, useSyncAccountPool } from "../../../hooks/useSyncAccountPool";
 import { modernButton, modernPill } from "../../../components/ui/modernLook";
 
@@ -478,9 +478,6 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                     />
                     <SetupTokenBadge profile={p} now={now} />
                     <MintTokenButton device={device} profile={p} />
-                    {p.email && profileHasSetupToken(p, now) && (
-                      <AccountMachinesControl deviceId={device.device_id} email={p.email} />
-                    )}
                     {!device.is_remote && p.email && profileHasSetupToken(p, now) && (
                       <AccountPoolPill deviceId={device.device_id} email={p.email} />
                     )}
@@ -557,6 +554,8 @@ export default function ClaudeAccountsSettings() {
           <div className="mt-2"><CopyableCommand cmd="cast accounts save <name>" /></div>
         </SettingsSection>
       )}
+
+      {data && data.devices.length > 0 && <AccountMachineGrid accounts={data.devices} />}
 
       {data?.devices.map((d) => (
         <DeviceAccountsSection key={d.device_id} device={d} />

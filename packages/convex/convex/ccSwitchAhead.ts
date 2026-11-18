@@ -144,7 +144,8 @@ function emailKey(email: string | undefined | null): string {
   return (email ?? "").trim().toLowerCase();
 }
 
-function hostsLineWork(device: { is_remote?: boolean; line_slots?: readonly unknown[] | null } | null | undefined): boolean {
+/** A cloud host that runs line work. */
+export function hostsLineWork(device: { is_remote?: boolean; line_slots?: readonly unknown[] | null } | null | undefined): boolean {
   return !!device?.is_remote && !!device.line_slots?.length;
 }
 
@@ -153,7 +154,12 @@ export function lineHostRefusesEmail(
   device: { is_remote?: boolean; line_slots?: readonly unknown[] | null } | null | undefined,
   email: string | undefined | null,
 ): boolean {
-  return hostsLineWork(device) && LINE_HOST_EDGE_REFUSED.has(emailKey(email));
+  return hostsLineWork(device) && lineHostsRefuse(email);
+}
+
+/** An email no line host is moved onto (LINE_HOST_EDGE_REFUSED). */
+export function lineHostsRefuse(email: string | undefined | null): boolean {
+  return LINE_HOST_EDGE_REFUSED.has(emailKey(email));
 }
 
 /** Profiles a line host may be ranked onto. The account it is already on
@@ -168,7 +174,7 @@ export function dropLineHostRefused<P extends { email?: string | null }>(
   const current = emailKey(currentEmail);
   return profiles.filter((p) => {
     const email = emailKey(p.email);
-    return !email || email === current || !LINE_HOST_EDGE_REFUSED.has(email);
+    return !email || email === current || !lineHostsRefuse(email);
   });
 }
 

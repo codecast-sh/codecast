@@ -1,3 +1,4 @@
+import { hostsLineWork } from "./ccSwitchAhead";
 import { peerLinkRowsByDevice } from "./lib/peerLinkRows";
 import { mutation, query, internalQuery } from "./functions";
 import { selfUpdateBlocked } from "./lib/deviceUpdate";
@@ -37,6 +38,7 @@ import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 import { queueMoveContinueIfMidTurn } from "./moveContinue";
 import { rehomeUndeliveredMessages } from "./pendingMessages";
+import { handRoleTriggersToRunner } from "./lib/agentTaskRows";
 import { stampPriorOwnerPage } from "./ownerAttribution";
 import { deviceManagementFor } from "./lib/teamPolicyGuard";
 
@@ -844,6 +846,14 @@ async function resolveRemoteForReparent(
   return siblings.find((s: any) => s.git_remote_url)?.git_remote_url;
 }
 
+// A conversation changed runner (a cross-account move or a device claim):
+// what waits on it follows, the messages not yet delivered and the role
+// triggers that wake it, so the new runner's daemon serves both.
+async function followNewRunner(ctx: { db: any }, conversationId: Id<"conversations">, runnerId: Id<"users">): Promise<void> {
+  await rehomeUndeliveredMessages(ctx, conversationId, runnerId);
+  await handRoleTriggersToRunner(ctx, conversationId);
+}
+
 export async function performReparentSessionToDevice(
   ctx: { db: any },
   userId: Id<"users">,
@@ -911,7 +921,7 @@ export async function performReparentSessionToDevice(
     patch.user_id = runnerId;
   }
   await ctx.db.patch(conv._id, patch);
-  if (crossUser) await rehomeUndeliveredMessages(ctx, conv._id, runnerId);
+  if (crossUser) await followNewRunner(ctx, conv._id, runnerId);
   // The prompts written so far keep their author once user_id names someone else.
   if (crossUser) await stampPriorOwnerPage(ctx, { conversation_id: conv._id, user_id: previousConversation.user_id, until: patch.updated_at });
   // Moved onto a team machine: the caller keeps the session as an owner.
@@ -1104,7 +1114,7 @@ export async function performClaimDeviceAccount(
     } else {
       await ctx.db.patch(conv._id, { user_id: callerId });
     }
-    await rehomeUndeliveredMessages(ctx, conv._id, callerId);
+    await followNewRunner(ctx, conv._id, callerId);
     const managed = await ctx.db
       .query("managed_sessions")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
@@ -1206,6 +1216,8 @@ export const listDevices = query({
         // `online` below still reads the raw timestamp.
         last_seen: bucketTs(d.last_seen)!,
         is_remote: d.is_remote ?? false,
+        // A cloud host running line work: it draws only the accounts opened to it.
+        line_host: hostsLineWork(d),
         local_project_roots: d.local_project_roots ?? [],
         settings: d.settings ?? undefined,
         cli_version: d.cli_version ?? undefined,

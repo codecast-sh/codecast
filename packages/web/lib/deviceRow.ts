@@ -16,6 +16,8 @@ export type Device = {
   ssh_host?: string;
   last_seen: number;
   is_remote: boolean;
+  /** A cloud host running line work (convex ccSwitchAhead.hostsLineWork). */
+  line_host?: boolean;
   local_project_roots: string[];
   /** Teams this machine is open to (Settings > Machines); teammates there may
    *  start sessions on it. Empty or absent = private. */

@@ -67,7 +67,7 @@ import {
   findFlowDevice,
   runsOwnFleet,
 } from "./ccAccountsShared";
-import { awaitsManualTarget, decideSwitchAhead, dropLineHostRefused, holdsManualTarget } from "./ccSwitchAhead";
+import { awaitsManualTarget, decideSwitchAhead, dropLineHostRefused, holdsManualTarget, hostsLineWork } from "./ccSwitchAhead";
 import { poolUsageOverlay } from "./accountPool";
 import { deliverSessionNotificationToParties } from "./lib/sessionNotify";
 import { canOwnerOrTeamAccess } from "./privacy";
@@ -2581,6 +2581,8 @@ export const listAccountProfiles = query({
           device_id: d.device_id,
           label: d.label,
           is_remote: d.is_remote === true,
+          // A line host draws only the accounts opened to it, and refuses some.
+          line_host: hostsLineWork(d),
           online: isDeviceOnline(d, now),
           active_email: d.cc_accounts?.active_email,
           // When the current login took over: a session whose last call predates

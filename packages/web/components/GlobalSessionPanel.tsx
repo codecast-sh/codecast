@@ -27,11 +27,11 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, isFleetProfile, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, isUsageExhausted, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
-import { contextWindowTokens, restartShareOfRemaining, formatCountdown, peggedWindow } from "@codecast/shared/contracts";
-import { fallbackProfiles, rankByHeadroom, exhaustedLabel, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
+import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
+import { USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
@@ -65,7 +65,9 @@ import { latestSessionCommand, requestAccountSwitchCommand, switchPending } from
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsRight, ChevronRight, ChevronDown, Star, Workflow, Play, Pause, Settings2, ArrowUpRight, Zap, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { InboxViewPicker } from "./InboxViewPicker";
-import { ContinueAccountPicker } from "./ContinueAccountPicker";
+import { BlockedLaneRow } from "./BlockedLaneRow";
+import { blockedLanes, type BlockedLane, type LaneAccount } from "../lib/blockedLanes";
+import { useAccountPool, useSyncAccountPool } from "../hooks/useSyncAccountPool";
 import { localDeviceIdOf } from "../hooks/useLocalDeviceId";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
 import { CardWorkersLine } from "./inbox/SessionCardParts";
@@ -261,6 +263,12 @@ export function SignInCta({
 // account's setup-token). Account switching itself lives in
 // settings/auto-switch, not in this banner. Own component so its account
 // query stays out of the hot panel render.
+/** Feeds the account pool while a blocked lane waits: only then does the banner read it. */
+function AccountPoolFeeder() {
+  useSyncAccountPool();
+  return null;
+}
+
 function BlockedSessionsBanner({
   blocked,
   onOpen,
@@ -285,7 +293,7 @@ function BlockedSessionsBanner({
   // Which account the continue runs on: "" = the account the machine is signed
   // into now, null = not chosen yet — the default, which is the account the
   // machine PROPOSED when it is asking, else the current one.
-  const [onAccount, setOnAccount] = useState<string | null>(null);
+  const [onAccount, setOnAccount] = useState<Record<string, string>>({});
   // The newest account switch in flight from any surface: a fleet revive and
   // a machine switch would fight over the same credential, so it holds both.
   const switchRow = useInboxStore((st) => latestSessionCommand(st.sessionCommands, (r) => r.kind === "switch"));
@@ -303,6 +311,9 @@ function BlockedSessionsBanner({
   // Read for any blocked session, not just fleets of two: a single parked
   // session can be the one the machine is asking about.
   const accountData = useQuery(api.accountSwitch.listAccountProfiles, blocked.length > 0 ? {} : "skip");
+  // Which of your accounts are narrowed off which machines: a lane that waits
+  // names the one that would end the wait (AccountPoolFeeder feeds it).
+  const accountPool = useAccountPool();
   // The window probes once (LocalDeviceProbe); the banner reads that answer.
   const localDeviceId = useInboxStore(localDeviceIdOf);
   // How many tokens one percent of a usage window is worth, fitted across the
@@ -385,123 +396,59 @@ function BlockedSessionsBanner({
     .filter((sess) => sess.pending_api_error_kind === "auth")
     .map((sess) => sess._id);
 
-  // The account picker's inventory. Accounts are DEVICE-SPECIFIC: a saved
-  // profile is a keychain snapshot on one machine, so the only accounts worth
-  // offering are the ones saved on the machines that will EXECUTE the revive —
-  // each blocked session's online owner, or the primary standing in for an
-  // offline or remote owner (the same routing insertSwitchCommands applies).
-  // Options are keyed by email (the identity); a profile name is that
-  // machine's alias and may differ or be absent elsewhere. The whole banner
-  // asks ONE question — which account does the fleet continue on? — so
-  // accounts render as a single select, ranked by live headroom.
   const devices = accountData?.devices ?? [];
   const deviceById = new Map(devices.map((d) => [d.device_id, d]));
   // A remote on a pushed copy of the primary's login is revived through the
   // primary; a cloud host on its own fleet store (the line pool) runs and is
   // judged on its own accounts, the routing insertSwitchCommands applies.
-  const executorFor = (sess: InboxSession) => {
+  const executorFor = (sess: { owner_device_id?: string | null }) => {
     const owner = sess.owner_device_id ? deviceById.get(sess.owner_device_id) : undefined;
     return owner && owner.online && (!owner.is_remote || runsOwnFleet({ is_remote: true, cc_accounts: owner })) ? owner : loginDevice;
   };
-  const executors = [...new Map(acted.map((sess) => executorFor(sess)).filter((d) => !!d).map((d) => [d!.device_id, d!])).values()];
-  // The account each machine's sessions run on: the launch profile after a
-  // token switch, else the keychain login (fleetAccount).
-  const fleetEmailOf = (d: (typeof executors)[number]) => fleetAccount(d, now).email;
-  const activeEmails = [...new Set(executors.map(fleetEmailOf).filter((e): e is string => !!e))];
-  const activeEmail = activeEmails.length === 1 ? activeEmails[0] : undefined;
-  type AccountOption = { key: string; name: string; email?: string; usage?: CcUsage; missingOn: string[] };
-  const accountOptions: AccountOption[] = [];
-  const parkedModels = [...new Set(acted.map((sess) => sess.model).filter((m): m is string => !!m))];
-  const unavailable = new Map<string, string>();
-  for (const device of executors) {
-    for (const p of device.profiles) {
-      if (!p.email || p.email === fleetEmailOf(device) || unavailable.has(p.email)) continue;
-      const why = p.reserved_for
-        ? `reserved for ${p.reserved_for}`
-        : p.access_refused_at
-          ? "access refused"
-          : p.login_expired_at && !(p.setup_token && p.setup_token.expires_at > now)
-            ? "signed out"
-            : isUsageExhausted(p.usage, now, parkedModels)
-              ? exhaustedLabel(p.usage, now)
-              : null;
-      if (why) unavailable.set(p.email, why);
-    }
-  }
-  for (const device of executors) {
-    // The account a machine runs now is "this account", not a switch. A dead
-    // login without a live token and a pegged window are not offers (the same
-    // fallbackProfiles rule auto-switch uses): suggesting one is how the
-    // banner named an account whose week was already full.
-    for (const p of fallbackProfiles(device.profiles, fleetEmailOf(device), now, parkedModels)) {
-      const key = p.email ? `email:${p.email}` : `name:${p.name}`;
-      const existing = accountOptions.find((t) => t.key === key);
-      if (!existing) accountOptions.push({ key, name: p.name, email: p.email, usage: p.usage, missingOn: [] });
-      else if (!existing.usage && p.usage) existing.usage = p.usage;
-    }
-  }
-  for (const opt of accountOptions) {
-    opt.missingOn = executors
-      .filter((d) => !d.profiles.some((p) => (opt.email ? p.email === opt.email : p.name === opt.name)))
-      .map((d) => d.label);
-  }
-  const rankedAccounts = rankByHeadroom(accountOptions, now);
-  for (const opt of accountOptions) if (opt.email) unavailable.delete(opt.email);
-  // Usage of what the executing machines run now — the account that parked
-  // these sessions, not whatever the machine at the desk is signed into.
-  const fleetUsageOf = (d: (typeof executors)[number]) => d.profiles.find((p) => isFleetProfile(p, d, now))?.usage;
-  const activeUsage = executors.map(fleetUsageOf).find((u) => !!u);
-  // What each executing machine runs now, for the picker's "Now" section: the
-  // same fleetAccount answer the header chip shows for this machine.
-  const pickerMachines = executors.map((d) => ({
-    deviceId: d.device_id,
-    label: d.label,
-    isLocal: d.device_id === localDeviceId,
-    email: fleetEmailOf(d),
-    usage: fleetUsageOf(d),
-    sessions: acted.filter((sess) => executorFor(sess)?.device_id === d.device_id).length,
-  }));
-  // The proposed account is the default pick, so the primary button approves
-  // exactly what the machine asked for — the same account the sentence names.
+  // Accounts belong to machines, so the banner answers per group of machines
+  // that hold the same ones (lib/blockedLanes): a laptop can switch while the
+  // line hosts wait for their own pool to reset.
+  const lanes = blockedLanes({ sessions: acted, executorFor: (sess) => executorFor(sess as InboxSession), pool: accountPool, now });
+  const laneOf = new Map(lanes.flatMap((lane) => lane.sessionIds.map((id) => [id, lane] as const)));
+  // The person's machine: every lane recovers under its mode (hostRecovery.recoveryFleet).
+  const recoveryDevice = devices.find((d) => !d.is_remote);
+  // The proposal belongs to the lane whose machines hold the account it names.
   const proposalKey = proposal?.target_email ? `email:${proposal.target_email}` : null;
-  const proposedOption = proposalKey ? rankedAccounts.find((t) => t.key === proposalKey) : undefined;
-  // Ask mode selects the account the fresh ranking named. One current login
-  // stays, unless it is spent. Machines that disagree have no account to stay
-  // on: the button moves everyone onto the saved account with the most room
-  // that every executor has.
-  const activeExhausted = isUsageExhausted(activeUsage, now, parkedModels);
-  // Every account the executing machines can run is spent: a continue is
-  // refused again on arrival, so the banner shows when the first one reopens
-  // instead of a button that cannot work. Only for a pure limit incident; a
-  // dropped connection or a signed-out session still has a continue to make.
-  const noAccountHasRoom =
-    limitCount === acted.length &&
-    rankedAccounts.length === 0 &&
-    executors.length > 0 &&
-    executors.every((d) => isUsageExhausted(fleetUsageOf(d), now, parkedModels));
-  const firstReopen = noAccountHasRoom
-    ? Math.min(
-        ...executors.flatMap((d) => d.profiles.map((p) => peggedWindow(p.usage, now)?.resets_at ?? Infinity)),
-      )
-    : Infinity;
-  const sharedAccounts = rankedAccounts.filter((t) => t.missingOn.length === 0);
-  const splitDefault = activeEmails.length > 1 ? (sharedAccounts[0] ?? rankedAccounts[0])?.key ?? "" : "";
-  const accountKey = onAccount ?? proposedOption?.key ?? (splitDefault || (activeExhausted ? rankedAccounts[0]?.key ?? "" : ""));
-  const selectedAccount = rankedAccounts.find((t) => t.key === accountKey);
+  const proposedLane = proposalKey ? lanes.find((lane) => lane.accounts.some((a) => a.key === proposalKey)) : undefined;
+  // Which account a lane continues on: "" = what its machines run now. Unset,
+  // it is the proposal in its lane, else the account with the most room every
+  // machine of the lane has when the current one is spent or they disagree.
+  const laneTarget = (lane: BlockedLane): LaneAccount | undefined => {
+    const fallback = lane.state === "switch" || lane.fleetEmails.length > 1 ? (lane.accounts.find((a) => a.missingOn.length === 0) ?? lane.accounts[0])?.key ?? "" : "";
+    const key = onAccount[lane.key] ?? (lane === proposedLane ? proposalKey! : fallback);
+    return lane.accounts.find((a) => a.key === key);
+  };
+  const setLaneAccount = (lane: BlockedLane, key: string) => setOnAccount((m) => ({ ...m, [lane.key]: key }));
+  // Only a lane that can continue has anything to restart; a waiting lane's
+  // sessions are not offered as ticks that could never act.
+  const actionLanes = lanes.filter((lane) => lane.state === "continue" || lane.state === "switch");
+  const actionIds = new Set(actionLanes.flatMap((lane) => lane.sessionIds));
+  // The lane the cost line prices: the biggest one a continue reaches.
+  const leadLane = [...actionLanes].sort((a, b) => b.sessionIds.length - a.sessionIds.length)[0];
+  const leadTarget = leadLane ? laneTarget(leadLane) : undefined;
   // The meters that matter are the ones the continue will run against: the
   // picked account when the picker moved, else the account the machines are on.
-  const targetUsage = selectedAccount?.usage ?? activeUsage;
+  const targetUsage = leadTarget?.usage ?? leadLane?.fleetUsage;
   // "What is left" is only meaningful with its horizon: the room refills at the
   // reset, so a share of a window that rolls in eight minutes reads differently
   // from the same share with four hours to go.
   const resetsAt = targetUsage?.session?.resets_at;
   const resetsNote = resetsAt && resetsAt > now ? `, which resets in ${formatCountdown(resetsAt - now)}` : "";
+  const switchesAccount = (sess: InboxSession) => {
+    const lane = laneOf.get(sess._id);
+    return !!lane && !!laneTarget(lane);
+  };
   // What the restart costs before any new work: each session that comes back
   // on another account or a cold cache reads its whole context again, at
   // twice the input price. A partial pick is a scoped revive: the server acts
   // on exactly these and dismisses nothing, so the unticked rows stay blocked.
   const reloads = (sess: InboxSession) =>
-    restartReloadsContext(sess, now, { switchingAccount: !!selectedAccount, activeSince: executorFor(sess)?.active_since });
+    restartReloadsContext(sess, now, { switchingAccount: switchesAccount(sess), activeSince: executorFor(sess)?.active_since });
   // What the session's model can hold. Null for a model whose window the
   // catalog does not claim to know, and the row then shows tokens alone.
   const contextWindowOf = (sess: InboxSession) => contextWindowTokens(sess.model, sess.agent_type);
@@ -511,25 +458,26 @@ function BlockedSessionsBanner({
   // continue will run on, which the picker may have changed.
   const shareOfRemaining = (contextTokens: number) =>
     restartShareOfRemaining(contextTokens, targetUsage, calibration, now);
-  // Everything the one button can restart: the continue set plus the full
-  // context windows it compacts.
-  const pickable = [...acted, ...contextBlocked];
+  // Everything a button can restart: the continue set where a lane can act,
+  // plus the full context windows it compacts.
+  const pickable = [...acted.filter((sess) => actionIds.has(sess._id)), ...contextBlocked];
   const pickableIds = new Set(pickable.map((sess) => sess._id));
   const { chosenIds, chosen, reloadTokens, reloadShare, leftUnticked: olderUnticked } = restartPlan(pickable, {
     now,
     windowMs: AUTO_CONTINUE_WINDOW_MS,
     parkedAt: blockAt,
     picked,
-    switchingAccount: !!selectedAccount,
+    switchingAccount: !!leadTarget,
     rowFor: (sess) => sess,
     activeSinceFor: (sess) => executorFor(sess)?.active_since,
   });
   const chosenCompact = chosen.filter(isContextFull);
   const chosenContinue = chosen.filter((sess) => !isContextFull(sess));
-  // A partial pick of the continue set is a scoped revive: the server acts on
-  // exactly those ids and dismisses nothing.
-  const scoped = chosenContinue.length !== acted.length;
   const allPicked = chosen.length === pickable.length;
+  // One lane holding every acted session, all ticked, is the whole incident:
+  // its continue may dismiss the skipped workers. Anything less is a scoped
+  // revive that acts on exactly its ids and dismisses nothing.
+  const wholeIncident = lanes.length === 1 && chosenContinue.length === acted.length;
   // The headline figure and the words after it. One place, because the fallback
   // has to change both: "18% of what is left in the 5h window" when the rate is
   // fitted, "2.1M tokens of context" when it is not.
@@ -556,7 +504,7 @@ function BlockedSessionsBanner({
       ? ` The share is an estimate: Anthropic reports a window as a percentage and never as a size, so codecast measures its own traffic against the meters (${calibration?.samples ?? 0} recent readings) to price a reload against what is left.`
       : "");
 
-  const switchTarget = (opt: AccountOption) => (opt.email ? { email: opt.email } : { profile: opt.name });
+  const switchTarget = (opt: LaneAccount) => (opt.email ? { email: opt.email } : { profile: opt.name });
 
 
   // Every way the banner closes goes through here: snooze 24h AND drop the
@@ -594,8 +542,12 @@ function BlockedSessionsBanner({
   // and the snooze — so the banner resurfaces for a retry. If a daemon is merely
   // unreachable, the stamps age out (BLOCKED_REVIVE_TTL_MS) and those sessions
   // honestly return to blocked.
-  const runRevive = async (target: { email?: string; profile?: string } | undefined) => {
-    const ids = chosenContinue.map((sess) => sess._id);
+  const runRevive = async (
+    target: { email?: string; profile?: string } | undefined,
+    sessions: InboxSession[],
+    { scoped, close }: { scoped: boolean; close: boolean },
+  ) => {
+    const ids = sessions.map((sess) => sess._id);
     const store = useInboxStore.getState();
     const nonce = Math.random().toString(36).slice(2, 10);
     const clientIds: Record<string, string> = {};
@@ -610,7 +562,7 @@ function BlockedSessionsBanner({
     // reconciliation the dismiss button relies on).
     const skippedIds = scoped ? [] : skippedWorkers.map((sess) => sess._id);
     if (skippedIds.length > 0) store.markBlockedAcknowledged(skippedIds);
-    closeBanner();
+    if (close) closeBanner();
     const targetLabel = target?.email ?? target?.profile;
     try {
       const res = await requestAccountSwitchCommand({
@@ -624,7 +576,7 @@ function BlockedSessionsBanner({
       const unswitchable = (res as { unswitchable?: number; unswitchable_devices?: string[] }).unswitchable ?? 0;
       const unswitchableDevices = (res as { unswitchable_devices?: string[] }).unswitchable_devices ?? [];
       if (unswitchable > 0) {
-        const stranded = chosenContinue
+        const stranded = sessions
           .filter((sess) => unswitchableDevices.includes(executorFor(sess)?.label ?? ""))
           .map((sess) => sess._id);
         for (const id of stranded) store.removeOptimisticMessage(id, clientIds[id]);
@@ -649,45 +601,56 @@ function BlockedSessionsBanner({
       if (isParkedDispatchError(err)) return;
       for (const id of ids) store.removeOptimisticMessage(id, clientIds[id]);
       store.clearBlockedReviveRequested(ids);
-      updateDismissed("blocked_sessions_banner", 0);
+      if (close) updateDismissed("blocked_sessions_banner", 0);
     }
   };
 
-  // ONE verb, one decision. Every blocked session needs the same thing — a
-  // "continue" — so the banner offers exactly that, on a choice of account.
-  // Which DELIVERY each session needs (a plain message, or a restart first
-  // because its process holds a dead token, or a credential swap) is the
-  // machinery's problem, resolved here per click, never a menu the user picks
-  // from. The button therefore always acts on the whole acted set and always
-  // says the full count.
-  const handleContinue = () => {
+  // One verb per lane. Every session a lane can reach needs the same thing — a
+  // "continue" — on that lane's account. Which DELIVERY each session needs (a
+  // plain message, a restart first because its process holds a dead token, a
+  // credential swap) is the machinery's problem, resolved per click, never a
+  // menu the user picks from. The banner closes once no other lane is left to
+  // act on; a lane that only waits is not a reason to keep it open.
+  const handleLaneContinue = (lane: BlockedLane | null) => {
+    const sessions = lane ? chosenContinue.filter((sess) => laneOf.get(sess._id) === lane) : [];
+    const close = actionLanes.length <= 1;
     if (chosenCompact.length > 0) {
       const store = useInboxStore.getState();
       for (const sess of chosenCompact) store.sendMessage(sess._id, "/compact");
       store.markBlockedReviveRequested(chosenCompact.map((sess) => sess._id));
     }
-    if (chosenContinue.length > 0) void runRevive(selectedAccount ? switchTarget(selectedAccount) : undefined);
-    else closeBanner();
+    const target = lane ? laneTarget(lane) : undefined;
+    if (sessions.length > 0) void runRevive(target ? switchTarget(target) : undefined, sessions, { scoped: !wholeIncident, close });
+    else if (close) closeBanner();
   };
   // "all" only when the button truly covers the headline count. When workers
   // are skipped the button says what happens to BOTH halves — the skipped
   // workers are dismissed by the same click, and a button that only said
   // "Continue 1" would hide that the other 37 rows are about to go.
-  const dismissLabel = skippedWorkers.length > 0 && !scoped ? ` · dismiss ${skippedWorkers.length} worker${skippedWorkers.length === 1 ? "" : "s"}` : "";
-  const countLabel = !allPicked
-    ? `${chosen.length} of ${pickable.length}`
-    : skippedWorkers.length > 0 && !scoped
-    ? `${pickable.length}${dismissLabel}`
-    : pickable.length === 1 ? (blocked.length === 1 ? "it" : "1 eligible session") : pickable.length === blocked.length ? `all ${pickable.length}` : `${pickable.length}`;
-  const dismissTitle = skippedWorkers.length > 0 && !scoped
+  const dismissing = skippedWorkers.length > 0 && wholeIncident;
+  const dismissLabel = dismissing ? ` · dismiss ${skippedWorkers.length} worker${skippedWorkers.length === 1 ? "" : "s"}` : "";
+  const laneCountLabel = (lane: BlockedLane) => {
+    const inLane = pickable.filter((sess) => laneOf.get(sess._id) === lane).length;
+    const ticked = chosenContinue.filter((sess) => laneOf.get(sess._id) === lane).length;
+    if (lanes.length > 1) return ticked === inLane ? `${inLane}` : `${ticked} of ${inLane}`;
+    return !allPicked
+      ? `${chosen.length} of ${pickable.length}`
+      : dismissing
+        ? `${pickable.length}${dismissLabel}`
+        : pickable.length === 1 ? (blocked.length === 1 ? "it" : "1 eligible session") : pickable.length === blocked.length ? `all ${pickable.length}` : `${pickable.length}`;
+  };
+  const dismissTitle = dismissing
     ? `; the ${skippedWorkers.length} skipped worker${skippedWorkers.length === 1 ? " is" : "s are"} dismissed from the blocked set, not continued (tick the box above to continue them instead)`
     : "";
   const compactTitle = chosenCompact.length > 0
     ? `${chosenCompact.length === 1 ? "The full session gets" : `The ${chosenCompact.length} full sessions get`} /compact instead (it keeps a summary and continues). `
     : "";
-  const continueTitle = compactTitle + (selectedAccount
-    ? `Switch ${executors.length === 1 ? executors[0].label : "the machines owning these sessions"} to ${selectedAccount.email ?? selectedAccount.name}, restart the blocked sessions, and continue them on it`
-    : `Send "continue" to each blocked session on the current account — ${authCount > 0 ? `${authCount === acted.length ? "they are" : `the ${authCount} signed out are`} restarted first (their processes hold an expired login); ` : ""}a session pinned to another account, or whose process still holds a spent login, is restarted on this one${limitCount > 0 && authCount === 0 ? "; the rest resume once the limit resets" : ""}`) + dismissTitle;
+  const laneContinueTitle = (lane: BlockedLane) => {
+    const target = laneTarget(lane);
+    return compactTitle + (target
+      ? `Switch ${lane.label} to ${target.email ?? target.name}, restart the blocked sessions there, and continue them on it`
+      : `Send "continue" to each blocked session on ${lane.label}'s current account — ${authCount > 0 ? `${authCount === acted.length ? "they are" : `the ${authCount} signed out are`} restarted first (their processes hold an expired login); ` : ""}a session pinned to another account, or whose process still holds a spent login, is restarted on this one${limitCount > 0 && authCount === 0 ? "; the rest resume once the limit resets" : ""}`) + dismissTitle;
+  };
 
   // The permanent decision: clear the banner flag on these sessions so they
   // leave the blocked set for good (only a NEW banner re-flags them). Local
@@ -704,6 +667,7 @@ function BlockedSessionsBanner({
 
   return (
     <div className={`m-2 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2.5 cc-blocked-banner-in ${fresh ? "cc-blocked-banner-glow" : ""}`}>
+      {lanes.some((lane) => lane.state === "wait") && <AccountPoolFeeder />}
       <div className="flex items-start gap-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
           <button
@@ -825,28 +789,27 @@ function BlockedSessionsBanner({
           <Zap className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sol-yellow" />
           <div className="min-w-0">
             <span className="font-semibold">Switch accounts?</span> {describeDecision(proposal)}
-            {!proposedOption ? (
+            {!proposedLane ? (
               <span className="ml-1.5 text-meta text-sol-text-dim">
-                {proposal.target_email ?? proposal.target_name} is not saved on{" "}
-                {executors.length === 1 ? executors[0].label : "the machines owning these sessions"} — pick another
-                account below, or save it there once.
+                {proposal.target_email ?? proposal.target_name} is not saved on the machines running these sessions — pick
+                another account below, or save it there once.
               </span>
-            ) : accountKey === proposedOption.key ? (
+            ) : laneTarget(proposedLane)?.key === proposalKey ? (
               <button
-                onClick={() => setOnAccount("")}
+                onClick={() => setLaneAccount(proposedLane, "")}
                 disabled={busy !== null}
                 className="ml-1.5 text-meta text-sol-text-dim underline decoration-dotted hover:text-sol-text disabled:opacity-60"
-                title="Continue the sessions on the account this machine is signed into now, without switching"
+                title="Continue the sessions on the account their machines run now, without switching"
               >
-                stay on {activeEmail ?? "this account"}
+                stay on {proposedLane.fleetEmails.length === 1 ? proposedLane.fleetEmails[0] : "the current accounts"}
               </button>
             ) : (
               <button
-                onClick={() => setOnAccount(proposedOption.key)}
+                onClick={() => setLaneAccount(proposedLane, proposalKey!)}
                 disabled={busy !== null}
                 className="ml-1.5 text-meta text-sol-text-dim underline decoration-dotted hover:text-sol-text disabled:opacity-60"
               >
-                use {proposedOption.email ?? proposedOption.name}
+                use {proposal.target_email ?? proposal.target_name}
               </button>
             )}
           </div>
@@ -945,43 +908,33 @@ function BlockedSessionsBanner({
             Review {safetyCount === 1 ? "safety stop" : `${safetyCount} safety stops`}
           </button>
         )}
-        {pickable.length > 0 && noAccountHasRoom && (
-          <span
-            className="text-meta font-semibold text-amber-700 dark:text-amber-500"
-            title={`Every account ${executors.map((d) => d.label).join(", ")} can run is at its limit; parked sessions continue on their own when one resets`}
-          >
-            {activeEmail ?? "account"} at limit · {firstReopen < Infinity ? `first reset in ${formatCountdown(firstReopen - now)}` : "no account has room"}
-          </span>
+        {chosenCompact.length > 0 && actionLanes.length === 0 && (
+          <Button variant="amber" size="xs" onClick={() => handleLaneContinue(null)} disabled={busy !== null} title={compactTitle}>
+            Compact {chosenCompact.length}
+          </Button>
         )}
-        {pickable.length > 0 && !noAccountHasRoom && <>
-        <Button
-          variant="amber"
-          size="xs"
-          onClick={handleContinue}
-          disabled={busy !== null || chosen.length === 0}
-          title={continueTitle}
-        >
-          {busy !== null
-            ? selectedAccount
-              ? "Switching…"
-              : "Continuing…"
-            : selectedAccount
-              ? `Switch & continue ${countLabel}`
-              : `Continue ${countLabel}`}
-        </Button>
-        {rankedAccounts.length > 0 && (
-          <ContinueAccountPicker
-            machines={pickerMachines}
-            accounts={rankedAccounts}
-            unavailable={[...unavailable]}
-            value={selectedAccount?.key ?? ""}
-            recommendedKey={proposedOption?.key}
-            onChange={setOnAccount}
-            disabled={busy !== null}
-            now={now}
-          />
+        {lanes.length > 0 && (
+          <div className={lanes.length > 1 ? "flex w-full flex-col gap-1.5" : "contents"}>
+            {lanes.map((lane) => (
+              <BlockedLaneRow
+                key={lane.key}
+                lane={lane}
+                showLabel={lanes.length > 1 || lane.devices.some((d) => d.is_remote) || lane.state !== "continue"}
+                now={now}
+                chosen={chosenContinue.filter((sess) => laneOf.get(sess._id) === lane).length + (lane === leadLane ? chosenCompact.length : 0)}
+                target={laneTarget(lane)}
+                recommendedKey={lane === proposedLane ? proposalKey ?? undefined : undefined}
+                localDeviceId={localDeviceId}
+                busy={busy !== null}
+                continueLabel={`${laneTarget(lane) ? "Switch & continue" : "Continue"} ${laneCountLabel(lane)}`}
+                continueTitle={laneContinueTitle(lane)}
+                onPick={(key) => setLaneAccount(lane, key)}
+                onContinue={() => handleLaneContinue(lane)}
+                recoveryDevice={recoveryDevice}
+              />
+            ))}
+          </div>
         )}
-        </>}
         <button
           onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
           disabled={busy !== null}
@@ -2376,7 +2329,7 @@ function SessionListPanelImpl({
   }, [s.sessions, s.blockedReviveRequestedAt, coarseNow]);
   // A fleet of nothing but blocked subagent workers doesn't earn the amber
   // pill: their parents have moved on, so there's no one waiting on a revive.
-  // The banner itself still handles the all-subs case when it's forced open.
+  // It gets the quiet pill instead, the way back to the banner after its X.
   const blockedHasNonSub = useMemo(
     () => blockedSessions.some((sess) => !isSubagentConversation(sess)),
     [blockedSessions],
@@ -3335,14 +3288,25 @@ function SessionListPanelImpl({
         <div data-sv-head-tools className="flex items-center flex-shrink-0 ml-auto gap-1.5">
           {/* Permanent trigger for the blocked-fleet actions: visible whenever
               ANY session is parked on a limit/login banner, no matter how the
-              banner itself was snoozed. Panel chrome, so it never scrolls away. */}
-          {blockedSessions.length > 0 && blockedHasNonSub && (
+              banner itself was snoozed. Panel chrome, so it never scrolls away.
+              Workers alone wait on nobody, so they get the quiet form: still the
+              way back to the banner, never the alarm. */}
+          {blockedSessions.length > 0 && (
             <button
               key={blockedIncidentTs}
               data-cc-keep
+              data-blocked-pill={blockedHasNonSub ? "alert" : "workers"}
               onClick={openBlockedBanner}
-              title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on usage, login, connection, API errors, a full context window, or safety review — view blockers`}
-              className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-meta font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""} modern:h-6 modern:rounded-control modern:border-transparent modern:bg-sol-amber/10 modern:px-2 modern:py-0 modern:font-medium modern:text-sol-amber modern:hover:bg-sol-amber/15`}
+              title={
+                blockedHasNonSub
+                  ? `${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on usage, login, connection, API errors, a full context window, or safety review — view blockers`
+                  : `${blockedSessions.length} subagent worker${blockedSessions.length === 1 ? "" : "s"} blocked — view them`
+              }
+              className={
+                blockedHasNonSub
+                  ? `flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-meta font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""} modern:h-6 modern:rounded-control modern:border-transparent modern:bg-sol-amber/10 modern:px-2 modern:py-0 modern:font-medium modern:text-sol-amber modern:hover:bg-sol-amber/15`
+                  : "flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-meta text-sol-text-dim border border-sol-border/60 hover:text-sol-text hover:border-sol-border transition-colors modern:h-6 modern:rounded-control modern:px-2 modern:py-0"
+              }
             >
               <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />

@@ -57,3 +57,24 @@ export async function scheduleSwitchAhead(
     await ctx.scheduler.runAfter(0, internal.accountSwitch.switchAheadCheck, { user_id: userId, device_id: beat.deviceId });
   }
 }
+
+type BeatAccounts = { profiles?: ReadonlyArray<{ email?: string }> } | null | undefined;
+
+/**
+ * Book a recovery pass when a machine gains an account: one just opened to it
+ * (accountPool.setAccountDevices), a pool copy arriving, a new login. Sessions
+ * parked there on spent accounts may now have somewhere to go, and the pass
+ * that found every account spent is asleep until the next reset. A first beat
+ * is not a gain. The pass is idempotent, so a spare one costs nothing.
+ */
+export async function scheduleRecoveryOnNewAccount(
+  ctx: { scheduler: { runAfter: (ms: number, fn: any, args: any) => Promise<any> } },
+  userId: Id<"users">,
+  beat: { ccAccounts?: BeatAccounts; previous?: BeatAccounts },
+): Promise<void> {
+  if (!beat.ccAccounts || !beat.previous) return;
+  const key = (email?: string) => email?.trim().toLowerCase();
+  const before = new Set((beat.previous.profiles ?? []).map((p) => key(p.email)).filter(Boolean));
+  if (!(beat.ccAccounts.profiles ?? []).some((p) => key(p.email) && !before.has(key(p.email)))) return;
+  await ctx.scheduler.runAfter(0, internal.accountSwitch.autoSwitchCheck, { user_id: userId });
+}
