@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessPlan, resolveSessionConversation } from "./lib/access";
+import { isConversationOwner } from "./privacy";
 import { resolveMessagingPolicy } from "@codecast/shared/contracts/messagingPolicy";
 
 // The shared log of a plan (messaging policy "shared-log"): the plan's fact,
@@ -48,7 +49,8 @@ export const unread = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
     const conv = await resolveSessionConversation(ctx, auth.userId, args.session_id);
-    if (!conv?.active_plan_id) return { entries: [] };
+    // Only the session's owner reads it: a teammate who can see it must not move its cursor.
+    if (!conv?.active_plan_id || !(await isConversationOwner(ctx, auth.userId, conv))) return { entries: [] };
     const plan: any = await ctx.db.get(conv.active_plan_id);
     if (!plan || resolveMessagingPolicy(plan.messaging_policy).delivery !== "plan-log") return { entries: [] };
     if (!(await canAccessPlan(ctx, auth.userId, plan))) return { entries: [] };

@@ -9,15 +9,19 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { FOREIGN_TEXT_CAPS, inlineForeignText } from "@codecast/shared/contracts";
+import { FOREIGN_TEXT_CAPS, fenceForeignText, inlineForeignText } from "@codecast/shared/contracts";
 import { foreignProse } from "@codecast/shared/tasks";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 
 export type LogEntry = { type: string; content: string; author?: string; session?: string; title?: string; timestamp: number };
 
-/** The commands that never carry the log: the daemon's own, auth, and the hooks. */
-const SKIP_COMMANDS = new Set(["start", "stop", "status", "daemon", "codecast", "_daemon", "_watchdog", "auth", "login", "update", "agent-context", "stable-context"]);
+/** The commands that never carry the log: the daemon's own, auth, the hooks, and
+ *  the ones that end a turn, where a delivery would move the cursor and be lost. */
+const SKIP_COMMANDS = new Set(["start", "stop", "status", "daemon", "codecast", "_daemon", "_watchdog", "auth", "login", "update", "agent-context", "stable-context", "state", "handoff", "task handoff"]);
+
+/** Under the backend's wait note (cliHttp.ts WAIT_NOTE_MS): a slow backend never holds up the command. */
+export const LOG_TIMEOUT_MS = 2_500;
 
 /** How long a session with no shared-log plan is not asked again.
  *  ponytail: a session bound to a shared-log plan by another process waits up
@@ -33,11 +37,13 @@ export function formatLogEntries(planShortId: string | undefined, entries: LogEn
     const from = [inlineForeignText(e.author), e.session && `session ${inlineForeignText(e.session)}`, e.title && `"${inlineForeignText(e.title).slice(0, 60)}"`].filter(Boolean).join(", ");
     return [`[${inlineForeignText(e.type)}]${from ? ` ${from}:` : ""} ${first}`, ...rest.map((l) => `  ${l}`)].join("\n");
   });
-  return [head, ...lines].join("\n");
+  // Other agents' words, fenced the way `cast plan show` fences them, so an
+  // instruction inside an entry reads as quoted data.
+  return `${head}\n${fenceForeignText(lines.join("\n"), `plan ${planShortId ?? ""} shared log`)}`;
 }
 
 export type DeliverOpts = {
-  /** The top-level command name (`plan`, `task`, `send`, ...). */
+  /** The command path under `cast` (`plan`, `task handoff`, `send`, ...). */
   command: string;
   /** The command was asked for machine-readable output: nothing may follow it. */
   json: boolean;
@@ -50,18 +56,22 @@ export type DeliverOpts = {
 };
 
 export async function deliverPlanLog(deps: Pick<PublishDeps, "getCliEndpoint">, opts: DeliverOpts): Promise<void> {
-  const { command, json, sessionId, stateDir, now = Date.now(), print = (t) => console.log(t) } = opts;
-  if (!sessionId || json || SKIP_COMMANDS.has(command) || command.startsWith("_")) return;
+  // stderr: an agent's tool shows it, and `$(cast ...)` never captures it.
+  const { command, json, sessionId, stateDir, now = Date.now(), print = (t) => process.stderr.write(`${t}\n`) } = opts;
+  const top = command.split(" ")[0];
+  if (!sessionId || json || SKIP_COMMANDS.has(top) || SKIP_COMMANDS.has(command) || top.startsWith("_")) return;
   try {
     const mark = path.join(stateDir, `plan-log-none-${sessionId.replace(/[^\w.-]/g, "_")}`);
-    if (command !== "plan") {
+    if (top !== "plan") {
       try {
         if (now - fs.statSync(mark).mtimeMs < NO_LOG_RECHECK_MS) return;
       } catch {}
     }
-    const res = await apiPost(deps as PublishDeps, "/cli/plans/log/unread", { session_id: sessionId }, { exitOnError: false });
+    const res = await apiPost(deps as PublishDeps, "/cli/plans/log/unread", { session_id: sessionId }, { exitOnError: false, timeoutMs: LOG_TIMEOUT_MS })
+      .catch(() => null);
     if (!res?.plan_short_id) {
-      // No plan, or a plan on another policy: skip the round-trip for a while.
+      // No plan, a plan on another policy, or a backend that is down, slow or
+      // older than this route: skip the round-trip for a while.
       fs.mkdirSync(stateDir, { recursive: true });
       fs.writeFileSync(mark, "");
       return;

@@ -23104,11 +23104,11 @@ program.hook('preAction', (thisCommand, actionCommand) => {
 program.hook('postAction', async (_thisCommand, actionCommand) => {
   const sessionId = sessionIdFromEnv();
   if (!sessionId) return;
-  let top = actionCommand;
-  while (top.parent && top.parent !== program) top = top.parent;
+  const names: string[] = [];
+  for (let c: typeof actionCommand | null = actionCommand; c && c !== program; c = c.parent) names.unshift(c.name());
   const json = !!actionCommand.opts().json || process.argv.includes("--json");
   const { deliverPlanLog } = await import("./planLogDelivery.js");
-  await deliverPlanLog({ getCliEndpoint }, { command: top.name(), json, sessionId, stateDir: CONFIG_DIR });
+  await deliverPlanLog({ getCliEndpoint }, { command: names.join(" "), json, sessionId, stateDir: CONFIG_DIR });
 });
 
 // Fast path for the vim-fugitive git shim: it invokes `cast __fugitive_blame@@

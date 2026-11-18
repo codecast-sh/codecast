@@ -70,3 +70,33 @@ test("the first read is capped to the newest entries", () => {
   expect(first[0].content).toBe("f5");
   expect(unreadLogEntries(entries, T0 + FIRST_READ_LIMIT + 3, new Set()).map((e) => e.content)).toEqual([`f${FIRST_READ_LIMIT + 4}`]);
 });
+
+test("a teammate who can see a session cannot read its log or move its cursor", async () => {
+  const t = convexTest(schema, allModules);
+  const MATE = "h".repeat(64);
+  const { conv, team } = await t.run(async (ctx) => {
+    const team = await ctx.db.insert("teams", { name: "Team", invite_code: "TEAM1234", created_at: T0 } as any);
+    const me = await ctx.db.insert("users", { name: "Me", team_id: team } as any);
+    const mate = await ctx.db.insert("users", { name: "Mate", team_id: team } as any);
+    for (const [user, token] of [[me, TOKEN], [mate, MATE]] as const) {
+      await ctx.db.insert("api_tokens", { user_id: user, token_hash: await hashToken(token), name: "cli", created_at: T0, last_used_at: T0 } as any);
+      await ctx.db.insert("team_memberships", { user_id: user, team_id: team, role: "member", joined_at: T0, visibility: "full" } as any);
+    }
+    const conv = await ctx.db.insert("conversations", {
+      user_id: me, session_id: "sess-a", agent_type: "claude_code", status: "active", message_count: 0,
+      started_at: T0, updated_at: T0, team_id: team, is_private: false, team_visibility: "full",
+    } as any);
+    return { conv, team };
+  });
+  const plan = await t.mutation(api.plans.create, { api_token: TOKEN, title: "Shared log", messaging_policy: "shared-log" });
+  // A team plan, so the teammate passes the plan check and only the owner check stands.
+  await t.run(async (ctx) => {
+    await ctx.db.patch(conv, { active_plan_id: plan.id } as any);
+    await ctx.db.patch(plan.id, { team_id: team, workspace: `team:${team}` } as any);
+  });
+  await t.mutation(api.plans.addComment, { api_token: TOKEN, short_id: plan.short_id, type: "fact", content: "from another session" });
+
+  expect((await t.mutation(api.planLog.unread, { api_token: MATE, session_id: "sess-a" })).entries).toEqual([]);
+  expect((await t.mutation(api.planLog.unread, { api_token: TOKEN, session_id: "sess-a" })).entries.map((e: any) => e.content))
+    .toEqual(["from another session"]);
+});
