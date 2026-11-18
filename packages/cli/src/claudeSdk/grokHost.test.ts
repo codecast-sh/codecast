@@ -162,6 +162,7 @@ describe("grok on the direct backend", () => {
       resumeModelEffort: () => ({ model: [], effort: [] }),
       transcriptExists: () => true,
       sessionChanged: () => {},
+      resumed: () => {},
     }, dir, { noLaunchd: true });
     cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
     cleanups.push(async () => { await backend.stop("conv1", { forget: true }); });

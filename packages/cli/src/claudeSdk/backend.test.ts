@@ -39,6 +39,7 @@ function makeBackend(world: FakeWorld, answer: (r: SdkPermissionRequest) => SdkP
     stopped: (_c, _s, why) => stopped.push(why),
     tooOld: () => {},
     sessionChanged: () => {},
+    resumed: () => {},
     transcriptHas: async () => false,
     mayResume: async () => true,
     resumeAccount: async (_c, saved) => saved,
@@ -206,8 +207,11 @@ describe("ClaudeSdkBackend", () => {
   test("a host that died is resumed by the next delivery", async () => {
     const world = fakeWorld(["interrupt", "resume"]);
     worlds.push(world);
-    const b = makeBackend(world);
+    // The server reaps a stopped session's row after an hour, so a resume must register it again.
+    const resumed: string[] = [];
+    const b = makeBackend(world, undefined, { resumed: (c, sid) => resumed.push(`${c}:${sid}`) });
     await b.backend.start("conv1", world.spec());
+    expect(resumed).toEqual([]);
     await b.backend.deliver("conv1", "m1", "sleep");
     await until(() => b.activity.some((a) => a.status === "working"), 240_000, "working");
     const { readHostState } = await import("./client.js");
@@ -217,6 +221,7 @@ describe("ClaudeSdkBackend", () => {
     await b.backend.deliver("conv1", "m2", "What was the code word?");
     await until(() => b.activity.some((a) => a.turnCompletedAt), 240_000, "resumed turn end");
     expect(world.fakeLog().filter((l) => l.startsWith("spawn ")).at(-1)).toContain("--resume=");
+    expect(resumed).toEqual([`conv1:${world.spec().sessionId}`]);
   }, T);
 });
 

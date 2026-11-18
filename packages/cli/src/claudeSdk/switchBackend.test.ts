@@ -127,6 +127,7 @@ function realBackend(world: FakeWorld, over: Partial<ClaudeSdkBackendDeps> = {})
     stopped: () => {},
     tooOld: () => {},
     sessionChanged: () => {},
+    resumed: () => {},
     transcriptHas: async () => false,
     mayResume: async () => true,
     resumeAccount: async (_c, saved) => saved,

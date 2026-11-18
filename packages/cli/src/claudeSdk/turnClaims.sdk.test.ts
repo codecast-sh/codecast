@@ -45,6 +45,7 @@ function setup(recordings: string[]) {
     stopped: (_conv, sessionId) => { if (ledger.get(sessionId)) void recovery.request(); },
     tooOld: () => {},
     sessionChanged: () => {},
+    resumed: () => {},
     transcriptHas: async () => false,
     mayResume: async () => true,
     resumeAccount: async (_c, saved) => saved,

@@ -58,6 +58,8 @@ export interface ClaudeSdkBackendDeps {
   transcriptHas: (sessionId: string, uuid: string) => Promise<boolean>;
   /** Claude moved to a new session in the same host (a /clear): the conversation now follows `next`. */
   sessionChanged: (conversationId: string, previous: string, next: string) => void;
+  /** A new host took the session up again after the old one stopped. The server may have reaped its row in the meantime, so it registers again. */
+  resumed: (conversationId: string, sessionId: string) => void;
   /** Claude Code is older than the backend needs; the daemon falls back to tmux. */
   tooOld: (conversationId: string, sessionId: string, version: string | null, minimum: string) => void;
 }
@@ -366,7 +368,9 @@ export class ClaudeSdkBackend {
       const account = await this.deps.resumeAccount(conversationId, binding.account);
       this.bindings.set(conversationId, { ...binding, hostId: spec.sessionId, spec, account });
       this.save();
-      return this.launch(conversationId, spec, account);
+      const client = await this.launch(conversationId, spec, account);
+      this.deps.resumed(conversationId, this.bindings.get(conversationId)?.sessionId ?? spec.sessionId);
+      return client;
     });
   }
 
