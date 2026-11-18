@@ -56,6 +56,23 @@ describe("resolveLocalDestination", () => {
     expect(r).toEqual({ localCwd: "/Users/me/src/repo/.codecast/worktrees/w", createIn: "/Users/me/src/repo" });
   });
 
+  test("a session in a subfolder of the host's main checkout lands in that subfolder of the checkout named like the repo", () => {
+    const local = [{ root: "/Users/me/src/repo-wt-old", origin: "git@github.com:acme/repo.git" }, ...roots];
+    const r = resolveLocalDestination({
+      sessionId: "s", remoteCwd: "/home/ubuntu/src/repo/outreach", remoteRoot: "/home/ubuntu/src/repo", remoteOrigin: "git@github.com:acme/repo.git",
+      worktreeName: null, recordedLocalCwd: null, localRoots: local, exists: exists([]),
+    });
+    expect(r).toEqual({ localCwd: "/Users/me/src/repo/outreach" });
+  });
+
+  test("a subfolder of a host worktree lands in the same subfolder of the local worktree, created at its top", () => {
+    const r = resolveLocalDestination({
+      sessionId: "s", remoteCwd: "/home/ubuntu/src/repo/.codecast/worktrees/w/outreach", remoteRoot: "/home/ubuntu/src/repo/.codecast/worktrees/w", remoteOrigin: "git@github.com:acme/repo.git",
+      worktreeName: "w", recordedLocalCwd: null, localRoots: roots, exists: exists([]),
+    });
+    expect(r).toEqual({ localCwd: "/Users/me/src/repo/.codecast/worktrees/w/outreach", worktree: "/Users/me/src/repo/.codecast/worktrees/w", createIn: "/Users/me/src/repo" });
+  });
+
   test("a session that ran in the host's main checkout comes back to the local root itself", () => {
     const r = resolveLocalDestination({
       sessionId: "s", remoteCwd: "/home/ubuntu/work/repo", remoteOrigin: "git@github.com:acme/repo.git",

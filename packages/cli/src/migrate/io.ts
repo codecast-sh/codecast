@@ -74,25 +74,32 @@ export function sameOrigin(a: string | null | undefined, b: string | null | unde
  *       <root>/.codecast/worktrees/<name>   (a codecast worktree)
  *       <root>                              (the session ran in the main checkout)
  *
+ * A session that ran in a subfolder of its repository (`remoteRoot` is the
+ * repository's top) lands in the same subfolder here. Among checkouts with the
+ * same origin, the one with the repository's own folder name is preferred.
+ *
  * Returns the path and, when it must be created, the local repo root to
  * create it in. Pure over its inputs so the rule is testable.
  */
 export function resolveLocalDestination(opts: {
   sessionId: string;
   remoteCwd: string;
+  remoteRoot?: string;
   remoteOrigin: string | null;
   worktreeName: string | null;
   recordedLocalCwd: string | null;
   localRoots: Array<{ root: string; origin: string | null }>;
   exists: (p: string) => boolean;
-}): { localCwd: string; createIn?: string } {
+}): { localCwd: string; worktree?: string; createIn?: string } {
   if (opts.recordedLocalCwd && opts.exists(opts.recordedLocalCwd)) return { localCwd: opts.recordedLocalCwd };
-  const remoteBase = path.posix.basename(opts.remoteCwd);
-  const wtMatch = /^(.*)\/\.codecast\/worktrees\/([^/]+)$/.exec(opts.remoteCwd);
+  const top = opts.remoteRoot && opts.remoteCwd.startsWith(`${opts.remoteRoot}/`) ? opts.remoteRoot : opts.remoteCwd;
+  const sub = top === opts.remoteCwd ? "" : opts.remoteCwd.slice(top.length + 1);
+  const remoteBase = path.posix.basename(top);
+  const wtMatch = /^(.*)\/\.codecast\/worktrees\/([^/]+)$/.exec(top);
   const remoteRepoBase = wtMatch ? path.posix.basename(wtMatch[1]) : remoteBase;
   const byOrigin = opts.localRoots.filter((r) => sameOrigin(r.origin, opts.remoteOrigin));
   const byName = opts.localRoots.filter((r) => path.basename(r.root) === remoteRepoBase);
-  const root = (byOrigin[0] ?? byName[0])?.root;
+  const root = (byOrigin.find((r) => path.basename(r.root) === remoteRepoBase) ?? byOrigin[0] ?? byName[0])?.root;
   if (!root) {
     throw new Error(
       `no local checkout of ${opts.remoteOrigin ?? remoteRepoBase} on this machine — clone it into a synced project root, then retry`,
@@ -100,10 +107,10 @@ export function resolveLocalDestination(opts: {
   }
   // The session ran in the main checkout on the host (a repo pushed whole by
   // `cast remote move`, or a cloud session placed on the host's main clone).
-  if (!wtMatch && path.basename(root) === remoteBase) return { localCwd: root };
+  if (!wtMatch && path.basename(root) === remoteBase) return { localCwd: path.join(root, sub) };
   const name = opts.worktreeName || (wtMatch ? wtMatch[2] : remoteBase);
-  const localCwd = path.join(root, ".codecast", "worktrees", name);
-  return opts.exists(localCwd) ? { localCwd } : { localCwd, createIn: root };
+  const worktree = path.join(root, ".codecast", "worktrees", name);
+  return opts.exists(worktree) ? { localCwd: path.join(worktree, sub) } : { localCwd: path.join(worktree, sub), ...(sub ? { worktree } : {}), createIn: root };
 }
 
 /**
@@ -309,6 +316,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       const dest = resolveLocalDestination({
         sessionId: facts.session_id,
         remoteCwd,
+        remoteRoot,
         remoteOrigin,
         worktreeName: facts.worktree_name,
         recordedLocalCwd: readMoves()[facts.session_id]?.localCwd ?? null,
@@ -319,13 +327,14 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
         if (!remoteBranch || remoteBranch === "HEAD") throw new Error("the session's worktree on the host is not on a branch; check it out there first");
         log(`  creating local worktree ${dest.localCwd} on ${remoteBranch} from the host`);
         const ref = `refs/codecast/migrate/${remoteBranch}`;
-        execFileSync("git", ["-C", dest.createIn, "fetch", "--force", gitSshUrl(host, remoteCwd), `+refs/heads/${remoteBranch}:${ref}`], { env: gitEnv(host), stdio: "pipe" });
-        fs.mkdirSync(path.dirname(dest.localCwd), { recursive: true });
+        execFileSync("git", ["-C", dest.createIn, "fetch", "--force", gitSshUrl(host, remoteRoot ?? remoteCwd), `+refs/heads/${remoteBranch}:${ref}`], { env: gitEnv(host), stdio: "pipe" });
+        const worktree = dest.worktree ?? dest.localCwd;
+        fs.mkdirSync(path.dirname(worktree), { recursive: true });
         try {
-          execFileSync("git", ["-C", dest.createIn, "worktree", "add", "-B", remoteBranch, dest.localCwd, ref], { stdio: "pipe" });
+          execFileSync("git", ["-C", dest.createIn, "worktree", "add", "-B", remoteBranch, worktree, ref], { stdio: "pipe" });
         } catch {
           // The branch is checked out elsewhere locally: detach at the same commit.
-          execFileSync("git", ["-C", dest.createIn, "worktree", "add", "--detach", dest.localCwd, ref], { stdio: "pipe" });
+          execFileSync("git", ["-C", dest.createIn, "worktree", "add", "--detach", worktree, ref], { stdio: "pipe" });
         }
       }
       const recordedMove = readMoves()[facts.session_id];

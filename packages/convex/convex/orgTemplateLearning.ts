@@ -24,7 +24,7 @@ import { compareVersions, type OrgTemplate } from "@codecast/shared/contracts/or
 import { readiness } from "@codecast/shared/contracts/orgTemplateState";
 import { LEARNING, canaryVerdict, draftDue, learningRequest, lessonLeaks, nextPatch, parseLessons, playbookRuleSignals, structuralSignals, workspaceTerms, type CanaryInstance, type LeakKind, type LearningDigest, type Redirect, type WorkspaceFacts } from "@codecast/shared/contracts/orgTemplateLearning";
 import { parsePlaybook } from "@codecast/shared/contracts/rolePlaybook";
-import { CODECAST_TEMPLATE_ACCESS, callerWorkspace, enqueueBind, fileLessonRow, performPublish, requireCaller, requireCodecastPublisher, routineRows, stateOf, templateRow, visibleTemplate, type Ctx } from "./orgTemplates";
+import { CODECAST_TEMPLATE_ACCESS, callerWorkspace, enqueueBind, fileLessonRow, hostStepOf, performPublish, requireCaller, requireCodecastPublisher, routineRows, stateOf, templateRow, visibleTemplate, type Ctx } from "./orgTemplates";
 import { standingConversationOf } from "./orgRoles";
 
 /** The model a pass asks. Generalizing a correction without carrying its specifics is judgment, not summary. */
@@ -225,6 +225,7 @@ function canaryOf(template: any): any | null {
   const stable = newest("stable"), canary = newest("canary");
   return canary && (!stable || compareVersions(canary.version, stable.version) > 0) ? canary : null;
 }
+type UpgradeStep = { state: "idle" | "pending" | "failed" | "done"; machine?: string; error?: string } | null;
 const onRelease = (row: any, release: any) => row.version === release.version && row.digest === release.digest;
 
 async function learnStatus(ctx: Ctx, template: any, now: number) {
@@ -233,13 +234,17 @@ async function learnStatus(ctx: Ctx, template: any, now: number) {
   const reading = await optedIn(ctx, rows);
   const release = canaryOf(template);
   const followers = rows.filter((row) => row.update_policy === "canary");
-  let canary: { version: string; digest: string; published_at: number; instances: Array<CanaryInstance & { pending: boolean }>; lessons_since: number; clean: boolean; why: string } | null = null;
+  let canary: { version: string; digest: string; published_at: number; instances: Array<CanaryInstance & { instance: string; pending: boolean; upgrade: UpgradeStep }>; lessons_since: number; clean: boolean; why: string } | null = null;
   if (release) {
-    const instances: Array<CanaryInstance & { pending: boolean }> = [];
+    const instances: Array<CanaryInstance & { instance: string; pending: boolean; upgrade: UpgradeStep }> = [];
     for (const row of followers) {
       const since = row.version_at ?? row.updated_at;
       const runs = (await routineRows(ctx, row, release.manifest)).filter((r) => !r.external && !r.retired && (r.trigger?.last_run_at ?? 0) > since);
-      instances.push({ on_release: onRelease(row, release), ran: runs.length > 0, failed: runs.some((r) => r.trigger?.last_run_failed), pending: row.pending_upgrade?.to === release.version });
+      const pending = row.pending_upgrade?.to === release.version;
+      // The host step that carries a pending upgrade: where it was sent and, when it failed, the CLI's own words.
+      const step = pending ? await hostStepOf(ctx, row) : null;
+      const upgrade: UpgradeStep = step ? { state: step.state, ...(step.device_label ? { machine: step.device_label } : {}), ...(step.error ? { error: step.error } : {}) } : null;
+      instances.push({ instance: row.instance, on_release: onRelease(row, release), ran: runs.length > 0, failed: runs.some((r) => r.trigger?.last_run_failed), pending, upgrade });
     }
     const lessons_since = lessons.filter((l) => l.source === "learning" && l.release.version === release.version).length;
     canary = { version: release.version, digest: release.digest, published_at: release.published_at, instances, lessons_since, ...canaryVerdict({ published_at: release.published_at, instances }, now) };
@@ -258,7 +263,8 @@ async function learnStatus(ctx: Ctx, template: any, now: number) {
     due: {
       pass: reading.some((row) => (row.learning?.at ?? 0) <= now - PASS_DUE_MS),
       draft: draft.due && (!canary || superseded),
-      rollout: !!canary && canary.instances.some((i) => !i.on_release && !i.pending),
+      // A rollout is due for an instance not yet sent the release, and again for one whose upgrade step failed.
+      rollout: !!canary && canary.instances.some((i) => !i.on_release && (!i.pending || i.upgrade?.state === "failed")),
       promote: !!canary?.clean,
     },
   };
