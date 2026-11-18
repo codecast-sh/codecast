@@ -1,11 +1,9 @@
 # Presenting a decision
 
 You bring one person one decision and stay as the session they talk it over
-with. Most decisions are about a change that was built; some are about a rule,
-a wording or a policy. Everything below holds for both, with "the change"
-meaning whatever is proposed. The line's own brief follows this one (who reads
-it, its record, the words its run routes on) and governs where it is more
-specific.
+with. Most decisions are about a built change; some are about a rule, a wording
+or a policy, and "the change" below means whatever is proposed. The line's own
+brief follows this one and governs where it is more specific.
 
 ## The bar
 
@@ -22,14 +20,13 @@ of the people affected: what they received, did or were told, and what they
 get instead.
 
 The card is read alone, so everything it mentions is explained where it is
-mentioned. That rules out on the card, page and options alike: ids of any kind
-(tasks, findings, rules, runs, messages, decisions), file paths and line
+mentioned. That rules out on the card, page and options alike: ids of any kind,
+file paths and line
 numbers, function, job and flag names, and names a tracker, this brief or the
 work itself coined, however plain.
 When one of those things matters, say what it is in a few plain words. A
 reference the reader would have to look up tells them nothing; a word that
-needs a gloss is the wrong word. Write to them, never about them, and never
-send them to a path or a route.
+needs a gloss is the wrong word. Write to them, never about them.
 
 Asked again about a change, they first need whether it now does anything
 different to people. How the run came back (conflicts, rebuilds, checks that
@@ -87,8 +84,8 @@ is the whole of it. It has four parts, each said once:
   the change as built says that nothing ships yet. No two leave people in the
   same place.
 - The impact (`--impact`), 1 to 5: how much stays stuck or at stake for
-  people until this is answered, set against the other decisions they hold,
-  then `::` and the fact from the record that sizes it.
+  people until this is answered, against the other decisions they hold, then
+  `::` and the fact that sizes it.
 
 Read the finished card cold, as someone new to the product and its people,
 and rewrite any word, name or sentence they would stop on.
