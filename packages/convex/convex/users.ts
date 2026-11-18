@@ -10,6 +10,7 @@ import { wakeDevicesFor } from "./cloudWake";
 import { internal } from "./_generated/api";
 import { ConvexError, v } from "convex/values";
 import { peopleOf } from "@codecast/shared/team/memberKind";
+import { planSyncChange } from "@codecast/shared/team/syncPlan";
 import { paginationOptsValidator } from "convex/server";
 import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -2320,6 +2321,25 @@ export const updateSyncSettings = mutation({
     }
     await ctx.db.patch(userId, updateData);
     return userId;
+  },
+});
+
+// One folder into the person's sync: the "Sync folder" control beside a
+// session's folder (store syncFolder). Planned here from the stored lists, so a
+// press from a stale tab never writes back an old list.
+export const syncFolder = mutation({
+  args: { folder: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getUserOrToken(ctx, undefined);
+    if (!userId) throw new Error("Not authenticated");
+    const user = await ctx.db.get(userId);
+    if (!user || !args.folder.startsWith("/")) return null;
+    const plan = planSyncChange(
+      { sync_mode: user.sync_mode ?? "all", sync_projects: user.sync_projects ?? [], sync_excluded: user.sync_excluded ?? [] },
+      { sync: [args.folder] },
+    );
+    if (plan.next) await ctx.db.patch(userId, plan.next);
+    return plan.next;
   },
 });
 

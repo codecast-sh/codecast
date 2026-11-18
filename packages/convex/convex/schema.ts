@@ -5315,6 +5315,11 @@ export default defineSchema({
     // would have done.
     trial: v.optional(v.boolean()),
     default_option: v.optional(v.number()),
+    // How much getting it answered matters, 1-5, as the asker judged it, and
+    // its one-line why (shared/contracts/decisionImpact.ts). Orders the lists
+    // inside the blocking tiers; unset counts as the middle.
+    impact: v.optional(v.number()),
+    impact_reason: v.optional(v.string()),
     // answered / dismissed are the human's verdicts; withdrawn is the agent
     // taking its own question back (`cast decide cancel`) — the facts changed
     // and there is nothing left to decide.
