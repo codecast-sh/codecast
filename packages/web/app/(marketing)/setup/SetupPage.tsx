@@ -11,7 +11,7 @@ import { useDevices, type Device } from "@/components/DeviceBadge";
 import { useLocalDeviceId } from "@/hooks/useLocalDeviceId";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { useAgentToolSetup } from "@/lib/useAgentToolSetup";
-import { agentSetupSteps, type AgentSetupStep } from "@/lib/agentToolSetupSteps";
+import { agentSetupSteps, readThisProfileExtension, withThisProfile, type AgentSetupStep, type ThisProfileExtension } from "@/lib/agentToolSetupSteps";
 import { useRouteMeta } from "../pageMeta";
 import { SOL } from "../blog/blogChrome";
 import { HeroStage as BrowserStage } from "../features/browser/HeroStage";
@@ -126,6 +126,19 @@ function ToolSetup({ tool }: { tool: AgentSetupTool }) {
   );
 }
 
+/** The note the Codecast extension in this Chrome profile writes onto the page, kept current by its event. */
+function useThisProfileExtension(): ThisProfileExtension | null {
+  const [ext, setExt] = useState<ThisProfileExtension | null>(() =>
+    typeof document === "undefined" ? null : readThisProfileExtension(document.documentElement.dataset.codecastExtension));
+  useMountEffect(() => {
+    const read = () => setExt(readThisProfileExtension(document.documentElement.dataset.codecastExtension));
+    read();
+    window.addEventListener("codecast-extension", read);
+    return () => window.removeEventListener("codecast-extension", read);
+  });
+  return ext;
+}
+
 /** Which machine the steps run on: `?device=`, else this browser's machine, else the newest online one. */
 function useSetupMachine(signedIn: boolean) {
   const named = useSearchParams().get("device");
@@ -147,8 +160,10 @@ function SetupBox({ tool }: { tool: AgentSetupTool }) {
   const { machine, choices, pick, loaded } = useSetupMachine(isAuthenticated);
   const live = isAuthenticated && !!machine?.online && !(tool === "computer" && !supportsComputer(machine));
   const setup = useAgentToolSetup(machine ? { deviceId: machine.device_id } : null, tool, live);
-  const steps = agentSetupSteps(tool, live ? setup.status : undefined);
-  const ready = live && !!setup.status?.ready;
+  const here = useThisProfileExtension();
+  const status = withThisProfile(setup.status, here);
+  const steps = agentSetupSteps(tool, live ? status : undefined);
+  const ready = live && !!status?.ready;
 
   // Coming back from the Web Store tab or System Settings is when the answer changes.
   const lastCheck = useRef(0);
