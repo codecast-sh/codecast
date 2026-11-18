@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { unitDirs } from '../../layout';
+
 // Merges a run's proposals/op-*.json (the conversation harness, round 20 on)
 // into <dir>/proposal.json so the grader reads the changes as one list (the
 // port of ~/.cache/org-eval/bin/assemble-proposals.py). summary_md joins each
@@ -17,10 +19,14 @@ export interface AssembledProposal {
 
 const opNumber = (file: string): number => Number(/op-(\d+)/.exec(file)![1]);
 
-/** The op files in the order the agent wrote them, by number. */
+/** Where a rep's agent writes its proposals: the closed sandbox lets it write only inside its own agentN/agent. */
+export const agentProposalsDir = (runDir: string): string => join(runDir, 'agent1', 'agent', 'proposals');
+
+/** The op files in the order the agent wrote them, by number: the run's proposals/, else each agent unit's. */
 export function proposalFiles(dir: string): string[] {
-  const d = join(dir, 'proposals');
-  if (!existsSync(d)) return [];
+  const dirs = [join(dir, 'proposals'), ...unitDirs(dir, 'agent').map((u) => join(dir, u, 'agent', 'proposals'))];
+  const d = dirs.find((x) => existsSync(x) && readdirSync(x).some((f) => /^op-\d+.*\.json$/.test(f)));
+  if (!d) return [];
   return readdirSync(d)
     .filter((f) => /^op-.*\.json$/.test(f) && /op-\d+/.test(f))
     .sort((a, b) => opNumber(a) - opNumber(b))
