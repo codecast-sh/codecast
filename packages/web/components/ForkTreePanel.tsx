@@ -4,10 +4,9 @@ import { useRef, useState, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Split, Search, GitFork, ChevronRight } from "lucide-react";
-import { withShortcut } from "../shortcuts";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
-import { KeyCap } from "./KeyboardShortcutsHelp";
+import { KeyCap, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { relativeTime } from "./BranchSelector";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { hoverFocus } from "../shortcuts/focusSource";
@@ -707,51 +706,40 @@ export function ForkMapBox({
 }
 
 // The branch map's handle: the composer drawn as the top card of a stack,
-// one layer peeking out behind its top edge per other branch (two at most).
+// one layer peeking out behind its top edge.
 // It sits in the gap above the box, so it takes no height. Hover or focus
-// lifts the front layer to name the family; a press opens the map upward into
-// the composer, and the layers fold down into the box while it is open (the
-// map's own close and Esc take it back). Positioned against ComposerShell's
-// zero-height anchor at the field's top edge; z-[25] clears the thread state
-// panel (relative z-20), whose padding covers that gap.
-export function BranchMapLayers({ heading, count, open, onToggle }: { heading: string; count: number; open: boolean; onToggle: () => void }) {
-  const back = count > 2;
+// lifts the front layer a little and a tooltip names the family (the gap is
+// too narrow to hold words); a press opens the map upward into the composer,
+// and the layer folds down into the box while it is open (the map's own close
+// and Esc take it back). Positioned against ComposerShell's zero-height anchor
+// at the field's top edge; z-[25] clears the thread state panel (relative
+// z-20), whose padding covers that gap.
+export function BranchMapLayers({ heading, open, onToggle }: { heading: string; open: boolean; onToggle: () => void }) {
   const radius = { borderRadius: "10px 10px 0 0" };
   const ease = "duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none";
   return (
-    <button
-      type="button"
-      data-branch-map-toggle
-      aria-expanded={open}
-      aria-label={`Branch map: ${heading}`}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={onToggle}
-      title={withShortcut("Branch map", "conv.toggleTree")}
-      tabIndex={open ? -1 : undefined}
-      className={`group absolute inset-x-3 bottom-0 z-[25] h-[10px] outline-none ${open ? "pointer-events-none" : ""}`}
-    >
-      {back && (
+    <ShortcutTooltip label={heading} action="conv.toggleTree" side="top">
+      <button
+        type="button"
+        data-branch-map-toggle
+        aria-expanded={open}
+        aria-label={`Branch map: ${heading}`}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onToggle}
+        tabIndex={open ? -1 : undefined}
+        className={`group absolute inset-x-3 bottom-0 z-[25] h-[10px] outline-none ${open ? "pointer-events-none" : ""}`}
+      >
         <span
           aria-hidden
           style={radius}
-          className={`absolute inset-x-3 transition-[bottom,height,opacity] ${open ? "bottom-0 h-0 opacity-0" : "bottom-[4px] h-[5px]"} border border-b-0 border-[color-mix(in_srgb,var(--sol-text)_12%,var(--sol-border))] bg-[color-mix(in_srgb,var(--sol-text)_8%,var(--sol-bg))] ${ease} group-hover:opacity-0 group-focus-visible:opacity-0`}
+          className={`absolute inset-x-0 bottom-0 border border-b-0 transition-[height,background-color,border-color] ${ease} ${
+            open
+              ? "h-0 border-transparent"
+              : `h-[6px] border-[color-mix(in_srgb,var(--sol-text)_16%,var(--sol-border))] bg-[color-mix(in_srgb,var(--sol-text)_5%,var(--sol-bg))] group-hover:h-[9px] group-hover:border-sol-cyan/55 group-hover:bg-[color-mix(in_srgb,var(--sol-cyan)_14%,var(--sol-bg))] group-focus-visible:h-[9px] group-focus-visible:border-sol-cyan/70 group-focus-visible:bg-[color-mix(in_srgb,var(--sol-cyan)_14%,var(--sol-bg))]`
+          }`}
         />
-      )}
-      <span
-        aria-hidden
-        style={radius}
-        className={`absolute inset-x-0 bottom-0 flex items-center justify-center overflow-hidden border border-b-0 transition-[height,background-color,border-color] ${ease} ${
-          open
-            ? "h-0 border-transparent"
-            : "h-[6px] group-hover:h-[12px] group-focus-visible:h-[12px] border-[color-mix(in_srgb,var(--sol-text)_16%,var(--sol-border))] bg-[color-mix(in_srgb,var(--sol-text)_5%,var(--sol-bg))] group-hover:border-sol-cyan/40 group-hover:bg-[color-mix(in_srgb,var(--sol-cyan)_7%,var(--sol-bg))] group-focus-visible:border-sol-cyan/60 group-focus-visible:bg-[color-mix(in_srgb,var(--sol-cyan)_7%,var(--sol-bg))]"
-        }`}
-      >
-        <span className={`flex items-center gap-1 text-xs leading-none text-sol-cyan opacity-0 transition-opacity ${ease} group-hover:opacity-100 group-hover:delay-75 group-focus-visible:opacity-100`}>
-          <Split className="h-2.5 w-2.5" />
-          {heading}
-        </span>
-      </span>
-    </button>
+      </button>
+    </ShortcutTooltip>
   );
 }
 
