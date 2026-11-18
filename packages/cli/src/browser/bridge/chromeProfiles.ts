@@ -66,6 +66,12 @@ export function pickBridgeProfile(found: ExtensionProfiles, pinned?: string): Re
   );
 }
 
+/** Chrome's last-used profile, when it has the extension and is not connected: the one a person clicking Pair is looking at. */
+export function unconnectedLastUsed(found: ExtensionProfiles, isLive: (p: RealProfile) => boolean): RealProfile | null {
+  const p = found.withExtension.find((c) => c.lastUsed);
+  return p && !isLive(p) ? p : null;
+}
+
 /** A `--profile` argument matched against a profile's name, directory or signed-in email (case-insensitive). */
 export function matchProfile(profiles: RealProfile[], query: string): RealProfile | null {
   const q = query.trim().toLowerCase();

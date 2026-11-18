@@ -172,7 +172,10 @@ async function getConfig() {
 }
 
 function setStatus(state, detail) {
+  const changed = !status || status.state !== state;
   status = { state, detail: detail || "" };
+  // Deferred: setStatus can run while the worker is still evaluating, before the setup-page constants exist.
+  if (changed) setTimeout(tellSetupPages, 0);
   chrome.action.setTitle({ title: `Codecast: ${state}${detail ? `, ${detail}` : ""}` });
   // A global badge only when something is wrong, so "working" is quiet.
   if (state === "bad-token") {
@@ -640,6 +643,37 @@ async function showSetupPage() {
     /* a page that cannot open leaves the install itself intact */
   }
 }
+
+/**
+ * The setup page asks the machine whether any profile is connected; only the
+ * extension knows whether THIS profile is. It writes its state onto every
+ * open setup page (codecast.sh and local dev hosts) so the page says Ready
+ * only when the profile it is open in can be driven, and offers Pair here
+ * otherwise. A page can fake this about itself and nothing else.
+ */
+const SETUP_PAGE_MATCHES = [`${SETUP_PAGE_URL}*`, "https://codecast.sh/setup/*", "https://local.codecast.sh/setup/*", "http://localhost/setup/*"];
+function isSetupPageUrl(url) {
+  return /^(https:\/\/(local\.)?codecast\.sh|http:\/\/localhost(:\d+)?)\/setup\//.test(url || "");
+}
+async function tellSetupPage(tabId) {
+  const state = { state: status.state, connected: status.state === "connected", version: chrome.runtime.getManifest().version };
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    args: [JSON.stringify(state)],
+    func: (json) => {
+      document.documentElement.dataset.codecastExtension = json;
+      window.dispatchEvent(new CustomEvent("codecast-extension", { detail: JSON.parse(json) }));
+    },
+  }).catch(() => {});
+}
+async function tellSetupPages() {
+  const tabs = await chrome.tabs.query({ url: SETUP_PAGE_MATCHES }).catch(() => []);
+  for (const t of tabs) if (t.id !== undefined) tellSetupPage(t.id);
+}
+chrome.tabs.onUpdated.addListener((tabId, info, t) => {
+  if (info.status === "complete" && isSetupPageUrl(t.url)) tellSetupPage(tabId);
+});
 connect("boot");
 
 // The options page asks for status and pokes reconnects through here.
@@ -650,6 +684,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.op === "keeper-beat") {
     if (!ws) connect("keeper");
     return false;
+  }
+  // The popup's and options page's Pair: the setup page pairs this profile through the Codecast app on this machine.
+  if (msg && msg.op === "open-setup") {
+    showSetupPage().then(() => sendResponse({ ok: true }));
+    return true;
   }
   if (msg && msg.op === "status") {
     sendResponse({ ...status, attached: [...attached] });
@@ -1571,7 +1610,7 @@ function paintBadge(tabId) {
   const [text, color, title] =
     h && h.state === "waiting" ? ["WAIT", "#b26a00", "an agent is waiting for you on this tab; click to continue"]
     : attached.has(tabId) ? ["RUN", "#c62828", "an agent is driving this tab; click to take it back"]
-    : lentTabs.has(tabId) ? ["ON", "#1a73e8", "lent to agents; click to take it back"]
+    : lentTabs.has(tabId) ? ["LENT", "#1a73e8", "lent to agents; click to take it back"]
     : ["", null, null];
   chrome.action.setBadgeText({ tabId, text }).catch(() => {});
   if (color) chrome.action.setBadgeBackgroundColor({ tabId, color }).catch(() => {});

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extensionProfiles, matchProfile, pickBridgeProfile } from "./chromeProfiles";
+import { extensionProfiles, matchProfile, pickBridgeProfile, unconnectedLastUsed } from "./chromeProfiles";
 import { BRIDGE_EXTENSION_ID } from "./protocol";
 
 const roots: string[] = [];
@@ -78,5 +78,22 @@ describe("the Chrome profile the bridge uses", () => {
     expect(matchProfile(found.all, "A@WORK.COM")?.dir).toBe("Profile 2");
     expect(matchProfile(found.all, "profile 2")?.dir).toBe("Profile 2");
     expect(matchProfile(found.all, "nope")).toBeNull();
+  });
+});
+
+describe("the profile a Pair click means while another is connected", () => {
+  const found = () => extensionProfiles(chromeRoot({
+    Default: { name: "Personal", ext: "enabled" },
+    "Profile 14": { name: "Team", ext: "enabled" },
+  }, "Profile 14"));
+
+  // Ashot's case (2026-11-18): Default was connected, the setup page in a
+  // second profile pressed Pair, and setup re-pinned Default and said Ready.
+  test("the last-used profile, when it is not connected yet", () => {
+    expect(unconnectedLastUsed(found(), (p) => p.dir === "Default")?.dir).toBe("Profile 14");
+  });
+
+  test("nothing when the last-used profile is already connected", () => {
+    expect(unconnectedLastUsed(found(), () => true)).toBeNull();
   });
 });

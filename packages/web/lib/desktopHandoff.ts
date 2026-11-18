@@ -103,7 +103,7 @@ export function parseDesktopDeepLinkPath(url: string): string | null {
 // the rule below the list recognizes.
 const HANDOFF_DENY = [
   /^\/$/,
-  /^\/(about|features|documentation|privacy|security|support|terms|changelog|pricing|download|blog|compare)(\/|$)/,
+  /^\/(about|features|documentation|privacy|security|support|terms|changelog|pricing|download|blog|compare|setup)(\/|$)/,
   /^\/login/,
   /^\/auth/,
   /^\/oauth/,

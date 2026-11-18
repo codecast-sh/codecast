@@ -110,6 +110,8 @@ describe("isHandoffEligiblePath", () => {
     expect(isHandoffEligiblePath("/compare/cursor")).toBe(false);
     expect(isHandoffEligiblePath("/download")).toBe(false);
     expect(isHandoffEligiblePath("/download/mac")).toBe(false);
+    expect(isHandoffEligiblePath("/setup/browser")).toBe(false);
+    expect(isHandoffEligiblePath("/setup/computer?installed=1")).toBe(false);
   });
 
   test("blocks auth, share, artifact, palette and api routes", () => {

@@ -104,7 +104,7 @@ async function pairFromFragment() {
 
 $("pair").addEventListener("click", async () => {
   const offer = pairingOffer;
-  if (!offer) return;
+  if (!offer) return void openSetupPage();
   pairingOffer = null;
   $("pair").hidden = true;
   renderBridgeStatus($("status"), { state: "connecting", attached: [] }, offer.port);
@@ -156,7 +156,8 @@ async function refreshStatus() {
   const s = await readBridgeStatus();
   const port = parseInt($("port").value, 10) || CAST_DEFAULT_PORT;
   const d = renderBridgeStatus($("status"), s, port);
-  $("reconnect").hidden = d.cls !== "state-wait" && d.cls !== "state-bad";
+  $("pair").hidden = !d.pair;
+  $("reconnect").hidden = !!d.pair || (d.cls !== "state-wait" && d.cls !== "state-bad");
   await renderTabs(s.attached);
 }
 

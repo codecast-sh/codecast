@@ -71,3 +71,31 @@ export function agentSetupSteps(tool: AgentSetupTool, status: AgentToolSetupStat
     ? browserSteps(status as BrowserStatus | undefined)
     : computerSteps(status as ComputerStatus | undefined);
 }
+
+/** What the Codecast extension in the viewing Chrome profile wrote onto the setup page (background.js tellSetupPage). */
+export interface ThisProfileExtension {
+  state: string;
+  connected: boolean;
+  version?: string;
+}
+
+/**
+ * The machine answers for every Chrome profile at once: "connected" means
+ * some profile is. A setup page open in a profile whose own extension is not
+ * connected must not say Ready, so that profile's word wins when it spoke.
+ */
+export function withThisProfile(status: AgentToolSetupStatus | undefined, ext: ThisProfileExtension | null): AgentToolSetupStatus | undefined {
+  if (!ext || status?.tool !== "browser") return status;
+  return { ...status, installed: true, connected: ext.connected, ready: ext.connected, paired: ext.connected || (status.paired && ext.state !== "no-config") };
+}
+
+/** Reads the extension's note off the page, or null when this profile's extension wrote none (not installed, or a build before 0.1.8). */
+export function readThisProfileExtension(raw: string | undefined): ThisProfileExtension | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Partial<ThisProfileExtension>;
+    return typeof v.state === "string" ? { state: v.state, connected: !!v.connected, version: v.version } : null;
+  } catch {
+    return null;
+  }
+}

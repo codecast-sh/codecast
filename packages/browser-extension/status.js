@@ -2,8 +2,9 @@
  * The connection as a person reads it, shared by the options page and the
  * toolbar popup so the two never describe one state in two ways. The worker
  * reports a state name and the tabs it holds; this turns that into a class
- * for the dot, a title, and one sentence that says what is true and, when
- * something is needed, the one command that provides it.
+ * for the dot, a title, a short line when one helps, and `pair` when the
+ * next step is the Pair button (it opens codecast's setup page, which pairs
+ * this profile through the Codecast app on this machine).
  */
 const CAST_DEFAULT_PORT = 41729;
 
@@ -31,18 +32,18 @@ function describeBridge(s, port) {
   const driving = n ? `Driving ${n} tab${n === 1 ? "" : "s"} right now.` : "";
   switch (s.state) {
     case "connected":
-      return { cls: "state-ok", title: "Connected", text: `Paired with cast on port ${port}. ${driving || "Agents can open tabs here when a session asks for your Chrome."}` };
+      return { cls: "state-ok", title: "Connected", text: driving };
     case "connecting":
     case "disconnected":
-      return { cls: "state-wait", title: "Waiting for cast", text: `Paired. The bridge host on port ${port} starts with the next cast browser command in real mode.` };
+      return { cls: "state-wait", title: "Paired, waiting for Codecast", text: "Connects when an agent on this computer next uses the browser." };
     case "standby":
       return { cls: "state-wait", title: "Standby", text: "Agents use another Chrome profile where Codecast is connected. This profile takes over if that one closes." };
     case "bad-token":
-      return { cls: "state-bad", title: "Pairing rejected", text: "This profile's pairing was revoked or is stale. Run cast browser extension setup again to pair it." };
+      return { cls: "state-bad", title: "Pairing expired", text: "", pair: true };
     case "bad-code":
-      return { cls: "state-bad", title: "Code not accepted", text: "The pairing code was wrong, used or expired. Run cast browser extension setup again for a new one." };
+      return { cls: "state-bad", title: "Code expired", text: "", pair: true };
     default:
-      return { cls: "state-none", title: "Not paired", text: "Run cast browser extension setup in a terminal on this machine. It opens this page with a one-time code filled in." };
+      return { cls: "state-none", title: "Not paired", text: "", pair: true };
   }
 }
 
@@ -125,6 +126,13 @@ function renderBridgeStatus(root, s, port) {
   root.classList.remove("state-ok", "state-wait", "state-bad", "state-none");
   root.classList.add(d.cls);
   root.querySelector("[data-title]").textContent = d.title;
-  root.querySelector("[data-text]").textContent = d.text;
+  const text = root.querySelector("[data-text]");
+  text.textContent = d.text;
+  text.hidden = !d.text;
   return d;
+}
+
+/** Pair: codecast's setup page pairs this profile through the Codecast app, no terminal. */
+async function openSetupPage() {
+  await askWorker({ op: "open-setup" });
 }

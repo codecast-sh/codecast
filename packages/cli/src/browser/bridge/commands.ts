@@ -21,7 +21,7 @@ import {
   reloadExtension, revokeHostClient, rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, waitForPairedProfile, writeBridgeState, type BridgeHostStatus, type BridgeState,
 } from "./host.js";
 import { findProfile, mintPairingCode, PAIRING_CODE_TTL_MS, readPairing, revokeAllProfiles, revokeProfile } from "./pairing.js";
-import { describeProfile, extensionProfiles, matchProfile, pickBridgeProfile, type ExtensionProfiles } from "./chromeProfiles.js";
+import { describeProfile, extensionProfiles, matchProfile, pickBridgeProfile, unconnectedLastUsed, type ExtensionProfiles } from "./chromeProfiles.js";
 import type { RealProfile } from "../profile.js";
 import { BRIDGE_EXTENSION_ID, BRIDGE_STORE_URL, bridgePairingUrl } from "./protocol.js";
 import { connectRealBridge, hostBrowserChoice, hostOwnsBrowser, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
@@ -279,6 +279,12 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       // sessions open their tabs in. A chosen profile that is already
       // connected only needs that pin.
       const before = await bridgeStatus(state).catch(() => null);
+      const isLive = (p: RealProfile | null) => !!p && !!before?.profiles?.some((l) => l.dir === p.dir);
+      // Asked without a name while the default is already connected, setup
+      // means the profile the person is in: Chrome's last-used one, when it
+      // has the extension and is not connected yet. This is how the setup
+      // page's Pair button reaches a second profile.
+      if (!o.profile && isLive(chosen)) chosen = unconnectedLastUsed(found, isLive) ?? chosen;
       const live = chosen ? before?.profiles?.find((p) => p.dir === chosen!.dir) : undefined;
       if (live && !o.showCode && !o.json) {
         writeBridgeState({ ...(readBridgeState() ?? state), profile: chosen!.dir });
