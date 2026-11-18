@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { withUnplaced } from "./lib/orgCoverage";
 import { readUnplaced } from "./orgUnplaced";
 import { makeFakeDb } from "./testDb";
-import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, landingRecordsOf, mergeAnalysisInputs, performApplyDecision, readGoalCandidates, readLanding, readStatedGoals, sessionUseOf, withLanding } from "./orgInit";
+import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, landingRecordsOf, mergeAnalysisInputs, performApplyDecision, readLanding, sessionUseOf, withLanding } from "./orgInit";
+import { readGoalCandidates, readStatedGoals } from "./orgSaid";
 import type { AskModel } from "./lib/statedGoals";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 

@@ -118,7 +118,7 @@ packages/convex/convex/notifications.ts
 packages/convex/convex/oauthConnectors.test.ts 850
 packages/convex/convex/org.ts
 packages/convex/convex/orgHealth.ts
-packages/convex/convex/orgInit.ts 2000
+packages/convex/convex/orgInit.ts 1800
 packages/convex/convex/orgProposals.test.ts 1850
 packages/convex/convex/orgProposals.ts 1550
 packages/convex/convex/orgRoles.ts

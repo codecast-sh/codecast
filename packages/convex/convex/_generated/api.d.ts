@@ -612,6 +612,7 @@ import type * as orgRoleTokensSchema from "../orgRoleTokensSchema.js";
 import type * as orgRoles from "../orgRoles.js";
 import type * as orgRootSeat from "../orgRootSeat.js";
 import type * as orgRoute from "../orgRoute.js";
+import type * as orgSaid from "../orgSaid.js";
 import type * as orgSplit from "../orgSplit.js";
 import type * as orgTakeover from "../orgTakeover.js";
 import type * as orgTemplateLearning from "../orgTemplateLearning.js";
@@ -1416,6 +1417,7 @@ declare const fullApi: ApiFromModules<{
   orgRoles: typeof orgRoles;
   orgRootSeat: typeof orgRootSeat;
   orgRoute: typeof orgRoute;
+  orgSaid: typeof orgSaid;
   orgSplit: typeof orgSplit;
   orgTakeover: typeof orgTakeover;
   orgTemplateLearning: typeof orgTemplateLearning;
