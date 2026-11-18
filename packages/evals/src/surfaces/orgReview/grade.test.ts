@@ -7,7 +7,7 @@ import { routeGates, scoreOf } from '../../adapters/replay';
 import { REPO_ROOT } from '../../paths';
 import { gate, type AgentResult } from '../../surface';
 import { servedReadKey } from '../../served';
-import { assembleProposals } from './assemble';
+import { agentProposalsDir, assembleProposals } from './assemble';
 import { buildBriefing, CHECK_SCRIPT } from './build';
 import { checkProposal } from './checkProposal';
 import { builtAt, gradeAuto, handlePool, refuseArchive, type GradeSets } from './grade';
@@ -51,6 +51,15 @@ describe('org-review, synthetic', () => {
     const out = assembleProposals(dir);
     expect(out).toEqual({ title: 'Second', summary_md: '[op-1] None\n\n[op-2] two\n\n[op-10] ten', mode: 'init', changes: [close('ct-1'), close('ct-2'), close('ct-3')], proposals: 3 });
     expect(JSON.parse(readFileSync(join(dir, 'proposal.json'), 'utf8'))).toEqual(out);
+  });
+
+  test("the agent's own proposals dir, the only one its sandbox can write, is read and is what the briefing names", () => {
+    const dir = tmp('org-agent-proposals-');
+    mkdirSync(agentProposalsDir(dir), { recursive: true });
+    writeFileSync(join(agentProposalsDir(dir), 'op-1.json'), JSON.stringify({ summary_md: 'one', changes: [close('ct-1')] }));
+    expect(assembleProposals(dir)).toMatchObject({ changes: [close('ct-1')], proposals: 1 });
+    const b = buildBriefing({ inputsText: JSON.stringify(WORLD), workspace: 'acme', served: 's', proposalsDir: agentProposalsDir(dir), frozen: [] });
+    expect(b.briefing).toContain(`${join(dir, 'agent1', 'agent', 'proposals')}/op-<n>.json`);
   });
 
   test('records band on recall of what the inputs flag, and a wrong close zeroes it', () => {
@@ -272,7 +281,7 @@ describe('org-review, synthetic', () => {
     expect(score.checks.map((c: { id: string }) => c.id)).toEqual(['records', 'sessions', 'roles_named', 'coverage', 'repeats', 'summary_words']);
     const hashes = JSON.parse(readFileSync(join(dir, 'hashes.json'), 'utf8'));
     expect(JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8')).promptSha).toBe(hashes.promptSha);
-    expect(readFileSync(join(dir, 'agent1', 'prompt.md'), 'utf8')).toContain(`${dir}/proposals/op-<n>.json`);
+    expect(readFileSync(join(dir, 'agent1', 'prompt.md'), 'utf8')).toContain(`${dir}/agent1/agent/proposals/op-<n>.json`);
     expect(JSON.parse(readFileSync(join(dir, 'grade-auto.json'), 'utf8')).records.recall).toBe('0 of 4');
 
     // The same folder regrades through `./evals grade`, which finds the freeze in its run.json.
