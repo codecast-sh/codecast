@@ -27,8 +27,8 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
+import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { contextShareOf, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
 import { USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
@@ -288,8 +288,9 @@ function BlockedSessionsBanner({
   // replay the entrance with the attention glow so the incident lands.
   fresh?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [includeSubs, setIncludeSubs] = useState(false);
+  // Opens expanded when workers are all that is blocked: they start unticked,
+  // so the rows are the only place anything can be continued.
+  const [expanded, setExpanded] = useState(() => actedBlockedConversations(blocked, false).length === 0 && skippedBlockedWorkers(blocked, false).length > 0);
   // Which account the continue runs on: "" = the account the machine is signed
   // into now, null = not chosen yet — the default, which is the account the
   // machine PROPOSED when it is asking, else the current one.
@@ -297,9 +298,8 @@ function BlockedSessionsBanner({
   // The newest account switch in flight from any surface: a fleet revive and
   // a machine switch would fight over the same credential, so it holds both.
   const switchRow = useInboxStore((st) => latestSessionCommand(st.sessionCommands, (r) => r.kind === "switch"));
-  // Which sessions the continue restarts. null = the default pick: parks inside
-  // the auto-continue window, since an older park already sat through a reset
-  // nobody came back for. The first tick or untick makes it an explicit set.
+  // Which sessions the continue restarts. null = all of them; the first tick or
+  // untick makes it an explicit set.
   const [picked, setPicked] = useState<Set<string> | null>(null);
   const acknowledgeMutation = useMutation(api.accountSwitch.acknowledgeBlocked);
   // The X is a durable, cross-device snooze (24h) — a banner that resurrects
@@ -346,7 +346,7 @@ function BlockedSessionsBanner({
   // halves — "Continue 1 · dismiss 37 workers" — and the incident shrinks to
   // what was acted on instead of carrying rows nobody will ever revive.
   const subagents = skippedBlockedWorkers(blocked, false);
-  const skippedWorkers = skippedBlockedWorkers(blocked, includeSubs);
+  const subagentIds = new Set(subagents.map((sess) => sess._id));
   const safetyBlocked = blocked.filter((sess) => sess.pending_api_error_kind === "safety");
   const safetyCount = safetyBlocked.length;
   // Full context windows: a "continue" cannot reach them, only /compact or
@@ -356,11 +356,15 @@ function BlockedSessionsBanner({
   const isContextFull = (sess: InboxSession) => sess.pending_api_error_kind === "context";
   const contextBlocked = blocked.filter((sess) => isContextFull(sess) && !isSubagentConversation(sess));
   const contextCount = contextBlocked.length;
-  // Workers join the acted set only through the checkbox — never because they
-  // are all that is blocked. Continuing an in-process worker cannot reach it;
-  // it resumes a standalone copy that reruns its brief for nobody (the
-  // 2026-08-20 fleet: 53 copies running stale briefs in the shared checkout).
-  // Left unticked, the banner offers nothing to continue and says so.
+  // Workers are drawn in their machine rows but start unticked, and join the
+  // acted set only when a person ticks one — never because they are all that
+  // is blocked. Continuing an in-process worker cannot reach it; it resumes a
+  // standalone copy that reruns its brief for nobody (the 2026-08-20 fleet: 53
+  // copies running stale briefs in the shared checkout).
+  const revivable = actedBlockedConversations(blocked, true);
+  const defaultPick = new Set(revivable.filter((sess) => !subagentIds.has(sess._id)).map((sess) => sess._id));
+  const includeSubs = [...(picked ?? defaultPick)].some((id) => subagentIds.has(id));
+  const skippedWorkers = includeSubs ? [] : subagents;
   const acted = actedBlockedConversations(blocked, includeSubs);
   const authCount = acted.filter((sess) => sess.pending_api_error_kind === "auth").length;
   const connCount = acted.filter((sess) => sess.pending_api_error_kind === "connection").length;
@@ -380,12 +384,17 @@ function BlockedSessionsBanner({
   // that answers "which sessions?" most usefully: fresh casualties on top).
   const blockedSorted = [...blocked].sort((a, b) => blockAt(b) - blockAt(a));
 
+  // A worker row is ticked like any other. The first ticked worker brings the
+  // workers into the acted set, and unticking the last one leaves them out
+  // again, where a whole-incident continue dismisses them.
   const togglePick = (id: string) => {
     const next = new Set(chosenIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setPicked(next);
   };
+  // Rows show their cause only when the causes differ; otherwise the headline says it.
+  const mixedCauses = new Set(blocked.map((sess) => sess.pending_api_error_kind)).size > 1;
   const setAllPicked = (on: boolean) => setPicked(new Set(on ? pickable.map((sess) => sess._id) : []));
 
   // The sign-in CTA's executor: the online primary (non-remote) machine — the
@@ -408,7 +417,7 @@ function BlockedSessionsBanner({
   // Accounts belong to machines, so the banner answers per group of machines
   // that hold the same ones (lib/blockedLanes): a laptop can switch while the
   // line hosts wait for their own pool to reset.
-  const lanes = blockedLanes({ sessions: acted, executorFor: (sess) => executorFor(sess as InboxSession), pool: accountPool, now });
+  const lanes = blockedLanes({ sessions: revivable, executorFor: (sess) => executorFor(sess as InboxSession), pool: accountPool, now });
   const laneOf = new Map(lanes.flatMap((lane) => lane.sessionIds.map((id) => [id, lane] as const)));
   // The person's machine: every lane recovers under its mode (hostRecovery.recoveryFleet).
   const recoveryDevice = devices.find((d) => !d.is_remote);
@@ -460,13 +469,11 @@ function BlockedSessionsBanner({
     restartShareOfRemaining(contextTokens, targetUsage, calibration, now);
   // Everything a button can restart: the continue set where a lane can act,
   // plus the full context windows it compacts.
-  const pickable = [...acted.filter((sess) => actionIds.has(sess._id)), ...contextBlocked];
+  const pickable = [...revivable.filter((sess) => actionIds.has(sess._id)), ...contextBlocked];
   const pickableIds = new Set(pickable.map((sess) => sess._id));
-  const { chosenIds, chosen, reloadTokens, reloadShare, leftUnticked: olderUnticked } = restartPlan(pickable, {
+  const { chosenIds, chosen, reloadTokens, reloadShare } = restartPlan(pickable, {
     now,
-    windowMs: AUTO_CONTINUE_WINDOW_MS,
-    parkedAt: blockAt,
-    picked,
+    picked: picked ?? defaultPick,
     switchingAccount: !!leadTarget,
     rowFor: (sess) => sess,
     activeSinceFor: (sess) => executorFor(sess)?.active_since,
@@ -477,7 +484,7 @@ function BlockedSessionsBanner({
   // One lane holding every acted session, all ticked, is the whole incident:
   // its continue may dismiss the skipped workers. Anything less is a scoped
   // revive that acts on exactly its ids and dismisses nothing.
-  const wholeIncident = lanes.length === 1 && chosenContinue.length === acted.length;
+  const wholeIncident = new Set(acted.map((sess) => laneOf.get(sess._id))).size === 1 && chosenContinue.length === acted.length;
   // The headline figure and the words after it. One place, because the fallback
   // has to change both: "18% of what is left in the 5h window" when the rate is
   // fitted, "2.1M tokens of context" when it is not.
@@ -623,24 +630,17 @@ function BlockedSessionsBanner({
     if (sessions.length > 0) void runRevive(target ? switchTarget(target) : undefined, sessions, { scoped: !wholeIncident, close });
     else if (close) closeBanner();
   };
-  // "all" only when the button truly covers the headline count. When workers
-  // are skipped the button says what happens to BOTH halves — the skipped
-  // workers are dismissed by the same click, and a button that only said
+  // The button counts what it continues: the ticked rows. When the click also
+  // dismisses the unticked workers it says so, since a button that only said
   // "Continue 1" would hide that the other 37 rows are about to go.
   const dismissing = skippedWorkers.length > 0 && wholeIncident;
   const dismissLabel = dismissing ? ` · dismiss ${skippedWorkers.length} worker${skippedWorkers.length === 1 ? "" : "s"}` : "";
   const laneCountLabel = (lane: BlockedLane) => {
-    const inLane = pickable.filter((sess) => laneOf.get(sess._id) === lane).length;
     const ticked = chosenContinue.filter((sess) => laneOf.get(sess._id) === lane).length;
-    if (lanes.length > 1) return ticked === inLane ? `${inLane}` : `${ticked} of ${inLane}`;
-    return !allPicked
-      ? `${chosen.length} of ${pickable.length}`
-      : dismissing
-        ? `${pickable.length}${dismissLabel}`
-        : pickable.length === 1 ? (blocked.length === 1 ? "it" : "1 eligible session") : pickable.length === blocked.length ? `all ${pickable.length}` : `${pickable.length}`;
+    return ticked === 0 ? "" : `${ticked}${lane.sessionIds.some((id) => !subagentIds.has(id)) ? dismissLabel : ""}`;
   };
   const dismissTitle = dismissing
-    ? `; the ${skippedWorkers.length} skipped worker${skippedWorkers.length === 1 ? " is" : "s are"} dismissed from the blocked set, not continued (tick the box above to continue them instead)`
+    ? `; the ${skippedWorkers.length} skipped worker${skippedWorkers.length === 1 ? " is" : "s are"} dismissed from the blocked set, not continued (tick their rows to continue them instead)`
     : "";
   const compactTitle = chosenCompact.length > 0
     ? `${chosenCompact.length === 1 ? "The full session gets" : `The ${chosenCompact.length} full sessions get`} /compact instead (it keeps a summary and continues). `
@@ -699,82 +699,6 @@ function BlockedSessionsBanner({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      {/* The breakdown items always sum to the headline count: when the
-          checkbox excludes subagents from the acted set, the excluded
-          slice appears here as its own item instead of silently vanishing
-          from the math. Every button below reuses these exact counts. */}
-      <div className="mt-0.5 text-meta leading-snug text-sol-text-muted">
-        {[
-          limitCount > 0 ? `${limitCount} hit a usage limit` : null,
-          throttleCount > 0 ? `${throttleCount} rate limited by a burst (retried a few at a time)` : null,
-          connCount > 0 ? `${connCount} dropped mid-response` : null,
-          fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
-          authCount > 0 ? `${authCount} signed out` : null,
-          safetyCount > 0 ? `${safetyCount} need${safetyCount === 1 ? "s" : ""} safety review (excluded from automatic recovery)` : null,
-          contextCount > 0 ? `${contextCount} ran out of context (compacted on continue)` : null,
-          // The suffix names a consequence of the continue button, so it
-          // only appears while that button does (a fleet of nothing but
-          // workers offers no continue, only "Dismiss all").
-          skippedWorkers.length > 0
-            ? `${skippedWorkers.length} subagent worker${skippedWorkers.length === 1 ? "" : "s"} skipped${acted.length > 0 ? " (dismissed on continue)" : ""}`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(" · ")}
-      </div>
-      {pickable.length > 0 && (
-        <div
-          className="mt-0.5 text-meta leading-snug text-sol-text-muted"
-          title={restartCostTip}
-        >
-          {chosen.length === 0
-            ? "nothing ticked to restart"
-            : reloadTokens > 0
-              ? (
-                  // The total is the number the decision turns on — untick a
-                  // session and this is what moves — so it carries the weight
-                  // of the line instead of sitting inside a grey sentence.
-                  // It is stated against the account's REMAINING window
-                  // wherever the rate has been fitted, because that is the
-                  // limit these sessions are parked on; the share of their
-                  // own context windows is the fallback when it has not.
-                  <>
-                    {`restarting ${chosen.length} spends about `}
-                    <span className="font-semibold text-amber-700 dark:text-amber-400 text-[13px]">
-                      {restartTotal}
-                    </span>
-                    {restartTotalSuffix}
-                  </>
-                )
-              : `restarting ${chosen.length}`}
-          {olderUnticked > 0 && ` · ${olderUnticked} parked over ${formatIdle(AUTO_CONTINUE_WINDOW_MS)} ago left unticked`}
-          {" "}
-          {!allPicked && (
-            <button onClick={() => setAllPicked(true)} className="ml-1.5 underline decoration-dotted hover:text-sol-text">
-              tick all
-            </button>
-          )}
-          {!expanded && pickable.length > 1 && (
-            <button onClick={() => setExpanded(true)} className="ml-1.5 underline decoration-dotted hover:text-sol-text">
-              choose
-            </button>
-          )}
-        </div>
-      )}
-      {subagents.length > 0 && (
-        <label
-          className="mt-1 flex w-fit cursor-pointer items-center gap-1.5 text-meta text-sol-text-dim hover:text-sol-text"
-          title="Subagent workers are skipped by default — their parent session has usually moved on, so reviving them spends the account on work nobody is waiting for. Left unticked, the continue button dismisses them from the blocked set instead."
-        >
-          <input
-            type="checkbox"
-            checked={includeSubs}
-            onChange={(e) => setIncludeSubs(e.target.checked)}
-            className="h-3 w-3 shrink-0 accent-amber-500"
-          />
-          include the {subagents.length} skipped worker{subagents.length === 1 ? "" : "s"}
-        </label>
-      )}
       {/* The big sign-in CTA belongs only to a LOGIN incident — the same
           condition that makes the headline read "blocked on login". In a
           mixed fleet (limits + a few signed out) the remedy the banner leads
@@ -819,7 +743,34 @@ function BlockedSessionsBanner({
         <SignInCta device={loginDevice} authSessionIds={actedAuthIds} disabled={busy !== null} />
       )}
       {expanded && (
-        <div className="mt-2 max-h-56 overflow-y-auto scrollbar-auto rounded border border-amber-500/15 bg-sol-bg/40 divide-y divide-sol-border/30">
+        <div className="mt-1.5 space-y-0.5 text-meta leading-snug text-sol-text-muted">
+          {/* The cause breakdown always sums to the headline count: when the
+              workers are left out, they appear as their own item. */}
+          <div>
+            {[
+              limitCount > 0 ? `${limitCount} hit a usage limit` : null,
+              throttleCount > 0 ? `${throttleCount} rate limited` : null,
+              connCount > 0 ? `${connCount} dropped mid-response` : null,
+              fatalCount > 0 ? `${fatalCount} api error` : null,
+              authCount > 0 ? `${authCount} signed out` : null,
+              safetyCount > 0 ? `${safetyCount} safety review` : null,
+              contextCount > 0 ? `${contextCount} context full (compacted)` : null,
+              skippedWorkers.length > 0 ? `${skippedWorkers.length} worker${skippedWorkers.length === 1 ? "" : "s"} left out` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </div>
+          {chosen.length > 0 && reloadTokens > 0 && (
+            <div title={restartCostTip}>
+              {`restarting ${chosen.length} costs `}
+              <span className="font-semibold text-amber-700 dark:text-amber-400">{restartTotal}</span>
+              {restartTotalSuffix}
+            </div>
+          )}
+        </div>
+      )}
+      {expanded && (
+        <div className="mt-1.5 max-h-56 overflow-y-auto scrollbar-auto rounded border border-amber-500/15 bg-sol-bg/40 divide-y divide-sol-border/30">
           {pickable.length > 1 && (
             <label className="sticky top-0 z-10 flex cursor-pointer items-center gap-2 bg-sol-bg/95 px-2 py-1 text-meta text-sol-text-dim hover:text-sol-text">
               <input
@@ -845,7 +796,7 @@ function BlockedSessionsBanner({
                 disabled={!pickableIds.has(sess._id) || busy !== null}
                 onChange={() => togglePick(sess._id)}
                 className="h-3 w-3 shrink-0 accent-amber-500 disabled:opacity-40"
-                title={!pickableIds.has(sess._id) ? "Not restartable from here (a skipped worker or a safety stop)" : isContextFull(sess) ? "Compact this session with the continue below (its context is full)" : "Restart this session with the continue below"}
+                title={!pickableIds.has(sess._id) ? "Not restartable from here (a safety stop, or its machine is waiting for a reset)" : subagentIds.has(sess._id) && !chosenIds.has(sess._id) ? "Subagent worker, left out by default: its parent has usually moved on" : isContextFull(sess) ? "Compact this session with the continue below (its context is full)" : "Restart this session with the continue below"}
                 aria-label="Include this session in the restart"
               />
               <button
@@ -853,12 +804,12 @@ function BlockedSessionsBanner({
                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
                 title="Open this session"
               >
-                <AuthErrorBadge kind={sess.pending_api_error_kind} agentType={sess.agent_type} />
-                <span className={`min-w-0 flex-1 truncate text-meta ${isSubagentConversation(sess) && !includeSubs ? "text-sol-text-dim" : "text-sol-text"}`}>
+                {mixedCauses && <AuthErrorBadge kind={sess.pending_api_error_kind} agentType={sess.agent_type} />}
+                <span className={`min-w-0 flex-1 truncate text-meta ${isSubagentConversation(sess) && !chosenIds.has(sess._id) ? "text-sol-text-dim" : "text-sol-text"}`}>
                   {cleanTitle(sess.title || "") || "Untitled session"}
                 </span>
                 {isSubagentConversation(sess) && (
-                  <span className="shrink-0 rounded border border-sol-border/50 px-1 text-meta text-sol-text-dim" title={includeSubs ? "Subagent worker — included in the revive" : "Subagent worker — dismissed by the continue button unless included above"}>
+                  <span className="shrink-0 rounded border border-sol-border/50 px-1 text-meta text-sol-text-dim" title="Subagent worker">
                     sub
                   </span>
                 )}
@@ -926,7 +877,7 @@ function BlockedSessionsBanner({
                 recommendedKey={lane === proposedLane ? proposalKey ?? undefined : undefined}
                 localDeviceId={localDeviceId}
                 busy={busy !== null}
-                continueLabel={`${laneTarget(lane) ? "Switch & continue" : "Continue"} ${laneCountLabel(lane)}`}
+                continueLabel={`${laneTarget(lane) ? "Switch & continue" : "Continue"} ${laneCountLabel(lane)}`.trim()}
                 continueTitle={laneContinueTitle(lane)}
                 onPick={(key) => setLaneAccount(lane, key)}
                 onContinue={() => handleLaneContinue(lane)}

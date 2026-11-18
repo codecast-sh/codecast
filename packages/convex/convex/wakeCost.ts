@@ -123,15 +123,12 @@ export function formatIdle(ms: number): string {
 }
 
 // The restart bar's arithmetic, kept out of the component so it can be tested:
-// which parked sessions are ticked by default, and what restarting the ticked
-// ones reloads. Parks inside `windowMs` are ticked; an older park already sat
-// through a reset nobody came back for.
+// which parked sessions are ticked (all of them until the person picks), and
+// what restarting the ticked ones reloads.
 export function restartPlan<T extends { _id: string }>(
   acted: T[],
   opts: {
     now: number;
-    windowMs: number;
-    parkedAt: (row: T) => number;
     picked?: Set<string> | null;
     switchingAccount: boolean;
     rowFor: (row: T) => WakeRow & { context_tokens?: number | null };
@@ -145,10 +142,8 @@ export function restartPlan<T extends { _id: string }>(
   /** How full the reloading sessions are, across their combined windows. Covers
    *  only the ones whose model window is known; null when none of them is. */
   reloadShare: number | null;
-  leftUnticked: number;
 } {
-  const chosenIds = opts.picked
-    ?? new Set(acted.filter((row) => opts.now - opts.parkedAt(row) < opts.windowMs).map((row) => row._id));
+  const chosenIds = opts.picked ?? new Set(acted.map((row) => row._id));
   const chosen = acted.filter((row) => chosenIds.has(row._id));
   let reloadTokens = 0;
   // The share is computed over the sessions whose window we know, BOTH halves of
@@ -177,6 +172,5 @@ export function restartPlan<T extends { _id: string }>(
     scoped: chosen.length !== acted.length,
     reloadTokens,
     reloadShare: knownWindow > 0 ? knownTokens / knownWindow : null,
-    leftUnticked: opts.picked ? 0 : acted.length - chosen.length,
   };
 }

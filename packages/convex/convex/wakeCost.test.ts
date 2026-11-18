@@ -108,24 +108,26 @@ describe("restartPlan — what the restart bar ticks and what it costs", () => {
   });
   const acted = [row("a", 4, 800_000), row("b", 90, 300_000), row("c", 8 * 60, 500_000), row("d", 30 * 60, 400_000)];
   const base = {
-    now: NOW, windowMs: 6 * 60 * 60 * 1000, parkedAt: (r: any) => r.pending_api_error_at,
+    now: NOW,
     switchingAccount: false, rowFor: (r: any) => r, activeSinceFor: () => null,
   };
 
-  test("parks inside the window are ticked, older ones are left for the human", () => {
+  test("every session is ticked until the person picks", () => {
+    // The 2026-11-18 banner hid a machine's only session (parked 8h ago) from
+    // its own button, which read "Continue 0 of 1".
     const plan = restartPlan(acted, base);
-    expect([...plan.chosenIds].sort()).toEqual(["a", "b"]);
-    expect(plan.scoped).toBe(true);
-    expect(plan.leftUnticked).toBe(2);
+    expect([...plan.chosenIds].sort()).toEqual(["a", "b", "c", "d"]);
+    expect(plan.scoped).toBe(false);
   });
 
   test("the cost counts only the sessions whose cache is gone", () => {
+    const ab = { ...base, picked: new Set(["a", "b"]) };
     // "a" parked 4 minutes ago keeps its cache; "b" at 90 minutes does not.
-    expect(restartPlan(acted, base).reloadTokens).toBe(300_000);
+    expect(restartPlan(acted, ab).reloadTokens).toBe(300_000);
     // Switching account reloads every ticked session.
-    expect(restartPlan(acted, { ...base, switchingAccount: true }).reloadTokens).toBe(1_100_000);
+    expect(restartPlan(acted, { ...ab, switchingAccount: true }).reloadTokens).toBe(1_100_000);
     // A login that took over after those calls does the same.
-    expect(restartPlan(acted, { ...base, activeSinceFor: () => NOW - 60_000 }).reloadTokens).toBe(1_100_000);
+    expect(restartPlan(acted, { ...ab, activeSinceFor: () => NOW - 60_000 }).reloadTokens).toBe(1_100_000);
   });
 
   test("the total reads as a share of the windows the reloading sessions fill", () => {
@@ -144,11 +146,10 @@ describe("restartPlan — what the restart bar ticks and what it costs", () => {
     expect(restartPlan([row("a", 4, 800_000)], base).reloadShare).toBeNull();
   });
 
-  test("an explicit pick replaces the default and stops counting unticked rows", () => {
+  test("an explicit pick replaces the default", () => {
     const plan = restartPlan(acted, { ...base, picked: new Set(["c", "d"]) });
     expect(plan.chosen.map((r) => r._id)).toEqual(["c", "d"]);
     expect(plan.reloadTokens).toBe(900_000);
-    expect(plan.leftUnticked).toBe(0);
   });
 
   test("ticking every session is not a scoped revive", () => {
