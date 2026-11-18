@@ -413,7 +413,7 @@ import { setBackgroundSessions, setGovernorBackground, holdForDelivery, isDelive
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { followsCredentialStore, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
+import { CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -16063,9 +16063,11 @@ export async function captureTmuxComposerPane(exec: typeof tmuxExec, target: str
 }
 
 function tmuxComposerRegion(pane: string): string | null {
-  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
-  if (glyphAt === -1) return null;
-  return pane.slice(glyphAt + 1).split(/^(?:[─═]{3,}\s*$|\s*[╰└╚][─═]{3,}.*$)/m, 1)[0];
+  const start = composerTextStart(pane);
+  if (start === -1) return null;
+  const lines = pane.slice(start).split("\n");
+  const end = lines.findIndex((line) => /^(?:[─═]{3,}\s*$|\s*[╰└╚][─═]{3,})/.test(line) || CLAUDE_COMPOSER_SCROLLED_BELOW.test(line));
+  return (end === -1 ? lines : lines.slice(0, end)).join("\n");
 }
 
 // Both checks read the whole capture: the caller sizes it to the payload. A
@@ -18253,13 +18255,14 @@ async function runTmuxSubmitVerify(
 // its rule, blank lines included: a draft can sit under blank lines (type-ahead
 // into a busy turn on a starved client), and stopping at the first one read
 // that box as empty, so each retry pasted another copy on top (jx751p3,
-// 2026-11-07). An unboxed one (Codex) ends at a blank line.
+// 2026-11-07). An unboxed one (Codex) ends at a blank line. A box scrolled past
+// its ❯ row is read from its "↑ N more" rule (composerTextStart).
 // null when no glyph is visible (glyphless client or mid-redraw).
 export function tmuxComposerText(pane: string): string | null {
-  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
-  if (glyphAt === -1) return null;
-  const lines = pane.slice(glyphAt + 1).split("\n");
-  const ruleAt = lines.findIndex((line, i) => i > 0 && /^[─═]{3,}\s*$/.test(line));
+  const start = composerTextStart(pane);
+  if (start === -1) return null;
+  const lines = pane.slice(start).split("\n");
+  const ruleAt = lines.findIndex((line, i) => i > 0 && (/^[─═]{3,}\s*$/.test(line) || CLAUDE_COMPOSER_SCROLLED_BELOW.test(line)));
   if (ruleAt !== -1) return lines.slice(0, ruleAt).join("\n").replace(/\s+$/, "");
   const body = [lines[0]];
   for (const line of lines.slice(1)) {
@@ -18616,8 +18619,8 @@ export async function awaitTmuxComposerPayload(
     } catch {
       return "unwatchable"; // capture problems are diagnosed by the post-submit verifier
     }
-    const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
-    if (glyphAt === -1) {
+    const composerAt = composerTextStart(pane);
+    if (composerAt === -1) {
       // Glyphless client, or a transient redraw hid the box: after a few
       // consecutive misses, hand back to the legacy timed-Enter path.
       if (++glyphlessTicks >= 3) return "unwatchable";
@@ -18625,7 +18628,7 @@ export async function awaitTmuxComposerPayload(
       continue;
     }
     glyphlessTicks = 0;
-    const afterGlyph = pane.slice(glyphAt + 1);
+    const afterGlyph = pane.slice(composerAt);
     const glyphLine = afterGlyph.split("\n", 1)[0];
     const composer = tmuxComposerRegion(pane) ?? "";
     if (matches(pane)) return "matched";

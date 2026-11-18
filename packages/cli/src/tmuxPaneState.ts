@@ -238,6 +238,31 @@ export const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽*]\s+\S[^\n]*…\s
 // the pane deferred as AGENT_UNKNOWN_STATE for four hours (2026-11-07, jx7aztd).
 export const CLAUDE_OVERPAINTED_RULE = /^\s*[·✢✳✶✻✽*][─━][^\n]*[─━]{10,}\s*$/m;
 
+// A draft taller than Claude Code's composer scrolls inside the box, and the
+// box's rules then count the hidden lines: "─── ↑ 74 more ───…" on top, where
+// the ❯ row has scrolled out of view, and "─── ↓ 3 more ───…" at the bottom.
+// With no ❯ in view the pane read "unknown", and a typed scheduled task that
+// had not been submitted held every message to its session for hours
+// (2026-11-17: six messages to two sessions, 2h+ each). One line each.
+export const CLAUDE_COMPOSER_SCROLLED_ABOVE = /^\s*[─━]{2,}\s+↑\s*\d+\s+more\s+[─━]{2,}\s*$/;
+export const CLAUDE_COMPOSER_SCROLLED_BELOW = /^\s*[─━]{2,}\s+↓\s*\d+\s+more\s+[─━]{2,}\s*$/;
+
+// Where the composer's text starts: after its last ❯/› glyph, or under the top
+// rule of a composer scrolled past its ❯ row, whichever is lower on the pane.
+// Taking the last glyph alone read the transcript's newest user turn, above the
+// box, as the draft. -1 when neither is in view.
+export function composerTextStart(pane: string): number {
+  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  let scrolledAt = -1;
+  let offset = 0;
+  for (const line of pane.split("\n")) {
+    if (CLAUDE_COMPOSER_SCROLLED_ABOVE.test(line)) scrolledAt = offset + line.length + 1;
+    offset += line.length + 1;
+  }
+  if (scrolledAt > glyphAt) return Math.min(scrolledAt, pane.length);
+  return glyphAt === -1 ? -1 : glyphAt + 1;
+}
+
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
 // list, so check Rewind first). Idle is a positive whitelist — never inferred from
@@ -268,6 +293,11 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // into type-ahead without the leading Escape, and an idle composer still
   // submits the paste.
   if (CLAUDE_OVERPAINTED_RULE.test(region)) return "busy";
+  // A composer scrolled past its ❯ row is still the composer, and it is the
+  // live UI: a dialog replaces the box rather than drawing under it. Checked
+  // before the dialog rules because the draft inside can be any text, a
+  // scheduled task quoting "Esc to cancel" included.
+  if (region.split("\n").some((line) => CLAUDE_COMPOSER_SCROLLED_ABOVE.test(line))) return "idle";
   // Rewind / cancel-able modal: distinguished from warnings by an Esc option.
   // Warnings have only "Press enter to continue" (no Esc). The "❯ (current)" marker
   // is also unique to the Rewind option list.

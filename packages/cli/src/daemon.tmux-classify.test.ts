@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { isTitledRule } from "./interactivePrompt.js";
-import { autoContinueArmedOnPane, inputGuard, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, clearUnresolvablePane, extractTmuxLiveRegion, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
+import { tmuxComposerHoldsPayload, tmuxComposerText, autoContinueArmedOnPane, inputGuard, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, clearUnresolvablePane, extractTmuxLiveRegion, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
 import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isClaudeIdleResumeDialog, isClaudeRewindDialog, isGrokTrustDialog, isIdleResumeOptionRow } from "./tmuxPaneState.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { CLAUDE_BYPASS_WARNING_PANE, CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
@@ -1285,5 +1285,56 @@ describe("composer whose top rule carries the session title (GitHub #88)", () =>
   test("the usage limit dialog in a titled session is still the limit park", () => {
     const pane = [TITLED_RULE_TOP, ...LIMIT_DIALOG_PANE.split("\n")].join("\n");
     expect(classifyTmuxLiveState(extractTmuxLiveRegion(pane))).toBe("limit_dialog");
+  });
+});
+
+// Real tail of cc-resume-launch-lead-session-setup (2026-11-17): a typed
+// scheduled task taller than the composer scrolled inside it, so the box's top
+// rule reads "↑ 2 more" and the ❯ row is out of view. The pane classified
+// "unknown" and the message held for over two hours, and the composer reader
+// took the transcript's older "❯ continue" for the draft.
+describe("a composer scrolled past its ❯ row", () => {
+  const rule = "─".repeat(120);
+  const draft = [
+    "  1. Read sd-2749 (press pitch and investor email) and sd-2750 (launch-week posts).",
+    "  2. Re-read the counts and update the drafts if they have moved.",
+    "  3. If sd-2749 is option 1: prepare the press pitch. Esc to cancel is not a dialog here.",
+    "  4. End with cast state.",
+  ];
+  const pane = (top: string, bottom = rule) => [
+    "❯ continue",
+    "⏺ Both launch cards are now current and waiting on Ashot's yes.",
+    "✻ Churned for 32s · done Monday 5:29 PM",
+    "",
+    top,
+    ...draft,
+    bottom,
+    "",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+  ].join("\n");
+  const scrolledTop = `─── ↑ 2 more ${"─".repeat(100)}`;
+
+  test("reads as the idle composer, not unknown", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(pane(scrolledTop)))).toBe("idle");
+  });
+
+  test("a running turn above it still reads busy", () => {
+    const busy = pane(scrolledTop).replace("✻ Churned for 32s · done Monday 5:29 PM", "✶ Perambulating… (50s · ↓ 161 tokens)");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(busy))).toBe("busy");
+  });
+
+  test("the composer text is the box under the rule, not the transcript's last ❯", () => {
+    expect(tmuxComposerText(pane(scrolledTop))).toBe(draft.join("\n"));
+  });
+
+  test("a payload whose tail fills the box is recognized as its tail", () => {
+    const payload = ["<scheduled-task title=\"Launch morning\">", "Steps:", ...draft.map((l) => l.trim())].join("\n");
+    expect(tmuxComposerHoldsPayload(pane(scrolledTop), payload)).toBe(false);
+    expect(tmuxComposerText(pane(scrolledTop))?.replace(/^\s+/gm, "")).toBe(draft.map((l) => l.trim()).join("\n"));
+  });
+
+  test("a bottom rule counting lines below ends the composer", () => {
+    const head = pane(rule, `─── ↓ 5 more ${"─".repeat(100)}`).replace("❯ continue\n", "").replace(draft[0], `❯ ${draft[0].trim()}`);
+    expect(tmuxComposerText(head)).toBe([` ${draft[0].trim()}`, ...draft.slice(1)].join("\n"));
   });
 });
