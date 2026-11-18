@@ -177,17 +177,25 @@ export function useSharedDraft(opts: {
   // of the text and on selection moves. Never from the box's own `input`
   // event: the browser flushes React's sync render between that listener and
   // React's onChange, and a render there still holds the old text, so React
-  // writes it back over the keystroke.
-  useWatchEffect(() => {
+  // writes it back over the keystroke. Only a focused box has a caret: an idle
+  // box's selection sits at the end of the text after every remote edit, which
+  // drew a bare caret right behind the typist's own.
+  const readCaret = () => {
     const el = inputRef.current;
-    setCaret(el && joined ? el.selectionEnd ?? null : null);
-  }, [text, joined, inputRef]);
+    setCaret(el && joined && document.activeElement === el ? el.selectionEnd ?? null : null);
+  };
+  useWatchEffect(readCaret, [text, joined, inputRef]);
   useWatchEffect(() => {
     const el = inputRef.current;
     if (!el || !joined) return;
-    const onSel = () => { if (document.activeElement === el) setCaret(el.selectionEnd ?? null); };
-    document.addEventListener("selectionchange", onSel);
-    return () => document.removeEventListener("selectionchange", onSel);
+    document.addEventListener("selectionchange", readCaret);
+    el.addEventListener("focus", readCaret);
+    el.addEventListener("blur", readCaret);
+    return () => {
+      document.removeEventListener("selectionchange", readCaret);
+      el.removeEventListener("focus", readCaret);
+      el.removeEventListener("blur", readCaret);
+    };
   }, [joined, inputRef]);
 
   useWatchEffect(() => {
