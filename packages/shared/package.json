@@ -115,6 +115,7 @@
     "./contracts/orgTemplateLearningOptIn": "./contracts/orgTemplateLearningOptIn.ts",
     "./contracts/orgLead": "./contracts/orgLead.ts",
     "./contracts/orgWhere": "./contracts/orgWhere.ts",
+    "./contracts/messagingPolicy": "./contracts/messagingPolicy.ts",
     "./contracts/projectContext": "./contracts/projectContext.ts",
     "./contracts/projectOutputs": "./contracts/projectOutputs.ts",
     "./contracts/redirectWords": "./contracts/redirectWords.ts",
