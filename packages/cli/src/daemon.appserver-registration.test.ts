@@ -240,6 +240,11 @@ describe("one conversation, one agent", () => {
     const body = source.slice(start, end);
     expect(body).toContain("mayMaterializeClaudeTranscript(matAgentType)");
     expect(body).not.toContain("clientOwnsSessionStore(matAgentType)");
+    // A codex conversation with history and no local backend is rebuilt as a
+    // codex rollout (a delivery held 2.5 days retrying every 5 min otherwise),
+    // and never while an app-server thread on this machine owns it.
+    expect(body).toContain("generateCodexJsonl(exportData");
+    expect(body).toContain("persistedAppServerThreads.has(conversationId)");
   });
 
   test("only a provably missing thread counts as gone", () => {
