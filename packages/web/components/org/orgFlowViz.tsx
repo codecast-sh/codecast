@@ -4,6 +4,8 @@
 // (healthParts.RoleLevers). One colour
 // per measure everywhere: work in, work closed, and a daily limit.
 import { RoleFace } from "./RoleFace";
+import { checkFaultOf } from "@codecast/shared/contracts/orgAreas";
+import { AREA_STATUS_COLOR } from "./staffingModel";
 import type { RoleFlow } from "./orgFlow";
 
 export const FLOW_TONE = { reached: "var(--sol-blue)", closed: "var(--sol-green)", asked: "var(--sol-violet)", limit: "var(--sol-orange)" } as const;
@@ -62,8 +64,12 @@ export function InOutBars({ inn, out, days, width, height, limit }: { inn: numbe
 
 /** What a role's week comes to, in the words a person acts on. Each says
  *  something is off, and only that: a role that is fine says nothing here. */
-function weekSignals(f: RoleFlow): { key: string; text: string; tone: string }[] {
-  const out: { key: string; text: string; tone: string }[] = [];
+function weekSignals(f: RoleFlow): { key: string; text: string; tone: string; title?: string }[] {
+  const out: { key: string; text: string; tone: string; title?: string }[] = [];
+  // A role whose check does not run hears nothing of its area: that comes
+  // first, red when nobody chose it, dim when a person turned it off.
+  const fault = f.area && f.status !== "paused" && f.status !== "not_started" ? checkFaultOf(f.area.check) : null;
+  if (fault) out.push({ key: fault.status, text: fault.label, tone: fault.status === "down" ? AREA_STATUS_COLOR.down : "var(--sol-text-dim)", title: fault.reason });
   if (f.daysAtCap > 0) out.push({ key: "limit", text: `at its limit ${f.daysAtCap} of 7 days`, tone: FLOW_TONE.limit });
   if (f.stalls > 0) out.push({ key: "stuck", text: `${f.stalls} stuck`, tone: "var(--sol-yellow)" });
   if (f.wakesTotal >= 20 && f.doneTotal * 20 < f.wakesTotal) out.push({ key: "closing", text: "little getting closed", tone: "var(--sol-magenta)" });
@@ -99,7 +105,7 @@ export function RoleWeekBody({ f, days, headless }: { f: RoleFlow; days: string[
         {signals.length === 0 ? (
           <span className="text-meta" style={{ color: "var(--sol-text-dim)" }}>keeping up</span>
         ) : signals.slice(0, 3).map((s) => (
-          <span key={s.key} className="inline-flex items-center h-[18px] px-1.5 rounded text-meta font-medium" style={{ background: `color-mix(in srgb, ${s.tone} 14%, transparent)`, color: s.tone }} data-week-signal={s.key}>{s.text}</span>
+          <span key={s.key} className="inline-flex items-center h-[18px] px-1.5 rounded text-meta font-medium" style={{ background: `color-mix(in srgb, ${s.tone} 14%, transparent)`, color: s.tone }} title={s.title} data-week-signal={s.key}>{s.text}</span>
         ))}
       </div>
     </div>
