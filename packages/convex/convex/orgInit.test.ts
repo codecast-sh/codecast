@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { withUnplaced } from "./lib/orgCoverage";
+import { readUnplaced } from "./orgUnplaced";
 import { makeFakeDb } from "./testDb";
-import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, landingRecordsOf, mergeAnalysisInputs, performApplyDecision, readLanding, readStatedGoals, sessionUseOf, withLanding } from "./orgInit";
+import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, landingRecordsOf, mergeAnalysisInputs, performApplyDecision, readGoalCandidates, readLanding, readStatedGoals, sessionUseOf, withLanding } from "./orgInit";
+import type { AskModel } from "./lib/statedGoals";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
@@ -91,6 +94,14 @@ function fixtures(extra: Record<string, any[]> = {}) {
 }
 
 const ctxOf = (db: any) => ({ db }) as any;
+/** A stand-in for the stated goals' model read: picks each candidate whose text says "goal" or "initiatives", quoting it whole. */
+const goalAsk: AskModel = async (req) => {
+  const goals = req.prompt.split(/\n\n(?=\[\d+\] )/).flatMap((block) => {
+    const m = /^\[(\d+)\] [^\n]*\n([\s\S]*)$/.exec(block);
+    return m && /goal|initiatives/i.test(m[2]) ? [{ i: Number(m[1]), quote: m[2] }] : [];
+  });
+  return JSON.stringify({ goals });
+};
 
 describe("org.analysisInputs", () => {
   test("reads the workspace inside the window, capped, with private rows and other workspaces left out", async () => {
@@ -294,7 +305,7 @@ describe("org.analysisInputs", () => {
         { _id: "cm_goal_dm", team_id: TEAM, channel_id: "chat_channels_dm", user_id: MATE, content: "My goal is a raise.", created_at: NOW - 18 * D },
       ],
     });
-    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW, goalAsk);
     expect(r.channels.map((c: any) => c.name)).toEqual(["general", "me-mate"]);
     expect(r.said.calls).toEqual([
       { id: "cl-7", title: "Quick sync", started_at: NOW - 6 * H, ended_at: NOW - 6 * H + 120_000, participants: ["Me", "Mate"], summary: null, summary_status: "skipped", action_items: [], lines: [
@@ -310,11 +321,11 @@ describe("org.analysisInputs", () => {
     expect(r.said.truncated).toBe(false);
     // The goals people stated: the written line first, then the call's own turn, joined, with where to read it.
     expect(r.said.goals).toEqual({ truncated: false, lines: [
-      { at: NOW - 20 * D, by: "Mate", line: "Core initiatives:\n- Make revenue\n- Grow the funnel", where: "#general" },
-      { at: NOW - 2 * D + 1000, by: "Mate", line: "Our goal is 250 dollars or less per introduction.", where: "cl-1" },
+      { at: NOW - 20 * D, by: "Mate", line: "Core initiatives:\n- Make revenue\n- Grow the funnel", where: "#general", kind: "chat" },
+      { at: NOW - 2 * D + 1000, by: "Mate", line: "Our goal is 250 dollars or less per introduction.", where: "cl-1", kind: "call" },
     ] });
     // A personal workspace reads no team chat and no calls.
-    const mine = await computeAnalysisInputs(ctxOf(db), ME as any, undefined, NOW);
+    const mine = await computeAnalysisInputs(ctxOf(db), ME as any, undefined, NOW, goalAsk);
     expect(mine.said).toEqual({ calls: [], chat: [], truncated: false, goals: { lines: [], truncated: false } });
   });
 
@@ -467,16 +478,46 @@ describe("org.analysisInputs", () => {
     expect(r.sessions.long_running.rows[2]).toMatchObject({ helpers: 3, routines: [] });
   });
 
+  test("stated goal candidates: members' answered decisions and the plans' recorded decisions, highest signal first", async () => {
+    const db = fixtures({
+      session_decisions: [
+        { _id: "sd_ans", conversation_id: S1, session_id: "s1", user_id: ME, team_id: TEAM, short_id: "sd-2", question: "How should the buy budget split?", options: [{ label: "Rank by expected fee" }, { label: "Even split" }], status: "answered", answer_index: 0, answer_text: "breadth gets about 20%", resolved_by: ME, resolved_at: NOW - 2 * D, answered_by: { kind: "user", id: ME }, created_at: NOW - 3 * D },
+        // A role's policy answered it, it is still open, it is old, and a teammate's private session asked it: none is a person's direction the caller can read.
+        { _id: "sd_policy", conversation_id: S1, session_id: "s1", user_id: ME, team_id: TEAM, short_id: "sd-3", question: "Auto?", options: [{ label: "Yes" }], status: "answered", answer_index: 0, resolved_at: NOW - D, answered_by: { kind: "policy", id: "x" }, created_at: NOW - D },
+        { _id: "sd_open", conversation_id: S1, session_id: "s1", user_id: ME, team_id: TEAM, short_id: "sd-4", question: "Open?", options: [{ label: "Yes" }], status: "pending", created_at: NOW - D },
+        { _id: "sd_old", conversation_id: S1, session_id: "s1", user_id: ME, team_id: TEAM, short_id: "sd-5", question: "Old?", options: [{ label: "Yes" }], status: "answered", answer_index: 0, resolved_by: ME, resolved_at: NOW - 40 * D, created_at: NOW - 41 * D },
+        { _id: "sd_priv", conversation_id: "conversations_s2", session_id: "s2", user_id: MATE, team_id: TEAM, short_id: "sd-6", question: "Private?", options: [{ label: "Yes" }], status: "answered", answer_index: 0, resolved_by: MATE, resolved_at: NOW - D, created_at: NOW - D },
+      ],
+      plans: [
+        { _id: PLAN, user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: "pl-1", title: "Launch", status: "active", goal: "Ship it", created_at: 1, updated_at: NOW - 3 * H, entries: [
+          { type: "decision", timestamp: NOW - D, content: "Breadth gets 20% of the budget", rationale: "fee is the objective", author: "Me" },
+          { type: "progress", timestamp: NOW - D, content: "Merged ct-2" },
+          { type: "decision", timestamp: NOW - 50 * D, content: "Too old" },
+        ], decision_log: [{ timestamp: NOW - 3 * D, decision: "Cold calls wait on screening" }] },
+      ],
+    });
+    const read = await readGoalCandidates(ctxOf(db), ME as any, TEAM, NOW);
+    expect(read.candidates.filter((c) => c.kind === "decision" || c.kind === "plan")).toEqual([
+      { kind: "decision", at: NOW - 2 * D, by: "Me", where: "sd-2", text: "Asked: How should the buy budget split?\nAnswered: Rank by expected fee: breadth gets about 20%" },
+      { kind: "plan", at: NOW - D, by: "Me", where: "pl-1", text: "Breadth gets 20% of the budget\nWhy: fee is the objective" },
+      { kind: "plan", at: NOW - 3 * D, by: "Me", where: "pl-1", text: "Cold calls wait on screening" },
+    ]);
+    // A long running session's opening brief joins after them, before chat and calls.
+    const goals = await readStatedGoals(read, [{ id: "c", short_id: "jxlong", owner: "Mate", started_at: NOW - 9 * D, first_message: "Own the goal: every listing gets a buyer in a week." }], "Acme", goalAsk);
+    expect(goals.lines.map((l) => l.where)).toEqual(["jxlong"]);
+    expect((await readGoalCandidates(ctxOf(db), ME as any, undefined, NOW)).candidates).toEqual([]);
+  });
+
   test("the three slices merge to the one process read, and the org slice never reads tasks", async () => {
     const db = fixtures();
     const ctx = ctxOf(db);
-    const whole = await computeAnalysisInputs(ctx, ME as any, TEAM, NOW);
+    const whole = await computeAnalysisInputs(ctx, ME as any, TEAM, NOW, goalAsk);
     const work = await computeAnalysisWork(ctx, ME as any, TEAM);
     const signals = await computeAnalysisSignals(ctx, ME as any, TEAM, NOW);
     const org = await computeAnalysisOrg(ctx, ME as any, TEAM, NOW, JSON.parse(JSON.stringify(work.handoff)));
     const activity = await computeAnalysisActivity(ctx, ME as any, TEAM, NOW);
     const landing = await readLanding(ctx, ME as any, TEAM, NOW, activity.repos, landingRecordsOf(activity.activity));
-    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, withLanding(activity.activity, landing), activity.coverage, await readStatedGoals(ctx, ME as any, TEAM, NOW))).toEqual(whole);
+    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, withLanding(activity.activity, landing), withUnplaced(activity.coverage, await readUnplaced(ctx, ME as any, TEAM, NOW)), await readStatedGoals(await readGoalCandidates(ctx, ME as any, TEAM, NOW), org.sessions.long_running.rows, "Acme", goalAsk))).toEqual(whole);
     expect(work.handoff.latest_event).toBe(NOW - H);
     expect(Object.keys(whole.truncated).sort()).toEqual(["docs", "insights", "plans", "projects", "tasks", "templates"]);
     // The activity block is its own slice (S9): areas, people and stale lists.

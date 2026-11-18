@@ -12,6 +12,7 @@ import { meta } from './meta';
 import { assembleProposals, proposalFiles, type AssembledProposal } from './assemble';
 import { checkProposal } from './checkProposal';
 import { foreignRecords, recordOwners } from './contamination';
+import { gradeGoalTree, loadGoalTreeLabel } from './goalTree';
 
 // The mechanical half of the org rubric for one sample (the port of
 // ~/.cache/org-eval/bin/grade.py): the same sets, bands and pools, against the
@@ -374,6 +375,22 @@ export function gradeDir(dir: string, ctx: OrgGradeContext): OrgGrade {
     const want = Object.keys(ctx.sets.files ?? {}).length;
     gates.push(gate('no-wrong-filing', !f.wrong.length, f.wrong.length ? `filed ${f.wrong.join('; ')}` : `${f.right.length} filed where they belong, none wrong`));
     checks.push({ id: 'filings', ask: 'loose sessions that belong to an area are filed where they belong', weight: 1, score: want ? f.right.length / want : f.wrong.length ? 0 : 1, evidence: want ? `${f.right.length} of ${want} filed${f.missed.length ? `; missed ${f.missed.join(', ')}` : ''}` : 'nothing to file' });
+  }
+  // A snapshot labelled with its goal tree (goal-tree/<snapshot>.json) grades the tree the review proposed.
+  const tree = loadGoalTreeLabel(labelsDir(ctx.workspace), basename(ctx.servedDir));
+  if (tree) {
+    const t = gradeGoalTree(spec.changes, inputs, tree);
+    const share = (a: number, b: number) => (b ? a / b : 1);
+    const parented = t.parents.right.length + t.parents.wrong.length;
+    const toPlace = Object.keys(tree.place).length;
+    gates.push(gate('goal-tree-two-levels', !t.third_level.length, t.third_level.length ? `a third level: ${t.third_level.join('; ')}` : 'no goal sits under a goal that has a parent'));
+    gates.push(gate('no-self-made-target', !t.self_made_targets.length, t.self_made_targets.length ? `targets nobody stated on: ${t.self_made_targets.join('; ')}` : 'every proposed number is one a person named'));
+    checks.push(
+      { id: 'goals_found', ask: 'every goal a person stated is in the tree', weight: 1, score: share(t.found.length, tree.goals.length), evidence: `${t.found.length} of ${tree.goals.length}${t.missing.length ? `; missing ${t.missing.join(', ')}` : ''}` },
+      { id: 'goal_parents', ask: 'each stated goal sits under the goal it feeds', weight: 1, score: share(t.parents.right.length, parented), evidence: `${t.parents.right.length} of ${parented}${t.parents.wrong.length ? `; wrong ${t.parents.wrong.join(', ')}` : ''}` },
+      { id: 'goals_invented', ask: 'no goal is proposed that no person stated', weight: 1, score: t.invented.length ? 0 : 1, evidence: t.invented.length ? `invented ${t.invented.join('; ')}` : 'none invented' },
+      { id: 'work_placed', ask: 'every piece of live work the label lists reaches a goal it serves', weight: 1, score: share(t.placed.right.length, toPlace), evidence: `${t.placed.right.length} of ${toPlace}${t.placed.missed.length ? `; unplaced ${t.placed.missed.join(', ')}` : ''}${t.placed.wrong.length ? `; wrong ${t.placed.wrong.join('; ')}` : ''}` },
+    );
   }
   return { auto, spec, gates, checks };
 }

@@ -20,8 +20,13 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity } from "./orgHealth";
 import { activityPlanOf, computeOrgActivity, isLandedCommit, landingFor, namedTextOf, namesRecord, recordWords, type OrgActivity, type RecordRef } from "./lib/orgActivity";
 import { canAccessChannel } from "./chatAccess";
+import { userMayRead } from "./lib/decisionAccess";
+import { callModel } from "./lib/anthropic";
+import type { VendorGate } from "./lib/vendorGuard";
+import { pickStatedGoals, type AskModel, type GoalCandidate, type StatedGoals } from "./lib/statedGoals";
 import { canReadCall } from "./transcripts";
-import { computeCoverage } from "./lib/orgCoverage";
+import { computeCoverage, withUnplaced } from "./lib/orgCoverage";
+import { planDriverRefs, readUnplaced } from "./orgUnplaced";
 import { isActiveTask } from "@codecast/shared/tasks";
 import { capacity, DAILY_CAP_KEYS, type LandedCommit } from "@codecast/shared/contracts/orgCapacity";
 import {
@@ -62,6 +67,7 @@ import {
   type OrgTrustChange, authorityWords, type OrgAuthorityChange, type OrgHireChange, type OrgUpgradeChange,
   type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, type OrgEvidenceLink, metricsWords, ORG_GOAL_KINDS, type OrgCharterEditChange, type OrgRoleEditChange, describeOrgChange, applyCharterEdits } from "@codecast/shared/contracts/orgProposal";
 import { INITIATIVE_RECORD_MAX, INITIATIVE_RECORD_NOUN, mergeIntentSources, parseIntentSource, type IntentSource } from "@codecast/shared/contracts/initiative";
+import { keepMetricReads, metricShape } from "@codecast/shared/contracts/metricStanding";
 import { performAddProjects, performCreateInitiative, performUpdateInitiative } from "./initiatives";
 import { findInitiative } from "./lib/initiativeRef";
 import { applyRoutineTune, performPauseRole, performResumeRole, performSetHiresFreely, performSetKeepsReportsInside, performSetTrust, performUpdateRole, roleCheckOf, standingConversationOf } from "./orgRoles";
@@ -124,13 +130,13 @@ export const ANALYSIS_CAPS = {
   calls_without_summary: 8,
   call_segments: 150,
   call_lines: 8,
-  /** The goals people stated (readStatedGoals): the lines of chat and of every call's own transcript that name a goal, a priority, a metric or a target, read in their own query part under their own budget. */
-  goal_bytes: 24_000,
-  goal_line_chars: 500,
+  /** The goals people stated (readGoalCandidates, lib/statedGoals): the window's chat lines and call turns read for candidates, alongside answered decisions and plan decisions. A call turn shorter than this states no direction worth a model's read. */
   goal_messages_per_channel: 1200,
   goal_segments_per_call: 1500,
   goal_segments: 12_000,
-  goal_lines_per_call: 8,
+  goal_turn_min_chars: 40,
+  /** Each member's newest answered decisions of the window, so the access reads stay inside a query's read limit. */
+  goal_decisions_per_member: 120,
   /** The landing read (readLanding): commits per repository over its own window, newest first; at the cap the search says so. */
   landing_commits_per_repo: 1200,
   /** The templates the workspace may hire (its own and Codecast's), one line each: under 4 KB of the inputs at both caps. */
@@ -663,7 +669,9 @@ export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, tea
   // the raw projects and plans, the open tasks, the roles and the areas.
   const userNames: Record<string, string> = {};
   for (const i of initiatives) if (i.owner?.kind === "user") userNames[String(i.owner.user_id)] ??= (await ctx.db.get(i.owner.user_id))?.name ?? "";
-  const coverage = computeCoverage({ projects, plans, tasks, roles: scan.roles, areas: activity.areas, initiatives, userNames });
+  // The session driving each open plan a goal lists (ct-95899).
+  const drivers = await planDriverRefs(ctx, plans, initiatives);
+  const coverage = computeCoverage({ projects, plans: plans.map((p: any) => ({ ...p, driver: drivers.get(String(p._id)) ?? null })), tasks, roles: scan.roles, areas: activity.areas, initiatives, userNames });
   return { activity, coverage, repos: reposFromScan(scan) };
 }
 
@@ -773,11 +781,6 @@ export type SaidThread = SaidLine & { channel: string; why: SaidWhy[]; replies: 
  *  is no summary ("skipped": too little said; "failed"; "pending"; null: never
  *  tried). A summarised call carries no lines. */
 export type SaidCall = { id: string | null; title: string | null; started_at: number; ended_at: number | null; participants: string[]; summary: string | null; summary_status: string | null; action_items: string[]; lines?: SaidLine[] };
-/** A goal as a person stated it: a chat line (`where` its channel) or a
- *  speaker's turn on a call (`where` the call's short id, which
- *  `cast call <id> --transcript` opens). */
-export type StatedGoal = SaidLine & { where: string };
-export type StatedGoals = { lines: StatedGoal[]; truncated: boolean };
 export type Said = { calls: SaidCall[]; chat: SaidThread[]; truncated: boolean; goals?: StatedGoals };
 /** Why a line matters: what it decides, asks, or names (a role by handle or
  *  mention, a project by short id or two title words). Empty when nothing. */
@@ -911,60 +914,95 @@ export async function readSaid(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"
   return { calls, chat, truncated };
 }
 
-// ── The goals people stated (2026-10-03) ─────────────────────────────────────
-// A goal comes from a person, and the place a person states one is a chat
-// line or a moment on a call. `said` could carry neither: a call arrives as
-// its generated summary, which keeps decisions and drops the "our goal is
-// $250 or less per introduction", and a busy channel's newest fifty lines
-// reach back days, not the weeks since someone posted the company's
-// priorities. So the goal lines are read on their own, in their own query
-// part: every person written chat line of the window and every speaker's turn
-// of every readable call that names a goal, a priority, a metric or a target,
-// written lines first (they are the firmest), then the calls newest first,
-// under one byte budget with `truncated` when lines were left out.
-const GOAL_RE = /\b(goals?|initiatives?|priorities|north star|objectives?|milestones?|mission|metrics?)\b/i;
-export const statesGoal = (text: string) => GOAL_RE.test(text);
-/** The part of a line that states the goal: a long turn is cut around the
- *  words that name it, never at its opening, so the number said after two
- *  minutes of talk is the part that is kept. */
-export function goalExcerpt(text: string): string {
-  const at = text.search(GOAL_RE);
-  const from = text.length <= ANALYSIS_CAPS.goal_line_chars || at < 0 ? 0 : Math.max(0, Math.min(at - 120, text.length - ANALYSIS_CAPS.goal_line_chars));
-  return text.slice(from, from + ANALYSIS_CAPS.goal_line_chars);
-}
-export function statedGoalsOfCall(where: string, segments: Array<{ at: number; by: string; text: string }>): StatedGoal[] {
-  return speakerTurns(segments).filter((l) => statesGoal(l.line)).slice(0, ANALYSIS_CAPS.goal_lines_per_call).map((l) => ({ ...l, line: goalExcerpt(l.line), where }));
-}
-export async function readStatedGoals(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number): Promise<StatedGoals> {
-  if (!teamId) return { lines: [], truncated: false };
+// ── The goals people stated ──────────────────────────────────────────────────
+// A goal comes from a person, and people state direction wherever they work:
+// a chat line, a turn on a call, the answer to a decision an agent asked, a
+// decision recorded on a plan, the brief that opened a long running session.
+// At Union the founders set most direction in the last three. The readers
+// here gather the window's candidates from each, highest signal first
+// (answered decisions, plan decisions, session openings, chat, then calls,
+// each newest first); lib/statedGoals has a small model pick the lines that
+// state direction. The session openings come from the org slice's long
+// running rows, so they are added where both slices meet.
+/** The window's goal candidates from decisions, plans, chat and calls. */
+export async function readGoalCandidates(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number): Promise<{ candidates: GoalCandidate[]; truncated: boolean }> {
+  if (!teamId) return { candidates: [], truncated: false };
   const cutoff = now - ANALYSIS_WINDOW_MS;
+  const names = new Map<string, string>();
+  const nameOfUser = async (id: any) => {
+    const k = String(id);
+    if (!names.has(k)) { const u: any = await ctx.db.get(id); names.set(k, u?.name ?? u?.email ?? "?"); }
+    return names.get(k)!;
+  };
+  // Answered decisions: what a member chose, with the question it answered.
+  const decisions: GoalCandidate[] = [];
+  const readable = new Map<string, boolean>();
+  const memberIds: Id<"users">[] = (await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect()).map((m: any) => m.user_id);
+  for (const memberId of memberIds) {
+    const rows: any[] = await ctx.db.query("session_decisions").withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", memberId).eq("status", "answered").gte("resolved_at", cutoff)).order("desc").take(ANALYSIS_CAPS.goal_decisions_per_member);
+    for (const d of rows) {
+      if (String(d.team_id ?? "") !== String(teamId) || d.answered_by?.kind === "policy" || d.answered_by?.kind === "role") continue;
+      // One access read per asking session and audience, not per card: a busy founder answers dozens from one thread.
+      const key = JSON.stringify([d.conversation_id, d.asked_user_ids ?? [d.user_id], (d.hops ?? []).map((h: any) => h.role_id), d.workflow_run_id ? d.task_id : null]);
+      if (!readable.has(key)) readable.set(key, await userMayRead(ctx, userId, d));
+      if (!readable.get(key)) continue;
+      const chosen = typeof d.answer_index === "number" ? d.options?.[d.answer_index]?.label : undefined;
+      const answer = [chosen, d.answer_text].filter(Boolean).join(": ");
+      if (!answer) continue;
+      decisions.push({ kind: "decision", at: d.resolved_at, by: await nameOfUser(d.resolved_by ?? d.user_id), where: d.short_id ?? String(d._id), text: `Asked: ${d.question}\nAnswered: ${answer}` });
+    }
+  }
+  decisions.sort((a, b) => b.at - a.at);
+  // Decisions recorded on the workspace's plans.
+  const plansRead = await scopedFetch(ctx, "plans", { userId, workspace: "team" as const, teamId, limit: ANALYSIS_CAPS.plans });
+  const planned: GoalCandidate[] = [];
+  for (const p of plansRead.records as any[]) {
+    const owner = await nameOfUser(p.user_id);
+    const entries = [
+      ...(p.entries ?? []).filter((e: any) => e.type === "decision").map((e: any) => ({ at: e.timestamp, by: e.author ?? owner, text: e.content, why: e.rationale })),
+      ...(p.decision_log ?? []).map((e: any) => ({ at: e.timestamp, by: owner, text: e.decision, why: e.rationale })),
+    ];
+    for (const e of entries) if (e.at >= cutoff && e.text?.trim()) planned.push({ kind: "plan", at: e.at, by: e.by, where: p.short_id ?? String(p._id), text: e.why ? `${e.text}\nWhy: ${e.why}` : e.text });
+  }
+  planned.sort((a, b) => b.at - a.at);
+  // Every person written line of the window's channels.
   const { nameOf, isPerson } = chatAuthors(ctx);
-  const written: StatedGoal[] = [];
+  const written: GoalCandidate[] = [];
   const channels: any[] = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", teamId)).take(ANALYSIS_CAPS.channels);
   for (const ch of channels) {
     if (!ch.name || ch.archived_at || ch.kind === "dm" || !(await canAccessChannel(ctx as any, userId, ch))) continue;
     const msgs: any[] = await ctx.db.query("chat_messages").withIndex("by_channel_created", (q: any) => q.eq("channel_id", ch._id).gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.goal_messages_per_channel);
-    for (const m of msgs) if (usableChat(m) && statesGoal(m.content) && (await isPerson(m))) written.push({ at: m.created_at, by: await nameOf(m), line: goalExcerpt(m.content.trim()), where: `#${ch.name}` });
+    for (const m of msgs) if (usableChat(m) && (await isPerson(m))) written.push({ kind: "chat", at: m.created_at, by: await nameOf(m), where: `#${ch.name}`, text: m.content.trim() });
   }
   written.sort((a, b) => b.at - a.at);
-  const spoken: StatedGoal[] = [];
+  // Every speaker's turn of every readable call, newest call first.
+  const spoken: GoalCandidate[] = [];
   let segmentsLeft = ANALYSIS_CAPS.goal_segments;
   for (const t of await readableCalls(ctx, userId, teamId, now)) {
     if (segmentsLeft <= 0) break;
     const segments = await segmentsOf(ctx, t, Math.min(ANALYSIS_CAPS.goal_segments_per_call, segmentsLeft));
     segmentsLeft -= segments.length;
-    spoken.push(...statedGoalsOfCall(t.short_id ?? t.title ?? "a call", segments));
+    for (const l of speakerTurns(segments)) if (l.line.length >= ANALYSIS_CAPS.goal_turn_min_chars) spoken.push({ kind: "call", at: l.at, by: l.by, where: t.short_id ?? t.title ?? "a call", text: l.line });
   }
-  const lines: StatedGoal[] = [];
-  let bytes = 0;
-  let truncated = segmentsLeft <= 0;
-  for (const l of [...written, ...spoken]) {
-    const size = JSON.stringify(l).length;
-    if (bytes + size > ANALYSIS_CAPS.goal_bytes) { truncated = true; break; }
-    bytes += size;
-    lines.push(l);
-  }
-  return { lines, truncated };
+  return { candidates: [...decisions, ...planned, ...written, ...spoken], truncated: segmentsLeft <= 0 };
+}
+/** The opening brief of each long running session a person started, as a goal candidate. */
+export function sessionOpeningCandidates(rows: Array<{ id: string; short_id?: string; owner?: string; started_at: number; first_message?: string }>): GoalCandidate[] {
+  return rows.filter((r) => r.first_message?.trim()).map((r) => ({ kind: "session" as const, at: r.started_at, by: r.owner ?? "?", where: r.short_id ?? r.id, text: r.first_message! }));
+}
+/** Candidates in the order they are worth keeping: decisions and plans, then session openings, then chat and calls. */
+export function goalCandidatesWith(read: { candidates: GoalCandidate[] }, openings: GoalCandidate[]): GoalCandidate[] {
+  const firm = read.candidates.filter((c) => c.kind === "decision" || c.kind === "plan");
+  const loose = read.candidates.filter((c) => c.kind !== "decision" && c.kind !== "plan");
+  return [...firm, ...openings.sort((a, b) => b.at - a.at), ...loose];
+}
+/** The model read, on the deployment's key under the workspace's vendor gate. */
+export function goalModelAsk(gate: VendorGate): AskModel {
+  return async (req) => (await callModel({ ...req, label: "Stated goals", gate, timeout_ms: 90_000 }))?.text ?? null;
+}
+/** The stated goals from the candidates the readers gathered and the long running rows. */
+export function readStatedGoals(read: { candidates: GoalCandidate[]; truncated: boolean }, longRunning: Parameters<typeof sessionOpeningCandidates>[0], workspace: string, ask: AskModel): Promise<StatedGoals> {
+  return pickStatedGoals(goalCandidatesWith(read, sessionOpeningCandidates(longRunning)), read.truncated, workspace, ask);
 }
 
 export function mergeAnalysisInputs(
@@ -1010,8 +1048,11 @@ export async function workspaceLabelOf(ctx: Ctx, userId: Id<"users">, teamId: Id
   return teamId ? (await ctx.db.get(teamId))?.name ?? "" : (await ctx.db.get(userId))?.name ?? "";
 }
 
-/** The three slices in one process: tests and server side callers. */
-export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
+const workspaceScopeOf = (userId: Id<"users">, teamId: Id<"teams"> | undefined) => (teamId ? `team:${teamId}` : `user:${userId}`);
+
+/** The three slices in one process: tests and server side callers. `ask` is
+ *  the stated goals' model read (goalModelAsk on the workspace's gate by default). */
+export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, ask: AskModel = goalModelAsk({ ctx, scope: { workspace: workspaceScopeOf(userId, teamId) } })) {
   const work = await computeAnalysisWork(ctx, userId, teamId);
   const [org, signals, label, activity] = await Promise.all([
     computeAnalysisOrg(ctx, userId, teamId, now, work.handoff),
@@ -1022,7 +1063,7 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
   const evidence = await Promise.all(org.sessions.long_running.rows.map((r: any) => readSessionEvidence(ctx, r.id, r.started_at, now, work.handoff.projects)));
   org.sessions.long_running.rows = withSessionEvidence(org.sessions.long_running.rows, evidence, work.handoff.projects);
   const landing = await readLanding(ctx, userId, teamId, now, activity.repos, landingRecordsOf(activity.activity));
-  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, withLanding(activity.activity, landing), activity.coverage, await readStatedGoals(ctx, userId, teamId, now));
+  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, withLanding(activity.activity, landing), withUnplaced(activity.coverage, await readUnplaced(ctx, userId, teamId, now)), await readStatedGoals(await readGoalCandidates(ctx, userId, teamId, now), org.sessions.long_running.rows, label, ask));
 }
 
 // One slice per call, so each read stays inside the execution limit on a
@@ -1057,7 +1098,7 @@ export const analysisPart = query({
     if (args.part === "work") return computeAnalysisWork(ctx, userId, args.team_id);
     if (args.part === "signals") return { ...(await computeAnalysisSignals(ctx, userId, args.team_id, now, args.work as AnalysisHandoff | undefined)), label: await workspaceLabelOf(ctx, userId, args.team_id), user_id: userId };
     if (args.part === "activity") return computeAnalysisActivity(ctx, userId, args.team_id, now);
-    if (args.part === "goals") return readStatedGoals(ctx, userId, args.team_id, now);
+    if (args.part === "goals") return readGoalCandidates(ctx, userId, args.team_id, now);
     if (args.part === "landing") return readLanding(ctx, userId, args.team_id, now, args.repos ?? [], (args.records as RecordRef[] | undefined) ?? []);
     if (!args.work) throw new Error("the org slice needs the work slice's handoff");
     return computeAnalysisOrg(ctx, userId, args.team_id, now, args.work as AnalysisHandoff);
@@ -1071,12 +1112,14 @@ export const analysisInputs = action({
     const part = (api as any).orgInit.analysisPart;
     // The work slice first: the org and signals slices read its handoff (the
     // projects, for the chat threads that name one and a session's work share).
-    const [work, activity] = await Promise.all([
+    const [work, activity, unplaced] = await Promise.all([
       ctx.runQuery(part, { ...args, part: "work", now }),
       ctx.runQuery(part, { ...args, part: "activity", now }),
+      // What reaches no goal, from whole tables, in its own read budget (ct-95900).
+      ctx.runQuery((api as any).orgUnplaced.part, { ...args, now }),
     ]);
     if (!work) return null;
-    const [org, signals, goals] = await Promise.all([
+    const [org, signals, goalRead] = await Promise.all([
       ctx.runQuery(part, { ...args, part: "org", now, work: work.handoff }),
       ctx.runQuery(part, { ...args, part: "signals", now, work: work.handoff }),
       ctx.runQuery(part, { ...args, part: "goals", now }),
@@ -1088,7 +1131,9 @@ export const analysisInputs = action({
     ]);
     org.sessions.long_running.rows = withSessionEvidence(org.sessions.long_running.rows, evidence, work.handoff.projects);
     const { label, user_id, ...rest } = signals;
-    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity && landing ? withLanding(activity.activity, landing) : activity?.activity, activity?.coverage, goals ?? undefined);
+    const gate: VendorGate = { ctx, scope: { workspace: workspaceScopeOf(user_id, args.team_id), apiToken: args.api_token } };
+    const goals = goalRead ? await readStatedGoals(goalRead, org.sessions.long_running.rows, label, goalModelAsk(gate)) : undefined;
+    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity && landing ? withLanding(activity.activity, landing) : activity?.activity, activity?.coverage ? withUnplaced(activity.coverage, unplaced) : undefined, goals);
   },
 });
 
@@ -1848,9 +1893,8 @@ export async function applyInitiativeShape(ctx: Ctx, userId: Id<"users">, bounda
   const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
   const parent = p.parent ? await initiativeByRef(ctx, userId, boundary, p.parent) : null;
   const sameParent = p.parent === undefined || String(initiative.parent_initiative_id ?? "") === String(parent?._id ?? "");
-  // A number's series and guardrail are part of it: a proposal that only links a series is a change.
-  const metricShape = (m: { name: string; target: string; series?: string; guardrail?: boolean }) => [m.name.trim(), m.target.trim(), m.series?.trim().toLowerCase() ?? null, !!m.guardrail];
-  const sameMetrics = p.metrics === undefined || JSON.stringify((initiative.metrics ?? []).map(metricShape)) === JSON.stringify(p.metrics.map(metricShape));
+  const proposedMetrics = p.metrics && keepMetricReads(initiative.metrics ?? [], p.metrics);
+  const sameMetrics = proposedMetrics === undefined || JSON.stringify((initiative.metrics ?? []).map(metricShape)) === JSON.stringify(proposedMetrics.map(metricShape));
   // What each list gains, and what it has no room for: a full list drops the entry, never the whole change.
   const crowded: string[] = [];
   const adds = <T>(list: "milestones" | "questions" | "decisions", words: "title" | "text", given: readonly T[] | undefined, wordsOf: (e: T) => string): T[] => {
@@ -1865,7 +1909,7 @@ export async function applyInitiativeShape(ctx: Ctx, userId: Id<"users">, bounda
   const decisions = adds("decisions", "text", p.decisions, (d) => d).map(textEntry);
   const fields: Record<string, any> = {};
   if (!sameParent) fields.parent_initiative_id = parent ? String(parent._id) : null;
-  if (!sameMetrics) fields.metrics = p.metrics;
+  if (!sameMetrics) fields.metrics = proposedMetrics;
   if (p.why !== undefined && p.why.trim() !== (initiative.why ?? "")) fields.why = p.why;
   if (p.done_when !== undefined && p.done_when.trim() !== (initiative.done_when ?? "")) fields.done_when = p.done_when;
   for (const [list, entries] of Object.entries({ milestones, questions, decisions })) if (entries.length) fields[list] = entries;
@@ -1874,7 +1918,7 @@ export async function applyInitiativeShape(ctx: Ctx, userId: Id<"users">, bounda
   const gained = [milestones.length ? counted(milestones.length, "milestone") : "", questions.length ? counted(questions.length, "open question") : "", decisions.length ? counted(decisions.length, "decision") : "", sources ? counted(sources, "source") : ""].filter(Boolean);
   const said = [
     "parent_initiative_id" in fields ? (parent ? `now feeds "${parent.title}" (${parent.short_id})` : "is now a top level goal") : "",
-    "metrics" in fields ? (p.metrics?.length ? `is measured by ${metricsWords(p.metrics)}` : "has no metric") : "",
+    "metrics" in fields ? (p.metrics?.length ? `is measured by ${metricsWords(proposedMetrics ?? p.metrics)}` : "has no metric") : "",
     "why" in fields ? "says why it matters" : "",
     "done_when" in fields ? "says what done looks like" : "",
     gained.length ? `gained ${andListOf(gained)}` : "",
