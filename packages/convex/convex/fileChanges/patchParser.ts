@@ -24,6 +24,16 @@ export interface ParsedPatch {
   newContent: string;
 }
 
+function hunkExpectsContext(hunk: PatchHunk): boolean {
+  let old = 0;
+  let neu = 0;
+  for (const l of hunk.lines) {
+    if (l.type !== "addition") old++;
+    if (l.type !== "deletion") neu++;
+  }
+  return old < hunk.oldCount && neu < hunk.newCount;
+}
+
 export function parsePatch(patch: string): ParsedPatch {
   const lines = patch.split("\n");
   const hunks: PatchHunk[] = [];
@@ -64,7 +74,11 @@ export function parsePatch(patch: string): ParsedPatch {
         content: line.slice(1),
         oldLineNumber: oldLineNum++,
       });
-    } else if (line.startsWith(" ") || line === "") {
+    } else if (line.startsWith(" ") || (line === "" && hunkExpectsContext(currentHunk))) {
+      // A bare empty line is a blank context line whose space was stripped,
+      // but only while the hunk still owes a line on both sides: the empty
+      // string `split` leaves after a patch's final newline (or a blank line
+      // between files) is not part of the hunk.
       currentHunk.lines.push({
         type: "context",
         content: line.startsWith(" ") ? line.slice(1) : line,
