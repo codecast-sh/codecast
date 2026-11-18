@@ -155,9 +155,13 @@ async function membership(deps: OrgInitDeps, options: any): Promise<{ ws: any; a
 
 // ── inputs ───────────────────────────────────────────────────────────────────
 
+/** The inputs are a dozen bounded reads and a model read of the stated goals
+ *  on the server: on Union they take 40 to 50 seconds, past the default wait. */
+const ANALYSIS_INPUTS_TIMEOUT_MS = 180_000;
+
 export async function showInputs(deps: OrgInitDeps, options: any): Promise<void> {
   const { ws, args } = await membership(deps, options);
-  const inputs = await deps.cliPost("/cli/org/analysis-inputs", args);
+  const inputs = await deps.cliPost("/cli/org/analysis-inputs", args, { timeoutMs: ANALYSIS_INPUTS_TIMEOUT_MS });
   if (!inputs) fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
   if (options.json) { console.log(JSON.stringify(inputs, null, 2)); return; }
   const s = summarizeInputs(inputs);
@@ -190,7 +194,7 @@ export async function showInputs(deps: OrgInitDeps, options: any): Promise<void>
 
 export async function runAnalyzer(deps: OrgInitDeps, mode: OrgInitMode, options: { team?: string; spawn?: boolean }): Promise<void> {
   const { ws, args } = await membership(deps, options);
-  const inputs = await deps.cliPost("/cli/org/analysis-inputs", args);
+  const inputs = await deps.cliPost("/cli/org/analysis-inputs", args, { timeoutMs: ANALYSIS_INPUTS_TIMEOUT_MS });
   if (!inputs) fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
   const workspace = inputs.workspace.name || deps.workspaceLabel(ws);
   // One proposal at a time per company. An analyzer parked on a usage limit

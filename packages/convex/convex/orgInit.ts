@@ -1080,14 +1080,17 @@ export const analysisInputs = action({
       ctx.runQuery(part, { ...args, part: "goals", now }),
     ]);
     if (!org || !signals) return null;
-    const [evidence, landing] = await Promise.all([
+    const { label, user_id, ...rest } = signals;
+    // The stated goals' model read is the slowest step: it starts as soon as
+    // its candidates and the sessions' opening briefs are in, beside the reads
+    // of session use and landing, so the inputs answer inside the CLI's wait.
+    const gate: VendorGate = { ctx, scope: { workspace: workspaceScopeOf(user_id, args.team_id), apiToken: args.api_token } };
+    const [evidence, landing, goals] = await Promise.all([
       Promise.all(org.sessions.long_running.rows.map((r: any) => ctx.runQuery(part, { ...args, part: "use", now, session: r.id, started_at: r.started_at, projects: work.handoff.projects }))),
       activity ? ctx.runQuery(part, { ...args, part: "landing", now, repos: activity.repos, records: landingRecordsOf(activity.activity) }) : null,
+      goalRead ? readStatedGoals(goalRead, org.sessions.long_running.rows, label, goalModelAsk(gate)) : undefined,
     ]);
     org.sessions.long_running.rows = withSessionEvidence(org.sessions.long_running.rows, evidence, work.handoff.projects);
-    const { label, user_id, ...rest } = signals;
-    const gate: VendorGate = { ctx, scope: { workspace: workspaceScopeOf(user_id, args.team_id), apiToken: args.api_token } };
-    const goals = goalRead ? await readStatedGoals(goalRead, org.sessions.long_running.rows, label, goalModelAsk(gate)) : undefined;
     return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity && landing ? withLanding(activity.activity, landing) : activity?.activity, activity?.coverage ? withUnplaced(activity.coverage, unplaced) : undefined, goals);
   },
 });
