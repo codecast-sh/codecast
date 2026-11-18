@@ -61,7 +61,7 @@ test("nothing without a transfer, and nothing once it is done", async () => {
 
 test("asking, then receiving with a mode chip and a determinate bar, then unpacking", async () => {
   await setTransfer({ phase: "asking", started_at: NOW, updated_at: NOW });
-  expect(text()).toContain("Asking your machines");
+  expect(text()).toContain("Looking for this session on your other machines");
   expect(button("Cancel")).toBeTruthy();
   expect(document.querySelector("[role=progressbar]")).toBeNull();
 
