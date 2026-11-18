@@ -12,7 +12,6 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { internalQuery } from "./_generated/server";
 import { query } from "./functions";
-import { scopedFetch } from "./data";
 import { collectOrgSessions, requireWorkspaceCaller, type OrgScan } from "./org";
 import { WORK_STATUSES } from "./orgHealth";
 import { readWorkspaceInitiatives } from "./lib/roleInitiatives";
@@ -50,21 +49,27 @@ export async function planDriverRefs(ctx: Ctx, plans: any[], initiatives: Array<
   return out;
 }
 
-/** Every open plan of the workspace (bodies stripped), one status slice each. */
-export async function readOpenPlans(ctx: Ctx, fetchOpts: { userId: Id<"users">; workspace: "team" | "personal"; teamId?: Id<"teams"> }): Promise<any[]> {
+/** Every open plan of the workspace, through the status index and the
+ *  workspace key on the row: no per-row conversation read (scopedFetch makes
+ *  one per linked conversation, which on Union took a query past the 4096
+ *  read limit). Bodies are dropped. */
+export async function readOpenPlans(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined): Promise<any[]> {
+  const key = teamId ? `team:${teamId}` : `user:${userId}`;
   const out: any[] = [];
   for (const status of ["active", "draft", "paused"] as const) {
-    out.push(...(await scopedFetch(ctx, "plans", { ...fetchOpts, status, limit: UNPLACED_READ.open_plans, stripFields: ["body"] })).records);
+    const q = teamId
+      ? ctx.db.query("plans").withIndex("by_team_status", (r: any) => r.eq("team_id", teamId).eq("status", status))
+      : ctx.db.query("plans").withIndex("by_user_status", (r: any) => r.eq("user_id", userId).eq("status", status));
+    for (const p of await q.take(UNPLACED_READ.open_plans)) if (p.workspace === key) { const { body: _body, ...rest } = p; out.push(rest); }
   }
   return out;
 }
 
 export async function readUnplaced(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, given: { scan?: OrgScan; plans?: any[]; projects?: any[] } = {}): Promise<OrgUnplaced> {
   const workspace = teamId ? `team:${teamId}` : `user:${userId}`;
-  const fetchOpts = teamId ? { userId, workspace: "team" as const, teamId } : { userId, workspace: "personal" as const };
   const [plans, projects, initiatives] = await Promise.all([
-    given.plans ?? readOpenPlans(ctx, fetchOpts),
-    given.projects ?? scopedFetch(ctx, "projects", { ...fetchOpts, limit: 200 }).then((r) => r.records),
+    given.plans ?? readOpenPlans(ctx, userId, teamId),
+    given.projects ?? ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).take(200),
     readWorkspaceInitiatives(ctx, workspace),
   ]);
   const refOf = sessionRefs(ctx);

@@ -188,7 +188,7 @@ describe("org.health", () => {
     expect(growth.area.standing).toEqual({ project: "Launch", text: "two pages shipped this week.", written_on: "2026-09-20", written_at: Date.parse("2026-09-20T00:00:00Z") });
     expect(growth.area.standing_lines.map((l) => l.project)).toEqual(["Launch", "Growth"]);
     expect(growth.area.checked_at).toBe(NOW - 2 * H);
-    expect(growth.area.check).toEqual({ trigger_id: "agent_tasks_check", short_id: "tr-7", title: "Check Growth lead's area", status: "paused", run_at: NOW + 3 * H, last_run_at: NOW - 21 * H, last_run_summary: "Nothing needed doing.", interval_ms: D, last_run_failed: false });
+    expect(growth.area.check).toEqual({ trigger_id: "agent_tasks_check", short_id: "tr-7", title: "Check Growth lead's area", status: "paused", run_at: NOW + 3 * H, last_run_at: NOW - 21 * H, last_run_summary: "Nothing needed doing.", interval_ms: D, last_run_failed: false, canceled_on_kill: false });
     // The standing session raising something for the person outranks the rest.
     await db.patch(S_GROWTH as any, { thread_state: "Needs your call on the price band", thread_state_status: "blocked", thread_state_at: NOW - H });
     const raised = (await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW)).roles.find((x) => x.handle === "growth")!;
@@ -402,10 +402,10 @@ describe("readWorkTasks", () => {
 describe("health task rows are slim", () => {
   const LONG = { description: "d".repeat(20_000), last_session_summary: "s".repeat(5_000), change_guide: "g".repeat(5_000), labels: ["a"], assignee: ME };
   test("the rows carry exactly the fields health reads", async () => {
-    expect([...HEALTH_TASK_FIELDS]).toEqual(["_id", "_creationTime", "short_id", "title", "status", "execution_status", "plan_id", "project_id", "updated_at", "conversation_ids"]);
+    expect([...HEALTH_TASK_FIELDS]).toEqual(["_id", "_creationTime", "short_id", "title", "status", "execution_status", "plan_id", "project_id", "updated_at", "conversation_ids", "source", "promoted", "assignee", "triage_status"]);
     const db = fixtures({ tasks: [task("ct-fat", { ...LONG, plan_id: "plans_launch", conversation_ids: ["c1"], execution_status: "blocked" })] });
     const work = slimWorkTasks(await readWorkTasks(ctxOf(db), ME as any, TEAM, { perStatus: 100, updatedSince: NOW - 7 * D, recentCap: 100 }));
-    expect(work.tasks).toEqual([{ _id: "ct-fat", short_id: "ct-fat", title: "ct-fat", status: "open", execution_status: "blocked", plan_id: "plans_launch", project_id: P, updated_at: NOW - 2 * H, conversation_ids: ["c1"] }]);
+    expect(work.tasks).toEqual([{ _id: "ct-fat", short_id: "ct-fat", title: "ct-fat", status: "open", execution_status: "blocked", plan_id: "plans_launch", project_id: P, updated_at: NOW - 2 * H, conversation_ids: ["c1"], assignee: ME }]);
     expect(JSON.stringify(work).length).toBeLessThan(500);
   });
   test("health computed from slim rows matches health from whole rows, and reads no other task field", async () => {

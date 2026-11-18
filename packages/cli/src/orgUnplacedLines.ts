@@ -19,6 +19,7 @@ export type UnplacedView = {
 const SHOWN = 8;
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const cut = (s: string, n = 48) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+const old = (days: number) => (days === 0 ? "new today" : `${days}d old`);
 const driven = (d: SessionRef) => (d ? ` · ${fmt.id(d.short_id)}` : fmt.muted(" · no session"));
 
 export function unplacedCountLine(u: UnplacedView): string {
@@ -38,12 +39,12 @@ export function unplacedLines(u: UnplacedView | null | undefined, now: number, i
   const more = (n: number) => (n > SHOWN ? [`${indent}  ${fmt.muted(`+${n - SHOWN} more (--json)`)}`] : []);
   const at = (t: number) => fmt.muted(`moved ${formatRelative(t, now)}`);
   for (const p of u.plans.slice(0, SHOWN)) {
-    out.push(`${indent}  ${fmt.muted("plan   ")} ${fmt.id(p.short_id)} ${cut(p.title)} ${fmt.muted(`· ${p.open_tasks} open of ${p.open_tasks + p.done_tasks} · ${p.status} · ${p.age_days}d old ·`)} ${at(p.last_activity_at)}${driven(p.driver)}`);
+    out.push(`${indent}  ${fmt.muted("plan   ")} ${fmt.id(p.short_id)} ${cut(p.title)} ${fmt.muted(`· ${p.open_tasks} open of ${p.open_tasks + p.done_tasks} · ${p.status} · ${old(p.age_days)} ·`)} ${at(p.last_activity_at)}${driven(p.driver)}`);
   }
   out.push(...more(u.plans.length));
   for (const p of u.projects.slice(0, SHOWN)) {
     const work = [p.open_tasks ? `${p.open_tasks} open` : "", p.open_plans ? plural(p.open_plans, "plan") : ""].filter(Boolean).join(", ");
-    out.push(`${indent}  ${fmt.muted("project")} ${p.short_id ? `${fmt.id(p.short_id)} ` : ""}${cut(p.title)} ${fmt.muted(`· ${work} · ${p.lead ? `lead ${p.lead}` : "no lead"} · ${p.age_days}d old ·`)} ${at(p.last_activity_at)}${driven(p.driver)}`);
+    out.push(`${indent}  ${fmt.muted("project")} ${p.short_id ? `${fmt.id(p.short_id)} ` : ""}${cut(p.title)} ${fmt.muted(`· ${work} · ${p.lead ? `lead ${p.lead}` : "no lead"} · ${old(p.age_days)} ·`)} ${at(p.last_activity_at)}${driven(p.driver)}`);
   }
   out.push(...more(u.projects.length));
   for (const g of u.loose_tasks.by_session.slice(0, SHOWN)) {
