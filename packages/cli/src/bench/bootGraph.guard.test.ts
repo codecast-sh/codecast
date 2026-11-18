@@ -496,7 +496,12 @@ describe("command groups stay off the boot graph", () => {
     // 4830 on 2026-11-18, measured with all of pl-1049 on main: the climb's
     // and env cases' command-group lines and `cast goal envs`, prediction
     // readability lines in initiativeCommand.ts (+10); bodies load on demand.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4830);
+    // 4839 the same day (+9): sessions codecast launched sync outside the
+    // selected folders (the launch record in syncScope.ts +4), sync lists read
+    // across the person's machines (folderLists.ts +1, syncPlan.ts), a start
+    // clones a missing checkout (resumePlacement.ts +2),
+    // syncService.getSyncSettings +1, reconciliation.ts and projectRoots.ts +1.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4839);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

@@ -8,12 +8,14 @@
 // forever as phantom "stuck syncs" (file changed, never synced, "last sync
 // 20618 days ago").
 
+import * as fs from "node:fs";
 import * as path from "node:path";
+import { codecastPath } from "./codecastDir.js";
 import { dirFilterByDepth } from "./fsWalk.js";
 import { checkoutRootOf } from "./fs/checkoutOf.js";
 import type { Config } from "./config/types.js";
 import { managedExcludedPaths } from "./config/managedPolicy.js";
-import { folderCovers } from "@codecast/shared/team/folderLists";
+import { folderCovers, folderCoversOnAnyMachine } from "@codecast/shared/team/folderLists";
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath } from "@codecast/shared/contracts";
 
 export { TEST_SCRATCH_DIRNAME, isTestArtifactPath };
@@ -50,10 +52,13 @@ export function isPathExcluded(projectPath: string, excludedPaths?: string): boo
 
 /** A folder is in a list when it is one of them or sits below one; a
  *  worktree outside its checkout (Codex keeps them under ~/.codex/worktrees)
- *  counts as its checkout, the same reach a sharing rule has. */
-function inFolderList(list: string[] | undefined, projectPath: string): boolean {
+ *  counts as its checkout, the same reach a sharing rule has. The person's
+ *  own sync lists (`anyMachine`) are shared by all their machines, so an entry
+ *  written on one covers the same place under home on this one. */
+function inFolderList(list: string[] | undefined, projectPath: string, anyMachine = false): boolean {
   if (!list || list.length === 0) return false;
-  const covers = (p: string) => list.some(entry => folderCovers(p, path.resolve(entry)));
+  const match = anyMachine ? folderCoversOnAnyMachine : folderCovers;
+  const covers = (p: string) => list.some(entry => match(p, path.resolve(entry)));
   const normalizedProject = path.resolve(projectPath);
   if (covers(normalizedProject)) return true;
   const checkout = checkoutRootOf(normalizedProject);
@@ -66,9 +71,9 @@ export function isProjectAllowedToSync(projectPath: string, config: Config): boo
   }
   if (!config.sync_mode || config.sync_mode === "all") {
     // "Everything except": the server's excluded folders never upload.
-    return !inFolderList(config.sync_excluded, projectPath);
+    return !inFolderList(config.sync_excluded, projectPath, true);
   }
-  return inFolderList(config.sync_projects, projectPath);
+  return inFolderList(config.sync_projects, projectPath, true);
 }
 
 /**
@@ -77,11 +82,27 @@ export function isProjectAllowedToSync(projectPath: string, config: Config): boo
  * transcript placed by workspace: the live watcher's event and the watchdog's
  * stale-file pass must never disagree about it.
  */
-export function transcriptScopeRefusal(workspacePath: string | null, config: Config): string | null {
-  if (!workspacePath) return config.sync_mode === "selected" ? "unknown workspace path" : null;
+//
+// `launched` marks a session codecast itself started or resumed
+// (markLaunched, below). The launch is the person's choice to see it in
+// codecast, so it lifts only the "not one of my selected folders" refusal; an
+// explicit exclusion (excluded_paths, a managed policy, sync_excluded) and the
+// test-artifact rule still hold it back.
+export function transcriptScopeRefusal(workspacePath: string | null, config: Config, launched = false): string | null {
+  if (!workspacePath) return config.sync_mode === "selected" && !launched ? "unknown workspace path" : null;
   if (isPathExcluded(workspacePath, config.excluded_paths)) return `excluded path ${workspacePath}`;
-  if (!isProjectAllowedToSync(workspacePath, config)) return `non-selected project ${workspacePath}`;
+  if (isTestArtifactPath(workspacePath)) return `non-selected project ${workspacePath}`;
+  if (launched && config.sync_mode === "selected") return null;
+  if (!isProjectAllowedToSync(workspacePath, config)) return `${config.sync_mode === "selected" ? "non-selected" : "excluded"} project ${workspacePath}`;
   return null;
+}
+
+/**
+ * Why a session codecast is launching in `folder` will never sync, or null when
+ * it will. Only explicit exclusions refuse a launch (see transcriptScopeRefusal).
+ */
+export function launchScopeRefusal(folder: string, config: Config): string | null {
+  return transcriptScopeRefusal(folder, config, true);
 }
 
 // The live watcher's own view of the same rule: these tmpdirs end up under
@@ -155,4 +176,79 @@ export function isClaudeTranscriptOutOfWatchScope(filePath: string): boolean {
   const rel = path.relative(claudeProjectsDir(), filePath);
   if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return false;
   return !watchFilter(rel);
+}
+
+// Sessions codecast itself launched on this machine: a start or resume a person
+// asked for through codecast (web, phone, `cast spawn`, a trigger). Such a
+// session exists to be seen in codecast, so the sync scope's "only the folders
+// I selected" rule does not hold its transcript back: the launch is the
+// selection. Explicit exclusions (the person's excluded folders, a managed
+// policy) still win; see transcriptScopeRefusal above.
+//
+// Keyed by conversation and by agent session id. A Claude start knows its
+// session id up front (--session-id); other agents learn theirs later, so the
+// transcript gate also accepts a session the conversation cache maps to a
+// launched conversation. Persisted, because a transcript can sync after a
+// daemon restart (the watchdog's stale pass). Leaf module: no daemon deps.
+
+
+const FILE = "launched-sessions.json";
+const KEEP_MS = 90 * 24 * 60 * 60 * 1000;
+
+interface LaunchedFile {
+  sessions: Record<string, number>;
+  conversations: Record<string, number>;
+}
+
+let memo: { file: string; data: LaunchedFile } | null = null;
+
+function filePath(): string {
+  return codecastPath(FILE);
+}
+
+function load(): LaunchedFile {
+  const file = filePath();
+  if (memo?.file === file) return memo.data;
+  let data: LaunchedFile = { sessions: {}, conversations: {} };
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    data = { sessions: raw?.sessions ?? {}, conversations: raw?.conversations ?? {} };
+  } catch {}
+  memo = { file, data };
+  return data;
+}
+
+function save(data: LaunchedFile): void {
+  const now = Date.now();
+  for (const table of [data.sessions, data.conversations]) {
+    for (const [id, at] of Object.entries(table)) if (now - at > KEEP_MS) delete table[id];
+  }
+  const file = filePath();
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(data));
+    fs.renameSync(tmp, file);
+  } catch {}
+}
+
+/** Record a launch. Either id may be unknown yet; call again when it is. */
+export function markLaunched(ids: { conversationId?: string; sessionId?: string }): void {
+  const data = load();
+  const now = Date.now();
+  let changed = false;
+  if (ids.conversationId && !data.conversations[ids.conversationId]) { data.conversations[ids.conversationId] = now; changed = true; }
+  if (ids.sessionId && !data.sessions[ids.sessionId]) { data.sessions[ids.sessionId] = now; changed = true; }
+  if (changed) save(data);
+}
+
+/** Whether codecast launched this session, by its own id or its conversation's. */
+export function wasLaunched(sessionId: string | undefined, conversationId?: string): boolean {
+  const data = load();
+  return (!!sessionId && !!data.sessions[sessionId]) || (!!conversationId && !!data.conversations[conversationId]);
+}
+
+/** Test seam: forget the in-memory copy so the next read goes to disk. */
+export function resetLaunchedSessionsMemo(): void {
+  memo = null;
 }

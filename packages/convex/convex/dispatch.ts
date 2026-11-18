@@ -2380,6 +2380,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!spec) throw new Error(`Unknown cloud session source: ${source}`);
     await (ctx as any).runMutation(api.users.updateSyncSettings, { [spec.field]: enabled });
   },
+  // One folder into the person's sync (store syncFolder).
+  syncFolder: async (ctx, userId, [folder]: [string]) => {
+    await (ctx as any).runMutation(api.users.syncFolder, { folder });
+  },
   // Web builds from before setCloudSessionSync still send this.
   setClaudeCloudSync: async (ctx, userId, [enabled]: [boolean]) => {
     await (ctx as any).runMutation(api.users.updateSyncSettings, { claude_cloud_sync: enabled });

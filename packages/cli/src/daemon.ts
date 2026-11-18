@@ -79,7 +79,7 @@ import { formatHarnessChange, harnessCauseEnv, markHarnessChangesSent, removeHar
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, pendingCapabilityContents, markCapabilityContentsSent, startCapabilitySourceWatcher, recordConvergenceSignals } from "./capabilities/heartbeat.js";
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, recordRemoteLaunch, stableHostnameAsync } from "./remote/device.js";
-import { UNSAFE_PATH_RE, creatableStartFolder, missingFolderError, missingResumeFolderError, noLocalCheckoutBannerActionable, noLocalCheckoutError, placeFreshDeliverySession, type ConversationProjectInfo } from "./resumePlacement.js";
+import { UNSAFE_PATH_RE, cloneDestination, creatableStartFolder, excludedFolderStartError, missingFolderError, missingResumeFolderError, noLocalCheckoutBannerActionable, noLocalCheckoutError, placeFreshDeliverySession, type ConversationProjectInfo } from "./resumePlacement.js";
 import { closeDeadRunPanes, liveRunnerPid, paneReplaceable, restartsForNewerFlow, runPaneLaunchLine, runPaneName } from "./workflow/runResume.js";
 import { liveRunIdsOf, type LiveRunsOnDevice } from "./workflow/liveRuns.js";
 import {
@@ -332,7 +332,8 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
-import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, transcriptScopeRefusal, watchDirFilter, watchFilter } from "./syncScope.js";
+import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, launchScopeRefusal, markLaunched, transcriptScopeRefusal, wasLaunched, watchDirFilter, watchFilter } from "./syncScope.js";
+import { folderOnThisMachine } from "@codecast/shared/team/folderLists";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync, tmuxRunAsync } from "./tmux.js";
@@ -413,7 +414,7 @@ import { setBackgroundSessions, setGovernorBackground, holdForDelivery, isDelive
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { followsCredentialStore, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
+import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState, agentAtLoginScreen } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -701,6 +702,51 @@ const folderFetches = new Map<string, Promise<string | null>>();
 const FOLDER_FETCH_RETRY_MS = 60_000;
 const folderFetchFailures = folderFetchGate(FOLDER_FETCH_RETRY_MS);
 
+// The person's sync lists, as the server holds them, into this machine's
+// config. Heartbeats carry them; a start refused for a folder they just
+// synced reads them fresh rather than wait for the next beat.
+function applyServerSyncSettings(data: { sync_mode?: string; sync_projects?: string[]; sync_excluded?: string[] }): void {
+  const currentConfig = readConfig();
+  const serverMode = data.sync_mode as "all" | "selected";
+  const serverProjects: string[] = data.sync_projects ?? [];
+  const serverExcluded: string[] = data.sync_excluded ?? [];
+  const localMode = currentConfig?.sync_mode ?? "all";
+  const localProjects = currentConfig?.sync_projects ?? [];
+  const localExcluded = currentConfig?.sync_excluded ?? [];
+
+  if (serverMode !== localMode || JSON.stringify(serverProjects) !== JSON.stringify(localProjects) || JSON.stringify(serverExcluded) !== JSON.stringify(localExcluded)) {
+    log(`Sync settings updated from server: mode=${serverMode}, projects=${serverProjects.length}, excluded=${serverExcluded.length}`);
+    patchConfig({ sync_mode: serverMode, sync_projects: serverProjects, sync_excluded: serverExcluded });
+    if (activeConfig) {
+      activeConfig.sync_mode = serverMode;
+      activeConfig.sync_projects = serverProjects;
+      activeConfig.sync_excluded = serverExcluded;
+    }
+    // A folder just chosen (or no longer excluded) already holds sessions
+    // nobody touched since; the sweep uploads them now instead of at the
+    // next reconciliation.
+    const widened = (serverMode === "all" && localMode !== "all")
+      || (serverMode === "selected" && serverProjects.some((p) => !localProjects.includes(p)))
+      || localExcluded.some((p) => !serverExcluded.includes(p));
+    if (widened) void pushUnsyncedFilesHandler?.("Sync scope widened").catch(() => {});
+  }
+}
+
+// Whether codecast launched the session behind this transcript, so the sync
+// scope's selected-folders rule doesn't hold it back (markLaunched, syncScope.ts). A
+// subagent transcript counts as its parent session's.
+export function launchedTranscript(sessionId: string | undefined, filePath?: string): boolean {
+  const cache = conversationCacheRef ?? readConversationCache();
+  const ids = [sessionId];
+  if (filePath) {
+    const parts = filePath.split(path.sep);
+    const sub = parts.lastIndexOf("subagents");
+    if (sub >= 1) ids.push(parts[sub - 1]);
+  }
+  // A codex app-server thread knows its conversation before the cache does.
+  return ids.some((id) => !!id && wasLaunched(id, cache[id] ?? appServerThreads.get(id)?.conversationId));
+}
+
 // Mapped before the transcript lands, so the watcher never mints a second
 // conversation for a session id it has no record of.
 function mapSessionToConversation(sessionId: string, conversationId: string): void {
@@ -708,6 +754,7 @@ function mapSessionToConversation(sessionId: string, conversationId: string): vo
   cache[sessionId] = conversationId;
   saveConversationCache(cache);
   if (conversationCacheRef) conversationCacheRef[sessionId] = conversationId;
+  if (wasLaunched(undefined, conversationId)) markLaunched({ sessionId, conversationId });
 }
 
 async function fetchFolderFromPeers(conversationId: string, recorded: string): Promise<string | null> {
@@ -875,6 +922,33 @@ interface ReparentedCheckout {
   restored?: RestoredWork;
 }
 
+// Clone `remote` into `dest` with this machine's own git credentials (SSH or a
+// helper): the person must have access to the repo here, as on the machine the
+// session came from. Async, so a large repo never stalls the event loop and the
+// other live sessions. A partial clone is removed so a retry starts clean, and
+// a folder already holding files is never cloned over.
+export async function cloneCheckout(remote: string, dest: string, tag: string): Promise<boolean> {
+  if (fs.existsSync(dest) && fs.readdirSync(dest).length > 0) {
+    log(`${tag} not cloning ${remote}: ${dest} already holds files`);
+    return false;
+  }
+  const created = !fs.existsSync(dest);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  log(`${tag} cloning ${remote} → ${dest}`);
+  try {
+    await _execFileAsync("git", ["clone", remote, dest], {
+      timeout: 10 * 60_000,
+      maxBuffer: 64 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    return true;
+  } catch (cloneErr: any) {
+    log(`${tag} clone failed: ${(cloneErr?.stderr || cloneErr?.message || String(cloneErr)).slice(0, 200)}`);
+    try { if (created && fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true }); } catch {}
+    return false;
+  }
+}
+
 function reparentCheckoutDir(remote: string): string {
   const name = (remote.split("/").pop() || "repo").replace(/\.git$/, "").replace(/[^A-Za-z0-9._-]/g, "-");
   const hash = createHash("sha1").update(remote).digest("hex").slice(0, 8);
@@ -933,22 +1007,8 @@ async function ensureReparentedCheckout(
   let cloned = false;
   try {
     if (!fs.existsSync(path.join(dest, ".git"))) {
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      log(`[REPARENT] cloning ${remote} → ${dest}`);
-      try {
-        // Uses the machine's own git credentials (SSH/helper) — the destination
-        // user must have access to the repo, which mirrors the ownership model.
-        await _execFileAsync("git", ["clone", remote, dest], {
-          timeout: 10 * 60_000,
-          maxBuffer: 64 * 1024 * 1024,
-        });
-        cloned = true;
-      } catch (cloneErr: any) {
-        log(`[REPARENT] clone failed: ${(cloneErr?.stderr || cloneErr?.message || String(cloneErr)).slice(0, 200)}`);
-        // Remove a partial clone so a retry starts clean.
-        try { if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true }); } catch {}
-        return undefined;
-      }
+      if (!(await cloneCheckout(remote, dest, "[REPARENT]"))) return undefined;
+      cloned = true;
     }
     // Learn the mapping so subsequent resolves (and re-resumes) find it directly.
     recordProjectMapping(path.basename(dest), dest);
@@ -3956,7 +4016,10 @@ export function refreshLocalProjectRoots(): Promise<void> {
   const home = process.env.HOME || "";
   if (localRootsRefresh?.home === home) return localRootsRefresh.promise;
   const generation = ++localRootsGeneration;
-  const started = [...new Set([...startedSessionTmux.values()].map(s => s.projectPath).filter((p): p is string => !!p))].slice(0, MAX_PROJECT_ROOTS);
+  // The folders the person chose to sync are their projects on every machine
+  // that has them, wherever under home they sit (folderOnThisMachine).
+  const chosen = (activeConfig?.sync_mode === "selected" ? activeConfig.sync_projects ?? [] : []).map(f => folderOnThisMachine(f, home)).filter(f => f !== home);
+  const started = [...new Set([...startedSessionTmux.values()].map(s => s.projectPath).filter((p): p is string => !!p).concat(chosen))].slice(0, MAX_PROJECT_ROOTS);
   const promise = (async () => {
     let roots: string[];
     if (daemonWorkersEnabled()) {
@@ -5928,32 +5991,7 @@ async function sendHeartbeat(): Promise<void> {
       else if (wanted) cloudAgents.syncTurnedOn(source);
     }
 
-    if (data.sync_mode !== undefined) {
-      const currentConfig = readConfig();
-      const serverMode = data.sync_mode as "all" | "selected";
-      const serverProjects: string[] = data.sync_projects ?? [];
-      const serverExcluded: string[] = data.sync_excluded ?? [];
-      const localMode = currentConfig?.sync_mode ?? "all";
-      const localProjects = currentConfig?.sync_projects ?? [];
-      const localExcluded = currentConfig?.sync_excluded ?? [];
-
-      if (serverMode !== localMode || JSON.stringify(serverProjects) !== JSON.stringify(localProjects) || JSON.stringify(serverExcluded) !== JSON.stringify(localExcluded)) {
-        log(`Sync settings updated from server: mode=${serverMode}, projects=${serverProjects.length}, excluded=${serverExcluded.length}`);
-        patchConfig({ sync_mode: serverMode, sync_projects: serverProjects, sync_excluded: serverExcluded });
-        if (activeConfig) {
-          activeConfig.sync_mode = serverMode;
-          activeConfig.sync_projects = serverProjects;
-          activeConfig.sync_excluded = serverExcluded;
-        }
-        // A folder just chosen (or no longer excluded) already holds sessions
-        // nobody touched since; the sweep uploads them now instead of at the
-        // next reconciliation.
-        const widened = (serverMode === "all" && localMode !== "all")
-          || (serverMode === "selected" && serverProjects.some((p) => !localProjects.includes(p)))
-          || localExcluded.some((p) => !serverExcluded.includes(p));
-        if (widened) void pushUnsyncedFilesHandler?.("Sync scope widened").catch(() => {});
-      }
-    }
+    if (data.sync_mode !== undefined) applyServerSyncSettings(data);
 
     if (data.team_id !== undefined) {
       const currentConfig = readConfig();
@@ -6132,6 +6170,40 @@ async function startClaudeSdkSession(o: {
 }
 
 /**
+ * Run an existing Grok session in a direct host (`grok agent stdio`, ACP)
+ * instead of a pane: the same host, socket and delivery path as an SDK Claude
+ * session (claudeSdk/grokSession.ts). The permission mode and model come from
+ * the argv the tmux resume would use; the rules the session was created with
+ * stay with it, since grok keeps them across a load.
+ */
+async function startGrokDirectSession(o: { conversationId: string; sessionId: string; cwd: string; permissionMode?: string }): Promise<void> {
+  if (!claudeSdkBackend) throw new Error("the direct backend is not running in this daemon");
+  const config = readConfig() ?? {};
+  if (ensureGrokFolderTrusted(o.cwd)) log(`grok folder trust granted for ${o.cwd}`);
+  const words = (flags: string | null | undefined) => (flags ?? "").split(/\s+/).filter(Boolean);
+  const configured = words(getAgentArgs(config, "grok"));
+  const permFlags = o.permissionMode ? ["--permission-mode", o.permissionMode] : words(getPermissionFlags("grok", config));
+  const spec: SdkLaunchSpec = {
+    agent: "grok",
+    conversationId: o.conversationId,
+    sessionId: o.sessionId,
+    resume: true,
+    cwd: o.cwd,
+    executable: launchBinary("grok", { warn: log }),
+    args: [...configured, ...permFlags],
+    env: {
+      ...worktreeEnv(o.cwd),
+      ...(hostAgentSocket() ? { SSH_AUTH_SOCK: hostAgentSocket()! } : {}),
+      ...(/^[a-z0-9]+$/i.test(o.conversationId) ? { [STABLE_ENV_CONVERSATION_ID]: o.conversationId } : {}),
+      [LAUNCH_TOKEN_VAR]: launchTokenLedger().issue(`gk-direct-${o.conversationId.slice(-12)}`, o.sessionId),
+      ...(isRemoteDevice() ? { [CLOUD_ENV_VAR]: "1" } : {}),
+    },
+  };
+  await claudeSdkBackend.start(o.conversationId, spec);
+  await bindSdkSession(o.conversationId, o.sessionId, o.cwd);
+}
+
+/**
  * Move a live Claude conversation to the other backend, keeping its session id
  * and transcript (switch_claude_backend; the order and outcome live in
  * claudeSdk/switchBackend.ts). Both resumes are the ones every other path
@@ -6141,18 +6213,21 @@ async function startClaudeSdkSession(o: {
 async function switchConversationBackend(conversationId: string, sessionIdHint: string | undefined, target: "sdk" | "tmux", interrupt: boolean, projectPath: string | undefined): Promise<{ result?: string; error?: string }> {
   const { readTranscriptCwd } = await import("./reconciliation.js");
   const sessionId = claudeSdkBackend?.sessionFor(conversationId) ?? buildReverseConversationCache(readConversationCache())[conversationId] ?? sessionIdHint;
-  if (!sessionId || !CLAUDE_UUID_RE.test(sessionId)) return { error: `No Claude session for ${conversationId}` };
-  if (target === "sdk" && !claudeSdkBackend) return { error: "This daemon has no SDK backend; update codecast" };
+  if (!sessionId || !CLAUDE_UUID_RE.test(sessionId)) return { error: `No session for ${conversationId}` };
+  if (target === "sdk" && !claudeSdkBackend) return { error: "This daemon has no direct backend; update codecast" };
+  const transcript = findSessionFile(sessionId, { staleOk: true });
+  // Which agent runs the session: the host's spec when it runs direct, else its transcript.
+  const agent: "claude" | "grok" = claudeSdkBackend?.specFor(conversationId)?.agent ?? (transcript?.agentType === "grok" ? "grok" : "claude");
+  if (transcript && transcript.agentType !== "claude" && transcript.agentType !== "grok") return { error: `A ${transcript.agentType} session has no direct backend` };
   const config = readConfig() ?? {};
-  const binary = launchBinary("claude", { warn: log });
+  const binary = launchBinary(agent, { warn: log });
   // The mode the session runs in now, read before the old backend stops: the
   // resume on the other side keeps it (a person who moved a session out of
   // bypass must not get bypass back by switching backends).
   const permissionMode = (claudeSdkBackend?.permissionModeFor(conversationId) ?? lastHookStatus.get(sessionId)?.permission_mode) || undefined;
-  // The folder the session runs in: its SDK spec, else the one its transcript records, else its project.
-  const transcript = findSessionFile(sessionId, { staleOk: true });
+  // The folder the session runs in: its host spec, else the one its transcript records, else its project.
   const recorded = claudeSdkBackend?.specFor(conversationId)?.cwd
-    ?? (transcript?.agentType === "claude" ? readTranscriptCwd(transcript.path) : undefined)
+    ?? (transcript?.agentType === "claude" ? readTranscriptCwd(transcript.path) : transcript?.agentType === "grok" ? grokSessionCwdFromTranscriptPath(transcript.path) : undefined)
     ?? projectPath;
   const cwd = recorded ? validatePath(recorded) ?? undefined : undefined;
   const onSdk = () => !!claudeSdkBackend?.owns(conversationId);
@@ -6163,15 +6238,15 @@ async function switchConversationBackend(conversationId: string, sessionIdHint: 
       if (!MID_TURN_AGENT_STATUSES.has(status ?? "")) return null;
       if (onSdk()) return status!;
       // A pane at its prompt has no turn, whatever the last hook said (an Escape fires no Stop hook).
-      const { tmuxTarget: pane } = await resolveSessionCommandPane(conversationId, sessionId, "claude");
+      const { tmuxTarget: pane } = await resolveSessionCommandPane(conversationId, sessionId, agent);
       if (!pane) return null;
-      const { state } = await captureTmuxLiveState(pane, glyphlessPromptPattern("claude"), 25).catch(() => ({ state: null as TmuxLiveState | null }));
+      const { state } = await captureTmuxLiveState(pane, glyphlessPromptPattern(agent), agent === "grok" ? GROK_TRUST_PANE_CAPTURE_LINES : 25).catch(() => ({ state: null as TmuxLiveState | null }));
       return state === "idle" || state === "exited" ? null : status!;
     },
-    sdkRefusal: async () => (cwd ? sdkBackendRefusal(binary) : `no folder found for ${shortId(sessionId)}`),
+    sdkRefusal: async () => (!cwd ? `no folder found for ${shortId(sessionId)}` : agent === "grok" ? null : sdkBackendRefusal(binary)),
     interrupt: async () => {
       if (onSdk()) { await claudeSdkBackend!.interrupt(conversationId); return; }
-      const { tmuxTarget: pane } = await resolveSessionCommandPane(conversationId, sessionId, "claude");
+      const { tmuxTarget: pane } = await resolveSessionCommandPane(conversationId, sessionId, agent);
       if (pane) {
         await tmuxExec(["send-keys", "-t", pane, "Escape", "Escape"]);
         observeSessionInput(sessionId, { kind: "escape" });
@@ -6191,6 +6266,7 @@ async function switchConversationBackend(conversationId: string, sessionIdHint: 
       await syncServiceRef?.cancelPendingPermissions(sessionId, Date.now()).catch(() => 0);
     },
     startSdk: async () => {
+      if (agent === "grok") return startGrokDirectSession({ conversationId, sessionId, cwd: cwd!, ...(permissionMode && { permissionMode }) });
       const { binaryArgs } = buildLaunchArgs({
         agentType: "claude",
         configuredArgs: getConfiguredAgentArgs("claude", config),
@@ -6212,7 +6288,7 @@ async function switchConversationBackend(conversationId: string, sessionIdHint: 
         transcriptPath: transcript?.agentType === "claude" ? transcript.path : undefined,
       });
     },
-    startTmux: () => autoResumeSession(sessionId, "", readTitleCache(), cwd, conversationId, "claude", { ...USER_RESUME, duringBackendSwitch: true, ...(permissionMode && { permissionMode }) }),
+    startTmux: () => autoResumeSession(sessionId, "", readTitleCache(), cwd, conversationId, agent, { ...USER_RESUME, duringBackendSwitch: true, ...(permissionMode && { permissionMode }) }),
     // A message injected but never echoed goes back to pending, for the backend that runs the session now.
     requeue: () => clearConversationDeliveryAndResumeState(conversationId, sessionId, "BACKEND-SWITCH"),
     log: (line) => log(line),
@@ -6221,7 +6297,7 @@ async function switchConversationBackend(conversationId: string, sessionIdHint: 
     log(`[backend-switch] ${conversationId.slice(0, 12)} stays put: ${outcome.message}`);
     return { error: outcome.message };
   }
-  if (outcome.fellBack) syncServiceRef?.setSessionError(conversationId, `Could not start the Agent SDK host, so this session runs in the terminal: ${outcome.fellBack}`).catch(logConvexFailure);
+  if (outcome.fellBack) syncServiceRef?.setSessionError(conversationId, `Could not start the direct connection, so this session runs in the terminal: ${outcome.fellBack}`).catch(logConvexFailure);
   log(`[backend-switch] ${conversationId.slice(0, 12)} (${shortId(sessionId)}) runs on ${outcome.backend}${outcome.already ? " (already)" : ""}`);
   return { result: JSON.stringify({ backend: outcome.backend, ...(outcome.already ? { already: true } : {}), ...(outcome.fellBack ? { fell_back: outcome.fellBack } : {}) }) };
 }
@@ -7361,7 +7437,21 @@ async function executeRemoteCommand(
               log(`[REMOTE] start_session: no local checkout, but ${String(conversationId).slice(0, 12)} is owned by ${owner.slice(0, 8)} — staying silent`);
               break;
             }
-            const creatable = creatableStartFolder(rawPath, process.env.HOME, projectInfo);
+            // The repo is the person's, and this is one of their machines:
+            // bring the checkout here rather than refuse. Clone it to the same
+            // place under home it holds on the machine the session was started
+            // for, else take the folder from another of their machines.
+            const clone = cloneDestination(rawPath, projectInfo, process.env.HOME);
+            if (clone && projectInfo?.git_remote_url && await cloneCheckout(projectInfo.git_remote_url, clone.root, "[START]")) {
+              recordProjectMapping(path.basename(clone.root), clone.root);
+              const placed = validatePath(clone.cwd) ?? clone.root;
+              resolved = { path: placed, remapped: true, reason: `cloned ${projectInfo.git_remote_url} → ${clone.root}` };
+            }
+            if (!resolved) {
+              const fetched = await fetchFolderFromPeers(conversationId, rawPath);
+              if (fetched) resolved = { path: fetched, remapped: true, reason: `fetched ${rawPath} from another machine → ${fetched}` };
+            }
+            const creatable = resolved ? null : creatableStartFolder(rawPath, process.env.HOME, projectInfo);
             if (creatable) {
               try {
                 fs.mkdirSync(creatable, { recursive: true });
@@ -7417,6 +7507,27 @@ async function executeRemoteCommand(
             log(`[REMOTE] start_session: ${String(conversationId).slice(0, 12)} owned by ${claim.owner?.slice(0, 8) ?? "another live device"} — skipping spawn`);
             break;
           }
+          // A launch is the person's choice to see this session in codecast, so
+          // its transcript syncs even outside their selected folders. A folder
+          // they excluded outright never uploads: say so on the session rather
+          // than run an agent whose replies would never arrive.
+          let scopeRefusal = launchScopeRefusal(cwd, activeConfig ?? config);
+          // The folder may have been synced moments ago (the banner's Sync
+          // folder): read the person's lists fresh before refusing on them.
+          if (scopeRefusal && !scopeRefusal.startsWith("excluded path")) {
+            const fresh = await syncServiceRef.getSyncSettings().catch(() => null);
+            if (fresh) {
+              applyServerSyncSettings(fresh);
+              scopeRefusal = launchScopeRefusal(cwd, activeConfig ?? config);
+            }
+          }
+          if (scopeRefusal) {
+            error = excludedFolderStartError(cwd, scopeRefusal.startsWith("excluded path"));
+            log(`[REMOTE] start_session refused: ${scopeRefusal}`);
+            syncServiceRef.setSessionError(conversationId, error).catch(() => {});
+            break;
+          }
+          markLaunched({ conversationId, sessionId: assignedClaudeSessionId });
         }
 
         // One backend per conversation. A cross-agent reconfigure (Codex<->Claude)
@@ -8613,6 +8724,9 @@ async function executeRemoteCommand(
         if (conversationId) {
           folderFetchFailures.forgetConversation(conversationId);
           (await import("./sessionTransfer.js")).forgetSessionFetchFailures(conversationId);
+          // A resume sent through codecast is a launch of a conversation that
+          // already lives there: its transcript syncs whatever the folder rules.
+          markLaunched({ conversationId, sessionId });
         }
         // A backend switch is moving this session and brings it back itself. A Restart, an agent
         // switch or a repair now would rebuild or rebind it under the switch.
@@ -17705,7 +17819,7 @@ export class UnreadableScreenError extends Error {
 // in, so the message is held with the one step that frees it.
 function signedOutError(agentType: string | undefined, screen?: string): InputBlockedError {
   const agent = agentType === "cursor" ? "cursor-agent" : agentType ?? "the agent";
-  const login = agentType === "cursor" ? "cursor-agent login" : agentType === "codex" ? "codex login" : "its login";
+  const login = agentType === "cursor" ? "cursor-agent login" : agentType === "codex" || agentType === "grok" ? `${agentType} login` : "its login";
   return new InputBlockedError(`${agent} is signed out on this machine`, `${agent} is signed out on this machine: run \`${login}\` there, then restart the session`, screen);
 }
 
@@ -17752,7 +17866,8 @@ function assertPromptAbsent(pane: string, ownText?: string, pastDialog = false):
   // delivery on a dialog the launch path already knows how to dismiss.
   // The Rewind picker is a modal ensureTmuxReady cancels with Escape, not a question.
   if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane) || isCodexUpdateDialog(pane) || limitDialogOnPane(pane) || isClaudeRewindDialog(pane)) return;
-  if (isAgentLoginScreen(pane)) throw signedOutError(isCodexLoginScreen(pane) ? "codex" : "cursor", holdScreen(pane));
+  const signedOutAgent = agentAtLoginScreen(pane);
+  if (signedOutAgent) throw signedOutError(signedOutAgent, holdScreen(pane));
   const prompt = parseInteractivePrompt(pane, true);
   if (prompt && !promptIsOwnText(prompt, ownText)) throw new InputBlockedError("terminal is waiting for a human answer", undefined, holdScreen(pane));
 }
@@ -27209,13 +27324,19 @@ async function materializeSession(
       // codex has its own live backend and would gain a second agent. Delivery falls
       // back to the started-pane injection / re-resume instead.
       const matAgentType = fromConvexAgentType(exportData.conversation.agent_type);
-      if (!mayMaterializeClaudeTranscript(matAgentType)) {
+      const codex = matAgentType === "codex";
+      if (!codex && !mayMaterializeClaudeTranscript(matAgentType)) {
         logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: conversation is ${matAgentType}, a materialized session would attach a claude backend to it`);
         return null;
       }
+      // A codex conversation with an app-server thread on this machine (live,
+      // persisted for rehydration, or starting) is answered by that thread; a
+      // rollout resumed beside it would be a second codex in the same thread.
+      if (codex && (appServerConversations.has(conversationId) || persistedAppServerThreads.has(conversationId) || pendingSessionStarts.has(conversationId))) {
+        logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: its codex app-server thread owns delivery`);
+        return null;
+      }
 
-      const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
-      const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
       const projectPath = await regenerationCwd(exportData);
       if (!projectPath) {
         logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: no local checkout for ${exportData.conversation.project_path ?? "<no project path>"}`);
@@ -27223,9 +27344,27 @@ async function materializeSession(
       }
       // Use the conversation's actual session_id so the JSONL matches Convex
       const convSessionId = exportData.conversation.session_id || undefined;
-      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId: convSessionId, cwd: projectPath });
-      const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
-      setPosition(matFilePath, fs.statSync(matFilePath).size);
+      // Codex gets a codex rollout under the same agent (what resume_session
+      // reconstitutes), never a claude transcript. A rollout already on disk
+      // is the real history: bind it rather than write a second one.
+      const tailMessages = codex ? exportData.messages.length : chooseClaudeTailMessagesForTokenBudget(exportData, CLAUDE_AUTO_TRIM_TARGET_TOKENS);
+      const onDisk = codex && convSessionId ? findSessionFile(convSessionId) : null;
+      let sessionId: string;
+      if (onDisk?.agentType === "codex") {
+        sessionId = convSessionId!;
+      } else {
+        let matFilePath: string;
+        if (codex) {
+          let jsonl: string;
+          ({ jsonl, sessionId } = generateCodexJsonl(exportData, { sessionId: convSessionId, cwd: projectPath }));
+          ({ filePath: matFilePath } = writeCodexSession(jsonl, sessionId));
+        } else {
+          let jsonl: string;
+          ({ jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId: convSessionId, cwd: projectPath }));
+          ({ filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath));
+        }
+        setPosition(matFilePath, fs.statSync(matFilePath).size);
+      }
 
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
@@ -27595,9 +27734,11 @@ async function deliverMessageIntoSession(
     // Claude echoes the message to its JSONL at once, and the echo promotes the row.
     markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
     // Claude writes the user line under the uuid it is sent with, so the echo
-    // settles this send by id (deliveryEchoLedger), never by its words.
+    // settles this send by id (deliveryEchoLedger), never by its words. Grok
+    // records no client id, so its echo pairs by the words, as from its pane.
     const uuid = deliveryRecordUuid(messageId, "codecast-sdk");
-    deliveryEchoLedger().expect({ messageId, conversationId, payload: content, exactUuid: uuid });
+    const grok = claudeSdkBackend.specFor(conversationId)?.agent === "grok";
+    deliveryEchoLedger().expect({ messageId, conversationId, payload: content, ...(grok ? {} : { exactUuid: uuid }) });
     const outcome = await claudeSdkBackend.deliver(conversationId, messageId, content, uuid);
     deliverySteps.mark("host_send");
     // A menu answer reaches Claude as a tool result, never as a user line to echo: it is delivered now (as the tmux path marks it).
@@ -27606,7 +27747,7 @@ async function deliverMessageIntoSession(
     const sdkSession = claudeSdkBackend.sessionFor(conversationId);
     if (sdkSession) ensureManagedSessionHeartbeat(sdkSession);
     syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
-    logDelivery(`[claude-sdk] delivered msg=${messageId.slice(0, 8)} to conv=${conversationId.slice(0, 12)} [DELIVERY-TIMING] ${deliverySteps.summary()}`);
+    logDelivery(`[${grok ? "grok-direct" : "claude-sdk"}] delivered msg=${messageId.slice(0, 8)} to conv=${conversationId.slice(0, 12)} [DELIVERY-TIMING] ${deliverySteps.summary()}`);
     return true;
   };
 
@@ -29338,7 +29479,7 @@ export async function handleTranscriptFileEvent(
 
   if (transcriptEventHeld(`${label} transcript`, event.sessionId)) return;
 
-  const refusal = transcriptScopeRefusal(await findWorkspacePath(), config);
+  const refusal = transcriptScopeRefusal(await findWorkspacePath(), config, launchedTranscript(event.sessionId));
   if (refusal) {
     log(`Skipping ${label} transcript ${event.sessionId}: ${refusal}`);
     return;
@@ -29358,7 +29499,7 @@ export function handleCursorTranscriptEvent(event: CursorTranscriptEvent, syncs:
 // under the same scope rule as the live event.
 export async function syncStaleCursorTranscript(filePath: string, deps: TranscriptSyncDeps): Promise<void> {
   const sessionId = cursorTranscriptSessionId(filePath);
-  if (transcriptScopeRefusal(await findWorkspacePathForCursorConversation(sessionId), deps.config)) return;
+  if (transcriptScopeRefusal(await findWorkspacePathForCursorConversation(sessionId), deps.config, launchedTranscript(sessionId))) return;
   log(`Watchdog: Syncing stale Cursor transcript ${sessionId}`);
   await syncCursorTranscript(deps, filePath, sessionId);
 }
@@ -29366,7 +29507,7 @@ export async function syncStaleCursorTranscript(filePath: string, deps: Transcri
 // A Cursor workspace database's event.
 export function handleCursorDatabaseEvent(event: CursorSessionEvent, syncs: Map<string, InvalidateSync>, deps: TranscriptSyncDeps): void {
   if (transcriptEventHeld("Cursor session", event.sessionId)) return;
-  const refusal = transcriptScopeRefusal(event.workspacePath, deps.config);
+  const refusal = transcriptScopeRefusal(event.workspacePath, deps.config, launchedTranscript(event.sessionId));
   if (refusal) {
     log(`Skipping Cursor session ${event.sessionId}: ${refusal}`);
     return;
@@ -30766,7 +30907,7 @@ function startWatchdog(
       const projectDirName = parts[subagentsIndex >= 2 ? subagentsIndex - 2 : parts.length - 2];
       const parentConversationId = subagentsIndex >= 1 ? deps.conversationCache[parts[subagentsIndex - 1]] : undefined;
       const projectPath = resolveTranscriptProjectPath(filePath, projectDirName);
-      if (transcriptScopeRefusal(projectPath, deps.config)) return;
+      if (transcriptScopeRefusal(projectPath, deps.config, launchedTranscript(sessionId, filePath))) return;
 
       log(`Watchdog: Syncing stale session ${sessionId}`);
       await syncClaudeTranscript(deps, filePath, sessionId, projectPath, parentConversationId);
@@ -30798,7 +30939,7 @@ function startWatchdog(
     }, "Watchdog worker");
 
     await runBounded(staleCursorSessions, WATCHDOG_CONCURRENCY, async (cursorSession) => {
-      if (transcriptScopeRefusal(cursorSession.workspacePath, deps.config)) return;
+      if (transcriptScopeRefusal(cursorSession.workspacePath, deps.config, launchedTranscript(cursorSession.sessionId))) return;
 
       log(`Watchdog: Syncing stale Cursor session ${cursorSession.sessionId}`);
       await syncCursorDatabase(deps, cursorSession.dbPath, cursorSession.sessionId, cursorSession.workspacePath);
@@ -31942,7 +32083,7 @@ async function main(): Promise<void> {
     // so sync_mode:"selected" matching and the project label are both correct.
     const projectPath = resolveTranscriptProjectPath(filePath, event.projectPath);
 
-    const refusal = transcriptScopeRefusal(projectPath, config);
+    const refusal = transcriptScopeRefusal(projectPath, config, launchedTranscript(event.sessionId, filePath));
     if (refusal) {
       log(`Skipping sync for ${refusal}`);
       return;
@@ -32592,9 +32733,16 @@ async function main(): Promise<void> {
       const { cmd, prefixArgs } = resolveCastInvocation();
       return [cmd, ...prefixArgs];
     },
-    shellPrefix: (account) => `${launchAccountPrefix(account, log).prefix}${providerKeySourcePrefix("claude", CONFIG_DIR)}`,
+    // A Claude account pin is Claude's; a Grok host carries only its provider keys.
+    shellPrefix: (account, agent) => agent === "grok"
+      ? providerKeySourcePrefix("grok", CONFIG_DIR)
+      : `${launchAccountPrefix(account, log).prefix}${providerKeySourcePrefix("claude", CONFIG_DIR)}`,
     activity: (convId, sessionId, a, launchToken) => {
-      const cwd = claudeSdkBackend?.specFor(convId)?.cwd;
+      const spec = claudeSdkBackend?.specFor(convId);
+      const cwd = spec?.cwd;
+      const transcriptPath = spec?.agent === "grok"
+        ? findSessionFile(sessionId, { staleOk: true })?.path
+        : claudeTranscriptFor(sessionId) ?? (cwd ? path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(cwd), `${sessionId}.jsonl`) : undefined);
       hookStatusGate.deliver(sessionId, normalizeHookStatus({
         status: a.status,
         ts: a.ts,
@@ -32604,7 +32752,7 @@ async function main(): Promise<void> {
         ...(a.dialog && { dialog: true }),
         ...(a.turnCompletedAt && {
           turn_completed_at: a.turnCompletedAt,
-          ...(cwd && { transcript_path: claudeTranscriptFor(sessionId) ?? path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(cwd), `${sessionId}.jsonl`) }),
+          ...(transcriptPath && { transcript_path: transcriptPath }),
         }),
         ...(launchToken && { launch_token: launchToken }),
       }));
@@ -32710,8 +32858,10 @@ async function main(): Promise<void> {
       return pin ? pin.cc_account ?? undefined : saved;
     },
     mayResume: async (convId, sessionId, userInitiated) => !backendSwitchHeld(convId, sessionId) && resumeAllowed(sessionId, convId, userInitiated ? { userInitiated: true } : undefined),
-    transcriptExists: (sessionId, cwd) => !!claudeTranscriptFor(sessionId)
-      || fs.existsSync(path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(cwd), `${sessionId}.jsonl`)),
+    transcriptExists: (sessionId, cwd, agent) => agent === "grok"
+      ? findSessionFile(sessionId, { staleOk: true })?.agentType === "grok"
+      : !!claudeTranscriptFor(sessionId) || fs.existsSync(path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(cwd), `${sessionId}.jsonl`)),
+    // Grok records no delivery uuid, so a resend after a host death is decided by the host's own message-id dedupe alone.
     transcriptHas: async (sessionId, uuid) => {
       const file = claudeTranscriptFor(sessionId);
       if (!file) return false;
@@ -32787,7 +32937,7 @@ async function main(): Promise<void> {
         const projectDirName = parts[parts.length - 2];
         const projectPath = resolveTranscriptProjectPath(transcriptPath, projectDirName);
 
-        if (!transcriptScopeRefusal(projectPath, config)) claudeTranscriptRetrySync(fileSyncs, transcriptPath, sessionId, projectPath, transcriptDeps).invalidate();
+        if (!transcriptScopeRefusal(projectPath, config, launchedTranscript(sessionId, transcriptPath))) claudeTranscriptRetrySync(fileSyncs, transcriptPath, sessionId, projectPath, transcriptDeps).invalidate();
       }
     }
   });
@@ -32944,7 +33094,7 @@ async function main(): Promise<void> {
           projectDirName = parts[parts.length - 2];
         }
         const projectPath = resolveTranscriptProjectPath(filePath, projectDirName);
-        if (transcriptScopeRefusal(projectPath, config)) return;
+        if (transcriptScopeRefusal(projectPath, config, launchedTranscript(sessionId, filePath))) return;
 
         let parentConversationId: string | undefined;
         if (isSubagentFile) {

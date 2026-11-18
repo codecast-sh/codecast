@@ -12,8 +12,11 @@ import * as path from "path";
  *  keeps a checkout where the laptop keeps it (remoteRepoPath), and "work" is
  *  where hosts kept them before; both must be advertised as roots for
  *  host-native routing: a session pointed at a folder the host already holds
- *  starts there without a laptop preparing it. */
-export const PROJECT_PARENT_DIRS = ["src", "dev", "Projects", "projects", "repos", "code", "work"] as const;
+ *  starts there without a laptop preparing it. ~/git, ~/GitHub, ~/Developer
+ *  and ~/workspace are where people keep repos too: a machine whose code sits
+ *  there and nowhere else reported no projects, so every new session on it
+ *  fell back to the home folder (2026-11-18, a rented Mac keeping ~/git). */
+export const PROJECT_PARENT_DIRS = ["src", "dev", "Projects", "projects", "repos", "code", "work", "git", "GitHub", "Developer", "workspace"] as const;
 
 /** Upper bound on what we report. High enough to cover a real machine, low
  *  enough that a home directory full of junk degrades instead of hanging. */

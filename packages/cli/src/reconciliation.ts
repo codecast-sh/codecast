@@ -8,9 +8,9 @@ import { setPosition } from "./positionTracker.js";
 import { updateSyncRecord } from "./syncLedger.js";
 import {
   isClaudeTranscriptOutOfWatchScope,
-  isPathExcluded,
-  isProjectAllowedToSync,
   isTestArtifactPath,
+  transcriptScopeRefusal,
+  wasLaunched,
   watchDirFilter,
 } from "./syncScope.js";
 import type { Config } from "./config/types.js";
@@ -112,12 +112,16 @@ export function isTranscriptFileInSyncScope(
   if (!config) return true;
 
   const recordedCwd = observedCwd !== undefined ? observedCwd : readTranscriptCwd(filePath);
+  // A session codecast launched syncs outside the selected folders, exactly as
+  // the live watcher decides (transcriptScopeRefusal), so repair agrees with it.
+  const parts = filePath.split(path.sep);
+  const sub = parts.lastIndexOf("subagents");
+  const launched = wasLaunched(path.basename(filePath, ".jsonl")) || (sub >= 1 && wasLaunched(parts[sub - 1]));
   // A selected-project configuration must fail closed when a new/partial file
   // has not recorded its cwd yet. The live watcher can reconsider it once the
   // cwd row arrives; diagnostics must not "repair" it into a zombie ledger row.
-  if (!recordedCwd) return config.sync_mode !== "selected";
-  return isProjectAllowedToSync(recordedCwd, config)
-    && !isPathExcluded(recordedCwd, config.excluded_paths);
+  if (!recordedCwd) return config.sync_mode !== "selected" || launched;
+  return transcriptScopeRefusal(recordedCwd, config, launched) === null;
 }
 
 export async function performReconciliation(

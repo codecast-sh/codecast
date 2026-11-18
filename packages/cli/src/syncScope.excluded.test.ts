@@ -41,3 +41,18 @@ test("a transcript placed by workspace syncs only where both the exclusions and 
   expect(transcriptScopeRefusal(null, selected)).toContain("unknown");
   expect(transcriptScopeRefusal(null, { sync_mode: "all" })).toBeNull();
 });
+
+// One person's sync lists cover all their machines: a new Mac whose account is
+// named differently (rentamac vs david) keeps the projects at the same place
+// under home, and must not need every folder chosen again.
+test("a chosen or excluded folder decides the same place under home on the person's other machines", () => {
+  const chosen = { sync_mode: "selected" as const, sync_projects: ["/Users/david/git/littlebird"] };
+  expect(isProjectAllowedToSync("/Users/rentamac/git/littlebird", chosen)).toBe(true);
+  expect(isProjectAllowedToSync("/home/ubuntu/git/littlebird/backend", chosen)).toBe(true);
+  expect(isProjectAllowedToSync("/Users/rentamac/git/littlebird2", chosen)).toBe(false);
+  expect(isProjectAllowedToSync("/Users/rentamac", chosen)).toBe(false);
+  expect(isProjectAllowedToSync("/opt/git/littlebird", chosen)).toBe(false);
+  const excluded = { sync_mode: "all" as const, sync_excluded: ["/Users/david/clients"] };
+  expect(isProjectAllowedToSync("/Users/rentamac/clients/acme", excluded)).toBe(false);
+  expect(isProjectAllowedToSync("/Users/rentamac/git/app", excluded)).toBe(true);
+});

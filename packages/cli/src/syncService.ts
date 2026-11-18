@@ -2048,6 +2048,19 @@ export class SyncService {
     }
   }
 
+  /** The person's sync lists as the server holds them, or null. */
+  async getSyncSettings(): Promise<{ sync_mode: "all" | "selected"; sync_projects: string[]; sync_excluded: string[] } | null> {
+    try {
+      return await this.guarded(async () => {
+        const r = await this.client.query("users:getSyncSettings" as any, { api_token: this.apiToken });
+        return r ? { sync_mode: r.sync_mode ?? "all", sync_projects: r.sync_projects ?? [], sync_excluded: r.sync_excluded ?? [] } : null;
+      });
+    } catch (error) {
+      if (error instanceof AuthExpiredError) throw error;
+      return null;
+    }
+  }
+
   async getProjectInfo(conversationId: string): Promise<{ project_path: string | null; git_root: string | null; git_remote_url: string | null; effort: string | null; cc_account: string | null; execution_protocol_state: string | null } | null> {
     try {
       return await this.guarded(async () => {

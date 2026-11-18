@@ -2183,6 +2183,36 @@ export const findUserLocalCheckouts = query({
 
 // Lightweight metadata fetch used by the daemon to resolve project paths
 // without pulling the full conversation + messages. Auth-checked.
+/** The repository a folder holds, as the person's own earlier sessions
+ *  recorded it: a session in the folder itself, else one whose checkout root
+ *  is the folder or a folder above it. Null when none of them saw a remote. */
+export async function recordedRepoForFolder(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  folder: string | null,
+): Promise<{ git_root: string; git_remote_url: string } | null> {
+  if (!folder || !folder.startsWith("/")) return null;
+  const inFolder = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_project_path", (q) => q.eq("user_id", userId).eq("project_path", folder))
+    .order("desc")
+    .take(8);
+  const direct = inFolder.find((c) => c.git_remote_url && c.git_root);
+  if (direct) return { git_root: direct.git_root!, git_remote_url: direct.git_remote_url! };
+  let dir = folder.replace(/\/+$/, "");
+  for (let depth = 0; dir && dir !== "/" && depth < 8; depth++) {
+    const rows = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_git_root", (q) => q.eq("user_id", userId).eq("git_root", dir))
+      .order("desc")
+      .take(4);
+    const hit = rows.find((c) => c.git_remote_url);
+    if (hit) return { git_root: dir, git_remote_url: hit.git_remote_url! };
+    dir = dir.slice(0, dir.lastIndexOf("/"));
+  }
+  return null;
+}
+
 export const getProjectInfo = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -2194,10 +2224,16 @@ export const getProjectInfo = query({
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return null;
     if (!(await canOwnerOrTeamAccess(ctx, userId, conv))) return null;
+    // A session started from codecast has no repo recorded until its agent
+    // reports one, but the machine starting it needs the repo to find or clone
+    // its checkout. The owner's earlier sessions in the same folder name it.
+    const repo = conv.git_remote_url
+      ? null
+      : await recordedRepoForFolder(ctx, conv.user_id, conv.git_root ?? conv.project_path ?? null);
     return {
       project_path: conv.project_path ?? null,
-      git_root: conv.git_root ?? null,
-      git_remote_url: conv.git_remote_url ?? null,
+      git_root: conv.git_root ?? repo?.git_root ?? null,
+      git_remote_url: conv.git_remote_url ?? repo?.git_remote_url ?? null,
       // Resume effort fallback: a session launched with --effort but never
       // switched in-session has no transcript echo to re-pin from; the
       // conversation row is the only durable record.

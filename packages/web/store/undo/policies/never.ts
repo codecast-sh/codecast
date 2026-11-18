@@ -235,6 +235,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setChatSlackMember: SETTINGS,
   setCloudSessionMode: SETTINGS,
   setCloudSessionSync: SETTINGS,
+  syncFolder: SETTINGS,
   adoptTimezone: never("internal: fills an unset timezone from the browser once, never a gesture"),
   adoptSession: never("internal: stamps a nested session the person talked to so it stands alone in their inbox; a side effect of sending, never a gesture"),
   setCloudSharedCheckout: SETTINGS,

@@ -6,9 +6,11 @@
 // folders inside them); "selected" uploads only the chosen folders (and the
 // folders inside them).
 
-import { folderCovers } from "./folderLists";
+import { folderCoversOnAnyMachine as folderCovers, folderOnThisMachine, folderUnderHome } from "./folderLists";
 
-export { folderCovers };
+// Lists belong to the person, not one machine: a folder chosen or excluded on
+// one of their machines decides the same place under home on the others.
+export { folderCovers, folderOnThisMachine, folderUnderHome };
 
 export type SyncSettings = { sync_mode: "all" | "selected"; sync_projects: string[]; sync_excluded?: string[] };
 

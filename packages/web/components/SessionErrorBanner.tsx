@@ -123,6 +123,16 @@ export function SessionErrorBanner({
           <span className="opacity-80"> — or move this session to another machine from the header chip.</span>
         )}
       </div>
+      {/* A start refused because the person excluded the folder from sync:
+          syncing it is the answer, and a restart then runs it. */}
+      {/is excluded from sync, so/.test(error) && projectPath && (
+        <button
+          onClick={() => { useInboxStore.getState().syncFolder(projectPath); setDismissedError(error); onResume?.(); }}
+          className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0"
+        >
+          Sync folder{onResume ? " and start" : ""}
+        </button>
+      )}
       {/* Every cloud host was full: the answer is another host, offered right here. */}
       {/no room for another session/.test(error) && ownerDeviceId && byId.get(ownerDeviceId) && (
         <AddCloudHost like={byId.get(ownerDeviceId)!} label="Add a cloud host" className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0" />

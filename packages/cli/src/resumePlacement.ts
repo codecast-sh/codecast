@@ -5,6 +5,7 @@
 
 import * as path from "node:path";
 import { isResumableCwd } from "./projectPathResolver.js";
+import { folderOnThisMachine, folderUnderHome } from "@codecast/shared/team/folderLists";
 
 export const UNSAFE_PATH_RE = /[;|&`$(){}<>"\r\n\0]/;
 
@@ -71,6 +72,38 @@ export function noLocalCheckoutError(remote: string | null | undefined, recorded
 // repo to clone: the session has to start somewhere this machine has.
 export function missingFolderError(recordedPath: string): string {
   return `${recordedPath} isn't on this machine. Start the session in a folder this machine has.`;
+}
+
+/** Where a start that found no checkout of its repo here clones one: the same
+ *  place under this machine's home as the checkout the session was started
+ *  for (a repo outside any home lands at ~/<name>), with the session's folder
+ *  inside it. Null when there is no repo to clone or no honest place for it. */
+export function cloneDestination(
+  rawPath: string,
+  recorded: { git_root: string | null; git_remote_url: string | null } | null,
+  home: string | undefined,
+): { root: string; cwd: string } | null {
+  if (!home || !recorded?.git_remote_url || !rawPath || !path.isAbsolute(rawPath)) return null;
+  const raw = path.resolve(rawPath);
+  const recordedRoot = recorded.git_root && (raw === path.resolve(recorded.git_root) || raw.startsWith(path.resolve(recorded.git_root) + path.sep))
+    ? path.resolve(recorded.git_root)
+    : raw;
+  const root = folderUnderHome(recordedRoot) === null
+    ? path.join(home, path.basename(recordedRoot))
+    : folderOnThisMachine(recordedRoot, home);
+  if (UNSAFE_PATH_RE.test(root) || path.resolve(root) === path.resolve(home) || !root.startsWith(path.resolve(home) + path.sep)) return null;
+  return { root, cwd: root + raw.slice(recordedRoot.length) };
+}
+
+// The start_session banner when the folder is one the person excluded from
+// sync: the agent would run, but nothing it says would ever reach codecast.
+// `onThisMachine`: the exclusion is this machine's own (excluded_paths or an
+// organization's policy), which the synced-folders list cannot lift.
+export const EXCLUDED_FOLDER_START = "is excluded from sync";
+export function excludedFolderStartError(folder: string, onThisMachine: boolean): string {
+  return onThisMachine
+    ? `${folder} ${EXCLUDED_FOLDER_START} on this machine, so this session's replies would never reach codecast.`
+    : `${folder} ${EXCLUDED_FOLDER_START}, so this session's replies would never reach codecast. Sync the folder, then restart the session.`;
 }
 
 // The same refusal for a session that already ran somewhere else.

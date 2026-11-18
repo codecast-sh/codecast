@@ -1,4 +1,5 @@
 import { resourceOffloadStubs, cancelResourceBatch, requeueMigrationBatch } from "./resourceOffloadActions";
+import { planSyncChange } from "@codecast/shared/team/syncPlan";
 import { approvesCommandRun } from "@codecast/shared/contracts/commandRun";
 import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, GOAL_RESUME_RESET, goalCanPause, goalCanResume, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
@@ -1511,6 +1512,9 @@ export type SessionDecisionItem = {
   run?: import("@codecast/shared/contracts/commandRun").CommandRun;
   blocking: boolean;
   default_option?: number;
+  /** How much getting it answered matters, 1-5, as the asker judged it, and why (shared/contracts/decisionImpact.ts). */
+  impact?: number;
+  impact_reason?: string;
   /** A pointer card (a staffing proposal's): answering clears it and
    *  delivers nothing into the session. */
   silent?: boolean;
@@ -2655,13 +2659,17 @@ export function teamInboxIdsOf(st: TeamInboxIdsState): ReadonlySet<string> {
   return (st.teamInboxIdSnapshot?.team_id ?? null) === (st.clientState.ui?.active_team_id ?? null) ? ids : EMPTY_TEAM_INBOX_IDS;
 }
 
-const inboxScopeCache = new WeakMap<object, {
+// Several answers per sessions object: the warm loop and the badges ask for
+// both scopes over the same rows, and one slot made each evict the other.
+type InboxScopeEntry = {
   scope: "mine" | "team";
   meId: string | null | undefined;
   teamInboxIds: ReadonlySet<string>;
   focusedId: string | null | undefined;
   value: Record<string, InboxSession>;
-}>();
+};
+const inboxScopeCache = new WeakMap<object, InboxScopeEntry[]>();
+const INBOX_SCOPE_SLOTS = 4;
 
 export function filterInboxScope(
   sessions: Record<string, InboxSession>,
@@ -2670,10 +2678,12 @@ export function filterInboxScope(
   teamInboxIds: ReadonlySet<string> = EMPTY_TEAM_INBOX_IDS,
   focusedId?: string | null,
 ): Record<string, InboxSession> {
-  const hit = inboxScopeCache.get(sessions);
-  if (hit && hit.scope === scope && hit.meId === meId && hit.teamInboxIds === teamInboxIds && hit.focusedId === focusedId) return hit.value;
+  const entries = inboxScopeCache.get(sessions);
+  const hit = entries?.find((e) => e.scope === scope && e.meId === meId && e.teamInboxIds === teamInboxIds && e.focusedId === focusedId);
+  if (hit) return hit.value;
   const value = computeInboxScope(sessions, scope, meId, teamInboxIds, focusedId);
-  inboxScopeCache.set(sessions, { scope, meId, teamInboxIds, focusedId, value });
+  const next = [{ scope, meId, teamInboxIds, focusedId, value }, ...(entries ?? [])].slice(0, INBOX_SCOPE_SLOTS);
+  inboxScopeCache.set(sessions, next);
   return value;
 }
 
@@ -3953,6 +3963,85 @@ function reuseArrayMap<T>(prev: Map<string, T[]> | undefined, next: Map<string, 
   }
   return prev;
 }
+
+// The row fields that order a section besides the shared sort time: the new
+// lane by connection, pinned by pin time, the set-aside lanes by when the row
+// was set aside (and the Killed list's recent-kill horizon).
+const ORDER_STAMPS = ["is_connected", "inbox_pinned_at", "inbox_dismissed_at", "inbox_killed_at", "inbox_stashed_at", "inbox_snoozed_until"] as const;
+
+// A cached placement under an unchanged key, with the rows a write replaced
+// swapped for their new objects. Null when the write added or removed a row,
+// or moved a changed row inside its section: the caller then recomputes. Every
+// array or map holding no changed row keeps its identity, so a heartbeat on
+// one row wakes only the readers of that row's section.
+function refreshPlacedRows(
+  memo: { sessions: Record<string, InboxSession>; val: PlacedInbox },
+  sessions: Record<string, InboxSession>,
+  now: number,
+): PlacedInbox | null {
+  const prevRows = memo.sessions;
+  const v = memo.val;
+  const changed = new Map<string, InboxSession>();
+  let n = 0;
+  for (const id in sessions) {
+    n++;
+    const s = sessions[id];
+    const p = prevRows[id];
+    if (s === p) continue;
+    if (!p) return null;
+    const placement = v.placements.get(id) ?? null;
+    const a = sessionSortTime(p, placement, now);
+    const b = sessionSortTime(s, placement, now);
+    if (a.at !== b.at || a.key !== b.key) return null;
+    for (const f of ORDER_STAMPS) if ((p as any)[f] !== (s as any)[f]) return null;
+    changed.set(id, s);
+  }
+  let prevN = 0;
+  for (const _ in prevRows) prevN++;
+  if (prevN !== n) return null;
+  if (changed.size === 0) return v;
+  const swap = (arr: InboxSession[]): InboxSession[] => {
+    let out: InboxSession[] | null = null;
+    for (let i = 0; i < arr.length; i++) {
+      const next = changed.get(arr[i]._id);
+      if (next && next !== arr[i]) (out ??= arr.slice())[i] = next;
+    }
+    return out ?? arr;
+  };
+  const swapMap = (m: Map<string, InboxSession[]>): Map<string, InboxSession[]> => {
+    let out: Map<string, InboxSession[]> | null = null;
+    for (const [k, arr] of m) {
+      const next = swap(arr);
+      if (next !== arr) (out ??= new Map(m)).set(k, next);
+    }
+    return out ?? m;
+  };
+  let visibleSessions = v.visibleSessions;
+  for (const [id, s] of changed) {
+    if (visibleSessions[id] && visibleSessions[id] !== s) {
+      if (visibleSessions === v.visibleSessions) visibleSessions = { ...visibleSessions };
+      visibleSessions[id] = s;
+    }
+  }
+  return {
+    ...v,
+    visibleSessions,
+    sorted: swap(v.sorted),
+    questions: swap(v.questions),
+    pinned: swap(v.pinned),
+    newSessions: swap(v.newSessions),
+    needsInput: swap(v.needsInput),
+    done: swap(v.done),
+    dormant: swap(v.dormant),
+    working: swap(v.working),
+    stashed: swap(v.stashed),
+    snoozed: swap(v.snoozed),
+    dismissed: swap(v.dismissed),
+    subsByParent: swapMap(v.subsByParent),
+    forksByParent: swapMap(v.forksByParent),
+    workersNeedingYouByParent: swapMap(v.workersNeedingYouByParent),
+  };
+}
 function samePlacements(a: Map<string, InboxRowPlacement>, b: Map<string, InboxRowPlacement>): boolean {
   if (a === b) return true;
   if (a.size !== b.size) return false;
@@ -4049,11 +4138,18 @@ export function placeInboxRows(
   ];
   const memo = _placedMemo.get(slot);
   const sameKey = memo != null && memo.key.length === key.length && key.every((v, i) => Object.is(v, memo.key[i]));
-  // Fast path needs the COLLECTION IDENTITY too: a heartbeat mints a new
-  // sessions ref without touching the placement key, and the contract is
-  // fresh rows — so the walk below re-runs (cheap: per-row placements hit the
-  // identity cache) and only the placement half is reused by content.
-  if (memo && sameKey && memo.sessions === state.sessions) return memo.val;
+  // Equal keys mean no placement moved. A heartbeat mints a new sessions ref
+  // without touching the key, and the contract is fresh rows: the cached
+  // answer is handed back with the changed rows swapped in, unless one of them
+  // moved its place inside a section (refreshPlacedRows).
+  if (memo && sameKey) {
+    if (memo.sessions === state.sessions) return memo.val;
+    const refreshed = refreshPlacedRows(memo, state.sessions, now);
+    if (refreshed) {
+      _placedMemo.set(slot, { key, sessions: state.sessions, val: refreshed });
+      return refreshed;
+    }
+  }
 
   // 1. Declared-overlay inputs (store/inboxOverlays — the ONLY local passes),
   // resolved ONCE; every keep / in-flight / engaged rule below derives from
@@ -6326,6 +6422,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setWalkiePref: (pref: "team" | "off") => void;
   adoptTimezone: (timezone: string) => void;
   setCloudSessionSync: (source: CloudSessionSource, enabled: boolean) => void;
+  syncFolder: (folder: string) => void;
   snoozeWalkie: (until: number) => number;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
@@ -11703,6 +11800,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // dispatch side effect runs the authoritative users.updateSyncSettings.
   setCloudSessionSync: action(function (this: Draft, source: CloudSessionSource, enabled: boolean) {
     if (this.currentUser) (this.currentUser as any)[CLOUD_SESSION_SOURCES[source].field] = enabled;
+  }),
+
+  // One folder into the person's sync, from the control beside a session's
+  // folder. The lists flip here at once; the syncFolder side effect plans the
+  // same change on the server from the stored lists (users.syncFolder).
+  syncFolder: action(function (this: Draft, folder: string) {
+    const u = this.currentUser as any;
+    if (!u) return;
+    const plan = planSyncChange({ sync_mode: u.sync_mode ?? "all", sync_projects: u.sync_projects ?? [], sync_excluded: u.sync_excluded ?? [] }, { sync: [folder] });
+    if (plan.next) Object.assign(u, plan.next);
   }),
 
   // Snooze: the shutter under that door. Same local-first reason again, and

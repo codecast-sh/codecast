@@ -1,4 +1,5 @@
 import { LogoIcon } from "../Logo";
+import { FolderSyncControl } from "./FolderSyncControl";
 import { policyTeamOf } from "@codecast/shared/contracts";
 import { usePolicyRefusal } from "../../lib/managedPolicy";
 import { useSyncTeamMachines } from "../../hooks/useSyncTeamMachines";
@@ -877,6 +878,8 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
           of the picker box and these hints hide. Kept to the picker's width,
           so a cloud agent's options wrap inside the column instead of
           spanning the pane. */}
+      {!picking && currentPath && <FolderSyncControl folder={currentPath} />}
+
       {modeSlot === undefined && <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 max-w-3xl">
         <NewSessionBucketPill conversation={conversation} />
 

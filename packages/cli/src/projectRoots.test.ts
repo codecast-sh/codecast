@@ -34,3 +34,16 @@ describe("enumerateAgentHomeDirs", () => {
     expect(enumerateProjectRoots(home)).toEqual([path.join(home, "code", "app")]);
   });
 });
+
+// A rented Mac kept its repos in ~/git and reported no projects, so every new
+// session on it started in the home folder (2026-11-18).
+describe("repos kept in ~/git", () => {
+  test("are projects, in both the sync and the async scan", async () => {
+    const { enumerateLocalRootsAsync } = await import("./projectRoots");
+    const home = tmpHome();
+    fs.mkdirSync(path.join(home, "git", "littlebird"), { recursive: true });
+    const want = path.join(home, "git", "littlebird");
+    expect(enumerateProjectRoots(home)).toContain(want);
+    expect(await enumerateLocalRootsAsync(home)).toContain(want);
+  });
+});

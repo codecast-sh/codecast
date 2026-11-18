@@ -20,6 +20,7 @@
 
 import { execFile, lastErrorLine, spawn } from "./proc.js";
 import * as fs from "node:fs";
+import { folderOnThisMachine } from "@codecast/shared/team/folderLists";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
@@ -93,12 +94,9 @@ function realPathOf(p: string): string {
 }
 
 /** The recorded path as it would sit on this machine: another user's home
- *  prefix (/Users/m1, /home/m1) becomes this one's. */
-export function localFolderFor(recorded: string, home: string): string {
-  const m = recorded.match(/^\/(?:Users|home)\/[^/]+(\/.*)?$/);
-  if (!m || !home) return recorded;
-  return m[1] ? path.join(home, m[1]) : home;
-}
+ *  prefix (/Users/m1, /home/m1) becomes this one's. The same rule names "the
+ *  same folder" in the person's sync lists (shared/team/folderLists.ts). */
+export const localFolderFor = folderOnThisMachine;
 
 export type FolderPlan =
   | { ok: true; dir: string; entries: string[]; bytes: number; files: number }
