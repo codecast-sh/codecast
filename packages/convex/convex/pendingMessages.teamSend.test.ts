@@ -15,6 +15,7 @@ import {
   STUCK_SEND_NOTIFY_DEADLINE_MS,
   DEAD_SESSION_REVIVE_WINDOW_MS,
   planDeadSessionRevive,
+  sendStatusFor,
 } from "./pendingMessages";
 
 // ── In-memory Convex-ish DB ──────────────────────────────────────────────────
@@ -229,6 +230,60 @@ describe("reply to the session that wrote to you", () => {
     const { ctx } = world({ now: Date.now() });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "please take this" });
     await expect(performSessionSend(ctx as any, "uCarol" as any, { to: "jxalice", from: "jxbob01", body: "x" })).rejects.toThrow();
+  });
+});
+
+// A short id is 7 characters and collides often. Resolving to the newest match
+// sent 117 workers' reports meant for the Marketplaces lead (a weeks-old
+// standing session) to a newer reviewer sharing its prefix (week of 2026-11-17).
+describe("a short id shared by several sessions", () => {
+  async function twins() {
+    const w = world({ now: Date.now() });
+    w.tables.conversations.push(
+      { _id: "convLead", user_id: "uAlice", short_id: "jxtwin0", session_id: "sess-lead", is_private: true, status: "active" },
+      { _id: "convWorker", user_id: "uAlice", short_id: "jxworkr", session_id: "sess-worker", is_private: true, status: "active", spawned_by_conversation_id: "convLead" },
+      { _id: "convPen", user_id: "uAlice", short_id: "jxpenpl", session_id: "sess-pen", is_private: true, status: "active" },
+      { _id: "convTwin", user_id: "uAlice", short_id: "jxtwin0", session_id: "sess-twin", is_private: true, status: "active" },
+    );
+    return w;
+  }
+
+  test("a worker's report reaches its own lead, not a newer session with the same short id", async () => {
+    const { ctx, tables } = await twins();
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxtwin0", from: "jxworkr", body: "done" });
+    expect(tables.pending_messages[0].conversation_id).toBe("convLead");
+  });
+
+  test("a lead reaches its own worker over a newer twin", async () => {
+    const { ctx, tables } = await twins();
+    tables.conversations.push({ _id: "convWorker2", user_id: "uAlice", short_id: "jxworkr", session_id: "sess-w2", is_private: true, status: "active" });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxworkr", from: "jxtwin0", body: "next" });
+    // jxtwin0 as a sender is itself ambiguous among Alice's own sessions; the newest (convTwin) sends,
+    // so pin the sender by its longer prefix to speak as the lead.
+    tables.pending_messages.length = 0;
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxworkr", from: "convLead", body: "next" });
+    expect(tables.pending_messages[0].conversation_id).toBe("convWorker");
+  });
+
+  test("a reply reaches the session that wrote to the sender", async () => {
+    const { ctx, tables } = await twins();
+    tables.pending_messages.push({ _id: "pm0", conversation_id: "convPen", from_conversation_id: "convLead", content: "<session-message from=\"jxtwin0\">hi</session-message>", status: "delivered", created_at: 1 });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxtwin0", from: "jxpenpl", body: "answer" });
+    expect(tables.pending_messages.at(-1)!.conversation_id).toBe("convLead");
+  });
+
+  test("with no relation to the sender the newest match still wins", async () => {
+    const { ctx, tables } = await twins();
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxtwin0", from: "jxpenpl", body: "hello" });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxtwin0", body: "hello" });
+    expect(tables.pending_messages.map((r) => r.conversation_id)).toEqual(["convTwin", "convTwin"]);
+  });
+
+  test("cast send --status reads the same session a send reaches", async () => {
+    const { ctx } = await twins();
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxtwin0", from: "jxworkr", body: "done" });
+    const status = await sendStatusFor(ctx as any, "uAlice" as any, { to: "jxtwin0", from: "jxworkr" });
+    expect(status.sends.length).toBe(1);
   });
 });
 

@@ -102,10 +102,15 @@ export const otherShortIdMatches = async (
   return candidates.filter((c) => String(c._id) !== String(chosen._id));
 };
 
+// `rank` settles a short id that several accepted conversations share: the
+// lowest rank wins, newest first among equals. Without it the newest accepted
+// match wins, which shadows a long-lived session (a role's standing session, a
+// lead running for weeks) behind any newer one that happens to share its prefix.
 export const findConversationByAnyRefWhere = async (
   ctx: LookupCtx,
   ref: string,
-  accept: (conversation: LookupRecord) => boolean | Promise<boolean>
+  accept: (conversation: LookupRecord) => boolean | Promise<boolean>,
+  rank?: (conversation: LookupRecord) => number | Promise<number>
 ): Promise<LookupRecord | null> => {
   const trimmed = (ref ?? "").trim();
   if (!trimmed) return null;
@@ -127,9 +132,15 @@ export const findConversationByAnyRefWhere = async (
     }
   }
 
+  let best: { candidate: LookupRecord; rank: number } | null = null;
   for (const candidate of await shortIdCandidatesNewestFirst(ctx, trimmed)) {
-    if (await accept(candidate)) return candidate;
+    if (!(await accept(candidate))) continue;
+    if (!rank) return candidate;
+    const r = await rank(candidate);
+    if (!best || r < best.rank) best = { candidate, rank: r };
+    if (r === 0) break;
   }
+  if (best) return best.candidate;
 
   // session_id: directly on the conversation, or via the managed_sessions link.
   for (const candidate of await sessionIdCandidatesNewestFirst(ctx, trimmed)) {
