@@ -98,6 +98,8 @@ const updates = () => {
 };
 
 const backend = new ClaudeSdkBackend(deps, hostDir);
+// Whichever backend holds the host last; a run that fails midway still stops it.
+let current = backend;
 const spec = {
   agent: "grok" as const,
   conversationId: conv,
@@ -144,6 +146,7 @@ try {
   const pid = readHostState(sessionId, hostDir)?.pid;
   backend.detachAll();
   const backend2 = new ClaudeSdkBackend(deps, hostDir);
+  current = backend2;
   const attached = await backend2.reattachAll();
   check("a restarted daemon reattaches to the same host", attached.includes(conv) && readHostState(sessionId, hostDir)?.pid === pid);
   const ends2 = turnEnds();
@@ -169,6 +172,7 @@ try {
   await backend2.stop(conv, { forget: true });
   check("stop leaves no host", !readHostState(sessionId, hostDir));
 } finally {
+  await current.stop(conv, { forget: true }).catch(() => {});
   if (!keep) fs.rmSync(scratch, { recursive: true, force: true });
   else console.log(`kept ${scratch}`);
 }
