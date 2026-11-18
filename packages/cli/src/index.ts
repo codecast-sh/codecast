@@ -20217,7 +20217,7 @@ plan
   .description("Add a comment to a plan")
   .argument("<plan_id>", "Plan short ID")
   .argument("<text>", stdinText("Comment text"))
-  .option("-t, --type <type>", "Comment type: progress, decision, discovery, reference, blocker, note", choiceOption(["progress", "decision", "discovery", "reference", "blocker", "note"]), "progress")
+  .option("-t, --type <type>", "Comment type: progress, decision, discovery, reference, blocker, note; for the shared log, fact (a discovery), fail (an approach that did not work, and why) or interface (a contract between tasks)", choiceOption(["progress", "decision", "discovery", "reference", "blocker", "note", "fact", "fail", "interface"]), "progress")
   .option("-d, --decision", "Shorthand for --type decision")
   .option("-f, --finding", "Shorthand for --type discovery")
   .option("--ref <path_or_url>", "Add a reference pointer (sets type to reference)")
@@ -20227,7 +20227,7 @@ plan
     const sessionId = detectCurrentSessionId();
     let type = options.type;
     if (options.decision) type = "decision";
-    if (options.finding) type = "discovery";
+    if (options.finding || type === "fact") type = "discovery";
     if (options.ref) type = "reference";
 
     const body: Record<string, any> = { short_id: planId, content: text, type };

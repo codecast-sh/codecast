@@ -6811,6 +6811,10 @@ export default defineSchema({
         v.literal("reference"),
         v.literal("blocker"),
         v.literal("note"),
+        // The shared log's entries (cast plan comment --type fail|interface);
+        // a fact is stored as "discovery".
+        v.literal("fail"),
+        v.literal("interface"),
       ),
       timestamp: v.number(),
       session_id: v.optional(v.string()),

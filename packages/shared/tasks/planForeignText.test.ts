@@ -111,6 +111,20 @@ describe("renderFencedPlanRecord", () => {
     expect(aged).toContain("- [2h ago] ada: started");
   });
 
+  test("shared-log entries carry their kind, and a discovery reads as a fact", () => {
+    const comments = [
+      { type: "discovery", content: "the cache keys on host", author: "w1" },
+      { type: "fail", content: "a global lock deadlocks the pusher", author: "w2" },
+      { type: "interface", content: "plans.messaging_policy: lead | shared-log", author: "w3" },
+      { type: "progress", content: "started", author: "w4" },
+    ];
+    const body = renderForeignPlanBody({ ...plan, comments });
+    expect(body).toContain("- [fact] w1: the cache keys on host");
+    expect(body).toContain("- [fail] w2: a global lock deadlocks the pusher");
+    expect(body).toContain("- [interface] w3: plans.messaging_policy: lead | shared-log");
+    expect(body).toContain("- w4: started");
+  });
+
   test("a comment author cannot forge the line after it", () => {
     const body = renderForeignPlanBody({
       ...plan,

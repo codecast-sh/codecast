@@ -505,7 +505,8 @@ export const addComment = mutation({
     const actor = await resolveActor(ctx, auth.userId, callerConv);
     const entries = (plan as any).entries || [];
     const entry: Record<string, any> = {
-      type: args.type || "progress",
+      // A shared-log fact is the plan's existing "discovery" entry.
+      type: args.type === "fact" ? "discovery" : args.type || "progress",
       timestamp: Date.now(),
       content: args.content,
     };
