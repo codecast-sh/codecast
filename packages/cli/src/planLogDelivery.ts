@@ -9,6 +9,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { FOREIGN_TEXT_CAPS, inlineForeignText } from "@codecast/shared/contracts";
+import { foreignProse } from "@codecast/shared/tasks";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 
@@ -24,9 +26,12 @@ export const NO_LOG_RECHECK_MS = 5 * 60_000;
 
 export function formatLogEntries(planShortId: string | undefined, entries: LogEntry[]): string {
   const head = fmt.muted(`shared log${planShortId ? ` of ${planShortId}` : ""}, ${entries.length} new:`);
+  // Another agent wrote each entry: escaped and capped the way `cast plan show`
+  // renders a plan comment (planForeignText.ts), so it cannot repaint the terminal.
   const lines = entries.map((e) => {
-    const [first, ...rest] = e.content.split("\n");
-    return [`[${e.type}]${e.author ? ` ${e.author}:` : ""} ${first}`, ...rest.map((l) => `  ${l}`)].join("\n");
+    const [first, ...rest] = (foreignProse(e.content, FOREIGN_TEXT_CAPS.commentChars) ?? "").split("\n");
+    const author = inlineForeignText(e.author);
+    return [`[${inlineForeignText(e.type)}]${author ? ` ${author}:` : ""} ${first}`, ...rest.map((l) => `  ${l}`)].join("\n");
   });
   return [head, ...lines].join("\n");
 }
