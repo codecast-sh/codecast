@@ -23,7 +23,7 @@ async function world(policy: "lead" | "shared-log") {
     await t.run(async (ctx) => {
       await ctx.db.insert("conversations", {
         user_id: me, session_id, agent_type: "claude_code", status: "active", message_count: 0,
-        started_at: T0, updated_at: T0, active_plan_id: plan.id,
+        started_at: T0, updated_at: T0, active_plan_id: plan.id, short_id: `c-${session_id}`, title: `Agent ${session_id}`,
       } as any);
     });
   }
@@ -46,6 +46,7 @@ test("a shared-log plan delivers each fact, fail and interface once, never the r
     ["fact", "the cache keys on host"],
     ["fail", "a global lock deadlocks the pusher"],
   ]);
+  expect(first.entries[0]).toMatchObject({ session: "c-sess-a", title: "Agent sess-a" });
   expect((await unread("sess-b")).entries).toEqual([]);
 
   await new Promise((r) => setTimeout(r, 2));

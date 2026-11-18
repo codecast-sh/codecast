@@ -14,7 +14,7 @@ import { foreignProse } from "@codecast/shared/tasks";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 
-export type LogEntry = { type: string; content: string; author?: string; timestamp: number };
+export type LogEntry = { type: string; content: string; author?: string; session?: string; title?: string; timestamp: number };
 
 /** The commands that never carry the log: the daemon's own, auth, and the hooks. */
 const SKIP_COMMANDS = new Set(["start", "stop", "status", "daemon", "codecast", "_daemon", "_watchdog", "auth", "login", "update", "agent-context", "stable-context"]);
@@ -30,8 +30,8 @@ export function formatLogEntries(planShortId: string | undefined, entries: LogEn
   // renders a plan comment (planForeignText.ts), so it cannot repaint the terminal.
   const lines = entries.map((e) => {
     const [first, ...rest] = (foreignProse(e.content, FOREIGN_TEXT_CAPS.commentChars) ?? "").split("\n");
-    const author = inlineForeignText(e.author);
-    return [`[${inlineForeignText(e.type)}]${author ? ` ${author}:` : ""} ${first}`, ...rest.map((l) => `  ${l}`)].join("\n");
+    const from = [inlineForeignText(e.author), e.session && `session ${inlineForeignText(e.session)}`, e.title && `"${inlineForeignText(e.title).slice(0, 60)}"`].filter(Boolean).join(", ");
+    return [`[${inlineForeignText(e.type)}]${from ? ` ${from}:` : ""} ${first}`, ...rest.map((l) => `  ${l}`)].join("\n");
   });
   return [head, ...lines].join("\n");
 }

@@ -84,6 +84,11 @@ test("formatLogEntries names each entry's kind", () => {
   expect(formatLogEntries(undefined, [{ type: "fail", content: "retry loop", timestamp: 1 }])).toContain("[fail] retry loop");
 });
 
+test("formatLogEntries names the writing session, so one person's agents can be told apart", () => {
+  expect(formatLogEntries(undefined, [{ type: "fail", content: "retry loop", author: "Ana", session: "c-12", title: "Fix the cap", timestamp: 1 }]))
+    .toContain('[fail] Ana, session c-12, "Fix the cap": retry loop');
+});
+
 test("formatLogEntries escapes another agent's control characters", () => {
   const out = formatLogEntries(undefined, [{ type: "fact", content: "ok\u001b[2Jwiped", author: "w\u001b[31m2", timestamp: 1 }]);
   expect(out).not.toContain("\u001b[2J");

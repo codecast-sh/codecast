@@ -11,7 +11,11 @@ const LOG_TYPES: Record<string, string> = { discovery: "fact", fail: "fail", int
 /** What a session sees on its first read: the newest entries, not the whole history. */
 export const FIRST_READ_LIMIT = 20;
 
-export type LogEntry = { type: string; content: string; author?: string; session_id?: string; timestamp: number };
+export type LogEntry = {
+  type: string; content: string; author?: string; session_id?: string; timestamp: number;
+  /** The writing session as other agents name it (`cast send <session>`), and its title. */
+  session?: string; title?: string;
+};
 
 /**
  * The log entries a session has not read: newer than its cursor and not its
@@ -56,6 +60,17 @@ export const unread = mutation({
     const all: any[] = plan.entries ?? [];
     const own = new Set([args.session_id, conv.session_id, String(conv._id)].filter(Boolean) as string[]);
     const entries = unreadLogEntries(all, cursor?.read_at ?? null, own);
+    // One person's agents share a name, so each entry names its session too:
+    // only one the reader may see, through the same access check.
+    const writers = new Map<string, any>();
+    for (const e of entries) {
+      if (!e.session_id) continue;
+      if (!writers.has(e.session_id)) writers.set(e.session_id, await resolveSessionConversation(ctx, auth.userId, e.session_id));
+      const w = writers.get(e.session_id);
+      if (!w) continue;
+      e.session = w.short_id ?? String(w._id).slice(0, 7);
+      if (w.title) e.title = w.title;
+    }
 
     // Past every log entry, the session's own included, so nothing comes back.
     const newest = Math.max(0, ...all.filter((e) => LOG_TYPES[e?.type]).map((e) => e.timestamp));
