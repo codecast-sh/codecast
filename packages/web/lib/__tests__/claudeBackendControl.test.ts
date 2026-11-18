@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { GROK_DIRECT_BACKEND } from "@codecast/shared/contracts";
 import { backendRows, canSwitchClaudeBackend } from "../claudeBackendControl";
 import { backendSwitchState, BACKEND_SWITCH_GIVE_UP_MS, type SessionCommandRow } from "../sessionCommands";
 
@@ -31,7 +32,7 @@ describe("Runs in rows", () => {
     expect(canSwitchClaudeBackend("claude_code", "s", 3)).toBe(true);
     expect(canSwitchClaudeBackend(undefined, "s", 3)).toBe(true);
     expect(canSwitchClaudeBackend("codex", "s", 3)).toBe(false);
-    expect(canSwitchClaudeBackend("grok", "s", 3)).toBe(true);
+    expect(canSwitchClaudeBackend("grok", "s", 3)).toBe(GROK_DIRECT_BACKEND);
     expect(canSwitchClaudeBackend("claude_code", "s", 0)).toBe(false);
     expect(canSwitchClaudeBackend("claude_code", null, 3)).toBe(false);
   });

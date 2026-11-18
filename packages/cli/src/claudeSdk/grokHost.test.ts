@@ -139,3 +139,33 @@ describe("grok session helpers", () => {
     expect(grokTurnError(new Error("429 rate limit exceeded")).kind).toBe("rate_limit");
   });
 });
+
+describe("grok on the direct backend", () => {
+  test("a start reports the session boundary to the daemon", async () => {
+    const { ClaudeSdkBackend } = await import("./backend.js");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "grok-backend-"));
+    const bin = path.join(dir, "grok");
+    fs.writeFileSync(bin, `#!/bin/sh\nexec "${process.execPath}" "${path.join(import.meta.dir, "testing", "fakeGrok.ts")}" "$@"\n`, { mode: 0o755 });
+    const activity: SdkActivity[] = [];
+    const backend = new ClaudeSdkBackend({
+      log: () => {},
+      castArgv: () => [process.execPath, path.join(import.meta.dir, "..", "main.ts")],
+      shellPrefix: () => "",
+      activity: (_c, _s, a) => activity.push(a),
+      permission: async () => null,
+      turnError: () => {},
+      stopped: () => {},
+      tooOld: () => {},
+      transcriptHas: async () => false,
+      mayResume: async () => true,
+      resumeAccount: async () => undefined,
+      resumeModelEffort: () => ({ model: [], effort: [] }),
+      transcriptExists: () => true,
+      sessionChanged: () => {},
+    }, dir, { noLaunchd: true });
+    cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    cleanups.push(async () => { await backend.stop("conv1", { forget: true }); });
+    await backend.start("conv1", { agent: "grok", conversationId: "conv1", sessionId: SESSION, resume: true, cwd: dir, executable: bin, args: ["--permission-mode", "bypassPermissions"], env: {} });
+    expect(activity.find((a) => a.sessionBoundary)).toMatchObject({ status: "idle", sessionBoundary: true });
+  }, 60_000);
+});

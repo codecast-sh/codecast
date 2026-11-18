@@ -324,6 +324,37 @@ sent with `verbatimPrompts`, so Claude dispatches commands):
 | Bash edit capture and other codecast hooks besides the status hook | Works: they load with the user's settings. |
 | Terminal attach (watching the pane) | Gap by design: there is no pane. The header's SDK pill offers the switch to a terminal instead. |
 
+## Grok on the direct backend
+
+A Grok session can run in the same host instead of a tmux pane: the host drives
+`grok agent stdio` over ACP (`claudeSdk/grokSession.ts`, a `GrokAcpSession`
+with `ClaudeSdkSession`'s events and methods), chosen by `agent: "grok"` on the
+launch spec. Socket, protocol, client, backend, bindings, reattach and the
+daemon's delivery and status wiring are the ones above. It is offered in the
+"Runs in" control once `GROK_DIRECT_BACKEND` (`shared/contracts/claudeBackend.ts`)
+is on; the same predicate gates Convex's `switchBackend`.
+
+| | Claude | Grok |
+|---|---|---|
+| Process | SDK `query()` over the user's `claude` | `grok agent [-m model] stdio` (`GrokAcpClient`, `grokAcp.ts`) |
+| Moving a terminal session | resume by id | `session/load`, with `_meta.yoloMode` for bypassPermissions |
+| Context feed | stable-context hook | the `rules` the session was created with; grok keeps them across loads, and agent mode takes no `--rules` flag |
+| Mid-turn message | `priority: "next"` | grok runs it as the next turn; both end with one idle report |
+| Interrupt | SDK interrupt | `session/cancel`; the running prompt ends `cancelled` |
+| Permissions | `canUseTool` | `session/request_permission`, answered with grok's `allow_once` / `allow_always` / `reject_once`; an aborted card cancels the call |
+| Echo of a delivered message | the uuid it was sent under | the words, as from its pane (grok records no client id) |
+| Status hook | silenced by `CODECAST_SDK_SESSION` | the same: grok runs Claude's hooks and the marker silences them |
+| Shell prefix | account pin and provider keys | grok's provider keys only |
+
+A fresh Grok start still opens a pane; the direct backend takes over an
+existing session through the switch. `packages/cli/scripts/grok-direct-e2e.ts`
+runs the backend against the real `grok` from a private `GROK_HOME` (auth.json
+linked, never copied, so a refresh cannot fork the grant): load, a turn, a
+mid-turn message, interrupt, reattach after a daemon restart, a killed host
+resumed, and every prompt in the session's `updates.jsonl`.
+`claudeSdk/grokHost.test.ts` runs the real host against a fake grok
+(`testing/fakeGrok.ts`).
+
 ## Subscription quota
 
 There is an unverified report that SDK and `claude -p` use draws a Claude

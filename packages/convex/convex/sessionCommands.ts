@@ -38,9 +38,10 @@ export const switchBackend = mutation({
     backend: v.union(v.literal("sdk"), v.literal("tmux")),
     interrupt: v.optional(v.boolean()),
     request_id: v.string(),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getAuthUserId(ctx);
+    const user = await getAuthUserId(ctx) ?? (args.api_token ? (await verifyApiToken(ctx, args.api_token))?.userId : null);
     if (!user) throw new Error("Not authenticated");
     validateSessionCommandRequestId(args.request_id);
     const conv = await requireSessionCommandTarget(ctx, user, args.conversation_id);

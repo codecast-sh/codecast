@@ -25,7 +25,10 @@ const queue = new Map<string, Promise<void>>();
 async function runPrompt(id: number, params: any): Promise<void> {
   const sessionId = params.sessionId as string;
   const text = (params.prompt as Array<{ type: string; text?: string }>).map((b) => b.text ?? "").join("");
-  if (text.includes("FAIL")) return write({ jsonrpc: "2.0", id, error: { code: -32000, message: "Authentication required: sign in with grok login" } });
+  if (text.includes("FAIL")) {
+    write({ jsonrpc: "2.0", id, error: { code: -32000, message: "Authentication required: sign in with grok login" } });
+    return;
+  }
   if (text.includes("PERMISSION") && !yolo.get(sessionId)) {
     const askId = nextId++;
     const answer = await new Promise<any>((resolve) => {
@@ -46,7 +49,8 @@ async function runPrompt(id: number, params: any): Promise<void> {
     update(sessionId, { sessionUpdate: "tool_call", toolCallId: "call-slow", title: "run_terminal_command", rawInput: { command: "sleep 60" } });
     await new Promise<void>((resolve) => cancels.set(sessionId, resolve));
     cancels.delete(sessionId);
-    return write({ jsonrpc: "2.0", id, result: { stopReason: "cancelled" } });
+    write({ jsonrpc: "2.0", id, result: { stopReason: "cancelled" } });
+    return;
   }
   update(sessionId, { sessionUpdate: "tool_call", toolCallId: "call-1", title: "run_terminal_command", rawInput: { command: "echo pong" } });
   update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "pong" } });

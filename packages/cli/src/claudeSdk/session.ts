@@ -171,11 +171,12 @@ export class ClaudeSdkSession extends EventEmitter<ClaudeSdkSessionEvents> {
         slashCommands: init.commands.map((c) => c.name),
       };
       this._init = info;
-      if (this._status === "starting") this.setStatus("idle");
+      // The boundary goes out before the status: the status's snapshot is what ends a start's wait for init.
       if (this.boundaryPending && this.outstanding === 0) {
         this.boundaryPending = false;
         this.report({ status: "idle", sessionBoundary: true });
       }
+      if (this._status === "starting") this.setStatus("idle");
       this.emit("init", info);
       return info;
     });

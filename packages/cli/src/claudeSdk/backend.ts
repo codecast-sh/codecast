@@ -80,6 +80,8 @@ interface Binding {
 interface Live {
   client: SdkHostClient;
   prompts: Map<string, AbortController>;
+  /** Some activity reached the daemon live; until then the host's snapshot is the only record of it. */
+  heard: boolean;
 }
 
 /** Image tags the daemon writes into a message for each attachment it downloaded: `[Image /path]`. */
@@ -256,8 +258,12 @@ export class ClaudeSdkBackend {
     const ready = await initialized(client, this.launchOpts.initTimeoutMs ?? 180_000);
     if (!ready) {
       await this.stopHost(conversationId);
-      throw new Error("Claude Code did not finish starting in its SDK host");
+      throw new Error(`${spec.agent === "grok" ? "Grok" : "Claude Code"} did not finish starting in its host`);
     }
+    // The start's own boundary can be reported before this client connected; the snapshot holds it.
+    const live = this.live.get(conversationId);
+    const snapshot = client.state?.activity;
+    if (live && !live.heard && snapshot) this.deps.activity(conversationId, this.bindings.get(conversationId)?.sessionId ?? client.sessionId, snapshot, spec.env.CODECAST_LAUNCH_TOKEN);
     return client;
   }
 
@@ -278,7 +284,8 @@ export class ClaudeSdkBackend {
     const prompts = new Map<string, AbortController>();
     const previous = this.live.get(conversationId);
     if (previous && previous.client !== client) previous.client.close();
-    this.live.set(conversationId, { client, prompts });
+    const live: Live = { client, prompts, heard: false };
+    this.live.set(conversationId, live);
     const openPrompt = (request: SdkPermissionRequest) => {
       if (QUESTION_TOOLS.has(request.toolName) || prompts.has(request.requestId)) return;
       if (AUTO_ALLOW_TOOLS.has(request.toolName)) {
@@ -297,7 +304,10 @@ export class ClaudeSdkBackend {
         if (!r.ok) this.deps.log(`[claude-sdk] answer for ${request.toolName} ${request.requestId.slice(0, 8)} not taken: ${r.error}`);
       }).catch((err) => this.deps.log(`[claude-sdk] permission card failed: ${(err as Error).message}`));
     };
-    client.on("activity", (a) => this.deps.activity(conversationId, current(), a, this.bindings.get(conversationId)?.spec.env.CODECAST_LAUNCH_TOKEN));
+    client.on("activity", (a) => {
+      live.heard = true;
+      this.deps.activity(conversationId, current(), a, this.bindings.get(conversationId)?.spec.env.CODECAST_LAUNCH_TOKEN);
+    });
     client.on("permission", openPrompt);
     // A prompt that ended without its card (the turn was interrupted, Claude moved on) closes the card.
     client.on("permission_settled", (requestId, by) => {

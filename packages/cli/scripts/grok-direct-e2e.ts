@@ -129,8 +129,9 @@ try {
   await until("working", () => activity.at(-1)?.status === "working" || activity.at(-1)?.status === "thinking");
   await new Promise((r) => setTimeout(r, 1500));
   await backend.deliver(conv, "m3", "Then reply with exactly the word NEXT.");
-  await until("both turns", () => turnEnds() >= before + 2, 240_000);
-  check("a mid-turn message runs as the next turn", updates().includes("NEXT"));
+  // The two turns run back to back and end with one idle report, once the queue is empty.
+  await until("both turns", () => turnEnds() > before && updates().includes("NEXT"), 240_000);
+  check("a mid-turn message runs as the next turn", updates().includes("slow-done") && updates().includes("NEXT"));
 
   // 5. Interrupt a running turn.
   await backend.deliver(conv, "m4", "Run the shell command `sleep 40`, then reply DONE.");

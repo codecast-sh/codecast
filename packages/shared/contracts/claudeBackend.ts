@@ -12,9 +12,12 @@ export const CLAUDE_BACKEND_LABELS: Record<ClaudeBackend, string> = {
   tmux: "Terminal",
 };
 
+/** Grok's direct host (grok agent stdio) is offered once its live end-to-end run passes (scripts/grok-direct-e2e.ts). */
+export const GROK_DIRECT_BACKEND = false;
+
 /** The conversation agent types (Convex spelling) that can run in a direct host as well as a pane. */
 export function hasDirectBackend(agentType: string | null | undefined): boolean {
-  return (agentType || "claude_code") === "claude_code" || agentType === "grok";
+  return (agentType || "claude_code") === "claude_code" || (GROK_DIRECT_BACKEND && agentType === "grok");
 }
 
 export function asClaudeBackend(v: unknown): ClaudeBackend | undefined {
