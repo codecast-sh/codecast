@@ -8,6 +8,7 @@
  * and every title escaped where it sits on a line of ours (ct-49593).
  */
 import { inlineForeignText } from "@codecast/shared/contracts";
+import { resolveMessagingPolicy } from "@codecast/shared/contracts/messagingPolicy";
 import { renderFencedPlanRecord, renderFencedTaskRecord, type TaskEffort } from "@codecast/shared/tasks";
 
 // --- Model Stylesheet Types & Resolution ---
@@ -312,6 +313,13 @@ function fencedPlan(plan: any): string | null {
   });
 }
 
+/** The plan's shared log, for a plan that chose it; null under the default lead policy. */
+function sharedLogSection(plan: any): string | null {
+  const policy = resolveMessagingPolicy(plan.messaging_policy);
+  if (policy.delivery !== "plan-log") return null;
+  return `## Shared log\n\n${policy.guidance.replaceAll("<plan_id>", plan.short_id)}\n`;
+}
+
 export function buildImplementerPrompt(plan: any, task: any): string {
   const steps = task.steps?.length
     ? task.steps.map((s: any, i: number) => `${i + 1}. ${s.done ? "[x]" : "[ ]"} ${inlineForeignText(s.title)}${s.verification ? ` (verify: ${inlineForeignText(s.verification)})` : ""}`).join("\n")
@@ -341,6 +349,7 @@ export function buildImplementerPrompt(plan: any, task: any): string {
     doneContext,
     threadContext,
   ].filter(Boolean).join("\n");
+  const sharedLog = sharedLogSection(plan);
 
   return `You are implementing a task. Your progress is visible to the team in the codecast dashboard.
 
@@ -348,7 +357,7 @@ Start by binding to this task: \`cast task start ${task.short_id}\`
 
 ## Context
 ${planContext}
-${steps ? `\n## Steps\n${steps}\n` : ""}
+${steps ? `\n## Steps\n${steps}\n` : ""}${sharedLog ? `\n${sharedLog}` : ""}
 ## How to work
 
 1. Read the acceptance criteria and relevant code. If anything is unclear, output NEEDS_CONTEXT: <what you need>.
