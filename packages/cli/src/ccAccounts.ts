@@ -1917,11 +1917,32 @@ const CC_PROBE_MODEL = process.env.CODECAST_CC_PROBE_MODEL || "claude-haiku-4-5-
 
 /** One-token model call whose only purpose is the rate-limit headers. Costs a
  *  handful of input tokens on the account; never touches the credential store. */
+/**
+ * The model-scoped weekly window a response's headers carry, or null when they
+ * carry none. A request for a model with its own weekly window answers with
+ * that window beside the unified ones (measured 2026-11-17 on Fable 5.2:
+ * `…-7d_oi-utilization: 0.31`, `…-7d_oi-status: allowed`, `…-7d_oi-reset`).
+ */
+export function parseScopedRateLimitWindow(headers: { get(name: string): string | null }): CcUsageWindow | null {
+  const num = (name: string): number | null => {
+    const raw = headers.get(name);
+    if (raw == null || raw === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+  const util = num("anthropic-ratelimit-unified-7d_oi-utilization");
+  const status = headers.get("anthropic-ratelimit-unified-7d_oi-status");
+  if (util == null && !status) return null;
+  const reset = num("anthropic-ratelimit-unified-7d_oi-reset");
+  const percent = status === "rejected" ? 100 : Math.min(100, Math.round((util ?? 0) * 100));
+  return { percent, ...(reset != null && { resets_at: reset * 1000 }) };
+}
+
 async function probeModel(
   bearerToken: string,
   model: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<{ status: number; fp: RateLimitFingerprint; body: () => Promise<string> }> {
+): Promise<{ status: number; fp: RateLimitFingerprint; scoped: CcUsageWindow | null; windowed: boolean; body: () => Promise<string> }> {
   const res = await fetchImpl(CC_MESSAGES_URL, {
     method: "POST",
     headers: {
@@ -1934,7 +1955,11 @@ async function probeModel(
     body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
     signal: AbortSignal.timeout(20000),
   });
-  return { status: res.status, fp: parseRateLimitFingerprint(res.headers), body: () => res.text().catch(() => "") };
+  const fp = parseRateLimitFingerprint(res.headers);
+  // A refusal for a spent window names the windows it was judged on. One that
+  // names none was refused for another reason and says nothing about them.
+  const windowed = fp.five_hour_reset != null || fp.seven_day_reset != null || !!res.headers.get("anthropic-ratelimit-unified-status");
+  return { status: res.status, fp, scoped: parseScopedRateLimitWindow(res.headers), windowed, body: () => res.text().catch(() => "") };
 }
 
 export async function fetchRateLimitFingerprint(bearerToken: string, fetchImpl?: typeof fetch): Promise<RateLimitFingerprint> {
@@ -1963,12 +1988,19 @@ const CC_SCOPED_PROBE_MODEL = process.env.CODECAST_CC_SCOPED_PROBE_MODEL || "cla
  *
  * The token can make model requests, and those answer the question directly.
  * One call on the probe model gives both unified windows from the headers. If
- * those windows admit requests, one call on the scoped model tells whether its
- * window is spent: a refusal there, with the unified windows open, can only be
- * the model's own window. A success means it is not spent, and the endpoint's
- * percent is unknowable, so an older reading below 100 is kept and a pegged one
- * is dropped. When the unified windows refuse, the scoped call proves nothing
- * and the previous scoped reading stands.
+ * those windows admit requests, one call on the scoped model asks about its
+ * window. An answer that carries the model's window is the reading itself. A
+ * refusal that names rate-limit windows, with the unified ones open, can only
+ * be the model's own window: it is spent. A success without the window means
+ * it is not spent and its percent is unknowable, so an older reading below 100
+ * is kept and a pegged one is dropped. When the unified windows refuse, the
+ * scoped call proves nothing and the previous scoped reading stands.
+ *
+ * A refusal that names no window proves nothing either. The API answers a bare
+ * request for the scoped model with an empty 429 whatever the window holds: on
+ * 2026-11-17 six token accounts read "Fable 100%" with no reset time while one
+ * of them ran Fable sessions at 31% of that window. Such a reading is dropped
+ * unless it came with a reset time that has not passed.
  */
 export async function fetchTokenUsageSnapshot(
   token: string,
@@ -1991,9 +2023,14 @@ export async function fetchTokenUsageSnapshot(
     return snap;
   }
   const scoped = await probeModel(token, CC_SCOPED_PROBE_MODEL, opts.fetchImpl);
-  if (scoped.status === 429) {
-    const reset = prevScoped?.resets_at && prevScoped.resets_at > now ? prevScoped.resets_at : undefined;
-    snap.weekly_scoped = { percent: 100, ...(reset && { resets_at: reset }), label: prevScoped?.label ?? "Fable" };
+  const label = prevScoped?.label ?? "Fable";
+  const liveReset = prevScoped?.resets_at && prevScoped.resets_at > now ? prevScoped.resets_at : undefined;
+  if (scoped.scoped) {
+    snap.weekly_scoped = { ...scoped.scoped, label };
+  } else if (scoped.status === 429 && scoped.windowed) {
+    snap.weekly_scoped = { percent: 100, ...(liveReset && { resets_at: liveReset }), label };
+  } else if (scoped.status === 429) {
+    if (prevScoped && (prevScoped.percent < 100 || liveReset)) snap.weekly_scoped = prevScoped;
   } else if (scoped.status >= 200 && scoped.status < 300) {
     if (prevScoped && prevScoped.percent < 100) snap.weekly_scoped = prevScoped;
   } else if (prevScoped) {

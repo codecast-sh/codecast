@@ -1637,7 +1637,8 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
       if (String(url).includes("/v1/messages")) {
         const model = JSON.parse(init.body).model;
         models.push(model);
-        if (model.includes("fable")) return new Response(`{"type":"error"}`, { status: fableStatus });
+        // A refusal for a spent window names the windows it was judged on.
+        if (model.includes("fable")) return new Response(`{"type":"error"}`, { status: fableStatus, headers: fableStatus === 429 ? { "anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-unified-7d-reset": String(FABLE_RESET / 1000) } : {} });
         return new Response("{}", {
           status: 200,
           headers: {
@@ -1684,7 +1685,7 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
       if (!String(url).includes("/v1/messages")) return usageFetch([])(url, init);
       const model = JSON.parse(init.body).model;
       models.push(model);
-      if (model.includes("fable")) return new Response(`{"type":"error"}`, { status: 429 });
+      if (model.includes("fable")) return new Response(`{"type":"error"}`, { status: 429, headers: { "anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-unified-7d-reset": String(WEEKLY_RESET_S.c) } });
       return new Response("{}", {
         status: 200,
         headers: {
@@ -1703,6 +1704,56 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     models.length = 0;
     await refreshUsageSnapshots({ now: NOW + 60_000, fetchImpl, heldProfiles: new Set(["c"]) });
     expect(models).toEqual([]);
+  });
+
+  // 2026-11-17: six token accounts read "Fable 100%" with no reset time while
+  // one of them ran Fable sessions at 31% of that window. The API answers a
+  // bare request for the scoped model with an empty 429 whatever the window
+  // holds, and the probe read every one as a spent window.
+  describe("the scoped probe on a token account", () => {
+    const UNIFIED = {
+      "anthropic-ratelimit-unified-5h-utilization": "0.05",
+      "anthropic-ratelimit-unified-5h-reset": String(SESSION_RESET_S),
+      "anthropic-ratelimit-unified-7d-utilization": "0.2",
+      "anthropic-ratelimit-unified-7d-reset": String(WEEKLY_RESET_S.c),
+    };
+    const probe = async (prevScoped: { percent: number; resets_at?: number; label: string } | undefined, fable: () => Response) => {
+      writeAccountToken("c", `sk-ant-oat01-${"z".repeat(60)}`);
+      fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify({
+        accounts: { "uuid-c": { fetched_at: NOW - 10_000, source: "live-session", polled_at: NOW - 30 * 3600_000, ...(prevScoped && { weekly_scoped: prevScoped }) } },
+      }));
+      invalidateAccountsCache();
+      const fetchImpl = (async (url: any, init: any) => {
+        if (!String(url).includes("/v1/messages")) return usageFetch([])(url, init);
+        return JSON.parse(init.body).model.includes("fable") ? fable() : new Response("{}", { status: 200, headers: UNIFIED });
+      }) as any;
+      const res = await refreshUsageSnapshots({ now: NOW, fetchImpl, heldProfiles: new Set(["c"]) });
+      expect(res.probed).toContain("c");
+      return readUsageCache().accounts["uuid-c"].weekly_scoped;
+    };
+    const emptyRefusal = () => new Response(`{"type":"error","error":{"type":"rate_limit_error","message":"Error"}}`, { status: 429 });
+
+    it("drops a pegged reading with no reset time when the refusal names no window", async () => {
+      expect(await probe({ percent: 100, label: "Fable" }, emptyRefusal)).toBeUndefined();
+    });
+
+    it("does not peg a window that had no reading", async () => {
+      expect(await probe(undefined, emptyRefusal)).toBeUndefined();
+    });
+
+    it("keeps a measured reading through a refusal that names no window", async () => {
+      const reset = NOW + 5 * 24 * 3600_000;
+      expect(await probe({ percent: 55, resets_at: reset, label: "Fable" }, emptyRefusal)).toEqual({ percent: 55, resets_at: reset, label: "Fable" });
+      expect(await probe({ percent: 100, resets_at: reset, label: "Fable" }, emptyRefusal)).toEqual({ percent: 100, resets_at: reset, label: "Fable" });
+    });
+
+    it("takes the model's own window from the answer when it carries one", async () => {
+      const reset = Math.floor(NOW / 1000) + 6 * 24 * 3600;
+      const answered = () => new Response("{}", { status: 200, headers: { ...UNIFIED, "anthropic-ratelimit-unified-7d_oi-utilization": "0.31", "anthropic-ratelimit-unified-7d_oi-status": "allowed", "anthropic-ratelimit-unified-7d_oi-reset": String(reset) } });
+      expect(await probe({ percent: 100, label: "Fable" }, answered)).toEqual({ percent: 31, resets_at: reset * 1000, label: "Fable" });
+      const spent = () => new Response("{}", { status: 429, headers: { "anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-unified-7d_oi-utilization": "1.02", "anthropic-ratelimit-unified-7d_oi-status": "rejected", "anthropic-ratelimit-unified-7d_oi-reset": String(reset) } });
+      expect(await probe({ percent: 31, label: "Fable" }, spent)).toEqual({ percent: 100, resets_at: reset * 1000, label: "Fable" });
+    });
   });
 
   it("marks an index entry with no secret behind it login-expired instead of skipping it silently", async () => {
