@@ -1,22 +1,64 @@
 import { useLayoutEffect, useState, type DependencyList, type RefObject } from "react";
 
-// Every hook that measures in one commit measures in one pass: a microtask
-// after the commit's layout effects, still before the browser paints. The
-// reads run back to back with no writes between them, so the page is laid out
-// once for the whole batch; a read inside each hook's own layout effect laid
-// it out once per mounted row (a conversation's first paint mounts dozens).
-const pending = new Map<HTMLElement, () => void>();
-let flushQueued = false;
-function measureBeforePaint(el: HTMLElement, check: () => void) {
-  pending.set(el, check);
-  if (flushQueued) return;
-  flushQueued = true;
-  queueMicrotask(() => {
-    flushQueued = false;
-    const checks = [...pending.values()];
-    pending.clear();
-    for (const check of checks) check();
+// One observer for every hook. Its callback runs after the browser lays the
+// frame out and before it paints, so the first answer for a new element still
+// lands before paint, and every element in the batch is read before any
+// answer is set: the reads find the layout already computed and none of them
+// forces another. A read per hook in its own effect laid the page out once per
+// mounted row, against a page the transcript had just rewritten.
+type Watch = { el: HTMLElement; check: () => void };
+const watchesByTarget = new Map<Element, Set<Watch>>();
+let shared: ResizeObserver | null = null;
+
+function observer(): ResizeObserver {
+  shared ??= new ResizeObserver((entries) => {
+    const due = new Set<Watch>();
+    for (const e of entries) for (const w of watchesByTarget.get(e.target) ?? []) due.add(w);
+    for (const w of due) w.check();
   });
+  return shared;
+}
+
+function watch(w: Watch, targets: Element[]): () => void {
+  const ro = observer();
+  let observedFresh = false;
+  for (const t of targets) {
+    let set = watchesByTarget.get(t);
+    if (!set) { set = new Set(); watchesByTarget.set(t, set); ro.observe(t); observedFresh = true; }
+    set.add(w);
+  }
+  // Every target already watched by another hook: no first callback is coming.
+  if (!observedFresh) queueMicrotask(w.check);
+  return () => {
+    for (const t of targets) {
+      const set = watchesByTarget.get(t);
+      if (!set) continue;
+      set.delete(w);
+      if (set.size === 0) { watchesByTarget.delete(t); ro.unobserve(t); }
+    }
+  };
+}
+
+/** A yes/no read off an element's layout (`read`), kept current as it or its
+ *  children resize, and first answered before the browser paints. While
+ *  `enabled` is false nothing is read and the last answer stands. */
+export function useLayoutFlag(
+  ref: RefObject<HTMLElement | null>,
+  read: (el: HTMLElement) => boolean,
+  deps: DependencyList,
+  enabled = true,
+): boolean {
+  const [flag, setFlag] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !enabled) return;
+    const check = () => setFlag(read(el));
+    // A window with no layout (a test's jsdom) has no observer: one answer stands.
+    if (typeof ResizeObserver === "undefined") { check(); return; }
+    return watch({ el, check }, [el, ...el.children]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, ...deps]);
+  return flag;
 }
 
 /** Whether the element's content is taller than `maxHeight`, kept current as
@@ -29,20 +71,5 @@ function measureBeforePaint(el: HTMLElement, check: () => void) {
  *  row's height under the conversation virtualizer, which moved scrollTop to
  *  match and visibly jumped the feed while scrolling up. */
 export function useOverflows(ref: RefObject<HTMLElement | null>, maxHeight: number, deps: DependencyList = []): boolean {
-  const [overflows, setOverflows] = useState(false);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    let live = true;
-    const check = () => { if (live) setOverflows(el.scrollHeight > maxHeight); };
-    measureBeforePaint(el, check);
-    // A window with no layout (a test's jsdom) has nothing to watch: the first answer stands.
-    if (typeof ResizeObserver === "undefined") return () => { live = false; };
-    const obs = new ResizeObserver(check);
-    obs.observe(el);
-    for (const child of el.children) obs.observe(child);
-    return () => { live = false; pending.delete(el); obs.disconnect(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maxHeight, ...deps]);
-  return overflows;
+  return useLayoutFlag(ref, (el) => el.scrollHeight > maxHeight, [maxHeight, ...deps]);
 }

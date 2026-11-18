@@ -355,7 +355,6 @@ function BlockedSessionsBanner({
   // own button makes), so the banner never asks for a second decision.
   const isContextFull = (sess: InboxSession) => sess.pending_api_error_kind === "context";
   const contextBlocked = blocked.filter((sess) => isContextFull(sess) && !isSubagentConversation(sess));
-  const contextCount = contextBlocked.length;
   // Workers are drawn in their machine rows but start unticked, and join the
   // acted set only when a person ticks one — never because they are all that
   // is blocked. Continuing an in-process worker cannot reach it; it resumes a
@@ -395,7 +394,6 @@ function BlockedSessionsBanner({
   };
   // Rows show their cause only when the causes differ; otherwise the headline says it.
   const mixedCauses = new Set(blocked.map((sess) => sess.pending_api_error_kind)).size > 1;
-  const setAllPicked = (on: boolean) => setPicked(new Set(on ? pickable.map((sess) => sess._id) : []));
 
   // The sign-in CTA's executor: the online primary (non-remote) machine — the
   // one whose keychain holds the login and whose browser the OAuth flow opens
@@ -471,7 +469,7 @@ function BlockedSessionsBanner({
   // plus the full context windows it compacts.
   const pickable = [...revivable.filter((sess) => actionIds.has(sess._id)), ...contextBlocked];
   const pickableIds = new Set(pickable.map((sess) => sess._id));
-  const { chosenIds, chosen, reloadTokens, reloadShare } = restartPlan(pickable, {
+  const { chosenIds, chosen, reloadTokens } = restartPlan(pickable, {
     now,
     picked: picked ?? defaultPick,
     switchingAccount: !!leadTarget,
@@ -480,11 +478,13 @@ function BlockedSessionsBanner({
   });
   const chosenCompact = chosen.filter(isContextFull);
   const chosenContinue = chosen.filter((sess) => !isContextFull(sess));
-  const allPicked = chosen.length === pickable.length;
   // One lane holding every acted session, all ticked, is the whole incident:
   // its continue may dismiss the skipped workers. Anything less is a scoped
   // revive that acts on exactly its ids and dismisses nothing.
-  const wholeIncident = new Set(acted.map((sess) => laneOf.get(sess._id))).size === 1 && chosenContinue.length === acted.length;
+  // The workers it would dismiss must sit in that same lane: a machine's
+  // button never clears sessions on another machine.
+  const actedLanes = new Set([...acted, ...skippedWorkers].map((sess) => laneOf.get(sess._id)));
+  const wholeIncident = actedLanes.size === 1 && chosenContinue.length === acted.length;
   // The headline figure and the words after it. One place, because the fallback
   // has to change both: "18% of what is left in the 5h window" when the rate is
   // fitted, "2.1M tokens of context" when it is not.
@@ -498,15 +498,15 @@ function BlockedSessionsBanner({
   const restartTotalSuffix =
     remainingShare !== null
       ? remainingShare === Infinity
-        ? ` — nothing restarts until it resets${resetsNote}`
-        : ` of what is left in this account's 5h window${resetsNote}`
-      : ` tokens of context${formatShare(reloadShare) ? ` — ${formatShare(reloadShare)} of what those sessions hold` : ""}`;
+        ? ""
+        : " of the 5h window left"
+      : " tokens";
 
   // The tooltip has to say where the percentage came from, because nobody
   // publishes it: Anthropic reports a window as a percent and never as a size,
   // so the rate behind it is fitted from our own traffic and is an estimate.
   const restartCostTip =
-    "A session that comes back on another account, or after its prompt cache expired (one hour), reads its whole context again before it does new work. Untick the ones nobody is waiting for." +
+    `A session that comes back on another account, or after its prompt cache expired (one hour), reads its whole context again before it does new work${resetsNote ? ` (the window${resetsNote.replace(", which", "")})` : ""}. Untick the ones nobody is waiting for.` +
     (remainingShare !== null
       ? ` The share is an estimate: Anthropic reports a window as a percentage and never as a size, so codecast measures its own traffic against the meters (${calibration?.samples ?? 0} recent readings) to price a reload against what is left.`
       : "");
@@ -665,28 +665,76 @@ function BlockedSessionsBanner({
     }
   };
 
+  // "3 sessions and 19 workers": the headline and each machine count the same way.
+  const countLabelOf = (rows: InboxSession[], join = " and ") => {
+    const workers = rows.filter(isSubagentConversation).length;
+    const plural = (k: number, w: string) => `${k} ${w}${k === 1 ? "" : "s"}`;
+    return [rows.length - workers > 0 || workers === 0 ? plural(rows.length - workers, "session") : null, workers > 0 ? plural(workers, "worker") : null].filter(Boolean).join(join);
+  };
+  // Sessions are listed under the machine they run on; one that no machine
+  // row holds (a safety stop) is listed on its own below the rows.
+  const unlaned = blockedSorted.filter((sess) => !laneOf.has(sess._id));
+  // markWorkers: tag worker rows, needed only where workers and sessions mix.
+  const sessionRow = (sess: InboxSession, canPick: boolean, markWorkers: boolean) => (
+    <div key={sess._id} className="group flex w-full items-center gap-2 py-1 hover:bg-amber-500/10 transition-colors">
+      {canPick && (
+        <input
+          type="checkbox"
+          checked={chosenIds.has(sess._id)}
+          disabled={busy !== null}
+          onChange={() => togglePick(sess._id)}
+          className="h-3 w-3 shrink-0 accent-amber-500"
+          title={subagentIds.has(sess._id) && !chosenIds.has(sess._id) ? "Subagent worker, left out by default: its parent has usually moved on" : isContextFull(sess) ? "Compacted by the continue (its context is full)" : "Restarted by the continue"}
+          aria-label="Include this session in the restart"
+        />
+      )}
+      <button onClick={() => onOpen?.(sess)} className="flex min-w-0 flex-1 items-center gap-2 text-left" title="Open this session">
+        {mixedCauses && <AuthErrorBadge kind={sess.pending_api_error_kind} agentType={sess.agent_type} />}
+        <span className={`min-w-0 flex-1 truncate text-meta ${isSubagentConversation(sess) && !chosenIds.has(sess._id) ? "text-sol-text-dim" : "text-sol-text"}`}>
+          {cleanTitle(sess.title || "") || "Untitled session"}
+        </span>
+        {markWorkers && isSubagentConversation(sess) && <span className="shrink-0 text-meta text-sol-text-dim">worker</span>}
+        <span className="shrink-0 text-meta text-sol-text-dim">{getProjectName(sess.git_root, sess.project_path)}</span>
+        {canPick && sess.context_tokens && reloads(sess) && formatShare(shareOfRemaining(sess.context_tokens)) ? (
+          <span
+            className="shrink-0 text-meta tabular-nums text-amber-600 dark:text-amber-500"
+            title={`${formatTokens(sess.context_tokens)} tokens${contextWindowOf(sess) ? ` of the ${formatTokens(contextWindowOf(sess)!)} its model holds` : ""}${formatShare(contextShareOf(sess)) ? ` (${formatShare(contextShareOf(sess))} full)` : ""}, reloaded in full on restart`}
+          >
+            {formatShare(shareOfRemaining(sess.context_tokens))}
+          </span>
+        ) : null}
+        <span className="shrink-0 text-meta tabular-nums text-sol-text-dim" title={`Stopped ${new Date(blockAt(sess)).toLocaleString()}`}>
+          {fmtDuration(Math.max(0, now - blockAt(sess)))}
+        </span>
+      </button>
+      <button
+        onClick={() => handleAcknowledge([sess._id])}
+        className="shrink-0 rounded p-0.5 text-sol-text-dim opacity-0 group-hover:opacity-100 hover:bg-sol-bg-alt hover:text-sol-text transition-opacity"
+        title="Never restart this session: remove it from this list"
+        aria-label="Dismiss this session"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+
   return (
     <div className={`m-2 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2.5 cc-blocked-banner-in ${fresh ? "cc-blocked-banner-glow" : ""}`}>
       {lanes.some((lane) => lane.state === "wait") && <AccountPoolFeeder />}
       <div className="flex items-start gap-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="flex items-center gap-1 text-left text-xs font-semibold text-sol-text hover:text-amber-500 transition-colors"
-            title={expanded ? "Hide the affected sessions" : "Show which sessions are blocked"}
-          >
-            <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
+          <span className="text-xs font-semibold text-sol-text">
             {/* Headline names the LARGEST slice — a fleet that is mostly
                 signed out shouldn't read "blocked on usage limits" because a
                 couple of stragglers also hit a limit. */}
-            {blocked.length} session{blocked.length === 1 ? "" : "s"} blocked on {headlineOn}
-          </button>
+            {countLabelOf(blocked)} blocked on {headlineOn}
+          </span>
           {latestBlockAt > 0 && (
             <span
               className="ml-auto text-meta tabular-nums text-sol-text-dim whitespace-nowrap"
               title={`${blocked.length > 1 ? "Most recent block: " : "Blocked "}${new Date(latestBlockAt).toLocaleString()}`}
             >
-              {blocked.length > 1 ? "latest " : ""}{fmtDuration(Math.max(0, now - latestBlockAt))} ago
+              {fmtDuration(Math.max(0, now - latestBlockAt))} ago
             </span>
           )}
         </div>
@@ -742,135 +790,18 @@ function BlockedSessionsBanner({
       {authCount > 0 && limitCount === 0 && connCount === 0 && fatalCount === 0 && safetyCount === 0 && loginDevice && (
         <SignInCta device={loginDevice} authSessionIds={actedAuthIds} disabled={busy !== null} />
       )}
-      {expanded && (
-        <div className="mt-1.5 space-y-0.5 text-meta leading-snug text-sol-text-muted">
-          {/* The cause breakdown always sums to the headline count: when the
-              workers are left out, they appear as their own item. */}
-          <div>
-            {[
-              limitCount > 0 ? `${limitCount} hit a usage limit` : null,
-              throttleCount > 0 ? `${throttleCount} rate limited` : null,
-              connCount > 0 ? `${connCount} dropped mid-response` : null,
-              fatalCount > 0 ? `${fatalCount} api error` : null,
-              authCount > 0 ? `${authCount} signed out` : null,
-              safetyCount > 0 ? `${safetyCount} safety review` : null,
-              contextCount > 0 ? `${contextCount} context full (compacted)` : null,
-              skippedWorkers.length > 0 ? `${skippedWorkers.length} worker${skippedWorkers.length === 1 ? "" : "s"} left out` : null,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </div>
-          {chosen.length > 0 && reloadTokens > 0 && (
-            <div title={restartCostTip}>
-              {`restarting ${chosen.length} costs `}
-              <span className="font-semibold text-amber-700 dark:text-amber-400">{restartTotal}</span>
-              {restartTotalSuffix}
-            </div>
-          )}
-        </div>
-      )}
-      {expanded && (
-        <div className="mt-1.5 max-h-56 overflow-y-auto scrollbar-auto rounded border border-amber-500/15 bg-sol-bg/40 divide-y divide-sol-border/30">
-          {pickable.length > 1 && (
-            <label className="sticky top-0 z-10 flex cursor-pointer items-center gap-2 bg-sol-bg/95 px-2 py-1 text-meta text-sol-text-dim hover:text-sol-text">
-              <input
-                type="checkbox"
-                checked={allPicked}
-                ref={(el) => { if (el) el.indeterminate = chosen.length > 0 && !allPicked; }}
-                disabled={busy !== null}
-                onChange={() => setAllPicked(!allPicked)}
-                className="h-3 w-3 shrink-0 accent-amber-500"
-                aria-label="Tick every session"
-              />
-              {allPicked ? `all ${pickable.length} ticked` : `${chosen.length} of ${pickable.length} ticked`}
-            </label>
-          )}
-          {blockedSorted.map((sess) => (
-            <div
-              key={sess._id}
-              className="group flex w-full items-center gap-2 px-2 py-1.5 hover:bg-amber-500/10 transition-colors"
-            >
-              <input
-                type="checkbox"
-                checked={chosenIds.has(sess._id) && pickableIds.has(sess._id)}
-                disabled={!pickableIds.has(sess._id) || busy !== null}
-                onChange={() => togglePick(sess._id)}
-                className="h-3 w-3 shrink-0 accent-amber-500 disabled:opacity-40"
-                title={!pickableIds.has(sess._id) ? "Not restartable from here (a safety stop, or its machine is waiting for a reset)" : subagentIds.has(sess._id) && !chosenIds.has(sess._id) ? "Subagent worker, left out by default: its parent has usually moved on" : isContextFull(sess) ? "Compact this session with the continue below (its context is full)" : "Restart this session with the continue below"}
-                aria-label="Include this session in the restart"
-              />
-              <button
-                onClick={() => onOpen?.(sess)}
-                className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                title="Open this session"
-              >
-                {mixedCauses && <AuthErrorBadge kind={sess.pending_api_error_kind} agentType={sess.agent_type} />}
-                <span className={`min-w-0 flex-1 truncate text-meta ${isSubagentConversation(sess) && !chosenIds.has(sess._id) ? "text-sol-text-dim" : "text-sol-text"}`}>
-                  {cleanTitle(sess.title || "") || "Untitled session"}
-                </span>
-                {isSubagentConversation(sess) && (
-                  <span className="shrink-0 rounded border border-sol-border/50 px-1 text-meta text-sol-text-dim" title="Subagent worker">
-                    sub
-                  </span>
-                )}
-                <span className="shrink-0 text-meta text-sol-text-dim">{getProjectName(sess.git_root, sess.project_path)}</span>
-                                {sess.context_tokens ? (
-                  <span
-                    className={`shrink-0 text-meta tabular-nums ${reloads(sess) ? "text-amber-600 dark:text-amber-500" : "text-sol-text-dim"}`}
-                    title={`${formatTokens(sess.context_tokens)} tokens${
-                      contextWindowOf(sess) ? ` of the ${formatTokens(contextWindowOf(sess)!)} its model holds` : " of context"
-                    }${formatShare(contextShareOf(sess)) ? ` (${formatShare(contextShareOf(sess))} full)` : ""}${reloads(sess)
-                      ? ", reloaded in full on restart"
-                      : "; its cache is still warm, so a restart reads it cheaply"}`}
-                  >
-                    {/* Every figure in this banner answers the same question —
-                        what restarting spends against the limit these sessions
-                        are parked on. A row that will not reload spends nothing
-                        there, so it shows its size instead. */}
-                    {(reloads(sess) && formatShare(shareOfRemaining(sess.context_tokens))) ||
-                      formatTokens(sess.context_tokens)}
-                  </span>
-                ) : null}
-                <span
-                  className="shrink-0 text-meta tabular-nums text-sol-text-dim"
-                  title={`Blocked ${new Date(blockAt(sess)).toLocaleString()}`}
-                >
-                  {fmtDuration(Math.max(0, now - blockAt(sess)))} ago
-                </span>
-              </button>
-              <button
-                onClick={() => handleAcknowledge([sess._id])}
-                className="shrink-0 rounded p-0.5 text-sol-text-dim opacity-0 group-hover:opacity-100 hover:bg-sol-bg-alt hover:text-sol-text transition-opacity"
-                title="Never restart this session — remove it from the blocked set permanently"
-                aria-label="Dismiss this session from the banner permanently"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      {/* The whole action surface: [Continue all N] on [account ▾] … dismiss.
-          One solid button, one quiet select, one quiet escape hatch — nothing
-          folded away, nothing competing. */}
-      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-        {safetyCount > 0 && (
-          <button onClick={() => safetyCount === 1 ? onOpen?.(safetyBlocked[0]) : setExpanded(true)} className="rounded border border-amber-500/40 px-3 py-1 text-meta font-semibold text-amber-700 dark:text-amber-500 hover:bg-amber-500/10 modern:h-6 modern:rounded-control modern:border-sol-amber/40 modern:py-0 modern:font-medium modern:text-sol-amber modern:hover:bg-sol-amber/10">
-            Review {safetyCount === 1 ? "safety stop" : `${safetyCount} safety stops`}
-          </button>
-        )}
-        {chosenCompact.length > 0 && actionLanes.length === 0 && (
-          <Button variant="amber" size="xs" onClick={() => handleLaneContinue(null)} disabled={busy !== null} title={compactTitle}>
-            Compact {chosenCompact.length}
-          </Button>
-        )}
-        {lanes.length > 0 && (
-          <div className={lanes.length > 1 ? "flex w-full flex-col gap-1.5" : "contents"}>
-            {lanes.map((lane) => (
+      {lanes.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          {lanes.map((lane) => {
+            const rows = blockedSorted.filter((sess) => laneOf.get(sess._id) === lane);
+            const canAct = lane.state === "continue" || lane.state === "switch";
+            const workers = rows.filter(isSubagentConversation).length;
+            const plain = rows.length - workers;
+            const countLabel = countLabelOf(rows, " · ");
+            return (
               <BlockedLaneRow
                 key={lane.key}
                 lane={lane}
-                showLabel={lanes.length > 1 || lane.devices.some((d) => d.is_remote) || lane.state !== "continue"}
                 now={now}
                 chosen={chosenContinue.filter((sess) => laneOf.get(sess._id) === lane).length + (lane === leadLane ? chosenCompact.length : 0)}
                 target={laneTarget(lane)}
@@ -882,9 +813,46 @@ function BlockedSessionsBanner({
                 onPick={(key) => setLaneAccount(lane, key)}
                 onContinue={() => handleLaneContinue(lane)}
                 recoveryDevice={recoveryDevice}
-              />
-            ))}
-          </div>
+                countLabel={countLabel}
+              >
+                {expanded && (
+                  <>
+                    {lane === leadLane && chosen.length > 0 && reloadTokens > 0 && (
+                      <div className="mt-1 text-meta leading-snug text-sol-text-muted" title={restartCostTip}>
+                        {"Restart rereads "}
+                        <span className="font-medium text-amber-700 dark:text-amber-400">{restartTotal}</span>
+                        {restartTotalSuffix}
+                      </div>
+                    )}
+                    <div className="mt-1 max-h-48 overflow-y-auto scrollbar-auto divide-y divide-sol-border/30">
+                      {rows.map((sess) => sessionRow(sess, canAct, workers > 0 && plain > 0))}
+                    </div>
+                  </>
+                )}
+              </BlockedLaneRow>
+            );
+          })}
+        </div>
+      )}
+      {expanded && unlaned.length > 0 && (
+        <div className="mt-1.5 divide-y divide-sol-border/30">{unlaned.map((sess) => sessionRow(sess, pickableIds.has(sess._id), true))}</div>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="text-meta text-sol-text-dim hover:text-sol-text"
+        >
+          {expanded ? "Hide list" : "Show list"}
+        </button>
+        {safetyCount > 0 && (
+          <button onClick={() => safetyCount === 1 ? onOpen?.(safetyBlocked[0]) : setExpanded(true)} className="rounded border border-amber-500/40 px-3 py-1 text-meta font-semibold text-amber-700 dark:text-amber-500 hover:bg-amber-500/10 modern:h-6 modern:rounded-control modern:border-sol-amber/40 modern:py-0 modern:font-medium modern:text-sol-amber modern:hover:bg-sol-amber/10">
+            Review {safetyCount === 1 ? "safety stop" : `${safetyCount} safety stops`}
+          </button>
+        )}
+        {chosenCompact.length > 0 && actionLanes.length === 0 && (
+          <Button variant="amber" size="xs" onClick={() => handleLaneContinue(null)} disabled={busy !== null} title={compactTitle}>
+            Compact {chosenCompact.length}
+          </Button>
         )}
         <button
           onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
@@ -892,7 +860,7 @@ function BlockedSessionsBanner({
           title="Never restart these — clear all of them from the blocked set permanently"
           className="ml-auto rounded px-2 py-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
         >
-          {blocked.length === 1 ? "Dismiss it" : `Dismiss all ${blocked.length}`}
+          {blocked.length === 1 ? "Dismiss" : "Dismiss all"}
         </button>
       </div>
     </div>

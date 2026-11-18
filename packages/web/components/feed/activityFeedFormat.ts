@@ -17,18 +17,26 @@ export function extractWorkspace(projectPath: string | undefined | null): string
   return name;
 }
 
+// Built once: each toLocaleDateString with options builds a formatter, and the
+// feed formats a date per day group on every render.
+const DAY_KEY = new Intl.DateTimeFormat("en-CA");
+const WEEKDAY = new Intl.DateTimeFormat("en-US", { weekday: "long" });
+const MONTH_DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+const MONTH_DAY_YEAR = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" });
+// Today's and yesterday's keys, recomputed when the minute changes.
+let dayKeys = { minute: -1, today: "", yesterday: "" };
+
 export function formatDate(dateStr: string): string {
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
-  const yesterday = new Date(Date.now() - 86400000).toLocaleDateString("en-CA", { timeZone: tz });
-  if (dateStr === today) return "Today";
-  if (dateStr === yesterday) return "Yesterday";
+  const nowMs = Date.now();
+  const minute = Math.floor(nowMs / 60000);
+  if (dayKeys.minute !== minute) dayKeys = { minute, today: DAY_KEY.format(nowMs), yesterday: DAY_KEY.format(nowMs - 86400000) };
+  if (dateStr === dayKeys.today) return "Today";
+  if (dateStr === dayKeys.yesterday) return "Yesterday";
   const d = new Date(dateStr + "T12:00:00");
-  const now = new Date();
-  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
-  if (diffDays < 7) return d.toLocaleDateString("en-US", { weekday: "long" });
-  if (d.getFullYear() === now.getFullYear()) return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const diffDays = Math.floor((nowMs - d.getTime()) / 86400000);
+  if (diffDays < 7) return WEEKDAY.format(d);
+  if (d.getFullYear() === new Date(nowMs).getFullYear()) return MONTH_DAY.format(d);
+  return MONTH_DAY_YEAR.format(d);
 }
 
 export function formatMsgCount(n: number): string {

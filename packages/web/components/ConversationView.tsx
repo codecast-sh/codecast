@@ -1365,7 +1365,8 @@ const ConversationViewInner = (
   }, [activeStickyMsg?.id, activeStickyMsg?.content, stickyMsgVisible, stickyExpanded]);
 
   // Track the sticky prompt card's height (stickyHeightRef, read by the sticky
-  // scroll check) and publish it on the header as --conv-sticky-h for overlays
+  // scroll check and by the render's insets, which must never read layout)
+  // and publish it on the header as --conv-sticky-h for overlays
   // anchored under the header. Imperative write: no re-render on resize.
   useWatchEffect(() => {
     const header = headerRef.current;
@@ -1375,12 +1376,14 @@ const ConversationViewInner = (
       header.style.setProperty("--conv-sticky-h", "0px");
       return;
     }
-    const update = () => {
-      stickyHeightRef.current = el.offsetHeight;
-      header.style.setProperty("--conv-sticky-h", `${el.offsetHeight}px`);
-    };
-    update();
-    const ro = new ResizeObserver(update);
+    // From the observer's entries alone: its first one arrives after this
+    // frame's layout and before its paint, so the height costs no forced read.
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.borderBoxSize?.[0];
+      const h = Math.round(box ? box.blockSize : el.offsetHeight);
+      stickyHeightRef.current = h;
+      header.style.setProperty("--conv-sticky-h", `${h}px`);
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, [stickyMsgVisible, activeStickyMsg?.id]);
@@ -1770,11 +1773,13 @@ const ConversationViewInner = (
     if (box) {
       size = Math.round(horizontal ? box.inlineSize : box.blockSize);
     } else {
-      // The mount-time call has no observer entry. A height this row had on an
-      // earlier visit stands in for the forced layout read; the observer's
-      // first entry, a frame later, corrects it if the row changed.
-      const cached = instance.itemSizeCache.get(key) ?? VIRT_HEIGHT_CACHE.get(virtHeightKey(key, rowDensityKey(index)));
-      size = cached !== undefined ? cached : (element as HTMLElement)[horizontal ? "offsetWidth" : "offsetHeight"];
+      // The mount-time call has no observer entry, and is never answered by a
+      // layout read: rows are placed by writing `top` straight into the DOM,
+      // so each read laid the whole page out again, once per mounted row. The
+      // row's known height (this mount, an earlier visit, else the estimate)
+      // stands in; the observer's first entry arrives after this frame's
+      // layout and before its paint, with the real size.
+      return instance.itemSizeCache.get(key) ?? VIRT_HEIGHT_CACHE.get(virtHeightKey(key, rowDensityKey(index))) ?? instance.options.estimateSize(index);
     }
     // A fast-scroll placeholder reports its believed height back; keep that
     // out of the cache, where it would pass for a measurement.
@@ -2402,7 +2407,7 @@ const ConversationViewInner = (
           return;
         }
         let hideForNextMsg = false;
-        const stickyBottom = headerHeight + (stickyElRef.current?.offsetHeight ?? stickyHeightRef.current);
+        const stickyBottom = headerHeight + stickyHeightRef.current;
         const nextArrayIdx = stickyUserMsgIndices.indexOf(stickyResolved.index) + 1;
         if (nextArrayIdx > 0 && nextArrayIdx < stickyUserMsgIndices.length) {
           const nextTlIdx = stickyUserMsgIndices[nextArrayIdx];
@@ -2674,6 +2679,12 @@ const ConversationViewInner = (
     if (isLoadingOlder || isLoadingNewer) a.loading = true;
     else if (a.loading) pageAnchorRef.current = null;
   }, [isLoadingOlder, isLoadingNewer]);
+  // Whether the virtual rows alone are taller than the viewport, from the
+  // virtualizer's own numbers (its observed viewport, its measured rows).
+  const virtualListOverfills = () => {
+    const viewport = virtualizer.scrollRect?.height ?? 0;
+    return viewport > 0 && virtualizer.getTotalSize() > viewport;
+  };
   const maybeLoadOlderRef = useRef<() => void>(() => {});
   maybeLoadOlderRef.current = () => {
     const sc = containerRef.current;
@@ -2681,6 +2692,10 @@ const ConversationViewInner = (
     // The conditions that need no layout first: this runs on every scroll
     // event, and a read of scrollHeight against a changed page is a full layout.
     if (!sc || !pp.onLoadOlder || !pp.hasMoreAbove || pp.isLoadingOlder || pp.isLoadingNewer || Date.now() < paginationCooldownRef.current) return;
+    // Unarmed, only an underfilled list loads; the scroller is at least as tall
+    // as the virtual rows, so rows taller than the viewport settle it with no
+    // read of the page (this runs on every measurement while a window loads).
+    if (!loadOlderArmedRef.current && virtualListOverfills()) return;
     if (sc.clientHeight === 0) return;
     const underfilled = sc.scrollHeight <= sc.clientHeight;
     if (!loadOlderArmedRef.current && !underfilled) return;
@@ -2713,6 +2728,7 @@ const ConversationViewInner = (
     const sc = containerRef.current;
     const pp = paginationPropsRef.current;
     if (!sc || !pp.onLoadNewer || !pp.hasMoreBelow || pp.isLoadingOlder || pp.isLoadingNewer || Date.now() < paginationCooldownRef.current) return;
+    if (!loadNewerArmedRef.current && virtualListOverfills()) return;
     if (sc.clientHeight === 0) return;
     if (!loadNewerArmedRef.current && sc.scrollHeight > sc.clientHeight) return;
     if (!shouldLoadNewer({
@@ -5002,7 +5018,7 @@ const ConversationViewInner = (
         <div
           className="absolute inset-x-0 z-20 flex justify-center pt-3 sm:pt-4 pointer-events-none"
           style={{
-            top: showSticky ? (stickyElRef.current?.offsetHeight ?? 0) + 4 : 0,
+            top: showSticky ? stickyHeightRef.current + 4 : 0,
             animation: "fadeIn 150ms ease-out",
           }}
         >
@@ -5021,7 +5037,7 @@ const ConversationViewInner = (
           scrollRef={containerRef}
           messageIds={timelineMessageIds}
           virtualizer={virtualizer}
-          topInset={showSticky ? stickyElRef.current?.offsetHeight ?? 0 : 0}
+          topInset={showSticky ? stickyHeightRef.current : 0}
         />
       )}
       <div ref={containerRef} data-sv-feed data-cc-density={feedDensity} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
@@ -5353,7 +5369,7 @@ const ConversationViewInner = (
                 <CollabRequestBanner conversationId={conversation._id.toString()} />
                 {composerNode}
               </>} composerPlaceholder={newSessionPage && roleSend.recipient ? `Ask ${roleSend.recipient.name} for anything…` : composerPlaceholder} skills={newSessionPage || onSendOverride ? sessionSkills : composerSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchControl={forkFamily && !newSessionPage && !onSendOverride ? (
-                <BranchMapLayers heading={forkFamily.heading} count={forkFamily.count} open={treePopoverOpen} onToggle={toggleMap} />
+                <BranchMapLayers heading={forkFamily.heading} open={treePopoverOpen} onToggle={toggleMap} />
               ) : undefined} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray

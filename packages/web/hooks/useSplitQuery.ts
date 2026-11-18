@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useConvex, type ConvexReactClient } from "convex/react";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { queryWithSignal } from "../lib/queryWithSignal";
-import { cacheRows, rebuildRows, type SplitCache } from "@codecast/shared/contracts/inboxSplit";
+import { cacheRows, heldHash, rebuildRows, type SplitCache } from "@codecast/shared/contracts/inboxSplit";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -69,9 +69,10 @@ function noteHeldChanged(name: string): void {
     h.saveTimer = null;
     const upserts: SplitRow[] = [];
     const removes: string[] = [];
-    for (const [id, { row, hash }] of h.cache) {
+    for (const [id, entry] of h.cache) {
+      const { row } = entry;
       if (h.saved.get(id) === row) continue;
-      upserts.push({ id, hash, row });
+      upserts.push({ id, hash: heldHash(entry)!, row });
       h.saved.set(id, row);
     }
     for (const id of h.saved.keys()) if (!h.cache.has(id)) removes.push(id);

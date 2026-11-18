@@ -6,7 +6,7 @@ import { LogoIcon } from "../../Logo";
 import { useRouter } from "next/navigation";
 import { Fragment, useRef, useState, useMemo, useCallback, memo, useContext } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-import { useOverflows } from "../../../hooks/useOverflows";
+import { useLayoutFlag, useOverflows } from "../../../hooks/useOverflows";
 import { createPortal } from "react-dom";
 import { BrowserTabPill } from "../../browser/BrowserTabPill";
 import { formatModel } from "../../../lib/conversationProcessor";
@@ -208,7 +208,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const hostedConversation = useIsHostedConversation(conversationId);
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
-  const [isTruncated, setIsTruncated] = useState(false);
   const [contentExpanded, setContentExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   // Rewind needs the fork that continues from here, so it is offered where forking is.
@@ -230,14 +229,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
 
   const effectivelyCollapsed = collapsed && !isExpanded;
 
-  useWatchEffect(() => {
-    if (effectivelyCollapsed && contentRef.current) {
-      const el = contentRef.current;
-      setIsTruncated(el.scrollHeight > el.clientHeight);
-    } else {
-      setIsTruncated(false);
-    }
-  }, [effectivelyCollapsed, content]);
+  const isTruncated = useLayoutFlag(contentRef, (el) => el.scrollHeight > el.clientHeight, [content], effectivelyCollapsed) && effectivelyCollapsed;
 
   const isOverflowing = useOverflows(contentRef, USER_CONTENT_MAX_HEIGHT, [content, effectivelyCollapsed]);
 

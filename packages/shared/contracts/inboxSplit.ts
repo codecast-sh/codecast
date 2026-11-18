@@ -108,14 +108,22 @@ export function splitRows<R extends Record<string, unknown>>(entries: Array<[str
   return { ids, hot, cold_hash };
 }
 
-/** The rows a replica held from earlier results, with their hashes. */
-export type SplitCache<R> = Map<string, { row: R; hash: string }>;
+/** The rows a replica held from earlier results, each hashed the first time
+ *  something asks (heldHash). */
+export type SplitCache<R> = Map<string, { row: R; hash?: string }>;
+
+/** A held row's hash. Hot rows arrive freshly decoded on every push, and only
+ *  a row checked as cold needs its hash, so none is computed before then. */
+export function heldHash<R>(held: { row: R; hash?: string } | undefined): string | undefined {
+  if (!held) return undefined;
+  return (held.hash ??= rowHash(held.row));
+}
 
 export function cacheRows<R>(cache: SplitCache<R>, entries: Iterable<[string, R]>): void {
   for (const [id, row] of entries) {
     const held = cache.get(id);
     if (held && held.row === row) continue;
-    cache.set(id, { row, hash: rowHash(row) });
+    cache.set(id, { row });
   }
 }
 
@@ -129,7 +137,7 @@ export function rebuildRows<R>(split: SplitRows<R>, cache: SplitCache<R>): Array
   cacheRows(cache, split.hot);
   const hot = new Map(split.hot);
   const hotIds = new Set(hot.keys());
-  if (coldHashOf(split.ids, hotIds, (id) => cache.get(id)?.hash) !== split.cold_hash) return null;
+  if (coldHashOf(split.ids, hotIds, (id) => heldHash(cache.get(id))) !== split.cold_hash) return null;
   // The result is the whole set now: rows it no longer lists leave the cache.
   const listed = new Set(split.ids);
   for (const id of cache.keys()) if (!listed.has(id)) cache.delete(id);

@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useLayoutFlag, useOverflows } from "../hooks/useOverflows";
 import { useHostsReveal } from "../lib/revealHost";
 
 // A body that renders clipped to a short height with a fade at the cut, plus a
@@ -45,20 +45,8 @@ export function ExpandableLine({
   title?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
   const innerRef = useRef<HTMLSpanElement>(null);
-
-  useWatchEffect(() => {
-    if (expanded) return;
-    const el = innerRef.current;
-    if (!el) return;
-    const measure = () => setOverflows(el.scrollWidth > el.clientWidth + 1);
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [expanded, text]);
+  const overflows = useLayoutFlag(innerRef, (el) => el.scrollWidth > el.clientWidth + 1, [text], !expanded);
 
   const openable = overflows || expanded;
 
@@ -117,7 +105,6 @@ export function CollapsibleBody({
   children: React.ReactNode | ((expanded: boolean) => React.ReactNode);
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
   const innerRef = useRef<HTMLDivElement>(null);
 
   // The clip lives on the outer box, so the inner box keeps its natural height
@@ -126,16 +113,7 @@ export function CollapsibleBody({
   // catches the final size. Keeping `children` out of the deps also matters in a
   // transcript: it is a fresh object every render, and depending on it would
   // rebuild the observer on every parent re-render, on every mounted card.
-  useWatchEffect(() => {
-    const el = innerRef.current;
-    if (!el) return;
-    const measure = () => setOverflows(el.scrollHeight > collapsedHeight + 8);
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [collapsedHeight]);
+  const overflows = useOverflows(innerRef, collapsedHeight + 8);
 
   // A reference in the body opened its full page here: the band is far taller
   // than the clip and pulls out to the full width, so the body stands open

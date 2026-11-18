@@ -1,6 +1,7 @@
 "use client";
 
-import React, { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useMemo, useRef, useState } from "react";
+import { useLayoutFlag } from "../hooks/useOverflows";
 import { Check, ChevronDown, Copy, X } from "lucide-react";
 import { toast } from "sonner";
 import { threadStateAskParts, type ThreadStateRow } from "@codecast/shared/contracts";
@@ -149,15 +150,10 @@ export function ThreadStatePanelView({
   // measuring the unclamped body would always read "fits" and eat the control
   // that collapses it back.
   const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
   const narrow = useMediaQuery(BELOW_SM);
   const bodyRef = useRef<HTMLDivElement>(null);
   useWatchEffect(() => setExpanded(false), [conversationId]);
-  useLayoutEffect(() => {
-    if (expanded) return;
-    const el = bodyRef.current;
-    if (el) setOverflows(el.scrollHeight > el.clientHeight + 1);
-  }, [threadState, collapsed, expanded]);
+  const overflows = useLayoutFlag(bodyRef, (el) => el.scrollHeight > el.clientHeight + 1, [threadState, collapsed], !expanded);
 
   const view = threadStateView(
     {

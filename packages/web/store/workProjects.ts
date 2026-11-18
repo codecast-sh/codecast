@@ -60,16 +60,22 @@ const lookupOf = (state: WorkProjectSource) => ({
   planProject: (id: string) => state.plans?.[id]?.project_id ?? null,
 });
 
-let memo: { sig: string; tasks: unknown; plans: unknown; byId: Map<string, string | null> } | null = null;
+// Tasks and plans by the fields the rule reads, so a status or title write on
+// a task (the common one) rebuilds nothing.
+const taskProjectSig = makeCollectionSig<{ project_id?: string | null; plan_id?: string | null }>((t) => `${t.project_id ?? ""}|${t.plan_id ?? ""}`);
+const planProjectSig = makeCollectionSig<{ project_id?: string | null }>((p) => p.project_id ?? "");
+const EMPTY_ROWS = {};
+
+let memo: { sig: string; byId: Map<string, string | null> } | null = null;
 
 /** The project of every session in the store, by conversation id (null: none). */
 export function workProjectsBySession(state: WorkProjectSource): ReadonlyMap<string, string | null> {
-  const sig = projectFieldsSig(state.sessions);
-  if (memo && memo.sig === sig && memo.tasks === state.tasks && memo.plans === state.plans) return memo.byId;
+  const sig = `${projectFieldsSig(state.sessions)}\x1f${taskProjectSig(state.tasks ?? EMPTY_ROWS)}\x1f${planProjectSig(state.plans ?? EMPTY_ROWS)}`;
+  if (memo && memo.sig === sig) return memo.byId;
   const lookup = lookupOf(state);
   const byId = new Map<string, string | null>();
   for (const s of Object.values(state.sessions)) byId.set(s._id, sessionProjectId(row(s), lookup));
-  memo = { sig, tasks: state.tasks, plans: state.plans, byId };
+  memo = { sig, byId };
   return byId;
 }
 
