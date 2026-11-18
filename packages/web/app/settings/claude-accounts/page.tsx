@@ -37,7 +37,7 @@ import {
 } from "../../../components/AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge, type MintFlow } from "../../../components/MintTokenDialog";
 import { isFleetProfile, profileHasSetupToken } from "@codecast/convex/convex/ccAccountsShared";
-import { describeLastAction, formatAgo, planTypeLabel, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
+import { describeLastAction, formatAgo, planTypeLabel, profileLabel, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
 import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/RecoveryModeSelect";
@@ -358,7 +358,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                   On one line they ran past the card, which clips. */}
               <div className="flex items-center gap-2.5">
                 <span className={`h-2 w-2 shrink-0 rounded-full ${isActive ? "bg-sol-green" : "bg-sol-border"}`} />
-                <span className="min-w-0 truncate text-sm font-medium text-sol-text" title={p.name}>{p.name}</span>
+                <span className="min-w-0 truncate text-sm font-medium text-sol-text" title={profileLabel(p.name)}>{profileLabel(p.name)}</span>
                 <span className="min-w-0 flex-1 truncate text-xs text-sol-text-muted" title={p.email}>{p.email}</span>
                 {sw.switching === p.name ? (
                   <span className="inline-flex shrink-0 items-center gap-1.5 text-meta font-medium text-sol-cyan">
@@ -411,8 +411,8 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                           title={
                             blocked?.label ??
                             (tokenSwitch
-                              ? `Move this machine's sessions to "${p.name}" on its minted token. The saved login stays expired and the machine's own login stays put; running sessions keep the account they started on.`
-                              : `Switch this machine to "${p.name}". Running sessions keep the account they started on.`)
+                              ? `Move this machine's sessions to "${profileLabel(p.name)}" on its minted token. The saved login stays expired and the machine's own login stays put; running sessions keep the account they started on.`
+                              : `Switch this machine to "${profileLabel(p.name)}". Running sessions keep the account they started on.`)
                           }
                           className="h-6 shrink-0 px-2 text-meta"
                         >
@@ -497,7 +497,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
               )}
               {sw.outcome?.kind === "success" && sw.outcome.profile === p.name && (
                 <div className="mt-1.5 pl-[18px] text-meta text-sol-green">
-                  Now using {p.name}. Running sessions keep the account they started on.
+                  Now using {profileLabel(p.name)}. Running sessions keep the account they started on.
                 </div>
               )}
               <div className="mt-2 pl-[18px]">
@@ -519,7 +519,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       )}
       {!device.is_remote && activeProfile && (
         <div className="px-4 py-2 text-meta text-sol-text-dim sm:px-5">
-          Currently logged in as <span className="text-sol-text">{device.active_email}</span> (saved as "{activeProfile.name}").
+          Currently logged in as <span className="text-sol-text">{device.active_email}</span> (saved as "{profileLabel(activeProfile.name)}").
         </div>
       )}
     </SettingsSection>

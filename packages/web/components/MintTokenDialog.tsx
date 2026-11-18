@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { KeyRound } from "lucide-react";
 import { MINT_FLOW_STALE_MS, profileHasSetupToken } from "@codecast/convex/convex/ccAccountsShared";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { profileLabel } from "@codecast/shared/contracts";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 
@@ -289,7 +290,7 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
           <div>
             <div className="mb-1 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Why a token</div>
             <p>
-              Sessions pinned to <span className="text-sol-text">{profile.name}</span> normally run on its saved login,
+              Sessions pinned to <span className="text-sol-text">{profileLabel(profile.name)}</span> normally run on its saved login,
               which renews itself. A renewal can still fail: two processes refreshing the same grant, a keychain reset,
               or an older Claude Code that ignores per account logins. A token never changes, so none of that can
               strand it. It also works when the saved login has expired

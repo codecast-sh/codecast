@@ -290,7 +290,13 @@ export function accountDisplayName(profiles: ReadonlyArray<{ name: string; email
   const want = key?.trim().toLowerCase();
   if (!want) return undefined;
   const p = profiles.find((x) => x.name.toLowerCase() === want || x.email?.toLowerCase() === want);
-  return p?.email || (p?.name ?? key!.trim()).replace(/^pool-/, "");
+  return p?.email || profileLabel(p?.name ?? key!.trim());
+}
+
+/** A profile's name as a person reads it: the daemon id without the
+ * account-pool `pool-` prefix. Commands and keys keep the raw id. */
+export function profileLabel(name: string): string {
+  return name.replace(/^pool-/, "");
 }
 
 /** The machine's `last_action` ("switch:<profile>", "manual", ...) as a phrase. */

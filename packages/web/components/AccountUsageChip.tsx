@@ -26,7 +26,7 @@ import { RecoveryModeSelect, RecoveryDecisionNote } from "./RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../hooks/useMachineAccountSwitch";
 import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, profileHasSetupToken, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { describeLastAction, formatAgo, headroomScore, describeDecision, planTypeLabel } from "@codecast/shared/contracts";
+import { describeLastAction, formatAgo, headroomScore, describeDecision, planTypeLabel, profileLabel } from "@codecast/shared/contracts";
 import { planAgentType, resolveAccountChip } from "../lib/accountUsageChip";
 import { machineSwitchBlock, machineSwitchPendingCopy, profileIsCurrentLogin } from "../lib/machineAccountSwitch";
 import { usageTone } from "../lib/usageTone";
@@ -309,7 +309,7 @@ export function AccountUsageChip() {
                 </span>
               )}
               <span className="min-w-0 flex-1 truncate text-meta text-sol-text-dim">
-                {e.p.name}
+                {profileLabel(e.p.name)}
                 {(e.p.subscription ?? e.p.tier) ? ` · ${e.p.subscription ? planTypeLabel(e.p.subscription) : e.p.tier}` : ""}
               </span>
               {e.provider === "claude" && sw.switching === e.p.name ? (
