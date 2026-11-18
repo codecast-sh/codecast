@@ -369,3 +369,20 @@ keep_daemons = true
     expect(() => parseManifestText(text)).toThrow(needle);
   });
 });
+
+describe("[host] data", () => {
+  test("folders under $HOME a repo's code keeps outside the checkout", () => {
+    const m = parseManifestText(`[host]\ndata = ["~/.local/share/tool/freezes", "~/.cache/tool/snapshots/"]\n`);
+    expect(m.host?.data).toEqual(["~/.local/share/tool/freezes", "~/.cache/tool/snapshots/"]);
+  });
+
+  test.each([
+    `[host]\ndata = ["/etc/tool"]\n`,
+    `[host]\ndata = ["~/Documents"]\n`,
+    `[host]\ndata = ["~/.ssh/keys"]\n`,
+    `[host]\ndata = ["~/.claude/projects"]\n`,
+    `[host]\ndata = ["~/tool/../.ssh"]\n`,
+  ])("refuses %p", (text) => {
+    expect(() => parseManifestText(text)).toThrow("host.data[0]");
+  });
+});

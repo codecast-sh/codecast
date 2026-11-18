@@ -38,6 +38,7 @@ import { mcpTables } from "./mcpSchema";
 import { roleIconValidator } from "./lib/roleIconValidator";
 import { assistantTables } from "./assistantSchema";
 import { castMachineTables } from "./castMachinesSchema";
+import { dataSyncTables } from "./dataSyncSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
 import { agentTables } from "./agentSchema";
@@ -9626,6 +9627,7 @@ export default defineSchema({
   ...expectationTables,
   ...assistantTables,
   ...castMachineTables,
+  ...dataSyncTables,
 
 }, {
   // The `messages` table is in the millions of rows, and the default

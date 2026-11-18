@@ -124,6 +124,13 @@ export interface HostSpec {
   /** Simulator platforms a cloud Mac gets (Xcode, the runtime, axe), e.g. ["iOS"]. Ignored on Linux hosts. */
   simulators?: string[];
   /**
+   * Folders under $HOME, written `~/...`, that this repo's code keeps outside
+   * the checkout and needs on every machine: a tool's local data dir. Every
+   * machine of the person syncs them through codecast (dataSync/), so data
+   * made on one is there on the others.
+   */
+  data?: string[];
+  /**
    * The memory a host needs, in GB, for a session in this repo to do its real
    * work there: its typecheck, its dev server and a browser beside a few
    * agents. New hosts are sized to it and placements prefer hosts that have it.

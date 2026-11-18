@@ -9,6 +9,7 @@
 
 import * as fs from "node:fs";
 import { envNameProblem, secretNameProblem } from "@codecast/shared/contracts/secretRules";
+import { dataFolderFromManifest } from "@codecast/shared/contracts/dataSync";
 import type {
   BrowserSpec,
   HostSpec,
@@ -124,7 +125,7 @@ const HOST_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9.+:@_-]*$/;
 function validateHost(raw: unknown, file?: string): HostSpec | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) throw new ManifestError("'host' must be a table", file, "host");
-  const known = new Set(["packages", "services", "run", "simulators", "memory_gb"]);
+  const known = new Set(["packages", "services", "run", "simulators", "memory_gb", "data"]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) throw new ManifestError(`unknown key in [host]: '${key}'`, file, `host.${key}`);
   }
@@ -143,7 +144,11 @@ function validateHost(raw: unknown, file?: string): HostSpec | undefined {
   if (memory !== undefined && (typeof memory !== "number" || !Number.isFinite(memory) || memory <= 0 || memory > 1024)) {
     throw new ManifestError("'host.memory_gb' must be a number of gigabytes", file, "host.memory_gb");
   }
-  return { packages, services, run: validateStringArray(raw["run"], "host.run", file), ...(simulators.length ? { simulators } : {}), ...(memory !== undefined ? { memory_gb: memory as number } : {}) };
+  const data = validateStringArray(raw["data"], "host.data", file);
+  data.forEach((entry, i) => {
+    if (!dataFolderFromManifest(entry)) throw new ManifestError(`'host.data[${i}]' must be a folder under $HOME written ~/..., at least two levels deep and outside credential and agent folders`, file, `host.data[${i}]`);
+  });
+  return { packages, services, run: validateStringArray(raw["run"], "host.run", file), ...(simulators.length ? { simulators } : {}), ...(memory !== undefined ? { memory_gb: memory as number } : {}), ...(data.length ? { data } : {}) };
 }
 
 /** Simulator platforms a cloud Mac can be provisioned for (sim/provision.ts). */

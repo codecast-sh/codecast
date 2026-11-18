@@ -31453,6 +31453,12 @@ async function main(): Promise<void> {
     shouldRun: () => !isRemoteDevice() && isCloudMirrorEnabled(readConfig()),
     log: (m) => log(`[MIRROR] ${m}`),
   });
+  // Folders the person's repos declare for every machine ([host] data), synced through codecast (dataSync/).
+  void import("./dataSync/loop.js").then(({ startDataSyncLoop }) => startDataSyncLoop({
+    shouldRun: () => !!readConfig()?.auth_token,
+    log: (m) => log(`[DATA-SYNC] ${m}`),
+    firstTickMs: 45_000 * bootPacing.fanoutOffsetScale,
+  })).catch((err) => log(`[DATA-SYNC] did not start: ${err instanceof Error ? err.message : String(err)}`));
   // The opt-in SSH agent bridge (cloud/agentBridge.ts), on the same tick.
   setTimeout(() => { maintainAgentBridges().catch(() => {}); }, 66_000 * bootPacing.fanoutOffsetScale);
   setInterval(() => { maintainAgentBridges().catch(() => {}); }, AGENT_BRIDGE_TICK_MS);

@@ -47,9 +47,9 @@ export function sameMirrorProcess(a: MirrorProcessIdentity, b: MirrorProcessIden
 // the supervised process's own.
 const TASKPOLICY = "/usr/sbin/taskpolicy";
 
-export function mirrorProcessInvocation(execPath = process.execPath, entry = process.argv[1] ?? "", platform: NodeJS.Platform = process.platform): { command: string; args: string[] } {
+export function mirrorProcessInvocation(execPath = process.execPath, entry = process.argv[1] ?? "", platform: NodeJS.Platform = process.platform, subcommand: string[] = ["cloud", "mirror-run"]): { command: string; args: string[] } {
   const fromSource = /\.(?:[cm]?js|ts)$/.test(entry) && !entry.startsWith("/$bunfs/") && !entry.includes("~BUN/");
-  const args = [...(fromSource ? [path.join(path.dirname(entry), entry.endsWith(".ts") ? "main.ts" : "main.js")] : []), "cloud", "mirror-run"];
+  const args = [...(fromSource ? [path.join(path.dirname(entry), entry.endsWith(".ts") ? "main.ts" : "main.js")] : []), ...subcommand];
   if (platform === "darwin" && fs.existsSync(TASKPOLICY)) return { command: TASKPOLICY, args: ["-c", "utility", execPath, ...args] };
   return { command: execPath, args };
 }

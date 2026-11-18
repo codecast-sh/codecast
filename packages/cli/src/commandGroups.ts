@@ -57,6 +57,16 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     load: () => import("./liveArtifactCommand.js").then((m) => m.registerDataCommand),
   },
   {
+    token: "datasync",
+    description: `Folders outside your repos that every machine of yours shares, such as a tool's local data
+
+  cast datasync        the shared folders: where, declared by which repo, how much
+  cast datasync now    sync them now (the daemon does every minute)
+
+A repo declares one in .codecast/workspace.toml: [host] data = ["~/.local/share/<tool>/<dir>"].`,
+    load: () => import("./dataSync/command.js").then((m) => m.registerDataSyncCommand),
+  },
+  {
     token: "sharing",
     hasOptions: true,
     description: "See and change what syncs to codecast and what each team sees of it",
