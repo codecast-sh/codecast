@@ -2339,7 +2339,7 @@ const ConversationViewInner = (
       const virtualItems = virtualizer.getVirtualItems();
       // The virtualizer holds each mounted row by key; a selector walk over the
       // feed per row per frame cost more than the boxes themselves.
-      const rowEl = (v: { key: string | number; index: number }) => {
+      const rowEl = (v: { key: string | number | bigint; index: number }) => {
         const node = virtualizer.elementsCache.get(v.key) as HTMLElement | undefined;
         return node?.isConnected && node.dataset.index === String(v.index) ? node : null;
       };
