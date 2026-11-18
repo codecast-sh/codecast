@@ -311,17 +311,17 @@ final class Provider {
         case "setValue":
             return try actionResult(params: params) { try setValue(params: params) }
         case "typeText":
-            return try actionResult(params: params) { try typeText(params: params) }
+            return try actionResult(params: params, awaitsLateReaction: true) { try typeText(params: params) }
         case "pressKey":
-            return try actionResult(params: params) { try pressKey(params: params) }
+            return try actionResult(params: params, awaitsLateReaction: true) { try pressKey(params: params) }
         case "hotkey":
-            return try actionResult(params: params) { try hotkey(params: params) }
+            return try actionResult(params: params, awaitsLateReaction: true) { try hotkey(params: params) }
         case "pasteText":
-            return try actionResult(params: params) { try pasteText(params: params) }
+            return try actionResult(params: params, awaitsLateReaction: true) { try pasteText(params: params) }
         case "scroll":
-            return try actionResult(params: params) { try scroll(params: params) }
+            return try actionResult(params: params, awaitsLateReaction: true) { try scroll(params: params) }
         case "drag":
-            return try actionResult(params: params) { try drag(params: params) }
+            return try actionResult(params: params, awaitsLateReaction: true) { try drag(params: params) }
         default:
             throw ProviderError(.invalidArgument, "unknown method '\(method)'")
         }
@@ -927,9 +927,9 @@ final class Provider {
         return result
     }
 
-    /// A click never raises. An agent that needs the window forward asks for it
-    /// with `--restore-window`, and the `window_not_focused` recovery names the
-    /// flag, so it finds it on the first failure.
+    /// A click never raises: an accessibility press when the element takes
+    /// one, else a real press, which reaches a window in the back through
+    /// `BackgroundMouse`. `--restore-window` brings the window forward first.
     private func click(params: [String: JSONValue]) throws -> [String: Any] {
         let snapshot = try currentSnapshot(params: params)
         let button = try mouseButton(params["mouseButton"]?.string)
@@ -956,12 +956,10 @@ final class Provider {
             guard let point else {
                 throw ProviderError(.elementNotClickable, "element \(record.index) has no clickable frame")
             }
-            let why = forceMouse ? "--mouse was asked for" : accessible ? "element \(record.index) takes no accessibility press" : "modifiers, a double click or the middle button need a real press"
-            let route = try syntheticClick(at: point, button: button, count: count, modifiers: modifiers, snapshot: snapshot, params: params, why: why)
             return actionMetadata(
                 path: "synthetic",
                 fallbackReason: forceMouse ? "mouseRequested" : "actionUnsupported",
-                verification: syntheticVerification(route)
+                verification: try syntheticClick(at: point, button: button, count: count, modifiers: modifiers, snapshot: snapshot, params: params)
             )
         }
         return try clickPoint(
@@ -986,16 +984,17 @@ final class Provider {
     ) throws -> [String: Any] {
         // A background window drops a real press, but the control under the
         // point can often be pressed through accessibility instead.
-        if accessible, !isTargetWindowFocused(snapshot), let hit = pressableElement(at: point, snapshot: snapshot, button: button) {
+        if accessible, params["mouse"]?.bool != true, !isTargetWindowFocused(snapshot), let hit = pressableElement(at: point, snapshot: snapshot, button: button) {
             let shown = pointAt(point, snapshot: snapshot, params: params)
             if let actionName = try performClickAction(element: hit, mouseButton: button) {
                 pressAt(shown)
                 return actionMetadata(path: "accessibility", actionName: actionName, fallbackReason: "backgroundPointHit")
             }
         }
-        let why = accessible ? "nothing under that point takes an accessibility press" : "modifiers, a double click or the middle button need a real press"
-        let route = try syntheticClick(at: point, button: button, count: count, modifiers: modifiers, snapshot: snapshot, params: params, why: why)
-        return actionMetadata(path: "synthetic", verification: syntheticVerification(route))
+        return actionMetadata(
+            path: "synthetic",
+            verification: try syntheticClick(at: point, button: button, count: count, modifiers: modifiers, snapshot: snapshot, params: params)
+        )
     }
 
     /// The agent cursor glides to where the action is about to land, unless the
@@ -1020,6 +1019,24 @@ final class Provider {
         AgentCursor.press()
     }
 
+    /// Whether a point of the target window falls inside a web page.
+    private func isWebContent(at point: CGPoint, snapshot: Snapshot) -> Bool {
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(snapshot.app.pid), Float(point.x), Float(point.y), &hit) == .success,
+              var current = hit
+        else {
+            return false
+        }
+        for _ in 0..<64 {
+            let role = stringAttribute(current, kAXRoleAttribute as String)
+            if role == "AXWebArea" { return true }
+            if role == "AXWindow" { return false }
+            guard let parent = copyElement(current, kAXParentAttribute as String) else { return false }
+            current = parent
+        }
+        return false
+    }
+
     /// The element under a window point that takes a press, if it belongs to
     /// the target window: the hit itself or one of its two nearest ancestors,
     /// since a click on a button's label hits the label.
@@ -1041,24 +1058,32 @@ final class Provider {
         return nil
     }
 
-    /// A real mouse click: the target window must be in front (AppKit drops a
-    /// press on a background window), and the fence stops it if focus moves.
+    /// A real mouse click: through the HID stream when the target is in front,
+    /// fenced so it stops if focus moves; posted to the app when it is in the
+    /// back, so the human's pointer and front app stay theirs.
     private func syntheticClick(
         at point: CGPoint,
         button: MouseButtonSelection,
         count: Int,
         modifiers: [KeyModifierName],
         snapshot: Snapshot,
-        params: [String: JSONValue],
-        why: String
-    ) throws -> InputRoute {
+        params: [String: JSONValue]
+    ) throws -> [String: Any] {
+        // Priming a background app touches window server focus, so it holds
+        // the same lock as foreground input.
         try ForegroundInput.run {
-            try requireMouseFocus(snapshot, verb: "click", why: why)
             let shown = pointAt(point, snapshot: snapshot, params: params)
-            try Input.click(at: point, button: button, count: count, modifiers: modifiers, targetWindow: snapshot)
+            if isTargetWindowFocused(snapshot) {
+                try Input.click(at: point, button: button, count: count, modifiers: modifiers, targetWindow: snapshot)
+                pressAt(shown)
+                return syntheticVerification(.hid)
+            }
+            let target = try BackgroundMouse.target(snapshot: snapshot, params: params)
+            let flags = modifiers.reduce(into: CGEventFlags()) { $0.insert($1.flag) }
+            let report = try BackgroundMouse.click(target, at: point, button: button, count: count, flags: flags)
             pressAt(shown)
+            return syntheticVerification(.process(pid: snapshot.app.pid), background: report)
         }
-        return .hid
     }
 
     private func performClickAction(element: AXUIElement, mouseButton: MouseButtonSelection) throws -> String? {
@@ -1141,7 +1166,12 @@ final class Provider {
     private func typeText(params: [String: JSONValue]) throws -> [String: Any] {
         let snapshot = try currentKeyboardSnapshot(params: params)
         let text = try requiredString(params, "text")
-        if let focused = focusedRecord(snapshot), let verification = TextInput.replaceSelection(focused.element, with: text) {
+        // A page hears typing as key events: a card field formats the number
+        // and moves to the expiry on the 16th digit, and an accessibility
+        // write skips all of that. So a field in web content gets keys, which
+        // a background Chrome or Electron window takes like a typing person.
+        if let focused = focusedRecord(snapshot), !focused.inWebContent,
+           let verification = try TextInput.replaceSelection(focused.element, with: text) {
             return actionMetadata(path: "accessibility", actionName: "AXReplaceSelection", verification: readBack(verification, on: focused))
         }
         let route = try ForegroundInput.run {
@@ -1199,7 +1229,7 @@ final class Provider {
         guard PasteSafety.isWithinCap(text.utf8.count) else {
             throw ProviderError(.invalidArgument, PasteSafety.tooLargeMessage)
         }
-        if let focused = focusedRecord(snapshot), let verification = TextInput.replaceSelection(focused.element, with: text) {
+        if let focused = focusedRecord(snapshot), let verification = try TextInput.replaceSelection(focused.element, with: text) {
             return actionMetadata(path: "accessibility", actionName: "AXReplaceSelection", verification: readBack(verification, on: focused))
         }
         try ForegroundInput.run { try Input.pasteText(text, route: inputRoute(snapshot)) }
@@ -1229,11 +1259,11 @@ final class Provider {
             guard let point = center(record.localFrame, in: snapshot.windowBounds) else {
                 throw ProviderError(.elementNotClickable, "element \(record.index) has no scrollable frame")
             }
-            try ForegroundInput.run { try Input.scroll(pid: snapshot.app.pid, at: point, direction: direction, pages: pages) }
+            try ForegroundInput.run { try Input.scroll(try BackgroundMouse.target(snapshot: snapshot, params: params), at: point, direction: direction, pages: pages) }
             return actionMetadata(path: "synthetic", fallbackReason: "actionUnsupported")
         }
         let point = try coordinatePoint(params: params, xKey: "x", yKey: "y", snapshot: snapshot)
-        try ForegroundInput.run { try Input.scroll(pid: snapshot.app.pid, at: point, direction: direction, pages: pages) }
+        try ForegroundInput.run { try Input.scroll(try BackgroundMouse.target(snapshot: snapshot, params: params), at: point, direction: direction, pages: pages) }
         return actionMetadata(path: "synthetic")
     }
 
@@ -1260,14 +1290,27 @@ final class Provider {
         } else {
             to = try coordinatePoint(params: params, xKey: "toX", yKey: "toY", snapshot: snapshot)
         }
-        try ForegroundInput.run {
-            try requireMouseFocus(snapshot, verb: "drag", why: "a drag is a real press and move")
+        return try ForegroundInput.run {
             if pointAt(from, snapshot: snapshot, params: params) != nil {
                 AgentCursor.follow(to: to, over: Input.dragSeconds)
             }
-            try Input.drag(from: from, to: to, targetWindow: snapshot)
+            if isTargetWindowFocused(snapshot) {
+                try Input.drag(from: from, to: to, targetWindow: snapshot)
+                return actionMetadata(path: "synthetic", actionName: "drag", verification: syntheticVerification(.hid))
+            }
+            // Chromium reads whether the button is held from the machine's
+            // real button state, never from the posted event, so a page in a
+            // background window sees the moves with nothing pressed.
+            if isWebContent(at: from, snapshot: snapshot) {
+                throw ProviderError(
+                    .unsupportedCapability,
+                    "a drag in a web page needs its window in front: the page reads whether the button is held from the real mouse. For a page in the human's Chrome, drag with cast browser; otherwise ask the human before --restore-window, which takes their screen"
+                )
+            }
+            let target = try BackgroundMouse.target(snapshot: snapshot, params: params)
+            let report = try BackgroundMouse.drag(target, from: from, to: to, steps: Input.dragSteps, stepMicroseconds: Input.dragStepMicroseconds)
+            return actionMetadata(path: "synthetic", actionName: "drag", verification: syntheticVerification(.process(pid: snapshot.app.pid), background: report))
         }
-        return actionMetadata(path: "synthetic", actionName: "drag", verification: syntheticVerification(.hid))
     }
 
     /// Accessibility text replacement and select all post no global input, so
@@ -1695,18 +1738,6 @@ private func inputRoute(_ snapshot: Snapshot) -> InputRoute {
     return .process(pid: snapshot.app.pid)
 }
 
-/// Mouse input reaches only a focused window (see InputRoute). `why` says
-/// how this action ended up needing the mouse, so the alternatives offered are
-/// ones the agent has not already tried.
-private func requireMouseFocus(_ snapshot: Snapshot, verb: String, why: String? = nil) throws {
-    guard !isTargetWindowFocused(snapshot) else { return }
-    let reason = why.map { "\($0), so this " } ?? "a "
-    throw ProviderError(
-        .windowNotFocused,
-        "\(reason)mouse \(verb) needs the \(snapshot.app.name) window in front: macOS drops a press on a background window. Look for another way that needs no mouse (a keyboard shortcut, a menu item, a Secondary Action, set-value), or pass --restore-window to bring it forward, which takes the human's screen"
-    )
-}
-
 private func makeMainWithinApp(_ snapshot: Snapshot) {
     let appElement = AXUIElementCreateApplication(snapshot.app.pid)
     if let current = copyElement(appElement, kAXFocusedWindowAttribute as String), windowNumber(current) == snapshot.windowId {
@@ -1719,8 +1750,10 @@ private func makeMainWithinApp(_ snapshot: Snapshot) {
     usleep(60_000)
 }
 
-private func syntheticVerification(_ route: InputRoute) -> [String: Any] {
-    unverifiedAction(reason: route.isBackground ? "background_input" : "synthetic_input")
+private func syntheticVerification(_ route: InputRoute, background: [String: Any]? = nil) -> [String: Any] {
+    var verification = unverifiedAction(reason: route.isBackground ? "background_input" : "synthetic_input")
+    if let background { verification["background"] = background }
+    return verification
 }
 
 private func matchingWindow(
@@ -3325,28 +3358,38 @@ private enum Input {
         }
     }
 
-    static func scroll(pid: pid_t, at point: CGPoint, direction: String, pages: Double) throws {
+    static func scroll(_ target: BackgroundMouseTarget, at point: CGPoint, direction: String, pages: Double) throws {
         guard let delta = boundedInteger(max(1, (12 * pages).rounded()), as: Int32.self) else {
             throw ProviderError(.invalidArgument, "pages is out of range")
         }
         let wheel1: Int32 = direction == "up" ? delta : direction == "down" ? -delta : 0
         let wheel2: Int32 = direction == "left" ? delta : direction == "right" ? -delta : 0
-        guard let event = CGEvent(
-            scrollWheelEvent2Source: nil,
-            units: .line,
-            wheelCount: 2,
-            wheel1: wheel1,
-            wheel2: wheel2,
-            wheel3: 0
-        ) else {
-            throw ProviderError(.accessibilityError, "failed to create scroll event")
-        }
-        event.location = point
-        event.postToPid(pid)
+        try BackgroundMouse.scroll(target, at: point, wheel1: wheel1, wheel2: wheel2, ticks: 1)
     }
 
     static func typeText(_ text: String, route: InputRoute) throws {
+        var previous: UInt16 = 0
         for unit in text.utf16 {
+            defer { previous = unit }
+            // Return and Tab are keys, not characters, to a page: a unicode
+            // string on another key code inserts nothing for a newline and a
+            // literal tab where a person's Tab moves to the next field.
+            switch unit {
+            case 10 where previous == 13:
+                continue
+            case 10, 13:
+                try keyEvent(36, down: true, flags: [], route: route)
+                try keyEvent(36, down: false, flags: [], route: route)
+                if route.isBackground { usleep(2_000) }
+                continue
+            case 9:
+                try keyEvent(48, down: true, flags: [], route: route)
+                try keyEvent(48, down: false, flags: [], route: route)
+                if route.isBackground { usleep(2_000) }
+                continue
+            default:
+                break
+            }
             var character = unit
             guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
@@ -3424,7 +3467,11 @@ private enum Input {
 }
 
 private enum TextInput {
-    static func replaceSelection(_ element: AXUIElement, with text: String) -> [String: Any]? {
+    /// Nil only when the text was not written, so the caller may type it
+    /// instead. Once the write lands the text is in the field: a read-back that
+    /// differs (a field that reformats its input, a mirror that lags) is
+    /// reported as unverified, never typed a second time.
+    static func replaceSelection(_ element: AXUIElement, with text: String) throws -> [String: Any]? {
         guard isSettable(element, kAXValueAttribute as String),
               let current = rawStringAttribute(element, kAXValueAttribute as String)
         else {
@@ -3436,11 +3483,29 @@ private enum TextInput {
         let start = String.Index(utf16Offset: startOffset, in: current)
         let end = String.Index(utf16Offset: endOffset, in: current)
         let next = String(current[..<start]) + text + String(current[end...])
-        guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, next as CFString) == .success else {
+        switch AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, next as CFString) {
+        case .success:
+            break
+        case .cannotComplete:
+            throw ProviderError(.actionTimeout, AppResponsiveness.outcomeUnknown("The text write"), outcomeUnknown: true)
+        default:
             return nil
         }
         setSelectedTextRange(element, CFRange(location: startOffset + text.utf16.count, length: 0))
-        guard rawStringAttribute(element, kAXValueAttribute as String) == next else { return nil }
+        // Chrome applies the write in the page and updates its mirror after
+        // this call returns, so an immediate read can still show the old text.
+        var actual = rawStringAttribute(element, kAXValueAttribute as String)
+        for _ in 0..<6 where actual != next {
+            usleep(50_000)
+            actual = rawStringAttribute(element, kAXValueAttribute as String)
+        }
+        guard actual == next else {
+            return unverifiedAction(
+                reason: "value_mismatch",
+                expected: text,
+                actualPreview: actual.map { SnapshotRenderHeuristics.preview($0) }
+            )
+        }
         return verifiedAction(
             property: "focusedText",
             expected: text,
