@@ -1354,9 +1354,14 @@ const ConversationViewInner = (
   useWatchEffect(() => {
     setStickyExpanded(false);
   }, [activeStickyMsg?.id]);
+  // Read in the next frame, where the browser lays the page out anyway: read
+  // here, right after the commit that swapped the text, it forced one more.
   useWatchEffect(() => {
-    const el = stickyTextRef.current;
-    setStickyClamped(el ? el.scrollHeight > el.clientHeight + 1 : false);
+    const frame = requestAnimationFrame(() => {
+      const el = stickyTextRef.current;
+      setStickyClamped(el ? el.scrollHeight > el.clientHeight + 1 : false);
+    });
+    return () => cancelAnimationFrame(frame);
   }, [activeStickyMsg?.id, activeStickyMsg?.content, stickyMsgVisible, stickyExpanded]);
 
   // Track the sticky prompt card's height (stickyHeightRef, read by the sticky
@@ -4221,9 +4226,12 @@ const ConversationViewInner = (
         className={`${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}
         lead={<>
             {/* The inbox's way back from a conversation to its home (the
-                board or the feed of your sessions). Modern names where it goes:
-                the trail's last step, else the inbox (components/nav/BackControl). */}
-            {onBack && modernStyle && <BackControl className="max-w-[12rem]" />}
+                board or the feed of your sessions). Modern shows it only at
+                phone width, where the session list is off screen: wider, the
+                list sits beside the conversation and the top bar carries Back,
+                and a named step before the title read as the session's parent
+                (components/nav/BackControl). */}
+            {onBack && modernStyle && <BackControl compact className="md:hidden" />}
             {onBack && !modernStyle && (
               <button type="button" onClick={onBack} aria-label="Back to all sessions" title="All sessions" data-cc-conv-back className="-ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text">
                 <ChevronLeft className="h-4 w-4" aria-hidden />
