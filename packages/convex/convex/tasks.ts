@@ -1776,9 +1776,10 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
   // The filters that judge one row by itself. A bounded read applies them as
   // it streams, so its limit counts rows the list will show; every read
   // applies them again below.
-  const planTaskIds = args.plan_id
-    ? new Set(((await ctx.db.query("plans").withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!)).first())?.task_ids || []).map((id: any) => String(id)))
-    : null;
+  const planTaskIdList: any[] = args.plan_id
+    ? [...new Set(((await ctx.db.query("plans").withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!)).first())?.task_ids || []).map((id: any) => String(id)))]
+    : [];
+  const planTaskIds = args.plan_id ? new Set(planTaskIdList) : null;
   const wantedQuery = args.query?.toLowerCase();
   const wantedLabel = args.label?.toLowerCase();
   const keepRow = (t: any): boolean => {
@@ -1828,6 +1829,12 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
     tasks = (await Promise.all(projectIds.map((projectId) => statuses
       ? projectTasksIn(ctx, auth.userId as Id<"users">, projectId as any, statuses, bound)
       : projectTasks(ctx, auth.userId as Id<"users">, projectId as any)))).flat();
+  } else if (args.plan_id) {
+    // A plan names its tasks: read those, never the workspace. Collecting a
+    // large team's tasks to keep one plan's 15 ran out of the server's 64 MB
+    // (Union, Nov 17, ct-95906).
+    tasks = (await Promise.all(planTaskIdList.map((id) => db.getScoped("tasks", id)))).filter(Boolean);
+    if (args.query?.trim()) searched = await searchWorkspaceTasks(ctx, db.workspaceKey, args.query.trim(), searchCategories(args));
   } else if (args.cursor !== undefined) {
     const got = await db.query("tasks")
       .withIndex("by_workspace_updated", (q: any) => q.eq("workspace", db.workspaceKey))

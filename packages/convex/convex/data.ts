@@ -352,6 +352,19 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
       return doc;
     },
 
+    // One row by id, kept only where query(table) would list it: the same
+    // workspace key and project narrowing, not get's owner-always rule. A
+    // reader that knows its ids (a plan's tasks) reads them without walking
+    // the workspace.
+    async getScoped(table: string, id: any) {
+      if (!SCOPED_TABLES.has(table)) throw new Error(`getScoped reads a workspace-scoped table; ${table} is not one`);
+      const docId = ctx.db.normalizeId(table, String(id));
+      const doc = docId ? await ctx.db.get(docId) : null;
+      if (!doc || !(await inWorkspaceKey(ctx, doc, workspace, key, opts.userId))) return null;
+      if (projectPath && opts.narrowToProject !== false && !matchesProjectPath(doc, projectPath)) return null;
+      return doc;
+    },
+
     async patch(id: any, fields: Record<string, any>) {
       const doc = await ctx.db.get(id);
       if (!doc || !(await canAccess(ctx, doc, opts.userId, workspace, key))) {
@@ -443,6 +456,15 @@ async function canAccess(
   return (await resolveWorkspaceKey(ctx, doc)) === key;
 }
 
+// A row is in the workspace when its ACCESS key equals the context's key. A
+// stored key decides alone; a row from before the backfill must also be this
+// team's (or, personal, this owner's) by routing, then its computed key decides.
+async function inWorkspaceKey(ctx: { db: any }, d: any, workspace: Workspace, key: WorkspaceKey, userId: Id<"users">): Promise<boolean> {
+  if (typeof d.workspace === "string" && d.workspace) return d.workspace === key;
+  const mine = workspace.type === "team" ? String(d.team_id) === String(workspace.teamId) : String(d.user_id) === String(userId);
+  return mine && (await resolveWorkspaceKey(ctx, d)) === key;
+}
+
 // Chokepoint query for a scoped table: rows whose ACCESS key equals the
 // context's key. Reads by_workspace, then unions the legacy rows (no stored key
 // yet), filtered by their computed key — so the answer is identical before and
@@ -476,12 +498,11 @@ function wrapWorkspaceQuery(
   };
   const merge = async (mods: Array<(q: any) => any>, index?: [string, any]): Promise<any[]> => {
     const [a, legacy] = build(mods, index);
-    const out: any[] = (await a.collect()).filter((d: any) => d.workspace === key);
-    const seen = new Set(out.map((d: any) => String(d._id)));
-    for (const d of (await Promise.all(legacy.map((q: any) => q.collect()))).flat()) {
+    const out: any[] = [];
+    const seen = new Set<string>();
+    for (const d of [...await a.collect(), ...(await Promise.all(legacy.map((q: any) => q.collect()))).flat()]) {
       if (seen.has(String(d._id))) continue;
-      if (typeof d.workspace === "string" && d.workspace) continue; // keyed elsewhere
-      if ((await resolveWorkspaceKey(ctx, d)) === key) { seen.add(String(d._id)); out.push(d); }
+      if (await inWorkspaceKey(ctx, d, workspace, key, userId)) { seen.add(String(d._id)); out.push(d); }
     }
     return out;
   };
@@ -503,7 +524,7 @@ function wrapWorkspaceQuery(
       const result = await a.paginate(opts);
       const page: any[] = [];
       for (const d of result.page) {
-        if ((await resolveWorkspaceKey(ctx, d)) === key) page.push(d);
+        if (await inWorkspaceKey(ctx, d, workspace, key, userId)) page.push(d);
       }
       return { ...result, page };
     },
@@ -511,8 +532,12 @@ function wrapWorkspaceQuery(
   return wrap([]);
 }
 
+function matchesProjectPath(d: any, projectPath: string): boolean {
+  return !d.project_path || pathIsWithin(d.project_path, projectPath) || !!(d.git_root && pathIsWithin(d.git_root, projectPath));
+}
+
 function wrapProjectQuery(inner: any, projectPath: string): any {
-  const matchesProject = (d: any) => !d.project_path || pathIsWithin(d.project_path, projectPath) || (d.git_root && pathIsWithin(d.git_root, projectPath));
+  const matchesProject = (d: any) => matchesProjectPath(d, projectPath);
   const wrap = (q: any) => ({
     filter: (fn: any) => wrap(q.filter(fn)),
     order: (dir: any) => wrap(q.order(dir)),
