@@ -81,6 +81,12 @@ describe("useAttachCopy reaches another of your machines over its tailnet", () =
     expect(attachFor()).toStartWith("tmux -L");
   });
 
+  test("the pane is on this window's own machine and it has an ssh host: the local attach, no ssh to itself", () => {
+    machine = { ...MINE, ssh_host: "me@nose.lan" };
+    useInboxStore.setState({ localDevice: { viewer: "u1", deviceId: "box" } });
+    expect(attachFor()).toStartWith("tmux -L");
+  });
+
   test("an ssh host the person set wins over the tailnet", () => {
     machine = { ...MINE, ssh_host: "me@nose.lan" };
     expect(attachFor()).toStartWith("ssh me@nose.lan -t ");

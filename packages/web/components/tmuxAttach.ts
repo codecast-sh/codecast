@@ -32,6 +32,9 @@ export type SessionMachine = {
   tailnet_name?: string | null;
   /** The MagicDNS suffix of the viewer's own machine, when known. */
   viewer_tailnet?: string | null;
+  /** The pane is on the machine this window runs on (useAttachCopy fills it),
+   *  so the plain local attach works and no ssh hop is wanted. */
+  is_here?: boolean;
 };
 
 /**
@@ -69,7 +72,7 @@ export function attachCommand(
   const local = localTmuxAttachCommand(tmuxSession);
   // Unknown machine (no owner_device_id, or the device row is gone): keep the
   // pre-existing local form rather than silently withholding the pane name.
-  if (!machine) return local;
+  if (!machine || machine.is_here) return local;
   if (!machine.is_mine) return null;
   // A Windows viewer pastes into PowerShell, where tmux only exists inside WSL.
   if (!machine.ssh_host && machine.wsl_distro && viewerOnWindows) return wslTmuxAttachCommand(machine.wsl_distro, tmuxSession);
