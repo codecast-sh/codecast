@@ -1,7 +1,7 @@
 import { SeatKillDialog } from "./org/SeatKillDialog";
 import { PendingAgentFeatures } from "./onboarding/usePendingAgentFeatures";
 import { LiveRunsCheck } from "../hooks/useLiveRunsCheck";
-import { useSyncMetricSeries } from "../hooks/useMetricSeries";
+import { useSyncMetricSeries, useSyncMetricWindows } from "../hooks/useMetricSeries";
 import { useSessionCardBuckets, useSyncSessionCardBucket } from "../hooks/useSyncTimeline";
 import { useSyncOpsSources } from "../hooks/useSyncOps";
 import { useSyncSessionIndex } from "../hooks/useSyncSessionIndex";
@@ -512,6 +512,8 @@ function HostFeeders() {
   // The workspace's metric series: the live numbers goals and projects read
   // wherever they are drawn (hooks/useMetricSeries), one subscription for all.
   useSyncMetricSeries();
+  // And the 30 days a goal read over a window needs (contracts/metricStanding).
+  useSyncMetricWindows();
   // The workspace's Ops sources (a handful of rows): the sidebar's Ops count
   // reads their health beside the alerting watches above, in every window.
   useSyncOpsSources();
