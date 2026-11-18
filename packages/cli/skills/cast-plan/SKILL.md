@@ -55,13 +55,16 @@ default, rewrite those steps before unblocking them.
 ## Write the plan
 
 ```bash
-cast plan create "<title>" -g "<goal in one sentence>" -a "<criterion>" -a "<criterion>" --body-file - <<'PLAN'
+cast plan create "<title>" --project <ref> -g "<objective in one sentence>" -a "<criterion>" -a "<criterion>" --body-file - <<'PLAN'
 Context: what exists, what earlier attempts learned, which decisions bind.
 Approach: the design, and the alternatives rejected with reasons.
 Risks: what could go wrong and how each is checked.
 PLAN
 cast plan bind <plan_id>
 ```
+
+File the plan under the project whose goal it serves (`cast goal ls` shows
+the goals and their projects), or say in the plan that none fits.
 
 Decompose into tasks that one session can finish alone. Each task is a
 vertical slice: a thin piece of behavior carried through every layer it

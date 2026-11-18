@@ -39,6 +39,7 @@ import { matchProject, looksLikeConvexId } from "./projectRef.js";
 import { groundUpdateBody } from "@codecast/shared/contracts/goalsBrief";
 import { SOURCE_NEEDED, answerWrite, healthText, initiativeLine, initiativeShowLines, liveSeries, metricRecordLine, milestoneWrite, parseInitiativeHealth, pickRecordEntry, readDayArg, readMilestoneArg, readMomentArg, readSourceArg, recordVerb, recordWriteLines, removeWrite, saidWrite, scopeSentence, sourceFillIn, sourceWrite, unread, type Read, type RecordWrite } from "./initiativeCommand.js";
 import { INITIATIVE_RECORD_LISTS, INITIATIVE_STATUSES, metricReadings, metricTrends, parseMetricSpec, type IntentSource } from "@codecast/shared/contracts/initiative";
+import { metricWindowNoiseError } from "@codecast/shared/contracts/metricStanding";
 import { ORG_CONTEXT_GUIDANCE, orgWhereLines } from "@codecast/shared/contracts/orgWhere";
 import {
   parseEntityUrl,
@@ -134,6 +135,7 @@ import { writeThreadStatePulse } from "./threadStateStamp.js";
 import { AuthServer } from "./authServer.js";
 import { makeVerifier, registerAuthRequest, startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
+import { newProjectGoalLines, unplacedPlanLines } from "./planPlacement.js";
 import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, standingSessionLine } from "./briefLines.js";
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
 import { parkedNote, planReadiness, stuckAdvice, stuckNote } from "./planReadiness.js";
@@ -17576,6 +17578,8 @@ work
   .option("--model <model>", "Model a session spawned for this task launches with")
   .option("--effort <level>", "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max")
   .option("--ephemeral", "Bookkeeping with no value once done (a checklist, a probe): kept off the board, the feed and notifications; cast task keep undoes it")
+  .option("--goal-ref <ref>", "The goal it serves: a metric ref (in-N:key) or project short id from cast goals")
+  .option("--predict <line>", "The predicted effect on a goal metric, read after ship: \"in-9:intros_a_week +5% by 2026-12-15 :: <basis>\" (or in 21d after ship)")
   .option("--json", "Output the created task as JSON (one object for one title, an array for several)")
   .action(async (title: string, options: any) => {
     // Bulk decomposition: `cast task create --parent ct-x -` gives one subtask
@@ -17639,6 +17643,8 @@ work
       // so this overrides the "agent" default a session would otherwise set.
       if (options.fromMeeting || fromCall) body.source = "meeting";
       if (fromCall) body.from_call = fromCall;
+      if (options.goalRef) body.goal_ref = options.goalRef.trim();
+      if (options.predict) body.predict = options.predict;
       body.project_path = getRealCwd();
 
       const result = await cliPost("/cli/work/create", body);
@@ -17825,6 +17831,10 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   if (t.labels?.length && want("details")) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
   if (t.assignee && want("details")) console.log(`  ${c.dim}Assignee: ${t.assignee_name || t.assignee}${c.reset}`);
   if (t.created_at && want("details")) console.log(`  ${c.dim}Created: ${new Date(t.created_at).toLocaleString()}${t.creator_name ? ` by ${t.creator_name}` : ""}${c.reset}`);
+  if (t.predicted && want("details")) {
+    const { predictionText, realisedLine } = await import("@codecast/shared/contracts/predictedEffect");
+    console.log(`  ${c.dim}Predicts: ${predictionText(t.predicted)}${t.realised ? `; ${realisedLine(t.predicted, t.realised)}` : ""}${c.reset}`);
+  }
   // The graph in the web's order and words (task-graph.md TG12).
   for (const s of want("graph") ? taskGraphSections(t, t.links, { waitId: fmt.muted, ...checkoutWords(getRealCwd()) }) : []) {
     const head = `  ${s.holds ? c.red : c.dim}${s.label}:${c.reset}`;
@@ -18136,6 +18146,7 @@ work
   .option("--readiness <state>", "Whether it can be worked as it stands: ready, needs_context or not_actionable")
   .option("--readiness-note <text>", stdinText("One line on why"))
   .option("--watch-days <n>", "Watch the problem after ship: a new report within N days reopens it, a quiet watch closes it as resolved; 0 ends the watch")
+  .option("--predict <line>", "The predicted effect on a goal metric, read after ship: \"in-9:intros_a_week +5% by 2026-12-15 :: <basis>\" (or in 21d after ship); '' clears")
   .option("--model <model>", "Model a session spawned for this task launches with; '' clears")
   .option("--effort <level>", "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max; '' clears")
   .action(async (shortId: string, options: any) => {
@@ -18149,6 +18160,7 @@ work
       }
       body.watch_days = days;
     }
+    if (options.predict !== undefined) body.predict = options.predict;
     try {
       Object.assign(body, groundUpdateBody(options), taskHintBody({ model: options.model, effort: options.effort }));
     } catch (err) {
@@ -18599,6 +18611,11 @@ projectCmd
     if (created && !created.team_id) {
       console.log(`${c.yellow}note${c.reset} Created in your personal workspace (path has no team mapping); tasks in a team workspace cannot bind to it.`);
     }
+    if (created) {
+      const goals = await tryCliPost("/cli/initiatives/list", created.team_id ? { workspace: "team", team_id: created.team_id } : { workspace: "personal" });
+      const lines = newProjectGoalLines(c, created.short_id ?? String(result.id), Array.isArray(goals) ? goals : []);
+      if (lines.length) console.log(["", ...lines].join("\n"));
+    }
   });
 
 projectCmd
@@ -18669,7 +18686,7 @@ projectCmd
 // a repeatable flag replaces the whole list, "none" clears a value.
 function charterOptions(cmd: any, project: boolean): any {
   cmd
-    .option("--goal <text>", stdinText("The goal; 'none' clears it"))
+    .option("--goal <text>", stdinText(project ? "The goal; 'none' clears it" : "The plan's objective; 'none' clears it"))
     .option("--metric <text>", stdinText("A success metric (repeatable; replaces the list; 'none' clears)"), collectRepeatable)
     .option("--priority <p>", "Priority: p0, p1, p2, p3 ('none' clears)")
     .option("--owner <role>", "Owner role: @handle or or-N in the same workspace ('none' clears)")
@@ -19134,12 +19151,17 @@ function initiativeHealthArg(text: string): string {
 }
 
 // "Weekly active teams=1000" is a metric with its target, "@mw-N" reads it
-// live from a series, "guardrail" marks one (parseMetricSpec); 'none' clears.
-function initiativeMetricsArg(raw: string[], flag = "--metric"): Array<{ name: string; target: string; series?: string; guardrail?: boolean }> {
+// live from a series, "window 3w noise poisson" reads it over a window with a
+// noise band, "guardrail" marks one (parseMetricSpec); 'none' clears.
+function initiativeMetricsArg(raw: string[], flag = "--metric"): Array<{ name: string; target: string; series?: string; guardrail?: boolean; window?: string; noise?: string }> {
   if (raw.length === 1 && NONE(raw[0])) return [];
   return raw.map((entry) => {
     const spec = parseMetricSpec(entry);
     if (!spec) { console.error(`Invalid ${flag} "${entry}": use name=target, like "Weekly active teams=1000" or "Dollars per intro=under $250 @mw-12"`); process.exit(1); }
+    // A window or noise word that did not read as one stays in the target; say so when it was surely meant as one.
+    const meant = spec.target.match(/\b(window)\s+(\d\S*(?:\s+\S+)?)|\b(noise)\s+((?:poisson|poison|binomial|aa)\S*)/i);
+    const bad = meant ? metricWindowNoiseError(meant[1] ? meant[2] : null, meant[3] ? meant[4] : null) : metricWindowNoiseError(spec.window, spec.noise);
+    if (bad) { console.error(`Invalid ${flag} "${entry}": ${bad}`); process.exit(1); }
     return spec;
   });
 }
@@ -19172,7 +19194,7 @@ initiativeCmd
   .option("--priority <p>", "p0, p1, p2, p3")
   .option("--project <ref>", "A project it carries (repeatable): id, short id or title substring", collectRepeatable)
   .option("--parent <in-N>", "The top level goal this one feeds (one level)")
-  .option("--metric <name=target>", "A number the goal is measured by, with its target (repeatable, at most four): \"Weekly active teams=1000\"; add @mw-N to read it live from a series, and guardrail for a number the work must not make worse", collectRepeatable)
+  .option("--metric <name=target>", "A number the goal is measured by, with its target (repeatable, at most four): \"Weekly active teams=1000\"; add @mw-N to read it live from a series, window 3w noise poisson to read it over a window with a noise band (noise: poisson, binomial:<n or mw-N>, aa:<sd>), and guardrail for a number the work must not make worse", collectRepeatable)
   .option("--why <text>", stdinText("Why it matters"))
   .option("--done-when <text>", stdinText("What done looks like: the sentence a result is checked against"))
   .option("--milestone <title[=YYYY-MM-DD]>", "A step on the way, with the day it is due (repeatable): \"Private beta open=2026-11-01\"", collectRepeatable)
@@ -19233,10 +19255,25 @@ initiativeCmd
   .argument("<in-N>", "Goal short id or id")
   .option("--json", "Output as JSON")
   .action(async (ref: string, options: any) => {
-    const row = await cliPost("/cli/initiatives/get", { id: ref });
+    const [row, levels] = await Promise.all([cliPost("/cli/initiatives/get", { id: ref }), tryCliPost("/cli/envs/goal-levels", { goal: ref })]);
     if (!row) exitNotFound("goal", ref, "cast goal ls");
-    if (options.json) { printJson(row); return; }
-    for (const line of initiativeShowLines(c, row, { ago: formatRelativeTime, projectIcons: PROJECT_STATUS_ICONS })) console.log(line);
+    if (options.json) { printJson(levels ? { ...row, env_levels: levels.levels } : row); return; }
+    const { goalLevelLines } = await import("./envCommand.js");
+    const envLines = levels ? goalLevelLines(c, levels.levels, row.short_id) : [];
+    for (const line of initiativeShowLines(c, row, { ago: formatRelativeTime, projectIcons: PROJECT_STATUS_ICONS, afterMetrics: envLines })) console.log(line);
+  });
+
+initiativeCmd
+  .command("envs")
+  .description("The environments that predict a goal, by level; set, add or remove L<n>=<product>/<name>")
+  .argument("<in-N>", "Goal")
+  .argument("[action]", "set, add, remove")
+  .argument("[envs...]", "L<n>=<env key>")
+  .option("--allow-undeclared", "Name an env another repo declares")
+  .option("--json", "Output as JSON")
+  .action(async (ref: string, action: string | undefined, envs: string[], options: any) => {
+    const { goalEnvsAction } = await import("./envCommand.js");
+    await goalEnvsAction((path, body) => cliPost(path, body), ref, action, envs ?? [], { allowUndeclared: options.allowUndeclared, json: options.json });
   });
 
 initiativeCmd
@@ -19289,7 +19326,7 @@ initiativeCmd
   .option("--target <date>", "Target date (YYYY-MM-DD; 'none' clears)")
   .option("--priority <p>", "p0, p1, p2, p3 ('none' clears)")
   .option("--parent <in-N>", "The top level goal this one feeds ('none' clears)")
-  .option("--metric <name=target>", "The numbers the goal is measured by, with targets (repeatable, at most four; replaces; 'none' clears): add @mw-N to read one live from a series, guardrail to mark one", collectRepeatable)
+  .option("--metric <name=target>", "The numbers the goal is measured by, with targets (repeatable, at most four; replaces; 'none' clears): add @mw-N to read one live from a series, window 3w noise poisson to read it over a window with a noise band, guardrail to mark one", collectRepeatable)
   .option("--why <text>", stdinText("Why it matters ('none' clears)"))
   .option("--done-when <text>", stdinText("What done looks like: the sentence a result is checked against ('none' clears)"))
   .option("--labels <labels>", "Comma-separated labels (replaces; 'none' clears)")
@@ -19851,12 +19888,12 @@ plan
   .command("create")
   .description("Create a new plan")
   .argument("<title>", stdinText("Plan title"))
-  .option("-g, --goal <text>", stdinText("Plan goal"))
+  .option("-g, --goal <text>", stdinText("The plan's objective: what it sets out to do (the company's goals are cast goal records, reached through --project)"))
   .option("-b, --body <text>", stdinText("Plan body"))
   .option("--body-file <path>", "Plan body from file (for longer content; '-' for stdin)")
   .option("-a, --acceptance <criteria>", stdinText("Acceptance criterion (repeatable)"), (val: string, prev: string[]) => prev.concat([val]), [] as string[])
   .option("--from-session", "Promote from current session")
-  .option("--project <ref>", "Project ID, short ID, or title substring")
+  .option("--project <ref>", "The project whose goal the plan serves: ID, short ID, or title substring (without it the plan is unplaced)")
   .option("-t, --template <name>", "Steps from a template: plan-implement-verify, implement-review-fix, full-lifecycle, or one saved with cast plan template save")
   .option("--steps <lines>", stdinText("The plan's steps, one per line (\"Title :: what done means\" adds a description); a blank line starts a wave that needs the one before (steps in a wave run in parallel)"))
   .option("--model-stylesheet <stylesheet>", "CSS-like model routing rules")
@@ -19918,8 +19955,22 @@ plan
     // The way forward closes the output, after any steps.
     if (sessionId && !options.fromSession) say(fmt.muted(`  Run ${c.cyan}cast plan bind ${result.short_id}${c.reset} to bind this session to the plan`));
     if (steps) say(fmt.muted(`  ${c.cyan}cast task ready --plan ${result.short_id} --claim${c.reset} takes the first ready step`));
+    if (!body.project_id && !options.json) for (const line of await unplacedPlanNotice(result.short_id)) console.log(line);
     if (options.json) printJson({ short_id: result.short_id, title, tasks: createdTasks });
   });
+
+/** How recently a plan was touched to count as live in `cast plan ls`. */
+const PLAN_LIVE_DAYS = 14;
+
+/** The workspace's goals and projects, read in the plan's own workspace, so
+ *  an unplaced plan can be filed under the goal it serves. */
+async function unplacedPlanNotice(planRef: string): Promise<string[]> {
+  const created = await tryCliPost("/cli/plans/get", { short_id: planRef });
+  if (!created) return [];
+  const scope = created.team_id ? { workspace: "team", team_id: created.team_id } : { workspace: "personal" };
+  const [projects, goals] = await Promise.all([tryCliPost("/cli/projects/list", scope), tryCliPost("/cli/initiatives/list", scope)]);
+  return ["", ...unplacedPlanLines(c, planRef, Array.isArray(goals) ? goals : [], Array.isArray(projects) ? projects : [])];
+}
 
 /** What the task graph's commands (taskGraphCommands.ts) take from here. The
  *  session is the caller's own, never a guess, since it signs the history. */
@@ -19931,9 +19982,9 @@ registerTaskGraphCommands(work, plan, taskGraphDeps());
 plan
   .command("ls")
   .alias("list")
-  .description("List plans (default: active only)")
+  .description("List plans (default: live ones, draft or active and touched in the last 14 days)")
   .option("--team <name|id|personal>", "Workspace to list: a team, or personal (default: the directory's mapping)")
-  .option("--active", "Show active plans (default)")
+  .option("--active", "Show every active plan")
   .option("--draft", "Show draft plans")
   .option("--done", "Show done plans")
   .option("--all", "Show all statuses")
@@ -19948,25 +19999,33 @@ plan
     else if (options.draft) body.status = "draft";
     else if (options.done) body.status = "done";
     else if (options.active) body.status = "active";
+    // Live by default: draft or active and touched lately. The server's
+    // default also returns old active plans nobody works, which bury these.
+    // A search (-q, --project) still reads every open plan.
+    const liveOnly = !body.status && !body.include_all && !options.query && !options.project;
     if (options.team) Object.assign(body, workspaceScope(await readWorkspace(options.team)));
     if (options.project) body.project_id = await resolveProjectId(options.project, options.team);
     if (options.query) body.query = options.query;
     body.project_path = getRealCwd();
 
-    const plans = await cliPost("/cli/plans/list", body);
+    const listed = await cliPost("/cli/plans/list", body);
+    const liveSince = Date.now() - PLAN_LIVE_DAYS * 86_400_000;
+    const plans = Array.isArray(listed) && liveOnly
+      ? listed.filter((p: any) => (p.status === "draft" || p.status === "active") && (p.updated_at ?? p.created_at ?? 0) >= liveSince)
+      : listed;
     if (options.json) {
       printJson(Array.isArray(plans) ? plans : []);
       return;
     }
+    const liveNote = liveOnly ? ` live (draft or active, touched in ${PLAN_LIVE_DAYS} days); --active for every active plan, --all for every status` : "";
     if (!Array.isArray(plans) || plans.length === 0) {
-      console.log(fmt.muted("No plans found."));
+      console.log(fmt.muted(liveOnly ? `No live plans (draft or active, touched in ${PLAN_LIVE_DAYS} days); --all for every status` : "No plans found."));
       return;
     }
     for (const p of plans) {
       console.log(formatPlanItem(p));
     }
-    const suffix = options.all || options.done || options.draft || options.status ? "" : fmt.muted(" (active only, use --all to see all)");
-    console.log(fmt.muted(`\n  ${plans.length} plans`) + suffix);
+    console.log(fmt.muted(`\n  ${plans.length} plans${liveNote}`));
   });
 
 plan
@@ -20070,7 +20129,8 @@ plan
   .option("-b, --body <text>", stdinText("Update body"))
   .option("--body-file <path>", "Update body from file (for longer content; '-' for stdin)")
   .option("--base <revision>", "With --body: the revision the body was computed from (default: the one this session last read)")
-  .option("--force", "With --body: write even if the plan doc changed since it was read, discarding that change");
+  .option("--force", "With --body: write even if the plan doc changed since it was read, discarding that change")
+  .option("--project <ref>", "File the plan under a project (id, short id or title substring); its open tasks move with it");
 charterOptions(plan.commands.find((x: any) => x.name() === "update"), false)
   .action(async (planId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
@@ -20088,9 +20148,14 @@ charterOptions(plan.commands.find((x: any) => x.name() === "update"), false)
     }
     // --goal is the plan's own field and a charter flag at once: one body.
     const charter = charterBody(options);
-    if (Object.keys(charter).length || options.title || bodyContent !== undefined) {
+    if (Object.keys(charter).length || options.title || bodyContent !== undefined || options.project) {
       const body: Record<string, any> = { short_id: planId, ...charter };
       if (options.title) body.title = options.title;
+      if (options.project) {
+        const target = await cliPost("/cli/plans/get", { short_id: planId });
+        if (!target) exitNotFound("plan", planId, "cast plan ls --all");
+        body.project_id = await resolveProjectId(options.project, target.team_id ?? "personal");
+      }
       if (bodyContent !== undefined) {
         body.body = bodyContent;
         // The body was written against some read of the plan (`cast plan
@@ -20106,11 +20171,16 @@ charterOptions(plan.commands.find((x: any) => x.name() === "update"), false)
           process.exit(1);
         }
       }
-      noteDocRevisions(docLedgerSession(), "/cli/plans/update", body, await cliPost("/cli/plans/update", body));
+      const updated = await cliPost("/cli/plans/update", body);
+      noteDocRevisions(docLedgerSession(), "/cli/plans/update", body, updated);
       console.log(`${c.green}ok${c.reset} Updated plan ${c.cyan}${planId}${c.reset}`);
+      if (updated?.filed) {
+        const n = updated.filed.tasks_moved;
+        console.log(fmt.muted(`  Filed under ${updated.filed.project_title}; ${n} open task${n === 1 ? "" : "s"} moved with it`));
+      }
     }
-    if (!options.log && !Object.keys(charter).length && !options.title && bodyContent === undefined) {
-      console.error("Specify --log, --goal, --title, --body, --body-file, or a charter flag (--metric, --priority, --owner, --non-goal)");
+    if (!options.log && !Object.keys(charter).length && !options.title && bodyContent === undefined && !options.project) {
+      console.error("Specify --log, --goal, --title, --body, --body-file, --project, or a charter flag (--metric, --priority, --owner, --non-goal)");
       console.error(`Usage: cast plan update <plan_id> --goal "..." or cast plan comment <plan_id> "note"`);
       process.exit(1);
     }

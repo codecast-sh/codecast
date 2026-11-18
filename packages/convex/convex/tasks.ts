@@ -1,8 +1,10 @@
 import { v, type ObjectType, type Validator } from "convex/values";
+import { predictionPatch } from "./predictions";
 import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { patchTask } from "./lib/taskWrite";
+import { projectFromPlan } from "./lib/planFiling";
 import { resolveActor, roleOfConversation } from "./lib/actor";
 import { allRolesInBoundary, liveRoleByHandle, roleByHandleForRead } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
@@ -1038,7 +1040,7 @@ async function cascadeClose(ctx: any, ids: Id<"tasks">[], newStatus: string, use
     if (!t || !isSameWorkspace(t, scope)) continue;
     // status_id cleared: the cascade moves the subtree to a terminal category,
     // so any custom-status refinement from the old category is stale.
-    await patchTask(ctx, t, { status: newStatus, status_id: undefined, closed_at: now, updated_at: now });
+    await patchTask(ctx, t, { status: newStatus, status_id: undefined, ...(t.status === newStatus ? {} : { closed_at: now }), updated_at: now });
     await releaseBoundSessions(ctx, t);
     await recordTaskChange(ctx, id, { user_id: userId, actor_type: "system" }, [["status", t.status, newStatus]], now);
     // The parent's own release (afterStatusMove) runs after this one.
@@ -1197,6 +1199,9 @@ export const create = mutation({
     // the task's origin, so the one notice is the whole hand-off.
     assignment_note: v.optional(v.string()),
     assignment_from: v.optional(v.string()),
+    // `cast task create --goal-ref in-9:key --predict "<line>"` (predictions.ts).
+    goal_ref: v.optional(v.string()),
+    predict: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1257,6 +1262,8 @@ export const create = mutation({
       if (!plan_id && parent.plan_id) plan_id = parent.plan_id;
       if (!project_id && parent.project_id) project_id = parent.project_id;
     }
+    // A task under a plan lives in the plan's project unless it names its own.
+    if (!project_id) project_id = await projectFromPlan(ctx, plan_id);
 
     const from_call = (await resolveFromCall(ctx, auth.userId, args.from_call)) ?? undefined;
     const found_during = await foundDuringForCreate(ctx, auth.userId, { explicit: args.found_during, conversation: originConv, workspace: db.workspace, parent_id, plan_id });
@@ -1329,6 +1336,8 @@ export const create = mutation({
       steps: args.steps,
       acceptance_criteria: args.acceptance_criteria,
       estimated_minutes: args.estimated_minutes,
+      goal_ref: args.goal_ref?.trim() || undefined,
+      ...(args.predict?.trim() ? await predictionPatch(ctx, { workspace: db.workspaceKey, short_id }, args.predict, now) : {}),
     } as any);
 
     for (const dep of args.blocked_by || []) {
@@ -2110,6 +2119,8 @@ export const update = mutation({
     // The watch after ship (LE12): days from now until a quiet cause closes
     // as resolved; 0 ends the watch.
     watch_days: v.optional(v.number()),
+    // A predicted effect on a goal metric (predictions.ts); "" clears it.
+    predict: v.optional(v.string()),
     // model, effort and ephemeral (TG8, TG9); ephemeral:false is `cast task keep`.
     ...executionHintArgs,
   },
@@ -2217,6 +2228,12 @@ export const update = mutation({
       if (!plan || !(await canAccessPlan(ctx, auth.userId, plan))) notFound("Plan not found");
       requireSameWorkspace(plan, targetWorkspace, "plan");
       updates.plan_id = plan._id;
+      // A task that followed its old plan's project (or had none) follows the
+      // new plan's; one filed in some other project on purpose keeps it.
+      if (!("project_id" in updates) && plan.project_id && String(plan._id) !== String(task.plan_id ?? "")) {
+        const oldPlanProject = await projectFromPlan(ctx, task.plan_id);
+        if (!task.project_id || String(task.project_id) === String(oldPlanProject ?? "")) updates.project_id = plan.project_id;
+      }
       // Subtasks carry plan_id for context but never join plan.task_ids — the
       // parent is the plan's unit of progress. Branch on key PRESENCE, not
       // value: `updates.parent_id === undefined` is also how detach is
@@ -2252,13 +2269,16 @@ export const update = mutation({
       }
     }
     Object.assign(updates, groundPatch(args), executionHintPatch(args));
+    // Judged against the status this same call sets: `--status open --predict` on a shipped task is a reopen, then a prediction.
+    if (args.predict !== undefined) Object.assign(updates, await predictionPatch(ctx, { ...task, status: nextStatus ?? task.status }, args.predict, now));
     if (args.watch_days !== undefined) {
       // The watch station runs right after the ship: the fix is live from now, and older evidence never reopens it.
       updates.watch_until = watchUntilFor(args.watch_days, now);
       updates.watch_from = updates.watch_until ? now : undefined;
     }
 
-    if (nextStatus === "done" || nextStatus === "dropped") {
+    // Only a move into a closed status stamps when it closed: a repeat "done" keeps the close it had.
+    if ((nextStatus === "done" || nextStatus === "dropped") && nextStatus !== task.status) {
       updates.closed_at = now;
     }
 
@@ -3837,7 +3857,7 @@ export async function updateTaskAs(ctx: MutationCtx, userId: Id<"users">, args: 
     if (args.triage_status === "active") updates.promoted = true;
   }
 
-  if (nextStatus === "done" || nextStatus === "dropped") {
+  if ((nextStatus === "done" || nextStatus === "dropped") && nextStatus !== task.status) {
     updates.closed_at = now;
   }
   if (nextStatus === "in_progress") {
@@ -4324,6 +4344,7 @@ export async function createTaskAs(ctx: MutationCtx, userId: Id<"users">, args: 
     if (!plan_id && parentDoc.plan_id) plan_id = parentDoc.plan_id;
     if (!project_id && parentDoc.project_id) project_id = parentDoc.project_id;
   }
+  if (!project_id) project_id = await projectFromPlan(ctx, plan_id);
 
   const short_id = await nextShortId(ctx.db, "ct");
 

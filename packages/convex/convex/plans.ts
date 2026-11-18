@@ -41,6 +41,7 @@ import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 import { cliDocWriter, docLiveState, docRevision, writeDocBody } from "./lib/docBody";
 import { mergePlanEntries, recalcProgress } from "./lib/planProgress";
+import { filePlanUnderProject } from "./lib/planFiling";
 export { canAccessPlan };
 
 async function canReadPlanTask(ctx: any, userId: Id<"users">, plan: any, task: any) {
@@ -351,6 +352,8 @@ export const update = mutation({
     doc_id: v.optional(v.string()),
     model_stylesheet: v.optional(v.string()),
     workflow_id: v.optional(v.string()),
+    // File the plan under a project; its open tasks follow (lib/planFiling).
+    project_id: v.optional(v.string()),
     // The charter (org-staffing.md S7); `goal` above completes it.
     ...planCharterArgs,
     // The plan doc's revision `body` was computed from, the deliberate
@@ -434,7 +437,16 @@ export const update = mutation({
     }
 
     await ctx.db.patch(plan._id, updates);
-    return { success: true, short_id: plan.short_id, doc_id: updates.doc_id ?? plan.doc_id, doc_revision };
+    let filed: { project_id: string; project_title: string; tasks_moved: number } | undefined;
+    if (args.project_id) {
+      const projectId = ctx.db.normalizeId("projects", args.project_id);
+      if (!projectId) notFound("Project not found");
+      const project = await requireAccessibleProject(ctx, auth.userId, projectId);
+      requireSameWorkspace(project, planWorkspace, "project");
+      const { tasks_moved } = await filePlanUnderProject(ctx, { ...plan, doc_id: updates.doc_id ?? plan.doc_id }, projectId, now);
+      filed = { project_id: String(projectId), project_title: project.title, tasks_moved };
+    }
+    return { success: true, short_id: plan.short_id, doc_id: updates.doc_id ?? plan.doc_id, doc_revision, filed };
   },
 });
 
@@ -1277,10 +1289,7 @@ export const webUpdate = mutation({
       if (!projectId) notFound("Project not found");
       const project = await requireAccessibleProject(ctx, userId, projectId);
       requireSameWorkspace(project, workspaceForResource(plan), "project");
-      updates.project_id = projectId;
-      const now = Date.now();
-      const planTasks = await ctx.db.query("tasks").withIndex("by_plan_id", (q) => q.eq("plan_id", plan._id)).collect();
-      for (const task of planTasks) if (!task.project_id) await ctx.db.patch(task._id, { project_id: projectId, updated_at: now });
+      await filePlanUnderProject(ctx, plan, projectId);
     }
 
     if (args.title && plan.doc_id) {

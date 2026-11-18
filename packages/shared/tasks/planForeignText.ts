@@ -138,7 +138,7 @@ export function renderForeignPlanBody(
   const sections: string[] = [];
 
   const goal = foreignProse(plan.goal, FOREIGN_TEXT_CAPS.descriptionChars);
-  if (goal) sections.push(`Goal: ${goal}`);
+  if (goal) sections.push(`Objective: ${goal}`);
 
   const body = foreignProse(plan.doc_content, FOREIGN_PLAN_CAPS.bodyChars);
   if (body) sections.push(`Body:\n${body}`);
