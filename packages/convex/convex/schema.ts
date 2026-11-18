@@ -6918,6 +6918,15 @@ export default defineSchema({
     .index("by_project_id", ["project_id"])
     .index("by_doc_id", ["doc_id"]),
 
+  // How far each session has read its plan's shared log (plans with
+  // messaging_policy "shared-log"): planLog.unread delivers each fact, fail and
+  // interface entry once per session, then moves read_at past it.
+  plan_log_reads: defineTable({
+    conversation_id: v.id("conversations"),
+    plan_id: v.id("plans"),
+    read_at: v.number(),
+  }).index("by_conversation_plan", ["conversation_id", "plan_id"]),
+
   tasks: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),

@@ -4695,6 +4695,11 @@ cliRoute("/cli/plans/unbind", async (ctx, body) => {
 cliRoute("/cli/plans/comment", async (ctx, body) => {
   return await ctx.runMutation(api.plans.addComment, body);
 });
+// The shared log entries new to the calling session (planLog.unread), read by
+// the CLI after each command.
+cliRoute("/cli/plans/log/unread", async (ctx, body) => {
+  return await ctx.runMutation(api.planLog.unread, { api_token: body.api_token, session_id: body.session_id });
+});
 // Legacy routes — translate to addComment (only pass known args)
 cliRoute("/cli/plans/log", async (ctx, body) => {
   return await ctx.runMutation(api.plans.addComment, {
