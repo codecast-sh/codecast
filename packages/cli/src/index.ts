@@ -19897,6 +19897,7 @@ plan
   .option("-t, --template <name>", "Steps from a template: plan-implement-verify, implement-review-fix, full-lifecycle, or one saved with cast plan template save")
   .option("--steps <lines>", stdinText("The plan's steps, one per line (\"Title :: what done means\" adds a description); a blank line starts a wave that needs the one before (steps in a wave run in parallel)"))
   .option("--model-stylesheet <stylesheet>", "CSS-like model routing rules")
+  .option("--policy <name>", "How the plan's agents share findings: lead (report to the lead, the default) or shared-log (post typed entries to the plan)", choiceOption(["lead", "shared-log"]))
   .option("--human", "File it as a person's plan, on the shelf (a script a person drives; a terminal is detected on its own)")
   .option("--json", "Output the created plan as JSON: { short_id, title, tasks }")
   .action(async (title: string, options: any) => {
@@ -19921,6 +19922,7 @@ plan
     if (options.acceptance?.length) body.acceptance_criteria = options.acceptance;
     if (options.project) body.project_id = await resolveProjectId(options.project);
     if (options.modelStylesheet) body.model_stylesheet = options.modelStylesheet;
+    if (options.policy) body.messaging_policy = options.policy;
 
     const sessionId = detectCurrentSessionId();
     if (options.fromSession) {
@@ -20131,7 +20133,8 @@ plan
   .option("--body-file <path>", "Update body from file (for longer content; '-' for stdin)")
   .option("--base <revision>", "With --body: the revision the body was computed from (default: the one this session last read)")
   .option("--force", "With --body: write even if the plan doc changed since it was read, discarding that change")
-  .option("--project <ref>", "File the plan under a project (id, short id or title substring); its open tasks move with it");
+  .option("--project <ref>", "File the plan under a project (id, short id or title substring); its open tasks move with it")
+  .option("--policy <name>", "How the plan's agents share findings: lead (report to the lead) or shared-log (post typed entries to the plan)", choiceOption(["lead", "shared-log"]));
 charterOptions(plan.commands.find((x: any) => x.name() === "update"), false)
   .action(async (planId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
@@ -20149,9 +20152,10 @@ charterOptions(plan.commands.find((x: any) => x.name() === "update"), false)
     }
     // --goal is the plan's own field and a charter flag at once: one body.
     const charter = charterBody(options);
-    if (Object.keys(charter).length || options.title || bodyContent !== undefined || options.project) {
+    if (Object.keys(charter).length || options.title || bodyContent !== undefined || options.project || options.policy) {
       const body: Record<string, any> = { short_id: planId, ...charter };
       if (options.title) body.title = options.title;
+      if (options.policy) body.messaging_policy = options.policy;
       if (options.project) {
         const target = await cliPost("/cli/plans/get", { short_id: planId });
         if (!target) exitNotFound("plan", planId, "cast plan ls --all");
@@ -20180,8 +20184,8 @@ charterOptions(plan.commands.find((x: any) => x.name() === "update"), false)
         console.log(fmt.muted(`  Filed under ${updated.filed.project_title}; ${n} open task${n === 1 ? "" : "s"} moved with it`));
       }
     }
-    if (!options.log && !Object.keys(charter).length && !options.title && bodyContent === undefined && !options.project) {
-      console.error("Specify --log, --goal, --title, --body, --body-file, --project, or a charter flag (--metric, --priority, --owner, --non-goal)");
+    if (!options.log && !Object.keys(charter).length && !options.title && bodyContent === undefined && !options.project && !options.policy) {
+      console.error("Specify --log, --goal, --title, --body, --body-file, --project, --policy, or a charter flag (--metric, --priority, --owner, --non-goal)");
       console.error(`Usage: cast plan update <plan_id> --goal "..." or cast plan comment <plan_id> "note"`);
       process.exit(1);
     }

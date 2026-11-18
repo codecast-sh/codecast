@@ -15,6 +15,7 @@ import { changeGuideStepValidator, changeGuideValidator } from "./lib/changeGuid
 import { followViewValidator } from "./lib/followView";
 import { TASK_EFFORTS, TASK_PRIORITIES, TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { taskWaitValidator } from "./lib/taskWaitValidator";
+import { messagingPolicyValidator } from "./lib/messagingPolicyValidator";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { LINE_CATEGORIES } from "@codecast/shared/contracts/goalsBrief";
 import { proseAnchorValidator } from "./lib/proseAnchorValidator";
@@ -6867,6 +6868,8 @@ export default defineSchema({
       v.literal("quorum"),
     )),
     join_k: v.optional(v.number()),
+    // How the plan's agents share findings; absent = "lead" (lib/messagingPolicyValidator).
+    messaging_policy: v.optional(messagingPolicyValidator),
     orchestration_metadata: v.optional(
       v.object({
         wave_count: v.optional(v.number()),

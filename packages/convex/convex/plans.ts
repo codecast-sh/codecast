@@ -42,6 +42,7 @@ import { linkConversationToEntityBestEffort } from "./conversationLinks";
 import { cliDocWriter, docLiveState, docRevision, writeDocBody } from "./lib/docBody";
 import { mergePlanEntries, recalcProgress } from "./lib/planProgress";
 import { filePlanUnderProject } from "./lib/planFiling";
+import { messagingPolicyValidator } from "./lib/messagingPolicyValidator";
 export { canAccessPlan };
 
 async function canReadPlanTask(ctx: any, userId: Id<"users">, plan: any, task: any) {
@@ -72,6 +73,7 @@ export const create = mutation({
     fidelity: v.optional(v.string()),
     join_policy: v.optional(v.string()),
     join_k: v.optional(v.number()),
+    messaging_policy: v.optional(messagingPolicyValidator),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -130,6 +132,7 @@ export const create = mutation({
       fidelity: args.fidelity as any,
       join_policy: args.join_policy as any,
       join_k: args.join_k,
+      messaging_policy: args.messaging_policy,
     });
 
     const docId = await db.insert("docs", {
@@ -352,6 +355,7 @@ export const update = mutation({
     doc_id: v.optional(v.string()),
     model_stylesheet: v.optional(v.string()),
     workflow_id: v.optional(v.string()),
+    messaging_policy: v.optional(messagingPolicyValidator),
     // File the plan under a project; its open tasks follow (lib/planFiling).
     project_id: v.optional(v.string()),
     // The charter (org-staffing.md S7); `goal` above completes it.
@@ -396,6 +400,7 @@ export const update = mutation({
     }
     if (args.model_stylesheet !== undefined) updates.model_stylesheet = args.model_stylesheet;
     if (args.workflow_id) updates.workflow_id = args.workflow_id as Id<"workflows">;
+    if (args.messaging_policy) updates.messaging_policy = args.messaging_policy;
 
     if (args.task_ids) {
       const taskDocIds: Id<"tasks">[] = [];
