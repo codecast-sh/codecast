@@ -196,6 +196,8 @@ export interface AgentAuthSource {
   requires?: string;
   /** The login's text when it is not simply the file's (gh keeps its token in the keychain). */
   read?: (home: string, env: NodeJS.ProcessEnv) => string | null;
+  /** The name a host's login setting calls it by, when several files make one login (aws's two). Default: `id`. */
+  login?: string;
   /** The file names laptop paths (a CLI that links directories): rewrite the home to the host's. */
   remapHome?: boolean;
 }
@@ -206,7 +208,7 @@ export const AGENT_AUTH_SOURCES: readonly AgentAuthSource[] = [
   { id: "codex", client: "codex", localPath: (h, e) => path.join(e.CODEX_HOME || path.join(h, ".codex"), "auth.json"), remotePath: "~/.codex/auth.json", gate: codexAuthHealth },
   { id: "grok", client: "grok", localPath: (h, e) => path.join(e.GROK_HOME || path.join(h, ".grok"), "auth.json"), remotePath: "~/.grok/auth.json", gate: grokAuthHealth },
   { id: "gemini", client: "gemini", localPath: (h) => path.join(h, ".gemini", "oauth_creds.json"), remotePath: "~/.gemini/oauth_creds.json", gate: (raw) => geminiAuthHealth(raw) },
-  { id: "gemini-accounts", client: "gemini", localPath: (h) => path.join(h, ".gemini", "google_accounts.json"), remotePath: "~/.gemini/google_accounts.json", gate: (raw) => (raw === null ? { ship: null, reason: "absent" } : { ship: raw }), requires: "gemini" },
+  { id: "gemini-accounts", client: "gemini", localPath: (h) => path.join(h, ".gemini", "google_accounts.json"), remotePath: "~/.gemini/google_accounts.json", gate: (raw) => (raw === null ? { ship: null, reason: "absent" } : { ship: raw }), requires: "gemini", login: "gemini" },
   { id: "opencode", client: "opencode", localPath: (h, e) => path.join(xdgData(h, e), "opencode", "auth.json"), remotePath: "~/.local/share/opencode/auth.json", gate: filterProviderAuthMap },
   { id: "pi", client: "pi", localPath: (h) => path.join(h, ".pi", "agent", "auth.json"), remotePath: "~/.pi/agent/auth.json", gate: filterProviderAuthMap },
 ];
@@ -335,8 +337,8 @@ export const TOOL_AUTH_SOURCES: readonly AgentAuthSource[] = [
   { id: "cloudflare", localPath: platformPath("Library/Preferences/cloudflare/config/default.json", ".config/cloudflare/config/default.json"), remotePath: "~/.config/cloudflare/config/default.json", gate: liveOAuthLogin("expiration_time") },
   { id: "wrangler", localPath: (h, e) => fs.existsSync(path.join(h, ".wrangler/config/default.toml")) ? path.join(h, ".wrangler/config/default.toml") : platformPath("Library/Preferences/.wrangler/config/default.toml", ".config/.wrangler/config/default.toml")(h), remotePath: "~/.wrangler/config/default.toml", gate: liveOAuthLogin("expiration_time", "toml") },
   { id: "convex", localPath: homeFile(".convex/config.json"), remotePath: "~/.convex/config.json", gate: presentLogin },
-  { id: "aws-config", localPath: (h, e) => e.AWS_CONFIG_FILE || path.join(h, ".aws/config"), remotePath: "~/.aws/config", gate: presentLogin, remapHome: true },
-  { id: "aws-credentials", localPath: (h, e) => e.AWS_SHARED_CREDENTIALS_FILE || path.join(h, ".aws/credentials"), remotePath: "~/.aws/credentials", gate: presentLogin },
+  { id: "aws-config", localPath: (h, e) => e.AWS_CONFIG_FILE || path.join(h, ".aws/config"), remotePath: "~/.aws/config", gate: presentLogin, remapHome: true, login: "aws" },
+  { id: "aws-credentials", localPath: (h, e) => e.AWS_SHARED_CREDENTIALS_FILE || path.join(h, ".aws/credentials"), remotePath: "~/.aws/credentials", gate: presentLogin, login: "aws" },
   { id: "railway", localPath: homeFile(".railway/config.json"), remotePath: "~/.railway/config.json", gate: presentLogin, remapHome: true },
   { id: "fly", localPath: homeFile(".fly/config.yml"), remotePath: "~/.fly/config.yml", gate: presentLogin, remapHome: true },
   { id: "vercel", localPath: platformPath("Library/Application Support/com.vercel.cli/auth.json", ".local/share/com.vercel.cli/auth.json"), remotePath: "~/.local/share/com.vercel.cli/auth.json", gate: presentLogin },
@@ -378,6 +380,67 @@ export function collectGcloudLogin(home: string, env: NodeJS.ProcessEnv): AgentA
   };
   walk("");
   return out.some((f) => /(?:^|\/)(?:credentials\.db|application_default_credentials\.json)$/.test(f.path)) ? out : [];
+}
+
+// ---------------------------------------------------------------------------
+// Which logins travel to one host (`cast hosts logins`)
+// ---------------------------------------------------------------------------
+
+/**
+ * A host's login setting, stored on its registry entry: the logins left on the
+ * laptop (`off`), or the only ones that travel (`only`). Missing means every
+ * login, which is what hosts registered before the setting existed keep. The
+ * Claude credential is not in it: it travels to every host.
+ */
+export type HostLogins = { off: string[] } | { only: string[] };
+
+/** The name a host's login setting calls this source by. */
+export const hostLoginName = (s: AgentAuthSource) => s.login ?? s.id;
+
+/** Every name a host's login setting accepts. */
+export const HOST_LOGIN_NAMES: readonly string[] = [...new Set([...AGENT_AUTH_SOURCES, ...TOOL_AUTH_SOURCES].map(hostLoginName)), "gcloud"];
+
+export function hostLoginTravels(logins: HostLogins | undefined, name: string): boolean {
+  if (!logins) return true;
+  return "only" in logins ? logins.only.includes(name) : !logins.off.includes(name);
+}
+
+/** A comma list from the command line as setting names; throws naming any it does not know. */
+export function parseHostLoginNames(list: string): string[] {
+  const names = [...new Set(list.split(",").map((n) => n.trim()).filter(Boolean))];
+  const unknown = names.filter((n) => !HOST_LOGIN_NAMES.includes(n));
+  if (unknown.length) throw new Error(`unknown login${unknown.length === 1 ? "" : "s"} ${unknown.join(", ")}; known: ${HOST_LOGIN_NAMES.join(", ")}`);
+  return names;
+}
+
+/**
+ * The setting `cast hosts logins` stores for its options, or `current`
+ * itself when there is nothing to change. Throws on two options at once or
+ * a name it does not know.
+ */
+export function hostLoginSetting(current: HostLogins | undefined, o: { off?: string; only?: string; on?: string; all?: boolean }): HostLogins | undefined {
+  const given = (["off", "only", "on", "all"] as const).filter((k) => o[k] !== undefined && o[k] !== false);
+  if (given.length > 1) throw new Error(`use one of --off, --only, --on and --all, not ${given.map((k) => `--${k}`).join(" and ")}`);
+  if (o.all) return { off: [] };
+  if (o.off !== undefined) return { off: parseHostLoginNames(o.off) };
+  if (o.only !== undefined) return { only: parseHostLoginNames(o.only) };
+  if (o.on === undefined || !current) return current;
+  const names = parseHostLoginNames(o.on);
+  return "only" in current ? { only: [...new Set([...current.only, ...names])] } : { off: current.off.filter((n) => !names.includes(n)) };
+}
+
+/** One kept file from the receiver (session-move parseAgentAuthReceiverOutput's `kept`), as the line that says why and what to do. */
+export function keptLoginNote(kept: string): string {
+  const owned = /^(.*) host-owned$/.exec(kept);
+  if (owned) return `${owned[1]} kept: the host's own file, never pushed from this laptop (remove it there to let this laptop's login replace it)`;
+  return `${kept} — the host's copy is newer; run codex login on this machine to re-own the grant`;
+}
+
+/** The setting in a few words, for `cast hosts ls`. */
+export function describeHostLogins(logins: HostLogins | undefined): string {
+  if (!logins) return "all";
+  if ("only" in logins) return logins.only.length ? `only ${logins.only.join(", ")}` : "none but claude";
+  return logins.off.length ? `all but ${logins.off.join(", ")}` : "all";
 }
 
 /** The exact filenames the daemon's fs.watch reacts to, per source directory. */
@@ -457,8 +520,8 @@ export interface CollectOptions {
   codexTrustPaths?: string[];
   /** Leave the settings.json env out (a trust-only bundle). */
   withClaudeEnv?: boolean;
-  /** Leave the tool logins (gh, cloud and deploy CLIs) out. */
-  withToolLogins?: boolean;
+  /** The host's login setting: a login it leaves out is neither shipped nor withdrawn. Missing = every login. */
+  logins?: HostLogins;
   /** The host's home: a tool login that names laptop paths is rewritten to it; without it those logins ship as they are. */
   hostHome?: string;
 }
@@ -498,7 +561,8 @@ export function collectAgentAuthBundle(opts: CollectOptions): CollectedBundle {
   const absent: string[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
   const shipped = new Set<string>();
-  for (const source of [...AGENT_AUTH_SOURCES, ...(opts.withToolLogins === false ? [] : TOOL_AUTH_SOURCES)]) {
+  for (const source of [...AGENT_AUTH_SOURCES, ...TOOL_AUTH_SOURCES]) {
+    if (!hostLoginTravels(opts.logins, hostLoginName(source))) continue;
     const read = readIfFile(source.localPath(opts.home, env));
     if (read === "missing") { absent.push(source.remotePath); continue; }
     if (typeof read === "string") { skipped.push({ id: source.id, reason: read }); continue; }
@@ -517,7 +581,7 @@ export function collectAgentAuthBundle(opts: CollectOptions): CollectedBundle {
     shipped.add(source.id);
     files.push({ path: source.remotePath, content: gate.ship, mode: 0o600, ...(gate.lastRefresh !== undefined ? { last_refresh: gate.lastRefresh } : {}) });
   }
-  if (opts.withToolLogins !== false) files.push(...collectGcloudLogin(opts.home, env));
+  if (hostLoginTravels(opts.logins, "gcloud")) files.push(...collectGcloudLogin(opts.home, env));
   const bundle: AgentAuthBundle = {
     origin: { user_id: opts.userId, device_id: opts.deviceId, pushed_at: new Date(now).toISOString() },
     files,
@@ -590,6 +654,23 @@ export function agentAuthHostKey(host: RemoteHost): string {
  * a broken box awake); a periodic tick pushes to every host. A host that
  * came back on a new address has no entry and is pushed.
  */
+/**
+ * The daemon's hosts in groups that share one bundle: the same home (a tool
+ * login naming laptop paths is rewritten to it) and the same login setting.
+ * `homeOf` is session-move's remoteHome (a value import of it here would be a cycle).
+ */
+export function agentAuthPushGroups(hosts: RemoteHost[], homeOf: (h: RemoteHost) => string): Array<{ key: string; hostHome: string; logins?: HostLogins; hosts: RemoteHost[] }> {
+  const groups = new Map<string, { key: string; hostHome: string; logins?: HostLogins; hosts: RemoteHost[] }>();
+  for (const h of hosts) {
+    const hostHome = homeOf(h);
+    const key = JSON.stringify([hostHome, h.logins ?? null]);
+    const g = groups.get(key) ?? { key, hostHome, ...(h.logins ? { logins: h.logins } : {}), hosts: [] };
+    g.hosts.push(h);
+    groups.set(key, g);
+  }
+  return [...groups.values()];
+}
+
 export function planAgentAuthPush(hosts: RemoteHost[], hash: string, lastByHost: ReadonlyMap<string, string>, opts: { onlyIfChanged?: boolean } = {}): RemoteHost[] {
   if (!opts.onlyIfChanged) return [...hosts];
   return hosts.filter((h) => lastByHost.get(agentAuthHostKey(h)) !== hash);

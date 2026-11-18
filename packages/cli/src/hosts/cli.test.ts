@@ -527,7 +527,7 @@ describe("tools line and logins lines (`cast hosts ls` / `wake` / `sync-auth`)",
   test("loginsReportLines: pushed / not pushed, the claude line, kept files and skipped sources", () => {
     expect(loginsReportLines(undefined)).toEqual(["agent logins: not pushed"]);
     expect(loginsReportLines({ pushed: true, shipped: "codex, grok, 1 env key, trust 1", skipped: [{ id: "gemini", reason: "no refresh token" }], envSkipped: [], kept: ["codex host-fresher"], claude: { pushed: true } }))
-      .toEqual(["agent logins: pushed codex, grok, 1 env key, trust 1", "claude credential: pushed", "kept on the host: codex host-fresher", "skipped gemini: no refresh token"]);
+      .toEqual(["agent logins: pushed codex, grok, 1 env key, trust 1", "claude credential: pushed", "codex host-fresher — the host's copy is newer; run codex login on this machine to re-own the grant", "skipped gemini: no refresh token"]);
     expect(loginsReportLines({ pushed: false, reason: "host holds another user's logins", shipped: "", skipped: [], envSkipped: [], kept: [], claude: { pushed: false, reason: "no credential" } }))
       .toEqual(["agent logins: not pushed (host holds another user's logins)", "claude credential: not pushed (no credential)"]);
   });

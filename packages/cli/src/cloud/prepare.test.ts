@@ -123,6 +123,19 @@ describe("agent logins step (readyHostHome step 1)", () => {
     expect(agentLoginsBundleFor(host, undefined, { ...sources(), userId: "u1" }).bundle.codexTrustPaths).toEqual([]);
   });
 
+  test("agentLoginsBundleFor and pushAgentLoginsNow honour the host's login setting (#99)", () => {
+    fs.mkdirSync(path.join(home, ".aws"));
+    fs.writeFileSync(path.join(home, ".aws", "credentials"), "[default]\naws_access_key_id = AKIA\n");
+    fs.writeFileSync(path.join(home, ".netrc"), "machine x login a password b\n");
+    expect(agentLoginsBundleFor(host, undefined, { ...sources(), userId: "u1" }).bundle.files.map((f) => f.path).sort()).toEqual(["~/.aws/credentials", "~/.netrc"]);
+    const narrow = { ...host, logins: { off: ["aws", "netrc"] } };
+    expect(agentLoginsBundleFor(narrow, undefined, { ...sources(), userId: "u1" }).bundle.files).toEqual([]);
+    const pushed: Array<{ files: Array<{ path: string }> }> = [];
+    pushAgentLoginsNow(narrow, { config, deps: { pushClaude: () => ({ pushed: true }), push: (_h, b) => { pushed.push(b); return { pushed: true, kept: [], files: 0, deleted: 0, env: [], trust: 0 }; }, sources } });
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0].files).toEqual([]);
+  });
+
   test("pushAgentLoginsNow: every source skipped still pushes a files=[] bundle, non-fatally, and reports the Claude push beside it", () => {
     fs.mkdirSync(path.join(home, ".codex"));
     fs.writeFileSync(path.join(home, ".codex", "auth.json"), JSON.stringify({ OPENAI_API_KEY: null, tokens: {} }));

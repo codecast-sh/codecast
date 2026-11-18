@@ -46,6 +46,7 @@ import {
   assertNoLaptopPaths,
   collectAgentAuthBundle,
   describeBundle,
+  keptLoginNote,
   laptopHome,
   type AgentAuthBundle,
 } from "../remote/agentAuth.js";
@@ -291,6 +292,7 @@ export function agentLoginsBundleFor(host: RemoteHost, localGitRoot: string | un
     deviceId: sources.deviceId,
     codexTrustPaths: localGitRoot ? [remoteRepoPath(host, localGitRoot)] : [],
     hostHome: remoteHome(host),
+    logins: host.logins,
   });
 }
 
@@ -369,7 +371,7 @@ export function pushAgentLoginsNow(host: RemoteHost, opts: PushAgentLoginsOption
     log(`agent logins not pushed: ${receiver.reason}`);
     return { ...base, skipped, envSkipped, pushed: false, reason: receiver.reason, receiver, shipped };
   }
-  for (const k of receiver.kept) log(`${k} — the host's copy is newer; run codex login on this machine to re-own the grant`);
+  for (const k of receiver.kept) log(keptLoginNote(k));
   for (const e of receiver.errors ?? []) log(`agent login not written on the host: ${e}`);
   if (receiver.unparseableSettings) log("the host's ~/.claude/settings.json is not valid JSON — provider keys not merged");
   log(`agent logins pushed: ${shipped}${receiver.env?.length ? ` (env: ${receiver.env.join(", ")})` : ""}`);

@@ -71,6 +71,7 @@ export async function runCloudEnv(opts: CloudEnvOptions, ledger = new ParityLedg
     home, now: Date.now(), days, config, dryRun: opts.dryRun,
     ...(opts.only ? { only: opts.only.split(",").map((p) => p.trim().replace(/^~(?=\/|$)/, home)).filter(Boolean) } : {}),
     ...(config?.user_id ? { userId: config.user_id, deviceId: localDeviceId() } : {}),
+    ...(target?.host.logins ? { logins: target.host.logins } : {}),
     log,
   });
   if (target) {

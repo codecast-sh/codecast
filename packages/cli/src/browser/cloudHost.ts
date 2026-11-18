@@ -37,6 +37,7 @@ import { codecastPath } from "../codecastDir.js";
 import { hostProvider, hostSleeps, isMacHost } from "../hosts/providers/registry.js";
 import { HOST_TAILNET_COMMAND, localTailnet, readHostTailnet, tailnetDialAddress, type TailnetRecord } from "../cloud/tailnet.js";
 import type { WakePhase } from "@codecast/shared/contracts";
+import type { HostLogins } from "../remote/agentAuth.js";
 import type { HostFacts, HostInspection } from "../hosts/providers/types.js";
 
 export { AwsCliFailed, instanceNameTag } from "../hosts/providers/aws.js";
@@ -83,6 +84,8 @@ export interface CloudHost {
   gitAutoGrantAt?: number;
   /** The human turned the SSH agent bridge on (`cast hosts forward-agent`). Missing = off. */
   forwardAgent?: boolean;
+  /** Which of this laptop's logins the daemon, prepare and provision push here (`cast hosts logins`). Missing = every login: hosts registered before the setting. A new host starts with NEW_HOST_LOGINS. */
+  logins?: HostLogins;
   /** Laptop folders the human approved for this host (`cast hosts reach`), mounted there at the same path while both are up (cloud/reach.ts). */
   reach?: import("../cloud/reach.js").ReachFolder[];
   /** The idle watchdog version `cast hosts provision` last installed (provisionLinux.ts). */
@@ -211,9 +214,15 @@ export function writeHosts(hosts: CloudHost[]): void {
   fs.renameSync(tmp, p);
 }
 
+/** What a host registered from now on starts with: cloud and database credentials stay on the laptop until turned on (`cast hosts logins`). */
+export const NEW_HOST_LOGINS: HostLogins = { off: ["aws", "kube", "pgpass", "netrc", "git-credentials"] };
+
+/** Add or replace one entry. A host new to the registry gets the narrow login default unless the caller set one. */
 export function upsertHost(host: CloudHost): void {
-  const hosts = readHosts().filter((h) => h.id !== host.id);
-  hosts.push(host);
+  const all = readHosts();
+  const known = all.some((h) => h.id === host.id);
+  const hosts = all.filter((h) => h.id !== host.id);
+  hosts.push(known || host.logins ? host : { ...host, logins: structuredClone(NEW_HOST_LOGINS) });
   writeHosts(hosts);
 }
 
@@ -563,6 +572,7 @@ export function toRemoteHost(host: CloudHost): RemoteHost {
     remoteBaseDir: `${home}/work`,
     homeDir: home,
     ...(host.proxyCommand ? { proxyCommand: host.proxyCommand } : {}),
+    ...(host.logins ? { logins: host.logins } : {}),
   };
 }
 

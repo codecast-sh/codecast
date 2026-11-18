@@ -17,6 +17,9 @@
  *      ~/.codex/auth.json is KEPT when its `last_refresh` is newer than the
  *      bundle's (`kept:codex host-fresher`): a codex session on the host may
  *      have rotated the grant, and overwriting it would kill both copies.
+ *      A file that exists and that the stamp (step 6) does not record THIS
+ *      device as having pushed is the host's own and is KEPT too
+ *      (`kept:<path>:host-owned`), the rule step 3 applies to deletes.
  *   3. absent: a file the laptop no longer has is unlinked only when the
  *      stamp (step 6) says THIS device pushed it: a second laptop of the
  *      same user, or a login made on the host itself, is never deleted by a
@@ -276,6 +279,12 @@ def main():
                     raise ValueError("content is not a string")
                 if f.get("encoding") == "base64":
                     content = base64.b64decode(content, validate=True)
+                # A file this device never pushed is the host's own (a login made
+                # there, or credentials something else put there): kept, the
+                # same rule step 3 applies to deletes.
+                if os.path.isfile(dest) and not os.path.islink(dest) and (not device_id or owners.get(rel) != device_id):
+                    kept.append("%s:host-owned" % rel)
+                    continue
                 if rel == "~/.codex/auth.json":
                     cur = read_json(dest) if os.path.isfile(dest) and not os.path.islink(dest) else None
                     host_ms = iso_ms(cur.get("last_refresh")) if isinstance(cur, dict) else None

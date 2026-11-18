@@ -463,6 +463,7 @@ function settleHome(ledger: ParityLedger, plan: EnvPlan, home: ReadyHostHomeRepo
       const key = parityKey("login", id);
       if (!logins.pushed) ledger.settle(key, "failed", { reason: logins.reason ?? "the login bundle was not sent" });
       else if (logins.kept.some((k) => k.includes(id))) ledger.settle(key, "present", { detail: "the host's copy is newer and was kept" });
+      else if (logins.kept.includes(`${remotePath} host-owned`)) ledger.settle(key, "present", { detail: "the host's own copy, never pushed from this laptop, was kept" });
       else if (errors.has(remotePath)) ledger.settle(key, "failed", { reason: errors.get(remotePath)! });
       else ledger.settle(key, "carried");
     }

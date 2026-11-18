@@ -51,6 +51,7 @@ export interface RemoteHost {
    * original Scaleway hosts; Linux hosts must say /home/<user>. */
   homeDir?: string;
   proxyCommand?: string;
+  logins?: import("./agentAuth.js").HostLogins; // which of this laptop's logins travel here (the registry's); missing = every login
 }
 
 /** Where ~ is on the remote — the macOS default unless the host says otherwise. */
@@ -69,7 +70,6 @@ export interface LocalSession {
 }
 
 const CLAUDE_PROJECTS = path.join(os.homedir(), ".claude", "projects");
-
 
 /**
  * Reverse a project-dir slug to a real path by probing the filesystem

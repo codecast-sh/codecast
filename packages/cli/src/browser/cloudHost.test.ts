@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { instanceNameTag, patchHost, readHosts, registryLockPath, resolveCloudHost, writeHosts, type CloudHost } from "./cloudHost";
+import { instanceNameTag, NEW_HOST_LOGINS, patchHost, readHosts, registryLockPath, resolveCloudHost, toRemoteHost, upsertHost, writeHosts, type CloudHost } from "./cloudHost";
 
 let dir: string, prev: string | undefined;
 const base: CloudHost = { id: "i-1", provider: "aws", region: "us-west-2", user: "ubuntu", keyPath: "/k", address: "1.1.1.1", forwardAgent: true, idleStopMinutes: 20 };
@@ -19,6 +19,25 @@ beforeEach(() => {
 afterEach(() => {
   if (prev === undefined) delete process.env.CODECAST_DIR; else process.env.CODECAST_DIR = prev;
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+describe("login setting on new hosts (#99)", () => {
+  test("a host new to the registry starts with cloud and database credentials off; a host already registered keeps getting everything", () => {
+    expect(NEW_HOST_LOGINS).toEqual({ off: ["aws", "kube", "pgpass", "netrc", "git-credentials"] });
+    upsertHost({ ...base, id: "i-new" });
+    expect(readHosts().find((h) => h.id === "i-new")!.logins).toEqual(NEW_HOST_LOGINS);
+    // Re-registering an entry that predates the setting (cast hosts add on it again) leaves it unset: every login.
+    upsertHost({ ...base, address: "3.3.3.3" });
+    expect(readHosts().find((h) => h.id === "i-1")!.logins).toBeUndefined();
+    // A caller's own setting wins on a new host.
+    upsertHost({ ...base, id: "i-wide", logins: { off: [] } });
+    expect(readHosts().find((h) => h.id === "i-wide")!.logins).toEqual({ off: [] });
+  });
+
+  test("toRemoteHost carries the setting, so every push path (daemon, prepare, wake, provision, sync-auth) reads it from the host it dials", () => {
+    expect(toRemoteHost({ ...base, logins: { only: ["gh"] } }).logins).toEqual({ only: ["gh"] });
+    expect("logins" in toRemoteHost(base)).toBe(false);
+  });
 });
 
 describe("patchHost — field-level registry writes under a lock", () => {

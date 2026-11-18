@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Command } from "commander";
-import { readHosts, type CloudHost } from "../browser/cloudHost";
+import { NEW_HOST_LOGINS, readHosts, type CloudHost } from "../browser/cloudHost";
 import { registeredHostId } from "../cloud/autoscale";
 import { FAKE_BOX, installFakeNamespace } from "../test-helpers/fakeNamespace";
 import { buildHostsCommand } from "./cli";
@@ -55,7 +55,8 @@ describe("cast hosts add --provider namespace", () => {
   test("registers the box by name with its generated key and proxy, and no --key", async () => {
     installBox();
     await cast("add", "--provider", "namespace", "cast-box");
-    expect(readHosts()).toEqual([REGISTERED(fake.home)]);
+    // A new host starts with cloud and database credentials off (#99).
+    expect(readHosts()).toEqual([{ ...REGISTERED(fake.home), logins: NEW_HOST_LOGINS }]);
     expect(lines.join("\n")).toContain("registered box123 (Linux, stopped)");
     expect(fake.calls().map((c) => c.slice(0, 2).join(" "))).toEqual(["devbox list", "nsc list"]);
   });
@@ -98,7 +99,7 @@ describe("cast hosts create --provider namespace", () => {
     expect(fake.calls().find((c) => c[1] === "create")).toEqual([
       "devbox", "create", "--name", "cast-box", "--size", "s", "--no_checkout", "--image", "builtin:default", "--auto_stop_idle_timeout", "5m",
     ]);
-    expect(readHosts()).toEqual([{ ...REGISTERED(fake.home), maxRunMinutes: 240 }]);
+    expect(readHosts()).toEqual([{ ...REGISTERED(fake.home), maxRunMinutes: 240, logins: NEW_HOST_LOGINS }]);
     expect(lines).toContain("Registered box123. Resume setup with: cast hosts provision box123");
     expect(registeredHostId(lines.at(-1)!)).toBe("box123");
   });

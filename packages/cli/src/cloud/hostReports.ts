@@ -27,7 +27,7 @@ export function buildCloudHostReport(host: CloudHost, managedBy: string, now = D
   }
   let held: CloudHostReport["logins_held"] = [];
   try {
-    const { skipped } = collectAgentAuthBundle({ home: laptopHome(), userId: "report", deviceId: managedBy, hostHome: remoteHome(toRemoteHost(host)) });
+    const { skipped } = collectAgentAuthBundle({ home: laptopHome(), userId: "report", deviceId: managedBy, hostHome: remoteHome(toRemoteHost(host)), logins: host.logins });
     held = skipped.filter((s) => !/^no login$|^missing$|not shipped$/.test(s.reason)).map((s) => ({ id: s.id, reason: s.reason }));
   } catch { /* the login read is the only field this loses */ }
   const state = (["running", "stopped", "pending", "stopping", "missing"] as const).includes(facts.state as any) ? facts.state as CloudHostReport["state"] : "unknown";

@@ -3,11 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  AGENT_AUTH_SOURCES, AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, codexAuthHealth,
+  AGENT_AUTH_SOURCES, AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthPushGroups, describeHostLogins, HOST_LOGIN_NAMES, hostLoginSetting, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, codexAuthHealth,
   collectAgentAuthBundle, describeBundle, filterProviderAuthMap, geminiAuthHealth, grokAuthHealth, mirrorEnvSkipReason,
   parseClientVersion, planAgentAuthPush, readClaudeSettingsEnvForMirror, readInstalledClientVersions, trustOnlyBundle, type AgentAuthBundle,
 } from "./agentAuth";
-import { parseAgentAuthReceiverOutput, type RemoteHost } from "./session-move";
+import { parseAgentAuthReceiverOutput, remoteHome, type RemoteHost } from "./session-move";
 import { jwtClaims } from "../codexAuthDecode";
 import { codexAuthJson, jwt } from "../test-helpers/codexCloudFixtures";
 
@@ -220,7 +220,7 @@ describe("collectAgentAuthBundle — a fake HOME", () => {
     write(".gemini/oauth_creds.json", JSON.stringify({ access_token: "a" })); // no refresh token → skipped
     write(".gemini/google_accounts.json", JSON.stringify({ active: "a@b.c" }));
     write(".claude/settings.json", JSON.stringify({ env: { OPENROUTER_API_KEY: "sk-or", ANTHROPIC_API_KEY: "no" } }));
-    const { bundle, skipped, envSkipped } = collectAgentAuthBundle({ home, env: {}, now: NOW, userId: "u1", deviceId: "d1", codexTrustPaths: ["/home/ubuntu/work/r"], withToolLogins: false });
+    const { bundle, skipped, envSkipped } = collectAgentAuthBundle({ home, env: {}, now: NOW, userId: "u1", deviceId: "d1", codexTrustPaths: ["/home/ubuntu/work/r"], logins: { only: ["codex", "grok", "gemini", "opencode", "pi"] } });
     expect(bundle.files.map((f) => f.path).sort()).toEqual(["~/.codex/auth.json", "~/.grok/auth.json"]);
     expect(bundle.files.every((f) => f.mode === 0o600)).toBe(true);
     expect(bundle.files.find((f) => f.path === "~/.codex/auth.json")?.last_refresh).toBe(Date.parse("2026-09-05T01:20:00.123456Z"));
@@ -232,6 +232,32 @@ describe("collectAgentAuthBundle — a fake HOME", () => {
     expect(bundle.origin).toEqual({ user_id: "u1", device_id: "d1", pushed_at: new Date(NOW).toISOString() });
     expect(describeBundle(bundle)).toBe("codex, grok, 1 env key, trust 1");
   });
+  test("a host's login setting (#99): a login it leaves out is neither shipped nor withdrawn; aws names both files, gemini its accounts file", () => {
+    write(".codex/auth.json", live());
+    write(".aws/credentials", "[default]\naws_access_key_id = AKIA\n");
+    write(".aws/config", "[default]\nregion = us-west-2\n");
+    write(".kube/config", "apiVersion: v1\n");
+    write(".pgpass", "db:5432:*:u:p\n");
+    write(".gemini/oauth_creds.json", JSON.stringify({ refresh_token: "r" }));
+    write(".gemini/google_accounts.json", "{}");
+    const paths = (logins?: Parameters<typeof collectAgentAuthBundle>[0]["logins"]) => {
+      const { bundle } = collectAgentAuthBundle({ home, env: {}, now: NOW, userId: "u", deviceId: "d", hostHome: "/home/ubuntu", logins });
+      return { files: bundle.files.map((f) => f.path).sort(), absent: bundle.absent };
+    };
+    const every = paths();
+    expect(every.files).toEqual(expect.arrayContaining(["~/.aws/config", "~/.aws/credentials", "~/.kube/config", "~/.pgpass"]));
+    const narrow = paths({ off: ["aws", "kube", "pgpass", "netrc", "git-credentials"] });
+    expect(narrow.files).toEqual(["~/.codex/auth.json", "~/.gemini/google_accounts.json", "~/.gemini/oauth_creds.json"]);
+    // Off is not "logged out": the receiver must not delete the host's own copies.
+    for (const p of ["~/.aws/config", "~/.aws/credentials", "~/.kube/config", "~/.pgpass", "~/.netrc", "~/.git-credentials"]) expect(narrow.absent).not.toContain(p);
+    expect(narrow.absent).toContain("~/.grok/auth.json");
+    const only = paths({ only: ["codex", "kube"] });
+    expect(only.files).toEqual(["~/.codex/auth.json", "~/.kube/config"]);
+    expect(only.absent).not.toContain("~/.grok/auth.json");
+    expect(paths({ off: ["gemini"] }).files).not.toContain("~/.gemini/google_accounts.json");
+    expect(paths({ off: [] })).toEqual(every);
+  });
+
   test("google_accounts.json rides along only with live gemini creds", () => {
     write(".gemini/oauth_creds.json", JSON.stringify({ refresh_token: "r", expiry_date: 1 }));
     write(".gemini/google_accounts.json", "{}");
@@ -364,5 +390,36 @@ describe("parseAgentAuthReceiverOutput — the wire contract", () => {
     expect(parseAgentAuthReceiverOutput("", 1, "Traceback\nKeyError: x\n").reason).toBe("receiver exited 1: KeyError: x");
     expect(parseAgentAuthReceiverOutput("", 127, "bash: python3: command not found\n").reason).toBe("python3 missing on the host");
     expect(parseAgentAuthReceiverOutput("applied files=0 kept= deleted=0 env= trust=0\nsettings:unparseable\n", 0).unparseableSettings).toBe(true);
+  });
+});
+
+describe("host login settings (#99)", () => {
+  test("hostLoginSetting: --off and --only replace, --on adds back to either, --all is everything, nothing given keeps the setting", () => {
+    expect(hostLoginSetting(undefined, { off: "aws, kube" })).toEqual({ off: ["aws", "kube"] });
+    expect(hostLoginSetting({ off: ["aws"] }, { only: "gh,codex" })).toEqual({ only: ["gh", "codex"] });
+    expect(hostLoginSetting({ off: ["aws", "kube"] }, { on: "aws" })).toEqual({ off: ["kube"] });
+    expect(hostLoginSetting({ only: ["gh"] }, { on: "codex,gh" })).toEqual({ only: ["gh", "codex"] });
+    expect(hostLoginSetting({ only: ["gh"] }, { all: true })).toEqual({ off: [] });
+    const current = { off: ["aws"] };
+    expect(hostLoginSetting(current, {})).toBe(current);
+    expect(hostLoginSetting(undefined, { on: "aws" })).toBeUndefined();
+    expect(() => hostLoginSetting(undefined, { off: "aws", only: "gh" })).toThrow("use one of");
+    expect(() => hostLoginSetting(undefined, { off: "aws,awss" })).toThrow("unknown login awss");
+    expect(HOST_LOGIN_NAMES).toEqual(expect.arrayContaining(["aws", "kube", "pgpass", "netrc", "git-credentials", "gh", "codex", "gcloud"]));
+    expect(HOST_LOGIN_NAMES).not.toContain("aws-credentials");
+  });
+
+  test("describeHostLogins: the ls line", () => {
+    expect(describeHostLogins(undefined)).toBe("all");
+    expect(describeHostLogins({ off: [] })).toBe("all");
+    expect(describeHostLogins({ off: ["aws", "kube"] })).toBe("all but aws, kube");
+    expect(describeHostLogins({ only: ["gh"] })).toBe("only gh");
+  });
+
+  test("agentAuthPushGroups: one bundle per home and login setting, so a narrowed host never gets the wider bundle", () => {
+    const h = (address: string, logins?: { off: string[] }): RemoteHost => ({ address, user: "ubuntu", keyPath: "/k", remoteBaseDir: "/home/ubuntu/work", homeDir: "/home/ubuntu", ...(logins ? { logins } : {}) });
+    const groups = agentAuthPushGroups([h("a"), h("b", { off: ["aws"] }), h("c"), h("d", { off: ["aws"] })], remoteHome);
+    expect(groups.map((g) => [g.logins ?? null, g.hosts.map((x) => x.address)])).toEqual([[null, ["a", "c"]], [{ off: ["aws"] }, ["b", "d"]]]);
+    expect(groups.every((g) => g.hostHome === "/home/ubuntu")).toBe(true);
   });
 });

@@ -45,6 +45,11 @@ function read(rel: string): string {
   return fs.readFileSync(path.join(home, rel), "utf-8");
 }
 
+/** A stamp saying device D pushed these paths earlier (the receiver keeps any file D did not push). */
+function pushedByD(...paths: string[]): void {
+  fs.writeFileSync(path.join(home, ".codecast", "agent-auth-origin.json"), JSON.stringify({ user_id: "U", device_id: "D", files: Object.fromEntries(paths.map((p) => [p, "D"])) }));
+}
+
 const file = (p: string, content: string, last_refresh?: number) => ({ path: p, content, mode: 0o600, ...(last_refresh !== undefined ? { last_refresh } : {}) });
 
 d("agent auth receiver (python3) against a temp HOME", () => {
@@ -143,8 +148,30 @@ d("agent auth receiver (python3) against a temp HOME", () => {
     expect(fs.existsSync(path.join(home, ".codecast", "codex-accounts"))).toBe(false);
   });
 
+  test("a file this device never pushed is the host's own and is kept, not overwritten (#99); one it pushed is replaced", () => {
+    config("U");
+    // The host's own read-only key, put there by something other than this laptop.
+    fs.mkdirSync(path.join(home, ".aws"), { mode: 0o700 });
+    fs.writeFileSync(path.join(home, ".aws", "credentials"), "host-readonly");
+    // A file another device of the same user pushed is not this laptop's either.
+    expect(run({ origin: { user_id: "U", device_id: "E", pushed_at: "2026-09-07T11:00:00Z" }, files: [file("~/.kube/config", "from-E")] }).outcome.files).toBe(1);
+    const r = run({ files: [file("~/.aws/credentials", "laptop-key"), file("~/.kube/config", "from-D"), file("~/.netrc", "new")] });
+    expect(r.status).toBe(0);
+    expect(r.outcome.kept).toEqual(["~/.aws/credentials host-owned", "~/.kube/config host-owned"]);
+    expect(r.outcome.files).toBe(1);
+    expect(read(".aws/credentials")).toBe("host-readonly");
+    expect(read(".kube/config")).toBe("from-E");
+    expect(read(".netrc")).toBe("new");
+    // Kept files keep their owners in the stamp; the new one is this device's, and its next push replaces it.
+    expect(JSON.parse(read(".codecast/agent-auth-origin.json")).files).toEqual({ "~/.kube/config": "E", "~/.netrc": "D" });
+    expect(run({ files: [file("~/.netrc", "newer")] }).outcome.files).toBe(1);
+    expect(read(".netrc")).toBe("newer");
+  });
+
   test("a host ~/.codex/auth.json with a NEWER last_refresh is kept and reported; an older one is replaced", () => {
     config("U");
+    // Pushed by this device earlier (the stamp says so), then refreshed on the host.
+    pushedByD("~/.codex/auth.json");
     fs.mkdirSync(path.join(home, ".codex"), { mode: 0o700 });
     fs.writeFileSync(path.join(home, ".codex", "auth.json"), JSON.stringify({ tokens: { access_token: "host" }, last_refresh: "2026-09-07T10:00:00.500000Z" }));
     fs.mkdirSync(path.join(home, ".codecast", "codex-accounts"), { recursive: true });
@@ -162,6 +189,7 @@ d("agent auth receiver (python3) against a temp HOME", () => {
 
   test("a host blob with an offset last_refresh compares in UTC; an unparseable one never wins", () => {
     config("U");
+    pushedByD("~/.codex/auth.json");
     fs.mkdirSync(path.join(home, ".codex"), { mode: 0o700 });
     // 12:00+02:00 = 10:00Z, older than the bundle's 11:00Z → replaced.
     fs.writeFileSync(path.join(home, ".codex", "auth.json"), JSON.stringify({ last_refresh: "2026-09-07T12:00:00+02:00" }));

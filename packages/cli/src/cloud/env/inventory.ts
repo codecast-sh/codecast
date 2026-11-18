@@ -21,7 +21,7 @@ import { extractCodexCwd } from "../../codexSessionMeta.js";
 import { slugToCwd } from "../../remote/session-move.js";
 import { computeFootprint, readToolCalls, type Footprint } from "../../migrate/footprint.js";
 import { collectMirrorFiles, type Inventory } from "../mirror/inventory.js";
-import { AGENT_AUTH_SOURCES, TOOL_AUTH_SOURCES, collectAgentAuthBundle } from "../../remote/agentAuth.js";
+import { AGENT_AUTH_SOURCES, TOOL_AUTH_SOURCES, collectAgentAuthBundle, hostLoginName, hostLoginTravels, type HostLogins } from "../../remote/agentAuth.js";
 import { nodeRequirement, requiredHostTools, type HostToolRequirement, type RequiredHostTools } from "../hostTools.js";
 import { resolveHostSpec } from "../hostSetup.js";
 import { readSyncScope } from "../syncScope.js";
@@ -100,6 +100,8 @@ export interface InventoryDeps {
   config: Config | null;
   userId?: string;
   deviceId?: string;
+  /** The target host's login setting (`cast hosts logins`); missing = every login. */
+  logins?: HostLogins;
   /** Carry only these folders (and the repositories they are in); everything else in the home still travels. */
   only?: string[];
   /** Leave the commit (and its ref) out: a dry run writes nothing. */
@@ -577,7 +579,9 @@ export async function readLaptopEnvironment(ledger: ParityLedger, deps: Inventor
   ledger.plan("login", "claude", { detail: "Claude Code credential" });
   const loginPaths: Record<string, string> = {};
   if (deps.userId && deps.deviceId) {
-    const collected = collectAgentAuthBundle({ home, now: deps.now, userId: deps.userId, deviceId: deps.deviceId, hostHome: "/home/ubuntu" });
+    const collected = collectAgentAuthBundle({ home, now: deps.now, userId: deps.userId, deviceId: deps.deviceId, hostHome: "/home/ubuntu", logins: deps.logins });
+    const heldBack = new Set([...AGENT_AUTH_SOURCES, ...TOOL_AUTH_SOURCES].filter((src) => !hostLoginTravels(deps.logins, hostLoginName(src)) && fs.existsSync(src.localPath(home, process.env))).map(hostLoginName));
+    for (const name of heldBack) ledger.skip("login", name, "off for this host", { fix: `cast hosts logins <host> --on ${name}` });
     const ids = new Map([...AGENT_AUTH_SOURCES, ...TOOL_AUTH_SOURCES].map((s) => [s.remotePath, s.id]));
     for (const f of collected.bundle.files) {
       const id = ids.get(f.path) ?? (f.path.includes("gcloud") ? "gcloud" : f.path);

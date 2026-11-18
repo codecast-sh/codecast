@@ -38,6 +38,7 @@ import { hostToolsDetailLines, parseHostToolsStamp, summarizeHostTools, type Hos
 import { parseHostMcpOverrides } from "../cloud/hostMcpOverrides.js";
 import { deviceId } from "../remote/device.js";
 import { ssh, sshDestination, sshIdentity, sshShell, type RemoteHost } from "../remote/session-move.js";
+import { describeHostLogins, keptLoginNote } from "../remote/agentAuth.js";
 import { ROOT_WORKSPACE_NAME, type AgentLoginsReport } from "../cloud/prepare.js";
 import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
 import { FIND_CAST_SH } from "../cloud/ghWrapper.js";
@@ -50,6 +51,7 @@ import { checkIdleMinutes, provisionArgv, registerHostCreateCommand } from "./cr
 import { hostRunLimit, runLimitText, type RunLimit } from "./namespaceCli.js";
 import { registerHostResizeCommand } from "./resize.js";
 import { registerHostTeamCommand } from "./team.js";
+import { registerHostLoginsCommand } from "./logins.js";
 import type { MacDesktop } from "./macLogin.js";
 import { remoteExec } from "../browser/remote.js";
 import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
@@ -359,6 +361,8 @@ export interface HostReport {
   mirrorNote?: string;
   /** Git push access from the host, as the registry last recorded it (no ssh). */
   git: HostGitReport;
+  /** Which of this laptop's logins travel to the host (`cast hosts logins`), in a few words. */
+  logins: string;
   /** The host's last tools check (~/.codecast/host-tools.json), when it is awake and has one. */
   tools?: HostToolsReport | null;
   toolsNote?: string;
@@ -572,7 +576,7 @@ export function unansweredHostReport(host: CloudHost, why: string): HostReport {
     id: host.id, provider: host.provider, region: host.region, state: "unknown", address: host.address ?? null, stateError: why,
     device: { id: host.deviceId ?? null, label: null, online: null, lastSeen: null },
     sessions: [], sessionsError: why, worktrees: [], worktreesNote: why,
-    git: hostGitReport(host), reach: hostReachLines(host),
+    git: hostGitReport(host), logins: describeHostLogins(host.logins), reach: hostReachLines(host),
     cost: { hourlyUsd: null, diskMonthlyUsd: null, line: `unknown (${why})`, instanceType: null, volumeGiB: null },
   };
 }
@@ -763,6 +767,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     ...(setup ? { setup } : {}),
     ...hostRunLimit(host, live ? facts.value?.startedAt : undefined),
     git: hostGitReport(host),
+    logins: describeHostLogins(host.logins),
     reach: hostReachLines(host),
     cost: {
       ...cost,
@@ -818,7 +823,7 @@ export function loginsReportLines(r: AgentLoginsReport | undefined): string[] {
   const lines: string[] = [];
   lines.push(r.pushed ? `agent logins: pushed ${r.shipped || "nothing"}` : `agent logins: not pushed${r.reason ? ` (${r.reason})` : ""}`);
   lines.push(`claude credential: ${r.claude.pushed ? "pushed" : `not pushed (${r.claude.reason ?? "unknown"})`}`);
-  for (const k of r.kept) lines.push(`kept on the host: ${k}`);
+  for (const k of r.kept) lines.push(keptLoginNote(k));
   for (const sk of r.skipped) lines.push(`skipped ${sk.id}: ${sk.reason}`);
   return lines;
 }
@@ -857,6 +862,7 @@ function printHostReport(r: HostReport, opts: { verbose?: boolean } = {}): void 
   const mirror = mirrorStatusLine(r.mirror, deviceId(), Date.now(), r.mirrorNote);
   console.log(`  config mirror  ${mirror.startsWith("never") || mirror.startsWith("unknown") ? fmt.muted(mirror) : mirror}`);
   const gitLine = gitStatusLine(r.git, r.id);
+  console.log(`  logins     ${r.logins}`);
   console.log(`  git        ${r.git.write ? gitLine : r.git.write === null ? fmt.muted(gitLine) : fmt.warning(gitLine)}`);
   const toolsLine = toolsStatusLine(r.tools, r.toolsNote);
   const toolsBad = !!r.tools && (r.tools.missing.length > 0 || r.tools.unsupported.length > 0);
@@ -973,6 +979,7 @@ export function buildHostsCommand(parent: Command): Command {
   registerHostCreateCommand(hosts);
   registerHostResizeCommand(hosts, EC2_HOURLY_USD);
   registerHostTeamCommand(hosts);
+  registerHostLoginsCommand(hosts);
 
   hosts
     .command("ls", { isDefault: true })

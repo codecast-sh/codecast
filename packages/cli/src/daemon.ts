@@ -95,7 +95,7 @@ import {
 import { readInputIdleMs } from "./inputIdle.js";
 import { folderFetchGate } from "./folderFetchGate.js";
 import { checkoutOfMoveClone, copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
-import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush, primeGhToken } from "./remote/agentAuth.js";
+import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthPushGroups, keptLoginNote, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush, primeGhToken } from "./remote/agentAuth.js";
 import { dialRemoteHost, dialsWithoutWaking, hostForDevice, noteDialError, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
 import {
   AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocket, hostAgentSocketEnv,
@@ -4370,7 +4370,7 @@ let remoteAgentAuthPushInFlight = false;
 const lastPushedAgentAuthHashByHost = new Map<string, string>();
 const agentAuthRefusalLogged = new Set<string>();
 const agentAuthKeptLogged = new Set<string>();
-let lastAgentAuthSkipKey: string | null = null;
+const lastAgentAuthSkipKeyByGroup = new Map<string, string | null>();
 
 async function pushAgentAuthToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean } = {}): Promise<void> {
   if (isRemoteDevice() || remoteAgentAuthPushInFlight) return;
@@ -4381,20 +4381,22 @@ async function pushAgentAuthToRemoteHosts(reason: string, opts: { onlyIfChanged?
     const home = laptopHome();
     const reachable = await reachableTransferHosts();
     if (reachable.length) await primeGhToken(home);
-    // One bundle per host home: a tool login that names laptop paths is rewritten to the home it lands in.
-    for (const hostHome of new Set(reachable.map((h) => remoteHome(h)))) {
-    const { bundle, skipped, envSkipped } = collectAgentAuthBundle({ home, now: Date.now(), userId: config.user_id, deviceId: deviceId(), hostHome });
+    // One bundle per host home and login setting: a tool login that names
+    // laptop paths is rewritten to the home it lands in, and a host gets only
+    // the logins its registry entry lets travel (`cast hosts logins`).
+    for (const { key: group, hostHome, logins, hosts: members } of agentAuthPushGroups(reachable, remoteHome)) {
+    const { bundle, skipped, envSkipped } = collectAgentAuthBundle({ home, now: Date.now(), userId: config.user_id, deviceId: deviceId(), hostHome, logins });
     assertNoLaptopPaths(bundle, home);
     // Skipped sources once per distinct set, not every tick: the state is
     // what matters ("codex is logged out here"), not the polling.
     const skipKey = [...skipped.map((s) => `${s.id}:${s.reason}`), ...envSkipped.map((e) => `env ${e.key}:${e.reason}`)].sort().join("|") || null;
-    if (skipKey !== lastAgentAuthSkipKey) {
-      lastAgentAuthSkipKey = skipKey;
+    if (skipKey !== lastAgentAuthSkipKeyByGroup.get(group)) {
+      lastAgentAuthSkipKeyByGroup.set(group, skipKey);
       if (skipped.length) log(`[REMOTE-AUTH] agent logins skipped: ${skipped.map((s) => `${s.id} ${s.reason}`).join(", ")}`);
       if (envSkipped.length) log(`[REMOTE-AUTH] settings.json env keys not mirrored: ${envSkipped.map((e) => `${e.key} (${e.reason})`).join(", ")}`);
     }
     const hash = bundleHash(bundle);
-    const hosts = planAgentAuthPush(reachable.filter((h) => remoteHome(h) === hostHome), hash, lastPushedAgentAuthHashByHost, opts);
+    const hosts = planAgentAuthPush(members, hash, lastPushedAgentAuthHashByHost, opts);
     for (const host of hosts) {
       const key = agentAuthHostKey(host);
       const res = await copyAgentAuthToRemoteAsync(host, bundle);
@@ -4409,7 +4411,7 @@ async function pushAgentAuthToRemoteHosts(reason: string, opts: { onlyIfChanged?
       agentAuthRefusalLogged.delete(key);
       for (const k of res.kept) {
         const kk = `${key}:${k}`;
-        if (!agentAuthKeptLogged.has(kk)) { agentAuthKeptLogged.add(kk); log(`[REMOTE-AUTH] ${key} kept its own ${k} — run \`codex login\` on this machine to re-own the grant`); }
+        if (!agentAuthKeptLogged.has(kk)) { agentAuthKeptLogged.add(kk); log(`[REMOTE-AUTH] ${key}: ${keptLoginNote(k)}`); }
       }
       if (!res.kept.length) for (const kk of [...agentAuthKeptLogged]) if (kk.startsWith(`${key}:`)) agentAuthKeptLogged.delete(kk);
       for (const e of res.errors ?? []) log(`[REMOTE-AUTH] ${key}: ${e}`, "warn");
