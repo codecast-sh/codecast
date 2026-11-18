@@ -64,13 +64,18 @@ public enum BackgroundMousePlan {
         ]
     }
 
+    /// The off-screen press a `skylight` gesture opens with. An app that has
+    /// never been active spends its first press on activating; this one takes
+    /// that, and counts toward Chromium's user activation gate.
+    public static let skylightPrimer = [
+        Step(kind: .down, point: offScreen, clickState: 1, phase: 1, primer: true, pauseAfterMicroseconds: 1_000),
+        Step(kind: .up, point: offScreen, clickState: 1, phase: 2, primer: true, pauseAfterMicroseconds: 100_000),
+    ]
+
     public static func click(technique: Technique, leftButton: Bool, at point: CGPoint, count: Int) -> [Step] {
         let skylight = technique == .skylight
         var steps = [Step(kind: .move, point: point, clickState: 0, phase: skylight ? 2 : nil, pauseAfterMicroseconds: 15_000)]
-        if skylight, leftButton {
-            steps.append(Step(kind: .down, point: offScreen, clickState: 1, phase: 1, primer: true, pauseAfterMicroseconds: 1_000))
-            steps.append(Step(kind: .up, point: offScreen, clickState: 1, phase: 2, primer: true, pauseAfterMicroseconds: 100_000))
-        }
+        if skylight, leftButton { steps += skylightPrimer }
         let presses = min(max(count, 1), SyntheticMouseClickDelivery.maxClickCount)
         for press in 1...presses {
             steps.append(Step(kind: .down, point: point, clickState: Int64(press), phase: skylight ? 3 : nil, pauseAfterMicroseconds: 30_000))
@@ -81,12 +86,11 @@ public enum BackgroundMousePlan {
 
     /// Down, `steps` dragged moves, up: apps start a drag only after the
     /// pointer moved a few points with the button held.
-    public static func drag(from: CGPoint, to: CGPoint, steps: Int, stepMicroseconds: UInt32) -> [Step] {
+    public static func drag(technique: Technique, from: CGPoint, to: CGPoint, steps: Int, stepMicroseconds: UInt32) -> [Step] {
         let count = max(1, steps)
-        var plan = [
-            Step(kind: .move, point: from, clickState: 0, pauseAfterMicroseconds: 15_000),
-            Step(kind: .down, point: from, clickState: 1, pauseAfterMicroseconds: 60_000),
-        ]
+        var plan = [Step(kind: .move, point: from, clickState: 0, pauseAfterMicroseconds: 15_000)]
+        if technique == .skylight { plan += skylightPrimer }
+        plan.append(Step(kind: .down, point: from, clickState: 1, pauseAfterMicroseconds: 60_000))
         for step in 1...count {
             let t = CGFloat(step) / CGFloat(count)
             plan.append(Step(kind: .dragged, point: CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t), clickState: 1, pauseAfterMicroseconds: stepMicroseconds))

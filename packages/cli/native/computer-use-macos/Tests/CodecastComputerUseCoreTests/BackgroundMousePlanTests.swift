@@ -45,12 +45,22 @@ final class BackgroundMousePlanTests: XCTestCase {
     }
 
     func testDragHoldsTheButtonAcrossEvenSteps() {
-        let steps = BackgroundMousePlan.drag(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 120, y: 60), steps: 4, stepMicroseconds: 16_000)
+        let steps = BackgroundMousePlan.drag(technique: .pid, from: CGPoint(x: 0, y: 0), to: CGPoint(x: 120, y: 60), steps: 4, stepMicroseconds: 16_000)
         XCTAssertEqual(steps.map(\.kind), [.move, .down, .dragged, .dragged, .dragged, .dragged, .up])
         XCTAssertEqual(steps.filter { $0.kind == .dragged }.map(\.point), [
             CGPoint(x: 30, y: 15), CGPoint(x: 60, y: 30), CGPoint(x: 90, y: 45), CGPoint(x: 120, y: 60),
         ])
         XCTAssertEqual(steps.last?.point, CGPoint(x: 120, y: 60))
+    }
+
+    /// A freshly launched app spends its first press on activating, so a
+    /// SkyLight drag opens with the off-screen primer, as a click does; the
+    /// drag's own press comes after it.
+    func testSkylightDragOpensWithTheOffScreenPrimer() {
+        let steps = BackgroundMousePlan.drag(technique: .skylight, from: CGPoint(x: 10, y: 10), to: CGPoint(x: 90, y: 10), steps: 2, stepMicroseconds: 16_000)
+        XCTAssertEqual(steps.map(\.kind), [.move, .down, .up, .down, .dragged, .dragged, .up])
+        XCTAssertEqual(steps.filter(\.primer).map(\.point), [BackgroundMousePlan.offScreen, BackgroundMousePlan.offScreen])
+        XCTAssertEqual(steps.first { $0.kind == .down && !$0.primer }?.point, CGPoint(x: 10, y: 10))
     }
 
     func testWindowLocationStampModes() {

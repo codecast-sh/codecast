@@ -145,7 +145,7 @@ export const MEMORY_SNIPPET_END = "<!-- /codecast-memory -->";
 export const MEMORY_SNIPPET = `
 ## Memory
 
-You are one session among many. Past conversations hold the decisions, patterns and prior work you need, so search them before you rebuild context: when starting a task, when debugging, and whenever the user refers to earlier work. Run several searches in parallel for different angles. When the question is what happened or what was decided before, search sessions first; your harness's own memory notes supplement that record and never replace it. To learn what one session concluded, including this one, ask it instead of paging through it: the answer cites its lines and flags anything reversed later. Agent commits carry a \`Codecast-Session\` trailer, so \`git log\` and \`cast blame\` lead from code back to the conversation that wrote it.
+You are one session among many. Past conversations hold the decisions, patterns and prior work you need, so search them before you rebuild context: when starting a task, when debugging, and whenever the user refers to earlier work. Run several searches in parallel for different angles. When the question is what happened or what was decided before, search sessions first; your harness's own memory notes supplement that record and never replace it. To learn what one session concluded, including this one, ask it instead of paging through it: the answer cites its lines and flags anything reversed later. Agent commits carry a \`Codecast-Session\` trailer, so \`git log\` and \`cast blame\` lead from code back to the conversation that wrote it. Record each decision once settled, with the files it governs.
 
 \`\`\`bash
 cast search "auth"                 # filters: file:<path> commit:<sha> pr:<n> label: author: after:7d; --mine, -g all teams
@@ -155,7 +155,7 @@ cast context "implement auth"      # prior sessions relevant to a task
 cast feed                          # what the team is doing now
 cast sessions <id>… --until        # wait until they settle
 cast diff <id> | summary <id> | blame <file>
-cast decisions list | add "title" --reason "why"
+cast decisions --touching [range] | add "title" --reason "why" --files <paths>
 \`\`\`
 
 States: \`needs-input\` (a human acts), \`working\`, \`dormant\` (waiting on an automatic wake), \`done\` (delivered), \`idle\` (unused). \`cast guide memory\` has the full command reference.
@@ -834,7 +834,7 @@ Other verbs: \`set-value\`, \`type-text\`, \`paste-text\`, \`press-key\`, \`hotk
 
 **Read once, then act and read the change.** Every action prints what it changed, with the indexes to use next, so no snapshot is needed between steps; "No change" means the app ignored it. An index is good only for the tree it came from: after navigation, scrolling or a delay, snapshot again. Exit 0 means the action was delivered, not that the app took it; it is confirmed only when it says \`verified\`.
 
-**The human keeps their screen.** Every verb works on a background window, and none raises one unless you pass \`--restore-window\`; do that only when asked, or when only a real mouse event will do. Accessibility and Screen Recording grants are the human's: a verb that finds one missing puts the setup card under itself; ${agentSetupPageUrl("computer")} grants both too.
+**The human keeps their screen.** Every verb works on a background window, mouse included; none raises one unless you pass \`--restore-window\`, which takes the human's screen, so only when asked. Accessibility and Screen Recording grants are the human's: a verb that finds one missing puts the setup card under itself; ${agentSetupPageUrl("computer")} grants both too.
 
 Secrets go through \`--text-stdin\` or \`--value-stdin\`, never the command line. Password managers are refused on purpose. Do not submit a form, send a message, buy, delete or change settings unless the human asked for that action; reading is yours to do. Every failure prints its code and the recovery: change something before retrying. \`cast computer help <verb>\` lists a verb's flags, and \`cast guide computer\` has the rest.
 ${COMPUTER_SNIPPET_END}
@@ -874,7 +874,7 @@ cast computer remote                              # on the laptop: which cloud h
 
 **Verification.** Any verdict other than \`verified\` names why the change could not be read back (synthetic input, a clipboard paste, an unasserted accessibility action, an older helper). Human output opens \`completed\` only when verified and \`attempted\` otherwise; in \`--json\` it is \`action.verification\`. When unverified and it matters, read the change it printed, or take a screenshot.
 
-**Background input.** \`set-value\`, \`perform-secondary-action\` and a click on an element that advertises a press go through accessibility and can be verified. Keys and typing go to the target app's own event queue when it is not frontmost, so they reach that app and never the one the human is using. A coordinate click on a background window presses the control under that point through accessibility. A real mouse event (\`--mouse\`, \`drag\`, a control with no press) needs the window in front, because macOS drops a press on a background window. The human's pointer returns to where it was after every real mouse event. Every action that lands on a point shows an orange "agent" pointer so the human can see what you are doing; \`--no-cursor\` hides it for one action. \`--open-settings\` (System Settings) is the only other verb that moves the human's screen.
+**Background input.** \`set-value\`, \`perform-secondary-action\` and a click on an element that advertises a press go through accessibility and can be verified. Keys and typing go to the target app's own event queue when it is not frontmost, so they reach that app and never the one the human is using. A coordinate click on a background window presses the control under that point through accessibility when it takes a press. Otherwise a real mouse event (\`--mouse\`, \`drag\`, \`scroll\`) is posted to the app itself: it lands in the window without raising it, and the human's pointer never moves. Typing into a web page goes in as keystrokes, so a field that formats as you type (a card number, a phone number) behaves as it would for a person. Two things still need the window in front: a drag inside a web page, which reads the real mouse button (\`cast browser\` drags in the human's Chrome), and a native view that takes a press only in the active window, such as a form field on a PDF in Preview, which \`set-value\` usually reaches. Every action that lands on a point shows an orange "agent" pointer so the human can see what you are doing; \`--no-cursor\` hides it for one action. \`--open-settings\` (System Settings) is the only other verb that moves the human's screen.
 
 **Sensitive input.** \`--text\` with \`--text-stdin\`, or stdin from a terminal, is an error. 1Password, Bitwarden, Dashlane, LastPass, NordPass and Proton Pass answer \`app_blocked\` under any name. A password, passcode or one time code field renders as \`[redacted]\` in every tree. In an app holding sensitive content, read only what you were asked to read. Modifiers are one flag, never two commands: \`click --modifiers CmdOrCtrl+Shift\` holds them for that click alone. \`press-key\` takes exactly one key, \`hotkey\` a modifier and one key. A paste above 16 MiB is refused, and \`paste-text\` restores the human's clipboard afterwards. Screenshots are point sized, so a position read off one is the coordinate an action takes; prefer an element whenever the tree offers one.
 
@@ -883,7 +883,7 @@ cast computer remote                              # on the laptop: which cloud h
 | \`app_not_found\` | Nothing runs under that selector. Use the exact bundle id from \`list-apps\`; for a website, target the browser holding it. |
 | \`app_blocked\` | A password manager, refused on purpose. Stop, and ask the human to do it. |
 | \`window_not_found\` | No window matches. Target one from \`list-windows\`; nothing here opens a closed app. |
-| \`window_not_focused\` | A mouse click or drag needs the window in front. Use the accessibility route (click by element without \`--mouse\`, \`perform-secondary-action\`), or \`--restore-window\` when only the mouse will do. |
+| \`window_not_focused\` | Another window took the front while a press into the front window was going in, so it stopped. Read the state, then retry: a window in the back takes the press without coming forward. |
 | \`window_stale\` | The window went away between snapshot and action. List the windows again, then snapshot. |
 | \`element_not_found\` | The index is stale, or was never in that tree. Snapshot again and use its numbers. |
 | \`element_not_clickable\` | No frame to click. Use a parent or child that has one, or a coordinate. |
@@ -1865,9 +1865,11 @@ export function guideTopics(): SnippetDescriptor[] {
  * The installed file's budget: every session on the machine reads every byte.
  * Raise it only with a held-out eval showing the words pay. 37k: the decision
  * card guidance, which took cards a cold reader could follow from 1 of 30 to
- * 20 of 30 (./evals check decide).
+ * 20 of 30 (./evals check decide). 37.1k: the line telling agents to record
+ * each decision with the files it governs, which the review step's
+ * \`cast decisions --touching\` check reads (sd-3566, raised without an eval).
  */
-export const GUIDANCE_MAX_CHARS = 37_000;
+export const GUIDANCE_MAX_CHARS = 37_100;
 /** Each section body's budget, so detail stays in the reference `cast guide` serves. */
 export const GUIDANCE_SECTION_MAX_CHARS = 4_000;
 

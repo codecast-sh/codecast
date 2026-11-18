@@ -13,6 +13,9 @@ final class Model: ObservableObject {
     @Published var taps = 0
     @Published var drags = 0
     @Published var scrolls = 0
+    /// Each zone's frame in the content view, top-left origin, for the matrix
+    /// to press: the zones have no accessibility element to find.
+    @Published var zones: [String: CGRect] = [:]
     var activations: [String] = []
 }
 
@@ -27,17 +30,26 @@ struct ProbeView: View {
                 .fill(Color.orange)
                 .frame(width: 220, height: 90)
                 .overlay(Text("TAP ZONE").font(.title).foregroundColor(.black))
+                .background(zoneReader("tap"))
                 .onTapGesture { model.taps += 1 }
                 .accessibilityHidden(true)
             Rectangle()
                 .fill(Color.teal)
                 .frame(width: 220, height: 90)
                 .overlay(Text("DRAG ZONE").font(.title).foregroundColor(.black))
+                .background(zoneReader("drag"))
                 .gesture(DragGesture(minimumDistance: 10).onEnded { _ in model.drags += 1 })
                 .accessibilityHidden(true)
         }
         .padding(30)
         .frame(width: 320, height: 340)
+        .coordinateSpace(name: "content")
+    }
+
+    private func zoneReader(_ name: String) -> some View {
+        GeometryReader { geometry in
+            Color.clear.onAppear { model.zones[name] = geometry.frame(in: .named("content")) }
+        }
     }
 }
 
@@ -75,6 +87,12 @@ final class Fixture: NSObject, NSApplicationDelegate {
             "drags": model.drags,
             "active": NSApp.isActive,
             "activations": model.activations,
+            // Window-local, as `cast computer` takes points: the title bar
+            // sits above the content view.
+            "zones": model.zones.mapValues { zone -> [Double] in
+                let titleBar = window.frame.height - window.contentLayoutRect.height
+                return [zone.midX, zone.midY + titleBar].map { Double($0) }
+            },
         ]
         if let data = try? JSONSerialization.data(withJSONObject: status) {
             try? data.write(to: URL(fileURLWithPath: statusFile), options: .atomic)

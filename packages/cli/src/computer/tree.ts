@@ -184,7 +184,7 @@ function unchangedTreeNote(opts: { synthetic?: boolean; background?: boolean; pi
       return `No change in the window's tree, but its pixels changed at ${describeRegion(pixels.region)}: content the tree does not show, such as a canvas, a drawing or a terminal.`;
     case "unchanged":
     case "cursor":
-      return `No change in the window's tree or its pixels, so the input was ignored. Try another element or \`click --mouse\`${opts.background ? ", or `--restore-window` if the app drops input sent to a background window" : ""}.`;
+      return `No change in the window's tree or its pixels, so the input was ignored. Try another element or \`click --mouse\`${opts.background ? ". If the app ignores input sent to a window in the back, `--restore-window` brings it forward, but that takes the human's screen: ask them first" : ""}.`;
     case "repainting":
       return `No change in the window's tree. The window repaints on its own at ${describeRegion(pixels.region)}, so its pixels cannot say whether the input landed; look at the screenshot.`;
   }

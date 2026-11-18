@@ -242,7 +242,7 @@ enum BackgroundMouse {
 
     static func drag(_ target: BackgroundMouseTarget, from: CGPoint, to: CGPoint, steps: Int, stepMicroseconds: UInt32) throws -> [String: Any] {
         try gesture(target) {
-            try target.post(BackgroundMousePlan.drag(from: from, to: to, steps: steps, stepMicroseconds: stepMicroseconds))
+            try target.post(BackgroundMousePlan.drag(technique: target.technique, from: from, to: to, steps: steps, stepMicroseconds: stepMicroseconds))
         }
     }
 

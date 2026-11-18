@@ -49,7 +49,7 @@ async function until(check: () => boolean | Promise<boolean>, timeoutMs = 5_000)
   return check();
 }
 
-type Sample = { landed: boolean; frontKept: boolean; cursorKept: boolean; path?: string; error?: string };
+type Sample = { pointer?: { from: [number, number]; to: [number, number]; moved: number }; focus?: { before: number; after: number; activated: string[] }; landed: boolean; frontKept: boolean; cursorKept: boolean; path?: string; error?: string };
 type Row = { name: string; samples: Sample[]; note?: string; skipped?: string; /** Apps that came to the front while the row set up: a setup bug. */ setupActivated?: number[] };
 type Report = { label: string; technique: string; stamp: string; at: string; load: number; rows: Row[] };
 
@@ -159,6 +159,48 @@ const HIT_RECORDER = `(() => {
 })()`;
 const HIT_LOG = "JSON.stringify(window.__hits ?? [])";
 
+/** Drags the page saw: a press, moves with the button held that cover 60
+ *  pixels, then a release. */
+const DRAG_RECORDER = `window.__drags = 0; window.__dlog = [];
+  for (const t of ["pointerdown", "pointermove", "pointerup", "mousedown", "mouseup"]) addEventListener(t, (e) => window.__dlog.length < 60 && window.__dlog.push([t, e.clientX, e.clientY, e.buttons]), true);
+  let start = null, far = false;
+  addEventListener("pointerdown", (e) => { start = [e.clientX, e.clientY]; far = false; });
+  addEventListener("pointermove", (e) => { if (start && e.buttons & 1 && Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 60) far = true; });
+  addEventListener("pointerup", () => { if (far) window.__drags++; start = null; });`;
+
+/** How many times the Stripe card became complete; undefined until it mounted. */
+const STRIPE_COMPLETES = "window.__card ? window.__completes : undefined";
+const STRIPE_RESET = `(() => {
+  window.__card.clear();
+  window.__card.blur();
+  const r = document.querySelector("#card iframe").getBoundingClientRect();
+  return { x: r.x + r.width / 4, y: r.y + r.height / 2, toolbar: outerHeight - innerHeight };
+})()`;
+
+/** Stripe's published docs test key: a real Card Element in its cross-origin
+ *  iframe, which never charges anything. Served over http on loopback, since
+ *  Stripe.js refuses a file:// page. */
+const STRIPE_TEST_KEY = "pk_test_TYooMQauvdEDq54NiTphI7jx";
+
+function stripeServer() {
+  const html = `<!doctype html><title>bg stripe</title>
+<body style="margin:0;height:100vh;display:flex;align-items:center"><div id="card" style="width:100vw"></div>
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+  window.__completes = 0; window.__log = [];
+  const card = Stripe(${JSON.stringify(STRIPE_TEST_KEY)}).elements().create("card", { style: { base: { fontSize: "64px" } } });
+  card.on("ready", () => (window.__card = card));
+  card.on("focus", () => window.__log.push(["focus", Date.now()]));
+  card.on("change", (e) => {
+    window.__log.push(["change", e.complete, e.empty, e.error && e.error.code]);
+    if (e.complete) window.__completes++;
+  });
+  card.mount("#card");
+</script></body>`;
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response(html, { headers: { "content-type": "text/html" } }) });
+  return { url: `http://127.0.0.1:${server.port}/`, stop: () => server.stop(true) };
+}
+
 /** The bench fixture's 2000-row table: a wheel scroll moves its scroll bar,
  *  which the tree reports. Each scroll goes down; it never reaches the end. */
 async function fixtureScroll(ctx: Context): Promise<Subject> {
@@ -206,11 +248,17 @@ async function swiftui(zone: "button" | "tap" | "drag", ctx: Context): Promise<S
     pid: fixture.pid,
     params,
     point: async () => {
+      if (zone !== "button") {
+        // The tap and drag zones have no element: the fixture reports where they are.
+        const zoneCenter = () => (status(fixture).zones as Record<string, [number, number]> | undefined)?.[zone];
+        await until(async () => !!zoneCenter(), 5_000);
+        const center = zoneCenter();
+        if (!center) throw new Error(`the fixture reported no ${zone} zone`);
+        return { x: Math.round(center[0]), y: Math.round(center[1]) };
+      }
       const snapshot = await ctx.read({ ...params, noScreenshot: true });
-      // The tap zone has no element; its label is read from the pixels.
-      const pattern = { button: /^button.*Probe Button/, tap: /^visible text TAP ZONE/, drag: /^visible text DRAG ZONE/ }[zone];
-      const index = elementLine(snapshot.snapshot.treeText, pattern);
-      if (index === undefined) throw new Error(`no ${zone} in the tree`);
+      const index = elementLine(snapshot.snapshot.treeText, /^button.*Probe Button/);
+      if (index === undefined) throw new Error("no button in the tree");
       return centerOf(frameOf(snapshot, index));
     },
     count: async () => Number(status(fixture)[{ button: "buttonPresses", tap: "taps", drag: "drags" }[zone]] ?? 0),
@@ -287,7 +335,7 @@ async function textedit(ctx: Context): Promise<Subject> {
     },
     count: async () => {
       const tree = (await textArea()).snapshot.snapshot.treeText;
-      return (tree.split("\n").find((l) => /^\s*\d+ text area/.test(l))?.match(/test@/g) ?? []).length;
+      return (tree.split("\n").find((l) => /^\s*\d+ text (entry )?area/.test(l))?.match(/test@/g) ?? []).length;
     },
     afterPress: async () => {
       await ctx.client.action("typeText", { ...params, text: "@" });
@@ -338,19 +386,22 @@ async function preview(part: "toolbar" | "page", ctx: Context): Promise<Subject>
     return { snapshot, index };
   };
   if (part === "toolbar") {
-    const toggleOn = async () => Number(/Rectangular Selection, Value: 1/.test((await read()).snapshot.treeText));
+    // The Inspector checkbox: each press flips its value, and accessibility
+    // turns it back off between presses.
+    const inspector = () => find(/^checkbox Inspector/, "Inspector checkbox");
+    const inspectorOn = async () => Number(/checkbox Inspector, Value: 1/.test((await read()).snapshot.treeText));
     return {
       pid: doc.pid,
       params,
       point: async () => {
-        // Back to the text tool through accessibility, so each press starts from Value 0.
-        const text = await find(/^toggle button Text Selection/, "Text Selection tool");
-        await ctx.client.action("click", { ...params, elementIndex: text.index, cursor: false, noScreenshot: true });
-        if (!(await until(async () => (await toggleOn()) === 0, 3_000))) throw new Error("Rectangular Selection stayed on");
-        const { snapshot, index } = await find(/^toggle button Rectangular Selection/, "Rectangular Selection toggle");
+        if (await inspectorOn()) {
+          await ctx.client.action("click", { ...params, elementIndex: (await inspector()).index, cursor: false, noScreenshot: true });
+          if (!(await until(async () => (await inspectorOn()) === 0, 3_000))) throw new Error("the Inspector stayed on");
+        }
+        const { snapshot, index } = await inspector();
         return centerOf(frameOf(snapshot, index));
       },
-      count: toggleOn,
+      count: inspectorOn,
       cleanup: doc.close,
     };
   }
@@ -375,14 +426,20 @@ const ELECTRON = path.join(import.meta.dir, "../../../node_modules/.bun/electron
  *  throwaway profile, or an Electron app of our own. Neither may take the
  *  front while it starts: Chrome starts with no window and opens the page as
  *  a background window over DevTools; the Electron window shows inactive. */
-async function chromium(kind: "chrome" | "electron", ctx: Context, mode: "click" | "scroll" = "click"): Promise<Subject> {
+async function chromium(kind: "chrome" | "electron", ctx: Context, mode: "click" | "scroll" | "stripe" | "drag" = "click"): Promise<Subject> {
   const port = kind === "chrome" ? 9333 : 9334;
+  const server = mode === "stripe" ? stripeServer() : undefined;
   const profile = path.join(WORK, `${kind}-profile`);
   fs.mkdirSync(profile, { recursive: true });
   const page =
     mode === "click"
-      ? tmpFile("bg-page.html", `<!doctype html><title>bg page</title><body style="margin:0"><button id="b" style="width:100vw;height:100vh;font-size:40px">PRESS</button></body>`)
-      : tmpFile("bg-tall.html", `<!doctype html><title>bg tall</title><body style="margin:0"><div style="height:40000px;background:linear-gradient(#fff,#88f)">TALL</div></body>`);
+      ? `file://${tmpFile("bg-page.html", `<!doctype html><title>bg page</title><body style="margin:0"><button id="b" style="width:100vw;height:100vh;font-size:40px">PRESS</button></body>`)}`
+      : mode === "drag"
+        ? `file://${tmpFile("bg-drag.html", `<!doctype html><title>bg drag</title><body style="margin:0;height:100vh;background:#cfc"><script>${DRAG_RECORDER}</script></body>`)}`
+      : mode === "scroll"
+        ? `file://${tmpFile("bg-tall.html", `<!doctype html><title>bg tall</title><body style="margin:0"><div style="height:40000px;background:linear-gradient(#fff,#88f)">TALL</div></body>`)}`
+        : server!.url;
+  const probe = mode === "click" ? HIT_RECORDER : mode === "scroll" ? "window.scrollY" : mode === "drag" ? "window.__drags" : STRIPE_COMPLETES;
   let pid = 0;
   let child: ReturnType<typeof spawn> | undefined;
   if (kind === "chrome") {
@@ -393,15 +450,15 @@ async function chromium(kind: "chrome" | "electron", ctx: Context, mode: "click"
     const version = (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()) as { webSocketDebuggerUrl: string };
     const ws = new WebSocket(version.webSocketDebuggerUrl);
     await new Promise((resolve) => (ws.onopen = resolve));
-    ws.send(JSON.stringify({ id: 1, method: "Target.createTarget", params: { url: `file://${page}`, newWindow: true, background: true } }));
+    ws.send(JSON.stringify({ id: 1, method: "Target.createTarget", params: { url: page, newWindow: true, background: true } }));
     await new Promise((resolve) => (ws.onmessage = resolve));
     ws.close();
   } else {
     child = spawn(ELECTRON, [path.join(import.meta.dir, "computer-electron-fixture.cjs"), String(port), page], { stdio: "ignore" });
   }
   pid = child.pid!;
-  const pick = (t: { type: string; url: string }) => t.type === "page" && t.url.startsWith("file:");
-  await until(async () => (await cdpEvaluate(port, mode === "click" ? HIT_RECORDER : "window.scrollY", pick).catch(() => undefined)) !== undefined, 60_000);
+  const pick = (t: { type: string; url: string }) => t.type === "page" && (t.url.startsWith("file:") || (!!server && t.url.startsWith(server.url)));
+  await until(async () => (await cdpEvaluate(port, probe, pick).catch(() => undefined)) !== undefined, 60_000);
   let params: Record<string, unknown> = { app: `pid:${pid}` };
   await until(async () => {
     const listed = await ctx.client.listWindows({ app: `pid:${pid}` }).catch(() => undefined);
@@ -415,18 +472,29 @@ async function chromium(kind: "chrome" | "electron", ctx: Context, mode: "click"
     params,
     point: async () => {
       const { width, height } = (await ctx.read({ ...params, noScreenshot: true })).snapshot.window;
+      if (mode === "stripe") {
+        // From an empty, unfocused card each time, pressed in the middle of
+        // the card's iframe: the window's toolbar sits above the page.
+        const rect = (await cdpEvaluate(port, STRIPE_RESET, pick)) as { x: number; y: number; toolbar: number };
+        return { x: Math.round(rect.x), y: Math.round(rect.y + rect.toolbar) };
+      }
       return { x: Math.round(width / 2), y: Math.round(height / 2) };
     },
     ...(mode === "scroll" ? { gesture: { kind: "scroll" as const, direction: "down" as const } } : {}),
+    ...(mode === "drag" ? { gesture: { kind: "drag" as const, dx: 120, dy: 40 } } : {}),
     count: async () => {
       for (let attempt = 0; ; attempt++) {
-        const value = await cdpEvaluate(port, mode === "click" ? HIT_RECORDER : "Math.floor(window.scrollY / 10)", pick).catch((err) => (attempt < 4 ? undefined : Promise.reject(err)));
+        const value = await cdpEvaluate(port, mode === "scroll" ? "Math.floor(window.scrollY / 10)" : probe, pick).catch((err) => (attempt < 4 ? undefined : Promise.reject(err)));
         if (typeof value === "number") return value;
         await sleep(250);
       }
     },
+    // The card number, expiry, CVC and ZIP in one run: the Card Element moves
+    // between its fields by itself, the way a person types it.
+    ...(mode === "stripe" ? { afterPress: async () => void (await ctx.client.action("typeText", { ...params, text: "4242424242424242123412312345", noScreenshot: true })) } : {}),
     cleanup: async () => {
-      if (process.env.BGMOUSE_DEBUG) console.log(`    ${kind} hits: ${await cdpEvaluate(port, HIT_LOG, pick).catch(String)}`);
+      if (process.env.BGMOUSE_DEBUG) console.log(`    ${kind} log: ${await cdpEvaluate(port, mode === "stripe" ? "JSON.stringify(window.__log)" : mode === "drag" ? "JSON.stringify(window.__dlog)" : HIT_LOG, pick).catch(String)}`);
+      server?.stop();
       child?.kill("SIGTERM");
       await until(() => pidsOf(`user-data-dir=${profile}`).length === 0 && pidsOf("computer-electron-fixture").length === 0, 10_000);
     },
@@ -468,6 +536,8 @@ const ROWS: Record<string, (ctx: Context) => Promise<Subject>> = {
   "preview-toolbar": (ctx) => preview("toolbar", ctx),
   "preview-page": (ctx) => preview("page", ctx),
   chrome: (ctx) => chromium("chrome", ctx),
+  stripe: (ctx) => chromium("chrome", ctx, "stripe"),
+  "chrome-drag": (ctx) => chromium("chrome", ctx, "drag"),
   electron: (ctx) => chromium("electron", ctx),
 };
 
@@ -497,7 +567,7 @@ async function run(args: string[]): Promise<void> {
           const before = await subject.count();
           const start = await observer.mark();
           if (start.front === subject.pid) {
-            row.skipped = "the target app was frontmost";
+            row.skipped = `the target app was frontmost (front ${start.front}, target ${subject.pid})`;
             break;
           }
           const sample: Sample = { landed: false, frontKept: false, cursorKept: false };
@@ -527,7 +597,9 @@ async function run(args: string[]): Promise<void> {
           await subject.afterPress?.();
           sample.landed = await until(async () => (await subject!.count()) >= before + 1, 3_000);
           sample.frontKept = end.front === start.front && end.activations.length === 0;
+          if (!sample.frontKept) sample.focus = { before: start.front, after: end.front, activated: end.activations.map((pid) => `${pid} ${bundleOf(pid) ?? "?"}`) };
           sample.cursorKept = end.moved < 1;
+          if (!sample.cursorKept) sample.pointer = { from: start.cursor, to: end.cursor, moved: end.moved };
           row.samples.push(sample);
           await sleep(300);
         }

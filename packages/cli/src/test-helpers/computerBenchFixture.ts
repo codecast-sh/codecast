@@ -27,20 +27,26 @@ export type Fixture = {
   output: () => string;
 };
 
-export function buildFixture(): string {
+/** Compiles a fixture (a Swift source under scripts/, the bench fixture by
+ *  default) unless its binary is newer. */
+export function buildFixture(source = FIXTURE_SOURCE): string {
   fs.mkdirSync(WORK, { recursive: true });
-  const binary = path.join(WORK, "fixture");
-  const fresh = fs.existsSync(binary) && fs.statSync(binary).mtimeMs > fs.statSync(FIXTURE_SOURCE).mtimeMs;
+  const binary = path.join(WORK, source === FIXTURE_SOURCE ? "fixture" : path.basename(source, ".swift"));
+  const fresh = fs.existsSync(binary) && fs.statSync(binary).mtimeMs > fs.statSync(source).mtimeMs;
   if (!fresh) {
-    const built = spawnSync("swiftc", ["-O", FIXTURE_SOURCE, "-o", binary], { stdio: "inherit" });
-    if (built.status !== 0) throw new Error("the fixture did not compile");
+    const built = spawnSync("swiftc", ["-O", source, "-o", binary], { stdio: "inherit" });
+    if (built.status !== 0) throw new Error(`${path.basename(source)} did not compile`);
   }
   return binary;
 }
 
-export async function launchFixture(extra: string[] = []): Promise<Fixture> {
-  const statusFile = path.join(WORK, `status-${process.pid}-${Date.now()}.json`);
-  const child = spawn(buildFixture(), ["--status-file", statusFile, ...extra], { stdio: ["ignore", "pipe", "inherit"] });
+/** A Swift file under scripts/, by name. */
+export const scriptSource = (name: string) => path.join(import.meta.dir, "..", "..", "scripts", name);
+
+/** Any fixture that prints `READY pid=<n> windows=<title>=<id>,...` works. */
+export async function launchFixture(extra: string[] = [], source = FIXTURE_SOURCE): Promise<Fixture> {
+  const statusFile = path.join(WORK, `status-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`);
+  const child = spawn(buildFixture(source), ["--status-file", statusFile, ...extra], { stdio: ["ignore", "pipe", "inherit"] });
   let seen = "";
   const ready = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("the fixture never said READY")), 60_000);
