@@ -3,7 +3,7 @@
 // event loop. One pass at a time; a pass that runs past its budget is killed
 // and the next tick starts over from the state file.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "../proc.js";
 import { agentSpawnPath } from "../agentSpawnPath.js";
 import { mirrorProcessInvocation } from "../cloud/mirror/process.js";
 

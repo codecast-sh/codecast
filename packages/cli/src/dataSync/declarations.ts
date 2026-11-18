@@ -3,7 +3,7 @@
 // machine that has the repo, and from then on every machine of the person
 // syncs the folder, with the checkout or without it.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { dataFolderFromManifest } from "@codecast/shared/contracts/dataSync";
