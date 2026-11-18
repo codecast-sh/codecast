@@ -34,6 +34,7 @@ const restoreGlobals = replaceGlobals({
   Node: dom.window.Node,
   MutationObserver: dom.window.MutationObserver,
   ResizeObserver: class { observe() {} disconnect() {} },
+  IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} },
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   IS_REACT_ACT_ENVIRONMENT: true,
 });
@@ -127,11 +128,11 @@ function seed(rows: Record<string, unknown>[]) {
   } as any);
 }
 
-async function mountInbox() {
+async function mountInbox(activeSessionId: string | null = null) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  await act(async () => root.render(<MemoryRouter initialEntries={["/inbox"]}><SessionListPanel activeSessionId={null} /></MemoryRouter>));
+  await act(async () => root.render(<MemoryRouter initialEntries={["/inbox"]}><SessionListPanel activeSessionId={activeSessionId} /></MemoryRouter>));
   return {
     host,
     unmount: async () => {
@@ -254,6 +255,30 @@ test("a blocked sub-lead is a sub row under its parent lead, which is the card i
   expect(cardOf(m.host, STANDING)!.compareDocumentPosition(sub) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]")!.textContent).toBe("2 sessions");
   await m.unmount();
+});
+
+// A sub row draws no rows of its own, so a session under a sub-lead is only
+// a count on the sub-lead. Open, it is a row under the parent lead's card.
+test("the open session under a sub-lead renders under the parent lead's card", async () => {
+  const SUB_ROLE_ID = id("orgrolescalling");
+  const SUB_ROLE = { _id: SUB_ROLE_ID, short_id: "or-9", name: "Calling lead", handle: "calling", avatar: "fox", status: "active", tenure_kind: "standing" as const };
+  const SUB = id("substanding");
+  const DEEP = id("deep");
+  seed([
+    standing({ agent_status: "working", is_idle: false, thread_state_status: null }),
+    row(SUB, { title: "Calling lead", is_anchor: true, anchor_id: id("anchorsub"), standing_role_id: SUB_ROLE_ID, role: SUB_ROLE, org_role_id: ROLE_ID }),
+    row(DEEP, { title: "Market rollout", org_role_id: SUB_ROLE_ID, role: SUB_ROLE, is_pinned: true }),
+  ]);
+  const closed = await mountInbox();
+  expect(cardOf(closed.host, SUB)).not.toBeNull();
+  expect(cardOf(closed.host, DEEP)).toBeNull();
+  await closed.unmount();
+
+  const open = await mountInbox(DEEP);
+  const deep = cardOf(open.host, DEEP)!;
+  expect(deep).not.toBeNull();
+  expect(cardOf(open.host, STANDING)!.compareDocumentPosition(deep) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await open.unmount();
 });
 
 test("a card's star flips in the same commit as the toggle, both ways", async () => {

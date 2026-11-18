@@ -4348,6 +4348,18 @@ export function placeInboxRows(
     if (!subsByParent.has(top)) subsByParent.set(top, []);
     subsByParent.get(top)!.push(...move);
   }
+  // The open session is always on the list: nested under a sub row (a role's
+  // session under a sub-lead under its parent lead's card), it moves up to
+  // the top card, whose rows the panel draws.
+  const focusedParent = focusedId ? nestedUnder.get(focusedId) : undefined;
+  const focusedTop = focusedParent ? topCardOf(focusedParent) : undefined;
+  const focusedSiblings = focusedParent ? subsByParent.get(focusedParent) : undefined;
+  if (focusedParent && focusedTop && focusedTop !== focusedParent && focusedSiblings?.some((sub) => sub._id === focusedId)) {
+    const stay = focusedSiblings.filter((sub) => sub._id !== focusedId);
+    if (stay.length) subsByParent.set(focusedParent, stay); else subsByParent.delete(focusedParent);
+    if (!subsByParent.has(focusedTop)) subsByParent.set(focusedTop, []);
+    subsByParent.get(focusedTop)!.push(scoped[focusedId!] ?? visibleSessions[focusedId!]);
+  }
   const workerCountByParent = new Map<string, number>();
   const workersNeedingYouByParent = new Map<string, InboxSession[]>();
   for (const w of spawnedPresent) {
