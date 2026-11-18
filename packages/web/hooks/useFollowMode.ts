@@ -11,7 +11,7 @@ import { subscribeNavEvents } from "../store/viewNav";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
 import { useOpenSession } from "./useOpenSession";
-import { isCallPanelWindow } from "../lib/desktop";
+import { isCallPanelWindow, isPaletteWindow } from "../lib/desktop";
 import { viewedConversationId } from "./usePresenceReporter";
 import { applyFollowView, followersSig, followViewSig, planFollowApply, planViewApply, samePath, shouldEndFollow, subscribeFollowSurfaces, type FollowView } from "../lib/follow";
 import { useLeaderView } from "./useFollowSurface";
@@ -56,8 +56,7 @@ function inEditable(target: EventTarget | null): boolean {
  *  others only mirror the state for their faces and pills. */
 function isFollowHost(): boolean {
   if (typeof window === "undefined") return false;
-  if (isCallPanelWindow()) return false;
-  return !window.location?.pathname?.startsWith("/palette");
+  return !isCallPanelWindow() && !isPaletteWindow();
 }
 
 export function useFollowMode(): void {

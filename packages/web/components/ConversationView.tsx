@@ -1765,7 +1765,10 @@ const ConversationViewInner = (
     if (box) {
       size = Math.round(horizontal ? box.inlineSize : box.blockSize);
     } else {
-      const cached = instance.itemSizeCache.get(key);
+      // The mount-time call has no observer entry. A height this row had on an
+      // earlier visit stands in for the forced layout read; the observer's
+      // first entry, a frame later, corrects it if the row changed.
+      const cached = instance.itemSizeCache.get(key) ?? VIRT_HEIGHT_CACHE.get(virtHeightKey(key, rowDensityKey(index)));
       size = cached !== undefined ? cached : (element as HTMLElement)[horizontal ? "offsetWidth" : "offsetHeight"];
     }
     // A fast-scroll placeholder reports its believed height back; keep that
@@ -1800,6 +1803,11 @@ const ConversationViewInner = (
     // that moves the caret, so each keystroke paid for every visible row.
     directDomUpdatesMode: "position",
     onChange: (instance) => { updateScrollProgress(instance); holdRef.current?.onChange(); },
+    // A measurement re-renders with the next batch, not synchronously inside
+    // the ref or resize callback: synchronous re-renders turned the first
+    // paint of a conversation into a chain of commits, each forcing the next
+    // row's layout read against a freshly changed page.
+    useFlushSync: false,
     count: timeline.length,
     getScrollElement: () => containerRef.current,
     getItemKey,
@@ -1846,7 +1854,8 @@ const ConversationViewInner = (
     const previous = rowLayoutsRef.current;
     const layouts = new Map<string | number, string>();
     const corrections: { index: number; size: number }[] = [];
-    const canMeasure = containerRef.current?.offsetParent != null;
+    // offsetParent forces a layout; ask only once a row actually needs measuring.
+    let canMeasure: boolean | undefined;
     for (let index = 0; index < timeline.length; index++) {
       const key = getItemKey(index);
       const estimate = estimateUncachedSize(index);
@@ -1854,6 +1863,7 @@ const ConversationViewInner = (
       layouts.set(key, layout);
       if (!previous.has(key) || previous.get(key) === layout) continue;
       const element = virtualizer.elementsCache.get(key) as HTMLElement | undefined;
+      canMeasure ??= containerRef.current?.offsetParent != null;
       const mounted = canMeasure && element?.isConnected && element.dataset.index === String(index) && element.dataset.vkey === String(key);
       corrections.push({ index, size: estimate === 0 ? 0 : mounted ? element.offsetHeight : estimateSize(index) });
     }
@@ -2653,7 +2663,10 @@ const ConversationViewInner = (
   maybeLoadOlderRef.current = () => {
     const sc = containerRef.current;
     const pp = paginationPropsRef.current;
-    if (!sc || !pp.onLoadOlder || sc.clientHeight === 0) return;
+    // The conditions that need no layout first: this runs on every scroll
+    // event, and a read of scrollHeight against a changed page is a full layout.
+    if (!sc || !pp.onLoadOlder || !pp.hasMoreAbove || pp.isLoadingOlder || pp.isLoadingNewer || Date.now() < paginationCooldownRef.current) return;
+    if (sc.clientHeight === 0) return;
     const underfilled = sc.scrollHeight <= sc.clientHeight;
     if (!loadOlderArmedRef.current && !underfilled) return;
     if (!shouldLoadOlder({
@@ -2684,7 +2697,8 @@ const ConversationViewInner = (
   maybeLoadNewerRef.current = () => {
     const sc = containerRef.current;
     const pp = paginationPropsRef.current;
-    if (!sc || !pp.onLoadNewer || sc.clientHeight === 0) return;
+    if (!sc || !pp.onLoadNewer || !pp.hasMoreBelow || pp.isLoadingOlder || pp.isLoadingNewer || Date.now() < paginationCooldownRef.current) return;
+    if (sc.clientHeight === 0) return;
     if (!loadNewerArmedRef.current && sc.scrollHeight > sc.clientHeight) return;
     if (!shouldLoadNewer({
       nearBottom: sc.scrollHeight - sc.scrollTop - sc.clientHeight < BOTTOM_LOAD_TRIGGER_PX,
@@ -4526,10 +4540,19 @@ const ConversationViewInner = (
                         Copy ID (<span className="modern:font-mono">{conversation.short_id}</span>)
                       </DropdownMenuItem>
                     )}
+                    {/* The tmux pill's copy button is the first thing the
+                        header squeeze sheds (cq-sq1), so the menu repeats it. */}
+                    {!guest && managedSession?.tmux_session && (
+                      <DropdownMenuItem onSelect={() => setTimeout(copyTmuxAttach)}>
+                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        Copy tmux attach
+                      </DropdownMenuItem>
+                    )}
                     {/* Simple view strips the header's branch chip — resurface
                         its copy here so the hamburger stays the full command
-                        surface in that mode. The tmux pill keeps its own copy
-                        button in both modes. */}
+                        surface in that mode. */}
                     {!guest && simpleViewPref && conversation?.git_branch && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.git_branch!).then(() => toast.success("Branch copied")).catch(() => toast.error("Failed to copy")); }); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

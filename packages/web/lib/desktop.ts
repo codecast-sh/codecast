@@ -1,4 +1,5 @@
 import { conversationIdFromPath } from "./desktopHandoff";
+import { isCallPanelWindow, isPaletteWindow } from "./windowRole";
 import { useSyncExternalStore } from "react";
 import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
 import { BrowserBannerGate, bannerEntity } from "./notificationGate";
@@ -611,10 +612,7 @@ export function callPanelRoute(
   return `${CALL_PANEL_ROUTE}?${q.toString()}`;
 }
 
-/** This renderer IS the call panel: it hosts the call and draws the stage. */
-export function isCallPanelWindow(): boolean {
-  return typeof window !== "undefined" && window.__CODECAST_ELECTRON__?.isCallPanelWindow === true;
-}
+export { isCallPanelWindow, isPaletteWindow };
 
 /**
  * A call panel exists somewhere — this window or another.

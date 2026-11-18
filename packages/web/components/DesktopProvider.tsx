@@ -27,6 +27,7 @@ import {
   reportDesktopWindowState,
   isDetachedTabWindow,
   isSatelliteWindow,
+  isPaletteWindow,
   navigateFromHere,
   onCallPanelHandback,
   onVoiceMirror,
@@ -173,8 +174,7 @@ export function DesktopProvider() {
 
   useWatchEffect(() => {
     if (!notifications) return;
-    const isPalette = typeof window !== "undefined" && window.location.pathname === "/palette";
-    if (isPalette) return;
+    if (isPaletteWindow()) return;
     const canNotify = isDesktop() || hasBrowserNotificationPermission();
 
     if (!initializedRef.current) {

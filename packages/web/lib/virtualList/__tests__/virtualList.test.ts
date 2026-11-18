@@ -168,7 +168,7 @@ describe("createScrollHold", () => {
   });
 });
 
-import { createScrollSeekTracker, makeSeekKeep } from "../scrollSeek";
+import { attachScrollSeek, createScrollSeekTracker, makeSeekKeep } from "../scrollSeek";
 
 describe("scroll seek", () => {
   const run = (steps: Array<[top: number, at: number, input?: boolean]>) => {
@@ -192,6 +192,27 @@ describe("scroll seek", () => {
   test("slow reading never seeks", () => {
     const { seen } = run([[0, 0, true], [20, 16, true], [40, 32, true], [60, 48, true]]);
     expect(seen).toEqual([]);
+  });
+
+  // The list's own re-anchoring scrolls must not read scrollTop: each read
+  // against a changed page is a forced layout.
+  test("a scroll nobody made reads no scroll position", () => {
+    const listeners: Record<string, () => void> = {};
+    let reads = 0;
+    const sc = {
+      addEventListener: (type: string, fn: () => void) => { listeners[type] = fn; },
+      removeEventListener: () => {},
+      get scrollTop() { reads++; return 0; },
+      clientWidth: 600,
+    } as unknown as HTMLElement;
+    const detach = attachScrollSeek(sc, () => {});
+    listeners.scroll();
+    listeners.scroll();
+    expect(reads).toBe(0);
+    listeners.wheel();
+    listeners.scroll();
+    expect(reads).toBe(1);
+    detach();
   });
 
   test("rows on screen when seeking began stay real", () => {

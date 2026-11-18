@@ -1,7 +1,9 @@
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, isConvexId, ensureHydrated, visualOrderViewSig, inboxMemberRows, sessionRowFromConversation, type InboxSession } from "../store/inboxStore";
+import { useInboxStore, isConvexId, ensureHydrated, visualOrderViewSig, inboxMemberRows, sessionRowFromConversation, sessionStructuralSig, type InboxSession } from "../store/inboxStore";
+import { makeCollectionSig } from "../store/wakeSig";
 import { whenInputQuiet } from "../lib/inputQuiet";
+import { windowDrawsTranscripts } from "../lib/windowRole";
 import { windowOrgTree } from "../store/orgSlice";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { isHostedAgentType } from "@codecast/shared/contracts";
@@ -382,9 +384,20 @@ export const WARM_COALESCE_MS = 750;
 /** A pass waits for a pause in typing, but never longer than this. */
 const WARM_MAX_DEFER_MS = 3_000;
 
+// What a pass reads, as signatures: a row's place and membership (its
+// structural signature) and the fields warmRowsFromState plans from; each
+// conversation's cached tail; whether older pages remain. A heartbeat or a
+// streamed token in some other field changes none of them and schedules
+// nothing.
+const warmSessionsSig = makeCollectionSig<InboxSession>((s) => `${sessionStructuralSig(s)}|${s.message_count ?? ""}|${s.is_anchor ? 1 : 0}|${s.agent_type ?? ""}`);
+const warmMessagesSig = makeCollectionSig<{ timestamp?: number }[] | undefined>((m) => (m ? `${m.length}|${m[m.length - 1]?.timestamp ?? ""}` : null));
+const warmPaginationSig = makeCollectionSig<{ hasMoreAbove?: boolean } | undefined>((p) => (p?.hasMoreAbove ? "1" : "0"));
+
 type WarmInputs = Pick<ReturnType<typeof useInboxStore.getState>, "sessions" | "messages" | "pagination" | "liveInboxIds" | "teamInboxIds" | "orgTree">;
 const warmInputsChanged = (a: WarmInputs, b: WarmInputs) =>
-  a.sessions !== b.sessions || a.messages !== b.messages || a.pagination !== b.pagination
+  (a.sessions !== b.sessions && warmSessionsSig(a.sessions) !== warmSessionsSig(b.sessions))
+  || (a.messages !== b.messages && warmMessagesSig(a.messages) !== warmMessagesSig(b.messages))
+  || (a.pagination !== b.pagination && warmPaginationSig(a.pagination) !== warmPaginationSig(b.pagination))
   || a.liveInboxIds !== b.liveInboxIds || a.teamInboxIds !== b.teamInboxIds || a.orgTree !== b.orgTree;
 
 /**
@@ -403,6 +416,9 @@ let loopRefs = 0;
 let stopLoop: (() => void) | null = null;
 
 export function startWarmLoop(convex: ConvexClient): () => void {
+  // Messages never replicate between windows, so a window that never draws a
+  // transcript has no use for a warm cache of its own.
+  if (!windowDrawsTranscripts()) return () => {};
   loopRefs++;
   if (!stopLoop) stopLoop = runWarmLoop(convex);
   else warmVisibleSessions(convex);

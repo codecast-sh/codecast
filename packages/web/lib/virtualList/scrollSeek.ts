@@ -65,6 +65,12 @@ export function createScrollSeekTracker(onChange: (seeking: boolean) => void, o:
       if (idle) clearTimeout(idle);
       idle = setTimeout(() => { speed = 0; lastTop = null; set(false); }, idleMs);
     },
+    /** Whether a scroll at `now` can move the state: only the reader's scrolls
+     *  enter a seek, and only a seek has anything to leave. */
+    wants(now: number) { return seeking || dragging || now - inputAt <= inputWindow; },
+    /** A scroll nobody made (the list re-anchoring itself): forget the last
+     *  position so the next reader scroll measures from its own start. */
+    skip() { lastTop = null; },
     get seeking() { return seeking; },
     dispose() { if (idle) clearTimeout(idle); },
   };
@@ -89,7 +95,13 @@ export function attachScrollSeek(sc: HTMLElement, onChange: (seeking: boolean) =
     window.addEventListener("pointerup", up, true);
     window.addEventListener("pointercancel", up, true);
   };
-  const onScroll = () => t.scroll(sc.scrollTop, now());
+  // scrollTop is read only for scrolls that can change the answer: a read
+  // during the list's own re-anchoring forces a layout of a changed page.
+  const onScroll = () => {
+    const at = now();
+    if (t.wants(at)) t.scroll(sc.scrollTop, at);
+    else t.skip();
+  };
   sc.addEventListener("wheel", onInput, { passive: true });
   sc.addEventListener("touchmove", onInput, { passive: true });
   sc.addEventListener("keydown", onKey);
