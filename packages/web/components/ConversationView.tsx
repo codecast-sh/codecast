@@ -2332,9 +2332,15 @@ const ConversationViewInner = (
       const scrollTop = el.scrollTop;
       const containerRect = el.getBoundingClientRect();
       const virtualItems = virtualizer.getVirtualItems();
+      // The virtualizer holds each mounted row by key; a selector walk over the
+      // feed per row per frame cost more than the boxes themselves.
+      const rowEl = (v: { key: string | number; index: number }) => {
+        const node = virtualizer.elementsCache.get(v.key) as HTMLElement | undefined;
+        return node?.isConnected && node.dataset.index === String(v.index) ? node : null;
+      };
       const rects = [];
       for (const v of virtualItems) {
-        const domEl = el.querySelector(`[data-index="${v.index}"]`);
+        const domEl = rowEl(v);
         if (!domEl) continue;
         const r = domEl.getBoundingClientRect();
         rects.push({ index: v.index, top: r.top, bottom: r.bottom });
@@ -2397,7 +2403,7 @@ const ConversationViewInner = (
           const nextTlIdx = stickyUserMsgIndices[nextArrayIdx];
           const nextVItem = virtualItems.find(v => v.index === nextTlIdx);
           if (nextVItem) {
-            const nextDom = el.querySelector(`[data-index="${nextTlIdx}"]`);
+            const nextDom = rowEl(nextVItem);
             const nextTop = nextDom
               ? nextDom.getBoundingClientRect().top - containerRect.top
               : nextVItem.start - scrollTop;
@@ -2448,10 +2454,14 @@ const ConversationViewInner = (
         setStickyMsgVisible(false);
       }
     };
-    check();
-    const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
+    // Once per frame, never synchronously in the commit that changed an input:
+    // these inputs move on every streamed message, and each check reads the
+    // boxes of every rendered row.
+    let frame = 0;
+    const schedule = () => { if (!ticking) { ticking = true; frame = requestAnimationFrame(check); } };
+    schedule();
+    el.addEventListener('scroll', schedule, { passive: true });
+    return () => { el.removeEventListener('scroll', schedule); cancelAnimationFrame(frame); };
   }, [stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, virtualizer, timeline, fallbackStickyContent, serverUserMessages, stickyEligibleServerIds, loadedMessageIds, headerHeight, stickyDisabled]);
 
   const scrollToMessageById = useCallback((messageId: string) => {
