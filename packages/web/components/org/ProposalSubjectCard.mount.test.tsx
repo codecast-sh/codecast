@@ -16,7 +16,13 @@ for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButton
   const v = (dom.window as any)[key];
   if (v !== undefined) Object.defineProperty(globalThis, key, { value: v, configurable: true, writable: true });
 }
-(globalThis as any).ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
+// Like a browser's, the observer answers once for each element it starts watching (hooks/useOverflows waits on that first answer).
+(globalThis as any).ResizeObserver = class {
+  constructor(private cb: (entries: { target: Element }[]) => void) {}
+  observe(target: Element) { queueMicrotask(() => this.cb([{ target }])); }
+  unobserve() {}
+  disconnect() {}
+};
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 // A clamp asks scrollHeight; jsdom answers 0. Twenty pixels a line, ninety characters to a line.
 Object.defineProperty(dom.window.Element.prototype, "scrollHeight", { configurable: true, get() { return Math.ceil(((this as Element).textContent?.length ?? 0) / 90) * 20; } });
@@ -335,7 +341,7 @@ test("every text field clamps at two lines with show all and show less, except t
   child.done();
   // op-903's charter runs to 1449 characters: the word appears, and opens the whole text.
   const long = mount({ card: cardOf(ORG_LONG_CHARTER_FIXTURE_PROPOSAL.changes, "Partnerships lead", ORG_RECORDS_FIXTURE_LIVE), ordinal: 2, onAnswer });
-  // The clamp measures in a microtask after the commit (hooks/useOverflows).
+  // The clamp measures on the observer's first answer after the commit (hooks/useOverflows).
   await React.act(async () => {});
   const charter = field("charter");
   expect(charter.previousElementSibling!.textContent).toBe("Charter");
