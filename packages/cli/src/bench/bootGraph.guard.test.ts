@@ -711,7 +711,8 @@ describe("command groups stay off the boot graph", () => {
     // for max-lines, no new code.
     // 611 the same day: contracts/messagingPolicy.ts, through orgWhere.ts (no imports).
     // 612 the same day: ccRateLimitHeaders.ts, out of ccAccounts.ts, the same split.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(612);
+    // 613 the same day: remote/localSession.ts, out of remote/session-move.ts, the same split.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(613);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
