@@ -133,6 +133,10 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and ship.exit_code = 3", { outcome: "failure", "ship.exit_code": "3" }, true],
     ["outcome = failure and ship.exit_code = 3", { outcome: "failure", "ship.exit_code": "1" }, false],
     ["outcome = failure and ship.exit_code = 3", { outcome: "success", "ship.exit_code": "3" }, false],
+    ["outcome = failure and gauge.exit_code = 5", { outcome: "failure", "gauge.exit_code": "5" }, true],
+    ["outcome = failure and gauge.exit_code = 5", { outcome: "failure", "gauge.exit_code": "3" }, false],
+    ["outcome = failure and gauge.exit_code != 5", { outcome: "failure", "gauge.exit_code": "4" }, true],
+    ["outcome = failure and gauge.exit_code != 5", { outcome: "failure", "gauge.exit_code": "5" }, false],
     ["outcome = failure and ship.exit_code != 3", { outcome: "failure", "ship.exit_code": "1" }, true],
     ["outcome = failure and ship.exit_code != 3", { outcome: "failure", "ship.exit_code": "3" }, false],
     // check.cast: exit 2 from verify means the check could not judge, not that it failed.
