@@ -857,4 +857,4 @@
 /* Modern (.modern-style): a document and the draft tools read in the interface sans; code
    spans keep .tiptap code's mono. */
 .modern-style .doc-editor,
-.modern-style :is(.mention-date-resolved, .draft-lab-button, .draft-panel, .draft-trimbar) { font-family: var(--font-ui), sans-serif; }
+.mention-date-resolved:is(.modern-style *), .draft-lab-button:is(.modern-style *), .draft-panel:is(.modern-style *), .draft-trimbar:is(.modern-style *) { font-family: var(--font-ui), sans-serif; }

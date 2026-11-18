@@ -413,7 +413,12 @@ export function QueuePageClient() {
   // Which surface the inbox home shows: the fleet board (default) or the
   // chronological feed. Persisted per-user (stamped LWW).
   const inboxHome = useInboxStore((s) => resolveInboxHome(s.clientState.ui));
-  const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
+  // Sorted once per structural change (the same signature this component
+  // wakes on): sorting every row classifies each one, and the sessions
+  // object is new on every heartbeat, so any other re-render re-sorted all.
+  const sessionsSig = sessionsWakeSig(sessions);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const sortedSessions = useMemo(() => sortSessions(sessions), [sessionsSig]);
 
 
   const isPopstateRef = useRef(false);

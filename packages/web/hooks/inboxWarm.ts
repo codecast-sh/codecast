@@ -1,6 +1,6 @@
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, isConvexId, ensureHydrated, visualOrderViewSig, inboxMemberRows, sessionRowFromConversation, sessionStructuralSig, type InboxSession } from "../store/inboxStore";
+import { useInboxStore, isConvexId, ensureHydrated, visualOrderViewSig, inboxMemberRows, placeInboxRows, sessionRowFromConversation, sessionStructuralSig, type InboxSession } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { whenInputQuiet } from "../lib/inputQuiet";
 import { windowDrawsTranscripts } from "../lib/windowRole";
@@ -315,8 +315,11 @@ export function warmOrder(st: ReturnType<typeof useInboxStore.getState>): { id: 
     byId.set(id, entry);
     order.push(entry);
   };
-  for (const s of st.visualOrder()) add(String(s._id), s);
-  for (const s of inboxMemberRows(st, st.currentSessionId ?? null)) add(String(s._id), s);
+  for (const s of renderedOrder(st)) add(String(s._id), s);
+  // Membership without the focus rule: the open conversation is warm anyway,
+  // and asking per focused id gave placement a new memo slot on every switch,
+  // two whole placements per switch spent only on warming.
+  for (const s of inboxMemberRows(st, null)) add(String(s._id), s);
   // A role's standing session needs its row, and the row needs is_anchor:
   // placement files a standing session hidden by it, so a copy seeded without
   // it (before seeds carried it) shows as an active card until refetched.
@@ -325,6 +328,23 @@ export function warmOrder(st: ReturnType<typeof useInboxStore.getState>): { id: 
     if (id) add(id, st.sessions[id], !st.sessions[id]?.is_anchor);
   }
   for (const s of Object.values(st.sessions)) if (s.standing_role_id) add(String(s._id), s, !s.is_anchor);
+  return order;
+}
+
+// The rendered order, recomputed only when what it is drawn from moved: the
+// placement (its per-row map keeps its identity while no row changed bucket)
+// and the view's own inputs. It only sets warm priority, so an order that
+// shifted inside a bucket waits for the next structural change; the rows
+// themselves are read from the store on every pass.
+let renderedMemo: { placements: unknown; view: string; deps: unknown[]; order: InboxSession[] } | null = null;
+function renderedOrder(st: ReturnType<typeof useInboxStore.getState>): InboxSession[] {
+  const { placements } = placeInboxRows(st, { focusedId: st.currentSessionId ?? null });
+  const view = visualOrderViewSig(st);
+  const deps: unknown[] = [st.bucketAssignments, st.buckets, st.collapsedSections, st.favorites, st.plans, st.scheduleNavSets, st.recentFreezeOrder, st.orgTree, st.clientState.ui];
+  const m = renderedMemo;
+  if (m && m.placements === placements && m.view === view && deps.every((d, i) => d === m.deps[i])) return m.order;
+  const order = st.visualOrder();
+  renderedMemo = { placements, view, deps, order };
   return order;
 }
 

@@ -1534,9 +1534,11 @@ export function attachTitlebarHead(el: HTMLElement, corner: number = TRAFFIC_LIG
     measure();
     settle = [400, 900].map((ms) => setTimeout(measure, ms));
   };
-  kick();
-  const ro = new ResizeObserver(kick);
-  ro.observe(el);
+  // The observer's first callback measures (it lands after layout, before
+  // paint); a read here, on mount, laid out the page the mount had changed.
+  const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(kick);
+  if (ro) ro.observe(el);
+  else kick();
   // Vertical moves (a tab bar or breadcrumb appearing above) change how much of
   // the row lies in the titlebar band; horizontal moves (a rail opening beside
   // it) change how much lies in the traffic-light corner. Neither resizes the
@@ -1560,7 +1562,7 @@ export function attachTitlebarHead(el: HTMLElement, corner: number = TRAFFIC_LIG
   window.addEventListener("resize", onResize);
   return () => {
     settle.forEach(clearTimeout);
-    ro.disconnect();
+    ro?.disconnect();
     observers.forEach((o) => o.disconnect());
     window.removeEventListener("resize", onResize);
     el.classList.remove("titlebar-head", "titlebar-head--edge", "titlebar-head--under");
@@ -1629,10 +1631,15 @@ export function guardZenCorner(corner: number, controls: Element): () => void {
     }
   };
   // At most one hit test per CHECK_GAP_MS however fast the DOM churns (a
-  // streaming transcript mutates continuously).
+  // streaming transcript mutates continuously). The test runs just after a
+  // paint, when the page is usually laid out already: run straight after a
+  // mutation, every hit test laid out the page the mutation had changed.
+  let frame = 0;
+  let tail: ReturnType<typeof setTimeout> | null = null;
+  const afterPaint = () => { frame = requestAnimationFrame(() => { tail = setTimeout(check, 0); }); };
   const schedule = () => {
     if (pending) return;
-    pending = setTimeout(() => { cancelQuiet = whenInputQuiet(check, 2000); }, CHECK_GAP_MS);
+    pending = setTimeout(() => { cancelQuiet = whenInputQuiet(afterPaint, 2000); }, CHECK_GAP_MS);
   };
   schedule();
   const mo = new MutationObserver(schedule);
@@ -1641,6 +1648,8 @@ export function guardZenCorner(corner: number, controls: Element): () => void {
   return () => {
     mo.disconnect();
     if (pending) clearTimeout(pending);
+    cancelAnimationFrame(frame);
+    if (tail) clearTimeout(tail);
     cancelQuiet?.();
     window.removeEventListener("resize", schedule);
     release();

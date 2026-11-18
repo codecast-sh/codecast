@@ -60,8 +60,9 @@ await test("switch", "a warm conversation switch fetches no history and opens th
       convexSubscribes: 15,
       // Two writes that change no key: each wakes every subscriber for nothing.
       storeWrites: 2,
-      // The pane swaps its subtrees; nothing else on the page moves.
-      domMutations: 23,
+      // The pane swaps its subtrees; nothing else on the page moves. Six rows
+      // of overscan each side (ConversationView) set how many it mounts.
+      domMutations: 21,
     });
   }
 });

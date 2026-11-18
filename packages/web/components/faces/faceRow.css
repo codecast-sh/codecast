@@ -1699,4 +1699,4 @@
 /* Modern (.modern-style): cards and their lines are words, in the interface sans; count
    badges keep mono. */
 .modern-style .engagement-card :is(.walkie-stage, .ring-card-line),
-.modern-style :is(.face-card, .face-row-size-word) { font-family: var(--font-ui); }
+.face-card:is(.modern-style *), .face-row-size-word:is(.modern-style *) { font-family: var(--font-ui); }

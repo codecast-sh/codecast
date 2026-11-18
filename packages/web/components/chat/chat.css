@@ -4089,7 +4089,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 @media (max-width: 640px) { .ch-community-links { display: none; } }
 
 /* Modern (.modern-style): words in the interface sans. */
-.modern-style :is(.ch-listen-handle, .ch-community-bar) { font-family: var(--font-ui, system-ui, sans-serif); }
+.ch-listen-handle:is(.modern-style *), .ch-community-bar:is(.modern-style *) { font-family: var(--font-ui, system-ui, sans-serif); }
 
 /* ── Modern (.modern-style on <html>): chat's controls are the app's
    primitives (components/ui/modernLook.ts), drawn from the same tokens: the

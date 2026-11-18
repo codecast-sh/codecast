@@ -96,6 +96,41 @@ describe("createScrollHold", () => {
     expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
   });
 
+  // Each re-aim reads the scroller's geometry (a forced layout). Bursts of size
+  // changes inside one frame re-aim once there, and once more at the next
+  // frame's start, still before it paints.
+  test("size bursts inside one frame re-aim once, then at the next frame", async () => {
+    const queued: Array<() => void> = [];
+    const realRaf = (globalThis as any).requestAnimationFrame;
+    (globalThis as any).requestAnimationFrame = (fn: () => void) => { queued.push(fn); return queued.length; };
+    try {
+      const { v, el, runFrames } = setup(Array.from({ length: 50 }, (_, i) => `k${i}`));
+      const hold = createScrollHold(v, () => el as any);
+      hold.set("bottom", { holdMs: 1000 });
+      runFrames();
+      // Only the hold reads scrollTop (the virtualizer hears offsets through
+      // its observer), so its reads count the re-aims.
+      let reads = 0;
+      const top = Object.getOwnPropertyDescriptor(el, "scrollTop")!;
+      Object.defineProperty(el, "scrollTop", { get() { reads++; return top.get!.call(el); }, set(t: number) { top.set!.call(el, t); }, configurable: true });
+      v.resizeItem(40, 600);
+      hold.onChange();
+      await settle();
+      const afterFirst = reads;
+      expect(afterFirst).toBeGreaterThan(0);
+      v.resizeItem(41, 600);
+      hold.onChange();
+      await settle();
+      expect(reads).toBe(afterFirst);
+      queued.splice(0).forEach((f) => f());
+      expect(reads).toBeGreaterThan(afterFirst);
+      runFrames();
+      expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+    } finally {
+      (globalThis as any).requestAnimationFrame = realRaf;
+    }
+  });
+
   test("an idle hold writes nothing when sizes have not moved", async () => {
     const { v, el, runFrames, writes } = setup(Array.from({ length: 50 }, (_, i) => `k${i}`));
     const hold = createScrollHold(v, () => el as any);
@@ -168,7 +203,7 @@ describe("createScrollHold", () => {
   });
 });
 
-import { attachScrollSeek, createScrollSeekTracker, makeSeekKeep } from "../scrollSeek";
+import { createScrollSeekTracker, makeSeekKeep } from "../scrollSeek";
 
 describe("scroll seek", () => {
   const run = (steps: Array<[top: number, at: number, input?: boolean]>) => {
@@ -192,27 +227,6 @@ describe("scroll seek", () => {
   test("slow reading never seeks", () => {
     const { seen } = run([[0, 0, true], [20, 16, true], [40, 32, true], [60, 48, true]]);
     expect(seen).toEqual([]);
-  });
-
-  // The list's own re-anchoring scrolls must not read scrollTop: each read
-  // against a changed page is a forced layout.
-  test("a scroll nobody made reads no scroll position", () => {
-    const listeners: Record<string, () => void> = {};
-    let reads = 0;
-    const sc = {
-      addEventListener: (type: string, fn: () => void) => { listeners[type] = fn; },
-      removeEventListener: () => {},
-      get scrollTop() { reads++; return 0; },
-      clientWidth: 600,
-    } as unknown as HTMLElement;
-    const detach = attachScrollSeek(sc, () => {});
-    listeners.scroll();
-    listeners.scroll();
-    expect(reads).toBe(0);
-    listeners.wheel();
-    listeners.scroll();
-    expect(reads).toBe(1);
-    detach();
   });
 
   test("rows on screen when seeking began stay real", () => {

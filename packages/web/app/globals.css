@@ -2406,7 +2406,19 @@ diffs-container {
 .titlebar-head.titlebar-head--under {
   padding-top: 28px !important;
 }
-:is(.electron-drag-region, .titlebar-head) :is(button, a, input, textarea, select, [role="button"], [role="tab"], [role="combobox"], [role="menuitem"], [contenteditable="true"]) {
+/* One selector per control (rightmost), so each is tested only by elements of
+   its kind; a list on the right is tested against every element. Every rule
+   that sets app-region on a control says no-drag, so weight does not matter. */
+:is(.electron-drag-region, .titlebar-head) button,
+:is(.electron-drag-region, .titlebar-head) a,
+:is(.electron-drag-region, .titlebar-head) input,
+:is(.electron-drag-region, .titlebar-head) textarea,
+:is(.electron-drag-region, .titlebar-head) select,
+:is(.electron-drag-region, .titlebar-head) [role="button"],
+:is(.electron-drag-region, .titlebar-head) [role="tab"],
+:is(.electron-drag-region, .titlebar-head) [role="combobox"],
+:is(.electron-drag-region, .titlebar-head) [role="menuitem"],
+:is(.electron-drag-region, .titlebar-head) [contenteditable="true"] {
   -webkit-app-region: no-drag;
 }
 /* Anything that floats over the titlebar. A drag region eats pointer events
@@ -4223,7 +4235,7 @@ diffs-container {
 .modern-style diffs-container {
   --diffs-header-font-family: var(--font-mono), monospace;
 }
-.modern-style :is(.fs-link, .cc-railx-row-where) {
+.fs-link:is(.modern-style *), .cc-railx-row-where:is(.modern-style *) {
   font-family: var(--font-mono), monospace;
 }
 
@@ -6600,7 +6612,8 @@ diffs-container {
   width: 100%;
   line-height: normal;
 }
-:is(p, li, h1, h2, h3, h4, h5, h6):has(.object-reveal-slot[data-reveal-inline])::after {
+/* One selector per tag, not :is(p, li, h1…): each is then tested only by its tag. */
+p:has(.object-reveal-slot[data-reveal-inline])::after, li:has(.object-reveal-slot[data-reveal-inline])::after, h1:has(.object-reveal-slot[data-reveal-inline])::after, h2:has(.object-reveal-slot[data-reveal-inline])::after, h3:has(.object-reveal-slot[data-reveal-inline])::after, h4:has(.object-reveal-slot[data-reveal-inline])::after, h5:has(.object-reveal-slot[data-reveal-inline])::after, h6:has(.object-reveal-slot[data-reveal-inline])::after {
   content: "";
   display: block;
   clear: both;
@@ -8025,20 +8038,22 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
    a person reads: the alpha steps from 50 up resolve to the solid token.
    Steps below 50 are left alone, they mark separators and resting icons.
    :where() keeps this at single-class weight, so hover:, dark: and modern:
-   variants on the same element still win. */
-.modern-style :where([class~="text-sol-text-dim/50"], [class~="text-sol-text-dim/55"], [class~="text-sol-text-dim/60"], [class~="text-sol-text-dim/70"], [class~="text-sol-text-dim/80"]) {
+   variants on the same element still win. Each rule is keyed by the class
+   itself (rightmost), so only elements carrying it test the rule; an
+   attribute or :is() list on the right is tested against every element. */
+.text-sol-text-dim\/50:where(.modern-style *), .text-sol-text-dim\/55:where(.modern-style *), .text-sol-text-dim\/60:where(.modern-style *), .text-sol-text-dim\/70:where(.modern-style *), .text-sol-text-dim\/80:where(.modern-style *) {
   color: var(--sol-text-dim);
 }
-.modern-style :where([class~="text-sol-text-muted/50"], [class~="text-sol-text-muted/70"], [class~="text-sol-text-muted/80"], [class~="text-sol-text-muted/85"]) {
+.text-sol-text-muted\/50:where(.modern-style *), .text-sol-text-muted\/70:where(.modern-style *), .text-sol-text-muted\/80:where(.modern-style *), .text-sol-text-muted\/85:where(.modern-style *) {
   color: var(--sol-text-muted);
 }
-.modern-style :where([class~="text-sol-text/60"], [class~="text-sol-text/70"], [class~="text-sol-text/75"]) {
+.text-sol-text\/60:where(.modern-style *), .text-sol-text\/70:where(.modern-style *), .text-sol-text\/75:where(.modern-style *) {
   color: var(--sol-text-muted);
 }
-.modern-style :where([class~="text-sol-cyan/50"], [class~="text-sol-cyan/60"], [class~="text-sol-cyan/70"], [class~="text-sol-cyan/80"], [class~="text-sol-cyan/90"]) {
+.text-sol-cyan\/50:where(.modern-style *), .text-sol-cyan\/60:where(.modern-style *), .text-sol-cyan\/70:where(.modern-style *), .text-sol-cyan\/80:where(.modern-style *), .text-sol-cyan\/90:where(.modern-style *) {
   color: var(--sol-cyan);
 }
-.modern-style :where([class~="text-sol-amber/60"], [class~="text-sol-amber/70"]) {
+.text-sol-amber\/60:where(.modern-style *), .text-sol-amber\/70:where(.modern-style *) {
   color: var(--sol-amber);
 }
 /* An ops pill sets its ink inline and paints its ground as 14% of that ink.
@@ -8050,16 +8065,17 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 /* Raw Tailwind palette text (text-amber-400, text-red-400 and the like) was
    picked for dark grounds and lands near 2:1 to 3.5:1 on Modern's near-white.
    On the light theme it resolves to the theme's own accent of that hue, which
-   is tuned to pass. Single-class weight: hover: and dark: variants still win. */
-:where(.modern-style:not(.dark)) :is(.text-red-300, .text-red-400, .text-red-500, .text-rose-300, .text-rose-400, .text-rose-500) { color: var(--sol-red); }
-:where(.modern-style:not(.dark)) :is(.text-amber-300, .text-amber-400, .text-amber-500) { color: var(--sol-amber); }
-:where(.modern-style:not(.dark)) :is(.text-yellow-300, .text-yellow-400, .text-yellow-500, .text-lime-300, .text-lime-400, .text-lime-500) { color: var(--sol-yellow); }
-:where(.modern-style:not(.dark)) :is(.text-orange-300, .text-orange-400, .text-orange-500) { color: var(--sol-orange); }
-:where(.modern-style:not(.dark)) :is(.text-green-300, .text-green-400, .text-green-500, .text-emerald-300, .text-emerald-400, .text-emerald-500) { color: var(--sol-green); }
-:where(.modern-style:not(.dark)) :is(.text-blue-300, .text-blue-400, .text-blue-500, .text-sky-300, .text-sky-400, .text-sky-500) { color: var(--sol-blue); }
-:where(.modern-style:not(.dark)) :is(.text-cyan-300, .text-cyan-400, .text-cyan-500, .text-teal-300, .text-teal-400, .text-teal-500) { color: var(--sol-cyan); }
-:where(.modern-style:not(.dark)) :is(.text-violet-300, .text-violet-400, .text-violet-500, .text-purple-300, .text-purple-400, .text-purple-500, .text-indigo-300, .text-indigo-400, .text-indigo-500) { color: var(--sol-violet); }
-:where(.modern-style:not(.dark)) :is(.text-pink-300, .text-pink-400, .text-pink-500, .text-fuchsia-300, .text-fuchsia-400, .text-fuchsia-500) { color: var(--sol-magenta); }
+   is tuned to pass. Single-class weight: hover: and dark: variants still win.
+   Keyed by each class, so only elements carrying one test the rule. */
+.text-red-300:where(.modern-style:not(.dark) *), .text-red-400:where(.modern-style:not(.dark) *), .text-red-500:where(.modern-style:not(.dark) *), .text-rose-300:where(.modern-style:not(.dark) *), .text-rose-400:where(.modern-style:not(.dark) *), .text-rose-500:where(.modern-style:not(.dark) *) { color: var(--sol-red); }
+.text-amber-300:where(.modern-style:not(.dark) *), .text-amber-400:where(.modern-style:not(.dark) *), .text-amber-500:where(.modern-style:not(.dark) *) { color: var(--sol-amber); }
+.text-yellow-300:where(.modern-style:not(.dark) *), .text-yellow-400:where(.modern-style:not(.dark) *), .text-yellow-500:where(.modern-style:not(.dark) *), .text-lime-300:where(.modern-style:not(.dark) *), .text-lime-400:where(.modern-style:not(.dark) *), .text-lime-500:where(.modern-style:not(.dark) *) { color: var(--sol-yellow); }
+.text-orange-300:where(.modern-style:not(.dark) *), .text-orange-400:where(.modern-style:not(.dark) *), .text-orange-500:where(.modern-style:not(.dark) *) { color: var(--sol-orange); }
+.text-green-300:where(.modern-style:not(.dark) *), .text-green-400:where(.modern-style:not(.dark) *), .text-green-500:where(.modern-style:not(.dark) *), .text-emerald-300:where(.modern-style:not(.dark) *), .text-emerald-400:where(.modern-style:not(.dark) *), .text-emerald-500:where(.modern-style:not(.dark) *) { color: var(--sol-green); }
+.text-blue-300:where(.modern-style:not(.dark) *), .text-blue-400:where(.modern-style:not(.dark) *), .text-blue-500:where(.modern-style:not(.dark) *), .text-sky-300:where(.modern-style:not(.dark) *), .text-sky-400:where(.modern-style:not(.dark) *), .text-sky-500:where(.modern-style:not(.dark) *) { color: var(--sol-blue); }
+.text-cyan-300:where(.modern-style:not(.dark) *), .text-cyan-400:where(.modern-style:not(.dark) *), .text-cyan-500:where(.modern-style:not(.dark) *), .text-teal-300:where(.modern-style:not(.dark) *), .text-teal-400:where(.modern-style:not(.dark) *), .text-teal-500:where(.modern-style:not(.dark) *) { color: var(--sol-cyan); }
+.text-violet-300:where(.modern-style:not(.dark) *), .text-violet-400:where(.modern-style:not(.dark) *), .text-violet-500:where(.modern-style:not(.dark) *), .text-purple-300:where(.modern-style:not(.dark) *), .text-purple-400:where(.modern-style:not(.dark) *), .text-purple-500:where(.modern-style:not(.dark) *), .text-indigo-300:where(.modern-style:not(.dark) *), .text-indigo-400:where(.modern-style:not(.dark) *), .text-indigo-500:where(.modern-style:not(.dark) *) { color: var(--sol-violet); }
+.text-pink-300:where(.modern-style:not(.dark) *), .text-pink-400:where(.modern-style:not(.dark) *), .text-pink-500:where(.modern-style:not(.dark) *), .text-fuchsia-300:where(.modern-style:not(.dark) *), .text-fuchsia-400:where(.modern-style:not(.dark) *), .text-fuchsia-500:where(.modern-style:not(.dark) *) { color: var(--sol-magenta); }
 /* A span of words faded with a static opacity step (a suffix, a unit, a
    second name) keeps its parent's ink at full strength in Modern. Fills,
    overlays and dots are left alone, and hover: and group-hover: steps still win. */

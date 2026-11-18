@@ -45,4 +45,4 @@
 }
 
 /* Modern (.modern-style): buttons and their reason in the interface sans. */
-.modern-style :is(.face-action, .face-actions-reason) { font-family: var(--font-ui); }
+.face-action:is(.modern-style *), .face-actions-reason:is(.modern-style *) { font-family: var(--font-ui); }

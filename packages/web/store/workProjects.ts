@@ -41,7 +41,15 @@ export type WorkProjectSource = {
 const projectFieldsSig = makeCollectionSig<SessionLike>((s) =>
   `${s.project_id ?? ""}|${s.active_task?._id ?? ""}|${s.active_plan?._id ?? ""}|${s.parent_conversation_id ?? ""}|${s.spawned_by_conversation_id ?? ""}`);
 
-const row = (s: SessionLike): SessionProjectRow => ({
+// One adapter per session row object: a rebuild walks every row (and every
+// child walks its parents), and allocating each time was most of its cost.
+const rowsBySession = new WeakMap<SessionLike, SessionProjectRow>();
+const row = (s: SessionLike): SessionProjectRow => {
+  let r = rowsBySession.get(s);
+  if (!r) rowsBySession.set(s, (r = adapt(s)));
+  return r;
+};
+const adapt = (s: SessionLike): SessionProjectRow => ({
   _id: s._id,
   project_id: s.project_id,
   active_task_id: s.active_task?._id,
@@ -74,7 +82,8 @@ export function workProjectsBySession(state: WorkProjectSource): ReadonlyMap<str
   if (memo && memo.sig === sig) return memo.byId;
   const lookup = lookupOf(state);
   const byId = new Map<string, string | null>();
-  for (const s of Object.values(state.sessions)) byId.set(s._id, sessionProjectId(row(s), lookup));
+  const resolved = new Map<string, string | null>();
+  for (const s of Object.values(state.sessions)) byId.set(s._id, sessionProjectId(row(s), lookup, resolved));
   memo = { sig, byId };
   return byId;
 }

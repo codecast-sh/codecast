@@ -151,9 +151,13 @@ function ClipProbe({ cap, onChange }: { cap: number; onChange: (clipped: boolean
   const watch = useCallback((probe: HTMLSpanElement | null) => {
     const img = probe?.previousElementSibling;
     if (!(img instanceof HTMLImageElement)) return;
-    const measure = () => onChange(img.getBoundingClientRect().height > cap + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
+    // From the observer's entries: its first one lands after layout and
+    // before paint, so the answer costs no forced read on mount.
+    if (typeof ResizeObserver === "undefined") { onChange(img.getBoundingClientRect().height > cap + 1); return; }
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.borderBoxSize?.[0];
+      onChange((box ? box.blockSize : img.getBoundingClientRect().height) > cap + 1);
+    });
     observer.observe(img);
     return () => observer.disconnect();
   }, [cap, onChange]);

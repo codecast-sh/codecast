@@ -71,17 +71,31 @@ export const SESSION_PROJECT_MAX_DEPTH = 32;
 
 /** The project a session works in, or null. A parent missing from the lookup
  *  ends the walk with no answer rather than a guess. */
-export function sessionProjectId<R extends SessionProjectRow>(conv: R, lookup: SessionProjectLookup<R>): string | null {
+export function sessionProjectId<R extends SessionProjectRow>(
+  conv: R,
+  lookup: SessionProjectLookup<R>,
+  // Answers already found in this pass, by session id. A caller resolving
+  // many rows at once (every session in a store) passes one map, so a child
+  // takes its parent's answer instead of walking the chain again.
+  memo?: Map<string, string | null>,
+): string | null {
   const seen = new Set<string>();
   let cur: R | null | undefined = conv;
+  const settle = (value: string | null) => {
+    if (memo) for (const id of seen) memo.set(id, value);
+    return value;
+  };
   while (cur && seen.size < SESSION_PROJECT_MAX_DEPTH) {
     const id = cur._id.toString();
     if (seen.has(id)) return null;
+    if (memo?.has(id)) return settle(memo.get(id)!);
     seen.add(id);
     const own = ownSessionProjectId(cur, lookup);
-    if (own) return own;
+    if (own) return settle(own);
     const parentId = projectParentIdOf(cur);
     cur = parentId ? lookup.session(parentId) : null;
   }
-  return null;
+  // The chain ended without a project: every row on it has none. A cycle or
+  // the depth cap answers only for the row asked about, and is not kept.
+  return cur ? null : settle(null);
 }

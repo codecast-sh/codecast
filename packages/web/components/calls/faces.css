@@ -406,7 +406,7 @@
 }
 
 /* Modern (.modern-style): names, initials and words in the interface sans. */
-.modern-style :is(.face-avatar-fallback, .face-name, .face-waiting, .faces-btn-word, .faces-reconnecting) { font-family: var(--font-ui); }
+.face-avatar-fallback:is(.modern-style *), .face-name:is(.modern-style *), .face-waiting:is(.modern-style *), .faces-btn-word:is(.modern-style *), .faces-reconnecting:is(.modern-style *) { font-family: var(--font-ui); }
 
 /* ── Modern (.modern-style on <html>): the stage's buttons at the control
    radius (components/ui/modernLook.ts); their glass and colours stay. ── */

@@ -166,7 +166,7 @@ a.dpp-headci:hover span { text-decoration: underline; }
 .dpp-detail-sessions a.dpp-detail-task { background: color-mix(in srgb, var(--sol-blue) 10%, transparent); }
 .dpp-detail-task span { margin-left: 6px; color: var(--sol-text-muted); }
 /* Modern's sans interface: the repository, a version and a task id stay mono. */
-.modern-style :is(.dpp-repo, .dpp-head-sub, .dpp-ver, .dpp-detail-task) { font-family: var(--font-mono); }
+.dpp-repo:is(.modern-style *), .dpp-head-sub:is(.modern-style *), .dpp-ver:is(.modern-style *), .dpp-detail-task:is(.modern-style *) { font-family: var(--font-mono); }
 .modern-style .dpp-detail-task span { font-family: var(--font-ui); }
 .dpp-via { flex: none; font-size: var(--fs-meta); color: var(--sol-text-dim); font-style: italic; }
 .dpp-changes { display: flex; flex-direction: column; gap: 8px; }

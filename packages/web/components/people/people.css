@@ -774,4 +774,4 @@
 }
 
 /* Modern (.modern-style): words in the interface sans. */
-.modern-style :is(.people-face-gesture, .people-legend) { font-family: var(--font-ui); }
+.people-face-gesture:is(.modern-style *), .people-legend:is(.modern-style *) { font-family: var(--font-ui); }

@@ -305,7 +305,7 @@
 }
 
 /* Modern (.modern-style): the chip and menu are words; the time tip keeps mono. */
-.modern-style :is(.call-controls-chip, .call-controls-menu) { font-family: var(--font-ui, system-ui, sans-serif); }
+.call-controls-chip:is(.modern-style *), .call-controls-menu:is(.modern-style *) { font-family: var(--font-ui, system-ui, sans-serif); }
 
 /* ── Modern (.modern-style on <html>): the player's chip, menu and rows take
    the control and card radii and the menu row's height; the glass over the

@@ -53,6 +53,8 @@ export function createScrollHold(v: HoldVirtualizer, getEl: () => HTMLElement | 
   let ro: ResizeObserver | null = null;
   let observed: HTMLElement | null = null;
   let applyQueued = false;
+  // Whether this frame already re-aimed (see onChange).
+  let frameApplied = false;
 
   const charge = (h: Hold) => {
     const now = Date.now();
@@ -132,7 +134,21 @@ export function createScrollHold(v: HoldVirtualizer, getEl: () => HTMLElement | 
       if (!charge(h) || h.bail?.()) { stop(); return; }
       if (applyQueued) return;
       applyQueued = true;
-      queueMicrotask(() => { applyQueued = false; apply(); });
+      // Once per frame in the microtask: each re-aim reads the scroller's
+      // geometry, a layout of the page the transcript just changed, and a
+      // conversation's first frame changes sizes in many bursts. A burst
+      // after this frame's re-aim waits for the next frame's start, which
+      // still runs before that frame paints.
+      const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : null;
+      if (frameApplied && raf) {
+        raf(() => { applyQueued = false; apply(); });
+        return;
+      }
+      queueMicrotask(() => {
+        applyQueued = false;
+        if (raf) { frameApplied = true; raf(() => { frameApplied = false; }); }
+        apply();
+      });
     },
     /** The reader took the view. */
     release: stop,

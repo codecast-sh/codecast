@@ -86,3 +86,27 @@ describe("projectParentIdOf", () => {
     expect(projectParentIdOf({ _id: "x" })).toBeNull();
   });
 });
+
+// A caller resolving every row at once shares one memo; the answers must be
+// exactly the ones each row gets alone, whatever order the rows come in.
+describe("sessionProjectId with a shared memo", () => {
+  const rows: Row[] = [
+    { _id: "root", project_id: "p1" },
+    { _id: "mid", parent_conversation_id: "root" },
+    { _id: "leaf", parent_conversation_id: "mid" },
+    { _id: "own", parent_conversation_id: "root", project_id: "p2" },
+    { _id: "loose" },
+    { _id: "orphan", parent_conversation_id: "gone" },
+    { _id: "c1", parent_conversation_id: "c2" },
+    { _id: "c2", parent_conversation_id: "c1" },
+    { _id: "under-cycle", parent_conversation_id: "c1" },
+  ];
+  const lookup = lookupOf(rows);
+  const alone = Object.fromEntries(rows.map((r) => [r._id, sessionProjectId(r, lookup)]));
+  for (const order of [rows, [...rows].reverse()]) {
+    test(`matches the per-row answers (${order === rows ? "parents first" : "children first"})`, () => {
+      const memo = new Map<string, string | null>();
+      for (const r of order) expect(sessionProjectId(r, lookup, memo)).toBe(alone[r._id]);
+    });
+  }
+});

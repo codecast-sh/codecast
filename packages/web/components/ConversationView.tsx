@@ -1823,7 +1823,11 @@ const ConversationViewInner = (
     getItemKey,
     estimateSize,
     measureElement,
-    overscan: 10,
+    // Rows past the viewport kept mounted on each side. Transcript rows are
+    // tall, so six still hold more than a screen either way, and a fast fling
+    // past them draws placeholders (scrollSeek); every extra row is DOM a
+    // conversation switch builds, styles and tears down.
+    overscan: 6,
     paddingStart: 16,
     paddingEnd: VIRTUAL_PADDING_END,
     isScrollingResetDelay: 150,
@@ -2012,11 +2016,20 @@ const ConversationViewInner = (
       // under a bottom-pinned view leaves the last message's tail cut off.
       if (corrections.length > 0 && nearBottom && !userScrolledRef.current && !guestStayAtTopRef.current) virtualizer.scrollToEnd({ behavior: "auto" });
     };
-    const id = setInterval(tick, 1000);
+    // Each second's pass waits for an idle moment after a frame, where the
+    // page is already laid out: its reads (every row's height) then cost
+    // nothing, where a timer landing after a DOM change paid a full layout.
+    let idle: number | null = null;
+    const ric = typeof requestIdleCallback === "function" ? requestIdleCallback : null;
+    const id = setInterval(() => {
+      if (!ric) return tick();
+      if (idle === null) idle = ric(() => { idle = null; tick(); }, { timeout: 1000 });
+    }, 1000);
     const onVisible = () => { if (document.visibilityState === "visible") tick(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(id);
+      if (idle !== null) cancelIdleCallback(idle);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [virtualizer]);
@@ -2285,9 +2298,13 @@ const ConversationViewInner = (
   const bindHeader = useCallback((el: HTMLElement | null) => {
     headerRef.current = el;
     if (!el) return;
-    const measure = () => setHeaderHeight(el.getBoundingClientRect().height);
-    const ro = new ResizeObserver(measure);
-    measure();
+    // The entry's border box is the same fractional height, and the first one
+    // lands after layout and before paint: no forced read on bind.
+    if (typeof ResizeObserver === "undefined") { setHeaderHeight(el.getBoundingClientRect().height); return; }
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.borderBoxSize?.[0];
+      setHeaderHeight(box ? box.blockSize : el.getBoundingClientRect().height);
+    });
     ro.observe(el, { box: "border-box" });
     return () => ro.disconnect();
   }, []);
@@ -2314,8 +2331,10 @@ const ConversationViewInner = (
     if (!feed || !pane) return;
     const measure = () =>
       setMessageInputHeight(Math.max(0, Math.round(pane.getBoundingClientRect().bottom - feed.getBoundingClientRect().bottom)));
+    // Measured in the observer's first callback (after layout, before paint);
+    // a read on mount laid out the conversation the mount had just changed.
+    if (typeof ResizeObserver === "undefined") { measure(); return; }
     const ro = new ResizeObserver(measure);
-    measure();
     ro.observe(feed);
     ro.observe(pane);
     return () => ro.disconnect();

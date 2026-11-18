@@ -572,9 +572,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       if (!Number.isFinite(max)) return;
       root.style.setProperty("--composer-max-h", `${Math.max(48, max - (root.scrollHeight - field.offsetHeight))}px`);
     };
+    // The observer's first callback measures (after layout, before paint).
     const ro = new ResizeObserver(measure);
     ro.observe(root);
-    measure();
     return () => {
       ro.disconnect();
       root.style.removeProperty("--composer-max-h");

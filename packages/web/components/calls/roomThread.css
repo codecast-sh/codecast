@@ -991,7 +991,7 @@ button.rt-event-agent:hover {
 }
 
 /* Modern (.modern-style): labels and controls in the interface sans; clocks and ids keep mono. */
-.modern-style :is(.rt-density-label, .rt-seg-btn-labeled, .rt-divider, .rt-recap-items-label) { font-family: var(--font-ui, system-ui, sans-serif); }
+.rt-density-label:is(.modern-style *), .rt-seg-btn-labeled:is(.modern-style *), .rt-divider:is(.modern-style *), .rt-recap-items-label:is(.modern-style *) { font-family: var(--font-ui, system-ui, sans-serif); }
 
 /* ── Modern (.modern-style on <html>): the thread's controls are the app's
    primitives (components/ui/modernLook.ts): the segmented tray with the live
