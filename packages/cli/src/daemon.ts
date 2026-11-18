@@ -461,7 +461,7 @@ import { readThreadStateStamp } from "./threadStateStamp.js";
 import { supervisedBySystemdUnit } from "./systemdDaemonUnit.js";
 import { teamHostHeartbeat } from "./hosts/teamMarker.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
-import { applyManagedPolicy, effectivePolicy, policySnippetAvailability, writeEffectivePolicyFile } from "./config/managedPolicy.js";
+import { applyManagedPolicy, effectivePolicy, managedExcludedPaths, policySnippetAvailability, writeEffectivePolicyFile } from "./config/managedPolicy.js";
 import {
   CodexAppServerRuntimeDriver,
   FENCED_TMUX_TAG_NAMES,
@@ -1687,6 +1687,10 @@ const cloudAgents = new CloudAgentRegistry(cloudAgentAdapters(CONFIG_DIR, { runL
 const verifyProviderKey: ProviderKeyVerifier = (provider, apiKey) => cloudAgents.verifyKey(provider, apiKey);
 let daemonVersion: string | undefined;
 let activeConfig: Config | null = null;
+/** Test seam: the config the sync passes judge a transcript's folder by. */
+export function setActiveConfigForTests(config: Config | null): void {
+  activeConfig = config;
+}
 const platform = process.platform;
 
 function loadPersistedLogQueue(): void {
@@ -10937,6 +10941,34 @@ async function refuseTranscript(result: {messages: RawMessage[]}, pending: Pendi
   publishPendingTranscript(pending, sessionId, []);
   await commitTranscriptIngest(result, sessionId, undefined, cache, commit);
 }
+// Asked inside each pass so the watcher, the watchdog and a retry all agree. A
+// refused pass commits nothing, so the transcript syncs in full once in scope.
+function transcriptOutOfScope(label: string, sessionId: string, workspacePath: string | null | undefined): boolean {
+  const refusal = transcriptScopeRefusal(workspacePath ?? null, activeConfig ?? {});
+  if (refusal) log(`Skipping ${label} session ${sessionId}: ${refusal}`);
+  return refusal !== null;
+}
+/**
+ * The folder a Gemini transcript belongs to, or null. gemini-cli keeps a
+ * project's sessions in ~/.gemini/tmp/<project>/chats: it writes the folder to
+ * a `.project_root` file beside `chats`, and older versions named <project> by
+ * the SHA-256 of the folder instead. A hash names a folder only when it is one
+ * the scope lists, selected or excluded.
+ */
+function geminiWorkspace(transcriptPath: string, config: Config): string | null {
+  const projectDir = path.dirname(path.dirname(transcriptPath));
+  let recorded = "";
+  try { recorded = fs.readFileSync(path.join(projectDir, ".project_root"), "utf8").trim(); } catch {}
+  if (path.isAbsolute(recorded)) return recorded;
+  const listed = [
+    ...(config.sync_projects ?? []),
+    ...(config.sync_excluded ?? []),
+    ...managedExcludedPaths(),
+    ...(config.excluded_paths ?? "").split(",").map(p => p.trim()).filter(p => p.length > 0),
+  ];
+  return listed.map(folder => path.resolve(folder))
+    .find(folder => createHash("sha256").update(folder).digest("hex") === path.basename(projectDir)) ?? null;
+}
 function queueTranscriptConversation(retryQueue: RetryQueue, params: Record<string, unknown>, error: string): string {
   const existing = retryQueue.getPendingOperations().find(op => op.type === "createConversation" && op.params.sessionId === params.sessionId);
   return existing?.id ?? retryQueue.add("createConversation", params, error);
@@ -13436,6 +13468,9 @@ async function processCodexSessionPass(
       log(`Skipping app-server-managed Codex transcript ${sessionId}`);
       return;
     }
+    // The ingest reads the folder from the head of the rollout, whichever
+    // window this pass holds.
+    if (transcriptOutOfScope("Codex", sessionId, metadata.cwd)) return;
     const codexMetadata = metadata.codex;
     const nativeParentSessionId = codexMetadata?.parentThreadId;
     codexModelPositions.set(filePath, {offset:lastPosition+bytesConsumed,model:ingest.model});
@@ -13754,6 +13789,7 @@ async function processGeminiSessionPass(
   titleCache: TitleCache,
   updateStateCallback: () => void
 ): Promise<void> {
+  if (transcriptOutOfScope("Gemini", sessionId, geminiWorkspace(filePath, activeConfig ?? {}))) return;
   try {
     const ingest = await readTranscriptIngest({client:"gemini",file:filePath,sessionId,offset:0});
     const allMessages = ingest.messages;
@@ -14010,6 +14046,7 @@ async function processOpencodeSessionPass(
     const allMessages = ingest.messages;
     if (allMessages.length === 0) return;
     const cwd = ingest.metadata.cwd;
+    if (transcriptOutOfScope("OpenCode", sessionId, cwd)) return;
     let conversationId = conversationCache[sessionId];
 
     if (!conversationId) {
@@ -14383,6 +14420,22 @@ async function processTranscriptDeltaSessionPass(
     // synced conversation (orphan detection below would treat every synced uuid as
     // abandoned).
     if (allMessages.length === 0) return;
+    // Authoritative project path is the transcript's own record of its cwd
+    // (pi: the session header; grok: the sibling summary.json); the containing
+    // slug dir decodes back to it only lossily (see decodePiCwdSlug — and
+    // grok's long-path hash dirs don't decode at all).
+    const projectPath = client === "pi" && !mirror
+      ? ingest.metadata.cwd ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
+      : mirror || client === "muse" || client === "cursor"
+        // muse's date-sharded dirs carry no cwd — only the log's own
+        // route_facts record (ingest metadata) can place the session.
+        // cursor's projects/<slug> dir is lossy; its chat meta.json is not,
+        // and neither is a cloud mirror's.
+        ? ingest.metadata.cwd ?? undefined
+      : ingest.metadata.cwd ?? decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(filePath)))) ?? undefined;
+    // Cursor's transcripts and cloud mirrors are judged at their watcher's
+    // event, which can find a Cursor folder the transcript does not record.
+    if (!mirror && client !== "cursor" && transcriptOutOfScope(client, sessionId, projectPath)) return;
     const restored = piSyncedSigs.get(filePath) ? undefined : await restoreSyncedSignatures(ingest, sessionId, conversationCache);
     const syncedSigs = piSyncedSigs.get(filePath) ?? (mirror ? withMirrorSynced(restored ?? null, filePath, conversationCache[sessionId]) : restored) ?? new Map<string, string>();
     const { newMessages, orphanUuids, nextSynced } = await computeIngestSyncDelta(allMessages, ingest.signatures!, syncedSigs);
@@ -14405,20 +14458,6 @@ async function processTranscriptDeltaSessionPass(
 
     if (!conversationId) {
       try {
-        // Authoritative project path is the transcript's own record of its cwd
-        // (pi: the session header; grok: the sibling summary.json); the containing
-        // slug dir decodes back to it only lossily (see decodePiCwdSlug — and
-        // grok's long-path hash dirs don't decode at all).
-        const projectPath = client === "pi" && !mirror
-          ? ingest.metadata.cwd ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
-          : mirror || client === "muse" || client === "cursor"
-            // muse's date-sharded dirs carry no cwd — only the log's own
-            // route_facts record (ingest metadata) can place the session.
-            // cursor's projects/<slug> dir is lossy; its chat meta.json is not,
-            // and neither is a cloud mirror's.
-            ? ingest.metadata.cwd ?? undefined
-          : ingest.metadata.cwd ?? decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(filePath)))) ?? undefined;
-
         // A cloud agent codecast started is bound when it is created (the
         // registry's bindSession); any other is not a pane codecast launched,
         // so it never takes over a local session started in the same folder.
@@ -28117,7 +28156,7 @@ function persistProjectPathRepairs(map: Record<string, string>): void {
   } catch {}
 }
 
-async function repairProjectPaths(syncService: SyncService): Promise<void> {
+export async function repairProjectPaths(syncService: SyncService, config: Config): Promise<void> {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
   if (!fs.existsSync(claudeProjectsDir)) return;
 
@@ -28168,6 +28207,9 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
   };
   // One transcript, one send decision, shared by every store below.
   const repairOne = async (sessionId: string, projectPath: string): Promise<void> => {
+    // A session the sync scope keeps out has no conversation to repair, and
+    // the server must not learn its folder.
+    if (transcriptScopeRefusal(projectPath, config)) return;
     checked++;
     const { root: gitRoot, remote } = await resolveRepoRoot(projectPath);
     const plan = projectPathRepairNeeded(confirmed, sessionId, projectPath, gitRoot, remote);
@@ -28233,7 +28275,7 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
         try {
           await new Promise(resolve => setImmediate(resolve));
           const projectPath = extractCodexCwd(await readCodexSessionMetaHeadAsync(file.path));
-          if (!projectPath || isTestArtifactPath(projectPath)) continue;
+          if (!projectPath) continue;
           await repairOne(sessionId, projectPath);
         } catch {
           // Unreadable rollout or a session the server does not know
@@ -30736,6 +30778,8 @@ function startWatchdog(
         /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
       );
       const sessionId = match ? match[1] : filename;
+      // An out-of-scope rollout never gets a position, so it is stale on every tick.
+      if (transcriptScopeRefusal(extractCodexCwd(await readCodexSessionMetaHeadAsync(filePath)) ?? null, deps.config)) return;
 
       log(`Watchdog: Syncing stale Codex session ${sessionId}`);
 
@@ -31164,7 +31208,7 @@ async function main(): Promise<void> {
   void checkForForcedUpdate(syncService);
 
   // Repair any project paths that were stored incorrectly (one-time on startup)
-  repairProjectPaths(syncService).catch(err => {
+  repairProjectPaths(syncService, config).catch(err => {
     log(`Failed to repair project paths: ${err instanceof Error ? err.message : String(err)}`);
   });
 

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { processCodexSession, TEST_SCRATCH_DIRNAME } from "./daemon.js";
+import { processCodexSession } from "./daemon.js";
 import { formatAgentPrompt } from "./agentPromptOrigin.js";
 import type { CreateConversationParams, SyncService } from "./syncService.js";
 import type { RetryQueue } from "./retryQueue.js";
@@ -14,7 +14,8 @@ afterAll(() => isolated.restore());
 const parent = "jx70pj3pgb4jjmcka1sbxnna3h8erqge";
 
 test("a Codex launch marker supplies the parent before creation and survives a failed create", async () => {
-  const dir = mkdtempSync(join(tmpdir(), TEST_SCRATCH_DIRNAME + "-codex-subagent-"));
+  // The session's cwd is inside, so no test-scratch name: the sync scope refuses that folder.
+  const dir = mkdtempSync(join(tmpdir(), "codex-subagent-"));
   try {
     const sessionId = randomUUID();
     const cwd = join(dir, "project");

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { processCodexSession, TEST_SCRATCH_DIRNAME } from "./daemon.js";
+import { processCodexSession } from "./daemon.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { createHash } from "node:crypto";
 import type { CreateConversationParams, SyncService } from "./syncService.js";
@@ -15,7 +15,8 @@ afterAll(() => isolated.restore());
 const parent = "jx70pj3pgb4jjmcka1sbxnna3h8erqge";
 
 test("a Codex trigger receipt stamps its first conversation and failed-create retry", async () => {
-  const dir = mkdtempSync(join(tmpdir(), TEST_SCRATCH_DIRNAME + "-codex-subagent-"));
+  // The session's cwd is inside, so no test-scratch name: the sync scope refuses that folder.
+  const dir = mkdtempSync(join(tmpdir(), "codex-subagent-"));
   try {
     const sessionId = randomUUID();
     const prompt = `[Codecast Task: test]\nTask ID: trigger-${sessionId}\nReport.`;
