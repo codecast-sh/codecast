@@ -87,7 +87,23 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
 }
 
 /** The pool: every shipped flow, then each published one the shipped set does not already name. */
+// Every pill, fence and picker in a transcript asks for the pool over the
+// same store rows, each through its own memo with its own array; building it
+// parses every pushed graph's source. The answer is kept for the last few row
+// lists, matched row by row. Callers read it and never change it.
+const POOL_SLOTS = 4;
+const poolMemo: { rows: ReadonlyArray<PushedFlowRow>; pool: AppFlow[] }[] = [];
+const sameRows = (a: ReadonlyArray<PushedFlowRow>, b: ReadonlyArray<PushedFlowRow>) => a.length === b.length && a.every((r, i) => r === b[i]);
 export function appPool(pushed: ReadonlyArray<PushedFlowRow> = []): AppFlow[] {
+  const hit = poolMemo.find((m) => sameRows(m.rows, pushed));
+  if (hit) return hit.pool;
+  const pool = buildPool(pushed);
+  poolMemo.unshift({ rows: pushed.slice(), pool });
+  poolMemo.length = Math.min(poolMemo.length, POOL_SLOTS);
+  return pool;
+}
+
+function buildPool(pushed: ReadonlyArray<PushedFlowRow>): AppFlow[] {
   // The shipped template's graph names no label of its own; people read it as the Standard steps.
   const shipped = SHIPPED_FLOWS.map((f) => ({ ...f, ...(f.slug === DEFAULT_LINE_SLUG && f.label === "Line" ? { label: DEFAULT_STEPS_LABEL } : {}), where: "shipped" as const, workflowId: null }));
   const names = new Set(shipped.map((f) => f.slug));

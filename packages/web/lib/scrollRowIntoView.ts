@@ -11,40 +11,51 @@ import { rowScrollDelta, scrollMarginTopOf } from "./rowScroll";
 // rows) stays clear at the top, so a followed row never lands under its own
 // heading (lib/rowScroll).
 export function scrollRowIntoView(container: HTMLElement, el: Element) {
-  const marginTop = scrollMarginTopOf(el);
+  let marginTop = 0;
   const remainingDelta = () => rowScrollDelta(container.getBoundingClientRect(), el.getBoundingClientRect(), marginTop);
-  const delta = remainingDelta();
-  if (delta === 0) return;
   // Hidden/occluded tabs get no animation frames — settle instantly so the
   // row can't be stranded mid-glide until the tab is next viewed.
   if (document.visibilityState !== "visible") {
-    container.scrollTop += delta;
+    marginTop = scrollMarginTopOf(el);
+    container.scrollTop += remainingDelta();
     return;
   }
-  const maxGlide = container.clientHeight;
-  if (Math.abs(delta) > maxGlide) {
-    container.scrollTop += delta - Math.sign(delta) * maxGlide;
-  }
-  let aborted = false;
-  const abort = () => { aborted = true; };
-  const cleanup = () => {
-    container.removeEventListener("wheel", abort);
-    container.removeEventListener("touchstart", abort);
-  };
-  container.addEventListener("wheel", abort, { passive: true, once: true });
-  container.addEventListener("touchstart", abort, { passive: true, once: true });
-  let frames = 0;
-  const step = () => {
-    // Row unmounted mid-glide (panel remount/resort) — a detached node
-    // measures as all-zeros, so stop rather than chase garbage.
-    if (aborted || !el.isConnected) return cleanup();
-    const remaining = remainingDelta();
-    if (Math.abs(remaining) < 1 || ++frames > 60) {
-      container.scrollTop += remaining;
-      return cleanup();
+  // Everything is measured from the next frame on, where the page is laid out
+  // anyway: called right after the selection moved, the first read forced a
+  // style and layout pass of the whole changed page.
+  requestAnimationFrame(() => {
+    if (!el.isConnected) return;
+    marginTop = scrollMarginTopOf(el);
+    const delta = remainingDelta();
+    if (delta === 0) return;
+    const maxGlide = container.clientHeight;
+    if (Math.abs(delta) > maxGlide) {
+      container.scrollTop += delta - Math.sign(delta) * maxGlide;
     }
-    container.scrollTop += remaining * 0.25;
+    glide();
+  });
+  const glide = () => {
+    let aborted = false;
+    const abort = () => { aborted = true; };
+    const cleanup = () => {
+      container.removeEventListener("wheel", abort);
+      container.removeEventListener("touchstart", abort);
+    };
+    container.addEventListener("wheel", abort, { passive: true, once: true });
+    container.addEventListener("touchstart", abort, { passive: true, once: true });
+    let frames = 0;
+    const step = () => {
+      // Row unmounted mid-glide (panel remount/resort) — a detached node
+      // measures as all-zeros, so stop rather than chase garbage.
+      if (aborted || !el.isConnected) return cleanup();
+      const remaining = remainingDelta();
+      if (Math.abs(remaining) < 1 || ++frames > 60) {
+        container.scrollTop += remaining;
+        return cleanup();
+      }
+      container.scrollTop += remaining * 0.25;
+      requestAnimationFrame(step);
+    };
     requestAnimationFrame(step);
   };
-  requestAnimationFrame(step);
 }
