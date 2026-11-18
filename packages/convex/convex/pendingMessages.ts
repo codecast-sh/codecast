@@ -857,6 +857,38 @@ async function wroteTo(ctx: { db: any }, writer: any, recipient: any): Promise<b
   return recent.some((row: any) => String(row.from_conversation_id ?? "") === String(writer._id));
 }
 
+const ledBy = (c: any, leadId: string): boolean =>
+  [c?.parent_conversation_id, c?.spawned_by_conversation_id].some((id) => id && String(id) === leadId);
+
+// The session a send (and `cast send --status`) addresses: a role handle's
+// standing session, else the ref, among sessions the caller may message or
+// that wrote to the sender. A short id is 7 characters and collides often, and
+// a session learns its lead's and its correspondents' ids from the
+// `<session-message from>` header, so a colliding short id resolves to the
+// candidate nearest the sender: its own lead, then its own worker, then one
+// that wrote to it, then the newest. Newest alone sent 117 workers' reports
+// meant for the Marketplaces lead to a newer reviewer sharing its prefix
+// (week of 2026-11-17).
+async function resolveSendTarget(ctx: { db: any }, authUserId: Id<"users">, to: string, sender: any | null): Promise<{ target: any | null; role: boolean }> {
+  const roleTarget = await standingSessionForHandle(ctx, authUserId, to);
+  if (roleTarget) return { target: (await canSendProductMessage(ctx, authUserId, roleTarget)) ? roleTarget : null, role: true };
+  const target = await findConversationByAnyRefWhere(
+    ctx,
+    to,
+    async (conversation) =>
+      await canSendProductMessage(ctx, authUserId, conversation)
+        || (!!sender && await wroteTo(ctx, conversation, sender) && await standsWithRunner(ctx, authUserId, conversation.user_id)),
+    sender
+      ? async (conversation) => {
+        if (ledBy(sender, String(conversation._id))) return 0;
+        if (ledBy(conversation, String(sender._id))) return 1;
+        return (await wroteTo(ctx, conversation, sender)) ? 2 : 3;
+      }
+      : undefined,
+  );
+  return { target, role: false };
+}
+
 // Send a message from one of the user's sessions to another — your own OR a teammate's. The
 // target must be a session you can already see (own it, or it's shared to a team you're in); the
 // access rule is exactly the feed-visibility rule (checkConversationAccess). The text is injected
@@ -916,16 +948,9 @@ export async function performSessionSend(
   // can speak only as one its caller runs.
   const fromRef = args.from?.trim();
   const ownSender = fromRef ? await findConversationByAnyRef(ctx, fromRef, authUserId) : null;
-  const roleTarget = args.target ?? await standingSessionForHandle(ctx, authUserId, args.to);
-  const target = args.target
-    ? args.target
-    : roleTarget
-    ? ((await canSendProductMessage(ctx, authUserId, roleTarget)) ? roleTarget : null)
-    : await findConversationByAnyRefWhere(ctx, args.to, async (conversation) => {
-      return await canSendProductMessage(ctx, authUserId, conversation)
-        || (!!ownSender && await wroteTo(ctx, conversation, ownSender)
-          && await standsWithRunner(ctx, authUserId, conversation.user_id));
-    });
+  // A role's standing session (named by handle, or resolved by `cast role wake`)
+  // is never held as killed or idle below.
+  const { target, role: roleTarget } = args.target ? { target: args.target, role: true } : await resolveSendTarget(ctx, authUserId, args.to, ownSender);
   if (!target) {
     throw new Error(`No session found for "${args.to}" (you can only message your own sessions, sessions shared with your team, sessions whose owner granted you send access, or a session that messaged yours)`);
   }
@@ -1167,12 +1192,7 @@ export async function sendStatusFor(
 ): Promise<{ to_short_id: string; sends: Array<{ created_at: number; status: string; typed_in_at?: number; delivered_at?: number; reason?: string; intent: SessionMessageIntent; preview: string }> }> {
   const sender = await findConversationByAnyRef(ctx, args.from, authUserId);
   if (!sender) throw new Error(`Sender session "${args.from}" not found; pass --from <your session short id>`);
-  const roleTarget = await standingSessionForHandle(ctx, authUserId, args.to);
-  const target = roleTarget
-    ? ((await canSendProductMessage(ctx, authUserId, roleTarget)) ? roleTarget : null)
-    : await findConversationByAnyRefWhere(ctx, args.to, async (conversation) =>
-      await canSendProductMessage(ctx, authUserId, conversation)
-        || (await wroteTo(ctx, conversation, sender) && await standsWithRunner(ctx, authUserId, conversation.user_id)));
+  const { target } = await resolveSendTarget(ctx, authUserId, args.to, sender);
   if (!target) throw new Error(`No session found for "${args.to}" that you can message`);
   const rows = await ctx.db
     .query("pending_messages")
