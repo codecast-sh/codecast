@@ -436,8 +436,8 @@ stays as the implementation detail it is. Coalescing default is two minutes.
 Every long lived role carries two faces, and each viewer picks which one they
 see. The setting is `clientState.ui.show_characters` (absent reads as on).
 
-**Character.** An animal portrait and an optional given name. The 24 painted
-storybook portraits (one style, 256 px WebP) live in
+**Character.** A portrait and an optional given name. The 24 faceless
+cut-paper portraits of people (one style, 256 px WebP) live in
 `packages/web/components/org/avatars/` with the key list in
 `packages/shared/contracts/orgAvatars.ts`; `org_roles.avatar?: key`, defaulted
 from the handle at hire.

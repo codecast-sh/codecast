@@ -616,7 +616,7 @@ export function ActionSubmenu({
   const items = useMemo(() => {
     const q = search.toLowerCase();
     if (mode === "snooze") return SESSION_SNOOZE_CHOICES.filter((item) => item.label.includes(q)).map((item) => ({ ...item, icon: Clock }));
-    // A character is picked by typing the animal (or a name to give them), so
+    // A character is picked by typing what sets the face apart (or a name to give them), so
     // the whole set is one keystroke away without a grid to arrow around.
     if (mode === "character") {
       const faces = AVATAR_KEYS
@@ -1240,7 +1240,7 @@ export function ActionSubmenu({
   }, [highlightIndex]);
 
   const modeLabel =
-    mode === "character" ? "Pick an animal, or type a name…" :
+    mode === "character" ? "Pick a face, or type a name…" :
     mode === "snooze" ? "Snooze session for…" :
     mode === "rename" ? "Enter a new name…" :
     mode === "deadline" ? "Target date (YYYY-MM-DD)…" :

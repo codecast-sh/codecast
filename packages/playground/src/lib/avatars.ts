@@ -6,10 +6,6 @@ import { AVATAR_LABELS, AVATAR_URLS } from "../../../web/lib/orgAvatars";
 
 export { AVATAR_KEYS, AVATAR_LABELS, AVATAR_URLS, type AvatarKey };
 
-export function characterTitle(p: { name: string; avatar: AvatarKey }): string {
-  return `${p.name} the ${AVATAR_LABELS[p.avatar].toLowerCase()}`;
-}
-
 let forApps: Promise<Record<AvatarKey, string>> | null = null;
 
 function dataUrl(url: string): Promise<string> {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AVATAR_URLS, characterTitle, type AvatarKey } from "../lib/avatars";
+import { AVATAR_URLS, type AvatarKey } from "../lib/avatars";
 import { Dots } from "./Dots";
 import s from "./Face.module.css";
 
@@ -10,7 +10,7 @@ export type Person = { id: string; avatar: AvatarKey; name: string };
  *  `decorative`: the name is already said beside it, so screen readers skip it. */
 export function Face({ person, size = 28, typing = false, decorative = false, className = "" }: { person: Pick<Person, "avatar" | "name">; size?: number; typing?: boolean; decorative?: boolean; className?: string }) {
   const [broken, setBroken] = useState(false);
-  const title = characterTitle(person);
+  const title = person.name;
   return (
     <span className={`${s.face} ${className}`} style={{ width: size, height: size }} title={title} aria-hidden={decorative || undefined}>
       {broken ? (

@@ -35,10 +35,15 @@ export const AVATAR_URLS: Record<AvatarKey, string> = {
   swan, snail, elephant, koala, squirrel, robin,
 };
 
-/** The animal's name, for the alt text and the hire form's picker. */
-export const AVATAR_LABELS: Record<AvatarKey, string> = Object.fromEntries(
-  AVATAR_KEYS.map((k) => [k, k.charAt(0).toUpperCase() + k.slice(1)]),
-) as Record<AvatarKey, string>;
+/** What sets each face apart, for the alt text and the pickers, which match
+ *  what is typed against it. The keys still name the animals the set began
+ *  as, because roles store them; the label is what a person sees. */
+export const AVATAR_LABELS: Record<AvatarKey, string> = {
+  fox: "Bob", owl: "Glasses", otter: "Curls", crane: "Braids", bear: "Beanie", hare: "Headphones",
+  moth: "Top knot", whale: "Afro", hedgehog: "Mustache", stag: "Hijab", raccoon: "Buzzcut", penguin: "Spectacles",
+  seal: "Ponytail", lynx: "Cap", octopus: "Turban", toucan: "Pixie", frog: "Mohawk", goat: "Beard",
+  swan: "Bucket hat", snail: "Locs", elephant: "Bandana", koala: "Space buns", squirrel: "Fedora", robin: "Waves",
+};
 
 /** One component per key, each an <img> that fills the box it is given. */
 export const AVATAR_ART: Record<AvatarKey, AvatarArt> = Object.fromEntries(

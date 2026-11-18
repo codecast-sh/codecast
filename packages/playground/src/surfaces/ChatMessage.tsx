@@ -56,7 +56,7 @@ export function ChatMessage({ m, grouped, now, mine, sharedName }: { m: MessageV
       {showHead && (
         <p className={s.who} aria-hidden>
           <b>{name}</b>
-          {sharedName && m.author && <span className={s.meta}>the {AVATAR_LABELS[m.author.avatar].toLowerCase()}</span>}
+          {sharedName && m.author && <span className={s.meta}>{AVATAR_LABELS[m.author.avatar]}</span>}
           {mine && <span className={s.youTag}>you</span>}
           <time className={s.meta} dateTime={new Date(m.created_at).toISOString()}>{chatTime(m.created_at, now)}</time>
           {pending && <ClockIcon />}

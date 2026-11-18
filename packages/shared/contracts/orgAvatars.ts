@@ -1,11 +1,12 @@
 // Personified roles (docs/architecture/org-staffing.md S13): the key list of
-// the animal profile icons a role may wear. The images live in
+// the portraits a role may wear. The images live in
 // packages/web/components/org/avatars/; this list is what the server
 // validates against and what the default is drawn from, so a key stored on a
 // role always names an icon the web can draw.
 //
-// One animal per key, in the order the set was drawn. The order is load
-// bearing: `defaultAvatarFor` hashes a handle to a position, so reordering or
+// The keys name the animals the set was first drawn as; the portraits are
+// now people, labelled in web/lib/orgAvatars, but a key is stored on role
+// rows and so never changes. The order is load bearing: `defaultAvatarFor` hashes a handle to a position, so reordering or
 // renaming a key moves every role that never chose a face.
 
 export const AVATAR_KEYS = [
