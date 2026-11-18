@@ -1178,7 +1178,7 @@ export async function pullSession(
   sessionId: string,
   host: RemoteHost,
   move: MoveResult,
-  opts: { aloneInCheckout?: (remoteRoot: string) => Promise<boolean> } = {},
+  opts: { aloneInCheckout?: (remoteRoot: string) => Promise<boolean>; hostFolderInRepo?: boolean } = {},
 ): Promise<{ ff: boolean; reason?: string; appliedWork?: boolean; conflicts?: string[]; hostKept?: string; hostCleared?: boolean }> {
   // transcript back (rsync into the project dir)
   const remoteJsonl = path.posix.join(move.remoteProjectDir, `${sessionId}.jsonl`);
@@ -1197,6 +1197,10 @@ export async function pullSession(
     if (why) console.error(`WARNING: ${b.local} did not come back: ${why}`);
   }
   // working tree back
+  // A host folder in no repository holds no git work to replay, and copying it
+  // over a checkout here would replace that checkout's files with the host's
+  // loose copies: its files stay on the host.
+  if (opts.hostFolderInRepo === false && isWorktree(move.localCwd)) return { ff: true, hostKept: "the host folder is not a git repository" };
   if (isWorktree(move.localCwd)) {
     // Where the host's work began: the commit this move pushed, else the one the host was at when the session landed.
     // Whole checkout to whole checkout: the session's own folder in it is only where it runs.

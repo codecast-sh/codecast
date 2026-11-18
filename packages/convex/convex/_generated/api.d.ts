@@ -169,7 +169,7 @@ import type * as emails_render from "../emails/render.js";
 import type * as emails_send from "../emails/send.js";
 import type * as emails_templates from "../emails/templates.js";
 import type * as entities from "../entities.js";
-import type * as envHeld from "../envCases.js";
+import type * as envCases from "../envCases.js";
 import type * as envSchema from "../envSchema.js";
 import type * as envs from "../envs.js";
 import type * as executionBindings from "../executionBindings.js";
