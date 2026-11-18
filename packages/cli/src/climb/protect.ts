@@ -5,7 +5,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "../proc.js";
 import type { EnvDeclaration } from "@codecast/shared/contracts/envs";
 import { CLIMB_ALWAYS_PROTECTED, commandPaths, globMatch, protectedTouches } from "@codecast/shared/contracts/climb";
 

@@ -359,7 +359,7 @@ is grounded against: its own project's, else its workspace's.`,
     token: "climb",
     description: `The climb's stations: hill-climb one goal metric through its environments (the climb flow, cast flow run climb --task <ct-N>)
 
-  cast climb gauge|admit|screen|confirm|guard --dir <run_dir/climb>   each exits 0 go on, 3 nothing to promote, 4 budget spent
+  cast climb gauge|admit|screen|confirm|guard --dir <run_dir/climb>   each exits 0 go on, 3 nothing to promote, 4 spending limit reached
   cast climb status --dir <dir> [--summary|--json] | refuse <cand-N> -m <why> | experiment --goal <in-N> --metric <key> --lift 0.08`,
     load: () => import("./climbCommand.js").then((m) => m.registerClimbCommand),
   },

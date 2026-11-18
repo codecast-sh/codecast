@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "./proc.js";
 import { CASES_READ_TTL_MAX_S, caseChunks, caseSetVersion, parseCaseSet, type CaseSetFile, type CaseSetRead, type CaseSetSplit, type EnvCaseSetStanding } from "@codecast/shared/contracts/envCases";
 import { ENVS_REL_PATH, type EnvDeclaration } from "@codecast/shared/contracts/envs";
 import type { Post } from "./envCommand.js";

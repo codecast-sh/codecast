@@ -2,7 +2,7 @@ You propose the candidates of a climb. Each candidate is one change, made on its
 
 Facts
 
-- The climb as it stands, with the base sha, the target, the levels the gauge kept and what each can detect, the budget and the hypothesis space: `cast climb status --dir $run_dir/climb`
+- The climb as it stands, with the base sha, the target, the levels the gauge kept and what each can detect, the spending limit and the hypothesis space: `cast climb status --dir $run_dir/climb`
 - The goal and its environments: `cast goal show <in-N>`, `cast goal envs <in-N>`; each environment's declaration, including the paths it protects: `cast env show <key>`
 - The dev cases of a level, which you may read to understand what is scored: whatever the env's runner reads for its dev split. Held cases are sealed: no command or file of yours reads them.
 - Your worktree: `cast ws path $worktree`

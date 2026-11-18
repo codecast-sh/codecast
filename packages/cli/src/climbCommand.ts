@@ -5,7 +5,7 @@
 // promote; 4 stops it because the budget is spent. The last line of every
 // station's output is one JSON {"why"} the run report reads.
 import fs from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./proc.js";
 import type { Command } from "commander";
 import { CLIMB_EXPERIMENT_MAX_WEEKS, experimentWeeks } from "@codecast/shared/contracts/climb";
 import { formatSeriesValue, metricReadings } from "@codecast/shared/contracts/initiative";

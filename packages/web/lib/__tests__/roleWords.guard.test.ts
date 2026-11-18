@@ -37,6 +37,8 @@ function readable(line: string): string[] {
 // Another sense of the word, a product outside the org, or a page the org
 // words never reach. One entry per line, path:line-text.
 const ALLOWED: ReadonlyArray<[string, string]> = [
+  // The climb card's JSON field name in the frame station's example card (money a climb may spend), a key, not a role's limit.
+  ["packages/web/lib/line/shippedFlowStations.generated.ts", String.raw`\"budget\": {\"usd\"`],
   // Anthropic's usage windows have a spend cap of their own.
   ["packages/web/components/AccountUsageMeter.tsx", "Extra spend cap reached"],
   ["packages/web/components/AccountUsageMeter.tsx", "extra spend cap reached"],

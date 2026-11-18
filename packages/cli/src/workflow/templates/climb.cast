@@ -8,12 +8,12 @@
 // The task names the goal (and optionally the metric) in its goal_ref. Agents
 // write two things, the climb card (Frame) and the candidates (Propose); every
 // number after that is computed by `cast climb` (climbCommand.ts) under the
-// rules in contracts/climb.ts, which no station can bend: the budget is the
+// rules in contracts/climb.ts, which no station can bend: the spending limit is the
 // smaller of the card's and the goal's (or the default), a level whose
 // minimum detectable change is larger than one change could move is refused,
 // a candidate that touches what grades it is refused, the base's own env
 // declaration runs both sides, held cases are run only through `cast env run
-// --split held` and come back as scores on hashed ids, and the budget stops
+// --split held` and come back as scores on hashed ids, and the spending limit stops
 // the climb when it is spent. All state lives in $run_dir/climb, and every
 // script skips work already filed there, so a resumed run pays for nothing
 // twice. Every way the climb ends passes through Record, which leaves the
@@ -21,7 +21,7 @@
 //
 // Stations:
 //   frame     picks the target and the levels, writes the climb card
-//   gauge     the card under the caps; base runs measure each level's noise;
+//   gauge     the card under the limits; base runs measure each level's noise;
 //             levels that cannot see one change are refused (exit 3: none
 //             can; exit 5: the card itself is refused, back to Frame once)
 //   propose   N candidates, one change each on its own branch from the base
@@ -95,9 +95,9 @@ $sum\" -t progress >/dev/null; exit 0"]
   admit -> record  [condition="outcome = failure", label="every candidate refused"]
   review -> screen
   screen -> confirm [condition="outcome = success"]
-  screen -> record  [condition="outcome = failure", label="none separated, or budget spent"]
+  screen -> record  [condition="outcome = failure", label="none separated, or the spending limit reached"]
   confirm -> guard  [condition="outcome = success"]
-  confirm -> record [condition="outcome = failure", label="overfit, or budget spent"]
+  confirm -> record [condition="outcome = failure", label="overfit, or the spending limit reached"]
   guard -> promote  [condition="outcome = success"]
   guard -> record   [condition="outcome = failure", label="every survivor refused"]
   promote -> evidence

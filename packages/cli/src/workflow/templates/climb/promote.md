@@ -2,7 +2,7 @@ This climb found a change that separated from base on the dev split, held up on 
 
 Facts
 
-- The climb whole: target, levels with their MDE, every candidate with its dev and held results, the guard's verdicts, the promoted candidate and its branch, cost against budget: `cast climb status --dir $run_dir/climb`
+- The climb whole: target, levels with their MDE, every candidate with its dev and held results, the guard's verdicts, the promoted candidate and its branch, cost against its spending limit: `cast climb status --dir $run_dir/climb`
 - The goal, each metric's reading (level, band, what 4 weeks detect), and its environments' links to the level above: `cast goal show <in-N>`, `cast goal envs <in-N>`
 - How long a 50/50 test needs to read a lift on a goal metric: `cast climb experiment --goal <in-N> --metric <key> --lift <fraction>`
 - The climb's task: $task_id

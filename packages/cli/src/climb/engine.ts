@@ -23,7 +23,7 @@
 // nothing twice.
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 import type { EnvCase, EnvDeclaration, EnvLevel, EnvResult, EnvSplit, EnvStanding } from "@codecast/shared/contracts/envs";
 import { CLIMB_AA_RUNS, baseMeanCases, halve, levelCanSee, levelNoise, readClimbCard, separates, type ClimbBudget, type ClimbCard, type LevelNoise } from "@codecast/shared/contracts/climb";
 import { parseEnvsText } from "../envDeclaration.js";
