@@ -19,7 +19,6 @@ import {
   isChatTriggerEvent,
   isPageTriggerEvent,
 } from "@codecast/shared/contracts";
-import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { useLaneMailAbilities } from "../../components/simple/useLaneMail";
 import { serverErrorText } from "../../lib/errorCause";
 import { copyToClipboard } from "../../lib/utils";
@@ -32,7 +31,8 @@ import { useTriggers, fetchTriggerRuns, useSyncTriggerHistory } from "../../hook
 import { openRunInStore } from "../../components/TriggerRunHistory";
 import { SelectBox } from "../../components/ui/select-box";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
-import { useInboxStore, filterInboxScopeFromState, type TriggerEdit } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, filterInboxScopeFromState, type TriggerEdit } from "../../store/inboxStore";
+import { runValuesOf, triggerFormFields } from "./triggerFormFields";
 import { gestureToast } from "../../store/undoStack";
 import { isTriggerEditable } from "../../lib/triggerEditable";
 import {
@@ -138,7 +138,7 @@ function deriveInitial(t: any | undefined) {
     // does the task. Read-only is the marked exception (the checkbox below).
     // Agent-created schedules (cast trigger add) still default to propose —
     // their prompts were never reviewed by a person.
-    return { prompt: "", title: "", kind: "in" as SchedKind, duration: "30m", eventKey: "pr_comment", mode: "apply" as const, agent: "claude" as const, project: "" };
+    return { ...runValuesOf(undefined), kind: "in" as SchedKind, duration: "30m", eventKey: "pr_comment" };
   }
   let kind: SchedKind = "in";
   let duration = "30m";
@@ -156,17 +156,11 @@ function deriveInitial(t: any | undefined) {
     kind = "in";
     duration = msToDurationToken(Math.max(t.run_at - Date.now(), 60_000));
   }
-  return {
-    prompt: t.prompt ?? "",
-    title: t.title ?? "",
-    kind,
-    duration,
-    eventKey,
-    mode: (t.mode === "apply" ? "apply" : "propose") as "propose" | "apply",
-    agent: (t.agent_type === "codex" ? "codex" : "claude") as "claude" | "codex",
-    project: t.project_path ?? "",
-  };
+  return { ...runValuesOf(t), kind, duration, eventKey };
 }
+
+/** Why a run field is locked for a viewer who does not own the trigger. */
+const LOCKED_TITLE = "Only its owner can change this";
 
 /** The form's example once the person's mail is connected. */
 const MAIL_ROUTINE_PLACEHOLDER = 'What should the assistant do? e.g. "Summarize my unread mail and flag anything urgent"';
@@ -193,6 +187,10 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
 }) {
   const isEdit = !!editTask;
   const init = useMemo(() => deriveInitial(editTask ?? seedTask), [editTask, seedTask]);
+  // What a trigger runs (prompt, agent, read-only, checkout) is its owner's to
+  // change; a teammate may still retitle and reschedule it.
+  const viewerId = useTrackedStore([(s) => s.currentUser?._id]).currentUser?._id;
+  const runLocked = isEdit && !!viewerId && String(editTask.user_id) !== String(viewerId);
   const create = useMutation(api.agentTasks.webCreate);
   const [prompt, setPrompt] = useState(init.prompt);
   const [title, setTitle] = useState(init.title);
@@ -253,17 +251,7 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
     if (!valid || submitting) return;
     setSubmitting(true);
     try {
-      const args: TriggerEdit & Record<string, any> = {
-        prompt: prompt.trim(),
-        title: title.trim() || undefined,
-        mode,
-      };
-      if (!hostedRoutine) {
-        args.agent_type = agent;
-        args.project_path = isEdit ? project.trim() : project.trim() || undefined;
-      } else if (!isEdit) {
-        args.agent_type = HOSTED_AGENT_TYPE;
-      }
+      const args: TriggerEdit & Record<string, any> = triggerFormFields(init, { prompt, title, mode, agent, project }, { isEdit, hosted: hostedRoutine });
       if (kind === "on") {
         args.schedule_type = "event";
         // Keeps a --source or --repo the trigger was armed with; the form
@@ -313,9 +301,10 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
   );
   // Beside the agent.
   const readOnlyBox = (
-    <label className="inline-flex items-center gap-1.5 py-1 text-xs text-sol-text-muted cursor-pointer select-none">
+    <label className={`inline-flex items-center gap-1.5 py-1 text-xs text-sol-text-muted select-none ${runLocked ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`} title={runLocked ? LOCKED_TITLE : undefined}>
       <input
         type="checkbox"
+        disabled={runLocked}
         checked={mode === "propose"}
         onChange={(e) => setMode(e.target.checked ? "propose" : "apply")}
         className="accent-sol-cyan"
@@ -336,7 +325,9 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
       )}
       <FormRow label="Prompt">
         <textarea
-          autoFocus
+          autoFocus={!runLocked}
+          disabled={runLocked}
+          title={runLocked ? LOCKED_TITLE : undefined}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => {
@@ -345,7 +336,7 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
           }}
           placeholder={hostedRoutine && mailAbilities.connected ? MAIL_ROUTINE_PLACEHOLDER : 'What should the agent do? e.g. "Check if CI is green on main and report"'}
           rows={3}
-          className={`w-full ${bareInput} text-sm leading-relaxed resize-none`}
+          className={`w-full ${bareInput} text-sm leading-relaxed resize-none disabled:text-sol-text-muted disabled:cursor-not-allowed`}
         />
       </FormRow>
       <FormRow label="Title">
@@ -397,8 +388,8 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
             value={agent}
             onChange={(a) => setAgent(a as "claude" | "codex")}
             items={[
-              { key: "claude", label: "claude" },
-              { key: "codex", label: "codex" },
+              { key: "claude", label: "claude", disabled: runLocked, title: runLocked ? LOCKED_TITLE : undefined },
+              { key: "codex", label: "codex", disabled: runLocked, title: runLocked ? LOCKED_TITLE : undefined },
             ]}
           />
           {readOnlyBox}
@@ -408,10 +399,12 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
         <FormRow label="Project">
           <input
             value={project}
+            disabled={runLocked}
+            title={runLocked ? LOCKED_TITLE : undefined}
             onChange={(e) => setProject(e.target.value)}
             list="trigger-project-roots"
             placeholder="Optional path"
-            className={`w-full ${bareInput} font-mono`}
+            className={`w-full ${bareInput} font-mono disabled:text-sol-text-muted disabled:cursor-not-allowed`}
           />
           <datalist id="trigger-project-roots">
             {projectOptions.map((p) => <option key={p} value={p} />)}
