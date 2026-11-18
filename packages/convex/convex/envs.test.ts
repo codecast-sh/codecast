@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { create, get as getGoal, update } from "./initiatives";
 import { get, goalLevels, link, list, record, standings, workspaceStandings } from "./envs";
@@ -51,10 +51,11 @@ const run = (fn: any, db: any, args: Record<string, any>, who: string | null = M
 const inTeam = { workspace: "team" as const, team_id: TEAM };
 
 let clock = 1_790_000_000_000;
+// A ticking fake clock for this file only: bun runs every test file in one
+// process, so the real clock goes back after each test.
 const realNow = Date.now;
-Date.now = () => (clock += 1000);
-afterEach(() => { Date.now = () => (clock += 1000); });
-void realNow;
+beforeEach(() => { Date.now = () => (clock += 1000); });
+afterEach(() => { Date.now = realNow; });
 
 const result = (over: Record<string, any> = {}) => ({
   env: "union/unit-smoke",

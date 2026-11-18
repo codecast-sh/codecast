@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "./proc.js";
 import type { Command } from "commander";
 import {
   ENV_LEVEL_NAME,

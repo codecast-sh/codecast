@@ -37,8 +37,7 @@ import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unpa
 import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 import { queueMoveContinueIfMidTurn } from "./moveContinue";
-import { rehomeUndeliveredMessages } from "./pendingMessages";
-import { handRoleTriggersToRunner } from "./lib/agentTaskRows";
+import { followNewRunner } from "./lib/followNewRunner";
 import { stampPriorOwnerPage } from "./ownerAttribution";
 import { deviceManagementFor } from "./lib/teamPolicyGuard";
 
@@ -844,14 +843,6 @@ async function resolveRemoteForReparent(
       q.eq("user_id", conv.user_id).eq("git_root", conv.git_root))
     .take(50);
   return siblings.find((s: any) => s.git_remote_url)?.git_remote_url;
-}
-
-// A conversation changed runner (a cross-account move or a device claim):
-// what waits on it follows, the messages not yet delivered and the role
-// triggers that wake it, so the new runner's daemon serves both.
-async function followNewRunner(ctx: { db: any }, conversationId: Id<"conversations">, runnerId: Id<"users">): Promise<void> {
-  await rehomeUndeliveredMessages(ctx, conversationId, runnerId);
-  await handRoleTriggersToRunner(ctx, conversationId);
 }
 
 export async function performReparentSessionToDevice(

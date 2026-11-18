@@ -18,8 +18,7 @@ import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
 import { openAccountLedger } from "../consequential/ledgers";
 import { accountLabel, accountMachineGrid, toggledDeviceIds, type CellState, type GridCell, type GridColumn, type GridDeviceAccounts, type GridRow } from "../../lib/accountMachineGrid";
 
-/** The anchor the blocked banner links to. */
-export const WHERE_ACCOUNTS_RUN_ID = "where-accounts-run";
+import { WHERE_ACCOUNTS_RUN_ID } from "../../lib/accountMachineAnchors";
 
 const MARK: Record<CellState, { glyph: string; tone: string; word: string }> = {
   own: { glyph: "●", tone: "text-sol-text", word: "its own login" },
@@ -94,7 +93,7 @@ function CellBox({ state, count }: { state: CellState; count?: string }) {
   const m = MARK[state];
   const box = state === "off" ? "border border-sol-border/70" : state === "arriving" ? "border border-dashed border-sol-green/40" : "bg-sol-bg-alt/60";
   return (
-    <span className={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[11px] font-semibold ${box} ${m.tone}`}>
+    <span className={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-xs font-semibold ${box} ${m.tone}`}>
       {m.glyph}
       {count && <span className="ml-0.5 font-normal tabular-nums">{count}</span>}
     </span>

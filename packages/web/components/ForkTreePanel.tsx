@@ -746,7 +746,7 @@ export function BranchMapLayers({ heading, count, open, onToggle }: { heading: s
             : "h-[6px] group-hover:h-[12px] group-focus-visible:h-[12px] border-[color-mix(in_srgb,var(--sol-text)_16%,var(--sol-border))] bg-[color-mix(in_srgb,var(--sol-text)_5%,var(--sol-bg))] group-hover:border-sol-cyan/40 group-hover:bg-[color-mix(in_srgb,var(--sol-cyan)_7%,var(--sol-bg))] group-focus-visible:border-sol-cyan/60 group-focus-visible:bg-[color-mix(in_srgb,var(--sol-cyan)_7%,var(--sol-bg))]"
         }`}
       >
-        <span className={`flex items-center gap-1 text-[10px] leading-none text-sol-cyan opacity-0 transition-opacity ${ease} group-hover:opacity-100 group-hover:delay-75 group-focus-visible:opacity-100`}>
+        <span className={`flex items-center gap-1 text-xs leading-none text-sol-cyan opacity-0 transition-opacity ${ease} group-hover:opacity-100 group-hover:delay-75 group-focus-visible:opacity-100`}>
           <Split className="h-2.5 w-2.5" />
           {heading}
         </span>

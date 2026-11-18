@@ -1,4 +1,4 @@
-// The repair for role checks that died before ct-95585 (migrations.repairRoleChecks).
+// The repair for role checks that died before ct-95585 (roleCheckRepair.repairRoleChecks).
 //
 //   rearm      a dead check on a seat nothing else checks is stamped with the
 //              role, handed to the seat's runner and armed for its next slot,
@@ -18,7 +18,7 @@ import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
-import { performRepairRoleChecks } from "./migrations";
+import { performRepairRoleChecks } from "./roleCheckRepair";
 import { findRoleRoutineInAnyStatus, roleRoutineFor } from "./lib/orgRoutine";
 import { checkFaultOf } from "@codecast/shared/contracts/orgAreas";
 

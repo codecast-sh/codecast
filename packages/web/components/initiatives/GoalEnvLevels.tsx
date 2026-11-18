@@ -59,7 +59,7 @@ export function GoalEnvLevels({ goal, now }: { goal: InitiativeRow; now: number 
         <div className="grid items-baseline gap-x-3 gap-y-1.5 text-[12.5px]" style={{ gridTemplateColumns: "auto minmax(0,1fr) auto auto auto auto" }}>
           {levels.map((s) => (
             <div key={s.env} className="contents" data-goal-env={s.env} data-level={s.level}>
-              <span className="font-mono text-[11px] px-1 rounded-sm" style={{ color: "var(--sol-cyan)", background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)" }} title={ENV_LEVEL_NAME[s.level]}>{s.level}</span>
+              <span className="font-mono text-xs px-1 rounded-sm" style={{ color: "var(--sol-cyan)", background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)" }} title={ENV_LEVEL_NAME[s.level]}>{s.level}</span>
               <span className="min-w-0 truncate" style={{ color: "var(--sol-text-secondary)" }} title={`${s.env}${s.note ? ` · ${s.note}` : ""}`}>{s.title ?? s.env}</span>
               <Score s={s} />
               <Noise s={s} />

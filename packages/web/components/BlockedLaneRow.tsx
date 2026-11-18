@@ -7,7 +7,7 @@
 // resumes and, when one of your accounts with room is kept off its machines,
 // offers to open it there through the shared review.
 import { formatCountdown, worstUsagePercent } from "@codecast/shared/contracts";
-import { WHERE_ACCOUNTS_RUN_ID } from "./settings/AccountMachineGrid";
+import { WHERE_ACCOUNTS_RUN_ID } from "../lib/accountMachineAnchors";
 import { Button } from "./ui/button";
 import { ContinueAccountPicker } from "./ContinueAccountPicker";
 import { ConsequentialSwitch } from "./consequential/ConsequentialSwitch";

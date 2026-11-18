@@ -211,6 +211,8 @@ function plans() {
     byWorkspace("projects", "by_workspace"),
     byTeam("initiatives", "by_team_id"),
     byWorkspace("initiatives", "by_workspace"),
+    byWorkspace("env_attempts", "by_workspace", { children: [under("env_attempt_cases", "by_attempt", "attempt_id")] }),
+    byWorkspace("env_links", "by_workspace_env"),
     byTeam("workflows", "by_team_id", { children: [under("workflow_versions", "by_workflow_at", "workflow_id")] }),
     byWorkspace("workflows", "by_workspace", { children: [under("workflow_versions", "by_workflow_at", "workflow_id")] }),
     byWorkspace("workflow_runs", "by_workspace_updated"),

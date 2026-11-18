@@ -21,7 +21,7 @@
 // scores whatever those hold.
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "./proc.js";
 import {
   ENVS_REL_PATH,
   ENV_COMMAND_VARS,

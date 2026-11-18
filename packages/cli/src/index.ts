@@ -135,7 +135,6 @@ import { writeThreadStatePulse } from "./threadStateStamp.js";
 import { AuthServer } from "./authServer.js";
 import { makeVerifier, registerAuthRequest, startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
-import { newProjectGoalLines, unplacedPlanLines } from "./planPlacement.js";
 import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, standingSessionLine } from "./briefLines.js";
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
 import { parkedNote, planReadiness, stuckAdvice, stuckNote } from "./planReadiness.js";
@@ -18613,6 +18612,7 @@ projectCmd
     }
     if (created) {
       const goals = await tryCliPost("/cli/initiatives/list", created.team_id ? { workspace: "team", team_id: created.team_id } : { workspace: "personal" });
+      const { newProjectGoalLines } = await import("./planPlacement.js");
       const lines = newProjectGoalLines(c, created.short_id ?? String(result.id), Array.isArray(goals) ? goals : []);
       if (lines.length) console.log(["", ...lines].join("\n"));
     }
@@ -19969,6 +19969,7 @@ async function unplacedPlanNotice(planRef: string): Promise<string[]> {
   if (!created) return [];
   const scope = created.team_id ? { workspace: "team", team_id: created.team_id } : { workspace: "personal" };
   const [projects, goals] = await Promise.all([tryCliPost("/cli/projects/list", scope), tryCliPost("/cli/initiatives/list", scope)]);
+  const { unplacedPlanLines } = await import("./planPlacement.js");
   return ["", ...unplacedPlanLines(c, planRef, Array.isArray(goals) ? goals : [], Array.isArray(projects) ? projects : [])];
 }
 

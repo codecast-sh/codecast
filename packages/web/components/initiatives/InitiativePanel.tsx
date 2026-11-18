@@ -197,7 +197,7 @@ function ProjectOpenPlans({ plans, projectId, now }: { plans: PlanItem[]; projec
           </div>
         );
       })}
-      {open.more > 0 && <Link href={`/projects/${encodeURIComponent(projectId)}`} className="text-[11.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }}>{open.more} more open {open.more === 1 ? "plan" : "plans"}</Link>}
+      {open.more > 0 && <Link href={`/projects/${encodeURIComponent(projectId)}`} className="text-xs hover:underline" style={{ color: "var(--sol-text-dim)" }}>{open.more} more open {open.more === 1 ? "plan" : "plans"}</Link>}
     </div>
   );
 }

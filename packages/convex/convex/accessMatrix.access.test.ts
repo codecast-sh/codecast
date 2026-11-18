@@ -53,6 +53,9 @@ const NOT_YET_COVERED = new Set([
   // rows need seeds this world lacks (dynamic runs, session flow runs, proposals).
   // listForWorkflow answers only the workflow's owner: stricter than the matrix's workspace rule.
   "workflow_runs.listForWorkflow", "workflow_runs.listDynamicRuns", "sessionFlowRuns.forConversation", "sessionFlowRuns.forTeam", "orgProposals.list",
+  // Derived from the workspace goals (initiatives), which this world does not seed either
+  // (initiatives.webList above); covered together with them.
+  "envs.workspaceStandings",
 ]);
 
 type Ids = Awaited<ReturnType<typeof seed>>;

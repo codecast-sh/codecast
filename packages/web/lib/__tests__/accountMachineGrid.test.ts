@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { accountLabel, accountMachineGrid, toggledDeviceIds, type GridMachine, type GridPoolRow } from "../accountMachineGrid";
 
 const NOW = Date.UTC(2026, 10, 17, 12);
-const use = (pct: number) => ({ fetched_at: NOW, weekly: { percent: pct, resets_at: NOW + 1e8 } });
+const usageAt = (pct: number) => ({ fetched_at: NOW, weekly: { percent: pct, resets_at: NOW + 1e8 } });
 
 const machines: GridMachine[] = [
   { device_id: "mac", label: "MacBook", is_remote: false },
@@ -18,10 +18,10 @@ const accounts = [
   { device_id: "h2", profiles: [] },
 ];
 const pool: GridPoolRow[] = [
-  { mine: true, team_id: null, email: "claude@x.com", device_ids: ["mac", "mini"], usage: use(7) },
-  { mine: true, team_id: null, email: "claude3@x.com", device_ids: ["mac", "mini"], usage: use(100) },
-  { mine: true, team_id: "T", email: "claude3@x.com", pools: ["line"], usage: use(100) },
-  { mine: true, team_id: null, email: "r.cameron.musgrave@gmail.com", device_ids: null, usage: use(5) },
+  { mine: true, team_id: null, email: "claude@x.com", device_ids: ["mac", "mini"], usage: usageAt(7) },
+  { mine: true, team_id: null, email: "claude3@x.com", device_ids: ["mac", "mini"], usage: usageAt(100) },
+  { mine: true, team_id: "T", email: "claude3@x.com", pools: ["line"], usage: usageAt(100) },
+  { mine: true, team_id: null, email: "r.cameron.musgrave@gmail.com", device_ids: null, usage: usageAt(5) },
 ];
 const grid = accountMachineGrid({ machines, accounts, pool, now: NOW });
 const row = (email: string) => grid.rows.find((r) => r.email === email)!;
