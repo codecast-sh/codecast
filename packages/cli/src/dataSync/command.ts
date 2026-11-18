@@ -10,6 +10,7 @@ import { defaultConfigDir } from "../config/configDir.js";
 import { readAuthConfig } from "../config/readAuthConfig.js";
 import { deviceId } from "../remote/device.js";
 import { commandGroup } from "../commandGroups.js";
+import { dataFolderFromManifest } from "@codecast/shared/contracts/dataSync";
 import { convexDataSyncApi } from "./convexApi.js";
 import { declarationsFor, paneProjectPaths } from "./declarations.js";
 import { syncOnce, type DataSyncApi, type SyncReport } from "./engine.js";
@@ -56,6 +57,18 @@ export function registerDataSyncCommand(program: Command): void {
       if (opts.json) return console.log(JSON.stringify(folders, null, 2));
       if (!folders.length) return console.log("No shared folders. A repo declares one in .codecast/workspace.toml:\n  [host]\n  data = [\"~/.local/share/<tool>/<dir>\"]");
       for (const f of folders) console.log(`~/${f.path}  ${f.files} files, ${mib(f.bytes)}${f.declared_by ? `  (${f.declared_by})` : ""}`);
+    });
+
+  cmd
+    .command("add <dir>")
+    .description("Share a folder under $HOME with every machine of yours, as a repo's [host] data would")
+    .action(async (dir: string) => {
+      const home = process.env.HOME || "";
+      const absolute = path.resolve(dir.replace(/^~(?=\/|$)/, home));
+      const folder = absolute.startsWith(`${home}/`) ? dataFolderFromManifest(`~/${path.relative(home, absolute)}`) : null;
+      if (!folder) throw new Error(`${dir} cannot be shared: it must be a folder under $HOME, at least two levels deep, outside credential and agent folders`);
+      await liveApi().declareFolders([{ path: folder }]);
+      console.log(`~/${folder} now syncs on every machine of yours; this one sends its copy on the next pass (cast datasync now).`);
     });
 
   cmd

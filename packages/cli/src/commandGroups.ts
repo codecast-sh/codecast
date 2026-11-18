@@ -62,6 +62,7 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
 
   cast datasync        the shared folders: where, declared by which repo, how much
   cast datasync now    sync them now (the daemon does every minute)
+  cast datasync add <dir>   share a folder under $HOME without a repo declaring it
 
 A repo declares one in .codecast/workspace.toml: [host] data = ["~/.local/share/<tool>/<dir>"].`,
     load: () => import("./dataSync/command.js").then((m) => m.registerDataSyncCommand),
