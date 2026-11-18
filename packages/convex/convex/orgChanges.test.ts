@@ -442,6 +442,20 @@ describe("org history remaining change kinds", () => {
     const goal = await f.db.get("initiatives_i");
     expect([goal.milestones.length, goal.milestones.at(-1).title, goal.decisions.length]).toEqual([12, "Private beta open", 1]);
   });
+  test("a shape change that retargets a number keeps the window and noise it is read with", async () => {
+    const f = fixture();
+    await f.db.patch("initiatives_i", { metrics: [{ key: "intros_a_week", name: "Intros a week", target: "at least 30", window: "3w", noise: "poisson:1.75" }] });
+    await f.apply({ kind: "initiative_shape", initiative: "in-1", metrics: [{ name: "Intros a week", target: "at least 60" }, { name: "Bounce", target: "under 3%", guardrail: true }] });
+    expect((await f.db.get("initiatives_i")).metrics).toEqual([
+      { key: "intros_a_week", name: "Intros a week", target: "at least 60", window: "3w", noise: "poisson:1.75" },
+      { key: "bounce", name: "Bounce", target: "under 3%", guardrail: true },
+    ]);
+    await f.apply({ kind: "initiative_shape", initiative: "in-1", metrics: [{ name: "Intros a week", target: "at least 60", window: "4w", noise: "poisson" }, { name: "Bounce", target: "under 3%", guardrail: true }] });
+    expect((await f.db.get("initiatives_i")).metrics[0]).toMatchObject({ window: "4w", noise: "poisson" });
+    // A number that turns from a count into a share does not carry a count's noise model.
+    await f.apply({ kind: "initiative_shape", initiative: "in-1", metrics: [{ name: "Intros a week", target: "at least 40%" }] });
+    expect((await f.db.get("initiatives_i")).metrics).toEqual([{ key: "intros_a_week", name: "Intros a week", target: "at least 40%" }]);
+  });
   test("an initiative owner undo removes only the scope it gained", async () => {
     const { performUpdateInitiative } = await import("./initiatives");
     const f = fixture(); const role = await f.role();

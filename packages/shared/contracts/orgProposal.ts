@@ -9,6 +9,7 @@ import { ORG_SESSION_KINDS, sessionDestination, type OrgFileSessionChange } from
 export { ORG_SESSION_KINDS, sessionDestination, type OrgFileSessionChange, type OrgSessionDestination } from "./orgSessionFiling";
 import { autonomyOn, trustForSwitch } from "./roleAutonomy";
 import { INITIATIVE_METRICS_MAX, INITIATIVE_RECORD_MAX } from "./initiative";
+import { metricWindowNoiseError } from "./metricStanding";
 import { everyWords } from "./rolePlaybook";
 export { everyWords } from "./rolePlaybook";
 import { DEFAULT_LINE_SLUG, LINE_SLUG_RE } from "./lineSlug";
@@ -217,7 +218,7 @@ export type OrgUpgradeChange = { kind: "upgrade"; instance: string; template: st
 // carried so the row reads cold in a store that does not hold the row.
 /** How a goal is measured: a name and the number to reach ("Weekly active teams", "1000"). At most two. */
 /** A goal's number as a proposal names it: the goal's InitiativeMetric without its key (derived from the name), read live from `series` (mw-N) when it names one, and a guardrail when the work must not make it worse. */
-export type OrgInitiativeMetric = { name: string; target: string; series?: string; guardrail?: boolean };
+export type OrgInitiativeMetric = { name: string; target: string; series?: string; guardrail?: boolean; window?: string; noise?: string };
 /** A step on the way to a goal, with the day it is due (unix ms) when one was named. */
 export type OrgInitiativeMilestone = { title: string; date?: number };
 /** The written half of a goal's intent record (I5) a change may carry: why
@@ -592,13 +593,16 @@ export function orgChangeError(raw: any): string | null {
   return null;
 }
 
-/** Up to INITIATIVE_METRICS_MAX metrics, each { name, target, series?, guardrail? }, or absent. */
+/** Up to INITIATIVE_METRICS_MAX metrics, each { name, target, series?, guardrail?, window?, noise? }, or absent. */
 function metricsError(kind: string, raw: unknown): string | null {
   if (raw === undefined) return null;
-  if (!Array.isArray(raw) || raw.length > INITIATIVE_METRICS_MAX) return `${kind} metrics is a list of at most ${INITIATIVE_METRICS_MAX} { name, target, series?, guardrail? }: the numbers the goal is measured by`;
+  if (!Array.isArray(raw) || raw.length > INITIATIVE_METRICS_MAX) return `${kind} metrics is a list of at most ${INITIATIVE_METRICS_MAX} { name, target, series?, guardrail?, window?, noise? }: the numbers the goal is measured by`;
   for (const m of raw) {
     if (!m || typeof m !== "object" || !nonEmpty((m as any).name) || !nonEmpty((m as any).target)) return `${kind} metrics entries are { name, target }, both strings ("Weekly active teams", "1000")`;
-    const { series, guardrail } = m as any;
+    const { series, guardrail, window, noise } = m as any;
+    if ((window !== undefined && typeof window !== "string") || (noise !== undefined && typeof noise !== "string")) return `${kind} metrics window and noise are strings ("3w", "poisson")`;
+    const readBad = metricWindowNoiseError(window, noise);
+    if (readBad) return `${kind} metrics: ${readBad}`;
     if (series !== undefined && (typeof series !== "string" || !/^mw-\d+$/i.test(series.trim()))) return `${kind} metrics series is a metric watch's short id (mw-N), the live series the number reads`;
     if (guardrail !== undefined && typeof guardrail !== "boolean") return `${kind} metrics guardrail is true or false`;
   }
@@ -972,7 +976,7 @@ function recordEffect(c: OrgInitiativeRecord): string {
   ].filter(Boolean).join(" ");
 }
 /** "Weekly active teams (target 1,000) and Paying teams (target 40)" */
-export const metricsWords = (metrics: ReadonlyArray<OrgInitiativeMetric>): string => andList(metrics.map((m) => `${m.name.trim()} (${[`target ${m.target.trim()}`, m.series ? `live from ${m.series.trim().toLowerCase()}` : "", m.guardrail ? "a guardrail" : ""].filter(Boolean).join(", ")})`));
+export const metricsWords = (metrics: ReadonlyArray<OrgInitiativeMetric>): string => andList(metrics.map((m) => `${m.name.trim()} (${[`target ${m.target.trim()}`, m.series ? `live from ${m.series.trim().toLowerCase()}` : "", m.window ? `read over ${m.window.trim().toLowerCase()}${m.noise ? ` with ${m.noise.trim().toLowerCase()} noise` : ""}` : "", m.guardrail ? "a guardrail" : ""].filter(Boolean).join(", ")})`));
 
 /**
  * A derived ask's words, for a person reading cold: no handle, no
