@@ -9,10 +9,15 @@ import { useInboxStore } from "../../store/inboxStore";
 /** Beside a session's folder: the folder's sync state when it isn't syncing,
  *  and the one press that syncs it. */
 export function FolderSyncControl({ folder }: { folder: string }) {
-  const settings = useInboxStore(useShallow((s) => {
+  // The raw fields only: a `?? []` inside the selector is a new array on every
+  // read, useShallow never sees two equal snapshots, and React loops (#185).
+  const raw = useInboxStore(useShallow((s) => {
     const u = s.currentUser as any;
-    return u ? { sync_mode: u.sync_mode ?? "all", sync_projects: u.sync_projects ?? [], sync_excluded: u.sync_excluded ?? [] } as SyncSettings : null;
+    return u ? { sync_mode: u.sync_mode, sync_projects: u.sync_projects, sync_excluded: u.sync_excluded } : null;
   }));
+  const settings: SyncSettings | null = raw
+    ? { sync_mode: raw.sync_mode ?? "all", sync_projects: raw.sync_projects ?? [], sync_excluded: raw.sync_excluded ?? [] }
+    : null;
   const state = folderSyncState(settings, folder);
   if (!state) return null;
   const name = folder.split("/").filter(Boolean).pop() ?? folder;
