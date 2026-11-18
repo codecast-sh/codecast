@@ -91,6 +91,16 @@ describe("data sync between machines", () => {
     await laptop.sync();
     expect((await host.sync()).deletedHere).toBe(1);
     expect(host.read("a")).toBeNull();
+
+    // A deletion that empties a folder takes the folder with it.
+    laptop.write("deep/er/x", "x");
+    await laptop.sync();
+    await host.sync();
+    laptop.rm("deep/er/x");
+    // Its own commit of the file comes back in this pull; that is no reason to bring the file back.
+    expect(await laptop.sync()).toMatchObject({ pulled: 0, pushed: 1 });
+    expect(await host.sync()).toMatchObject({ deletedHere: 1 });
+    expect(fs.existsSync(path.join(host.home, FOLDER, "deep"))).toBe(false);
     expect(server.rows.get(`${FOLDER}/a`)?.deleted).toBe(true);
   });
 

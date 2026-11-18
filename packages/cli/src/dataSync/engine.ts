@@ -139,6 +139,13 @@ function walk(root: string): string[] {
   return out.sort();
 }
 
+/** Removes the folders a deletion emptied, up to (not including) the synced folder itself. */
+function removeEmptyParents(dir: string, root: string): void {
+  for (let d = dir; d.startsWith(`${root}/`); d = path.dirname(d)) {
+    try { fs.rmdirSync(d); } catch { return; }
+  }
+}
+
 function writeAtomic(abs: string, bytes: Buffer, mtime: number): void {
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const tmp = `${abs}.cast-data-${process.pid}.tmp`;
@@ -192,16 +199,20 @@ export async function syncOnce(o: SyncOptions): Promise<SyncReport> {
         const target = abs(row.folder, row.rel);
         const local = localFile(target, base);
         const agreed = row.deleted ? local === null : local?.sha === row.sha256;
+        // The row changed the file only if it differs from the version both sides last agreed on;
+        // otherwise it is this machine's own commit coming back, and a local edit since goes out below.
+        const remoteChanged = row.deleted ? base !== undefined : row.sha256 !== base?.sha;
         if (agreed) {
           if (row.deleted) delete files[row.rel];
           else files[row.rel] = local!;
-        } else {
+        } else if (remoteChanged) {
           const changedHere = base ? local === null || local.sha !== base.sha : local !== null;
           const remoteWins = !changedHere || row.mtime >= (local?.mtimeMs ?? 0);
           if (remoteWins) {
             if (changedHere && local) keepAside(row.folder, row.rel, fs.readFileSync(target), "this-machine");
             if (row.deleted) {
               fs.rmSync(target, { force: true });
+              removeEmptyParents(path.dirname(target), path.join(o.home, row.folder));
               delete files[row.rel];
               report.deletedHere++;
             } else {

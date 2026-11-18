@@ -130,6 +130,8 @@ import type * as dataDeletionsSchema from "../dataDeletionsSchema.js";
 import type * as dataQueries from "../dataQueries.js";
 import type * as dataQueriesSchema from "../dataQueriesSchema.js";
 import type * as dataRefresh from "../dataRefresh.js";
+import type * as dataSync from "../dataSync.js";
+import type * as dataSyncSchema from "../dataSyncSchema.js";
 import type * as debugTmp from "../debugTmp.js";
 import type * as debugTmpDiet from "../debugTmpDiet.js";
 import type * as decisionAreas from "../decisionAreas.js";
@@ -935,6 +937,8 @@ declare const fullApi: ApiFromModules<{
   dataQueries: typeof dataQueries;
   dataQueriesSchema: typeof dataQueriesSchema;
   dataRefresh: typeof dataRefresh;
+  dataSync: typeof dataSync;
+  dataSyncSchema: typeof dataSyncSchema;
   debugTmp: typeof debugTmp;
   debugTmpDiet: typeof debugTmpDiet;
   decisionAreas: typeof decisionAreas;
