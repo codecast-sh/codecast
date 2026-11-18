@@ -11,15 +11,18 @@ import { applyCancel, applyReactivate } from "./agentTasks";
 // good. Per role with a standing session:
 //   rearm      its dead check, stamped with the role, handed to the account
 //              that runs the seat, armed for its next slot (applyReactivate)
-//   adopt      a live trigger on the seat that carries the role's id or the
-//              check's title becomes the role's check (both stamped, handed to
-//              the runner); the dead check it replaces is cancelled
+//   adopt      a live trigger on the seat that already is the role's (its id),
+//              or carries the check's title and is owned by the account that
+//              runs the seat, becomes the role's check (both stamped); the dead
+//              check it replaces is cancelled. A trigger a person names in
+//              `adopt` is adopted too; owned by anyone else, its precheck is
+//              cleared in the same write, since it moves to the runner's daemon.
 //   cancel     a dead check replaced by an adopted one, or an older copy of the
 //              one being re-armed
-//   ambiguous  a live trigger on the seat that only looks like a check (armed
-//              by hand, no role id, another title): a person decides, and
-//              naming it in `adopt` makes it the role's check. Both are left
-//              alone until then.
+//   ambiguous  a live trigger on the seat that looks like the check but is
+//              not the runner's own (armed by hand, no role id): a person
+//              decides, and naming it in `adopt` makes it the role's check.
+//              Both are left alone until then.
 //   create     a check for an active role with none in any status
 //   reown      a live role trigger on the seat still under an account that no
 //              longer runs it
@@ -33,7 +36,9 @@ import { applyCancel, applyReactivate } from "./agentTasks";
 type RoleCheckRepairRow = {
   role: string; handle: string; standing: string | null;
   action: "rearm" | "adopt" | "cancel" | "ambiguous" | "create" | "reown" | "skip";
-  trigger: string | null; title?: string; owner?: { from: string; to: string }; replaced_by?: string; check_title?: string; reason: string;
+  trigger: string | null; title?: string; owner?: { from: string; to: string }; replaced_by?: string; check_title?: string;
+  /** An adopted trigger's precheck, cleared because it moves to another account's daemon. */
+  precheck_cleared?: string; reason: string;
 };
 
 // The recurring routines a role holds beside its check.
@@ -63,9 +68,14 @@ export async function performRepairRoleChecks(ctx: any, args: { dryRun?: boolean
     const triggers = await tasksOriginatedBy(ctx, standing._id);
     const dead = triggers.filter((t) => t.status === "failed" && t.schedule_type === "recurring" && t.title === title && (!t.role_id || mine(t))).sort((a, b) => b.created_at - a.created_at);
     const liveRecurring = triggers.filter((t) => isLiveTrigger(t) && t.schedule_type === "recurring" && !ROLE_ROUTINES_BESIDE_CHECK.has(t.title));
-    const adoptable = liveRecurring.find((t) => (mine(t) || t.title === title || chosen.has(ref(t))) && (!t.role_id || mine(t))) ?? null;
-    const lookalikes = adoptable ? [] : liveRecurring.filter((t) => !t.role_id && looksLikeACheck(t));
-    const stamps = adoptable ? { ...(mine(adoptable) ? {} : { role_id: role._id }), ...(adoptable.title === title ? {} : { title }) } : {};
+    const runsSeat = (t: any) => String(t.user_id) === String(standing.user_id);
+    // Taken on its own only when it already is the role's, or the runner armed
+    // it under the check's title: a teammate's trigger must never become the
+    // role's and follow the seat onto the runner's machine.
+    const adoptable = liveRecurring.find((t) => mine(t) || (!t.role_id && ((t.title === title && runsSeat(t)) || chosen.has(ref(t))))) ?? null;
+    const lookalikes = adoptable ? [] : liveRecurring.filter((t) => !t.role_id && (t.title === title || looksLikeACheck(t)));
+    const clearsPrecheck = !!adoptable && !mine(adoptable) && !runsSeat(adoptable) && !!adoptable.precheck;
+    const stamps = adoptable ? { ...(mine(adoptable) ? {} : { role_id: role._id }), ...(adoptable.title === title ? {} : { title }), ...(clearsPrecheck ? { precheck: undefined, precheck_mode: undefined, precheck_state: undefined } : {}) } : {};
     const adopting = !!adoptable && Object.keys(stamps).length > 0;
 
     // Live role triggers on the seat under the wrong account move, paused role or not.
@@ -81,7 +91,7 @@ export async function performRepairRoleChecks(ctx: any, args: { dryRun?: boolean
     let rearmed: any = null;
     if (adoptable) {
       if (adopting) {
-        rows.push({ ...base, action: "adopt", trigger: ref(adoptable), title: adoptable.title, check_title: title, owner: await ownerMove(adoptable), reason: chosen.has(ref(adoptable)) ? "named by a person as the role's check" : "a live trigger on the seat carries the check's title or the role" });
+        rows.push({ ...base, action: "adopt", trigger: ref(adoptable), title: adoptable.title, check_title: title, owner: await ownerMove(adoptable), ...(clearsPrecheck ? { precheck_cleared: adoptable.precheck } : {}), reason: chosen.has(ref(adoptable)) ? `named by a person as the role's check${clearsPrecheck ? "; its precheck is cleared, since it moves to the seat runner's machine" : ""}` : "the seat's runner armed it under the check's title" });
         if (!dryRun) await ctx.db.patch(adoptable._id, stamps);
       }
       for (const t of dead) {
@@ -101,7 +111,7 @@ export async function performRepairRoleChecks(ctx: any, args: { dryRun?: boolean
       }
     } else {
       const any = await findRoleRoutineInAnyStatus(ctx, role, standing);
-      if (any && !isLiveTrigger(any)) rows.push({ ...base, action: "skip", trigger: ref(any), reason: `its check is ${any.status === "completed" ? "off: a person cancelled it" : any.status}` });
+      if (any && !isLiveTrigger(any)) rows.push({ ...base, action: "skip", trigger: ref(any), reason: any.status === "completed" ? (any.canceled_on_kill_at ? "its check stopped when its session was killed" : "its check is off: a person cancelled it") : `its check is ${any.status}` });
       else if (!any) {
         rows.push({ ...base, action: "create", trigger: null, reason: "active role with a standing session and no check" });
         if (!dryRun) rows[rows.length - 1].trigger = ((made) => made.short_id ?? String(made.id))(await ensureRoleRoutine(ctx, role, standing));

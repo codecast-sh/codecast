@@ -238,7 +238,11 @@ export async function readWorkTasks(ctx: Ctx, userId: Id<"users">, teamId: Id<"t
  *  title; computeOrgHealth reads every task through this shape on both the
  *  fanned and the in-process path, so a field read here and missing from the
  *  list fails the tests rather than prod. */
-export const HEALTH_TASK_FIELDS = ["_id", "_creationTime", "short_id", "title", "status", "execution_status", "plan_id", "project_id", "updated_at", "conversation_ids"] as const;
+// The four board fields (source, promoted, assignee, triage_status) are what
+// isOnProjectBoard reads: the analyzer's activity part takes its tasks in this
+// shape too (orgInit analysisPart "worktasks"), and coverage counts only
+// board rows.
+export const HEALTH_TASK_FIELDS = ["_id", "_creationTime", "short_id", "title", "status", "execution_status", "plan_id", "project_id", "updated_at", "conversation_ids", "source", "promoted", "assignee", "triage_status"] as const;
 export type HealthTask = { [K in (typeof HEALTH_TASK_FIELDS)[number]]?: any };
 export function slimHealthTask(t: any): HealthTask {
   const out: HealthTask = {};
@@ -735,7 +739,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     });
     const initiatives: AreaInitiative[] = servedInitiatives(initiativeRows, { role_id: rid, project_ids: items.projectIds }, undefined, initiativeSeries).map(({ _id, trends: _trends, target_date: _date, ...i }) => ({ id: _id, ...i }));
     const routine: any = standingRaw ? await findRoleRoutineInAnyStatus(ctx, role, standingRaw) : null;
-    const check: AreaCheck | null = routine ? { trigger_id: String(routine._id), short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, last_run_summary: routine.last_run_summary ?? null, interval_ms: routine.interval_ms ?? null, last_run_failed: !!routine.last_run_failed } : null;
+    const check: AreaCheck | null = routine ? { trigger_id: String(routine._id), short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, last_run_summary: routine.last_run_summary ?? null, interval_ms: routine.interval_ms ?? null, last_run_failed: !!routine.last_run_failed, canceled_on_kill: !!routine.canceled_on_kill_at } : null;
     const areaInput: AreaInput = {
       role_status: role.status,
       has_standing: !!standingRaw,

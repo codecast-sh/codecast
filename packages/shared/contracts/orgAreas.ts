@@ -147,17 +147,21 @@ export type AreaCheck = {
   interval_ms: number | null;
   /** Its last run failed; absent on rows from before the field. */
   last_run_failed?: boolean;
+  /** It was stopped by killing its session, not by a person's cancel. */
+  canceled_on_kill?: boolean;
 };
 
 /** Why the role's check does not wake it, or null when it does. "down"
  *  is a fault nobody chose: no check at all, one that stopped, or one whose
  *  last run failed; it presses on the Head of People (AREA_STATUS_ATTENTION).
+ *  A kill stops it too, and that is down: nobody chose to stop the check.
  *  "off" is a check a person cancelled: their call (S25), shown, never
  *  pressed. A paused check is the person's hold and reads as neither. The
  *  label fits a chip; the reason is the whole of it. */
 export type CheckFault = { status: "down" | "off"; label: string; reason: string };
 export function checkFaultOf(check: AreaCheck | null): CheckFault | null {
   if (!check) return { status: "down", label: "no check", reason: "it has no check" };
+  if (check.status === "completed" && check.canceled_on_kill) return { status: "down", label: "check stopped", reason: "its check stopped when its session was killed" };
   if (check.status === "completed" || check.status === "cancelled") return { status: "off", label: "check off", reason: "its check was cancelled" };
   const why = String(check.last_run_summary ?? "").split("\n")[0].replace(/^Failed:\s*/, "").trim().slice(0, 160);
   const because = (lead: string) => (why ? `${lead}: ${why}` : lead);

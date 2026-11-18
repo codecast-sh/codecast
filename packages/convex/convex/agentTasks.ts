@@ -40,7 +40,7 @@ import { nextCadenceRun } from "@platform/assistant/cadence";
 import { startHostedConversationFor } from "./assistant/start";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
-import { type TaskCtx, roleSeatOf, roleTriggerRunnerOf, handRoleTriggersToRunner, projectQuiet, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill, projectRunsInline, scheduleProjectFire } from "./lib/agentTaskRows";
+import { type TaskCtx, mayRewriteTrigger, roleTriggerRunnerOf, handRoleTriggersToRunner, projectQuiet, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill, projectRunsInline, scheduleProjectFire } from "./lib/agentTaskRows";
 export { refreshArmedTriggerKind, patchTask, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill };
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -1784,12 +1784,11 @@ export const skipTaskRun = mutation({
       ...nextArmingAfterRun(task, now),
       last_precheck_skip_at: now,
       last_precheck_skip_reason: args.reason,
-      // A firing that recorded its skip worked: retries and failed slots count
-      // failures in a row, never across healthy firings, and the run before it
-      // is no longer the last word on the trigger.
+      // A firing that recorded its skip worked: retries count failures in a row,
+      // never across healthy firings. A skip ran no agent, so it says nothing
+      // about the last real run: failed_slots and last_run_failed stand until a
+      // clean run or a re-arm (ct-95585).
       retry_count: 0,
-      failed_slots: undefined,
-      last_run_failed: false,
       ...(args.precheck_state !== undefined && sameGate(task, args.command, args.precheck_mode) ? { precheck_state: args.precheck_state } : {}),
       lease_holder: undefined,
       lease_expires_at: undefined,
@@ -2734,15 +2733,14 @@ const TASK_UPDATE_ARG_VALIDATORS = {
 // shell command the owner's daemon runs, and the home is the session it
 // injects into and whose machine runs it. Anyone who may manage a trigger
 // still pauses, cancels, runs and retitles it; changing the precheck or the
-// home is for the owner, or for a role's trigger the account running its seat.
-// The role's own tune door (orgRoles.applyRoutineTune) has its own rule.
+// home is for the owner (mayRewriteTrigger). The role's tune door
+// (orgRoles.applyRoutineTune) holds a precheck change to the same rule.
 async function assertMayChangeGateOrHome(ctx: TaskCtx, task: Doc<"agent_tasks">, update: TaskUpdateArgs, userId: Id<"users">): Promise<void> {
   const precheckMoves = (update.precheck !== undefined && (update.precheck.trim() || undefined) !== task.precheck)
     || (update.precheck_mode !== undefined && (update.precheck_mode || undefined) !== task.precheck_mode);
   const homeMoves = update.originating_conversation_id !== undefined && String(update.originating_conversation_id ?? "") !== String(task.originating_conversation_id ?? "");
   if (!precheckMoves && !homeMoves) return;
-  if (String(task.user_id) === String(userId)) return;
-  if (task.role_id && String((await roleSeatOf(ctx, task.role_id))?.user_id ?? "") === String(userId)) return;
+  if (await mayRewriteTrigger(ctx, task, userId)) return;
   throw new Error(precheckMoves
     ? "Only the trigger's owner can change its precheck: it runs as a shell command on their machine"
     : "Only the trigger's owner can change the session it runs in");

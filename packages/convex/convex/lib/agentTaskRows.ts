@@ -222,10 +222,26 @@ export async function roleSeatOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefin
 // to whoever owns that session, so nobody can choose a teammate's machine to
 // run it on. A person's own trigger on a session is theirs and keeps its owner.
 export async function roleTriggerRunnerOf(ctx: TaskCtx, task: Pick<Doc<"agent_tasks">, "role_id" | "user_id" | "originating_conversation_id">): Promise<Id<"users"> | null> {
+  const seat = await seatOfRoleTrigger(ctx, task);
+  return seat && String(seat.user_id) !== String(task.user_id) ? seat.user_id : null;
+}
+
+/** The seat of a role trigger that lives on it; null for a person's trigger
+ *  or a role trigger left anywhere else. */
+export async function seatOfRoleTrigger(ctx: TaskCtx, task: Pick<Doc<"agent_tasks">, "role_id" | "originating_conversation_id">): Promise<Doc<"conversations"> | null> {
   if (!task.role_id || !task.originating_conversation_id) return null;
   const seat = await roleSeatOf(ctx, task.role_id);
-  if (!seat || String(seat._id) !== String(task.originating_conversation_id)) return null;
-  return String(seat.user_id) !== String(task.user_id) ? seat.user_id : null;
+  return seat && String(seat._id) === String(task.originating_conversation_id) ? seat : null;
+}
+
+/** Who may change what a trigger runs (its precheck, its home): its owner,
+ *  or for a role trigger on its seat the account running the seat, which is
+ *  whose daemon claims it next (roleTriggerRunnerOf hands it over at the
+ *  claim, before any precheck runs). Nobody else picks the machine a shell
+ *  command runs on. */
+export async function mayRewriteTrigger(ctx: TaskCtx, task: Pick<Doc<"agent_tasks">, "role_id" | "user_id" | "originating_conversation_id">, userId: Id<"users">): Promise<boolean> {
+  if (String(task.user_id) === String(userId)) return true;
+  return String((await seatOfRoleTrigger(ctx, task))?.user_id ?? "") === String(userId);
 }
 
 /** Hand every role trigger seated on a conversation to the account that runs
