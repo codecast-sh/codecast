@@ -11,11 +11,29 @@ The org does two jobs for communication, and neither is routing every message.
 
 The wording is `ORG_CONTEXT_GUIDANCE` (`packages/shared/contracts/orgWhere.ts`), injected at session start inside `<org-context>` and printed by `cast org where`. A lead's routine (`ROLE_CHECK_PROMPT`, `convex/lib/orgRoutine.ts`) carries the synthesis duty on every run; `armRoleRoutines` brings hired roles up to a changed prompt.
 
+### Messaging policies
+
+A messaging policy is one named unit: the guidance an agent is told and the delivery that carries findings (`MESSAGING_POLICIES`, `packages/shared/contracts/messagingPolicy.ts`). There are two.
+
+| Policy | Guidance | Delivery |
+|---|---|---|
+| `lead` (default) | variant G3, the text above, which builds `ORG_CONTEXT_GUIDANCE` | the lead feed: the lead reads its whole area and routes |
+| `shared-log` | variant LOG of the suite | the plan log: each `cast` command carries the entries new to the session |
+
+**Choosing.** A plan chooses: `cast plan create|update --policy lead|shared-log` sets `plans.messaging_policy`. A plan with no value, or an unknown one, is `lead` (`resolveMessagingPolicy`), so nothing changes for a plan that does not choose. There is no team default: `teams.features` holds only on/off flags, and a named default needs a settings surface first.
+
+**Writing to the log.** An agent posts `cast plan comment <plan_id> --type fact|fail|interface "<entry>"`. The CLI and `plans.addComment` store a fact as the plan's existing `discovery` entry. `fail` and `interface` are plan entry types of their own. Plan records tag the three as `[fact]`, `[fail]` and `[interface]`.
+
+**Reading it.** `planLog.unread` (`POST /cli/plans/log/unread`) reads the log of the session's active plan. It returns the entries newer than the session's cursor in `plan_log_reads`, leaving out its own. Then it moves the cursor past them, so each entry arrives once. A first read gets the newest 20. It returns nothing for a session with no plan or a plan on `lead`. The CLI prints those entries after the output of each `cast` command the session runs. Nothing wakes an idle agent.
+
+**Telling the agent.** When the plan uses the log, `buildImplementerPrompt` (`packages/cli/src/agents/prompts.ts`) adds a "Shared log" section. It holds the LOG guidance with the plan's id. `cast guide messaging` serves the same text. The guidance installed into CLAUDE.md and AGENTS.md does not change. It is the lead policy for everyone, and the installed file is at its size budget.
+
 ## AC2. Why this policy
 
 - **Real traffic** (6,525 messages, Sept 6 to Oct 6, 320 read in full). Agent-to-agent noise was 7%, and half of all messages changed what the recipient did. Most direction came from outside the spawn line, and most of that was legitimate resource coordination. Informal hubs (release and merge drivers) took half of all messages.
 - **Ablation** (about 2,500 graded runs, 20 situations, three models). Today's wording, variant G3 in the suite, was perfect on Opus and Fable. It beat the previous route-to-owner text, which let out-of-line redirects through without the lead hearing (p = 0.006 on Opus).
 - **Simulation** (64 worlds, up to ten workers). With a lead that reads its whole area, G3 sent 36% fewer messages than free peer messaging (p = 0.0004) and delivered as many facts on time, at about a third of a round of extra latency. A lead choosing its own reads dropped a quarter of the facts, which is why the routine reads the whole brief.
+- **Shared log** (issue #89, with the simulation mode in PR #97: a policy name that ends in `+log`, run with `WORLD=big LEAD_FEED=1`). Each arm had four worlds of 2 to 10 workers. A blind judge graded the final plans of each world from 1 to 10. With 4 to 10 workers, the log alone scored above G3 (6.2 to 6.8 against 4.2 to 6.2). It sent 32 to 56% fewer messages and cost up to 23% more. With 4 worlds, only the gap at 10 workers is clear: every log world scored above every G3 world (p of about 0.03). On facts delivered on time with their id, the log arms are a little lower (81 to 93% against 93 to 100%). Most of the gap is senders who restated a fact on the log without its id. So `shared-log` is a choice per plan, and `lead` stays the default.
 
 ## AC3. Huddle delivery
 
