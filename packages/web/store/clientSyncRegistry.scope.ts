@@ -69,6 +69,7 @@ export const DATA_SCOPE = {
   plans: "workspace",
   projects: "workspace",
   initiatives: "workspace",
+  envStandings: "workspace",
   initiativeUpdates: "entity",
   buckets: "viewer",
   bucketAssignments: "viewer",

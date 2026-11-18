@@ -630,7 +630,6 @@ export const CLIENT_SYNC_REGISTRY = {
   envStandings: {
     persistence: { kind: "collection", key: "envStandings" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     // The attempt and the link are objects: a new run must replace them.
     sync: { deepFields: ["attempt", "link"] },
     feeds: ["envs.workspaceStandings"],
