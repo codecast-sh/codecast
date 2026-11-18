@@ -108,6 +108,7 @@ describe("active-team pointer", () => {
       "hooks/useMentionQuery.ts",
       "hooks/useTeamFeed.ts",
       "hooks/useSyncTeamMembers.ts",
+      "hooks/useSessionShipState.ts",
       "components/InviteModal.tsx",
     ];
     for (const rel of guarded) {

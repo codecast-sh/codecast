@@ -4,7 +4,7 @@
 // HostFeeders), and one map of every session's state built once per change of
 // either collection, which each card reads its own entry of through its one
 // store subscription (SessionCard), as a signature string.
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { activeTeamIdOf } from "../lib/activeTeam";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useSyncCollection } from "./useSyncCollection";
@@ -18,7 +18,12 @@ const api = _api as any;
 
 /** Feeder: the active team's sessions' change runs and its deploy records. Mounted once, on the sync host. */
 export function useSyncTeamShipFeeds() {
-  const teamId = useInboxStore((s) => activeTeamIdOf(s) ?? null);
+  // isConvexId: a just-created team holds a "team-stub-…" id until its
+  // create echoes, and both queries take an Id<"teams">; skip until it is real.
+  const teamId = useInboxStore((s) => {
+    const id = activeTeamIdOf(s);
+    return id && isConvexId(id) ? id : null;
+  });
   useSyncCollection("workflowRuns", api.sessionFlowRuns.forTeam, teamId ? { team_id: teamId } : "skip");
   useSyncTeamDeployRecords(teamId);
 }
