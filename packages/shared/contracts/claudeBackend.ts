@@ -13,7 +13,7 @@ export const CLAUDE_BACKEND_LABELS: Record<ClaudeBackend, string> = {
 };
 
 /** Grok's direct host (grok agent stdio) is offered once its live end-to-end run passes (scripts/grok-direct-e2e.ts). */
-export const GROK_DIRECT_BACKEND = false;
+export const GROK_DIRECT_BACKEND = true;
 
 /** The conversation agent types (Convex spelling) that can run in a direct host as well as a pane. */
 export function hasDirectBackend(agentType: string | null | undefined): boolean {
