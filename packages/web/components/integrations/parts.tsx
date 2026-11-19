@@ -91,14 +91,14 @@ export function ConfirmButton({
       <button
         type="button"
         onClick={() => setArmed(true)}
-        className={cn("text-meta text-sol-red hover:underline", className)}
+        className={cn("rounded-sm text-meta text-sol-red hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring/60", className)}
       >
         {label}
       </button>
     );
   }
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="inline-flex items-center gap-2" data-armed>
       {question && <span className="text-meta text-sol-text-dim">{question}</span>}
       <button
         type="button"
@@ -106,14 +106,14 @@ export function ConfirmButton({
           setArmed(false);
           onConfirm();
         }}
-        className="shrink-0 rounded bg-sol-red/15 px-2 py-0.5 text-meta font-medium text-sol-red hover:bg-sol-red/25"
+        className="shrink-0 rounded bg-sol-red/15 px-2 py-0.5 text-meta font-medium text-sol-red hover:bg-sol-red/25 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring/60 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-3"
       >
         {confirmLabel ?? label}
       </button>
       <button
         type="button"
         onClick={() => setArmed(false)}
-        className="shrink-0 text-meta text-sol-text-muted hover:text-sol-text"
+        className="shrink-0 rounded-sm text-meta text-sol-text-muted hover:text-sol-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring/60 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-3"
       >
         Cancel
       </button>
