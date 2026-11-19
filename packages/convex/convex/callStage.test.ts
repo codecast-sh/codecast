@@ -8,7 +8,7 @@ import { api } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
 import { presentToken } from "@platform/auth/convex";
-import { STAGE_PIN_LIMIT } from "@codecast/shared/contracts";
+import { STAGE_PIN_LIMIT } from "@codecast/shared/contracts/stagePins";
 import { ensureCallBoard } from "./callStage";
 
 setDefaultTimeout(30_000);

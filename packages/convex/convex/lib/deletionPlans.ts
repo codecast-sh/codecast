@@ -380,6 +380,7 @@ export const LEFT_OUT: Record<string, string> = {
   call_invites: "keyed by room, not team",
   call_room_state: "keyed by room, not team",
   call_knocks: "keyed by room, not team",
+  call_stage_pins: "keyed by room, not team; holds refs to docs, not content, and dies with the huddle",
   call_guest_links: "keyed by room, not team",
   call_guests: "keyed by room, not team",
   artifact_identities: "indexed by person first (a page viewer's sign-in token)",

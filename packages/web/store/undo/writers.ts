@@ -288,6 +288,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   issueSyncSources: "Integration settings (add, update, remove a source); settings are never undoable.",
   notifications: "Read state (mark read, mark all read); never undoable.",
   callRooms: "Live call controls (lock, transcription, recording) act on a call in progress; never undoable.",
+  callStagePins: "Pins on a live call's stage are the room's, put up and taken down for everyone with the stage's own controls; never undoable.",
   callRecordings:
     "A per-window view of a call's files, each carrying a URL signed for one window; written only by deleteCallRecording, a delete, never undoable.",
   callRecordingCalls:

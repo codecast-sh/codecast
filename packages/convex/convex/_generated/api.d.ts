@@ -546,6 +546,7 @@ import type * as linearApi from "../linearApi.js";
 import type * as linearWebhooks from "../linearWebhooks.js";
 import type * as linkPreviews from "../linkPreviews.js";
 import type * as liveActivity from "../liveActivity.js";
+import type * as liveArtifactPurge from "../liveArtifactPurge.js";
 import type * as liveArtifacts from "../liveArtifacts.js";
 import type * as liveArtifactsSchema from "../liveArtifactsSchema.js";
 import type * as liveComments from "../liveComments.js";
@@ -1354,6 +1355,7 @@ declare const fullApi: ApiFromModules<{
   linearWebhooks: typeof linearWebhooks;
   linkPreviews: typeof linkPreviews;
   liveActivity: typeof liveActivity;
+  liveArtifactPurge: typeof liveArtifactPurge;
   liveArtifacts: typeof liveArtifacts;
   liveArtifactsSchema: typeof liveArtifactsSchema;
   liveComments: typeof liveComments;

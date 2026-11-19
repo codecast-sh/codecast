@@ -4,7 +4,7 @@
 import { useMemo, useRef, useState } from "react";
 import { Pin, Plus, Sheet, SquareKanban } from "lucide-react";
 import { toast } from "sonner";
-import { parseStagePinRef } from "@codecast/shared/contracts";
+import { parseStagePinRef } from "@codecast/shared/contracts/stagePins";
 import type { ArtifactType } from "@codecast/shared/artifacts";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
@@ -160,5 +160,26 @@ function QuickButton({ icon, label, busy, onClick }: { icon: React.ReactNode; la
       {icon}
       {busy ? "…" : label}
     </button>
+  );
+}
+
+/** The stage's header control: what is pinned, and the way to pin more. */
+export function StagePinButton({ roomKey, pins, className }: { roomKey: string; pins: StagePinRow[]; className: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative shrink-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`${className} ${open ? "bg-sol-cyan/10 text-sol-cyan" : "text-sol-text-muted hover:bg-white/[0.06] hover:text-sol-text"}`}
+        title="Pin a board, doc, sheet or page to the stage for everyone in the call"
+        aria-label="Pin to the stage"
+        aria-expanded={open}
+      >
+        <Pin className="h-3.5 w-3.5" />
+        <span className="stage-word">pin</span>
+        {pins.length > 0 && <span className="font-mono text-meta text-sol-text-dim">{pins.length}</span>}
+      </button>
+      {open && <StagePinPicker roomKey={roomKey} pins={pins} onClose={() => setOpen(false)} />}
+    </span>
   );
 }

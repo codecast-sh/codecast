@@ -3,10 +3,9 @@
 // board, sheet or dashboard is the editable artifact with everyone's cursors
 // on it; a doc is its collaborative editor; a published page is the page; any
 // other object is its card. In a strip it is a small card that says what it is.
-import { createContext, memo, useContext, type ReactNode } from "react";
+import { memo, useContext, type ReactNode } from "react";
 import { ExternalLink, FileText, Globe, Lock, PinOff } from "lucide-react";
 import { isArtifactDocType, type ArtifactType } from "@codecast/shared/artifacts";
-import { DOC_TYPE_LABELS, type DocType } from "@codecast/shared/docs";
 import { useInboxStore } from "../../store/inboxStore";
 import type { StagePinRow } from "../../hooks/useStagePins";
 import { useSyncDocDetail } from "../../hooks/useSyncDocs";
@@ -17,18 +16,11 @@ import { EntityObjectCard } from "../EntityObjectCard";
 import { DocTypeMark } from "../docs/DocTypeMark";
 import { AppLoader } from "../AppLoader";
 import { useEntityResolution } from "../../lib/entityDisplay";
+import { useActiveMentionScope, useMentionQuery } from "../../hooks/useMentionQuery";
+import { useImageUpload } from "../../hooks/useImageUpload";
 import { ErrorBoundary } from "../ErrorBoundary";
 import type { StagePinShare } from "./stageHost";
-
-/** What a pin's tile may do outside itself: open the thing whole (in the app,
- *  or the main window from a call's own window), and take it off the stage. */
-export type StagePinActions = { roomKey: string; openPath: (path: string) => void };
-export const StagePinContext = createContext<StagePinActions | null>(null);
-
-/** The stage share for a pin row: what the views lay out. */
-export function pinShare(row: StagePinRow): StagePinShare {
-  return { kind: "pin", key: `pin:${row.ref}`, identity: `pin:${row.ref}`, name: pinTitle(row), pin: row, at: row.at };
-}
+import { pinPath, pinTitle, StagePinContext } from "../../lib/calls/stagePins";
 
 /** An object pin's own title (a task's, a plan's), else the pin's stored one. */
 function usePinTitle(row: StagePinRow): string {
@@ -40,19 +32,6 @@ function usePinTitle(row: StagePinRow): string {
 /** A pin's name where the stage labels it (its tab). */
 export function StagePinLabel({ share }: { share: StagePinShare }) {
   return <>{usePinTitle(share.pin as StagePinRow)}</>;
-}
-
-function pinTitle(row: StagePinRow): string {
-  if (row.title) return row.title;
-  if (row.kind === "page") return "Published page";
-  if (row.kind === "doc") return row.doc_type ? DOC_TYPE_LABELS[row.doc_type as DocType] ?? "Doc" : "Doc";
-  return row.ref;
-}
-
-function pinPath(row: StagePinRow): string | null {
-  if (row.kind === "doc" && row.doc_id) return `/docs/${row.doc_id}`;
-  if (row.kind === "page" && row.slug) return `/a/${row.slug}`;
-  return null;
 }
 
 function PinMark({ row, size = 14 }: { row: StagePinRow; size?: number }) {
@@ -192,11 +171,14 @@ function PinHead({ row, toolbar }: { row: StagePinRow; toolbar?: ReactNode }) {
 function ProseDoc({ id }: { id: string }) {
   const detailResult = useSyncDocDetail(id);
   const detail = useInboxStore((s: any) => s.docDetails[id] ?? s.docs[id]) as { content?: string; title?: string } | undefined;
+  // The same mentions and image drops as the doc's own page.
+  const onMentionQuery = useMentionQuery(useActiveMentionScope());
+  const onImageUpload = useImageUpload();
   if (!detail && detailResult === undefined) return <AppLoader className="h-full" />;
   return (
     <div className="h-full overflow-y-auto px-6 py-4">
       <div className="mx-auto max-w-[760px]">
-      <CollabDocEditor key={id} docId={id} markdownContent={detail?.content ?? ""} editable contentReady={!!detail} placeholder="Write together…" />
+      <CollabDocEditor key={id} docId={id} markdownContent={detail?.content ?? ""} onMentionQuery={onMentionQuery} onImageUpload={onImageUpload} editable contentReady={!!detail} placeholder="Write together…" />
       </div>
     </div>
   );

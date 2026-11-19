@@ -86,7 +86,6 @@ import { agentIdentity, claimRoomRows, liveTranscriptFor, postEvent } from "./ca
 import { mayPublishCall, stopRoomRecording } from "./lib/callRecordingRuns";
 import { callGuestsOnRecord, endGuestAdmissions, noteGuestAttendance } from "./lib/callGuestAdmission";
 import { scheduleFaceJoin, scheduleFaceLeave } from "./callFace";
-import { ensureCallBoard } from "./callStage";
 import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { siteUrl } from "./lib/siteUrl";
 import { slackSend } from "./lib/slackSend";
@@ -265,9 +264,15 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
   }
   // The first agent in the room gives the call its board, pinned on the
   // stage: the agents keep it as the room's shared picture of the talk.
-  if (wanted.size > 0 && t.status === "live" && !isRoomlessKey(t.room_key)) {
+  // Scheduled, not imported: callStage reaches docs.ts, and a static import
+  // from here closes an import cycle that breaks module load.
+  if (wanted.size > 0 && t.status === "live" && !isRoomlessKey(t.room_key) && !t.board_doc_id) {
     const first = wanted.values().next().value!;
-    await ensureCallBoard(ctx, (await ctx.db.get(t._id))!, first.addedBy, first.conversationId);
+    await ctx.scheduler.runAfter(0, internal.callStage.ensureBoardForFeed, {
+      transcript_id: t._id,
+      user_id: first.addedBy,
+      conversation_id: first.conversationId,
+    });
   }
 }
 

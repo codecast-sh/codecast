@@ -74,7 +74,6 @@ export * from "./transcribeLanguage";
 export * from "./callPush";
 export * from "./transcriptChunk";
 export * from "./callLinks";
-export * from "./stagePins";
 // A call's recordings (LiveKit Egress files) and the one rule that finds the
 // file and offset showing a moment of the call; and guests, the people who
 // join from a link without an account. Shared by Convex, web, mobile and the

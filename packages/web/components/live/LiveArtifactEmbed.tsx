@@ -13,7 +13,8 @@ import { ErrorBoundary } from "../ErrorBoundary";
 import "./live.css";
 import { useLiveArtifact } from "./useLiveArtifact";
 import { useLiveElements, useLivePresence } from "./liveArtifactReads";
-import { createScreenMap, CursorLayer } from "./LiveCursors";
+import { CursorLayer } from "./LiveCursors";
+import { createScreenMap } from "../../lib/liveScreenMap";
 import { AskClaimProvider, useAskClaims } from "./askAgent";
 import { LIVE_VIEWS, type LiveExport, type LiveImport } from "./registry";
 

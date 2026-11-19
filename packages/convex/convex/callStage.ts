@@ -11,9 +11,9 @@
 // the board as the room's shared picture of the talk.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { mutation, query, type MutationCtx } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
-import { parseStagePinRef, stagePinRowId, STAGE_PIN_LIMIT, type StagePinTarget } from "@codecast/shared/contracts";
+import { parseStagePinRef, stagePinRowId, STAGE_PIN_LIMIT, type StagePinTarget } from "@codecast/shared/contracts/stagePins";
 import { liveSeat, readRoomState } from "./callRooms";
 import { liveTranscriptFor, postEvent } from "./callChat";
 import { canAccessDoc } from "./lib/access";
@@ -149,6 +149,16 @@ export async function ensureCallBoard(
   await writePin(ctx, t.room_key, t.team_id, userId, { kind: "doc", id: String(boardId), ref: `doc:${boardId}` }, bySession, "the call's board");
   return boardId;
 }
+
+/** The board for a call an agent just joined (transcripts.syncAgentFeeds). */
+export const ensureBoardForFeed = internalMutation({
+  args: { transcript_id: v.id("transcripts"), user_id: v.id("users"), conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t) return null;
+    return await ensureCallBoard(ctx, t, args.user_id, args.conversation_id);
+  },
+});
 
 // ── People in the room ────────────────────────────────────────────────────
 
