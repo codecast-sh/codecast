@@ -48,6 +48,7 @@ export function useOpenThreadPrefetch(): (rootId: string) => void {
 export function useThreadPrefetch(roots: { id: string; lastReplyAt?: number }[]): void {
   const convex = useConvex();
   const key = roots.map((r) => `${r.id}:${r.lastReplyAt ?? 0}`).join(",");
+  // eslint-disable-next-line no-restricted-syntax -- one-shot fetch per set of roots and reply times
   useEffect(() => {
     const rootIds = roots.map((r) => r.id);
     const s = useInboxStore.getState() as any;

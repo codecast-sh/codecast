@@ -117,7 +117,8 @@ import { ScrollProgressTrack, useScrollProgressBar } from '@/components/session/
 import { goToTab } from '@/lib/tabNavigation';
 import { parseJointMessage } from '@codecast/shared/contracts/jointMessage';
 import { goalFrameLine, goalMessageBody } from '@codecast/shared/contracts/sessionGoal';
-import { parseCommandInvocation, cleanCommandExpansion, parseCastCommand, parseApiErrorContent, stripSystemTags as stripTagsShared } from '@codecast/web/components/conversation/classify';
+import { parseCommandInvocation, cleanCommandExpansion, parseCastCommand, parseApiErrorContent, parseContextBlocks, parseSkillBlocks, parseTeammateMessages, stripSystemTags as stripTagsShared } from '@codecast/web/components/conversation/classify';
+import type { ParsedContextBlock } from '@codecast/web/components/conversation/types';
 import { sayTextOf } from '@codecast/web/components/castCommand';
 import { useRecordConversationOpen } from '@/lib/accessLogOpen';
 import type { ParsedApiError } from '@codecast/web/components/conversation/types';
@@ -938,42 +939,6 @@ function PlanBlock({ content, timestamp, collapsed: collapsedProp }: { content: 
   );
 }
 
-type TeammateMessagePart = { type: 'text'; content: string } | { type: 'teammate'; teammateId: string; color?: string; summary?: string; content: string };
-
-function parseTeammateMessages(text: string): TeammateMessagePart[] {
-  if (!text || typeof text !== 'string') {
-    return [{ type: 'text', content: String(text || '') }];
-  }
-  const parts: TeammateMessagePart[] = [];
-  const regex = /<teammate-message\s+([^>]*)>([\s\S]*?)<\/teammate-message>/g;
-  let lastIndex = 0;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      const before = text.slice(lastIndex, match.index).trim();
-      if (before) parts.push({ type: 'text', content: before });
-    }
-    const attrs = match[1];
-    const inner = match[2].trim();
-    const idMatch = attrs.match(/teammate_id="([^"]+)"/);
-    const colorMatch = attrs.match(/color="([^"]+)"/);
-    const summaryMatch = attrs.match(/summary="([^"]+)"/);
-    parts.push({
-      type: 'teammate',
-      teammateId: idMatch?.[1] || 'agent',
-      color: colorMatch?.[1],
-      summary: summaryMatch?.[1],
-      content: inner,
-    });
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) {
-    const remaining = text.slice(lastIndex).trim();
-    if (remaining) parts.push({ type: 'text', content: remaining });
-  }
-  return parts;
-}
-
 const agentColors: Record<string, string> = {
   blue: Theme.blue,
   red: Theme.red,
@@ -1064,42 +1029,6 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
       )}
     </RNView>
   );
-}
-
-type SkillBlockPart = { type: 'text' | 'skill'; content: string; skillName?: string; skillDesc?: string; skillPath?: string };
-
-function parseSkillBlocks(text: string): SkillBlockPart[] {
-  if (!text || typeof text !== 'string') {
-    return [{ type: 'text', content: String(text || '') }];
-  }
-  const parts: SkillBlockPart[] = [];
-  const skillRegex = /<skill>([\s\S]*?)<\/skill>/g;
-  let lastIndex = 0;
-  let match;
-  while ((match = skillRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      const before = text.slice(lastIndex, match.index).trim();
-      if (before) parts.push({ type: 'text', content: before });
-    }
-    const inner = match[1];
-    const nameMatch = inner.match(/<name>(.*?)<\/name>/);
-    const pathMatch = inner.match(/<path>(.*?)<\/path>/);
-    const descMatch = inner.match(/description:\s*(.+)/);
-    parts.push({
-      type: 'skill',
-      content: match[0],
-      skillName: nameMatch?.[1],
-      skillDesc: descMatch?.[1]?.trim(),
-      skillPath: pathMatch?.[1],
-    });
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) {
-    const remaining = text.slice(lastIndex).trim();
-    if (remaining) parts.push({ type: 'text', content: remaining });
-  }
-  if (parts.length === 0) parts.push({ type: 'text', content: text });
-  return parts;
 }
 
 function SkillBlockCard({ name, description, path }: { name?: string; description?: string; path?: string }) {
@@ -1394,27 +1323,6 @@ function ApiErrorCard({ error, conversationId }: { error: ParsedApiError; conver
 // "★ Insight ─────" parsing + card rendering live inside MarkdownContent
 // (components/MarkdownRenderer.tsx, shared parser from web insightBlocks.ts)
 // so every markdown surface gets them, not just the message-bubble branch.
-
-type ParsedContextBlock = { type: string; title: string; id?: string; status?: string; priority?: string };
-
-function parseContextBlocks(text: string): { contexts: ParsedContextBlock[]; remaining: string } {
-  const contexts: ParsedContextBlock[] = [];
-  const remaining = text.replace(
-    /<context\s+type="([^"]+)"\s+title="([^"]+)">\s*([\s\S]*?)\s*<\/context>\s*/g,
-    (_, type, title, inner) => {
-      const ctx: ParsedContextBlock = { type, title };
-      const idMatch = inner.match(/ID:\s*(\S+)/);
-      const statusMatch = inner.match(/Status:\s*(\S+)/);
-      const priorityMatch = inner.match(/Priority:\s*(\S+)/);
-      if (idMatch) ctx.id = idMatch[1];
-      if (statusMatch) ctx.status = statusMatch[1];
-      if (priorityMatch) ctx.priority = priorityMatch[1];
-      contexts.push(ctx);
-      return '';
-    }
-  ).trim();
-  return { contexts, remaining };
-}
 
 const contextTypeConfig: Record<string, { icon: 'list' | 'crosshairs' | 'file-text-o'; color: string }> = {
   task: { icon: 'list', color: Theme.accent },
@@ -2321,7 +2229,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               return <TaskNotificationLine content={content} childConversationMap={childConversationMap} />;
             }
             if (content.includes('<skill>')) {
-              return parseSkillBlocks(content).map((part, idx) =>
+              return parseSkillBlocks(content).parts.map((part, idx) =>
                 part.type === 'skill'
                   ? <SkillBlockCard key={idx} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
                   : <MarkdownContent key={idx} text={part.content} baseStyle={bodyStyle} isUser={isUser} />
