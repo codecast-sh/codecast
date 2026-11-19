@@ -689,7 +689,7 @@ export function ObjectCardFrame({
       style={expanded && count > 1 ? { gridColumn: "1 / -1" } : undefined}
       // The surface stays the same open or closed; only the border raise and
       // the chevron say the card is open, so expanding never recolors it.
-      className={`entity-card group/card relative min-w-0 cursor-pointer overflow-hidden rounded-md border bg-sol-card ${expanded ? accent.borderOpen : accent.border} ${accent.borderHover} text-left transition-colors focus-visible:outline-none focus-visible:ring-1 ${accent.ring}`}
+      className={`entity-card group/card relative min-w-0 cursor-pointer select-text overflow-hidden rounded-md border bg-sol-card ${expanded ? accent.borderOpen : accent.border} ${accent.borderHover} text-left transition-colors focus-visible:outline-none focus-visible:ring-1 ${accent.ring}`}
       data-entity-card={kind}
     >
       {/* A flat card renders as its own surface — no header strip; the

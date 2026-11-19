@@ -837,6 +837,25 @@ html, body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
   }
+  /* Controls are not text. A drag or double-click across the palette, a menu,
+     a row of tabs or a button must not paint a selection over their labels.
+     Content (messages, docs, code, ids, dialogs, cards) keeps selecting, and a
+     control that wraps real content opts back in with `select-text`, which
+     beats this layer. Editable fields always select. */
+  :is(
+    button, [role="button"], summary, label, kbd, nav,
+    [role="menu"], [role="menubar"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"],
+    [role="listbox"], [role="option"], [role="tablist"], [role="tab"], [role="toolbar"],
+    [role="switch"], [role="checkbox"], [role="radio"], [role="slider"], [role="separator"],
+    [cmdk-group-heading]
+  ) {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  :is(input, textarea, [contenteditable]:not([contenteditable="false"])) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
   /* No ligatures where a person types. JetBrains Mono draws pairs like ??
      and !! as contextual alternates: the first character becomes an empty
      spacer glyph and the pair is drawn in the last cell. Chrome reshapes a
@@ -6650,6 +6669,11 @@ p:has(.object-reveal-slot[data-reveal-inline])::after, li:has(.object-reveal-slo
 .page-embed:focus-within .page-embed__stage {
   box-shadow: 0 1px 3px rgb(0 0 0 / .06), 0 10px 26px -10px rgb(0 0 0 / .22);
 }
+/* Filling a box its host sizes (a board element): the host draws the edge. */
+.page-embed--fill { margin: 0; height: 100%; }
+.page-embed--fill > span { height: 100%; }
+.page-embed--fill .page-embed__stage,
+.page-embed--fill:hover .page-embed__stage { box-shadow: none; border-radius: 0; transition: none; }
 .page-embed[data-loaded] .page-embed__stage { transition: height 260ms var(--embed-ease), box-shadow 200ms ease; }
 .page-embed__stage[data-resizing] { transition: box-shadow 200ms ease; }
 /* Pinning notes rings the page yellow a few pixels off it, so the mode is
