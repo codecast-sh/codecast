@@ -6,6 +6,7 @@
 //   ask     — undecided; one gesture (`request`) raises the OS prompt
 //   off     — denied, or turned off later; only System Settings can flip it
 //   unknown — couldn't tell (not macOS, plist unreadable): never nag on it
+//   n/a     — this build cannot hold the grant at all: nothing to set up
 //
 // Microphone, camera and screen come from Electron's systemPreferences, which
 // reads the TCC database. Notifications have no Electron API at all — a
@@ -74,11 +75,18 @@ function settingsUrl(kind, bundleId) {
 
 // `electron` and the notifications addon are injected so the pure parts
 // stay testable under plain node.
-function createOsPermissions({ electron, bundleId, notifications = loadNotificationsAddon() }) {
+//
+// `notificationsGrantable` is false for a run from source: that process is
+// the ad-hoc signed Electron.app from npm, and usernotificationsd refuses its
+// request outright ("requestAuthorization not allowed: com.github.Electron"),
+// with no prompt and an error the addon cannot pass back. Its notifications
+// read as n/a, so no surface offers a button that cannot work.
+function createOsPermissions({ electron, bundleId, notifications = loadNotificationsAddon(), notificationsGrantable = true }) {
   const { systemPreferences, desktopCapturer, shell } = electron;
   const mac = process.platform === "darwin";
 
   function readNotificationState() {
+    if (!notificationsGrantable) return "n/a";
     if (!notifications) return "unknown";
     try {
       return authorizationStatusToReadiness(notifications.authorizationStatus());
@@ -118,6 +126,7 @@ function createOsPermissions({ electron, bundleId, notifications = loadNotificat
       case "notifications":
         // Raises Allow / Don't Allow (a no-op once decided); the answer
         // lands in Notification Center, so the caller re-polls for it.
+        if (!notificationsGrantable) return "n/a";
         if (notifications) {
           try {
             notifications.requestAuthorization();

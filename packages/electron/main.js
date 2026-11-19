@@ -3428,10 +3428,12 @@ shellIpc.handle("show-notification", (_e, payload) => bannerGate.admit(describeW
 
 // OS-level permissions (notifications, microphone, camera, screen) read from
 // the OS itself — see osPermissions.js. Unpackaged dev runs register with
-// macOS under Electron's own bundle id, so System Settings opens that one.
+// macOS under Electron's own bundle id, so System Settings opens that one,
+// and macOS will not let that bundle ask for notifications at all.
 const osPermissions = createOsPermissions({
   electron: { systemPreferences, desktopCapturer, shell },
   bundleId: app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron",
+  notificationsGrantable: app.isPackaged,
 });
 modernNotify = osPermissions.notify;
 // Clicks are heard from boot, not from this run's first banner: a banner

@@ -130,6 +130,19 @@ test("notify prompts first when never asked, and reports false when nothing can 
   assert.equal(createOsPermissions({ electron: stubElectron(), bundleId: APP, notifications: mute }).notify("t", "b"), false);
 });
 
+// A run from source is the ad-hoc signed Electron.app, which macOS refuses to
+// let ask for notifications: no prompt, no error the app can see. It must not
+// read as "ask", or the setup list offers a Turn on that does nothing.
+test("a build that cannot hold the notification grant reads n/a and never asks", { skip: NOT_MAC }, async () => {
+  let asked = 0;
+  const addon = { authorizationStatus: () => 0, requestAuthorization: () => { asked++; }, post: () => "id", onActivate: () => {} };
+  const p = createOsPermissions({ electron: stubElectron(), bundleId: "com.github.Electron", notifications: addon, notificationsGrantable: false });
+  assert.equal((await p.getAll()).notifications, "n/a");
+  assert.equal(await p.request("notifications"), "n/a");
+  p.notify("t", "b");
+  assert.equal(asked, 0);
+});
+
 test("notify never posts off macOS, even with a working addon, so the caller falls back", { skip: !NOT_MAC }, () => {
   let posts = 0;
   const addon = { authorizationStatus: () => 2, requestAuthorization: () => {}, post: () => { posts++; return "id"; }, onActivate: () => {} };
