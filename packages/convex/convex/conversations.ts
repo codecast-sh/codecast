@@ -12823,6 +12823,9 @@ export const linkSessions = mutation({
       ? await getAuthenticatedUserId(ctx, args.api_token)
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
+    // A row parented to itself is a subagent of nothing: every list that
+    // skips children (inbox, team feed, Now) hides it for good.
+    if (args.parent_conversation_id === args.child_conversation_id) return;
 
     const parent = await ctx.db.get(args.parent_conversation_id);
     if (!parent || parent.user_id !== userId) throw new Error("Parent not found");

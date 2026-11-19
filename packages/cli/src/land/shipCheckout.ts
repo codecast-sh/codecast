@@ -511,10 +511,17 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
       }));
       const scripts = shippedPaths.filter((p) => blobOf.has(p) && /\.(m|c)?[jt]sx?$/.test(p));
       const sources = await readBlobs(root, scripts.map((p) => blobOf.get(p)!));
+      // Work left out of the commit is a held path or a file git would track
+      // but has not; a gitignored build output (a native .node addon) is
+      // neither, and the shipped tree never carried it.
+      const uncommitted = new Set([
+        ...out.held.flatMap((h) => h.paths),
+        ...((await gitTry(root, ["ls-files", "--others", "--exclude-standard"])) ?? "").split("\n").filter(Boolean),
+      ]);
       const gaps: string[] = [];
       for (const p of scripts) {
         const source = sources.get(blobOf.get(p)!);
-        if (source) gaps.push(...importGaps(source, p, (x) => blobOf.has(x), (x) => fs.existsSync(path.join(root, x))));
+        if (source) gaps.push(...importGaps(source, p, (x) => blobOf.has(x), (x) => uncommitted.has(x) && fs.existsSync(path.join(root, x))));
       }
       if (gaps.length) { out.import_gaps = gaps; return fail("check", `the shipped commits import files held back:\n${gaps.join("\n")}`); }
     }

@@ -422,6 +422,23 @@ describe("extractCodexForkRoot - collapsing resume/fork chains", () => {
     const root = extractCodexForkRoot(head);
     expect(root === "a" || root === "b").toBe(true);
   });
+
+  // Codex 0.167 writes a spawned thread with forked_from_id AND parent_thread_id set to
+  // its spawner, then the spawner's own session_meta below it. Keying it on the spawner
+  // merged both transcripts into one row that ended up parented to itself (hidden from
+  // the team feed as a subagent).
+  test("a spawned subagent or reviewer is its own root, not its parent's resume", () => {
+    const spawned = (id: string, parentId: string, source: unknown) =>
+      JSON.stringify({
+        type: "session_meta",
+        payload: { id, forked_from_id: parentId, parent_thread_id: parentId, source },
+      });
+    const threadSpawn = { subagent: { thread_spawn: { parent_thread_id: "main", depth: 1 } } };
+    expect(extractCodexForkRoot([spawned("child", "main", threadSpawn), meta("main")].join("\n"))).toBe("child");
+    expect(extractCodexForkRoot([spawned("rev", "main", { subagent: "review" }), meta("main")].join("\n"))).toBe("rev");
+    // A resume of the spawned child still collapses onto the child.
+    expect(extractCodexForkRoot([meta("child2", "child"), spawned("child", "main", threadSpawn), meta("main")].join("\n"))).toBe("child");
+  });
 });
 
 describe("Codex review lifecycle metadata", () => {

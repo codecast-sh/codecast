@@ -138,6 +138,12 @@ export function isCompletedNativeCodexReviewChild(
 // whose head was truncated still resolves consistently because every fork embeds the same
 // ancestry. Returns the file's own id when there is no fork lineage, or undefined when no
 // session_meta is present at all.
+//
+// A thread Codex spawned (a subagent, an approval reviewer) also carries forked_from_id,
+// pointing at the thread that spawned it, because it starts from a copy of that thread's
+// history. It is a separate session, not a resume of its parent, so the walk stops there:
+// following the link would key the child onto its parent's conversation and pour both
+// transcripts into one row.
 export function extractCodexForkRoot(content: string): string | undefined {
   const parent = new Map<string, string | undefined>();
   let ownId: string | undefined;
@@ -149,7 +155,8 @@ export function extractCodexForkRoot(content: string): string | undefined {
       const id: string | undefined = entry.payload?.id;
       if (!id) continue;
       if (!ownId) ownId = id; // the file's own session_meta is always first
-      if (!parent.has(id)) parent.set(id, entry.payload?.forked_from_id ?? undefined);
+      const spawned = !!entry.payload?.parent_thread_id || !!entry.payload?.source?.subagent;
+      if (!parent.has(id)) parent.set(id, spawned ? undefined : entry.payload?.forked_from_id ?? undefined);
     } catch {}
   }
   if (!ownId) return undefined;

@@ -134,3 +134,30 @@ export const repairReuploadedActivity = internalMutation({
     return { scanned: rows.length, fixed: fixed.length, rows: fixed };
   },
 });
+
+// TEMPORARY: before 2026-11-18 the daemon keyed a spawned Codex thread onto its
+// parent's conversation (extractCodexForkRoot followed the child's forked_from_id),
+// so a child ingested first created the row and the native-parent link then
+// pointed it at itself. A row parented to itself is hidden from the inbox, the
+// team feed and Now as a subagent of nothing. Clears the child's stamps it was born with.
+export const unnestSelfParented = internalMutation({
+  args: { ids: v.array(v.id("conversations")), dryRun: v.boolean() },
+  handler: async (ctx, args) => {
+    const fixed: string[] = [];
+    for (const id of args.ids) {
+      const conv = await ctx.db.get(id);
+      if (!conv || conv.parent_conversation_id !== id) continue;
+      fixed.push(id);
+      if (!args.dryRun) {
+        await ctx.db.patch(id, {
+          parent_conversation_id: undefined,
+          is_subagent: undefined,
+          subagent_description: undefined,
+          cli_flags: undefined,
+          inbox_dismissed_at: undefined,
+        });
+      }
+    }
+    return { fixed };
+  },
+});
