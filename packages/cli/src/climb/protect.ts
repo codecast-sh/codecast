@@ -71,36 +71,63 @@ export function protectedDigest(dir: string, globs: readonly string[]): string {
   return sha([...new Set(files)].sort().map((f) => `${f}\0${sha(fs.readFileSync(path.join(dir, f)))}`).join("\n"));
 }
 
+/** The packages a set of files names in its imports and requires: `zod`, `@scope/pkg`, never a relative path or a node builtin. */
+export function importedPackages(sources: readonly string[]): string[] {
+  const names = new Set<string>();
+  const spec = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["']([^"'./][^"']*)["']/g;
+  for (const text of sources) for (const m of text.matchAll(spec)) {
+    const raw = m[1];
+    if (raw.startsWith("node:") || raw.startsWith("bun:")) continue;
+    const parts = raw.split("/");
+    names.add(raw.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]);
+  }
+  return [...names].sort();
+}
+
 /**
- * The checkout's installed packages, which every tree the climb runs in links
- * live (envCommand withTreeAt): every file in each node_modules a tree would
- * link, by its contents. A grader package edited in place after gauge, at
- * any size and with any timestamp, changes it, and the climb stops rather
- * than score through it.
+ * The installed packages the files that grade import, as the checkout holds
+ * them: every tree the climb runs in links the checkout's node_modules live
+ * (envCommand withTreeAt), so a grader package edited there after gauge would
+ * grade both sides with someone's edit. Each is found the way Node resolves
+ * it, from the importing file's directory up to the repo root.
  */
-export function packagesPrint(root: string): string {
+export function graderPackageDirs(root: string, base: string, globs: readonly string[]): string[] {
+  const files = (tryGit(root, ["ls-tree", "-r", "--name-only", base]) ?? "").split("\n").filter((f) => /\.(m?[jt]sx?|cjs)$/.test(f) && !f.includes("node_modules/") && globs.some((g) => globMatch(g, f)));
+  const dirs = new Set<string>();
+  for (const f of files) {
+    const text = tryGit(root, ["show", `${base}:${f}`]) ?? "";
+    for (const name of importedPackages([text])) {
+      for (let d = path.posix.dirname(f); ; d = path.posix.dirname(d)) {
+        const rel = d === "." ? `node_modules/${name}` : `${d}/node_modules/${name}`;
+        if (fs.existsSync(path.join(root, rel))) { dirs.add(rel); break; }
+        if (d === ".") break;
+      }
+    }
+  }
+  return [...dirs].sort();
+}
+
+/**
+ * Those packages' files by inode, size and change time. A write moves a
+ * file's change time and no unprivileged process can set it back (utimes
+ * moves it too), so a package edited in place at any size, with its
+ * modification time restored, changes the print, and the climb stops rather
+ * than score through it. Reading metadata of the grader's own imports keeps
+ * it to seconds where every installed file of a large product took minutes.
+ */
+export function packagesPrint(root: string, dirs: readonly string[]): string {
   const lines: string[] = [];
-  const walkAll = (abs: string, rel: string) => {
+  const walk = (abs: string, rel: string) => {
     let entries: fs.Dirent[] = [];
     try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       const p = path.join(abs, e.name);
-      if (e.isDirectory()) walkAll(p, `${rel}/${e.name}`);
-      else if (e.isFile()) { try { lines.push(`${rel}/${e.name}\0${sha(fs.readFileSync(p))}`); } catch {} }
+      if (e.isDirectory()) walk(p, `${rel}/${e.name}`);
+      else if (e.isFile()) { try { const st = fs.lstatSync(p, { bigint: true }); lines.push(`${rel}/${e.name}\0${st.ino}\0${st.size}\0${st.ctimeNs}`); } catch {} }
       else if (e.isSymbolicLink()) { try { lines.push(`${rel}/${e.name}\0->${fs.readlinkSync(p)}`); } catch {} }
     }
   };
-  const find = (rel: string, depth: number) => {
-    let entries: fs.Dirent[] = [];
-    try { entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      if (!e.isDirectory() || e.name === ".git" || (e.name.startsWith(".") && e.name !== ".codecast")) continue;
-      const sub = rel ? `${rel}/${e.name}` : e.name;
-      if (e.name === "node_modules") walkAll(path.join(root, sub), sub);
-      else if (depth < 4) find(sub, depth + 1);
-    }
-  };
-  find("", 0);
+  for (const d of dirs) { try { walk(fs.realpathSync(path.join(root, d)), d); } catch { lines.push(`${d}\0missing`); } }
   return sha(lines.sort().join("\n"));
 }
 

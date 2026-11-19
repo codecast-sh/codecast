@@ -5,6 +5,18 @@
 import type { Cand, ClimbState, Cut } from "./engine.js";
 import { sign } from "./engine.js";
 
+/** What the climb has filed so far, in one line: what a failed station still leaves on the record. */
+export function filedLine(s: ClimbState | null): string {
+  if (!s) return "Filed nothing: the climb had not started";
+  const done = Object.entries(s.ledger.done).filter(([, d]) => !d.reused);
+  const failed = Object.entries(s.ledger.failed ?? {});
+  const usd = [...done.map(([, d]) => d.usd ?? 0), ...failed.map(([, f]) => f.usd)].reduce((a, b) => a + b, 0);
+  if (!done.length && !failed.length) return "Filed nothing: no env run had started";
+  const ids = done.map(([, d]) => d.attempt);
+  const fails = failed.slice(0, 3).map(([k, f]) => `${k}: ${f.why.slice(0, 120)}`).join("; ");
+  return `Filed ${done.length} run${done.length === 1 ? "" : "s"}${ids.length ? ` (${ids.slice(0, 8).join(", ")}${ids.length > 8 ? ", ..." : ""})` : ""}${failed.length ? `, ${failed.length} failed or unfiled (${fails})` : ""}; $${usd.toFixed(2)} spent`;
+}
+
 /** What production can read of one change, in one line: the card says it before the climb spends. */
 export function readabilityLine(s: ClimbState): string | null {
   const r = s.readability;

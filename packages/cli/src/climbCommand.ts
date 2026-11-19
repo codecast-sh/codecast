@@ -15,7 +15,7 @@ import { repoRoot } from "./envDeclaration.js";
 import { parseDuration } from "@codecast/shared/time";
 import { ClimbStop, STOP, admit, bindPromoted, promoteMode, confirm, gauge, guard, readState, refuse, screen, setOutcome, type ClimbIo, type RunOut } from "./climb/engine.js";
 import { LINE_COMMAND_VARS } from "./lineProfile.js";
-import { statusText, summaryText } from "./climb/report.js";
+import { filedLine, statusText, summaryText } from "./climb/report.js";
 
 const cwd = () => process.env.CODECAST_CWD || process.cwd();
 
@@ -50,19 +50,30 @@ export function defaultIo(deps: PublishDeps): ClimbIo {
   scrubRunValues();
   const root = repoRoot(cwd());
   if (!root) throw new ClimbStop("not inside a git repository", 3);
-  const post = (urlPath: string, body: Record<string, unknown>, read?: boolean) => apiPost(deps, urlPath, body, { read });
+  // A refusal from the server is an error the station handles, never an exit: an exit mid-gauge loses what it ran,
+  // and turns a refusal the caller reads (an env with no case set in codecast runs as before) into the climb's end.
+  const post = (urlPath: string, body: Record<string, unknown>, read?: boolean) => apiPost(deps, urlPath, body, { read, exitOnError: false });
+  return climbIo(post, root, deps.detectCurrentSessionId());
+}
+
+/** The climb's runs on this machine: dev through runWithCases (an env with no set in codecast runs as before), held through `cast env run`, each filed. */
+export function climbIo(post: ClimbIo["post"], root: string, sessionId: string | null | undefined): ClimbIo {
   return {
     root,
     post,
     run: async (decl, o) => {
       if (o.split === "held") return heldRun(o.dir, decl.key, o.label, o.goal, o.task);
       // The env's dev set travels through codecast (envCases.ts): runWithCases hands it to the runner and names the version read, which the attempt records.
-      const fetch = { goal: o.goal, task_id: o.task, session_id: deps.detectCurrentSessionId() };
+      const fetch = { goal: o.goal, task_id: o.task, session_id: sessionId };
       let r: Awaited<ReturnType<typeof runEnv>>, read: string | undefined;
       try { ({ run: r, read } = await runWithCases(post, decl, { dir: o.dir, candidate: o.label, split: o.split, sha: o.sha, quiet: false }, fetch)); } catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) }; }
       if (!r.ok) return r;
-      const filed = await recordRun(post, decl, root, r.result, { ...fetch, ...(read ? { cases_read: read } : {}) }).catch(() => null);
-      return { ok: true, result: r.result, short_id: filed?.short_id };
+      try {
+        const filed = await recordRun(post, decl, root, r.result, { ...fetch, ...(read ? { cases_read: read } : {}) });
+        return { ok: true, result: r.result, short_id: filed.short_id };
+      } catch (err) {
+        return { ok: true, result: r.result, unfiled: err instanceof Error ? err.message : String(err) };
+      }
     },
     tree: (sha, fn) => withTreeAt(root, sha, fn),
     evalResult: (reps, out) => spawnSync("cast", ["line", "eval-result", "--reps", reps, "--out", out], { stdio: "inherit" }).status ?? 2,
@@ -74,8 +85,8 @@ const readJson = (file: string, what: string, code = 3): unknown => {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (err) { throw new ClimbStop(`${what} ${file} is not readable JSON: ${err instanceof Error ? err.message : err}`, code); }
 };
 
-/** Run one station: its words on stdout, a {"why"} line last, its exit code. */
-async function station(name: string, fn: () => Promise<string>): Promise<void> {
+/** Run one station: its words on stdout, a {"why"} line last, its exit code. A station that fails says what the climb has filed so far, or that it filed nothing. */
+async function station(name: string, fn: () => Promise<string>, dir?: string): Promise<void> {
   try {
     const why = await fn();
     console.log(JSON.stringify({ why }));
@@ -83,7 +94,10 @@ async function station(name: string, fn: () => Promise<string>): Promise<void> {
     const code = err instanceof ClimbStop ? err.code : 1;
     const msg = err instanceof Error ? err.message : String(err);
     console.log(`${name}: ${msg}`);
-    console.log(JSON.stringify({ why: msg }));
+    let filed = "";
+    try { filed = dir ? filedLine(readState(dir)) : ""; } catch {}
+    if (filed) console.log(filed);
+    console.log(JSON.stringify({ why: filed ? `${msg} (${filed})` : msg }));
     process.exit(code);
   }
 }
@@ -117,14 +131,14 @@ export function registerClimbCommand(program: Command, deps: PublishDeps): void 
       const s = await gauge(io, o.dir, { card: readJson(o.card, "the card", 5), base, task: o.task, goal: o.goal ?? undefined });
       console.log(statusText(s));
       return `levels kept: ${s.levels.filter((l) => l.kept).map((l) => `${l.level} ${l.env}`).join(", ")}`;
-    }));
+    }, o.dir));
 
   dirOpt(climb.command("admit").description("Check Propose's candidates against the diff rules: one branch each, from the base, touching nothing that grades it"))
     .requiredOption("--candidates <file>", "The candidate list Propose wrote")
     .action((o) => station("admit", async () => {
       const s = await admit(defaultIo(deps), o.dir, readJson(o.candidates, "the candidate list"));
       return `${s.candidates.filter((c) => c.status === "admitted").length} of ${s.candidates.length} candidates admitted`;
-    }));
+    }, o.dir));
 
   dirOpt(climb.command("refuse").description("Refuse an admitted candidate (the review station), with why"))
     .argument("<id>", "The candidate (cand-N)")
@@ -135,13 +149,13 @@ export function registerClimbCommand(program: Command, deps: PublishDeps): void 
     .action((o) => station("screen", async () => {
       const s = await screen(defaultIo(deps), o.dir);
       return `${s.candidates.filter((c) => c.status === "survivor").length} survived dev`;
-    }));
+    }, o.dir));
 
   dirOpt(climb.command("confirm").description("Run the survivors on the held split; a dev gain that vanishes there is logged as overfit"))
     .action((o) => station("confirm", async () => {
       const s = await confirm(defaultIo(deps), o.dir);
       return `${s.candidates.filter((c) => c.status === "survivor").length} confirmed on held; overfit: ${s.candidates.filter((c) => c.status === "overfit").map((c) => c.id).join(", ") || "none"}`;
-    }));
+    }, o.dir));
 
   dirOpt(climb.command("guard").description("The goal's L0 checks and the product's eval gate (the line profile's commands.eval, as committed at the base) on each survivor, best first; the first to pass is promoted. A void verdict (an outage, a capped pool, unscored cases) exits 6 and promotes nothing"))
     .option("--hold", "On a void verdict, re-run the void checks every --every until a real verdict lands or --for runs out (the Hold station)")
@@ -162,7 +176,7 @@ export function registerClimbCommand(program: Command, deps: PublishDeps): void 
       }
       const top = s.candidates.find((c) => c.status === "promoted")!;
       return `${top.id} promoted; guard refused: ${s.candidates.filter((c) => c.status === "guard_failed").map((c) => c.id).join(", ") || "none"}`;
-    }));
+    }, o.dir));
 
   dirOpt(climb.command("promote-mode").description("How this repo ships a promoted change, from .codecast/climb.toml at the climb's base ([promote] mode = \"line\" | \"experiment\"), as one JSON line for the graph to route on"))
     .action((o) => {

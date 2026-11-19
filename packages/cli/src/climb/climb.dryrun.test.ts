@@ -13,7 +13,8 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runEnv, withTreeAt } from "../envCommand";
 import { ClimbStop, admit, bindPromoted, confirm, gauge, guard, promoteMode, readState, refuse, screen, type ClimbIo } from "./engine";
-import { statusText, summaryText } from "./report";
+import { filedLine, statusText, summaryText } from "./report";
+import { climbIo } from "../climbCommand";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
 isolateCodecastDirEachTest("climb-dry-state-");
 
@@ -95,6 +96,9 @@ describe("the climb's dry run", () => {
   const g = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
   // The registry: every filed attempt as the server keeps it.
   let registry = new Map<string, any>();
+  /** The goal's environments as `/cli/envs/goal-levels` serves them: the scoring levels hold a held set in codecast. */
+  const HELD = { version: "v1", size: 30, uploaded_at: 1, reads: 0, unfiled: 0 };
+  let standings: any[] = [];
   /** The goal row `/cli/initiatives/get` serves; null unless a test gives the goal a metric to read. */
   let goalRow: any = null;
   const TASK_AT = 1000;
@@ -105,7 +109,7 @@ describe("the climb's dry run", () => {
       if (url === "/cli/envs/list") return [...registry.values()].filter((a) => a.env === body.env).reverse();
       if (url === "/cli/envs/get") return registry.get(String(body.id)) ?? null;
       if (url === "/cli/initiatives/get") return goalRow;
-      if (url === "/cli/envs/goal-levels") return body.goal === "in-1" ? { goal: { short_id: "in-1" }, levels: [{ env: "fake/floor", level: "L0" }, { env: "fake/noisy", level: "L1" }, { env: "fake/replay", level: "L2" }] } : null;
+      if (url === "/cli/envs/goal-levels") return body.goal === "in-1" ? { goal: { short_id: "in-1" }, levels: standings } : null;
       throw new Error(`unexpected ${url}`);
     },
     run: async (decl, o) => {
@@ -149,6 +153,8 @@ describe("the climb's dry run", () => {
     fs.writeFileSync(path.join(repo, ".codecast/envs.toml"), ENVS);
     fs.writeFileSync(path.join(repo, "evals/run.mjs"), RUNNER);
     fs.writeFileSync(path.join(repo, "evals/grader.txt"), "grade strictly\n");
+    // A grader module that imports an installed package: the climb holds that package still (protect.ts graderPackageDirs).
+    fs.writeFileSync(path.join(repo, "evals/deps.mjs"), `import lib from "grader-lib";\nexport default lib;\n`);
     fs.writeFileSync(path.join(repo, "prompt.txt"), "pitch\n");
     // The product's eval gate, as the line profile names it: FAKE_GATE=worse makes it refuse.
     fs.mkdirSync(path.join(repo, "scripts"));
@@ -168,6 +174,7 @@ describe("the climb's dry run", () => {
     filed.length = 0;
     registry = new Map();
     goalRow = null;
+    standings = [{ env: "fake/floor", level: "L0" }, { env: "fake/noisy", level: "L1", held: HELD }, { env: "fake/replay", level: "L2", held: HELD }];
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -365,7 +372,7 @@ describe("the climb's dry run", () => {
     await gauge(io(), dir, { card: CARD, base });
     await admit(io(), dir, proposed);
     fs.writeFileSync(path.join(repo, "node_modules/grader-lib/index.js"), "module.exports = 0.06 // bonus\n");
-    await expect(screen(io(), dir)).rejects.toThrow("installed packages changed");
+    await expect(screen(io(), dir)).rejects.toThrow("an installed package the grading files import changed since gauge");
   });
 
   test("a held run's error text never reaches the record", async () => {
@@ -416,15 +423,17 @@ describe("the climb's dry run", () => {
     const st = fs.statSync(lib);
     fs.writeFileSync(lib, "module.exports = 0.06;\n");
     fs.utimesSync(lib, st.atime, st.mtime);
-    await expect(screen(io(), dir)).rejects.toThrow("installed packages changed");
+    await expect(screen(io(), dir)).rejects.toThrow("an installed package the grading files import changed since gauge");
   });
 
   test("a scoring level whose env names no protects is refused, since its runner's imports cannot show what grades", async () => {
     fs.writeFileSync(path.join(repo, ".codecast/envs.toml"), ENVS.replace(/cost_usd = 0\.25\nprotects = \["evals\/\*\*"\]/, "cost_usd = 0.25"));
     g("add", "-A"); g("commit", "-q", "-m", "unprotected");
     base = g("rev-parse", "HEAD");
-    await gauge(io(), dir, { card: CARD, base }).catch(() => {});
-    expect(readState(dir)!.levels.find((l) => l.env === "fake/replay")!.why).toContain("declares no protects");
+    const err = await gauge(io(), dir, { card: CARD, base }).catch((e) => e);
+    expect(err.code).toBe(5);
+    expect(err.message).toContain("fake/replay (the card's L2 level) declares no protects");
+    expect(runs).toBe(0);
   });
 
   test("an eval gate run through a package script pins the script it runs; a candidate that rewrites it is refused", async () => {
@@ -505,5 +514,58 @@ describe("the climb's dry run", () => {
     expect((big.readability as any).readable).toBe(true);
     // A card that names the metric without a plausible lift is sent back to Frame.
     await expect(gauge(io(), `${dir}-none`, { card: { ...CARD, production_lift: undefined }, base })).rejects.toThrow("production_lift");
+  });
+
+  // From the first run of the climb through the flow (Union in-9, ct-97125): an L0 unit-test env with no case set in
+  // codecast beside an L2 env with one. The station ran 50 minutes and ended on a refusal, filing nothing.
+  test("an env with no case set in codecast runs as before beside one that has a set, through the climb's own runs", async () => {
+    const opened: string[] = [];
+    const recorded: any[] = [];
+    // The server as the climb's posts meet it: a refusal is an error the caller reads (apiPost with exitOnError off).
+    const post = async (url: string, body: any) => {
+      if (url === "/cli/envs/cases/open") {
+        opened.push(body.env);
+        if (body.env === "fake/floor") throw new Error(`${body.env} has no dev set in this workspace: the product's runner uploads one with cast env cases put ${body.env} --split dev --file <json>`);
+        return { read: "cr-1", version: "v1", size: 1 };
+      }
+      if (url === "/cli/envs/cases/page") return { cases: [{ id: "d1", payload: JSON.stringify({ text: "a moment" }) }], next: null };
+      if (url === "/cli/envs/record") {
+        const r = JSON.parse(body.result);
+        const short_id = `ea-${registry.size + 1}`;
+        recorded.push({ env: body.env, cases_read: body.cases_read });
+        registry.set(short_id, { short_id, ...r, created_at: Date.now(), task_id: body.task_id });
+        return { short_id };
+      }
+      return io().post(url, body);
+    };
+    const card = { ...CARD, levels: [{ env: "fake/floor" }, { env: "fake/replay", plausible_effect: 0.04 }] };
+    const s = await gauge(climbIo(post, repo, null), dir, { card, base });
+    expect(s.levels.map((l) => [l.env, l.kept])).toEqual([["fake/floor", true], ["fake/replay", true]]);
+    expect(opened).toEqual(["fake/floor", "fake/replay", "fake/replay", "fake/replay"]);
+    // The L0 env ran on its own cases and was filed; the L2 runs were filed against the set they read.
+    expect(recorded).toEqual([{ env: "fake/floor", cases_read: undefined }, ...[1, 2, 3].map(() => ({ env: "fake/replay", cases_read: "cr-1" }))]);
+    expect(filedLine(readState(dir))).toMatch(/^Filed 4 runs \(ea-1, ea-2, ea-3, ea-4\); \$0\.75 spent$/);
+  });
+
+  test("preflight answers before any run: every level's missing precondition, in one list", async () => {
+    standings = [{ env: "fake/floor", level: "L0" }, { env: "fake/noisy", level: "L1" }, { env: "fake/replay", level: "L2" }];
+    fs.writeFileSync(path.join(repo, ".codecast/envs.toml"), ENVS.replace(/key = "fake\/floor"([\s\S]*?)protects = \["evals\/\*\*"\]\n/, 'key = "fake/floor"$1'));
+    g("add", "-A"); g("commit", "-q", "-m", "floor unprotected");
+    const at = Date.now();
+    const err = await gauge(io(), dir, { card: CARD, base: g("rev-parse", "HEAD") }).catch((e) => e);
+    expect(err.code).toBe(5);
+    expect(runs).toBe(0);
+    expect(Date.now() - at).toBeLessThan(5000);
+    for (const words of ["fake/noisy declares a held split but has no held set", "fake/replay declares a held split but has no held set", "no scoring level the card names has a held set", "fake/floor (the goal's L0 check, which the guard runs on every survivor) declares no protects"]) expect(err.message).toContain(words);
+    // Nothing ran, and the station can say so.
+    expect(filedLine(readState(dir))).toBe("Filed nothing: the climb had not started");
+  });
+
+  test("a run the registry refuses to file is counted with the registry's reason", async () => {
+    const refusing = { ...io(), run: async (decl: any, o: any) => { const r = await io().run(decl, o); return r.ok ? { ok: true as const, result: r.result, unfiled: "held_read required" } : r; } };
+    await gauge(refusing, dir, { card: CARD, base }).catch(() => {});
+    const line = filedLine(readState(dir));
+    expect(line).toContain("could not be filed (held_read required)");
+    expect(line).toMatch(/^Filed 0 runs, \d+ failed or unfiled/);
   });
 });

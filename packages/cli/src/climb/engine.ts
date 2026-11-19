@@ -30,9 +30,10 @@ import { parseEnvsText } from "../envDeclaration.js";
 import { parseLineProfileText, resolveLineProfile } from "../lineProfile.js";
 import { StoreTampered, readSealed, writeSealed } from "./store.js";
 import { MetricUnread, readability as readabilityOf, type Readability } from "./readability.js";
-import { commandFiles, gradingGlobs, inadmissible, packagesPrint, pinsAScript, protectedDigest, tryGit } from "./protect.js";
+import { commandFiles, graderPackageDirs, gradingGlobs, inadmissible, packagesPrint, pinsAScript, protectedDigest, tryGit } from "./protect.js";
 
-export type RunOut = { ok: true; result: EnvResult; short_id?: string } | { ok: false; error: string };
+/** A run's outcome; `unfiled` is a run that finished but the registry refused to file, with the registry's reason. */
+export type RunOut = { ok: true; result: EnvResult; short_id?: string; unfiled?: string } | { ok: false; error: string };
 export type ClimbIo = {
   root: string;
   post: (urlPath: string, body: Record<string, unknown>, read?: boolean) => Promise<any>;
@@ -69,7 +70,7 @@ export type ClimbState = {
   reuse_before: number;
   /** The goal's L0 checks as they stood at gauge; the guard runs these and any the goal names now. */
   checks: string[];
-  /** The checkout's installed packages at gauge (protect.ts packagesPrint). */
+  /** The installed packages the grading files import, as they stood at gauge (protect.ts packagesPrint). */
   packages: string;
   levels: LevelState[]; candidates: Cand[];
   ledger: { usd: number; runs: number; done: Record<string, Done>; failed: Record<string, Failed> };
@@ -220,7 +221,7 @@ const HELD_FAILED = "the held run failed; its output is sealed and not repeated 
 async function treeGuard(v: View, tree: string): Promise<string | null> {
   v.digest ??= await v.io.tree(v.s.base, async (t) => protectedDigest(t, v.globs));
   if (protectedDigest(tree, v.globs) !== v.digest) return "its tree holds the files that grade differently from the base";
-  if (packagesPrint(v.io.root) !== v.s.packages) return "PACKAGES";
+  if (packagesPrint(v.io.root, graderPackageDirs(v.io.root, v.s.base, v.globs)) !== v.s.packages) return "PACKAGES";
   return null;
 }
 
@@ -238,12 +239,12 @@ async function runOnce(v: View, key: string, decl: EnvDeclaration, opts: { label
     if (refused) return { ok: false, error: refused };
     return v.io.run(decl, { dir: tree, label: opts.label, split: opts.split, sha: opts.sha, goal: v.s.card.goal, task: v.s.task });
   });
-  if (refused === "PACKAGES") { v.s.stopped = "the checkout's installed packages changed since gauge, and every tree the climb runs in links them; reinstall and start a new climb"; save(v.dir, v.s); throw new ClimbStop(v.s.stopped, STOP.none); }
+  if (refused === "PACKAGES") { v.s.stopped = "an installed package the grading files import changed since gauge, and every tree the climb runs in links it; reinstall and start a new climb"; save(v.dir, v.s); throw new ClimbStop(v.s.stopped, STOP.none); }
   const fail = (why: string, usd: number) => { (v.s.ledger.failed ??= {})[key] = { usd, why }; save(v.dir, v.s); return { error: why }; };
   if (refused) return fail(`GRADER: ${refused}`, 0);
   const cost = Math.max(0, (out.ok ? out.result.cost_usd : undefined) ?? decl.cost_usd ?? 0);
   if (!out.ok) return fail(opts.split === "held" ? HELD_FAILED : out.error.replace(/\s+/g, " ").slice(0, 300), cost);
-  if (!out.short_id) return fail("the run could not be filed, and the climb counts only filed runs", cost);
+  if (!out.short_id) return fail(`the run finished but could not be filed (${out.unfiled ?? "no attempt id came back"}), and the climb counts only filed runs`, cost);
   v.s.ledger.done[key] = { attempt: out.short_id, usd: cost };
   save(v.dir, v.s);
   const r = await verified(v, key, v.s.ledger.done[key], want);
@@ -269,8 +270,11 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
     const goalLevels = (levels.levels as EnvStanding[]).map((l) => ({ env: l.env, level: l.level }));
     const read = readClimbCard(card, { short_id: levels.goal.short_id, budget: levels.goal.budget ?? repoCeiling(io.root, opts.base, levels.goal.short_id), levels: goalLevels });
     if (!read.ok) throw new ClimbStop(`the card is refused: ${read.error}`, STOP.card);
-    const task = opts.task ? await io.post("/cli/work/get", { short_id: opts.task }, true).catch(() => null) : null;
     const decls = baseDecls(io.root, opts.base);
+    // Every precondition of every chosen level, before a base run spends anything: the card goes back to Frame with the whole list.
+    const problems = preflight(read.card, decls, levels.levels as EnvStanding[]);
+    if (problems.length) throw new ClimbStop(`the card's levels cannot run as chosen, and nothing was spent:\n- ${problems.join("\n- ")}`, STOP.card);
+    const task = opts.task ? await io.post("/cli/work/get", { short_id: opts.task }, true).catch(() => null) : null;
     const notes = [...read.notes];
     // Before anything is spent: can production confirm one change of the size the card expects? When it cannot, the card says so and names what stands in.
     let readability: ClimbState["readability"];
@@ -283,7 +287,7 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
       reuse_before: Number(task?.created_at ?? task?._creationTime) || 0,
       ...(readability ? { readability } : {}),
       checks: goalLevels.filter((l) => l.level === "L0").map((l) => l.env),
-      packages: packagesPrint(io.root),
+      packages: packagesPrint(io.root, graderPackageDirs(io.root, opts.base, gradingGlobs(io.root, opts.base, decls))),
       levels: [], candidates: [], ledger: { usd: 0, runs: 0, done: {}, failed: {} }, gates: {},
     });
   }
@@ -293,11 +297,8 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
     const decl = declOf(v.decls, cl.env);
     const row: LevelState = { env: cl.env, level: cl.level, title: decl?.title ?? cl.env, kept: false, why: "", cost_usd: decl?.cost_usd ?? 0, held: !!decl?.splits.includes("held") && !!decl?.protects?.length, base_attempts: [], ...(cl.plausible_effect !== undefined ? { plausible_effect: cl.plausible_effect } : {}) };
     s.levels = [...s.levels.filter((l) => l.env !== cl.env), row];
+    // Preflight held every level to its preconditions before the climb's first run; one missing here was refused there.
     if (!decl) { row.why = "the base does not declare it"; continue; }
-    if (decl.level !== cl.level) { row.why = `declared at ${decl.level} at the base`; continue; }
-    if (!decl.splits.includes("dev")) { row.why = "declares no dev split"; continue; }
-    // A runner imports the product it scores, so what grades cannot be found from its imports: the env must name it.
-    if (!decl.protects?.length) { row.why = "declares no protects: name its grader, cases and checks in envs.toml so the climb can hold them still"; continue; }
     const k = cl.level === "L0" ? 1 : CLIMB_AA_RUNS;
     await reuseBaseRuns(v, cl.env, k);
     const runs: EnvCase[][] = [];
@@ -324,6 +325,40 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
     throw new ClimbStop(s.stopped, STOP.none);
   }
   return s;
+}
+
+/**
+ * Why the card's levels cannot run as chosen, one line each, read from git at
+ * the base and the goal's standings and nothing else, so it answers in
+ * seconds. Each level: declared at the base at its level, with a dev split
+ * and the paths that grade it named in `protects` (a runner imports the
+ * product it scores, so only the env's author can say what grades). A dev
+ * set in codecast is optional: an env with none runs on its own cases, as
+ * every env did before sets existed. A scoring level Confirm runs needs a
+ * held set in codecast, and at least one such level must exist. The goal's
+ * L0 checks, which the guard runs on every survivor, are held to the same
+ * terms.
+ */
+export function preflight(card: ClimbCard, decls: EnvDeclaration[], standings: readonly EnvStanding[]): string[] {
+  const out: string[] = [];
+  const terms = (key: string, level: EnvLevel, what: string): EnvDeclaration | null => {
+    const d = declOf(decls, key);
+    if (!d) { out.push(`${key} (${what}) is not declared in .codecast/envs.toml at the base`); return null; }
+    if (d.level !== level) out.push(`${key} (${what}) is declared at ${d.level} at the base, and the goal names it at ${level}`);
+    if (!d.splits.includes("dev")) out.push(`${key} (${what}) declares no dev split`);
+    if (!d.protects?.length) out.push(`${key} (${what}) declares no protects: name its grader, cases and checks in envs.toml so the climb can hold them still`);
+    return d;
+  };
+  let confirmable = 0;
+  for (const l of card.levels) {
+    const d = terms(l.env, l.level, l.level === "L0" ? "an L0 check on the card" : `the card's ${l.level} level`);
+    if (!d || l.level === "L0" || !d.splits.includes("held")) continue;
+    if (standings.find((x) => x.env === l.env)?.held) confirmable++;
+    else out.push(`${l.env} declares a held split but has no held set in codecast, so Confirm cannot run it (the product's runner puts one with cast env cases put ${l.env} --split held)`);
+  }
+  if (!confirmable && card.levels.some((l) => l.level !== "L0")) out.push("no scoring level the card names has a held set in codecast, so no gain could be confirmed");
+  for (const s of standings) if (s.level === "L0" && !card.levels.some((l) => l.env === s.env)) terms(s.env, "L0", "the goal's L0 check, which the guard runs on every survivor");
+  return out;
 }
 
 /**
