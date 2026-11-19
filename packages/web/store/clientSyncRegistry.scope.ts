@@ -197,6 +197,7 @@ export const DATA_SCOPE = {
   // Calls and live rooms span teams by product design: a huddle, a knock or a
   // recording is the viewer's wherever it started.
   callRooms: "viewer",
+  callStagePins: "entity",
   roomKnocks: "viewer",
   guestsWaiting: "viewer",
   guestLinks: "entity",

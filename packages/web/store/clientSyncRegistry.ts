@@ -1602,6 +1602,19 @@ export const CLIENT_SYNC_REGISTRY = {
     ],
     feeds: ["calls.getLiveRooms"],
   },
+  // What the stage of the huddle I'm seated in holds beside faces and screen
+  // shares (convex/callStage.ts): boards, sheets, docs, pages, objects pinned
+  // for the room to look at and edit together. One row per pin keyed
+  // `<room_key>|<ref>`, fed by useStagePins in the window showing the stage.
+  // Snapshot: the feed is the room's complete set. localFirst: pinToStage /
+  // unpinFromStage paint at once and ride the same-named dispatch effects.
+  // Never persisted: a pin belongs to the huddle.
+  callStagePins: {
+    sync: {},
+    localFirst: true,
+    unprotectedFields: ["title", "doc_type", "readable", "pinned_by_name", "pinned_by_agent", "pinned_by_session"],
+    feeds: ["callStage.listPins"],
+  },
   // Who is waiting at the door of the room I'm seated in (calls.getRoomKnocks,
   // teammates and guests in one list), fed by useCallSync in every window.
   // A localFirst list keyed by from_user: answering a guest (store
@@ -2262,6 +2275,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   // Fed in every window by useCallSync (calls are window effects, not host
   // feeders), like the liveRooms roster it is split from.
   callRooms: "local",
+  callStagePins: "local",
   roomKnocks: "local",
   guestsWaiting: "local",
   guestLinks: "local",
