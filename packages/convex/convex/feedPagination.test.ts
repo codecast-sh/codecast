@@ -205,16 +205,13 @@ describe("pageNewestFirst", () => {
     let after: StreamPosition | null = null;
     for (let i = 0; i < 500; i++) {
       let reads = 0;
+      async function* below(rows: Row[], from: StreamPosition | null) {
+        for (const r of rows) if (!from || isAfter(r, from)) yield (reads++, r);
+      }
       const page: { rows: Row[]; next: StreamPosition | null } = await pageNewestFirst({
-        streams: Object.keys(tables),
-        after,
+        streams: Object.values(tables).map((rows) => below(rows, after)),
         limit,
         budget,
-        fetch: async (id, from, take) => {
-          const rows = tables[id].filter((r) => !from || isAfter(r, from)).slice(0, take);
-          reads += rows.length;
-          return rows;
-        },
         accept: (r) => r.visible,
       });
       served.push(...page.rows);
@@ -241,17 +238,17 @@ describe("pageNewestFirst", () => {
     }
   });
 
-  test("reads at most its budget a page, however many members there are", async () => {
+  test("reads one row per member and at most its budget more a page", async () => {
     const tables = Object.fromEntries(
       Array.from({ length: 100 }, (_, m) => [`m${m}`, stream(`m${m}`, Array.from({ length: 30 }, (_, i) => [1000 - i * 7 - m, m, i % 3 === 0] as [number, number, boolean]))]),
     );
-    const { served, readsPerPage } = await drainNewest(tables, 50, 200);
+    const { served, readsPerPage } = await drainNewest(tables, 50, 100);
     expect(served.length).toBe(100 * 10);
-    expect(Math.max(...readsPerPage)).toBeLessThanOrEqual(200);
+    expect(Math.max(...readsPerPage)).toBeLessThanOrEqual(100 + 100);
   });
 
   test("a read with no member, or none with rows left, ends with no cursor", async () => {
-    expect(await pageNewestFirst({ streams: [], after: null, limit: 10, budget: 10, fetch: async () => [], accept: () => true })).toEqual({ rows: [], next: null });
+    expect(await pageNewestFirst({ streams: [], limit: 10, budget: 10, accept: () => true })).toEqual({ rows: [], next: null });
     const { served } = await drainNewest({ a: stream("a", [[5, 1, false]]), b: [] }, 10, 10);
     expect(served).toEqual([]);
   });

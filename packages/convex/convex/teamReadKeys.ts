@@ -35,7 +35,7 @@ const KEY_PREFIX_CHARS = 6;
 
 /** Use is recorded once per key per window: one audit event and one write, whatever the request rate. */
 export const USE_WINDOW_MS = 60 * 60 * 1000;
-/** Conversation rows one page may read across all members (feedPagination pageNewestFirst). */
+/** Rows one page may take, past the one it reads first for each member (feedPagination pageNewestFirst). */
 const PAGE_READ_BUDGET = 200;
 
 const isLive = (key: Doc<"team_read_keys">, now: number) => !key.revoked_at && key.expires_at > now;
@@ -228,26 +228,21 @@ export const sessionsForKey = internalQuery({
     const sharing = floor.members.filter(
       (u) => u.activity_visibility !== "hidden" && isVisibilityShareable(floor.filter.getVisibility(String(u._id))),
     );
+    const { after } = args;
+    const team = key.team_id;
+    async function* below(member: Id<"users">) {
+      const scan = ctx.db
+        .query("conversations")
+        .withIndex("by_team_user_updated", (q) =>
+          q.eq("team_id", team).eq("user_id", member).gte("updated_at", args.since).lte("updated_at", Math.min(after?.t ?? args.until, args.until)),
+        )
+        .order("desc");
+      for await (const c of scan) if (!after || isAfter(c, after)) yield c;
+    }
     const page = await pageNewestFirst({
-      streams: sharing.map((u) => String(u._id)),
-      after: args.after,
+      streams: sharing.map((u) => below(u._id)),
       limit: args.limit,
       budget: PAGE_READ_BUDGET,
-      fetch: async (memberId, after, take) => {
-        const rows: Doc<"conversations">[] = [];
-        const scan = ctx.db
-          .query("conversations")
-          .withIndex("by_team_user_updated", (q) =>
-            q.eq("team_id", key.team_id).eq("user_id", memberId as Id<"users">).gte("updated_at", args.since).lte("updated_at", Math.min(after?.t ?? args.until, args.until)),
-          )
-          .order("desc");
-        for await (const c of scan) {
-          if (after && !isAfter(c, after)) continue;
-          rows.push(c);
-          if (rows.length === take) break;
-        }
-        return rows;
-      },
       accept: (c) => floor.isVisible(c) && !isNestedIdentity(c),
     });
 

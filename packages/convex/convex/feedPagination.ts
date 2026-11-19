@@ -163,12 +163,12 @@ export async function paginateTeamFeed(opts: {
 // --- Strictly newest first across member streams ---
 //
 // A team read key's pages (teamReadKeys.sessionsForKey) keep one order across
-// pages: newest first, no row skipped or repeated, and at most `budget` rows
-// read a page however many members there are. Each member is a stream on its
-// own index. A page always takes the newest head among all streams, so it
-// stops short when a stream it could not read yet might hold a newer row. The
-// continuation is the last row examined, as (updated_at, _creationTime), so
-// rows that share a millisecond stay apart and every stream resumes after it.
+// pages: newest first, no row skipped or repeated. Each sharing member is a
+// stream on its own index, resumed below the cursor. A page reads one head per
+// sharing member, then repeatedly takes the newest head and reads the next row
+// of that member only, up to `limit` accepted rows or `budget` rows taken. The
+// cursor is the last row taken, as (updated_at, _creationTime), so rows that
+// share a millisecond stay apart and every stream resumes below it.
 
 export type StreamPosition = { t: number; c: number };
 type StreamRow = { updated_at: number; _creationTime: number };
@@ -177,43 +177,31 @@ type StreamRow = { updated_at: number; _creationTime: number };
 export const isAfter = (row: StreamRow, p: StreamPosition): boolean =>
   row.updated_at < p.t || (row.updated_at === p.t && row._creationTime < p.c);
 
-const positionOf = (row: StreamRow): StreamPosition => ({ t: row.updated_at, c: row._creationTime });
-
 export async function pageNewestFirst<R extends StreamRow>(opts: {
-  streams: string[];
-  after: StreamPosition | null;
+  /** Each stream's rows below the cursor, newest first. */
+  streams: AsyncIterable<R>[];
   limit: number;
   budget: number;
-  /** Up to `take` rows of one stream that come after `after`, newest first. */
-  fetch: (stream: string, after: StreamPosition | null, take: number) => Promise<R[]>;
   accept: (row: R) => boolean;
 }): Promise<{ rows: R[]; next: StreamPosition | null }> {
-  const { streams, limit, fetch, accept } = opts;
-  if (streams.length === 0) return { rows: [], next: null };
-  // Enough for every stream's head and one more, so each page makes progress.
-  let left = Math.max(opts.budget, 2 * streams.length);
-  const batch = Math.floor(left / streams.length);
-  const state = streams.map((id) => ({ id, from: opts.after, buf: [] as R[], dry: false }));
-  const fill = async (s: (typeof state)[number]) => {
-    const take = Math.min(batch, left);
-    if (take === 0) return;
-    left -= take;
-    s.buf = await fetch(s.id, s.from, take);
-    s.dry = s.buf.length < take;
+  const streams = opts.streams.map((s) => s[Symbol.asyncIterator]());
+  const pull = async (i: number) => {
+    const r = await streams[i].next();
+    return r.done ? undefined : r.value;
   };
-  await Promise.all(state.map(fill));
+  const heads: (R | undefined)[] = await Promise.all(streams.map((_, i) => pull(i)));
   const rows: R[] = [];
-  let last = opts.after;
-  for (;;) {
-    for (const s of state) if (s.buf.length === 0 && !s.dry) await fill(s);
-    if (state.some((s) => s.buf.length === 0 && !s.dry)) break;
-    const open = state.filter((s) => s.buf.length > 0);
-    if (open.length === 0) return { rows, next: null };
-    if (rows.length === limit) break;
-    const s = open.reduce((a, b) => (isAfter(a.buf[0], positionOf(b.buf[0])) ? b : a));
-    const row = s.buf.shift()!;
-    s.from = last = positionOf(row);
-    if (accept(row)) rows.push(row);
+  let next: StreamPosition | null = null;
+  for (let taken = 0; ; taken++) {
+    let i = -1;
+    heads.forEach((h, j) => {
+      if (h && (i < 0 || isAfter(heads[i]!, { t: h.updated_at, c: h._creationTime }))) i = j;
+    });
+    if (i < 0) return { rows, next: null };
+    if (rows.length === opts.limit || taken === opts.budget) return { rows, next };
+    const row = heads[i]!;
+    next = { t: row.updated_at, c: row._creationTime };
+    if (opts.accept(row)) rows.push(row);
+    heads[i] = await pull(i);
   }
-  return { rows, next: last };
 }
