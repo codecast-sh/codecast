@@ -10,4 +10,8 @@
 //
 // This file is excluded from its own hash, and it imports nothing on purpose:
 // the CLI fast path reads it, so it must never pull in a module graph.
+<<<<<<< HEAD
 export const DAEMON_BUILD_ID = "41111a350170";
+=======
+export const DAEMON_BUILD_ID = "6808e521a36c";
+>>>>>>> 94d5e1dbd (Climb can stack on a pending change: measured against main plus the stack, promoting only the increment)
