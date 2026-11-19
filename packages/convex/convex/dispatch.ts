@@ -101,6 +101,7 @@ import { cancelRunByPerson, landAgainCore, resumeRunCore } from "./workflow_runs
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { dismissGuestSuggestionFor, sendGuestSuggestionFor, writeGuestSuggestions } from "./guestSuggestions";
 import { proposeAnswerFor, proposePermissionFor, sendMineNowFor, withdrawTeamSuggestionFor } from "./teamSuggestions";
+import { acknowledgeIfReadable, markUnreadIfReadable } from "./sessionReads";
 import { answerPresence, charterWire, deepMergeField, isServerId, linkConversationToObject, liveSecretWrite, opsRowId, type HandlerCtx } from "./dispatchHelpers";
 import { assertMayBind, handIsPrivate, handThreadToSession, handableThread } from "./chatHandoff";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
@@ -2942,19 +2943,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // The viewer is looking at this session right now. `at` is the conversation's
   // own updated_at, so the mark the client already rendered is exactly what
   // lands and the card cannot flicker back to unread on the echo.
-  writeSessionAck: async (ctx, _userId, [conversationId, at]: [string, number?]) => {
+  writeSessionAck: async (ctx, userId, [conversationId, at]: [string, number?]) => {
     if (!isServerId(conversationId)) return;
-    return await ctx.runMutation!(api.sessionReads.acknowledge, {
-      conversation_id: conversationId,
-      ...(typeof at === "number" && at > 0 ? { acknowledged_at: at } : {}),
-    });
+    return await acknowledgeIfReadable(ctx as any, userId, conversationId, typeof at === "number" && at > 0 ? at : undefined);
   },
   // The manual "leave it lit" gesture. Cleared by the next presence ack.
-  writeSessionUnread: async (ctx, _userId, [conversationId]: [string]) => {
+  writeSessionUnread: async (ctx, userId, [conversationId]: [string]) => {
     if (!isServerId(conversationId)) return;
-    return await ctx.runMutation!(api.sessionReads.markUnread, {
-      conversation_id: conversationId,
-    });
+    return await markUnreadIfReadable(ctx as any, userId, conversationId);
   },
   // Two arg shapes: the legacy [rootId] (old bundles and persisted outbox
   // entries, always a chat thread) and [kind, rootKey]. A comment key is

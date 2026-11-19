@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { acknowledge, listMine, markUnread } from "./sessionReads";
+import { dispatch } from "./dispatch";
 
 // The server half of session unread. It stores two facts and one flag; what
 // these tests pin is that it never stores a third — no derived "unread"
@@ -136,5 +137,44 @@ describe("sessionReads.listMine", () => {
   test("an unauthenticated caller gets an empty list, never everyone's marks", async () => {
     const ctx = context(null);
     expect(await (listMine as any)._handler(ctx, {})).toEqual([]);
+  });
+});
+
+// The web's presence ack fires for whatever session is on screen, through
+// dispatch. A session the viewer reads without owning or sharing a team (a
+// share link, a mention grant) or one deleted while its page stayed open has
+// no card to light, so the ack writes nothing and the dispatch succeeds.
+describe("dispatch read marks on a session the viewer cannot mark", () => {
+  const OWN = "jx7own00000000000000000000000001";
+  const FOREIGN = "jx7foreign0000000000000000000002";
+  const GONE = "jx7gone0000000000000000000000003";
+
+  function dispatchContext() {
+    const db = makeFakeDb({
+      users: [{ _id: USER, name: "Ashot" }, { _id: OTHER, name: "Sam" }],
+      team_memberships: [],
+      conversations: [
+        { _id: OWN, user_id: USER, is_private: true, session_id: "sess-own", updated_at: 5_000 },
+        { _id: FOREIGN, user_id: OTHER, is_private: true, session_id: "sess-foreign", updated_at: 5_000 },
+      ],
+      session_reads: [],
+    });
+    return { db, auth: { async getUserIdentity() { return { subject: `${USER}|session` }; } } } as any;
+  }
+
+  test("writeSessionAck and writeSessionUnread write nothing and do not throw", async () => {
+    const ctx = dispatchContext();
+    for (const id of [FOREIGN, GONE]) {
+      expect(await (dispatch as any)._handler(ctx, { action: "writeSessionAck", args: [id, 4_000] })).toBeNull();
+      expect(await (dispatch as any)._handler(ctx, { action: "writeSessionUnread", args: [id] })).toBeNull();
+    }
+    expect(rows(ctx)).toEqual([]);
+  });
+
+  test("the viewer's own session still gets its mark", async () => {
+    const ctx = dispatchContext();
+    await (dispatch as any)._handler(ctx, { action: "writeSessionAck", args: [OWN, 4_000] });
+    expect(rows(ctx)).toHaveLength(1);
+    expect(rows(ctx)[0]).toMatchObject({ user_id: USER, conversation_id: OWN, acknowledged_at: 4_000 });
   });
 });

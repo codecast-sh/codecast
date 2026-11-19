@@ -104,19 +104,48 @@ export async function markReadBySystem(
   await upsertMark(ctx, userId, conversationId, { acknowledgedAt: at });
 }
 
-/** Resolve what the caller named — a conversation id or a short id — and
- *  refuse a session they cannot read. */
-async function requireConversation(
+/** Resolve what the caller named (a conversation id or a short id) to a
+ *  session they can read, or null when it is gone or out of their reach. */
+async function findReadableConversation(
   ctx: MutationCtx,
   userId: Id<"users">,
   ref: string,
-): Promise<Doc<"conversations">> {
+): Promise<Doc<"conversations"> | null> {
   const conversation = await resolveConversationRef(ctx, ref, userId);
-  if (!conversation) throw new Error("Conversation not found");
-  if (!(await canAccessConversation(ctx, userId, conversation))) {
-    throw new Error("Conversation not found");
-  }
-  return conversation;
+  if (!conversation) return null;
+  return (await canAccessConversation(ctx, userId, conversation)) ? conversation : null;
+}
+
+/** The two writes, returning null for a session the viewer cannot mark. The
+ *  web dispatches its presence ack and "mark unread" for whatever session is
+ *  on screen, which can be one read through a share link or a mention grant,
+ *  or one deleted while its page stayed open. Such a session has no card in
+ *  their inbox to light, so dispatch writes nothing and succeeds; the public
+ *  mutations below turn null into an error for a CLI caller who named it. */
+export async function acknowledgeIfReadable(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  ref: string,
+  acknowledgedAt?: number,
+): Promise<SessionReadRow | null> {
+  const conversation = await findReadableConversation(ctx, userId, ref);
+  if (!conversation) return null;
+  const now = Date.now();
+  // Never accept a future stamp: it would swallow turns that have not landed.
+  return await upsertMark(ctx, userId, conversation._id, {
+    acknowledgedAt: Math.min(acknowledgedAt ?? now, now),
+    manualUnread: false,
+  });
+}
+
+export async function markUnreadIfReadable(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  ref: string,
+): Promise<SessionReadRow | null> {
+  const conversation = await findReadableConversation(ctx, userId, ref);
+  if (!conversation) return null;
+  return await upsertMark(ctx, userId, conversation._id, { manualUnread: true });
 }
 
 // ── Queries ─────────────────────────────────────────────────────────────────
@@ -159,14 +188,9 @@ export const acknowledge = mutation({
   handler: async (ctx, args): Promise<SessionReadRow> => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
     if (!userId) throw new Error("Unauthorized");
-    const conversation = await requireConversation(ctx, userId, args.conversation_id);
-    const now = Date.now();
-    // Never accept a future stamp: it would swallow turns that have not landed.
-    const at = Math.min(args.acknowledged_at ?? now, now);
-    return await upsertMark(ctx, userId, conversation._id, {
-      acknowledgedAt: at,
-      manualUnread: false,
-    });
+    const mark = await acknowledgeIfReadable(ctx, userId, args.conversation_id, args.acknowledged_at);
+    if (!mark) throw new Error("Conversation not found");
+    return mark;
   },
 });
 
@@ -180,7 +204,8 @@ export const markUnread = mutation({
   handler: async (ctx, args): Promise<SessionReadRow> => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
     if (!userId) throw new Error("Unauthorized");
-    const conversation = await requireConversation(ctx, userId, args.conversation_id);
-    return await upsertMark(ctx, userId, conversation._id, { manualUnread: true });
+    const mark = await markUnreadIfReadable(ctx, userId, args.conversation_id);
+    if (!mark) throw new Error("Conversation not found");
+    return mark;
   },
 });
