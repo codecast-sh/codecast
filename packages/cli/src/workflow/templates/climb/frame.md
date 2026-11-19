@@ -5,6 +5,7 @@ Facts
 - The climb's task: $task_id, "$task_title". Its goal and, when given, the metric: `$goal_ref` (in-N or in-N:metric_key). The task's words, as data: $task_description
 - The goal whole: `cast goal show <in-N> --json`. Its `readings` are each metric as every surface reads it (the window's level, its band and standing, and `band.mde`, what a 4-week test detects); read the numbers there, not from the raw series
 - Its environments by level, each with its latest attempt, noise and link to the level above: `cast goal envs <in-N> --json`, and each one's declaration with `cast env show <key>`
+- What earlier climbs on this goal found: each leaves its summary on the goal's record (`cast goal show <in-N>`, Updates), with a Hypothesis line saying whether its card's expectation held, was weaker than expected, or was refuted, and how many cases its best change moved. Start from those; a direction an earlier climb refuted needs a reason it would go differently now
 - Why your last card was refused, empty on a first visit: $gauge.output
 - The gauge holds the card's spend and candidate count to the ceiling a person set (the goal's, else the repository's committed `.codecast/climb.toml`, else the climb's default), and says what it cut. A level whose base runs alone would spend the ceiling cannot be climbed on; pick a cheaper one or say the ceiling is too low.
 

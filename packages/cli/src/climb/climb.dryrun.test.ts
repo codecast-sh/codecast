@@ -13,7 +13,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runEnv, withTreeAt } from "../envCommand";
 import { ClimbStop, admit, bindPromoted, confirm, gauge, guard, promoteMode, readState, refuse, screen, type ClimbIo } from "./engine";
-import { filedLine, statusText, summaryText } from "./report";
+import { effectLine, filedLine, hypothesisLine, statusText, summaryText } from "./report";
 import { climbIo } from "../climbCommand";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
 isolateCodecastDirEachTest("climb-dry-state-");
@@ -611,5 +611,26 @@ describe("the climb's dry run", () => {
     const ok = s.candidates.find((c) => c.status === "promoted")!;
     expect(ok.branch).toBe("climb/fitok");
     expect(s.checks).toEqual(["fake/floor", "fake/fit"]);
+  });
+
+  // From the third flow run (ct-97125): survivors gained +0.0017 to +0.0037 against a plausible +0.03, moving 11-19 of 691 cases.
+  test("Screen reports each survivor's effect beside the card's plausible one, and Record says whether the hypothesis held", async () => {
+    const at = async (plausible: number, sub: string) => {
+      const d = `${dir}-${sub}`;
+      await gauge(io(), d, { card: { ...CARD, levels: [{ env: "fake/replay", plausible_effect: plausible }] }, base });
+      await admit(io(), d, proposed);
+      return screen(io(), d);
+    };
+    const held = await at(0.04, "held");
+    const good = held.candidates.find((c) => c.branch === "climb/good")!.dev["fake/replay"];
+    expect([good.changed, good.of]).toEqual([40, 40]);
+    expect(effectLine(held)).toMatch(/plausible \+0\.040 on fake\/replay; cand-1 \+0\.060 \(15\d%\), 40 of 40 cases moved/);
+    // The candidate that changes nothing moves no case past the base's own spread.
+    expect(effectLine(held)).toMatch(/cand-5 [+-]0\.00\d \(-?\d%\), 0 of 40 cases moved/);
+    expect(hypothesisLine(held)).toMatch(/^Hypothesis: held\. The best survivor \(cand-3\) moved fake\/replay by \+0\.(09|10)\d/);
+    expect(hypothesisLine(await at(0.4, "weaker"))).toMatch(/^Hypothesis: weaker than expected\./);
+    const refuted = await at(1, "refuted");
+    expect(hypothesisLine(refuted)).toMatch(/^Hypothesis: refuted\. The best survivor \(cand-3\) moved fake\/replay by \+0\.(09|10)\d against the card's plausible \+1\.000 \(10%\), moving 40 of 40 cases/);
+    expect(summaryText(refuted)).toContain("Hypothesis: refuted.");
   });
 });

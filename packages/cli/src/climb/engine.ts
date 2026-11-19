@@ -25,7 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "../proc.js";
 import type { EnvCase, EnvDeclaration, EnvLevel, EnvResult, EnvSplit, EnvStanding } from "@codecast/shared/contracts/envs";
-import { CLIMB_AA_RUNS, baseMeanCases, halve, levelCanSee, levelNoise, readClimbCard, separates, type ClimbBudget, type ClimbCard, type LevelNoise } from "@codecast/shared/contracts/climb";
+import { CLIMB_AA_RUNS, baseMeanCases, changedCases, halve, levelCanSee, levelNoise, readClimbCard, separates, type ClimbBudget, type ClimbCard, type LevelNoise } from "@codecast/shared/contracts/climb";
 import { parseEnvsText } from "../envDeclaration.js";
 import { parseLineProfileText, resolveLineProfile } from "../lineProfile.js";
 import { StoreTampered, readSealed, writeSealed } from "./store.js";
@@ -46,7 +46,8 @@ export type ClimbIo = {
   log: (line: string) => void;
 };
 
-export type Cut = { attempt?: string; delta: number; ci95?: [number, number]; keep: boolean; why: string };
+/** One candidate on one level and split: the paired delta, whether it separated, and how many cases its change moved past the base's own spread. */
+export type Cut = { attempt?: string; delta: number; ci95?: [number, number]; keep: boolean; why: string; changed?: number; of?: number };
 export type LevelState = {
   env: string; level: EnvLevel; title: string; kept: boolean; why: string;
   cost_usd: number; held: boolean; plausible_effect?: number;
@@ -421,10 +422,10 @@ async function reuseBaseRuns(v: View, env: string, k: number): Promise<void> {
 }
 
 /** The base cases a candidate is paired against on one level: the mean of its gauge runs, each read back and checked. */
-async function baseCases(v: View, env: string): Promise<EnvCase[]> {
+async function baseRuns(v: View, env: string): Promise<EnvCase[][]> {
   const runs: EnvCase[][] = [];
   for (const [key, d] of Object.entries(v.s.ledger.done)) if (key.startsWith(`base|${env}|dev|`)) runs.push((await verified(v, key, d, { env, split: "dev", label: "base", sha: v.s.base })).cases);
-  return baseMeanCases(runs);
+  return runs;
 }
 
 // ── admit: the candidates Propose made, checked against the diff rules ──
@@ -479,12 +480,13 @@ const LEVEL_ORDER = (a: LevelState, b: LevelState) => a.level.localeCompare(b.le
 const live = (s: ClimbState) => s.candidates.filter((c) => c.status === "admitted" || c.status === "survivor");
 const editsEnv = (k: Cut) => k.why.startsWith("changes the env");
 
-async function cut(v: View, l: LevelState, c: Cand, split: EnvSplit, decl: EnvDeclaration, base: EnvCase[], baseVersion: string): Promise<Cut> {
+async function cut(v: View, l: LevelState, c: Cand, split: EnvSplit, decl: EnvDeclaration, runs: EnvCase[][], baseVersion: string): Promise<Cut> {
+  const base = baseMeanCases(runs);
   const r = await runOnce(v, `${c.id}|${l.env}|${split}`, decl, { label: c.id, split, sha: c.sha! });
   if ("error" in r) return { delta: 0, keep: false, why: r.error.startsWith("GRADER:") ? `changes the env itself: ${r.error.slice(8)}` : `the run failed: ${r.error}` };
   if (r.version !== baseVersion) return { attempt: r.attempt, delta: 0, keep: false, why: `changes the env itself (version ${split === "held" ? "differs" : `${r.version}, base ${baseVersion}`})` };
   const sep = separates(l.level, base, r.cases, { se: l.noise?.se ?? 0 });
-  return { attempt: r.attempt, delta: sep.delta.delta, ...(sep.delta.ci95 ? { ci95: sep.delta.ci95 } : {}), keep: sep.keep, why: sep.why };
+  return { attempt: r.attempt, delta: sep.delta.delta, ...(sep.delta.ci95 ? { ci95: sep.delta.ci95 } : {}), keep: sep.keep, why: sep.why, ...changedCases(runs, r.cases) };
 }
 
 async function screenView(v: View): Promise<void> {
@@ -498,7 +500,7 @@ async function screenView(v: View): Promise<void> {
   const order = s.levels.filter((x) => x.kept).sort(LEVEL_ORDER);
   for (const [i, l] of order.entries()) {
     const decl = declOf(v.decls, l.env)!;
-    const base = await baseCases(v, l.env);
+    const base = await baseRuns(v, l.env);
     // Halving thins the field for the dearer level above; at the last dev level every candidate that separated goes on to held.
     const ahead = order.slice(i + 1).some((x) => x.level !== "L0");
     const results: Array<{ c: Cand; delta: number }> = [];
@@ -534,7 +536,7 @@ async function confirmView(v: View): Promise<void> {
     const b = await runOnce(v, `base|${l.env}|held|0`, decl, { label: "base", split: "held", sha: s.base });
     if ("error" in b) { s.stopped = `the base could not run on ${l.env} held (${HELD_FAILED})`; save(v.dir, s); throw new ClimbStop(s.stopped, STOP.none); }
     for (const c of live(s)) {
-      const k = (c.held[l.env] = await cut(v, l, c, "held", decl, b.cases, b.version));
+      const k = (c.held[l.env] = await cut(v, l, c, "held", decl, [b.cases], b.version));
       if (!k.keep) {
         const dev = c.dev[l.env];
         c.status = editsEnv(k) ? "refused" : "overfit";

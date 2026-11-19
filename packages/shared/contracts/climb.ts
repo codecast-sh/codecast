@@ -172,6 +172,40 @@ export function separates(level: EnvLevel, base: readonly EnvCase[], cand: reado
   return { keep: true, delta: d, why: `${s(d.delta)} [${s(d.ci95[0])}, ${s(d.ci95[1])}] over ${d.n} cases, past the A/A band ±${f(band)}` };
 }
 
+/**
+ * How many cases a candidate's change actually moved: its score differs from
+ * the base mean by more than the base's own run-to-run spread on that case
+ * (twice the case's spread across the base runs, and never less than a
+ * rounding step). A small mean gain made of a few moved cases says the change
+ * rarely applies, which a mean alone hides.
+ */
+export function changedCases(baseRuns: ReadonlyArray<readonly EnvCase[]>, cand: readonly EnvCase[]): { changed: number; of: number } {
+  const by = new Map<string, number[]>();
+  for (const r of baseRuns) for (const c of r) by.set(c.id, [...(by.get(c.id) ?? []), c.score]);
+  let changed = 0, of = 0;
+  for (const c of cand) {
+    const s = by.get(c.id);
+    if (!s?.length) continue;
+    of++;
+    const m = mean(s);
+    if (Math.abs(c.score - m) > Math.max(2 * sd(s), 1e-6)) changed++;
+  }
+  return { changed, of };
+}
+
+export type HypothesisVerdict = "held" | "weaker" | "refuted";
+/**
+ * Whether the card's expectation held: the best survivor's observed effect
+ * against the plausible effect Frame stated. Half or more held; down to a
+ * sixth is weaker than expected; under that, or nothing separated at all, the
+ * hypothesis is refuted. The next Frame reads this on the goal's record.
+ */
+export function hypothesisVerdict(observed: number | null, plausible: number): HypothesisVerdict {
+  if (observed === null || !(observed > 0) || !(plausible > 0)) return "refuted";
+  const r = observed / plausible;
+  return r >= 0.5 ? "held" : r >= 1 / 6 ? "weaker" : "refuted";
+}
+
 /** Successive halving: of the candidates that separated, the better half by delta go on (at least one). */
 export function halve<T extends { delta: number }>(kept: readonly T[]): T[] {
   return [...kept].sort((a, b) => b.delta - a.delta).slice(0, Math.max(1, Math.ceil(kept.length / 2)));

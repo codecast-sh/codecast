@@ -4,6 +4,7 @@
 // refusals, cost against the budget, and how it ended).
 import type { Cand, ClimbState, Cut } from "./engine.js";
 import { sign } from "./engine.js";
+import { hypothesisVerdict } from "@codecast/shared/contracts/climb";
 
 /** What the climb has filed so far, in one line: what a failed station still leaves on the record. */
 export function filedLine(s: ClimbState | null): string {
@@ -29,7 +30,51 @@ export function readabilityLine(s: ClimbState): string | null {
 }
 
 const usd = (x: number) => `$${x.toFixed(2)}`;
-const cutText = (env: string, k: Cut) => `${env} ${sign(k.delta)}${k.ci95 ? ` [${sign(k.ci95[0])}, ${sign(k.ci95[1])}]` : ""}${k.attempt ? ` ${k.attempt}` : ""}`;
+const cutText = (env: string, k: Cut) => `${env} ${sign(k.delta)}${k.ci95 ? ` [${sign(k.ci95[0])}, ${sign(k.ci95[1])}]` : ""}${k.changed !== undefined ? `, ${k.changed} of ${k.of} cases moved` : ""}${k.attempt ? ` ${k.attempt}` : ""}`;
+const pct = (x: number) => `${Math.round(x * 100)}%`;
+
+/** The level whose plausible effect the card staked the climb on: the highest scoring level kept that states one. */
+function stakeLevel(s: ClimbState) {
+  return s.levels.filter((l) => l.kept && l.level !== "L0" && l.plausible_effect).sort((a, b) => b.level.localeCompare(a.level))[0];
+}
+
+/**
+ * What the climb found against what the card expected: the best candidate
+ * that separated on dev, its effect on the staked level (held when it ran
+ * there, else dev), and how many cases it moved. Null before Screen.
+ */
+export function observedEffect(s: ClimbState): { env: string; plausible: number; observed: number | null; cand?: Cand; cut?: Cut } | null {
+  const l = stakeLevel(s);
+  if (!l || !s.candidates.some((c) => c.dev[l.env])) return null;
+  let best: { c: Cand; k: Cut; d: number } | null = null;
+  for (const c of s.candidates) {
+    const dev = c.dev[l.env];
+    if (!dev?.keep) continue;
+    const k = c.held[l.env] ?? dev;
+    if (!best || k.delta > best.d) best = { c, k, d: k.delta };
+  }
+  return { env: l.env, plausible: l.plausible_effect!, observed: best ? best.d : null, ...(best ? { cand: best.c, cut: best.k } : {}) };
+}
+
+/** The line the next Frame starts from: whether the card's expectation held, was weaker than expected, or was refuted. */
+export function hypothesisLine(s: ClimbState): string | null {
+  const e = observedEffect(s);
+  if (!e) return null;
+  const verdict = hypothesisVerdict(e.observed, e.plausible);
+  const word = verdict === "held" ? "held" : verdict === "weaker" ? "weaker than expected" : "refuted";
+  const target = s.card.target.split(/(?<=\.)\s/)[0];
+  if (e.observed === null || !e.cand) return `Hypothesis: ${word}. No candidate separated from base on ${e.env} against the card's plausible ${sign(e.plausible)}. The card's target was: ${target}`;
+  const moved = e.cut?.changed !== undefined ? `, moving ${e.cut.changed} of ${e.cut.of} cases` : "";
+  return `Hypothesis: ${word}. The best survivor (${e.cand.id}) moved ${e.env} by ${sign(e.observed)} against the card's plausible ${sign(e.plausible)} (${pct(e.observed / e.plausible)})${moved}. The card's target was: ${target}`;
+}
+
+/** Each screened candidate's observed effect beside the card's plausible one, and how many cases it moved. */
+export function effectLine(s: ClimbState): string | null {
+  const e = observedEffect(s);
+  if (!e) return null;
+  const each = s.candidates.filter((c) => c.dev[e.env]).map((c) => { const k = c.dev[e.env]; return `${c.id} ${sign(k.delta)} (${pct(k.delta / e.plausible)})${k.changed !== undefined ? `, ${k.changed} of ${k.of} cases moved` : ""}`; });
+  return `Effect against the card: plausible ${sign(e.plausible)} on ${e.env}; ${each.join("; ")}`;
+}
 
 function candLine(c: Cand): string[] {
   const out = [`${c.id} ${c.status}${c.branch ? ` ${c.branch}` : ""}${c.sha ? `@${c.sha.slice(0, 8)}` : ""}${c.predicted_delta !== undefined ? ` predicted ${sign(c.predicted_delta)}` : ""}`];
@@ -57,6 +102,10 @@ export function statusText(s: ClimbState): string {
   ];
   if (s.card.hypotheses.length) lines.push("", "Hypothesis space:", ...s.card.hypotheses.map((h) => `  - ${h}`));
   if (s.candidates.length) lines.push("", "Candidates:", ...s.candidates.flatMap(candLine));
+  const e = effectLine(s);
+  if (e) lines.push("", e);
+  const h = hypothesisLine(s);
+  if (h) lines.push(h);
   const top = s.candidates.find((c) => c.status === "promoted");
   if (top) lines.push("", `Promoted: ${top.id} (${top.branch})`);
   if (s.pending) lines.push("", `Pending: ${s.pending}`);
@@ -85,6 +134,8 @@ export function summaryText(s: ClimbState): string {
   for (const c of by("guard_failed")) lines.push(`Guard refused ${c.id}: ${c.guard?.why ?? c.why}`);
   for (const c of by("unscreened")) lines.push(`Undecided ${c.id}: ${c.why}`);
   if (top) lines.push(`Promoted ${top.id} (${top.branch}): ${top.hypothesis.slice(0, 200)}; dev ${Object.entries(top.dev).map(([e, k]) => cutText(e, k)).join("; ")}; held ${Object.entries(top.held).map(([e, k]) => cutText(e, k)).join("; ")}.`);
+  const h = hypothesisLine(s);
+  if (h) lines.push(h);
   lines.push(`Cost: ${usd(s.ledger.usd)} of ${usd(s.card.budget.usd)}, ${s.ledger.runs} of ${s.card.budget.runs} runs.`);
   if (s.outcome && !top) lines.push(`Outcome: ${s.outcome}`);
   return lines.join("\n");

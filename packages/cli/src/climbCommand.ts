@@ -15,7 +15,7 @@ import { repoRoot } from "./envDeclaration.js";
 import { parseDuration } from "@codecast/shared/time";
 import { ClimbStop, STOP, admit, bindPromoted, promoteMode, confirm, gauge, guard, readState, refuse, screen, setOutcome, type ClimbIo, type RunOut } from "./climb/engine.js";
 import { LINE_COMMAND_VARS } from "./lineProfile.js";
-import { filedLine, statusText, summaryText } from "./climb/report.js";
+import { effectLine, filedLine, hypothesisLine, statusText, summaryText } from "./climb/report.js";
 
 const cwd = () => process.env.CODECAST_CWD || process.cwd();
 
@@ -148,6 +148,7 @@ export function registerClimbCommand(program: Command, deps: PublishDeps): void 
   dirOpt(climb.command("screen").description("Run the candidates on the dev split, cheapest level first, keeping the better half that separates from base"))
     .action((o) => station("screen", async () => {
       const s = await screen(defaultIo(deps), o.dir);
+      for (const line of [effectLine(s), hypothesisLine(s)]) if (line) console.log(line);
       return `${s.candidates.filter((c) => c.status === "survivor").length} survived dev`;
     }, o.dir));
 

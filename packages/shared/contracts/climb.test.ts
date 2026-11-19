@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CLIMB_DEFAULT_BUDGET, commandPaths, detectableAt, experimentWeeks, globMatch, halve, levelCanSee, levelNoise, protectedTouches, readClimbCard, separates } from "./climb";
+import { CLIMB_DEFAULT_BUDGET, changedCases, hypothesisVerdict, commandPaths, detectableAt, experimentWeeks, globMatch, halve, levelCanSee, levelNoise, protectedTouches, readClimbCard, separates } from "./climb";
 
 const goal = { short_id: "in-9", levels: [{ env: "u/unit", level: "L0" as const }, { env: "u/replay", level: "L2" as const }, { env: "u/exp", level: "L4" as const }] };
 const card = (over: Record<string, unknown> = {}) => ({ goal: "in-9", target: "matched to opted in", levels: [{ env: "u/replay", plausible_effect: 0.03 }], ...over });
@@ -120,5 +120,18 @@ describe("sizing a production test from the reading's own MDE", () => {
     expect(experimentWeeks(0.52, "poisson", 0.3)!).toBeGreaterThan(4);
     expect(experimentWeeks(1.747, "poisson:1.75", 0.15)).toBeNull();
     expect(experimentWeeks(null, "poisson", 0.5)).toBeNull();
+  });
+});
+
+describe("what a climb learned about its card", () => {
+  test("a case moved only past the base's own run-to-run spread", () => {
+    const runs = [[{ id: "a", score: 0.5 }, { id: "b", score: 0.5 }], [{ id: "a", score: 0.52 }, { id: "b", score: 0.5 }]];
+    expect(changedCases(runs, [{ id: "a", score: 0.53 }, { id: "b", score: 0.6 }, { id: "z", score: 1 }])).toEqual({ changed: 1, of: 2 });
+  });
+  test("held at half the plausible effect or more, weaker down to a sixth, refuted under that or with nothing separated", () => {
+    expect(hypothesisVerdict(0.02, 0.03)).toBe("held");
+    expect(hypothesisVerdict(0.006, 0.03)).toBe("weaker");
+    expect(hypothesisVerdict(0.0037, 0.03)).toBe("refuted");
+    expect(hypothesisVerdict(null, 0.03)).toBe("refuted");
   });
 });
