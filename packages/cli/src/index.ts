@@ -10430,8 +10430,9 @@ program
   .description(
     "List authority events, newest first: permissions answered, share links minted,\n" +
     "revoked and redeemed, visibility moved, org trust/caps/authority set, proposals\n" +
-    "accepted, team members added, removed or re-roled. One append only record,\n" +
-    "written in the same transaction as the change.\n\n" +
+    "accepted, team members added, removed or re-roled, team read keys minted, used\n" +
+    "and revoked. One append only record, written in the same transaction as the\n" +
+    "change.\n\n" +
     "Examples:\n" +
     "  cast audit                          # What you caused and your workspaces' events\n" +
     "  cast audit --kind share_link_minted # One kind\n" +
