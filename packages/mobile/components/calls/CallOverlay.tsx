@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Animated, Keyboard, Pressable, StyleSheet, View } from "react-native";
 import { usePathname, useRouter } from "expo-router";
+import { isTabAddress } from "@/lib/tabNavigation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
@@ -200,7 +201,7 @@ export function CallOverlay() {
   // thread) does not.
   const onTabScreen =
     pathname === "/" || pathname === "/inbox" || pathname === "/tasks" || pathname === "/chat" ||
-    pathname === "/notifications" || pathname === "/settings" || pathname === "/(tabs)" || pathname.startsWith("/(tabs)/");
+    pathname === "/notifications" || pathname === "/settings" || isTabAddress(pathname);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   useEffect(() => {
     const show = Keyboard.addListener("keyboardWillShow", (e) => setKeyboardHeight(e.endCoordinates.height));

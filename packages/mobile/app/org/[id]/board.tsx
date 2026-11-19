@@ -20,7 +20,7 @@ import { useFeedLoading } from '@/hooks/useSyncWorkspaceData';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { filterToWorkspace } from '@codecast/web/lib/workspaceScope';
 import { mobileRouteForUrl } from '@/lib/linkRoutes';
-import { openLink } from '@/lib/links';
+import { openAppRoute, openLink } from '@/lib/links';
 import { solColor } from '@/lib/solColor';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { useScopeFeedStream } from '@codecast/web/hooks/useScopeFeedStream';
@@ -208,7 +208,8 @@ function Board({ scope, head }: { scope: ScopeRef; head: React.ReactElement }) {
   const open = useCallback((row: FeedRow) => {
     if (row.kind === 'session') { router.push(`/session/${row.id}`); return; }
     const route = mobileRouteForUrl(row.href);
-    if (route) router.push(route as never);
+    // A row's link can resolve to a tab; openAppRoute goes there without stacking one.
+    if (route) openAppRoute(router, route);
     // A page the phone has no screen for (an artifact, a decision) opens on the web.
     else void openLink(/^https?:/i.test(row.href) ? row.href : `https://codecast.sh${row.href}`);
   }, [router]);

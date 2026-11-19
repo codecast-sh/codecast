@@ -1,5 +1,6 @@
 import {
   useState,
+  useEffect,
   useCallback,
   useMemo,
   useRef } from "react";
@@ -17,7 +18,8 @@ import {
 } from 'react-native';
 import { Text as RNText, TextInput } from '@/components/Themed';
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { linkArrival } from "@/lib/linkArrival";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useAppearanceKey, useTheme } from "@/constants/Theme";
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
@@ -224,12 +226,20 @@ export default function TasksScreen() {
   const [assigneeFilter, setAssigneeFilter] = useState<string>(linkParams.assignee ?? "");
   // A person's page links here with their user id (`?assignee=`): it opens the
   // task list filtered to them, again whenever a new person's link arrives.
+  // The link is an arrival, not a standing filter (lib/linkArrival): once
+  // applied it leaves the address, so the same person's link applies again
+  // after the chip was cleared or another segment was chosen.
   const linkedAssignee = linkParams.assignee ?? null;
-  const [appliedAssignee, setAppliedAssignee] = useState(linkedAssignee);
-  if (linkedAssignee !== appliedAssignee) {
-    setAppliedAssignee(linkedAssignee);
-    if (linkedAssignee) { setSegment("tasks"); setAssigneeFilter(linkedAssignee); }
+  const [seenAssignee, setSeenAssignee] = useState(linkedAssignee);
+  const arrival = linkArrival(linkedAssignee, seenAssignee);
+  if (arrival.seen !== seenAssignee) {
+    setSeenAssignee(arrival.seen);
+    if (arrival.apply) { setSegment("tasks"); setAssigneeFilter(arrival.apply); }
   }
+  const navigation = useNavigation();
+  useEffect(() => {
+    if (arrival.consume) navigation.setParams({ assignee: undefined } as never);
+  }, [arrival.consume, navigation]);
   // Search folds behind its header icon; it stays open while it holds text.
   const [searchOpen, setSearchOpen] = useState(false);
   const router = useRouter();

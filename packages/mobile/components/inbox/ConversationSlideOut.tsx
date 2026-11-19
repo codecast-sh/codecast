@@ -3,6 +3,7 @@ import { Keyboard } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
 import { InboxView } from '@/app/(tabs)/inbox';
+import { goToTab } from '@/lib/tabNavigation';
 
 const DrawerContext = createContext<{ open: () => void } | null>(null);
 
@@ -37,7 +38,7 @@ export function ConversationSlideOut({ id, children }: { id: string; children: R
     router.setParams({ id: conversationId, message: messageId, focus: undefined } as never);
   }, [router]);
 
-  const exit = useCallback(() => router.navigate('/(tabs)/inbox' as never), [router]);
+  const exit = useCallback(() => goToTab(router, '/(tabs)/inbox'), [router]);
 
   const drawer = useMemo(() => ({ open: () => setOpen(true) }), [setOpen]);
 

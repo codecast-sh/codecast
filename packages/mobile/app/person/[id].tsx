@@ -5,6 +5,8 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+// This page sits over the tabs: a push or replace to a tab from here stacked a second tabs screen.
+import { goToTab } from '@/lib/tabNavigation';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Ionicons } from '@expo/vector-icons';
 import { teamFeatureEnabled } from '@codecast/shared/contracts';
@@ -132,7 +134,7 @@ export default function PersonScreen() {
               <FontAwesome name="user-o" size={26} color={Theme.textDim} />
               <RNText style={styles.emptyTitle}>No one called @{ref} here</RNText>
               <RNText style={styles.emptyBody}>They may be in another workspace.</RNText>
-              <TouchableOpacity style={styles.secondary} onPress={() => router.replace('/(tabs)/chat' as never)}>
+              <TouchableOpacity style={styles.secondary} onPress={() => goToTab(router, '/(tabs)/chat')}>
                 <RNText style={styles.secondaryText}>Team</RNText>
               </TouchableOpacity>
             </>
@@ -233,7 +235,7 @@ export default function PersonScreen() {
                 <TaskItemRow key={t._id} task={t} onPress={() => router.push(`/task/${t.short_id ?? t._id}` as never)} />
               ))}
               {openTasks.length > TASK_LIMIT && (
-                <TouchableOpacity style={styles.more} activeOpacity={0.6} onPress={() => router.push(`/(tabs)/tasks?assignee=${encodeURIComponent(userId!)}` as never)} testID="person-all-tasks">
+                <TouchableOpacity style={styles.more} activeOpacity={0.6} onPress={() => goToTab(router, `/(tabs)/tasks?assignee=${encodeURIComponent(userId!)}`)} testID="person-all-tasks">
                   <RNText style={styles.moreText}>All {openTasks.length} open tasks</RNText>
                   <FontAwesome name="angle-right" size={15} color={Theme.accent} />
                 </TouchableOpacity>

@@ -1,5 +1,6 @@
 import { View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { goToTab, isTabAddress } from '@/lib/tabNavigation';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/constants/Theme';
@@ -22,7 +23,8 @@ export function Places({ onLeave }: { onLeave: () => void }) {
   const go = (route: string) => {
     void Haptics.selectionAsync();
     onLeave();
-    router.navigate(route as never);
+    if (isTabAddress(route)) goToTab(router, route);
+    else router.navigate(route as never);
   };
   const icon = (name: keyof typeof Feather.glyphMap) => <Feather name={name} size={17} color={Theme.textMuted} />;
   const rows: Array<{ page: string; name: string; icon: keyof typeof Feather.glyphMap; route: string; count?: number; live?: boolean }> = [

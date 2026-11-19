@@ -26,7 +26,7 @@ import { BottomSheet } from '@/components/BottomSheet';
 import { ChatAvatar } from '@/components/chat/MessageRow';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { useActiveTeamFeature } from '@/lib/teamFeatures';
-import { mobileRouteForUrl, openWebPage } from '@/lib/links';
+import { mobileRouteForUrl, openAppRoute, openWebPage } from '@/lib/links';
 import { CHROME_FONT_CAP, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { SessionHit } from './SessionHit';
 import { ObjectHit } from './ObjectHit';
@@ -111,13 +111,13 @@ export function SearchResults({ query, onOpenSession }: {
 
   const openObject = useCallback((hit: ObjectHitRow) => {
     const route = hit.external ? null : mobileRouteForUrl(hit.href);
-    if (route) router.push(route as never);
+    if (route) openAppRoute(router, route);
     // A kind the phone has no screen for yet opens its web page in the sheet.
     else void openWebPage(/^https?:/i.test(hit.href) ? hit.href : `${CODECAST_BASE_URL}${hit.href}`);
   }, [router]);
   const openChat = useCallback((permalink: string) => {
     const route = mobileRouteForUrl(permalink);
-    if (route) router.push(route as never);
+    if (route) openAppRoute(router, route);
   }, [router]);
 
   const countOf = (n: number) => (n >= SEARCH_KIND_CAP ? `${SEARCH_KIND_CAP}+` : n);

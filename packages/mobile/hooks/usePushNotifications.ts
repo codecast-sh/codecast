@@ -12,6 +12,7 @@ import { acceptInvite, declineInvite, joinCall } from '@/lib/calls/callManager';
 import { useAuth } from '@/lib/auth';
 import { catchUpConversation } from '@/lib/foregroundResume';
 import { openLink } from '@/lib/links';
+import { goToTab } from '@/lib/tabNavigation';
 import { setDevicePushToken } from '@/lib/devicePushToken';
 import {
   CALL_PUSH_ACTION_DECLINE,
@@ -169,7 +170,7 @@ export function usePushNotifications() {
       if (data.type === CALL_PUSH_TYPE_MISSED) {
         // Ring back from the missed-call notification: land on the Chat tab
         // where the huddle affordances live.
-        router.push('/(tabs)/chat' as never);
+        goToTab(router, '/(tabs)/chat');
         return;
       }
       if (data.conversationId) {
@@ -197,11 +198,11 @@ export function usePushNotifications() {
       } else if (data.type === 'sessions_need_input') {
         // The hourly fold-up names several sessions — the inbox is where they
         // all are, and where the needs-input group sits at the top.
-        router.push('/(tabs)/inbox' as never);
+        goToTab(router, '/(tabs)/inbox');
       } else if (data.type === 'aggregate') {
         // A batched push ("12 notifications") has no single session to open —
         // land on the list that itemizes them.
-        router.push('/(tabs)/notifications');
+        goToTab(router, '/(tabs)/notifications');
       }
     };
 
