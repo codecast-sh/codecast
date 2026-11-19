@@ -4792,15 +4792,9 @@ cliRoute("/cli/progress/latest", async (ctx, body) => {
 });
 
 // Docs
-cliRoute("/cli/docs/create", async (ctx, body) => {
-  return await ctx.runMutation(api.docs.create, body);
-});
-cliRoute("/cli/docs/list", async (ctx, body) => {
-  return await ctx.runQuery(api.docs.list, body);
-});
-cliRoute("/cli/docs/get", async (ctx, body) => {
-  return await ctx.runQuery(api.docs.get, body);
-});
+cliRoute("/cli/docs/create", async (ctx, body) => await ctx.runMutation(api.docs.create, body));
+cliRoute("/cli/docs/list", async (ctx, body) => await ctx.runQuery(api.docs.list, body));
+cliRoute("/cli/docs/get", async (ctx, body) => await ctx.runQuery(api.docs.get, body));
 // A whole-body write refuses while a person's editor holds steps it has not
 // saved yet (lib/docBody.ts writeDocBody). The editor saves a second after
 // its last step reaches the server, which on a live rig measured about five
@@ -4838,18 +4832,10 @@ cliRoute("/cli/live/checkpoint", async (ctx, body) => await ctx.runMutation(api.
 cliRoute("/cli/live/state-at", async (ctx, body) => await ctx.runAction(api.liveArtifacts.stateAt, body));
 cliRoute("/cli/live/restore", async (ctx, body) => await ctx.runAction(api.liveArtifacts.restore, body));
 cliRoute("/cli/live/remote", async (ctx, body) => await ctx.runAction(api.liveArtifacts.runRemote, body));
-// Who may edit a team artifact (`cast <cli> access`): read it with the people who could be named, or set it.
-cliRoute("/cli/live/access", async (ctx, body) => {
-  const { op, ...rest } = body;
-  if (op === "set") return await ctx.runMutation(api.liveArtifacts.setEditAccess, rest);
-  return await ctx.runQuery(api.liveArtifacts.editorCandidates, { doc_id: rest.doc_id, api_token: rest.api_token, session_id: rest.session_id });
-});
-cliRoute("/cli/docs/comment", async (ctx, body) => {
-  return await ctx.runMutation(api.docs.addComment, body);
-});
-cliRoute("/cli/docs/search", async (ctx, body) => {
-  return await ctx.runQuery(api.docs.search, body);
-});
+// Who may edit a team artifact (`cast <cli> access`): set it, or read who could be named.
+cliRoute("/cli/live/access", async (ctx, { op, ...rest }) => op === "set" ? await ctx.runMutation(api.liveArtifacts.setEditAccess, rest) : await ctx.runQuery(api.liveArtifacts.editorCandidates, { doc_id: rest.doc_id, api_token: rest.api_token, session_id: rest.session_id }));
+cliRoute("/cli/docs/comment", async (ctx, body) => await ctx.runMutation(api.docs.addComment, body));
+cliRoute("/cli/docs/search", async (ctx, body) => await ctx.runQuery(api.docs.search, body));
 // A session's share link, and the pin that makes it public (cast share).
 cliRoute("/cli/sessions/share", async (ctx, body) => {
   return { share_token: await ctx.runMutation(api.conversations.generateShareLink, body) };
@@ -4861,15 +4847,9 @@ cliRoute("/cli/sessions/unpin", async (ctx, body) => {
   return await ctx.runMutation(api.conversations.unpinFromProfile, body);
 });
 
-cliRoute("/cli/docs/share", async (ctx, body) => {
-  return await ctx.runMutation(api.docs.generateShareLink, body);
-});
-cliRoute("/cli/docs/unshare", async (ctx, body) => {
-  return await ctx.runMutation(api.docs.unshare, body);
-});
-cliRoute("/cli/docs/delete", async (ctx, body) => {
-  return await ctx.runMutation(api.docs.remove, body);
-});
+cliRoute("/cli/docs/share", async (ctx, body) => await ctx.runMutation(api.docs.generateShareLink, body));
+cliRoute("/cli/docs/unshare", async (ctx, body) => await ctx.runMutation(api.docs.unshare, body));
+cliRoute("/cli/docs/delete", async (ctx, body) => await ctx.runMutation(api.docs.remove, body));
 // `cast doc lab`: a Lab tool (alternatives, trim, flag, typos) run on the
 // stored doc, its result written in as drafting markup (docLab.runOnDoc).
 cliRoute("/cli/docs/lab", async (ctx, body) => ctx.runAction((api as any).docLab.runOnDoc, body));

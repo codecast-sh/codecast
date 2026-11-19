@@ -2431,7 +2431,7 @@ export const unshare = mutation({
   },
 });
 
-const purgeLiveDocRef = makeFunctionReference<"mutation", { doc_id: Id<"docs"> }>("liveArtifacts:purgeDoc");
+const purgeLiveDocRef = makeFunctionReference<"mutation", { doc_id: Id<"docs"> }>("liveArtifactPurge:purgeDoc");
 
 export const remove = mutation({
   args: {

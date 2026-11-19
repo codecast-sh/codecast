@@ -698,7 +698,7 @@ describe("live artifacts", () => {
     test("a purge never touches a doc that still exists", async () => {
       const { t, doc, agent } = await setup();
       await t.mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", x: 0 } }], ...agent });
-      expect(await t.mutation(internal.liveArtifacts.purgeDoc, { doc_id: doc })).toEqual({ purged: 0, done: true });
+      expect(await t.mutation(internal.liveArtifactPurge.purgeDoc, { doc_id: doc })).toEqual({ purged: 0, done: true });
       expect(Object.keys(await state(t, doc))).toEqual(["el_a"]);
       await t.finishAllScheduledFunctions(() => {});
     });
