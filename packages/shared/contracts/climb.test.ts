@@ -135,3 +135,23 @@ describe("what a climb learned about its card", () => {
     expect(hypothesisVerdict(null, 0.03)).toBe("refuted");
   });
 });
+
+describe("the paired floor", () => {
+  test("on runs that agree, a paired level's floor is the moved change times sqrt(share / n), far under the unpaired SE", () => {
+    const run = Array.from({ length: 691 }, (_, i) => ({ id: `d${i}`, score: 0.25 + ((i * 37) % 100) / 200 }));
+    const unpaired = levelNoise("L2", [run, run, run]);
+    const paired = levelNoise("L2", [run, run, run], undefined, undefined, { share: 19 / 691, rms: 0.17, from: "history" });
+    if ("error" in unpaired || "error" in paired) throw new Error("noise");
+    expect(unpaired.by).toBe("cases");
+    expect(unpaired.mde).toBeGreaterThan(0.01);
+    expect(paired.by).toBe("paired");
+    expect(paired.mde).toBeCloseTo(2.8 * 0.17 * Math.sqrt(19 / 691 / 691), 3);
+    // A declared MDE above both still rules.
+    const declared = levelNoise("L2", [run, run, run], undefined, 0.02, { share: 0.02, from: "card" });
+    expect(!("error" in declared) && declared.by).toBe("declared");
+  });
+  test("the card's moved_share is a share", () => {
+    expect(readClimbCard(card({ levels: [{ env: "u/replay", plausible_effect: 0.03, moved_share: 0.02 }] }), goal)).toMatchObject({ ok: true });
+    expect(readClimbCard(card({ levels: [{ env: "u/replay", plausible_effect: 0.03, moved_share: 2 }] }), goal)).toMatchObject({ ok: false });
+  });
+});

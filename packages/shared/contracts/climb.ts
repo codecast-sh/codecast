@@ -30,7 +30,8 @@ export const CLIMB_LEVELS: readonly EnvLevel[] = ["L0", "L1", "L2", "L3"];
 export const CLIMB_EXPERIMENT_MAX_WEEKS = 26;
 
 export type ClimbBudget = { usd: number; runs: number };
-export type ClimbCardLevel = { env: string; level: EnvLevel; plausible_effect?: number };
+/** A level on the card: `moved_share` is the share of its cases one change is expected to move (0.02 = 2%), what a paired level's noise floor rests on. */
+export type ClimbCardLevel = { env: string; level: EnvLevel; plausible_effect?: number; moved_share?: number };
 export type ClimbCard = {
   goal: string;
   metric?: string;
@@ -68,7 +69,9 @@ export function readClimbCard(raw: unknown, goal: { short_id: string; budget?: P
     if (levels.some((x) => x.env === l.env)) return { ok: false, error: `${l.env} is named twice` };
     const said = posNum(l.plausible_effect);
     if (named.level !== "L0" && said === null) return { ok: false, error: `${l.env}: say the plausible effect of one change on its score (0..1), so the climb can check the level can see it` };
-    levels.push({ env: l.env, level: named.level, ...(said !== null ? { plausible_effect: said } : {}) });
+    const share = posNum(l.moved_share);
+    if (share !== null && share > 1) return { ok: false, error: `${l.env}: moved_share is a share of its cases, from 0 to 1 (0.02 is 2%)` };
+    levels.push({ env: l.env, level: named.level, ...(said !== null ? { plausible_effect: said } : {}), ...(share !== null ? { moved_share: share } : {}) });
   }
   if (!levels.some((l) => l.level !== "L0")) return { ok: false, error: "the card names only L0 checks; a climb needs a level that scores" };
   const goalBudget = { usd: posNum(goal.budget?.usd) ?? CLIMB_DEFAULT_BUDGET.usd, runs: posNum(goal.budget?.runs) ?? CLIMB_DEFAULT_BUDGET.runs };
@@ -104,8 +107,10 @@ export type LevelNoise = {
   se: number;
   /** The smallest delta this level detects at 80% power, two-sided 5%: from the run-to-run noise, never below the case-level floor or the env's declared MDE. */
   mde: number;
-  /** What set the MDE: the runs' own spread, the case-level floor (runs that agree exactly, as a cached grader makes them), or the env's declaration. */
-  by?: "runs" | "cases" | "declared";
+  /** What set the MDE: the runs' own spread, the paired floor (the change a moved case makes, over the share of cases a change moves), the unpaired case-level floor, or the env's declaration. */
+  by?: "runs" | "paired" | "cases" | "declared";
+  /** The paired floor's terms, when it was read: the share of cases a change moves and the change a moved case makes (root mean square). */
+  paired?: { share: number; rms: number; from: "history" | "card" };
 };
 
 /**
@@ -118,7 +123,7 @@ export type LevelNoise = {
  * of the mean, when it reports one, is taken if larger. L0 is deterministic:
  * one run, no spread, and any case that gets worse counts.
  */
-export function levelNoise(level: EnvLevel, runs: ReadonlyArray<readonly EnvCase[]>, reportedAaSd?: number, declaredMde?: number): LevelNoise | { error: string } {
+export function levelNoise(level: EnvLevel, runs: ReadonlyArray<readonly EnvCase[]>, reportedAaSd?: number, declaredMde?: number, paired?: { share: number; rms?: number; from: "history" | "card" }): LevelNoise | { error: string } {
   if (level === "L0") return { runs: runs.length, se: 0, mde: 0 };
   if (runs.length < 2 && !(reportedAaSd && reportedAaSd > 0)) return { error: `one base run cannot show the spread; ${CLIMB_AA_RUNS} are needed` };
   const k = runs.length;
@@ -138,16 +143,24 @@ export function levelNoise(level: EnvLevel, runs: ReadonlyArray<readonly EnvCase
   const fromRunner = (reportedAaSd ?? 0) * both;
   const se = Math.max(Math.sqrt(fromCases ** 2 + fromMeans ** 2), fromRunner);
   // Runs that agree exactly (a cached grader, a deterministic replay) show no run-to-run spread, and a level is never
-  // that sharp: what a change can be told apart from is still the spread of the cases themselves, so the clustered
-  // case-level standard error of the mean is the floor. An env that knows better declares its MDE.
+  // that sharp. A climb compares each candidate with the base case by case, so the difference has variance only on the
+  // cases a change moves: the floor is the change a moved case makes times sqrt(share moved / n). Without a share (the
+  // card names none and no earlier climb filed one), the unpaired standard error of the mean stands in. An env that
+  // knows better declares its MDE.
   const means = baseMeanCases(runs).map((c) => c.score);
-  const floor = means.length > 1 ? sd(means) / Math.sqrt(means.length) : 0;
-  const candidates: Array<[number, LevelNoise["by"]]> = [[MDE_Z * se, "runs"], [MDE_Z * floor, "cases"], [declaredMde ?? 0, "declared"]];
+  const n = means.length;
+  const unpaired = n > 1 ? sd(means) / Math.sqrt(n) : 0;
+  const rms = paired ? paired.rms ?? sd(means) : 0;
+  const floor = paired && n ? rms * Math.sqrt(paired.share / n) : unpaired;
+  const candidates: Array<[number, LevelNoise["by"]]> = [[MDE_Z * se, "runs"], [MDE_Z * floor, paired ? "paired" : "cases"], [declaredMde ?? 0, "declared"]];
   const [mde, by] = candidates.reduce((a, b) => (b[0] > a[0] ? b : a));
-  return { runs: k, se: round(se), mde: round(mde), by };
+  return { runs: k, se: round(se), mde: round(mde), by, ...(paired ? { paired: { share: paired.share, rms: round(rms), from: paired.from } } : {}) };
 }
 
-const byWords = (n: LevelNoise) => (n.by === "cases" ? " (the case-level floor: the base runs agree, so the cases' own spread sets it)" : n.by === "declared" ? " (the env's declared MDE)" : "");
+const byWords = (n: LevelNoise) =>
+  n.by === "paired" && n.paired
+    ? ` (the paired floor: ${(n.paired.share * 100).toFixed(1)}% of cases moving by ±${n.paired.rms.toFixed(3)}, ${n.paired.from === "history" ? "as this level's earlier climbs moved them" : "as the card expects"})`
+    : n.by === "cases" ? " (the unpaired case-level floor: the base runs agree and nothing says what share of cases a change moves; the card's moved_share would pair it)" : n.by === "declared" ? " (the env's declared MDE)" : "";
 
 /** Whether a level can see one change: its MDE no larger than the card's plausible effect, held to CLIMB_PLAUSIBLE_MAX. */
 export function levelCanSee(level: EnvLevel, noise: LevelNoise, plausible?: number): { ok: boolean; why: string } {

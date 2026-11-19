@@ -645,7 +645,7 @@ describe("the climb's dry run", () => {
       expect(replay.noise!.se).toBe(0);
       expect(replay.noise!.mde).toBeGreaterThan(0.004);
       expect(replay.noise!.by).toBe("cases");
-      expect(replay.why).toContain("the case-level floor");
+      expect(replay.why).toContain("the unpaired case-level floor");
     } finally { delete process.env.FAKE_SAME; }
   });
 

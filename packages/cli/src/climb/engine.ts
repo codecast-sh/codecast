@@ -30,6 +30,7 @@ import { parseEnvsText } from "../envDeclaration.js";
 import { parseLineProfileText, resolveLineProfile } from "../lineProfile.js";
 import { StoreTampered, archiveSealed, readSealed, writeSealed } from "./store.js";
 import type { ClimbBase } from "./base.js";
+import { movedHistory, pairedTerms } from "./noise.js";
 import { MetricUnread, readability as readabilityOf, type Readability } from "./readability.js";
 import { resolveCommand, withDirs, graderPackageDirs, gradingGlobs, inadmissible, packagesPrint, pinsAScript, protectedDigest, tryGit } from "./protect.js";
 
@@ -357,7 +358,9 @@ async function measureLevels(v: View): Promise<void> {
       if (r.attempt) { row.base_attempts.push(r.attempt); reported = Math.max(reported, v.read.get(r.attempt)?.aa_sd ?? 0); }
     }
     if (row.why) { save(dir, s); continue; }
-    const noise = levelNoise(cl.level, runs, reported || undefined, decl.mde);
+    // A scoring level is compared paired, case by case: its floor rests on how many cases one change moves and by how much.
+    const paired = cl.level === "L0" ? undefined : pairedTerms(cl, await movedHistory(v.io.post, s.card.goal, cl.env, version!));
+    const noise = levelNoise(cl.level, runs, reported || undefined, decl.mde, paired);
     if ("error" in noise) { row.why = noise.error; save(dir, s); continue; }
     const see = levelCanSee(cl.level, noise, cl.plausible_effect);
     Object.assign(row, { noise, version, kept: see.ok, why: see.why });
