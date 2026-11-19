@@ -13,8 +13,22 @@ import { FOREIGN_TEXT_CAPS, fenceForeignText, inlineForeignText } from "@codecas
 import { foreignProse } from "@codecast/shared/tasks";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
+import { execFileSync } from "./proc.js";
 
-export type LogEntry = { type: string; content: string; author?: string; session?: string; title?: string; timestamp: number };
+export type LogEntry = { type: string; content: string; author?: string; session?: string; title?: string; commit?: string; timestamp: number };
+
+/** The checkout an entry is about: short HEAD, "+dirty" with uncommitted
+ *  changes, since workers in one shared checkout mostly report on those.
+ *  Undefined outside a git repo. */
+export function commitStamp(cwd: string): string | undefined {
+  const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 3_000 }).trim();
+  try {
+    // No index.lock, so it never collides with another agent's add or commit in a shared checkout.
+    return git("rev-parse", "--short", "HEAD") + (git("--no-optional-locks", "status", "--porcelain") ? "+dirty" : "");
+  } catch {
+    return undefined;
+  }
+}
 
 /** The commands that never carry the log: the daemon's own, auth, the hooks, and
  *  the ones that end a turn, where a delivery would move the cursor and be lost. */
@@ -34,7 +48,7 @@ export function formatLogEntries(planShortId: string | undefined, entries: LogEn
   // renders a plan comment (planForeignText.ts), so it cannot repaint the terminal.
   const lines = entries.map((e) => {
     const [first, ...rest] = (foreignProse(e.content, FOREIGN_TEXT_CAPS.commentChars) ?? "").split("\n");
-    const from = [inlineForeignText(e.author), e.session && `session ${inlineForeignText(e.session)}`, e.title && `"${inlineForeignText(e.title).slice(0, 60)}"`].filter(Boolean).join(", ");
+    const from = [inlineForeignText(e.author), e.session && `session ${inlineForeignText(e.session)}`, e.title && `"${inlineForeignText(e.title).slice(0, 60)}"`, e.commit && `@ ${inlineForeignText(e.commit)}`].filter(Boolean).join(", ");
     return [`[${inlineForeignText(e.type)}]${from ? ` ${from}:` : ""} ${first}`, ...rest.map((l) => `  ${l}`)].join("\n");
   });
   // Other agents' words, fenced the way `cast plan show` fences them, so an

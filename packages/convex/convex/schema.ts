@@ -6829,6 +6829,8 @@ export default defineSchema({
       author: v.optional(v.string()),
       rationale: v.optional(v.string()),
       path_or_url: v.optional(v.string()),
+      // The writer's checkout when it wrote: short HEAD, "+dirty" with uncommitted changes.
+      commit: v.optional(v.string()),
     }))),
     session_ids: v.optional(v.array(v.id("conversations"))),
     current_session_id: v.optional(v.id("conversations")),

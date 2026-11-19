@@ -19635,7 +19635,8 @@ doc
         const who = e.author ? `${e.author} ` : "";
         const extra = e.rationale ? ` ${c.dim}(${e.rationale})${c.reset}` : "";
         const ref = e.path_or_url ? ` ${c.dim}→ ${e.path_or_url}${c.reset}` : "";
-        console.log(`  ${icon} ${c.dim}${who}${ago} ago:${c.reset} ${e.content}${extra}${ref}`);
+        const at = e.commit ? ` @ ${e.commit}` : "";
+        console.log(`  ${icon} ${c.dim}${who}${ago} ago${at}:${c.reset} ${e.content}${extra}${ref}`);
       }
     };
     if (options.comments) { printComments(true); return; }
@@ -20239,7 +20240,15 @@ plan
     if (options.ref) body.path_or_url = options.ref;
     if (sessionId) body.session_id = sessionId;
     if (options.author) body.author = options.author;
-    await cliPost("/cli/plans/comment", body);
+    const { commitStamp } = await import("./planLogDelivery.js");
+    const commit = commitStamp(getRealCwd());
+    try {
+      await cliPost("/cli/plans/comment", commit ? { ...body, commit } : body, { throwOnError: !!commit });
+    } catch (err) {
+      // A backend older than the stamp rejects the field: post without it.
+      if (!/(extra field|Unexpected field) `commit/.test(String((err as Error).message))) { console.error(`Error: ${(err as Error).message}`); process.exit(1); }
+      await cliPost("/cli/plans/comment", body);
+    }
     console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${planId}${c.reset}`);
     await warnIfThreadStateStale();
   });
@@ -21704,7 +21713,7 @@ plan
   .command("eval")
   .description("Evaluate a plan's execution metrics with detailed grading")
   .argument("<plan_id>", "Plan short ID")
-  .option("--compare <plan_ids>", "Compare against other plan evaluations (comma-separated)")
+  .option("--compare <plan_ids>", "Plans to set beside this one (comma-separated): messaging policy, time, tokens, cost, retries and log entries")
   .option("--json", "Output as JSON")
   .action(async (planId: string, options: any) => {
     const plan = await cliPost("/cli/plans/get", { short_id: planId });
@@ -21782,9 +21791,12 @@ plan
       stats: { tasks: tasks.length, done: done.length, dropped: dropped.length, blocked: blocked.length, retries: totalRetries, waves, time_minutes: totalTime },
       event_counts: eventStats,
     };
+    // Time, tokens and log use per plan, to compare messaging policies; null from a backend without the route.
+    const runIds = [planId, ...(options.compare ? String(options.compare).split(",").map((s) => s.trim()).filter(Boolean) : [])];
+    const runs = (await Promise.all(runIds.map((id) => cliPost("/cli/plans/telemetry", { short_id: id }, { throwOnError: true }).catch(() => null)))).filter(Boolean);
 
     if (options.json) {
-      console.log(JSON.stringify(evalResult, null, 2));
+      console.log(JSON.stringify({ ...evalResult, runs }, null, 2));
       return;
     }
 
@@ -21831,23 +21843,12 @@ plan
 
     console.log(`\n  ${c.bold}Score: ${score}/100${c.reset}`);
 
-    // Compare with other plans
-    if (options.compare) {
-      const compareIds = options.compare.split(",").map((s: string) => s.trim());
-      console.log(`\n  ${c.bold}Comparison${c.reset}`);
-      for (const cid of compareIds) {
-        try {
-          const cplan = await cliPost("/cli/plans/get", { short_id: cid });
-          if (cplan) {
-            const ctasks = cplan.tasks || [];
-            const cdone = ctasks.filter((t: any) => t.status === "done").length;
-            const cdropped = ctasks.filter((t: any) => t.status === "dropped").length;
-            const cactionable = ctasks.length - cdropped;
-            const crate = cactionable > 0 ? ((cdone / cactionable) * 100).toFixed(1) : "0";
-            console.log(`    ${c.cyan}${cid}${c.reset} ${cplan.title}: ${cdone}/${ctasks.length} (${crate}%)`);
-          }
-        } catch {}
-      }
+    if (runs.length) {
+      const { formatTelemetryTable } = await import("./planTelemetry.js");
+      console.log(`\n  ${c.bold}${runs.length > 1 ? "Comparison" : "Run"}${c.reset}`);
+      for (const line of formatTelemetryTable(runs).split("\n")) console.log(`    ${line}`);
+      const missing = runIds.length - runs.length;
+      if (missing) console.log(`    ${c.dim}no numbers for ${missing} plan${missing === 1 ? "" : "s"}${c.reset}`);
     }
 
     console.log();

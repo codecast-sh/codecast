@@ -4678,9 +4678,8 @@ cliRoute("/cli/plans/create", async (ctx, body) => {
 cliRoute("/cli/plans/list", async (ctx, body) => {
   return await ctx.runQuery(api.plans.list, body);
 });
-cliRoute("/cli/plans/get", async (ctx, body) => {
-  return await ctx.runQuery(api.plans.get, body);
-});
+cliRoute("/cli/plans/get", (ctx, body) => ctx.runQuery(api.plans.get, body));
+cliRoute("/cli/plans/telemetry", (ctx, body) => ctx.runQuery(api.planLog.telemetry, { api_token: body.api_token, short_id: body.short_id }));
 cliRoute("/cli/plans/update", async (ctx, body) => waitingOutLiveEdits(body, (args) => ctx.runMutation(api.plans.update, args)));
 cliRoute("/cli/plans/bind", async (ctx, body) => {
   return await ctx.runMutation(api.plans.bindSession, body);

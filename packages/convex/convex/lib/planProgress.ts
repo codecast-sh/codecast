@@ -41,7 +41,7 @@ export async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
 // Deduplicates by timestamp+content to avoid showing entries written to both old and new.
 export function mergePlanEntries(plan: any): Array<{
   type: string; timestamp: number; content: string;
-  session_id?: string; author?: string; rationale?: string; path_or_url?: string;
+  session_id?: string; author?: string; rationale?: string; path_or_url?: string; commit?: string;
 }> {
   const seen = new Set<string>();
   const all: any[] = [];

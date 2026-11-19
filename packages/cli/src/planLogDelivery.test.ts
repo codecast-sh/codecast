@@ -2,7 +2,8 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { deliverPlanLog, formatLogEntries, NO_LOG_RECHECK_MS } from "./planLogDelivery.js";
+import { execFileSync } from "node:child_process";
+import { commitStamp, deliverPlanLog, formatLogEntries, NO_LOG_RECHECK_MS } from "./planLogDelivery.js";
 
 let reply: any = { entries: [] };
 let status = 200;
@@ -115,4 +116,27 @@ test("formatLogEntries escapes another agent's control characters", () => {
   const out = formatLogEntries(undefined, [{ type: "fact", content: "ok\u001b[2Jwiped", author: "w\u001b[31m2", timestamp: 1 }]);
   expect(out).not.toContain("\u001b[2J");
   expect(out).not.toContain("\u001b[31m");
+});
+
+test("formatLogEntries names the commit an entry is about", () => {
+  expect(formatLogEntries(undefined, [{ type: "fail", content: "retry loop", author: "Ana", commit: "1dbb552+dirty", timestamp: 1 }]))
+    .toContain("[fail] Ana, @ 1dbb552+dirty: retry loop");
+});
+
+test("commitStamp is the short HEAD, +dirty with uncommitted changes, nothing outside a repo", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stamp-"));
+  try {
+    expect(commitStamp(dir)).toBeUndefined();
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: dir, stdio: "pipe" }).toString().trim();
+    git("init", "-q");
+    fs.writeFileSync(path.join(dir, "a.txt"), "1");
+    git("add", ".");
+    git("commit", "-qm", "one");
+    const head = git("rev-parse", "--short", "HEAD");
+    expect(commitStamp(dir)).toBe(head);
+    fs.writeFileSync(path.join(dir, "a.txt"), "2");
+    expect(commitStamp(dir)).toBe(`${head}+dirty`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
