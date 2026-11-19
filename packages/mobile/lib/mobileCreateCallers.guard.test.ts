@@ -291,9 +291,7 @@ describe("mobile send button is a real tap target", () => {
     expect(composer).toBeGreaterThan(overlayClose);
   });
 
-  test("chat send is 44pt", () => {
-    expect(composerSource).toContain("width: 44");
-    expect(composerSource).toContain("height: 44");
-    expect(composerSource).toContain("hitSlop={12}");
+  test("chat sends through the session composer's button", () => {
+    expect(composerSource).toContain("<MessageComposer");
   });
 });

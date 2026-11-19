@@ -3,7 +3,7 @@
 // once the text wraps. The session screen's reply box (app/session/[id]) and
 // the new session sheet's first message both draw it, so a first message can
 // carry what a reply can.
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, KeyboardAvoidingView, Platform, View as RNView, Image, ActivityIndicator, Modal, useWindowDimensions, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 import { useConvex } from 'convex/react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -31,7 +31,7 @@ export const IMAGE_ONLY_CONTENT = '[image]';
 
 export type ComposerSuggestion = { text: string; onUse: () => void };
 
-export type ComposerImage = { uri: string; mime: string; storageId?: string; uploading: boolean };
+export type ComposerImage = { uri: string; mime: string; width?: number; height?: number; storageId?: string; uploading: boolean };
 
 /** A screen recording attached to the turn: named by the server once
  *  `begun`, its bytes on their way until `uploaded`. */
@@ -67,8 +67,11 @@ export function dispatchComposerSend(conversationId: string, content: string, im
 }
 
 /** The images attached to the turn being written, uploading as soon as they
- *  are picked, each with an `[Image N]` token in the text. */
-export function useComposerImages(setMessage: (update: (text: string) => string) => void, opts: { recordingsTo?: string } = {}) {
+ *  are picked, each with an `[Image N]` token in the text (unless
+ *  `placeholders` is false: a chat message carries its images beside the
+ *  words, not referenced from them). */
+export function useComposerImages(setMessage: (update: (text: string) => string) => void, opts: { recordingsTo?: string; placeholders?: boolean } = {}) {
+  const placeholders = opts.placeholders !== false;
   // The session a screen recording would go to; none offers no recording.
   const allowRecording = !!opts.recordingsTo;
   const convex = useConvex();
@@ -87,22 +90,22 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
     selectedImagesRef.current = selectedImagesRef.current.filter(img => img.uri !== uri);
     setSelectedImages(selectedImagesRef.current);
     forgetUpload(uri);
-    setMessage(m => dropImagePlaceholder(m, index + 1));
+    if (placeholders) setMessage(m => dropImagePlaceholder(m, index + 1));
   };
 
   // Adds local image files to the turn: each gets an `[Image N]` token in
   // attach order (the order the agent receives them) and starts uploading.
-  const attachImages = (picked: Array<{ uri: string; mime: string }>) => {
-    for (const { uri, mime } of picked) {
+  const attachImages = (picked: Array<{ uri: string; mime: string; width?: number; height?: number }>) => {
+    for (const { uri, mime, width, height } of picked) {
       if (selectedImagesRef.current.some(img => img.uri === uri)) continue;
       // Ref-first so a multi-pick batch numbers sequentially: the state
       // updates are async, so `selectedImages` is still the old array here.
       // The number is taken now: the text updater runs after the whole batch,
       // when the ref already counts every image (two picks both read 2).
-      selectedImagesRef.current = [...selectedImagesRef.current, { uri, mime, uploading: true }];
+      selectedImagesRef.current = [...selectedImagesRef.current, { uri, mime, width, height, uploading: true }];
       setSelectedImages(selectedImagesRef.current);
       const n = selectedImagesRef.current.length;
-      setMessage(m => insertImagePlaceholder(m, m.length, n).text);
+      if (placeholders) setMessage(m => insertImagePlaceholder(m, m.length, n).text);
       // Registered in pendingImageUploads under the uri, so a send pressed
       // before the bytes land still finds the upload (dispatchComposerSend).
       startUpload(convex, { uri, mime }).then(storageId => {
@@ -170,20 +173,49 @@ export type ComposerStatus = { color: string; dot?: string; label: string };
 
 const composerImageSrc = (img: ComposerImage) => img.uri;
 
+/** A button in the composer's bottom row beside attach (chat's mention and
+ *  emoji): the same size and weight as attach, lit while `on`. */
+export function ComposerTool({ icon, label, onPress, on }: {
+  icon: ComponentProps<typeof Feather>['name'];
+  label: string;
+  onPress: () => void;
+  on?: boolean;
+}) {
+  const Theme = useTheme();
+  return (
+    <TouchableOpacity
+      style={[styles.toolButton, on && styles.toolButtonOn]}
+      onPress={onPress}
+      activeOpacity={0.6}
+      hitSlop={{ top: 8, bottom: 8, left: 2, right: 2 }}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={on === undefined ? undefined : { selected: on }}
+    >
+      <Feather name={icon} size={18} color={on ? Theme.text : Theme.textMuted} />
+    </TouchableOpacity>
+  );
+}
+
 export function MessageComposer({
-  field, images, placeholder, canSend, onSend, stop, status, attach = true,
-  error, onDismissError, suggestion, above, cardStyle, inputStyle,
+  field, images, placeholder, placeholderColor, canSend, onSend, sendIcon = 'arrow-up', stop, status, attach = true,
+  tools, error, onDismissError, suggestion, above, cardStyle, inputStyle,
 }: {
   field: ReturnType<typeof useComposerField>;
   images: ReturnType<typeof useComposerImages>;
   placeholder: string;
+  placeholderColor?: string;
   canSend: boolean;
   onSend: () => void;
+  /** `check` while the send saves an edit. */
+  sendIcon?: 'arrow-up' | 'check';
   /** Present while a turn can be stopped: an empty box's send becomes Stop. */
   stop?: { label: string; onPress: () => void } | null;
   /** Said in the otherwise empty middle of the button row. */
   status?: ComposerStatus | null;
   attach?: boolean;
+  /** More buttons for the bottom row, after attach (ComposerTool). */
+  tools?: ReactNode;
   error?: string | null;
   onDismissError?: () => void;
   /** A suggested reply for the empty box, shown where the words would go. */
@@ -294,6 +326,7 @@ export function MessageComposer({
           <Feather name="plus" size={18} color={Theme.textMuted} />
         </TouchableOpacity>
       ) : null}
+      {tools}
       <RNView style={styles.composerSpacer}>
         {status && (
           <RNView style={styles.composerStatus}>
@@ -331,7 +364,7 @@ export function MessageComposer({
       >
         {showStop
           ? <FontAwesome name="stop" size={11} color="#fff" />
-          : <FontAwesome name="arrow-up" size={14} color="#fff" />}
+          : <FontAwesome name={sendIcon} size={14} color="#fff" />}
       </NativePressable>
     </RNView>
   );
@@ -356,7 +389,7 @@ export function MessageComposer({
           value={message}
           onChangeText={onChangeText}
           placeholder={ghost?.text ?? placeholder}
-          placeholderTextColor={Theme.textMuted0}
+          placeholderTextColor={ghost ? Theme.textMuted0 : placeholderColor ?? Theme.textMuted0}
           multiline
           maxLength={10000}
           blurOnSubmit={false}
@@ -408,7 +441,7 @@ export function MessageComposer({
               value={message}
               onChangeText={onChangeText}
               placeholder={placeholder}
-              placeholderTextColor={Theme.textMuted0}
+              placeholderTextColor={placeholderColor ?? Theme.textMuted0}
               multiline
               autoFocus
               maxLength={10000}
@@ -501,6 +534,14 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     backgroundColor: Theme.bgAlt,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
+  },
+  toolButton: {
+    ...S.imageButton,
+    borderRadius: 16,
+    marginLeft: 4,
+  },
+  toolButtonOn: {
+    backgroundColor: Theme.bgHighlight,
   },
   // One rounded card: full-width input on top, action row underneath. Buttons
   // living below the text (not beside it) is what gives the input the whole

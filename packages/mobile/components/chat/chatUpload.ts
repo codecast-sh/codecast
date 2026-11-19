@@ -15,6 +15,7 @@ import { uploadUriToStorage } from '@/lib/uploadToStorage';
 import { optionalNative } from '@/lib/optionalNative';
 import { pendingImageUploads } from '@codecast/web/lib/pendingUploads';
 import { appAlert, showActionSheet } from '@/lib/popups';
+import type { ComposerImage } from '@/components/session/MessageComposer';
 
 // Lazy-required, NEVER statically imported: a native module missing from the
 // installed binary throws during initial JS eval — before expo-updates marks
@@ -32,9 +33,6 @@ export type PickedImage = {
   width?: number;
   height?: number;
   mime: string;
-  /** Set when the upload lands; absent, a send hands the store the local uri. */
-  storageId?: string;
-  failed?: boolean;
 };
 
 /** An attachment as a send carries it: `storage_id` is empty while the bytes
@@ -116,12 +114,6 @@ export async function pickImages(source: ImageSource = 'library'): Promise<Picke
   return picked;
 }
 
-/** The + button's whole flow: choose a source, then take or pick. */
-export async function chooseAndPickImages(): Promise<PickedImage[]> {
-  const source = await chooseImageSource();
-  return source ? pickImages(source) : [];
-}
-
 /** Upload one picked image; resolves to its storage id (null on failure).
  *  Registers itself in pendingImageUploads under the local uri, where it stays
  *  until the send that carries it settles (releaseUpload) or the tile is
@@ -139,17 +131,15 @@ export function forgetUpload(uri: string): void {
   pendingImageUploads.delete(uri);
 }
 
-/** The picked images as a send's attachments, without waiting: an upload still
- *  in flight rides as its preview and the store finishes it. Failed uploads
- *  drop out (the tile already said so). */
-export function sendableAttachments(images: PickedImage[]): ChatAttachmentArg[] {
-  return images
-    .filter((img) => !img.failed)
-    .map((img) => ({
-      storage_id: img.storageId ?? '',
-      ...(img.storageId ? {} : { preview_url: img.uri }),
-      mime: img.mime,
-      width: img.width,
-      height: img.height,
-    }));
+/** The composer's images as a send's attachments, without waiting: an upload
+ *  still in flight rides as its preview and the store finishes it. (A failed
+ *  upload has already left the strip.) */
+export function composerAttachments(images: ComposerImage[]): ChatAttachmentArg[] {
+  return images.map((img) => ({
+    storage_id: img.storageId ?? '',
+    ...(img.storageId ? {} : { preview_url: img.uri }),
+    mime: img.mime,
+    width: img.width,
+    height: img.height,
+  }));
 }

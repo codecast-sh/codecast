@@ -1,24 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  StyleSheet, TouchableOpacity, View as RNView, Image, ActivityIndicator, Platform,
+  StyleSheet, TouchableOpacity, View as RNView, ScrollView, Platform, Keyboard,
 } from 'react-native';
-import { Text as RNText, TextInput as ThemedTextInput } from '@/components/Themed';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Text as RNText } from '@/components/Themed';
+import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
-import { useConvex } from 'convex/react';
 import { useTypingReporter } from '@codecast/web/hooks/useChatTyping';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
-import { TYPE_SCALE } from '@codecast/shared/render/typeScale';
 import { MentionStrip, type MentionCandidate } from './MentionStrip';
-import {
-  chooseAndPickImages, startUpload, forgetUpload, sendableAttachments,
-  type ChatAttachmentArg, type PickedImage,
-} from './chatUpload';
+import { composerAttachments, type ChatAttachmentArg } from './chatUpload';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
-import { NativePressable } from '@/lib/gestureHandler';
+import { MessageComposer, ComposerTool, useComposerImages } from '@/components/session/MessageComposer';
 
-// The one chat composer on mobile — channel floor and thread alike.
+// The one chat composer on mobile — channel floor and thread alike. It draws
+// the session screen's composer card (MessageComposer), as web chat draws the
+// session's MessageInput, with chat's own tools in the bottom row: mention,
+// emoji, and in a thread whether the reply also goes to its channel.
 //
 // It owns the draft, the attachment strip, the typing report and the edit
 // banner, and hands the parent a finished (content, attachments) pair. The
@@ -31,7 +30,25 @@ import { NativePressable } from '@/lib/gestureHandler';
 // `draftKey` keeps the draft in the store's drafts (the web composer's key for
 // the same box), so it survives leaving the screen and follows to the web.
 
+/** Whether the keyboard is up (iOS reports it before it moves, so the bar's
+ *  padding changes with the slide instead of after it). */
+function useKeyboardUp(enabled: boolean): boolean {
+  const [up, setUp] = useState(false);
+  useEffect(() => {
+    if (!enabled) return;
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const a = Keyboard.addListener(showEvt, () => setUp(true));
+    const b = Keyboard.addListener(hideEvt, () => setUp(false));
+    return () => { a.remove(); b.remove(); };
+  }, [enabled]);
+  return up;
+}
+
 export type ComposerEdit = { messageId: string; content: string };
+
+// The emoji strip's picks: the common ones, in Slack's frequently-used order.
+const QUICK_EMOJI = ['👍', '🙏', '🎉', '✅', '👀', '❤️', '😂', '🔥', '🚀', '💯', '🤔', '😅', '👏', '🙌', '😊', '😢', '⚠️', '❌'];
 
 export function ChatComposerBar({
   channelId,
@@ -44,6 +61,8 @@ export function ChatComposerBar({
   onSubmitEdit,
   onSend,
   draftKey,
+  broadcastTo,
+  atScreenBottom,
 }: {
   channelId: string | undefined;
   threadRootId?: string;
@@ -56,21 +75,25 @@ export function ChatComposerBar({
   editing?: ComposerEdit | null;
   onCancelEdit?: () => void;
   onSubmitEdit?: (messageId: string, content: string) => void;
-  onSend: (content: string, attachments: ChatAttachmentArg[]) => void;
+  onSend: (content: string, attachments: ChatAttachmentArg[], opts?: { broadcast?: boolean }) => void;
   draftKey?: string;
+  /** A thread reply can also go to its channel (`#eng`): the composer offers
+   *  the choice per message, and it resets after each send. */
+  broadcastTo?: string;
+  /** The bar is the screen's bottom edge: it clears the home indicator while
+   *  the keyboard is down, and sits on the keyboard when it is up. */
+  atScreenBottom?: boolean;
 }) {
   const Theme = useTheme();
-  const convex = useConvex();
   const [storedDraft] = useState(() => (draftKey ? String(useInboxStore.getState().drafts[draftKey]?.draft_message ?? '') : ''));
-  const {
-    value: draft,
-    setValue: setDraft,
-    onChangeText: applyChange,
-    epoch,
-    inputRef,
-    clearAfterSend,
-  } = useComposerField(storedDraft);
-  const [images, setImages] = useState<PickedImage[]>([]);
+  const field = useComposerField(storedDraft);
+  const { value: draft, setValue: setDraft, onChangeText: applyChange, inputRef, clearAfterSend } = field;
+  const images = useComposerImages(setDraft, { placeholders: false });
+  const [broadcast, setBroadcast] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const insets = useSafeAreaInsets();
+  const keyboardUp = useKeyboardUp(!!atScreenBottom);
+  const bottomPad = atScreenBottom && !keyboardUp ? Math.max(8, insets.bottom) : 8;
 
   // ── Edit mode ─────────────────────────────────────────────────────────────
   // Entering an edit REPLACES the box (the previous draft is small on mobile
@@ -111,28 +134,21 @@ export function ChatComposerBar({
     else stopTyping();
   }, [applyChange, reportTyping, stopTyping, keepDraft, editing]);
 
-  // ── Attachments ───────────────────────────────────────────────────────────
-  const onAttach = useCallback(async () => {
-    const picked = await chooseAndPickImages();
-    if (picked.length === 0) return;
-    setImages((prev) => [...prev, ...picked]);
-    // Upload immediately; the strip's spinner clears as each one lands.
-    for (const img of picked) {
-      void startUpload(convex, img).then((storageId) => {
-        setImages((prev) =>
-          prev.map((p) => (p.uri === img.uri ? { ...p, storageId: storageId ?? undefined, failed: !storageId } : p)),
-        );
-      });
-    }
-  }, [convex]);
-
-  const removeImage = useCallback((uri: string) => {
-    forgetUpload(uri);
-    setImages((prev) => prev.filter((p) => p.uri !== uri));
-  }, []);
+  // ── Tools ─────────────────────────────────────────────────────────────────
+  // Mention and emoji write at the end of the box, where the mention strip
+  // reads its query, and go through onChangeText so the draft and typing
+  // report follow, as a keystroke would.
+  const append = useCallback((text: string) => {
+    onChangeText(draft + (draft && !/\s$/.test(draft) ? ' ' : '') + text);
+    inputRef.current?.focus();
+  }, [draft, onChangeText, inputRef]);
+  const pickMention = useCallback((next: string) => {
+    onChangeText(next);
+    inputRef.current?.focus();
+  }, [onChangeText, inputRef]);
 
   // ── Send ──────────────────────────────────────────────────────────────────
-  const canSend = draft.trim().length > 0 || images.some((i) => !i.failed);
+  const canSend = draft.trim().length > 0 || images.selectedImages.length > 0;
   const submit = useCallback(() => {
     const content = nativeComposerText(
       inputRef.current as { _lastNativeText?: unknown } | null,
@@ -145,174 +161,127 @@ export function ChatComposerBar({
       onCancelEdit?.();
       return;
     }
-    const attachments = sendableAttachments(images);
+    const attachments = composerAttachments(images.selectedImages);
     if (!content && attachments.length === 0) return;
     // Clear the box and hand the send over NOW: the row paints in this tick,
     // with any image still uploading shown from its local file, and the store
     // delivers once the bytes land. Remount the native field so iOS cannot
     // restore the just-sent buffer.
     clearAfterSend(content);
-    setImages([]);
+    images.clearImages();
+    setEmojiOpen(false);
     if (draftKey) { clearTimeout(draftTimer.current); useInboxStore.getState().clearDraft(draftKey); }
     stopTyping();
     if (Platform.OS === 'ios') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onSend(content, attachments);
-  }, [draft, images, editing, onSubmitEdit, onCancelEdit, onSend, stopTyping, clearAfterSend, inputRef, draftKey]);
+    onSend(content, attachments, broadcastTo && broadcast ? { broadcast: true } : undefined);
+    setBroadcast(false);
+  }, [draft, images, editing, onSubmitEdit, onCancelEdit, onSend, stopTyping, clearAfterSend, inputRef, draftKey, broadcastTo, broadcast, setDraft]);
 
-  return (
-    <RNView>
-      <MentionStrip draft={draft} members={mentionCandidates} onPick={setDraft} />
-
+  const above = (
+    <>
+      <MentionStrip draft={draft} members={mentionCandidates} onPick={pickMention} />
+      {emojiOpen && !editing && (
+        <ScrollView
+          horizontal
+          keyboardShouldPersistTaps="always"
+          showsHorizontalScrollIndicator={false}
+          style={styles.emojiStrip}
+          contentContainerStyle={styles.emojiStripContent}
+        >
+          {QUICK_EMOJI.map((e) => (
+            <TouchableOpacity key={e} style={styles.emoji} onPress={() => append(e)} accessibilityLabel={`Insert ${e}`}>
+              <RNText style={styles.emojiText}>{e}</RNText>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
       {editing && (
         <RNView style={styles.editBanner}>
-          <FontAwesome name="pencil" size={10} color={Theme.accent} />
+          <Feather name="edit-2" size={11} color={Theme.accent} />
           <RNText style={styles.editText}>Editing message</RNText>
           <TouchableOpacity onPress={onCancelEdit} hitSlop={8}>
             <RNText style={styles.editCancel}>Cancel</RNText>
           </TouchableOpacity>
         </RNView>
       )}
+    </>
+  );
 
-      {images.length > 0 && (
-        <RNView style={styles.thumbRow}>
-          {images.map((img) => (
-            <RNView key={img.uri} style={[styles.thumb, img.failed && styles.thumbFailed]}>
-              <Image source={{ uri: img.uri }} style={styles.thumbImg} />
-              {!img.storageId && !img.failed && (
-                <RNView style={styles.thumbBusy}>
-                  <ActivityIndicator size="small" color="#fff" />
-                </RNView>
-              )}
-              {img.failed && (
-                <RNView style={styles.thumbBusy}>
-                  <FontAwesome name="exclamation" size={12} color={Theme.red} />
-                </RNView>
-              )}
-              <TouchableOpacity style={styles.thumbRemove} onPress={() => removeImage(img.uri)} hitSlop={6}>
-                <FontAwesome name="close" size={9} color="#fff" />
-              </TouchableOpacity>
-            </RNView>
-          ))}
-        </RNView>
-      )}
-
-      <RNView style={styles.composer}>
-        {!editing && (
-          <TouchableOpacity style={styles.attach} onPress={onAttach} hitSlop={8}>
-            <FontAwesome name="image" size={16} color={Theme.textMuted0} />
-          </TouchableOpacity>
-        )}
-        <ThemedTextInput
-          key={epoch}
-          ref={inputRef}
-          style={styles.input}
-          placeholder={placeholder}
-          placeholderTextColor={placeholderTint ?? Theme.textMuted0}
-          value={draft}
-          onChangeText={onChangeText}
-          multiline
-          submitBehavior="newline"
-        />
-        <NativePressable
-          style={[styles.send, !canSend && styles.sendDisabled, editing && styles.sendEdit]}
-          onPress={submit}
-          delayPressIn={0}
-          hitSlop={12}
-          pressRetentionOffset={20}
-          accessibilityRole="button"
-          accessibilityLabel="Send"
+  const tools = editing ? null : (
+    <>
+      <ComposerTool icon="at-sign" label="Mention someone" onPress={() => append('@')} />
+      <ComposerTool icon="smile" label="Emoji" on={emojiOpen} onPress={() => setEmojiOpen((o) => !o)} />
+      {!!broadcastTo && (
+        <TouchableOpacity
+          style={[styles.broadcast, broadcast && styles.broadcastOn]}
+          onPress={() => { void Haptics.selectionAsync(); setBroadcast((b) => !b); }}
+          activeOpacity={0.6}
+          hitSlop={{ top: 8, bottom: 8 }}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: broadcast }}
+          accessibilityLabel={`Also send to ${broadcastTo}`}
         >
-          <FontAwesome name={editing ? 'check' : 'arrow-up'} size={14} color={canSend ? Theme.bg : Theme.textMuted0} />
-        </NativePressable>
-      </RNView>
+          <Feather name={broadcast ? 'check-square' : 'square'} size={13} color={broadcast ? Theme.text : Theme.textMuted} />
+          <RNText style={[styles.broadcastText, broadcast && styles.broadcastTextOn]} numberOfLines={1}>
+            Also to {broadcastTo}
+          </RNText>
+        </TouchableOpacity>
+      )}
+    </>
+  );
+
+  return (
+    <RNView style={[styles.bar, { paddingBottom: bottomPad }]}>
+      <MessageComposer
+        field={{ ...field, onChangeText }}
+        images={images}
+        placeholder={placeholder}
+        placeholderColor={placeholderTint}
+        canSend={canSend}
+        onSend={submit}
+        sendIcon={editing ? 'check' : 'arrow-up'}
+        attach={!editing}
+        tools={tools}
+        above={above}
+      />
     </RNView>
   );
 }
 
-const styles = themedStyles((Theme, look) => StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
+  bar: {
+    backgroundColor: Theme.bgAlt,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.borderLight,
+  },
   editBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 5,
+    marginHorizontal: 10,
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
     backgroundColor: Theme.accent + '14',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Theme.accent + '44',
   },
-  editText: { flex: 1, fontSize: 11, fontWeight: '600', color: Theme.accent },
-  editCancel: { fontSize: 11, fontWeight: '600', color: Theme.textMuted },
-  thumbRow: {
+  editText: { flex: 1, fontSize: 12, fontWeight: '600', color: Theme.accent },
+  editCancel: { fontSize: 12, fontWeight: '600', color: Theme.textMuted },
+  emojiStrip: { flexGrow: 0, marginTop: 6 },
+  emojiStripContent: { paddingHorizontal: 10, gap: 2 },
+  emoji: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  emojiText: { fontSize: 24 },
+  broadcast: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
     gap: 6,
-    paddingHorizontal: Spacing.md,
-    paddingTop: 6,
-  },
-  thumb: {
-    width: 52,
-    height: 52,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: '#00000022',
-  },
-  thumbFailed: { borderWidth: 1, borderColor: Theme.red },
-  thumbImg: { width: '100%', height: '100%' },
-  thumbBusy: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#00000055',
-  },
-  thumbRemove: {
-    position: 'absolute',
-    top: 2,
-    right: 2,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#000000AA',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  composer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Theme.border + '55',
-  },
-  attach: {
-    width: 32,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 1,
-  },
-  input: {
-    flex: 1,
-    minHeight: 36,
-    maxHeight: 120,
-    borderWidth: 1,
-    borderColor: Theme.border + '66',
-    borderRadius: 9,
+    height: 32,
+    marginLeft: 6,
     paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: look === 'modern' ? TYPE_SCALE.body.size : 13.5,
-    color: Theme.text,
-    backgroundColor: Theme.bgAlt + '55',
+    borderRadius: 16,
+    flexShrink: 1,
   },
-  send: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: Theme.blue,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 2,
-  },
-  sendEdit: { backgroundColor: Theme.accent },
-  sendDisabled: { backgroundColor: Theme.bgHighlight },
+  broadcastOn: { backgroundColor: Theme.bgHighlight },
+  broadcastText: { fontSize: 13, color: Theme.textMuted, flexShrink: 1 },
+  broadcastTextOn: { color: Theme.text, fontWeight: '600' },
 }));
