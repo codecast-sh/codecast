@@ -65,6 +65,7 @@ export function ModernAskUserQuestion({ tool, result, onSendMessage, parsedInput
               question={q.question}
               answer={picked ? picked.replace(RECOMMENDED, "") : closed ?? (sent ? "Sent" : undefined)}
               closed={!picked}
+              detail={<SettledQuestion question={q} picked={picked ? clean(picked) : undefined} />}
             />
           );
         })}
@@ -168,6 +169,44 @@ export function ModernAskUserQuestion({ tool, result, onSendMessage, parsedInput
           <Button type="button" size="md" variant="primary" disabled={!allAnswered} onClick={() => send(selections)}>
             {multiQuestion ? `Submit answers ${answered}/${questions.length}` : `Submit ${selections[0]?.length ?? 0} selected`}
           </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A settled question opened under its row: the question whole, every option
+ *  with the chosen ones checked, and an answer typed in the person's own words. */
+function SettledQuestion({ question: q, picked }: { question: PollQuestion; picked?: string }) {
+  const options = q.options.filter((o) => !SYNTHETIC_POLL_OPTION.test(o.label.trim()));
+  const labels = options.map((o) => clean(o.label));
+  const chosen = new Set(picked == null ? [] : labels.includes(picked) ? [picked] : picked.split(", ").filter((p) => labels.includes(p)));
+  const typed = picked && chosen.size === 0 ? picked : undefined;
+  return (
+    <div data-cc-ask-settled-detail className="flex min-w-0 flex-col gap-2.5 text-ui leading-5 [overflow-wrap:anywhere]">
+      {q.header && <div className="text-meta text-sol-text-dim">{q.header}</div>}
+      <div className="font-medium text-sol-text whitespace-pre-line">{q.question}</div>
+      {q.detail && <div className="text-sol-text-muted whitespace-pre-line">{q.detail}</div>}
+      {options.length > 0 && (
+        <ul className="flex flex-col gap-1.5">
+          {options.map((o, i) => {
+            const on = chosen.has(labels[i]);
+            return (
+              <li key={i} data-chosen={on || undefined} className="flex min-w-0 gap-2">
+                <Check aria-hidden className={`mt-0.5 size-4 shrink-0 ${on ? "text-sol-green" : "invisible"}`} strokeWidth={1.75} />
+                <div className="min-w-0">
+                  <span className={on ? "font-medium text-sol-text" : "text-sol-text-muted"}>{labels[i]}</span>
+                  {o.description && <div className="text-sol-text-dim">{o.description}</div>}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {typed && (
+        <div className="flex min-w-0 gap-2">
+          <Check aria-hidden className="mt-0.5 size-4 shrink-0 text-sol-green" strokeWidth={1.75} />
+          <div className="min-w-0 text-sol-text whitespace-pre-line">{typed}</div>
         </div>
       )}
     </div>
