@@ -173,6 +173,36 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     expect(failReason()).not.toContain("killed after");
   }, 30000);
 
+  test.each(builders)("%s: a hand whose transcript ends on a weekly-limit banner is parked though its row's flag was cleared", async (id) => {
+    // 56 onefix Build hands answered their brief with "You've hit your weekly limit · resets …" while their rows
+    // read no park, and were killed at 480m (2026-11-18).
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      if (route === "/cli/read") {
+        calls.push({ route, body: JSON.parse(init?.body || "{}") });
+        const banner = reads >= 3 && reads <= 6;
+        const content = banner ? "You've hit your weekly limit · resets Nov 21, 10am (UTC)" : "Checking the build.";
+        return new Response(JSON.stringify({ messages: [{ role: "assistant", content }] }), { status: 200 });
+      }
+      const res = await realFetch(url, init);
+      if (route !== "/cli/inbox") return res;
+      const body = await res.json();
+      // The banner turn, then the resumed turn: the transcript grows at each.
+      body.sessions[0].message_count = reads < 3 ? 40 : reads <= 6 ? 41 : 42;
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    jumpAt = 5;
+    jumpMs = 11 * 60_000;
+    handoffAt = 9;
+    expect(await run(id)).toBe("completed");
+    expect(reached("verify")).toBe(true);
+    expect(logs.some((l) => l.includes("parked on limit"))).toBe(true);
+    expect(failReason()).not.toContain("killed after");
+    // One read per transcript length, not one per poll.
+    expect(calls.filter((c) => c.route === "/cli/read").length).toBe(3);
+  }, 30000);
+
   test.each(builders)("%s: a hand parked on a connection error still ends at the node's timeout", async (id) => {
     limitReads = () => true;
     jumpAt = 5;

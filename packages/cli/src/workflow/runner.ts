@@ -1,5 +1,5 @@
 import { foreignTaskSource } from "@codecast/shared/tasks";
-import { CONTINUE_BANNER_KINDS, FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineForeignText, fromConvexAgentType, toConvexAgentType, resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
+import { CONTINUE_BANNER_KINDS, classifyApiErrorBanner, FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineForeignText, fromConvexAgentType, toConvexAgentType, resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { splitReviewNote } from "./reviewNote";
 import { definitionLaunchFlags } from "../agentLaunch.js";
 import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
@@ -616,6 +616,9 @@ async function waitOnStation(
   let askedForHandoffAt = 0;
   let seenMessages = -1;
   let subjectWorked = false;
+  // The quota park the hand's newest turn shows (quotaParkAtTail), read again only when its transcript grows.
+  let tailPark: string | null = null;
+  let tailReadAt = -1;
   // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts).
   const clock = new ParkedClock(startMs);
   while (clock.elapsed() < timeout) {
@@ -673,12 +676,20 @@ async function waitOnStation(
       console.log(`${c.dim}  ${shortId}: ${state}${c.reset}`);
       lastState = state;
     }
+    // The row's park flag marks the blocked set, which a dismiss clears while the hand still sits on its banner:
+    // 56 onefix Build hands whose transcripts ended on a weekly-limit banner read unparked and were killed at 480m
+    // (2026-11-18). So a transcript that ends on a limit or throttle banner is a park whatever the flag says.
+    if (!row.blocked_on && (row.message_count ?? 0) > 0 && row.message_count !== tailReadAt) {
+      tailReadAt = row.message_count;
+      tailPark = await quotaParkAtTail(conversationId, options);
+    }
+    const parkedOn: string | null = row.blocked_on || tailPark;
     // A parked hand (limit, throttle, dropped connection) resumes on its own: wait. A limit or throttle also stops
     // the node's clock (18 limit-parked hands hit their timeout, 2026-10-24); other parks keep it, so they still end.
-    if (row.blocked_on && CONTINUE_BANNER_KINDS.includes(row.blocked_on)) {
-      const quota = row.blocked_on === "limit" || row.blocked_on === "throttle";
-      if (lastState !== `parked:${row.blocked_on}`) console.log(`${c.dim}  ${shortId}: parked on ${row.blocked_on}, waiting for it to resume${quota ? "; the node's clock stops until it does" : ""}${c.reset}`);
-      lastState = `parked:${row.blocked_on}`;
+    if (parkedOn && CONTINUE_BANNER_KINDS.includes(parkedOn)) {
+      const quota = parkedOn === "limit" || parkedOn === "throttle";
+      if (lastState !== `parked:${parkedOn}`) console.log(`${c.dim}  ${shortId}: parked on ${parkedOn}, waiting for it to resume${quota ? "; the node's clock stops until it does" : ""}${c.reset}`);
+      lastState = `parked:${parkedOn}`;
       if (quota) clock.park();
       continue;
     }
@@ -852,6 +863,13 @@ async function presenterBack(conversationId: string, since: number | null, optio
     if (Date.now() >= until) return false;
     await new Promise((r) => setTimeout(r, pollInterval));
   }
+}
+
+/** The quota park ("limit" or "throttle") a hand's newest turn is, read off its transcript, else null. */
+async function quotaParkAtTail(conversationId: string, options: RunOptions): Promise<string | null> {
+  const last = (await cliCall(options, "/cli/read", { conversation_id: conversationId, tail: 1 }))?.messages?.at(-1);
+  const kind = last?.role === "assistant" && typeof last.content === "string" ? classifyApiErrorBanner(last.content) : null;
+  return kind === "limit" || kind === "throttle" ? kind : null;
 }
 
 /** A presenter that cannot come back is stopped, so a late revive finds it retired, and the cards it left waiting are
