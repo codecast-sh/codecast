@@ -4,6 +4,7 @@ import { verifyApiToken } from "./apiTokens";
 import { canAccessPlan, canAccessTask, isSameWorkspace, resolveSessionConversation, workspaceForResource } from "./lib/access";
 import { childConversations, newSessionPrice, priceSession } from "./lib/sessionCost";
 import { isConversationOwner } from "./privacy";
+import type { Doc } from "./_generated/dataModel";
 import { resolveMessagingPolicy } from "@codecast/shared/contracts/messagingPolicy";
 
 // The shared log of a plan (messaging policy "shared-log"): the plan's fact,
@@ -131,9 +132,9 @@ export const telemetry = query({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
-    const plan: any = await ctx.db.query("plans").withIndex("by_short_id", (q) => q.eq("short_id", args.short_id)).first();
+    const plan = await ctx.db.query("plans").withIndex("by_short_id", (q) => q.eq("short_id", args.short_id)).first();
     if (!plan || !(await canAccessPlan(ctx, auth.userId, plan))) return null;
-    const tasks: any[] = [];
+    const tasks: Array<Doc<"tasks"> & { started_at?: number }> = [];
     for (const id of plan.task_ids ?? []) {
       const t = await ctx.db.get(id);
       if (!t || !isSameWorkspace(t, workspaceForResource(plan)) || !(await canAccessTask(ctx, auth.userId, t))) continue;

@@ -7,13 +7,13 @@
 // Rides along with another command's output, so it is silent on every failure
 // and never turns that command into an error.
 
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { FOREIGN_TEXT_CAPS, fenceForeignText, inlineForeignText } from "@codecast/shared/contracts";
 import { foreignProse } from "@codecast/shared/tasks";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
+import { execFileSync } from "./proc.js";
 
 export type LogEntry = { type: string; content: string; author?: string; session?: string; title?: string; commit?: string; timestamp: number };
 
@@ -23,7 +23,8 @@ export type LogEntry = { type: string; content: string; author?: string; session
 export function commitStamp(cwd: string): string | undefined {
   const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 3_000 }).trim();
   try {
-    return git("rev-parse", "--short", "HEAD") + (git("status", "--porcelain") ? "+dirty" : "");
+    // No index.lock, so it never collides with another agent's add or commit in a shared checkout.
+    return git("rev-parse", "--short", "HEAD") + (git("--no-optional-locks", "status", "--porcelain") ? "+dirty" : "");
   } catch {
     return undefined;
   }
