@@ -34307,7 +34307,7 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${hold.holdReason} in conv=${msg.conversation_id.slice(0, 12)}; retrying when the screen changes`);
             holdConversationForPrompt(msg.conversation_id);
             rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
-          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof RunLimitHoldError || err instanceof BlankStartHoldError || err instanceof ForeignWriterHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
+          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof RunLimitHoldError || err instanceof ForeignWriterHoldError || err instanceof BlankStartHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
             // never spending the retry budget, and tried again at the error's

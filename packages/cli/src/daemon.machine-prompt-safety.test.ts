@@ -24,7 +24,7 @@ import { stepTimer } from "./stepTimer";
 import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { SwapHeldError } from "./herdTake";
-import { RunLimitHoldError, TerminalHoldError } from "./terminalHold";
+import { BlankStartHoldError, RunLimitHoldError, TerminalHoldError } from "./terminalHold";
 import { ForeignWriterHoldError } from "./foreignSessionWriter";
 import { BackendSwitchHoldError } from "./claudeSdk/switchBackend";
 import { ghosttyPane } from "./ghostty";
@@ -181,7 +181,7 @@ function fixture(transport = "tmux", cached = true) {
     tmuxExec, execAsync, redactSecrets, stepTimer,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
     // No cloud agent owns this fixture's conversation, so every one goes to the pane.
-    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, TerminalHoldError, RunLimitHoldError, ForeignWriterHoldError, BackendSwitchHoldError, backendSwitchHeld: () => false, pollPendingNow: () => {},
+    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, TerminalHoldError, RunLimitHoldError, ForeignWriterHoldError, BackendSwitchHoldError, BlankStartHoldError, backendSwitchHeld: () => false, pollPendingNow: () => {},
     cloudAgents: { deliver: async () => null, forConversation: () => undefined, interrupt: async () => null },
     // A recovery continue restarts a pane that holds its own credential first;
     // this fixture's machine has no fleet store, so no pane is restarted.
