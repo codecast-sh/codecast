@@ -27,10 +27,10 @@ async function world(policy: "lead" | "shared-log") {
       } as any);
     });
   }
-  const comment = (session_id: string, type: string, content: string) =>
-    t.mutation(api.plans.addComment, { api_token: TOKEN, short_id: plan.short_id, session_id, type, content });
+  const comment = (session_id: string, type: string, content: string, extra: Record<string, string> = {}) =>
+    t.mutation(api.plans.addComment, { api_token: TOKEN, short_id: plan.short_id, session_id, type, content, ...extra });
   const unread = (session_id: string) => t.mutation(api.planLog.unread, { api_token: TOKEN, session_id });
-  return { comment, unread, plan };
+  return { t, me, comment, unread, plan };
 }
 
 test("a shared-log plan delivers each fact, fail and interface once, never the reader's own", async () => {
@@ -99,4 +99,48 @@ test("a teammate who can see a session cannot read its log or move its cursor", 
   expect((await t.mutation(api.planLog.unread, { api_token: MATE, session_id: "sess-a" })).entries).toEqual([]);
   expect((await t.mutation(api.planLog.unread, { api_token: TOKEN, session_id: "sess-a" })).entries.map((e: any) => e.content))
     .toEqual(["from another session"]);
+});
+
+test("an entry carries the commit its writer was on, capped", async () => {
+  const { comment, unread } = await world("shared-log");
+  await comment("sess-a", "fail", "the retry loop never backs off", { commit: "1dbb552+dirty" });
+  await comment("sess-a", "fact", "no stamp from an older CLI");
+  await comment("sess-a", "fact", "a long stamp", { commit: "x".repeat(200) });
+  const entries = (await unread("sess-b")).entries;
+  expect(entries.map((e: any) => e.commit)).toEqual(["1dbb552+dirty", undefined, "x".repeat(64)]);
+});
+
+test("telemetry gives a plan's policy, time, tokens and log entries", async () => {
+  const { t, me, comment, plan } = await world("shared-log");
+  const MIN = 60_000;
+  const { b } = await t.run(async (ctx) => {
+    const convs = await ctx.db.query("conversations").collect();
+    for (const c of convs) await ctx.db.patch(c._id, { model: "claude-opus-4-8", usage_totals: { input: 100_000, output: 50_000, cache_read: 0, cache_write: 0, updated_at: T0 } } as any);
+    const task = (short_id: string, status: string, conv: any, closed_at?: number) =>
+      ctx.db.insert("tasks", {
+        short_id, user_id: me, workspace: `user:${me}`, plan_id: plan.id, title: short_id, status, task_type: "task", priority: "medium",
+        created_at: T0, updated_at: T0, conversation_ids: [conv], ...(closed_at ? { closed_at } : {}),
+      } as any);
+    const started = (task_id: any, at: number) =>
+      ctx.db.insert("task_history", { task_id, actor_type: "agent", action: "updated", field: "status", old_value: "open", new_value: "in_progress", created_at: at });
+    const a = await task("ct-a", "done", convs[0]._id, T0 + 30 * MIN);
+    const b = await task("ct-b", "in_progress", convs[1]._id);
+    await started(a, T0 + 10 * MIN);
+    await started(b, T0 + 12 * MIN);
+    await ctx.db.patch(plan.id, { task_ids: [a, b] } as any);
+    return { b };
+  });
+  await comment("sess-a", "fact", "the cache keys on host");
+  await comment("sess-a", "fail", "a global lock deadlocks");
+  await comment("sess-b", "interface", "I own src/cap.ts");
+  const telemetry = () => t.query(api.planLog.telemetry, { api_token: TOKEN, short_id: plan.short_id });
+
+  const open = await telemetry();
+  expect(open).toMatchObject({ plan: plan.short_id, policy: "shared-log", tasks: 2, done: 1, finished: false, task_minutes: 20, sessions: 2, tokens: 300_000 });
+  expect(open.entries).toMatchObject({ fact: 1, fail: 1, interface: 1 });
+  expect(open.list_usd).toBeGreaterThan(0);
+
+  await t.run((ctx) => ctx.db.patch(b, { status: "done", closed_at: T0 + 40 * MIN } as any));
+  expect(await telemetry()).toMatchObject({ done: 2, finished: true, wall_minutes: 30, task_minutes: 48 });
+  expect(await t.query(api.planLog.telemetry, { api_token: TOKEN, short_id: "pl-none" })).toBeNull();
 });

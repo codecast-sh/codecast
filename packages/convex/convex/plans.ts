@@ -492,6 +492,7 @@ export const addComment = mutation({
     path_or_url: v.optional(v.string()),
     session_id: v.optional(v.string()),
     author: v.optional(v.string()),
+    commit: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -521,6 +522,7 @@ export const addComment = mutation({
     if (actor.name) entry.author = actor.name;
     if (args.rationale) entry.rationale = args.rationale;
     if (args.path_or_url) entry.path_or_url = args.path_or_url;
+    if (args.commit) entry.commit = args.commit.slice(0, 64);
 
     entries.push(entry);
     await ctx.db.patch(plan._id, { entries, updated_at: Date.now() } as any);
