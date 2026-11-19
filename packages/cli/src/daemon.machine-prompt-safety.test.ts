@@ -34,6 +34,7 @@ import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
 import { planHandoffTarget } from "./planHandoff";
 import { waitForHandHost } from "./handHostGrace";
+import { materializeFileTags } from "../../shared/contracts/fileAttachment";
 
 
 // The fixture lifts delivery code out of daemon.ts by name; the pane classifiers
@@ -271,6 +272,8 @@ function fixture(transport = "tmux", cached = true) {
     restoreSuspendedAgent: async () => false,
     prepareTmuxDelivery: async () => hooks.prepare(), TmuxDeliveryUncertainError, TmuxDeliveryExhaustedError,
     DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice,
+    // No message here carries a web-attached file tag, so nothing is fetched.
+    materializeFileTags, downloadAttachedFile: fail("downloadAttachedFile"),
     // The receipt journal the inject path opens when a delivery identity rides
     // along: a private one per fixture, so no test reads the machine's.
     tmuxDeliveryJournal: () => (journal ??= new TmuxDeliveryJournal(path.join(directory, "delivery.sqlite"))),
