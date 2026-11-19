@@ -730,4 +730,33 @@ describe("the climb's dry run", () => {
     await expect(guard(io(), d2, { env: { project_path: repo } })).rejects.toThrow("every survivor failed the guard");
     expect(readState(d2)!.candidates[0].guard!.why).toContain("names scripts/nope.ts, which the climb could not find at the base");
   });
+
+  // From the fourth flow run (ct-97276): the selection replay's base run returned selection_errors 691, refused_statements 691, slot_mean null.
+  test("a level whose base run fails is an environment failure with the runner's own error, never a sensitivity verdict", async () => {
+    const broken = io();
+    const run = broken.run;
+    broken.run = async (decl, o) => (decl.key === "fake/replay" ? { ok: false, error: "selection_errors 691, refused_statements 691, slot_mean null" } : run(decl, o));
+    const err = await gauge(broken, dir, { card: { ...CARD, levels: [{ env: "fake/replay", plausible_effect: 0.04 }] }, base }).catch((e) => e);
+    expect(err.code).toBe(3);
+    expect(err.message).toContain("the environment failed to run, so nothing was measured or proposed (fake/replay: selection_errors 691, refused_statements 691, slot_mean null)");
+    expect(err.message).toContain("says nothing about the change's size");
+    expect(err.message).not.toContain("can see one change");
+    const s = readState(dir)!;
+    expect(summaryText(s)).toContain("failed to run (selection_errors 691");
+    expect(statusText(s)).toContain("L2 fake/replay failed to run");
+  });
+
+  test("a base run that scores no case failed to run too; beside a level refused for noise, both are named", async () => {
+    const empty = io();
+    const run = empty.run;
+    empty.run = async (decl, o) => {
+      const r = await run(decl, o);
+      if (!r.ok || decl.key !== "fake/replay") return r;
+      // As the registry files a run whose every case went unscored.
+      registry.set(r.short_id!, { ...registry.get(r.short_id!), cases: [], n: 0, unscored: 691 });
+      return { ...r, result: { ...r.result, cases: [], summary: { n: 0, mean: 0, unscored: 691 } } };
+    };
+    const err = await gauge(empty, `${dir}-empty`, { card: CARD, base }).catch((e) => e);
+    expect(err.message).toContain("no level that ran can see one change, and one failed to run (fake/replay: the base run scored no case");
+  });
 });

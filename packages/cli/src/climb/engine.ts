@@ -52,6 +52,8 @@ export type LevelState = {
   env: string; level: EnvLevel; title: string; kept: boolean; why: string;
   cost_usd: number; held: boolean; plausible_effect?: number;
   noise?: LevelNoise; version?: string; base_attempts: string[];
+  /** Why the level's base runs failed to run (the runner's own error, or no case scored): an environment failure, never a sensitivity verdict. */
+  failed?: string;
   /** The held split's own A/A: the spread between the base's two held runs, and how many cases moved between them. */
   held_aa?: { se: number; moved: number; of: number };
 };
@@ -321,7 +323,9 @@ async function measureLevels(v: View): Promise<void> {
     let reported = 0;
     for (let i = 0; i < k; i++) {
       const r = await runOnce(v, `base|${cl.env}|dev|${i}`, decl, { label: "base", split: "dev", sha: s.base });
-      if ("error" in r) { row.why = `base run failed: ${r.error}`; break; }
+      // A base run that fails, or scores no case, is the environment failing to run: never a verdict on what the level can see.
+      if ("error" in r) { row.failed = r.error; row.why = `the base run failed to run: ${r.error}`; break; }
+      if (!r.cases.length) { row.failed = `the base run scored no case${r.unscored ? ` (${r.unscored} unscored)` : ""}`; row.why = row.failed; break; }
       if (version && r.version !== version) { row.why = `the env reported two versions on the unchanged base (${version}, ${r.version}): it is not stable enough to climb on`; break; }
       version = r.version;
       runs.push(r.cases);
@@ -334,8 +338,15 @@ async function measureLevels(v: View): Promise<void> {
     Object.assign(row, { noise, version, kept: see.ok, why: see.why });
     save(dir, s);
   }
-  if (!s.levels.some((l) => l.kept && l.level !== "L0")) {
-    s.stopped = "no level the card names can see one change; nothing was proposed";
+  const scoring = s.levels.filter((l) => l.level !== "L0");
+  if (!scoring.some((l) => l.kept)) {
+    const failed = scoring.filter((l) => l.failed);
+    const words = failed.map((l) => `${l.env}: ${l.failed}`).join("; ");
+    s.stopped = failed.length === scoring.length
+      ? `the environment failed to run, so nothing was measured or proposed (${words}); fix the env and rerun: this says nothing about the change's size`
+      : failed.length
+        ? `no level that ran can see one change, and ${failed.length === 1 ? "one" : failed.length} failed to run (${words}); nothing was proposed`
+        : "no level the card names can see one change; nothing was proposed";
     save(dir, s);
     throw new ClimbStop(s.stopped, STOP.none);
   }

@@ -100,7 +100,7 @@ export function statusText(s: ClimbState): string {
     `Budget: ${usd(s.ledger.usd)} of ${usd(b.usd)}, ${s.ledger.runs} of ${b.runs} runs; up to ${s.card.candidates} candidates${s.notes.length ? ` (${s.notes.join("; ")})` : ""}`,
     "",
     "Levels:",
-    ...s.levels.map((l) => `  ${l.level} ${l.env} ${l.kept ? "kept" : "refused"}${l.held ? ", has held" : ""}${l.cost_usd ? `, ~${usd(l.cost_usd)} a run` : ""}: ${l.why}${l.held_aa ? `; held A/A: the base's two held runs moved ${l.held_aa.moved} of ${l.held_aa.of} cases (se ${l.held_aa.se.toFixed(4)})` : ""}`),
+    ...s.levels.map((l) => `  ${l.level} ${l.env} ${l.kept ? "kept" : l.failed ? "failed to run" : "refused"}${l.held ? ", has held" : ""}${l.cost_usd ? `, ~${usd(l.cost_usd)} a run` : ""}: ${l.why}${l.held_aa ? `; held A/A: the base's two held runs moved ${l.held_aa.moved} of ${l.held_aa.of} cases (se ${l.held_aa.se.toFixed(4)})` : ""}`),
   ];
   if (s.card.hypotheses.length) lines.push("", "Hypothesis space:", ...s.card.hypotheses.map((h) => `  - ${h}`));
   if (s.candidates.length) lines.push("", "Candidates:", ...s.candidates.flatMap(candLine));
@@ -128,7 +128,7 @@ export function summaryText(s: ClimbState): string {
     `Climb on ${s.card.goal}${s.card.metric ? `:${s.card.metric}` : ""}${s.task ? ` (${s.task})` : ""}: ${top ? `${top.id} promoted${s.promoted_task ? ` as ${s.promoted_task}` : ""}${s.outcome ? `; ${s.outcome}` : ""}` : s.stopped ? `stopped, ${s.stopped}` : s.pending ? `held, ${s.pending}` : "unfinished"}.`,
     `Target: ${s.card.target}`,
     ...(readabilityLine(s) ? [readabilityLine(s)!] : []),
-    `Levels: ${s.levels.map((l) => `${l.level} ${l.env} ${l.kept ? `kept (MDE ${l.noise?.mde.toFixed(3) ?? "0"})` : `refused (${l.why})`}`).join("; ")}.`,
+    `Levels: ${s.levels.map((l) => `${l.level} ${l.env} ${l.kept ? `kept (MDE ${l.noise?.mde.toFixed(3) ?? "0"})` : l.failed ? `failed to run (${l.failed})` : `refused (${l.why})`}`).join("; ")}.`,
     `Candidates: ${proposed} proposed, ${admitted} admitted, ${separated.length} separated from base on dev.`,
   ];
   for (const c of by("refused")) lines.push(`Refused ${c.id}: ${c.why}`);
