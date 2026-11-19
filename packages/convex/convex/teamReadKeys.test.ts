@@ -1,9 +1,9 @@
 // Team read keys under convex-test: an admin mints a key, a server reads
 // GET /cli/v1/team/sessions with it and sees what every member of the team
 // sees (the member feed agrees row for row), as metadata only: no prompt as a
-// title, no machine path, no local remote. A private session and an
-// activity-level member's session never leak, and a cursor says nothing in
-// the clear. Revoked and expired keys are refused, an address over its
+// title, no project path, no remote outside GitHub. A private session and an
+// activity-level member's session never leak. Revoked and expired keys are
+// refused, an address over its
 // unknown-key window is refused before any lookup, a team holds a capped
 // number of live keys, and minting, use and revoking show in the audit every
 // member reads.
@@ -196,43 +196,23 @@ describe("team read keys", () => {
     });
   });
 
-  test("a session's title counts once it is named, and machine paths never leave", async () => {
+  test("a session's title counts once it is named, and not while it echoes the opening prompt", async () => {
     const { t, ada, team, as } = await setup();
     await t.run((ctx) => ctx.db.patch(ada, { active_team_id: team }));
-    const prompt = "Deploy the billing fix from /Users/ada/secret-folder tonight. Then tell me.";
-    const { conversation_id, short_id } = await as(ada).mutation(api.assistant.entry.startConversation, { firstMessage: prompt });
+    const { conversation_id, short_id } = await as(ada).mutation(api.assistant.entry.startConversation, { firstMessage: "Deploy the billing fix tonight. Then tell me." });
     await as(ada).mutation(api.conversations.setPrivacy, { conversation_id, is_private: false });
+    const echo = await session(t, ada, { team_id: team, title: "OPENING PROMPT…" });
     await session(t, ada, { team_id: team, title: "Mirror", git_remote_url: "https://bot:tok3n@gitlab.example.com/acme/api.git" });
     const { key } = await mint(as(ada), team);
 
     const before = await readAll(t, key);
     expect(before.sessions.find((s) => s.id === short_id)).toMatchObject({ title: null });
-    expect(before.sessions.find((s) => s.title === "Mirror")?.repo).toBe("acme/api");
-    for (const leak of ["Deploy the billing fix", "secret-folder", "tok3n"]) expect(before.raw).not.toContain(leak);
+    expect(before.sessions.find((s) => s.id === String(echo))).toMatchObject({ title: null });
+    expect(before.sessions.find((s) => s.title === "Mirror")).toMatchObject({ repo: null });
+    for (const leak of ["Deploy the billing fix", "OPENING PROMPT", "tok3n"]) expect(before.raw).not.toContain(leak);
 
-    await t.mutation(internal.titleGeneration.setTitleAndSubtitle, {
-      conversation_id,
-      title: "Billing fix deploy",
-      subtitle: "Deployed the fix from /Users/ada/secret-folder/billing.ts, see https://example.com/home/runbook",
-    });
-    const after = await readAll(t, key);
-    expect(after.sessions.find((s) => s.title === "Billing fix deploy")?.summary).toBe("Deployed the fix from billing.ts, see https://example.com/home/runbook");
-    expect(after.raw).not.toContain("secret-folder");
-  });
-
-  test("a cursor works only with its key and says nothing in the clear", async () => {
-    const { t, ada, team, as } = await setup();
-    await session(t, ada, { team_id: team, title: "First", updated_at: NOW - HOUR });
-    await session(t, ada, { team_id: team, title: "Hidden in between", is_private: true, updated_at: NOW - HOUR - 1 });
-    await session(t, ada, { team_id: team, title: "Second", updated_at: NOW - 2 * HOUR });
-    const mine = await mint(as(ada), team, "mine");
-    const theirs = await mint(as(ada), team, "theirs");
-
-    const { body } = await get(t, mine.key, "?limit=1");
-    const cursor: string = body.next_cursor;
-    expect(atob(cursor.replace(/-/g, "+").replace(/_/g, "/"))).not.toContain(String(NOW - HOUR));
-    expect((await get(t, theirs.key, `?cursor=${cursor}`)).status).toBe(400);
-    expect((await get(t, mine.key, `?cursor=${cursor}`)).body.sessions.map((s: any) => s.title)).toEqual(["Second"]);
+    await t.mutation(internal.titleGeneration.setTitleAndSubtitle, { conversation_id, title: "Billing fix deploy", subtitle: "Deployed the billing fix" });
+    expect((await readAll(t, key)).sessions.find((s) => s.id === short_id)).toMatchObject({ title: "Billing fix deploy", summary: "Deployed the billing fix" });
   });
 
   test("an address over its unknown-key window is refused before any key is looked up", async () => {

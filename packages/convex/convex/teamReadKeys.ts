@@ -6,19 +6,19 @@
 // A key reads the TEAM FLOOR (privacy.ts teamFloorScope), the rule the member
 // feed reads through: what every member sees, before anything granted to one
 // viewer. Rows are metadata only, even for a session shared in full: no
-// message text, prompt or path leaves this module. A title counts only once a
-// title pass or a person set it (before that it is the opening prompt cut
-// short), and machine paths in a title or summary become their last segment.
-// Subagent and workflow child sessions are left out.
+// message text, prompt or project path leaves this module. A title counts
+// only once a title pass or a person set it, and not while it still echoes the
+// opening prompt. Subagent and workflow child sessions are left out.
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { isNestedIdentity, repositoryKeyOfRemote, type WorkState } from "@codecast/shared/contracts";
+import { isNestedIdentity, repositoryFromRemote, type WorkState } from "@codecast/shared/contracts";
 import { internalMutation, internalQuery, mutation, query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireTeamAdmin } from "./lib/access";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { sha256Hex } from "./lib/hash";
 import { isVisibilityShareable, teamFloorScope } from "./privacy";
+import { needsHostedTitle } from "./assistant/backfills";
 import { isAfter, pageNewestFirst, type StreamPosition } from "./feedPagination";
 import { windowSpent } from "./ipRateLimit";
 import { cliSessionClassifier } from "./cliSessionClassifier";
@@ -114,7 +114,6 @@ export const create = mutation({
       name,
       key_hash: await sha256Hex(key),
       prefix,
-      cursor_secret: newCursorSecret(),
       created_at: now,
       expires_at: expiresAt,
     });
@@ -146,7 +145,7 @@ export const revoke = mutation({
   },
 });
 
-export type FoundKey = { key_id: Id<"team_read_keys">; cursor_secret: string; use_due: boolean };
+export type FoundKey = { key_id: Id<"team_read_keys">; use_due: boolean };
 
 /**
  * The live key a presented secret hashes to, and whether this request opens a
@@ -161,7 +160,7 @@ export const keyForHash = internalQuery({
     const now = Date.now();
     const row = await ctx.db.query("team_read_keys").withIndex("by_key_hash", (q) => q.eq("key_hash", args.key_hash)).first();
     const key = await liveKey(ctx, row, now);
-    return key ? { key_id: key._id, cursor_secret: key.cursor_secret, use_due: useDue(key, now) } : null;
+    return key ? { key_id: key._id, use_due: useDue(key, now) } : null;
   },
 });
 
@@ -192,9 +191,9 @@ export type TeamSessionRow = {
   owner: { id: string; name: string | null; github_username: string | null };
   agent: string;
   branch: string | null;
-  /** owner/name of a network git remote, never a local path. */
+  /** owner/name of a GitHub remote. */
   repo: string | null;
-  /** Null until a title pass or a person names the session. */
+  /** Null until a title pass or a person names the session, and while it echoes the opening prompt. */
   title: string | null;
   /** The session summary teammates see. */
   summary: string | null;
@@ -256,9 +255,9 @@ export const sessionsForKey = internalQuery({
         owner: { id: String(owner._id), name: owner.name ?? null, github_username: owner.github_username ?? null },
         agent: c.agent_type,
         branch: c.git_branch ?? null,
-        repo: repoOf(c.git_remote_url),
-        title: c.title_is_custom || c.subtitle !== undefined ? withoutLocalPaths(c.title) : null,
-        summary: withoutLocalPaths(c.subtitle),
+        repo: repositoryFromRemote(c.git_remote_url),
+        title: (c.title_is_custom || c.subtitle !== undefined) && !needsHostedTitle(c) ? (c.title ?? null) : null,
+        summary: c.subtitle ?? null,
         sharing: floor.contentVisible(c) ? "full" : "summary",
         work_state: (await classifier.classify(c)).work_state,
         started_at: new Date(c.started_at).toISOString(),
@@ -268,23 +267,3 @@ export const sessionsForKey = internalQuery({
     return { sessions, next: page.next };
   },
 });
-
-/** 32 random bytes, base64: the AES-GCM key a key's page cursors are sealed with (lib/teamReadKeyHttp.ts). */
-function newCursorSecret(): string {
-  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
-}
-
-// A machine path (a home folder, a mounted volume, a Windows drive) becomes
-// its last segment. A URL or a route stays as written.
-const LOCAL_PATH = /(?<![\w.:/-])(?:~|\/(?:Users|home|root|Volumes|private|tmp|var|opt|srv|mnt)|[A-Za-z]:)[\\/][^\s"'`<>]*/g;
-
-function withoutLocalPaths(text: string | undefined): string | null {
-  return text === undefined ? null : text.replace(LOCAL_PATH, (path) => path.split(/[\\/]/).filter(Boolean).pop() ?? "");
-}
-
-/** owner/name of a remote that has a host (git@host:… or a network URL). Null for a local path or file: origin. */
-function repoOf(remote: string | undefined): string | null {
-  const hosted = !!remote && (/^[\w.-]+@[\w.-]+:/.test(remote) || /^(?:https?|ssh|git)(?:\+ssh)?:\/\/[^/]/.test(remote));
-  const repo = hosted ? repositoryKeyOfRemote(remote) : null;
-  return repo && /^[\w.-]+\/[\w.-]+$/.test(repo) ? repo : null;
-}

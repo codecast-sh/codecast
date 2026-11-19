@@ -12,10 +12,7 @@
 // Admission runs in ingest's order: an address over its unknown-key window is
 // refused before any lookup, every unknown or malformed key counts against it,
 // and a known key is charged before its parameters are read. Both limiters
-// fail closed. A page that stops partway through skipped rows resumes at the
-// last row it examined, which can be a private one, so the cursor is sealed with
-// AES-GCM under the key's own secret: it shows no timestamp, and only that key
-// can use it.
+// fail closed.
 //
 // Answers 200 { sessions, next_cursor }; 400 for a bad parameter or cursor;
 // 401 for a missing, unknown, revoked or expired key; 429 over a limit.
@@ -49,35 +46,29 @@ function timeParam(raw: string | null): number | undefined | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-const toBase64Url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const fromBase64 = (text: string) => Uint8Array.from(atob(text.replace(/-/g, "+").replace(/_/g, "/")), (ch) => ch.charCodeAt(0));
-const cursorKey = (secret: string) => crypto.subtle.importKey("raw", fromBase64(secret), "AES-GCM", false, ["encrypt", "decrypt"]);
-
-async function sealCursor(secret: string, state: Window & StreamPosition): Promise<string> {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await cursorKey(secret), new TextEncoder().encode(JSON.stringify(state)));
-  return toBase64Url(new Uint8Array([...iv, ...new Uint8Array(sealed)]));
+// The page cursor is the window and the last row the page took, as base64url
+// JSON, so a client passes back one opaque string.
+function encodeCursor(cursor: Window & StreamPosition): string {
+  return btoa(JSON.stringify(cursor)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** The window and position a cursor sealed, or null for anything this key did not seal. */
-async function openCursor(secret: string, raw: string): Promise<(Window & StreamPosition) | null> {
+function decodeCursor(raw: string): (Window & StreamPosition) | null {
   try {
-    const bytes = fromBase64(raw);
-    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.slice(0, 12) }, await cursorKey(secret), bytes.slice(12));
-    return JSON.parse(new TextDecoder().decode(plain));
+    const c = JSON.parse(atob(raw.replace(/-/g, "+").replace(/_/g, "/")));
+    return [c?.since, c?.until, c?.t, c?.c].every((n) => typeof n === "number") ? c : null;
   } catch {
     return null;
   }
 }
 
-async function pageRequest(params: URLSearchParams, now: number, secret: string): Promise<PageRequest | string> {
+function pageRequest(params: URLSearchParams, now: number): PageRequest | string {
   const limitRaw = params.get("limit");
   const limit = limitRaw === null ? DEFAULT_LIMIT : Number(limitRaw);
   if (!Number.isInteger(limit) || limit < 1) return "limit takes a whole number from 1 to 100";
   const cursorRaw = params.get("cursor");
   if (cursorRaw) {
-    const cursor = await openCursor(secret, cursorRaw);
-    if (!cursor) return "cursor is not a next_cursor this key was given";
+    const cursor = decodeCursor(cursorRaw);
+    if (!cursor) return "cursor is not a next_cursor this endpoint gave";
     return { since: cursor.since, until: cursor.until, limit: Math.min(limit, MAX_LIMIT), after: { t: cursor.t, c: cursor.c } };
   }
   const until = timeParam(params.get("until"));
@@ -105,7 +96,7 @@ export const teamSessionsHttp = httpAction(async (ctx, request) => {
   const limited = await keyRateLimited(ctx, `team-read-key:${found.key_id}`, KEY_RATE.max, KEY_RATE.window_ms, true);
   if (limited) return limited;
 
-  const page = await pageRequest(new URL(request.url).searchParams, Date.now(), found.cursor_secret);
+  const page = pageRequest(new URL(request.url).searchParams, Date.now());
   if (typeof page === "string") return json(400, { error: page });
   // Audit before the read: a use that cannot be recorded is not served.
   if (found.use_due) await ctx.runMutation(internal.teamReadKeys.recordUse, { key_id: found.key_id });
@@ -115,6 +106,6 @@ export const teamSessionsHttp = httpAction(async (ctx, request) => {
     { key_id: found.key_id, since: page.since, until: page.until, limit: page.limit, after: page.after },
   );
   if (!result) return await unknownKey();
-  const next = result.next && (await sealCursor(found.cursor_secret, { since: page.since, until: page.until, ...result.next }));
+  const next = result.next && encodeCursor({ since: page.since, until: page.until, ...result.next });
   return json(200, { sessions: result.sessions, next_cursor: next });
 });
