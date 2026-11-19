@@ -29,15 +29,19 @@ export async function batchScanConversations(opts: {
       exhausted = true;
       break;
     }
+    // A scan that reaches `want` mid-batch has not examined the rest of it,
+    // so a short batch is the end of the index only when read to its end.
+    let examined = 0;
     for (const c of batch) {
+      examined++;
       if (accept(c)) {
         rows.push(c);
         if (rows.length >= want) break;
       }
     }
-    cursor = batch[batch.length - 1].updated_at;
+    cursor = batch[examined - 1].updated_at;
     oldestSeen = cursor;
-    if (batch.length < batchSize) {
+    if (examined === batch.length && batch.length < batchSize) {
       exhausted = true;
       break;
     }
