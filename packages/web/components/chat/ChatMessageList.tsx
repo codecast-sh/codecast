@@ -7,7 +7,7 @@ import { isModernStyle } from "../../lib/visualStyle";
 import { ChatMessage, ChatDayDivider, ChatNewDivider } from "./ChatMessage";
 import type { ChatMessageView } from "./chatTypes";
 import { shouldHoldChatLanding } from "./chatLanding";
-import { useChatSelection } from "./ChatSelectionActions";
+import { useChatSelection } from "../../hooks/useChatSelection";
 import "./chat.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";

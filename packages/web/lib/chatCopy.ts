@@ -15,7 +15,7 @@ const DATE = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric"
 // Mentions and entity links are markdown with app routes behind them; on the
 // clipboard they read as their labels, the way they read on screen.
 const MD_LINK = /\[([^\]]+)\]\((?:[^()\s]|\([^()\s]*\))+\)/g;
-const INVISIBLE = /[​-‍⁠﻿]/g;
+const INVISIBLE = /[\u200B-\u200D\u2060\uFEFF]/g;
 
 /** A message's source as someone reading it would copy it. */
 export function chatPlainText(markdown: string): string {

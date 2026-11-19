@@ -334,7 +334,9 @@ describe("command groups stay off the boot graph", () => {
     // split out of ccAccounts.ts for its max-lines pin, no new code. 369 the
     // same day: `plan verify` loads workspace/detect.ts on demand, which took
     // detect.ts, share.ts, manifest.ts and contracts/dataSync.ts off the graph.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(369);
+    // 370 the same day: contracts/fileAttachment.ts, the [File <path>] tag a
+    // web attachment becomes (no imports), carried by the contracts barrel.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(370);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -714,7 +716,9 @@ describe("command groups stay off the boot graph", () => {
     // 611 the same day: contracts/messagingPolicy.ts, through orgWhere.ts (no imports).
     // 612 the same day: ccRateLimitHeaders.ts, out of ccAccounts.ts, the same split.
     // 613 the same day: remote/localSession.ts, out of remote/session-move.ts, the same split.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(613);
+    // 615 the same day: contracts/fileAttachment.ts (no imports) and attachedFileDownload.ts,
+    // which saves a file attached on the web next to the agent before its prompt is delivered.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(615);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

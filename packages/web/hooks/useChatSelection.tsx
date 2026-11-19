@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { Send } from "lucide-react";
-import { chatPlainText, formatChatCopy, type ChatCopyPart } from "../../lib/chatCopy";
-import { sendToSession } from "../../lib/sendToSession";
-import { useInboxStore } from "../../store/inboxStore";
-import type { ChatMessageView } from "./chatTypes";
+import { chatPlainText, formatChatCopy, type ChatCopyPart } from "../lib/chatCopy";
+import { sendToSession } from "../lib/sendToSession";
+import { useInboxStore } from "../store/inboxStore";
+import { useMountEffect } from "./useMountEffect";
+import type { ChatMessageView } from "../components/chat/chatTypes";
 
 // Selecting across chat rows: copy writes each person's lines under one header
 // instead of the row chrome the browser would copy, and a "Send to session"
@@ -99,7 +100,8 @@ export function useChatSelection(
   byIdRef.current = new Map(messages.map((m) => [m.id, m]));
   const [pop, setPop] = useState<{ top: number; left: number; text: string } | null>(null);
 
-  useEffect(() => {
+  // The container is the caller's own element, set before effects run.
+  useMountEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const onCopy = (e: ClipboardEvent) => {
@@ -147,7 +149,7 @@ export function useChatSelection(
       el.removeEventListener("scroll", hide);
       document.removeEventListener("selectionchange", onSelChange);
     };
-  }, [containerRef]);
+  });
 
   const button = pop ? (
     <button
