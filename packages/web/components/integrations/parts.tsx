@@ -106,14 +106,14 @@ export function ConfirmButton({
           setArmed(false);
           onConfirm();
         }}
-        className="rounded bg-sol-red/15 px-2 py-0.5 text-meta font-medium text-sol-red hover:bg-sol-red/25"
+        className="shrink-0 rounded bg-sol-red/15 px-2 py-0.5 text-meta font-medium text-sol-red hover:bg-sol-red/25"
       >
         {confirmLabel ?? label}
       </button>
       <button
         type="button"
         onClick={() => setArmed(false)}
-        className="text-meta text-sol-text-muted hover:text-sol-text"
+        className="shrink-0 text-meta text-sol-text-muted hover:text-sol-text"
       >
         Cancel
       </button>

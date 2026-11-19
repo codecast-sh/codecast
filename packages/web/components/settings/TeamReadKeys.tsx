@@ -191,7 +191,7 @@ function KeyLine({ teamId, row, now }: { teamId: Id<"teams">; row: KeyRow; now: 
       {ended ? (
         <span className="shrink-0 text-xs text-sol-text-muted">{ended}</span>
       ) : (
-        <div className="ml-auto shrink-0">
+        <div className="ml-auto max-w-full shrink-0">
           <ConfirmButton
             label="Revoke"
             question="Anything using this key loses access now."
