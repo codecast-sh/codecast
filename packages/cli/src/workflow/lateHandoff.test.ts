@@ -173,6 +173,55 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     expect(failReason()).not.toContain("killed after");
   }, 30000);
 
+  test.each(builders)("%s: a hand on a weekly-limit banner whose flag was cleared has it re-stamped, and parks", async (id) => {
+    // 56 onefix Build hands answered their brief with "You've hit your weekly limit · resets …" while their rows
+    // read no park (a Dismiss cleared it), and were killed at 480m (2026-11-18).
+    let flag: string | null = null;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      const onBanner = reads >= 3 && reads <= 6;
+      if (route === "/cli/accounts/restamp-park") {
+        calls.push({ route, body: JSON.parse(init?.body || "{}") });
+        if (onBanner) flag = "limit";
+        return new Response(JSON.stringify({ kind: flag }), { status: 200 });
+      }
+      const res = await realFetch(url, init);
+      if (route !== "/cli/inbox") return res;
+      const body = await res.json();
+      // The banner turn, then the resumed turn, which lifts the flag: the transcript grows at each.
+      if (reads > 6) flag = null;
+      body.sessions[0].message_count = reads < 3 ? 40 : reads <= 6 ? 41 : 42;
+      if (flag) body.sessions[0].blocked_on = flag;
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    jumpAt = 5;
+    jumpMs = 11 * 60_000;
+    handoffAt = 9;
+    expect(await run(id)).toBe("completed");
+    expect(reached("verify")).toBe(true);
+    expect(logs.some((l) => l.includes("parked on limit"))).toBe(true);
+    expect(failReason()).not.toContain("killed after");
+    // One restamp per transcript length while the flag reads clear, none while it reads set.
+    expect(calls.filter((c) => c.route === "/cli/accounts/restamp-park").length).toBe(3);
+  }, 30000);
+
+  test.each(builders)("%s: a killed hand is never held as parked", async (id) => {
+    globalThis.fetch = (async (url: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      calls.push({ route, body: {} });
+      const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
+      if (route === "/cli/spawn") return reply({ conversation_id: "conv_hand", short_id: "jx7hand" });
+      if (route === "/cli/inbox") return reply({ sessions: [{ id: "conv_hand", work_state: "needs_input", is_live: false, is_killed: true, message_count: 40, blocked_on: "limit" }] });
+      if (route === "/cli/accounts/restamp-park") return reply({ kind: "limit" });
+      if (route === "/cli/work/get") return reply(task);
+      return reply({ ok: true });
+    }) as typeof fetch;
+    await run(id);
+    expect(logs.some((l) => l.includes("parked on limit"))).toBe(false);
+    expect(calls.some((c) => c.route === "/cli/accounts/restamp-park")).toBe(false);
+  }, 30000);
+
   test.each(builders)("%s: a hand parked on a connection error still ends at the node's timeout", async (id) => {
     limitReads = () => true;
     jumpAt = 5;

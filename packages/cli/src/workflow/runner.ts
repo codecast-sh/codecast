@@ -616,6 +616,8 @@ async function waitOnStation(
   let askedForHandoffAt = 0;
   let seenMessages = -1;
   let subjectWorked = false;
+  // The transcript length at which the hand's park flag was last re-stamped (/cli/accounts/restamp-park).
+  let restampedAt = -1;
   // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts).
   const clock = new ParkedClock(startMs);
   while (clock.elapsed() < timeout) {
@@ -673,12 +675,21 @@ async function waitOnStation(
       console.log(`${c.dim}  ${shortId}: ${state}${c.reset}`);
       lastState = state;
     }
+    // The row's park flag can be cleared while the hand still sits on its banner (a Dismiss): 56 onefix Build hands
+    // whose transcripts ended on a weekly-limit banner then read unparked and were killed at 480m (2026-11-18), and
+    // nothing revives a row without the flag. So a quiet hand whose flag is clear has it re-stamped from its
+    // transcript, once per transcript length: its run waits on the park, and recovery revives it like any other.
+    let parkedOn: string | null = row.is_killed ? null : row.blocked_on;
+    if (!parkedOn && !row.is_killed && state !== "working" && (row.message_count ?? 0) > 0 && row.message_count !== restampedAt) {
+      restampedAt = row.message_count;
+      parkedOn = (await cliCall(options, "/cli/accounts/restamp-park", { conversation_id: conversationId }))?.kind ?? null;
+    }
     // A parked hand (limit, throttle, dropped connection) resumes on its own: wait. A limit or throttle also stops
     // the node's clock (18 limit-parked hands hit their timeout, 2026-10-24); other parks keep it, so they still end.
-    if (row.blocked_on && CONTINUE_BANNER_KINDS.includes(row.blocked_on)) {
-      const quota = row.blocked_on === "limit" || row.blocked_on === "throttle";
-      if (lastState !== `parked:${row.blocked_on}`) console.log(`${c.dim}  ${shortId}: parked on ${row.blocked_on}, waiting for it to resume${quota ? "; the node's clock stops until it does" : ""}${c.reset}`);
-      lastState = `parked:${row.blocked_on}`;
+    if (parkedOn && CONTINUE_BANNER_KINDS.includes(parkedOn)) {
+      const quota = parkedOn === "limit" || parkedOn === "throttle";
+      if (lastState !== `parked:${parkedOn}`) console.log(`${c.dim}  ${shortId}: parked on ${parkedOn}, waiting for it to resume${quota ? "; the node's clock stops until it does" : ""}${c.reset}`);
+      lastState = `parked:${parkedOn}`;
       if (quota) clock.park();
       continue;
     }

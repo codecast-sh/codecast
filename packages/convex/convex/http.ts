@@ -5180,6 +5180,7 @@ cliRoute("/cli/command-claim", async (ctx, body) => ctx.runMutation(api.users.cl
   release: body.release === true ? true : undefined,
 }), { forwardDeviceId: true });
 
+cliRoute("/cli/accounts/restamp-park", async (ctx, body) => ctx.runMutation(api.accountSwitch.restampStationPark, body));
 cliRoute("/cli/accounts/continue-blocked", async (ctx, body) => ctx.runMutation(api.accountSwitch.continueAllBlocked, body));
 cliRoute("/cli/accounts/save", async (ctx, body) => ctx.runMutation(api.accountSwitch.saveAccountProfile, body), { forwardDeviceId: true });
 cliRoute("/cli/accounts/publish", async (ctx, body) => ctx.runMutation(api.accountSwitch.publishDeviceAccounts, body), { forwardDeviceId: true });

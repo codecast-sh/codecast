@@ -2441,6 +2441,27 @@ async function decideRestamp(
   return { kind, at: newest.timestamp };
 }
 
+// A workflow station whose park flag was cleared (a Dismiss) while its transcript still ends on the banner: its run
+// waits on the park, and no revive selects a row without the flag. The runner asks for the flag back
+// (/cli/accounts/restamp-park), and the restamp wakes recovery as a fresh park would. Returns the park kind, or null.
+export const restampStationPark = mutation({
+  args: { api_token: v.optional(v.string()), conversation_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const convId = ctx.db.normalizeId("conversations", args.conversation_id);
+    const conv = convId ? await ctx.db.get(convId) : null;
+    if (!conv || conv.user_id.toString() !== userId.toString() || conv.inbox_killed_at || conv.inbox_dismissed_at) return { kind: null };
+    if (conv.pending_api_error === true) return { kind: conv.pending_api_error_kind ?? "error" };
+    // Only the quota parks the runner waits out: a context or auth park has its own recovery, which a restamp would race.
+    const restamp = await decideRestamp(ctx, conv);
+    if (!restamp || (restamp.kind !== "limit" && restamp.kind !== "throttle")) return { kind: null };
+    await ctx.db.patch(conv._id, { pending_api_error: true, pending_api_error_kind: restamp.kind, pending_api_error_at: restamp.at });
+    if (isCurrentBlock({ pending_api_error_at: restamp.at }, Date.now())) await onFreshApiErrorPark(ctx, conv.user_id, restamp.kind, conv._id);
+    return { kind: restamp.kind };
+  },
+});
+
 // How many parked rows one reclassify pass reads. The sibling above scans 1000
 // recent conversations in a single transaction and TIMES OUT on production
 // ("too many system operations"), which is exactly why the stranded rows were
