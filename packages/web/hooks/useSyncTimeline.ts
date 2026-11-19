@@ -1,7 +1,7 @@
 // Timeline lanes (commits, pull requests) — store-fed delta overlays.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { normalizeRepository } from "@codecast/shared/contracts";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { applyCollectionFeed, useSyncCollection, entityIdArgs } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
@@ -79,7 +79,7 @@ export function useSyncPullRequestDetail(id: string | undefined) {
  *  a surface has opened it. A mounted reader has the row on screen, so it
  *  holds it against the collection's cap (lib/detailRows pinDetailRows). */
 export function usePullRequestDetail(id: string | undefined): PullRequestDetailRow | undefined {
-  useEffect(() => (id ? pinDetailRows("pullRequestDetails", [id]) : undefined), [id]);
+  useWatchEffect(() => (id ? pinDetailRows("pullRequestDetails", [id]) : undefined), [id]);
   return useInboxStore((s) => (id ? ((s as any).pullRequestDetails as Record<string, PullRequestDetailRow> | undefined)?.[id] : undefined));
 }
 

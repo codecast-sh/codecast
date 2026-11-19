@@ -15,6 +15,7 @@ import { useIsSyncHost } from "./useSyncRole";
 import { isConvexId } from "../lib/entityLinks";
 import { pinDetailRows, taskCommentsRow, taskThreadStale, type TaskCommentsRow } from "../lib/detailRows";
 import { useServerAuthState } from "./useServerAuthSettled";
+import { useWatchEffect } from "./useWatchEffect";
 
 const api = _api as any;
 
@@ -341,7 +342,7 @@ const NO_COMMENTS: any[] = [];
  *  thread changes. A mounted reader has the thread on screen, so it holds it
  *  against the collection's cap (lib/detailRows pinDetailRows). */
 export function useTaskComments(taskId: string | null | undefined): any[] {
-  useEffect(() => (taskId ? pinDetailRows("taskComments", [taskId]) : undefined), [taskId]);
+  useWatchEffect(() => (taskId ? pinDetailRows("taskComments", [taskId]) : undefined), [taskId]);
   return useInboxStore((s) => (taskId ? (s.taskComments as Record<string, TaskCommentsRow>)[taskId]?.comments : undefined)) ?? NO_COMMENTS;
 }
 
@@ -393,9 +394,9 @@ export function useSyncTaskThreads(tasks: ReadonlyArray<{ _id: string; last_comm
   const confirmedRef = useRef(confirmed);
   confirmedRef.current = confirmed;
 
-  useEffect(() => (enabled ? pinDetailRows("taskComments", tasks.map((t) => String(t._id))) : undefined), [tasks, enabled]);
+  useWatchEffect(() => (enabled ? pinDetailRows("taskComments", tasks.map((t) => String(t._id))) : undefined), [tasks, enabled]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!enabled || !confirmed) return;
     const now = Date.now();
     const need: Array<{ id: string; key: string; stamp: number }> = [];
