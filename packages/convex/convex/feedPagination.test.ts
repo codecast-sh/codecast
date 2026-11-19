@@ -27,7 +27,10 @@ function makeFetchPage(tables: Record<string, any[]>) {
 const acceptMain = (c: any) => !c.subagent;
 
 // Drain the feed to the end, asserting per-page invariants as we go.
-async function drain(tables: Record<string, any[]>, opts?: { limit?: number; startCursor?: string | null; maxPages?: number }) {
+async function drain(
+  tables: Record<string, any[]>,
+  opts?: { limit?: number; startCursor?: string | null; maxPages?: number; perMemberFetch?: number; perMemberWant?: number },
+) {
   const limit = opts?.limit ?? 5;
   let cursor: string | null = opts?.startCursor ?? null;
   const pages: any[][] = [];
@@ -39,8 +42,8 @@ async function drain(tables: Record<string, any[]>, opts?: { limit?: number; sta
       limit,
       fetchPage: makeFetchPage(tables),
       accept: acceptMain,
-      perMemberFetch: 4,
-      perMemberWant: 3,
+      perMemberFetch: opts?.perMemberFetch ?? 4,
+      perMemberWant: opts?.perMemberWant ?? 3,
       maxBatches: 2,
     });
     pages.push(page.rows);
@@ -92,6 +95,13 @@ describe("paginateTeamFeed", () => {
     };
     const { seen } = await drain(tables, { limit: 3 });
     expect(seen.size).toBe(6);
+  });
+
+  test("a member whose rows fit one batch keeps those past its share for the next page", async () => {
+    // One fetch reads all five rows and the page takes three: the other two lead the next page.
+    const tables = { a: member([{ t: 50 }, { t: 40 }, { t: 30 }, { t: 20 }, { t: 10 }], "a") };
+    const { seen } = await drain(tables, { limit: 3, perMemberFetch: 10, perMemberWant: 3 });
+    expect(seen.size).toBe(5);
   });
 
   test("legacy numeric cursor is honored as a shared bound and upgrades to composite", async () => {
