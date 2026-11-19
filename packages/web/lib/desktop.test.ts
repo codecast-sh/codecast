@@ -395,6 +395,7 @@ describe("desktop window role", () => {
       peopleWall: false,
       apps: null,
       app: null,
+      shown: null,
     });
   });
 
