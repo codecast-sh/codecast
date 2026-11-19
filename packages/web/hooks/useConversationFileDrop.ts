@@ -1,22 +1,22 @@
 import { useRef, useCallback } from "react";
 import { toast } from "sonner";
 import { useFileDragTarget } from "./useFileDragTarget";
-import { isRecordingFile } from "./useScreenRecordingAttach";
 
 /** Image drops on a conversation or a room thread: the composer registers
- *  where the images go through `dropFilesRef`. A session's composer also
- *  takes a screen recording (`recordings`; hooks/useScreenRecordingAttach). */
-export function useConversationFileDrop(opts: { recordings?: boolean } = {}) {
+ *  where the images go through `dropFilesRef`. A session's composer takes any
+ *  file (`anyFile`): a screen recording (hooks/useScreenRecordingAttach) or a
+ *  file the agent gets as a path (hooks/useFileAttach). */
+export function useConversationFileDrop(opts: { anyFile?: boolean } = {}) {
   const dropFilesRef = useRef<((files: File[]) => void) | null>(null);
-  const recordings = !!opts.recordings;
+  const anyFile = !!opts.anyFile;
   const onFiles = useCallback((dropped: File[]) => {
-    const files = dropped.filter(f => f.type.startsWith("image/") || (recordings && isRecordingFile(f)));
+    const files = anyFile ? dropped : dropped.filter(f => f.type.startsWith("image/"));
     if (files.length > 0 && dropFilesRef.current) {
       dropFilesRef.current(files);
     } else if (files.length === 0 && dropped.length > 0) {
-      toast.error(recordings ? "Only images and screen recordings (MP4, MOV) can be attached" : "Only image files are supported");
+      toast.error("Only image files are supported");
     }
-  }, [recordings]);
+  }, [anyFile]);
   const { isOver, handlers } = useFileDragTarget(onFiles);
   return {
     dropFilesRef,

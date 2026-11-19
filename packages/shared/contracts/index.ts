@@ -84,6 +84,7 @@ export * from "./callGuests";
 // for the digest markdown and the <huddle-summary> wire tag, one parser back.
 export * from "./huddleDigest";
 export * from "./screenRecording";
+export * from "./fileAttachment";
 export * from "./convexErrors";
 // Without these two lines every consumer reinvents the capability vocabulary:
 // convex copied the constants, the web store reached in by relative path, and

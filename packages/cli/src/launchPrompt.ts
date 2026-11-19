@@ -12,7 +12,7 @@
 //
 // Pure helpers plus one file write: the daemon owns the start and the delivery.
 
-import { isPollResponsePayload, stampDeliveryId } from "@codecast/shared/contracts";
+import { isPollResponsePayload, parseFileTags, stampDeliveryId } from "@codecast/shared/contracts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PendingDeliveryHeldError } from "./pendingDeliveryAdmission.js";
@@ -63,10 +63,11 @@ export function pickLaunchPrompt<T extends LaunchPromptRow>(rows: readonly T[], 
 }
 
 /** The text to launch with, or null for a message only the composer can take:
- *  an image rides a downloaded file path, a poll answer is keystrokes, and a
+ *  an image or attached file rides a downloaded file path, a poll answer is keystrokes, and a
  *  leading `/` or `!` is a composer mode rather than a prompt. */
 export function launchPromptText(row: Pick<LaunchPromptRow, "content" | "image_storage_ids" | "image_storage_id">): string | null {
   if (row.image_storage_ids?.length || row.image_storage_id) return null;
+  if (parseFileTags(row.content ?? "").length) return null;
   const text = prepareInjectedContent(row.content ?? "", { bracketed: true });
   const head = text.trimStart();
   if (!head || /^[/!]/.test(head) || text.includes("\0")) return null;

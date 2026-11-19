@@ -1282,7 +1282,7 @@ export function NewSessionFoot({ slotRef, dropRef }: {
     <>
       <div ref={slotRef} className="flex min-w-0 flex-wrap items-center gap-0.5" />
       <span className="ml-auto">
-        <ComposerAttachButton dropRef={dropRef} className="w-7 h-7 rounded-full flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg/60 transition-colors" />
+        <ComposerAttachButton dropRef={dropRef} anyFile className="w-7 h-7 rounded-full flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg/60 transition-colors" />
       </span>
     </>
   );

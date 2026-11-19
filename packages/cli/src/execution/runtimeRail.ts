@@ -18,6 +18,7 @@ import {
   type ExecutionOperationJournal,
 } from "./localJournal.js";
 import type { EnsureBindingRequest } from "./types.js";
+import { materializeFileTags, type AttachedFileRef } from "@codecast/shared/contracts";
 import type { ExecutionConvexTransport } from "./convexControlPlane.js";
 import { defaultConfigDir } from "../config/configDir.js";
 
@@ -246,6 +247,8 @@ export interface DaemonExecutionRuntimeOptions {
   journalDirectory?: string;
   daemonBootId?: string;
   resolveImage?: (storageId: string) => Promise<string | null>;
+  /** Saves a file attached in the web composer and returns its local path. */
+  resolveFile?: (ref: AttachedFileRef) => Promise<string | null>;
   onLog?: (message: string) => void;
 }
 
@@ -256,6 +259,7 @@ export class DaemonExecutionRuntime {
   readonly drivers: RuntimeDriverRegistry;
   private readonly ownerDeviceId: string;
   private readonly resolveImage?: DaemonExecutionRuntimeOptions["resolveImage"];
+  private readonly resolveFile?: DaemonExecutionRuntimeOptions["resolveFile"];
   private readonly onLog: (message: string) => void;
   private unsubscribe?: () => void;
   private workChain: Promise<void> = Promise.resolve();
@@ -264,6 +268,7 @@ export class DaemonExecutionRuntime {
     this.daemonBootId = options.daemonBootId ?? randomUUID();
     this.ownerDeviceId = options.ownerDeviceId;
     this.resolveImage = options.resolveImage;
+    this.resolveFile = options.resolveFile;
     this.onLog = options.onLog ?? (() => {});
     this.controlPlane = new ConvexExecutionControlPlane(options.transport);
     this.drivers = options.drivers instanceof RuntimeDriverRegistry
@@ -423,10 +428,11 @@ export class DaemonExecutionRuntime {
     for (let index = 0; index < 1024; index += 1) {
       const claim = await this.controlPlane.claimNextDelivery(binding);
       if (!("permit" in claim)) return;
-      const input: Array<Delivery["input"][number]> = [
-        { type: "text", text: claim.delivery.content },
-      ];
+      const input: Array<Delivery["input"][number]> = [];
       try {
+        const resolveFile = this.resolveFile;
+        const text = resolveFile ? await materializeFileTags(claim.delivery.content, resolveFile) : claim.delivery.content;
+        input.push({ type: "text", text });
         for (const storageId of claim.delivery.imageStorageIds) {
           if (!this.resolveImage) throw new Error("fenced image resolver is unavailable");
           const localPath = await this.resolveImage(storageId);

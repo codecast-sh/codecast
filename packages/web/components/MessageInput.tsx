@@ -57,9 +57,11 @@ import { soundSend } from "../lib/sounds";
 import type { MentionItem } from "./editor/MentionList";
 import { MentionMenu } from "./editor/MentionMenu";
 import { mergeMentionSuggestions, mentionViewTimes, orderMentionItems } from "../lib/mentionRanking";
-import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft, MonitorPlay } from "lucide-react";
+import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft, MonitorPlay, Paperclip } from "lucide-react";
 import { formatCallTime } from "@codecast/shared/contracts";
 import { isRecordingFile, useScreenRecordingAttach } from "../hooks/useScreenRecordingAttach";
+import { useFileAttach } from "../hooks/useFileAttach";
+import { ComposerAttachButton } from "./chat/ComposerAttachButton";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, filterMentionItems, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
@@ -242,7 +244,7 @@ function commitDraftText(conversationId: string, text: string) {
   else store.setDraft(conversationId, { ...existing, draft_message: text || null });
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkTail, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onSideQuestion, onEscapeClose, onGateSend, onGoalCommand, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchControl, branchMapNode, threadStateNode, composerNode, sessionControl, composerFoot, bareComposer, hero, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef, escapeCloses, sharedDraft, maxLength }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; /** Branches the session from its latest message and returns the fork's id; the composer then sends into it. */ onForkTail?: () => Promise<string | null>; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; /** `/btw <question>`: a side answer about this session, never sent to the agent ("" for a bare `/btw`). Unset, `/btw` goes to the agent like any text. */ onSideQuestion?: (question: string) => Promise<string | null> | null; /** A panel open beside the composer (the Ask panel): an empty composer's Escape closes it instead of stopping the turn. */ onEscapeClose?: () => void; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => void | Promise<void>; /** Codecast's own `/goal` command: true when it took the text (the composer then sends nothing). */ onGoalCommand?: (text: string) => boolean; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; /** Opens the branch map; present only when the session has forks. Drawn on the field's top edge. */ branchControl?: React.ReactNode; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The session's agent/model control, at the right of the status line. */ sessionControl?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The new-session page's centred card (ComposerShell hero): always expanded, foot inside the box. */ hero?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean>; /** Escape closes the surface around the composer (the compose sheet), so the status line offers no Escape hint. */ escapeCloses?: boolean; /** A session's own composer: becomes one shared draft while anyone else has this session's composer open (hooks/useSharedDraft). */ sharedDraft?: boolean; /** The most characters the receiver takes (team chat's limit). Past it the send is held, the text stays in the box, and the count shows beside send. */ maxLength?: number }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkTail, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onSideQuestion, onEscapeClose, onGateSend, onGoalCommand, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchControl, branchMapNode, threadStateNode, composerNode, sessionControl, composerFoot, bareComposer, hero, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef, escapeCloses, sharedDraft, maxLength, acceptFiles }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; /** Branches the session from its latest message and returns the fork's id; the composer then sends into it. */ onForkTail?: () => Promise<string | null>; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; /** `/btw <question>`: a side answer about this session, never sent to the agent ("" for a bare `/btw`). Unset, `/btw` goes to the agent like any text. */ onSideQuestion?: (question: string) => Promise<string | null> | null; /** A panel open beside the composer (the Ask panel): an empty composer's Escape closes it instead of stopping the turn. */ onEscapeClose?: () => void; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => void | Promise<void>; /** Codecast's own `/goal` command: true when it took the text (the composer then sends nothing). */ onGoalCommand?: (text: string) => boolean; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; /** Opens the branch map; present only when the session has forks. Drawn on the field's top edge. */ branchControl?: React.ReactNode; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The session's agent/model control, at the right of the status line. */ sessionControl?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The new-session page's centred card (ComposerShell hero): always expanded, foot inside the box. */ hero?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean>; /** Escape closes the surface around the composer (the compose sheet), so the status line offers no Escape hint. */ escapeCloses?: boolean; /** A session's own composer: becomes one shared draft while anyone else has this session's composer open (hooks/useSharedDraft). */ sharedDraft?: boolean; /** A session's composer: files other than images are uploaded and reach the agent as a local path (hooks/useFileAttach). */ acceptFiles?: boolean; /** The most characters the receiver takes (team chat's limit). Past it the send is held, the text stays in the box, and the count shows beside send. */ maxLength?: number }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -360,6 +362,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // A video dropped or pasted in is a screen recording for the session
   // (hooks/useScreenRecordingAttach): the agent gets its words and frames.
   const screenRec = useScreenRecordingAttach(conversationId, isConvexId(conversationId) && !hostedConversation);
+  // Any other file dropped, pasted or picked is uploaded and reaches the agent
+  // as a path on its own machine (hooks/useFileAttach).
+  const fileAttach = useFileAttach();
   // A hosted conversation whose month is used up says so at rest and holds
   // Send, rather than letting a message travel only to come back refused.
   const allowanceOut = useAllowanceOut(hostedConversation);
@@ -1309,10 +1314,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     attachSend(() => { void handleSubmitRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent); });
     return () => attachSend(null);
   }, [attachSend]);
-  const hasContent = (composeMode ? composeHasContent : message.trim().length > 0) || pastedImages.length > 0 || !!screenRec.recording || queuedMessages.length > 0;
+  const hasContent = (composeMode ? composeHasContent : message.trim().length > 0) || pastedImages.length > 0 || !!screenRec.recording || fileAttach.files.length > 0 || queuedMessages.length > 0;
   // A showing ghost suggestion is content too: it can run several lines, and
   // the collapsed pill (narrow, fully rounded) bends that into an ellipse.
-  const isExpanded = !!hero || composeMode || !!onSubmitWithIntent || !!onSendAndAdvance || isFocused || message.length > 0 || ghostVisible || pastedImages.length > 0 || queuedMessages.length > 0 || reviewCount > 0 || !!branchMapNode;
+  const isExpanded = !!hero || composeMode || !!onSubmitWithIntent || !!onSendAndAdvance || isFocused || message.length > 0 || ghostVisible || pastedImages.length > 0 || fileAttach.files.length > 0 || queuedMessages.length > 0 || reviewCount > 0 || !!branchMapNode;
 
   const toggleCompose = useCallback(() => {
     if (composeMode) {
@@ -1640,6 +1645,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     uploadImage(file);
   }, [hostedConversation, uploadImage]);
 
+  const takeFile = useCallback((file: File) => {
+    if (!acceptFiles) {
+      toast.error("Only images can be attached here", { id: "files-unsupported" });
+      return;
+    }
+    if (hostedConversation) {
+      toast.error("The assistant can't read files. Paste the text instead.", { id: "hosted-file-refusal" });
+      return;
+    }
+    fileAttach.attach(file);
+  }, [acceptFiles, hostedConversation, fileAttach.attach]);
+
 
   useWatchEffect(() => {
     if (onDropFiles) {
@@ -1647,11 +1664,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         files.forEach(f => {
           if (isRecordingFile(f)) void screenRec.attach(f);
           else if (f.type.startsWith("image/")) takeImage(f);
+          else takeFile(f);
         });
       };
       return () => { if (onDropFiles) onDropFiles.current = null; };
     }
-  }, [onDropFiles, takeImage, screenRec.attach]);
+  }, [onDropFiles, takeImage, takeFile, screenRec.attach]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
@@ -1664,13 +1682,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         if (file) takeImage(file);
       } else if (items[i].kind === "file") {
         const file = items[i].getAsFile();
-        if (file && isRecordingFile(file)) {
-          e.preventDefault();
-          void screenRec.attach(file);
-        }
+        if (!file) continue;
+        e.preventDefault();
+        if (isRecordingFile(file)) void screenRec.attach(file);
+        else takeFile(file);
       }
     }
-  }, [takeImage, screenRec.attach]);
+  }, [takeImage, takeFile, screenRec.attach]);
 
   // Set when a submit could not commit its send (the optimistic row + outbox
   // enqueue refused). Read synchronously right after handleSubmit() is called:
@@ -1762,6 +1780,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       submitRefusedRef.current = true;
       return false;
     }
+    if (fileAttach.uploading) {
+      toast("A file is still uploading", { id: "file-uploading" });
+      submitRefusedRef.current = true;
+      return false;
+    }
     // What the person typed, before quotes and joint parts fold in: the
     // suggestion outcome is reported against it once the send is committed.
     const typed = message;
@@ -1770,7 +1793,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // the quotes, and a proposal's answers (org-staffing.md S39), lead the
       // text and are taken here, so a bare Enter with answers waiting is a
       // send. The gate's host receives the whole body and takes nothing.
-      const text = attachReviewToMessage(conversationId, message).trim();
+      const text = fileAttach.take(attachReviewToMessage(conversationId, message)).trim();
       // Same reconcile as the main path: the durable draft is the record of
       // pasted images, memory can lose rows across a remount (jx7byyk).
       const gateDraftRows = restoreDraftImages(useInboxStore.getState().drafts[conversationId] ?? undefined);
@@ -1855,6 +1878,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (!forking) message = takeJointSend(conversationId, message);
     // An attached screen recording rides as its tag (a fork leaves it here).
     if (!forking) message = screenRec.take(message);
+    // Attached files ride as tags the daemon turns into local paths.
+    if (!forking) message = fileAttach.take(message);
     const quotedOriginals: OptimisticImage[] = quoted.map(q => ({ media_type: "image/png", storage_id: q.storageId }));
     const quotedUploads = quoted.map(q => uploadMarkedImage(convex, q));
     const hasUploadingImages = submitImages.some(img => img.uploading) || quotedUploads.length > 0;
@@ -2814,6 +2839,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // A hosted conversation has no Claude Code permission mode to cycle: its
       // status line owns the whole meta row.
       metaEnd={<>
+                {acceptFiles && !hostedConversation && !composerFoot && onDropFiles && (
+                  <ComposerAttachButton dropRef={onDropFiles} anyFile className="flex h-5 w-5 items-center justify-center rounded text-sol-text-dim hover:text-sol-text transition-colors" />
+                )}
                 {sessionControl}
                 {permissionMode && !hostedConversation && (
                   <div className="relative" data-composer-mode={permissionMode}>
@@ -2989,6 +3017,21 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       </svg>
                     </button>
                   </div>
+                </div>
+              )}
+              {fileAttach.files.length > 0 && (
+                <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50 flex-wrap">
+                  {fileAttach.files.map((f) => (
+                    <div key={f.key} className="group relative flex h-9 max-w-[240px] items-center gap-2 rounded-lg bg-sol-bg px-2.5 ring-1 ring-sol-border/40" title={f.file.name}>
+                      <Paperclip className={`h-3.5 w-3.5 shrink-0 ${f.storageId ? "text-sol-cyan" : "text-sol-yellow"}`} />
+                      <span className="truncate text-sm text-sol-text">{f.file.name}</span>
+                      <button type="button" onClick={() => fileAttach.remove(f.key)} aria-label={`Remove ${f.file.name}`} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-sol-bg-alt border border-sol-border flex items-center justify-center text-sol-text-secondary hover:text-sol-text transition-colors opacity-0 group-hover:opacity-100">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
               {pastedImages.length > 0 && (

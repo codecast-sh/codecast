@@ -24,6 +24,7 @@ describe("launchPromptText", () => {
   test.each([
     ["an image", { image_storage_ids: ["s1"] }],
     ["a legacy image", { image_storage_id: "s1" }],
+    ["an attached file", { content: "read it\n\n[File a.pdf · upload kg2abcdefghijk]" }],
     ["a slash command", { content: "/compact" }],
     ["a shell line", { content: "  !ls" }],
     ["a poll answer", { content: JSON.stringify({ __cc_poll: true, keys: ["Enter"] }) }],

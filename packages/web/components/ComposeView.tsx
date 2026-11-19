@@ -254,12 +254,8 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     e.stopPropagation();
     dragCounterRef.current = 0;
     setIsDragging(false);
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
-    if (files.length > 0 && dropFilesRef.current) {
-      dropFilesRef.current(files);
-    } else if (files.length === 0 && e.dataTransfer.files.length > 0) {
-      toast.error("Only image files are supported");
-    }
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0 && dropFilesRef.current) dropFilesRef.current(files);
   }, []);
 
   // --- guarded dismissal ----------------------------------------------------
@@ -683,6 +679,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           skills={skills}
           agentType={recipient ? undefined : liveAgentType}
           onDropFiles={dropFilesRef}
+          acceptFiles
           onPopulateInput={populateInputRef}
           onGateSend={recipient ? async (text, images) => { await wakeRole(text, images); } : hosted ? startHosted : undefined}
           composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : hosted ? "Ask anything, or hand me a chore" : startsProject ? "What is the project for? Its first line names it" : undefined}

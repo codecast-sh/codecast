@@ -16,6 +16,8 @@ import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, rec
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isValidBrowserStreamKey, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
+import { materializeFileTags } from "@codecast/shared/contracts";
+import { downloadAttachedFile } from "./attachedFileDownload.js";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer.js";
@@ -33810,6 +33812,7 @@ async function main(): Promise<void> {
           return registry;
         })(),
         resolveImage: (storageId) => downloadImage(storageId, syncService),
+        resolveFile: (ref) => downloadAttachedFile(ref, (id) => syncService.getImageUrl(id), log),
         onLog: log,
       })
     : null;
@@ -34094,6 +34097,17 @@ async function main(): Promise<void> {
             const imageTags = imagePaths.map(p => `[Image ${p}]`).join(" ");
             messageContent = realText ? `${realText} ${imageTags}` : imageTags;
           }
+        }
+
+        // Files attached in the web composer: each tag becomes the path the
+        // file was saved to here. A failed fetch re-pends, as for images.
+        try {
+          messageContent = await materializeFileTags(messageContent, (ref) => downloadAttachedFile(ref, (id) => syncService.getImageUrl(id), log));
+        } catch (err) {
+          logDelivery(`File fetch failed for msg=${msg._id.slice(0, 8)} (${err instanceof Error ? err.message : String(err)}); re-pending instead of delivering without it`);
+          releaseInFlight();
+          scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
+          continue;
         }
 
         // A screen recording the person sent: its tag becomes the timed lines

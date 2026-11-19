@@ -1,27 +1,29 @@
 import { useRef, type MutableRefObject } from "react";
-import { ImagePlus } from "lucide-react";
+import { ImagePlus, Paperclip } from "lucide-react";
 import "./chat.css";
 
-// The image picker in a framed composer's foot row. Picked files go through the
-// same drop handler MessageInput fills, so they land in its thumbnail strip and
-// upload pipeline exactly like a paste or a drop.
-export function ComposerAttachButton({ dropRef, className = "ch-composer-attach" }: { dropRef: MutableRefObject<((files: File[]) => void) | null>; className?: string }) {
+// The attach picker in a framed composer's foot row. Picked files go through the
+// same drop handler MessageInput fills, so they land in its attachment strip and
+// upload pipeline exactly like a paste or a drop. `anyFile` (a session's
+// composer) takes any file; otherwise it picks images.
+export function ComposerAttachButton({ dropRef, className = "ch-composer-attach", anyFile = false }: { dropRef: MutableRefObject<((files: File[]) => void) | null>; className?: string; anyFile?: boolean }) {
+  const label = anyFile ? "Attach files" : "Attach an image";
   const pickerRef = useRef<HTMLInputElement | null>(null);
   return (
     <>
       <button
         type="button"
         className={className}
-        title="Attach an image"
-        aria-label="Attach an image"
+        title={label}
+        aria-label={label}
         onClick={() => pickerRef.current?.click()}
       >
-        <ImagePlus className="w-3.5 h-3.5" />
+        {anyFile ? <Paperclip className="w-3.5 h-3.5" /> : <ImagePlus className="w-3.5 h-3.5" />}
       </button>
       <input
         ref={pickerRef}
         type="file"
-        accept="image/*"
+        accept={anyFile ? undefined : "image/*"}
         multiple
         className="hidden"
         onChange={(e) => {
