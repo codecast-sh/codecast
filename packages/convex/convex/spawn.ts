@@ -7,7 +7,7 @@ import { verifyApiToken } from "./apiTokens";
 import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { inheritedChildPrivacy, resolveCreationPrivacy } from "./privacy";
 import { admitSubagent, startSpawnedSession, type QueuedStart } from "./subagentFleet";
-import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, isHostedAgentType, isReservedDevice, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
+import { checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, isHostedAgentType, isReservedDevice, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
@@ -18,7 +18,6 @@ import { actingPersonOf } from "./lib/userSend";
 import { canAccessTask } from "./lib/access";
 import { capsFor, countersFor, roleStartsOnItsOwn, roleTokensToday } from "./lib/orgCaps";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
-import { charterLine, type CharterRow } from "./lib/orgCharter";
 import { applyHandoffLink, findHandoffSource, handoffChildFields } from "./handoff";
 import { defaultDeviceFor } from "./newSessionDefaults";
 
@@ -458,28 +457,24 @@ export const createSessionFromCli = mutation({
       targetDeviceId = await defaultDeviceFor(ctx, userId, [args.git_root, args.project_path].filter((p): p is string => !!p));
     }
 
-    const subagentFields = args.parent_session
+    const parentFields = args.parent_session
       ? await resolveSpawnParent(ctx, userId, args.parent_session)
       : null;
     const spawner = args.spawner_session
-      ? (await findConversationByAnyRef(ctx, args.spawner_session, userId)) ?? (await runSpawnerOf(ctx, userId, subagentFields?.parent_conversation_id, args.spawner_session))
+      ? (await findConversationByAnyRef(ctx, args.spawner_session, userId)) ?? (await runSpawnerOf(ctx, userId, parentFields?.parent_conversation_id, args.spawner_session))
       : null;
     // A role's standing session, or one of its hands, starting a hand: the
     // trust stage and the daily hand cap gate it (org-roles-standing.md T4).
     const roleGate = await gateHandStart(ctx, spawner);
+    // A hand is a worker of the session that started it: nested under it, so
+    // its settle wakes that session (workerSettle.tellParent) and the session
+    // reads and steers it like any worker. Its prompt is the spawner's brief,
+    // as written. A workflow station names its run's session as its parent.
+    const subagentFields = parentFields ?? (roleGate && spawner ? { parent_conversation_id: spawner._id as Id<"conversations">, is_subagent: true as const } : null);
     // A review hand is gated by the role whose work it judges, not filed
     // under it, so its verdict is recorded as its own.
     const review = args.review_for_task ? await resolveReviewTarget(ctx, userId, args.review_for_task) : null;
     if (review?.role) await gateRoleCaps(ctx, review.role);
-    // A hand's first turn opens with the unattended opening and the hand
-    // briefing (the-line.md L2): who it works for and how it ends its turn.
-    // A workflow station is nested under its run's session, and the run's
-    // task is the one it works on. Otherwise the spawner's own binding; for a
-    // station that would be whatever its role's session is bound to just now.
-    const handTaskId = !roleGate ? null : (await runTaskOf(ctx, subagentFields?.parent_conversation_id)) ?? spawner?.active_task_id ?? null;
-    const handTask: any = handTaskId ? await ctx.db.get(handTaskId) : null;
-    const handProject: any = handTask?.project_id ? await ctx.db.get(handTask.project_id) : null;
-    const prompt = roleGate ? handBriefing(roleGate, asDef.prompt, handTask?.short_id ?? undefined, handProject) : asDef.prompt;
 
     let cloudPark: { deviceId: string; workspace: CloudWorkspaceMode; checkoutPath: string } | undefined;
     if (args.cloud_workspace === "shared") {
@@ -509,7 +504,7 @@ export const createSessionFromCli = mutation({
       subagentFields,
       spawnerConversationId: spawner?._id,
       handoffFrom,
-      prompt,
+      prompt: asDef.prompt,
       // A worker joins the fleet when its spawner declares the fleet's limits
       // (`cast spawn --subagent` always does). A workflow station's hand is
       // nested under its run but paced by it, one station at a time, so it
@@ -584,13 +579,6 @@ async function inheritRunOwners(ctx: { db: any }, parentId: Id<"conversations">,
   for (const owner of await listSessionOwnerIds(ctx, parentId)) await retainSessionCreator(ctx, childId, owner, child.user_id);
 }
 
-/** The task of the workflow run whose own session `conversationId` is, if any. */
-async function runTaskOf(ctx: { db: any }, conversationId: Id<"conversations"> | undefined): Promise<Id<"tasks"> | null> {
-  const conv = conversationId ? await ctx.db.get(conversationId) : null;
-  const run = conv?.is_workflow_primary && conv.workflow_run_id ? await ctx.db.get(conv.workflow_run_id) : null;
-  return run?.task_id ?? null;
-}
-
 async function resolveReviewTarget(ctx: { db: any }, userId: Id<"users">, shortId: string): Promise<{ task: any; role: any | null }> {
   const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
   if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error(`Task not found: ${shortId}`);
@@ -636,32 +624,9 @@ export async function recordHandStart(ctx: { db: any }, role: any, conversationI
   await ctx.db.patch(conversationId, { org_role_id: role._id, org_role_hold: "filed" });
 }
 
-// The briefing a hand starts with (org-roles-standing.md T4, the-line.md L2):
-// the unattended opening, who the hand works for, the goal of the project the
-// task serves (org-staffing.md S7), and the structured ending. Written where
-// the hand pointer is written, so no hand can start without it.
-/** The first line of a hand's briefing; a session whose first message opens
- *  with it was started by a role's line (migrations:releaseFolderHeldSessions
- *  reads it for hands from before the `org_role_hold` stamp). */
+/** The first line of the briefing hands were started with until 2026-11-19;
+ *  a session whose first message opens with it was started by a role's line
+ *  (migrations:releaseFolderHeldSessions reads it for hands from before the
+ *  `org_role_hold` stamp). */
 export const HAND_BRIEFING_HEADER = "## You are a hand of ";
 export const isHandBriefing = (text: string | null | undefined) => (text ?? "").trimStart().startsWith(HAND_BRIEFING_HEADER);
-
-export function handBriefing(
-  role: { name: string; handle: string; short_id?: string },
-  prompt: string | undefined,
-  taskShortId?: string,
-  project?: ({ title: string } & CharterRow) | null,
-): string {
-  const ct = taskShortId ?? "<ct-id>";
-  const direction = charterLine(`Project ${project?.title ?? ""}`, project);
-  const header = [
-    `${HAND_BRIEFING_HEADER}${role.name} (@${role.handle})`,
-    `You work for that role, not for a person. It reads your handoff, not your transcript.`,
-    ...(direction ? [`${direction}. Your work serves that goal; say in the handoff how it moved.`] : []),
-    `- Bind your work: \`cast task start ${ct}\` if this session was not started on it.`,
-    `- A question you cannot answer yourself goes to your role, attached to the task: \`cast decide --task ${ct} "<question>" -o ... -o ...\`, then end your turn.`,
-    `- If you review another hand's work, end with \`cast task verdict ${ct} approve|changes|reject --note -\`.`,
-    `- End every turn with a handoff, not a pin: \`cast task handoff ${ct} --status done|blocked|needs_context --evidence - <<'EOF'\` with what you changed, what you verified, and what is left.`,
-  ].join("\n");
-  return applyUnattended(`${header}\n\n${(prompt ?? "").trim()}`.trim(), `the role ${role.name} (@${role.handle})`);
-}

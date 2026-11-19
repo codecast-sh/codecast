@@ -175,7 +175,7 @@ describe("a spawned worker's settle wakes its parent", () => {
   test("rows that report elsewhere, a newer status, and a killed parent tell nobody", async () => {
     const cases: Array<[any, any, Record<string, any>, number | undefined, string]> = [
       [worker("a", { agent_task_id: "agent_tasks_x" }), session("a", "idle"), {}, STATUS_TS, "not_worker"],
-      [worker("a", { org_role_id: "org_roles_x" }), session("a", "idle"), {}, STATUS_TS, "not_worker"],
+      [worker("a", { standing_role_id: "org_roles_x" }), session("a", "idle"), {}, STATUS_TS, "not_worker"],
       [worker("a", { is_workflow_sub: true }), session("a", "idle"), {}, STATUS_TS, "not_worker"],
       [worker("a"), session("a", "idle", STATUS_TS + 1), {}, STATUS_TS, "superseded"],
       [worker("a"), session("a", "idle"), { inbox_killed_at: NOW - 1 }, STATUS_TS, "no_parent"],
@@ -185,6 +185,13 @@ describe("a spawned worker's settle wakes its parent", () => {
       expect(await tell(ctx, "a", ts)).toEqual({ told: 0, reason });
       expect(wakes(tables)).toHaveLength(0);
     }
+  });
+
+  test("a role's hand tells the session that started it, like any worker", async () => {
+    const w = worker("a", { org_role_id: "org_roles_x" });
+    const { ctx, tables } = world([w], [session("a", "idle")]);
+    expect(await tell(ctx, "a")).toEqual({ told: 1 });
+    expect(wakes(tables)).toHaveLength(1);
   });
 
   test("a native subagent (no managed session of its own) is never told about", async () => {

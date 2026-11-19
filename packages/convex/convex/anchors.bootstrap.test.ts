@@ -26,7 +26,9 @@ describe("a role's opening message", () => {
     expect(m).toContain("`## Where it stands`");
     // It works at its level and hands the hands-on work to sessions (roleLevel.ts), by its switch.
     expect(m).toContain("Work at the level of your seat");
-    expect(m).toContain("`cast spawn --subagent`");
+    expect(m).toContain("`cast spawn --subagent -- -`");
+    expect(m).toContain("It wakes you whenever it stops");
+    expect(m).toContain("steer it with `cast send <id>`");
     expect(opening(false)).toContain("You do not start work on your own");
     expect(opening(false)).not.toContain("`cast spawn --subagent`");
     expect(m).toContain(SAY_GUIDANCE);

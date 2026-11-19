@@ -8,7 +8,6 @@ import { webUpdate as planWebUpdate } from "./plans";
 import { webUpdate as projectWebUpdate } from "./projects";
 import { charterPatch, charterLine } from "./lib/orgCharter";
 import { computeBriefFacts } from "./org";
-import { handBriefing } from "./spawn";
 import { workspaceAnchorFor } from "./anchors";
 import { resolveChatMentions } from "./lib/mentionResolve";
 
@@ -680,12 +679,5 @@ describe("project and plan charters", () => {
     const facts = await computeBriefFacts(ctx, ME as any, tables.org_roles.find((r) => r._id === "r1"), NOW);
     expect(facts.initiatives.map((i) => [i.short_id, i.owned, i.health, i.health_at])).toEqual([["in-4", true, "at_risk", NOW - 11 * 86_400_000], ["in-9", false, "none", null]]);
     expect(facts.standing).toMatchObject({ short_id: "jxmine1", state: "working", state_status: "blocked", state_line: "Waiting on the pricing decision" });
-  });
-
-  test("the hand briefing names the task's project goal", () => {
-    const withGoal = handBriefing({ name: "Head of Growth", handle: "growth" }, "Ship the signup form", "ct-7", { title: "Growth", goal: "Double weekly signups", priority: "p1" });
-    expect(withGoal).toContain("Project Growth [p1] · goal: Double weekly signups. Your work serves that goal");
-    const without = handBriefing({ name: "Head of Growth", handle: "growth" }, "Ship the signup form", "ct-7", { title: "Growth" });
-    expect(without).not.toContain("Project Growth");
   });
 });

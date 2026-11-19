@@ -68,6 +68,15 @@ describe("the route up", () => {
     expect(told(tables, "standing_top")).toEqual([]);
   });
 
+  test("a hand nested under the session that started it tells that session as a worker, never the role's trigger", async () => {
+    const { ctx, tables } = blockedHand();
+    Object.assign(tables.conversations.find((c) => c._id === "conv1")!, { is_subagent: true, parent_conversation_id: "standing_sub" });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("under_role");
+    expect(triggerOn(tables, "standing_sub")).toBeUndefined();
+    expect(told(tables, "standing_sub")).toEqual([]);
+  });
+
   test("one run per ask: a second check, a reason that changes while it waits, the same block declared again after more work, and the declaration itself add nothing", async () => {
     const { ctx, tables } = blockedHand();
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });

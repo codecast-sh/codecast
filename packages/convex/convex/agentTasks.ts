@@ -41,6 +41,7 @@ import { startHostedConversationFor } from "./assistant/start";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
 import { type TaskCtx, mayRewriteTrigger, roleTriggerRunnerOf, handRoleTriggersToRunner, projectQuiet, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill, projectRunsInline, scheduleProjectFire } from "./lib/agentTaskRows";
+import { isSpawnedWorker } from "./lib/workerSettleTrigger";
 export { refreshArmedTriggerKind, patchTask, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill };
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -1010,8 +1011,11 @@ async function roleHearing(ctx: TaskCtx, roleId: Id<"org_roles">, spec: RoleEven
 }
 
 /** The role that hears for a waiting session: its role for a session under
- *  one, the parent role for a role's own standing session, null otherwise. */
+ *  one, the parent role for a role's own standing session, null otherwise. A
+ *  worker nested under the session that started it tells that session instead
+ *  (workerSettle.tellParent), so no role hears for it. */
 async function routeUpTarget(ctx: TaskCtx, conv: Doc<"conversations">): Promise<{ target: Id<"org_roles"> | null; standingRole: any }> {
+  if (isSpawnedWorker(conv as any)) return { target: null, standingRole: null };
   const standingRole = conv.standing_role_id ? await ctx.db.get(conv.standing_role_id) : null;
   const target = standingRole ? (standingRole.reports_to?.kind === "role" ? standingRole.reports_to.role_id : null) : conv.org_role_id ?? null;
   return { target, standingRole };

@@ -106,7 +106,7 @@ export function hasCharter(row: CharterRow | null | undefined): boolean {
 }
 
 // The line a charter becomes wherever a role or a hand reads it: the frame's
-// "Your scope now", the brief's facts, a hand's briefing. Null when the row
+// "Your scope now" and the brief's facts. Null when the row
 // has no goal, priority or metrics, so a surface never prints an empty one.
 export function charterLine(label: string, row: CharterRow | null | undefined): string | null {
   if (!hasCharter(row)) return null;

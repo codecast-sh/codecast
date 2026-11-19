@@ -1,7 +1,7 @@
-// A hand's briefing names the task it was started for. A workflow station is
-// nested under its run's session, so it is briefed on the run's task; the
-// spawning role session's own binding (which drifts between its hands) is
-// only the fallback.
+// A role's hand is a worker of the session that started it: nested under that
+// session (so its settle wakes it), started on the brief exactly as written,
+// filed under the role and marked unattended. A workflow station keeps its
+// run's session as its parent.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { createSessionFromCli } from "./spawn";
@@ -30,26 +30,27 @@ function fixture() {
   return { ctx, tables };
 }
 
-const briefed = (tables: Record<string, any[]>): string => tables.pending_messages[0].content;
+const firstTurn = (tables: Record<string, any[]>): string => tables.pending_messages[0].content;
+const hand = (tables: Record<string, any[]>) => tables.conversations.find((c) => c.session_id !== "lead-uuid" && c.session_id !== "wf-run" && c.session_id !== "plain-uuid");
 
-describe("a hand's briefing task", () => {
-  test("a station spawned by the role's session is briefed on its run's task, not the session's binding", async () => {
-    const { ctx, tables } = fixture();
-    await (createSessionFromCli as any)._handler(ctx, { agent_type: "claude_code", spawner_session: "lead-uuid", parent_session: "wf-run", prompt: "Prove it" });
-    const text = briefed(tables);
-    expect(text).toContain("cast task handoff ct-59509");
-    expect(text).not.toContain("ct-55739");
-  });
-
-  test("with no task named, the spawner's binding is used", async () => {
+describe("a role's hand", () => {
+  test("nests under the role session that started it, on the brief as written", async () => {
     const { ctx, tables } = fixture();
     await (createSessionFromCli as any)._handler(ctx, { agent_type: "claude_code", spawner_session: "lead-uuid", prompt: "Do it" });
-    expect(briefed(tables)).toContain("cast task handoff ct-55739");
+    expect(hand(tables)).toMatchObject({ parent_conversation_id: "conversations_lead", is_subagent: true, org_role_id: ROLE, unattended: true });
+    expect(firstTurn(tables)).toBe("Do it");
   });
 
-  test("a worker nested under an ordinary session keeps the spawner's binding", async () => {
+  test("a station keeps its run's session as its parent and its own brief", async () => {
     const { ctx, tables } = fixture();
-    await (createSessionFromCli as any)._handler(ctx, { agent_type: "claude_code", spawner_session: "lead-uuid", parent_session: "plain-uuid", prompt: "Do it" });
-    expect(briefed(tables)).toContain("cast task handoff ct-55739");
+    await (createSessionFromCli as any)._handler(ctx, { agent_type: "claude_code", spawner_session: "lead-uuid", parent_session: "wf-run", prompt: "Prove it" });
+    expect(hand(tables)).toMatchObject({ parent_conversation_id: "conversations_run", org_role_id: ROLE });
+    expect(firstTurn(tables)).toBe("Prove it");
+  });
+
+  test("a session outside any role spawns with no parent it did not ask for", async () => {
+    const { ctx, tables } = fixture();
+    await (createSessionFromCli as any)._handler(ctx, { agent_type: "claude_code", spawner_session: "plain-uuid", prompt: "Do it" });
+    expect(hand(tables)?.parent_conversation_id).toBeUndefined();
   });
 });

@@ -27,9 +27,12 @@ export type WorkerRow = {
   reported_to_parent_at?: number;
 };
 
+// A role's hand is a worker like any other: it reports to the session that
+// started it, which is woken when it settles (createSessionFromCli nests every
+// hand under its spawner). A role's standing session never is one.
 export function isSpawnedWorker(c: WorkerRow): boolean {
   return c.is_subagent === true && !!c.parent_conversation_id && !c.agent_task_id && !c.is_workflow_sub &&
-    !c.org_role_id && !c.standing_role_id && !c.agent_team_name;
+    !c.standing_role_id && !c.agent_team_name;
 }
 
 export async function scheduleWorkerSettle(ctx: any, conversationId: Id<"conversations">, statusTs: number): Promise<void> {

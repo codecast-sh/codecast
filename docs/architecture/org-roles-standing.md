@@ -147,10 +147,11 @@ the conversation as the plain message it is.
 | A person messages the role (`cast role wake`, `cast send @handle`, the composer) | `pendingMessages.enqueuePendingMessage` | the message, as written |
 | A chat mention of the role, by a person or a session | `chat.ts` mention path, `tellRole` | a `<chat-mention>` line, the same shape a mentioned session gets |
 | A decision routed to the role | `sessionDecisions.wakeLadder`, `tellRole` | one line naming the decision and the commands |
-| A hand needs input or is hard blocked | `notifications.performNeedsInputCheck` (one line per waiting episode via `hand_wake_notified_key`); `conversations.performSetThreadState` with `--status blocked` | one line naming the hand |
+| A hand settles: finished, blocked, stopped or waiting | `workerSettle.tellParent` (the hand is a worker nested under the session that started it) | one `<worker-report>` naming the hand and what it settled on, woken in the session that started it |
+| A session under the role that is not its worker (a line station, a session moved under it) needs input or is hard blocked | `notifications.performNeedsInputCheck` (one line per waiting episode via `hand_wake_notified_key`); `conversations.performSetThreadState` with `--status blocked` | one line naming the hand |
 | A task handed to the role | `tasks.announceAssignment`, `tellRole` | one line naming the task |
 | A routine fired | `agentTasks.dispatchCloudTriggers`; the daemon path through `sendMessageToSession` with `origin: "scheduler"` | the `<scheduled-task>` message every session gets |
-| A task or plan in scope changed; the charter, scope, line, authority or reports changed; a hand settled done; a decision was answered | nothing | read at the next run with `cast brief` |
+| A task or plan in scope changed; the charter, scope, line, authority or reports changed; a decision was answered | nothing | read at the next run with `cast brief` |
 
 Each line into a standing session counts as one of the role's wakes today
 (`counters.wakes`, bumped in `enqueuePendingMessage`); org.health reads the
@@ -169,9 +170,7 @@ refused; the web role page is the one door. Retire (`performRetireRole`)
 tears the seat down: live hands get one interrupt, the standing session's
 routines are cancelled, its held turns dropped, and its anchor decommissioned
 (kill command, bot off the roster).
-A hand's first turn opens with the unattended opening and a briefing that
-names `cast task handoff`, `cast task verdict` and `cast decide --task`
-(`spawn.handBriefing`, written where the hand pointer is written). Usage: `messages.rollUpUsage` from the CLI
+A hand is a worker of the session that started it (`spawn.createSessionFromCli` nests it there when the spawner did not name a parent), filed under the role and marked unattended, and its first turn is the spawner's brief as written. The spawner reads it with `cast read`, steers it with `cast send`, and is woken when it settles. Usage: `messages.rollUpUsage` from the CLI
 parser's `usageOf` on Claude assistant records, into
 `conversations.usage_totals` and the role's daily token counter. One turn
 spans several JSONL records that share `message.id` and repeat the usage

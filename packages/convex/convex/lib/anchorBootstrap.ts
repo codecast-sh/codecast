@@ -57,7 +57,7 @@ function standingRoleWays(role: RoleBootstrap, cleanChat: boolean): string {
     ? `write to them with \`cast role wake @${role.parentHandle} "<what they will decide and why>"\`.`
     : `raise it in this thread: say what they will decide and why in your pinned state (\`cast state --status blocked\`), and post a real choice between options as a \`cast decide\` card here, with your recommendation.`;
   return [
-    `You wake on your routine, when a session under you is waiting, and when someone writes to you; a person can see and change those triggers on your page. Start every turn with \`cast brief\`: what changed, your sessions, and how the people who report to you are doing against their goals.`,
+    `You wake on your routine, when a session under you finishes or is waiting, and when someone writes to you; a person can see and change those triggers on your page. Start every turn with \`cast brief\`: what changed, your sessions, and how the people who report to you are doing against their goals.`,
     roleLevelGuidance({ parent: role.parentName, startsOnItsOwn: role.startsOnItsOwn }),
     `The sessions that report to you stay out of the person's inbox; what they need reaches you as messages, and you answer what you can. What you cannot answer goes up to ${role.parentName}: ${up}`,
     cleanChat ? SAY_GUIDANCE : LAST_MESSAGE_GUIDANCE,
