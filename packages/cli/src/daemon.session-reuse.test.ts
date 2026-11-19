@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { freshDeliveryStartVerdict, pickReusableConversationTmux, startedSessionGuard, STARTED_SESSION_BOOT_WINDOW_MS } from "./daemon.js";
+import { BLANK_START_HOLD_RECHECK_MS, BlankStartHoldError } from "./terminalHold.js";
 
 // Regression coverage for the web new-session double-start (root-caused 2026-05-25).
 //
@@ -136,6 +137,21 @@ describe("double-start fix invariants", () => {
     expect(body.indexOf('if (declaredAgentType !== "claude")')).toBeLessThan(
       body.indexOf('const tmuxSession = `cc-claude-${shortId}`'),
     );
+  });
+
+  // A Grok role start that failed left its launch prompt pending; every pass
+  // refused the Claude fallback, returned false, and retried on the failure
+  // ladder with no reason shown: 461 retries over 38h (2026-11-19).
+  test("refusing a different declared agent holds the message with its reason", () => {
+    const start = daemonSource.indexOf("async function startFreshSessionForDelivery");
+    const body = daemonSource.slice(start, start + 5000);
+    const refusal = body.slice(body.indexOf('if (declaredAgentType !== "claude")'));
+    expect(refusal.slice(0, refusal.indexOf("\n  }\n"))).toContain("throw new BlankStartHoldError(declaredAgentType)");
+    const holdBranch = daemonSource.slice(daemonSource.indexOf("} else if (err instanceof CloudAgentHoldError"));
+    expect(holdBranch.slice(0, holdBranch.indexOf("{"))).toContain("err instanceof BlankStartHoldError");
+    const hold = new BlankStartHoldError("grok");
+    expect(hold.holdReason).toContain("no grok session to resume");
+    expect(hold.recheckMs).toBe(BLANK_START_HOLD_RECHECK_MS);
   });
 });
 

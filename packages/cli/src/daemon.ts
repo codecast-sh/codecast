@@ -343,7 +343,7 @@ import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketN
 import { ghosttyPane } from "./ghostty.js";
 import type { PaneTransport } from "./paneTransport.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
-import { RunLimitHoldError, TerminalHoldError } from "./terminalHold.js";
+import { BlankStartHoldError, RunLimitHoldError, TerminalHoldError } from "./terminalHold.js";
 import { ForeignWriterHoldError, foreignSessionWriter, foreignWriterScreen, parsePsRows, PS_ROWS_ARGS, type PsRow } from "./foreignSessionWriter.js";
 import { HERD_TAKE_PATH, SwapHeldError, abortableWait, closeHerdrPane, pollUntilUp, serveHerdTake, swapHeld, takeBusy, type HerdTakeDeps } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
@@ -16200,30 +16200,42 @@ function normalizePromptText(value: string): string {
 // reads exactly like a typed one, and delivery pressed Enter on it for 15 s at
 // a time (ct-51376). Every capture that asks what the composer holds is taken
 // with -e and read through this, which drops faint runs and every other escape.
+//
+// The composer's scroll rules are the exception: Claude Code draws the
+// "↑ 228 more" of a draft taller than its box in faint text too, and with it
+// dropped the rule read as a bare line, the gate found no composer and held a
+// pasted message as unverified for over an hour (jx7bj74, 2026-11-19). A line
+// that is a scroll rule once its escapes are gone is kept whole.
 export function stripTmuxFaintText(pane: string): string {
   let faint = false;
-  let out = "";
-  let last = 0;
   const re = /\x1b\[([0-9;:]*)([A-Za-z])|\x1b[^[]/g;
-  for (let m = re.exec(pane); m; m = re.exec(pane)) {
-    if (!faint) out += pane.slice(last, m.index);
-    last = re.lastIndex;
-    if (m[2] !== "m") continue;
-    const params = (m[1] || "0").split(/[;:]/);
-    for (let i = 0; i < params.length; i++) {
-      const p = params[i];
-      // 38/48/58 carry a colour: 5;N or 2;R;G;B. Their arguments are not
-      // attributes, and a truecolor "2" read as faint dropped opencode's and
-      // grok's typed text.
-      if (p === "38" || p === "48" || p === "58") {
-        i += params[i + 1] === "5" ? 2 : params[i + 1] === "2" ? 4 : 0;
-        continue;
+  return pane.split("\n").map((line) => {
+    let out = "";
+    let last = 0;
+    re.lastIndex = 0;
+    for (let m = re.exec(line); m; m = re.exec(line)) {
+      if (!faint) out += line.slice(last, m.index);
+      last = re.lastIndex;
+      if (m[2] !== "m") continue;
+      const params = (m[1] || "0").split(/[;:]/);
+      for (let i = 0; i < params.length; i++) {
+        const p = params[i];
+        // 38/48/58 carry a colour: 5;N or 2;R;G;B. Their arguments are not
+        // attributes, and a truecolor "2" read as faint dropped opencode's and
+        // grok's typed text.
+        if (p === "38" || p === "48" || p === "58") {
+          i += params[i + 1] === "5" ? 2 : params[i + 1] === "2" ? 4 : 0;
+          continue;
+        }
+        if (p === "2") faint = true;
+        else if (p === "" || p === "0" || p === "22") faint = false;
       }
-      if (p === "2") faint = true;
-      else if (p === "" || p === "0" || p === "22") faint = false;
     }
-  }
-  return faint ? out : out + pane.slice(last);
+    if (!faint) out += line.slice(last);
+    const plain = line.replace(re, "");
+    if (CLAUDE_COMPOSER_SCROLLED_ABOVE.test(plain) || CLAUDE_COMPOSER_SCROLLED_BELOW.test(plain)) return plain;
+    return out;
+  }).join("\n");
 }
 
 export async function captureTmuxComposerPane(exec: typeof tmuxExec, target: string, lines: number): Promise<string> {
@@ -18727,11 +18739,14 @@ function composerShowsOnlyPayloadTail(composer: string, payload: string): boolea
 // tail at 220x50 and was written three times, then dropped, while it sat whole
 // in the composer (jx75w1x, 2026-11-14). The TUI redraws after the resize,
 // which takes over a second on a loaded machine, so the wait runs to the
-// caller's deadline.
+// caller's deadline. Claude's composer is about half the window too (45 rows
+// at 100, 195 at 400), and a 400-row ceiling left a 250-line paste with its
+// start hidden at full size, so it could never be confirmed (jx7bj74,
+// 2026-11-19). The ceiling only guards against a runaway estimate.
 export function composerReadHeight(payload: string, width = Number(TMUX_WINDOW_WIDTH)): number {
   const usable = Math.max(40, width - 12);
   const rows = payload.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / usable)), 0);
-  return Math.min(400, Math.max(Number(TMUX_WINDOW_HEIGHT), 2 * rows + 20));
+  return Math.min(1200, Math.max(Number(TMUX_WINDOW_HEIGHT), 2 * rows + 20));
 }
 
 async function matchAtFullWindowSize(exec: typeof tmuxExec, target: string, payload: string, matches: (pane: string) => boolean, deadline: number): Promise<boolean> {
@@ -27253,6 +27268,7 @@ async function startFreshSessionForDelivery(
   // agent boundary when another runtime is merely late to register.
   if (declaredAgentType !== "claude") {
     logDelivery(`Refusing cross-agent delivery fallback for conv=${conversationId.slice(0, 12)} — requested ${declaredAgentType ?? "unknown"}, fallback is claude`);
+    if (declaredAgentType) throw new BlankStartHoldError(declaredAgentType);
     return null;
   }
 
@@ -34291,7 +34307,7 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${hold.holdReason} in conv=${msg.conversation_id.slice(0, 12)}; retrying when the screen changes`);
             holdConversationForPrompt(msg.conversation_id);
             rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
-          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof RunLimitHoldError || err instanceof ForeignWriterHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
+          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof RunLimitHoldError || err instanceof BlankStartHoldError || err instanceof ForeignWriterHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
             // never spending the retry budget, and tried again at the error's

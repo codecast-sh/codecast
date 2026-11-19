@@ -28,3 +28,21 @@ export class RunLimitHoldError extends Error {
     this.holdReason = reason;
   }
 }
+
+// A conversation whose agent this daemon cannot start blank (anything but
+// Claude, with no transcript to resume and no registered session). Retrying on
+// the failure ladder only spends the retry count every five minutes with no
+// reason anyone can see (a Grok role start that failed held its launch prompt
+// 461 times, 2026-11-19). Held with its reason instead; it goes out once the
+// agent registers a session, or someone starts the conversation again.
+export const BLANK_START_HOLD_RECHECK_MS = 5 * 60_000;
+
+export class BlankStartHoldError extends Error {
+  readonly holdReason: string;
+  readonly recheckMs = BLANK_START_HOLD_RECHECK_MS;
+  constructor(agent: string) {
+    const reason = `no ${agent} session to resume on this machine; start the conversation again to send it`;
+    super(reason);
+    this.holdReason = reason;
+  }
+}
