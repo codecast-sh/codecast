@@ -41,6 +41,10 @@ export function isCompactionSummaryMessage(rawContent: string | null | undefined
 // and the insert-time Sends counter (convex/lib/userSend.ts).
 
 export function stripPastedContent(text: string): string {
+  // Both patterns need this word, and the second has no fixed start for the
+  // engine to search for, so without the check it walks every character of
+  // every message it is given.
+  if (!text.includes("pasted_content")) return text;
   return text
     .replace(/<pasted_content(?=[\s>]|$)[^>]*(?:>|$)\r?\n?/g, "")
     .replace(/(?:\r?\n)?<\/pasted_content(?=[\s>]|$)[^>]*(?:>|$)/g, "");
@@ -67,9 +71,12 @@ const LEGACY_MENTION_CONTEXT_RE =
   /\n\n---\n(?=### (?:Task|Plan|Doc|Session|Trigger|Label): |[\s\S]{0,800}?<untrusted-[0-9a-f]+ source=)[\s\S]*?\n> `cast (?:task context|plan show|read|trigger log|doc read|sessions)[^\n]*\n---(?=\n|$)\n?/g;
 
 export function stripMentionContext(text: string): string {
-  return text
-    .replace(/\n*<mention-context>[\s\S]*?(?:<\/mention-context>\n?|$)/g, "")
-    .replace(LEGACY_MENTION_CONTEXT_RE, "");
+  // Each pattern runs only on a text that holds the words it has to start
+  // with: the tag, or the rule a legacy block opens on.
+  let out = text;
+  if (out.includes("<mention-context>")) out = out.replace(/\n*<mention-context>[\s\S]*?(?:<\/mention-context>\n?|$)/g, "");
+  if (out.includes("\n\n---\n")) out = out.replace(LEGACY_MENTION_CONTEXT_RE, "");
+  return out;
 }
 
 // Normalize the wrappers/control chars the daemon may prepend before a wire
@@ -77,9 +84,14 @@ export function stripMentionContext(text: string): string {
 // keystrokes (Ctrl-A/Ctrl-K) occasionally leak in as leading control chars,
 // and system/task reminders can be appended by the harness.
 export function stripInjectionNoise(text: string): string {
-  return stripMentionContext(stripPastedContent(text))
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
-    .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
+  // Every predicate on a message calls this, several per row per render, on
+  // texts that almost never hold what it removes. A reminder pattern runs only
+  // where its closing tag is present; the checks above do the same for the
+  // paste and mention patterns.
+  let out = stripMentionContext(stripPastedContent(text));
+  if (out.includes("</system-reminder>")) out = out.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");
+  if (out.includes("</task-reminder>")) out = out.replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "");
+  return out
     .replace(/^[\x00-\x1f\s]+/, "")
     // The clearing keystrokes sometimes leak a PRINTABLE character instead of a
     // control one, leaving "h<session-message from=…". Drop up to two such

@@ -59,7 +59,7 @@ import { goalCanPause, goalCanResume, goalFrameLine, goalObjectiveProblem, goalM
 import { SessionGoalPill } from "./SessionGoalPill";
 import { ConsequentialSwitch, SwitchReview } from "./consequential/ConsequentialSwitch";
 import { sessionGoalLedger } from "../lib/sessionGoalLedger";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, jumpRowForMessage, initialScrollEdge, settleTimelineItemAtOffset, cancelActiveItemSettle, releaseScrollTarget, shouldResumeFollow, READER_SCROLL_WINDOW_MS } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, isUnrenderedBox, loadOlderNeedsNoRead, jumpRowForMessage, initialScrollEdge, settleTimelineItemAtOffset, cancelActiveItemSettle, releaseScrollTarget, shouldResumeFollow, READER_SCROLL_WINDOW_MS } from "./conversationScroll";
 import { deriveHostedRunningPhrase, deriveRunningPhrase, shouldShowIdleGap, workingSinceForClock, isProducingAgentStatus } from "./workingStatus";
 import { quoteToComposer, submitReview } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
@@ -1770,6 +1770,12 @@ const ConversationViewInner = (
     }
     const box = entry?.borderBoxSize?.[0];
     let size: number;
+    if (isUnrenderedBox(box)) {
+      // The pane went display:none (a background tab): the row has no box, and
+      // its height is whatever it was. Returning that leaves the virtualizer's
+      // cache and VIRT_HEIGHT_CACHE as they are.
+      return instance.itemSizeCache.get(key) ?? VIRT_HEIGHT_CACHE.get(virtHeightKey(key, rowDensityKey(index))) ?? instance.options.estimateSize(index);
+    }
     if (box) {
       size = Math.round(horizontal ? box.inlineSize : box.blockSize);
     } else {
@@ -2711,10 +2717,19 @@ const ConversationViewInner = (
     // The conditions that need no layout first: this runs on every scroll
     // event, and a read of scrollHeight against a changed page is a full layout.
     if (!sc || !pp.onLoadOlder || !pp.hasMoreAbove || pp.isLoadingOlder || pp.isLoadingNewer || Date.now() < paginationCooldownRef.current) return;
-    // Unarmed, only an underfilled list loads; the scroller is at least as tall
-    // as the virtual rows, so rows taller than the viewport settle it with no
-    // read of the page (this runs on every measurement while a window loads).
-    if (!loadOlderArmedRef.current && virtualListOverfills()) return;
+    // Answered from the virtualizer's own numbers wherever they settle it: a
+    // hidden pane, an unarmed list whose rows overflow the viewport (the
+    // scroller is at least as tall as the virtual rows), and an armed load
+    // whose reader is nowhere near the top (conversationScroll.ts). This runs
+    // on every measurement while a window loads and on every streamed chunk.
+    const observed = virtualizer.scrollRect;
+    if (observed && loadOlderNeedsNoRead({
+      armed: loadOlderArmedRef.current,
+      viewport: observed.height,
+      totalSize: virtualizer.getTotalSize(),
+      scrollOffset: virtualizer.scrollOffset ?? 0,
+      triggerPx: TOP_LOAD_TRIGGER_PX,
+    })) return;
     if (sc.clientHeight === 0) return;
     const underfilled = sc.scrollHeight <= sc.clientHeight;
     if (!loadOlderArmedRef.current && !underfilled) return;
@@ -2747,6 +2762,8 @@ const ConversationViewInner = (
     const sc = containerRef.current;
     const pp = paginationPropsRef.current;
     if (!sc || !pp.onLoadNewer || !pp.hasMoreBelow || pp.isLoadingOlder || pp.isLoadingNewer || Date.now() < paginationCooldownRef.current) return;
+    // A hidden pane has no geometry to read.
+    if (virtualizer.scrollRect?.height === 0) return;
     if (!loadNewerArmedRef.current && virtualListOverfills()) return;
     if (sc.clientHeight === 0) return;
     if (!loadNewerArmedRef.current && sc.scrollHeight > sc.clientHeight) return;

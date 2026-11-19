@@ -11,7 +11,19 @@ const sizes = new WeakMap<Element, number>();
 let onHeightRead: ((el: HTMLElement) => void) | undefined;
 const offsets = new WeakMap<Element, number>();
 const observers = new Set<TestResizeObserver>();
-const height = (el: Element) => (el as HTMLElement).style.height === "0px" ? 0 : sizes.get(el) ?? (el.hasAttribute("data-sv-feed") ? 500 : 50);
+// A background tab pane is display:none: nothing in it has a box.
+let paneHidden = false;
+let scrollerReads = 0;
+// A row's height by its key, for a test whose rows unmount and mount again.
+const keyedSizes = new Map<string, number>();
+const height = (el: Element) => paneHidden || (el as HTMLElement).style.height === "0px" ? 0 : sizes.get(el) ?? keyedSizes.get((el as HTMLElement).dataset?.vkey ?? "") ?? (el.hasAttribute("data-sv-feed") ? 500 : 50);
+/** Every observer reports each of its targets again, as a browser does when a pane hides or shows. */
+const reportAllBoxes = () => {
+  for (const observer of [...observers]) {
+    const entries = [...observer.targets].filter((el) => el.isConnected).map((el) => ({ target: el, contentRect: { width: paneHidden ? 0 : 700, height: height(el) }, borderBoxSize: [{ blockSize: height(el), inlineSize: paneHidden ? 0 : 700 }] }));
+    if (entries.length) observer.callback(entries as unknown as ResizeObserverEntry[], observer as unknown as ResizeObserver);
+  }
+};
 class TestResizeObserver {
   targets = new Set<Element>();
   constructor(public callback: ResizeObserverCallback) { observers.add(this); }
@@ -36,12 +48,12 @@ Object.defineProperties(dom.window.HTMLElement.prototype, {
   },
   offsetHeight: { get() { onHeightRead?.(this); return height(this); } },
   offsetWidth: { get() { return 700; } },
-  clientHeight: { get() { return height(this); } },
+  clientHeight: { get() { if (this.hasAttribute("data-sv-feed")) scrollerReads++; return height(this); } },
   clientWidth: { get() { return 700; } },
-  scrollHeight: { get() { return this.hasAttribute("data-sv-feed") ? Number.parseFloat(this.querySelector("[data-vkey]")?.parentElement.style.height ?? "500") : height(this); } },
+  scrollHeight: { get() { if (this.hasAttribute("data-sv-feed")) scrollerReads++; return this.hasAttribute("data-sv-feed") ? Number.parseFloat(this.querySelector("[data-vkey]")?.parentElement.style.height ?? "500") : height(this); } },
   offsetParent: { get() { return dom.window.document.body; } },
 });
-dom.window.HTMLElement.prototype.getBoundingClientRect = function () { return { x: 0, y: 0, top: 0, left: 0, right: 700, bottom: height(this), width: 700, height: height(this), toJSON() {} }; };
+dom.window.HTMLElement.prototype.getBoundingClientRect = function () { const width = paneHidden ? 0 : 700; return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height(this), width, height: height(this), toJSON() {} }; };
 dom.window.HTMLElement.prototype.scrollTo = function (x: any, y?: number) { this.scrollTop = typeof x === "object" ? x.top ?? this.scrollTop : y ?? 0; };
 dom.window.HTMLElement.prototype.scrollIntoView = () => {};
 dom.window.HTMLCanvasElement.prototype.getContext = (() => null) as any;
@@ -92,6 +104,64 @@ for (const messageCount of [80, 800]) test(`a measured row resize keeps geometry
       expect(Number.parseFloat(progress!.style.height)).toBeCloseTo(feed.scrollTop / (feed.scrollHeight - feed.clientHeight) * 100, 2);
     }
   } finally { await act(() => root.unmount()); host.remove(); errors.mockRestore(); }
+}, 30_000);
+
+test("a pane that hides and comes back keeps every row's height and place, and reads no layout for a reader mid-transcript", async () => {
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  let commits = 0;
+  try {
+    await act(async () => { root.render(<ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><Profiler id="transcript" onRender={() => commits++}><ConversationView conversation={{ ...conversation, _id: "hidden-pane-fixture" as any, messages: conversation.messages.map(m => ({ ...m, _id: `hidden-${m._id}` })), message_count: 800 }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></Profiler></MemoryRouter></ConvexProviderWithAuth>); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)); });
+    const feed = host.querySelector<HTMLElement>("[data-sv-feed]")!;
+    // The reader wheels up into the middle of the transcript: a load is armed
+    // and stays armed, far from the top.
+    await act(async () => {
+      feed.dispatchEvent(new dom.window.WheelEvent("wheel", { deltaY: -800, bubbles: true }));
+      feed.scrollTop -= 800;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    });
+    const rows = [...host.querySelectorAll<HTMLElement>("[data-vkey]")];
+    expect(rows.length).toBeGreaterThan(2);
+    const container = rows[0].parentElement!;
+    // Rows of different heights, so a lost measurement shows.
+    await act(async () => {
+      rows.forEach((row, i) => keyedSizes.set(row.dataset.vkey!, 60 + (i % 5) * 20));
+      reportAllBoxes();
+      await new Promise(resolve => setTimeout(resolve, 100));
+    });
+    const placed = () => [...host.querySelectorAll<HTMLElement>("[data-vkey]")].map((row) => `${row.dataset.vkey}@${row.style.top}`).join(" ");
+    const heightBefore = container.style.height;
+    const placedBefore = placed();
+    const offsetBefore = feed.scrollTop;
+    expect(Number.parseFloat(heightBefore)).toBeGreaterThan(500);
+    expect(feed.scrollTop).toBeGreaterThan(1200);
+
+    // The tab goes to the background.
+    const commitsBefore = commits;
+    scrollerReads = 0;
+    await act(async () => {
+      paneHidden = true;
+      reportAllBoxes();
+      await new Promise(resolve => setTimeout(resolve, 150));
+    });
+    // A pane with no viewport draws no rows; what it must keep is their heights.
+    expect(container.style.height).toBe(heightBefore);
+
+    // And comes back.
+    await act(async () => {
+      paneHidden = false;
+      reportAllBoxes();
+      await new Promise(resolve => setTimeout(resolve, 250));
+    });
+    expect(container.style.height).toBe(heightBefore);
+    expect(placed()).toBe(placedBefore);
+    expect(feed.scrollTop).toBe(offsetBefore);
+    // No row lost its height, so no row was measured again: nothing to commit
+    // per row, and the armed load never read the page.
+    expect(commits - commitsBefore).toBeLessThanOrEqual(4);
+    expect(scrollerReads).toBeLessThanOrEqual(6);
+  } finally { paneHidden = false; keyedSizes.clear(); await act(() => root.unmount()); host.remove(); }
 }, 30_000);
 
 test("size repair reads all row heights before changing geometry", async () => {

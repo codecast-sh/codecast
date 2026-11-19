@@ -1,7 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge, shouldResumeFollow } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge, shouldResumeFollow, isUnrenderedBox, loadOlderNeedsNoRead } from "./conversationScroll";
 
 describe("shouldFollowStreaming", () => {
   test("follows normally before the user scrolls away", () => {
@@ -297,5 +297,46 @@ describe("shouldResumeFollow", () => {
 
   test("does not resume away from the bottom", () => {
     expect(shouldResumeFollow({ nearBottom: false, scrolledDown: true, readerMovingDown: true })).toBe(false);
+  });
+});
+
+describe("isUnrenderedBox", () => {
+  test("a row in a hidden pane has no width and no height", () => {
+    expect(isUnrenderedBox({ inlineSize: 0, blockSize: 0 })).toBe(true);
+  });
+
+  test("a row that renders nothing still spans the list, so its zero height is a measurement", () => {
+    expect(isUnrenderedBox({ inlineSize: 700, blockSize: 0 })).toBe(false);
+    expect(isUnrenderedBox({ inlineSize: 700, blockSize: 48 })).toBe(false);
+  });
+
+  test("a mount-time call with no observer entry is not a hidden row", () => {
+    expect(isUnrenderedBox(undefined)).toBe(false);
+  });
+});
+
+describe("loadOlderNeedsNoRead", () => {
+  const g = { armed: false, viewport: 800, totalSize: 12_000, scrollOffset: 9_000, triggerPx: 600 };
+
+  test("a hidden pane has no geometry to read, armed or not", () => {
+    expect(loadOlderNeedsNoRead({ ...g, viewport: 0 })).toBe(true);
+    expect(loadOlderNeedsNoRead({ ...g, viewport: 0, armed: true, scrollOffset: 0 })).toBe(true);
+  });
+
+  test("an unarmed list whose rows overflow the viewport needs none", () => {
+    expect(loadOlderNeedsNoRead(g)).toBe(true);
+    expect(loadOlderNeedsNoRead({ ...g, scrollOffset: 0 })).toBe(true);
+  });
+
+  test("rows no taller than the viewport may be underfilled, so the page is read", () => {
+    expect(loadOlderNeedsNoRead({ ...g, totalSize: 800 })).toBe(false);
+    expect(loadOlderNeedsNoRead({ ...g, totalSize: 300, armed: true })).toBe(false);
+  });
+
+  test("an armed load far from the top needs none; inside twice the trigger band it reads the page", () => {
+    expect(loadOlderNeedsNoRead({ ...g, armed: true })).toBe(true);
+    expect(loadOlderNeedsNoRead({ ...g, armed: true, scrollOffset: 1_201 })).toBe(true);
+    expect(loadOlderNeedsNoRead({ ...g, armed: true, scrollOffset: 1_200 })).toBe(false);
+    expect(loadOlderNeedsNoRead({ ...g, armed: true, scrollOffset: 0 })).toBe(false);
   });
 });

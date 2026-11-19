@@ -6,6 +6,7 @@
 import { describeError, errorChain, errorSummary, rootError } from "./errorCause";
 import { showErrorToast } from "./errorToast";
 import { dropStylePreloads } from "./stylePreloads";
+import { watchLongFrames } from "./freezeAttribution";
 import {
   claimErrorKey,
   setupErrorToasts as setupPlatformErrorToasts,
@@ -141,9 +142,15 @@ function startReplayOnError(analytics: AnalyticsRuntime) {
       // stylesheet preload link forever, a listener and a timer at a time
       // (./stylePreloads).
       dropStylePreloads();
-      replayRecorder = startReplay({ sink, sampleRate: replay?.sampleRate ?? 0, replayDom: replay?.dom ?? "off" });
-      if (regulated) replayRecorder.stop();
-      else for (const reason of pendingKeeps.splice(0)) replayRecorder.keep(reason);
+      const recorder = startReplay({ sink, sampleRate: replay?.sampleRate ?? 0, replayDom: replay?.dom ?? "off" });
+      replayRecorder = recorder;
+      if (regulated) recorder.stop();
+      else {
+        for (const reason of pendingKeeps.splice(0)) recorder.keep(reason);
+        // What ran in each long frame, beside the recorder's own `freeze` mark
+        // (./freezeAttribution). A stopped recorder drops the marks.
+        watchLongFrames((name, data) => recorder.mark(name, data));
+      }
     })
     .catch(() => {});
 }

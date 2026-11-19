@@ -117,6 +117,54 @@ export function shouldLoadOlder(i: LoadOlderInput): boolean {
   return i.nearTop;
 }
 
+/**
+ * A row inside a pane that is not rendered reports a box with no width and no
+ * height. A background tab pane is `display: none`, so every mounted row of its
+ * transcript reports one the moment the pane hides. It is not a measurement: a
+ * row that really renders nothing still spans the list's width. Recorded as a
+ * height of 0, it stacked every mounted row at one offset when the pane came
+ * back, drawn over each other until each was measured again.
+ */
+export function isUnrenderedBox(box: { inlineSize: number; blockSize: number } | undefined): boolean {
+  return box !== undefined && box.inlineSize === 0 && box.blockSize === 0;
+}
+
+export interface LoadOlderGeometry {
+  /** A wheel-up armed a load that no page has consumed yet. */
+  armed: boolean;
+  /** The scroller's height as the virtualizer last observed it; 0 while the pane is hidden. */
+  viewport: number;
+  /** The virtual rows' total height. */
+  totalSize: number;
+  /** The scroll offset the virtualizer holds from the last scroll event. */
+  scrollOffset: number;
+  /** How close to the top a scroll-up has to come before a page loads. */
+  triggerPx: number;
+}
+
+/**
+ * Whether a load-older check can be answered from the virtualizer's own
+ * numbers, with no read of the page.
+ *
+ * The check runs on every wheel-up and on every change of the rows' total
+ * height (each measurement while a window loads, each streamed chunk), and its
+ * reads of clientHeight, scrollHeight and scrollTop each lay the whole page out
+ * when React has just changed it. Three cases need no read:
+ *   - the pane is hidden, so it has no geometry to read;
+ *   - nothing is armed and the rows overflow the viewport, so the list is not
+ *     underfilled and nothing asked for a page;
+ *   - a load is armed but the reader is far from the top. An arm stays set
+ *     until a page consumes it, so a reader who wheeled up once in the middle
+ *     of a transcript paid a full layout per streamed chunk from then on. The
+ *     offset is one frame old at most, so "far" is twice the trigger band.
+ */
+export function loadOlderNeedsNoRead(g: LoadOlderGeometry): boolean {
+  if (g.viewport === 0) return true;
+  if (g.totalSize <= g.viewport) return false;
+  if (!g.armed) return true;
+  return g.scrollOffset > g.triggerPx * 2;
+}
+
 export interface LoadNewerInput {
   /** The content-bottom is near the viewport (distance from bottom inside the preload band). */
   nearBottom: boolean;
