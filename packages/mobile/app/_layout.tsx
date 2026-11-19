@@ -2,6 +2,7 @@ import '@/lib/polyfills';
 import { ComposeHost } from '@/components/session/NewSessionSheet';
 import { UndoBarHost } from '@/components/UndoBar';
 import { PopupHost } from '@/components/PopupHost';
+import { SelectTextHost } from '@/components/SelectTextSheet';
 import { BiometricGate } from '@/components/BiometricGate';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
@@ -340,6 +341,7 @@ function RootLayoutNav() {
                   <ComposeHost />
                   <UndoBarHost />
                   <PopupHost />
+                  <SelectTextHost />
                   {calls ? (
                     <OverlayErrorBoundary>
                       <Suspense fallback={null}>

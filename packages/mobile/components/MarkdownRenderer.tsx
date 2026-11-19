@@ -41,7 +41,8 @@ import { parseInsightBlocks } from '@codecast/web/components/insightBlocks';
 import { replaceShortcodes } from '@codecast/shared/chat';
 import { resolveDateDisplay } from '@codecast/web/lib/dateMention';
 
-import { LinkText, HighlightedCodeText } from './CodeText';
+import { LinkText, HighlightedCodeText, useLinkLongPress } from './CodeText';
+import { OutsideMessage, useMessageLongPress } from './MessageLongPress';
 
 export { LinkText, linkifyPlainText, HighlightedCodeText } from './CodeText';
 
@@ -219,6 +220,7 @@ export function CodeBlockFullscreen({ content, language, visible, onClose }: { c
   const lines = content.split('\n');
   if (!visible) return null;
   return (
+<OutsideMessage>
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <RNView style={{ flex: 1, backgroundColor: '#002b36' }}>
         <RNView style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 60, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.1)' }}>
@@ -249,6 +251,7 @@ export function CodeBlockFullscreen({ content, language, visible, onClose }: { c
         </ScrollView>
       </RNView>
     </Modal>
+    </OutsideMessage>
   );
 }
 
@@ -321,13 +324,14 @@ function MarkdownMedia({ img, tiled }: { img: Image; tiled?: boolean }) {
 
 function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: boolean }) {
   const Theme = useTheme();
+  const messageLongPress = useMessageLongPress();
   const [full, setFull] = useState(false);
   const [failed, setFailed] = useState(false);
   const caption = captionFromAlt(alt);
   if (failed) return null;
   return (
     <RNView style={tiled ? mdStyles.imageTile : undefined}>
-      <TouchableOpacity onPress={() => setFull(true)} activeOpacity={0.85}>
+      <TouchableOpacity onPress={() => setFull(true)} onLongPress={messageLongPress ? () => messageLongPress() : undefined} activeOpacity={0.85}>
         <RNImage
           source={{ uri: src }}
           style={[mdStyles.image, tiled && mdStyles.imageTiled]}
@@ -337,11 +341,13 @@ function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: 
         />
       </TouchableOpacity>
       {caption ? <RNText style={mdStyles.imageCaption}>{caption}</RNText> : null}
+<OutsideMessage>
       <Modal visible={full} transparent animationType="fade" onRequestClose={() => setFull(false)}>
         <TouchableOpacity style={mdStyles.imageModal} activeOpacity={1} onPress={() => setFull(false)}>
           <RNImage source={{ uri: src }} style={mdStyles.imageFull} resizeMode="contain" />
         </TouchableOpacity>
       </Modal>
+      </OutsideMessage>
     </RNView>
   );
 }
@@ -398,6 +404,7 @@ function soloReference(p: Paragraph): SoloRef | null {
 
 function SoloRefCard({ solo, isUser }: { solo: SoloRef; isUser: boolean }) {
   const Theme = useTheme();
+  const onLinkLongPress = useLinkLongPress(solo.kind === 'url' ? solo.url : '');
   if (solo.kind === 'entity') {
     // A proposal and a decision read as the cards the web transcript draws,
     // with their answers right there. One change of a proposal (`op-55#3`)
@@ -424,7 +431,7 @@ function SoloRefCard({ solo, isUser }: { solo: SoloRef; isUser: boolean }) {
     <TouchableOpacity
       activeOpacity={0.7}
       onPress={() => { void openLink(solo.url); }}
-      onLongPress={() => { copyToClipboard(solo.url); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+      onLongPress={onLinkLongPress}
       style={mdStyles.refCard}
     >
       <FontAwesome name={kicker ? 'window-maximize' : 'globe'} size={13} color={isUser ? Theme.userBubble : Theme.cyan} />
@@ -675,7 +682,10 @@ function InsightCard({ label, content, baseStyle, knownMentionHandles }: { label
 /** `plainTextFences` draws a fence marked `text` as plain lines: the shape an
  *  approval's draft arrives in (@platform/assistant approvalContext quotes
  *  long text exactly, in a fence so nothing in it renders as markdown). */
-export function MarkdownContent({ text, baseStyle, isUser = false, knownMentionHandles, selectable = true, plainTextFences = false }: { text: string; baseStyle: any; isUser?: boolean; knownMentionHandles?: Set<string>; selectable?: boolean; plainTextFences?: boolean }) {
+export function MarkdownContent({ text, baseStyle, isUser = false, knownMentionHandles, selectable: selectableProp, plainTextFences = false }: { text: string; baseStyle: any; isUser?: boolean; knownMentionHandles?: Set<string>; selectable?: boolean; plainTextFences?: boolean }) {
+  // Inside a message a long press is the message's menu, so its text is not
+  // natively selectable there (Select text in that menu opens a view that is).
+  const selectable = selectableProp ?? !useMessageLongPress();
   // Insight extraction runs on every assistant text (same placement as web's
   // assistant-message flat run) so cards show up on ALL surfaces that render
   // markdown — message bubbles, tool results, plan/teammate cards.

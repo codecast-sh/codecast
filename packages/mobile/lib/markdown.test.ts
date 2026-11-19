@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseMarkdown, plainText, planTable } from './markdown';
+import { parseMarkdown, plainText, planTable, readableText } from './markdown';
 import { renderGalleryMessages } from '@codecast/web/lib/renderGallery';
 
 const CHAR = 7.8; // 13px JetBrains Mono
@@ -97,5 +97,16 @@ describe('render gallery', () => {
       }
     }
     expect([...layouts].sort()).toEqual(['cards', 'grid', 'scroll', 'wrap']);
+  });
+});
+
+describe('readableText', () => {
+  test('keeps block shape and drops markers', () => {
+    const md = '# Title\n\nSome **bold** and `code` with [a link](https://x.co).\n\n- one\n- two\n  1. nested\n\n```ts\nconst a = 1;\n```';
+    expect(readableText(md)).toBe('Title\n\nSome bold and code with a link.\n\n• one\n• two\n  1. nested\n\nconst a = 1;');
+  });
+
+  test('a table reads as rows', () => {
+    expect(readableText('| a | b |\n|---|---|\n| 1 | 2 |')).toBe('a | b\n1 | 2');
   });
 });

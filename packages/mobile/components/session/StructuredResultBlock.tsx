@@ -124,9 +124,9 @@ export function StructuredResultBlock({ input, result }: { input: string; result
           </Pressable>
         )}
       </RNView>
-      {rejected && !!result?.content && <RNText style={[styles.mono, styles.body, { color: Theme.red }]} selectable>{result.content}</RNText>}
+      {rejected && !!result?.content && <RNText style={[styles.mono, styles.body, { color: Theme.red }]}>{result.content}</RNText>}
       {showJson && payload ? (
-        <RNText style={[styles.mono, styles.body, { color: Theme.textSecondary }]} selectable>{JSON.stringify(payload, null, 2)}</RNText>
+        <RNText style={[styles.mono, styles.body, { color: Theme.textSecondary }]}>{JSON.stringify(payload, null, 2)}</RNText>
       ) : model && !rejected && model.sections.length > 0 ? (
         <RNView style={styles.body}>
           {model.sections.map((s) => <Section key={s.label} section={s} />)}

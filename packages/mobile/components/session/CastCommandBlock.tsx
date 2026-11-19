@@ -101,7 +101,7 @@ export function CastCommandBlock({ cast, output, isError, image }: {
 
   const raw = open && (
     <RNView style={styles.raw}>
-      <RNText style={styles.rawCmd} selectable>$ {cast.raw}</RNText>
+      <RNText style={styles.rawCmd}>$ {cast.raw}</RNText>
       {vault?.hidesOutput
         ? <RNText style={styles.rawOut}>Value not shown</RNText>
         : output.trim()
@@ -125,7 +125,7 @@ export function CastCommandBlock({ cast, output, isError, image }: {
           {status}
         </TouchableOpacity>
         {target.runId ? <FlowRunCard runId={target.runId} /> : target.flow && !isError && (subcommand === 'show' || subcommand === 'validate' || target.dryRun) ? <FlowCard slug={target.flow} /> : null}
-        {said && !open ? <RNText style={styles.rawOut} selectable>{said}</RNText> : null}
+        {said && !open ? <RNText style={styles.rawOut}>{said}</RNText> : null}
         {raw}
       </RNView>
     );
@@ -147,7 +147,7 @@ export function CastCommandBlock({ cast, output, isError, image }: {
         {sent.kind === 'dynamic' ? (
           // The shell filled in the real message ($(…), $VAR, a pipe); the
           // transcript holds only the recipe, so it is shown as typed.
-          <RNText style={styles.recipe} selectable>{sent.body}</RNText>
+          <RNText style={styles.recipe}>{sent.body}</RNText>
         ) : (
           <CollapsibleBody fadeColor={blendOver(accent + '0d', Theme.bg)}>
             <MarkdownContent text={sent.body} baseStyle={styles.bodyText} isUser={false} />
@@ -171,7 +171,7 @@ export function CastCommandBlock({ cast, output, isError, image }: {
           {status}
         </TouchableOpacity>
         {chat.kind === 'dynamic'
-          ? <RNText style={styles.recipe} selectable>{chat.body}</RNText>
+          ? <RNText style={styles.recipe}>{chat.body}</RNText>
           : !!chat.body && (
             <CollapsibleBody fadeColor={blendOver(accent + '0d', Theme.bg)}>
               <MarkdownContent text={chat.body} baseStyle={styles.bodyText} isUser={false} />

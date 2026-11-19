@@ -8,7 +8,7 @@
 // has no key for.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, View as RNView } from 'react-native';
+import { AppState, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View as RNView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useConvex } from 'convex/react';
@@ -23,6 +23,7 @@ import { themedStyles, useTheme } from '@/constants/Theme';
 import { Mono } from '@/constants/fonts';
 import { optionalNative } from '@/lib/optionalNative';
 import { copyToClipboard, readClipboard } from '@/lib/clipboard';
+import { SelectTextSheet } from '@/components/SelectTextSheet';
 import { CTRL_KEY_BYTES, QUICK_KEY_BYTES, SentinelInput, SENTINEL, ctrlChord, pasteBytes, plainKeyboardText, type QuickKey } from '@/lib/terminal/terminalInput';
 import { looksLikeTui, snapshotText } from '@/lib/terminal/snapshotRejoin';
 import { EscGate } from '@/lib/terminal/escGate';
@@ -526,33 +527,7 @@ export function PaneTerminal({ conversationId, target, title, hydrated = true }:
         accessibilityLabel="Terminal keyboard"
       />
 
-      <Modal visible={snapshot !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setSnapshot(null)}>
-        <RNView style={styles.sheet}>
-          <RNView style={styles.sheetHeader}>
-            <Pressable onPress={() => setSnapshot(null)} hitSlop={10} accessibilityRole="button">
-              <RNText style={styles.sheetAction}>Done</RNText>
-            </Pressable>
-            <RNText style={styles.sheetTitle}>Select text</RNText>
-            <Pressable
-              onPress={() => { if (snapshot) { void copyToClipboard(snapshot); void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); setSnapshot(null); } }}
-              hitSlop={10}
-              accessibilityRole="button"
-            >
-              <RNText style={[styles.sheetAction, styles.sheetActionStrong]}>Copy all</RNText>
-            </Pressable>
-          </RNView>
-          {/* A read-only text view, not <Text selectable>: iOS gives a Text
-              only Copy-all, and this is for picking out a range. */}
-          <TextInput
-            value={snapshot ?? ''}
-            editable={false}
-            multiline
-            scrollEnabled
-            style={[styles.snapshotText, styles.sheetBody]}
-            accessibilityLabel="Terminal text"
-          />
-        </RNView>
-      </Modal>
+      <SelectTextSheet text={snapshot} onClose={() => setSnapshot(null)} textStyle={styles.snapshotText} />
     </KeyboardAvoidingView>
   );
 }
@@ -618,11 +593,5 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   keyDisabled: { opacity: 0.35 },
   keyText: { fontSize: 13, fontFamily: Mono.medium, color: Theme.text },
   hiddenInput: { position: 'absolute', left: -1000, top: 0, width: 1, height: 1, opacity: 0 },
-  sheet: { flex: 1, backgroundColor: Theme.bg },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, height: 52, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Theme.border },
-  sheetTitle: { fontSize: 15, fontFamily: Mono.semiBold, color: Theme.text },
-  sheetAction: { fontSize: 15, color: Theme.textMuted },
-  sheetActionStrong: { color: Theme.accent ?? Theme.text, fontFamily: Mono.semiBold },
-  sheetBody: { flex: 1, padding: 14 },
   snapshotText: { fontFamily: Mono.regular, fontSize: 13, lineHeight: 19, color: Theme.text },
 }));

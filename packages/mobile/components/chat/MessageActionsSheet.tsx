@@ -4,6 +4,8 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatAvatar, type MobileChatMessage } from './MessageRow';
+import { openSelectText } from '@/components/SelectTextSheet';
+import { readableText } from '@/lib/markdown';
 
 // Long-press on a message. One sheet on BOTH platforms — ActionSheetIOS left
 // Android with a dead long-press, and a native sheet cannot carry the emoji
@@ -46,10 +48,11 @@ export function MessageActionsSheet({
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
         <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+          <RNView style={styles.handle} />
           {/* Whose words the sheet is acting on — anchored above the actions so
               a mis-aimed long-press is caught before anything fires. */}
           <RNView style={styles.subject}>
-            <ChatAvatar author={message.author} size={18} />
+            <ChatAvatar author={message.author} size={24} />
             <RNText style={styles.subjectName}>{message.author.name}</RNText>
             <RNText style={styles.subjectPreview} numberOfLines={1}>
               {message.content || 'attachment'}
@@ -72,6 +75,9 @@ export function MessageActionsSheet({
             <SheetRow icon="comment-o" label="Reply in thread" onPress={() => act({ kind: 'reply' })} />
           )}
           <SheetRow icon="copy" label="Copy text" onPress={() => act({ kind: 'copy' })} />
+          {!!message.content && (
+            <SheetRow icon="i-cursor" label="Select text" onPress={() => { onClose(); openSelectText(readableText(message.content)); }} />
+          )}
           {own && (
             <SheetRow icon="pencil" label="Edit message" onPress={() => act({ kind: 'edit' })} />
           )}
@@ -93,7 +99,7 @@ function SheetRow({ icon, label, danger, onPress }: {
   const Theme = useTheme();
   return (
     <TouchableOpacity style={styles.row} onPress={onPress}>
-      <FontAwesome name={icon} size={14} color={danger ? Theme.red : Theme.textMuted} style={styles.rowIcon} />
+      <FontAwesome name={icon} size={17} color={danger ? Theme.red : Theme.textMuted} style={styles.rowIcon} />
       <RNText style={[styles.rowLabel, danger && styles.rowDanger]}>{label}</RNText>
     </TouchableOpacity>
   );
@@ -106,26 +112,34 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: Theme.bg,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    paddingTop: 10,
+    backgroundColor: Theme.bgAlt,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingTop: 8,
     paddingBottom: 28,
     paddingHorizontal: Spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Theme.border,
   },
+  handle: {
+    alignSelf: 'center',
+    width: 36,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: Theme.border,
+    marginBottom: 12,
+  },
   subject: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingBottom: 10,
+    gap: 8,
+    paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.border + '44',
     marginBottom: 8,
   },
-  subjectName: { fontSize: 12, fontWeight: '600', color: Theme.textMuted },
-  subjectPreview: { flex: 1, fontSize: 11.5, color: Theme.textMuted0 },
+  subjectName: { fontSize: 13.5, fontWeight: '600', color: Theme.textMuted },
+  subjectPreview: { flex: 1, fontSize: 13, color: Theme.textMuted0 },
   emojiRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -133,25 +147,25 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     marginBottom: 4,
   },
   emoji: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Theme.bgAlt + '88',
+    backgroundColor: Theme.bgHighlight,
   },
   emojiMine: {
     backgroundColor: Theme.blue + '22',
     borderWidth: 1,
     borderColor: Theme.blue + '88',
   },
-  emojiText: { fontSize: 22 },
+  emojiText: { fontSize: 24 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
+    minHeight: 50,
   },
-  rowIcon: { width: 26 },
-  rowLabel: { fontSize: 14.5, color: Theme.text },
+  rowIcon: { width: 34 },
+  rowLabel: { fontSize: 15.5, color: Theme.text },
   rowDanger: { color: Theme.red },
 }));

@@ -16,6 +16,7 @@ import { replayTitle } from '@codecast/web/components/ops/opsModel';
 import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
 import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { MobileIdentityFace } from '@/components/identity';
+import { useMessageLongPress } from '@/components/MessageLongPress';
 
 const api = _api as any;
 
@@ -135,6 +136,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
 }) {
   const Theme = useTheme();
   const router = useRouter();
+  const messageLongPress = useMessageLongPress();
   const rawId = (idProp ?? shortId ?? '').trim();
   const looksConvex = isConvexId(rawId);
   // A full Convex id carries no type prefix (docs have no short id at all), so
@@ -231,6 +233,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
     <RNText
       style={[styles.pill, { backgroundColor: color + '1a', color }]}
       onPress={to ? () => void openLink(to) : route ? () => router.push(route as any) : webPage ? () => void openWebPage(`${CODECAST_BASE_URL}${webPage}`) : undefined}
+      onLongPress={messageLongPress ? () => messageLongPress([{ label: 'Copy ID', text: entity?.short_id ?? rawId }]) : undefined}
       suppressHighlighting
     >
       {type === 'task' ? (

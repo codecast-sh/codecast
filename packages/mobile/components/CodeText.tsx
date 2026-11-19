@@ -4,6 +4,7 @@ import * as Haptics from 'expo-haptics';
 import { Text as RNText } from '@/components/Themed';
 import { copyToClipboard } from '@/lib/clipboard';
 import { openLink } from '@/lib/links';
+import { useMessageLongPress } from '@/components/MessageLongPress';
 // The URL vocabulary is shared with the deep-link router and the plain-text
 // surfaces (lib/linkRoutes) — markdown prose, bash output and a tapped link all
 // recognise and normalise the same thing.
@@ -15,20 +16,31 @@ import { ansiSpans } from '@codecast/web/lib/ansi';
 // Links and highlighted code, shared by the markdown renderer, diffs and the
 // plain-text tool output surfaces.
 
+/** A long press on a link: inside a message, that message's menu with Copy
+ *  link first; anywhere else, the link is copied. */
+export function useLinkLongPress(url: string): () => void {
+  const messageLongPress = useMessageLongPress();
+  const copy = () => {
+    copyToClipboard(url);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+  return messageLongPress
+    ? () => messageLongPress([{ label: 'Copy link', text: url, icon: 'link' }])
+    : copy;
+}
+
 /**
  * A tapped link. Every link in the app is this component, so they all open the
  * same way (in-app for codecast objects, in-app browser otherwise) and all
  * carry the same long-press-to-copy affordance.
  */
 export function LinkText({ url, label, isUser, style }: { url: string; label?: React.ReactNode; isUser?: boolean; style?: any }) {
+  const onLongPress = useLinkLongPress(url);
   return (
     <RNText
       style={style ?? (isUser ? styles.linkTextUser : styles.linkText)}
       onPress={() => { void openLink(url); }}
-      onLongPress={() => {
-        copyToClipboard(url);
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      }}
+      onLongPress={onLongPress}
     >
       {label ?? shortenUrl(url)}
     </RNText>
@@ -105,9 +117,10 @@ function highlightSyntax(code: string): CodeSpan[] {
 }
 
 export function HighlightedCodeText({ content, style }: { content: string; style: any }) {
+  const inMessage = !!useMessageLongPress();
   const parts = useMemo(() => highlightSyntax(content), [content]);
   return (
-    <RNText style={[codeFont, style]} selectable>
+    <RNText style={[codeFont, style]} selectable={!inMessage}>
       {parts.map((p, i) => {
         if (p.link) {
           // A URL printed by a command — `cast publish`, a PR link, a dev
@@ -139,9 +152,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
 
 /** Command output with its terminal colors, and its URLs tappable. */
 export function AnsiText({ text, style }: { text: string; style: any }) {
+  const inMessage = !!useMessageLongPress();
   const spans = useMemo(() => ansiSpans(text), [text]);
   return (
-    <RNText style={[codeFont, style]} selectable>
+    <RNText style={[codeFont, style]} selectable={!inMessage}>
       {spans.map((sp, i) => {
         const body = linkifyPlainText(sp.text, `a${i}`);
         return sp.color || sp.bold

@@ -44,6 +44,46 @@ export function plainText(node: Nodes): string {
   return '';
 }
 
+/** A message as a person reads it, for picking text out of: block shape kept
+ *  (paragraphs, bullets, numbers, code, table rows), markers dropped. */
+export function readableText(text: string): string {
+  return blocksText(parseMarkdown(text).children as Nodes[], '');
+}
+
+function blocksText(nodes: Nodes[], indent: string, gap = '\n\n'): string {
+  return nodes.map((n) => blockText(n, indent)).filter(Boolean).join(gap);
+}
+
+function inlineText(node: Nodes): string {
+  if (node.type === 'break') return '\n';
+  if ('children' in node) return (node.children as Nodes[]).map(inlineText).join('');
+  return plainText(node);
+}
+
+function blockText(node: Nodes, indent: string): string {
+  switch (node.type) {
+    case 'code':
+      return node.value.split('\n').map((l) => indent + l).join('\n');
+    case 'list': {
+      const start = node.start ?? 1;
+      return node.children.map((item, i) => {
+        const marker = node.ordered ? `${start + i}. ` : '• ';
+        const body = blocksText(item.children as Nodes[], indent + ' '.repeat(marker.length), '\n').replace(/^\s+/, '');
+        return indent + marker + body;
+      }).join('\n');
+    }
+    case 'table':
+      return node.children.map((row) => indent + row.children.map((c) => inlineText(c)).join(' | ')).join('\n');
+    case 'blockquote':
+      return blocksText(node.children as Nodes[], indent);
+    case 'thematicBreak':
+    case 'html':
+      return '';
+    default:
+      return indent + inlineText(node).split('\n').join('\n' + indent);
+  }
+}
+
 // ── Table layout ─────────────────────────────────────────────────────────────
 //
 // A phone is too narrow for most tables an agent writes. The layout is chosen
