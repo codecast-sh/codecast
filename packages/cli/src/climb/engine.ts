@@ -30,7 +30,7 @@ import { parseEnvsText } from "../envDeclaration.js";
 import { parseLineProfileText, resolveLineProfile } from "../lineProfile.js";
 import { StoreTampered, readSealed, writeSealed } from "./store.js";
 import { MetricUnread, readability as readabilityOf, type Readability } from "./readability.js";
-import { commandFiles, graderPackageDirs, gradingGlobs, inadmissible, packagesPrint, pinsAScript, protectedDigest, tryGit } from "./protect.js";
+import { resolveCommand, withDirs, graderPackageDirs, gradingGlobs, inadmissible, packagesPrint, pinsAScript, protectedDigest, tryGit } from "./protect.js";
 
 /** A run's outcome; `unfiled` is a run that finished but the registry refused to file, with the registry's reason. */
 export type RunOut = { ok: true; result: EnvResult; short_id?: string; unfiled?: string } | { ok: false; error: string };
@@ -52,6 +52,8 @@ export type LevelState = {
   env: string; level: EnvLevel; title: string; kept: boolean; why: string;
   cost_usd: number; held: boolean; plausible_effect?: number;
   noise?: LevelNoise; version?: string; base_attempts: string[];
+  /** The held split's own A/A: the spread between the base's two held runs, and how many cases moved between them. */
+  held_aa?: { se: number; moved: number; of: number };
 };
 export type CandStatus = "admitted" | "refused" | "dropped" | "unscreened" | "survivor" | "overfit" | "guard_failed" | "promoted";
 export type Cand = {
@@ -77,6 +79,8 @@ export type ClimbState = {
   ledger: { usd: number; runs: number; done: Record<string, Done>; failed: Record<string, Failed> };
   /** The product eval gate's verdict per candidate sha (on trust: it is not filed anywhere); a void verdict is never kept here. */
   gates: Record<string, number>;
+  /** Script paths the eval command names that the climb could not reach at the base (protect.ts resolveCommand). */
+  gate_unreached?: string[];
   /** How many times the eval gate ran, void runs included: each counts against the run limit. */
   gate_runs?: number;
   /** Per candidate and check (`cand-1|env` or `cand-1|gate`), the round its void verdict is on: a re-run files under a new key. */
@@ -324,7 +328,7 @@ async function measureLevels(v: View): Promise<void> {
       if (r.attempt) { row.base_attempts.push(r.attempt); reported = Math.max(reported, v.read.get(r.attempt)?.aa_sd ?? 0); }
     }
     if (row.why) { save(dir, s); continue; }
-    const noise = levelNoise(cl.level, runs, reported || undefined);
+    const noise = levelNoise(cl.level, runs, reported || undefined, decl.mde);
     if ("error" in noise) { row.why = noise.error; save(dir, s); continue; }
     const see = levelCanSee(cl.level, noise, cl.plausible_effect);
     Object.assign(row, { noise, version, kept: see.ok, why: see.why });
@@ -526,6 +530,15 @@ export async function screen(io: ClimbIo, dir: string): Promise<ClimbState> {
 
 // ── confirm: survivors on the held split, which no station reads ──
 
+/**
+ * Confirm on the held split. Held runs need not repeat (live or inline
+ * regrades), so one base run read against candidates run later would count
+ * the drift between them as gain. The base runs twice, before and after the
+ * candidates, and each candidate is read against the mean of the two with
+ * the wider of dev's and the held A/A spread. A candidate whose held change
+ * moves many more of its cases than its dev change did is reading the held
+ * runs' drift, not its own effect: it is not confirmed.
+ */
 async function confirmView(v: View): Promise<void> {
   await screenView(v);
   const s = v.s;
@@ -533,12 +546,29 @@ async function confirmView(v: View): Promise<void> {
   if (!held.length) { s.stopped = "no level the climb kept has a held split, so no dev gain can be confirmed"; save(v.dir, s); throw new ClimbStop(s.stopped, STOP.none); }
   for (const l of held) {
     const decl = declOf(v.decls, l.env)!;
-    const b = await runOnce(v, `base|${l.env}|held|0`, decl, { label: "base", split: "held", sha: s.base });
-    if ("error" in b) { s.stopped = `the base could not run on ${l.env} held (${HELD_FAILED})`; save(v.dir, s); throw new ClimbStop(s.stopped, STOP.none); }
+    const baseRun = async (i: number) => {
+      const b = await runOnce(v, `base|${l.env}|held|${i}`, decl, { label: "base", split: "held", sha: s.base });
+      if ("error" in b) { s.stopped = `the base could not run on ${l.env} held (${HELD_FAILED})`; save(v.dir, s); throw new ClimbStop(s.stopped, STOP.none); }
+      return b;
+    };
+    const b0 = await baseRun(0);
+    for (const c of live(s)) await runOnce(v, `${c.id}|${l.env}|held`, decl, { label: c.id, split: "held", sha: c.sha! });
+    const b1 = await baseRun(1);
+    if (b1.version !== b0.version) { s.stopped = `${l.env} reported two versions on the unchanged base's held runs, so its held split cannot confirm anything`; save(v.dir, s); throw new ClimbStop(s.stopped, STOP.none); }
+    const aa = levelNoise(l.level, [b0.cases, b1.cases]);
+    const drift = changedCases([b0.cases], b1.cases);
+    const heldLevel: LevelState = { ...l, noise: { ...(l.noise ?? { runs: 0, se: 0, mde: 0 }), se: Math.max(l.noise?.se ?? 0, "error" in aa ? 0 : aa.se) } };
+    l.held_aa = { se: "error" in aa ? 0 : aa.se, moved: drift.changed, of: drift.of };
     for (const c of live(s)) {
-      const k = (c.held[l.env] = await cut(v, l, c, "held", decl, [b.cases], b.version));
-      if (!k.keep) {
-        const dev = c.dev[l.env];
+      const k = (c.held[l.env] = await cut(v, heldLevel, c, "held", decl, [b0.cases, b1.cases], b0.version));
+      const dev = c.dev[l.env];
+      const ratio = (x?: Cut) => (x?.of ? (x.changed ?? 0) / x.of : 0);
+      if (k.keep && dev && ratio(k) > Math.max(3 * ratio(dev), ratio(dev) + 0.1)) {
+        k.keep = false;
+        k.why = `moved ${k.changed} of ${k.of} held cases against ${dev.changed} of ${dev.of} on dev: the held runs drift (the base moved ${drift.changed} of ${drift.of} between its two held runs), so this reads their noise, not the change`;
+        c.status = "dropped";
+        c.why = `${l.env} held unreadable: ${k.why}`;
+      } else if (!k.keep) {
         c.status = editsEnv(k) ? "refused" : "overfit";
         c.why = c.status === "overfit" ? `${l.env}: dev ${dev ? sign(dev.delta) : "?"}, held ${k.why}` : `${l.env} held: ${k.why}`;
       }
@@ -639,8 +669,10 @@ async function guardView(v: View, opts: { env?: Record<string, string>; rerunVoi
       if (code === undefined && (rounds[key] ?? 0) < 0) code = 2; // came back void, not re-run yet
       if (code === undefined) {
         // What the eval command starts grades as much as the envs do: the candidate's tree must hold those files as the base does.
-        const evalFiles = commandFiles(v.io.root, s.base, command, { ...process.env, ...opts.env });
-        if (!pinsAScript(evalFiles)) code = -3;
+        const reach = resolveCommand(v.io.root, s.base, command, { ...process.env, ...opts.env });
+        const evalFiles = withDirs(reach.files);
+        s.gate_unreached = reach.unresolved;
+        if (reach.unresolved.length || !pinsAScript(evalFiles)) code = -3;
         else {
           await stopForBudget(v, 0, `the eval gate on ${c.id}`);
           s.gate_runs = (s.gate_runs ?? Object.keys(s.gates).length) + 1;
@@ -648,7 +680,9 @@ async function guardView(v: View, opts: { env?: Record<string, string>; rerunVoi
           const gdir = fs.mkdtempSync(path.join((process.env.TMPDIR || "/tmp").replace(/\/$/, ""), "climb-guard-"));
           code = await v.io.tree(c.sha!, async (tree) => {
             if (protectedDigest(tree, evalFiles) !== evalDigest) return -2;
-            spawnSync("bash", ["-c", command], { cwd: tree, stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, ...opts.env, run_dir: gdir, branch: c.branch, worktree: "" } });
+            // The gate runs the base's copies: the tree's files under $project_path, which hash as the base's.
+            const project = reach.project !== undefined ? { project_path: path.join(tree, reach.project) } : {};
+            spawnSync("bash", ["-c", command], { cwd: tree, stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, ...opts.env, ...project, run_dir: gdir, branch: c.branch, worktree: "" } });
             if (!fs.existsSync(path.join(gdir, "reps.json"))) return -1;
             return v.io.evalResult(path.join(gdir, "reps.json"), path.join(gdir, "eval-result.json"));
           });
@@ -658,7 +692,7 @@ async function guardView(v: View, opts: { env?: Record<string, string>; rerunVoi
         else s.gates[c.sha!] = code;
         save(v.dir, s);
       }
-      verdicts.push(gateVerdict(code));
+      verdicts.push(code === -3 && s.gate_unreached?.length ? { verdict: "fail", why: `the product's eval command names ${s.gate_unreached.join(", ")}, which the climb could not find at the base under the command's own directories, so it cannot hold the gate still` } : gateVerdict(code));
     }
     const fails = verdicts.filter((x) => x.verdict === "fail").map((x) => x.why);
     const voids = verdicts.filter((x) => x.verdict === "void").map((x) => x.why);

@@ -7,23 +7,53 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "../proc.js";
 import type { EnvDeclaration } from "@codecast/shared/contracts/envs";
-import { CLIMB_ALWAYS_PROTECTED, commandPaths, globMatch, protectedTouches } from "@codecast/shared/contracts/climb";
+import { CLIMB_ALWAYS_PROTECTED, commandPathGroups, globMatch, protectedTouches } from "@codecast/shared/contracts/climb";
 
 const sha = (text: string | Buffer) => crypto.createHash("sha256").update(text).digest("hex");
-export const tryGit = (root: string, args: string[]) => { try { return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; } };
+// A product's whole tree (`ls-tree -r`) runs to megabytes: past the default 1 MB buffer the read fails, and a failed read must never pass for an empty tree.
+export const tryGit = (root: string, args: string[]) => { try { return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 512 * 1024 * 1024 }).trim(); } catch { return null; } };
 
 /** `$name` and `${name}` filled from `env`, so `$project_path/x.sh` reads as the file it is. */
 export const fillVars = (command: string, env: Record<string, string | undefined>) => command.replace(/\$\{?([A-Za-z_]\w*)\}?/g, (whole, k) => env[k] ?? whole);
 
+export type CommandReach = {
+  /** The repo files the command starts, as the base holds them. */
+  files: string[];
+  /** Script paths the command names that no reading of it reaches at the base: why a gate cannot be held still. */
+  unresolved: string[];
+  /** The repo directory `$project_path` stands for, when the command names a file under it. */
+  project?: string;
+};
+
+const SCRIPT = /\.(m?[jt]sx?|cjs|py|sh|rb)$/;
+
 /**
- * The files a command starts, as the base holds them, and the directory each
- * sits in (what a runner imports usually lives beside it). A runner should
- * live in a directory of its own: one in the repo's root holds only itself.
+ * What a command starts, read the way it runs. Each path it names is tried
+ * as written (under every `cd` it made), then from the directories of the
+ * scripts it already reached (a wrapper that changes directory and runs the
+ * command after its `--`: `proof-tree.sh ... -- bun scripts/line.ts`), then
+ * as the one file at the base whose path ends with it (a `$project_path` the
+ * run filled in for another directory). A package script is followed to the
+ * command it runs. A script path none of that reaches is named, never
+ * guessed.
  */
-export function commandFiles(root: string, base: string, command: string, env: Record<string, string | undefined> = {}, depth = 0): string[] {
+export function resolveCommand(root: string, base: string, command: string, env: Record<string, string | undefined> = {}, depth = 0): CommandReach {
   const filled = fillVars(command, env);
   const atBase = (p: string) => tryGit(root, ["cat-file", "-t", `${base}:${p}`]) === "blob";
-  const files = commandPaths(filled, root).filter(atBase);
+  let all: string[] | null = null;
+  const bySuffix = (word: string) => { all ??= (tryGit(root, ["ls-tree", "-r", "--name-only", base]) ?? "").split("\n"); const hits = all.filter((f) => f.endsWith(`/${word}`)); return hits.length === 1 ? hits[0] : null; };
+  const files: string[] = [];
+  const unresolved: string[] = [];
+  for (const g of commandPathGroups(filled, root)) {
+    let hit = g.variants.find(atBase) ?? null;
+    if (!hit) {
+      const anchors = [...new Set(files.flatMap((f) => { const out: string[] = []; for (let d = path.posix.dirname(f); d !== "."; d = path.posix.dirname(d)) out.push(d); return out; }))];
+      hit = anchors.map((d) => `${d}/${g.word}`).find(atBase) ?? null;
+    }
+    hit ??= SCRIPT.test(g.word) ? bySuffix(g.word) : null;
+    if (hit) files.push(hit);
+    else if (SCRIPT.test(g.word)) unresolved.push(g.word);
+  }
   // A package script runs its own command: follow it (a few levels), so `bun run eval` pins what `eval` runs, not only package.json.
   if (depth < 3) {
     for (const m of filled.matchAll(/(?:^|[\s;&|(])(?:npm|bun|pnpm|yarn)\s+(?:run(?:-script)?\s+([\w:.-]+)|(test)\b)/g)) {
@@ -33,13 +63,28 @@ export function commandFiles(root: string, base: string, command: string, env: R
         let script: unknown;
         try { script = JSON.parse(tryGit(root, ["show", `${base}:${pkg}`]) ?? "{}")?.scripts?.[name]; } catch { continue; }
         const dir = path.posix.dirname(pkg);
-        if (typeof script === "string") files.push(...commandFiles(root, base, dir === "." ? script : `cd ${dir} && ${script}`, env, depth + 1).filter((f) => !f.endsWith("/**")));
+        if (typeof script !== "string") continue;
+        const inner = resolveCommand(root, base, dir === "." ? script : `cd ${dir} && ${script}`, env, depth + 1);
+        files.push(...inner.files);
+        unresolved.push(...inner.unresolved);
       }
     }
   }
-  // The script files a command reaches are what grade; package.json and Makefile alone pin only the recipe, so they never count as a pinned file by themselves.
-  return [...new Set(files.flatMap((f) => (f.includes("/") && !/(^|\/)(package\.json|Makefile)$/.test(f) ? [f, `${path.posix.dirname(f)}/**`] : [f])))];
+  const tail = command.match(/\$\{?project_path\}?(\/\S+)/)?.[1];
+  const under = tail ? files.find((f) => `/${f}`.endsWith(tail)) : undefined;
+  return { files: [...new Set(files)], unresolved: [...new Set(unresolved)], ...(under !== undefined ? { project: under.slice(0, under.length - tail!.length + 1).replace(/\/$/, "") } : {}) };
 }
+
+/**
+ * The files a command starts, as the base holds them, and the directory each
+ * sits in (what a runner imports usually lives beside it). A runner should
+ * live in a directory of its own: one in the repo's root holds only itself.
+ */
+export function commandFiles(root: string, base: string, command: string, env: Record<string, string | undefined> = {}): string[] {
+  return withDirs(resolveCommand(root, base, command, env).files);
+}
+/** Files and each one's directory, as globs to hold still; package.json and Makefile alone pin only the recipe, so they never bring their directory. */
+export const withDirs = (files: readonly string[]) => [...new Set(files.flatMap((f) => (f.includes("/") && !/(^|\/)(package\.json|Makefile)$/.test(f) ? [f, `${path.posix.dirname(f)}/**`] : [f])))];
 
 /** Whether a command's pinned files hold anything beyond package.json and Makefile, the recipes that name the real gate. */
 export const pinsAScript = (files: readonly string[]) => files.some((f) => !/(^|\/)(package\.json|Makefile)$/.test(f));

@@ -401,6 +401,8 @@ export type EnvDeclaration = {
   direction?: "higher" | "lower";
   /** How far a check's mean may move the wrong way against the base before Guard refuses the survivor (default 0). */
   tolerance?: number;
+  /** The smallest change in the mean score the env's author knows it can detect: a floor under what a climb's base runs measure. */
+  mde?: number;
 };
 
 // ── a goal's environments ──

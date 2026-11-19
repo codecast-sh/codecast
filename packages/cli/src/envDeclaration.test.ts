@@ -51,6 +51,8 @@ describe("parseEnvsText", () => {
     expect(() => parseEnvsText(one(`tolerance=0.02`))).toThrow(/tolerance applies to a check/);
     expect(() => parseEnvsText(one(`role="check"\ntolerance=2`))).toThrow(/tolerance must be a number from 0 to 1/);
     expect(() => parseEnvsText(one(`role="check"\ndirection="up"`))).toThrow(/direction must be "higher" or "lower"/);
+    expect(parseEnvsText(one(`mde=0.01`))[0].mde).toBe(0.01);
+    expect(() => parseEnvsText(one(`mde=0`))).toThrow(/mde must be a number above 0/);
   });
 
   test("placeholders are filled shell-quoted; ${VAR} is left to the shell", () => {

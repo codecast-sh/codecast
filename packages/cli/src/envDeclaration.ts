@@ -17,6 +17,7 @@
 //   role = "check"                    # a climb never climbs it; Guard refuses a survivor that worsens it
 //   direction = "higher"              # a check's good direction (higher, the default, or lower)
 //   tolerance = 0.02                  # how far its mean may move the wrong way against the base
+//   mde = 0.01                        # the smallest mean change it can detect: a floor under a climb's measured noise
 //
 // Each placeholder is filled shell-quoted, so write it bare: one inside
 // quotes is refused, and one handed to eval or `sh -c` runs as code (that is
@@ -49,7 +50,7 @@ export class EnvDeclarationError extends Error {
   }
 }
 
-const ENV_KEYS = ["key", "title", "level", "command", "splits", "cost_usd", "predicts", "timeout_s", "protects", "role", "direction", "tolerance"] as const;
+const ENV_KEYS = ["key", "title", "level", "command", "splits", "cost_usd", "predicts", "timeout_s", "protects", "role", "direction", "tolerance", "mde"] as const;
 const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && !(x instanceof Date);
 const text = (x: unknown, where: string): string => {
   if (typeof x !== "string" || !x.trim()) throw new EnvDeclarationError(`${where} must be a non-empty string`);
@@ -152,6 +153,10 @@ export function parseEnvsText(source: string, file?: string): EnvDeclaration[] {
         if (typeof e.tolerance !== "number" || !Number.isFinite(e.tolerance) || e.tolerance < 0 || e.tolerance > 1) throw new EnvDeclarationError(`${at} tolerance must be a number from 0 to 1 (an absolute change in the mean score)`);
         if (decl.role !== "check") throw new EnvDeclarationError(`${at} tolerance applies to a check (role = "check")`);
         decl.tolerance = e.tolerance;
+      }
+      if (e.mde !== undefined) {
+        if (typeof e.mde !== "number" || !Number.isFinite(e.mde) || e.mde <= 0 || e.mde > 1) throw new EnvDeclarationError(`${at} mde must be a number above 0 and at most 1 (the smallest change in the mean score it can detect)`);
+        decl.mde = e.mde;
       }
       return decl;
     });

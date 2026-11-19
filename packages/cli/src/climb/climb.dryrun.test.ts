@@ -45,8 +45,9 @@ if (env === "fake/floor") {
   const wide = env === "fake/noisy" ? 0.1 : 0.005;
   const count = split === "held" ? 30 : 40;
   for (let i = 1; i <= count; i++) {
-    const draw = (((i * 7 + n * 13) % 9) - 4) * wide;
-    cases.push({ id: (split === "held" ? "h" : "d") + i, score: Math.min(1, Math.max(0, 0.5 + (eff[split] ?? 0) + draw + (shifts[n - 1] || 0))) });
+    const draw = (((i * 7 + (process.env.FAKE_SAME ? 0 : n) * 13) % 9) - 4) * wide;
+    const few = i % 5 === 0 ? (eff[split + "_few"] ?? 0) : 0;
+    cases.push({ id: (split === "held" ? "h" : "d") + i, score: Math.min(1, Math.max(0, 0.5 + (eff[split] ?? 0) + few + draw + (shifts[n - 1] || 0))) });
   }
 }
 const mean = cases.reduce((a, c) => a + c.score, 0) / cases.length;
@@ -227,7 +228,8 @@ describe("the climb's dry run", () => {
     expect(sum).toContain("Refused cand-4");
     expect(sum).toMatch(/Cost: \$\d+\.\d\d of \$25\.00/);
     // The held split is run only for the base and the dev survivors.
-    expect(filed.filter((f) => f.endsWith(" held")).sort()).toEqual(["base fake/replay held", "cand-1 fake/replay held", "cand-2 fake/replay held", "cand-3 fake/replay held"]);
+    // The base runs twice on held, around the candidates (its held A/A).
+    expect(filed.filter((f) => f.endsWith(" held")).sort()).toEqual(["base fake/replay held", "base fake/replay held", "cand-1 fake/replay held", "cand-2 fake/replay held", "cand-3 fake/replay held"]);
     expect(filed.some((f) => f.startsWith("cand-4"))).toBe(false);
     expect(s4.candidates.find((c) => c.status === "promoted")!.guard!.why).toContain("eval gate passed");
   });
@@ -632,5 +634,100 @@ describe("the climb's dry run", () => {
     const refuted = await at(1, "refuted");
     expect(hypothesisLine(refuted)).toMatch(/^Hypothesis: refuted\. The best survivor \(cand-3\) moved fake\/replay by \+0\.(09|10)\d against the card's plausible \+1\.000 \(10%\), moving 40 of 40 cases/);
     expect(summaryText(refuted)).toContain("Hypothesis: refuted.");
+  });
+
+  // From the third flow run's end (ct-97125): Gauge read MDE 0.000, Confirm read held drift as gain, Guard refused a gate it could not resolve.
+  test("base runs that agree exactly never give a level a zero MDE: the cases' own spread is the floor", async () => {
+    process.env.FAKE_SAME = "1";
+    try {
+      const s = await gauge(io(), dir, { card: CARD, base });
+      const replay = s.levels.find((l) => l.env === "fake/replay")!;
+      expect(replay.noise!.se).toBe(0);
+      expect(replay.noise!.mde).toBeGreaterThan(0.004);
+      expect(replay.noise!.by).toBe("cases");
+      expect(replay.why).toContain("the case-level floor");
+    } finally { delete process.env.FAKE_SAME; }
+  });
+
+  /** An io whose held runs drift: `shift(k, label)` is added to 70% of the cases of the k-th held run of the sitting. */
+  const driftingIo = (shift: (k: number, label: string) => number) => {
+    const d = io();
+    const run = d.run;
+    let k = 0;
+    d.run = async (decl, o) => {
+      const r = await run(decl, o);
+      if (!r.ok || o.split !== "held") return r;
+      const add = shift(k++, o.label);
+      const cases = r.result.cases.map((c, i) => (i % 10 < 7 ? { ...c, score: Math.min(1, c.score + add) } : c));
+      registry.set(r.short_id!, { ...registry.get(r.short_id!), cases });
+      return { ...r, result: { ...r.result, cases } };
+    };
+    return d;
+  };
+
+  test("a held gain that moves far more cases than the change moved on dev is the held runs' drift, and is not confirmed", async () => {
+    // Dev runs agree exactly (a cached grader); the change reaches one case in five. The candidates' held runs land while
+    // the held grader has drifted (+0.012 on most cases), as the run's 184-195 of 467 held cases did against 11-19 of 691 on dev.
+    process.env.FAKE_SAME = "1";
+    try {
+      branch("climb/few", { "effect.txt": "dev_few=0.1\nheld_few=0.1\n" });
+      const drifting = driftingIo((_, label) => (label === "base" ? 0 : 0.012));
+      await gauge(drifting, dir, { card: CARD, base });
+      await admit(drifting, dir, [proposed[0], { branch: "climb/few", hypothesis: "h", predicted_delta: 0.02 }]);
+      const s = await confirm(drifting, dir);
+      expect(filed.filter((f) => f === "base fake/replay held")).toHaveLength(2);
+      const few = s.candidates.find((c) => c.branch === "climb/few")!;
+      expect([few.dev["fake/replay"].changed, few.dev["fake/replay"].of]).toEqual([8, 40]);
+      expect(few.status).toBe("dropped");
+      expect(few.why).toContain("the held runs drift");
+      // The truly better candidate moves every case on dev and held alike: it is confirmed.
+      expect(s.candidates.find((c) => c.branch === "climb/good")!.status).toBe("survivor");
+      // The hypothesis is read from dev for a held result that was drift.
+      expect(hypothesisLine(s)).not.toContain("+0.012");
+    } finally { delete process.env.FAKE_SAME; }
+  });
+
+  test("Confirm runs the base twice around the candidates, so a drift over the sitting is not read as gain", async () => {
+    // The held grader drifts upward through the sitting, base runs included: base, candidates, base again.
+    process.env.FAKE_SAME = "1";
+    try {
+      branch("climb/tiny", { "effect.txt": "dev_few=0.02\n" });
+      const drifting = driftingIo((k) => 0.012 * k);
+      await gauge(drifting, dir, { card: CARD, base });
+      await admit(drifting, dir, [{ branch: "climb/tiny", hypothesis: "h", predicted_delta: 0.004 }]);
+      const err = await confirm(drifting, dir).catch((e) => e);
+      expect(err.message).toBe("no dev gain held up on the held split");
+      const tiny = readState(dir)!.candidates[0];
+      expect(tiny.held["fake/replay"].keep).toBe(false);
+      expect(Math.abs(tiny.held["fake/replay"].delta)).toBeLessThan(0.005);
+    } finally { delete process.env.FAKE_SAME; }
+  });
+
+  test("the eval gate is resolved through its wrapper and the command after --, run on the base's copies, and named when it cannot be", async () => {
+    // Union's shape: bash $project_path/backend/scripts/eval/proof-tree.sh ... -- bun scripts/line.ts eval, run from the repo root.
+    fs.mkdirSync(path.join(repo, "outreach/backend/scripts/eval"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "outreach/backend/scripts/eval/wrap.sh"), `while [ "$1" != "--" ]; do shift; done; shift\ncd "$(dirname "$0")/../.." && exec "$@"\n`);
+    fs.writeFileSync(path.join(repo, "outreach/backend/scripts/gate.mjs"), `import fs from "node:fs";\nfs.writeFileSync(process.env.run_dir + "/reps.json", JSON.stringify({ worse: false }));\n`);
+    fs.writeFileSync(path.join(repo, ".codecast/line.toml"), `[line.commands]\neval = "bash $project_path/backend/scripts/eval/wrap.sh --name x -- bun scripts/gate.mjs eval"\n`);
+    g("add", "-A"); g("commit", "-q", "-m", "gate behind a wrapper");
+    base = g("rev-parse", "HEAD");
+    branch("climb/good2", { "effect.txt": "dev=0.06\nheld=0.06\n" });
+    branch("climb/gatehack2", { "outreach/backend/scripts/gate.mjs": `import fs from "node:fs";\nfs.writeFileSync(process.env.run_dir + "/reps.json", "{}");\n`, "effect.txt": "dev=0.2\nheld=0.2\n" });
+    await gauge(io(), dir, { card: CARD, base });
+    await admit(io(), dir, [{ branch: "climb/good2", hypothesis: "h", predicted_delta: 0.06 }, { branch: "climb/gatehack2", hypothesis: "h", predicted_delta: 0.2 }]);
+    // The run fills $project_path with the checkout it started in: the repo root, where backend/ is not.
+    const s = await guard(io(), dir, { env: { project_path: repo } });
+    expect(s.candidates.find((c) => c.branch === "climb/gatehack2")!.guard!.why).toContain("changes the files the product's eval command starts");
+    expect(s.candidates.find((c) => c.status === "promoted")!.guard!.why).toContain("eval gate passed");
+    // A command naming a script nothing reaches is refused, and says which.
+    fs.writeFileSync(path.join(repo, ".codecast/line.toml"), `[line.commands]\neval = "bash $project_path/backend/scripts/eval/wrap.sh -- bun scripts/nope.ts eval"\n`);
+    g("add", "-A"); g("commit", "-q", "-m", "gate that is not there");
+    base = g("rev-parse", "HEAD");
+    branch("climb/good3", { "effect.txt": "dev=0.06\nheld=0.06\n" });
+    const d2 = `${dir}-nope`;
+    await gauge(io(), d2, { card: CARD, base });
+    await admit(io(), d2, [{ branch: "climb/good3", hypothesis: "h", predicted_delta: 0.06 }]);
+    await expect(guard(io(), d2, { env: { project_path: repo } })).rejects.toThrow("every survivor failed the guard");
+    expect(readState(d2)!.candidates[0].guard!.why).toContain("names scripts/nope.ts, which the climb could not find at the base");
   });
 });

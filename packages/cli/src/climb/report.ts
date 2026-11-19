@@ -50,7 +50,9 @@ export function observedEffect(s: ClimbState): { env: string; plausible: number;
   for (const c of s.candidates) {
     const dev = c.dev[l.env];
     if (!dev?.keep) continue;
-    const k = c.held[l.env] ?? dev;
+    // A held result read off the held runs' drift (Confirm flags it) says nothing about the change: read dev instead.
+    const h = c.held[l.env];
+    const k = h && !h.why.includes("the held runs drift") ? h : dev;
     if (!best || k.delta > best.d) best = { c, k, d: k.delta };
   }
   return { env: l.env, plausible: l.plausible_effect!, observed: best ? best.d : null, ...(best ? { cand: best.c, cut: best.k } : {}) };
@@ -98,7 +100,7 @@ export function statusText(s: ClimbState): string {
     `Budget: ${usd(s.ledger.usd)} of ${usd(b.usd)}, ${s.ledger.runs} of ${b.runs} runs; up to ${s.card.candidates} candidates${s.notes.length ? ` (${s.notes.join("; ")})` : ""}`,
     "",
     "Levels:",
-    ...s.levels.map((l) => `  ${l.level} ${l.env} ${l.kept ? "kept" : "refused"}${l.held ? ", has held" : ""}${l.cost_usd ? `, ~${usd(l.cost_usd)} a run` : ""}: ${l.why}`),
+    ...s.levels.map((l) => `  ${l.level} ${l.env} ${l.kept ? "kept" : "refused"}${l.held ? ", has held" : ""}${l.cost_usd ? `, ~${usd(l.cost_usd)} a run` : ""}: ${l.why}${l.held_aa ? `; held A/A: the base's two held runs moved ${l.held_aa.moved} of ${l.held_aa.of} cases (se ${l.held_aa.se.toFixed(4)})` : ""}`),
   ];
   if (s.card.hypotheses.length) lines.push("", "Hypothesis space:", ...s.card.hypotheses.map((h) => `  - ${h}`));
   if (s.candidates.length) lines.push("", "Candidates:", ...s.candidates.flatMap(candLine));

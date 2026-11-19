@@ -102,8 +102,10 @@ export type LevelNoise = {
   runs: number;
   /** Standard error of one candidate run's mean delta against the base mean, from run-to-run noise alone. */
   se: number;
-  /** The smallest delta this level detects at 80% power, two-sided 5%. */
+  /** The smallest delta this level detects at 80% power, two-sided 5%: from the run-to-run noise, never below the case-level floor or the env's declared MDE. */
   mde: number;
+  /** What set the MDE: the runs' own spread, the case-level floor (runs that agree exactly, as a cached grader makes them), or the env's declaration. */
+  by?: "runs" | "cases" | "declared";
 };
 
 /**
@@ -116,7 +118,7 @@ export type LevelNoise = {
  * of the mean, when it reports one, is taken if larger. L0 is deterministic:
  * one run, no spread, and any case that gets worse counts.
  */
-export function levelNoise(level: EnvLevel, runs: ReadonlyArray<readonly EnvCase[]>, reportedAaSd?: number): LevelNoise | { error: string } {
+export function levelNoise(level: EnvLevel, runs: ReadonlyArray<readonly EnvCase[]>, reportedAaSd?: number, declaredMde?: number): LevelNoise | { error: string } {
   if (level === "L0") return { runs: runs.length, se: 0, mde: 0 };
   if (runs.length < 2 && !(reportedAaSd && reportedAaSd > 0)) return { error: `one base run cannot show the spread; ${CLIMB_AA_RUNS} are needed` };
   const k = runs.length;
@@ -135,8 +137,17 @@ export function levelNoise(level: EnvLevel, runs: ReadonlyArray<readonly EnvCase
   const fromMeans = k >= 2 ? sd(runs.map((r) => mean(r.map((c) => c.score)))) * both : 0;
   const fromRunner = (reportedAaSd ?? 0) * both;
   const se = Math.max(Math.sqrt(fromCases ** 2 + fromMeans ** 2), fromRunner);
-  return { runs: k, se: round(se), mde: round(MDE_Z * se) };
+  // Runs that agree exactly (a cached grader, a deterministic replay) show no run-to-run spread, and a level is never
+  // that sharp: what a change can be told apart from is still the spread of the cases themselves, so the clustered
+  // case-level standard error of the mean is the floor. An env that knows better declares its MDE.
+  const means = baseMeanCases(runs).map((c) => c.score);
+  const floor = means.length > 1 ? sd(means) / Math.sqrt(means.length) : 0;
+  const candidates: Array<[number, LevelNoise["by"]]> = [[MDE_Z * se, "runs"], [MDE_Z * floor, "cases"], [declaredMde ?? 0, "declared"]];
+  const [mde, by] = candidates.reduce((a, b) => (b[0] > a[0] ? b : a));
+  return { runs: k, se: round(se), mde: round(mde), by };
 }
+
+const byWords = (n: LevelNoise) => (n.by === "cases" ? " (the case-level floor: the base runs agree, so the cases' own spread sets it)" : n.by === "declared" ? " (the env's declared MDE)" : "");
 
 /** Whether a level can see one change: its MDE no larger than the card's plausible effect, held to CLIMB_PLAUSIBLE_MAX. */
 export function levelCanSee(level: EnvLevel, noise: LevelNoise, plausible?: number): { ok: boolean; why: string } {
@@ -144,8 +155,8 @@ export function levelCanSee(level: EnvLevel, noise: LevelNoise, plausible?: numb
   const bar = Math.min(plausible ?? CLIMB_PLAUSIBLE_MAX, CLIMB_PLAUSIBLE_MAX);
   const capped = (plausible ?? 0) > CLIMB_PLAUSIBLE_MAX ? ` (the card said ${f(plausible!)}; one change is held to ${f(CLIMB_PLAUSIBLE_MAX)})` : "";
   return noise.mde <= bar
-    ? { ok: true, why: `MDE ${f(noise.mde)} over ${noise.runs} base runs, within the plausible ${f(bar)}${capped}` }
-    : { ok: false, why: `MDE ${f(noise.mde)} over ${noise.runs} base runs is larger than the plausible ${f(bar)}${capped}: this level cannot see one change` };
+    ? { ok: true, why: `MDE ${f(noise.mde)} over ${noise.runs} base runs${byWords(noise)}, within the plausible ${f(bar)}${capped}` }
+    : { ok: false, why: `MDE ${f(noise.mde)} over ${noise.runs} base runs${byWords(noise)} is larger than the plausible ${f(bar)}${capped}: this level cannot see one change` };
 }
 
 // ── separating from base ──
@@ -231,21 +242,31 @@ export const CLIMB_ALWAYS_PROTECTED = [".codecast/**", "**/.gitattributes", ".gi
  * the base.
  */
 export function commandPaths(command: string, root?: string): string[] {
-  const out = new Set<string>();
+  return [...new Set(commandPathGroups(command, root).flatMap((g) => g.variants))];
+}
+
+/**
+ * The same paths grouped by the word of the command they come from, each
+ * with its variants (the word under every `cd` the command made before it),
+ * in command order, so a resolver can try them in turn and name the word none
+ * of them reached. A package script and a make target are words too.
+ */
+export function commandPathGroups(command: string, root?: string): Array<{ word: string; variants: string[] }> {
+  const out: Array<{ word: string; variants: string[] }> = [];
   const dirs = [""];
   const inRepo = (t: string) => (root && t.startsWith(`${root.replace(/\/$/, "")}/`) ? t.slice(root.replace(/\/$/, "").length + 1) : t);
   const tokens = command.split(/[\s;|&()<>]+/).map((t) => inRepo(t.replace(/^['"]|['"]$/g, "")).replace(/^\{root\}\/?/, "").replace(/^\.\//, ""));
-  const add = (t: string) => { for (const d of dirs) out.add(d ? `${d}/${t}` : t); };
+  const add = (word: string, t: string) => out.push({ word, variants: [...new Set(dirs.map((d) => (d ? `${d}/${t}` : t)))] });
   tokens.forEach((t, i) => {
     if (tokens[i - 1] === "cd" && t && !t.startsWith("/") && !/[{}$]/.test(t)) { dirs.push(t.replace(/\/$/, "")); return; }
     // `bun run <file>` runs the file (picked up below); `bun run <name>` and `npm test` run a package script.
-    if (/^(npm|bun|pnpm|yarn)$/.test(tokens[i - 1] ?? "") && /^(run|test|run-script)$/.test(t)) { if (t === "test" || !/[/.]/.test(tokens[i + 1] ?? "")) add("package.json"); return; }
-    if (t === "make") { add("Makefile"); return; }
+    if (/^(npm|bun|pnpm|yarn)$/.test(tokens[i - 1] ?? "") && /^(run|test|run-script)$/.test(t)) { if (t === "test" || !/[/.]/.test(tokens[i + 1] ?? "")) add(`${tokens[i - 1]} ${t}`, "package.json"); return; }
+    if (t === "make") { add("make", "Makefile"); return; }
     if (!t || t.startsWith("-") || t.startsWith("/") || t.startsWith("$") || /[{}=*]/.test(t)) return;
     if (!t.includes("/") && !/\.(m?[jt]sx?|py|sh|rb|json|toml|ya?ml)$/.test(t)) return;
-    add(t);
+    add(t, t);
   });
-  return [...out];
+  return out;
 }
 
 /** A glob over repo paths: `**` any depth, `*` within one segment. */
