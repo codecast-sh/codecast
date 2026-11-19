@@ -7,6 +7,7 @@ import { DATA_SYNC_COLLECTIONS } from "./clientSyncRegistry.data";
 import { ORG_SYNC_COLLECTIONS } from "./clientSyncRegistry.org";
 import { POOL_SYNC_COLLECTIONS } from "./clientSyncRegistry.pool";
 import { DATA_SCOPE } from "./clientSyncRegistry.scope";
+import { thinPullRequestRow, thinTaskRow } from "../lib/detailRows";
 export { DATA_SCOPE, EPHEMERAL_SLOT_SCOPE, SCOPED_READ_KEYS, type DataScope } from "./clientSyncRegistry.scope";
 
 export type PersistenceKind = "collection" | "meta";
@@ -178,6 +179,8 @@ export const CLIENT_SYNC_REGISTRY = {
     // the server's full set (which includes the real comment) replaces it. A
     // field lock here could never retire — the temp-id stub never matches the
     // server echo — and would freeze the stream at its optimistic snapshot.
+    // The stream lives in taskComments now; `comments` stays listed so a lock
+    // an older build persisted on the row keeps expiring (cacheRetention).
     // `waits` likewise: addWait paints a stub the echo never equals (the
     // server stamps created_at, resolves a bare #42, may meet it at once),
     // and a lock would hide every later settle of the wait.
@@ -195,6 +198,29 @@ export const CLIENT_SYNC_REGISTRY = {
     validRow: (row: any) =>
       typeof row?.short_id === "string" && row.short_id.startsWith("ct-") &&
       (row.comments === undefined || Array.isArray(row.comments)),
+    // `tasks` is the THIN list: a task's comments live in taskComments, held
+    // only for the tasks a surface opened (lib/detailRows). Rows cached by a
+    // build that kept the thread on the row shed it here.
+    hydrateRow: thinTaskRow,
+  },
+  // A task's comment thread, keyed by the task's id: the half of the thin
+  // split above that a task's page, an inline thread and the line's problem
+  // list read. A row exists only for a task one of them opened; the store
+  // keeps a held row current from every push that carries the thread
+  // (inboxStore DETAIL_SPLITS), and `as_of` against the task row's
+  // last_comment_at says when it has fallen behind. NOT localFirst:
+  // addTaskComment paints its optimistic comment here and the server's full
+  // set replaces it, so a lock could never retire. Bounded at hydration by
+  // last-open recency (cacheRetention).
+  taskComments: {
+    persistence: { kind: "collection", key: "taskComments" },
+    hydration: { phase: "deferred" },
+    localFirst: false,
+    validRow: (row: any) => Array.isArray(row?.comments),
+    // The thread is the row: compared by content, or a new comment on a row
+    // whose stamps did not move would be dropped.
+    sync: { isDelta: true, deepFields: ["comments"] },
+    feeds: ["taskMining.webGetTaskDetail"],
   },
   capabilityBindings: {
     writtenBy: ["capabilityBindings"],
@@ -1182,12 +1208,31 @@ export const CLIENT_SYNC_REGISTRY = {
   // pull_requests.sessionCardPRs carries only the fields a chip draws; its
   // feeder lays them over the cached row (useSyncSessionCardBucket,
   // lib/cardPullRequestRows). A row only that feed wrote has no body.
+  // `pullRequests` is the THIN list: a row's files (with their patches),
+  // commits and checks live in pullRequestDetails (lib/detailRows). Rows
+  // cached by a build that kept them on the row shed them here.
   pullRequests: {
     writtenBy: ["prShepherd"],
     persistence: { kind: "collection", key: "pullRequests" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
     feeds: ["pull_requests.getPRsForTimeline", "pull_requests.getPRByNumber", "pull_requests.getPRsForConversation", "pull_requests.webGet", "pull_requests.sessionCardPRs"],
+    hydrateRow: thinPullRequestRow,
+  },
+  // A pull request's files, commits and checks, keyed by its id: what its
+  // page and an opened diff read. A row exists only for a pull request one of
+  // them opened, fed by that surface's own query. Per window, like the rule
+  // for the full row before the split (lib/cardPullRequestRows): the window
+  // showing a pull request reads it live, and another window's copy may be
+  // days old. Each array is compared by content: the server rewrites them
+  // without moving a scalar this row carries. Bounded at hydration by
+  // last-open recency (cacheRetention).
+  pullRequestDetails: {
+    persistence: { kind: "collection", key: "pullRequestDetails", perWindow: true },
+    hydration: { phase: "deferred" },
+    localFirst: false,
+    sync: { isDelta: true, deepFields: ["files", "commits", "checks"] },
+    feeds: ["pull_requests.getPRByNumber", "pull_requests.webGet"],
   },
   // Which sessions link which pull requests, and how strongly ("committed":
   // the session's own commit is on it; "observed": it sat on the branch): the
@@ -2061,6 +2106,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sessions: "shared",
   conversations: "shared",
   tasks: "shared",
+  taskComments: "shared",
   capabilityBindings: "shared",
   capabilityState: "shared",
   teamKitItems: "shared",
@@ -2182,6 +2228,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   orgLogRows: "shared",
   commits: "shared",
   pullRequests: "shared",
+  pullRequestDetails: "local",
   pullRequestSessions: "shared",
   codeComments: "shared",
   quoteDrafts: "shared",

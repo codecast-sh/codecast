@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { CARD_BUCKETS, cardBuckets, isFullPullRequest, overlayCardPullRequests, rankCardSessions, stableCardIds, sessionPullRequests, sessionPullRequestsSig, showsCi, titledSessionPullRequests } from "../sessionPullRequests";
+import { joinPullRequestDetail } from "../detailRows";
 
 const pullRequests = {
   p1: { _id: "p1", repository: "acme/app", number: 10, state: "merged", title: "Ten" },
@@ -117,20 +118,25 @@ describe("rankCardSessions / stableCardIds", () => {
 
 describe("overlayCardPullRequests", () => {
   test("keeps what a fuller feed cached, takes the chip fields, clears the ones left out", () => {
-    const cached = { p1: { _id: "p1", number: 1, state: "open", draft: true, checks_state: "pending", files: [{ filename: "a" }], linked_session_ids: ["c1", "c2"] } };
+    const cached = { p1: { _id: "p1", number: 1, state: "open", draft: true, checks_state: "pending", head_ref: "fix/a", linked_session_ids: ["c1", "c2"] } };
     const [row] = overlayCardPullRequests([{ _id: "p1", number: 1, state: "open", checks_state: "success", title: "One" }], cached);
-    expect(row.files).toEqual([{ filename: "a" }]);
+    expect(row.head_ref).toBe("fix/a");
     expect(row.linked_session_ids).toEqual(["c1", "c2"]);
     expect(row.checks_state).toBe("success");
     expect(row.title).toBe("One");
     expect(row.draft).toBeUndefined();
     expect(isFullPullRequest(row)).toBe(false);
-    const withChecks = { p1: { ...cached.p1, checks: [{ name: "ci", conclusion: "failure" }], mergeable_state: "blocked" } };
-    const [moved] = overlayCardPullRequests([{ _id: "p1", number: 1, state: "merged", checks_state: "success" }], withChecks);
-    expect(moved.checks).toBeUndefined();
+    const withMerge = { p1: { ...cached.p1, mergeable_state: "blocked" } };
+    const [moved] = overlayCardPullRequests([{ _id: "p1", number: 1, state: "merged", checks_state: "success" }], withMerge);
     expect(moved.mergeable_state).toBeUndefined();
-    const [same] = overlayCardPullRequests([{ _id: "p1", number: 1, state: "open", draft: true, checks_state: "pending" }], withChecks);
-    expect(same.checks).toEqual(withChecks.p1.checks);
+    const [same] = overlayCardPullRequests([{ _id: "p1", number: 1, state: "open", draft: true, checks_state: "pending" }], withMerge);
+    expect(same.mergeable_state).toBe("blocked");
+    // The checks themselves live in pullRequestDetails, stamped with the state
+    // they were read under: once the chip feed moves the row's state, the
+    // page's read of the row hides them until a full read sends them again.
+    const detail = { _id: "p1", checks: [{ name: "ci", conclusion: "failure" }], checks_state: "pending", _cachedAt: 1 };
+    expect(joinPullRequestDetail(same, detail).checks).toEqual(detail.checks);
+    expect(joinPullRequestDetail(moved, detail).checks).toBeUndefined();
     const [fresh] = overlayCardPullRequests([{ _id: "p9", number: 9, state: "merged" }], cached);
     expect(fresh).toMatchObject({ _id: "p9", number: 9, state: "merged" });
     expect(isFullPullRequest(fresh)).toBe(false);

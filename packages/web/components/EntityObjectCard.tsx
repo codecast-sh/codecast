@@ -55,6 +55,7 @@ import {
 import { prState, repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
 import { DocDates } from "./DocDates";
 import { FileDiffList } from "./FileDiffView";
+import { PullRequestFiles } from "./pr/PullRequestFiles";
 import { RevealButton, RevealOpenLink, type RevealTarget } from "./ObjectReveal";
 import { ProposalBody, ProposalMeta } from "./org/ProposalCard";
 import { useOrgHover } from "./org/proposalContexts";
@@ -531,7 +532,7 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
     return (
       <div className="space-y-2.5">
         {entity.body ? <CardMarkdown content={entity.body} /> : <p className="text-meta italic text-sol-text-dim">No description.</p>}
-        <FileDiffList files={entity.files} emptyText="No file changes synced yet" className="overflow-hidden rounded border border-sol-border/40" />
+        <PullRequestFiles id={entity._id} files={entity.files} emptyText="No file changes synced yet" className="overflow-hidden rounded border border-sol-border/40" />
       </div>
     );
   }

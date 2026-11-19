@@ -12,12 +12,14 @@ export function isFullPullRequest(row: { body?: unknown }): boolean {
 
 /**
  * Lay chip rows over the rows the store holds, so a push never drops what a
- * fuller feed cached (files, checks, its other links), and a chip field the
+ * fuller feed cached (its body, its other links), and a chip field the
  * payload leaves out (a cleared draft flag) clears. A row nothing fuller has
  * written has no body, which is how the PR page and the timeline know it is
  * not loaded. The detail a fuller feed cached under an older state would
- * contradict the new one (red checks under "checks passed"): it goes until
- * that feed sends it again.
+ * contradict the new one: the merge state goes until that feed sends it
+ * again, and the checks, which live in pullRequestDetails, are hidden by
+ * their reader while they were read under another checks_state
+ * (lib/detailRows joinPullRequestDetail).
  */
 export function overlayCardPullRequests(rows: readonly Row[] | undefined, cached: Record<string, Row> | undefined, pending?: Record<string, unknown>): Row[] {
   const locked = lockedFields(pending);
@@ -29,10 +31,7 @@ export function overlayCardPullRequests(rows: readonly Row[] | undefined, cached
     // release the lock early.
     for (const field of locked.get(String(row._id)) ?? []) delete next[field];
     for (const field of SESSION_CARD_PR_FIELDS) next[field] = row[field];
-    if (prev) {
-      if (prev.checks_state !== row.checks_state) next.checks = undefined;
-      if (prev.state !== row.state || prev.draft !== row.draft) next.mergeable_state = undefined;
-    }
+    if (prev && (prev.state !== row.state || prev.draft !== row.draft)) next.mergeable_state = undefined;
     return next;
   });
 }

@@ -16,6 +16,7 @@ import { useTabActive } from "../../../../../hooks/usePagePresence";
 import { workspaceRows } from "../../../../../hooks/useWorkspaceCollection";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../../../hooks/useSyncDecisionDetail";
 import { useSyncTaskSignals } from "../../../../../hooks/useSyncSignals";
+import { useTaskComments } from "../../../../../hooks/useSyncTasks";
 import { decisionRef } from "../../../../../lib/line/fixDecision";
 import { lineFilterParam } from "../../../../../lib/line/lineWorkspaceUrl";
 import { needOfCase, stoppedAsk } from "../../../../../lib/line/lineNeeds";
@@ -144,8 +145,9 @@ function ProblemBody({ issue, model, workspace, selection, select, href, prev, n
   const home = useMemo(() => homeExpectation(issue.history, signals as ReadonlyArray<TopicSignal>), [issue.history, signals]);
   const full = useMemo(() => withoutOffTopic(issue.history, offTopic), [issue.history, offTopic]);
 
-  const task = useInboxStore((st) => (st.tasks as unknown as Record<string, BandTask & { comments?: BandNote[] }>)[issue.id] ?? null);
-  const notes = task?.comments;
+  const task = useInboxStore((st) => (st.tasks as unknown as Record<string, BandTask>)[issue.id] ?? null);
+  // The problem's notes are its task's thread, which the floor reads into the store for every problem (useLineFloor).
+  const notes = useTaskComments(issue.id) as BandNote[];
   // Runs whose findings were moved to another problem after they ran: their work is that problem's. They stay in Work,
   // marked and linked there, and never set this problem's state.
   const moves = useMemo(() => movedOut(notes ?? []), [notes]);

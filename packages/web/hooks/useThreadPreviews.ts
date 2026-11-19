@@ -12,11 +12,11 @@ import { useThreadsPage } from "../components/threads/threadsContext";
 // than beside the renderers so every component module exports only
 // components (the Fast Refresh guard).
 
-/** The task row, woken only by the fields a card shows. */
+/** The task row, woken only by the fields a card shows. Its comments are not
+ *  on it: a card reads them with useTaskComments (hooks/useSyncTasks). */
 function taskSig(t: TaskDetail | undefined): string {
   if (!t) return "";
-  const last = t.comments?.[t.comments.length - 1];
-  return `${t.short_id}|${t.external?.identifier ?? ""}|${t.external?.synced_at ?? ""}|${t.external?.last_error ?? ""}|${t.title}|${t.status}|${t.priority ?? ""}|${t.assignee_info?.name ?? ""}|${t.plan?.short_id ?? ""}|${(t.description ?? "").length}|${t.comments?.length ?? 0}|${last?._id ?? ""}|${last?.text?.length ?? 0}`;
+  return `${t.short_id}|${t.external?.identifier ?? ""}|${t.external?.synced_at ?? ""}|${t.external?.last_error ?? ""}|${t.title}|${t.status}|${t.priority ?? ""}|${t.assignee_info?.name ?? ""}|${t.plan?.short_id ?? ""}|${(t.description ?? "").length}`;
 }
 
 export function useTaskRow(taskId: string): TaskDetail | undefined {

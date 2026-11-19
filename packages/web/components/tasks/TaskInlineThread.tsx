@@ -4,18 +4,15 @@
 // under a disclosure, then the comment stream with the same composer the task
 // page uses. The Threads page's task rows and a session's task chip both draw
 // it, so a task reads the same wherever it is embedded. The detail feeder
-// fills tasks[id].comments, so a reply here reconciles exactly as it does on
-// the task page.
+// fills the task's thread in the store (taskComments), so a reply here
+// reconciles exactly as it does on the task page.
 
 import type { ReactNode } from "react";
-import { type TaskDetail } from "../../store/inboxStore";
-import { useSyncTaskDetail } from "../../hooks/useSyncTasks";
+import { useSyncTaskDetail, useTaskComments } from "../../hooks/useSyncTasks";
 import { useTaskRow } from "../../hooks/useThreadPreviews";
 import { TaskCommentStream, type TaskOwnerRef } from "./TaskCommentStream";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import "../threads/threads.css";
-
-const EMPTY_COMMENTS: NonNullable<TaskDetail["comments"]> = [];
 
 export function TaskInlineThread({ taskId, newSince, focusComposer = false, owner, children }: {
   taskId: string;
@@ -29,6 +26,7 @@ export function TaskInlineThread({ taskId, newSince, focusComposer = false, owne
 }) {
   useSyncTaskDetail(taskId);
   const task = useTaskRow(taskId);
+  const comments = useTaskComments(taskId);
   const desc = (task?.description ?? "").trim();
   return (
     <>
@@ -39,7 +37,7 @@ export function TaskInlineThread({ taskId, newSince, focusComposer = false, owne
         </details>
       )}
       {children}
-      <TaskCommentStream shortId={task?.short_id} comments={task?.comments ?? EMPTY_COMMENTS} composerAutoOpen composerAutoFocus={focusComposer} newSince={newSince} clampComments owner={owner} />
+      <TaskCommentStream shortId={task?.short_id} comments={comments} composerAutoOpen composerAutoFocus={focusComposer} newSince={newSince} clampComments owner={owner} />
     </>
   );
 }

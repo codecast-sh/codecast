@@ -197,6 +197,15 @@ Convex queries return records enriched with **derived/joined** fields: `task.ass
 
 Why not store the derived value optimistically: field-protection reconciles by `===`, so an optimistic **object** never matches the server's re-enriched object and freezes forever. Why not auto-derive in `syncTable`: a `config.transform` bypasses the no-change early-return and re-pushes the whole collection on every no-op sync (jank). String-valued derived fields (e.g. `display_title`) are the exception — they reconcile cleanly, so deriving them on an optimistic write is fine.
 
+### List rows are thin; heavy fields live in detail collections (`lib/detailRows`)
+
+A list row holds what a list draws. The fields only an opened object draws live in a detail collection keyed by the same id, which holds a row only for what a surface opened: `docs` and `docDetails`, `tasks` and `taskComments` (a task's comment thread), `pullRequests` and `pullRequestDetails` (files with their patches, commits, checks). On one account those two fields were 43% of every window's store.
+
+- **A `tasks` row never has `comments`, and a `pullRequests` row never has `files`, `commits` or `checks`,** even though the server sends them on every row: `syncTable` and `syncRecord` take them off on the way in (`DETAIL_SPLITS` in `store/inboxStore.ts`) and use them to refresh a detail row the store already holds. Read a thread with `useTaskComments(taskId)`, and a pull request with `usePullRequest` (the row with its detail laid on) or `usePullRequestDetail(id)`.
+- **The surface that shows the detail feeds it:** `useSyncTaskDetail` (a task's page or inline thread), `useSyncTaskThreads` (a list that reads many threads at once, as the line does for its problems' notes), `useSyncPullRequest` (the PR page) and `useSyncPullRequestDetail` (an expanded card; `components/pr/PullRequestFiles` mounts it). A new surface that needs the detail mounts one of these; it never puts the field back on the list row.
+- **A detail collection is capped while the window lives, not only at boot** (`DETAIL_ROW_CAPS`; the store evicts the least recently opened row past the cap on every insert). A mounted reader pins its row (`useTaskComments`, `usePullRequestDetail`, `useSyncTaskThreads`), and a pinned row is never evicted. Read a detail through those hooks so what is on screen stays held; a raw read of the collection is not pinned and can lose its row.
+- **A new heavy field joins a detail collection, not a list row.** `bun perf/detailRowsSize.ts` (from `packages/web`) prints what the two lists weigh at a real account's size.
+
 ### Dev console access
 
 Every build, dev and prod, exposes the store as `window.__inboxStore` (end of `store/inboxStore.ts`). Use it from the browser console (or `cast browser eval` when verifying) to inspect state or drive flows that have no URL of their own — e.g. fire an in-app deep-link to a message:
@@ -228,6 +237,16 @@ compositor layers; a typed key that matches no shortcut never queries the DOM.
 Background bulk work (a coalesced inbox apply, a coarse clock tick) waits for a
 pause in typing through `lib/inputQuiet.ts`. When the guard fails, fix the cost
 it names; never loosen the budget to get past it.
+
+## React Compiler (web)
+
+The web build runs React Compiler over an explicit list of files, `REACT_COMPILER_SOURCES` in `packages/web/plugins/reactCompiler.ts`, and over nothing else. `REACT_COMPILER=0` turns it off for a build or a dev server. Mobile's Metro build does not run it, so a listed file must stay correct uncompiled.
+
+A compiled component keeps whatever it computed from the same props, state, context and hook results. A read of anything else while rendering is kept too, and the value on screen stops changing: `formatRelativeTime(ts)` and every helper that calls `Date.now()` itself, a helper that calls `getState()` or reads the `store` proxy, `localStorage`, a module-level table that fills in later. The same read behind a function a hook hands back is kept as well: a hook whose callback never changes and calls `Date.now()` when called froze every compiled row's "just now", so a hook reads the instant in its own body and makes the callback from it (`useRelativeTime` in `lib/conversationFormat.tsx`). In a listed file, take such a value from a hook and pass it in (`relativeSeen(ts, now)` with `now` from `useNowWhen`), or put `"use no memo"; // <the read, and what would freeze>` first in the component. A direct `useInboxStore.getState()` in render makes the compiler skip the whole component, which is safe and silent.
+
+- `bun scripts/react-compiler-report.ts` (from `packages/web`) lists what compiled, what the compiler left as written and why, and every such read, followed through helpers and through the functions hooks hand back. It also lists each prop called while rendering, which it cannot follow: read those by hand. It must exit 0 for the list. Run it on a candidate (`bun scripts/react-compiler-report.ts components/inbox/`) before adding it.
+- `REACT_COMPILER=1 bun test <file>` and `REACT_COMPILER=1 scripts/perf-budgets.sh` run the listed files compiled; plain `bun test` never does.
+- Add a file only with a measured reason: `bun perf/compilerAB.ts --workload <case>` compares on against off (`packages/web/perf/README.md` has the numbers the current list was chosen on). The compiler speeds up re-renders where most of the page is unchanged, such as a message arriving; it does nothing for a conversation switch.
 
 ## Prompt evals (`evals`)
 

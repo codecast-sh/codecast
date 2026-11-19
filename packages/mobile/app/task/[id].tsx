@@ -14,7 +14,7 @@ import { ObjectHeader, ObjectMissing } from "@/components/objects/ObjectParts";
 import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
 import { directChildren, isActiveTask, subtaskProgressOf, waitTone, type WaitTone } from "@codecast/shared/tasks";
 import { createTaskAndAdopt, openSubtasksOf } from "@codecast/web/lib/taskActions";
-import { useSyncTaskDetail } from "@codecast/web/hooks/useSyncTasks";
+import { useSyncTaskDetail, useTaskComments } from "@codecast/web/hooks/useSyncTasks";
 import { useCoarseNow } from "@codecast/web/hooks/useCoarseNow";
 import { useRepoObject } from "@codecast/web/hooks/useRepoObject";
 import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
@@ -41,9 +41,9 @@ export default function TaskDetailScreen() {
   const addTaskComment = useInboxStore((s) => s.addTaskComment);
   const listLoading = useFeedLoading("tasks");
   // Fetch the per-task detail (full task + comments + history) and seed it into
-  // the store row via syncRecord, mirroring web's TaskDetailContent. This is what
-  // makes task.comments exist so the optimistic addTaskComment push lands; the
-  // enrichTasks list shape synced by useSyncTasks does NOT carry comments.
+  // the store, mirroring web's TaskDetailContent: the task into `tasks`, its
+  // thread into `taskComments` (web lib/detailRows), where the optimistic
+  // addTaskComment push lands.
   const directData = useSyncTaskDetail(id);
 
   const task = useMemo(() => {
@@ -53,6 +53,9 @@ export default function TaskDetailScreen() {
       ((directData as TaskItem | null) ?? undefined)
     );
   }, [tasks, id, directData]);
+
+  // The task's thread, read from the store by the row's own id (the route may name it by short id).
+  const thread = useTaskComments(task?._id);
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -151,7 +154,7 @@ export default function TaskDetailScreen() {
   const handleAddComment = useCallback(() => {
     const text = commentText.trim();
     if (!task || !text) return;
-    // Optimistic, local-first: addTaskComment pushes onto task.comments and
+    // Optimistic, local-first: addTaskComment pushes onto the task's thread and
     // dispatches the same server write through the outbox. Clear synchronously.
     addTaskComment(task.short_id, text, "note");
     setCommentText("");
@@ -166,11 +169,7 @@ export default function TaskDetailScreen() {
   const steps = task.steps ?? [];
   const criteria = task.acceptance_criteria ?? [];
   const labels = task.labels ?? [];
-  // Array.isArray, not just ??: a cached row poisoned by a stale pending lock
-  // once carried a lone comment object here (see tasks.unprotectedFields in
-  // clientSyncRegistry); one bad row must not crash the screen.
-  const rawComments = (task as any).comments;
-  const comments = (Array.isArray(rawComments) ? [...rawComments] : []).sort(
+  const comments = [...thread].sort(
     (a: any, b: any) => (a.created_at ?? 0) - (b.created_at ?? 0),
   );
 

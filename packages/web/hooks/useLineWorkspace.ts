@@ -309,7 +309,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const teamDecisions = useSyncTeamLineDecisions(useShared(() => (spaceKeys ?? [activeSpace]).filter((k): k is string => !!k), [spaceKeys, activeSpace]));
   const projectRow = useInboxStore((s) => (projectId ? ((s.projects as Record<string, LineProject>)?.[projectId] ?? null) : null));
   const workspace = useProjectWorkspace(projectRow as { workspace?: string | null; team_id?: string | null } | null);
-  const { now, lineRows, projects, admissions, ready } = useLineFloor(projectId, workspace, { rollup: false });
+  const { now, lineRows, projects, admissions, ready } = useLineFloor(projectId, workspace, { rollup: false, threads: true });
   const held = useShared(() => heldFrom(lineRows.signals as Array<{ created_at: number }>, now, LINE_SIGNAL_WINDOW_MS, LINE_SIGNAL_CAP), [lineRows.signals, now]);
   const project = projectId ? projectRow ?? projects.find((p) => p._id === projectId) ?? null : null;
   const refs = useShared(() => caseRefs(lineRows.tasks as Array<{ _id: string; short_id?: string | null }>), [lineRows.tasks]);

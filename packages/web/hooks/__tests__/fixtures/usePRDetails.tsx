@@ -8,7 +8,7 @@ import { getFunctionName } from "convex/server";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import { useInboxStore } from "../../../store/inboxStore";
 import { flushSyncPublishes } from "../../../store/syncTransaction";
-import { usePullRequest } from "../../useSyncTimeline";
+import { applyPullRequestAnswer, usePullRequest } from "../../useSyncTimeline";
 import { usePRDetails } from "../../usePRDetails";
 import { PRCommits } from "../../../components/pr/PRCommits";
 import { PRChecks } from "../../../components/pr/PRChecks";
@@ -37,15 +37,21 @@ function Probe({ tab }: { tab: "commits" | "checks" | null }) {
 const render = async (tab: "commits" | "checks" | null) => {
   await act(async () => { root.render(<ConvexProvider client={client}><MemoryRouter><Probe tab={tab} /></MemoryRouter></ConvexProvider>); });
 };
+// The server's row, as the page's feeder (useSyncPullRequest) applies each
+// push of it: the store's own row carries no commits or checks to build on.
+let served: Record<string, unknown>;
 const sync = async (fields: Record<string, unknown>) => {
   await act(async () => {
-    store().syncRecord("pullRequests", "pr1", { ...store().pullRequests.pr1, ...fields });
+    served = { ...served, ...fields };
+    applyPullRequestAnswer(served);
     flushSyncPublishes();
   });
 };
 
 beforeEach(() => {
   requests = [];
+  served = seed;
+  useInboxStore.setState({ pullRequestDetails: {} } as any);
   store().syncTable("pullRequests", [seed], { isDelta: false });
   flushSyncPublishes();
   root = createRoot(container);

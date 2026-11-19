@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../../store/inboxStore";
 import { applyCollectionFeed } from "../useSyncCollection";
-import { CARD_PR_OPTS, LINK_OPTS } from "../useSyncTimeline";
+import { CARD_PR_OPTS, LINK_OPTS, applyPullRequestAnswer } from "../useSyncTimeline";
 import { isFullPullRequest, sessionPullRequests } from "../../lib/sessionPullRequests";
 import { applyUpdatesToStore } from "../../store/syncReplication";
 
@@ -20,14 +20,14 @@ const numbers = (conv: string) => sessionPullRequests(useInboxStore.getState() a
 
 describe("session card pull request feed", () => {
   beforeEach(() => {
-    useInboxStore.setState({ pullRequests: {}, pullRequestSessions: {}, pending: {} } as any);
+    useInboxStore.setState({ pullRequests: {}, pullRequestDetails: {}, pullRequestSessions: {}, pending: {} } as any);
   });
 
   it("lays the chip fields over a cached full row, and a row nothing fuller wrote has no body", () => {
-    useInboxStore.getState().syncTable("pullRequests", [pr("p1", 1, { body: "full", files: [{ filename: "a" }], linked_session_ids: ["c1"], checks_state: "pending" })], { isDelta: true });
+    useInboxStore.getState().syncTable("pullRequests", [pr("p1", 1, { body: "full", head_ref: "feat", linked_session_ids: ["c1"], checks_state: "pending" })], { isDelta: true });
     apply(answer([link("l1", "p1", "c1"), link("l2", "p2", "c1")], [pr("p1", 1, { checks_state: "success" }), pr("p2", 2)], ["c1"]));
     const rows = useInboxStore.getState().pullRequests as Record<string, any>;
-    expect(rows.p1).toMatchObject({ body: "full", files: [{ filename: "a" }], checks_state: "success" });
+    expect(rows.p1).toMatchObject({ body: "full", head_ref: "feat", linked_session_ids: ["c1"], checks_state: "success" });
     expect(rows.p1.body).toBe("full");
     expect(rows.p2.body).toBeUndefined();
     expect(numbers("c1")).toEqual([2, 1]);
@@ -48,17 +48,22 @@ describe("session card pull request feed", () => {
   });
 
   it("a follower keeps its full row when the host replicates a chip-only one", () => {
-    const full = pr("p1", 1, { body: "full", files: [{ filename: "a" }], commits: [{ sha: "x" }], checks_state: "pending", linked_session_ids: ["c1"], author_github_username: "ada", head_ref: "feat", additions: 3 });
-    useInboxStore.getState().syncTable("pullRequests", [full], { isDelta: true });
+    const full = pr("p1", 1, { body: "full", checks_state: "pending", linked_session_ids: ["c1"], author_github_username: "ada", head_ref: "feat", additions: 3 });
+    // This window has the pull request open: its page fed the row and its detail.
+    const files = [{ filename: "a" }];
+    const commits = [{ sha: "x" }];
+    applyPullRequestAnswer({ ...full, files, commits });
     applyUpdatesToStore([{ key: "pullRequests", upserts: [pr("p1", 1, { checks_state: "success" })] } as any]);
     const row = (useInboxStore.getState().pullRequests as Record<string, any>).p1;
     expect(row).toMatchObject({ ...full, checks_state: "success" });
     expect(isFullPullRequest(row)).toBe(true);
-    // The host's whole row, its detail days old and its checks cleared: only
-    // its chip fields land over this window's own full row.
-    applyUpdatesToStore([{ key: "pullRequests", upserts: [{ ...full, body: "stale", files: [], checks: undefined, checks_state: "failure" }] } as any]);
+    // The host's whole row, its body days old: only its chip fields land over
+    // this window's own full row, and the detail this window read for itself
+    // (per window, never replicated) is not touched.
+    applyUpdatesToStore([{ key: "pullRequests", upserts: [{ ...full, body: "stale", checks_state: "failure" }] } as any]);
     const after = (useInboxStore.getState().pullRequests as Record<string, any>).p1;
-    expect(after).toMatchObject({ body: "full", files: [{ filename: "a" }], checks_state: "failure" });
+    expect(after).toMatchObject({ body: "full", head_ref: "feat", checks_state: "failure" });
+    expect((useInboxStore.getState() as any).pullRequestDetails.p1).toMatchObject({ files, commits, checks_state: "pending" });
     // A row this window does not hold lands as sent.
     applyUpdatesToStore([{ key: "pullRequests", upserts: [pr("p7", 7, { body: "new" })] } as any]);
     expect((useInboxStore.getState().pullRequests as Record<string, any>).p7.body).toBe("new");

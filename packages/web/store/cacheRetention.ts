@@ -12,6 +12,7 @@ import {
 import { isConvexId } from "../lib/entityLinks";
 import { PR_STATE_OF_KIND, SESSION_COMMIT_KINDS, SESSION_PUSH_KIND, prThreadKey } from "../lib/externalEventOutcomes";
 import { CLIENT_SYNC_REGISTRY } from "./clientSyncRegistry";
+import { DETAIL_ROW_CAPS } from "../lib/detailRows";
 
 // The message page the server sends on open (useConversationMessages' snapshot
 // fetch). The persisted cache keeps the same tail per conversation, applied
@@ -119,6 +120,26 @@ export function partitionDocDetailRetention(
     sortStamp: (row) => Math.max(row._cachedAt ?? 0, row.updated_at ?? 0),
   });
 }
+
+// Retention for the detail collections split off the task and pull request
+// lists (lib/detailRows), applied at hydration like docDetails above. The
+// same caps hold while a window lives (the store evicts past them on every
+// insert, inboxStore evictDetailRows); this pass is what bounds the disk a
+// window that never wrote the row still reads at boot, and ages rows out.
+// Capped by last-open recency (`_cachedAt`). A dropped row is one read away:
+// the surface that shows it fetches it again.
+export const DETAIL_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const MAX_CACHED_TASK_THREADS = DETAIL_ROW_CAPS.taskComments;
+export const MAX_CACHED_PULL_REQUEST_DETAILS = DETAIL_ROW_CAPS.pullRequestDetails;
+
+const detailRetention = (maxRows: number) => (rows: any[], now: number): { keep: any[]; drop: string[] } =>
+  partitionCacheRetention(rows, now, {
+    ttlMs: DETAIL_CACHE_TTL_MS,
+    maxRows,
+    alwaysKeep: () => false,
+    stampedAt: (row) => row._cachedAt ?? 0,
+    sortStamp: (row) => row._cachedAt ?? 0,
+  });
 
 // Exclude tombstones never clear for delta tables (absence ≠ deletion in
 // applySyncTable), so every kill/dismiss adds a permanent `pending` entry —
@@ -303,6 +324,8 @@ export function partitionExternalEventRetention(
 // focused id as well, so they keep their own call.
 export const COLLECTION_RETENTION: Record<string, (rows: any[], now: number) => { keep: any[]; drop: string[] }> = {
   docDetails: partitionDocDetailRetention,
+  taskComments: detailRetention(MAX_CACHED_TASK_THREADS),
+  pullRequestDetails: detailRetention(MAX_CACHED_PULL_REQUEST_DETAILS),
   externalEvents: partitionExternalEventRetention,
   mySends: (rows, now) => partitionCacheRetention(rows, now, {
     ttlMs: Number.POSITIVE_INFINITY,

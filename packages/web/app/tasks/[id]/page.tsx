@@ -10,7 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
 import { lookup, resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConversationIds, taskOwnerOf } from "../../../lib/liveEntities";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
-import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
+import { useSyncTasks, useSyncTaskDetail, useTaskComments } from "../../../hooks/useSyncTasks";
 import { useSyncTaskExternalEvents, useExternalEvents, externalEventsOldestFirst } from "../../../hooks/useSyncExternalEvents";
 import { type ExternalEventRecord } from "../../../lib/externalEvents";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
@@ -282,6 +282,10 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
   // collection: a write to any other task must not repaint this page.
   const storeRow = useInboxStore((s) => (id ? lookup(s.tasks, id) : undefined));
   const data = (storeRow || directData) as TaskDetail | undefined;
+  // The row carries no comments (lib/detailRows): the detail feeder above
+  // writes the thread to the store, and a task opened before paints it from
+  // the cache.
+  const comments = useTaskComments(data?._id);
   const taskTeamId = data?.team_id as string | undefined;
   // A blocking question outranks the description: nothing in the body can be
   // acted on until it is answered, so the body folds and the card comes up
@@ -560,7 +564,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
           {/* Decisions bound to a problem lead its record: the card is the next move. */}
           {isProblem && <TaskDecisions taskId={data._id} />}
 
-          <RecordFold on={isProblem} count={((data as any).comments?.length ?? 0) + linkedConversations.length}>
+          <RecordFold on={isProblem} count={comments.length + linkedConversations.length}>
           {/* Primary properties — inline, editable (the card look) */}
           <div className="flex items-center gap-1 flex-wrap mb-4 -ml-1">
             <TaskStatusPicker task={data as any} shortcutHint="s to cycle" />
@@ -810,7 +814,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
             </div>
           )}
 
-          <TaskTimeline task={data as any} sessions={linkedConversations} externalEvents={externalEvents} openLinkedSession={openLinkedSession} />
+          <TaskTimeline task={data as any} comments={comments} sessions={linkedConversations} externalEvents={externalEvents} openLinkedSession={openLinkedSession} />
 
           {/* Comment input */}
           <TaskCommentComposer shortId={data.short_id} dropFilesRef={commentDropRef} owner={ownerSession ? { sessionId: ownerSession._id } : null} />

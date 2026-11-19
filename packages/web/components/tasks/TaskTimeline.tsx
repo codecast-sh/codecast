@@ -178,16 +178,21 @@ function ChangeBody({ row, graph, provider, origin, openLinkedSession }: { row: 
 
 export function TaskTimeline({
   task,
+  comments: thread,
   sessions,
   externalEvents,
   openLinkedSession,
 }: {
   task: { _id: string; created_at: number; creator?: Person | null; created_from_conversation?: string | null; history?: HistoryRow[]; comments?: TaskCommentRow[]; external?: { provider: "linear" | "github" } };
+  /** The task's thread. The store's task row does not carry it (lib/detailRows), so the task page hands it in; a caller
+   *  with a whole task object (a fixture) may leave it on the task. */
+  comments?: TaskCommentRow[];
   sessions: TaskLinkedSession[];
   externalEvents: ExternalEventRecord[];
   openLinkedSession: (info: any) => void;
 }) {
   const [filter, setFilter] = useState("all");
+  const comments = thread ?? task.comments;
   const origin = task.created_from_conversation ? sessions.find((s) => s._id === task.created_from_conversation) : undefined;
 
   const items = useMemo(() => {
@@ -200,14 +205,14 @@ export function TaskTimeline({
       : [{ _id: `created-${task._id}`, created_at: task.created_at, action: "created", actor: task.creator }];
     const all: Item[] = [
       ...[...created, ...history].map((row) => ({ kind: "change" as const, ts: row.created_at, key: row._id, row })),
-      ...(task.comments ?? []).map((row) => ({ kind: "comment" as const, ts: row.created_at, key: row._id, row })),
+      ...(comments ?? []).map((row) => ({ kind: "comment" as const, ts: row.created_at, key: row._id, row })),
       // A blank session that never got a message did no work on the task, and
       // the session that filed it is named on the created row instead.
       ...sessions.filter((s) => s.started_at && (s.title || s.message_count) && s._id !== task.created_from_conversation).map((row) => ({ kind: "session" as const, ts: row.started_at!, key: `s-${row._id}`, row })),
       ...externalEvents.map((row) => ({ kind: "git" as const, ts: row.created_at ?? 0, key: row._id, row })),
     ];
     return all.sort((a, b) => a.ts - b.ts);
-  }, [task._id, task.created_at, task.creator, task.created_from_conversation, task.history, task.comments, sessions, externalEvents]);
+  }, [task._id, task.created_at, task.creator, task.created_from_conversation, task.history, comments, sessions, externalEvents]);
 
   const count = (kind: Item["kind"]) => items.filter((i) => i.kind === kind).length;
   const filters = [

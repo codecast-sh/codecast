@@ -28,6 +28,7 @@ export const DATA_SCOPE = {
   sessions: "viewer",
   conversations: "viewer",
   tasks: "workspace",
+  taskComments: "entity",
   capabilityBindings: "viewer",
   capabilityState: "viewer",
   teamKitItems: "workspace",
@@ -159,6 +160,7 @@ export const DATA_SCOPE = {
   // Pull requests span teams by product design (a PR is read by repo and
   // number wherever the viewer can see it).
   pullRequests: "viewer",
+  pullRequestDetails: "entity",
   // A session's links to its pull requests, read by the session's id (lib/sessionPullRequests).
   pullRequestSessions: "entity",
   codeComments: "entity",

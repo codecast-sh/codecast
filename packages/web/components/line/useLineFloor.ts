@@ -2,16 +2,17 @@
 // The rows every line surface reads: the line app and /line/settings mount
 // the same feeders and count the same roll-up. Which project is in view is the
 // caller's (useLineProjectId reads the address).
-import type { SessionDecisionItem, TaskItem } from "../../store/inboxStore";
+import { useInboxStore, type SessionDecisionItem, type TaskItem } from "../../store/inboxStore";
 import { useActiveWorkspaceKey, useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { workspaceRefOf } from "../../lib/workspaceScope";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useSyncRuns, useWorkspaceRuns } from "../../hooks/useSyncRuns";
 import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useSyncProjectTasks } from "../../hooks/useSyncTasks";
+import { useSyncProjectTasks, useSyncTaskThreads } from "../../hooks/useSyncTasks";
+import { withTaskComments } from "../../lib/detailRows";
 import { useSyncWorkspaceProjects } from "../../hooks/useSyncProjects";
-import { isLineCard, type LineCauseTask, type LineFlowRun, type LineProject } from "../../lib/lineFlow";
+import { isCause, isLineCard, type LineCauseTask, type LineFlowRun, type LineProject } from "../../lib/lineFlow";
 import { lineRollup } from "../../lib/lineRollup";
 import { useLineAdmissions } from "./map/useLineAdmission";
 import { useSharedMemos } from "../../hooks/useSharedMemos";
@@ -50,7 +51,7 @@ export function heldTask(tasks: Record<string, HeldTask> | undefined, ref: strin
  *  `workspace` reads the floor where the project lives (its stored access
  *  key) when that is not the active workspace, so a project opened from
  *  another team shows its line without moving the viewer's active team. */
-export function useLineFloor(project?: string | null, workspace?: string | null, { rollup: withRollup = true }: { rollup?: boolean } = {}) {
+export function useLineFloor(project?: string | null, workspace?: string | null, { rollup: withRollup = true, threads: withThreads = false }: { rollup?: boolean; threads?: boolean } = {}) {
   // Kept outside the fiber (useSharedMemos): a discarded render of the line reads these rows back, the same arrays, so
   // nothing derived from them is computed twice.
   const { useShared, useSharedRows } = useSharedMemos("floor");
@@ -66,8 +67,22 @@ export function useLineFloor(project?: string | null, workspace?: string | null,
   const now = useCoarseNow(30_000);
 
   const signals = useSharedRows(useWorkspaceSignals(workspace));
-  const tasks = useSharedRows(useWorkspaceCollection<TaskItem & LineCauseTask>("tasks", causeSig, workspace));
   const runs = useSharedRows(useWorkspaceRuns(workspace) as LineFlowRun[]);
+  // The store's task rows carry no comments (lib/detailRows). The line app
+  // reads a task's thread across whole lists: a problem's notes (an
+  // escalation's reason) and a run's review verdicts. So for it (`threads`)
+  // the floor reads the threads of every problem and every task a run here
+  // worked on into the store, and lays them on those rows as `comments`. The
+  // roll-up reads no thread, so the settings page and a redirect ask for none.
+  const stored = useSharedRows(useWorkspaceCollection<TaskItem & LineCauseTask>("tasks", causeSig, workspace));
+  const reads = useShared(() => {
+    const ran = new Set(runs.map((r) => r.task_id).filter(Boolean));
+    return (t: { _id: string; cause?: unknown }) => isCause(t) || ran.has(t._id);
+  }, [runs]);
+  const threaded = useShared(() => stored.filter(reads), [stored, reads]);
+  useSyncTaskThreads(threaded as ReadonlyArray<{ _id: string; last_comment_at?: number | null }>, withThreads);
+  const threads = useInboxStore((s) => (withThreads ? s.taskComments : undefined));
+  const tasks = useSharedRows(useShared(() => (threads ? withTaskComments(stored, threads, reads) : stored), [stored, threads, reads]));
   const cards = useSharedRows(useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: isLineCard as (d: SessionDecisionItem) => boolean, sig: cardSig }));
   const projects = useSharedRows(useWorkspaceCollection<LineProject>("projects", projectSig, workspace));
 

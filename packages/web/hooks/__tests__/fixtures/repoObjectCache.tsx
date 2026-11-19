@@ -17,6 +17,7 @@ const { flushSyncPublishes } = await import("../../../store/syncTransaction");
 const { usePullRequest } = await import("../../useSyncTimeline");
 const { useEntityResolution } = await import("../../../lib/entityDisplay");
 const { usePRLookup } = await import("../../usePRLookup");
+const { PullRequestFiles } = await import("../../../components/pr/PullRequestFiles");
 const cache = await import("../../../store/idbCache");
 for (let i = 0; i < 1000 && !useInboxStore.getState().clientStateInitialized; i++) await new Promise(resolve => setTimeout(resolve, 1));
 expect(useInboxStore.getState().clientStateInitialized).toBe(true);
@@ -86,16 +87,39 @@ test("a mixed-case URL paints a cached PR before any server answer", async () =>
   expect(requests).toHaveLength(0);
 });
 
-test("a PR preview feeds the page and persists its full files", async () => {
+test("a PR preview feeds the page and persists the row without its files", async () => {
   responses.set("pull_requests:webGet", pr);
   await render(<><Reference /><Page /></>);
   expect(container.textContent).toContain(pr.title);
   expect(container.textContent).not.toContain("Missing");
-  expect(store().pullRequests.pr1.files).toEqual(pr.files);
+  // A reference draws a title and a state: the files and their patches stay
+  // out of the list row (lib/detailRows) and load when a diff is opened.
+  expect(store().pullRequests.pr1.title).toBe(pr.title);
+  expect(store().pullRequests.pr1.files).toBeUndefined();
+  expect((store() as any).pullRequestDetails.pr1).toBeUndefined();
   const disk = await cache.loadCache(["pullRequests"]);
-  expect(disk?.pullRequests.pr1.files).toEqual(pr.files);
+  expect(disk?.pullRequests.pr1.title).toBe(pr.title);
+  expect(disk?.pullRequests.pr1.files).toBeUndefined();
   await sync("pullRequests", [{ ...pr, _id: "pr2", number: 3592 }]);
   expect(store().pullRequests.pr1.title).toBe(pr.title);
+});
+
+test("opening a card's diff reads the pull request's files into its detail and persists them", async () => {
+  // A Convex id: the detail feeder skips a key the server could not name.
+  const prId = `k57${"0".repeat(29)}`;
+  const full = { ...pr, _id: prId, number: 3600 };
+  // Some feed sent the full row. It is stored thin, and nothing holds its files.
+  await sync("pullRequests", [full]);
+  expect(store().pullRequests[prId].files).toBeUndefined();
+  expect((store() as any).pullRequestDetails[prId]).toBeUndefined();
+  responses.set("pull_requests:webGet", full);
+  await render(<PullRequestFiles id={prId} emptyText="No file changes synced yet" />);
+  expect(container.textContent).toContain("score.ts");
+  expect(container.textContent).not.toContain("No file changes synced yet");
+  expect((store() as any).pullRequestDetails[prId].files).toEqual(full.files);
+  expect(store().pullRequests[prId].files).toBeUndefined();
+  const disk = await cache.loadCache(["pullRequestDetails"]);
+  expect(disk?.pullRequestDetails[prId].files).toEqual(full.files);
 });
 
 test("commit previews persist and keep receiving store updates offline", async () => {

@@ -12,6 +12,9 @@ import { track } from "../lib/analytics";
 import { useWorkspaceArgs, useFeederWorkspace, type WorkspaceArgs } from "./useWorkspaceArgs";
 import { useSyncCollection } from "./useSyncCollection";
 import { useIsSyncHost } from "./useSyncRole";
+import { isConvexId } from "../lib/entityLinks";
+import { pinDetailRows, taskCommentsRow, taskThreadStale, type TaskCommentsRow } from "../lib/detailRows";
+import { useServerAuthState } from "./useServerAuthSettled";
 
 const api = _api as any;
 
@@ -265,7 +268,10 @@ export function useSyncMentionTasks() {
 
 /** Store one task detail row (taskMining.webGetTaskDetail shape: the task plus
  *  its comments). Shared by the detail feeder below and the Threads inbox,
- *  whose payload carries the same rows for every task thread on the page. */
+ *  whose payload carries the same rows for every task thread on the page.
+ *  The task lands thin in `tasks` and its thread in `taskComments`
+ *  (lib/detailRows): this is one of the surfaces that opens a thread, so it
+ *  writes the row whether or not the store held one. */
 export function ingestTaskDetail(d: any, opts?: { partialComments?: boolean }): void {
   // Only persist genuine tasks. The detail route can be loaded with a foreign
   // id (/tasks/<conversationId>); storing whatever comes back plants a phantom
@@ -275,23 +281,31 @@ export function ingestTaskDetail(d: any, opts?: { partialComments?: boolean }): 
   // second copy of the row under that key — the never-pruned duplicate then
   // double-counts in subtaskProgressOf / taskFamilyIndex.
   if (!d || !collectionRowValidator("tasks")!(d)) return;
-  let row = d;
-  // A PARTIAL comment set (threads.listMine ships the newest 50) must never
-  // shrink a fuller local list: the task page renders the same array, and a
-  // truncating merge would drop its older history until the next detail push.
-  if (opts?.partialComments) {
-    const prev = (useInboxStore.getState().tasks as Record<string, any>)[String(d._id)];
-    const prevComments: any[] = prev?.comments ?? [];
-    if (prevComments.length > 0) {
-      const incoming = new Set((d.comments ?? []).map((c: any) => String(c._id)));
-      const keep = prevComments.filter((c: any) => !incoming.has(String(c._id)));
-      if (keep.length > 0) {
-        row = { ...d, comments: [...keep, ...(d.comments ?? [])].sort((a: any, b: any) => a.created_at - b.created_at) };
-      }
+  const { subtasks, graph_tasks, comments, ...rest } = d as any;
+  const id = String(rest._id);
+  const store = useInboxStore.getState();
+  if (Array.isArray(comments)) {
+    const prev = (store.taskComments as Record<string, TaskCommentsRow>)[id];
+    let thread = taskCommentsRow({ ...rest, comments }, prev, Date.now())!;
+    if (opts?.partialComments) {
+      // A PARTIAL comment set (threads.listMine ships the newest 50) must
+      // never shrink a fuller local list: the task page renders the same
+      // thread, and a truncating merge would drop its older history until the
+      // next detail push. A partial set is not the thread as of the task's
+      // last comment either, so it keeps the stamp it had (none: unread).
+      const incoming = new Set(comments.map((c: any) => String(c._id)));
+      const keep = (prev?.comments ?? []).filter((c: any) => !incoming.has(String(c._id)));
+      thread = {
+        ...thread,
+        as_of: prev?.as_of ?? 0,
+        comments: keep.length ? [...keep, ...comments].sort((a: any, b: any) => a.created_at - b.created_at) : comments,
+      };
     }
+    store.syncTable("taskComments", [thread]);
+    // A complete set is also the count a list shows; a partial one is not.
+    if (!opts?.partialComments) rest.comment_count = comments.length;
   }
-  const { subtasks, graph_tasks, ...rest } = row as any;
-  useInboxStore.getState().syncRecord("tasks", String(rest._id), rest);
+  store.syncRecord("tasks", id, rest);
   // The detail ships the task's direct children (taskMining.directSubtasks)
   // so a surface without the list feeder draws the same checklist, and the
   // tasks its graph names (lib/taskGraph graphNeighbors) so Blocked by reads
@@ -317,4 +331,126 @@ export function useSyncTaskDetail(id?: string) {
   useConvexSync(data, ingestTaskDetail);
 
   return data;
+}
+
+const NO_COMMENTS: any[] = [];
+
+/** A task's comment thread from the store, oldest first as the server sent
+ *  it; empty until a surface has opened the task (useSyncTaskDetail, the
+ *  Threads inbox, useSyncTaskThreads). The array keeps its identity until the
+ *  thread changes. A mounted reader has the thread on screen, so it holds it
+ *  against the collection's cap (lib/detailRows pinDetailRows). */
+export function useTaskComments(taskId: string | null | undefined): any[] {
+  useEffect(() => (taskId ? pinDetailRows("taskComments", [taskId]) : undefined), [taskId]);
+  return useInboxStore((s) => (taskId ? (s.taskComments as Record<string, TaskCommentsRow>)[taskId]?.comments : undefined)) ?? NO_COMMENTS;
+}
+
+// What this window has asked the server for, keyed by the signed-in person
+// and the task: another account's answers say nothing about this one's.
+//   threadsInFlight: a read is out for the thread as of this comment stamp.
+//   threadsLeftOut: the server, answering this person, left the task out
+//     (dropped, no longer theirs). Not asked for again until its row says its
+//     comments moved, or the retry window passes: a wrong "left out" (an
+//     answer from a moment the server did not know the caller) must not be
+//     permanent.
+const threadsInFlight = new Map<string, number>();
+const threadsLeftOut = new Map<string, { stamp: number; at: number }>();
+const LEFT_OUT_RETRY_MS = 10 * 60 * 1000;
+// Each row carries its comments and their sessions (tasks.ts enrichTasks):
+// 300 comment-heavy rows in one call have gone past the function read cap.
+const THREAD_CHUNK = 50;
+const THREAD_CALLS_AT_ONCE = 4;
+
+/** Test seam. */
+export function resetTaskThreadReads(): void {
+  threadsInFlight.clear();
+  threadsLeftOut.clear();
+}
+
+/**
+ * Feeder for a surface that reads many tasks' threads at once (the line's
+ * problem list reads each problem's notes for its status): one-shot reads of
+ * the threads the store lacks, or holds from before the task's newest
+ * comment, written to `taskComments`. The answers land together, so the
+ * surface recomputes once. Once a thread is held the store keeps it current
+ * from every task push (inboxStore DETAIL_SPLITS); this reads again only for
+ * a window that push never reaches (a follower whose host does not hold the
+ * thread).
+ *
+ * It reads only as a caller the server has confirmed, like every feeder
+ * (useServerAuthSettled): the line boots from cached rows before the socket
+ * has an identity, and tasks.webGetByIds answers a stranger with no rows,
+ * which is not "these tasks have no thread". The threads it reads are on
+ * screen, so it holds them against the collection's cap.
+ */
+export function useSyncTaskThreads(tasks: ReadonlyArray<{ _id: string; last_comment_at?: number | null }>, enabled = true): void {
+  const convex = useConvex();
+  const threads = useInboxStore((s) => s.taskComments) as Record<string, TaskCommentsRow>;
+  const principal = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ""));
+  const auth = useServerAuthState();
+  const confirmed = auth.settled && !auth.identityLost;
+  // Read when an answer lands: the socket may have lost its identity while the read was out.
+  const confirmedRef = useRef(confirmed);
+  confirmedRef.current = confirmed;
+
+  useEffect(() => (enabled ? pinDetailRows("taskComments", tasks.map((t) => String(t._id))) : undefined), [tasks, enabled]);
+
+  useEffect(() => {
+    if (!enabled || !confirmed) return;
+    const now = Date.now();
+    const need: Array<{ id: string; key: string; stamp: number }> = [];
+    for (const t of tasks) {
+      const id = String(t._id);
+      if (!isConvexId(id) || !taskThreadStale(t, threads[id])) continue;
+      const key = `${principal}:${id}`;
+      const stamp = t.last_comment_at ?? 0;
+      if (threadsInFlight.get(key) === stamp) continue;
+      const leftOut = threadsLeftOut.get(key);
+      if (leftOut && leftOut.stamp === stamp && now - leftOut.at < LEFT_OUT_RETRY_MS) continue;
+      threadsInFlight.set(key, stamp);
+      need.push({ id, key, stamp });
+    }
+    if (!need.length) return;
+    const chunks: Array<typeof need> = [];
+    for (let i = 0; i < need.length; i += THREAD_CHUNK) chunks.push(need.slice(i, i + THREAD_CHUNK));
+    void (async () => {
+      const rows: any[] = [];
+      // The tasks a confirmed caller's answer left out.
+      const leftOut: typeof need = [];
+      let next = 0;
+      const worker = async () => {
+        while (next < chunks.length) {
+          const chunk = chunks[next++];
+          try {
+            const items: any[] = (await convex.query(api.tasks.webGetByIds, { ids: chunk.map((c) => c.id) }))?.items ?? [];
+            rows.push(...items);
+            // An answer that arrives while the socket has no identity is a
+            // stranger's: it names no task, and says nothing about any.
+            if (confirmedRef.current) {
+              const answered = new Set(items.map((row) => String(row._id)));
+              for (const c of chunk) if (!answered.has(c.id)) leftOut.push(c);
+            }
+          } catch {
+            // Asked again the next time the surface looks.
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(THREAD_CALLS_AT_ONCE, chunks.length) }, worker));
+      if (rows.length) holdTaskThreads(rows);
+      const at = Date.now();
+      for (const c of leftOut) threadsLeftOut.set(c.key, { stamp: c.stamp, at });
+      for (const c of need) if (threadsInFlight.get(c.key) === c.stamp) threadsInFlight.delete(c.key);
+    })();
+  }, [convex, tasks, threads, enabled, confirmed, principal]);
+}
+
+/** Write the threads these task rows carry (the tasks.ts enrichTasks shape)
+ *  into `taskComments`, and the rows themselves, thin, into `tasks`. */
+export function holdTaskThreads(rows: any[]): void {
+  const store = useInboxStore.getState();
+  const held = store.taskComments as Record<string, TaskCommentsRow>;
+  const now = Date.now();
+  const threadRows = rows.map((row) => taskCommentsRow(row, held[String(row._id)], now)).filter((r): r is TaskCommentsRow => !!r);
+  if (threadRows.length) store.syncTable("taskComments", threadRows);
+  store.syncTable("tasks", rows, { isDelta: true });
 }

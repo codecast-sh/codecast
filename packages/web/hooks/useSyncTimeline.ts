@@ -1,8 +1,8 @@
 // Timeline lanes (commits, pull requests) — store-fed delta overlays.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { normalizeRepository } from "@codecast/shared/contracts";
-import { useCallback, useMemo, useState } from "react";
-import { useSyncCollection, entityIdArgs } from "./useSyncCollection";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { applyCollectionFeed, useSyncCollection, entityIdArgs } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useCoarseNow } from "./useCoarseNow";
@@ -10,6 +10,7 @@ import { useWatchEffect } from "./useWatchEffect";
 import { activeWorkspaceKeyOf } from "../lib/workspaceScope";
 import { CARD_BUCKETS, cardBuckets, rankCardSessions, stableCardIds } from "../lib/sessionPullRequests";
 import { isFullPullRequest, overlayCardPullRequests } from "../lib/cardPullRequestRows";
+import { joinPullRequestDetail, pinDetailRows, pullRequestDetailRow, type PullRequestDetailRow } from "../lib/detailRows";
 
 const api = _api as any;
 
@@ -26,9 +27,9 @@ export function useCommits(where?: (c: any) => boolean): any[] {
   return useCollectionRows<any>("commits", { where, sig: commitSig, sort: byTimestampDesc });
 }
 
-// A row only the inbox's chip feed has written lacks the body, files and
-// authorship the timeline and the PR page draw: they treat it as not loaded
-// rather than paint it half empty.
+// A row only the inbox's chip feed has written lacks the body and authorship
+// the timeline and the PR page draw: they treat it as not loaded rather than
+// paint it half empty.
 const fullRow = (p: any) => isFullPullRequest(p);
 
 export function usePullRequests(where?: (p: any) => boolean): any[] {
@@ -42,24 +43,63 @@ export function usePullRequests(where?: (p: any) => boolean): any[] {
 const oneRow = (row: any) => (row ? [row] : []);
 const ONE_ROW = { select: oneRow };
 
+// A pull request's files, commits and checks live apart from its list row
+// (lib/detailRows), in pullRequestDetails. The surfaces that draw them (its
+// page, an opened diff) feed that row from the same answer that feeds the
+// list row: Convex shares the subscription between the two calls.
+const oneDetail = (row: any) => {
+  if (!row) return [];
+  const held = (useInboxStore.getState() as any).pullRequestDetails as Record<string, PullRequestDetailRow> | undefined;
+  const detail = pullRequestDetailRow(row, held?.[String(row._id)], Date.now());
+  return detail ? [detail] : [];
+};
+const ONE_DETAIL = { select: oneDetail };
+
+/** One full pull request answer as useSyncPullRequest applies it: its detail
+ *  row, then its list row. For a test that plays the server's push. */
+export function applyPullRequestAnswer(row: any): void {
+  applyCollectionFeed("pullRequestDetails", row, oneDetail);
+  applyCollectionFeed("pullRequests", row, oneRow);
+}
+
+/** Feeder: one pull request by repository and number, its list row and its detail (the PR page). */
 export function useSyncPullRequest(args: { repository: string; number: number } | "skip") {
+  useSyncCollection("pullRequestDetails", api.pull_requests.getPRByNumber, args, ONE_DETAIL);
   return useSyncCollection("pullRequests", api.pull_requests.getPRByNumber, args, ONE_ROW);
 }
 
+/** Feeder: one pull request's detail by id, for a surface that opens its diff
+ *  from a row already in the store (an expanded card). Mount it only while
+ *  the diff is open. */
+export function useSyncPullRequestDetail(id: string | undefined) {
+  return useSyncCollection("pullRequestDetails", api.pull_requests.webGet, entityIdArgs("id", id), ONE_DETAIL);
+}
+
+/** A pull request's files, commits and checks from the store; undefined until
+ *  a surface has opened it. A mounted reader has the row on screen, so it
+ *  holds it against the collection's cap (lib/detailRows pinDetailRows). */
+export function usePullRequestDetail(id: string | undefined): PullRequestDetailRow | undefined {
+  useEffect(() => (id ? pinDetailRows("pullRequestDetails", [id]) : undefined), [id]);
+  return useInboxStore((s) => (id ? ((s as any).pullRequestDetails as Record<string, PullRequestDetailRow> | undefined)?.[id] : undefined));
+}
+
 // The PR page paints far more of a row than the timeline lane does, so it wakes
-// on its own signature rather than widening the lane's.
+// on its own signature rather than widening the lane's. The detail row wakes
+// it by identity: the store keeps that row while its contents hold.
 const prDetailSig = (p: any) =>
   [
     p.title, p.state, p.draft, p.updated_at, p.merged_at ?? "", p.body,
     p.head_sha ?? "", p.mergeable_state ?? "", p.behind_by ?? "", p.review_decision ?? "",
-    p.checks_state ?? "", JSON.stringify(p.checks), p.unresolved_review_count ?? "",
+    p.checks_state ?? "", p.unresolved_review_count ?? "",
     (p.requested_reviewers ?? []).join(","), (p.linked_session_ids ?? []).join(","),
-    (p.task_ids ?? []).join(","), (p.files ?? []).length,
+    (p.task_ids ?? []).join(","), p.changed_files ?? "",
     p.shepherd_state ?? "", p.shepherd_enabled ?? "", p.shepherd_conversation_id ?? "",
     p.shepherd_last_wake_at ?? "", p.shepherd_wake_count ?? "",
-    (p.labels ?? []).map((l: any) => l.name).join(","), (p.assignees ?? []).join(","), JSON.stringify(p.commits), p.commits_count ?? "",
+    (p.labels ?? []).map((l: any) => l.name).join(","), (p.assignees ?? []).join(","), p.commits_count ?? "",
   ].join("|");
 
+/** One pull request as its page reads it: the list row with its files,
+ *  commits and checks laid on once useSyncPullRequest has fed them. */
 export function usePullRequest(repository: string, number: number): any | undefined {
   const canonicalRepository = normalizeRepository(repository);
   const where = useMemo(
@@ -67,7 +107,9 @@ export function usePullRequest(repository: string, number: number): any | undefi
     [canonicalRepository, number],
   );
   const rows = useCollectionRows<any>("pullRequests", { where, sig: prDetailSig });
-  return rows[0];
+  const row = rows[0];
+  const detail = usePullRequestDetail(row?._id);
+  return useMemo(() => (row ? joinPullRequestDetail(row, detail) : undefined), [row, detail]);
 }
 
 // One commit, fed into the same collection the timeline fills. Same trick as

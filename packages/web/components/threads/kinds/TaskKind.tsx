@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ShortId } from "../../ShortId";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useTaskRow } from "../../../hooks/useThreadPreviews";
+import { useTaskComments } from "../../../hooks/useSyncTasks";
 import type { ThreadCardModel } from "../../../lib/threadCards";
 import { rowOf, taskIdOf } from "../../../lib/threadRows";
 import { TaskStatusBadge } from "../../TaskStatusBadge";
@@ -19,7 +20,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // what is NEW since the reader's last visit under a divider, the earlier
 // comments one click away, then the same composer the task page uses
 // (components/tasks/TaskCommentStream), fed by the task detail query so the
-// optimistic reply and the server echo land in tasks[id].comments exactly as
+// optimistic reply and the server echo land in the task's stored thread exactly as
 // they do on the task page.
 
 /** Short id AND title: the head label is the one column every kind shares,
@@ -67,10 +68,8 @@ export function TaskMeta({ card }: { card: ThreadCardModel }) {
 export function TaskExpanded({ card, seen, frozenReadAt, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const row = rowOf(card);
   const taskId = taskIdOf(card);
-  // TaskInlineThread mounts the detail feeder that fills tasks[id].comments.
-  const task = useTaskRow(taskId);
-
-  const commentCount = task?.comments?.length ?? 0;
+  // TaskInlineThread mounts the detail feeder that fills the task's thread.
+  const commentCount = useTaskComments(taskId).length;
 
   // The read law: the row is open and the reader is here (`seen`) — and the
   // store holds the stream. Never while it holds nothing for an unread

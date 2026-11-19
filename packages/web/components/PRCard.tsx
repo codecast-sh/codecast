@@ -1,7 +1,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { FileDiffList, type DiffFile } from "./FileDiffView";
+import type { DiffFile } from "./FileDiffView";
+import { PullRequestFiles } from "./pr/PullRequestFiles";
 import { prPageHref } from "../lib/repoView";
 
 type PRCardProps = {
@@ -18,6 +19,7 @@ type PRCardProps = {
   deletions?: number;
   changed_files?: number;
   commits_count?: number;
+  /** Undefined from the conversation, whose store rows carry none: the card reads them when it opens. */
   files?: DiffFile[];
   created_at: number;
   updated_at: number;
@@ -156,7 +158,7 @@ export function PRCard(props: PRCardProps) {
             </div>
           )}
 
-          <FileDiffList files={props.files} emptyText="No file changes synced yet" />
+          <PullRequestFiles id={props._id} files={props.files} emptyText="No file changes synced yet" />
 
           <div className="px-3 py-2 bg-sol-bg/20 flex items-center justify-between">
             <a

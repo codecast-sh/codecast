@@ -51,6 +51,23 @@ export function noteSnapshotSync(key: string, incomingIds: Iterable<string>, dro
 }
 
 /**
+ * Rows a live cache bound evicted from `key` (inboxStore evictDetailRows):
+ * they may leave disk with the write that drops them from the store. Unlike a
+ * snapshot this says nothing about the rest of the collection, so hydration
+ * still treats the cache as the floor. Call it only in a window that writes
+ * `key` to disk: the next write spends the note, and a window that never
+ * writes would keep it for the life of the page.
+ */
+export function noteEvictedRows(key: string, ids: Iterable<string>): void {
+  if (!persistedCollections.has(key)) return;
+  let drops = snapshotDrops.get(key);
+  for (const id of ids) {
+    if (!drops) snapshotDrops.set(key, (drops = new Set()));
+    drops.add(id);
+  }
+}
+
+/**
  * The cached rows that may still land under a live value at hydration. Until a
  * snapshot has landed the cache is the floor (unionHydrate's windowed-payload
  * rationale). Once one has, the live value IS the complete server set: a cached

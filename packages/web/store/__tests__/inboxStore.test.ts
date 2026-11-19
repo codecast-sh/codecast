@@ -1624,9 +1624,9 @@ describe("preserveFields — task list deltas must not strip cached detail joins
   // linked_conversations/related_docs/source_insight. The list channels push
   // the same row without them on every delta; if that stripped the cached
   // joins, every re-open of a task would reload its activity, origin chip and
-  // Sessions list async instead of painting from the store. Comments ride
-  // every channel, and stay preserved for a row that lacks them (an older
-  // server's list, the create stub's rekey).
+  // Sessions list async instead of painting from the store. Comments never
+  // land on the row: they live in taskComments (lib/detailRows), and the row
+  // keeps their count through a delta that carries none.
   const id = "task0000000000000000000000000077";
   const listRow = { _id: id, short_id: "ct-77", title: "t", status: "open", priority: "high", created_at: 1, updated_at: 1, creator: { name: "a" }, plan: null };
   const detailRow = {
@@ -1649,7 +1649,8 @@ describe("preserveFields — task list deltas must not strip cached detail joins
     const after = (useInboxStore.getState().tasks as any)[id];
     expect(after.title).toBe("renamed");
     expect(after.creator).toEqual({ name: "b" }); // list-authoritative
-    expect(after.comments).toEqual(detailRow.comments);
+    expect(after.comments).toBeUndefined();
+    expect(after.comment_count).toBe(1);
     expect(after.history).toEqual(detailRow.history);
     expect(after.linked_conversations).toEqual(detailRow.linked_conversations);
     expect(after.related_docs).toEqual(detailRow.related_docs);
@@ -1662,7 +1663,8 @@ describe("preserveFields — task list deltas must not strip cached detail joins
     store.syncRecord("tasks", id, { ...detailRow, linked_conversations: [], comments: [] });
     const after = (useInboxStore.getState().tasks as any)[id];
     expect(after.linked_conversations).toEqual([]);
-    expect(after.comments).toEqual([]);
+    expect(after.comments).toBeUndefined();
+    expect(after.comment_count).toBe(0);
   });
 });
 

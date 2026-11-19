@@ -55,7 +55,7 @@ import { installStoreListenerCensus } from "./storeListenerCensus";
 import { current, isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import type { AppPermissionKind } from "../lib/osPermissions";
-import { cacheFloorUnderSnapshot, keysWithSnapshotDrops, noteSnapshotSync } from "./idbCollectionDiff";
+import { cacheFloorUnderSnapshot, keysWithSnapshotDrops, noteEvictedRows, noteSnapshotSync } from "./idbCollectionDiff";
 import { loadCache, loadPaintCacheSync, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, writeConversationUserMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, setUpgradeBlockedListener, PERSISTENCE_AVAILABLE } from "./idbCache";
 import {
   DISPATCH_TABLE_MAP,
@@ -64,6 +64,7 @@ import {
   HYDRATION_PAINT_KEYS,
   HYDRATION_DEFERRED_KEYS,
   REGISTRY_SYNC_OPTS,
+  REPLICATION_CLASSIFICATION,
   collectionInitialState,
   hydrationMergeStrategy,
   type RegisteredCollectionSlots,
@@ -396,6 +397,7 @@ export { threadRowId } from "./threadTypes";
 import type { ThreadsCursor } from "./threadTypes";
 import type { CallRoomFlags, GuestWaiting, LiveRoom, RoomKnock } from "./callRoomTypes";
 import { isTriggerEditable } from "../lib/triggerEditable";
+import { detailRowsToEvict, isDetailKey, isDetailPinned, pullRequestDetailRow, taskCommentsRow, thinPullRequestRow, thinTaskRow, type DetailKey, type PullRequestDetailRow, type TaskCommentsRow } from "../lib/detailRows";
 import { FOLDER_ACTIVE_WINDOW_MS, type FolderActivity } from "../lib/railFolderFilter";
 export type { ThreadsCursor } from "./threadTypes";
 
@@ -1794,7 +1796,11 @@ function cascadeCloseDraft(draft: { tasks: Record<string, TaskItem> }, parentId:
 }
 
 export type TaskDetail = TaskItem & {
+  /** On a detail answer only. The store's row never carries the thread: read
+   *  it from `taskComments` (hooks/useSyncTasks useTaskComments). */
   comments?: any[];
+  /** How many comments the last row that carried the thread had. */
+  comment_count?: number;
   linked_conversations?: any[];
   related_docs?: any[];
   source_insight?: any;
@@ -7130,6 +7136,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   notifications: Record<string, any>;
   docProjectPaths: string[];
   docDetails: Record<string, DocDetail>;
+  // Comment threads of the tasks a surface opened, by task id (lib/detailRows).
+  taskComments: Record<string, TaskCommentsRow>;
+  // Files, commits and checks of the pull requests this window opened.
+  pullRequestDetails: Record<string, PullRequestDetailRow>;
   // Cross-team mention index — lightweight per-record snapshots loaded once
   // at the app shell so @-search works for every team the user belongs to,
   // without colliding with the active-team `tasks`/`docs`/`plans` collections
@@ -7967,6 +7977,78 @@ export function hasSyncRegistryEntry(key: string): boolean {
   return !!SYNC_REGISTRY[key];
 }
 
+// The collections whose rows the server sends with fields no list draws
+// (lib/detailRows): a task's comment thread, a pull request's files, commits
+// and checks. syncTable and syncRecord are the one way a row enters either
+// collection, whichever channel sent it (a list, the crawl, the sync log's
+// refetch, a detail query, another window), so the split is made there: the
+// row lands thin, and what it carried refreshes the detail row when the store
+// already holds one. A detail row is first written by the surface that shows
+// it (useSyncTaskDetail, useSyncTaskThreads, useSyncPullRequest), never here,
+// so the detail collections hold only what was opened.
+type DetailSplit = {
+  key: "taskComments" | "pullRequestDetails";
+  thin: (row: any) => any;
+  detail: (row: any, prev: any, now: number) => { _id: string } | null;
+};
+const DETAIL_SPLITS: Record<string, DetailSplit> = {
+  tasks: { key: "taskComments", thin: thinTaskRow, detail: taskCommentsRow },
+  pullRequests: { key: "pullRequestDetails", thin: thinPullRequestRow, detail: pullRequestDetailRow },
+};
+
+/** `rows` as their collection stores them, and the detail rows to refresh. Hands `rows` back when none carried detail. */
+function splitDetailRows(split: DetailSplit, rows: any[], held: Record<string, any> | undefined): { rows: any[]; details: any[] } {
+  let thin: any[] | null = null;
+  const details: any[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const slim = split.thin(row);
+    if (slim === row) continue;
+    (thin ??= rows.slice())[i] = slim;
+    const prev = held?.[String(row._id)];
+    const detail = prev ? split.detail(row, prev, Date.now()) : null;
+    if (detail) details.push(detail);
+  }
+  return { rows: thin ?? rows, details };
+}
+
+/**
+ * Hold a detail collection to its cap while the window lives (lib/detailRows
+ * DETAIL_ROW_CAPS): after a write that added rows, drop the least recently
+ * opened ones past the cap. Never a row a surface in this window has on
+ * screen, or one with an unsent write (a thread holding an optimistic
+ * comment, a pending entry of its own); a row this write brought goes only
+ * when the write alone is over the cap. Without this
+ * the caps held only at boot, and a window left open kept the detail of every
+ * pull request and every line project it ever showed.
+ */
+/** A thread holding a comment this window wrote and has not seen come back: its id is still the optimistic `temp_` one. */
+function holdsUnsentComment(row: { comments?: Array<{ _id?: unknown }> } | undefined): boolean {
+  return !!row?.comments?.some((c) => typeof c?._id === "string" && c._id.startsWith("temp_"));
+}
+
+function evictDetailRows(key: DetailKey, justWritten: readonly unknown[]): void {
+  const st = useInboxStore.getState() as any;
+  const rows = (st[key] ?? {}) as Record<string, { _cachedAt?: number; comments?: Array<{ _id?: unknown }> }>;
+  const fresh = new Set(justWritten.map((row: any) => String(row?._id)));
+  let unsent: Set<string> | null = null;
+  const hasUnsentWrite = (id: string) => {
+    if (holdsUnsentComment(rows[id])) return true;
+    if (!unsent) {
+      unsent = new Set();
+      const prefix = `${key}:`;
+      for (const k in st.pending ?? {}) if (k.startsWith(prefix)) unsent.add(k.slice(prefix.length).split(":")[0]);
+    }
+    return unsent.has(id);
+  };
+  const gone = detailRowsToEvict(key, rows, hasUnsentWrite, (id) => fresh.has(id));
+  if (!gone.length) return;
+  // The rows leave disk too, where this window is the one that writes them:
+  // the sync host for a shared key, any window for a per-window one.
+  if (st.syncRole === "host" || REPLICATION_CLASSIFICATION[key] === "local") noteEvictedRows(key, gone);
+  st.dropRows(key, gone);
+}
+
 // Store-internal sync opts (transforms, merges, normalizers). Each entry is
 // merged OVER the data-only opts registered on the collection itself
 // (clientSyncRegistry `sync`), field by field: an entry here adds or overrides
@@ -8069,12 +8151,11 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
     // channels (webList, webListPaginated, webGetByIds) never carry them.
     // Preserve them across list deltas so a fetched task's detail renders
     // instantly from cache on the next open instead of reloading async.
-    // Comments are the exception: every list channel carries them (one row
-    // builder, tasks.ts enrichTasks), so they stay list-authoritative like
-    // creator, assignee_info and plan. They stay preserved so a row without
-    // them (an older server's list, the create stub's rekey) keeps the cached
-    // thread.
-    preserveFields: ["comments", "history", "linked_conversations", "related_docs", "source_insight", "graph_missing", "graph_status"],
+    // Comments never land on the row: every list channel carries them (one
+    // row builder, tasks.ts enrichTasks) and DETAIL_SPLITS below takes them
+    // off on the way in, leaving their count. The count is preserved so a row
+    // that arrives without the thread (the create stub's rekey) keeps it.
+    preserveFields: ["comment_count", "history", "linked_conversations", "related_docs", "source_insight", "graph_missing", "graph_status"],
   },
   // The decision queue. NOT delta: listForUser returns the complete visible
   // window (pending + 24h of resolved) on every push, so absence means the
@@ -9890,6 +9971,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!table) return;
     for (const id of ids) {
       if (this.pending[`${key}:${id}`]?.type === "include") continue;
+      // The host evicted a detail row past its cap (evictDetailRows); this
+      // window has it on screen, and its own reader is what keeps it there.
+      if (isDetailPinned(key, id)) continue;
+      // Nor a thread holding a comment written here that the server has not
+      // echoed yet: an optimistic comment has no pending entry of its own, the
+      // thread may be closed (so nothing pins it), and a later list push only
+      // refreshes threads the store still holds, so the comment would vanish
+      // from this window until the thread is read again.
+      if (holdsUnsentComment(table[id])) continue;
       if (table[id] !== undefined) delete table[id];
     }
   }),
@@ -12629,7 +12719,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // commits synchronously; only the notification is folded. A plain function,
   // not an action: the fold has to wrap the inner action's own commit.
   syncTable(field: string, incoming: any, opts?: SyncOpts) {
-    syncTransaction(() => get().applySyncTableRows(field, incoming, opts));
+    syncTransaction(() => {
+      const split = DETAIL_SPLITS[field];
+      if (split && Array.isArray(incoming)) {
+        const out = splitDetailRows(split, incoming, (get() as any)[split.key]);
+        if (out.details.length) get().applySyncTableRows(split.key, out.details);
+        incoming = out.rows;
+      }
+      get().applySyncTableRows(field, incoming, opts);
+      if (isDetailKey(field) && Array.isArray(incoming) && incoming.length) evictDetailRows(field, incoming);
+    });
   },
 
   applySyncTableRows: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
@@ -12895,7 +12994,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // function wrapping the sync() action, because the fold has to enclose the
   // action's own write.
   syncRecord(field: string, id: string, record: any) {
-    syncTransaction(() => get().applySyncRecordRow(field, id, record));
+    syncTransaction(() => {
+      const split = DETAIL_SPLITS[field];
+      if (split && record && typeof record === "object") {
+        const out = splitDetailRows(split, [record], (get() as any)[split.key]);
+        if (out.details.length) get().applySyncTableRows(split.key, out.details);
+        record = out.rows[0];
+      }
+      get().applySyncRecordRow(field, id, record);
+    });
   },
 
   applySyncRecordRow: sync(function (this: Draft, field: string, id: string, record: any) {
@@ -14030,6 +14137,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   savedViews: {},
   notifications: {},
   docDetails: {},
+  taskComments: {},
+  pullRequestDetails: {},
   taskFilter: { status: "" },
   docProjectPaths: [],
 
@@ -15097,11 +15206,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   addTaskComment: action(function (this: Draft, shortId: string, text: string, commentType?: string, imageIds?: string[]) {
     const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as any;
     if (task) {
-      // The row may not carry activity yet (list channels never send it) —
-      // start the array so the optimistic comment renders instantly; the live
-      // detail query reconciles it with the full server set.
-      if (!task.comments) task.comments = [];
-      task.comments.push({
+      // The thread lives in taskComments (lib/detailRows). A task nothing has
+      // opened yet has no row there: start one so the optimistic comment
+      // renders instantly. `as_of: 0` marks it behind the task row, so the
+      // next read of the thread (the open surface's detail query, the sync
+      // log's refetch once the server stamps the comment) replaces it with
+      // the full server set, the real comment included.
+      const threads = (this as any).taskComments as Record<string, TaskCommentsRow>;
+      const id = String(task._id);
+      if (!threads[id]) threads[id] = { _id: id, comments: [], as_of: 0, _cachedAt: Date.now() };
+      threads[id].comments.push({
         _id: `temp_${Date.now()}`,
         author: "You",
         text,

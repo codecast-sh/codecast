@@ -133,7 +133,8 @@ function TaskHoverContent({ task }: { task: any }) {
   const kind = task.task_type && task.task_type !== "task" ? task.task_type : null;
   const source = task.source && task.source !== "human" ? task.source : null;
   const labels: string[] = task.labels ?? [];
-  const commentCount = task.comments?.length ?? 0;
+  // The live answer carries the thread; the store's row, which paints first, carries only its count.
+  const commentCount = task.comments?.length ?? task.comment_count ?? 0;
   const sessionCount = task.conversation_ids?.length ?? 0;
 
   // Where the task lives and when, one wrapping line: no label column, each
