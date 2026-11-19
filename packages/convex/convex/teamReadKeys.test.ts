@@ -1,15 +1,18 @@
 // Team read keys under convex-test: an admin mints a key, a server reads
 // GET /cli/v1/team/sessions with it and sees what every member of the team
-// sees (the member feed agrees row for row), as metadata only. A private
-// session and an activity-level member's session never leak. Revoked and
-// expired keys are refused, a team holds a capped number of live keys, and
-// minting, use and revoking show in the audit every member reads.
+// sees (the member feed agrees row for row), as metadata only: no prompt as a
+// title, no machine path, no local remote. A private session and an
+// activity-level member's session never leak, and a cursor says nothing in
+// the clear. Revoked and expired keys are refused, an address over its
+// unknown-key window is refused before any lookup, a team holds a capped
+// number of live keys, and minting, use and revoking show in the audit every
+// member reads.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { httpRouter } from "convex/server";
 import { hashToken } from "@platform/auth/convex";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
 import { TEAM_SESSIONS_PATH, teamSessionsHttp } from "./lib/teamReadKeyHttp";
@@ -66,6 +69,7 @@ async function session(t: any, user: Id<"users">, fields: Record<string, unknown
       project_path: "/Users/someone/secret-folder",
       git_remote_url: "git@github.com:acme/api.git",
       git_branch: "feat/x",
+      subtitle: "A summary",
       first_prompt: "OPENING PROMPT",
       last_message_preview: "PREVIEW TEXT",
       ...fields,
@@ -121,6 +125,8 @@ describe("team read keys", () => {
     await session(t, ada, { team_id: team, title: "Ada subagent", is_subagent: true });
     await session(t, ada, { team_id: team, title: "Ada workflow child", is_workflow_sub: true });
     await session(t, ada, { team_id: team, title: "Ada last week", updated_at: NOW - 7 * 24 * HOUR });
+    // Run by Ada, assigned to Mo: Mo is its owner, and Ada's sharing decides who sees it.
+    await session(t, ada, { team_id: team, title: "Assigned to Mo", owner_user_id: mo, updated_at: NOW - 3 * HOUR, git_remote_url: "/srv/clients/acme/private.git" });
     const { key } = await mint(as(ada), team);
 
     const { sessions, raw } = await readAll(t, key);
@@ -139,6 +145,7 @@ describe("team read keys", () => {
         updated_at: new Date(NOW - HOUR).toISOString(),
       },
       expect.objectContaining({ title: "Mo work", summary: "Mo summary", sharing: "summary", owner: expect.objectContaining({ name: "Mo" }) }),
+      expect.objectContaining({ title: "Assigned to Mo", sharing: "full", owner: expect.objectContaining({ id: String(mo) }), repo: null }),
     ]);
     for (const leak of SECRETS) expect(raw).not.toContain(leak);
 
@@ -154,11 +161,15 @@ describe("team read keys", () => {
       const m = await ctx.db.query("team_memberships").withIndex("by_user_team", (q) => q.eq("user_id", mo).eq("team_id", team)).first();
       await ctx.db.patch(m!._id, { visibility: "full", visibility_history: [{ before: NOW - 90 * 60 * 1000, visibility: "summary" }] } as any);
     });
-    const leaver = await t.run(async (ctx) => {
-      const id = await ctx.db.insert("users", { name: "Lee", email: "lee@acme.dev" } as any);
-      await ctx.db.insert("team_memberships", { user_id: id, team_id: team, role: "member", visibility: "full", joined_at: 1 } as any);
-      return id;
-    });
+    const joiner = (name: string, fields: Record<string, unknown> = {}) =>
+      t.run(async (ctx) => {
+        const id = await ctx.db.insert("users", { name, email: `${name.toLowerCase()}@acme.dev`, ...fields } as any);
+        await ctx.db.insert("team_memberships", { user_id: id, team_id: team, role: "member", visibility: "full", joined_at: 1 } as any);
+        return id;
+      });
+    const leaver = await joiner("Lee");
+    // Shares in full with the team, but hid their activity for the whole account.
+    const hider = await joiner("Hid", { activity_visibility: "hidden" });
     const at = (minutesAgo: number) => NOW - minutesAgo * 60 * 1000;
     await session(t, ada, { team_id: team, title: "Ada shared", updated_at: at(60) });
     await session(t, ada, { team_id: team, title: "Ada run log", workflow_run_id: "run", is_workflow_primary: true, updated_at: at(65) });
@@ -166,6 +177,7 @@ describe("team read keys", () => {
     await session(t, mo, { team_id: team, title: "Mo after the switch", started_at: at(60), updated_at: at(30) });
     await session(t, mo, { team_id: team, title: "Mo shared as summary", team_visibility: "summary", started_at: at(60), updated_at: at(50) });
     await session(t, leaver, { team_id: team, title: "Lee before leaving", updated_at: at(55) });
+    await session(t, hider, { team_id: team, title: "Hid's work", updated_at: at(45) });
     await t.run(async (ctx) => {
       const m = await ctx.db.query("team_memberships").withIndex("by_user_team", (q) => q.eq("user_id", leaver).eq("team_id", team)).first();
       await ctx.db.delete(m!._id);
@@ -184,12 +196,59 @@ describe("team read keys", () => {
     });
   });
 
+  test("a session's title counts once it is named, and machine paths never leave", async () => {
+    const { t, ada, team, as } = await setup();
+    await t.run((ctx) => ctx.db.patch(ada, { active_team_id: team }));
+    const prompt = "Deploy the billing fix from /Users/ada/secret-folder tonight. Then tell me.";
+    const { conversation_id, short_id } = await as(ada).mutation(api.assistant.entry.startConversation, { firstMessage: prompt });
+    await as(ada).mutation(api.conversations.setPrivacy, { conversation_id, is_private: false });
+    await session(t, ada, { team_id: team, title: "Mirror", git_remote_url: "https://bot:tok3n@gitlab.example.com/acme/api.git" });
+    const { key } = await mint(as(ada), team);
+
+    const before = await readAll(t, key);
+    expect(before.sessions.find((s) => s.id === short_id)).toMatchObject({ title: null });
+    expect(before.sessions.find((s) => s.title === "Mirror")?.repo).toBe("acme/api");
+    for (const leak of ["Deploy the billing fix", "secret-folder", "tok3n"]) expect(before.raw).not.toContain(leak);
+
+    await t.mutation(internal.titleGeneration.setTitleAndSubtitle, {
+      conversation_id,
+      title: "Billing fix deploy",
+      subtitle: "Deployed the fix from /Users/ada/secret-folder/billing.ts, see https://example.com/home/runbook",
+    });
+    const after = await readAll(t, key);
+    expect(after.sessions.find((s) => s.title === "Billing fix deploy")?.summary).toBe("Deployed the fix from billing.ts, see https://example.com/home/runbook");
+    expect(after.raw).not.toContain("secret-folder");
+  });
+
+  test("a cursor works only with its key and says nothing in the clear", async () => {
+    const { t, ada, team, as } = await setup();
+    await session(t, ada, { team_id: team, title: "First", updated_at: NOW - HOUR });
+    await session(t, ada, { team_id: team, title: "Hidden in between", is_private: true, updated_at: NOW - HOUR - 1 });
+    await session(t, ada, { team_id: team, title: "Second", updated_at: NOW - 2 * HOUR });
+    const mine = await mint(as(ada), team, "mine");
+    const theirs = await mint(as(ada), team, "theirs");
+
+    const { body } = await get(t, mine.key, "?limit=1");
+    const cursor: string = body.next_cursor;
+    expect(atob(cursor.replace(/-/g, "+").replace(/_/g, "/"))).not.toContain(String(NOW - HOUR));
+    expect((await get(t, theirs.key, `?cursor=${cursor}`)).status).toBe(400);
+    expect((await get(t, mine.key, `?cursor=${cursor}`)).body.sessions.map((s: any) => s.title)).toEqual(["Second"]);
+  });
+
+  test("an address over its unknown-key window is refused before any key is looked up", async () => {
+    const { t, ada, team, as } = await setup();
+    const { key } = await mint(as(ada), team);
+    for (let i = 0; i < 30; i++) expect((await get(t, "cc_trk_" + "0".repeat(48))).status).toBe(401);
+    expect((await get(t, "cc_trk_" + "0".repeat(48))).status).toBe(429);
+    expect((await get(t, key)).status).toBe(429);
+  });
+
   test("a revoked or expired key is refused, as is a missing or unknown one", async () => {
     const { t, ada, team, as } = await setup();
     const revoked = await mint(as(ada), team, "revoked");
     const expired = await mint(as(ada), team, "expired");
     expect((await get(t, revoked.key)).status).toBe(200);
-    await as(ada).mutation(api.teamReadKeys.revoke, { key_id: revoked.key_id });
+    await as(ada).mutation(api.teamReadKeys.revoke, { team_id: team, key_id: revoked.key_id });
     await t.run((ctx) => ctx.db.patch(expired.key_id, { expires_at: Date.now() - 1 }));
     expect((await get(t, revoked.key)).status).toBe(401);
     expect((await get(t, expired.key)).status).toBe(401);
@@ -208,7 +267,7 @@ describe("team read keys", () => {
     const row = (await t.run((ctx) => ctx.db.get(minted.key_id)))!;
     expect(JSON.stringify(row)).not.toContain(minted.key);
     expect((await as(ada).query(api.teamReadKeys.list, { team_id: team }))!.map((k) => k.name)).toEqual(["eng site"]);
-    await expect(as(mo).mutation(api.teamReadKeys.revoke, { key_id: minted.key_id })).rejects.toThrow();
+    await expect(as(mo).mutation(api.teamReadKeys.revoke, { team_id: team, key_id: minted.key_id })).rejects.toThrow();
   });
 
   test(`a team holds at most ${MAX_LIVE_TEAM_READ_KEYS} live keys; a revoked one frees a place`, async () => {
@@ -216,7 +275,7 @@ describe("team read keys", () => {
     const first = await mint(as(ada), team, "key 0");
     for (let i = 1; i < MAX_LIVE_TEAM_READ_KEYS; i++) await mint(as(ada), team, `key ${i}`);
     await expect(mint(as(ada), team, "one too many")).rejects.toThrow(/active read keys/);
-    await as(ada).mutation(api.teamReadKeys.revoke, { key_id: first.key_id });
+    await as(ada).mutation(api.teamReadKeys.revoke, { team_id: team, key_id: first.key_id });
     await mint(as(ada), team, "replacement");
   });
 
@@ -227,7 +286,7 @@ describe("team read keys", () => {
     await get(t, key);
     await t.run((ctx) => ctx.db.patch(key_id, { last_used_at: Date.now() - USE_WINDOW_MS }));
     await get(t, key);
-    await as(ada).mutation(api.teamReadKeys.revoke, { key_id });
+    await as(ada).mutation(api.teamReadKeys.revoke, { team_id: team, key_id });
 
     const events = (await as(mo).query(api.authorityEvents.list, {})).sort((a: any, b: any) => a._creationTime - b._creationTime);
     expect(events.map((e: any) => e.kind)).toEqual([

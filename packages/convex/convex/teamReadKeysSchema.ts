@@ -15,6 +15,8 @@ export const teamReadKeyTables = {
     key_hash: v.string(),
     // The first characters of the secret, so an admin can tell keys apart.
     prefix: v.string(),
+    // AES-GCM key for this key's page cursors (lib/teamReadKeyHttp.ts). Never leaves the server.
+    cursor_secret: v.string(),
     created_at: v.number(),
     expires_at: v.number(),
     revoked_at: v.optional(v.number()),

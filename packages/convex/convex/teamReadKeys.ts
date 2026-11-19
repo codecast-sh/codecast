@@ -6,8 +6,10 @@
 // A key reads the TEAM FLOOR (privacy.ts teamFloorScope), the rule the member
 // feed reads through: what every member sees, before anything granted to one
 // viewer. Rows are metadata only, even for a session shared in full: no
-// message text, prompt or path leaves this module. Subagent and workflow child
-// sessions are left out.
+// message text, prompt or path leaves this module. A title counts only once a
+// title pass or a person set it (before that it is the opening prompt cut
+// short), and machine paths in a title or summary become their last segment.
+// Subagent and workflow child sessions are left out.
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { isNestedIdentity, repositoryKeyOfRemote, type WorkState } from "@codecast/shared/contracts";
@@ -17,7 +19,8 @@ import { requireTeamAdmin } from "./lib/access";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { sha256Hex } from "./lib/hash";
 import { isVisibilityShareable, teamFloorScope } from "./privacy";
-import { paginateTeamFeed } from "./feedPagination";
+import { isAfter, pageNewestFirst, type StreamPosition } from "./feedPagination";
+import { windowSpent } from "./ipRateLimit";
 import { cliSessionClassifier } from "./cliSessionClassifier";
 import {
   MAX_LIVE_TEAM_READ_KEYS,
@@ -32,7 +35,7 @@ const KEY_PREFIX_CHARS = 6;
 
 /** Use is recorded once per key per window: one audit event and one write, whatever the request rate. */
 export const USE_WINDOW_MS = 60 * 60 * 1000;
-/** Conversation rows one page may read across all members (feedPagination's per-member scans). */
+/** Conversation rows one page may read across all members (feedPagination pageNewestFirst). */
 const PAGE_READ_BUDGET = 200;
 
 const isLive = (key: Doc<"team_read_keys">, now: number) => !key.revoked_at && key.expires_at > now;
@@ -111,6 +114,7 @@ export const create = mutation({
       name,
       key_hash: await sha256Hex(key),
       prefix,
+      cursor_secret: newCursorSecret(),
       created_at: now,
       expires_at: expiresAt,
     });
@@ -126,11 +130,11 @@ export const create = mutation({
 
 /** Admin-only: the key stops working on its next request. */
 export const revoke = mutation({
-  args: { key_id: v.id("team_read_keys") },
+  args: { team_id: v.id("teams"), key_id: v.id("team_read_keys") },
   handler: async (ctx, args) => {
+    const userId = await requireAdmin(ctx, args.team_id);
     const row = await ctx.db.get(args.key_id);
-    if (!row) throw new Error("No such key");
-    const userId = await requireAdmin(ctx, row.team_id);
+    if (!row || row.team_id !== args.team_id) throw new Error("No such key");
     if (row.revoked_at) return;
     await ctx.db.patch(row._id, { revoked_at: Date.now() });
     await recordAuthorityEvent(ctx, {
@@ -142,14 +146,22 @@ export const revoke = mutation({
   },
 });
 
-/** The live key a presented secret hashes to, and whether this request opens a new use window. */
+export type FoundKey = { key_id: Id<"team_read_keys">; cursor_secret: string; use_due: boolean };
+
+/**
+ * The live key a presented secret hashes to, and whether this request opens a
+ * new use window. An address over its unknown-key window is refused before the
+ * lookup, as ingest's sourceForKey does.
+ */
 export const keyForHash = internalQuery({
-  args: { key_hash: v.string() },
-  handler: async (ctx, args): Promise<{ key_id: Id<"team_read_keys">; use_due: boolean } | null> => {
+  args: { key_hash: v.string(), guess_guard: v.object({ key: v.string(), max: v.number(), window_ms: v.number() }) },
+  handler: async (ctx, args): Promise<FoundKey | { retry_after_ms: number } | null> => {
+    const wait = await windowSpent(ctx.db, args.guess_guard.key, args.guess_guard.max, args.guess_guard.window_ms);
+    if (wait !== null) return { retry_after_ms: wait };
     const now = Date.now();
     const row = await ctx.db.query("team_read_keys").withIndex("by_key_hash", (q) => q.eq("key_hash", args.key_hash)).first();
     const key = await liveKey(ctx, row, now);
-    return key ? { key_id: key._id, use_due: useDue(key, now) } : null;
+    return key ? { key_id: key._id, cursor_secret: key.cursor_secret, use_due: useDue(key, now) } : null;
   },
 });
 
@@ -176,11 +188,13 @@ export const recordUse = internalMutation({
 
 export type TeamSessionRow = {
   id: string;
+  /** The person the session is assigned to, else the member who runs it. */
   owner: { id: string; name: string | null; github_username: string | null };
   agent: string;
   branch: string | null;
-  /** owner/name from the git remote, never a local path. */
+  /** owner/name of a network git remote, never a local path. */
   repo: string | null;
+  /** Null until a title pass or a person names the session. */
   title: string | null;
   /** The session summary teammates see. */
   summary: string | null;
@@ -193,8 +207,8 @@ export type TeamSessionRow = {
 
 /**
  * One page of the team floor for a live key, newest activity first, within
- * [since, until]. `cursor` is feedPagination's per-member cursor. Null when
- * the key stopped being live after keyForHash.
+ * [since, until] and after `after`. Null when the key stopped being live
+ * after keyForHash.
  */
 export const sessionsForKey = internalQuery({
   args: {
@@ -202,54 +216,80 @@ export const sessionsForKey = internalQuery({
     since: v.number(),
     until: v.number(),
     limit: v.number(),
-    cursor: v.union(v.string(), v.null()),
+    after: v.union(v.object({ t: v.number(), c: v.number() }), v.null()),
   },
-  handler: async (ctx, args): Promise<{ sessions: TeamSessionRow[]; next_cursor: string | null } | null> => {
+  handler: async (ctx, args): Promise<{ sessions: TeamSessionRow[]; next: StreamPosition | null } | null> => {
     const now = Date.now();
     const key = await liveKey(ctx, await ctx.db.get(args.key_id), now);
     if (!key) return null;
     const floor = await teamFloorScope(ctx, key.team_id);
-    // Members at hidden or activity show no session at all; skip their rows.
-    const sharing = floor.members.filter((u) => isVisibilityShareable(floor.filter.getVisibility(String(u._id))));
-    if (sharing.length === 0) return { sessions: [], next_cursor: null };
-    const page = await paginateTeamFeed({
-      memberIds: sharing.map((u) => String(u._id)),
-      cursor: args.cursor,
+    // The members who can list a session, as cast feed reads them: sharing above
+    // activity with the team, and not hidden for the whole account (the legacy setting).
+    const sharing = floor.members.filter(
+      (u) => u.activity_visibility !== "hidden" && isVisibilityShareable(floor.filter.getVisibility(String(u._id))),
+    );
+    const page = await pageNewestFirst({
+      streams: sharing.map((u) => String(u._id)),
+      after: args.after,
       limit: args.limit,
-      fetchPage: (memberId, cursor, take) =>
-        ctx.db
+      budget: PAGE_READ_BUDGET,
+      fetch: async (memberId, after, take) => {
+        const rows: Doc<"conversations">[] = [];
+        const scan = ctx.db
           .query("conversations")
-          .withIndex("by_team_user_updated", (q) => {
-            const member = q.eq("team_id", key.team_id).eq("user_id", memberId as Id<"users">).gte("updated_at", args.since);
-            return cursor === null ? member.lte("updated_at", args.until) : member.lt("updated_at", cursor);
-          })
-          .order("desc")
-          .take(take),
+          .withIndex("by_team_user_updated", (q) =>
+            q.eq("team_id", key.team_id).eq("user_id", memberId as Id<"users">).gte("updated_at", args.since).lte("updated_at", Math.min(after?.t ?? args.until, args.until)),
+          )
+          .order("desc");
+        for await (const c of scan) {
+          if (after && !isAfter(c, after)) continue;
+          rows.push(c);
+          if (rows.length === take) break;
+        }
+        return rows;
+      },
       accept: (c) => floor.isVisible(c) && !isNestedIdentity(c),
-      perMemberFetch: Math.max(5, Math.floor(PAGE_READ_BUDGET / sharing.length)),
-      perMemberWant: args.limit,
-      maxBatches: 2,
     });
 
-    const owners = new Map(sharing.map((u) => [String(u._id), u]));
+    const roster = new Map(floor.members.map((u) => [String(u._id), u]));
     const classifier = cliSessionClassifier(ctx, now);
     const sessions: TeamSessionRow[] = [];
-    for (const c of page.rows as Doc<"conversations">[]) {
-      const owner = owners.get(String(c.user_id))!;
+    for (const c of page.rows) {
+      const owner = roster.get(String(c.owner_user_id)) ?? roster.get(String(c.user_id))!;
       sessions.push({
         id: c.short_id ?? String(c._id),
         owner: { id: String(owner._id), name: owner.name ?? null, github_username: owner.github_username ?? null },
         agent: c.agent_type,
         branch: c.git_branch ?? null,
-        repo: repositoryKeyOfRemote(c.git_remote_url),
-        title: c.title ?? null,
-        summary: c.subtitle ?? null,
+        repo: repoOf(c.git_remote_url),
+        title: c.title_is_custom || c.subtitle !== undefined ? withoutLocalPaths(c.title) : null,
+        summary: withoutLocalPaths(c.subtitle),
         sharing: floor.contentVisible(c) ? "full" : "summary",
         work_state: (await classifier.classify(c)).work_state,
         started_at: new Date(c.started_at).toISOString(),
         updated_at: new Date(c.updated_at).toISOString(),
       });
     }
-    return { sessions, next_cursor: page.nextCursor };
+    return { sessions, next: page.next };
   },
 });
+
+/** 32 random bytes, base64: the AES-GCM key a key's page cursors are sealed with (lib/teamReadKeyHttp.ts). */
+function newCursorSecret(): string {
+  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+}
+
+// A machine path (a home folder, a mounted volume, a Windows drive) becomes
+// its last segment. A URL or a route stays as written.
+const LOCAL_PATH = /(?<![\w.:/-])(?:~|\/(?:Users|home|root|Volumes|private|tmp|var|opt|srv|mnt)|[A-Za-z]:)[\\/][^\s"'`<>]*/g;
+
+function withoutLocalPaths(text: string | undefined): string | null {
+  return text === undefined ? null : text.replace(LOCAL_PATH, (path) => path.split(/[\\/]/).filter(Boolean).pop() ?? "");
+}
+
+/** owner/name of a remote that has a host (git@host:… or a network URL). Null for a local path or file: origin. */
+function repoOf(remote: string | undefined): string | null {
+  const hosted = !!remote && (/^[\w.-]+@[\w.-]+:/.test(remote) || /^(?:https?|ssh|git)(?:\+ssh)?:\/\/[^/]/.test(remote));
+  const repo = hosted ? repositoryKeyOfRemote(remote) : null;
+  return repo && /^[\w.-]+\/[\w.-]+$/.test(repo) ? repo : null;
+}
