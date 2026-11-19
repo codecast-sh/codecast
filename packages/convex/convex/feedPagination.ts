@@ -111,6 +111,8 @@ export async function paginateTeamFeed(opts: {
   maxBatches?: number;
 }): Promise<{ rows: any[]; nextCursor: string | null }> {
   const { memberIds, limit, fetchPage, accept, perMemberFetch, perMemberWant, maxBatches = 4 } = opts;
+  // No member to read (everyone hidden) is the end, not an empty page to repeat.
+  if (memberIds.length === 0) return { rows: [], nextCursor: null };
   const { legacy, members } = parseFeedCursor(opts.cursor);
   const boundOf = (id: string): MemberBound => (members ? members[id] : legacy ?? undefined);
 

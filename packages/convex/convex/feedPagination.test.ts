@@ -104,6 +104,19 @@ describe("paginateTeamFeed", () => {
     expect(seen.size).toBe(5);
   });
 
+  test("a team with no member to read ends at once", async () => {
+    const page = await paginateTeamFeed({
+      memberIds: [],
+      cursor: null,
+      limit: 5,
+      fetchPage: makeFetchPage({}),
+      accept: acceptMain,
+      perMemberFetch: 4,
+      perMemberWant: 3,
+    });
+    expect(page).toEqual({ rows: [], nextCursor: null });
+  });
+
   test("legacy numeric cursor is honored as a shared bound and upgrades to composite", async () => {
     const tables = {
       a: member([{ t: 100 }, { t: 80 }, { t: 60 }], "a"),
