@@ -3083,11 +3083,6 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!isServerId(enrollmentId)) return;
     return await ctx.runMutation!(api.managedDevices.restoreDeviceEnrollment, { enrollment_id: enrollmentId as Id<"device_enrollments"> });
   },
-  // Revoke a team read key (store revokeTeamReadKey paints the settings row).
-  revokeTeamReadKey: async (ctx, _userId, [, keyId]: [string, string]) => {
-    if (!isServerId(keyId)) return;
-    return await ctx.runMutation!(api.teamReadKeys.revoke, { key_id: keyId as Id<"team_read_keys"> });
-  },
   // A team's monthly model budget (store setTeamBudget paints the settings row).
   setTeamBudget: async (ctx, _userId, [teamId, capUsd]: [string, number]) => {
     if (!isServerId(teamId)) return;

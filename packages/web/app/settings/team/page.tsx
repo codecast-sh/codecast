@@ -497,7 +497,7 @@ export default function TeamPage() {
 
       {isAdmin && effectiveTeamId && <ManagedDevicesLink teamId={String(effectiveTeamId)} />}
       {isAdmin && effectiveTeamId && <AccessLogLink teamId={String(effectiveTeamId)} />}
-      {isAdmin && effectiveTeamId && <TeamReadKeys teamId={effectiveTeamId} teamName={team.name} />}
+      {isAdmin && effectiveTeamId && <TeamReadKeys key={String(effectiveTeamId)} teamId={effectiveTeamId} teamName={team.name} />}
 
       {effectiveTeamId && <TeamTemplateLearning teamId={String(effectiveTeamId)} />}
 
