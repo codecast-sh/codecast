@@ -257,7 +257,7 @@ export async function boardSvg({ elements, byKey, root, only }: ExportInput): Pr
           + `<path d="M${b.x} ${b.y + head}H${b.x + b.w}" stroke="${c("var(--sol-border)")}"/>`
           + textBlock([words], b.x + 12, b.y + (head - 13 * 1.3) / 2, 13, { link, color: text, weight: 600 })
           + (shot
-            ? `<image href="${shot}" x="${b.x + 1}" y="${b.y + head + 1}" width="${b.w - 2}" height="${b.h - head - 2}" preserveAspectRatio="xMidYMin slice"/>`
+            ? `<image href="${shot}" x="${b.x + 1}" y="${b.y + head + 1}" width="${b.w - 2}" height="${b.h - head - 2}" preserveAspectRatio="xMinYMin slice"/>`
             : textBlock([[{ t: pageShareUrl(slug), href: pageShareUrl(slug) }]], b.x + 16, b.y + head + 16, 13, { link, color: text }))
           + `</g>`);
         break;
