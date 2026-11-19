@@ -1,12 +1,34 @@
 import { useLayoutEffect, useState, type DependencyList, type RefObject } from "react";
+import { flushSync } from "react-dom";
 
-// One observer for every hook. Its callback runs after the browser lays the
-// frame out and before it paints, so the first answer for a new element still
-// lands before paint, and every element in the batch is read before any
-// answer is set: the reads find the layout already computed and none of them
-// forces another. A read per hook in its own effect laid the page out once per
-// mounted row, against a page the transcript had just rewritten.
-type Watch = { el: HTMLElement; check: () => void };
+// One observer for every hook, and one batch for every first answer. Every
+// element in a batch is read before any answer is set, so the reads find the
+// layout already computed and none of them forces another. A read per hook in
+// its own effect laid the page out once per mounted row, against a page the
+// transcript had just rewritten.
+//
+// The first answer is read in a microtask after the commit and applied with
+// flushSync, so the clamp is in the DOM before the browser paints. A state set
+// from the observer callback renders on a later task, after paint: a long
+// session message painted at full height, the virtualizer measured it, then it
+// clamped, and near the tail the 900px swing remounted the rows above in a
+// loop that shook the conversation several times a second.
+type Watch = { read: () => boolean; set: (v: boolean) => void };
+const firstAnswers = new Set<Watch>();
+let firstAnswersQueued = false;
+
+function answerBeforePaint(w: Watch) {
+  firstAnswers.add(w);
+  if (firstAnswersQueued) return;
+  firstAnswersQueued = true;
+  queueMicrotask(() => {
+    firstAnswersQueued = false;
+    const due = [...firstAnswers];
+    firstAnswers.clear();
+    const answers = due.map((d) => [d, d.read()] as const);
+    flushSync(() => { for (const [d, v] of answers) d.set(v); });
+  });
+}
 const watchesByTarget = new Map<Element, Set<Watch>>();
 let shared: ResizeObserver | null = null;
 
@@ -14,22 +36,21 @@ function observer(): ResizeObserver {
   shared ??= new ResizeObserver((entries) => {
     const due = new Set<Watch>();
     for (const e of entries) for (const w of watchesByTarget.get(e.target) ?? []) due.add(w);
-    for (const w of due) w.check();
+    for (const w of due) w.set(w.read());
   });
   return shared;
 }
 
 function watch(w: Watch, targets: Element[]): () => void {
   const ro = observer();
-  let observedFresh = false;
   for (const t of targets) {
     let set = watchesByTarget.get(t);
-    if (!set) { set = new Set(); watchesByTarget.set(t, set); ro.observe(t); observedFresh = true; }
+    if (!set) { set = new Set(); watchesByTarget.set(t, set); ro.observe(t); }
     set.add(w);
   }
-  // Every target already watched by another hook: no first callback is coming.
-  if (!observedFresh) queueMicrotask(w.check);
+  answerBeforePaint(w);
   return () => {
+    firstAnswers.delete(w);
     for (const t of targets) {
       const set = watchesByTarget.get(t);
       if (!set) continue;
@@ -52,10 +73,9 @@ export function useLayoutFlag(
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !enabled) return;
-    const check = () => setFlag(read(el));
     // A window with no layout (a test's jsdom) has no observer: one answer stands.
-    if (typeof ResizeObserver === "undefined") { check(); return; }
-    return watch({ el, check }, [el, ...el.children]);
+    if (typeof ResizeObserver === "undefined") { setFlag(read(el)); return; }
+    return watch({ read: () => read(el), set: setFlag }, [el, ...el.children]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, ...deps]);
   return flag;
@@ -66,7 +86,7 @@ export function useLayoutFlag(
  *  answer holds while the element is clamped. Children are observed too: a
  *  clamped element keeps its own size while its content grows.
  *
- *  The first answer is taken before the browser paints: callers clamp on it,
+ *  The first answer is applied before the browser paints: callers clamp on it,
  *  and a mount that painted unclamped and clamped a frame later changed the
  *  row's height under the conversation virtualizer, which moved scrollTop to
  *  match and visibly jumped the feed while scrolling up. */
