@@ -10,7 +10,8 @@ import type { Command } from "commander";
 import { MetricUnread, experimentWords } from "./climb/readability.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
-import { baseSha, recordRun, runEnv, runWithCases, withTreeAt } from "./envCommand.js";
+import { recordRun, runEnv, runWithCases, withTreeAt } from "./envCommand.js";
+import { climbBase } from "./climb/base.js";
 import { repoRoot } from "./envDeclaration.js";
 import { parseDuration } from "@codecast/shared/time";
 import { ClimbStop, STOP, admit, bindPromoted, promoteMode, confirm, gauge, guard, readState, refuse, screen, setOutcome, type ClimbIo, type RunOut } from "./climb/engine.js";
@@ -121,14 +122,15 @@ export function registerClimbCommand(program: Command, deps: PublishDeps): void 
 
   dirOpt(climb.command("gauge").description("Read Frame's card under the caps, run the base on each level to measure its noise, and refuse levels that cannot see one change"))
     .requiredOption("--card <file>", "The climb card Frame wrote")
-    .option("--base <ref>", "The base every candidate starts from (default: the merge base with origin's default branch)")
+    .option("--base <ref>", "The base every candidate starts from (default: the default branch's upstream tip, fetched now, whatever this checkout's HEAD is)")
     .option("--task <ct-N>", "The climb's task")
     .option("--goal <ref>", "The climb's task's goal_ref (in-N or in-N:metric): the card must climb that goal")
     .action((o) => station("gauge", async () => {
       const io = defaultIo(deps);
-      const base = baseSha(io.root, o.base);
-      if (!base) throw new ClimbStop("no base to climb from (no merge base with origin)", 3);
-      const s = await gauge(io, o.dir, { card: readJson(o.card, "the card", 5), base, task: o.task, goal: o.goal ?? undefined });
+      // A shared checkout lags its default branch: base on the upstream tip, never on this checkout's own HEAD.
+      const base = climbBase(io.root, o.base);
+      if (!base) throw new ClimbStop(o.base ? `--base ${o.base} is not a commit here` : "no base to climb from: no upstream and no HEAD", 3);
+      const s = await gauge(io, o.dir, { card: readJson(o.card, "the card", 5), base: base.sha, base_info: base, task: o.task, goal: o.goal ?? undefined });
       console.log(statusText(s));
       return `levels kept: ${s.levels.filter((l) => l.kept).map((l) => `${l.level} ${l.env}`).join(", ")}`;
     }, o.dir));

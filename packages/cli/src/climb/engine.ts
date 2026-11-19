@@ -29,6 +29,7 @@ import { CLIMB_AA_RUNS, baseMeanCases, changedCases, halve, levelCanSee, levelNo
 import { parseEnvsText } from "../envDeclaration.js";
 import { parseLineProfileText, resolveLineProfile } from "../lineProfile.js";
 import { StoreTampered, readSealed, writeSealed } from "./store.js";
+import type { ClimbBase } from "./base.js";
 import { MetricUnread, readability as readabilityOf, type Readability } from "./readability.js";
 import { resolveCommand, withDirs, graderPackageDirs, gradingGlobs, inadmissible, packagesPrint, pinsAScript, protectedDigest, tryGit } from "./protect.js";
 
@@ -70,7 +71,9 @@ type Done = { attempt: string; reused?: boolean; usd?: number };
 /** A run that failed or was refused: never run again, and its cost counted. */
 type Failed = { usd: number; why: string };
 export type ClimbState = {
-  base: string; task?: string; card: ClimbCard; notes: string[];
+  base: string;
+  /** Where the base came from and how far this checkout's HEAD stood from it (base.ts). */
+  base_info?: ClimbBase; task?: string; card: ClimbCard; notes: string[];
   /** When the climb's task was created: runs of the climb are filed after it, reused base runs before it. */
   reuse_before: number;
   /** The goal's checks (L0 envs and `role = "check"` envs) as they stood at gauge; the guard runs these and any the goal names now. */
@@ -265,7 +268,7 @@ async function runOnce(v: View, key: string, decl: EnvDeclaration, opts: { label
 
 // ── gauge: the card held to the caps, what grades pinned, and what each level can see ──
 
-export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; base: string; task?: string; goal?: string }): Promise<ClimbState> {
+export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; base: string; base_info?: ClimbBase; task?: string; goal?: string }): Promise<ClimbState> {
   const prior = readState(dir);
   // A climb is pinned to the base it started on: a default branch that moved meanwhile neither resets its record nor its spend.
   if (prior && prior.base !== opts.base) io.log(`the climb stays on its base ${prior.base.slice(0, 8)} (the default branch is now ${opts.base.slice(0, 8)})`);
@@ -294,7 +297,7 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
       try { readability = readabilityOf(row, read.card.metric, read.card.production_lift); } catch (err) { readability = { metric: read.card.metric, unread: err instanceof MetricUnread ? err.message : String(err) }; }
     }
     save(dir, {
-      base: opts.base, ...(opts.task ? { task: opts.task } : {}), card: read.card, notes,
+      base: opts.base, ...(opts.base_info ? { base_info: opts.base_info } : {}), ...(opts.task ? { task: opts.task } : {}), card: read.card, notes,
       reuse_before: Number(task?.created_at ?? task?._creationTime) || 0,
       ...(readability ? { readability } : {}),
       checks: goalChecks(goalLevels, decls),

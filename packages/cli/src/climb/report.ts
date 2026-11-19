@@ -4,6 +4,7 @@
 // refusals, cost against the budget, and how it ended).
 import type { Cand, ClimbState, Cut } from "./engine.js";
 import { sign } from "./engine.js";
+import { baseWords } from "./base.js";
 import { hypothesisVerdict } from "@codecast/shared/contracts/climb";
 
 /** What the climb has filed so far, in one line: what a failed station still leaves on the record. */
@@ -94,7 +95,7 @@ function candLine(c: Cand): string[] {
 export function statusText(s: ClimbState): string {
   const b = s.card.budget;
   const lines = [
-    `Climb on ${s.card.goal}${s.card.metric ? `:${s.card.metric}` : ""} from base ${s.base.slice(0, 12)}`,
+    `Climb on ${s.card.goal}${s.card.metric ? `:${s.card.metric}` : ""} from base ${s.base_info ? baseWords(s.base_info) : s.base.slice(0, 12)}`,
     `Target: ${s.card.target}`,
     ...(readabilityLine(s) ? [readabilityLine(s)!] : []),
     `Budget: ${usd(s.ledger.usd)} of ${usd(b.usd)}, ${s.ledger.runs} of ${b.runs} runs; up to ${s.card.candidates} candidates${s.notes.length ? ` (${s.notes.join("; ")})` : ""}`,
@@ -127,6 +128,7 @@ export function summaryText(s: ClimbState): string {
   const lines = [
     `Climb on ${s.card.goal}${s.card.metric ? `:${s.card.metric}` : ""}${s.task ? ` (${s.task})` : ""}: ${top ? `${top.id} promoted${s.promoted_task ? ` as ${s.promoted_task}` : ""}${s.outcome ? `; ${s.outcome}` : ""}` : s.stopped ? `stopped, ${s.stopped}` : s.pending ? `held, ${s.pending}` : "unfinished"}.`,
     `Target: ${s.card.target}`,
+    ...(s.base_info ? [`Base: ${baseWords(s.base_info)}.`] : []),
     ...(readabilityLine(s) ? [readabilityLine(s)!] : []),
     `Levels: ${s.levels.map((l) => `${l.level} ${l.env} ${l.kept ? `kept (MDE ${l.noise?.mde.toFixed(3) ?? "0"})` : l.failed ? `failed to run (${l.failed})` : `refused (${l.why})`}`).join("; ")}.`,
     `Candidates: ${proposed} proposed, ${admitted} admitted, ${separated.length} separated from base on dev.`,
