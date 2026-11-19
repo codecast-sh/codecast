@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
 import { isConvexId } from "../lib/entityLinks";
+import { ownsConversationAccount } from "../lib/liveEntities";
 import { entityIdArgs, useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { useWatchEffect } from "./useWatchEffect";
@@ -30,7 +31,9 @@ export function useComposerSuggestion({ conversationId, idle, hidden, enabled = 
   hidden: boolean;
   enabled?: boolean;
 }) {
-  const isRealId = enabled && isConvexId(conversationId);
+  // Generating is owner-only on the server, so a teammate's session asks for nothing.
+  const owned = useInboxStore((s) => ownsConversationAccount(s.conversations[conversationId], s.currentUser?._id));
+  const isRealId = enabled && owned && isConvexId(conversationId);
 
   // Tail signature of the last real turn, as a primitive so the selector
   // doesn't re-render on unrelated store churn. Mirrors the server's anchor:

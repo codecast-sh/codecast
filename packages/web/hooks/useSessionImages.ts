@@ -10,6 +10,7 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { interleaveGalleryPages, type GalleryImage, type GalleryItem } from "../lib/galleryItems";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { ownsConversationAccount } from "../lib/liveEntities";
 import { useSessionPages } from "./useSessionPages";
 import { usePageEmbedFeed } from "./usePageInfo";
 import type { ConversationData } from "../components/conversation/types";
@@ -75,17 +76,19 @@ export function useSessionImages({ deferredQueriesEnabled, conversation }: {
   // row thumbnail): when the loaded transcript visibly has images but the row
   // doesn't know it, ask the server to recompute — server-side, idempotent,
   // owner-only, once per opened conversation.
+  // Both backfills are owner-only on the server: a teammate's session is skipped, not refused.
+  const myId = useInboxStore((s) => s.currentUser?._id?.toString() ?? null);
   const backfillImagePreview = useMutation(api.conversations.backfillImagePreview);
   const imagePreviewBackfilledRef = useRef<string | null>(null);
   useWatchEffect(() => {
     const cid = conversation?._id?.toString();
     if (!cid || !isConvexId(cid) || sessionImageEntries.length === 0) return;
-    if (conversation?.is_own === false) return;
+    if (!ownsConversationAccount(conversation, myId)) return;
     if (useInboxStore.getState().sessions[cid]?.image_preview_url) return;
     if (imagePreviewBackfilledRef.current === cid) return;
     imagePreviewBackfilledRef.current = cid;
     backfillImagePreview({ conversation_id: cid as Id<"conversations"> }).catch(() => {});
-  }, [conversation?._id, conversation?.is_own, sessionImageEntries.length, backfillImagePreview]);
+  }, [conversation?._id, conversation?.is_own, conversation?.user_id, myId, sessionImageEntries.length, backfillImagePreview]);
 
   // Sessions whose images predate conversation_images have nothing to read back,
   // so ask the server to sweep the history once per opened conversation. The
@@ -104,7 +107,8 @@ export function useSessionImages({ deferredQueriesEnabled, conversation }: {
   const imagesBackfilledRef = useRef<string | null>(null);
   useWatchEffect(() => {
     const cid = conversation?._id?.toString();
-    if (!cid || !isConvexId(cid) || !serverSessionImages || conversation?.is_own === false) return;
+    if (!cid || !isConvexId(cid) || !serverSessionImages) return;
+    if (!ownsConversationAccount(conversation, myId)) return;
     if (imagesBackfilledRef.current === cid) return;
     const known = new Set(serverSessionImages.map((e: SessionImageEntry) => e.key));
     // data: entries are never materialized — comparing them would re-trigger forever.
@@ -115,7 +119,7 @@ export function useSessionImages({ deferredQueriesEnabled, conversation }: {
     if (!windowHasUnknown && !rowHasImages) return;
     imagesBackfilledRef.current = cid;
     backfillConversationImages({ conversation_id: cid as Id<"conversations"> }).catch(() => {});
-  }, [conversation?._id, conversation?.is_own, serverSessionImages, windowImageEntries, backfillConversationImages]);
+  }, [conversation?._id, conversation?.is_own, conversation?.user_id, myId, serverSessionImages, windowImageEntries, backfillConversationImages]);
 
   return { sessionGalleryItems };
 }

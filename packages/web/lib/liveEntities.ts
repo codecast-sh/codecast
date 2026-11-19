@@ -137,6 +137,20 @@ export function isForeignSession(
 }
 
 /**
+ * Is this conversation's ACCOUNT the viewer's, as the server's owner-only
+ * writes judge it (conversation.user_id against the caller)? Unlike
+ * isForeignSession, assignment does not count and an unknown answers false:
+ * a call made on a guess is refused by the server and lands in error tracking.
+ */
+export function ownsConversationAccount(
+  conv: { user_id?: unknown; is_own?: boolean } | null | undefined,
+  myId: unknown,
+): boolean {
+  if (conv?.is_own !== undefined) return conv.is_own;
+  return !!conv?.user_id && !!myId && String(conv.user_id) === String(myId);
+}
+
+/**
  * Resolve the author of an inbox session FOR DISPLAY — or null when the session
  * is the current user's own (or the author can't be named). The inbox session
  * cache is user-scoped, so a teammate's session only enters it by being OPENED
