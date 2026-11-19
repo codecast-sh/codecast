@@ -7366,6 +7366,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setTeamBudget: (teamId: string, capUsd: number) => void;
   setTeamPolicy: (teamId: string, policy: Record<string, unknown>) => void;
   revokeEnrollmentToken: (teamId: string, tokenId: string) => void;
+  revokeTeamReadKey: (teamId: string, keyId: string) => void;
   revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   restoreDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
@@ -15822,6 +15823,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const key = settingsDataKey("managedDevices", (this.currentUser as any)?._id, teamId);
     const device = key ? (this.settingsData as any)[key]?.value?.devices?.find((d: any) => String(d._id) === enrollmentId) : undefined;
     if (device) device.status = "pending";
+  }),
+  // Revoking a team read key paints its cached row in Read-only keys; the feed's next answer replaces it.
+  revokeTeamReadKey: action(function (this: Draft, teamId: string, keyId: string) {
+    const key = settingsDataKey("teamReadKeys", (this.currentUser as any)?._id, teamId);
+    const row = key ? (this.settingsData as any)[key]?.value?.find((k: any) => String(k._id) === keyId) : undefined;
+    if (row && !row.revoked_at) row.revoked_at = Date.now();
   }),
 
   // A team's monthly model budget (learning-loop.md LL10; admin only on the

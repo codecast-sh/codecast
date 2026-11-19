@@ -370,6 +370,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setTeamBudget: SETTINGS,
   setTeamPolicy: SETTINGS,
   revokeEnrollmentToken: never("sharing: a revoked enrollment token stays revoked; minting a new one is the way back"),
+  revokeTeamReadKey: never("sharing: a revoked read key stays revoked; minting a new one is the way back"),
   revokeDeviceEnrollment: never("machine control: the device is signed out at once; enrolling it again is the way back"),
   restoreDeviceEnrollment: never("machine control: lets a removed device enroll again; removing it again is the way back"),
 
