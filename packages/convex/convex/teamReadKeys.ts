@@ -102,10 +102,10 @@ export const create = mutation({
     if (!team || team.deleted_at) throw new Error("No such team");
     const now = Date.now();
     if ((await keysOf(ctx, args.team_id)).filter((k) => isLive(k, now)).length >= MAX_LIVE_TEAM_READ_KEYS) {
-      throw new ConvexError(`A team can have ${MAX_LIVE_TEAM_READ_KEYS} active read keys. Revoke one to make another.`);
+      throw new ConvexError(`A team can have ${MAX_LIVE_TEAM_READ_KEYS} active read-only keys. Revoke one to create another.`);
     }
     const key = newTeamReadKey();
-    const name = args.name.trim().slice(0, 80) || "Read key";
+    const name = args.name.trim().slice(0, 80) || "Read-only key";
     const prefix = key.slice(0, TEAM_READ_KEY_PREFIX.length + KEY_PREFIX_CHARS);
     const expiresAt = now + args.expires_in_days * DAY_MS;
     const keyId = await ctx.db.insert("team_read_keys", {

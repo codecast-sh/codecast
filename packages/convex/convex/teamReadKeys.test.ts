@@ -254,7 +254,7 @@ describe("team read keys", () => {
     const { ada, team, as } = await setup();
     const first = await mint(as(ada), team, "key 0");
     for (let i = 1; i < MAX_LIVE_TEAM_READ_KEYS; i++) await mint(as(ada), team, `key ${i}`);
-    await expect(mint(as(ada), team, "one too many")).rejects.toThrow(/active read keys/);
+    await expect(mint(as(ada), team, "one too many")).rejects.toThrow(/active read-only keys/);
     await as(ada).mutation(api.teamReadKeys.revoke, { team_id: team, key_id: first.key_id });
     await mint(as(ada), team, "replacement");
   });
