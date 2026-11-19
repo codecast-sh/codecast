@@ -26,6 +26,7 @@ export function ModernPlanBlock({ content, timestamp, collapsed, messageId, conv
   messageId?: string;
   conversationId?: Id<"conversations">;
 }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const { isBookmarked, toggleBookmark } = useMessageBookmark(conversationId, messageId);
   const chatOn = useTeamFeature("chat");
   const title = content.match(/^#\s+(.+)$/m)?.[1];

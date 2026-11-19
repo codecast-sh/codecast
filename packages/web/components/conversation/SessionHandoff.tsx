@@ -23,6 +23,7 @@ type HandoffSessionLinkProps = HandoffNavigation & Omit<ComponentPropsWithoutRef
 };
 
 export const HandoffSessionLink = forwardRef<HTMLAnchorElement, HandoffSessionLinkProps>(function HandoffSessionLink({ details, compact, children, convLink, navigateToSession, onClick, ...linkProps }, ref) {
+  "use no memo"; // convLink() reads the share tokens this tab has presented, and one can arrive after this draws; compiled, the first link would be kept.
   const { title, shortTitle } = useInboxStore(useShallow(s => ({
     title: s.conversations[details.conversation_id]?.title || s.sessions[details.conversation_id]?.title || details.title || "Untitled session",
     shortTitle: s.conversations[details.conversation_id]?.short_title || s.sessions[details.conversation_id]?.short_title,
@@ -69,6 +70,7 @@ export function SessionHandoffCard({ handoff, source, timestamp, ...navigation }
   source?: HandoffLinkDetails | null;
   timestamp: number;
 }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const linkedSource = source?.short_id === handoff.sourceId ? source : null;
   const details = linkedSource ?? { conversation_id: handoff.sourceId, short_id: handoff.sourceId, title: handoff.sourceTitle };
   return (

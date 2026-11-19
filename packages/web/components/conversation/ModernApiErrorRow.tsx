@@ -29,6 +29,7 @@ export function ModernApiErrorRow({ heading, error, live, timestamp, conversatio
   signIn?: string;
   detail?: ReactNode;
 }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [open, setOpen] = useState(false);
   const send = (text: string) => {
     if (!conversationId) return;

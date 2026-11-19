@@ -141,6 +141,7 @@ function SkillCard({ name, description, path }: { name?: string; description?: s
 // row's lineage, not from the content. A quiet line above the bubble: where
 // this thread came from, and that this turn is where it diverged.
 export function ForkSeedMark({ parentId, parentTitle, parentUsername, convLink }: { parentId: string; parentTitle?: string; parentUsername?: string; convLink: (id: string) => string }) {
+  "use no memo"; // convLink() reads the share tokens this tab has presented, and one can arrive after this draws; compiled, the first link would be kept.
   const label = parentTitle || (parentUsername ? `@${parentUsername}` : parentId.slice(0, 7));
   return (
     <div className="flex items-center gap-1.5 px-3 pt-1 text-meta text-sol-text-dim" data-cc-fork-seed>

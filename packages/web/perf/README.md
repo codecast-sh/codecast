@@ -10,6 +10,7 @@ Both drive `harness.tsx`: the real components mounted in jsdom over a synthetic 
 | Case | Workload | Exact counts (budgets.ts) |
 | --- | --- | --- |
 | switch conversation (warm) | Two conversations of 200 cached messages, both visited, over 2,000 sessions; switch until the last answer is on screen | 0 one-shot fetches, 15 subscriptions opened, 2 store writes, 21 DOM mutation records |
+| a message arrives in an open conversation | One conversation of 200 cached messages on screen, over 2,000 sessions; one more row appended through `mergeMessages` (the path a streamed answer takes) until its text is drawn | 1 store write, 0 fetches, 0 subscriptions opened |
 | load an inbox of 5000 sessions | `SessionListPanel` mounting over 5,000 sessions | 51 cards drawn, 2 subscriptions, 0 fetches |
 | heartbeat in an inbox of 5000 sessions | A liveness overlay payload (`applyMineLivenessPayload`) shaped like the server's: the viewer's 600 newest sessions, each with its facts and placement stamps, plus the projection envelope, all freshly decoded; only one drawn session's heartbeat moved | 0 commits, 0 DOM mutations, 0 layout reads |
 | the same two, Modern style (`inbox-load-modern`, `inbox-heartbeat-modern`; budgets only) | The panel under the Modern theme context, drawing `ModernSessionCardView` and its section header | the same counts: 51 cards, 2 subscriptions; 0 commits, 0 DOM mutations, 0 layout reads |
@@ -24,6 +25,30 @@ DOM mutations are counted under the mounted tree and inside every shadow root fr
 The primary is `cpu.work`: CPU time of the bench process during the action. That covers React, the store and the app's own code, plus jsdom's DOM work. It leaves out style, layout and paint, which jsdom does not do, so it is not the browser's main-thread time. Because jsdom's DOM operations are slower than a browser's, DOM-heavy cases are dominated by jsdom: opening the long diff costs about 6 s of CPU here and much less in Chrome. A/B differences still point the right way because both sides pay the same jsdom cost. React also runs its development build here (plain bun leaves `NODE_ENV` unset, and `act()` and `<Profiler onRender>` need the development build), so `cpu.work` includes development-only work such as owner stacks and warnings that production never pays. Page-level cases (strobe `web()` targets in a real Chromium, measuring `main.work`, layout shift and frames) would need the app to boot offline against a mocked backend, which it cannot do today.
 
 Commits and layout reads in the switch case depend on wall time, because the transcript's interval timers (the 1 s size reconciler, the 350 ms scroll hold) tick while it settles. They are compared between base and head but not asserted.
+
+The append case is the re-render memoization exists for: one row is new and nothing else on the page has anything new to show. Its commits (6 or 7), DOM mutation records and layout reads follow the transcript's timers like the switch's, so they are compared, not asserted.
+
+## React Compiler
+
+The Vite build compiles the files on the allowlist in `plugins/reactCompiler.ts`; plain bun compiles nothing. `REACT_COMPILER=1` makes the harness load those files compiled (`test-helpers/reactCompiler.ts`, the same list and options), so every command below can be run with the compiler on, and `perf/compilerAB.ts` compares the two directly:
+
+```sh
+REACT_COMPILER=1 scripts/perf-budgets.sh                  # the exact counts, compiled
+bun perf/compilerAB.ts --workload append                  # on against off: CPU, React render time, every count
+bun perf/compilerAB.ts --workload switch --pairs 8 --runs 6
+REACT_COMPILER_SOURCES=components/inbox/ bun perf/compilerAB.ts --workload inbox-load   # a candidate, before it joins the list
+```
+
+`compilerAB.ts` runs fresh processes in pairs with the order alternating and reports the median difference with a 95% interval, for CPU (what strobe calls `cpu.work`) and for the time React spent rendering (`detail.renderMs`, the harness Profiler's `actualDuration`). Measured on 2026-11-18 with the list as it was first written, 8 pairs:
+
+| Case | React render, off → on | CPU, off → on |
+| --- | --- | --- |
+| a message arrives in an open conversation | 37.9 → 32.9 ms, -13.8% (95% -8.6 to -3.7 ms) | 133.5 → 111.3 ms, -19.5% (95% -35.7 to -12.7 ms) |
+| switch conversation (warm) | 42.3 → 40.8 ms, no difference (95% -5.4 to +5.7 ms) | 145.9 → 133.1 ms, no difference (95% -28.6 to +7.7 ms) |
+
+Measured again the same day, 6 pairs, after `useRelativeTime` was changed to hand compiled rows a callback that moves with the clock: a message arriving renders in 39.6 → 34.5 ms, -12.3% (95% -5.7 to -3.4 ms); CPU 131.4 → 117.6 ms with an interval that reaches zero (-27.6 to +0.1 ms, taken at a load of 24).
+
+The switch does not move, with this list or with every directory compiled (40.4 → 44.0 ms, no difference): a switch gives every row new content, so there is nothing for a cache to return, and the components that hold most of its render time (`ConversationView`, `MessageInput`, `MessageReviewImpl`, `UserPromptImpl`, `InboxConversation`) are ones the compiler leaves as written. `bun scripts/react-compiler-report.ts <files>` names the reason for each. Add a file to the list only after that report is clean for it and an A/B on a case that renders it shows a difference.
 
 ## Run
 

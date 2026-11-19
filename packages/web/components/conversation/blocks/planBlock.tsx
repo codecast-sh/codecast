@@ -22,6 +22,7 @@ const PLAN_MAX_HEIGHT = 1800;
 type PlanBlockProps = { content: string; timestamp: number; collapsed?: boolean; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void };
 
 function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationId, onOpenComments, onStartShareSelection }: PlanBlockProps) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [isExpanded, setIsExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);

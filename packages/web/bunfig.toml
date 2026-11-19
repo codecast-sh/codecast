@@ -1,2 +1,4 @@
 [test]
-preload = ["./test-helpers/preload.ts"]
+# reactCompiler.ts first: it does nothing unless REACT_COMPILER=1, and when it
+# does, it must be registered before preload.ts loads its first app module.
+preload = ["./test-helpers/reactCompiler.ts", "./test-helpers/preload.ts"]

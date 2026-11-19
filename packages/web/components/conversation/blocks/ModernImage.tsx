@@ -29,6 +29,7 @@ export function ModernImage({
   onError: () => void;
   onOpen: () => void;
 }) {
+  "use no memo"; // knownImageDims() reads a table that fills in after the first render; compiled, the first answer would be kept.
   // A size learned from this mount's own decode; the message's or an earlier
   // decode's is read fresh, since the src can resolve after the first render.
   const [decoded, setDecoded] = useState<ImageDims | null>(null);

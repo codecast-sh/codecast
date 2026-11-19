@@ -17,7 +17,7 @@ import type { Report, Workload } from "./harness";
 const only = process.argv[2] as Workload | undefined;
 if (!only) {
   let failed = 0;
-  for (const workload of ["switch", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
+  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
     const child = Bun.spawnSync(["bun", import.meta.path, workload], { stdout: "inherit", stderr: "inherit" });
     if (child.exitCode !== 0) failed++;
   }
@@ -63,6 +63,19 @@ await test("switch", "a warm conversation switch fetches no history and opens th
       // The pane swaps its subtrees; nothing else on the page moves. Six rows
       // of overscan each side (ConversationView) set how many it mounts.
       domMutations: 21,
+    });
+  }
+});
+
+await test("append", "a message arriving in an open conversation writes the store once and asks the server for nothing", async () => {
+  await setup("append");
+  for (const r of await twice()) {
+    expect({ ...pick(r, ["storeWrites", "convexQueries", "convexActions", "convexMutations", "convexSubscribes"]), asked: r.detail.query }).toEqual({
+      // The merge that carries the row in; drawing it writes nothing back.
+      storeWrites: 1,
+      // The transcript already holds its window: a new row opens no query
+      // and fetches no history.
+      convexQueries: 0, convexActions: 0, convexMutations: 0, convexSubscribes: 0, asked: [],
     });
   }
 });

@@ -58,6 +58,7 @@ export function ModernMonitorRow({ background, description, command, status, ton
   persistent?: boolean;
   title?: string;
 }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [open, setOpen] = useState(false);
   const firstLine = (command ?? "").split("\n").find((l) => l.trim()) ?? "";
   const Icon = background ? Terminal : Radar;

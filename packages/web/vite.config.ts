@@ -23,6 +23,7 @@ import { mcpProxyPlugin } from "./plugins/mcpProxy";
 import { frameCheckResponse } from "./server/frameCheck";
 import { uiFontPreloadPlugin } from "./plugins/uiFontPreload";
 import { precacheScope } from "./plugins/precacheScope";
+import { REACT_COMPILER_RUNTIME, reactCompilerBabelOptions, reactCompilerOff } from "./plugins/reactCompiler";
 import autoprefixer from "autoprefixer";
 import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS, NAVIGATION_ROUTE } from "./vite.pwa";
 
@@ -60,7 +61,11 @@ export default defineConfig(({ mode, command }) => ({
     // Before react(): gives hooks in plain .ts files a Fast Refresh signature,
     // so editing their hook list remounts consumers instead of crashing them.
     hookRefreshPlugin(),
-    react(),
+    // React Compiler, for the files on its allowlist only (plugins/reactCompiler.ts,
+    // which also says what a file must not do to join it). REACT_COMPILER=0
+    // builds and serves exactly as before. Per file, so a production build
+    // runs babel on the listed files and on no others.
+    react(reactCompilerOff() ? {} : { babel: (id) => reactCompilerBabelOptions(id) }),
     // Lets an edit to a store action hot-swap instead of reloading the whole app.
     storeHmrPlugin(),
     // An edit to a file no window has loaded updates the stylesheet that scans
@@ -224,6 +229,9 @@ export default defineConfig(({ mode, command }) => ({
       "react",
       "react-dom",
       "react-dom/client",
+      // Compiled files import their memo cache from here. plugin-react adds it
+      // itself only for a static babel config, and ours is per file.
+      ...(reactCompilerOff() ? [] : [REACT_COMPILER_RUNTIME]),
       "react-router",
       "convex/react",
       "@convex-dev/auth/react",

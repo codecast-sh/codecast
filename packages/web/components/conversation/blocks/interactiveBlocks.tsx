@@ -49,6 +49,7 @@ const BACKGROUND_BADGE_LABEL: Record<MonitorStatus, string> = {
 };
 
 export function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId?: string }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const isBackground = tool.name !== "Monitor";
   let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean } = {};
   try { input = JSON.parse(tool.input); } catch {}

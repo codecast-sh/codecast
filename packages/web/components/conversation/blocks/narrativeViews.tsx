@@ -114,6 +114,7 @@ const BeatRow = memo(function BeatRow({ beat, userName, avatarUrl, showPrompt, a
 });
 
 function NarrativeFooter({ data, generating, run, unit }: { data: any; generating: boolean; run: () => void; unit: string }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   return (
     <div className="mt-2 pt-3 border-t border-sol-border/40 flex items-center gap-3 text-meta text-sol-text-dim">
       <span>

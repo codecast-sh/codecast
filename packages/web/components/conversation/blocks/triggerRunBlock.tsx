@@ -80,6 +80,7 @@ function changeWords(c: NonNullable<ScheduledTaskFrame["change"]>): string {
  *  the person (ConversationView turnEndedSilent). A wake it answered needs
  *  no mark: the answer is the next thing on screen. */
 function RoleWakeBlock({ frame, timestamp, unanswered = false }: { frame: ScheduledTaskFrame; timestamp: number; unanswered?: boolean }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [open, setOpen] = useState(false);
   const role = frame.role!;
   const w = frame.waiting;
@@ -144,6 +145,7 @@ const WORKER_TONE: Record<string, string> = {
 /** One worker's report: who, what it settled on and its pinned line, on one
  *  quiet row that opens in place to the whole line. */
 function WorkerReportRow({ worker: w, timestamp, first }: { worker: WaitingSession; timestamp: number; first: boolean }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [open, setOpen] = useState(false);
   const toggle = () => w.state && setOpen(!open);
   return (
@@ -193,6 +195,7 @@ function HostedRoutineRunLine({ frame, timestamp }: { frame: ScheduledTaskFrame;
 }
 
 export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = false, unanswered = false }: { content: string; timestamp: number; hosted?: boolean; unanswered?: boolean }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [showPlumbing, setShowPlumbing] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();

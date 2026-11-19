@@ -74,6 +74,7 @@ type CommentEntry = {
 // 60% of the window with a fade, expanded it takes the whole window height
 // and scrolls. The card shifts up when its anchor would push it off screen.
 function HoverPreview({ message, conversationId, rect, onMouseEnter, onMouseLeave, onDropdownEnter, onDropdownLeave }: { message: NavigatorRow; conversationId: string; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void; onDropdownEnter: () => void; onDropdownLeave: () => void }) {
+  "use no memo"; // formatTimeAgo() reads the clock as this renders; compiled, the time shown would stop moving.
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const [top, setTop] = useState(() => Math.max(8, rect.top - 20));
@@ -201,6 +202,7 @@ function NavDropdown({
   tab: "messages" | "comments";
   onTabChange: (t: "messages" | "comments") => void;
 }) {
+  "use no memo"; // formatTimeAgo() reads the clock as this renders; compiled, the time shown would stop moving.
   const [mounted, setMounted] = useState(false);
   const [search, setSearch] = useState("");
   // Automated rows (triggers, sessions, teammates) and bare "continue" nudges

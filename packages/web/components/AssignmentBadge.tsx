@@ -43,6 +43,7 @@ import { RoleFace } from "./org/RoleFace";
 import { MakeRoleDialog } from "./org/MakeRoleDialog";
 import { MirrorMenuItems } from "./LocalMirror";
 import { cloudSeedTitle } from "@codecast/shared/contracts";
+import { useNowWhen } from "../hooks/useCoarseNow";
 
 type Runner = { id?: string; name: string; image?: string | null };
 
@@ -184,10 +185,15 @@ export function AssignmentBadge({
   // laptop: "offline" is its resting state, not a problem, so say so instead of
   // reporting how long ago it was seen.
   const cloudHost = !!d && deviceWakesOnUse(d);
+  // "last seen 4m ago" is told against a clock of its own, which wakes the
+  // badge only when those words change. A Date.now() read while rendering is
+  // one React Compiler keeps: the title would hold its first answer.
+  const lastSeen = d && !cloudHost && !d.online ? d.last_seen : null;
+  const now = useNowWhen((t) => (lastSeen === null ? "" : relativeSeen(lastSeen, t)), 60_000);
   const deviceTitle = d
     ? `Runs on ${deviceDisplayName(d)} (${cloudHost ? "cloud host, wakes on use" : deviceKindLabel(d)})`
       + `${own || !foreign ? "" : ` — ${foreignRunnerNote(foreign)}`}`
-      + `${cloudHost ? "" : ` — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`}`
+      + `${cloudHost ? "" : ` — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen, now)}`}`}`
       + `${worktree ? `\nWorktree ${worktree}` : shared ? "\nShared checkout on the host" : ""}`
       + `${seedLine ? `\n${seedLine}` : ""}`
       + `${preparing ? "\nPreparing the host — its checkout is being made now." : ""}`

@@ -14,7 +14,7 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
 // The -modern workloads are the same inbox with the Modern style on (its
 // session card, ModernSessionCardView, and section header): the same budgets.
-export type Workload = "switch" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
+export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -159,6 +159,12 @@ const fiberName = (f: any) => { const t = f.elementType ?? f.type; return typeof
   },
 };
 
+// REACT_COMPILER=1 runs the files on the compiler's allowlist compiled
+// (test-helpers/reactCompiler.ts), so a bench or a budget can be taken with
+// the compiler on. Before any app module, which is why those load below. A
+// base ref without the helper runs as written.
+if (process.env.REACT_COMPILER === "1") await import("../test-helpers/reactCompiler").catch(() => {});
+
 // --- App modules (loaded after the DOM exists: react-dom decides at load) ----
 
 const React = await import("react");
@@ -265,6 +271,8 @@ function seedStore(sessions: number) {
 // --- Mounting and measuring ------------------------------------------------
 
 let commits = 0;
+// Time React spent rendering in those commits (the Profiler's actualDuration).
+let renderMs = 0;
 let host: HTMLElement;
 let root: ReturnType<typeof createRoot>;
 let render: (node: React.ReactNode) => Promise<void>;
@@ -278,7 +286,7 @@ function mount() {
       root.render(
         <ConvexProviderWithAuth client={convex} useAuth={useAuth}>
           <MemoryRouter>
-            <Profiler id="perf" onRender={() => { commits++; }}>{node}</Profiler>
+            <Profiler id="perf" onRender={(_id, _phase, actualDuration) => { commits++; renderMs += actualDuration; }}>{node}</Profiler>
           </MemoryRouter>
         </ConvexProviderWithAuth>,
       );
@@ -315,6 +323,7 @@ const tally = (xs: string[]) => [...xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0)
 // mutations and forced layouts.
 async function measure(action: () => Promise<void>): Promise<Report> {
   commits = 0;
+  renderMs = 0;
   rendered = new Map();
   layoutReads = [];
   convexAsked = { subscribe: [], query: [], mutation: [], action: [] };
@@ -345,7 +354,7 @@ async function measure(action: () => Promise<void>): Promise<Report> {
       convexSubscribes: convexAsked.subscribe.length, convexQueries: convexAsked.query.length,
       convexMutations: convexAsked.mutation.length, convexActions: convexAsked.action.length,
     },
-    detail: { layoutReads: [...new Set(reads)], layoutReadKinds: tally(reads.map((r) => r.split(" ")[0])), storeKeys: [...storeKeys], rendered: [...rendered].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} x${n}`), ...convexAsked },
+    detail: { renderMs: [renderMs.toFixed(2)], layoutReads: [...new Set(reads)], layoutReadKinds: tally(reads.map((r) => r.split(" ")[0])), storeKeys: [...storeKeys], rendered: [...rendered].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} x${n}`), ...convexAsked },
   };
 }
 
@@ -378,6 +387,32 @@ async function setupSwitch(): Promise<Bench> {
   await settle();
   return {
     run: () => measure(async () => { await show(current === a ? b : a); await settle(); }),
+    reset: async () => { await settle(); },
+  };
+}
+
+// A message arriving in the open conversation: 200 cached messages on screen,
+// one more appended through the store's own merge (the path a streamed answer
+// takes), until its text is drawn. The other rows have nothing new to show,
+// so this is the re-render that memoization exists for.
+async function setupAppend(): Promise<Bench> {
+  const { InboxConversation } = await import("../app/inbox/QueuePageClient");
+  seedStore(2000);
+  const a = convId(1);
+  useInboxStore.getState().setMessages(a, messages(a, 200), { hasMoreAbove: true, initialized: true });
+  mount();
+  await render(<InboxConversation sessionId={a} isIdle autoFocusInput={false} />);
+  await until(() => host.textContent!.includes(`Last line of answer 199 in ${a.slice(-6)}`), `conversation ${a} to paint`);
+  await settle();
+  let n = 200;
+  return {
+    run: () => measure(async () => {
+      const i = n++;
+      const row = { _id: `${a.slice(0, 20)}m${String(i).padStart(11, "0")}`, conversation_id: a, role: "assistant", timestamp: now + i * 1000, content: `Streamed answer ${i} has arrived.` };
+      await act(async () => { useInboxStore.getState().mergeMessages(a, [row] as any, "append"); });
+      await until(() => host.textContent!.includes(`Streamed answer ${i} has arrived.`), "the new message to paint");
+      await settle();
+    }),
     reset: async () => { await settle(); },
   };
 }
@@ -529,6 +564,7 @@ async function setupDiff(): Promise<Bench> {
 
 const setups: Record<Workload, () => Promise<Bench>> = {
   switch: setupSwitch,
+  append: setupAppend,
   "inbox-load": () => setupInboxLoad(),
   "inbox-heartbeat": () => setupInboxHeartbeat(),
   "inbox-load-modern": () => setupInboxLoad(true),

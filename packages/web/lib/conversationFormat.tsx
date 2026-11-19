@@ -108,10 +108,19 @@ export function renderAnsi(text: string): React.ReactNode {
  */
 export const RelativeTimeNow = createContext<number | null>(null);
 
-/** `formatRelativeTime` measured from the surface's instant (RelativeTimeNow), for a component's render. */
+/**
+ * `formatRelativeTime` measured from the surface's instant (RelativeTimeNow),
+ * for a component's render.
+ *
+ * The instant is read here, once per render, and the callback is made from
+ * it, so on the wall clock each render gets a new callback. That is the
+ * point: React Compiler caches `relativeTime(ts)` in a caller on the callback
+ * and `ts`. A callback that stayed the same and read Date.now() when called
+ * left a compiled row showing "just now" through every later render.
+ */
 export function useRelativeTime(): (ts: number) => string {
-  const now = useContext(RelativeTimeNow);
-  return useCallback((ts: number) => formatRelativeTime(ts, now ?? Date.now()), [now]);
+  const now = useStampNow();
+  return useCallback((ts: number) => formatRelativeTime(ts, now), [now]);
 }
 
 /** The instant a surface's times are measured from: the sandbox's (RelativeTimeNow) under a film, the wall clock elsewhere. Pass it as the `now` of any age or day formatter a view calls. */

@@ -14,6 +14,7 @@ import { useIsModernStyle } from "../../../hooks/useVisualStyle";
 import { Button } from "../../ui/button";
 
 export function DeliveryFailedBlock({ notice, conversationId, timestamp }: { notice: DeliveryFailedNotice; conversationId?: string; timestamp?: number }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [open, setOpen] = useState(false);
   const [done, setDone] = useState(false);
   const modern = useIsModernStyle();

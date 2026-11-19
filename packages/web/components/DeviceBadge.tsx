@@ -89,8 +89,8 @@ export function deviceAccentClasses(d: Device): string {
   return "bg-sol-blue/10 text-sol-blue border-sol-blue/30";
 }
 
-export function relativeSeen(lastSeen: number): string {
-  const s = Math.max(0, Math.round((Date.now() - lastSeen) / 1000));
+export function relativeSeen(lastSeen: number, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - lastSeen) / 1000));
   if (s < 60) return `${s}s ago`;
   const m = Math.round(s / 60);
   if (m < 60) return `${m}m ago`;

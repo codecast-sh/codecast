@@ -85,6 +85,7 @@ function InlineEntityTitle({ shortId, struck }: { shortId: string; struck?: bool
 }
 
 function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "doc"; shortId?: string; convexId?: string }) {
+  "use no memo"; // Reads Date.now() as it renders; compiled, that first instant would be kept.
   const router = useRouter();
   // Local-first seed: the card paints from the store's row on the first
   // frame; the query refreshes it. Every `cast task/plan/doc` row in a

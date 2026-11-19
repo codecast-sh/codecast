@@ -9,7 +9,8 @@ import { formatRunDuration } from "../../../lib/workflowRun";
 // anywhere to expand the turn to full.
 export const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, toolCount, workedMs = 0, onExpand }: { preview: string; messageCount: number; toolCount: number; workedMs?: number; onExpand: () => void }) {
   const bits: string[] = [];
-  if (workedMs >= 1000) bits.push(`Worked ${formatRunDuration(0, workedMs)}`);
+  // A span with both ends given; the third argument keeps the helper's default clock read out of render.
+  if (workedMs >= 1000) bits.push(`Worked ${formatRunDuration(0, workedMs, workedMs)}`);
   if (messageCount > 1) bits.push(`${messageCount} messages`);
   if (toolCount > 0) bits.push(`${toolCount} ${toolCount === 1 ? "tool" : "tools"}`);
   return (

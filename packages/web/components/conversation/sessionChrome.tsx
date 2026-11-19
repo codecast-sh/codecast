@@ -199,6 +199,7 @@ export function ThreadTailLoader({ loading }: { loading: boolean }) {
 // transfer, not a private ping (that is AssignedToYouBanner, for the assignee
 // until they acknowledge). A transfer still in flight renders dimmed.
 export function HandoffMarker({ handoff, meId }: { handoff: HandoffInfo; meId?: string }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const from = handoff.from === meId ? "You" : handoff.from_name;
   const to = handoff.to === meId ? "you" : handoff.to_name;
   return (
@@ -322,6 +323,7 @@ function useApiErrorLive(conversationId?: string, timestamp?: number): boolean {
 }
 
 export function ApiErrorCard({ error, agentType, conversationId, messageUuid, timestamp, compact = false }: { error: ParsedApiError; agentType?: string; conversationId?: string; messageUuid?: string; timestamp?: number; compact?: boolean }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   // A cloud agent's setup card (the daemon's): its provider is the session's, its kind in the id the daemon posted it under.
   const cloudCard = useCloudAgentSetupCard(conversationId, messageUuid, error.message);
   // A credential card is history once the machine has the credential, whatever the session did since.
@@ -726,6 +728,7 @@ export function ConversationMetadata({
  *  out. `endedAt` ends the duration where a session's span ends (a cloud
  *  agent's mirror: its last message), else it runs to now. */
 export function ConversationAgeMenuItems({ startedAt, endedAt, messageCount }: { startedAt?: number; endedAt?: number; messageCount?: number }) {
+  "use no memo"; // formatDuration() reads the clock as this renders; compiled, the time shown would stop moving.
   return (
     <>
       {startedAt && (

@@ -46,6 +46,7 @@ import { chatHref } from "../../../lib/chatHref";
 import { pressable } from "../../ops/parts";
 
 function CommandStatusLine({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '').trim();
   const cmdType = getCommandType(content);
   const cmdNameMatch = content.match(/<command-name>([^<]*)<\/command-name>/) || content.match(/<command-message>([^<]*)<\/command-message>/) || content.trim().match(/^\/([\w-]+)/);
@@ -111,6 +112,7 @@ export function CommandMessageBlock({
   agentType?: string;
   messageId?: string;
 }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [showSource, setShowSource] = useState(false);
   const { cmdName, args } = parseCommandInvocation(content);
 
@@ -202,6 +204,7 @@ export function BashCommandBlock({ command, stdout, stderr, timestamp, userName,
   avatarUrl?: string | null;
   messageId?: string;
 }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [expanded, setExpanded] = useState(false);
   const out = stripAnsiCodes(stdout || "").trimEnd();
   const err = stripAnsiCodes(stderr || "").trimEnd();
@@ -277,6 +280,7 @@ export function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: 
  *  role's brief), folded to one row that opens it. `collapsed` is the
  *  condensed feed's label-only form. */
 export function FoldedPromptBlock({ label, preview, content, timestamp, collapsed }: { label: string; preview?: string; content: string; timestamp: number; collapsed?: boolean }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [expanded, setExpanded] = useState(false);
   const icon = (size: string) => (
     <svg data-cc-row-icon className={`${size} text-sol-cyan/70 shrink-0`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -329,6 +333,7 @@ export function FoldedPromptBlock({ label, preview, content, timestamp, collapse
 // shape in the workflow's cyan) rather than a person's bubble. Long briefs
 // start clipped behind an Expand.
 export function WorkflowTaskBlock({ body, timestamp }: { body: string; timestamp: number }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   return (
     <div className="mb-3 rounded border-l-2 border-sol-cyan/60 bg-sol-cyan/5" data-cc-row="brief">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1" data-cc-row-head>
@@ -368,6 +373,7 @@ export function InterruptStatusLine({ label = "user interrupted", tone = "sky" }
 // account recovery sent after a usage limit: it carries the recovery's mark
 // instead of the person's face, because they did not type it.
 export function NudgeLine({ messageId, text, count, timestamp, userName, avatarUrl, recovery = false, pending = false }: { messageId: string; text: string; count: number; timestamp: number; userName?: string; avatarUrl?: string | null; recovery?: boolean; pending?: boolean }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const title = recovery
     ? `Sent by account recovery after the usage limit · ${formatFullTimestamp(timestamp)}`
     : count > 1 ? `${userName ?? "You"} sent "${text}" ${count} times in a row · last at ${formatFullTimestamp(timestamp)}` : `${userName ?? "You"} · ${formatFullTimestamp(timestamp)}`;
@@ -413,6 +419,7 @@ function SwitchDivider({
   /** The details are markdown (a brief), not a raw notice. */
   markdown?: boolean;
 }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [open, setOpen] = useState(false);
   const details = [content.trim(), extra?.trim()].filter(Boolean).join("\n\n");
   const hasDetails = details.includes("\n");
@@ -580,6 +587,7 @@ const taskStatusConfig: Record<string, { icon: string; color: string; bg: string
 const WAKE_STATUSES = new Set(['completed', 'failed', 'killed']);
 
 export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { content: string; timestamp: number; agentNameToChildMap?: Record<string, string> }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const parsed = parseTaskNotification(content);
   const router = useRouter();
   if (!parsed) return null;
@@ -898,6 +906,7 @@ export function ChatChannelPill({ name, href, direct }: { name: string; href: st
 // with the summary and the `cast call` pointer; this renders it the way the
 // human should read it — the digest, and the transcript unfoldable under it.
 export function HuddleSummaryBlock({ huddle, timestamp }: { huddle: HuddleSummaryTag; timestamp?: number }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   // The header already names the call, who was on it and what was filmed;
   // drop the digest's own lead and video lines so the card doesn't say them
   // twice.
@@ -948,6 +957,7 @@ function ChatWakeLine({ entry, dim }: { entry: ChatWakeEntry; dim?: boolean }) {
 }
 
 export function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; timestamp?: number }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   // Land on the thread. A permalink to a REPLY opens the thread panel; the root
   // alone would only scroll the channel — so prefer the anchor's placeholder,
   // which is always a reply, and fall back to the root.
@@ -1095,6 +1105,7 @@ export function TeammateMessageCard({ teammateId, color, summary, content, times
 }
 
 function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   if (isHiddenSystemNotice(content, subtype)) return null;
 
   if (subtype === "compact_boundary") {
