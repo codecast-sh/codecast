@@ -31,7 +31,13 @@ export function useEmailProof(conversationId: string | undefined) {
     setPhase("checking");
     setError("");
     try {
-      await confirm({ code, ...(conversationId ? { conversation_id: conversationId as Id<"conversations"> } : {}) });
+      const result = await confirm({ code, ...(conversationId ? { conversation_id: conversationId as Id<"conversations"> } : {}) });
+      // A wrong code is an answer, not a throw (convex/lib/emailProof).
+      if (result.error) {
+        setError(result.error);
+        setPhase("idle");
+        return;
+      }
       setPhase("done");
     } catch (err) {
       setError(humanizeConvexError(err, "That code didn't work. Try again or send a new one."));

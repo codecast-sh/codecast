@@ -212,3 +212,44 @@ export function passkeyAdded(args: { email: string; passkeyName: string; addedAt
     reason: `You received this security notice because a passkey was added to ${args.email} at codecast.sh.`,
   });
 }
+
+/** The code that moves an account to a new sign-in address (accountEmail.ts), mailed to that new address. Not the sign-up wording: the account exists, and the code decides which address it answers to. */
+export function confirmNewEmail(args: { code: string; email: string; expiryMinutes: number }): RenderedEmail {
+  return renderEmail({
+    subject: `${args.code} is your Codecast code to change your email`,
+    preheader: `Enter this code to sign in to Codecast as ${args.email}. It expires in ${args.expiryMinutes} minutes.`,
+    eyebrow: "change your email",
+    heading: "Confirm your new address",
+    blocks: [
+      { kind: "text", value: `Enter this code in Settings to make **${args.email}** the address your Codecast account signs in with.` },
+      { kind: "code", code: args.code, hint: `expires in ${args.expiryMinutes} minutes` },
+      { kind: "note", value: "Didn't ask for this? You can safely ignore this email: nothing changes without the code." },
+    ],
+    reason: `You received this because someone signed in to Codecast asked to use ${args.email} as their account email.`,
+  });
+}
+
+/** An account moved to a new sign-in address (accountEmail.ts), mailed to the address it left: the one mailbox a person who did not do this still reads. */
+export function emailChanged(args: { oldEmail: string; newEmail: string; changedAt: number; settingsUrl: string }): RenderedEmail {
+  return renderEmail({
+    subject: "Your Codecast sign-in email was changed",
+    preheader: "If this was you, no action is needed.",
+    eyebrow: "security",
+    heading: "Your sign-in email was changed",
+    blocks: [
+      { kind: "text", value: "Your Codecast account now signs in with a different address. Notices go to the new address from here on, and a password sign-in uses it too." },
+      {
+        kind: "meta",
+        rows: [
+          { label: "was", value: args.oldEmail },
+          { label: "now", value: args.newEmail },
+          { label: "when", value: formatWhen(args.changedAt) },
+        ],
+      },
+      { kind: "text", value: "If this was you, no action is needed." },
+      { kind: "text", value: `If this **wasn't** you, someone else has access to your account. Email us at **${BRAND.supportEmail}** from this address and we will move it back.` },
+      { kind: "button", label: "Review your account", url: args.settingsUrl },
+    ],
+    reason: `You received this security notice because ${args.oldEmail} was the sign-in address of a Codecast account until now.`,
+  });
+}

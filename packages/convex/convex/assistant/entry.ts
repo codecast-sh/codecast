@@ -153,15 +153,17 @@ export const sendEmailProof = mutation({
 });
 
 /** The person entered the mailed code: their email is proven, and the
- *  conversation that stopped on `verify` picks up the ask it stopped on. A
- *  wrong or expired code throws the sentence to show (lib/emailProof). */
+ *  conversation that stopped on `verify` picks up the ask it stopped on. An
+ *  expired code throws the sentence to show; a wrong one returns it as
+ *  `error`, so the try it cost is kept (lib/emailProof). */
 export const confirmEmailProof = mutation({
   args: { code: v.string(), conversation_id: v.optional(v.id("conversations")) },
-  handler: async (ctx, args): Promise<{ resumed: boolean }> => {
+  handler: async (ctx, args): Promise<{ resumed: boolean; error?: string }> => {
     const userId = await getAuthUserId(ctx);
     const user = userId ? await ctx.db.get(userId) : null;
     if (!user) throw new Error("Not authenticated");
-    await confirmEmailCode(ctx, user, args.code);
+    const check = await confirmEmailCode(ctx, user, args.code);
+    if (!check.ok) return { resumed: false, error: check.message };
     const conversation = args.conversation_id ? await ctx.db.get(args.conversation_id) : null;
     if (!conversation || conversation.user_id !== user._id || conversation.hosted_stop !== "verify") return { resumed: false };
     const outcome = await resumeAfterNotice(ctx, conversation._id);

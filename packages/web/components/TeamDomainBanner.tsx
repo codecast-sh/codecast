@@ -40,7 +40,14 @@ export function TeamDomainBanner() {
   const checkCode = () => {
     setError("");
     setPhase("checking");
-    confirmCode({ code }).then(() => setPhase("idle")).catch((err) => { fail(err); setPhase("code"); });
+    // A wrong code is an answer, not a throw (convex/lib/emailProof): stay on the field and say so.
+    confirmCode({ code })
+      .then((result) => {
+        if (result.proven) return setPhase("idle");
+        setError(result.error);
+        setPhase("code");
+      })
+      .catch((err) => { fail(err); setPhase("code"); });
   };
   const ask = (teamId: Id<"teams">) => {
     setError("");

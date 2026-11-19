@@ -13,6 +13,7 @@ import { internal } from "../_generated/api";
 import { internalAction, mutation } from "../functions";
 import { BRAND, type RenderedEmail } from "./render";
 import {
+  emailChanged,
   passkeyAdded,
   passwordChanged,
   teamInvite,
@@ -94,6 +95,17 @@ export const sendPasskeyAdded = internalAction({
       args.email,
       passkeyAdded({ email: args.email, passkeyName: args.passkey_name, addedAt: args.added_at, settingsUrl: args.settings_url }),
       "passkey-added",
+    );
+  },
+});
+
+export const sendEmailChanged = internalAction({
+  args: { old_email: v.string(), new_email: v.string(), changed_at: v.number(), settings_url: v.string() },
+  handler: async (_ctx, args) => {
+    await deliver(
+      args.old_email,
+      emailChanged({ oldEmail: args.old_email, newEmail: args.new_email, changedAt: args.changed_at, settingsUrl: args.settings_url }),
+      "email-changed",
     );
   },
 });

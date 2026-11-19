@@ -21,9 +21,9 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { isTeamAdmin } from "./privacy";
 import { addTeamMember } from "./teams";
 import { deliver } from "./emails/send";
-import { verifyEmail } from "./emails/templates";
+import { confirmNewEmail, verifyEmail } from "./emails/templates";
 import { emailProven, workDomain } from "./lib/workDomain";
-import { confirmEmailCode, sendEmailCode } from "./lib/emailProof";
+import { CODE_TTL_MS, confirmEmailCode, sendEmailCode } from "./lib/emailProof";
 
 export { workDomain };
 
@@ -173,20 +173,27 @@ export const sendWorkEmailCode = mutation({
   },
 });
 
-/** Mails a code lib/emailProof issued. */
+/** Mails a code lib/emailProof issued: to prove the account's own address,
+ *  or, with `moving`, to move the account to this one (accountEmail.ts). */
 export const deliverWorkEmailCode = internalAction({
-  args: { email: v.string(), code: v.string() },
+  args: { email: v.string(), code: v.string(), moving: v.optional(v.boolean()) },
   handler: async (_ctx, args) => {
+    if (args.moving) {
+      await deliver(args.email, confirmNewEmail({ code: args.code, email: args.email, expiryMinutes: CODE_TTL_MS / 60_000 }), "change-email");
+      return;
+    }
     await deliver(args.email, verifyEmail({ code: args.code, email: args.email }), "verify-email");
   },
 });
 
-/** Prove the account email with the code it was sent. */
+/** Prove the account email with the code it was sent. A wrong code comes
+ *  back as `proven: false` with the sentence to show, so the try it cost is
+ *  kept (lib/emailProof). */
 export const confirmWorkEmailCode = mutation({
   args: { code: v.string() },
-  handler: async (ctx, args) => {
-    await confirmEmailCode(ctx, await me(ctx), args.code);
-    return { proven: true };
+  handler: async (ctx, args): Promise<{ proven: true } | { proven: false; error: string }> => {
+    const check = await confirmEmailCode(ctx, await me(ctx), args.code);
+    return check.ok ? { proven: true } : { proven: false, error: check.message };
   },
 });
 
