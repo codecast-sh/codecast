@@ -72,6 +72,9 @@ import { RoleFailoverBanner } from '@/components/org/RoleFailoverBanner';
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { appAlert, showActionSheet, type SheetItem } from '@/lib/popups';
+import { MessageLongPressContext, OutsideMessage, useMessageLongPress, type BlockCopy } from '@/components/MessageLongPress';
+import { openSelectText } from '@/components/SelectTextSheet';
+import { readableText } from '@/lib/markdown';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { ScreenRecordingCard } from '@/components/ScreenRecordingCard';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
@@ -431,14 +434,14 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
         )}
         <RNText style={[styles.specialToolMeta, { marginLeft: 'auto' }]}>{expanded ? 'collapse' : 'expand'}</RNText>
       </RNView>
-      <RNText style={styles.specialToolContent} selectable numberOfLines={expanded ? 50 : 3}>{linkifyPlainText(truncatedPrompt, 'sp')}</RNText>
+      <RNText style={styles.specialToolContent} numberOfLines={expanded ? 50 : 3}>{linkifyPlainText(truncatedPrompt, 'sp')}</RNText>
       {!expanded && prompt.length > 300 && (
         <RNText style={{ fontSize: 10, color: Theme.textDim, marginTop: 2 }}>show more</RNText>
       )}
       {expanded && result && (
         <RNView style={styles.specialToolResult}>
           <RNText style={styles.specialToolResultLabel}>Result</RNText>
-          <RNText style={[styles.specialToolResultText, result.is_error && { color: Theme.red }]} selectable numberOfLines={20}>
+          <RNText style={[styles.specialToolResultText, result.is_error && { color: Theme.red }]} numberOfLines={20}>
             {linkifyPlainText(result.content, 'sr')}
           </RNText>
         </RNView>
@@ -753,6 +756,7 @@ function imageKeyOf(image: ImageData): string | undefined {
 }
 
 function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void }) {
+  const messageLongPress = useMessageLongPress();
   const Theme = useTheme();
   const src = useImageSrc(image);
 
@@ -765,7 +769,7 @@ function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void
   }
 
   return (
-    <Pressable onPress={onPress} style={styles.imageContainer}>
+    <Pressable onPress={onPress} onLongPress={messageLongPress ? () => messageLongPress() : undefined} style={styles.imageContainer}>
       <RNView style={{ height: IMAGE_COLLAPSED_HEIGHT, overflow: 'hidden' }}>
         <Image
           source={{ uri: src }}
@@ -1452,6 +1456,22 @@ function ToolImages({ toolId, images, globalImageMap, openGallery }: {
   );
 }
 
+/** What a tool row's menu can copy: a shell call's command (else its input) and its output. */
+function toolCopies(toolCall: ToolCall, output: string): BlockCopy[] {
+  let command: string | undefined;
+  if (isShellTool(toolCall.name)) {
+    try {
+      const parsed = JSON.parse(toolCall.input);
+      command = parsed.command || parsed.cmd;
+    } catch {}
+  }
+  const copies: BlockCopy[] = [];
+  if (command) copies.push({ label: 'Copy command', text: command });
+  else if (toolCall.input && toolCall.input.length > 2) copies.push({ label: 'Copy input', text: toolCall.input });
+  if (output) copies.push({ label: 'Copy output', text: output });
+  return copies;
+}
+
 function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImageMap, openGallery }: {
   toolCall: ToolCall;
   result?: ToolResult;
@@ -1471,6 +1491,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   const color = toolColorHex[toolIcon(displayToolName).color];
   const summary = toolSummary(nestedActions.length === 1 ? nestedActions[0] : toolCall);
   const [viewMode, setViewMode] = useState<'raw' | 'rendered'>('rendered');
+  const messageLongPress = useMessageLongPress();
 
   // Format input nicely - parse JSON and extract relevant fields
   let inputDisplay = toolCall.input;
@@ -1596,7 +1617,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
     ].includes(toolCall.name) || toolCall.name.startsWith('mcp__');
 
   return (
-    <Pressable onPress={onToggle} style={styles.toolCallContainer}>
+    <Pressable onPress={onToggle} onLongPress={messageLongPress ? () => messageLongPress(toolCopies(toolCall, processedResult)) : undefined} style={styles.toolCallContainer}>
       <RNText style={styles.toolCallHeader} numberOfLines={expanded ? undefined : 1}>
         <RNText style={[styles.toolCallName, { color }]}>{toolLabel(displayToolName)}</RNText>
         {summary ? (
@@ -1634,14 +1655,14 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
           )}
           {isBash && inputDisplay ? (
             <RNView style={styles.bashCommandSection}>
-              <RNText style={styles.bashPrompt} selectable>
+              <RNText style={styles.bashPrompt}>
                 <RNText>$ </RNText>
                 <RNText>{linkifyPlainText(inputDisplay, 'bp')}</RNText>
               </RNText>
             </RNView>
           ) : !shouldHideInput && toolCall.input && toolCall.input.length > 2 ? (
             <RNView style={styles.toolInputSection}>
-              <RNText style={styles.toolCallInput} selectable>{linkifyPlainText(inputDisplay, 'ti')}</RNText>
+              <RNText style={styles.toolCallInput}>{linkifyPlainText(inputDisplay, 'ti')}</RNText>
             </RNView>
           ) : null}
           {isEdit && parsedInput.old_string && parsedInput.new_string ? (
@@ -1691,7 +1712,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
               ) : isMarkdownResult ? (
                 <MarkdownContent text={resultDisplay} baseStyle={styles.toolCallResult} isUser={false} />
               ) : (
-                <RNText style={[styles.toolCallResult, result.is_error && { color: Theme.red }]} selectable>
+                <RNText style={[styles.toolCallResult, result.is_error && { color: Theme.red }]}>
                   {linkifyPlainText(resultDisplay, 'tr')}
                 </RNText>
               )}
@@ -1710,6 +1731,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
         </RNView>
       )}
       {mdFullscreen && (
+        <OutsideMessage>
         <Modal visible={mdFullscreen} animationType="slide" onRequestClose={() => setMdFullscreen(false)}>
           <RNView style={styles.planFullscreen}>
             <RNView style={styles.planFullscreenHeader}>
@@ -1724,6 +1746,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
             </ScrollView>
           </RNView>
         </Modal>
+        </OutsideMessage>
       )}
     </Pressable>
   );
@@ -1737,10 +1760,12 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
 function ThinkingBlock({ content }: { content: string }) {
   const Theme = useTheme();
   const [expanded, setExpanded] = useState(false);
+  const messageLongPress = useMessageLongPress();
   const isLong = content.split('\n').length > 2 || content.length > 200;
   return (
     <TouchableOpacity
       onPress={() => isLong && setExpanded(!expanded)}
+      onLongPress={messageLongPress ? () => messageLongPress([{ label: 'Copy thinking', text: content }]) : undefined}
       style={styles.thinkingBlock}
       activeOpacity={isLong ? 0.7 : 1}
     >
@@ -1982,12 +2007,14 @@ const USER_BUBBLE_ALPHA = '30';
 /** A folded run of tool calls: one quiet line saying what it did; a tap opens the calls under it. */
 function ToolRunRow({ run, expanded, onToggle }: { run: ToolRun; expanded: boolean; onToggle: () => void }) {
   const Theme = useTheme();
+  const messageLongPress = useMessageLongPress();
   const turn = useSharedValue(expanded ? 1 : 0);
   useEffect(() => { turn.set(withTiming(expanded ? 1 : 0, { duration: 180, easing: CHEVRON_EASE, reduceMotion: ReduceMotion.System })); }, [expanded, turn]);
   const chevronStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${turn.get() * 90}deg` }] }));
   return (
     <Pressable
       onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onToggle(); }}
+      onLongPress={messageLongPress ? () => messageLongPress() : undefined}
       hitSlop={6}
       accessibilityRole="button"
       accessibilityState={{ expanded }}
@@ -2091,23 +2118,32 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   useEffect(() => { setLocalExpanded(false); }, [globalCollapsed]);
   const isBookmarked = bookmarkedSet?.has(message._id);
 
-  const handleLongPress = () => {
+  // The bubble's menu. A block inside it (a tool row, a link, thinking) puts
+  // what of it can be copied first; the message's own actions follow.
+  const handleLongPress = (copies: BlockCopy[] = []) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const messageText = message.content || '';
+    const messageText = stripSystemTags(message.content || '').trim();
     const canFork = !message.role?.startsWith('system') && message.message_uuid && onFork;
     const canBookmark = !!conversationId;
-    const items: SheetItem[] = [
-      {
-        label: 'Copy text',
-        icon: 'copy',
-        onPress: () => {
-          void copyToClipboard(messageText);
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          showToast?.('Copied to clipboard');
-        },
+    const copyRow = ({ label, text, icon = 'copy' }: BlockCopy): SheetItem => ({
+      label,
+      icon,
+      onPress: () => {
+        void copyToClipboard(text);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        showToast?.('Copied to clipboard');
       },
+    });
+    const items: SheetItem[] = copies.map(copyRow);
+    if (messageText) {
+      items.push(copyRow({ label: 'Copy text', text: messageText }));
+      // A press on the transcript is this menu; picking out part of a turn
+      // happens on a page with the system's selection handles.
+      items.push({ label: 'Select text', icon: 'type', onPress: () => openSelectText(readableText(messageText)) });
+    }
+    items.push(
       {
-        label: 'Copy link',
+        label: 'Copy message link',
         icon: 'link',
         onPress: () => {
           void copyToClipboard(`https://codecast.sh/conversation/${conversationId}#msg-${message._id}`);
@@ -2115,8 +2151,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
           showToast?.('Link copied');
         },
       },
-      { label: 'Share message', icon: 'share', onPress: () => { void Share.share({ message: messageText }); } },
-    ];
+    );
+    if (messageText) items.push({ label: 'Share message', icon: 'share', onPress: () => { void Share.share({ message: messageText }); } });
     if (canBookmark) {
       items.push({
         label: isBookmarked ? 'Remove bookmark' : 'Bookmark',
@@ -2209,7 +2245,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     // transcript's persistTaps="handled" never sees a tap on plain text: a tap
     // with nothing to do puts the keyboard away here. Links, tool rows and
     // images inside are deeper pressables and take their own taps.
-    <Pressable onLongPress={handleLongPress} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : Keyboard.dismiss}>
+    <MessageLongPressContext.Provider value={handleLongPress}>
+    <Pressable onLongPress={() => handleLongPress()} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : Keyboard.dismiss}>
       {isUser && sender ? <RNText style={styles.userBubbleSender} numberOfLines={1}>{sender}</RNText> : null}
       <RNView
         style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
@@ -2457,6 +2494,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       )}
       </RNView>
     </Pressable>
+    </MessageLongPressContext.Provider>
   );
 }
 
@@ -2888,6 +2926,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   useAckActiveSession(typeof id === "string" ? id : null);
 
   const flatListRef = useRef<FlatList>(null);
+  const pendingStartScrollRef = useRef(false);
   const loadCooldownRef = useRef(false);
   const [initialScrollDone, setInitialScrollDone] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -2957,6 +2996,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     hasMoreAbove: hookHasMoreAbove,
     isLoadingOlder: hookIsLoadingOlder,
     loadOlder: hookLoadOlder,
+    hasMoreBelow,
+    isLoadingNewer,
+    loadNewer,
     jumpToStart: hookJumpToStart,
     jumpToEnd: hookJumpToEnd,
     jumpToTimestamp: hookJumpToTimestamp,
@@ -4151,16 +4193,22 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       // Hook loads the window at the very start of the conversation (target
       // mode); allMessages re-derives from it. Scroll to the oldest once it
       // lands — the hook's isLoadingOlder gates the spinner meanwhile.
+      // The start window replaces the tail when it lands, which can take
+      // longer than any fixed delay; the effect below scrolls once it has.
+      pendingStartScrollRef.current = true;
       hookJumpToStart();
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 400);
     } catch {
       showToast('Failed to jump to start');
     } finally {
       setTimeout(() => setJumpingToStart(false), 400);
     }
   }, [id, jumpingToStart, hasMoreAbove, hookJumpToStart, showToast]);
+
+  useEffect(() => {
+    if (!pendingStartScrollRef.current || loadingOlder) return;
+    pendingStartScrollRef.current = false;
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+  }, [loadingOlder, allMessages.length]);
 
   const handleScroll = useCallback((event: any) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
@@ -4216,7 +4264,15 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     if (distanceFromTop < 100 && userScrolled && hasMoreAbove && !loadingOlder && !loadCooldownRef.current && initialScrollDone) {
       handleLoadOlder();
     }
-  }, [hasMoreAbove, loadingOlder, handleLoadOlder, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled, reportScrollProgress]);
+
+    // After a jump the list holds a window that ends before the live tail.
+    // Scrolling toward the newest rows pages it forward; the anchored first
+    // visible row (maintainVisibleContentPosition) keeps the view still while
+    // rows land below it.
+    if (deltaY < 0 && offset < clientHeight && hasMoreBelow && !isLoadingNewer) {
+      loadNewer();
+    }
+  }, [hasMoreAbove, loadingOlder, handleLoadOlder, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled, hasMoreBelow, isLoadingNewer, loadNewer, reportScrollProgress]);
 
   if (conversation === undefined) {
     return (
@@ -4784,7 +4840,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           }}
           // The list is inverted, so its header is the foot of the transcript:
           // what a hosted conversation waits on the person for.
-          ListHeaderComponent={hostedApprovals.length > 0 || settledAnswer || cardPending || (pendingPermissions?.length ?? 0) > 0 ? (
+          ListHeaderComponent={isLoadingNewer ? (
+            <RNView style={styles.loadMoreIndicator}>
+              <ActivityIndicator size="small" color={Theme.textMuted} />
+            </RNView>
+          ) : hostedApprovals.length > 0 || settledAnswer || cardPending || (pendingPermissions?.length ?? 0) > 0 ? (
             <RNView style={{ gap: 12, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4 }}>
               {hostedApprovals.map((d, n) => <ApprovalCard key={d._id} decision={d} index={n} />)}
               {settledAnswer ? <ApprovalSettled label={settledAnswer} /> : cardPending ? <ApprovalPending /> : null}
@@ -4930,7 +4990,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
         {/* Jump arrows. Unmount when empty: an absolute box-none layer with
             zIndex still intercepts taps on some RN builds. */}
-        {(userScrolled || hasMoreAbove || (!isNearTop && allMessages.length > 0)) && (
+        {(userScrolled || hasMoreAbove || hasMoreBelow || (!isNearTop && allMessages.length > 0)) && (
         <RNView style={styles.jumpButtonsOverlay} pointerEvents="box-none">
           {scrollProgressShown && <ScrollProgressTrack fill={scrollProgressFill} />}
           {((!isNearTop && allMessages.length > 0) || hasMoreAbove) && (
@@ -4967,7 +5027,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
               </TouchableOpacity>
             </Animated.View>
           )}
-          {userScrolled && (
+          {(userScrolled || hasMoreBelow) && (
             <RNView style={styles.jumpBottomButtonWrap} pointerEvents="box-none">
               <TouchableOpacity
                 onPress={handleJumpToEnd}
