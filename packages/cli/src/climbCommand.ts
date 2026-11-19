@@ -8,6 +8,7 @@ import fs from "node:fs";
 import { spawnSync } from "./proc.js";
 import type { Command } from "commander";
 import { MetricUnread, experimentWords } from "./climb/readability.js";
+import { archiveSealed, climbHome } from "./climb/store.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { recordRun, runEnv, runWithCases, withTreeAt } from "./envCommand.js";
@@ -54,13 +55,15 @@ export function defaultIo(deps: PublishDeps): ClimbIo {
   // A refusal from the server is an error the station handles, never an exit: an exit mid-gauge loses what it ran,
   // and turns a refusal the caller reads (an env with no case set in codecast runs as before) into the climb's end.
   const post = (urlPath: string, body: Record<string, unknown>, read?: boolean) => apiPost(deps, urlPath, body, { read, exitOnError: false });
-  return climbIo(post, root, deps.detectCurrentSessionId());
+  // The flow run is the attempt: a failure is reused across its stations and run again by the next run of the flow.
+  return climbIo(post, root, deps.detectCurrentSessionId(), scrubRunValues().run_id);
 }
 
 /** The climb's runs on this machine: dev through runWithCases (an env with no set in codecast runs as before), held through `cast env run`, each filed. */
-export function climbIo(post: ClimbIo["post"], root: string, sessionId: string | null | undefined): ClimbIo {
+export function climbIo(post: ClimbIo["post"], root: string, sessionId: string | null | undefined, attempt?: string): ClimbIo {
   return {
     root,
+    ...(attempt ? { attempt } : {}),
     post,
     run: async (decl, o) => {
       if (o.split === "held") return heldRun(o.dir, decl.key, o.label, o.goal, o.task);
@@ -213,6 +216,18 @@ export function registerClimbCommand(program: Command, deps: PublishDeps): void 
         return;
       }
       console.log(o.summary ? summaryText(s) : statusText(s));
+    });
+
+  dirOpt(climb.command("where").description("Where this climb keeps its state on this machine (the run's $run_dir/climb is its handle)"))
+    .action((o) => {
+      const s = readState(o.dir);
+      console.log(`${climbHome(o.dir)}${s ? ` (base ${s.base.slice(0, 10)}, ${s.stopped ? `stopped: ${s.stopped.slice(0, 120)}` : s.candidates.find((c) => c.status === "promoted") ? "promoted" : "under way"})` : " (no climb state yet)"}`);
+    });
+
+  dirOpt(climb.command("reset").description("Set this climb's state aside (kept beside it as state.<time>.json, never deleted) so its next run starts a fresh climb"))
+    .action((o) => {
+      const to = archiveSealed(o.dir);
+      console.log(to ? `The climb's state is set aside at ${to}; the next Gauge starts a fresh climb. Its filed env attempts stay in the registry.` : `No climb state at ${climbHome(o.dir)}.`);
     });
 
   dirOpt(climb.command("outcome").description("Record how the climb's decision went"))

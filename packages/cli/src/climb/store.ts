@@ -47,3 +47,12 @@ export function writeSealed(dir: string, state: unknown): void {
   fs.writeFileSync(file + ".tmp", JSON.stringify({ seal: mac(body), body }));
   fs.renameSync(file + ".tmp", file);
 }
+
+/** Set a climb's state aside as `state.<time>.json` beside it (kept, never deleted), so the next station starts a fresh climb. Returns where it went, or null when there was none. */
+export function archiveSealed(dir: string): string | null {
+  const file = path.join(climbHome(dir), "state.json");
+  if (!fs.existsSync(file)) return null;
+  const to = path.join(climbHome(dir), `state.${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+  fs.renameSync(file, to);
+  return to;
+}

@@ -759,4 +759,40 @@ describe("the climb's dry run", () => {
     const err = await gauge(empty, `${dir}-empty`, { card: CARD, base }).catch((e) => e);
     expect(err.message).toContain("no level that ran can see one change, and one failed to run (fake/replay: the base run scored no case");
   });
+
+  // From ct-97276's next attempt: Gauge took 4 seconds and printed the earlier failure, reused from the ledger, though the env was fixed on main.
+  test("a failed base run is reused only within the attempt that made it; the next attempt runs it again", async () => {
+    const card = { ...CARD, levels: [{ env: "fake/replay", plausible_effect: 0.04 }] };
+    const broken = { ...io(), attempt: "run-1" };
+    const run = broken.run;
+    broken.run = async (decl, o) => (decl.key === "fake/replay" ? { ok: false, error: "summary.mean must be a number" } : run(decl, o));
+    await expect(gauge(broken, dir, { card, base })).rejects.toThrow("the environment failed to run");
+    // The same attempt replaying its stations reads the failure back and pays nothing more.
+    const before = runs;
+    await expect(gauge(broken, dir, { card, base })).rejects.toThrow("the environment failed to run");
+    expect(runs).toBe(before);
+    // The next run of the flow, with the env fixed, runs it again and measures the level.
+    const s = await gauge({ ...io(), attempt: "run-2" }, dir, { card, base });
+    expect(s.stopped).toBeUndefined();
+    expect(s.levels.find((l) => l.env === "fake/replay")!.kept).toBe(true);
+    // The old failure keeps its cost on the ledger, under another key.
+    expect(Object.keys(s.ledger.failed).some((k) => k.startsWith("base|fake/replay|dev|0~"))).toBe(true);
+  });
+
+  test("a climb that stopped starts fresh when the upstream base moved, keeping the old state aside", async () => {
+    const card = { ...CARD, levels: [{ env: "fake/replay", plausible_effect: 0.04 }] };
+    const broken = { ...io(), attempt: "run-1" };
+    broken.run = async () => ({ ok: false, error: "summary.mean must be a number" });
+    await gauge(broken, dir, { card, base }).catch(() => {});
+    // Main gains the env fix; the next attempt bases on the new tip.
+    fs.writeFileSync(path.join(repo, "evals/fix.txt"), "fixed\n");
+    g("add", "-A"); g("commit", "-q", "-m", "env fix");
+    const tip = g("rev-parse", "HEAD");
+    const s = await gauge({ ...io(), attempt: "run-2" }, dir, { card, base: tip });
+    expect(s.base).toBe(tip);
+    expect(s.notes.join(" ")).toContain(`the last attempt, on base ${base.slice(0, 10)}, stopped (the environment failed to run`);
+    expect(s.levels.find((l) => l.env === "fake/replay")!.kept).toBe(true);
+    const home = (await import("./store")).climbHome(dir);
+    expect(fs.readdirSync(home).filter((f) => /^state\..+\.json$/.test(f))).toHaveLength(1);
+  });
 });

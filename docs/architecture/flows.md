@@ -501,7 +501,14 @@ the climb (a reinstall, an upgrade), the base is measured again on the new
 state, the old runs keep their cost on the ledger, and no comparison mixes
 the two. A station that fails says what the climb has filed so
 far, or that it filed nothing, and a run the registry refuses to file is
-counted with the registry's reason. What stays on trust is the registry
+counted with the registry's reason. A failed run is reused only within the
+attempt (the flow run) that made it, so its stations replaying one another
+pay once; the next run of the flow runs it again, since the env may have been
+fixed since, and the old failure keeps its cost on the ledger. A climb that
+stopped, or never kept a level, starts fresh when the upstream base has moved,
+and its old state is kept beside the new one. `cast climb where --dir
+<run_dir>/climb` prints where a climb's state lives, and `cast climb reset`
+sets it aside so the next run starts fresh. What stays on trust is the registry
 itself: it records an attempt's candidate, sha and task as the filer states
 them, and agents file as the same user, so an agent that reads the seal's
 key can file a result it made up and point the cache at it. Closing that

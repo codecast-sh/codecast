@@ -28,7 +28,7 @@ import type { EnvCase, EnvDeclaration, EnvLevel, EnvResult, EnvSplit, EnvStandin
 import { CLIMB_AA_RUNS, baseMeanCases, changedCases, halve, levelCanSee, levelNoise, readClimbCard, separates, type ClimbBudget, type ClimbCard, type LevelNoise } from "@codecast/shared/contracts/climb";
 import { parseEnvsText } from "../envDeclaration.js";
 import { parseLineProfileText, resolveLineProfile } from "../lineProfile.js";
-import { StoreTampered, readSealed, writeSealed } from "./store.js";
+import { StoreTampered, archiveSealed, readSealed, writeSealed } from "./store.js";
 import type { ClimbBase } from "./base.js";
 import { MetricUnread, readability as readabilityOf, type Readability } from "./readability.js";
 import { resolveCommand, withDirs, graderPackageDirs, gradingGlobs, inadmissible, packagesPrint, pinsAScript, protectedDigest, tryGit } from "./protect.js";
@@ -38,6 +38,8 @@ export type RunOut = { ok: true; result: EnvResult; short_id?: string; unfiled?:
 export type ClimbIo = {
   root: string;
   post: (urlPath: string, body: Record<string, unknown>, read?: boolean) => Promise<any>;
+  /** This attempt at the climb: the flow run's id, so a failure is reused within the attempt that made it and run again by the next. */
+  attempt?: string;
   /** Run one env in `dir` (a detached tree at `sha`) on a split and file the attempt under the climb's task. */
   run: (decl: EnvDeclaration, opts: { dir: string; label: string; split: EnvSplit; sha: string; goal: string; task?: string }) => Promise<RunOut>;
   /** A detached tree at a sha, removed after `fn`. */
@@ -69,7 +71,8 @@ export type Cand = {
 /** A run the cache names: its attempt, and whether it was reused from before the climb. */
 type Done = { attempt: string; reused?: boolean; usd?: number };
 /** A run that failed or was refused: never run again, and its cost counted. */
-type Failed = { usd: number; why: string };
+/** A run that failed or was refused in one attempt (the flow run that made it): its cost counted, run again by any later attempt. */
+type Failed = { usd: number; why: string; attempt?: string };
 export type ClimbState = {
   base: string;
   /** Where the base came from and how far this checkout's HEAD stood from it (base.ts). */
@@ -244,8 +247,16 @@ async function runOnce(v: View, key: string, decl: EnvDeclaration, opts: { label
   const want = { env: decl.key, split: opts.split, label: opts.label, sha: opts.sha };
   const done = v.s.ledger.done[key];
   if (done) { const r = await verified(v, key, done, want); return { cases: r.cases, version: r.version, attempt: done.attempt, unscored: r.unscored }; }
+  // A failure is reused only by the attempt that made it (its stations replay one another). A later attempt runs the
+  // env again, since it may have been fixed since; the old failure keeps its cost on the ledger under another key.
+  const attempt = v.io.attempt ?? `process-${process.pid}`;
   const failed = v.s.ledger.failed?.[key];
-  if (failed) return { error: failed.why };
+  if (failed && failed.attempt === attempt) return { error: failed.why };
+  if (failed) {
+    const ledger = v.s.ledger.failed!;
+    ledger[`${key}~${Object.keys(ledger).filter((k) => k.startsWith(`${key}~`)).length + 1}`] = failed;
+    delete ledger[key];
+  }
   await stopForBudget(v, estimate(v, decl), `${opts.label} on ${decl.key} ${opts.split}`);
   let refused: string | null = null;
   const out = await v.io.tree(opts.sha, async (tree): Promise<RunOut> => {
@@ -254,7 +265,7 @@ async function runOnce(v: View, key: string, decl: EnvDeclaration, opts: { label
     return v.io.run(decl, { dir: tree, label: opts.label, split: opts.split, sha: opts.sha, goal: v.s.card.goal, task: v.s.task });
   });
   if (refused === "PACKAGES") { save(v.dir, v.s); throw new PackagesMoved(); }
-  const fail = (why: string, usd: number) => { (v.s.ledger.failed ??= {})[key] = { usd, why }; save(v.dir, v.s); return { error: why }; };
+  const fail = (why: string, usd: number) => { (v.s.ledger.failed ??= {})[key] = { usd, why, attempt }; save(v.dir, v.s); return { error: why }; };
   if (refused) return fail(`GRADER: ${refused}`, 0);
   const cost = Math.max(0, (out.ok ? out.result.cost_usd : undefined) ?? decl.cost_usd ?? 0);
   if (!out.ok) return fail(opts.split === "held" ? HELD_FAILED : out.error.replace(/\s+/g, " ").slice(0, 300), cost);
@@ -269,8 +280,17 @@ async function runOnce(v: View, key: string, decl: EnvDeclaration, opts: { label
 // ── gauge: the card held to the caps, what grades pinned, and what each level can see ──
 
 export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; base: string; base_info?: ClimbBase; task?: string; goal?: string }): Promise<ClimbState> {
-  const prior = readState(dir);
-  // A climb is pinned to the base it started on: a default branch that moved meanwhile neither resets its record nor its spend.
+  let prior = readState(dir);
+  let carried: string | null = null;
+  // A climb under way is pinned to the base it started on: a default branch that moved meanwhile neither resets its
+  // record nor its spend. One that stopped, or never kept a level (its env failed, say), starts fresh on the new base,
+  // where the fix that lets it run may be. The old state is set aside, never deleted.
+  if (prior && prior.base !== opts.base && (prior.stopped || !prior.levels.some((l) => l.kept))) {
+    const to = archiveSealed(dir);
+    carried = `the last attempt, on base ${prior.base.slice(0, 10)}, stopped (${prior.stopped ?? "no level kept"}) after $${prior.ledger.usd.toFixed(2)}; this attempt starts fresh on ${opts.base.slice(0, 10)}${to ? ` (the last attempt's state is kept at ${to})` : ""}`;
+    io.log(carried);
+    prior = null;
+  }
   if (prior && prior.base !== opts.base) io.log(`the climb stays on its base ${prior.base.slice(0, 8)} (the default branch is now ${opts.base.slice(0, 8)})`);
   if (!prior) {
     const card = opts.card as any;
@@ -289,7 +309,7 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
     const problems = preflight(read.card, decls, levels.levels as EnvStanding[]);
     if (problems.length) throw new ClimbStop(`the card's levels cannot run as chosen, and nothing was spent:\n- ${problems.join("\n- ")}`, STOP.card);
     const task = opts.task ? await io.post("/cli/work/get", { short_id: opts.task }, true).catch(() => null) : null;
-    const notes = [...read.notes];
+    const notes = [...read.notes, ...(carried ? [carried] : [])];
     // Before anything is spent: can production confirm one change of the size the card expects? When it cannot, the card says so and names what stands in.
     let readability: ClimbState["readability"];
     if (read.card.metric && read.card.production_lift) {
@@ -313,6 +333,8 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
 /** Each card level's base runs and what they show: the noise, the MDE, and whether the level can see one change. */
 async function measureLevels(v: View): Promise<void> {
   const s = v.s, dir = v.dir;
+  // Each Gauge measures afresh: a stop an earlier attempt recorded here is the old attempt's, not this one's.
+  delete s.stopped;
   for (const cl of s.card.levels) {
     const decl = declOf(v.decls, cl.env);
     const row: LevelState = { env: cl.env, level: cl.level, title: decl?.title ?? cl.env, kept: false, why: "", cost_usd: decl?.cost_usd ?? 0, held: !!decl?.splits.includes("held") && !!decl?.protects?.length, base_attempts: [], ...(cl.plausible_effect !== undefined ? { plausible_effect: cl.plausible_effect } : {}) };
