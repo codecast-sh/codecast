@@ -300,6 +300,7 @@ function plans() {
     byTeam("account_shares", "by_team"),
     byTeam("team_enrollment_tokens", "by_team"),
     byTeam("device_enrollments", "by_team"),
+    byTeam("team_read_keys", "by_team"),
     byTeam("capability_bindings", "by_team_updated"),
     byTeam("capability_events", "by_team_created"),
     byTeam("slack_channel_links", "by_team"),

@@ -64,6 +64,7 @@ import { slackTables } from "./slackSchema";
 import { callRoomTables } from "./callRoomSchema";
 import { passkeyTables } from "./passkeysSchema";
 import { accessLogTables } from "./accessLogSchema";
+import { teamReadKeyTables } from "./teamReadKeysSchema";
 import { dataDeletionTables } from "./dataDeletionsSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
 import { decisionValidator, intentSourceValidator, milestoneValidator, questionValidator, scoreValidator } from "./lib/initiativeValidators";
@@ -163,6 +164,7 @@ export default defineSchema({
   ...slackTables,
   ...passkeyTables,
   ...accessLogTables,
+  ...teamReadKeyTables,
   ...dataDeletionTables,
   ...authTables,
   users: defineTable({
@@ -5621,6 +5623,8 @@ export default defineSchema({
       v.literal("team_member_role_changed"),
       v.literal("team_member_visibility_changed"),
       v.literal("staff_daemon_command"),
+      v.literal("team_read_key_minted"),
+      v.literal("team_read_key_revoked"),
     ),
     actor_user_id: v.id("users"),
     actor_conversation_id: v.optional(v.id("conversations")),
