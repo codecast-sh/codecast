@@ -390,7 +390,7 @@ jobs:
           '
           for attempt in 1 2 3; do
             echo "::group::Injection suites attempt $attempt"
-            if bun test src/daemon.inject-clear.test.ts src/daemon.inject-enter-gate.test.ts src/daemon.inject-submit-verify.test.ts src/daemon.inject-deaf-pane.test.ts src/daemon.inject-double-paste.test.ts --timeout=240000; then
+            if bun test src/daemon.inject-clear.test.ts src/daemon.inject-enter-gate.test.ts src/daemon.inject-scrolled-composer.test.ts src/daemon.inject-submit-verify.test.ts src/daemon.inject-deaf-pane.test.ts src/daemon.inject-double-paste.test.ts --timeout=240000; then
               echo "::endgroup::"
               echo "Injection suites passed on attempt $attempt"
               exit 0
