@@ -721,6 +721,41 @@ describe("awaitTmuxComposerPayload in a short window", () => {
     expect(height).toBe(50);
   });
 
+  // Claude draws the "↑ N more" of a scrolled composer in faint text, which the
+  // composer capture strips, and its box is about half the window. A 250-line
+  // paste sat whole in a resumed pane while every retry read it as glyphless
+  // and held it as unverified for over an hour (jx7bj74, 2026-11-19).
+  test("a claude composer scrolled past its caret, with a faint rule, is read at the payload's height", async () => {
+    const lines = Array.from({ length: 250 }, (_, i) => `${i + 1}. finding number ${i + 1} from the review lens, long enough to read as a real line`);
+    const payload = lines.join("\n");
+    const rule = (glyph: string, hidden: number) =>
+      `\x1b[38;5;245m───\x1b[39m \x1b[2m${glyph} ${hidden} more\x1b[0m \x1b[38;5;245m${"─".repeat(150)}\x1b[39m`;
+    const claudeBox = (shown: string[], hiddenAbove: number) => [
+      "⏺ Earlier turn in the transcript.",
+      hiddenAbove > 0 ? rule("↑", hiddenAbove) : "─".repeat(160),
+      ...shown.map((row, i) => (i === 0 && hiddenAbove === 0 ? `❯ ${row}` : `  ${row}`)),
+      "─".repeat(160),
+      "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+    ].join("\n");
+    const calls: Args[] = [];
+    let height = 50;
+    const exec = (async (args: Args) => {
+      calls.push(args);
+      if (args[0] === "display-message") return { stdout: `220|${height}\n` };
+      if (args[0] === "resize-window") height = Number(args[args.indexOf("-y") + 1]);
+      if (args[0] === "set-option") height = 50;
+      const fits = Math.min(lines.length, Math.floor(height / 2) - 5);
+      return { stdout: args[0] === "capture-pane" ? claudeBox(lines.slice(-fits), lines.length - fits) : "" };
+    }) as any;
+    expect(await awaitTmuxComposerPayload("t:0.0", payload, {
+      allowRePaste: false, budgetMs: 2_000,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec,
+    })).toBe("matched");
+    expect(calls.some(c => c[0] === "resize-window")).toBe(true);
+    expect(height).toBe(50);
+  });
+
   test("a scrolled composer whose full view is not the payload is refused", async () => {
     const pane = shortPane(`draft ${LONG}`, TAIL, false);
     await expect(awaitTmuxComposerPayload("t:0.0", LONG, {

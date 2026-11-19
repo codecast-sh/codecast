@@ -26,6 +26,9 @@ describe("prompt suggestion ghost text is not composer input", () => {
     expect(stripTmuxFaintText("\x1b[38;2;200;2;2mtyped\x1b[0m")).toBe("typed");
     expect(stripTmuxFaintText("\x1b[48;5;2mtyped\x1b[0m")).toBe("typed");
     expect(stripTmuxFaintText("\x1b[2mghost\x1b[22m typed")).toBe(" typed");
+    // Claude's composer scroll rules carry their count in faint text.
+    expect(stripTmuxFaintText("\x1b[38;5;245m───\x1b[39m \x1b[2m↑ 228 more\x1b[0m \x1b[38;5;245m──────\x1b[39m")).toBe("─── ↑ 228 more ──────");
+    expect(stripTmuxFaintText("\x1b[2m↓ 3 more\x1b[0m\n─── \x1b[2m↓ 3 more\x1b[0m ───")).toBe("\n─── ↓ 3 more ───");
   });
 
   test("a faint suggestion does not read as the payload already at the prompt", () => {
