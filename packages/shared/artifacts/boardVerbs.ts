@@ -5,8 +5,11 @@
 import type { ArtifactElement, ArtifactOp, Json } from "./core";
 import type { ArtifactVerb, ArtifactView, VerbResult } from "./spec";
 import { newElementKey } from "./spec";
+import { parsePublishedPageUrl } from "../entities";
 import {
   BOARD_COLORS,
+  BOARD_DEFAULT_SIZE,
+  elementBounds,
   alignBoxes,
   center,
   distributeBoxes,
@@ -20,6 +23,7 @@ import {
 } from "./boardGeometry";
 import {
   bottomZ,
+  clearOffset,
   frameAround,
   freeSpot,
   gridPositions,
@@ -346,10 +350,11 @@ const move: ArtifactVerb = {
 
 const frame: ArtifactVerb = {
   summary: "Wrap elements in a titled frame (a section)",
-  usage: "frame <doc> \"<title>\" <keys...> [--pad 40] [--color blue]",
+  usage: "frame <doc> \"<title>\" <keys...> [--pad 40] [--color blue]   (or --title \"<title>\" <keys...>)",
   run(view, args) {
     const { pos, flags } = parseVerbArgs(args);
-    const [title, ...keys] = pos;
+    // The title is the first word, or --title (then every word is a key).
+    const [title, ...keys] = str(flags.title) ? [str(flags.title)!, ...pos] : pos;
     if (!title) throw new Error("give the frame a title");
     const els = requireKeys(view, keys);
     const op = frameAround(els.map(elementBox), title, bottomZ(view), count(flags.pad, "--pad", 40))!;
@@ -407,6 +412,50 @@ const card: ArtifactVerb = {
   },
 };
 
+/** A published page's slug from its share URL, serving URL or the bare slug; null for anything else. */
+export function pageSlugOf(input: string): string | null {
+  const s = input.trim();
+  if (/^[A-Za-z0-9]{8,24}$/.test(s)) return s;
+  return parsePublishedPageUrl(/^[a-z]+:\/\//i.test(s) || s.startsWith("/") ? s : `https://${s}`)?.slug ?? null;
+}
+
+/** Where a new element of `size` goes beside `key`: to its right, nudged off anything it would cover. */
+export function besideSpot(view: Pick<ArtifactView, "elements">, key: ArtifactElement, size: { w: number; h: number }, gap = 40): Pt {
+  const b = elementBox(key);
+  const at = { x: Math.round(b.x + b.w + gap), y: Math.round(b.y) };
+  const taken = view.elements.filter((e) => e.key !== key.key && e.kind !== "connector" && e.kind !== "pen" && e.kind !== "frame" && e.kind !== "session").map(elementBounds);
+  const off = clearOffset({ ...at, ...size }, taken);
+  return { x: at.x + off.x, y: at.y + off.y };
+}
+
+const page: ArtifactVerb = {
+  summary: "Place a published page (`cast publish`) live on the board, or turn an element into one",
+  usage: "page <doc> <url|slug> [--at x,y | --near <key>] [--w 640 --h 480] [--caption \"...\"] [--replace <key>]",
+  run(view, args) {
+    const { pos, flags } = parseVerbArgs(args);
+    const slug = pageSlugOf(pos[0] ?? "");
+    if (!slug) throw new Error("name a published page: its https://codecast.sh/a/<slug> address or the slug");
+    const d = BOARD_DEFAULT_SIZE.page;
+    const size = { w: count(flags.w, "--w", d.w), h: count(flags.h, "--h", d.h) };
+    const caption = str(flags.caption);
+    const fields = { kind: "page", slug, ...(caption ? { caption } : {}) };
+    const replace = str(flags.replace);
+    if (replace) {
+      const [el] = requireKeys(view, [replace]);
+      const b = elementBox(el);
+      // Same key: arrows into the element stay attached to the page.
+      const box = { x: Math.round(b.x), y: Math.round(b.y), ...size };
+      const op: ArtifactOp = { k: el.key, put: { ...fields, ...box, z: typeof el.z === "number" ? el.z : 0, ...(el.group ? { group: el.group } : {}) } as any };
+      return done([op], [el.key], `${el.key} is now page ${slug}`, view, [box]);
+    }
+    const near = str(flags.near);
+    const at = point(flags.at, "--at") ?? (near ? besideSpot(view, requireKeys(view, [near])[0], size) : freeSpot(view));
+    const k = newElementKey("el");
+    const op: ArtifactOp = { k, put: { ...fields, x: at.x, y: at.y, ...size, z: nextZ(view) } as any };
+    return done([op], [k], `placed page ${slug}`, view, boxesOf([op]));
+  },
+};
+
 const order: ArtifactVerb = {
   summary: "Bring elements to the front or send them to the back",
   usage: "order <doc> front|back <keys...>",
@@ -422,5 +471,5 @@ const order: ArtifactVerb = {
 };
 
 export const BOARD_VERBS: Record<string, ArtifactVerb> = {
-  add, place, template, matrix, edit, clear, timeline, connect, arrange, align, distribute, move, frame, themes, group, card, order,
+  add, place, template, matrix, edit, clear, timeline, connect, arrange, align, distribute, move, frame, themes, group, card, page, order,
 };

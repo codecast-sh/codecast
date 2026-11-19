@@ -83,7 +83,8 @@ export const elementsSince = query({
     let caller: Caller;
     try {
       caller = await resolveCaller(ctx, args);
-      doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+      // An archived artifact still opens, read only (every write refuses it).
+      doc = await requireLiveDoc(ctx, caller.userId, args.doc_id, { archived: "allow" });
     } catch {
       return null;
     }
@@ -104,7 +105,10 @@ export const elementsSince = query({
       // Who may edit, and whether the caller may.
       edit: head?.edit ?? "team",
       editors: (head?.editors ?? []).map(String),
-      can_edit: mayEditLive(doc, head, caller.userId),
+      can_edit: mayEditLive(doc, head, caller.userId) && !doc.archived_at,
+      ...(doc.archived_at ? { archived: true } : {}),
+      // Its owner, so a reader knows whether access is theirs to change.
+      owner: String(doc.user_id) === String(caller.userId),
       // How many element rows a complete copy of the doc holds; null when unknown.
       total: tracked(head) ? head!.rows : null,
       rev_sum: tracked(head) ? head!.rev_sum : null,
@@ -213,6 +217,46 @@ export const countLiveRows = internalMutation({
   },
 });
 
+/** Rows purgeDoc deletes in one transaction before it schedules the rest. */
+const PURGE_ROWS = 500;
+
+/**
+ * Delete what a deleted board, sheet or dashboard kept outside its docs row:
+ * elements (comments included), the op log, versions and their snapshots, the
+ * search row, presence and the head. Scheduled by docs.remove; runs in pages
+ * and reschedules itself until nothing is left. A doc that still exists is
+ * never touched.
+ */
+export const purgeDoc = internalMutation({
+  args: { doc_id: v.id("docs") },
+  handler: async (ctx, args) => {
+    if (await ctx.db.get(args.doc_id)) return { purged: 0, done: true };
+    let budget = PURGE_ROWS;
+    const byDoc = (q: any) => q.eq("doc_id", args.doc_id);
+    const tables: Array<[string, string]> = [
+      ["live_elements", "by_doc_rev"],
+      ["live_batches", "by_doc_rev"],
+      ["live_versions", "by_doc_rev"],
+      ["live_search", "by_doc"],
+      ["live_presence", "by_doc_updated"],
+      ["live_heads", "by_doc"],
+    ];
+    for (const [table, index] of tables) {
+      if (budget <= 0) break;
+      const rows = await (ctx.db.query(table as any) as any).withIndex(index, byDoc).take(budget);
+      for (const r of rows) {
+        if (table === "live_versions" && r.snapshot) await ctx.storage.delete(r.snapshot).catch(() => {});
+        await ctx.db.delete(r._id);
+      }
+      budget -= rows.length;
+    }
+    const purged = PURGE_ROWS - budget;
+    const done = budget > 0;
+    if (!done) await ctx.scheduler.runAfter(0, internal.liveArtifacts.purgeDoc, { doc_id: args.doc_id });
+    return { purged, done };
+  },
+});
+
 export const draftStart = mutation({
   args: { doc_id: v.id("docs"), label: v.optional(v.string()), ...vCaller },
   handler: async (ctx, args) => {
@@ -311,14 +355,15 @@ export const checkpoint = mutation({
  * owner sets it.
  */
 export const setEditAccess = mutation({
-  args: { doc_id: v.id("docs"), edit: v.union(v.literal("team"), v.literal("owners")), editors: v.optional(v.array(v.id("users"))) },
+  args: { doc_id: v.id("docs"), edit: v.union(v.literal("team"), v.literal("owners")), editors: v.optional(v.array(v.id("users"))), ...vCaller },
   handler: async (ctx, args) => {
-    const caller = await resolveCaller(ctx, {});
+    const caller = await resolveCaller(ctx, args);
     const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
     // Its owner sets it, or an admin of its team (so a board is never locked for good when its owner leaves).
     if (String(doc.user_id) !== String(caller.userId) && !(await isTeamAdminOf(ctx, doc, caller.userId))) {
       throw new ConvexError("Only the artifact's owner or a team admin can change who edits it");
     }
+    if (!String(doc.workspace ?? "").startsWith("team:")) throw new ConvexError("Only you can open a personal artifact, so only you edit it; who edits is a choice for a team artifact");
     const editors: Id<"users">[] = [];
     for (const id of [...new Set((args.editors ?? []).map(String))].slice(0, 50)) {
       const uid = id as Id<"users">;
@@ -354,12 +399,12 @@ export const setEditAccess = mutation({
  * for a personal artifact.
  */
 export const editorCandidates = query({
-  args: { doc_id: v.id("docs") },
+  args: { doc_id: v.id("docs"), ...vCaller },
   handler: async (ctx, args) => {
     let caller: Caller;
     let doc: Doc<"docs">;
     try {
-      caller = await resolveCaller(ctx, {});
+      caller = await resolveCaller(ctx, args);
       doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
     } catch {
       return [];

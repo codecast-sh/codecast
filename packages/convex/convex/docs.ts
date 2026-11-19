@@ -1,6 +1,7 @@
 import { FOREIGN_TEXT_CAPS, fenceForeignText, inlineForeignText } from "@codecast/shared/contracts";
-import { requireArtifactEditor } from "./lib/liveArtifactAccess";
-import { isArtifactDocType } from "@codecast/shared/artifacts";
+import { refuseArtifactBodyWrite, requireArtifactEditor } from "./lib/liveArtifactAccess";
+import { ARTIFACT_SPECS, isArtifactDocType } from "@codecast/shared/artifacts";
+import { makeFunctionReference } from "convex/server";
 import { ensureLiveSearch } from "./liveSearch";
 import { FOREIGN_PLAN_CAPS, foreignProse, referenceGuidance, foreignTaskSource } from "@codecast/shared/tasks";
 import type { RegisteredQuery } from "convex/server";
@@ -631,6 +632,7 @@ export const update = mutation({
     const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
     await requireArtifactEditor(ctx, doc, auth.userId);
     await refuseRoleCharterWrite(ctx, auth.userId, doc, args.session_id);
+    if (args.content !== undefined) refuseArtifactBodyWrite(doc);
 
     const text = docTextUpdates(doc, { title: args.title || undefined, content: args.content });
     // A forced body equal to the stored markdown still rewrites the editor's
@@ -760,6 +762,7 @@ export const patch = mutation({
     const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
     await requireArtifactEditor(ctx, doc, auth.userId);
     await refuseRoleCharterWrite(ctx, auth.userId, doc, args.session_id);
+    refuseArtifactBodyWrite(doc);
 
     // Computed here from the stored text, so it needs no base, but only once
     // that text holds everything the editor has: before searching it, so a
@@ -2428,6 +2431,8 @@ export const unshare = mutation({
   },
 });
 
+const purgeLiveDocRef = makeFunctionReference<"mutation", { doc_id: Id<"docs"> }>("liveArtifacts:purgeDoc");
+
 export const remove = mutation({
   args: {
     api_token: v.string(),
@@ -2438,7 +2443,15 @@ export const remove = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== auth.userId) throw new Error("Doc not found");
+    if (!doc || !(await canAccessDoc(ctx, auth.userId, doc))) throw new Error("Doc not found");
+    if (doc.user_id !== auth.userId) {
+      throw new Error(isArtifactDocType(doc.doc_type)
+        ? `Only this ${doc.doc_type}'s owner can delete it for good; \`cast ${ARTIFACT_SPECS[doc.doc_type].cli} archive ${doc._id}\` takes it out of everyone's list (undo with unarchive)`
+        : "Only the document's owner can delete it");
+    }
+    // A board, sheet or dashboard keeps its elements, history and search row
+    // in the live_* tables: they go too, in pages, once the doc is gone.
+    if (isArtifactDocType(doc.doc_type)) await ctx.scheduler.runAfter(0, purgeLiveDocRef, { doc_id: args.id });
 
     const docId = args.id as string;
     const snapshots = await ctx.db

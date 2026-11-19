@@ -4537,6 +4537,19 @@ cliRoute("/cli/calls/frame-share", async (ctx, body) => {
 cliRoute("/cli/calls/hold", async (ctx, body) => {
   return await ctx.runMutation(api.transcripts.cliHoldCall, body);
 });
+// `cast call pin|unpin|pins|board`: the stage of the huddle a session is fed (callStage.ts).
+cliRoute("/cli/calls/pin", async (ctx, body) => {
+  return await ctx.runMutation(api.callStage.cliPin, body);
+});
+cliRoute("/cli/calls/unpin", async (ctx, body) => {
+  return await ctx.runMutation(api.callStage.cliUnpin, body);
+});
+cliRoute("/cli/calls/pins", async (ctx, body) => {
+  return await ctx.runMutation(api.callStage.cliPins, body);
+});
+cliRoute("/cli/calls/board", async (ctx, body) => {
+  return await ctx.runMutation(api.callStage.cliBoard, body);
+});
 // `cast call join <link>` / `cast call leave`: a Recall bot to a meeting on
 // another platform (meetingBots.ts).
 cliRoute("/cli/calls/bots/send", async (ctx, body) => {
@@ -4825,6 +4838,12 @@ cliRoute("/cli/live/checkpoint", async (ctx, body) => await ctx.runMutation(api.
 cliRoute("/cli/live/state-at", async (ctx, body) => await ctx.runAction(api.liveArtifacts.stateAt, body));
 cliRoute("/cli/live/restore", async (ctx, body) => await ctx.runAction(api.liveArtifacts.restore, body));
 cliRoute("/cli/live/remote", async (ctx, body) => await ctx.runAction(api.liveArtifacts.runRemote, body));
+// Who may edit a team artifact (`cast <cli> access`): read it with the people who could be named, or set it.
+cliRoute("/cli/live/access", async (ctx, body) => {
+  const { op, ...rest } = body;
+  if (op === "set") return await ctx.runMutation(api.liveArtifacts.setEditAccess, rest);
+  return await ctx.runQuery(api.liveArtifacts.editorCandidates, { doc_id: rest.doc_id, api_token: rest.api_token, session_id: rest.session_id });
+});
 cliRoute("/cli/docs/comment", async (ctx, body) => {
   return await ctx.runMutation(api.docs.addComment, body);
 });

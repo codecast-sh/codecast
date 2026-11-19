@@ -13,6 +13,7 @@ import { randomUUID } from "crypto";
 import {
   artifactView,
   chunkOps,
+  fromElement,
   opsProblem,
   specForCli,
   ARTIFACT_SPECS,
@@ -22,6 +23,7 @@ import {
   type ArtifactSpec,
 } from "@codecast/shared/artifacts";
 import { apiPost, type PublishDeps } from "./castApi.js";
+import { renameDoc, setDocArchived, setDocProject, shareDoc, unshareDoc, type DocPost } from "./docActions.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
 
@@ -96,7 +98,39 @@ export async function readArtifact(deps: PublishDeps, docId: string, layer: "mer
   const elements: ArtifactElement[] = [...pick.values()]
     .filter((r) => !r.deleted)
     .map((r) => ({ ...(r.fields ?? {}), key: r.key, kind: r.kind, rev: r.rev, by: r.by, at: r.at }));
-  return { title: meta.title as string, doc_type: meta.doc_type as string, head: meta.head as number, draft: meta.draft, elements };
+  return {
+    title: meta.title as string, doc_type: meta.doc_type as string, head: meta.head as number, draft: meta.draft, elements,
+    archived: !!meta.archived, can_edit: meta.can_edit !== false, owner: !!meta.owner,
+    edit: (meta.edit ?? "team") as "team" | "owners", editors: (meta.editors ?? []) as string[],
+  };
+}
+
+/** Lines `read` ends with when the artifact is not open for this session to edit, and what to do about it. */
+export function readNotes(cli: string, noun: string, id: string, a: { archived?: boolean; can_edit?: boolean; draft?: { by_name?: string } | null }): string[] {
+  const out: string[] = [];
+  if (a.archived) out.push(`archived: read only. \`cast ${cli} unarchive ${id}\` brings it back.`);
+  else if (a.can_edit === false) out.push(`view only: its owner limited who edits this ${noun}. You can still comment (\`cast ${cli} comment\`).`);
+  if (a.draft) out.push(`a draft by ${a.draft.by_name ?? "someone"} is open; this shows it laid over the ${noun} (--main for the saved state). Write into it with --draft; \`cast ${cli} draft ${id} save\` publishes it.`);
+  return out;
+}
+
+/**
+ * Element keys for `rm`: each an element key, or a reference the product reads
+ * (a sheet's A1 or Tab!A1). Throws naming every one that matches nothing.
+ */
+export function resolveRmKeys(spec: ArtifactSpec, view: ReturnType<typeof artifactView>, refs: string[]): string[] {
+  const keys: string[] = [];
+  const missing: string[] = [];
+  for (const ref of refs) {
+    const key = view.get(ref) ? ref : spec.anchorFor?.(view, ref);
+    if (key && view.get(key)) keys.push(key);
+    else missing.push(ref);
+  }
+  if (missing.length) {
+    const hint = spec.type === "sheet" ? "; to empty cells use `cast sheet clear <doc> <range>`" : "";
+    throw new Error(`no element ${missing.join(", ")} in this ${spec.label.toLowerCase()} (\`cast ${spec.cli} read <doc> --json\` lists every key${hint})`);
+  }
+  return [...new Set(keys)];
 }
 
 async function readComments(deps: PublishDeps, docId: string) {
@@ -170,6 +204,20 @@ function guard<T extends any[]>(fn: (...args: T) => Promise<void>) {
   };
 }
 
+/** The whole life of an artifact in a few lines, the same for every product: the top of `cast <cli> --help`. */
+export function lifecycleGuide(spec: ArtifactSpec): string[] {
+  const noun = spec.label.toLowerCase();
+  const c = (verb: string) => `\`cast ${spec.cli} ${verb}\``;
+  return [
+    `A ${noun} from start to end (<doc> is its id or /docs/<id> URL):`,
+    `  Make: ${c('create "<title>"')} (--personal, --team, --project), or ${c("copy <doc>")}. Find: ${c("ls")}. Read: ${c("read <doc>")} (--json gives every element with its key).`,
+    `  Change elements with the verbs below, or ${c("apply <doc>")} with JSON ops on stdin: {"k":key,"put":{"kind":..,..fields}} writes an element whole, {"k":key,"set":{..}} merges fields (null removes one), {"k":key,"del":true} deletes. ${c("rm <doc> <keys...>")} deletes elements.`,
+    `  Edits for review: ${c("draft <doc> start")}, --draft on every write, then ${c("draft <doc> save")} (or discard).`,
+    `  The ${noun} itself: ${c("rename <doc> <title>")}; ${c("share <doc>")} turns on a public link, ${c("unshare <doc>")} ends it; ${c("access <doc> team|owners [names]")}; ${c("project <doc> <ref|none>")}; ${c("archive <doc>")} deletes it (${c("unarchive <doc>")} undoes that).`,
+    `  History: ${c("history <doc>")}, ${c("checkpoint <doc> [label]")}, ${c("restore <doc> <rev>")}. Comments: ${c("comment <doc> <key> <text>")}, ${c("comments <doc>")}.`,
+  ];
+}
+
 function registerGroup(program: Command, deps: LiveDeps, cli: string) {
   const spec = specForCli(cli);
   if (!spec) return;
@@ -186,34 +234,41 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
   const group = program
     .command(cli)
     .description(commandGroup(cli).description)
-    .addHelpText("after", `\nWriting a ${noun} well:\n${spec.agentGuide.split("\n").map((l) => `  ${l}`).join("\n")}\n`);
+    .addHelpText("after", `\n${lifecycleGuide(spec).map((l) => `  ${l}`).join("\n")}\n\nWriting a ${noun} well:\n${spec.agentGuide.split("\n").map((l) => `  ${l}`).join("\n")}\n`);
 
-  group
-    .command("create")
-    .description(`Create a ${noun}`)
-    .argument("<title>", "Title")
+  type Placement = { project?: string; personal?: boolean; team?: string; json?: boolean };
+  // A new artifact holding `ops` (the product's seed, or a copy's elements), placed by the flags.
+  const createWith = async (title: string, options: Placement, ops: ArtifactOp[]) => {
+    if (options.personal && options.team) throw new Error("Pass --personal or --team, not both");
+    const sid = deps.detectCurrentSessionId();
+    const body: Record<string, any> = { title, content: "", doc_type: spec.type, project_path: process.cwd(), ...(sid ? { conversation_id: sid } : {}) };
+    // Without either flag the workspace follows the session's team, then the directory's mapping.
+    if (options.personal || options.team) {
+      const { loadWorkspaceRoster, resolveWorkspaceForWrite } = await import("./resolveWorkspace.js");
+      const roster = await loadWorkspaceRoster(async () => await apiPost(deps, "/cli/teams", {}, { read: true }));
+      const ws = resolveWorkspaceForWrite(roster, options.personal ? "personal" : options.team);
+      Object.assign(body, ws.kind === "team" ? { workspace: "team", team_id: ws.teamId } : { workspace: "personal" });
+    }
+    if (options.project && deps.resolveProjectId) body.project_id = await deps.resolveProjectId(options.project);
+    const result = await apiPost(deps, "/cli/docs/create", body);
+    const id = String(result.id || result._id);
+    if (ops.length) await writeOps(deps, spec, id, title, ops, {});
+    if (options.json) console.log(JSON.stringify({ id, url: `${webOrigin()}/docs/${id}` }));
+    else console.log(`${fmt.success("ok")} Created ${noun} ${id}: ${title}\n  ${webOrigin()}/docs/${id}`);
+  };
+  const placementOptions = (c: Command) => c
     .option("--project <ref>", "Project id, short id or title")
     .option("--personal", "Only you can see it")
     .option("--team <team>", "The team that can see it (name or id)")
-    .option("--json", "Machine-readable output")
-    .action(guard(async (title: string, options: { project?: string; personal?: boolean; team?: string; json?: boolean }) => {
-      if (options.personal && options.team) throw new Error("Pass --personal or --team, not both");
-      const sid = deps.detectCurrentSessionId();
-      const body: Record<string, any> = { title, content: "", doc_type: spec.type, project_path: process.cwd(), ...(sid ? { conversation_id: sid } : {}) };
-      // Without either flag the workspace follows the session's team, then the directory's mapping.
-      if (options.personal || options.team) {
-        const { loadWorkspaceRoster, resolveWorkspaceForWrite } = await import("./resolveWorkspace.js");
-        const roster = await loadWorkspaceRoster(async () => await apiPost(deps, "/cli/teams", {}, { read: true }));
-        const ws = resolveWorkspaceForWrite(roster, options.personal ? "personal" : options.team);
-        Object.assign(body, ws.kind === "team" ? { workspace: "team", team_id: ws.teamId } : { workspace: "personal" });
-      }
-      if (options.project && deps.resolveProjectId) body.project_id = await deps.resolveProjectId(options.project);
-      const result = await apiPost(deps, "/cli/docs/create", body);
-      const id = String(result.id || result._id);
-      const seed = spec.seed?.() ?? [];
-      if (seed.length) await writeOps(deps, spec, id, title, seed, {});
-      if (options.json) console.log(JSON.stringify({ id, url: `${webOrigin()}/docs/${id}` }));
-      else console.log(`${fmt.success("ok")} Created ${noun} ${id}: ${title}\n  ${webOrigin()}/docs/${id}`);
+    .option("--json", "Machine-readable output");
+  const post: DocPost = (path, body) => apiPost(deps, path, body);
+
+  placementOptions(group
+    .command("create")
+    .description(`Create a ${noun}`)
+    .argument("<title>", "Title"))
+    .action(guard(async (title: string, options: Placement) => {
+      await createWith(title, options, spec.seed?.() ?? []);
     }));
 
   group
@@ -249,7 +304,7 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
         elements = elements.filter((e) => keys.has(e.key));
       }
       if (options.json) {
-        console.log(JSON.stringify({ id, title: a.title, type: a.doc_type, rev: a.head, draft: a.draft ?? null, elements }, null, 2));
+        console.log(JSON.stringify({ id, title: a.title, type: a.doc_type, rev: a.head, draft: a.draft ?? null, archived: a.archived, can_edit: a.can_edit, elements }, null, 2));
         return;
       }
       console.log(spec.describe(artifactView(spec.type, a.title, elements)));
@@ -260,7 +315,8 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
         const where = openRoots.slice(0, 6).map((r: any) => (places.get(r.key) === null ? "deleted" : placeLabel(places.get(r.key)) ?? "unpinned"));
         console.log(`\ncomments: ${openRoots.length} open (${where.join(", ")}${openRoots.length > 6 ? ", …" : ""}); \`cast ${cli} comments ${id}\``);
       }
-      if (a.draft) console.log(fmt.muted(`\n(a draft by ${a.draft.by_name} is open; this shows it laid over the ${noun}. --main for the saved state)`));
+      const notes = readNotes(cli, noun, id, a);
+      if (notes.length) console.log(fmt.muted(`\n${notes.join("\n")}`));
     }));
 
   group
@@ -281,13 +337,15 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
 
   group
     .command("rm")
-    .description("Delete elements by key")
+    .description(`Delete elements by key (the ${noun} itself: archive)`)
     .argument("<doc>", "Id or /docs/<id> URL")
-    .argument("<keys...>", "Element keys")
+    .argument("<keys...>", spec.anchorFor ? "Element keys, or cell references like Tab!A1" : "Element keys")
     .option("--draft", "Delete in the draft")
-    .action(guard(async (ref: string, keys: string[], options: { draft?: boolean }) => {
+    .action(guard(async (ref: string, refs: string[], options: { draft?: boolean }) => {
       const id = parseDocRef(ref);
-      const r = await writeOps(deps, spec, id, "", keys.map((k) => ({ k, del: true as const })), { draft: options.draft });
+      const a = await readOwn(id, options.draft ? "merged" : "main");
+      const keys = resolveRmKeys(spec, artifactView(spec.type, a.title, a.elements), refs);
+      const r = await writeOps(deps, spec, id, a.title, keys.map((k) => ({ k, del: true as const })), { draft: options.draft, elements: a.elements });
       printWrite(spec, id, r);
     }));
 
@@ -317,7 +375,10 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
       if (!["start", "save", "discard"].includes(op)) throw new Error("draft takes start, save or discard");
       const id = parseDocRef(ref);
       const r = await apiPost(deps, "/cli/live/draft", { op, doc_id: id, ...(op === "start" && options.label ? { label: options.label } : {}), ...session(deps) });
-      console.log(`${fmt.success("ok")} draft ${op}${r?.saved !== undefined ? ` (${r.saved} elements)` : r?.discarded !== undefined ? ` (${r.discarded} elements)` : ""}`);
+      const n = r?.saved ?? r?.discarded;
+      console.log(`${fmt.success("ok")} draft ${op}${n !== undefined ? ` (${n} elements)` : ""}`);
+      if (op === "start") console.log(`Write into it by adding --draft to apply, rm and the ${cli} verbs; a write without it changes the saved ${noun} at once. \`cast ${cli} draft ${id} save\` publishes it.`);
+      else if (n === 0) console.log(fmt.muted(`The draft held nothing: only writes made with --draft go into it.`));
     }));
 
   group
@@ -419,6 +480,129 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
         console.log(`${root.key}${where}${root.resolved ? " (resolved)" : ""}  ${root.author_name ?? ""}: ${root.text}`);
         for (const r of rows.filter((c: any) => c.parent === root.key) as any[]) console.log(`  ${r.key}  ${r.author_name ?? ""}: ${r.text}`);
       }
+    }));
+
+  // ── The artifact itself: the same calls `cast doc` makes (docActions.ts). ──
+
+  group
+    .command("rename")
+    .description(`Rename the ${noun}`)
+    .argument("<doc>", "Id or /docs/<id> URL")
+    .argument("<title...>", "New title")
+    .action(guard(async (ref: string, words: string[]) => {
+      const id = parseDocRef(ref);
+      await readOwn(id);
+      await renameDoc(post, id, words.join(" "), deps.detectCurrentSessionId());
+      console.log(`${fmt.success("ok")} renamed ${id}: ${words.join(" ").trim()}`);
+    }));
+
+  group
+    .command("share")
+    .description(`Turn on a public link anyone can view without signing in (--off ends it)`)
+    .argument("<doc>", "Id or /docs/<id> URL")
+    .option("--off", "Turn the public link off (same as unshare)")
+    .action(guard(async (ref: string, options: { off?: boolean }) => {
+      const id = parseDocRef(ref);
+      await readOwn(id);
+      if (options.off) {
+        await unshareDoc(post, id);
+        console.log(`${fmt.success("ok")} public link off`);
+        return;
+      }
+      console.log(`${fmt.success("ok")} ${await shareDoc(post, id)}`);
+    }));
+
+  group
+    .command("unshare")
+    .description("Turn the public link off; the old link stops working")
+    .argument("<doc>", "Id or /docs/<id> URL")
+    .action(guard(async (ref: string) => {
+      const id = parseDocRef(ref);
+      await readOwn(id);
+      await unshareDoc(post, id);
+      console.log(`${fmt.success("ok")} public link off`);
+    }));
+
+  group
+    .command("access")
+    .description(`Who may edit a team ${noun}: the whole team, or only you and the people named (the rest view and comment)`)
+    .argument("<doc>", "Id or /docs/<id> URL")
+    .argument("[who...]", "team | owners [names...]; nothing prints who edits now")
+    .action(guard(async (ref: string, who: string[]) => {
+      const id = parseDocRef(ref);
+      const a = await readOwn(id);
+      const people = ((await apiPost(deps, "/cli/live/access", { doc_id: id, ...session(deps) }, { read: true })) ?? []) as Array<{ _id: string; name: string }>;
+      const nameOf = (uid: string) => people.find((p) => p._id === uid)?.name ?? uid;
+      if (who.length === 0) {
+        console.log(a.edit === "owners" ? `owners: the owner${a.editors.length ? ` and ${a.editors.map(nameOf).join(", ")}` : " only"}` : "team: everyone who can open it edits");
+        if (people.length) console.log(fmt.muted(`can be named: ${people.map((p) => p.name).join(", ")}`));
+        return;
+      }
+      const [mode, ...names] = who;
+      if (mode !== "team" && mode !== "owners") throw new Error("access takes team, or owners followed by the people who may edit");
+      const editors = names.map((n) => {
+        const matches = people.filter((p) => p.name.toLowerCase() === n.toLowerCase() || p._id === n);
+        const loose = matches.length ? matches : people.filter((p) => p.name.toLowerCase().includes(n.toLowerCase()));
+        if (loose.length !== 1) throw new Error(`${loose.length ? `"${n}" matches ${loose.map((p) => p.name).join(", ")}` : `no one named "${n}" on the ${noun}'s team`}; name one of: ${people.map((p) => p.name).join(", ") || "(only the owner can name editors)"}`);
+        return loose[0]._id;
+      });
+      const r = await apiPost(deps, "/cli/live/access", { op: "set", doc_id: id, edit: mode, editors, ...session(deps) });
+      console.log(`${fmt.success("ok")} ${r.edit === "owners" ? `owners edit: the owner${r.editors.length ? ` and ${r.editors.map(nameOf).join(", ")}` : " only"}` : "the whole team edits"}`);
+    }));
+
+  group
+    .command("project")
+    .description(`File the ${noun} under a project in its own workspace (none takes it out)`)
+    .argument("<doc>", "Id or /docs/<id> URL")
+    .argument("<project>", "Project id, short id or title, or none")
+    .action(guard(async (ref: string, project: string) => {
+      const id = parseDocRef(ref);
+      await readOwn(id);
+      const clear = project === "none";
+      const projectId = clear ? "" : deps.resolveProjectId ? await deps.resolveProjectId(project) : project;
+      await setDocProject((path, body) => apiPost(deps, path, body, {
+        describeError: (e) => /another workspace/.test(e)
+          ? `that project is in another workspace; a ${noun} files only under a project in its own (to move it, \`cast ${cli} copy ${id} --team <team> --project <ref>\`, then archive this one)`
+          : e,
+      }), id, projectId);
+      console.log(`${fmt.success("ok")} ${clear ? "out of its project" : `filed under ${project}`}`);
+    }));
+
+  placementOptions(group
+    .command("copy")
+    .description(`Copy the saved ${noun} into a new one (not its draft, comments or history)`)
+    .argument("<doc>", "Id or /docs/<id> URL")
+    .argument("[title...]", "Title of the copy (default: \"<title> (copy)\")"))
+    .action(guard(async (ref: string, words: string[], options: Placement) => {
+      const id = parseDocRef(ref);
+      const a = await readOwn(id, "main");
+      const ops: ArtifactOp[] = a.elements.map((e) => {
+        const { kind, fields } = fromElement(e as any);
+        return { k: e.key, put: { kind, ...fields } } as ArtifactOp;
+      });
+      await createWith(words.join(" ").trim() || `${a.title || "Untitled"} (copy)`, options, ops);
+    }));
+
+  group
+    .command("archive")
+    .description(`Delete the ${noun}: out of every list, read only, history kept (unarchive undoes; \`cast doc delete --yes\` erases for good)`)
+    .argument("<doc>", "Id or /docs/<id> URL")
+    .action(guard(async (ref: string) => {
+      const id = parseDocRef(ref);
+      await readOwn(id);
+      await setDocArchived(post, id, true);
+      console.log(`${fmt.success("ok")} archived ${id}; \`cast ${cli} unarchive ${id}\` brings it back`);
+    }));
+
+  group
+    .command("unarchive")
+    .description(`Bring an archived ${noun} back, as it was`)
+    .argument("<doc>", "Id or /docs/<id> URL")
+    .action(guard(async (ref: string) => {
+      const id = parseDocRef(ref);
+      await readOwn(id);
+      await setDocArchived(post, id, false);
+      console.log(`${fmt.success("ok")} ${id} is back`);
     }));
 
   for (const [name, verb] of Object.entries(spec.verbs ?? {})) {

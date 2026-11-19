@@ -6,7 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { verifyApiToken } from "../apiTokens";
 import { requireAccessibleDoc, resolveSessionConversation } from "./access";
-import { isArtifactDocType, presenceColor, PRESENCE_TTL_MS } from "@codecast/shared/artifacts";
+import { ARTIFACT_SPECS, isArtifactDocType, type ArtifactType, presenceColor, PRESENCE_TTL_MS } from "@codecast/shared/artifacts";
 
 export type Caller = {
   userId: Id<"users">;
@@ -53,11 +53,24 @@ export async function resolveCaller(ctx: any, args: { api_token?: string; sessio
   return { userId, actor: `u:${userId}`, name: userName(user), kind: "person", image: user?.image || user?.github_avatar_url || undefined };
 }
 
-export async function requireLiveDoc(ctx: any, userId: Id<"users">, docId: Id<"docs">): Promise<Doc<"docs">> {
+export async function requireLiveDoc(ctx: any, userId: Id<"users">, docId: Id<"docs">, opts: { archived?: "allow" } = {}): Promise<Doc<"docs">> {
   const doc = await requireAccessibleDoc(ctx, userId, docId);
   if (!isArtifactDocType(doc.doc_type)) throw new ConvexError(`${doc.title} is a ${doc.doc_type}, not a board, sheet or dashboard`);
-  if (doc.archived_at) throw new ConvexError("This artifact is archived");
+  if (doc.archived_at && opts.archived !== "allow") {
+    throw new ConvexError(`This ${doc.doc_type} is archived, so it is read only. \`cast ${ARTIFACT_SPECS[doc.doc_type as ArtifactType].cli} unarchive ${doc._id}\` brings it back.`);
+  }
   return doc;
+}
+
+/**
+ * Refuse a markdown body write to a board, sheet or dashboard: its content is
+ * its elements, and a body written through `cast doc` would report success
+ * while the artifact stays as it was.
+ */
+export function refuseArtifactBodyWrite(doc: Doc<"docs">): void {
+  if (!isArtifactDocType(doc.doc_type)) return;
+  const cli = ARTIFACT_SPECS[doc.doc_type].cli;
+  throw new ConvexError(`This ${doc.doc_type}'s content is its elements, not text: read it with \`cast ${cli} read ${doc._id}\` and change it with \`cast ${cli} apply\` or the \`cast ${cli}\` verbs. A new title goes through \`cast ${cli} rename\`.`);
 }
 
 

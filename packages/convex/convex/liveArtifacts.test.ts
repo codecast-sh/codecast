@@ -3,7 +3,7 @@
 // server's order, the agent's writes carry its session identity and cursor,
 // drafts save and discard, history restores, and access follows the doc's
 // workspace.
-import { describe, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
+import { describe, expect, jest, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -627,4 +627,80 @@ describe("live artifacts", () => {
     await t.finishAllScheduledFunctions(() => {});
   });
 
+
+  describe("the artifact itself from the CLI", () => {
+    const rosaToken = async (t: any) => {
+      await t.run(async (ctx: any) => {
+        const rosa = (await ctx.db.query("users").collect()).find((u: any) => u.name === "Rosa");
+        await ctx.db.insert("api_tokens", { user_id: rosa._id, token_hash: await hashToken("rosa_clisecret"), name: "mac", created_at: 1, last_used_at: 1 } as any);
+      });
+      return presentToken("rosa_clisecret");
+    };
+
+    test("an archived artifact still reads, marked archived, and refuses writes naming the way back", async () => {
+      const { t, doc, agent } = await setup();
+      await t.mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", x: 0 } }], ...agent });
+      await t.mutation(api.docs.update, { id: doc, archived: true, api_token: agent.api_token });
+      const page = await t.query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0, ...agent });
+      expect(page).toMatchObject({ archived: true, can_edit: false });
+      expect(page!.rows.map((r: any) => r.key)).toEqual(["el_a"]);
+      await expect(t.mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", set: { x: 1 } }], ...agent })).rejects.toThrow(/archived.*cast board unarchive/);
+      await t.mutation(api.docs.update, { id: doc, archived: false, api_token: agent.api_token });
+      await t.mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", set: { x: 1 } }], ...agent });
+      await t.finishAllScheduledFunctions(() => {});
+    });
+
+    test("a rename is a title; a text body is refused with the artifact's own verbs", async () => {
+      const { t, doc, agent } = await setup();
+      await t.mutation(api.docs.update, { id: doc, title: "Launch plan", api_token: agent.api_token });
+      expect((await t.run((ctx: any) => ctx.db.get(doc))).title).toBe("Launch plan");
+      await expect(t.mutation(api.docs.update, { id: doc, content: "# Launch plan\nhello", api_token: agent.api_token })).rejects.toThrow(/content is its elements.*cast board apply/);
+      await expect(t.mutation(api.docs.patch, { id: doc, old_string: "Launch", new_string: "Lunch", api_token: agent.api_token })).rejects.toThrow(/cast board read/);
+      await t.finishAllScheduledFunctions(() => {});
+    });
+
+    test("the owner sets who edits from a token; a personal artifact has no such choice", async () => {
+      const { t, doc, privateDoc, dev } = await setup();
+      const api_token = await rosaToken(t);
+      expect((await t.query(api.liveArtifacts.editorCandidates, { doc_id: doc, api_token })).map((c: any) => c.name)).toEqual(["Dev"]);
+      await t.mutation(api.liveArtifacts.setEditAccess, { doc_id: doc, edit: "owners", editors: [dev], api_token });
+      expect((await t.query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0, api_token }))).toMatchObject({ edit: "owners", editors: [String(dev)], owner: true });
+      await expect(t.mutation(api.liveArtifacts.setEditAccess, { doc_id: privateDoc, edit: "owners", api_token })).rejects.toThrow(/personal artifact/);
+      await t.finishAllScheduledFunctions(() => {});
+    });
+
+    test("deleting an artifact takes its elements, history and search row with it; only the owner can", async () => {
+      const { t, doc, agent } = await setup();
+      const api_token = await rosaToken(t);
+      await t.mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", x: 0, text: "Lock pricing" } }], ...agent });
+      await t.mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_a", put: { kind: "comment", text: "hm", anchor: "el_a" } }], ...agent });
+      await t.mutation(api.liveArtifacts.checkpoint, { doc_id: doc, label: "v1", ...agent });
+      await t.finishAllScheduledFunctions(() => {});
+      await expect(t.mutation(api.docs.remove, { id: doc, api_token: agent.api_token })).rejects.toThrow(/owner can delete it for good.*cast board archive/);
+      // The purge is scheduled: run the scheduler's timers so it lands.
+      jest.useFakeTimers();
+      try {
+        await t.mutation(api.docs.remove, { id: doc, api_token });
+        await t.finishAllScheduledFunctions(() => jest.runAllTimers());
+      } finally {
+        jest.useRealTimers();
+      }
+      const left = await t.run(async (ctx: any) => {
+        const n: Record<string, number> = {};
+        for (const [table, index] of [["live_elements", "by_doc_rev"], ["live_batches", "by_doc_rev"], ["live_versions", "by_doc_rev"], ["live_search", "by_doc"], ["live_presence", "by_doc_updated"], ["live_heads", "by_doc"]]) {
+          n[table] = (await ctx.db.query(table).withIndex(index, (q: any) => q.eq("doc_id", doc)).collect()).length;
+        }
+        return n;
+      });
+      expect(left).toEqual({ live_elements: 0, live_batches: 0, live_versions: 0, live_search: 0, live_presence: 0, live_heads: 0 });
+    });
+
+    test("a purge never touches a doc that still exists", async () => {
+      const { t, doc, agent } = await setup();
+      await t.mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", x: 0 } }], ...agent });
+      expect(await t.mutation(internal.liveArtifacts.purgeDoc, { doc_id: doc })).toEqual({ purged: 0, done: true });
+      expect(Object.keys(await state(t, doc))).toEqual(["el_a"]);
+      await t.finishAllScheduledFunctions(() => {});
+    });
+  });
 });

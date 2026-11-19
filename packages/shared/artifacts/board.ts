@@ -7,15 +7,16 @@ import { center, connectorGeometry, contains, elementBox, stickyFitHeight, stick
 import { boardArtFor } from "./boardArt";
 import { BOARD_VERBS } from "./boardVerbs";
 import { BOARD_ART } from "./boardArt";
+import { pageShareUrl } from "../entities";
 
 export * from "./boardGeometry";
 export * from "./boardLayout";
 export * from "./boardArt";
 export * from "./boardTemplates";
-export { BOARD_VERBS, parseVerbArgs } from "./boardVerbs";
+export { BOARD_VERBS, besideSpot, pageSlugOf, parseVerbArgs } from "./boardVerbs";
 
 // "session" is the board's workshop state (dot vote, timer): one undrawn element, key el_session.
-export const BOARD_KINDS = ["sticky", "text", "shape", "connector", "frame", "pen", "image", "stamp", "card", "session"] as const;
+export const BOARD_KINDS = ["sticky", "text", "shape", "connector", "frame", "pen", "image", "stamp", "card", "page", "session"] as const;
 export type BoardKind = (typeof BOARD_KINDS)[number];
 
 const fmtBox = (b: Box) => `${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.w)}x${Math.round(b.h)}`;
@@ -89,6 +90,10 @@ export function describeElement(el: ArtifactElement, view: Pick<ArtifactView, "g
     case "card":
       parts.push(String(el.ref ?? "?"), fmtBox(b));
       break;
+    case "page":
+      parts.push(pageShareUrl(String(el.slug ?? "")), fmtBox(b));
+      if (el.caption) parts.push(quote(el.caption, 80));
+      break;
     case "image":
       parts.push(fmtBox(b), quote(el.alt ?? el.src, 80));
       break;
@@ -101,7 +106,7 @@ export function describeElement(el: ArtifactElement, view: Pick<ArtifactView, "g
 
 /** Pairs of cards, shapes and text that cover each other (stamps, pens, frames and arrows sit on things on purpose). */
 function overlaps(els: readonly ArtifactElement[], max = 20): string[] {
-  const solid = els.filter((e) => e.kind === "sticky" || e.kind === "shape" || e.kind === "text" || e.kind === "card" || e.kind === "image");
+  const solid = els.filter((e) => e.kind === "sticky" || e.kind === "shape" || e.kind === "text" || e.kind === "card" || e.kind === "page" || e.kind === "image");
   const boxes = solid.map((e) => elementBox(e));
   const out: string[] = [];
   for (let i = 0; i < solid.length && out.length < max; i++) {
@@ -175,8 +180,9 @@ export const boardSpec: ArtifactSpec = {
     "Themes: `Theme name: el_a el_b el_c` per line regroups existing stickies into titled frames.",
     "Colors: yellow orange red pink violet blue cyan green gray. Shapes: rect ellipse diamond pill triangle hexagon cylinder (a database) star.",
     "Stickers: `stamp 🎉` is a small emoji reaction; `stamp rocket` (any illustration name) places the painted illustration as a 120px sticker.",
-    "Fields for `apply`: every element x y w h z rot group; sticky text color icon; text text size weight(bold) color align(left|center|right); shape shape text color solid icon; frame title color; connector from to (keys) or x1 y1 x2 y2, curve(curved|elbow) arrow(end|both|none) label label_at(0..1) color dash width; pen points [x,y,...] color width opacity; stamp emoji size; card ref; image src alt. Text takes **bold**, *italic*, - lists and links.",
+    "Fields for `apply`: every element x y w h z rot group; sticky text color icon; text text size weight(bold) color align(left|center|right); shape shape text color solid icon; frame title color; connector from to (keys) or x1 y1 x2 y2, curve(curved|elbow) arrow(end|both|none) label label_at(0..1) color dash width; pen points [x,y,...] color width opacity; stamp emoji size; card ref; page slug caption; image src alt. Text takes **bold**, *italic*, - lists and links.",
     "Live codecast objects go on as cards: `cast board card <doc> ct-123`. Stickies into tasks: `cast task create` each, then `cast board card <doc> <ct-id> --replace <sticky key>` (same key, arrows stay attached).",
+    "A page you published (`cast publish`) goes on live with `cast board page <doc> <url> --near <key>`: put it beside the stickies or frame it supports, so the room sees it next to the idea. Republishing the same file updates it in place.",
     "Anything else: `cast board apply <doc>` with raw ops; give each put a z (`read` shows the top), or it lands behind what is there.",
   ].join("\n"),
 };
