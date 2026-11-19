@@ -28,6 +28,8 @@ const queries = {
   teamBudget: api.modelCalls.budgetForTeam,
   // Team settings > Managed devices: enrollment tokens and enrolled devices (admins only). Read on demand.
   managedDevices: api.managedDevices.adminOverview,
+  // Team settings > Read keys (admins only). Read on demand.
+  teamReadKeys: api.teamReadKeys.list,
   // Whether this deployment lets outside agents connect over OAuth (Settings >
   // Connected agents offers setup only when it does). Read on demand.
   agentOAuth: api.mcpAuth.oauthStatus,

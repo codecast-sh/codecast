@@ -26,6 +26,7 @@ import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatu
 import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
 import { ManagedDevicesLink } from "../../../components/settings/ManagedDevicesEditor";
 import { AccessLogLink } from "../../../components/settings/AccessLogPanel";
+import { TeamReadKeys } from "../../../components/settings/TeamReadKeys";
 import { TeamTemplateLearning } from "../../../components/settings/TeamTemplateLearning";
 import { TeamModelBudget } from "../../../components/settings/TeamModelBudget";
 import { TeamDomainAccess } from "../../../components/settings/TeamDomainAccess";
@@ -496,6 +497,7 @@ export default function TeamPage() {
 
       {isAdmin && effectiveTeamId && <ManagedDevicesLink teamId={String(effectiveTeamId)} />}
       {isAdmin && effectiveTeamId && <AccessLogLink teamId={String(effectiveTeamId)} />}
+      {isAdmin && effectiveTeamId && <TeamReadKeys teamId={effectiveTeamId} teamName={team.name} />}
 
       {effectiveTeamId && <TeamTemplateLearning teamId={String(effectiveTeamId)} />}
 
