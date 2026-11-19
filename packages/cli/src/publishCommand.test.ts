@@ -289,9 +289,11 @@ describe("formatArtifactTable", () => {
   });
 
   it("renders aligned rows with all columns", () => {
+    // The row's age comes from this same instant: lsRow's own Date.now() runs
+    // later, and a millisecond tick in between floored 3h to 2h.
     const now = Date.now();
     const lines = formatArtifactTable(
-      [lsRow(), lsRow({ slug: "xyz", title: "Dash", kind: "bundle", has_password: true, comments_open: 0, session_short_id: null })],
+      [lsRow({ updated_at: now - 3 * 3_600_000 }), lsRow({ slug: "xyz", title: "Dash", kind: "bundle", has_password: true, comments_open: 0, session_short_id: null })],
       now,
     );
     expect(lines).toHaveLength(3);

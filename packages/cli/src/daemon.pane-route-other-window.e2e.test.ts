@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { pollUntil } from "./test-helpers/pollUntil";
 
 const run = promisify(execFile);
 
@@ -23,7 +24,13 @@ test.skipIf(process.platform === "win32")("a pane in a window that is not showin
     await tmux("split-window", "-t", `${s}:2`, "sh -c 'sleep 120; :'");
     await tmux("select-window", "-t", `${s}:0`);
     const paneShell = Number((await tmux("display-message", "-p", "-t", `${s}:2.1`, "#{pane_pid}")).stdout.trim());
-    const agent = Number((await run("pgrep", ["-P", String(paneShell)])).stdout.trim().split("\n")[0]);
+    // The pane's shell forks its sleep a moment after the pane exists; pgrep
+    // exits 1 until it has.
+    let agent = 0;
+    await pollUntil(async () => {
+      agent = Number((await run("pgrep", ["-P", String(paneShell)]).catch(() => ({ stdout: "" }))).stdout.trim().split("\n")[0]) || 0;
+      return agent > 1;
+    }, "the pane shell's child process");
     const elsewhere = Number((await tmux("display-message", "-p", "-t", `${s}:1.0`, "#{pane_pid}")).stdout.trim());
     expect(agent).toBeGreaterThan(1);
 
