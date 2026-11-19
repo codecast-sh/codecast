@@ -36,7 +36,7 @@ const STYLES: Record<string, string[]> = {
 
 /** Lines that must keep naming a mono face where they draw code-like text. */
 const LINES: Record<string, Array<[what: string, pattern: RegExp, count?: number]>> = {
-  "components/CodeText.tsx": [["highlighted code and ANSI output", /<RNText style=\{\[codeFont, style\]\} selectable>/g, 2]],
+  "components/CodeText.tsx": [["highlighted code and ANSI output", /<RNText style=\{\[codeFont, style\]\} selectable[=>]/g, 2]],
   "components/MarkdownRenderer.tsx": [["fenced code lines", /<HighlightedCodeText content=\{line \|\| ' '\} style=\{\{[^}]*fontFamily: 'JetBrainsMono-Regular'/g]],
   "app/session/[id].tsx": [
     ["the branch chip", /style=\{\[styles\.metaChipText, codeFont\]\} numberOfLines=\{1\}>\{conversation\.git_branch\}/g],

@@ -101,7 +101,7 @@ describe("a tap outside the composer puts the keyboard away", () => {
 
   test("a session bubble dismisses on a plain tap and keeps its long-press menu", () => {
     const tags = pressableTags(read("app/session/[id].tsx")).filter((t) =>
-      t.tag.includes("onLongPress={handleLongPress}"),
+      t.tag.includes("onLongPress={() => handleLongPress()}"),
     );
     expect(tags.length).toBe(1);
     // Tap-to-expand on a collapsed turn stays; every other plain tap dismisses.
@@ -110,7 +110,7 @@ describe("a tap outside the composer puts the keyboard away", () => {
 
   test("a chat row dismisses on a plain tap and keeps its long-press menu", () => {
     const tags = pressableTags(read("components/chat/MessageRow.tsx")).filter((t) =>
-      t.tag.includes("onLongPress={() => onLongPress?.(message)}"),
+      t.tag.includes("onLongPress={openMenu}"),
     );
     expect(tags.length).toBe(1);
     expect(tags[0].tag).toContain("onPress={Keyboard.dismiss}");
