@@ -69,7 +69,7 @@ export function MentionStrip({
           style={[styles.chip, m.isAgent && styles.chipAgent]}
           onPress={() => onPick(completeMention(draft, m.handle))}
         >
-          <ChatAvatar author={{ id: m.id, name: m.name, avatarUrl: m.avatarUrl, isAgent: m.isAgent }} size={18} />
+          <ChatAvatar author={{ id: m.id, name: m.name, avatarUrl: m.avatarUrl, isAgent: m.isAgent }} size={24} />
           <RNText style={[styles.chipText, m.isAgent && styles.chipTextAgent]}>@{m.handle}</RNText>
         </TouchableOpacity>
       ))}
@@ -78,26 +78,26 @@ export function MentionStrip({
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({
-  strip: { maxHeight: 40 },
+  strip: { maxHeight: 52 },
   stripContent: {
-    gap: 6,
+    gap: 8,
     paddingHorizontal: Spacing.md,
-    paddingVertical: 5,
+    paddingVertical: 8,
     alignItems: 'center',
   },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 7,
+    height: 36,
     borderWidth: 1,
-    borderColor: Theme.border + '66',
-    borderRadius: 13,
-    paddingLeft: 3,
-    paddingRight: 8,
-    paddingVertical: 2,
-    backgroundColor: Theme.bgAlt + '66',
+    borderColor: Theme.border,
+    borderRadius: 18,
+    paddingLeft: 6,
+    paddingRight: 12,
+    backgroundColor: Theme.bgAlt,
   },
   chipAgent: { borderColor: Theme.violet + '77' },
-  chipText: { fontSize: 12, fontWeight: '600', color: Theme.textSecondary },
+  chipText: { fontSize: 13.5, fontWeight: '600', color: Theme.textSecondary },
   chipTextAgent: { color: Theme.violet },
 }));

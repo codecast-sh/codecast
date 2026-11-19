@@ -30,6 +30,7 @@ const TRANSCRIPTS = ["app/session/[id].tsx", "app/chat/[id].tsx", "app/chat/thre
 const COMPOSER_STRIPS = [
   "components/session/SlashCommandPills.tsx",
   "components/chat/MentionStrip.tsx",
+  "components/chat/ChatComposerBar.tsx", // the emoji strip
   "components/session/MessageComposer.tsx",
   "components/terminal/PaneTerminal.tsx", // the quick-key row sits on the keyboard
 ];

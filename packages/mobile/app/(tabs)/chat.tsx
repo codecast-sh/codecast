@@ -112,7 +112,7 @@ export default function ChatScreen() {
               <FontAwesome name="users" size={11} color={Theme.textMuted} />
             )}
             <RNText style={[styles.teamName, { maxWidth: Math.max(80, width - 250) }]} numberOfLines={1}>{teamName}</RNText>
-            {validTeams.length > 1 && <FontAwesome name="angle-down" size={11} color={Theme.textMuted0} />}
+            {validTeams.length > 1 && <FontAwesome name="angle-down" size={14} color={Theme.textMuted} />}
           </TouchableOpacity>
         )}
         <RNView style={{ flex: 1 }} />
@@ -126,7 +126,7 @@ export default function ChatScreen() {
             activeOpacity={0.7}
             accessibilityLabel="Start a huddle"
           >
-            <Ionicons name="headset" size={17} color={Theme.violet} />
+            <Ionicons name="headset" size={19} color={Theme.violet} />
           </TouchableOpacity>
         )}
         {segment === 'chat' && chatOn && (
@@ -139,7 +139,7 @@ export default function ChatScreen() {
             activeOpacity={0.7}
             accessibilityLabel="New message"
           >
-            <FontAwesome name="pencil" size={15} color={Theme.blue} />
+            <FontAwesome name="pencil" size={17} color={Theme.blue} />
           </TouchableOpacity>
         )}
       </RNView>
@@ -193,55 +193,64 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
+    paddingTop: Spacing.sm,
     paddingBottom: Spacing.sm,
-    backgroundColor: Theme.bgAlt,
-    borderBottomWidth: 1,
-    borderBottomColor: Theme.borderLight,
-    gap: 8,
+    backgroundColor: Theme.bg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.border + '80',
+    gap: 10,
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 28,
     fontWeight: '700',
     color: Theme.text,
   },
   segmentBar: {
-    backgroundColor: Theme.bgAlt,
+    backgroundColor: Theme.bg,
     paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: Theme.borderLight,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.border + '80',
   },
   segmentContainer: {
     flexDirection: 'row',
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 8,
-    padding: 2,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border,
+    borderRadius: 10,
+    padding: 3,
   },
   segmentBtn: {
     flex: 1,
-    paddingVertical: 6,
-    borderRadius: 6,
+    height: 34,
+    borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  segmentBtnActive: { backgroundColor: Theme.bg },
-  segmentText: { fontSize: 13, fontWeight: '600', color: Theme.textMuted0 },
+  segmentBtnActive: {
+    backgroundColor: Theme.bgHighlight,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  segmentText: { fontSize: 13.5, fontWeight: '600', color: Theme.textMuted },
   segmentTextActive: { color: Theme.text },
   teamPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    height: 26,
-    paddingHorizontal: 9,
-    borderRadius: 13,
+    gap: 6,
+    height: 32,
+    paddingHorizontal: 12,
+    borderRadius: 16,
     backgroundColor: Theme.bgHighlight,
   },
-  teamIcon: { fontSize: 12 },
-  teamName: { fontSize: 12, fontWeight: '600', color: Theme.textSecondary },
+  teamIcon: { fontSize: 14 },
+  teamName: { fontSize: 13.5, fontWeight: '600', color: Theme.textSecondary },
   iconBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },

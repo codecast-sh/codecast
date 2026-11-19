@@ -67,11 +67,11 @@ export default function NewMessageScreen() {
     setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <Stack.Screen options={{ headerShown: false }} />
       <RNView style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={styles.back}>
-          <FontAwesome name="chevron-left" size={16} color={Theme.textMuted} />
+          <FontAwesome name="chevron-left" size={18} color={Theme.text} />
         </TouchableOpacity>
         <RNText style={styles.title}>{huddleMode ? 'Start a huddle' : 'New message'}</RNText>
         {picked.length > 0 && (
@@ -91,7 +91,7 @@ export default function NewMessageScreen() {
       </RNView>
 
       <RNView style={styles.search}>
-        <FontAwesome name="search" size={12} color={Theme.textMuted0} />
+        <FontAwesome name="search" size={14} color={Theme.textMuted} />
         <ThemedTextInput
           style={styles.searchInput}
           placeholder="Search teammates"
@@ -126,7 +126,7 @@ export default function NewMessageScreen() {
               <RNView>
                 <ChatAvatar
                   author={{ id, name: m.name || 'Teammate', avatarUrl: m.github_avatar_url || m.image }}
-                  size={30}
+                  size={44}
                 />
                 {dotColor && <RNView style={[styles.presenceDot, { backgroundColor: dotColor }]} />}
               </RNView>
@@ -135,9 +135,9 @@ export default function NewMessageScreen() {
                 <RNText style={styles.presence}>{line}</RNText>
               </RNView>
               {on ? (
-                <FontAwesome name="check-circle" size={16} color={huddleMode ? Theme.violet : Theme.blue} />
+                <FontAwesome name="check-circle" size={22} color={huddleMode ? Theme.violet : Theme.blue} />
               ) : huddleMode ? (
-                <Ionicons name="headset-outline" size={16} color={Theme.violet} />
+                <Ionicons name="headset-outline" size={20} color={Theme.violet} />
               ) : null}
             </TouchableOpacity>
           );
@@ -163,63 +163,65 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
+    gap: 10,
+    paddingLeft: 4,
+    paddingRight: Spacing.md,
+    minHeight: 56,
   },
-  back: { paddingRight: 6 },
-  title: { flex: 1, fontSize: 15, fontWeight: '600', color: Theme.text },
+  back: { width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
+  title: { flex: 1, fontSize: 15.5, fontWeight: '700', color: Theme.text },
   go: {
-    minWidth: 64,
-    height: 30,
-    borderRadius: 15,
+    minWidth: 72,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: Theme.blue,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
-  goText: { fontSize: 12.5, fontWeight: '700', color: Theme.bg },
+  goText: { fontSize: 13.5, fontWeight: '700', color: Theme.bg },
   search: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     marginHorizontal: Spacing.md,
-    marginBottom: 6,
-    paddingHorizontal: 10,
+    marginBottom: 8,
+    paddingHorizontal: 14,
+    height: 42,
     borderWidth: 1,
-    borderColor: Theme.border + '66',
-    borderRadius: 9,
-    backgroundColor: Theme.bgAlt + '55',
+    borderColor: Theme.border,
+    borderRadius: 21,
+    backgroundColor: Theme.bgAlt,
   },
-  searchInput: { flex: 1, paddingVertical: 8, fontSize: 13.5, color: Theme.text },
+  searchInput: { flex: 1, fontSize: 14, color: Theme.text },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 14,
     paddingHorizontal: Spacing.md,
-    paddingVertical: 9,
+    minHeight: 64,
   },
   rowOn: { backgroundColor: Theme.blue + '14' },
   goHuddle: { backgroundColor: Theme.violet },
   goRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   rowMain: { flex: 1, minWidth: 0 },
-  name: { fontSize: 14, color: Theme.text },
-  presence: { fontSize: 10.5, color: Theme.textMuted0, marginTop: 1 },
+  name: { fontSize: 15.5, fontWeight: '500', color: Theme.text },
+  presence: { fontSize: 12.5, color: Theme.textMuted, marginTop: 2 },
   presenceDot: {
     position: 'absolute',
     right: -2,
     bottom: -2,
-    width: 9,
-    height: 9,
-    borderRadius: 4.5,
-    borderWidth: 1.5,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2.5,
     borderColor: Theme.bg,
   },
-  emptyText: { textAlign: 'center', padding: 24, fontSize: 12, color: Theme.textMuted0 },
+  emptyText: { textAlign: 'center', padding: 24, fontSize: 13.5, color: Theme.textMuted0 },
   hint: {
     textAlign: 'center',
-    fontSize: 10.5,
-    color: Theme.textMuted0,
-    paddingVertical: 8,
+    fontSize: 12,
+    color: Theme.textMuted,
+    paddingVertical: 10,
   },
 }));

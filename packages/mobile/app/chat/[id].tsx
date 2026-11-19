@@ -11,9 +11,10 @@ import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useInboxStore, selectChannelReadMarker } from '@codecast/web/store/inboxStore';
 import { useChannelMessages, useChannelMessagesSync, useChatRail, useSupersededChannelId } from '@codecast/web/hooks/useChatSync';
+import { useOpenThreadPrefetch, useThreadPrefetch } from '@codecast/web/hooks/useThreadPrefetch';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
-import { lineGroupKey, buildChatTimeline, dmOtherIds, memberHandle } from '@codecast/shared/chat';
+import { lineGroupKey, buildChatTimeline, dmOtherIds, memberHandle, plainPreview } from '@codecast/shared/chat';
 import { channelHuddleMemberIds, chatRoomKey } from '@codecast/shared/contracts';
 import { HuddleButton } from '@/components/calls/SessionHuddleButton';
 import { MessageRow, DayDivider, NewDivider, ChatAvatar, fromChatView, type MobileChatMessage } from '@/components/chat/MessageRow';
@@ -202,6 +203,12 @@ export default function ChatChannelScreen() {
   // The shared views, folded through the SAME timeline rules the web uses.
   const rows = useMemo(() => {
     const all = views.map((v) => fromChatView(v, chatMessages[v.id], identityFor));
+    // A reply also sent to the channel names the thread it belongs to: the
+    // root's opening words, read from the store (the root may be off the page).
+    for (const m of all) {
+      const root = m.threadRootId ? chatMessages[m.threadRootId] : undefined;
+      if (root?.content) m.threadRootPreview = plainPreview(root.content, 80);
+    }
     return buildChatTimeline(
       all.map((msg) => ({
         id: msg.id,
@@ -216,6 +223,16 @@ export default function ChatChannelScreen() {
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [views, identityFor, now, viewerId]);
+
+  // Every thread on the page, newest first, fetched into the store before
+  // anyone taps it: a thread opens on its replies, never on a spinner.
+  const threadRoots = useMemo(
+    () => views.filter((v) => (v.replyCount ?? 0) > 0).reverse().slice(0, 20)
+      .map((v) => ({ id: v.id, lastReplyAt: v.lastReplyAt })),
+    [views],
+  );
+  useThreadPrefetch(threadRoots);
+  const prefetchThread = useOpenThreadPrefetch();
 
   // Inverted list: index 0 renders at the bottom, so the rows reverse.
   const inverted = useMemo(() => [...rows].reverse(), [rows]);
@@ -292,10 +309,10 @@ export default function ChatChannelScreen() {
   }, []);
 
   // Object form + cast: the typed-route union regenerates only when Metro runs.
-  const pushThread = useCallback((rootId: string) => {
+  const pushThread = useCallback((rootId: string, focusId?: string) => {
     router.push({
       pathname: '/chat/thread/[id]',
-      params: { id: rootId, channel: String(channelId) },
+      params: { id: rootId, channel: String(channelId), ...(focusId ? { m: focusId } : {}) },
     } as never);
   }, [router, channelId]);
 
@@ -331,6 +348,7 @@ export default function ChatChannelScreen() {
           now={now}
           knownMentionHandles={knownHandles}
           onOpenThread={pushThread}
+          onThreadPressIn={prefetchThread}
           onLongPress={onLongPress}
           onToggleReaction={toggleReaction}
           onStopAgent={(mid) => void stopAnchor({ message_id: mid as any })}
@@ -339,7 +357,7 @@ export default function ChatChannelScreen() {
         />
       </RNView>
     );
-  }, [now, highlightId, knownHandles, pushThread, onLongPress, toggleReaction, stopAnchor, onRetrySend]);
+  }, [now, highlightId, knownHandles, pushThread, prefetchThread, onLongPress, toggleReaction, stopAnchor, onRetrySend]);
 
   // ── Header identity ───────────────────────────────────────────────────────
   const isDm = channel?.kind === 'dm';
@@ -366,8 +384,8 @@ export default function ChatChannelScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
       <RNView style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={styles.back}>
-          <FontAwesome name="chevron-left" size={16} color={Theme.textMuted} />
+        <TouchableOpacity onPress={() => router.back()} hitSlop={8} style={styles.back} accessibilityLabel="Back">
+          <FontAwesome name="chevron-left" size={18} color={Theme.text} />
         </TouchableOpacity>
         {isDm && counterpart ? (
           <ChatAvatar
@@ -377,14 +395,16 @@ export default function ChatChannelScreen() {
               avatarUrl: counterpart.github_avatar_url || counterpart.image,
               isAgent: counterpart.is_bot,
             }}
-            size={22}
+            size={32}
           />
         ) : (
-          <FontAwesome
-            name={isDm ? 'user' : channel?.is_private || channel?.kind === 'private' ? 'lock' : 'hashtag'}
-            size={13}
-            color={Theme.textMuted0}
-          />
+          <RNView style={styles.headGlyph}>
+            <FontAwesome
+              name={isDm ? 'user' : channel?.is_private || channel?.kind === 'private' ? 'lock' : 'hashtag'}
+              size={15}
+              color={Theme.textMuted}
+            />
+          </RNView>
         )}
         <RNView style={styles.headMain}>
           <RNText style={styles.title} numberOfLines={1}>{roomName}</RNText>
@@ -465,7 +485,7 @@ export default function ChatChannelScreen() {
           />
           {awayFromBottom && (
             <TouchableOpacity style={styles.jumpPill} onPress={jumpToNow} activeOpacity={0.85}>
-              <FontAwesome name="chevron-down" size={11} color={Theme.bg} />
+              <FontAwesome name="chevron-down" size={14} color={Theme.bg} />
               {missed > 0 && <RNText style={styles.jumpCount}>{missed > 99 ? '99+' : missed}</RNText>}
             </TouchableOpacity>
           )}
@@ -473,6 +493,7 @@ export default function ChatChannelScreen() {
 
         <TypingRow channelId={String(channelId)} viewerId={viewerId} nameOf={nameOf} />
         <ChatComposerBar
+          atScreenBottom
           channelId={String(channelId)}
           placeholder={isDm ? `Message ${roomName}` : `Message #${channel?.name ?? ''}`}
           mentionCandidates={mentionCandidates}
@@ -502,38 +523,47 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 8,
+    gap: 10,
+    paddingLeft: 4,
+    paddingRight: Spacing.md,
+    minHeight: 56,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.border + '55',
+    borderBottomColor: Theme.border + '80',
   },
-  back: { paddingRight: 4 },
+  back: { width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
+  headGlyph: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    backgroundColor: Theme.bgHighlight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   headMain: { flex: 1, minWidth: 0 },
-  title: { fontSize: 15, fontWeight: '600', color: Theme.text },
-  topic: { fontSize: 11, color: Theme.textMuted0 },
-  presenceRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 },
-  presenceDot: { width: 6, height: 6, borderRadius: 3 },
-  presenceText: { fontSize: 10.5, color: Theme.textMuted0 },
+  title: { fontSize: 15.5, fontWeight: '700', color: Theme.text },
+  topic: { fontSize: 12, color: Theme.textMuted, marginTop: 1 },
+  presenceRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
+  presenceDot: { width: 8, height: 8, borderRadius: 4 },
+  presenceText: { fontSize: 12, color: Theme.textMuted },
   loadingOlder: {
     textAlign: 'center',
-    fontSize: 11,
+    fontSize: 12,
     color: Theme.textMuted0,
     paddingVertical: 8,
   },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyList: { flexGrow: 1 },
-  emptyTitle: { fontSize: 14, fontWeight: '600', color: Theme.textSecondary, textAlign: 'center' },
-  emptySub: { fontSize: 12, color: Theme.textMuted0, textAlign: 'center', marginTop: 4 },
+  emptyTitle: { fontSize: 15, fontWeight: '600', color: Theme.textSecondary, textAlign: 'center' },
+  emptySub: { fontSize: 13, color: Theme.textMuted0, textAlign: 'center', marginTop: 4 },
   highlight: { backgroundColor: Theme.accent + '1E' },
   jumpPill: {
     position: 'absolute',
     right: 14,
     bottom: 12,
-    minWidth: 34,
-    height: 34,
-    borderRadius: 17,
-    paddingHorizontal: 10,
+    minWidth: 44,
+    height: 44,
+    borderRadius: 22,
+    paddingHorizontal: 14,
     backgroundColor: Theme.blue,
     flexDirection: 'row',
     alignItems: 'center',
@@ -545,5 +575,5 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 4,
   },
-  jumpCount: { fontSize: 11, fontWeight: '700', color: Theme.bg },
+  jumpCount: { fontSize: 13, fontWeight: '700', color: Theme.bg },
 }));

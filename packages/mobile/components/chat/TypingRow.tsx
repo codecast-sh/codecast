@@ -34,6 +34,6 @@ export function TypingRow({
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({
-  row: { paddingHorizontal: Spacing.md, paddingBottom: 2 },
-  text: { fontSize: 10.5, fontStyle: 'italic', color: Theme.textMuted0 },
+  row: { paddingHorizontal: Spacing.md, paddingTop: 2, paddingBottom: 4 },
+  text: { fontSize: 12, fontStyle: 'italic', color: Theme.textMuted },
 }));

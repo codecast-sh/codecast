@@ -37,6 +37,9 @@ function useRailKnown(): boolean {
   return live || cached;
 }
 
+/** Every row's leading tile: a face, or a glyph in a square of the same size. */
+const FACE = 44;
+
 const PRESENCE_LINE: Record<string, string> = { active: 'Active now', idle: 'Idle', away: 'Away' };
 
 function presenceColor(state: string | undefined, Theme: any): string | null {
@@ -70,11 +73,11 @@ function DmFace({ channel, members }: { channel: ChatRailChannel; members?: any[
   if (!one) {
     return (
       <RNView style={styles.glyphBox}>
-        <FontAwesome name={others.length > 1 ? 'users' : 'user'} size={14} color={Theme.textMuted} />
+        <FontAwesome name={others.length > 1 ? 'users' : 'user'} size={17} color={Theme.textMuted} />
       </RNView>
     );
   }
-  return <PresenceFace member={one} size={36} />;
+  return <PresenceFace member={one} size={FACE} />;
 }
 
 type ListItem =
@@ -193,6 +196,8 @@ export function ChatHomeList({
       keyExtractor={(item) => item.key}
       contentContainerStyle={styles.listContent}
       showsVerticalScrollIndicator={false}
+      ItemSeparatorComponent={({ leadingItem }: { leadingItem: ListItem }) =>
+        leadingItem.kind === 'channel' || leadingItem.kind === 'member' ? <RNView style={styles.separator} /> : null}
       renderItem={({ item }) => {
         switch (item.kind) {
           case 'header':
@@ -207,7 +212,7 @@ export function ChatHomeList({
                     style={styles.sectionAction}
                     accessibilityLabel="New message"
                   >
-                    <FontAwesome name="pencil-square-o" size={15} color={Theme.blue} />
+                    <FontAwesome name="pencil-square-o" size={18} color={Theme.blue} />
                   </TouchableOpacity>
                 )}
               </RNView>
@@ -238,7 +243,7 @@ export function ChatHomeList({
                 onPress={() => openPerson(m)}
                 accessibilityLabel={chatOn ? `Message ${m.name || 'teammate'}` : m.name || 'Teammate'}
               >
-                <PresenceFace member={m} size={36} />
+                <PresenceFace member={m} size={FACE} />
                 <RNView style={styles.rowMain}>
                   <RNText style={styles.name} numberOfLines={1}>{m.name || m.github_username || 'Teammate'}</RNText>
                   <RNText style={[styles.preview, item.inRoom && { color: Theme.green }]} numberOfLines={1}>{line}</RNText>
@@ -250,7 +255,7 @@ export function ChatHomeList({
                     hitSlop={6}
                     accessibilityLabel={item.inRoom ? `Join ${m.name || 'teammate'}'s huddle` : `Huddle with ${m.name || 'teammate'}`}
                   >
-                    <Ionicons name={item.inRoom ? 'headset' : 'headset-outline'} size={17} color={item.inRoom ? Theme.green : Theme.violet} />
+                    <Ionicons name={item.inRoom ? 'headset' : 'headset-outline'} size={19} color={item.inRoom ? Theme.green : Theme.violet} />
                   </TouchableOpacity>
                 )}
               </TouchableOpacity>
@@ -276,8 +281,8 @@ export function ChatHomeList({
                   <RNView style={[styles.glyphBox, unread && styles.glyphBoxUnread]}>
                     <FontAwesome
                       name={channel.isPrivate ? 'lock' : 'hashtag'}
-                      size={14}
-                      color={unread ? Theme.text : Theme.textMuted}
+                      size={18}
+                      color={unread ? Theme.accent : Theme.textMuted}
                     />
                   </RNView>
                 )}
@@ -289,34 +294,41 @@ export function ChatHomeList({
                     >
                       {displayName(channel)}
                     </RNText>
-                    {channel.slack && (
+                    {/* A healthy Slack mirror is the normal state and says
+                        nothing; the mark shows only when it needs attention. */}
+                    {channel.slack && channel.slack.state !== 'live' && (
                       <RNView accessibilityRole="image" accessibilityLabel={MIRROR_STATE_LABEL[channel.slack.state]}>
-                        <SlackLogo size={10} muted={channel.slack.state !== 'live'} />
+                        <SlackLogo size={12} muted />
                       </RNView>
                     )}
-                    {muted && <FontAwesome name="bell-slash-o" size={10} color={Theme.textMuted0} />}
+                    {muted && <FontAwesome name="bell-slash-o" size={12} color={Theme.textMuted0} />}
                     {channel.lastMessagePreview !== undefined && (
-                      <RNText style={styles.time}>
+                      <RNText style={[styles.time, unread && !muted && styles.timeUnread]}>
                         {formatRelativeTime(channel.sortAt)}
                       </RNText>
                     )}
                   </RNView>
-                  <RNText
-                    style={[styles.preview, unread && !muted && styles.previewUnread]}
-                    numberOfLines={1}
-                  >
-                    {channel.lastMessagePreview !== undefined
-                      ? (channel.lastMessageFromAgent ? '⚑ ' : '') + channel.lastMessagePreview
-                      : channel.topic || 'No messages yet'}
-                  </RNText>
-                </RNView>
-                {mentions > 0 ? (
-                  <RNView style={styles.badge}>
-                    <RNText style={styles.badgeText}>{mentions > 99 ? '99+' : mentions}</RNText>
+                  <RNView style={styles.previewRow}>
+                    {channel.lastMessagePreview !== undefined && channel.lastMessageFromAgent && (
+                      <FontAwesome name="microchip" size={11} color={Theme.violet} />
+                    )}
+                    <RNText
+                      style={[styles.preview, unread && !muted && styles.previewUnread]}
+                      numberOfLines={1}
+                    >
+                      {channel.lastMessagePreview !== undefined
+                        ? channel.lastMessagePreview
+                        : channel.topic || 'No messages yet'}
+                    </RNText>
+                    {mentions > 0 ? (
+                      <RNView style={styles.badge}>
+                        <RNText style={styles.badgeText}>{mentions > 99 ? '99+' : mentions}</RNText>
+                      </RNView>
+                    ) : unread ? (
+                      <RNView style={[styles.dot, muted && styles.dotMuted]} />
+                    ) : null}
                   </RNView>
-                ) : unread ? (
-                  <RNView style={[styles.dot, muted && styles.dotMuted]} />
-                ) : null}
+                </RNView>
               </TouchableOpacity>
             );
           }
@@ -327,47 +339,56 @@ export function ChatHomeList({
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({
-  listContent: { paddingBottom: 24 },
+  listContent: { paddingBottom: 32 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.md,
-    paddingVertical: 9,
-    gap: 12,
+    paddingVertical: 11,
+    gap: 14,
+    minHeight: 68,
+  },
+  // Rules start where the words do, so each row's tile stands clear.
+  separator: {
+    height: StyleSheet.hairlineWidth,
+    marginLeft: Spacing.md + FACE + 14,
+    backgroundColor: Theme.border + '70',
   },
   glyphBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: Theme.bgHighlight + '99',
+    width: FACE,
+    height: FACE,
+    borderRadius: 12,
+    backgroundColor: Theme.bgHighlight,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  glyphBoxUnread: { backgroundColor: Theme.bgHighlight },
-  rowMain: { flex: 1, minWidth: 0 },
+  glyphBoxUnread: { backgroundColor: Theme.accent + '2E' },
+  rowMain: { flex: 1, minWidth: 0, gap: 3 },
   rowHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  name: { flex: 1, fontSize: 14.5, color: Theme.textSecondary },
-  nameUnread: { color: Theme.text, fontWeight: '600' },
+  name: { flex: 1, fontSize: 15.5, fontWeight: '500', color: Theme.text },
+  nameUnread: { fontWeight: '700' },
   nameMuted: { color: Theme.textMuted },
-  time: { fontSize: 10.5, color: Theme.textMuted0 },
-  preview: { fontSize: 12, color: Theme.textMuted0, marginTop: 2 },
-  previewUnread: { color: Theme.textMuted },
+  time: { fontSize: 12, color: Theme.textMuted0 },
+  timeUnread: { color: Theme.accent, fontWeight: '600' },
+  previewRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  preview: { flex: 1, fontSize: 13.5, color: Theme.textMuted0 },
+  previewUnread: { color: Theme.textSecondary },
   badge: {
-    minWidth: 20,
-    height: 18,
-    borderRadius: 9,
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: Theme.red,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 5,
+    paddingHorizontal: 6,
   },
-  badgeText: { fontSize: 10, fontWeight: '700', color: Theme.bg },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Theme.blue },
+  badgeText: { fontSize: 11, fontWeight: '700', color: '#fff' },
+  dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Theme.accent },
   dotMuted: { backgroundColor: Theme.textMuted0 },
   huddleBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: Theme.violet + '16',
     alignItems: 'center',
     justifyContent: 'center',
@@ -378,27 +399,27 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: Spacing.md,
-    paddingTop: 16,
+    paddingTop: 26,
     paddingBottom: 6,
   },
   sectionLabel: {
     flex: 1,
-    fontSize: 10.5,
+    fontSize: 11.5,
     fontWeight: '700',
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
     textTransform: 'uppercase',
-    color: Theme.textMuted0,
+    color: Theme.textMuted,
   },
   sectionLabelLive: { color: Theme.green },
-  sectionAction: { padding: 2 },
+  sectionAction: { padding: 4 },
   presenceDot: {
     position: 'absolute',
-    right: -1,
-    bottom: -1,
-    width: 11,
-    height: 11,
-    borderRadius: 5.5,
-    borderWidth: 2,
+    right: -2,
+    bottom: -2,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2.5,
     borderColor: Theme.bg,
   },
   notice: {
@@ -413,6 +434,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderColor: Theme.borderLight,
     backgroundColor: Theme.bgAlt + '80',
   },
-  noticeTitle: { fontSize: 13, fontWeight: '600', color: Theme.textSecondary },
-  noticeBody: { fontSize: 12, color: Theme.textMuted, marginTop: 2, lineHeight: 17 },
+  noticeTitle: { fontSize: 13.5, fontWeight: '600', color: Theme.textSecondary },
+  noticeBody: { fontSize: 12.5, color: Theme.textMuted, marginTop: 2, lineHeight: 17 },
 }));

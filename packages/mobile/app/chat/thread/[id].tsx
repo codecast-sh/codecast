@@ -13,7 +13,8 @@ import { useInboxStore, selectChannelReadMarker, selectThreadMuted } from '@code
 import { useThreadMessages, useThreadSync } from '@codecast/web/hooks/useChatSync';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
-import { lineGroupKey, buildChatTimeline, memberHandle } from '@codecast/shared/chat';
+import { lineGroupKey, buildChatTimeline, memberHandle, dmOtherIds } from '@codecast/shared/chat';
+import { channelDisplayName } from '@codecast/web/lib/chatViews';
 import { MessageRow, fromChatView, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
 import { useSessionIdentityLookup } from '@/components/identity';
@@ -135,12 +136,14 @@ export default function ChatThreadScreen() {
   }, [markIfPresent]);
   useEffect(() => { markIfPresent(); }, [newestReplyId, markIfPresent]);
 
-  // Replies paint in this tick through the store's send action.
-  const onSend = useCallback((content: string, attachments: ChatAttachmentArg[]) => {
+  // Replies paint in this tick through the store's send action. `broadcast`
+  // also posts the reply into the channel (the composer's per-message choice).
+  const onSend = useCallback((content: string, attachments: ChatAttachmentArg[], opts?: { broadcast?: boolean }) => {
     if (!channelId) return;
     useInboxStore.getState().sendChatMessage(channelId, content, {
       threadRootId: rootId,
       attachments: attachments.length ? (attachments as any) : undefined,
+      broadcast: opts?.broadcast || undefined,
     });
   }, [channelId, rootId]);
 
@@ -236,21 +239,37 @@ export default function ChatThreadScreen() {
   }, [memberById]);
 
   const armed = thread.anchor?.armed ?? false;
+  const isDm = channel?.kind === 'dm';
+  const roomLabel = !channel ? '' : isDm
+    ? channelDisplayName({ name: channel.name ?? '', kind: 'dm', dmMemberIds: dmOtherIds(channel.dm_key, viewerId) }, teamMembers)
+    : channel.name ? `#${channel.name}` : '';
+  // The rollup the channel page carried says how many replies exist; until
+  // the thread page lands, the gap is said rather than drawn as an empty room.
+  const expectedReplies = useInboxStore((s: any) => s.chatThreadSummaries?.[rootId]?.reply_count ?? 0) as number;
+  const replyCount = Math.max(replies.length, expectedReplies);
+  const repliesComing = thread.loading && replies.length < expectedReplies;
   const anchorName = thread.anchor?.name ?? 'Workspace agent';
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
       <RNView style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={styles.back}>
-          <FontAwesome name="chevron-left" size={16} color={Theme.textMuted} />
+        <TouchableOpacity onPress={() => router.back()} hitSlop={8} style={styles.back} accessibilityLabel="Back">
+          <FontAwesome name="chevron-left" size={18} color={Theme.text} />
         </TouchableOpacity>
-        <RNView style={styles.headMain}>
+        <TouchableOpacity
+          style={styles.headMain}
+          disabled={!channelId}
+          activeOpacity={0.6}
+          onPress={() => channelId && router.push({ pathname: '/chat/[id]', params: { id: String(channelId) } } as never)}
+          accessibilityRole="link"
+          accessibilityLabel={roomLabel ? `Thread in ${roomLabel}. Open the channel` : 'Thread'}
+        >
           <RNText style={styles.title}>Thread</RNText>
-          {!!channel?.name && (
-            <RNText style={styles.subtitle} numberOfLines={1}>#{channel.name}</RNText>
+          {!!roomLabel && (
+            <RNText style={styles.subtitle} numberOfLines={1}>{roomLabel}</RNText>
           )}
-        </RNView>
+        </TouchableOpacity>
         {armed && (
           <TouchableOpacity
             onPress={() => void setFollow({ root_id: rootId as any, follow: false })}
@@ -310,19 +329,34 @@ export default function ChatThreadScreen() {
           // The root renders at the top of the inverted list — the subject line
           // the replies hang from.
           ListFooterComponent={
-            rootView ? (
-              <RNView style={styles.rootWrap}>
+            <RNView style={styles.rootWrap}>
+              {rootView ? (
                 <MessageRow
                   message={rootView}
                   now={now}
                   inThread
                   knownMentionHandles={knownHandles}
                   onLongPress={onLongPress}
+                  onToggleReaction={toggleReaction}
                   onOpenImage={setViewerUri}
                 />
-                <RNView style={styles.rootRule} />
+              ) : (
+                <RNText style={styles.placeholder}>{thread.loading ? 'Loading the thread…' : 'This message is not available.'}</RNText>
+              )}
+              <RNView style={styles.replyRule}>
+                <RNText style={styles.replyRuleText}>
+                  {replyCount === 0 ? 'No replies yet' : `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`}
+                </RNText>
+                <RNView style={styles.replyRuleLine} />
               </RNView>
-            ) : null
+            </RNView>
+          }
+          // Short threads read from the top: the root first, replies under it,
+          // and the space left over below them (flex-end is the top here,
+          // because the list is inverted).
+          contentContainerStyle={styles.listContent}
+          ListHeaderComponent={
+            repliesComing ? <RNText style={styles.placeholder}>Loading replies…</RNText> : null
           }
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         />
@@ -334,9 +368,11 @@ export default function ChatThreadScreen() {
           nameOf={nameOf}
         />
         <ChatComposerBar
+          atScreenBottom
           channelId={channelId ? String(channelId) : undefined}
           threadRootId={String(rootId)}
           placeholder={armed ? `Reply — ${anchorName} will answer` : 'Reply…'}
+          broadcastTo={channel?.name && !isDm ? `#${channel.name}` : undefined}
           placeholderTint={armed ? Theme.violet + 'AA' : undefined}
           mentionCandidates={mentionCandidates}
           editing={editing}
@@ -364,16 +400,17 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
+    gap: 10,
+    paddingLeft: 4,
+    paddingRight: Spacing.md,
+    minHeight: 56,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.border + '55',
+    borderBottomColor: Theme.border + '80',
   },
-  back: { paddingRight: 6 },
+  back: { width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
   headMain: { flex: 1, minWidth: 0 },
-  title: { fontSize: 15, fontWeight: '600', color: Theme.text },
-  subtitle: { fontSize: 10.5, color: Theme.textMuted0 },
+  title: { fontSize: 15.5, fontWeight: '700', color: Theme.text },
+  subtitle: { fontSize: 12, color: Theme.textMuted },
   armedPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -384,16 +421,22 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 3,
   },
-  armedText: { fontSize: 10, fontWeight: '600', color: Theme.violet },
+  armedText: { fontSize: 11, fontWeight: '600', color: Theme.violet },
   // No counter-flip: on this RN (0.81 / Fabric) an inverted list does NOT
   // transform header/footer components — flipping here rendered the root
   // upside down (caught in the simulator, 2026-08-15).
-  rootWrap: {},
-  rootRule: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Theme.border + '66',
-    marginVertical: 8,
-    marginHorizontal: Spacing.md,
+  rootWrap: { paddingTop: 4 },
+  listContent: { flexGrow: 1, justifyContent: 'flex-end', paddingBottom: 12 },
+  replyRule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 14,
+    marginBottom: 2,
+    paddingHorizontal: Spacing.md,
   },
+  replyRuleText: { fontSize: 12, fontWeight: '700', color: Theme.textMuted },
+  replyRuleLine: { flex: 1, height: 1, backgroundColor: Theme.border },
+  placeholder: { fontSize: 13, color: Theme.textMuted0, paddingHorizontal: Spacing.md, paddingVertical: 14 },
   highlight: { backgroundColor: Theme.accent + '1E' },
 }));

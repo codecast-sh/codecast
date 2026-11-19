@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 import { router } from 'expo-router';
 import { StyleSheet, TouchableOpacity, View as RNView, Image, Keyboard, Linking, useWindowDimensions } from 'react-native';
 import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
@@ -9,6 +9,8 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { TYPE_SCALE } from '@codecast/shared/render/typeScale';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
+import { MessageLongPressContext, useMessageLongPress } from '@/components/MessageLongPress';
+import { formatRelativeTime } from '@/components/SessionItem';
 import { openLink } from '@/lib/links';
 import { SlackLogo } from '@/components/SlackLogo';
 import { MobileIdentityFace, MobileSessionIdentityLine } from '@/components/identity';
@@ -35,11 +37,13 @@ function AttachmentImage({ storageId, previewUrl, onOpen }: {
   const { width } = useWindowDimensions();
   const url = useStorageImageUrl(storageId || undefined) || previewUrl;
   const side = Math.min(width - 96, 280);
+  const messageLongPress = useMessageLongPress();
   return (
     <TouchableOpacity
       activeOpacity={0.85}
       disabled={!url || !onOpen}
       onPress={() => url && onOpen?.(url)}
+      onLongPress={messageLongPress ? () => messageLongPress() : undefined}
       style={[styles.attachment, { width: side, height: side * 0.75 }]}
     >
       {url ? (
@@ -55,11 +59,13 @@ function AttachmentVideo({ storageId }: { storageId: string }) {
   const { width } = useWindowDimensions();
   const url = useStorageImageUrl(storageId || undefined);
   const side = Math.min(width - 96, 280);
+  const messageLongPress = useMessageLongPress();
   return (
     <TouchableOpacity
       activeOpacity={0.85}
       disabled={!url}
       onPress={() => url && void openLink(url)}
+      onLongPress={messageLongPress ? () => messageLongPress() : undefined}
       style={[styles.attachment, styles.attachmentVideo, { width: side, height: side * 0.5625 }]}
       accessibilityRole="button"
       accessibilityLabel="Play video"
@@ -107,6 +113,8 @@ export type MobileChatMessage = {
   mentionsMe?: boolean;
   /** Set on a reply (a broadcast in the channel): the thread it belongs to. */
   threadRootId?: string;
+  /** That thread's root, as a line of plain text, when the store holds it. */
+  threadRootPreview?: string;
   agentStatus?: 'thinking' | 'streaming' | 'done' | 'error';
   agentDeadlineAt?: number;
   pending?: boolean;
@@ -172,6 +180,9 @@ export function fromChatView(
       : undefined,
   };
 }
+
+/** The face beside a message's first line; the gutter is this plus its gap. */
+const AVATAR = 36;
 
 const AVATAR_HUES = [Theme.blue, Theme.cyan, Theme.green, Theme.violet, Theme.magenta, Theme.orange];
 function hueFor(seed: string): string {
@@ -252,6 +263,7 @@ export const MessageRow = memo(function MessageRow({
   grouped,
   now,
   onOpenThread,
+  onThreadPressIn,
   onLongPress,
   onToggleReaction,
   onStopAgent,
@@ -263,7 +275,9 @@ export const MessageRow = memo(function MessageRow({
   message: MobileChatMessage;
   grouped?: boolean;
   now: number;
-  onOpenThread?: (id: string) => void;
+  onOpenThread?: (id: string, focusId?: string) => void;
+  /** A finger went down on a thread link: fetch its replies now. */
+  onThreadPressIn?: (rootId: string) => void;
   onLongPress?: (message: MobileChatMessage) => void;
   onToggleReaction?: (id: string, emoji: string) => void;
   onStopAgent?: (id: string) => void;
@@ -281,8 +295,11 @@ export const MessageRow = memo(function MessageRow({
   const thinking = agentStatus === 'thinking' || agentStatus === 'streaming';
   const errored = agentStatus === 'error';
   const elapsed = thinking ? Math.max(0, Math.round((now - message.createdAt) / 1000)) : 0;
+  // Chat's sheet has its own actions; a link's Copy link is covered by Copy text.
+  const openMenu = useCallback(() => onLongPress?.(message), [onLongPress, message]);
 
   return (
+    <MessageLongPressContext.Provider value={onLongPress ? openMenu : null}>
     <TouchableOpacity
       activeOpacity={0.85}
       // The row claims every tap (it holds the long-press menu), so the
@@ -290,7 +307,7 @@ export const MessageRow = memo(function MessageRow({
       // tap with nothing to do puts the keyboard away here. Links, reactions
       // and images inside are deeper touchables and take their own taps.
       onPress={Keyboard.dismiss}
-      onLongPress={() => onLongPress?.(message)}
+      onLongPress={openMenu}
       delayLongPress={350}
       style={[
         styles.row,
@@ -301,7 +318,7 @@ export const MessageRow = memo(function MessageRow({
       ]}
     >
       <RNView style={styles.gutter}>
-        {!grouped && <ChatAvatar author={author} />}
+        {!grouped && <ChatAvatar author={author} size={AVATAR} />}
       </RNView>
 
       <RNView style={styles.body}>
@@ -314,7 +331,7 @@ export const MessageRow = memo(function MessageRow({
               </RNView>
             )}
             {!!author.session?.via && (
-              <RNText style={styles.time} numberOfLines={1}>via {author.session.via}</RNText>
+              <RNText style={[styles.time, styles.via]} numberOfLines={1}>via {author.session.via}</RNText>
             )}
             {author.slack?.isBot && (
               <RNView style={styles.agentChip} accessibilityLabel={`${author.name} is a Slack app`}>
@@ -336,6 +353,22 @@ export const MessageRow = memo(function MessageRow({
             {message.slack && <SlackMark slack={message.slack} />}
             <RNText style={styles.time}>{clock(message.createdAt)}</RNText>
           </RNView>
+        )}
+
+        {!inThread && message.threadRootId && onOpenThread && (
+          <TouchableOpacity
+            style={styles.inThread}
+            onPressIn={() => onThreadPressIn?.(message.threadRootId!)}
+            onPress={() => onOpenThread(message.threadRootId!, message.id)}
+            hitSlop={{ top: 6, bottom: 6 }}
+            accessibilityRole="link"
+            accessibilityLabel="Replied in a thread. Open the thread"
+          >
+            <FontAwesome name="level-up" size={12} color={Theme.textMuted} style={styles.inThreadIcon} />
+            <RNText style={styles.inThreadText} numberOfLines={1}>
+              Replied to a thread{message.threadRootPreview ? <RNText style={styles.inThreadRoot}>: {message.threadRootPreview}</RNText> : null}
+            </RNText>
+          </TouchableOpacity>
         )}
 
         {message.deletedAt ? (
@@ -407,17 +440,28 @@ export const MessageRow = memo(function MessageRow({
         )}
 
         {!inThread && message.thread && (
-          <TouchableOpacity style={styles.threadLink} onPress={() => onOpenThread?.(message.id)}>
-            <FontAwesome name="comment-o" size={11} color={Theme.blue} />
+          <TouchableOpacity
+            style={styles.threadLink}
+            activeOpacity={0.6}
+            onPressIn={() => onThreadPressIn?.(message.id)}
+            onPress={() => onOpenThread?.(message.id)}
+            hitSlop={{ top: 4, bottom: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={`${message.thread.replyCount} ${message.thread.replyCount === 1 ? 'reply' : 'replies'}. Open thread`}
+          >
+            <FontAwesome name="comment-o" size={14} color={Theme.accent} />
             <RNText style={styles.threadText}>
               {message.thread.agentStatus === 'thinking' || message.thread.agentStatus === 'streaming'
                 ? 'Thinking…'
                 : `${message.thread.replyCount}${message.thread.replyCapped ? '+' : ''} ${message.thread.replyCount === 1 ? 'reply' : 'replies'}`}
             </RNText>
+            <RNText style={styles.threadWhen} numberOfLines={1}>{formatRelativeTime(message.thread.lastReplyAt)}</RNText>
+            <FontAwesome name="angle-right" size={16} color={Theme.textMuted0} />
           </TouchableOpacity>
         )}
       </RNView>
     </TouchableOpacity>
+    </MessageLongPressContext.Provider>
   );
 });
 
@@ -444,7 +488,7 @@ export function NewDivider() {
 
 const styles = themedStyles((Theme, look) => StyleSheet.create({
   avatar: {
-    borderRadius: 6,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
@@ -461,13 +505,15 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     borderColor: Theme.border + '80',
   },
   avatarInitials: { fontWeight: '700', color: Theme.bg },
-  mdBase: { fontSize: look === 'modern' ? TYPE_SCALE.body.size : 13.5, lineHeight: 20, color: Theme.textSecondary },
+  mdBase: look === 'modern'
+    ? { fontSize: 15, lineHeight: 21.5, color: Theme.text }
+    : { fontSize: 13.5, lineHeight: 20, color: Theme.textSecondary },
   row: {
     flexDirection: 'row',
     paddingHorizontal: Spacing.md,
     paddingVertical: 1,
   },
-  rowLead: { marginTop: 10 },
+  rowLead: { marginTop: 14 },
   rowMentionsMe: {
     backgroundColor: Theme.orange + '12',
     borderLeftWidth: 2,
@@ -479,32 +525,40 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     borderLeftColor: Theme.red,
   },
   rowPending: { opacity: 0.55 },
-  gutter: { width: 36, alignItems: 'flex-end', paddingRight: 8, paddingTop: 2 },
+  gutter: { width: AVATAR + 10, alignItems: 'flex-start', paddingTop: 2 },
   body: { flex: 1, minWidth: 0 },
-  head: { flexDirection: 'row', alignItems: 'baseline', gap: 6, marginBottom: 1 },
-  author: { fontSize: 13, fontWeight: '600', color: Theme.text, flexShrink: 1 },
+  // Wraps rather than truncates: a long session title keeps its words and the
+  // chip, via and time drop to a second line.
+  head: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 6, rowGap: 1, marginBottom: 2 },
+  author: { fontSize: 14, fontWeight: '700', color: Theme.text, flexShrink: 1 },
   agentChip: {
     borderWidth: 1,
     borderColor: Theme.violet + '70',
     borderRadius: 3,
     paddingHorizontal: 3,
   },
-  agentChipText: { fontSize: 7.5, fontWeight: '700', color: Theme.violet, letterSpacing: 0.8 },
-  time: { fontSize: 10, color: Theme.textMuted0 },
+  agentChipText: { fontSize: 8, fontWeight: '700', color: Theme.violet, letterSpacing: 0.6 },
+  time: { fontSize: 11, color: Theme.textMuted0 },
+  // "via" gives way before the author's name does.
+  via: { flexShrink: 3 },
   context: { flexShrink: 1, minWidth: 0 },
   contextTitle: { color: Theme.textMuted },
   // The head aligns on text baselines; a bare glyph has none, so it centers.
   slackMark: { alignSelf: 'center' },
-  deleted: { fontSize: 12.5, fontStyle: 'italic', color: Theme.textMuted0 },
-  edited: { fontSize: 10, color: Theme.textMuted0, marginTop: -4, marginBottom: 2 },
-  thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  thinking: { fontSize: 12.5, color: Theme.textMuted },
-  stop: { fontSize: 11.5, color: Theme.blue, textDecorationLine: 'underline' },
+  deleted: { fontSize: 13, fontStyle: 'italic', color: Theme.textMuted0 },
+  edited: { fontSize: 11, color: Theme.textMuted0, marginTop: -4, marginBottom: 2 },
+  thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  thinking: { fontSize: 13, color: Theme.textMuted },
+  stop: { fontSize: 13, fontWeight: '600', color: Theme.blue },
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  errorText: { fontSize: 12.5, color: Theme.red, flexShrink: 1 },
-  failedRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
-  failedText: { fontSize: 11, color: Theme.red },
-  retry: { fontSize: 11, fontWeight: '600', color: Theme.blue, textDecorationLine: 'underline' },
+  errorText: { fontSize: 13, color: Theme.red, flexShrink: 1 },
+  failedRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 },
+  failedText: { fontSize: 12, color: Theme.red },
+  retry: { fontSize: 12, fontWeight: '700', color: Theme.blue },
+  inThread: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 3, minHeight: 24 },
+  inThreadIcon: { transform: [{ rotate: '90deg' }] },
+  inThreadText: { flexShrink: 1, fontSize: 12, fontWeight: '600', color: Theme.textMuted },
+  inThreadRoot: { fontWeight: '400' },
   attachments: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -526,26 +580,40 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  reactions: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 },
+  reactions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   reaction: {
+    minHeight: 30,
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: Theme.border + '60',
-    borderRadius: 10,
-    paddingHorizontal: 6,
-    paddingVertical: 1,
+    borderRadius: 15,
+    paddingHorizontal: 10,
     backgroundColor: Theme.bgAlt + '80',
   },
   reactionMine: {
     borderColor: Theme.blue + '99',
     backgroundColor: Theme.blue + '22',
   },
-  reactionText: { fontSize: 11, color: Theme.textMuted },
-  threadLink: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, paddingVertical: 2 },
-  threadText: { fontSize: 11.5, fontWeight: '600', color: Theme.blue },
-  day: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 10, paddingHorizontal: Spacing.md },
-  dayLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border + '55' },
-  dayLabel: { fontSize: 10, fontWeight: '600', color: Theme.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
-  newRule: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 6, paddingHorizontal: Spacing.md },
-  newLabel: { fontSize: 9, fontWeight: '700', color: Theme.orange, letterSpacing: 1 },
+  reactionText: { fontSize: 12.5, color: Theme.textSecondary },
+  // The whole bar opens the thread: a thumb-sized target, not a word.
+  threadLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 40,
+    marginTop: 6,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border + '80',
+    backgroundColor: Theme.bgAlt + 'B0',
+  },
+  threadText: { fontSize: 13, fontWeight: '700', color: Theme.accent },
+  threadWhen: { flex: 1, fontSize: 12, color: Theme.textMuted0 },
+  day: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 4, paddingHorizontal: Spacing.md },
+  dayLine: { flex: 1, height: 1, backgroundColor: Theme.border },
+  dayLabel: { fontSize: 11, fontWeight: '700', color: Theme.textMuted, letterSpacing: 0.3 },
+  newRule: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 8, paddingHorizontal: Spacing.md },
+  newLabel: { fontSize: 10, fontWeight: '700', color: Theme.orange, letterSpacing: 1 },
   newLine: { flex: 1, height: 1, backgroundColor: Theme.orange + '66' },
 }));
