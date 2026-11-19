@@ -39,6 +39,8 @@ const version = createHash("sha256").update(fs.readFileSync("evals/grader.txt"))
 const cases = [];
 if (env === "fake/floor") {
   for (let i = 1; i <= (process.env.FAKE_VOID ? 4 : 5); i++) cases.push({ id: "f" + i, score: i === 3 && fs.existsSync("pressure.txt") ? 0 : 1 });
+} else if (env === "fake/fit") {
+  for (let i = 1; i <= 20; i++) cases.push({ id: "p" + i, score: Math.min(1, Math.max(0, 0.8 + (eff.fit ?? 0))) });
 } else {
   const wide = env === "fake/noisy" ? 0.1 : 0.005;
   const count = split === "held" ? 30 : 40;
@@ -78,6 +80,16 @@ command = "bun {root}/evals/run.mjs fake/replay {split} {out}"
 splits = ["dev", "held"]
 cost_usd = 0.25
 protects = ["evals/**"]
+
+[[env]]
+key = "fake/fit"
+title = "Share of picks the fit read passes"
+level = "L2"
+command = "bun {root}/evals/run.mjs fake/fit {split} {out}"
+splits = ["dev"]
+protects = ["evals/**"]
+role = "check"
+tolerance = 0.02
 `;
 
 const CARD = {
@@ -366,13 +378,22 @@ describe("the climb's dry run", () => {
     expect(readState(dir)!.candidates[0].why).toContain("evals/lib/bonus.mjs");
   });
 
-  test("installed packages edited after gauge stop the climb", async () => {
+  // From the second flow run (ct-97125): the shared checkout's node_modules are touched all day; only a new version or tarball moves a grade.
+  const graderLib = (version: string, body: string) => {
     fs.mkdirSync(path.join(repo, "node_modules/grader-lib"), { recursive: true });
-    fs.writeFileSync(path.join(repo, "node_modules/grader-lib/index.js"), "module.exports = 0\n");
+    fs.writeFileSync(path.join(repo, "node_modules/grader-lib/package.json"), JSON.stringify({ name: "grader-lib", version }));
+    fs.writeFileSync(path.join(repo, "node_modules/grader-lib/index.js"), body);
+  };
+  test("a grader package whose version changes mid-climb measures the base again on the new state, keeping what the old runs cost", async () => {
+    graderLib("1.0.0", "module.exports = 0\n");
     await gauge(io(), dir, { card: CARD, base });
     await admit(io(), dir, proposed);
-    fs.writeFileSync(path.join(repo, "node_modules/grader-lib/index.js"), "module.exports = 0.06 // bonus\n");
-    await expect(screen(io(), dir)).rejects.toThrow("an installed package the grading files import changed since gauge");
+    graderLib("2.0.0", "module.exports = 0\n");
+    const s = await screen(io(), dir);
+    expect(s.notes.join(" ")).toContain("measured again on the new state");
+    expect(Object.keys(s.ledger.failed).filter((k) => k.startsWith("stale")).length).toBeGreaterThan(0);
+    expect(s.levels.find((l) => l.env === "fake/replay")!.kept).toBe(true);
+    expect(s.candidates.filter((c) => c.status === "survivor").map((c) => c.branch)).toEqual(["climb/good", "climb/overfit", "climb/pushy"]);
   });
 
   test("a held run's error text never reaches the record", async () => {
@@ -414,16 +435,14 @@ describe("the climb's dry run", () => {
     expect(s.ledger.usd).toBeGreaterThan(Object.values(s.ledger.done).filter((d: any) => !d.reused).reduce((a: number, d: any) => a + (d.usd ?? 0), 0) - 1e-9);
   });
 
-  test("a package edited after gauge is caught at any size and timestamp", async () => {
-    const lib = path.join(repo, "node_modules/grader-lib/index.js");
-    fs.mkdirSync(path.dirname(lib), { recursive: true });
-    fs.writeFileSync(lib, "module.exports = 0.00;\n");
+  test("other sessions touching the shared node_modules (same version, new bytes and timestamps) stop nothing", async () => {
+    graderLib("1.0.0", "module.exports = 0.00;\n");
     await gauge(io(), dir, { card: CARD, base });
     await admit(io(), dir, proposed);
-    const st = fs.statSync(lib);
-    fs.writeFileSync(lib, "module.exports = 0.06;\n");
-    fs.utimesSync(lib, st.atime, st.mtime);
-    await expect(screen(io(), dir)).rejects.toThrow("an installed package the grading files import changed since gauge");
+    graderLib("1.0.0", "module.exports = 0.00; // rebuilt\n");
+    const s = await screen(io(), dir);
+    expect(s.notes.join(" ")).not.toContain("measured again");
+    expect(s.candidates.some((c) => c.status === "survivor")).toBe(true);
   });
 
   test("a scoring level whose env names no protects is refused, since its runner's imports cannot show what grades", async () => {
@@ -556,7 +575,7 @@ describe("the climb's dry run", () => {
     expect(err.code).toBe(5);
     expect(runs).toBe(0);
     expect(Date.now() - at).toBeLessThan(5000);
-    for (const words of ["fake/noisy declares a held split but has no held set", "fake/replay declares a held split but has no held set", "no scoring level the card names has a held set", "fake/floor (the goal's L0 check, which the guard runs on every survivor) declares no protects"]) expect(err.message).toContain(words);
+    for (const words of ["fake/noisy declares a held split but has no held set", "fake/replay declares a held split but has no held set", "no scoring level the card names has a held set", "fake/floor (the goal's check, which the guard runs on every survivor) declares no protects"]) expect(err.message).toContain(words);
     // Nothing ran, and the station can say so.
     expect(filedLine(readState(dir))).toBe("Filed nothing: the climb had not started");
   });
@@ -567,5 +586,30 @@ describe("the climb's dry run", () => {
     const line = filedLine(readState(dir));
     expect(line).toContain("could not be filed (held_read required)");
     expect(line).toMatch(/^Filed 0 runs, \d+ failed or unfiled/);
+  });
+
+  // From the second flow run: Frame climbed a sensitivity check (share of picks the fit read passes) as if it were a score.
+  test("an env declared a check is never a level to climb: preflight sends the card back", async () => {
+    standings = [...standings, { env: "fake/fit", level: "L2" }];
+    const err = await gauge(io(), dir, { card: { ...CARD, levels: [{ env: "fake/fit", plausible_effect: 0.09 }, { env: "fake/replay", plausible_effect: 0.04 }] }, base }).catch((e) => e);
+    expect(err.code).toBe(5);
+    expect(err.message).toContain('fake/fit is a check (role = "check"), not a climb target');
+    expect(runs).toBe(0);
+  });
+
+  test("Guard runs the goal's checks on every survivor and refuses one whose check falls past its tolerance against base", async () => {
+    standings = [...standings, { env: "fake/fit", level: "L2" }];
+    // The truly better candidate buys its yeses by passing fewer picks on fit: -0.05, past the 0.02 tolerance.
+    branch("climb/unfit", { "effect.txt": "dev=0.07\nheld=0.07\nfit=-0.05\n" });
+    branch("climb/fitok", { "effect.txt": "dev=0.06\nheld=0.06\nfit=-0.01\n" });
+    await gauge(io(), dir, { card: CARD, base });
+    await admit(io(), dir, [{ branch: "climb/unfit", hypothesis: "h", predicted_delta: 0.07 }, { branch: "climb/fitok", hypothesis: "h", predicted_delta: 0.06 }]);
+    const s = await guard(io(), dir);
+    const unfit = s.candidates.find((c) => c.branch === "climb/unfit")!;
+    expect(unfit.status).toBe("guard_failed");
+    expect(unfit.guard!.why).toContain("fake/fit: -0.050 over 20 cases, 0.050 the wrong way, past its tolerance 0.02");
+    const ok = s.candidates.find((c) => c.status === "promoted")!;
+    expect(ok.branch).toBe("climb/fitok");
+    expect(s.checks).toEqual(["fake/floor", "fake/fit"]);
   });
 });

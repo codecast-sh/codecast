@@ -68,7 +68,7 @@ export type ClimbState = {
   base: string; task?: string; card: ClimbCard; notes: string[];
   /** When the climb's task was created: runs of the climb are filed after it, reused base runs before it. */
   reuse_before: number;
-  /** The goal's L0 checks as they stood at gauge; the guard runs these and any the goal names now. */
+  /** The goal's checks (L0 envs and `role = "check"` envs) as they stood at gauge; the guard runs these and any the goal names now. */
   checks: string[];
   /** The installed packages the grading files import, as they stood at gauge (protect.ts packagesPrint). */
   packages: string;
@@ -102,6 +102,10 @@ function baseDecls(root: string, base: string): EnvDeclaration[] {
   return parseEnvsText(text);
 }
 const declOf = (decls: EnvDeclaration[], key: string) => decls.find((d) => d.key === key) ?? null;
+/** A check is what a climb may not make worse and never climbs: every L0 env, and any env declared `role = "check"`. */
+export const isCheck = (d: Pick<EnvDeclaration, "level" | "role">) => d.level === "L0" || d.role === "check";
+/** The goal's checks Guard runs on every survivor, by env key. */
+const goalChecks = (levels: ReadonlyArray<{ env: string; level: EnvLevel }>, decls: EnvDeclaration[]) => levels.filter((l) => isCheck(declOf(decls, l.env) ?? { level: l.level })).map((l) => l.env);
 
 /**
  * The repo's ceiling on what a climb of `goal` may spend, from
@@ -164,7 +168,7 @@ async function load(io: ClimbIo, dir: string): Promise<View> {
   const ceiling = goal?.goal?.budget ?? repoCeiling(io.root, s.base, s.card.goal);
   const read = readClimbCard({ ...s.card, budget: s.card.budget }, { short_id: s.card.goal, budget: ceiling, levels: s.card.levels.map((l) => ({ env: l.env, level: l.level })) });
   const budget = read.ok ? read.card.budget : s.card.budget;
-  if (goal?.levels) s.checks = [...new Set([...s.checks, ...(goal.levels as EnvStanding[]).filter((l) => l.level === "L0").map((l) => l.env)])];
+  if (goal?.levels) s.checks = [...new Set([...s.checks, ...goalChecks(goal.levels as EnvStanding[], decls)])];
   // A candidate is admissible only as git shows it now, whatever the state says.
   for (const c of s.candidates) if (!c.barred && c.sha) { const why = inadmissible(io.root, s.base, c.sha, globs); if (why) c.barred = why; }
   return { io, dir, s, decls, globs, budget, read: new Map() };
@@ -239,7 +243,7 @@ async function runOnce(v: View, key: string, decl: EnvDeclaration, opts: { label
     if (refused) return { ok: false, error: refused };
     return v.io.run(decl, { dir: tree, label: opts.label, split: opts.split, sha: opts.sha, goal: v.s.card.goal, task: v.s.task });
   });
-  if (refused === "PACKAGES") { v.s.stopped = "an installed package the grading files import changed since gauge, and every tree the climb runs in links it; reinstall and start a new climb"; save(v.dir, v.s); throw new ClimbStop(v.s.stopped, STOP.none); }
+  if (refused === "PACKAGES") { save(v.dir, v.s); throw new PackagesMoved(); }
   const fail = (why: string, usd: number) => { (v.s.ledger.failed ??= {})[key] = { usd, why }; save(v.dir, v.s); return { error: why }; };
   if (refused) return fail(`GRADER: ${refused}`, 0);
   const cost = Math.max(0, (out.ok ? out.result.cost_usd : undefined) ?? decl.cost_usd ?? 0);
@@ -286,13 +290,19 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
       base: opts.base, ...(opts.task ? { task: opts.task } : {}), card: read.card, notes,
       reuse_before: Number(task?.created_at ?? task?._creationTime) || 0,
       ...(readability ? { readability } : {}),
-      checks: goalLevels.filter((l) => l.level === "L0").map((l) => l.env),
+      checks: goalChecks(goalLevels, decls),
       packages: packagesPrint(io.root, graderPackageDirs(io.root, opts.base, gradingGlobs(io.root, opts.base, decls))),
       levels: [], candidates: [], ledger: { usd: 0, runs: 0, done: {}, failed: {} }, gates: {},
     });
   }
   const v = await load(io, dir);
-  const s = v.s;
+  await withRegauge(v, () => measureLevels(v));
+  return v.s;
+}
+
+/** Each card level's base runs and what they show: the noise, the MDE, and whether the level can see one change. */
+async function measureLevels(v: View): Promise<void> {
+  const s = v.s, dir = v.dir;
   for (const cl of s.card.levels) {
     const decl = declOf(v.decls, cl.env);
     const row: LevelState = { env: cl.env, level: cl.level, title: decl?.title ?? cl.env, kept: false, why: "", cost_usd: decl?.cost_usd ?? 0, held: !!decl?.splits.includes("held") && !!decl?.protects?.length, base_attempts: [], ...(cl.plausible_effect !== undefined ? { plausible_effect: cl.plausible_effect } : {}) };
@@ -324,7 +334,36 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
     save(dir, s);
     throw new ClimbStop(s.stopped, STOP.none);
   }
-  return s;
+}
+
+/** Thrown when the installed packages the grading files import are not what the climb measured its base on. */
+class PackagesMoved extends Error {}
+
+/**
+ * Run a station; when the grader's packages moved under it (a reinstall, an
+ * upgrade), measure the base again on the new state and run it once more.
+ * Every run made before the change keeps its cost on the ledger and is never
+ * read again, so no comparison mixes the two states.
+ */
+async function withRegauge(v: View, fn: () => Promise<void>): Promise<void> {
+  try { return await fn(); } catch (err) { if (!(err instanceof PackagesMoved)) throw err; }
+  const s = v.s;
+  const now = packagesPrint(v.io.root, graderPackageDirs(v.io.root, s.base, v.globs));
+  const n = Object.keys(s.ledger.failed ?? {}).filter((k) => k.startsWith("stale")).length;
+  for (const [key, d] of Object.entries(s.ledger.done)) {
+    if (!d.reused) (s.ledger.failed ??= {})[`stale${n}|${key}`] = { usd: d.usd ?? 0, why: "run before the grader's installed packages changed; measured again" };
+    delete s.ledger.done[key];
+  }
+  s.levels = [];
+  s.gates = {};
+  s.guard_rounds = {};
+  s.packages = now;
+  s.notes = [...s.notes, `the grader's installed packages changed during the climb; its base was measured again on the new state`];
+  v.read.clear();
+  save(v.dir, s);
+  v.io.log("the grader's installed packages changed: measuring the base again on the new state");
+  await measureLevels(v);
+  await fn();
 }
 
 /**
@@ -335,9 +374,10 @@ export async function gauge(io: ClimbIo, dir: string, opts: { card: unknown; bas
  * product it scores, so only the env's author can say what grades). A dev
  * set in codecast is optional: an env with none runs on its own cases, as
  * every env did before sets existed. A scoring level Confirm runs needs a
- * held set in codecast, and at least one such level must exist. The goal's
- * L0 checks, which the guard runs on every survivor, are held to the same
- * terms.
+ * held set in codecast, and at least one such level must exist. A scoring
+ * level must be a score: an env declared `role = "check"` is never climbed.
+ * The goal's checks, which the guard runs on every survivor, are held to the
+ * same terms.
  */
 export function preflight(card: ClimbCard, decls: EnvDeclaration[], standings: readonly EnvStanding[]): string[] {
   const out: string[] = [];
@@ -352,12 +392,13 @@ export function preflight(card: ClimbCard, decls: EnvDeclaration[], standings: r
   let confirmable = 0;
   for (const l of card.levels) {
     const d = terms(l.env, l.level, l.level === "L0" ? "an L0 check on the card" : `the card's ${l.level} level`);
+    if (d && l.level !== "L0" && d.role === "check") { out.push(`${l.env} is a check (role = "check"), not a climb target: climbing it alone trades the score for it. Guard runs it on every survivor; pick a score level`); continue; }
     if (!d || l.level === "L0" || !d.splits.includes("held")) continue;
     if (standings.find((x) => x.env === l.env)?.held) confirmable++;
     else out.push(`${l.env} declares a held split but has no held set in codecast, so Confirm cannot run it (the product's runner puts one with cast env cases put ${l.env} --split held)`);
   }
   if (!confirmable && card.levels.some((l) => l.level !== "L0")) out.push("no scoring level the card names has a held set in codecast, so no gain could be confirmed");
-  for (const s of standings) if (s.level === "L0" && !card.levels.some((l) => l.env === s.env)) terms(s.env, "L0", "the goal's L0 check, which the guard runs on every survivor");
+  for (const key of goalChecks(standings, decls)) if (!card.levels.some((l) => l.env === key)) terms(key, standings.find((x) => x.env === key)!.level, "the goal's check, which the guard runs on every survivor");
   return out;
 }
 
@@ -477,7 +518,7 @@ async function screenView(v: View): Promise<void> {
 
 export async function screen(io: ClimbIo, dir: string): Promise<ClimbState> {
   const v = await load(io, dir);
-  await screenView(v);
+  await withRegauge(v, () => screenView(v));
   return v.s;
 }
 
@@ -507,11 +548,11 @@ async function confirmView(v: View): Promise<void> {
 
 export async function confirm(io: ClimbIo, dir: string): Promise<ClimbState> {
   const v = await load(io, dir);
-  await confirmView(v);
+  await withRegauge(v, () => confirmView(v));
   return v.s;
 }
 
-// ── guard: the goal's L0 checks and the product's eval gate on each survivor, best first ──
+// ── guard: the goal's checks (L0 and role = "check") and the product's eval gate on each survivor, best first ──
 
 type CheckVerdict = { verdict: "pass" | "fail" | "void"; why: string };
 
@@ -533,6 +574,7 @@ async function checkVerdict(v: View, c: Cand, d: EnvDeclaration, round: number):
   if (k.version !== b.version) return { verdict: "fail", why: `${d.key}: changes the env itself (version ${k.version}, base ${b.version})` };
   const base = new Map(b.cases.map((x) => [x.id, x.score]));
   const cand = new Map(k.cases.map((x) => [x.id, x.score]));
+  if (d.level !== "L0") return toleranceVerdict(d, base, cand, b.unscored, k.unscored);
   const worse = [...cand].filter(([id, sc]) => base.has(id) && sc < base.get(id)!).map(([id]) => id);
   if (worse.length) return { verdict: "fail", why: `${d.key}: ${worse.length} case${worse.length === 1 ? "" : "s"} worse (${worse.slice(0, 3).join(", ")})` };
   const lost = [...base.keys()].filter((id) => !cand.has(id));
@@ -540,6 +582,24 @@ async function checkVerdict(v: View, c: Cand, d: EnvDeclaration, round: number):
   if (lost.length && !k.unscored) return { verdict: "fail", why: `${d.key}: ${lost.length} case${lost.length === 1 ? "" : "s"} the base scored and the candidate lost` };
   if (unscored || lost.length) return { verdict: "void", why: `${d.key}: ${b.unscored} case${b.unscored === 1 ? "" : "s"} unscored on the base and ${k.unscored} on the candidate; the ${Math.min(base.size, cand.size)} both scored agree` };
   return { verdict: "pass", why: `${d.key}: no case worse over ${cand.size}` };
+}
+
+/**
+ * A check above L0 (`role = "check"`): its mean over the cases both sides
+ * scored may move the wrong way by at most its tolerance. One that moves
+ * further fails; unscored cases with no failure hold the verdict open.
+ */
+function toleranceVerdict(d: EnvDeclaration, base: Map<string, number>, cand: Map<string, number>, baseUnscored: number, candUnscored: number): CheckVerdict {
+  const both = [...cand.keys()].filter((id) => base.has(id));
+  if (!both.length) return { verdict: "void", why: `${d.key}: no case scored on both sides` };
+  const mean = (m: Map<string, number>) => both.reduce((a, id) => a + m.get(id)!, 0) / both.length;
+  const delta = mean(cand) - mean(base);
+  const wrong = d.direction === "lower" ? delta : -delta;
+  const tol = d.tolerance ?? 0;
+  const said = `${delta >= 0 ? "+" : ""}${delta.toFixed(3)} over ${both.length} cases`;
+  if (wrong > tol + 1e-9) return { verdict: "fail", why: `${d.key}: ${said}, ${wrong.toFixed(3)} the wrong way, past its tolerance ${tol}` };
+  if (baseUnscored || candUnscored || both.length < base.size) return { verdict: "void", why: `${d.key}: ${said} within its tolerance, but ${baseUnscored + candUnscored || base.size - both.length} case(s) went unscored` };
+  return { verdict: "pass", why: `${d.key}: ${said}, within its tolerance ${tol}` };
 }
 
 const GATE_WORDS: Record<number, string> = {
@@ -608,7 +668,7 @@ async function guardView(v: View, opts: { env?: Record<string, string>; rerunVoi
       save(v.dir, s);
       throw new ClimbStop(s.pending, STOP.pending);
     }
-    c.guard = fails.length ? { pass: false, why: fails.join("; ") } : { pass: true, why: command ? "L0 checks and the product's eval gate passed" : `L0 checks passed${checks.length ? "" : " (none named)"}; the project names no eval command` };
+    c.guard = fails.length ? { pass: false, why: fails.join("; ") } : { pass: true, why: command ? "the goal's checks and the product's eval gate passed" : `the goal's checks passed${checks.length ? "" : " (none named)"}; the project names no eval command` };
     c.status = fails.length ? "guard_failed" : "promoted";
     if (fails.length) c.why = `guard: ${c.guard.why}`;
     save(v.dir, s);
@@ -622,7 +682,7 @@ async function guardView(v: View, opts: { env?: Record<string, string>; rerunVoi
 
 export async function guard(io: ClimbIo, dir: string, opts: { env?: Record<string, string>; rerunVoid?: boolean } = {}): Promise<ClimbState> {
   const v = await load(io, dir);
-  await guardView(v, opts);
+  await withRegauge(v, () => guardView(v, opts));
   return v.s;
 }
 
@@ -633,7 +693,7 @@ export async function guard(io: ClimbIo, dir: string, opts: { env?: Record<strin
  */
 export async function bindPromoted(io: ClimbIo, dir: string, task: string, opts: { env?: Record<string, string> } = {}): Promise<ClimbState> {
   const v = await load(io, dir);
-  await guardView(v, opts);
+  await withRegauge(v, () => guardView(v, opts));
   const s = v.s;
   if (s.promoted_task && s.promoted_task !== task) throw new ClimbStop(`the climb already promoted into ${s.promoted_task}`, STOP.none);
   const t = await io.post("/cli/work/get", { short_id: task }, true).catch(() => null);

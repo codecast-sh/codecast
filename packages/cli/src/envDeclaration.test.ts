@@ -43,6 +43,16 @@ describe("parseEnvsText", () => {
     expect(() => parseEnvsText(one(`timeout_s=0`))).toThrow(/timeout_s/);
   });
 
+  test("a check names its role, the direction that must not worsen and how far it may move", () => {
+    const one = (extra: string) => `[[env]]\nkey="u/fit"\ntitle="t"\nlevel="L2"\ncommand="run {candidate}"\n${extra}`;
+    expect(parseEnvsText(one(`role="check"\ndirection="lower"\ntolerance=0.02`))[0]).toMatchObject({ role: "check", direction: "lower", tolerance: 0.02 });
+    expect(parseEnvsText(one(`role="score"`))[0].role).toBe("score");
+    expect(() => parseEnvsText(one(`role="gate"`))).toThrow(/role must be "score" or "check"/);
+    expect(() => parseEnvsText(one(`tolerance=0.02`))).toThrow(/tolerance applies to a check/);
+    expect(() => parseEnvsText(one(`role="check"\ntolerance=2`))).toThrow(/tolerance must be a number from 0 to 1/);
+    expect(() => parseEnvsText(one(`role="check"\ndirection="up"`))).toThrow(/direction must be "higher" or "lower"/);
+  });
+
   test("placeholders are filled shell-quoted; ${VAR} is left to the shell", () => {
     expect(commandPlaceholders("a {candidate} ${HOME} {out}")).toEqual(["candidate", "out"]);
     expect(fillCommand("run --c {candidate} --o {out} ${HOME}", { candidate: "it's mine; rm -rf /", out: "/tmp/x.json" })).toBe(`run --c 'it'\\''s mine; rm -rf /' --o /tmp/x.json \${HOME}`);

@@ -14,6 +14,9 @@
 //   predicts = "L5:intros_a_week"     # what it predicts, a level above
 //   timeout_s = 1800                  # stopped, with its children, past this
 //   protects = ["evals/graders/**"]   # its grader, cases and checks: no climb candidate may change them
+//   role = "check"                    # a climb never climbs it; Guard refuses a survivor that worsens it
+//   direction = "higher"              # a check's good direction (higher, the default, or lower)
+//   tolerance = 0.02                  # how far its mean may move the wrong way against the base
 //
 // Each placeholder is filled shell-quoted, so write it bare: one inside
 // quotes is refused, and one handed to eval or `sh -c` runs as code (that is
@@ -46,7 +49,7 @@ export class EnvDeclarationError extends Error {
   }
 }
 
-const ENV_KEYS = ["key", "title", "level", "command", "splits", "cost_usd", "predicts", "timeout_s", "protects"] as const;
+const ENV_KEYS = ["key", "title", "level", "command", "splits", "cost_usd", "predicts", "timeout_s", "protects", "role", "direction", "tolerance"] as const;
 const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && !(x instanceof Date);
 const text = (x: unknown, where: string): string => {
   if (typeof x !== "string" || !x.trim()) throw new EnvDeclarationError(`${where} must be a non-empty string`);
@@ -135,6 +138,20 @@ export function parseEnvsText(source: string, file?: string): EnvDeclaration[] {
       if (e.protects !== undefined) {
         if (!Array.isArray(e.protects) || !e.protects.length) throw new EnvDeclarationError(`${at} protects must be a list of path globs`);
         decl.protects = e.protects.map((g, j) => text(g, `${at} protects[${j}]`));
+      }
+      if (e.role !== undefined) {
+        if (e.role !== "score" && e.role !== "check") throw new EnvDeclarationError(`${at} role must be "score" or "check"`);
+        decl.role = e.role;
+      }
+      if (e.direction !== undefined) {
+        if (e.direction !== "higher" && e.direction !== "lower") throw new EnvDeclarationError(`${at} direction must be "higher" or "lower"`);
+        if (decl.role !== "check") throw new EnvDeclarationError(`${at} direction applies to a check (role = "check")`);
+        decl.direction = e.direction;
+      }
+      if (e.tolerance !== undefined) {
+        if (typeof e.tolerance !== "number" || !Number.isFinite(e.tolerance) || e.tolerance < 0 || e.tolerance > 1) throw new EnvDeclarationError(`${at} tolerance must be a number from 0 to 1 (an absolute change in the mean score)`);
+        if (decl.role !== "check") throw new EnvDeclarationError(`${at} tolerance applies to a check (role = "check")`);
+        decl.tolerance = e.tolerance;
       }
       return decl;
     });

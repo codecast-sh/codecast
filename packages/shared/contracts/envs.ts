@@ -391,6 +391,16 @@ export type EnvDeclaration = {
   timeout_s?: number;
   /** Path globs this env's grader, cases, held data and checks live in: a climb candidate may not change them (contracts/climb.ts). */
   protects?: string[];
+  /**
+   * What a climb does with the env (contracts/climb.ts): "score", the default, is a level a climb may climb; "check"
+   * is a level no candidate may make worse past `tolerance` (an absolute change in the mean score, in `direction`),
+   * which Guard runs on every survivor and Frame never climbs. An L0 env is a check whatever it says.
+   */
+  role?: "score" | "check";
+  /** A check's good direction: "higher" (the default; every score is higher-is-better by contract) or "lower". */
+  direction?: "higher" | "lower";
+  /** How far a check's mean may move the wrong way against the base before Guard refuses the survivor (default 0). */
+  tolerance?: number;
 };
 
 // ── a goal's environments ──

@@ -555,7 +555,7 @@ export function registerEnvCommand(program: Command, deps: PublishDeps): void {
       const scope = await scopeFor(deps, o.team, false);
       const [rows, caseSets]: [any[], CaseSetLog | null] = await Promise.all([post("/cli/envs/list", { ...scope, env: ref, limit: 15 }, true), apiPost(deps, "/cli/envs/cases/log", { ...scope, env: ref, limit: 10 }, { read: true, exitOnError: false }).catch(() => null)]);
       if (o.json) { console.log(JSON.stringify({ declaration: decl ?? null, attempts: rows, case_sets: caseSets }, null, 2)); return; }
-      if (decl) console.log(`\n  ${c.cyan}${decl.level}${c.reset} ${c.bold}${decl.title}${c.reset} ${c.dim}${decl.key}${c.reset}\n  ${c.dim}${decl.command}${c.reset}\n  ${c.dim}splits ${decl.splits.join(", ")}${decl.cost_usd !== undefined ? ` · ~$${decl.cost_usd} a run` : ""}${decl.predicts ? ` · predicts ${decl.predicts}` : ""}${c.reset}`);
+      if (decl) console.log(`\n  ${c.cyan}${decl.level}${c.reset} ${c.bold}${decl.title}${c.reset} ${c.dim}${decl.key}${c.reset}\n  ${c.dim}${decl.command}${c.reset}\n  ${c.dim}splits ${decl.splits.join(", ")}${decl.cost_usd !== undefined ? ` · ~$${decl.cost_usd} a run` : ""}${decl.predicts ? ` · predicts ${decl.predicts}` : ""}${decl.role === "check" ? ` · check: may not get ${decl.direction === "lower" ? "higher" : "lower"} by more than ${decl.tolerance ?? 0}` : ""}${c.reset}`);
       else console.log(`\n  ${c.bold}${ref}${c.reset} ${c.yellow}not declared in this repo${c.reset}`);
       console.log(`\n  ${c.bold}Attempts (${rows.length})${c.reset}`);
       if (!rows.length) console.log(`  ${c.dim}None yet: cast env run ${ref}${c.reset}`);
