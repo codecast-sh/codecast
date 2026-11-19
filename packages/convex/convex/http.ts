@@ -23,6 +23,7 @@ import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
 import { ENROLL_PATH, enrollHttp } from "./lib/enrollHttp";
+import { TEAM_SESSIONS_PATH, teamSessionsHttp } from "./lib/teamReadKeyHttp";
 import { REPLAY_CHUNK_PATH, REPLAY_FRAME_ADMIT_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayFrameAdmit, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
 import { signReplayChunks } from "./lib/replayChunks";
 import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
@@ -217,6 +218,10 @@ http.route({
 // A managed device presents its MDM profile's enrollment token
 // (lib/enrollHttp.enrollHttp).
 http.route({ path: ENROLL_PATH, method: "POST", handler: enrollHttp });
+
+// A server reads its team's shared session metadata with a team read key
+// (lib/teamReadKeyHttp.ts).
+http.route({ path: TEAM_SESSIONS_PATH, method: "GET", handler: teamSessionsHttp });
 
 // The install callback is a plain function (lib/githubInstallCallback.ts) so
 // a test can drive the real handler.

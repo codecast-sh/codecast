@@ -509,6 +509,7 @@ import type * as lib_teamInvites from "../lib/teamInvites.js";
 import type * as lib_teamMembershipEnd from "../lib/teamMembershipEnd.js";
 import type * as lib_teamPolicyGuard from "../lib/teamPolicyGuard.js";
 import type * as lib_teamReadKey from "../lib/teamReadKey.js";
+import type * as lib_teamReadKeyHttp from "../lib/teamReadKeyHttp.js";
 import type * as lib_teamSeats from "../lib/teamSeats.js";
 import type * as lib_tokenHttp from "../lib/tokenHttp.js";
 import type * as lib_tokenRefresh from "../lib/tokenRefresh.js";
@@ -1321,6 +1322,7 @@ declare const fullApi: ApiFromModules<{
   "lib/teamMembershipEnd": typeof lib_teamMembershipEnd;
   "lib/teamPolicyGuard": typeof lib_teamPolicyGuard;
   "lib/teamReadKey": typeof lib_teamReadKey;
+  "lib/teamReadKeyHttp": typeof lib_teamReadKeyHttp;
   "lib/teamSeats": typeof lib_teamSeats;
   "lib/tokenHttp": typeof lib_tokenHttp;
   "lib/tokenRefresh": typeof lib_tokenRefresh;

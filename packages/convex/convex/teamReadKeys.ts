@@ -2,13 +2,23 @@
 // for a server, and the server reads the team's shared session metadata with
 // it (lib/teamReadKeyHttp.ts). Minting, revoking and use are authority events,
 // so they show in `cast audit` for every member of the team.
+//
+// A key reads the TEAM FLOOR (privacy.ts teamFloorScope), the rule the member
+// feed reads through: what every member sees, before anything granted to one
+// viewer. Rows are metadata only, even for a session shared in full: no
+// message text, prompt or path leaves this module. Subagent and workflow child
+// sessions are left out.
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { mutation, query } from "./functions";
+import { isNestedIdentity, repositoryKeyOfRemote, type WorkState } from "@codecast/shared/contracts";
+import { internalMutation, internalQuery, mutation, query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireTeamAdmin } from "./lib/access";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { sha256Hex } from "./lib/hash";
+import { isVisibilityShareable, teamFloorScope } from "./privacy";
+import { paginateTeamFeed } from "./feedPagination";
+import { cliSessionClassifier } from "./cliSessionClassifier";
 import {
   MAX_LIVE_TEAM_READ_KEYS,
   TEAM_READ_KEY_EXPIRY_DAYS,
@@ -20,7 +30,19 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Characters of the secret shown in the key list (after the cc_trk_ prefix). */
 const KEY_PREFIX_CHARS = 6;
 
+/** Use is recorded once per key per window: one audit event and one write, whatever the request rate. */
+export const USE_WINDOW_MS = 60 * 60 * 1000;
+/** Conversation rows one page may read across all members (feedPagination's per-member scans). */
+const PAGE_READ_BUDGET = 200;
+
 const isLive = (key: Doc<"team_read_keys">, now: number) => !key.revoked_at && key.expires_at > now;
+const useDue = (key: Doc<"team_read_keys">, now: number) => now - (key.last_used_at ?? 0) >= USE_WINDOW_MS;
+
+async function liveKey(ctx: any, key: Doc<"team_read_keys"> | null, now: number): Promise<Doc<"team_read_keys"> | null> {
+  if (!key || !isLive(key, now)) return null;
+  const team = await ctx.db.get(key.team_id);
+  return team && !team.deleted_at ? key : null;
+}
 
 async function requireAdmin(ctx: any, teamId: Id<"teams">): Promise<Id<"users">> {
   const userId = await getAuthUserId(ctx);
@@ -117,5 +139,117 @@ export const revoke = mutation({
       team_id: row.team_id,
       detail: { after: { key_id: row._id, name: row.name, prefix: row.prefix } },
     });
+  },
+});
+
+/** The live key a presented secret hashes to, and whether this request opens a new use window. */
+export const keyForHash = internalQuery({
+  args: { key_hash: v.string() },
+  handler: async (ctx, args): Promise<{ key_id: Id<"team_read_keys">; use_due: boolean } | null> => {
+    const now = Date.now();
+    const row = await ctx.db.query("team_read_keys").withIndex("by_key_hash", (q) => q.eq("key_hash", args.key_hash)).first();
+    const key = await liveKey(ctx, row, now);
+    return key ? { key_id: key._id, use_due: useDue(key, now) } : null;
+  },
+});
+
+/**
+ * A key's use, recorded before the read it opens: last_used_at moves and a
+ * team_read_key_used event names the key, with the admin who minted it as the
+ * actor. Requests inside the same window record nothing.
+ */
+export const recordUse = internalMutation({
+  args: { key_id: v.id("team_read_keys") },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const key = await liveKey(ctx, await ctx.db.get(args.key_id), now);
+    if (!key || !useDue(key, now)) return;
+    await ctx.db.patch(key._id, { last_used_at: now });
+    await recordAuthorityEvent(ctx, {
+      kind: "team_read_key_used",
+      actor_user_id: key.created_by,
+      team_id: key.team_id,
+      detail: { after: { key_id: key._id, name: key.name, prefix: key.prefix } },
+    });
+  },
+});
+
+export type TeamSessionRow = {
+  id: string;
+  owner: { id: string; name: string | null; github_username: string | null };
+  agent: string;
+  branch: string | null;
+  /** owner/name from the git remote, never a local path. */
+  repo: string | null;
+  title: string | null;
+  /** The session summary teammates see. */
+  summary: string | null;
+  /** The level the owner shares this session with the team at. */
+  sharing: "summary" | "full";
+  work_state: WorkState;
+  started_at: string;
+  updated_at: string;
+};
+
+/**
+ * One page of the team floor for a live key, newest activity first, within
+ * [since, until]. `cursor` is feedPagination's per-member cursor. Null when
+ * the key stopped being live after keyForHash.
+ */
+export const sessionsForKey = internalQuery({
+  args: {
+    key_id: v.id("team_read_keys"),
+    since: v.number(),
+    until: v.number(),
+    limit: v.number(),
+    cursor: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args): Promise<{ sessions: TeamSessionRow[]; next_cursor: string | null } | null> => {
+    const now = Date.now();
+    const key = await liveKey(ctx, await ctx.db.get(args.key_id), now);
+    if (!key) return null;
+    const floor = await teamFloorScope(ctx, key.team_id);
+    // Members at hidden or activity show no session at all; skip their rows.
+    const sharing = floor.members.filter((u) => isVisibilityShareable(floor.filter.getVisibility(String(u._id))));
+    if (sharing.length === 0) return { sessions: [], next_cursor: null };
+    const page = await paginateTeamFeed({
+      memberIds: sharing.map((u) => String(u._id)),
+      cursor: args.cursor,
+      limit: args.limit,
+      fetchPage: (memberId, cursor, take) =>
+        ctx.db
+          .query("conversations")
+          .withIndex("by_team_user_updated", (q) => {
+            const member = q.eq("team_id", key.team_id).eq("user_id", memberId as Id<"users">).gte("updated_at", args.since);
+            return cursor === null ? member.lte("updated_at", args.until) : member.lt("updated_at", cursor);
+          })
+          .order("desc")
+          .take(take),
+      accept: (c) => floor.isVisible(c) && !isNestedIdentity(c),
+      perMemberFetch: Math.max(5, Math.floor(PAGE_READ_BUDGET / sharing.length)),
+      perMemberWant: args.limit,
+      maxBatches: 2,
+    });
+
+    const owners = new Map(sharing.map((u) => [String(u._id), u]));
+    const classifier = cliSessionClassifier(ctx, now);
+    const sessions: TeamSessionRow[] = [];
+    for (const c of page.rows as Doc<"conversations">[]) {
+      const owner = owners.get(String(c.user_id))!;
+      sessions.push({
+        id: c.short_id ?? String(c._id),
+        owner: { id: String(owner._id), name: owner.name ?? null, github_username: owner.github_username ?? null },
+        agent: c.agent_type,
+        branch: c.git_branch ?? null,
+        repo: repositoryKeyOfRemote(c.git_remote_url),
+        title: c.title ?? null,
+        summary: c.subtitle ?? null,
+        sharing: floor.contentVisible(c) ? "full" : "summary",
+        work_state: (await classifier.classify(c)).work_state,
+        started_at: new Date(c.started_at).toISOString(),
+        updated_at: new Date(c.updated_at).toISOString(),
+      });
+    }
+    return { sessions, next_cursor: page.nextCursor };
   },
 });

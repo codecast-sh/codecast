@@ -31,6 +31,7 @@ export const AUTHORITY_EVENT_KINDS = [
   "staff_daemon_command",
   "team_read_key_minted",
   "team_read_key_revoked",
+  "team_read_key_used",
 ] as const;
 export type AuthorityEventKind = (typeof AUTHORITY_EVENT_KINDS)[number];
 

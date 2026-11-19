@@ -5625,6 +5625,7 @@ export default defineSchema({
       v.literal("staff_daemon_command"),
       v.literal("team_read_key_minted"),
       v.literal("team_read_key_revoked"),
+      v.literal("team_read_key_used"),
     ),
     actor_user_id: v.id("users"),
     actor_conversation_id: v.optional(v.id("conversations")),
