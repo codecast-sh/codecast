@@ -457,7 +457,12 @@ function runWarmLoop(convex: ConvexClient): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let cancelQuiet: (() => void) | null = null;
   let pending = false;
+  // A window nobody can see (minimized, behind another desktop, the desktop's
+  // warm spare) warms nothing; showing it runs the pass it missed.
+  const hidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
+  let missed = false;
   const schedule = () => {
+    if (hidden()) { missed = true; return; }
     if (pending) return;
     pending = true;
     timer = setTimeout(() => {
@@ -466,16 +471,25 @@ function runWarmLoop(convex: ConvexClient): () => void {
       // `pending` (not the returned cancel) is what says a pass is queued.
       cancelQuiet = whenInputQuiet(() => {
         pending = false;
+        if (hidden()) { missed = true; return; }
         warmVisibleSessions(convex);
       }, WARM_MAX_DEFER_MS);
     }, WARM_COALESCE_MS);
   };
+  const onVisibility = () => {
+    if (hidden() || !missed) return;
+    missed = false;
+    schedule();
+  };
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibility);
   const unsubscribe = useInboxStore.subscribe((st, prev) => {
     if (warmInputsChanged(st, prev) || visualOrderViewSig(st) !== visualOrderViewSig(prev)) schedule();
   });
-  warmVisibleSessions(convex);
+  if (hidden()) missed = true;
+  else warmVisibleSessions(convex);
   return () => {
     unsubscribe();
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
     if (timer !== null) clearTimeout(timer);
     cancelQuiet?.();
     timer = null;

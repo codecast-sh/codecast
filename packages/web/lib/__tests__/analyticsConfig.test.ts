@@ -73,6 +73,9 @@ describe("codecast's analytics configuration reaches the package", () => {
     expect(options.session_recording).toEqual({ sampleRate: POSTHOG_REPLAY_SAMPLE_RATE });
     expect(options.capture_dead_clicks).toBe(false);
     expect(options.capture_pageview).toBe("history_change");
+    // A visitor without an account (no stored token here) keeps the PostHog
+    // project's heatmap setting; the app turns heatmaps off (lib/analytics.ts).
+    expect("capture_heatmaps" in options).toBe(false);
 
     // Dev and prod share one PostHog project, so every event carries the
     // environment; "app" keeps codecast filterable from other platform apps.

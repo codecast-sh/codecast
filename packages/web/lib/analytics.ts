@@ -7,6 +7,7 @@ import { describeError, errorChain, errorSummary, rootError } from "./errorCause
 import { showErrorToast } from "./errorToast";
 import { dropStylePreloads } from "./stylePreloads";
 import { watchLongFrames } from "./freezeAttribution";
+import { hasStoredAuthToken } from "./localAuth";
 import {
   claimErrorKey,
   setupErrorToasts as setupPlatformErrorToasts,
@@ -89,6 +90,12 @@ export function initAnalytics(): Promise<void> {
       platform: getPlatform(),
       appName: "codecast",
       sessionReplaySampleRate: POSTHOG_REPLAY_SAMPLE_RATE,
+      // Heatmaps describe pages a visitor reads. In the app (the desktop, or
+      // anyone signed in) they only add page-wide click and mouse-move
+      // listeners and a dead-click detector that re-checks every DOM change of
+      // a live transcript. Visitors without an account keep the project's own
+      // setting.
+      heatmaps: getPlatform() === "desktop" || hasStoredAuthToken() ? false : undefined,
       // The catalog is enforced at the track boundary inside the package: an
       // event it does not describe is dropped, and a session stops sending
       // after 1000 events. A browser that sets Do Not Track loads no PostHog

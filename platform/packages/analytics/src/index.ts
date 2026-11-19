@@ -83,6 +83,14 @@ export interface AnalyticsConfig {
    * posthog-react-native-session-replay native module.
    */
   sessionReplaySampleRate?: number;
+  /**
+   * PostHog heatmaps on web: page-wide click, mouse-move and scroll listeners,
+   * plus a dead-click detector that watches every DOM mutation. Unset follows
+   * the PostHog project's own setting; false keeps them off whatever the
+   * project says, for an app whose screens are not pages a heatmap describes
+   * (a live feed rewrites its DOM continuously, and the detector pays for it).
+   */
+  heatmaps?: boolean;
 }
 
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com";

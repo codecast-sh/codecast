@@ -1,5 +1,5 @@
 import { conversationIdFromPath } from "./desktopHandoff";
-import { isCallPanelWindow, isPaletteWindow } from "./windowRole";
+import { applyShellVisibility, isCallPanelWindow, isPaletteWindow } from "./windowRole";
 import { useSyncExternalStore } from "react";
 import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
 import { BrowserBannerGate, bannerEntity } from "./notificationGate";
@@ -389,6 +389,10 @@ export type DesktopWindowRole = {
    *  window: a spare's preload arguments were fixed before anyone knew what
    *  it would become, so its identity arrives here instead. */
   app: string | null;
+  /** Whether this window is on screen (shown, not minimized; never the warm
+   *  spare). Null from a shell that does not say: the document's own
+   *  visibility then stands (lib/windowRole applyShellVisibility). */
+  shown: boolean | null;
 };
 
 /** A room handed to the voice host, with the state the person is already in. */
@@ -1367,6 +1371,7 @@ let windowRole: DesktopWindowRole = {
   peopleWall: false,
   apps: null,
   app: null,
+  shown: null,
 };
 // The bridge the tracker installed on. In the app there is exactly one and it
 // never changes; a test that stands a second shell up gets a second install
@@ -1413,7 +1418,9 @@ export function installWindowRoleTracker(): void {
       peopleWall: !!role.peopleWall,
       apps: role.apps && typeof role.apps === "object" ? { ...role.apps } : null,
       app: typeof role.app === "string" ? role.app : null,
+      shown: typeof role.shown === "boolean" ? role.shown : null,
     };
+    applyShellVisibility(windowRole.shown);
     for (const cb of windowRoleWatchers) cb();
   });
 }

@@ -205,6 +205,9 @@ export function initAnalytics(input: AnalyticsConfig) {
       disable_session_recording: replayRate === 0,
       ...(replayRate > 0 ? { session_recording: { sampleRate: replayRate } } : {}),
       capture_dead_clicks: false,
+      // Heatmaps start their own dead-click detector whatever capture_dead_clicks
+      // says, so only this keeps it off.
+      ...(config.heatmaps === false ? { capture_heatmaps: false } : {}),
       // Pageviews, pageleaves and autocapture all stamp the page's URL, its
       // referrer and the person's first URL; an app whose links are keys
       // rewrites them here, the one door every capture leaves through.

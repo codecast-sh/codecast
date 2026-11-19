@@ -2021,7 +2021,19 @@ function routedWindows() {
 function toldWindows() {
   const out = routedWindows();
   if (callRingWindow && !callRingWindow.isDestroyed()) out.push(callRingWindow);
+  // The warm spare is no app window yet, but it runs the whole app hidden:
+  // it is told it is not shown, so it rests until it is claimed.
+  if (spareTabWindow && !spareTabWindow.isDestroyed()) out.push(spareTabWindow);
   return out;
+}
+
+// Whether a window is on screen for the person: shown and not minimized (the
+// spare never is). Windows run with backgroundThrottling off, which in Electron
+// also keeps document.visibilityState at "visible" whatever the window does,
+// so the role carries this and the page reports it (web lib/shellVisibility).
+function windowShown(win) {
+  if (win === spareTabWindow) return false;
+  return win.isVisible() && !(typeof win.isMinimized === "function" && win.isMinimized());
 }
 
 function describeWindows() {
@@ -2109,10 +2121,20 @@ function flushWindowRole() {
         // The app THIS window is. A cold app window also says so in its
         // preload arguments; a claimed warm spare only learns it here.
         app: appOf(win),
+        shown: windowShown(win),
       });
     }
   }
 }
+
+// A window shown, hidden, minimized or restored changes what it should do in
+// the background (its `shown` above), so every such change re-tells the roles.
+app.on("browser-window-created", (_e, win) => {
+  for (const ev of ["show", "hide", "minimize", "restore"]) win.on(ev, () => broadcastWindowRole());
+  // A page that loads (or reloads) after the last broadcast has not heard it:
+  // the warm spare, hidden from birth, gets no focus or show event to carry one.
+  win.webContents.on("did-finish-load", () => broadcastWindowRole());
+});
 
 app.on("browser-window-focus", (_e, win) => {
   lastFocusedAt.set(win.id, Date.now());

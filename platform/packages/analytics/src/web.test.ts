@@ -75,6 +75,20 @@ describe("initAnalytics (web)", () => {
     expect(options.__extensionClasses).toBe(analyticsExtensions);
   });
 
+  // Heatmaps run their own dead-click detector, so capture_dead_clicks alone
+  // never stops it: an app that turns heatmaps off must say so to PostHog.
+  it("turns heatmaps off when the app asks", () => {
+    web.initAnalytics({ ...base, heatmaps: false });
+    const [, off] = last(phCalls, "init") as [string, Record<string, any>];
+    expect(off.capture_heatmaps).toBe(false);
+  });
+
+  it("leaves heatmaps to the project when the app says nothing", () => {
+    web.initAnalytics(base);
+    const [, options] = last(phCalls, "init") as [string, Record<string, any>];
+    expect("capture_heatmaps" in options).toBe(false);
+  });
+
   it("rejects a sample rate outside 0 to 1", () => {
     expect(() => web.initAnalytics({ ...base, sessionReplaySampleRate: 10 })).toThrow(/sessionReplaySampleRate/);
   });
