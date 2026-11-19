@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { create, get as getGoal, update } from "./initiatives";
-import { get, goalLevels, link, list, record, standings, workspaceStandings } from "./envs";
+import { recordCases, get, goalLevels, link, list, record, standings, workspaceStandings } from "./envs";
+import { ENV_CASE_PAGE, compactCasePages } from "@codecast/shared/contracts/envs";
 
 // Environment attempts and links (contracts/envs.ts, pl-1049 ct-96178).
 // Pinned: the server re-reads the runner's JSON (held content refused), one
@@ -73,6 +74,62 @@ const result = (over: Record<string, any> = {}) => ({
 });
 const file = (db: any, over: Record<string, any> = {}, extra: Record<string, any> = {}, who = ME) =>
   run(record, db, { ...inTeam, env: "union/unit-smoke", level: "L0", title: "Unit smoke", repo: "github.com/acme/union", result: JSON.stringify(result(over)), ...extra }, who);
+
+describe("envs: filing a large attempt in pages", () => {
+  // 1200 cases of ~90-char ids: about 115k characters, so three pages.
+  const big = Array.from({ length: 1200 }, (_, i) => ({ id: `second-side-pitch/${String(i).padStart(5, "0")}/${"x".repeat(60)}`, score: i % 4 === 0 ? 0 : 1 }));
+  const bigResult = { cases: big, summary: { n: big.length, mean: big.reduce((a, c) => a + c.score, 0) / big.length } };
+
+  test("record writes the first page only; recordCases writes the rest, each against its fingerprint; get reads it whole", async () => {
+    const db = fixtures();
+    const pages = compactCasePages(big);
+    expect(pages.length).toBe(3);
+    expect(pages.every((p) => p.length <= ENV_CASE_PAGE.chars)).toBe(true);
+    const out = await file(db, bigResult, { client_key: "k1" });
+    expect(out).toMatchObject({ short_id: "ea-1", case_pages: 3, case_pages_written: 1 });
+    const part = await run(get, db, { id: "ea-1" });
+    expect(part).toMatchObject({ cases_complete: false });
+    expect(part.cases).toHaveLength(pages[0] ? JSON.parse(pages[0]).length : 0);
+    expect(part.case_pages).toBeUndefined();
+
+    await expect(run(recordCases, db, { attempt: "ea-1", seq: 1, cases: pages[2] })).rejects.toThrow(/not the page its record promised/);
+    await expect(run(recordCases, db, { attempt: "ea-1", seq: 3, cases: pages[2] })).rejects.toThrow(/pages 1..2/);
+    await expect(run(recordCases, db, { attempt: "ea-1", seq: 1, cases: pages[1] }, MATE)).rejects.toThrow(/not found/i);
+    expect(await run(recordCases, db, { attempt: "ea-1", seq: 2, cases: pages[2] })).toMatchObject({ case_pages_written: 2 });
+    // A retried page answers as written and writes nothing twice.
+    expect(await run(recordCases, db, { attempt: "ea-1", seq: 2, cases: pages[2] })).toMatchObject({ case_pages_written: 2 });
+    expect(await run(recordCases, db, { attempt: "ea-1", seq: 1, cases: pages[1] })).toMatchObject({ case_pages: 3, case_pages_written: 3 });
+
+    const whole = await run(get, db, { id: "ea-1" });
+    expect(whole.cases_complete).toBe(true);
+    expect(whole.cases).toEqual(big);
+  });
+
+  test("a CLI from before pages (no client key) still files every page in one record", async () => {
+    const db = fixtures();
+    expect(await file(db, bigResult)).toMatchObject({ case_pages: 3, case_pages_written: 3 });
+    expect(await run(get, db, { id: "ea-1" })).toMatchObject({ cases_complete: true, cases: big });
+  });
+
+  test("a retried record with the same client key answers with the attempt it filed", async () => {
+    const db = fixtures();
+    const first = await file(db, bigResult, { client_key: "k2" });
+    const again = await file(db, bigResult, { client_key: "k2" });
+    expect(again).toMatchObject({ short_id: first.short_id, case_pages: 3, case_pages_written: 1 });
+    expect(await run(list, db, inTeam)).toHaveLength(1);
+    await expect(file(db, bigResult, { client_key: "k2" }, MATE)).rejects.toThrow(/another filing/);
+  });
+
+  test("an attempt filed whole before pages still reads whole", async () => {
+    const db = fixtures();
+    await file(db);
+    const row = (await run(list, db, inTeam))[0];
+    await db.patch(row._id, { case_pages: undefined, case_pages_written: undefined });
+    const pages = await db.query("env_attempt_cases").collect();
+    await db.patch(pages[0]._id, { seq: undefined });
+    expect(await run(get, db, { id: row.short_id })).toMatchObject({ cases_complete: true, cases: [{ id: "a" }, { id: "b" }] });
+  });
+});
 
 describe("envs: attempts", () => {
   test("a dev result is filed with its cases compact and read back whole", async () => {

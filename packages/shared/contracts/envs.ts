@@ -277,6 +277,41 @@ export function compactCases(cases: readonly EnvCase[]): CompactCase[] {
     return row;
   });
 }
+/**
+ * An attempt's cases as the registry files them: compact JSON in pages of at
+ * most ENV_CASE_PAGE.chars characters and ENV_CASE_PAGE.rows cases, each its
+ * own write, so filing a large attempt never writes more than a page at once.
+ * The CLI and the server cut the same pages from the same cases.
+ */
+export const ENV_CASE_PAGE = { chars: 64_000, rows: 500 } as const;
+export function compactCasePages(cases: readonly EnvCase[]): string[] {
+  const pages: string[] = [];
+  let rows: string[] = [];
+  let size = 2;
+  for (const row of compactCases(cases).map((r) => JSON.stringify(r))) {
+    if (rows.length && (rows.length >= ENV_CASE_PAGE.rows || size + row.length + 1 > ENV_CASE_PAGE.chars)) {
+      pages.push(`[${rows.join(",")}]`);
+      rows = [];
+      size = 2;
+    }
+    rows.push(row);
+    size += row.length + 1;
+  }
+  if (rows.length || !pages.length) pages.push(`[${rows.join(",")}]`);
+  return pages;
+}
+
+/** A page's fingerprint (two 32-bit FNV-1a passes, 16 hex): the server checks each later page against the one it was promised. */
+export function casePageHash(text: string): string {
+  let a = 0x811c9dc5, b = 0x9e3779b9;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    a = Math.imul(a ^ ch, 0x01000193);
+    b = Math.imul(b ^ ch, 0x01000193) ^ (b >>> 13);
+  }
+  return (a >>> 0).toString(16).padStart(8, "0") + (b >>> 0).toString(16).padStart(8, "0");
+}
+
 export function expandCases(rows: readonly CompactCase[]): EnvCase[] {
   return rows.map(([id, score, draws, pass, note]) => ({ id, score, ...(draws !== undefined ? { draws } : {}), ...(pass !== undefined ? { pass } : {}), ...(note !== undefined ? { note } : {}) }));
 }

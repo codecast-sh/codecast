@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { envEval, envEvalLines, goalLevelLines, type Post } from "./envCommand";
+import { envEval, envEvalLines, goalLevelLines, isRetryableWrite, recordRun, withWriteRetry, type Post } from "./envCommand";
+import { compactCasePages } from "@codecast/shared/contracts/envs";
 
 const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args], { encoding: "utf8" }).trim();
 const plain = { green: "", yellow: "", red: "", cyan: "", dim: "", bold: "", reset: "" };
@@ -167,5 +168,81 @@ describe("goalLevelLines", () => {
     const lines = goalLevelLines(plain, [{ env: "union/second-side-replay", level: "L2" }, { env: "union/sim", level: "L3" }], "in-8", 0, (k) => (k === "union/second-side-replay" ? "Second side replay" : undefined));
     expect(lines[1]).toBe("  L2 Second side replay union/second-side-replay · Outcome-labelled replay");
     expect(lines[4]).toBe("  L3 union/sim Forward simulation");
+  });
+});
+
+describe("recordRun: a large attempt is filed in pages, each write retried (Union in-9, 468 held cases)", () => {
+  const decl = { key: "acme/replay", title: "Replay", level: "L2" as const, command: "true", splits: ["dev" as const] };
+  const cases = Array.from({ length: 1200 }, (_, i) => ({ id: `second-side-pitch/${String(i).padStart(5, "0")}/${"x".repeat(60)}`, score: i % 4 ? 1 : 0 }));
+  const result = { env: "acme/replay", env_version: "9f3a2c1d", level: "L2" as const, candidate: { label: "base" }, split: "dev" as const, cases, summary: { n: cases.length, mean: 0.75 }, started_at: Date.parse("2026-11-17T00:00:00Z"), finished_at: Date.parse("2026-11-17T00:01:00Z") };
+  const pages = compactCasePages(cases);
+  const refusal = "Too many writes per second: this deployment is limited to 4 MiB/s";
+
+  function server(fail: (path: string, n: number) => string | null) {
+    const calls: Array<{ path: string; body: any }> = [];
+    const seen: Record<string, number> = {};
+    const post: Post = async (p, body) => {
+      calls.push({ path: p, body: structuredClone(body) });
+      seen[p] = (seen[p] ?? 0) + 1;
+      const why = fail(p, seen[p]);
+      if (why) throw new Error(why);
+      if (p === "/cli/envs/record") return { short_id: "ea-7", case_pages: pages.length, case_pages_written: 1 };
+      if (p === "/cli/envs/record-cases") return { short_id: "ea-7", case_pages: pages.length, case_pages_written: Number(body.seq) + 1 };
+      throw new Error(`unplanned ${p}`);
+    };
+    return { post, calls };
+  }
+  const waits: number[] = [];
+  const quiet = { sleep: async (ms: number) => { waits.push(ms); }, onRetry: () => {} };
+
+  test("the record carries the first page; each later page is its own write, in order", async () => {
+    const { post, calls } = server(() => null);
+    expect(pages.length).toBe(3);
+    const filed = await recordRun(post, decl, "/tmp", result, { goal: "in-9" }, quiet);
+    expect(filed.short_id).toBe("ea-7");
+    expect(calls.map((c) => c.path)).toEqual(["/cli/envs/record", "/cli/envs/record-cases", "/cli/envs/record-cases"]);
+    expect(calls.slice(1).map((c) => [c.body.seq, c.body.cases === pages[c.body.seq]])).toEqual([[1, true], [2, true]]);
+    expect(JSON.parse(calls[0].body.result).cases).toHaveLength(1200);
+  });
+
+  test("a write-rate refusal is retried with backoff, the record under one client key, and the filing lands", async () => {
+    waits.length = 0;
+    const { post, calls } = server((p, n) => (p === "/cli/envs/record" && n <= 2) || (p === "/cli/envs/record-cases" && n === 2) ? refusal : null);
+    expect((await recordRun(post, decl, "/tmp", result, { goal: "in-9" }, quiet)).short_id).toBe("ea-7");
+    const records = calls.filter((c) => c.path === "/cli/envs/record");
+    expect(records).toHaveLength(3);
+    expect(new Set(records.map((c) => c.body.client_key)).size).toBe(1);
+    expect(calls.filter((c) => c.path === "/cli/envs/record-cases").map((c) => c.body.seq)).toEqual([1, 2, 2]);
+    expect(waits).toHaveLength(3);
+    expect(waits[0]).toBeGreaterThanOrEqual(750);
+    expect(waits[1]).toBeGreaterThanOrEqual(1500);
+  });
+
+  test("a refusal that does not pass throws at once; one that keeps coming gives up after six tries", async () => {
+    const wrong = server((p) => (p === "/cli/envs/record" ? "The result for acme/replay breaks the contract: summary.mean 0.75 is not the mean" : null));
+    await expect(recordRun(wrong.post, decl, "/tmp", result, {}, quiet)).rejects.toThrow(/breaks the contract/);
+    expect(wrong.calls).toHaveLength(1);
+    const busy = server((p) => (p === "/cli/envs/record-cases" ? refusal : null));
+    await expect(recordRun(busy.post, decl, "/tmp", result, {}, quiet)).rejects.toThrow(/Too many writes/);
+    expect(busy.calls.filter((c) => c.path === "/cli/envs/record-cases")).toHaveLength(6);
+    expect(isRetryableWrite(new Error("HTTP 503"))).toBe(true);
+    expect(isRetryableWrite(new Error("Attempt not found"))).toBe(false);
+  });
+
+  test("a server from before pages, which refuses client_key, takes the record whole", async () => {
+    const calls: any[] = [];
+    const old: Post = async (p, body) => {
+      calls.push(structuredClone(body));
+      if ("client_key" in body) throw new Error("ArgumentValidationError: Object contains extra field `client_key` that is not in the validator.");
+      return { short_id: "ea-3" };
+    };
+    expect((await recordRun(old, decl, "/tmp", result, {}, quiet)).short_id).toBe("ea-3");
+    expect(calls.map((b) => "client_key" in b)).toEqual([true, false]);
+  });
+
+  test("withWriteRetry returns the first answer that comes", async () => {
+    let n = 0;
+    expect(await withWriteRetry(async () => { if (++n < 3) throw new Error(refusal); return "ok"; }, quiet)).toBe("ok");
+    expect(n).toBe(3);
   });
 });

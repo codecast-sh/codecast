@@ -21,7 +21,8 @@ import { envLevelValidator } from "./envSchema";
 import { caseSetStandingOf } from "./envCases";
 import {
   ENV_ATTEMPT_PREFIX,
-  compactCases,
+  casePageHash,
+  compactCasePages,
   expandCases,
   isEnvKey,
   parseEnvResult,
@@ -108,8 +109,18 @@ export const record = mutation({
     cases_read: v.optional(v.id("env_heldout_reads")),
     /** cases_read as CLIs sent it before dev sets. */
     held_read: v.optional(v.id("env_heldout_reads")),
+    /** The client's key for this filing: a retried record answers with the attempt it made rather than filing a second. */
+    client_key: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    if (args.client_key) {
+      const made = await ctx.db.query("env_attempts").withIndex("by_client_key", (q: any) => q.eq("client_key", args.client_key)).first();
+      if (made) {
+        const userId = await requireUserOrToken(ctx, args.api_token);
+        if (String(made.by_user) !== String(userId)) invalidScope("That client key belongs to another filing");
+        return { id: made._id, short_id: made.short_id, workspace: made.workspace, warnings: [], case_pages: made.case_pages?.length ?? 1, case_pages_written: made.case_pages_written ?? 1 };
+      }
+    }
     if (!isEnvKey(args.env)) invalidScope(`"${args.env}" is not an env key (<product>/<name>)`);
     const parsed = parseEnvResult(args.result, { env: args.env, level: args.level, heldIdsHashed: true });
     if (!parsed.ok) invalidScope(`The result for ${args.env} breaks the contract: ${parsed.error}`);
@@ -128,8 +139,12 @@ export const record = mutation({
     if (other) {
       invalidScope(`${result.env} is already recorded from ${other.repo}; this run is from ${repo}. Two repos cannot share an env key: rename one (<product>/<name>).`);
     }
-    const cases = JSON.stringify(compactCases(result.cases));
-    if (cases.length > CASES_MAX_CHARS) invalidScope(`The cases weigh ${cases.length} characters, over ${CASES_MAX_CHARS}: shorten case ids or split the set`);
+    // The cases go in pages, this mutation writing only the first, so filing a
+    // large attempt never writes more than a page at once (Convex refuses a
+    // burst of writes); envs.recordCases writes the rest, each against its fingerprint.
+    const pages = compactCasePages(result.cases);
+    const weight = pages.reduce((a, p) => a + p.length, 0);
+    if (weight > CASES_MAX_CHARS) invalidScope(`The cases weigh ${weight} characters, over ${CASES_MAX_CHARS}: shorten case ids or split the set`);
     const s = result.summary;
     const short_id = await nextShortId(ctx.db as any, ENV_ATTEMPT_PREFIX);
     const id = await ctx.db.insert("env_attempts", {
@@ -159,13 +174,41 @@ export const record = mutation({
       ...(args.task_id ? { task_id: args.task_id } : {}),
       ...(goal ? { goal_id: goal._id } : {}),
       ...(fetched ? { cases_version: fetched.version } : {}),
+      ...(args.client_key ? { client_key: args.client_key } : {}),
+      case_pages: pages.map(casePageHash),
+      // A CLI from before pages sends no client key and no later pages: its filing writes them all here, as it always did.
+      case_pages_written: args.client_key ? 1 : pages.length,
       created_at: Date.now(),
     });
-    await ctx.db.insert("env_attempt_cases", { attempt_id: id, workspace, cases });
+    for (const [seq, page] of (args.client_key ? pages.slice(0, 1) : pages).entries()) await ctx.db.insert("env_attempt_cases", { attempt_id: id, workspace, seq, cases: page });
     if (fetched) await ctx.db.patch(fetched._id, { attempt_id: id });
     // A result that carries a measured link files it as the env's link, with the attempt as evidence.
     if (result.link) await insertLink(ctx, userId, workspace, result.env, { ...result.link, evidence: result.link.evidence ?? short_id });
-    return { id, short_id, workspace, warnings: parsed.warnings };
+    return { id, short_id, workspace, warnings: parsed.warnings, case_pages: pages.length, case_pages_written: args.client_key ? 1 : pages.length };
+  },
+});
+
+/**
+ * One later page of an attempt's cases (`seq` from 1), from the caller who
+ * filed it, checked against the fingerprint record promised. A page already
+ * written answers as written, so a retry never doubles one.
+ */
+export const recordCases = mutation({
+  args: { api_token: v.optional(v.string()), attempt: v.string(), seq: v.number(), cases: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const row = await ctx.db.query("env_attempts").withIndex("by_short_id", (q: any) => q.eq("short_id", args.attempt.trim().toLowerCase())).first();
+    if (!row || String(row.by_user) !== String(userId)) return notFound("Attempt not found");
+    const promised = row.case_pages ?? [];
+    if (!Number.isInteger(args.seq) || args.seq < 1 || args.seq >= promised.length) invalidScope(`${row.short_id} has pages 1..${promised.length - 1} to write, not ${args.seq}`);
+    if (casePageHash(args.cases) !== promised[args.seq]) invalidScope(`page ${args.seq} of ${row.short_id} is not the page its record promised`);
+    const pages = await ctx.db.query("env_attempt_cases").withIndex("by_attempt", (q: any) => q.eq("attempt_id", row._id)).collect();
+    if (!pages.some((p: any) => p.seq === args.seq)) {
+      await ctx.db.insert("env_attempt_cases", { attempt_id: row._id, workspace: row.workspace, seq: args.seq, cases: args.cases });
+      await ctx.db.patch(row._id, { case_pages_written: pages.length + 1 });
+    }
+    const written = pages.some((p: any) => p.seq === args.seq) ? pages.length : pages.length + 1;
+    return { short_id: row.short_id, case_pages: promised.length, case_pages_written: written };
   },
 });
 
@@ -226,8 +269,12 @@ export const get = query({
     const row = await ctx.db.query("env_attempts").withIndex("by_short_id", (q: any) => q.eq("short_id", args.id.trim().toLowerCase())).first();
     if (!row || !(await workspaceGrantsAccess(ctx, userId, row.workspace as any))) return notFound("Attempt not found");
     const link = await latestLink(ctx, row.workspace, row.env);
-    const stored = await ctx.db.query("env_attempt_cases").withIndex("by_attempt", (q: any) => q.eq("attempt_id", row._id)).first();
-    return { ...attemptView(row), cases: stored ? expandCases(JSON.parse(stored.cases)) : [], link: link ? linkView(link) : null };
+    const stored = (await ctx.db.query("env_attempt_cases").withIndex("by_attempt", (q: any) => q.eq("attempt_id", row._id)).collect()).sort((a: any, b: any) => (a.seq ?? 0) - (b.seq ?? 0));
+    const cases = stored.flatMap((p: any) => expandCases(JSON.parse(p.cases)));
+    // An attempt filed in pages is whole once every page it promised is in; one filed before pages always is.
+    const cases_complete = !row.case_pages || stored.length >= row.case_pages.length;
+    const { case_pages: _p, client_key: _k, ...view } = attemptView(row) as any;
+    return { ...view, cases, cases_complete, link: link ? linkView(link) : null };
   },
 });
 

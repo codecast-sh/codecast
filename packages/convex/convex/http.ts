@@ -3978,7 +3978,7 @@ cliRoute("/cli/initiatives/get", async (ctx, body) => ctx.runQuery(api.initiativ
 
 // Environments and attempts (contracts/envs.ts): `cast env`, `cast goal envs`.
 // Environments and attempts (envs.ts).
-for (const [path, fn, write] of [["record", api.envs.record, true], ["link", api.envs.link, true], ["list", api.envs.list, false], ["standings", api.envs.standings, false], ["get", api.envs.get, false], ["goal-levels", api.envs.goalLevels, false]] as const) cliRoute(`/cli/envs/${path}`, async (ctx, body) => write ? ctx.runMutation(fn as any, body) : ctx.runQuery(fn as any, body));
+for (const [path, fn, write] of [["record", api.envs.record, true], ["record-cases", api.envs.recordCases, true], ["link", api.envs.link, true], ["list", api.envs.list, false], ["standings", api.envs.standings, false], ["get", api.envs.get, false], ["goal-levels", api.envs.goalLevels, false]] as const) cliRoute(`/cli/envs/${path}`, async (ctx, body) => write ? ctx.runMutation(fn as any, body) : ctx.runQuery(fn as any, body));
 // Case sets (envCases.ts): put from a runner, open + page from `cast env run`; /cli/envs/held/* is the CLI's first name for them.
 for (const base of ["/cli/envs/cases", "/cli/envs/held"]) for (const [verb, fn, write] of [["put", api.envCases.put, true], ["open", api.envCases.open, true], ["page", api.envCases.page, false], ["log", api.envCases.log, false]] as const) cliRoute(`${base}/${verb}`, async (ctx, body) => write ? ctx.runMutation(fn as any, body) : ctx.runQuery(fn as any, body));
 

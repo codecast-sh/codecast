@@ -154,3 +154,21 @@ describe("cases, stats, goal envs", () => {
     expect(readEnvLink({ to: "L5:intros", measure: "Rank!", value: 0.5, n: 4 }).ok).toBe(false);
   });
 });
+
+describe("case pages", () => {
+  test("pages are bounded by characters and rows, cut the same way every time, and join back to the cases", () => {
+    const { ENV_CASE_PAGE, casePageHash, compactCasePages, expandCases } = require("./envs");
+    const wide = Array.from({ length: 1200 }, (_, i) => ({ id: `p/${i}/${"x".repeat(80)}`, score: 1 }));
+    const pages: string[] = compactCasePages(wide);
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.every((p) => p.length <= ENV_CASE_PAGE.chars)).toBe(true);
+    expect(pages.flatMap((p) => expandCases(JSON.parse(p)))).toEqual(wide);
+    expect(compactCasePages(wide)).toEqual(pages);
+    const narrow: string[] = compactCasePages(Array.from({ length: 1001 }, (_, i) => ({ id: `${i}`, score: 0 })));
+    expect(narrow.map((p) => JSON.parse(p).length)).toEqual([500, 500, 1]);
+    expect(compactCasePages([])).toEqual(["[]"]);
+    expect(casePageHash(pages[0])).toMatch(/^[0-9a-f]{16}$/);
+    expect(casePageHash(pages[0])).toBe(casePageHash(pages[0]));
+    expect(casePageHash(pages[0])).not.toBe(casePageHash(pages[1]));
+  });
+});

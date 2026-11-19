@@ -52,18 +52,27 @@ export const envTables = {
     cases_version: v.optional(v.string()),
     /** The same, as held attempts filed before dev sets were recorded: read-only, never written. */
     held_version: v.optional(v.string()),
+    // Filing in pages (contracts/envs compactCasePages): the client's key for
+    // this filing, so a retried record answers with the attempt it made; one
+    // fingerprint per page of cases; and how many pages are written.
+    client_key: v.optional(v.string()),
+    case_pages: v.optional(v.array(v.string())),
+    case_pages_written: v.optional(v.number()),
     created_at: v.number(),
   })
     .index("by_short_id", ["short_id"])
     .index("by_workspace_env", ["workspace", "env", "finished_at"])
-    .index("by_workspace", ["workspace", "finished_at"]),
+    .index("by_workspace", ["workspace", "finished_at"])
+    .index("by_client_key", ["client_key"]),
 
   // An attempt's cases, apart from the attempt so a standing or a list never
   // reads them: CompactCase[] as JSON, [id, score, draws?, pass?, note?]; a
-  // held run's are [id, score]. One row per attempt.
+  // held run's are [id, score]. One row per page (seq from 0); a row without
+  // seq is an attempt filed whole, before pages.
   env_attempt_cases: defineTable({
     attempt_id: v.id("env_attempts"),
     workspace: v.string(),
+    seq: v.optional(v.number()),
     cases: v.string(),
   }).index("by_attempt", ["attempt_id"]),
 

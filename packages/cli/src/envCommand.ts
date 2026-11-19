@@ -7,10 +7,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "./proc.js";
+import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import {
   ENV_LEVEL_NAME,
   deltaPhrase,
+  compactCasePages,
   heldCaseId,
   normalizeGoalEnvs,
   pairedDelta,
@@ -173,21 +175,68 @@ export async function runWithCases(post: Post, decl: EnvDeclaration, run: Parame
   }
 }
 
-/** File a result. The server reads the same JSON again; the result's cases go as the runner wrote them. */
-export async function recordRun(post: Post, decl: EnvDeclaration, root: string, result: EnvResult, extra: { goal?: string; task_id?: string; session_id?: string | null; scope?: Record<string, unknown>; cases_read?: string }): Promise<{ short_id: string; warnings?: string[] }> {
+/** A refusal to write that passes on its own: Convex's write-rate limit, an overloaded backend, a dropped connection or a timeout. */
+const RETRYABLE_WRITE_RE = /too many (?:writes|bytes|requests|concurrent)|write.?rate|overloaded|rate.?limit|\b(?:429|50[234])\b|temporarily|try again|fetch failed|timed? ?out|ECONNRESET|socket hang up/i;
+export const isRetryableWrite = (err: unknown): boolean => RETRYABLE_WRITE_RE.test(err instanceof Error ? err.message : String(err));
+
+/**
+ * A write that is safe to repeat, retried with backoff (about 1, 2, 4, 8 and
+ * 16 seconds, jittered) while the refusal is one that passes. Anything else,
+ * or the last try, throws as it came.
+ */
+export async function withWriteRetry<T>(fn: () => Promise<T>, opts: { tries?: number; sleep?: (ms: number) => Promise<void>; onRetry?: (err: unknown, wait: number) => void } = {}): Promise<T> {
+  const tries = opts.tries ?? 6;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= tries || !isRetryableWrite(err)) throw err;
+      const wait = Math.round(1000 * 2 ** (attempt - 1) * (0.75 + Math.random() * 0.5));
+      opts.onRetry?.(err, wait);
+      await sleep(wait);
+    }
+  }
+}
+
+/**
+ * File a result. The server reads the same JSON again. Its cases are filed in
+ * pages (contracts/envs compactCasePages): the record carries the first and
+ * each later page is its own small write, so a large attempt never trips
+ * Convex's write-rate limit, and every write retries a refusal that passes.
+ * One client key makes the record safe to repeat; a page already written is a no-op.
+ */
+export async function recordRun(post: Post, decl: EnvDeclaration, root: string, result: EnvResult, extra: { goal?: string; task_id?: string; session_id?: string | null; scope?: Record<string, unknown>; cases_read?: string }, retry: Parameters<typeof withWriteRetry>[1] = {}): Promise<{ short_id: string; warnings?: string[] }> {
   const wire = { ...result, started_at: new Date(result.started_at).toISOString(), finished_at: new Date(result.finished_at).toISOString(), ...(result.link ? { link: { ...result.link, measured_at: new Date(result.link.measured_at).toISOString() } } : {}) };
-  return await post("/cli/envs/record", {
+  const notify = { onRetry: (err: unknown, wait: number) => console.error(`${c.yellow}warning${c.reset} filing ${decl.key}: ${err instanceof Error ? err.message : String(err)}; trying again in ${(wait / 1000).toFixed(1)}s`), ...retry };
+  const body = {
     ...(extra.goal ? {} : extra.scope ?? {}),
     result: JSON.stringify(wire),
     env: decl.key,
     level: decl.level,
     title: decl.title,
     repo: repoIdentity(root),
+    client_key: randomUUID(),
     ...(extra.goal ? { goal: extra.goal } : {}),
     ...(extra.task_id ? { task_id: extra.task_id } : {}),
     ...(extra.session_id ? { session_id: extra.session_id } : {}),
     ...(extra.cases_read ? { cases_read: extra.cases_read } : {}),
-  });
+  };
+  const filed = await withWriteRetry(async () => {
+    try {
+      return await post("/cli/envs/record", body);
+    } catch (err) {
+      // A server from before pages refuses the key it does not know: file whole, as it expects.
+      if (!/client_key|extra field|ArgumentValidationError/i.test(err instanceof Error ? err.message : String(err))) throw err;
+      const { client_key: _k, ...whole } = body;
+      return await post("/cli/envs/record", whole);
+    }
+  }, notify);
+  const pages = compactCasePages(result.cases);
+  for (let seq = filed.case_pages_written ?? 1; seq < (filed.case_pages ?? 1); seq++) {
+    await withWriteRetry(() => post("/cli/envs/record-cases", { attempt: filed.short_id, seq, cases: pages[seq] }), notify);
+  }
+  return filed;
 }
 
 const score = (r: { n: number; mean: number; ci95?: [number, number] }) => `${r.mean.toFixed(3)}${r.ci95 ? ` [${r.ci95[0].toFixed(3)}, ${r.ci95[1].toFixed(3)}]` : ""} n=${r.n}`;
@@ -366,7 +415,9 @@ export async function envEval(post: Post, opts: { task: string; base?: string; o
         if (prior) {
           row.base = prior.short_id;
           baseVersion = prior.env_version;
-          baseCases = (await post("/cli/envs/get", { id: prior.short_id }, true)).cases;
+          const read = await post("/cli/envs/get", { id: prior.short_id }, true);
+          if (read.cases_complete === false) throw new Error(`base ${prior.short_id} was filed without all its cases; run the eval again to file a whole base`);
+          baseCases = read.cases;
         } else {
           const baseRun = await withTreeAt(root, base, (dir) => runWithCases(post, baseDecl, { dir, candidate: "base", split: "dev", sha: base }, fetchFor));
           const b = baseRun.run;
@@ -396,7 +447,8 @@ export const envEvalLines = (rows: EnvEvalRow[]): string[] =>
 // ── the command ──
 
 export function registerEnvCommand(program: Command, deps: PublishDeps): void {
-  const post: Post = (urlPath, body, read) => apiPost(deps, urlPath, body, { read });
+  // Filing throws rather than exits, so recordRun can retry a refusal that passes.
+  const post: Post = (urlPath, body, read) => apiPost(deps, urlPath, body, { read, ...(urlPath.startsWith("/cli/envs/record") ? { exitOnError: false } : {}) });
   const env = program.command("env").alias("envs").description(commandGroup("env").description);
 
   env
@@ -464,7 +516,12 @@ export function registerEnvCommand(program: Command, deps: PublishDeps): void {
       for (const w of run.warnings) console.error(`${c.yellow}warning${c.reset} ${w}`);
       if (run.code !== 0) console.error(`${c.yellow}warning${c.reset} ${key} exited ${run.code}; its result is filed as printed`);
       const r = run.result;
-      const filed = o.record ? await recordRun(post, decl, root, r, { goal: o.goal, task_id: o.task, session_id: sessionId, scope, cases_read: casesRead }) : null;
+      let filed: { short_id: string; warnings?: string[] } | null = null;
+      try {
+        filed = o.record ? await recordRun(post, decl, root, r, { goal: o.goal, task_id: o.task, session_id: sessionId, scope, cases_read: casesRead }) : null;
+      } catch (err) {
+        fail(`${key} ran, but filing its attempt failed: ${errText(err)}`);
+      }
       if (o.json) { console.log(JSON.stringify({ ...(filed ? { short_id: filed.short_id } : {}), result: r }, null, 2)); return; }
       const s = r.summary;
       console.log(`${c.green}ok${c.reset} ${filed ? `${c.cyan}${filed.short_id}${c.reset} ` : ""}${r.level} ${c.bold}${key}${c.reset} ${r.split} ${r.candidate.label}${r.candidate.sha ? `@${r.candidate.sha.slice(0, 8)}` : ""}: ${score(s)}${s.unscored ? ` (${s.unscored} unscored)` : ""}`);
