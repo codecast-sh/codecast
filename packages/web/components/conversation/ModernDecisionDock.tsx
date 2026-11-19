@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ChevronRight, Maximize2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, Maximize2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ModernAskCard } from "./ModernAsk";
@@ -24,6 +24,11 @@ import { ModernAskCard } from "./ModernAsk";
 //
 // What is typed is the caller's to hold: it outlives the card, which is
 // drawn again for each ask.
+//
+// The card folds to one row (the Needs you mark, the question, its place)
+// under the chevron at its top right, for a person who wants the thread
+// room; the row opens it again. The caller holds the fold so it lasts from
+// one ask to the next.
 
 /** How many of the thread's other asks show before the rest fold behind a row. */
 const OTHERS_SHOWN = 3;
@@ -31,7 +36,7 @@ const OTHERS_SHOWN = 3;
 /** Another open ask of the same thread, as the card lists it. */
 export type DockedAsk = { key: string; position: number; question: string };
 
-export function ModernDecisionDock({ question, kicker, aside, options, recommended, proceedingWith, proceedingLabel, held, onAnswer, text, onText, onAnswerText, onOpen, answerable, others = [], othersOpen, onOthersOpen, onPick }: {
+export function ModernDecisionDock({ question, kicker, aside, options, recommended, proceedingWith, proceedingLabel, held, onAnswer, text, onText, onAnswerText, onOpen, answerable, others = [], othersOpen, onOthersOpen, onPick, collapsed = false, onCollapsed }: {
   question: string;
   kicker?: ReactNode;
   aside?: ReactNode;
@@ -58,13 +63,45 @@ export function ModernDecisionDock({ question, kicker, aside, options, recommend
   othersOpen?: boolean;
   onOthersOpen?: () => void;
   onPick?: (key: string) => void;
+  /** Folded to one row. */
+  collapsed?: boolean;
+  /** Absent when the card cannot fold. */
+  onCollapsed?: (collapsed: boolean) => void;
 }) {
   const [openedHere, setOpenedHere] = useState(false);
   const allOthers = othersOpen ?? openedHere;
   const drawn = answerable && options.length > 0;
   const rows = allOthers ? others : others.slice(0, OTHERS_SHOWN);
+  const shownQuestion = question || "Waiting on your decision";
+  const fold = onCollapsed && (
+    <button
+      type="button"
+      onClick={() => onCollapsed(!collapsed)}
+      aria-expanded={!collapsed}
+      aria-label={collapsed ? "Expand the decision" : "Collapse the decision"}
+      data-decision-collapse
+      className="-my-1 -mr-1.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/60"
+    >
+      {collapsed ? <ChevronUp aria-hidden className="h-4 w-4" /> : <ChevronDown aria-hidden className="h-4 w-4" />}
+    </button>
+  );
+  const corner = (aside || fold) && <span className="inline-flex items-center gap-2">{aside}{fold}</span>;
+  if (collapsed && onCollapsed) return (
+    <ModernAskCard
+      kicker={
+        <button type="button" onClick={() => onCollapsed(false)} title={shownQuestion} data-decision-collapsed-question className="flex min-w-0 items-center gap-2 text-left">
+          {kicker && <span className="shrink-0">{kicker}</span>}
+          <span className="truncate text-ui font-medium text-sol-text">{shownQuestion}</span>
+        </button>
+      }
+      aside={corner}
+      data-decision-dock
+      data-decision-collapsed
+      className="!my-1 !py-2"
+    />
+  );
   return (
-    <ModernAskCard kicker={kicker} aside={aside} question={question || "Waiting on your decision"} data-decision-dock className="!my-1">
+    <ModernAskCard kicker={kicker} aside={corner} question={shownQuestion} data-decision-dock className="!my-1">
       {drawn && (
         <div className="flex flex-wrap items-center gap-2" data-decision-options>
           {options.map((o) => (

@@ -2165,6 +2165,10 @@ export type ClientUI = {
   // left unstamped, so it stays a per-device reading preference like the other
   // layout toggles.
   thread_state_collapsed?: boolean;
+  // Fold the decision docked above the composer (Modern) to one row: the
+  // Needs you mark, the question and its place. Per-device like the other
+  // layout toggles; a new ask arrives folded too, still edged in Needs you.
+  decision_dock_collapsed?: boolean;
   // The calls history list beside an open call (/calls/<id>). Folded away by
   // default, so a call reads as its own page; per-device like the other
   // layout toggles.
@@ -7870,7 +7874,7 @@ export const PER_DEVICE_UI_KEYS = new Set([
   "visual_style", "modern_style", "mobile_modern_style", "mobile_text_size",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
-  "trigger_prompt_height", "thread_state_collapsed", "calls_list_open", "people_view", "float_face_size",
+  "trigger_prompt_height", "thread_state_collapsed", "decision_dock_collapsed", "calls_list_open", "people_view", "float_face_size",
   "call_mic_device_id", "call_camera_device_id",
   "call_speaker_device_id",
 ]);

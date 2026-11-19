@@ -128,6 +128,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   // agent in the wording.
   const hosted = useIsHostedConversation(item.conversationId);
   const modern = useIsModernStyle();
+  const dockCollapsed = useInboxStore((s) => s.clientState?.ui?.decision_dock_collapsed === true);
 
   const [size, setSize] = useState<Size>(() => {
     if (startSize) return startSize;
@@ -738,7 +739,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   // Modern docks the ask itself (ModernDecisionDock): the question and its options as Buttons, Open for the sheet.
   if (modern) return (
     <div ref={rootRef} tabIndex={-1} data-session-decision={item.conversationId} className="decision-card decision-fold relative z-20 shrink-0 conv-col mx-auto w-full px-2 sm:px-3 md:px-4 outline-none" onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}>
-      <ModernDecisionDock question={question} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} />
+      <ModernDecisionDock question={question} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} collapsed={dockCollapsed} onCollapsed={(v) => useInboxStore.getState().updateClientUI({ decision_dock_collapsed: v })} />
     </div>
   );
   return (

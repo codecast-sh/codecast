@@ -531,6 +531,20 @@ describe("Modern asks: the one loud card", () => {
     // The card grows; it never scrolls inside itself.
     expect(list.className).not.toContain("overflow");
   });
+
+  test("the dock folds to one row: the Needs you mark, the question and its place, with the chevron to open it again", () => {
+    const props = { question: "Ship the renderer behind a flag?", aside: "2 of 2", options: [{ label: "Ship now", index: 0 }], held: () => false, onAnswer: noop, text: "", onText: noop, onAnswerText: noop, onOpen: noop, answerable: true, others: [{ key: "decide:d1", position: 1, question: "Question 1?" }], onPick: noop, onCollapsed: noop };
+    const open = draw(<ModernDecisionDock {...props} />, "modern").querySelector("[data-cc-ask]")!;
+    expect(open.querySelector("[data-decision-collapse]")!.getAttribute("aria-expanded")).toBe("true");
+    const folded = draw(<ModernDecisionDock {...props} collapsed />, "modern").querySelector("[data-cc-ask]")!;
+    expect(folded.hasAttribute("data-decision-collapsed")).toBe(true);
+    expect(text(folded.querySelector("[data-decision-collapsed-question]"))).toBe("Ship the renderer behind a flag?");
+    expect(folded.textContent).toContain("2 of 2");
+    expect(folded.querySelector("[data-decision-collapse]")!.getAttribute("aria-expanded")).toBe("false");
+    for (const part of ["[data-cc-ask-question]", "[data-decision-options]", "input", "[data-decision-others]"]) expect(folded.querySelector(part)).toBeNull();
+    // A caller that cannot hold the fold gets no chevron.
+    expect(draw(<ModernDecisionDock {...props} onCollapsed={undefined} collapsed />, "modern").querySelector("[data-decision-collapse]")).toBeNull();
+  });
 });
 
 describe("Modern failures, paths and the live line", () => {
