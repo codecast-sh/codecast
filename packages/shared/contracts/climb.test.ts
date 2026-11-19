@@ -155,3 +155,12 @@ describe("the paired floor", () => {
     expect(readClimbCard(card({ levels: [{ env: "u/replay", plausible_effect: 0.03, moved_share: 2 }] }), goal)).toMatchObject({ ok: false });
   });
 });
+
+describe("the card's stack", () => {
+  test("names a pending change by ref or patch, with its task id", () => {
+    expect(readClimbCard(card({ stack: { ref: "pending/refill", task: "CT-96939" } }), goal)).toMatchObject({ ok: true, card: { stack: { ref: "pending/refill", task: "ct-96939" } } });
+    expect(readClimbCard(card({ stack: { patch: "/tmp/refill.patch" } }), goal)).toMatchObject({ ok: true, card: { stack: { patch: "/tmp/refill.patch" } } });
+    expect(readClimbCard(card({ stack: {} }), goal)).toMatchObject({ ok: false });
+    expect(readClimbCard(card({ stack: { ref: "x", task: "in-9" } }), goal)).toMatchObject({ ok: false });
+  });
+});

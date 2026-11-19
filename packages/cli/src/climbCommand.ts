@@ -12,7 +12,7 @@ import { archiveSealed, climbHome } from "./climb/store.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { recordRun, runEnv, runWithCases, withTreeAt } from "./envCommand.js";
-import { climbBase } from "./climb/base.js";
+import { climbBase, stackBase } from "./climb/base.js";
 import { repoRoot } from "./envDeclaration.js";
 import { parseDuration } from "@codecast/shared/time";
 import { ClimbStop, STOP, admit, bindPromoted, promoteMode, confirm, gauge, guard, readState, refuse, screen, setOutcome, type ClimbIo, type RunOut } from "./climb/engine.js";
@@ -131,9 +131,16 @@ export function registerClimbCommand(program: Command, deps: PublishDeps): void 
     .action((o) => station("gauge", async () => {
       const io = defaultIo(deps);
       // A shared checkout lags its default branch: base on the upstream tip, never on this checkout's own HEAD.
-      const base = climbBase(io.root, o.base);
+      let base = climbBase(io.root, o.base);
       if (!base) throw new ClimbStop(o.base ? `--base ${o.base} is not a commit here` : "no base to climb from: no upstream and no HEAD", 3);
-      const s = await gauge(io, o.dir, { card: readJson(o.card, "the card", 5), base: base.sha, base_info: base, task: o.task, goal: o.goal ?? undefined });
+      const card = readJson(o.card, "the card", 5) as any;
+      // A climb that builds on a pending change measures against that change applied onto the tip, so no candidate is credited with it.
+      if (card?.stack && (card.stack.ref || card.stack.patch)) {
+        const stacked = stackBase(io.root, base.sha, card.stack);
+        if ("error" in stacked) throw new ClimbStop(`the card's stack cannot be the base: ${stacked.error}`, 5);
+        base = { ...base, sha: stacked.sha, stack: { ...card.stack, sha: stacked.sha, onto: base.sha } };
+      }
+      const s = await gauge(io, o.dir, { card, base: base.sha, base_info: base, task: o.task, goal: o.goal ?? undefined });
       console.log(statusText(s));
       return `levels kept: ${s.levels.filter((l) => l.kept).map((l) => `${l.level} ${l.env}`).join(", ")}`;
     }, o.dir));

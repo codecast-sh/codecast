@@ -39,6 +39,8 @@ export type ClimbCard = {
   production_lift?: number;
   target: string;
   levels: ClimbCardLevel[];
+  /** A pending promoted change the climb builds on (a branch or commit, or a patch file, and its task): the control candidates are measured beyond. */
+  stack?: { ref?: string; patch?: string; task?: string };
   budget: ClimbBudget;
   candidates: number;
   hypotheses: string[];
@@ -83,9 +85,17 @@ export function readClimbCard(raw: unknown, goal: { short_id: string; budget?: P
   if (askedN !== null && askedN > CLIMB_CANDIDATES.max) notes.push(`candidates held to ${CLIMB_CANDIDATES.max}`);
   const hypotheses = Array.isArray(raw.hypotheses) ? raw.hypotheses.filter((h: unknown): h is string => typeof h === "string" && !!h.trim()).map((h: string) => h.trim().slice(0, 400)) : [];
   const metric = typeof raw.metric === "string" && raw.metric.trim() ? raw.metric.trim() : undefined;
+  let stack: ClimbCard["stack"];
+  if (raw.stack !== undefined && raw.stack !== null) {
+    const st = raw.stack;
+    const word = (x: unknown) => (typeof x === "string" && x.trim() ? x.trim().slice(0, 200) : undefined);
+    if (!isObj(st) || (!word(st.ref) && !word(st.patch))) return { ok: false, error: "the card's stack names the pending change it builds on: {ref: <branch or commit>} or {patch: <file>}, with its task" };
+    if (st.task !== undefined && !/^ct-\d+$/i.test(String(st.task))) return { ok: false, error: `the card's stack task "${st.task}" is not a task id (ct-N)` };
+    stack = { ...(word(st.ref) ? { ref: word(st.ref) } : { patch: word(st.patch) }), ...(st.task ? { task: String(st.task).toLowerCase() } : {}) };
+  }
   const lift = posNum(raw.production_lift);
   if (metric && lift === null) return { ok: false, error: `say production_lift: the plausible relative lift one change could make on ${metric} in production (0.04 = 4%), so the climb can say before it spends whether production can read it` };
-  return { ok: true, card: { goal: goal.short_id, ...(metric ? { metric } : {}), ...(lift !== null ? { production_lift: Math.min(lift, 10) } : {}), target: target.slice(0, 600), levels, budget, candidates, hypotheses }, notes };
+  return { ok: true, card: { goal: goal.short_id, ...(metric ? { metric } : {}), ...(stack ? { stack } : {}), ...(lift !== null ? { production_lift: Math.min(lift, 10) } : {}), target: target.slice(0, 600), levels, budget, candidates, hypotheses }, notes };
 }
 
 // ── noise and what a level can see ──
