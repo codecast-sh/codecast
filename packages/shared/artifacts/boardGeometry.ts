@@ -15,6 +15,8 @@ export const BOARD_DEFAULT_SIZE: Record<string, { w: number; h: number }> = {
   image: { w: 320, h: 220 },
   stamp: { w: 48, h: 48 },
   card: { w: 320, h: 168 },
+  // A published page: a header strip over a frame wide enough for a page laid out for a narrow column.
+  page: { w: 640, h: 480 },
   pen: { w: 0, h: 0 },
   connector: { w: 0, h: 0 },
 };

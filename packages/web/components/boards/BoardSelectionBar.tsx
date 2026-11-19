@@ -31,6 +31,7 @@ import {
   Wand2,
   Minus,
   MoveHorizontal,
+  MousePointerClick,
 } from "lucide-react";
 import { BOARD_COLORS, boardArtFor, type AlignMode } from "@codecast/shared/artifacts/board";
 import { BoardArtPicker } from "./BoardArtPicker";
@@ -53,6 +54,7 @@ export type BarAction =
   | { type: "describe" }
   | { type: "edit" }
   | { type: "frame" }
+  | { type: "interact"; on: boolean }
   | { type: "open" }
   | { type: "duplicate" }
   | { type: "delete" };
@@ -71,7 +73,7 @@ function Btn({ label, accel, active, onClick, children }: { label: string; accel
 
 const I = { size: 15, strokeWidth: 1.75 } as const;
 
-export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at, paneWidth, canMakeTasks, onAction }: {
+export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at, paneWidth, canMakeTasks, pageLive, onAction }: {
   selected: BoardEl[];
   /** Screen position: the bar's bottom-center (top-center when below). */
   at: { x: number; y: number; below: boolean };
@@ -79,6 +81,8 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
   paneWidth: number;
   /** Tasks are real objects a draft discard cannot take back, so they wait for a saved board. */
   canMakeTasks: boolean;
+  /** The selected page is entered. */
+  pageLive?: boolean;
   onAction(a: BarAction): void;
 }) {
   const [menu, setMenu] = useState<"color" | "align" | "art" | "shape" | null>(null);
@@ -193,6 +197,12 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
         </>
       )}
       {only("card") && n === 1 && <Btn label="Open" onClick={() => act({ type: "open" })}><ExternalLink {...I} /></Btn>}
+      {only("page") && n === 1 && (
+        <>
+          <Btn label={pageLive ? "Done" : "Interact"} accel={pageLive ? "Escape" : undefined} active={pageLive} onClick={() => act({ type: "interact", on: !pageLive })}><MousePointerClick {...I} /><span className="board-bar-text">{pageLive ? "Done" : "Interact"}</span></Btn>
+          <Btn label="Open in a new tab" onClick={() => act({ type: "open" })}><ExternalLink {...I} /></Btn>
+        </>
+      )}
 
       {n >= 2 && (
         <>

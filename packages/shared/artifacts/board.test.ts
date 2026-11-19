@@ -532,3 +532,31 @@ describe("straight arrows between boxes", () => {
     expect(g.b).toEqual({ x: 296, y: 260 });
   });
 });
+
+describe("page elements", () => {
+  test("page takes a share URL, a serving URL or a bare slug", () => {
+    for (const input of ["https://codecast.sh/a/Ab12Cd34Ef", "codecast.sh/a/Ab12Cd34Ef", "https://convex.codecast.sh/cli/a/Ab12Cd34Ef", "Ab12Cd34Ef"]) {
+      const { view } = run(board([]), "page", [input]);
+      expect(view.elements[0]).toMatchObject({ kind: "page", slug: "Ab12Cd34Ef", w: 640, h: 480 });
+    }
+    expect(() => run(board([]), "page", ["https://example.com/x"])).toThrow(/published page/);
+  });
+
+  test("page --near lands beside the element, clear of its neighbours", () => {
+    const v = board([el("a", "sticky", { x: 0, y: 0, w: 200, h: 160 }), el("b", "sticky", { x: 240, y: 0, w: 200, h: 160 })]);
+    const { view, res } = run(v, "page", ["Ab12Cd34Ef", "--near", "a", "--caption", "Pricing model", "--w", "500", "--h", "400"]);
+    const p = view.elements.find((e) => e.kind === "page")!;
+    expect(p).toMatchObject({ caption: "Pricing model", w: 500, h: 400 });
+    const pb = elementBox(p), bb = elementBox(view.get("b")!);
+    expect(pb.x >= bb.x + bb.w || pb.y >= bb.y + bb.h || pb.y + pb.h <= bb.y).toBe(true);
+    expect(res.status).toContain("placed page Ab12Cd34Ef");
+  });
+
+  test("page --replace keeps the key, and read names the page's address", () => {
+    const v = board([el("a", "sticky", { x: 40, y: 50, z: 2 }), el("b", "sticky", { x: 400, y: 50 }), el("c", "connector", { from: "a", to: "b" })]);
+    const { view } = run(v, "page", ["Ab12Cd34Ef", "--replace", "a", "--caption", "The model"]);
+    expect(view.get("a")).toMatchObject({ kind: "page", slug: "Ab12Cd34Ef", x: 40, y: 50, z: 2 });
+    expect(view.get("c")!.from).toBe("a");
+    expect(boardSpec.describe(view)).toContain('a  page  https://codecast.sh/a/Ab12Cd34Ef  40,50 640x480  "The model"');
+  });
+});

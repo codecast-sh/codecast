@@ -2,6 +2,7 @@
 // in world coordinates, in z order, memoized on its own row so a drag
 // re-renders only what moved (and the connectors attached to it).
 import { memo, useLayoutEffect, useRef, useState } from "react";
+import { ArrowUpRight } from "lucide-react";
 import {
   boardArtFor,
   connectorGeometry,
@@ -19,6 +20,12 @@ import { formatKey } from "./boardMarks";
 import { RichText } from "./BoardRichText";
 import { RichEditor } from "./BoardRichEditor";
 import { EntityObjectCard } from "../EntityObjectCard";
+import { PageFavicon, PublishedPageEmbed } from "../PublishedPageEmbed";
+import { KeyCap } from "../KeyCap";
+import { usePageInfoRow } from "../../hooks/usePageInfo";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { pageShareUrl } from "../../lib/publishedPageUrls";
+import { PAGE_ESCAPE_MESSAGE } from "../../../shared/render/pageTheme";
 import { colorToken, shapeFill, stickyFill, tint } from "./boardColors";
 import type { BoardEl } from "./boardTypes";
 
@@ -277,8 +284,79 @@ const CardView = memo(function CardView({ el, interactive }: { el: BoardEl; inte
   );
 });
 
+/** Which page on the board is entered (taking the pointer), and how to change it: given by an editable board, which
+ *  enters on a double-click or the selection bar. Without it the page keeps its own state (the shared view). */
+export type PageLiveProps = { pageLive?: boolean; onPageLive?(key: string | null): void };
+
+/**
+ * A published page, live: its header (title, caption, open in a new tab) over the page itself. The page takes no
+ * pointer until it is entered, so the board pans, selects, drags and resizes it like any element; entered, people
+ * scroll and click inside it, and Escape (in the page or on the board) or a press outside leaves.
+ */
+const PageView = memo(function PageView({ el, pageLive, onPageLive }: { el: BoardEl } & PageLiveProps) {
+  const slug = typeof el.slug === "string" ? el.slug : "";
+  const caption = typeof el.caption === "string" ? el.caption : "";
+  const info = usePageInfoRow(slug);
+  const title = (info && !info.missing && !info.locked && info.title) || "Published page";
+  const controlled = !!onPageLive;
+  const [own, setOwn] = useState(false);
+  const live = controlled ? !!pageLive : own;
+  const setLive = (on: boolean) => (onPageLive ? onPageLive(on ? el.key : null) : setOwn(on));
+  const setLiveRef = useRef(setLive);
+  setLiveRef.current = setLive;
+  const ref = useRef<HTMLDivElement | null>(null);
+  useWatchEffect(() => {
+    if (!live) return;
+    const node = ref.current;
+    node?.querySelector("iframe")?.focus();
+    const leave = () => setLiveRef.current(false);
+    const onMessage = (e: MessageEvent) => {
+      if ((e.data as { type?: unknown } | null)?.type !== PAGE_ESCAPE_MESSAGE || !e.source || e.source !== node?.querySelector("iframe")?.contentWindow) return;
+      leave();
+      (node.closest("[data-board]") as HTMLElement | null)?.focus({ preventScroll: true });
+    };
+    const onPress = (e: PointerEvent) => { if (!node?.contains(e.target as Node)) leave(); };
+    // An editable board backs out of the page on its own Escape, a layer before the selection.
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") leave(); };
+    window.addEventListener("message", onMessage);
+    window.addEventListener("pointerdown", onPress, true);
+    if (!controlled) window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      window.removeEventListener("pointerdown", onPress, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [live, controlled]);
+  return (
+    <div
+      ref={ref}
+      data-key={el.key}
+      className={`board-el board-page${live ? " is-live" : ""}`}
+      style={boxStyle(el)}
+      onDoubleClick={controlled ? undefined : (e) => { e.stopPropagation(); setLive(true); }}
+    >
+      <div className="board-page-head">
+        <PageFavicon className="h-4 w-4" />
+        <span className="board-page-title" title={title}>{title}</span>
+        <span className="board-page-caption" title={caption || undefined}>{caption}</span>
+        {live ? (
+          <button type="button" data-page-action className="board-page-act" onClick={() => setLive(false)}>
+            Done <KeyCap size="xs">Esc</KeyCap>
+          </button>
+        ) : !controlled ? (
+          <button type="button" data-page-action className="board-page-act" onClick={() => setLive(true)}>Interact</button>
+        ) : null}
+        <a data-page-action className="board-page-act" href={pageShareUrl(slug)} target="_blank" rel="noopener noreferrer" title="Open in a new tab" aria-label="Open in a new tab">
+          <ArrowUpRight size={15} strokeWidth={1.75} />
+        </a>
+      </div>
+      <div className="board-page-body">{slug ? <PublishedPageEmbed slug={slug} fill /> : null}</div>
+    </div>
+  );
+});
+
 /** One element, dispatched by kind. Connectors are drawn by ConnectorView with their ends. */
-export const BoardElementView = memo(function BoardElementView(props: ViewProps & { interactive?: boolean }) {
+export const BoardElementView = memo(function BoardElementView(props: ViewProps & PageLiveProps & { interactive?: boolean }) {
   switch (props.el.kind) {
     case "sticky": return <StickyView {...props} />;
     case "text": return <TextView {...props} />;
@@ -288,6 +366,7 @@ export const BoardElementView = memo(function BoardElementView(props: ViewProps 
     case "image": return <ImageView el={props.el} />;
     case "stamp": return <StampView el={props.el} />;
     case "card": return <CardView el={props.el} interactive={props.interactive} />;
+    case "page": return <PageView el={props.el} pageLive={props.pageLive} onPageLive={props.onPageLive} />;
     default: return null;
   }
 });

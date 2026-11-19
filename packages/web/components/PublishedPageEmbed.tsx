@@ -315,7 +315,7 @@ export function PublishedPageActions({ slug, notes }: {
  *  floating over its top corner, the resize edge under it, the caption
  *  below. Folded (`collapsed`), it is the title row alone. All spans, so it
  *  stays valid wherever markdown puts it. */
-export function FramelessPage({ title, href, actions, status, statusPinned, caption, height, stageRef, loaded, pinning, grip, expand, collapsed, onToggleCollapsed, bare = false, children }: {
+export function FramelessPage({ title, href, actions, status, statusPinned, caption, height, stageRef, loaded, pinning, grip, expand, collapsed, onToggleCollapsed, bare = false, fill = false, children }: {
   title: string;
   href: string;
   actions: ReactNode;
@@ -324,6 +324,8 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
   expand?: { expanded: boolean; onToggle: () => void };
   /** The page is part of the surface around it (a decision's own page): no toolbar, no fold, no resize edge. */
   bare?: boolean;
+  /** The page fills a box its host sizes (a board element): no margin, no shadow of its own. */
+  fill?: boolean;
   /** A quiet status beside the title in the toolbar. */
   status?: ReactNode;
   /** Also hold the status on the page's top edge while the toolbar is away:
@@ -370,7 +372,7 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
 
   return (
     <span
-      className="page-embed not-prose mb-5 block"
+      className={`page-embed not-prose block${fill ? " page-embed--fill" : " mb-5"}`}
       data-loaded={loaded ? "" : undefined}
       data-pinning={pinning ? "" : undefined}
     >
@@ -537,6 +539,9 @@ type PublishedPageEmbedProps = {
    *  the host's own scroll instead of a box that scrolls inside it, and carries no chrome of its own (the surface has
    *  its own ways to open and share it). `height` holds its place until then. */
   whole?: boolean;
+  /** The page fills a box its host sizes and moves (a board element), which carries its title and verbs: no chrome,
+   *  no fold, no resize edge of its own. */
+  fill?: boolean;
   /** Called once the page is in view (its frame loaded), or once it is known it will not frame (deleted, locked). */
   onReady?: () => void;
 };
@@ -546,7 +551,7 @@ export function PublishedPageEmbed(props: PublishedPageEmbedProps) {
   return asLink ? <PublishedPagePill slug={props.slug} href={pageShareUrl(props.slug)} /> : <PublishedPageFrame {...props} />;
 }
 
-function PublishedPageFrame({ slug, caption, height, decision, whole = false, onReady }: PublishedPageEmbedProps) {
+function PublishedPageFrame({ slug, caption, height, decision, whole = false, fill = false, onReady }: PublishedPageEmbedProps) {
   // The page's info (title, version, its gates) paints from the store, so a page seen before frames at once. A page
   // never seen starts loading anyway, with no gate tokens, hidden until its info arrives: an open page is then
   // already there, and a gated one reloads with the tokens a signed-in reader may hold. A guest frames at once: a
@@ -650,21 +655,22 @@ function PublishedPageFrame({ slug, caption, height, decision, whole = false, on
     <FramelessPage
       title={title}
       href={pageShareUrl(slug)}
-      caption={caption}
-      height={frameHeight}
+      caption={fill ? undefined : caption}
+      height={fill ? "100%" : frameHeight}
       stageRef={stageRef}
       loaded={loaded}
       pinning={notes?.pinMode}
       status={showAgent ? <PageAgentStatus agent={agent} /> : undefined}
       statusPinned={showAgent}
-      bare={whole}
-      collapsed={collapsed}
-      onToggleCollapsed={() => {
+      bare={whole || fill}
+      fill={fill}
+      collapsed={fill ? undefined : collapsed}
+      onToggleCollapsed={fill ? undefined : () => {
         setLoadedSrc(null);
         setCollapsed((v) => !v);
       }}
       actions={<PublishedPageActions slug={slug} notes={notes} />}
-      expand={canToggle && !(whole && reported) ? { expanded: tall, onToggle: toggleExpand } : undefined}
+      expand={canToggle && !(whole && reported) && !fill ? { expanded: tall, onToggle: toggleExpand } : undefined}
       grip={
         <span className="page-embed__grip" onDoubleClick={() => { setDragged(null); setExpanded(false); }} title="Drag to resize, double-click to fit">
           <HeightGrip target={stageRef} min={EMBED_MIN_HEIGHT} onResized={setDragged} />

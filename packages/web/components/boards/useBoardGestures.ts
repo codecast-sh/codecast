@@ -70,6 +70,8 @@ export type GestureDeps = {
   startEdit(key: string): void;
   onComment(at: Pt, anchor: string | null): void;
   onCardTool(at: Pt): void;
+  /** Step into a page element so the pointer reaches the page. */
+  enterPage(key: string): void;
   readOnly: boolean;
   /** The tool stays on after a placement. */
   locked: boolean;
@@ -240,6 +242,8 @@ export function useBoardGestures(d: GestureDeps) {
     }
     // A live card's own controls (open, expand) work when its card is the selection.
     if (target.closest(".board-card.is-interactive a, .board-card.is-interactive button")) return;
+    // A page's header verbs (open in a new tab, done) work with one press, selected or not.
+    if (target.closest(".board-page [data-page-action]")) return;
     const key = hitKey(e.target);
     switch (dd.tool) {
       case "pen":
@@ -511,6 +515,12 @@ export function useBoardGestures(d: GestureDeps) {
     const card = key ? dd.byKey.current.get(key) : undefined;
     if (card?.kind === "card") {
       (node?.querySelector("a[href]") as HTMLAnchorElement | null)?.click();
+      return;
+    }
+    // A double-click steps into a page, read-only boards too: using a page is reading it.
+    if (card?.kind === "page" && key) {
+      dd.setSelection([key]);
+      dd.enterPage(key);
       return;
     }
     if (dd.readOnly) return;

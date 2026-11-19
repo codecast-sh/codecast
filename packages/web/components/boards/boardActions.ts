@@ -2,8 +2,9 @@
 // plan, image upload, and the clipboard format. Canvas writes still go
 // through the live handle so they sync, undo and show to everyone.
 import { toast } from "sonner";
-import type { ArtifactOp } from "@codecast/shared/artifacts";
-import { clearOffset, elementBounds, elementBox, nextZ, parseItems, gridPositions, placeItems, squareCols, cloneOps, unionBox, type Pt } from "@codecast/shared/artifacts/board";
+import { newElementKey, type ArtifactOp } from "@codecast/shared/artifacts";
+import { parsePublishedPageUrl } from "@codecast/shared/entities";
+import { BOARD_DEFAULT_SIZE, clearOffset, elementBounds, elementBox, nextZ, parseItems, gridPositions, placeItems, squareCols, cloneOps, unionBox, type Pt } from "@codecast/shared/artifacts/board";
 import { useInboxStore } from "../../store/inboxStore";
 import { createTaskAndAdopt } from "../../lib/taskActions";
 import { uploadBlobToStorage } from "../../lib/uploadBlob";
@@ -149,6 +150,8 @@ export function pasteOps(text: string, at: Pt, all: BoardEl[], exists: (k: strin
     }
   } catch { /* not ours */ }
   const trimmed = text.trim();
+  const page = trimmed.includes("\n") ? null : parsePublishedPageUrl(trimmed);
+  if (page) return pageOps(page.slug, at, all);
   const url = /\/(?:tasks|plans|conversation)\/([A-Za-z0-9-]+)/.exec(trimmed);
   const ref = REF_RE.test(trimmed) ? trimmed : url ? url[1] : null;
   if (ref) return besideContent(placeItems([{ kind: "card", fields: { ref }, w: CARD.w, h: CARD.h }], [{ x: Math.round(at.x - CARD.w / 2), y: Math.round(at.y - CARD.h / 2) }], z0), all);
@@ -158,6 +161,13 @@ export function pasteOps(text: string, at: Pt, all: BoardEl[], exists: (k: strin
   const width = cols * 240 - 40;
   const positions = gridPositions(items, { cols, gap: 40, at: { x: Math.round(at.x - width / 2), y: Math.round(at.y - 80) } });
   return besideContent(placeItems(items, positions, z0), all);
+}
+
+/** Ops for a published page dropped or pasted at `at`: centered there, nudged clear of what is on the board. */
+export function pageOps(slug: string, at: Pt, all: BoardEl[]): { ops: ArtifactOp[]; keys: string[] } {
+  const { w, h } = BOARD_DEFAULT_SIZE.page;
+  const k = newElementKey("el");
+  return besideContent({ ops: [{ k, put: { kind: "page", slug, x: Math.round(at.x - w / 2), y: Math.round(at.y - h / 2), w, h, z: nextZ({ elements: all }) } }], keys: [k] }, all);
 }
 
 /** Shift freshly placed content to the nearest spot clear of what is already on the board. */

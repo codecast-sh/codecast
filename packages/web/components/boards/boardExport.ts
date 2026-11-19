@@ -24,6 +24,15 @@ import { wrapRuns, type Run } from "./boardMarks";
 import { colorToken, shapeFill, stickyFill, tint } from "./boardColors";
 import { drawOrder } from "./boardFrame";
 import type { BoardEl } from "./boardTypes";
+import { useInboxStore } from "../../store/inboxStore";
+import { pageShareUrl, pageThumbUrl } from "../../lib/publishedPageUrls";
+
+/** A page element's title and the capture `cast publish` took of it, from the page info the board already loaded. */
+function pageInfoOf(slug: string): { title: string; thumb: string | null } {
+  const info = (useInboxStore.getState() as any).pageEmbeds?.[slug];
+  const ok = info && !info.missing && !info.locked ? info : null;
+  return { title: ok?.title || "Published page", thumb: ok?.version && !ok.gated ? pageThumbUrl(slug, ok.version) : null };
+}
 
 const PAD = 40;
 
@@ -63,6 +72,8 @@ function resolver(root: HTMLElement): (css: string) => string {
 async function dataUrl(url: string): Promise<string | null> {
   try {
     const blob = await (await fetch(url)).blob();
+    // An error page is not a picture: drawing it would leave a broken image in the export.
+    if (!blob.type.startsWith("image/")) return null;
     return await new Promise((ok) => {
       const r = new FileReader();
       r.onload = () => ok(String(r.result));
@@ -131,6 +142,8 @@ export async function boardSvg({ elements, byKey, root, only }: ExportInput): Pr
     const a = boardArtFor(e.kind === "stamp" ? e.emoji : e.icon);
     if (a && !art.has(a)) art.set(a, await dataUrl(BOARD_ART_URLS[a]));
     if (e.kind === "image" && typeof e.src === "string" && !art.has(e.src)) art.set(e.src, await dataUrl(e.src));
+    const thumb = e.kind === "page" ? pageInfoOf(String(e.slug ?? "")).thumb : null;
+    if (thumb && !art.has(thumb)) art.set(thumb, await dataUrl(thumb));
   }
 
   const out: string[] = [];
@@ -231,6 +244,22 @@ export async function boardSvg({ elements, byKey, root, only }: ExportInput): Pr
         const a = boardArtFor(e.emoji);
         if (a && art.get(a)) out.push(`<image href="${art.get(a)}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"${rot}/>`);
         else out.push(`<text x="${b.x + b.w / 2}" y="${b.y + b.h * 0.82}" font-size="${b.w * 0.78}" text-anchor="middle"${rot}>${esc(typeof e.emoji === "string" ? e.emoji : "👍")}</text>`);
+        break;
+      }
+      case "page": {
+        // The header strip the board draws, then the page's capture (or its address, as a link, when there is none).
+        const slug = String(e.slug ?? "");
+        const { title, thumb } = pageInfoOf(slug);
+        const shot = thumb ? art.get(thumb) : null;
+        const head = 36;
+        const words = [title, ...(typeof e.caption === "string" && e.caption ? [e.caption] : [])].join("  ·  ");
+        out.push(`<g${rot}><rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="10" fill="${c("var(--sol-card)")}" stroke="${c("var(--sol-border)")}"/>`
+          + `<path d="M${b.x} ${b.y + head}H${b.x + b.w}" stroke="${c("var(--sol-border)")}"/>`
+          + textBlock([words], b.x + 12, b.y + (head - 13 * 1.3) / 2, 13, { link, color: text, weight: 600 })
+          + (shot
+            ? `<image href="${shot}" x="${b.x + 1}" y="${b.y + head + 1}" width="${b.w - 2}" height="${b.h - head - 2}" preserveAspectRatio="xMidYMin slice"/>`
+            : textBlock([[{ t: pageShareUrl(slug), href: pageShareUrl(slug) }]], b.x + 16, b.y + head + 16, 13, { link, color: text }))
+          + `</g>`);
         break;
       }
       case "card":

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { injectPageTheme, PAGE_PARK_MESSAGE, PAGE_THEME_DEFAULTS, PAGE_THEME_TOKENS } from "./pageTheme";
+import { injectPageTheme, PAGE_ESCAPE_MESSAGE, PAGE_PARK_MESSAGE, PAGE_THEME_DEFAULTS, PAGE_THEME_TOKENS } from "./pageTheme";
 
 describe("injectPageTheme", () => {
   test("goes first in <head>, so the page's own styles win", () => {
@@ -102,5 +102,24 @@ describe("injectPageTheme", () => {
     listeners.message!({ source: parent, data: { type: PAGE_PARK_MESSAGE } });
     expect(video.paused).toBe(true);
     expect(audio.paused).toBe(true);
+  });
+
+  test("framed, the page tells the window framing it that Escape was pressed, unless the page used the key", () => {
+    const script = /<script>([\s\S]*?)<\/script>/.exec(injectPageTheme("<head></head>"))![1]!;
+    const listeners: Record<string, (e: unknown) => void> = {};
+    const sent: unknown[] = [];
+    const win = {
+      innerWidth: 0, innerHeight: 0, scrollY: 0, self: 1, top: 2,
+      location: { search: "" },
+      parent: { postMessage: (m: unknown) => sent.push(m) },
+      addEventListener: (type: string, fn: (e: unknown) => void) => { listeners[type] = fn; },
+    };
+    const doc = { body: null, documentElement: { setAttribute() {} }, getElementById: () => ({ textContent: "" }), querySelectorAll: () => [], addEventListener() {} };
+    new Function("window", "document", "ResizeObserver", "location", `with (window) { ${script} }`)(win, doc, undefined, win.location);
+    listeners.keydown!({ key: "a", defaultPrevented: false });
+    listeners.keydown!({ key: "Escape", defaultPrevented: true });
+    expect(sent).toEqual([]);
+    listeners.keydown!({ key: "Escape", defaultPrevented: false });
+    expect(sent).toEqual([{ type: PAGE_ESCAPE_MESSAGE }]);
   });
 });

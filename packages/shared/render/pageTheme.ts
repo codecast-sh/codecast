@@ -24,6 +24,9 @@ export const PAGE_GATE_MESSAGE = "codecast:gate";
 // page stops whatever it is playing, open shadow roots included, so a player
 // does not go on sounding from a page nobody sees.
 export const PAGE_PARK_MESSAGE = "codecast:park";
+// Escape pressed inside a framed page: a host that lets people step into the
+// page (a board) steps back out, since the key never reaches the host itself.
+export const PAGE_ESCAPE_MESSAGE = "codecast:escape";
 export const PAGE_GATE_SIGNAL = `<script>try{if(window.parent!==window)window.parent.postMessage({type:${JSON.stringify(PAGE_GATE_MESSAGE)}},"*")}catch(e){}</script>`;
 
 /** The tokens a framed page receives, by name without the leading dashes. */
@@ -84,6 +87,7 @@ try{var t=new URLSearchParams(location.search).get("theme");if(t==="dark"||t==="
 var framed=false;try{framed=window.self!==window.top;}catch(e){framed=true;}
 function hush(root){var all=root.querySelectorAll("*");for(var i=0;i<all.length;i++){var n=all[i];if((n.tagName==="VIDEO"||n.tagName==="AUDIO")&&!n.paused)try{n.pause();}catch(e){}if(n.shadowRoot)hush(n.shadowRoot);}}
 window.addEventListener("message",function(e){var m=e.data;if(e.source===window.parent&&m&&m.type===${JSON.stringify(PAGE_PARK_MESSAGE)}){hush(document);return;}if(e.source!==window.parent||!m||m.type!==${JSON.stringify(PAGE_THEME_MESSAGE)})return;var mode=m.theme==="dark"||m.theme==="light"?m.theme:null;if(m.tokens&&typeof m.tokens==="object")put(mode,m.tokens);else if(mode)put(mode,D[mode]);});
+if(framed)window.addEventListener("keydown",function(e){if(e.key==="Escape"&&!e.defaultPrevented)try{window.parent.postMessage({type:${JSON.stringify(PAGE_ESCAPE_MESSAGE)}},"*")}catch(x){}});
 if(!framed||typeof ResizeObserver==="undefined")return;
 var last=0;function report(){var b=document.body;if(!b||!innerWidth||!innerHeight)return;var h=Math.ceil(b.getBoundingClientRect().bottom+window.scrollY+(parseFloat(getComputedStyle(b).marginBottom)||0));if(d.scrollHeight>innerHeight)h=Math.max(h,d.scrollHeight);if(h>0&&h!==last){last=h;var pm=document.querySelector('meta[name="codecast:height"]'),p=pm?parseInt(pm.getAttribute("content")||"",10):NaN;window.parent.postMessage({type:${JSON.stringify(PAGE_HEIGHT_MESSAGE)},height:h,preferred:p>0?p:null},"*");}}
 function watch(){var ro=new ResizeObserver(report);ro.observe(d);if(document.body)ro.observe(document.body);report();}
