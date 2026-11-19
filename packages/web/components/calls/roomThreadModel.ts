@@ -70,7 +70,8 @@ export type RoomEventKind =
   | "link_on"
   | "link_off"
   | "guest_admitted"
-  | "guest_removed";
+  | "guest_removed"
+  | "stage_pinned";
 
 export type AgentRef = {
   conversation_id: string;

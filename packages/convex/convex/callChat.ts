@@ -144,7 +144,9 @@ export type RoomEvent =
   | "link_on"
   | "link_off"
   | "guest_admitted"
-  | "guest_removed";
+  | "guest_removed"
+  // Something went up on the stage (callStage.ts): the line's text is its name.
+  | "stage_pinned";
 
 /** Something the room saw, as a row in its thread: an agent came or went,
  *  transcription went on or off, somebody let a guest in or put one out. `user_id` is who did it. A recording has no

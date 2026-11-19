@@ -9,7 +9,7 @@ import { ScreenCursors } from "./ScreenCursors";
 import { Avatar } from "./Avatar";
 import { firstName } from "./speakers";
 import { ParticipantTag, PersonName } from "./GuestTag";
-import { isMuted, noFollowLeader, SPEAKING_RING, stageLattice, useIsSpeaking, useStageHost } from "./stageHost";
+import { isMuted, isPinShare, noFollowLeader, SPEAKING_RING, stageLattice, useIsSpeaking, useStageHost, type StageShare } from "./stageHost";
 import "./callSurface.css";
 
 // THE STAGE'S PICTURE, apart from the app.
@@ -80,7 +80,8 @@ export function AutoStage({
 }: {
   roster: any[];
   cameras: ParticipantTile[];
-  screens: ParticipantTile[];
+  /** Screen shares and pinned things: whatever can hold the stage. */
+  screens: StageShare[];
   /** Who is speaking, for a host with no reactive read of its own (useIsSpeaking). */
   speaking?: ReadonlySet<string>;
   phase: string;
@@ -88,6 +89,9 @@ export function AutoStage({
   settledLine?: string | null;
 }) {
   const [heroKey, setHeroKey] = useState<string | null>(null);
+  // When the viewer last picked a tab: a thing pinned after it is marked new
+  // on its tab rather than taking the stage from what they chose.
+  const [pickedAt, setPickedAt] = useState(0);
   const hero = (heroKey && screens.find((t) => t.key === heroKey)) || screens[0] || null;
   if (hero) {
     return (
@@ -96,28 +100,47 @@ export function AutoStage({
       // call window with the thread open, a rail dragged wide.
       <div className="stage-fit flex min-h-0 min-w-0 flex-1">
       <div className="stage-split flex min-h-0 min-w-0 flex-1 gap-2">
-        <div className="relative min-h-0 min-w-0 flex-1">
-          <StageVideo tile={hero} speaking={speaking} contain />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
+          {/* Everything that can hold the stage, as tabs over it: a share and
+              each pinned thing. A row of its own, so it never covers a
+              shared screen's corner or a board's controls. */}
           {screens.length > 1 && (
-            <div className="absolute left-3 top-3 flex gap-1">
+            <div className="flex shrink-0 items-center gap-1 overflow-x-auto" role="tablist" aria-label="On the stage">
               {screens.map((t) => (
                 <button
                   key={t.key}
-                  onClick={() => setHeroKey(t.key)}
-                  className={`rounded-full px-2.5 py-0.5 font-mono text-meta backdrop-blur transition-colors ${
+                  role="tab"
+                  aria-selected={t.key === hero.key}
+                  onClick={() => {
+                    setHeroKey(t.key);
+                    setPickedAt(Date.now());
+                  }}
+                  className={`shrink-0 rounded-full px-2.5 py-0.5 font-mono text-meta transition-colors ${
                     t.key === hero.key
-                      ? "bg-sol-violet/30 text-white"
-                      : "bg-black/45 text-white/70 hover:text-white"
+                      ? isPinShare(t) ? "bg-sol-cyan/20 text-sol-text" : "bg-sol-violet/30 text-white"
+                      : "bg-white/[0.05] text-sol-text-muted hover:bg-white/[0.08] hover:text-sol-text"
                   } modern:rounded-control modern:font-sans modern:font-medium`}
                 >
-                  <span className="flex items-center gap-1">
-                    {t.isLocal ? "your screen" : `${firstName(t.name)}'s screen`}
-                    <ParticipantTag identity={t.identity} />
+                  <span className="flex max-w-[220px] items-center gap-1">
+                    {isPinShare(t) && heroKey && t.key !== hero.key && (t.at ?? 0) > pickedAt && (
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sol-cyan" aria-label="new" />
+                    )}
+                    {isPinShare(t) ? (
+                      <PinName share={t} />
+                    ) : (
+                      <>
+                        {t.isLocal ? "your screen" : `${firstName(t.name)}'s screen`}
+                        <ParticipantTag identity={t.identity} />
+                      </>
+                    )}
                   </span>
                 </button>
               ))}
             </div>
           )}
+          <div className="relative min-h-0 min-w-0 flex-1">
+            <StageVideo tile={hero} speaking={speaking} contain />
+          </div>
         </div>
         {(cameras.length > 0 || roster.length > 0) && (
           <div className="stage-strip flex w-[clamp(120px,22%,200px)] shrink-0 flex-col gap-2 overflow-y-auto">
@@ -179,7 +202,8 @@ export function SpeakerStage({
 }: {
   roster: any[];
   cameras: ParticipantTile[];
-  screens: ParticipantTile[];
+  /** Screen shares and pinned things: whatever can hold the stage. */
+  screens: StageShare[];
   /** Who is speaking, for a host with no reactive read of its own (useIsSpeaking). */
   speaking?: ReadonlySet<string>;
   focusId: string | null;
@@ -303,7 +327,8 @@ export function GridStage({
 }: {
   roster: any[];
   cameras: ParticipantTile[];
-  screens: ParticipantTile[];
+  /** Screen shares and pinned things: whatever can hold the stage. */
+  screens: StageShare[];
   /** Who is speaking, for a host with no reactive read of its own (useIsSpeaking). */
   speaking?: ReadonlySet<string>;
 }) {
@@ -362,7 +387,7 @@ function GridVoiceTile({ m, speaking }: { m: any; speaking?: ReadonlySet<string>
 // The tile reads its own speaking state (useIsSpeaking), so a change of who
 // is talking redraws the tiles it changes and nothing else.
 type StageVideoProps = {
-  tile: ParticipantTile;
+  tile: StageShare;
   speaking?: ReadonlySet<string>;
   muted?: boolean;
   small?: boolean;
@@ -370,7 +395,21 @@ type StageVideoProps = {
 };
 
 export function StageVideo(props: StageVideoProps) {
-  return isOwnScreen(props.tile) ? <OwnScreenTile tile={props.tile} small={props.small} /> : <TrackVideo {...props} />;
+  const tile = props.tile;
+  if (isPinShare(tile)) return <PinSlot share={tile} small={props.small} />;
+  return isOwnScreen(tile) ? <OwnScreenTile tile={tile} small={props.small} /> : <TrackVideo {...props} tile={tile} />;
+}
+
+/** A pinned thing's name, resolved by the host when it can. */
+function PinName({ share }: { share: Extract<StageShare, { kind: "pin" }> }) {
+  const Label = useStageHost().PinLabel;
+  return <span className="truncate">{Label ? <Label share={share} /> : share.name}</span>;
+}
+
+/** A pinned thing, drawn by the host that knows what it is. */
+function PinSlot({ share, small }: { share: Extract<StageShare, { kind: "pin" }>; small?: boolean }) {
+  const Tile = useStageHost().PinTile;
+  return Tile ? <Tile share={share} small={small} /> : null;
 }
 
 // Your own share, as the others see it named, without its picture: the video
@@ -395,7 +434,7 @@ function OwnScreenTile({ tile, small }: { tile: ParticipantTile; small?: boolean
   );
 }
 
-function TrackVideo({ tile, speaking: speakingSet, muted, small, contain }: StageVideoProps) {
+function TrackVideo({ tile, speaking: speakingSet, muted, small, contain }: StageVideoProps & { tile: ParticipantTile }) {
   const host = useStageHost();
   const speaking = useIsSpeaking(tile.identity, speakingSet);
   const ref = useRef<HTMLVideoElement>(null);

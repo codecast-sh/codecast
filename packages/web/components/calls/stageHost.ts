@@ -1,5 +1,6 @@
 import { createContext, useContext, type ComponentType, type MouseEvent, type ReactNode } from "react";
 import type { Room } from "livekit-client";
+import type { ParticipantTile } from "../../lib/calls/callMedia";
 import { LayoutGrid, User, Wand2 } from "lucide-react";
 
 // What the stage's views (StageViews) are told by whoever draws them, and the
@@ -7,6 +8,16 @@ import { LayoutGrid, User, Wand2 } from "lucide-react";
 // only components (a Fast Refresh boundary) and a guest's page reads none of
 // the app: a member's stage (CallStage) and a guest's (app/meet) each hand
 // the views a host, and the views never ask where they are.
+
+/** A thing pinned on the stage (convex/callStage.ts): drawn by the host,
+ *  beside the faces and in the same places a screen share goes. `pin` is the
+ *  host's own row; the views only lay it out. */
+export type StagePinShare = { kind: "pin"; key: string; identity: string; name: string; pin: unknown; /** When it went up. */ at?: number };
+
+/** What can hold the stage the way a screen share does. */
+export type StageShare = ParticipantTile | StagePinShare;
+
+export const isPinShare = (t: StageShare): t is StagePinShare => t.kind === "pin";
 
 export type StageFollowChip = ComponentType<{ identity: string; name: string; variant: "tile" | "row"; always?: boolean }>;
 
@@ -32,6 +43,11 @@ export type StageHost = {
    *  store) keeps a change of speaker to the tiles that change; without it
    *  the views read the `speaking` set they are handed. */
   useSpeaking?: (identity: string) => boolean;
+  /** Draw a pinned thing: whole and live on the stage, a card in a strip
+   *  (`small`). A host without it (a guest's page) shows no pins. */
+  PinTile?: ComponentType<{ share: StagePinShare; small?: boolean }>;
+  /** A pin's name where the views label it (its tab), resolved by the host. */
+  PinLabel?: ComponentType<{ share: StagePinShare }>;
 };
 
 export const noFollowLeader = () => null;

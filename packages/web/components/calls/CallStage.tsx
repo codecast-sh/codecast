@@ -13,6 +13,7 @@ import {
   MessageSquare,
   Minimize2,
   MonitorUp,
+  Pin,
   Radio,
   Unlock,
   Users,
@@ -86,6 +87,10 @@ import { AgentReplyPeek } from "./AgentReplyPeek";
 import { onCallThreadRequest, takeCallThreadRequest } from "../../lib/calls/callStage";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 import { modernButton, modernPill } from "../ui/modernLook";
+import { useRouter } from "next/navigation";
+import { useStagePins } from "../../hooks/useStagePins";
+import { pinShare, StagePinContext, StagePinLabel, StagePinTile, type StagePinActions } from "./StagePinTile";
+import { StagePinPicker } from "./StagePinPicker";
 
 /** How long a speaker holds the floor before a follower's app moves to them. */
 const STAGE_FOLLOW_SETTLE_MS = 1500;
@@ -150,6 +155,8 @@ function CallErrorNotice({ error, fix }: { error: string; fix: AppPermissionKind
 const MEMBER_STAGE_HOST: StageHost = {
   getRoom,
   FollowChip,
+  PinTile: StagePinTile,
+  PinLabel: StagePinLabel,
   useFollowLeader: () => useInboxStore((s) => s.followLeaderId),
   // Each tile asks for its own person, as a boolean: a change of who is
   // talking redraws the tiles whose answer changed, not the stage.
@@ -347,7 +354,9 @@ export function CallStage({
     // key that closed the window would end a call by accident.
     if (panel) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || keysOwnedElsewhere(e.target)) return;
+      // A pinned board or sheet that used the key (clearing its selection,
+      // leaving a cell) keeps the stage open.
+      if (e.key !== "Escape" || e.defaultPrevented || keysOwnedElsewhere(e.target)) return;
       // Typing in the thread composer: Esc leaves the field, not the stage.
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return el.blur();
@@ -357,7 +366,31 @@ export function CallStage({
     return () => window.removeEventListener("keydown", onKey);
   }, [collapse, panel]);
 
-  const { screens, cameras } = stageTiles(tiles);
+  const { screens: screenShares, cameras } = stageTiles(tiles);
+  // What the room pinned (callStage): beside the screen shares, newest
+  // first, so a thing just pinned takes the stage unless a share holds it or
+  // the viewer picked a tab.
+  const pins = useStagePins(call.roomKey, call.phase === "connected");
+  const screens = useMemo(
+    () => [...screenShares, ...[...pins].reverse().map(pinShare)],
+    [screenShares, pins],
+  );
+  const [pinPickerOpen, setPinPickerOpen] = useState(false);
+  const router = useRouter();
+  const pinActions = useMemo<StagePinActions | null>(
+    () =>
+      call.roomKey
+        ? {
+            roomKey: call.roomKey,
+            openPath: (path) => {
+              if (panel) return void navigateMainWindow(path);
+              router.push(path);
+              collapse();
+            },
+          }
+        : null,
+    [call.roomKey, panel, router, collapse],
+  );
 
   const parsed = call.roomKey ? parseRoomKey(call.roomKey) : null;
   const { label } = useRoomDescription(call.roomKey);
@@ -516,6 +549,27 @@ export function CallStage({
         </div>
         <div className="min-w-2 flex-1" />
 
+        {/* What the room works on together, beside the faces: the call's
+            board, a doc, a sheet, a page. Pinned for everyone in the call. */}
+        {call.roomKey && call.phase === "connected" && (
+          <span className="relative shrink-0">
+            <StageChromeButton
+              onClick={() => setPinPickerOpen((o) => !o)}
+              active={pinPickerOpen}
+              accent="cyan"
+              title="Pin a board, doc, sheet or page to the stage for everyone in the call"
+              aria-label="Pin to the stage"
+              aria-expanded={pinPickerOpen}
+            >
+              <Pin className="h-3.5 w-3.5" />
+              <span className="stage-word">pin</span>
+              {pins.length > 0 && <span className="font-mono text-meta text-sol-text-dim">{pins.length}</span>}
+            </StageChromeButton>
+            {pinPickerOpen && <StagePinPicker roomKey={call.roomKey} pins={pins} onClose={() => setPinPickerOpen(false)} />}
+          </span>
+        )}
+        <HeaderRule />
+
         {/* The view: one control with three positions, the live one raised. */}
         <SegmentedRadio label="View" options={STAGE_VIEWS} value={view} onChange={setView} labels iconClass="h-3.5 w-3.5" className="shrink-0" />
 
@@ -618,6 +672,7 @@ export function CallStage({
           </span>
         )}
         <StageHostProvider value={stageHost}>
+        <StagePinContext.Provider value={pinActions}>
         <div key={view} className={`flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200 max-sm:flex-col transition-opacity ${call.reconnecting ? "opacity-50" : ""}`}>
           {view === "grid" ? (
             <GridStage roster={roster} cameras={cameras} screens={screens} />
@@ -641,6 +696,7 @@ export function CallStage({
             />
           )}
         </div>
+        </StagePinContext.Provider>
         </StageHostProvider>
         {/* An agent's answer that just landed (unread, or arriving with the rail open), over the
             bottom of the video where the people talking are looking. */}

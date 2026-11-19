@@ -63,6 +63,7 @@ import type * as callGuests from "../callGuests.js";
 import type * as callRecordings from "../callRecordings.js";
 import type * as callRoomSchema from "../callRoomSchema.js";
 import type * as callRooms from "../callRooms.js";
+import type * as callStage from "../callStage.js";
 import type * as calls from "../calls.js";
 import type * as callsSchema from "../callsSchema.js";
 import type * as capabilities from "../capabilities.js";
@@ -870,6 +871,7 @@ declare const fullApi: ApiFromModules<{
   callRecordings: typeof callRecordings;
   callRoomSchema: typeof callRoomSchema;
   callRooms: typeof callRooms;
+  callStage: typeof callStage;
   calls: typeof calls;
   callsSchema: typeof callsSchema;
   capabilities: typeof capabilities;

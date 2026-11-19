@@ -78,7 +78,7 @@ import {
   unionTranscribeLanguages,
 } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
-import { canAccessConversation, canAccessTask, requireAccessibleDoc } from "./lib/access";
+import { canAccessConversation, canAccessDoc, canAccessTask, requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 import { nextShortId } from "./counters";
 import { enqueuePush } from "./pushRouter";
@@ -86,6 +86,7 @@ import { agentIdentity, claimRoomRows, liveTranscriptFor, postEvent } from "./ca
 import { mayPublishCall, stopRoomRecording } from "./lib/callRecordingRuns";
 import { callGuestsOnRecord, endGuestAdmissions, noteGuestAttendance } from "./lib/callGuestAdmission";
 import { scheduleFaceJoin, scheduleFaceLeave } from "./callFace";
+import { ensureCallBoard } from "./callStage";
 import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { siteUrl } from "./lib/siteUrl";
 import { slackSend } from "./lib/slackSend";
@@ -261,6 +262,12 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       event: "agent_joined",
       agent_conversation_id: conversationId,
     });
+  }
+  // The first agent in the room gives the call its board, pinned on the
+  // stage: the agents keep it as the room's shared picture of the talk.
+  if (wanted.size > 0 && t.status === "live" && !isRoomlessKey(t.room_key)) {
+    const first = wanted.values().next().value!;
+    await ensureCallBoard(ctx, (await ctx.db.get(t._id))!, first.addedBy, first.conversationId);
   }
 }
 
@@ -2007,6 +2014,8 @@ async function getCallCore(
       : null,
     routes: t.routes.map((r: Route) => routeView(t, r)),
     sessions: await linkedSessions(ctx, userId, t._id),
+    // The call's board (callStage.ensureCallBoard), when this viewer may open it.
+    board: await callBoardFor(ctx, userId, t),
     // The people from outside the team who were let in, each already marked
     // "(guest)" in the name, with `spoke` matched by identity against
     // `participants` (who the scribe heard), so a page lists the listeners
@@ -2022,6 +2031,13 @@ async function getCallCore(
       at: s._creationTime,
     })),
   };
+}
+
+async function callBoardFor(ctx: any, userId: Id<"users">, t: Doc<"transcripts">): Promise<{ doc_id: string; title: string } | null> {
+  if (!t.board_doc_id) return null;
+  const doc = await ctx.db.get(t.board_doc_id);
+  if (!doc || doc.archived_at || !(await canAccessDoc(ctx, userId, doc))) return null;
+  return { doc_id: String(doc._id), title: doc.title };
 }
 
 /** The sessions a call reached that the viewer may open, newest first. */
@@ -2619,6 +2635,8 @@ export const readUnsent = internalQuery({
         last_seq: t.last_seq,
         // The tasks note names the call by it (huddleTasksNote).
         short_id: t.short_id ?? null,
+        // The chunk header points the agents at the call's board.
+        board_doc_id: t.board_doc_id ?? null,
       },
       segments: segs.map((s) => ({
         seq: s.seq,
@@ -2861,6 +2879,7 @@ export const deliverRoutes = internalAction({
             held: verdict.held,
             full: fullBrief,
             call: transcript.short_id ?? null,
+            board: transcript.board_doc_id ? String(transcript.board_doc_id) : null,
           };
           await ctx.runMutation(internal.transcripts.deliverToSession, {
             as_user: asUser,

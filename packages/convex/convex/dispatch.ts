@@ -3117,6 +3117,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setRoomLocked: async (ctx, _userId, [roomKey, locked]: [string, boolean]) => {
     return await ctx.runMutation!(api.calls.setRoomLocked, { room_key: roomKey, locked: !!locked });
   },
+  // The huddle's stage (store pinToStage / unpinFromStage paint the callStagePins row first).
+  pinToStage: async (ctx, _userId, [roomKey, ref]: [string, string]) => {
+    return await ctx.runMutation!(api.callStage.pin, { room_key: roomKey, ref });
+  },
+  unpinFromStage: async (ctx, _userId, [roomKey, ref]: [string, string]) => {
+    return await ctx.runMutation!(api.callStage.unpin, { room_key: roomKey, ref });
+  },
+  pinCallBoard: async (ctx, _userId, [roomKey]: [string]) => {
+    return await ctx.runMutation!(api.callStage.pinCallBoard, { room_key: roomKey });
+  },
   setRoomTranscribeOff: async (ctx, _userId, [roomKey, off]: [string, boolean]) => {
     return await ctx.runMutation!(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: !!off });
   },

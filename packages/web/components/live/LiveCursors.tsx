@@ -2,6 +2,7 @@
 // and agent sessions alike. The product says where a position is on screen
 // (LiveViewProps.toScreen); this draws the arrows in each participant's color.
 // An agent's tag opens its session.
+import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { textOnColor, type ArtifactPosition, type ArtifactPresence } from "@codecast/shared/artifacts";
 import { CursorArrow } from "../presence/CursorArrow";
@@ -66,4 +67,33 @@ export function LiveCursors({ others, toScreen }: { others: ArtifactPresence[]; 
       })}
     </div>
   );
+}
+
+type ScreenMapFn = (pos: ArtifactPosition) => ScreenPoint | null;
+
+/** A tiny store for a product view's position mapping, read by the cursor
+ *  layer alone: a pan republishes it several times a second, and only the
+ *  cursors redraw for it. One per open artifact (the page, a call's stage). */
+export function createScreenMap() {
+  let current: ScreenMapFn | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => current,
+    set: (map: ScreenMapFn) => {
+      current = map;
+      for (const fn of listeners) fn();
+    },
+    subscribe: (fn: () => void) => {
+      listeners.add(fn);
+      return () => { listeners.delete(fn); };
+    },
+  };
+}
+
+export type ScreenMap = ReturnType<typeof createScreenMap>;
+
+/** Everyone else's cursor over a live artifact, placed through its view's mapping. */
+export function CursorLayer({ others, screenMap }: { others: readonly ArtifactPresence[]; screenMap: ScreenMap }) {
+  const map = useSyncExternalStore(screenMap.subscribe, screenMap.get, () => null);
+  return <LiveCursors others={others as ArtifactPresence[]} toScreen={map} />;
 }

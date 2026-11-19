@@ -3,7 +3,7 @@
 // RoomThread owns the reads and the writes and lays these out in time order.
 
 import { memo, useState } from "react";
-import { AlertTriangle, Captions, CaptionsOff, ChevronRight, Circle, DoorOpen, Globe, ImageUp, Link2Off, ListChecks, ListPlus, Sparkles, Square, Trash2, UserMinus, Video, VideoOff } from "lucide-react";
+import { AlertTriangle, Captions, CaptionsOff, ChevronRight, Circle, DoorOpen, Globe, ImageUp, Pin, Link2Off, ListChecks, ListPlus, Sparkles, Square, Trash2, UserMinus, Video, VideoOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { callShareHref, describeClockSpans, recordingFailureWords, recordingLostWords, recordingStoppedItselfWords } from "@codecast/shared/contracts";
 import { ChatAttachments } from "../chat/ChatAttachments";
@@ -374,6 +374,19 @@ export function EventLine({
   }
   if (row.event === "link_on" || row.event === "link_off" || row.event === "video_shared" || row.event === "video_unshared") {
     return <PublicLinkLine row={row} actor={actor} fresh={fresh} dayOf={dayOf} />;
+  }
+  if (row.event === "stage_pinned") {
+    return (
+      <div className={`rt-event${fresh ? " rt-in" : ""}`} role="note">
+        <span className="rt-event-glyph flex w-5 shrink-0 justify-center" aria-hidden="true">
+          <Pin className="h-3 w-3 text-sol-cyan" />
+        </span>
+        <span className="min-w-0 flex-1">
+          {agent ? name : actor} put <span className="text-sol-text">{row.text || "something"}</span> on the stage
+        </span>
+        <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
+      </div>
+    );
   }
   // A kind this build does not know (a newer server's) says nothing rather
   // than something untrue: every line below is one of these four.

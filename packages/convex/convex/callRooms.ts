@@ -471,7 +471,7 @@ export async function openRoomDoor(
  *  room restarting from empty is a NEW huddle, which starts unlocked with
  *  nobody waiting outside. */
 export async function clearRoomState(ctx: any, roomKey: string): Promise<void> {
-  for (const table of ["call_room_state", "call_knocks"] as const) {
+  for (const table of ["call_room_state", "call_knocks", "call_stage_pins"] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))

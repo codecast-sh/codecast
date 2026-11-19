@@ -149,3 +149,17 @@ describe("formatTranscriptChunk", () => {
     ).toBe("**Ada**: one. two.\n**Bob**: three.");
   });
 });
+
+describe("the call's board in the huddle framing", () => {
+  const base = { name: "Ember", lane: "context" as const, held: false, call: "cl-9" };
+  test("every header names the board, full or short, so a compacted agent keeps it", () => {
+    for (const full of [true, false]) {
+      expect(ownRoomChunkHeader({ ...base, full, board: "kd7board" })).toContain("doc:kd7board");
+      expect(liveFeedChunkHeader({ ...base, full, board: "kd7board" })).toContain("doc:kd7board");
+    }
+  });
+  test("with no board yet the full brief says how to get it, and a short header names no doc", () => {
+    expect(ownRoomChunkHeader({ ...base, full: true })).toContain("cast call board");
+    expect(ownRoomChunkHeader({ ...base, full: false })).not.toContain("doc:");
+  });
+});

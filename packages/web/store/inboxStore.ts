@@ -3,7 +3,7 @@ import { planSyncChange } from "@codecast/shared/team/syncPlan";
 import { approvesCommandRun } from "@codecast/shared/contracts/commandRun";
 import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, GOAL_RESUME_RESET, goalCanPause, goalCanResume, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
-import { cleanReservationPurpose } from "@codecast/shared/contracts";
+import { cleanReservationPurpose, parseStagePinRef, stagePinRowId } from "@codecast/shared/contracts";
 import type { InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
@@ -7356,6 +7356,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   noteKnock: (roomKey: string) => void;
   clearKnock: (roomKey: string) => void;
   setRoomLocked: (roomKey: string, locked: boolean) => void;
+  /** Put a board, sheet, doc, page or object on the huddle's stage for everyone in it (callStage.pin). */
+  pinToStage: (roomKey: string, ref: string) => void;
+  unpinFromStage: (roomKey: string, ref: string) => void;
+  /** The call's board on the stage, made if the call has none (callStage.pinCallBoard); resolves to its doc id. */
+  pinCallBoard: (roomKey: string) => Promise<{ doc_id: string } | undefined>;
   setTeamFeature: (teamId: string, feature: string, enabled: boolean) => void;
   setTeamBudget: (teamId: string, capUsd: number) => void;
   setTeamPolicy: (teamId: string, policy: Record<string, unknown>) => void;
@@ -15872,6 +15877,39 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });
     row.locked = locked;
     return { roomKey, locked };
+  }),
+  pinToStage: action(function (this: Draft, roomKey: string, ref: string) {
+    const target = parseStagePinRef(ref);
+    if (!target) return;
+    const id = stagePinRowId(roomKey, target.ref);
+    const me = (this as any).currentUser as { _id?: string; name?: string } | undefined;
+    const was = this.callStagePins[id];
+    this.callStagePins[id] = {
+      title: null,
+      doc_type: null,
+      readable: true,
+      pinned_by: me?._id ?? "",
+      pinned_by_name: me?.name ?? null,
+      pinned_by_session: null,
+      pinned_by_agent: null,
+      ...was,
+      _id: id,
+      room_key: roomKey,
+      ref: target.ref,
+      kind: target.kind,
+      doc_id: target.kind === "doc" ? target.id : null,
+      slug: target.kind === "page" ? target.slug : null,
+      at: Date.now(),
+    };
+    return { roomKey, ref: target.ref };
+  }),
+  unpinFromStage: action(function (this: Draft, roomKey: string, ref: string) {
+    const canonical = parseStagePinRef(ref)?.ref ?? ref;
+    delete this.callStagePins[stagePinRowId(roomKey, canonical)];
+    return { roomKey, ref: canonical };
+  }),
+  pinCallBoard: asyncAction(function (this: Draft, roomKey: string) {
+    return { roomKey };
   }),
   setRoomTranscribeOff: asyncAction(function (this: Draft, roomKey: string, off: boolean) {
     const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });

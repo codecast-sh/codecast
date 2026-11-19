@@ -3,11 +3,11 @@
 // sessions), Ask agent, comments, history, the draft bar, Share, and every
 // cursor. The product's view (components/live/registry.ts) fills the body and
 // says where positions are on screen.
-import { Suspense, useCallback, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Suspense, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Archive, Check, Copy, Download, Link2, Lock, Maximize2, Minimize2, Plus, RotateCcw, Upload, Users, History, MessageSquare, MoreHorizontal, Redo2, Undo2, X } from "lucide-react";
-import { artifactSpec, type ArtifactElement, type ArtifactPosition, type ArtifactType } from "@codecast/shared/artifacts";
+import { artifactSpec, type ArtifactElement, type ArtifactType } from "@codecast/shared/artifacts";
 import { useInboxStore } from "../../store/inboxStore";
 import { ShareControl } from "../ShareControl";
 import { policyTeamOf } from "@codecast/shared/contracts";
@@ -30,11 +30,11 @@ import { copyText } from "../../lib/copyText";
 import { hasOpenModal } from "../../shortcuts/registry";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { sharePageUrl } from "../../lib/utils";
-import { LiveCursors } from "./LiveCursors";
+import { createScreenMap, CursorLayer } from "./LiveCursors";
 import { AskAgentControl, AskConfirmHost } from "./AskAgentControl";
 import { AskClaimProvider, useAskClaims } from "./askAgent";
 import { CommentsPanel, HistoryPanel } from "./LiveSidePanels";
-import { LIVE_VIEWS, MINIMAL_VIEWS, type LiveExport, type LiveImport, type ScreenPoint } from "./registry";
+import { LIVE_VIEWS, MINIMAL_VIEWS, type LiveExport, type LiveImport } from "./registry";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -45,30 +45,6 @@ import { toast } from "sonner";
 
 type PanelKind = "comments" | "history" | "product" | null;
 const EMPTY: ArtifactElement[] = [];
-
-type ScreenMapFn = (pos: ArtifactPosition) => ScreenPoint | null;
-
-/** A tiny store for the product's position mapping, read by the cursor layer alone. */
-function createScreenMap() {
-  let current: ScreenMapFn | null = null;
-  const listeners = new Set<() => void>();
-  return {
-    get: () => current,
-    set: (map: ScreenMapFn) => {
-      current = map;
-      for (const fn of listeners) fn();
-    },
-    subscribe: (fn: () => void) => {
-      listeners.add(fn);
-      return () => { listeners.delete(fn); };
-    },
-  };
-}
-
-function CursorLayer({ others, screenMap }: { others: ReturnType<typeof useLivePresence>; screenMap: ReturnType<typeof createScreenMap> }) {
-  const map = useSyncExternalStore(screenMap.subscribe, screenMap.get, () => null);
-  return <LiveCursors others={others} toScreen={map} />;
-}
 
 export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; doc_type: ArtifactType; project_path?: string; git_root?: string } }) {
   const router = useRouter();

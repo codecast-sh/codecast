@@ -45,6 +45,8 @@ export type ChunkHeaderOpts = {
   full: boolean;
   /** The call's short id (`cl-42`), which the tasks note names. */
   call?: string | null;
+  /** The call's board (a doc id), named in every header so a compacted agent keeps it. */
+  board?: string | null;
 };
 
 // The full framing is several paragraphs, and a live feed sends a chunk at
@@ -106,7 +108,7 @@ export function isHuddlePass(text: string | null | undefined): boolean {
 // mid-turn never reaches the room. Said in one place so the briefing, the
 // own-room header and the generic feed header cannot drift apart on this.
 export const HUDDLE_REPLY_NOTE =
-  `Your reply at the end of this turn is shown in the huddle's chat, next to the people talking, and when you have a voice in the call it tells the room; anything they type in that chat reaches you here. Only that final reply reaches the room: words and links from earlier in the turn do not. Write it to be heard: short and conversational, the way you would speak in a room, with no code or tables. Anything with more in it than two spoken sentences (numbers, a comparison, a diagram, a plan, a mockup, findings) belongs on a page: write a self-contained HTML file, \`cast publish\` it, and put the URL alone on its own line in your reply, where the chat shows the page inline. Publish a first version as soon as it says something useful and republish the same file as it improves; the URL stays the same. When you have nothing the room needs, end the turn with exactly ${HUDDLE_PASS} and nothing else: the room sees nothing. Never post a line only to say you are listening or following along.`;
+  `Your reply at the end of this turn is shown in the huddle's chat, next to the people talking, and when you have a voice in the call it tells the room; anything they type in that chat reaches you here. Only that final reply reaches the room: words and links from earlier in the turn do not, so do every tool call the turn needs (the board, your pinned state, a task) before you write it, and make it the last thing you say. Write it to be heard: short and conversational, the way you would speak in a room, with no code or tables. Anything with more in it than two spoken sentences (numbers, a comparison, a diagram, a plan, a mockup, findings) belongs on a page: write a self-contained HTML file, \`cast publish\` it, and put the URL alone on its own line in your reply, where the chat shows the page inline. Publish a first version as soon as it says something useful and republish the same file as it improves; the URL stays the same. When you have nothing the room needs, end the turn with exactly ${HUDDLE_PASS} and nothing else: the room sees nothing. Never post a line only to say you are listening or following along.`;
 
 // What a session in a huddle is there to do: bring the room what the code and
 // the team's record know, unasked, as the talk goes. Passing on everything
@@ -115,6 +117,16 @@ export const HUDDLE_REPLY_NOTE =
 // and long work done in the foreground left the room waiting.
 export const HUDDLE_WORK_NOTE =
   "You are a working member of this meeting. You have the codebase in your working directory and the team's record through `cast` (past sessions, decisions, tasks, earlier calls), and the people talking mostly do not have them open. As the talk goes, catch the claims, questions and ideas that record could settle or sharpen: how the product actually behaves, whether something was already decided, built or tried, what a number really is, what a customer said. Go and look before you speak: read the code, `cast search`, `cast decisions list`, `cast call`, pull the number. Say only what you checked, and name where it comes from (a file, a session, a call line); when the record disagrees with what someone just said, say so plainly. A guess in the chat costs the room more than silence.\n\nA turn where you have something brings one or both of two things. The first is a grounded line in the chat: the fact or the correction, in a sentence or two. The second is a page, and it is the one the room cannot get anywhere else. Whenever what you have to bring holds more than a sentence can carry (several numbers, a funnel or a breakdown, a comparison, how something works end to end, what a tool is for and how to use it, the options and what each costs, a mockup of what they are describing), the page is your answer: write it as a self-contained HTML file and `cast publish` it in this same turn. The line beside it then carries only the headline the room should hear now (the one number that answers the question, what is off), in a sentence or two, and leaves every other figure to the page. Do this unasked, and even when the question that led to it was narrow: people look at a page together while they talk, and it outlasts the call. A page of what you already found takes a minute, so write it yourself. When a page needs research or building that will run longer than a couple of minutes, hand it to a background worker (your own background subagents, or `cast spawn --subagent`) and stay free for the room: your line says what is coming, and when the worker comes back, which starts a turn of its own, publish the page and post its link. The same goes for any other work longer than a minute or two. Finish what you started unless the room changes direction.";
+
+// The call's board: a board pinned on every person's stage beside the faces,
+// made when the first agent joined (convex/callStage.ensureCallBoard). The
+// agents in the room keep it as the shared picture of the talk, so the room
+// sees its ideas take shape while it talks instead of reading them back from
+// the chat afterwards.
+export function huddleBoardNote(board?: string | null): string {
+  const ref = board ? `doc:${board}` : "the call's board (`cast call board` gives its id, making it if the call has none)";
+  return `The room has a board, ${ref}, pinned on everyone's call stage next to the faces, and you keep it. It is the room's shared picture of the conversation: as the talk goes, put its substance there with the \`cast board\` verbs (\`cast board --help\` teaches them): the topics as frames, the ideas, options, numbers and open questions as stickies inside them, how things connect, what was decided and who owns what next. Read it before you write (\`cast board read\`), because people edit it with you: build on what is there, move and reword your own work as the talk changes rather than adding second copies, and leave what people wrote to them. Keep it readable at a glance from across the room: short phrases, grouped, nothing piled up. Every page you publish goes on the board too, beside the ideas it supports (\`cast board page\`). A turn spent only on the board is a good turn: end it with ${HUDDLE_PASS} when the room needs no words from you. When the room should look at something else together (a doc, a sheet, a dashboard, a page), \`cast call pin <ref>\` puts it on the stage and \`cast call unpin <ref>\` takes it off.`;
+}
 
 // Where the work a call asks for lands. "It's in the chat" left people unable
 // to find what they asked for once the call ended (cl-141:1148), and tasks
@@ -141,12 +153,12 @@ export const HUDDLE_GUEST_NOTE =
 const LANE_NOTE: Record<ChunkLane, string> = {
   ask: "They named you, so answer here as you would answer anything typed to you. Wait for a complete thought before acting on it; speech arrives in pieces.",
   context:
-    "Nobody named you: this is the room talking among itself. Read it for two things: a claim or question the code or the record can settle, and anything the room is working through that a page would help them see. A pointed question usually sits inside a bigger discussion, and answering it does not settle the discussion: when the room is unsure how something works, what it is for or what to do next, that is the page. Start now, while they are still on it: the line and the page in this turn, with a background worker only for a page that needs long work. If you are mid-work on something, carry on. Pass when the talk is social or logistics, or when what you found adds nothing the room does not already know.",
+    "Nobody named you: this is the room talking among itself. Read it for three things: what the room's board should now show, a claim or question the code or the record can settle, and anything the room is working through that a page would help them see. A pointed question usually sits inside a bigger discussion, and answering it does not settle the discussion: when the room is unsure how something works, what it is for or what to do next, that is the page. Start now, while they are still on it: the line and the page in this turn, with a background worker only for a page that needs long work. If you are mid-work on something, carry on. Pass when the talk is social or logistics, or when what you found adds nothing the room does not already know.",
 };
 
 const LANE_LINE: Record<ChunkLane, string> = {
   ask: "They named you: answer, briefly, once the thought is complete.",
-  context: `Nobody named you: bring what the code or the record settles, published as a page whenever it holds more than a sentence, else end with ${HUDDLE_PASS}.`,
+  context: `Nobody named you: bring the board up to date with what was said, and bring what the code or the record settles, published as a page whenever it holds more than a sentence; with nothing to say, end with ${HUDDLE_PASS}.`,
 };
 
 /** Was this message addressed to the agent: a chunk where someone named it
@@ -172,6 +184,7 @@ export function ownRoomChunkHeader(opts: ChunkHeaderOpts): string {
     LANE_NOTE[opts.lane],
     HUDDLE_GUEST_NOTE,
     HUDDLE_WORK_NOTE,
+    huddleBoardNote(opts.board),
     huddleTasksNote(opts.call),
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,
@@ -187,6 +200,7 @@ export function liveFeedChunkHeader(opts: ChunkHeaderOpts): string {
     LANE_NOTE[opts.lane],
     HUDDLE_GUEST_NOTE,
     HUDDLE_WORK_NOTE,
+    huddleBoardNote(opts.board),
     huddleTasksNote(opts.call),
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,
@@ -194,7 +208,8 @@ export function liveFeedChunkHeader(opts: ChunkHeaderOpts): string {
 }
 
 function shortHeader(lead: string, opts: ChunkHeaderOpts): string {
-  return [lead, opts.held ? HELD_NOTE : null, LANE_LINE[opts.lane]].filter(Boolean).join(" ");
+  const board = opts.board ? `Keep the room's board, doc:${opts.board}, current.` : null;
+  return [lead, opts.held ? HELD_NOTE : null, LANE_LINE[opts.lane], board].filter(Boolean).join(" ");
 }
 
 const HUDDLE_BRIEFING_LEAD = "You're being attached to a live team huddle (";
@@ -205,12 +220,13 @@ export const HUDDLE_FEED_DISREGARD =
 
 /** The first message a session spawned FOR a huddle reads: what it is
  *  attached to, what the room calls it, and how its words travel. */
-export function huddleFeedBriefing(opts: { name: string; label: string; call?: string | null }): string {
+export function huddleFeedBriefing(opts: { name: string; label: string; call?: string | null; board?: string | null }): string {
   return [
     `${HUDDLE_BRIEFING_LEAD}${opts.label}). In the room you are ${opts.name}: people say that name when they want you, and it is the name beside your replies in the huddle's chat.`,
     "Attributed transcript chunks arrive here as the room talks. The room is mid-conversation: answer questions raised, and bring what the code and the team's record say about what they are discussing.",
     HUDDLE_GUEST_NOTE,
     HUDDLE_WORK_NOTE,
+    huddleBoardNote(opts.board),
     huddleTasksNote(opts.call),
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,

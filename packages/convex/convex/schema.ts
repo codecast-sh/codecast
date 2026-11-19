@@ -8234,6 +8234,10 @@ export default defineSchema({
     started_at: v.number(),
     ended_at: v.optional(v.number()),
     title: v.optional(v.string()),
+    // The call's board: a board doc made when the first agent joined (or a
+    // person pressed Board on the stage), pinned on the stage and kept up by
+    // the agents in the room (callStage.ensureCallBoard). Outlives the pins.
+    board_doc_id: v.optional(v.id("docs")),
     // A transcript IS the durable call object (the calls page, cast calls).
     // Who spoke — accumulated from segment speaker ids as they append, so it
     // reflects actual voices, not seat leases.

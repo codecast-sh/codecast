@@ -20,6 +20,7 @@ import { useTeamFeature } from "../../lib/teamFeatures";
 import { useContext, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { DocTypeMark } from "../../components/docs/DocTypeMark";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ShareControl } from "../../components/ShareControl";
 import { KeyCap } from "../../components/KeyCap";
@@ -751,6 +752,18 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
             // The thread's head shows the sessions the call feeds: once is enough.
             inThread={recording ? undefined : new Set((call.routes || []).filter((r: any) => r.kind === "session").map((r: any) => String(r.target)))}
           />
+          {/* The call's board (callStage): what the room and its agents drew
+              together, kept after the call. */}
+          {call.board && (
+            <Link
+              href={`/docs/${call.board.doc_id}`}
+              className="flex items-center gap-1 rounded-md bg-sol-cyan/10 px-1.5 py-0.5 font-mono text-meta text-sol-cyan hover:bg-sol-cyan/15"
+              title={call.board.title}
+            >
+              <DocTypeMark type="board" size={12} />
+              board
+            </Link>
+          )}
           {sentTick && <span className="text-sol-green">{sentTick}</span>}
     </>
   );

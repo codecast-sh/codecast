@@ -257,4 +257,28 @@ export const callRoomTables = {
   })
     .index("by_transcript", ["transcript_id"])
     .index("by_guest_transcript", ["guest_id", "transcript_id"]),
+
+  // What the huddle's stage holds besides faces and screen shares: things a
+  // person or an agent in the room pinned there for everyone to look at and
+  // work on together (callStage.ts). One row per thing per room, at most
+  // STAGE_PIN_LIMIT. The pin belongs to the huddle, like the lock: clearRoomState
+  // removes them when the room restarts from empty. The call record keeps its
+  // board (transcripts.board_doc_id) after that.
+  call_stage_pins: defineTable({
+    room_key: v.string(),
+    // Routing, never access: whose huddle this is. Who may see a pin is who
+    // is seated in the room; who may see what it shows is the object's own rule.
+    team_id: v.id("teams"),
+    // Canonical (shared/contracts/stagePins): `doc:<id>`, `a/<slug>`, or a short id.
+    ref: v.string(),
+    kind: v.union(v.literal("doc"), v.literal("page"), v.literal("object")),
+    doc_id: v.optional(v.id("docs")),
+    slug: v.optional(v.string()),
+    pinned_by: v.id("users"),
+    // Set when an agent in the room pinned it (`cast call pin`).
+    pinned_by_session: v.optional(v.id("conversations")),
+    at: v.number(),
+  })
+    .index("by_room", ["room_key"])
+    .index("by_room_ref", ["room_key", "ref"]),
 };

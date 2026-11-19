@@ -56,7 +56,8 @@ import { initialsOf, pinPoints, useThreads } from "./commentThreads";
 import { useBoardCamera } from "./useBoardCamera";
 import { useBoardGestures, withFrameContents } from "./useBoardGestures";
 import { useBoardKeys } from "./useBoardKeys";
-import { pasteOps, placeImage, serializeSelection } from "./boardActions";
+import { pageOps, pasteOps, placeImage, serializeSelection } from "./boardActions";
+import { parsePublishedPageUrl } from "@codecast/shared/entities";
 import type { BoardEl, BoardTool } from "./boardTypes";
 import { drawOrder, fitBox } from "./boardFrame";
 import { BoardMinimap } from "./BoardMinimap";
@@ -72,6 +73,10 @@ import { useBoardSelectionChrome } from "./useBoardSelectionChrome";
 const MINIMAP_KEY = "board-minimap";
 /** Below this pane width the overview would cover the board itself, so it is not offered. */
 const MINIMAP_MIN_W = 600;
+// The overview takes a corner of the pane; a short pane (a cell of a call's
+// grid, a split) gives that corner to the board instead.
+const MINIMAP_MIN_H = 520;
+const roomForMinimap = (w: number, h: number) => w >= MINIMAP_MIN_W && h >= MINIMAP_MIN_H;
 
 const NOOP = () => {};
 const NOOP_EDIT = { editing: false, onEditInput: NOOP, onEditDone: NOOP };
@@ -121,15 +126,22 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   const [prompt, setPrompt] = useState<PromptState | null>(null);
   const [thread, setThread] = useState<string | null>(null);
   const [pressing, setPressing] = useState(false);
+  // The page element people have stepped into; any change of selection steps back out (Escape, a press elsewhere).
+  const [livePage, setLivePage] = useState<string | null>(null);
+  const onPageLive = useCallback((key: string | null) => setLivePage(key), []);
+  useWatchEffect(() => {
+    if (livePage && !(selection.length === 1 && selection[0] === livePage)) setLivePage(null);
+  }, [selection, livePage]);
   const editBaseH = useRef<number | null>(null);
   // What the board's own chrome covers at its edges: the zoom bar above, the toolbar below, the overview at the right.
   const chromeInsets = () => {
     const w = cam.rootRef.current?.clientWidth ?? 0;
+    const h = cam.rootRef.current?.clientHeight ?? 0;
     // The zoom bar and the Vote/Timer buttons end 46px down; in a narrow pane a running vote or timer adds a row.
     const sessionRow = w > 0 && w < 600 && (session.voting || session.timer);
     // An open overview sits at the bottom right (top right in a mid-size pane): fitted content stays clear
     // of it by height, so it stays centred across the pane.
-    const map = minimapOn.current && w >= MINIMAP_MIN_W;
+    const map = minimapOn.current && roomForMinimap(w, h);
     const mapTop = map && w < 820;
     return { top: w ? (mapTop ? 136 : sessionRow ? 92 : 56) : 0, bottom: map && !mapTop ? 200 : 64, right: 0 };
   };
@@ -297,7 +309,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   }, [live, setSelection, setTool]);
 
   const gestures = useBoardGestures({
-    cam, live, byKey: byKeyRef, selection, setSelection, tool, setTool, shapeKind, stamp, penColor, spaceHeld, startEdit, onComment, onCardTool, readOnly, locked,
+    cam, live, byKey: byKeyRef, selection, setSelection, tool, setTool, shapeKind, stamp, penColor, spaceHeld, startEdit, onComment, onCardTool, enterPage: onPageLive, readOnly, locked,
   });
 
   // ── Commands (keyboard and the selection bar share them) ───────────────────
@@ -350,7 +362,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     const r = cam.rootRef.current;
     return cam.toWorld({ x: (r?.clientWidth ?? 0) / 2, y: (r?.clientHeight ?? 0) / 2 });
   };
-  const runBar = (a: BarAction) =>
+  const runBar = (a: BarAction) => a.type === "interact" ? setLivePage(a.on && selection.length === 1 ? selection[0] : null) :
     runBoardBar(a, { live, selection, selectedEls, allEls, byKeyRef, setSelection, startEdit, openAsk, duplicate, deleteSelection, root: cam.rootRef.current, docTitle: doc.title });
   const startTemplate = (t: BoardTemplate) => {
     const { ops } = templateOps(t, { x: 0, y: 0 }, bottomZ({ elements: allEls() }), nextZ({ elements: allEls() }));
@@ -390,6 +402,8 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     clearSelection: () => {
       if (prompt) { setPrompt(null); return true; }
       if (thread) { setThread(null); return true; }
+      // Out of an entered page first; the page stays selected.
+      if (livePage) { setLivePage(null); return true; }
       if (!selection.length) return false;
       setSelection([]);
       return true;
@@ -524,9 +538,18 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   const onDrop = (e: React.DragEvent) => {
     if (readOnly) return;
     const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
+    const at = cam.clientToWorld(e.clientX, e.clientY);
+    // A published page's address dragged in (from a tab's address bar, a message, a link) goes on live.
+    const page = !files.length ? parsePublishedPageUrl((e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain")).split("\n")[0].trim()) : null;
+    if (page) {
+      e.preventDefault();
+      const { ops, keys } = pageOps(page.slug, at, allEls());
+      live.apply(ops);
+      setSelection(keys);
+      return;
+    }
     if (!files.length) return;
     e.preventDefault();
-    const at = cam.clientToWorld(e.clientX, e.clientY);
     files.forEach((f, i) => void placeImage(live, convex as any, f, { x: at.x + i * 40, y: at.y + i * 40 }, allEls()));
   };
 
@@ -591,7 +614,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       onLostPointerCapture={() => setPressing(false)}
       onPointerLeave={() => { lastPointer.current = null; }}
       onDoubleClick={gestures.onDoubleClick}
-      onDragOver={(e) => { if (!readOnly && [...e.dataTransfer.items].some((i) => i.kind === "file")) e.preventDefault(); }}
+      onDragOver={(e) => { if (!readOnly && [...e.dataTransfer.items].some((i) => i.kind === "file" || i.type === "text/uri-list")) e.preventDefault(); }}
       onDrop={onDrop}
       onContextMenu={(e) => {
         if ((e.target as HTMLElement).closest("[data-board-ui]")) { e.preventDefault(); return; }
@@ -626,7 +649,13 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
               {...(editing === el.key ? editHandlers : NOOP_EDIT)}
             />
           ) : (
-            <BoardElementView key={el.key} el={el} interactive={el.kind === "card" && selection.length === 1 && selection[0] === el.key} {...(editing === el.key ? editHandlers : NOOP_EDIT)} />
+            <BoardElementView
+              key={el.key}
+              el={el}
+              interactive={el.kind === "card" && selection.length === 1 && selection[0] === el.key}
+              {...(el.kind === "page" ? { pageLive: livePage === el.key, onPageLive } : null)}
+              {...(editing === el.key ? editHandlers : NOOP_EDIT)}
+            />
           ),
         )}
         <BoardOverlay
@@ -674,7 +703,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         <ShortcutTooltip label="Zoom to selection" accel="Shift+2" side="bottom">
           <button type="button" className="board-bar-btn" aria-label="Zoom to selection" disabled={selectedEls.length === 0} style={selectedEls.length ? undefined : { opacity: 0.35 }} onClick={() => fitTo(true)}><ScanSearch size={14} strokeWidth={1.75} /></button>
         </ShortcutTooltip>
-        {cam.viewport.w >= MINIMAP_MIN_W && <ShortcutTooltip label={minimap ? "Hide overview" : "Overview"} side="bottom">
+        {roomForMinimap(cam.viewport.w, cam.viewport.h) && <ShortcutTooltip label={minimap ? "Hide overview" : "Overview"} side="bottom">
           <button type="button" className={`board-bar-btn${minimap ? " is-active" : ""}`} aria-label="Overview" aria-pressed={minimap} onClick={() => setMinimap(!minimap)}><MapIcon size={14} strokeWidth={1.75} /></button>
         </ShortcutTooltip>}
       </div>
@@ -692,13 +721,13 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
           live.apply([sessionOp(!!sessionEl, { timer: ms ? { ends_at: Date.now() + ms, ms } : add && t ? { ends_at: Math.max(t.ends_at, Date.now()) + add, ms: t.ms + add } : null })], { undoable: false });
         }}
       />
-      {minimap && elements.length > 0 && cam.viewport.w >= MINIMAP_MIN_W && <BoardMinimap elements={elements} byKey={byKey} cam={cam} top={cam.viewport.w < 820} />}
+      {minimap && elements.length > 0 && roomForMinimap(cam.viewport.w, cam.viewport.h) && <BoardMinimap elements={elements} byKey={byKey} cam={cam} top={cam.viewport.w < 820} />}
       {editAt && <BoardEditBar at={editAt} />}
       <BoardContextMenu state={ctxMenu} items={menuItems} />
       <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>{announce}</div>
 
       {!readOnly && barAt && !pressing && !editing && !prompt && selectedEls.length > 0 && (
-        <BoardSelectionBar selected={selectedEls} at={barAt} paneWidth={cam.viewport.w} canMakeTasks={!live.draft.active} onAction={runBar} />
+        <BoardSelectionBar selected={selectedEls} at={barAt} paneWidth={cam.viewport.w} canMakeTasks={!live.draft.active} pageLive={!!livePage && selection[0] === livePage} onAction={runBar} />
       )}
 
       {prompt && (

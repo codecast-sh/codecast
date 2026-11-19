@@ -10590,6 +10590,13 @@ program
     "  https://codecast.sh/calls/<id>?part=action-<n>     # action item n (from 1)\n\n" +
     "cast call hold <duration>|off   # from a session a live huddle feeds: hold\n" +
     "                                # the room's words for a stretch of work\n\n" +
+    "From a session a live huddle feeds, the stage everyone in the call sees:\n" +
+    "cast call board                 # the call's board (made if it has none): the\n" +
+    "                                # room's shared picture; edit it with cast board\n" +
+    "cast call pin <ref>             # put a doc, board, sheet, dashboard, a page\n" +
+    "                                # link or any object (ct-12) on the stage\n" +
+    "cast call unpin <ref>           # take it off\n" +
+    "cast call pins                  # what the stage holds now\n\n" +
     "cast call join <meeting link>   # send a bot to a Zoom, Meet, Teams, Webex or\n" +
     "                                # GoTo meeting; it becomes a call, fed to this\n" +
     "                                # session live (--at 15m to schedule, --no-feed)\n" +
@@ -10598,11 +10605,11 @@ program
     "(`cast call snap --help` for this part alone):\n" +
     CALL_SNAP_EXAMPLES +
     CALL_SNAP_ABOUT)
-  .argument("<id>", "Call short id (cl-42), id or unique prefix from `cast calls`; or the verb `hold`, `snap`, `join` or `leave`")
+  .argument("<id>", "Call short id (cl-42), id or unique prefix from `cast calls`; or the verb `hold`, `snap`, `join`, `leave`, `board`, `pin`, `unpin` or `pins`")
   .argument("[arg]", "Lines to print (15:25, 15-25 or 15); after `hold`: 3m, 90s, 1h or `off`; after `snap`: the moment (cl-42:15, cl-42@12:34, cl-42 15)")
   .option("--transcript", "Print the full attributed transcript")
   .option("--json", "Machine-readable output (a call always includes segments; a snap gives frames, or {error, code, try})")
-  .option("--for <session>", "With `hold` or `join`: the fed session (default: the current one)")
+  .option("--for <session>", "With `hold`, `join`, `board` or `pin`: the fed session (default: the current one)")
   .option("--at <time>", "With `join`: when the bot joins (15m, 2h or an ISO time; default now)")
   .option("--no-feed", "With `join`: do not feed the meeting's words to this session")
   .option("--screen", "With `snap`: only a shared screen will do; refuse (code no_screen) where none was recorded")
@@ -10668,6 +10675,26 @@ program
       try {
         if (ref === "join") await runCallJoin(duration, { at: options.at, noFeed: options.feed === false }, deps);
         else await runCallLeave(duration, deps);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(1);
+      }
+      return;
+    }
+    if (ref === "board" || ref === "pin" || ref === "unpin" || ref === "pins") {
+      const session = options.for || callingSession();
+      if (!session) {
+        console.error("No session given and none detected — pass one with --for");
+        process.exit(1);
+      }
+      const { runCallStage } = await import("./callStageCommand.js");
+      try {
+        await runCallStage(ref, duration, {
+          post: (route: string, body: Record<string, unknown>) => cliPost(route, body, { throwOnError: true }),
+          session,
+          json: !!options.json,
+          webUrl: CODECAST_BASE_URL,
+        });
       } catch (e) {
         console.error(e instanceof Error ? e.message : String(e));
         process.exit(1);
@@ -19850,10 +19877,8 @@ doc
   .description("Generate a public share link for a document")
   .argument("<id>", DOC_ID_HELP, docIdArg)
   .action(async (id: string) => {
-    exitIfPolicyBlocks("public_sharing_disabled");
-    const result = await cliPost("/cli/docs/share", { id });
-    if (result?.error) { console.error(result.error); process.exit(1); }
-    const url = `${WEB_URL}/share/doc/${result.share_token}`;
+    const { shareDoc } = await import("./docActions.js");
+    const url = await shareDoc(cliPost, id).catch((e) => { console.error(e.message); process.exit(1); });
     console.log(`${c.green}ok${c.reset} ${url}`);
   });
 
@@ -19862,7 +19887,8 @@ doc
   .description("Remove the public share link for a document")
   .argument("<id>", DOC_ID_HELP, docIdArg)
   .action(async (id: string) => {
-    await cliPost("/cli/docs/unshare", { id });
+    const { unshareDoc } = await import("./docActions.js");
+    await unshareDoc(cliPost, id);
     console.log(`${c.green}ok${c.reset} Share link removed`);
   });
 
@@ -19873,7 +19899,8 @@ doc
   .option("--yes", "Confirm deletion (required)")
   .action(async (id: string, options: any) => {
     await requireDestructiveConfirm(["doc", "delete"], { yes: options.yes, args: [id] });
-    await cliPost("/cli/docs/delete", { id });
+    const { deleteDoc } = await import("./docActions.js");
+    await deleteDoc(cliPost, id);
     console.log(`${c.green}ok${c.reset} Deleted ${c.cyan}${id}${c.reset}`);
   });
 
