@@ -33,6 +33,7 @@ import { LinkedPrChips, PrStatusChip } from "../PrStatusChip";
 import type { LinkedPr } from "../../lib/sessionPullRequests";
 import { SessionShipChip } from "../ship/SessionShipChip";
 import type { SessionCardViewProps } from "./sessionCardTypes";
+import { ACTIVE_CARD_CLASS } from "./sessionCardTypes";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
@@ -423,7 +424,7 @@ export function SessionCardView({
         viewers.length > 0 && !isActive && !isSelected && !session.assigned_ping ? "ring-1 ring-inset ring-sol-blue/30" : ""
       } ${
         isActive
-          ? "bg-sol-cyan/[0.12] border-l-[3px] border-l-sol-cyan ring-1 ring-inset ring-sol-cyan/45 shadow-[0_1px_10px_-2px_rgba(42,161,152,0.35)]"
+          ? ACTIVE_CARD_CLASS
           : isWorking
             ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
             : isStashed

@@ -10,6 +10,8 @@ import { useDecisionQueue } from "../../hooks/useDecisionQueue";
 import { useDecisionQueueCursor } from "../../lib/decisionQueueCursor";
 import { SectionHeader } from "../inbox/SectionHeader";
 import { askedOfViewer, isStackedAsk, type QueueItem } from "../../lib/decisionQueue";
+import { WorkspaceTile } from "../identity/WorkspaceTile";
+import { ACTIVE_CARD_CLASS } from "../inbox/sessionCardTypes";
 
 // The inbox panel's Decisions section IS the decision queue: one row per
 // decision waiting on the viewer, numbered in the order the stepper walks
@@ -54,6 +56,7 @@ export function InboxDecisionQueue({
   const queue = useMemo(() => numbered.map(({ item }) => item), [numbered]);
   const cursor = useDecisionQueueCursor();
   const meId = useInboxStore((s) => s.currentUser?._id as string | undefined);
+  const showAgent = useInboxStore((s) => s.clientState.ui?.show_agent_icon !== false);
   const advisoryRows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: advisoryWhere, sig: advisorySig });
   const advisory = useMemo(() => advisoryRows.filter((d) => askedOfViewer(d, meId) && (!matches || matches(d.conversation_id))).length, [advisoryRows, meId, matches]);
 
@@ -91,19 +94,11 @@ export function InboxDecisionQueue({
   return (
     <div>
     <SectionHeader label="Decisions" count={queue.length} color="text-sol-violet" sectionKey="questions" collapsed={collapsed} onToggle={onToggle} />
-    {!collapsed && <div className="px-2 pb-2 pt-1 space-y-0.5" data-inbox-decision-queue>
+    {!collapsed && <div className="pb-2 pt-1" data-inbox-decision-queue>
       {shown.map((g) => {
         const lit = isLit(g);
         return (
-          <div
-            key={g.conversationId}
-            data-session-id={g.conversationId}
-            className={`rounded-lg border px-2.5 py-1.5 transition-colors ${lit ? "border-sol-yellow/60 bg-sol-yellow/[0.06]" : "border-transparent hover:bg-sol-bg-alt"}`}
-          >
-            <Link href={stepHref(g.conversationId)} className="flex items-baseline gap-2 min-w-0 no-underline">
-              <span className="truncate text-sm text-sol-text">{g.title}</span>
-              {g.project && <span className="shrink-0 text-meta text-sol-text-dim">{g.project}</span>}
-            </Link>
+          <QueueCard key={g.conversationId} id={g.conversationId} lit={lit} row={g.session} title={g.title} project={g.project} href={stepHref(g.conversationId)} showAgent={showAgent}>
             {g.asks.map(({ item, n }) => {
               const here = cursor ? item.key === cursor : lit && n === g.asks[0].n;
               return (
@@ -111,49 +106,89 @@ export function InboxDecisionQueue({
                   key={item.key}
                   href={stepHref(g.conversationId, item.key)}
                   data-decision-queue-row={n}
-                  className={`flex items-baseline gap-2 min-w-0 py-0.5 text-[12.5px] no-underline ${here ? "text-sol-text" : "text-sol-text-muted hover:text-sol-text"}`}
+                  data-here={here ? "true" : undefined}
+                  className={`flex items-baseline gap-2 min-w-0 py-0.5 text-ui no-underline ${here ? "text-sol-text font-medium" : "text-sol-text-muted hover:text-sol-text"}`}
                 >
-                  <span className={`w-5 shrink-0 text-right tabular-nums font-mono text-mark ${here ? "text-sol-yellow" : "text-sol-text-dim"}`}>{n}</span>
+                  <span className={`w-5 shrink-0 text-center tabular-nums font-mono text-mark ${here ? "text-sol-cyan" : "text-sol-text-dim"}`}>{n}</span>
                   <span className="truncate">{item.source === "permission" ? `Permission: ${item.question}` : item.question}</span>
                   {item.heldByRole && <span className="shrink-0 text-meta text-sol-text-dim">lead</span>}
                 </Link>
               );
             })}
-          </div>
+          </QueueCard>
         );
       })}
       {hidden > 0 && (
         <Link
           href="/decisions?mode=step"
           data-decision-queue-more={hidden}
-          className="flex items-center justify-between rounded-lg px-2.5 py-1.5 text-[12px] text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt no-underline"
+          className="mx-1.5 flex items-center justify-between rounded-lg px-3 py-1.5 text-[12px] text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt no-underline"
         >
           <span>{hidden} more</span>
           <ChevronRight className="w-3 h-3" />
         </Link>
       )}
       {extras.map((session) => (
-        <button
+        <QueueCard
           key={session._id}
-          data-session-id={session._id}
-          onClick={(e) => onSelectSession(session, e)}
-          className={`w-full text-left rounded-lg border px-2.5 py-1.5 flex items-baseline gap-2 min-w-0 transition-colors ${session._id === activeSessionId ? "border-sol-yellow/60 bg-sol-yellow/[0.06]" : "border-transparent hover:bg-sol-bg-alt"}`}
-        >
-          <span className="truncate text-sm text-sol-text">{session.title || "Session"}</span>
-          {session.project_path && <span className="shrink-0 text-meta text-sol-text-dim">{getProjectName(session.project_path)}</span>}
-        </button>
+          id={session._id}
+          lit={session._id === activeSessionId}
+          row={session}
+          title={session.title || "Session"}
+          project={session.project_path ? getProjectName(session.project_path) : undefined}
+          onSelect={(e) => onSelectSession(session, e)}
+          showAgent={showAgent}
+        />
       ))}
       {advisory > 0 && (
         <Link
           href="/decisions?tab=mine&blocking=advisory"
           data-decision-advisory={advisory}
-          className="mt-1 flex items-center justify-between rounded-lg border border-dashed border-sol-border/60 px-2.5 py-1.5 text-[12px] text-sol-text-dim hover:text-sol-text no-underline"
+          className="mx-1.5 mt-1 flex items-center justify-between rounded-lg border border-dashed border-sol-border/60 px-2.5 py-1.5 text-[12px] text-sol-text-dim hover:text-sol-text no-underline"
         >
           <span>Agents went ahead without you</span>
           <span className="flex items-center gap-0.5 font-mono text-mark tabular-nums">{advisory}<ChevronRight className="w-3 h-3" /></span>
         </Link>
       )}
     </div>}
+    </div>
+  );
+}
+
+// One asking session, drawn the way the rail draws a session card: the same
+// frame and ground (data-session-id under the rail, data-mc for Modern), the
+// workspace tile leading the title, and the open card's treatment when it is
+// the session on screen or holds the decision the stepper is on.
+function QueueCard({ id, lit, row, title, project, href, onSelect, showAgent, children }: {
+  id: string;
+  lit: boolean;
+  row?: InboxSession;
+  title: string;
+  project?: string;
+  href?: string;
+  onSelect?: (e: React.MouseEvent) => void;
+  showAgent: boolean;
+  children?: React.ReactNode;
+}) {
+  const head = (
+    <>
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center"><WorkspaceTile row={row ?? {}} size={20} showAgent={showAgent} /></span>
+      <span className="min-w-0 truncate text-body font-medium text-sol-text">{title}</span>
+      {project && <span className="shrink-0 text-meta text-sol-text-dim">{project}</span>}
+    </>
+  );
+  const headClass = "flex w-full min-w-0 items-center gap-2 text-left no-underline";
+  return (
+    <div
+      data-session-id={id}
+      data-active={lit ? "true" : undefined}
+      data-mc="card"
+      className={`relative overflow-hidden py-2 pl-3 pr-3 transition-colors ${lit ? ACTIVE_CARD_CLASS : "hover:bg-sol-bg-alt/80"}`}
+    >
+      {href
+        ? <Link href={href} className={headClass}>{head}</Link>
+        : <button type="button" onClick={onSelect} className={headClass}>{head}</button>}
+      {children && <div className="mt-1">{children}</div>}
     </div>
   );
 }

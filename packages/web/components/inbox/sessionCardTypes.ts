@@ -145,3 +145,9 @@ export type SessionCardViewProps = {
   /** Files dropped on the card, unfiltered. */
   onDropFiles?: (files: File[], title: string) => void;
 };
+
+/** The open card's treatment in Classic: a cyan tint, edge and ring. Modern
+ *  paints the open card from `[data-mc][data-active]` (modernSessionCard.css),
+ *  and simple view keys its wash off the ring class. Any row the rail lists
+ *  as a card (a session, the decision queue's groups) uses this when open. */
+export const ACTIVE_CARD_CLASS = "bg-sol-cyan/[0.12] border-l-[3px] border-l-sol-cyan ring-1 ring-inset ring-sol-cyan/45 shadow-[0_1px_10px_-2px_rgba(42,161,152,0.35)]";

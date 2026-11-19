@@ -53,7 +53,7 @@ const { MemoryRouter } = await import("react-router");
 const act: <T>(cb: () => T | Promise<T>) => Promise<T> = (React as any).act;
 
 const rows = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>("[data-decision-queue-row]")];
-const litRow = (c: HTMLElement) => rows(c).find((r) => r.querySelector(".text-sol-yellow"));
+const litRow = (c: HTMLElement) => rows(c).find((r) => r.getAttribute("data-here") === "true");
 
 describe("the inbox panel's Decisions section is the stepper's queue", () => {
   let container: HTMLElement;
@@ -82,6 +82,7 @@ describe("the inbox panel's Decisions section is the stepper's queue", () => {
   test("the row the stepper is on is lit, and it follows a jump to another item", async () => {
     await act(async () => root.render(<MemoryRouter>{panel}<DecisionQueue key="b1" initialKey="b1" /></MemoryRouter>));
     expect(litRow(container)?.getAttribute("data-decision-queue-row")).toBe("2");
+    expect(litRow(container)?.closest("[data-session-id]")?.getAttribute("data-active")).toBe("true");
 
     await act(async () => root.render(<MemoryRouter>{panel}<DecisionQueue key="a2" initialKey="a2" /></MemoryRouter>));
     expect(litRow(container)?.getAttribute("data-decision-queue-row")).toBe("3");
