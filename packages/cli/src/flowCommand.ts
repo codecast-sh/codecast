@@ -307,7 +307,6 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const info = JSON.parse(pr.stdout);
         branch = info.headRefName;
         title ??= info.title;
-        spawnSync("git", ["-C", top, "fetch", "--quiet", "origin", `${branch}:${branch}`]);
       }
 
       // The task the run binds to: the one named, else a new one for this change.
@@ -362,9 +361,18 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
         if (dirty) { console.error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`); process.exit(1); }
       }
-      // A task named alone brings the branch an earlier run of it left, when the flow works on a branch.
+      // A run with a change works from the remote as it is now, never a stale local copy (workflow/freshChange.ts);
+      // upstream is null when there is no change to read, or no remote to read it from.
+      const fresh = await import("./workflow/freshChange.js");
+      const stop = (err: unknown): never => { console.error(err instanceof Error ? err.message : String(err)); process.exit(1); };
+      const takesChange = !!(branch || sessionRef || (task && found.takes.includes("branch")));
+      const upstream = takesChange ? await fresh.fetchDefault(top).catch(stop) : null;
+      const remote = upstream?.remote ?? null;
+      // A task named alone brings the branch an earlier run of it left, here or on the remote, when the flow works on a branch.
       if (!branch && !sessionRef && task && found.takes.includes("branch")) {
-        const known = [`codecast/${worktree}`, `line-${task}`, `codecast/line-${task}`].find((b) => spawnSync("git", ["-C", top, "rev-parse", "--verify", "--quiet", b]).status === 0);
+        const names = [`codecast/${worktree}`, `line-${task}`, `codecast/line-${task}`];
+        const onRemote = await fresh.remoteBranches(top, remote, names).catch(stop);
+        const known = names.find((b) => onRemote.has(b) || spawnSync("git", ["-C", top, "rev-parse", "--verify", "--quiet", b]).status === 0);
         if (!known) {
           console.error(`${found.label} works on a change, and ${task} has no branch here yet: run it from the session that made the change (its own edits), or name the change with --branch or --pr`);
           process.exit(1);
@@ -372,9 +380,11 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         branch = known;
       }
       if (branch) {
-        const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();
-        if (!head) { console.error(`No branch ${branch} here`); process.exit(1); }
-        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps)), base: head, tip: head, branch, worktree, paths: [], shared: [], held: [] };
+        // Decided first, stopped on if empty, and only then moved, so a stop leaves the branch and its worktree as they were.
+        const head = await fresh.freshestBranch(top, remote, branch, earlier).catch(stop);
+        if (upstream) await fresh.requireOwnCommits(top, branch, head.tip, upstream).catch(stop);
+        await fresh.bringBranchTo(top, branch, head.local, head.tip, earlier).catch(stop);
+        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps)), base: head.tip, tip: head.tip, branch, worktree, paths: [], shared: [], held: [] };
       } else if (sessionRef) {
         const { freezeSessionChange } = await import("./workflow/flowChange.js");
         try {
@@ -390,7 +400,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const ws = await cast(["ws", "acquire", worktree, "--branch", change.branch, "--skip-pool", "--json"], top);
         if (ws.code !== 0) { console.error(acquireFailureLine(worktree, ws.out, ws.err)); process.exit(1); }
         // A rerun moved the branch under the worktree an earlier run made: its files follow the new tip.
-        if (earlier) spawnSync("git", ["-C", earlier, "reset", "--quiet", "--hard", change.tip]);
+        // Only in a worktree's root: a leftover directory inside the main checkout would otherwise hard-reset the shared tree.
+        if (earlier && (await fresh.isWorktreeRoot(earlier))) spawnSync("git", ["-C", earlier, "reset", "--quiet", "--hard", change.tip]);
         writeFrozenChange(runDir, change);
       }
 
