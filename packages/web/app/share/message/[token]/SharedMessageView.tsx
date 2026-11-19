@@ -34,6 +34,10 @@ export type SharedMessageData = {
   conversation: { _id: string; title?: string | null; agent_type?: string | null } & Omit<IdentityRow, "_id" | "title">;
   conversationShareToken: string | null;
   user: { name?: string | null; image?: string | null } | null;
+  /** Who typed the message, when the server names them (an in-place reference). */
+  author?: { name?: string | null; image?: string | null } | null;
+  /** The agent's first answer to a person's message, when the reader asked for it. */
+  reply?: any | null;
   note?: string | null;
   sharedAt: number;
 };
@@ -222,7 +226,16 @@ function ToolCallBlock({ tool }: { tool: any }) {
   );
 }
 
-export function MessageBlock({ message, isTarget, now, conversation }: { message: any; isTarget?: boolean; now: number; conversation: SharedMessageData["conversation"] }) {
+export function MessageBlock({ message, isTarget, now, conversation, authorName, flat }: {
+  message: any;
+  isTarget?: boolean;
+  now: number;
+  conversation: SharedMessageData["conversation"];
+  /** The person's name on their turns; "User" when the payload has none. */
+  authorName?: string | null;
+  /** Inside a card that already draws the frame: no box around a person's turn. */
+  flat?: boolean;
+}) {
   // Who speaks the agent's turns, from the payload's identity fields so the
   // server render and the browser agree: a role or character with its face,
   // else the agent's product name.
@@ -242,12 +255,12 @@ export function MessageBlock({ message, isTarget, now, conversation }: { message
   }
 
   return (
-    <div className={`relative ${isTarget ? "bg-sol-yellow/5 rounded-lg" : ""}`}>
+    <div className={`relative ${isTarget && !flat ? "bg-sol-yellow/5 rounded-lg" : ""}`}>
       {isUser ? (
-        <div className="bg-sol-blue/15 border border-sol-blue/40 rounded-lg p-4 mb-4">
+        <div className={flat ? "mb-4" : "bg-sol-blue/15 border border-sol-blue/40 rounded-lg p-4 mb-4"}>
           <div className="flex items-center gap-2 mb-2">
             <UserIcon />
-            <span className="text-sol-blue text-xs font-medium">User</span>
+            <span className="text-sol-blue text-xs font-medium">{authorName || "User"}</span>
             <span
               className="text-sol-text-dim text-xs"
               title={mounted ? formatFullTimestamp(message.timestamp) : undefined}
@@ -256,9 +269,12 @@ export function MessageBlock({ message, isTarget, now, conversation }: { message
             </span>
           </div>
           <div className="pl-7">
-            {(mounted ? tryRenderHtmlMessage(message.content) : null) ?? (
-              <div className="text-sol-text text-sm whitespace-pre-wrap break-words">{message.content}</div>
-            )}
+            {(mounted ? tryRenderHtmlMessage(message.content) : null) ??
+              (flat ? (
+                <MarkdownRenderer content={message.content} className="text-sol-text" />
+              ) : (
+                <div className="text-sol-text text-sm whitespace-pre-wrap break-words">{message.content}</div>
+              ))}
           </div>
         </div>
       ) : (
@@ -385,6 +401,7 @@ export function SharedMessageView({ data, now }: { data: SharedMessageData; now:
               isTarget={msg._id === message._id}
               now={now}
               conversation={conversation}
+              authorName={user?.name}
             />
           ))}
         </div>

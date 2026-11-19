@@ -2558,6 +2558,22 @@ export const getSharedMessage = query({
   },
 });
 
+/** The agent's first message with text after a person's message, within the
+ *  same turn: the next typed message from a person ends the search. */
+async function firstReplyTo(ctx: QueryCtx, message: Doc<"messages">): Promise<Doc<"messages"> | null> {
+  const after = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_timestamp", (q) =>
+      q.eq("conversation_id", message.conversation_id).gt("timestamp", message.timestamp),
+    )
+    .take(40);
+  for (const m of after) {
+    if (m.role === "user" && !m.tool_results?.length && m.content?.trim()) return null;
+    if (m.role === "assistant" && m.content?.trim()) return m;
+  }
+  return null;
+}
+
 /**
  * One message by id, for a reference to it (`/conversation/<id>#msg-<id>`
  * shared into chat). Same shape as getSharedMessage so both forms of a
@@ -2568,7 +2584,9 @@ export const webGet = query({
   // Same admission as listMessages / getUserMessages: owner, team, or a
   // PRESENTED share token, so a guest reading a shared transcript can open
   // the same message the navigator lists for them.
-  args: { id: v.string(), share_token: v.optional(v.string()) },
+  // `with_reply`: a chat card previews a person's message with the agent's
+  // answer under it, so it asks for the first reply with text as well.
+  args: { id: v.string(), share_token: v.optional(v.string()), with_reply: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId && !args.share_token) return null;
@@ -2581,9 +2599,16 @@ export const webGet = query({
     if (!conversation) return null;
     if ((await checkConversationAccess(ctx, userId, conversation, args.share_token)) === "denied") return null;
     const user = await ctx.db.get(conversation.user_id);
+    // A person's message names its sender (a teammate can type into a shared session).
+    const sender = message.role === "user" && message.from_user_id && message.from_user_id !== conversation.user_id
+      ? await ctx.db.get(message.from_user_id)
+      : user;
+    const reply = args.with_reply && message.role === "user" ? await firstReplyTo(ctx, message) : null;
     return {
       message,
       contextMessages: [message],
+      author: sender ? { name: sender.name, image: sender.image } : null,
+      reply,
       conversation: {
         _id: conversation._id,
         title: conversation.title,
