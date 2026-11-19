@@ -1,6 +1,6 @@
 // The screenshots taken in the last day, under the new session sheet's
 // composer: a screenshot is usually why a session starts. A tap on one opens
-// it full screen; its + badge attaches it.
+// it full screen; a tap on its lower half (the + badge) attaches it.
 //
 // Reads the library only when the person has already granted access (the
 // attach button asks for it); opening the sheet never prompts. A binary built
@@ -82,14 +82,16 @@ export function RecentScreenshots({ attachedUris, onAttach }: {
               <Image source={{ uri: shot.uri }} style={styles.thumb} />
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.badge}
-              hitSlop={8}
-              activeOpacity={0.7}
+              style={styles.attachZone}
+              hitSlop={{ top: 4, left: 4, right: 4, bottom: 8 }}
+              activeOpacity={0.6}
               accessibilityRole="button"
               accessibilityLabel="Attach screenshot"
               onPress={() => attach(shot)}
             >
-              <Feather name="plus" size={13} color="#fff" />
+              <RNView style={styles.badge}>
+                <Feather name="plus" size={18} color="#fff" />
+              </RNView>
             </TouchableOpacity>
           </RNView>
         ))}
@@ -122,15 +124,28 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderColor: Theme.borderLight,
     backgroundColor: Theme.bgAlt,
   },
-  badge: {
+  // The bottom half of the thumb attaches; the top half opens it.
+  attachZone: {
     position: 'absolute',
-    right: 4,
-    bottom: 4,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 50,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  badge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Theme.blue,
+    borderWidth: 2,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
   },
 }));
