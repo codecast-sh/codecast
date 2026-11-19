@@ -446,6 +446,26 @@
   .ch-jump { animation: none; }
 }
 
+/* Over a selection of chat lines: hands the excerpt to a session. */
+.ch-sel-send {
+  position: absolute;
+  z-index: 20;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--sol-blue) 45%, transparent);
+  border-radius: 8px;
+  background: var(--sol-card);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--sol-text) 18%, transparent);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  color: var(--sol-blue);
+  white-space: nowrap;
+}
+.ch-sel-send:hover { background: color-mix(in srgb, var(--sol-blue) 12%, var(--sol-card)); }
+
 /* ── Send states ─────────────────────────────────────────────────────────── */
 
 /* Failed reads as loudly as a mention, because it is the one state the reader

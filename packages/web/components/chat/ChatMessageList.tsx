@@ -7,6 +7,7 @@ import { isModernStyle } from "../../lib/visualStyle";
 import { ChatMessage, ChatDayDivider, ChatNewDivider } from "./ChatMessage";
 import type { ChatMessageView } from "./chatTypes";
 import { shouldHoldChatLanding } from "./chatLanding";
+import { useChatSelection } from "./ChatSelectionActions";
 import "./chat.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -326,6 +327,7 @@ export const ChatMessageList = memo(function ChatMessageList({
   }, [targetMessageId, targetFound, holdTarget]);
 
   const items = list.virtualizer.getVirtualItems();
+  const selectionButton = useChatSelection(list.containerRef, messages, permalinkChannelId);
 
   return (
     <div className="ch-list-wrap">
@@ -389,6 +391,8 @@ export const ChatMessageList = memo(function ChatMessageList({
         </div>
         </div>
       </div>
+
+      {selectionButton}
 
       {/* Only while the reader has deliberately scrolled away. Showing it at rest
           would put a button over the newest message for no reason. */}
