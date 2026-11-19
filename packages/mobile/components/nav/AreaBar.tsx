@@ -5,6 +5,7 @@ import { Text } from '@/components/Themed';
 import { themedStyles, useTheme } from '@/constants/Theme';
 import { Mono, useMonoFace } from '@/constants/fonts';
 import { TabBarIcon, useTabSignals } from '@/components/nav/TabBarIcon';
+import { goToTab } from '@/lib/tabNavigation';
 import { MOBILE_TABS, MOBILE_TAB_BAR_STYLE, MOBILE_TAB_LABEL_STYLE } from '@codecast/shared/render/mobileTabsStyle';
 
 /** The app's areas at the foot of a conversation's slide-out, drawn as the
@@ -25,7 +26,7 @@ export function AreaBar({ onLeave }: { onLeave?: () => void }) {
           onPress={() => {
             void Haptics.selectionAsync();
             onLeave?.();
-            router.navigate(`/(tabs)/${t.name}` as never);
+            goToTab(router, `/(tabs)/${t.name}`);
           }}
           activeOpacity={0.6}
           accessibilityRole="button"

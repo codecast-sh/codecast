@@ -22,6 +22,7 @@ import { Linking } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { router } from 'expo-router';
 import { mobileRouteForUrl } from '@/lib/linkRoutes';
+import { goToTab, isTabAddress, type TabRouter } from '@/lib/tabNavigation';
 import { Theme } from '@/constants/Theme';
 
 /** The web app's address, for a page the phone has no screen of its own for. */
@@ -38,6 +39,15 @@ export {
 } from '@/lib/linkRoutes';
 
 /**
+ * Open a route a link resolved to (mobileRouteForUrl). A page of its own is
+ * pushed over what is open; a tab is gone to, never stacked (lib/tabNavigation).
+ */
+export function openAppRoute(to: TabRouter & { push: (href: never) => void }, route: string): void {
+  if (isTabAddress(route)) goToTab(to, route);
+  else to.push(route as never);
+}
+
+/**
  * Open a tapped link. Never throws and never rejects — a dead link must not
  * take down the screen that rendered it.
  */
@@ -51,7 +61,7 @@ export async function openLink(url: string): Promise<void> {
 
   const route = mobileRouteForUrl(absolute);
   if (route) {
-    router.push(route as never);
+    openAppRoute(router, route);
     return;
   }
 

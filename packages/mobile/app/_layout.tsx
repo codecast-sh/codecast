@@ -27,6 +27,7 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 import { TextSizeProvider } from '@/hooks/useTextSize';
 import { convexAuthStorageKey } from '@/lib/cachePrincipal';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
+import { noteRouteSegments } from '@/lib/tabNavigation';
 import { useLiveActivity } from '@/hooks/useLiveActivity';
 import { useViewerIdentity } from '@codecast/web/hooks/useTeamRoster';
 import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@/lib/analytics';
@@ -223,6 +224,9 @@ function RootLayout() {
 // tracked before initAnalytics runs is queued until it does.
 function RouteTracker() {
   const pathname = usePathname();
+  // Where the app is, for goToTab: code with no hook of its own (a tapped
+  // link, a notification) asks lib/tabNavigation which call reaches a tab.
+  noteRouteSegments(useSegments());
   useEffect(() => {
     if (STORE_SHOTS) return;
     // The trace listens first so it reads the socket as the return found it.

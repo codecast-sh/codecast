@@ -110,6 +110,8 @@ import { ApplyPatchDiff, CastDiff, EditDiff } from '@/components/CastDiff';
 import { getToolPatchInputs } from '@codecast/convex/convex/fileChanges/embeddedPatch';
 import { BashModeBlock, FoldedPromptRow, SessionHandoffCard } from '@/components/session/UserRows';
 import { classifyUserRows, pairCommandExpansions } from '@codecast/web/lib/userRowKinds';
+import { ScrollProgressTrack, useScrollProgressBar } from '@/components/session/ScrollProgressTrack';
+import { goToTab } from '@/lib/tabNavigation';
 import { parseJointMessage } from '@codecast/shared/contracts/jointMessage';
 import { goalFrameLine, goalMessageBody } from '@codecast/shared/contracts/sessionGoal';
 import { parseCommandInvocation, cleanCommandExpansion, parseCastCommand, parseApiErrorContent, stripSystemTags as stripTagsShared } from '@codecast/web/components/conversation/classify';
@@ -2027,6 +2029,13 @@ function directMessage(item: Message, body: string): Message {
 // one of its own props changes. toolRun is rebuilt inline per render and is
 // compared by what it carries.
 const MVCP_ANCHOR_FIRST_VISIBLE = { minIndexForVisible: 0 };
+// One object each for the screen's lifetime. Stack.Screen calls setOptions
+// whenever its options change identity, and that re-renders the navigator in
+// a synchronous second pass: written inline, every render of this screen (a
+// sticky prompt changing mid-fling, a store write) cost two commits, 12 such
+// pairs in one 3-second fling.
+const SCREEN_NO_HEADER = { headerShown: false };
+const SCREEN_WITH_HEADER = { headerShown: true };
 
 const MemoMessageBubble = memo(MessageBubble, (a, b) => {
   for (const k in b) {
@@ -2745,7 +2754,7 @@ function SessionHeaderBar({ children, inFlow = false }: { children?: ReactNode; 
   return (
     <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT }, inFlow && { position: 'relative' }]}>
       <TouchableOpacity
-        onPress={drawer ? drawer.open : () => (router.canGoBack() ? router.back() : router.replace('/(tabs)/inbox' as never))}
+        onPress={drawer ? drawer.open : () => (router.canGoBack() ? router.back() : goToTab(router, '/(tabs)/inbox'))}
         style={styles.headerIconBtn}
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }}
         activeOpacity={0.6}
@@ -2826,7 +2835,7 @@ export default function SessionDetailScreen() {
   if (cold) {
     return (
       <RNView style={{ flex: 1, backgroundColor: Theme.bg }}>
-        <Stack.Screen options={{ headerShown: false }} />
+        <Stack.Screen options={SCREEN_NO_HEADER} />
         <SessionHeaderBar inFlow />
       </RNView>
     );
@@ -2894,7 +2903,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const [diffExpanded, setDiffExpanded] = useState(false);
   const [shareSelectionMode, setShareSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
-  const scrollProgressAnim = useRef(new Animated.Value(0)).current;
   const isNearBottomRef = useRef(true);
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
   const openedAtLastMessageTsRef = useRef<number | null>(null);
@@ -3750,6 +3758,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const activeIndex = activeStickyId ? promptRows.findIndex(r => r._id === activeStickyId) : -1;
     return sampleTicks(promptRows, 24, activeIndex);
   }, [promptRows, activeStickyId]);
+  // The tick rail carries the position signal when it renders; only a thread
+  // with no rail (fewer than 2 ticks) keeps the old track.
+  const scrollProgressShown = allMessages.length > 150 && userScrolled && navTicks.length < 2;
+  const { fill: scrollProgressFill, report: reportScrollProgress } = useScrollProgressBar(scrollProgressShown);
 
   const openNavigatorSheet = useCallback(() => setNavSheetVisible(true), []);
   const closeNavigatorSheet = useCallback(() => setNavSheetVisible(false), []);
@@ -4166,7 +4178,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     setIsNearTop(distanceFromTop < 96);
 
     const progress = scrollHeight > clientHeight ? 1 - (offset / (scrollHeight - clientHeight)) : 0;
-    scrollProgressAnim.setValue(progress);
+    reportScrollProgress(progress);
 
     if (offset > 400 && !userScrolled) {
       setUserScrolled(true);
@@ -4204,12 +4216,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     if (distanceFromTop < 100 && userScrolled && hasMoreAbove && !loadingOlder && !loadCooldownRef.current && initialScrollDone) {
       handleLoadOlder();
     }
-  }, [hasMoreAbove, loadingOlder, handleLoadOlder, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled]);
+  }, [hasMoreAbove, loadingOlder, handleLoadOlder, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled, reportScrollProgress]);
 
   if (conversation === undefined) {
     return (
       <RNView style={styles.container}>
-        <Stack.Screen options={{ headerShown: false }} />
+        <Stack.Screen options={SCREEN_NO_HEADER} />
         <SessionHeaderBar inFlow>
           <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>Conversation</RNText>
         </SessionHeaderBar>
@@ -4222,7 +4234,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     return (
       <RNView style={styles.errorContainer}>
         {/* The one state with no title bar of its own: the nav header's back. */}
-        <Stack.Screen options={{ headerShown: true }} />
+        <Stack.Screen options={SCREEN_WITH_HEADER} />
         {/* The server answers the same "denied" for a deleted session and
             another person's private one (a mention on a teammate's private
             session lands here), so the note names both, and the account:
@@ -4499,7 +4511,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   return (
     <ProposalBatchContext.Provider value={proposalBatch}>
-      <Stack.Screen options={{ headerShown: false }} />
+      <Stack.Screen options={SCREEN_NO_HEADER} />
       <KeyboardAvoidingView
         // iOS: KAV 'padding' (resets cleanly via keyboardWillHide). Android:
         // edge-to-edge does not resize the window for the IME, but KAV's own
@@ -4920,20 +4932,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             zIndex still intercepts taps on some RN builds. */}
         {(userScrolled || hasMoreAbove || (!isNearTop && allMessages.length > 0)) && (
         <RNView style={styles.jumpButtonsOverlay} pointerEvents="box-none">
-          {/* The tick rail carries the position signal when it renders; only a
-              thread with no rail (fewer than 2 ticks) keeps the old track. */}
-          {allMessages.length > 150 && userScrolled && navTicks.length < 2 && (
-            <RNView style={styles.scrollProgressTrackWrap}>
-              <RNView style={styles.scrollProgressTrack}>
-                <Animated.View style={[styles.scrollProgressFill, {
-                  height: scrollProgressAnim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: ['0%', '100%'],
-                  }),
-                }]} />
-              </RNView>
-            </RNView>
-          )}
+          {scrollProgressShown && <ScrollProgressTrack fill={scrollProgressFill} />}
           {((!isNearTop && allMessages.length > 0) || hasMoreAbove) && (
             <Animated.View
               // box-none: this wrap spans the full width at the sticky pill's
@@ -6273,24 +6272,6 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 10,
     color: Theme.textDim,
     fontStyle: 'italic',
-  },
-  scrollProgressTrackWrap: {
-    position: 'absolute',
-    right: 8,
-    top: '45%',
-  },
-  scrollProgressTrack: {
-    width: 3,
-    height: 48,
-    borderRadius: 1.5,
-    backgroundColor: Theme.bgHighlight,
-    overflow: 'hidden',
-    marginBottom: 6,
-  },
-  scrollProgressFill: {
-    width: '100%',
-    borderRadius: 1.5,
-    backgroundColor: Theme.cyan,
   },
   selectionCheckbox: {
     position: 'absolute',

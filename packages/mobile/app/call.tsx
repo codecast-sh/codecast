@@ -37,6 +37,7 @@ import {
   markedName,
 } from "@codecast/shared/contracts";
 import { mobileRouteForUrl } from "@/lib/linkRoutes";
+import { openAppRoute } from "@/lib/links";
 
 // VideoTrack from the guarded native module: on a binary without the LiveKit
 // natives it is null and the stage renders avatars only (joinCall refuses to
@@ -627,7 +628,7 @@ function RecordingEndNotice({ roomKey }: { roomKey: string | null }) {
             <Pressable
               onPress={() => {
                 setCard(null);
-                router.push(route as never);
+                openAppRoute(router, route);
               }}
               hitSlop={6}
               style={({ pressed }) => [recNoticeStyles.recNoticeBtn, pressed && styles.pressed]}

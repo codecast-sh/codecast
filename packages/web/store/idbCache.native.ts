@@ -26,7 +26,7 @@ import {
   PENDING_INPUT_PREFIX, SPLIT_PREFIX, PER_ROW_META_KEYS, collectionBlobKey, collectionRowKey, readPlan, readPlanSql,
   rowsToMap, collectReadKeys, isPurgeable, ownedKeysWhere,
 } from "./idbCacheKeys.native";
-import { createWriteBehind } from "./idbCacheWriteBehind.native";
+import { batchStatements, createWriteBehind } from "./idbCacheWriteBehind.native";
 export { readPlan, readPlanSql };
 import { diffCollection, durableDeletes } from "./idbCollectionDiff";
 import { partitionSessionRetention, COLLECTION_RETENTION, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
@@ -36,9 +36,16 @@ let Storage: any = null;
 // same SQLite file as the collection cache, so a new-session send waited on
 // whatever blob/row flush was in flight and froze the button for seconds.
 let PendingStorage: any = null;
+// True when Storage is expo-sqlite's own store, whose table a batch can write
+// in one statement; the test shim and an absent module take one key at a time.
+let sqliteBacked = false;
+// A suite whose shim sits on a real SQLite table hands over that connection,
+// so the batch write and the one-statement read run in tests as on a phone.
+let testCacheDb: any = null;
 try {
   const kv = require("expo-sqlite/kv-store");
   Storage = kv.default;
+  sqliteBacked = Storage != null;
   PendingStorage = typeof kv.SQLiteStorage === "function"
     ? new kv.SQLiteStorage("codecast-pending-input")
     : kv.default;
@@ -50,6 +57,8 @@ try {
   // on an older binary), degrade to in-memory exactly as before.
   Storage = (globalThis as any).__CODECAST_TEST_KV_STORAGE__ ?? null;
   PendingStorage = Storage;
+  testCacheDb = Storage?.cacheDb ?? null;
+  sqliteBacked = testCacheDb != null;
 }
 
 export type OutboxEntry = {
@@ -76,8 +85,18 @@ const lastPersisted = new Map<string, Map<string, any>>();
 // null-guarded as defense in depth.
 export const PERSISTENCE_AVAILABLE = Storage != null;
 
-// Scheduled per-key writes (idbCacheWriteBehind.native).
-const writes = createWriteBehind(Storage);
+// A flush's rows in one transaction, on the connection kv-store itself uses
+// (the native module hands back the one it has for a name, so nothing here
+// can find the database locked by the other). Throwing sends the batch down
+// the per-key path: no connection, or kv-store has not made its table yet.
+async function writeBatch(puts: Array<[string, string]>, removes: string[]): Promise<void> {
+  const db = await openCacheDb();
+  if (!db) throw new Error("cache database unavailable");
+  for (const { sql, params } of batchStatements(puts, removes)) await db.runAsync(sql, params);
+}
+
+// Scheduled writes (idbCacheWriteBehind.native).
+const writes = createWriteBehind(Storage, sqliteBacked ? writeBatch : null);
 const { scheduleWrite, scheduleRemove, scheduledValue } = writes;
 // One remove of the leftover whole-table blob per collection per process, so a
 // heartbeat does not keep issuing removeItem for a key that is already gone.
@@ -221,12 +240,15 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
 // every call is a native round trip, and React Native's callback registry
 // (LongLivedObjectCollection) walks every outstanding call on each
 // completion, so thousands in flight cost a full core for the first minute
-// after launch. The table is kv-store's own ("storage": key, value), opened
-// read-only beside it. Null when expo-sqlite is not there (tests inject a
-// shim), and the callers fall back to the per-key path.
+// after launch. The table is kv-store's own ("storage": key, value), reached
+// on the connection kv-store itself holds (the native module hands back the
+// one it has for a name). Bulk reads, the purge's delete and every batched
+// flush (writeBatch) go through it. Null when expo-sqlite is not there (tests
+// inject a shim), and the callers fall back to the per-key path.
 let cacheDb: Promise<any> | null | undefined;
 function openCacheDb(): Promise<any> | null {
   if (cacheDb !== undefined) return cacheDb;
+  if (testCacheDb) return (cacheDb = Promise.resolve(testCacheDb));
   try {
     const name = Storage?.databaseName;
     const { openDatabaseAsync } = require("expo-sqlite");

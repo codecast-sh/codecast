@@ -3,6 +3,8 @@ import { Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+// Tab addresses reach the router through goToTab only (lib/tabNavigation.guard.test.ts).
+import { goToTab } from '@/lib/tabNavigation';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -85,7 +87,7 @@ export default function ChatScreen() {
           <RNText style={styles.emptySubtitle}>
             Chat and huddles are team rooms. Join or create a team in Settings and they appear here.
           </RNText>
-          <TouchableOpacity style={styles.emptyBtn} onPress={() => router.push('/(tabs)/settings' as never)} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.emptyBtn} onPress={() => goToTab(router, '/(tabs)/settings')} activeOpacity={0.7}>
             <RNText style={styles.emptyBtnText}>Open Settings</RNText>
           </TouchableOpacity>
         </RNView>
