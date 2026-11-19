@@ -156,9 +156,25 @@ rather than leave out part of the change. Credential files stay out. The
 worktree is the one the run's isolated stations would make (`cast ws acquire`,
 same name), and `$run_dir/change.json` records the change; the runner reads it
 before the first station (`frozenChangeContext`), so `$branch` and `$worktree`
-are set from the start, for a detached daemon run too. A rerun on the same
-task moves the branch and resets that worktree to it, and refuses when the
-worktree holds uncommitted work of its own.
+are set from the start, for a detached daemon run too.
+
+A run with a change reads it from the remote as it is now, never from a stale
+local copy (`workflow/freshChange.ts`). It fetches the remote's default branch
+first and stops when a remote exists and the fetch fails; a checkout with no
+remote reads the change as it stands. A named branch (`--branch`, `--pr`, or
+the one an earlier run of the task left) is taken at its freshest tip: missing
+here or behind the remote's, it moves to the remote's tip; ahead of it, or not
+on the remote, it stands; diverged from it, the run stops, and so does a
+branch behind the remote's that is checked out in another worktree, which is
+never moved under that work. A branch holding no commit the default branch
+lacks stops the run: there is no change to run. A rerun on the same task
+brings the worktree an earlier run made to the change's tip with git's merge
+or checkout that refuse to overwrite a file, ignored ones included, and leaves
+it on the run's branch, so the stations' commits land there. It acts only in a
+worktree's own root, and it refuses when that worktree holds uncommitted work
+or commits on no branch. Putting the change on the default branch is Land's:
+the rebase station rebases it onto the freshly fetched default branch and
+checks it again before it ships (the-line.md L12).
 
 Every run binds to a task because the run's evidence, its gate decisions and
 its status already key on one (the-line.md L3, L6). The task is the record of
