@@ -1,5 +1,6 @@
 import { useInboxStore } from "../store/inboxStore";
 import { mapSlots } from "../store/simSlot";
+import { syncTransaction } from "../store/syncTransaction";
 import { crawlWatermarkScope, syncMetaKey } from "./syncMetaKeys";
 
 // Shared full-reconcile crawl, used by useSyncTasks and useSyncDocs.
@@ -219,7 +220,9 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
     // `ckpt` is the continuation cursor AFTER the rows being flushed — the rows
     // themselves have landed via onPage, so resuming from it is exact. Undefined
     // skips checkpointing (nothing new to record).
-    const flush = (loading: boolean, ckpt?: string | null) => {
+    // The page, its progress and its checkpoint are one transaction: one
+    // subscriber visit per flush instead of three.
+    const flush = (loading: boolean, ckpt?: string | null) => syncTransaction(() => {
       if (buffer.length) {
         opts.onPage(buffer);
         buffer = [];
@@ -229,7 +232,7 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       if (ckpt !== undefined && ckpt !== null && !superseded()) {
         useInboxStore.getState().recordSyncMeta(metaKey, { resumeCursor: ckpt, resumeAt: Date.now() });
       }
-    };
+    });
     for (let i = 0; i < maxPages; i++) {
       // Retry transient page failures with backoff — one hiccup must not abandon
       // the whole crawl and leave a partial list. Give up only after several tries.
@@ -237,7 +240,17 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       for (let attempt = 0; attempt < 5; attempt++) {
         if (!isCurrent()) { stop(all.length); return; }
         try { page = await opts.fetchPage(cursor); break; }
-        catch {
+        catch (err) {
+          // A rejected continuation cursor stays rejected: retrying it spent
+          // ~6s of backoff on every launch before the next run restarted.
+          // Drop the checkpoint and start this run from page zero instead.
+          if (cursor !== null && resumedMidway && all.length === 0 && /InvalidCursor/.test(String((err as any)?.message ?? err))) {
+            useInboxStore.getState().recordSyncMeta(metaKey, { resumeCursor: null });
+            cursor = null;
+            resumedMidway = false;
+            attempt = -1;
+            continue;
+          }
           if (attempt === 4) {
             // Persistent failure: don't snapshot a partial set (it would prune
             // real rows). Leave overlaid pages in place; retry next effect run.
