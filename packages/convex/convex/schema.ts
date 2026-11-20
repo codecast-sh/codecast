@@ -7719,6 +7719,8 @@ export default defineSchema({
   })
     .index("by_slug", ["slug"])
     .index("by_user", ["user_id"])
+    // The gallery reads each owner's newest pages first (artifacts.listForWeb).
+    .index("by_user_updated", ["user_id", "updated_at"])
     .index("by_user_path", ["user_id", "source_path"])
     .index("by_task", ["task_id"])
     .index("by_plan", ["plan_id"])

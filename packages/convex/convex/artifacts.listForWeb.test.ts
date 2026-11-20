@@ -2,11 +2,17 @@
 // through only when that workspace is a team the two share. Runs the handler
 // against a tiny fake db (same shape as calls.test.ts).
 import { describe, expect, test } from "bun:test";
-import { listForWeb } from "./artifacts";
+import { GALLERY_LIMIT, listForWeb } from "./artifacts";
 
-function fakeCtx(viewer: string, rows: Record<string, any[]>) {
+// `reads` counts every db read call, the unit Convex caps at 4,096 a query.
+function fakeCtx(viewer: string, rows: Record<string, any[]>, reads = { n: 0 }) {
   const byId = new Map<string, any>();
   for (const table of Object.values(rows)) for (const r of table) byId.set(r._id, r);
+  const result = (hit: any[]) => ({
+    collect: async () => (reads.n++, hit),
+    first: async () => (reads.n++, hit[0] ?? null),
+    take: async (n: number) => (reads.n++, hit.slice(0, n)),
+  });
   return {
     auth: { getUserIdentity: async () => ({ subject: `${viewer}|sess`, tokenIdentifier: "x" }) },
     db: {
@@ -15,10 +21,14 @@ function fakeCtx(viewer: string, rows: Record<string, any[]>) {
           const eqs: Array<[string, any]> = [];
           builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
           const hit = (rows[table] ?? []).filter((r) => eqs.every(([f, v]) => String(r[f]) === String(v)));
-          return { collect: async () => hit, first: async () => hit[0] ?? null };
+          return {
+            ...result(hit),
+            order: (dir: "asc" | "desc") =>
+              result([...hit].sort((a, b) => (dir === "desc" ? b.updated_at - a.updated_at : a.updated_at - b.updated_at))),
+          };
         },
       }),
-      get: async (id: string) => byId.get(id) ?? null,
+      get: async (id: string) => (reads.n++, byId.get(id) ?? null),
     },
   } as any;
 }
@@ -62,6 +72,38 @@ describe("listForWeb workspace scoping", () => {
       "mate-shared": ["team:t1", "u2", false],
       "mate-task": ["team:t1", "u2", false],
     });
+  });
+});
+
+describe("listForWeb read budget", () => {
+  test("an account with thousands of pages stays under Convex's read cap and gets its newest pages", async () => {
+    const pages: any[] = [];
+    const tasks: any[] = [];
+    for (const owner of ["u1", "u2", "u3"]) {
+      for (let i = 0; i < 2000; i++) {
+        const task_id = `${owner}-k${i}`;
+        tasks.push({ _id: task_id, user_id: owner, workspace: "team:t1" });
+        pages.push(page(`${owner}-p${i}`, owner, { task_id, updated_at: i * 3 + (owner === "u2" ? 1 : 0) }));
+      }
+    }
+    const reads = { n: 0 };
+    const ctx = fakeCtx("u1", {
+      users: [{ _id: "u1" }, { _id: "u2" }, { _id: "u3" }],
+      team_memberships: [
+        { _id: "m1", user_id: "u1", team_id: "t1" },
+        { _id: "m2", user_id: "u2", team_id: "t1", visibility: "full" },
+        { _id: "m3", user_id: "u3", team_id: "t1", visibility: "full" },
+      ],
+      tasks,
+      artifacts: pages,
+    }, reads);
+    const handler = (listForWeb as any)._handler ?? (listForWeb as any).handler;
+    const { artifacts } = await handler(ctx, {});
+    expect(reads.n).toBeLessThan(4096);
+    expect(artifacts).toHaveLength(GALLERY_LIMIT);
+    expect(artifacts[0].slug).toBe("u2-p1999");
+    const times = artifacts.map((a: any) => a.updated_at);
+    expect(times).toEqual([...times].sort((a, b) => b - a));
   });
 });
 
