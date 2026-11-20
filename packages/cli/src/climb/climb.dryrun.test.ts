@@ -391,6 +391,21 @@ describe("the climb's dry run", () => {
     expect(readState(dir)!.candidates[0].guard!.why).toContain("changes the files the product's eval command starts");
   });
 
+  // ct-97276: the base never scores the moments whose list is empty, and the climb fills them.
+  test("cases only the candidate scored never hold a check: the base's unscored cases are outside it", async () => {
+    await gauge(io(), dir, { card: CARD, base });
+    await admit(io(), dir, proposed);
+    process.env.FAKE_BASE_ABSENT = "1";
+    try {
+      const s = await guard(io(), dir);
+      const good = s.candidates.find((c) => c.branch === "climb/good")!;
+      expect(good.status).toBe("promoted");
+      expect(s.pending).toBeUndefined();
+      // A real failure on the cases the base scored still fails.
+      expect(s.candidates.find((c) => c.branch === "climb/pushy")!.status).toBe("guard_failed");
+    } finally { delete process.env.FAKE_BASE_ABSENT; }
+  });
+
   // From the first real climb (Union in-9).
   test("a void L0 check is pending, never a pass: nothing is promoted until a re-run lands a real verdict", async () => {
     await gauge(io(), dir, { card: CARD, base });

@@ -630,12 +630,14 @@ export async function confirm(io: ClimbIo, dir: string): Promise<ClimbState> {
 type CheckVerdict = { verdict: "pass" | "fail" | "void"; why: string };
 
 /**
- * One L0 check, candidate against base, where a check can come back void: an
- * outage, a capped pool, a runner that could not run, or cases left unscored
- * on either side. A case that got worse, or that the base scored and the
- * candidate lost with nothing unscored, fails at once; a void with no failure
- * among the cases both sides scored holds the verdict open. A candidate whose
- * tree changes what grades it fails, never holds.
+ * One L0 check, candidate against base, judged on the cases the base scored:
+ * a check asks whether the candidate made anything worse than the base, and a
+ * case the base has no score on has nothing to be worse than. So cases only
+ * the candidate scored (a climb filling empty lists scores more) never hold it,
+ * whatever the base's unscored count says (ct-97276). It is void on an outage,
+ * a runner that could not run, or a base-scored case unscored on the candidate. A case that got worse, or
+ * that the base scored and the candidate dropped with nothing unscored, fails
+ * at once. A candidate whose tree changes what grades it fails, never holds.
  */
 async function checkVerdict(v: View, c: Cand, d: EnvDeclaration, round: number): Promise<CheckVerdict> {
   const tag = round ? `|r${round}` : "";
@@ -647,23 +649,24 @@ async function checkVerdict(v: View, c: Cand, d: EnvDeclaration, round: number):
   if (k.version !== b.version) return { verdict: "fail", why: `${d.key}: changes the env itself (version ${k.version}, base ${b.version})` };
   const base = new Map(b.cases.map((x) => [x.id, x.score]));
   const cand = new Map(k.cases.map((x) => [x.id, x.score]));
-  if (d.level !== "L0") return toleranceVerdict(d, base, cand, b.unscored, k.unscored);
+  const lost = [...base.keys()].filter((id) => !cand.has(id));
+  const outside = b.unscored ? `; ${b.unscored} case${b.unscored === 1 ? "" : "s"} the base never scored ${b.unscored === 1 ? "is" : "are"} outside the check` : "";
+  if (lost.length && !k.unscored) return { verdict: "fail", why: `${d.key}: ${lost.length} case${lost.length === 1 ? "" : "s"} the base scored and the candidate lost` };
+  if (d.level !== "L0") return toleranceVerdict(d, base, cand, lost.length, outside);
   const worse = [...cand].filter(([id, sc]) => base.has(id) && sc < base.get(id)!).map(([id]) => id);
   if (worse.length) return { verdict: "fail", why: `${d.key}: ${worse.length} case${worse.length === 1 ? "" : "s"} worse (${worse.slice(0, 3).join(", ")})` };
-  const lost = [...base.keys()].filter((id) => !cand.has(id));
-  const unscored = b.unscored + k.unscored;
-  if (lost.length && !k.unscored) return { verdict: "fail", why: `${d.key}: ${lost.length} case${lost.length === 1 ? "" : "s"} the base scored and the candidate lost` };
-  if (unscored || lost.length) return { verdict: "void", why: `${d.key}: ${b.unscored} case${b.unscored === 1 ? "" : "s"} unscored on the base and ${k.unscored} on the candidate; the ${Math.min(base.size, cand.size)} both scored agree` };
-  return { verdict: "pass", why: `${d.key}: no case worse over ${cand.size}` };
+  if (lost.length) return { verdict: "void", why: `${d.key}: ${lost.length} case${lost.length === 1 ? "" : "s"} the base scored went unscored on the candidate (${k.unscored} unscored there); the ${base.size - lost.length} both scored agree` };
+  return { verdict: "pass", why: `${d.key}: no case worse over the ${base.size} the base scored${outside}` };
 }
 
 /**
  * A check above L0 (`role = "check"`): its mean over the cases both sides
  * scored may move the wrong way by at most its tolerance. One that moves
- * further fails; unscored cases with no failure hold the verdict open.
+ * further fails; a base-scored case left unscored on the candidate, with no
+ * failure, holds the verdict open.
  */
-function toleranceVerdict(d: EnvDeclaration, base: Map<string, number>, cand: Map<string, number>, baseUnscored: number, candUnscored: number): CheckVerdict {
-  const both = [...cand.keys()].filter((id) => base.has(id));
+function toleranceVerdict(d: EnvDeclaration, base: Map<string, number>, cand: Map<string, number>, lost: number, outside: string): CheckVerdict {
+  const both = [...base.keys()].filter((id) => cand.has(id));
   if (!both.length) return { verdict: "void", why: `${d.key}: no case scored on both sides` };
   const mean = (m: Map<string, number>) => both.reduce((a, id) => a + m.get(id)!, 0) / both.length;
   const delta = mean(cand) - mean(base);
@@ -671,8 +674,8 @@ function toleranceVerdict(d: EnvDeclaration, base: Map<string, number>, cand: Ma
   const tol = d.tolerance ?? 0;
   const said = `${delta >= 0 ? "+" : ""}${delta.toFixed(3)} over ${both.length} cases`;
   if (wrong > tol + 1e-9) return { verdict: "fail", why: `${d.key}: ${said}, ${wrong.toFixed(3)} the wrong way, past its tolerance ${tol}` };
-  if (baseUnscored || candUnscored || both.length < base.size) return { verdict: "void", why: `${d.key}: ${said} within its tolerance, but ${baseUnscored + candUnscored || base.size - both.length} case(s) went unscored` };
-  return { verdict: "pass", why: `${d.key}: ${said}, within its tolerance ${tol}` };
+  if (lost) return { verdict: "void", why: `${d.key}: ${said} within its tolerance, but ${lost} case${lost === 1 ? "" : "s"} the base scored went unscored on the candidate` };
+  return { verdict: "pass", why: `${d.key}: ${said}, within its tolerance ${tol}${outside}` };
 }
 
 const GATE_WORDS: Record<number, string> = {
