@@ -1,6 +1,8 @@
 "use client";
 
 import { useTaskHref } from "../../lib/taskHrefContext";
+import { answererNameOf } from "../../lib/decisionLinks";
+export { answererNameOf };
 import { Suspense, lazy, useCallback, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { Check, ChevronRight, GitPullRequest, Minus, X } from "lucide-react";
@@ -291,15 +293,6 @@ export function cardOutcome(decision: Pick<SessionDecisionItem, "status" | "opti
     pill: `${head} ${tail}`,
     line: outcomeLine(VERDICT_TONE[verdict], head, tail, note),
   };
-}
-
-/** Who answered a decision, in the words a card's outcome line uses: a person's name ("you" for the viewer), a role's, or "policy". */
-export function answererNameOf(detail: Pick<DecisionDetailItem, "decision" | "asked_users" | "holder_role" | "ladder">, meId: string | null | undefined): string {
-  const by = detail.decision.answered_by;
-  if (!by) return "a person";
-  if (by.kind === "policy") return "policy";
-  if (by.kind === "role") return detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === by.id)?.role?.name ?? "a role";
-  return detail.asked_users.find((u) => u._id === by.id)?.name ?? (by.id === meId ? "you" : "a person");
 }
 
 function outcomeLine(tone: string, head: string, tail: string, note?: string) {
