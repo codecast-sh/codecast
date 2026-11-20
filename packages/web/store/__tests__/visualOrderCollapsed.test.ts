@@ -277,12 +277,14 @@ describe("computeVisualOrder yourMove mirrors the panel's your-move sections", (
   });
 
   it("with old sessions hidden the folded stale row is off screen, so it is not the target", () => {
-    // The 12h fold cut (shared computeFold): wk (now) → idle (1d) is the first
-    // gap over 12h, so the cutoff is idle's activity and only stale (2d) folds.
+    // The 12h fold cut (shared computeFold): with idle 6h behind wk, idle → stale
+    // (2d) is the first gap over 12h, so stale is the cut and folds alone.
+    const recentIdle = session("idle", { is_idle: true, updated_at: Date.now() - DAY / 4, agent_status_updated_at: Date.now() - DAY / 4 });
+    const withRecentIdle = { ...baseState, sessions: byId([staleWorking, recentIdle, working]) };
     // Shown (the default): the stale row is on screen at the top of NEEDS YOU.
-    expect(yourMove(withStale)).toEqual(["stale", "idle"]);
+    expect(yourMove(withRecentIdle)).toEqual(["stale", "idle"]);
     // Hidden: it is not rendered, so it is not the target.
-    expect(yourMove({ ...withStale, clientState: { ui: { inbox_show_old: false } } })).toEqual(["idle"]);
+    expect(yourMove({ ...withRecentIdle, clientState: { ui: { inbox_show_old: false } } })).toEqual(["idle"]);
   });
 });
 

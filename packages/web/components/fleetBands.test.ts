@@ -338,17 +338,17 @@ describe("fleetCountedSessions", () => {
   });
 
   it("hides a row below the fold (the 12h activity-gap cut), pinned exempt", () => {
-    // computeFold: a >12h gap in the recent members' activity puts everything
-    // STRICTLY OLDER than the row at the gap below the fold; the gap row
-    // itself is the cut and stays. Pinned rows are a deliberate window — fold
+    // computeFold: a >12h gap in the recent members' activity puts the first
+    // row past the gap and everything older below the fold; the oldest row
+    // before the gap stays. Pinned rows are a deliberate window — fold
     // exempt, and they can't bridge the gap either.
     // `aged` is a plain settled row (needs input): an OPEN ASK would lift it
     // into QUESTIONS from behind the fold — the decision queue is
     // membership-blind by design — so it would count either way.
     const inWindow = sess({ _id: cid(3), is_idle: false, agent_status: "working" });
-    const edge = sess({ _id: cid(4), updated_at: NOW - 15 * 3600_000 });
-    const aged = sess({ _id: cid(1), updated_at: NOW - 16 * 3600_000 });
-    const pinnedAged = sess({ _id: cid(2), awaiting_input: true, is_pinned: true, updated_at: NOW - 17 * 3600_000 });
+    const edge = sess({ _id: cid(4), updated_at: NOW - 11 * 3600_000 });
+    const aged = sess({ _id: cid(1), updated_at: NOW - 24 * 3600_000 });
+    const pinnedAged = sess({ _id: cid(2), awaiting_input: true, is_pinned: true, updated_at: NOW - 25 * 3600_000 });
     const rows = fleetCountedSessions(stateOf(byId([aged, pinnedAged, inWindow, edge])), noQueue);
     expect(ids(rows)).toEqual([cid(2), cid(3), cid(4)]);
     // Show-old ON: the folded row renders and counts (shown + folded) — the

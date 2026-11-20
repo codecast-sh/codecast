@@ -137,10 +137,10 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
     const tables = {
       conversations: [
         conv("a", { updated_at: EPOCH - MIN }),
-        // The row AT the gap is the cut and never folds itself; the one below
-        // it does.
-        conv("edge", { updated_at: EPOCH - 20 * H }),
-        conv("older", { updated_at: EPOCH - 21 * H }),
+        // The oldest row before the 12h gap stays; the first row past it is
+        // the cut and folds.
+        conv("edge", { updated_at: EPOCH - 11 * H }),
+        conv("older", { updated_at: EPOCH - 24 * H }),
       ],
     };
     const dflt = await computeInboxSessions({ db: db(tables) }, ME as any, {});

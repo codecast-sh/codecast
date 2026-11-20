@@ -4796,11 +4796,12 @@ describe("computeInboxVisible — the authoritative active set (working-set memb
   it("show-old selects shown + folded INSIDE the computation (the 12h fold gap)", () => {
     const now = Date.now();
     const fresh = { ...needsInputRow("freshrow"), updated_at: now };
-    const edge = { ...needsInputRow("edgerow"), updated_at: now - 13 * 60 * 60 * 1000 };
-    const folded = { ...needsInputRow("foldedrow"), updated_at: now - 14 * 60 * 60 * 1000 };
+    const edge = { ...needsInputRow("edgerow"), updated_at: now - 11 * 60 * 60 * 1000 };
+    const folded = { ...needsInputRow("foldedrow"), updated_at: now - 24 * 60 * 60 * 1000 };
     const sessions = { [fresh._id]: fresh, [edge._id]: edge, [folded._id]: folded };
 
-    // Off: the folded member hides; the row AT the cut stays (shared computeFold).
+    // Off: the first row past the 12h gap (the cut) folds; the oldest row
+    // before the gap stays (shared computeFold).
     const off = computeInboxVisible(state(sessions, { inbox_show_old: false }));
     expect(Object.keys(off.visibleSessions).sort()).toEqual([fresh._id, edge._id].sort());
     expect(off.oldCount).toBe(1);

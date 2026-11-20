@@ -14,6 +14,7 @@ import { WakeWhen } from "../inbox/DormantWakeRows";
 const LIVENESS_FIELDS = new Set(["updated_at", "last_heartbeat", "last_metrics_at", "last_active_at", "last_message_at"]);
 
 export function DormantWakeChip({ conversationId }: { conversationId: string | undefined }) {
+  "use no memo"; // placeInboxRows reads its module memo, the clock and the modern-view flag in localStorage; compiled, the bucket would freeze
   const s = useTrackedStore([
     (st) => (conversationId ? rowSigExcluding(st.sessions[conversationId], LIVENESS_FIELDS) : null),
     (st) => st.currentUser?._id,

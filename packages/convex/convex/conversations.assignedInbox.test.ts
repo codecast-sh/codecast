@@ -59,10 +59,11 @@ describe("assigned sessions and the inbox cluster cutoff", () => {
       includeLiveness: false,
     });
     const ids = sessions.map((s: any) => s._id).sort();
-    // The row AT the cutoff stays (strict <); the one past it hides; the assigned
-    // rows stay regardless of age.
-    expect(ids).toEqual(["conversations_assigned", "conversations_assigned_old", "conversations_fresh", "conversations_stale"]);
-    expect(hidden_count).toBe(1);
+    // The row AT the cutoff folds with everything older, so stale hides: had the
+    // assigned row bridged the gap, it would show. The assigned rows stay
+    // regardless of age.
+    expect(ids).toEqual(["conversations_assigned", "conversations_assigned_old", "conversations_fresh"]);
+    expect(hidden_count).toBe(2);
     for (const id of ["conversations_assigned", "conversations_assigned_old"]) {
       expect(sessions.find((s: any) => s._id === id)?.owned_by_me).toBe(true);
     }
