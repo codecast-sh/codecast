@@ -310,8 +310,13 @@ function daemonLogEvidence(configDir: string, sessionId: string, conversationId:
   }
 }
 
+// The stub must live on the daemon's tmux server. Run from inside a pane (a
+// cast-managed agent's), an inherited TMUX points every command at that pane's
+// server instead, where the daemon never looks: the round-trip then failed as
+// "server → daemon → tmux inject broken" on a machine whose delivery worked.
 function tmuxRunQuiet(args: string[]): { ok: boolean; stdout: string; stderr: string } {
-  const r = spawnSync("tmux", args, { encoding: "utf-8", timeout: 10_000 });
+  const { TMUX: _tmux, TMUX_PANE: _pane, ...env } = process.env;
+  const r = spawnSync("tmux", args, { encoding: "utf-8", timeout: 10_000, env });
   return { ok: r.status === 0, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
