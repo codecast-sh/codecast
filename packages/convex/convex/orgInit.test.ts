@@ -694,8 +694,7 @@ describe("cast org apply", () => {
     const a = await performApplyDecision(ctx, ME as any, "sd-10", { provision: false });
     expect(a).toMatchObject({ status: "applied", role: { handle: "growth", short_id: "or-1" } });
     const growth = await db.get("org_roles_1" as any) ?? (await db.query("org_roles").withIndex("by_short_id", (q: any) => q.eq("short_id", "or-1")).first());
-    expect(growth).toMatchObject({ name: "Head of Growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, caps: { wakes_per_day: 12 } });
-    expect(await charterText(db, growth)).toBe("Owns growth.");
+    expect({ ...growth, charter: await charterText(db, growth) }).toMatchObject({ name: "Head of Growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, charter: "Owns growth.", caps: { wakes_per_day: 12 } });
 
     const b = await performApplyDecision(ctx, ME as any, "sd-11", { provision: false });
     expect(b).toMatchObject({ status: "applied", role: { handle: "landing" } });
@@ -736,8 +735,7 @@ describe("cast org apply", () => {
     expect(message).toContain("pick another handle, or skip");
     // The hand made role is untouched: scope, parent, charter and caps.
     const hand = await db.get("org_roles_hand" as any);
-    expect(hand).toMatchObject({ scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE } });
-    expect(await charterText(db, hand)).toBe("My own words.");
+    expect({ ...hand, charter: await charterText(db, hand) }).toMatchObject({ scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE }, charter: "My own words." });
     expect(hand.caps).toBeUndefined();
     // Not stamped: answering with a new handle makes the same decision apply.
     expect((await db.get("sd_a" as any)).applied_at).toBeUndefined();
