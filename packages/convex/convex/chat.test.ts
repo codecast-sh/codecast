@@ -654,9 +654,10 @@ describe("unread state", () => {
     const older = await call(sendMessage, alice, { channel_id: CHANNEL, content: "older" });
     messagesIn(ctx)[0].created_at = 1_000;
     await call(markRead, ctx, { channel_id: CHANNEL });
-    const at = ctx.db._tables.chat_reads[0].last_read_at;
+    const bobRead = () => ctx.db._tables.chat_reads.find((r: any) => r.user_id === BOB && r.channel_id === CHANNEL);
+    const at = bobRead().last_read_at;
     await call(markRead, ctx, { channel_id: CHANNEL, last_read_message_id: older.message_id });
-    expect(ctx.db._tables.chat_reads[0].last_read_at).toBe(at);
+    expect(bobRead().last_read_at).toBe(at);
   });
 
   test("a message from another channel cannot move this channel's mark, and is not refused", async () => {
@@ -665,14 +666,15 @@ describe("unread state", () => {
     await call(sendMessage, alice, { channel_id: CHANNEL, content: "here" });
     messagesIn(ctx)[0].created_at = 1_000;
     await call(markRead, ctx, { channel_id: CHANNEL });
-    const before = { ...ctx.db._tables.chat_reads[0] };
+    const bobRead = () => ctx.db._tables.chat_reads.find((r: any) => r.user_id === BOB && r.channel_id === CHANNEL);
+    const before = { ...bobRead() };
     const elsewhere = await call(sendMessage, alice, {
       channel_id: OTHER_CHANNEL, content: "over here",
     });
     const result = await call(markRead, ctx, {
       channel_id: CHANNEL, last_read_message_id: elsewhere.message_id,
     });
-    const after = ctx.db._tables.chat_reads.find((r: any) => r.channel_id === CHANNEL);
+    const after = bobRead();
     expect(after.last_read_at).toBe(before.last_read_at);
     expect(after.last_read_message_id).toBe(before.last_read_message_id);
     expect(result.last_read_at).toBe(before.last_read_at);
