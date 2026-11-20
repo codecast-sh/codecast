@@ -12,6 +12,7 @@ import { execFileSync } from "node:child_process";
 import { runEnv, withTreeAt } from "../envCommand";
 import { admit, gauge, screen, type ClimbIo } from "./engine";
 import { baseWords, stackBase } from "./base";
+import { hypothesisLine } from "./report";
 import { CARD, ENVS, RUNNER } from "./dryrunFixture";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
 isolateCodecastDirEachTest("climb-stack-state-");
@@ -105,4 +106,7 @@ test("Screen pairs candidates against the stacked base: a candidate is credited 
   // Its own +0.06, not the +0.08 it would read against plain main.
   expect(delta).toBeGreaterThan(0.05);
   expect(delta).toBeLessThan(0.07);
+  // Record reads the same number, and says it is beyond the pending change.
+  expect(hypothesisLine(s2)).toContain("moved fake/replay by +0.0");
+  expect(hypothesisLine(s2)).toContain("beyond ct-96939 (the base it stacks on) against the card's plausible +0.040");
 });

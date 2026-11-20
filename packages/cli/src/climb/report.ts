@@ -68,7 +68,10 @@ export function hypothesisLine(s: ClimbState): string | null {
   const target = s.card.target.split(/(?<=\.)\s/)[0];
   if (e.observed === null || !e.cand) return `Hypothesis: ${word}. No candidate separated from base on ${e.env} against the card's plausible ${sign(e.plausible)}. The card's target was: ${target}`;
   const moved = e.cut?.changed !== undefined ? `, moving ${e.cut.changed} of ${e.cut.of} cases` : "";
-  return `Hypothesis: ${word}. The best survivor (${e.cand.id}) moved ${e.env} by ${sign(e.observed)} against the card's plausible ${sign(e.plausible)} (${pct(e.observed / e.plausible)})${moved}. The card's target was: ${target}`;
+  // On a stacked base every delta is the candidate's own, beyond the pending change it builds on: say so, so the number is not read as the total.
+  const st = s.card.stack;
+  const beyond = st ? ` beyond ${st.task ?? st.ref ?? "the stacked change"} (the base it stacks on)` : "";
+  return `Hypothesis: ${word}. The best survivor (${e.cand.id}) moved ${e.env} by ${sign(e.observed)}${beyond} against the card's plausible ${sign(e.plausible)} (${pct(e.observed / e.plausible)})${moved}. The card's target was: ${target}`;
 }
 
 /** Each screened candidate's observed effect beside the card's plausible one, and how many cases it moved. */
