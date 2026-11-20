@@ -21,6 +21,7 @@ import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
 import { activityPlanOf, computeStale, type ActivityCommit, type ActivitySession } from "./lib/orgActivity";
 import { isActiveTask } from "@codecast/shared/tasks";
 import { approxMessageBytes, isNavigableUserMessage } from "./userMessagesFilter";
+import { roleCharterOf } from "./lib/roleCharter";
 
 // org.health (docs/architecture/org-staffing.md S3): the flow signals the
 // capacity model needs, per role, per person and for the company, with the
@@ -788,7 +789,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       flow: { decisions_7d: flow.decisions_7d, median_recommend_min: flow.median_recommend_min, review_stalls: stalls, done_7d: done7, hands_window: hands.length, sends_7d: { to: toRows.map((r) => ({ handle: r.handle, n: r.n })), from: fromRows.map((r) => ({ handle: r.handle, n: r.n })) } },
       idle_days: activity.idle_days,
       age_days: activity.age_days,
-      has_charter: !!(role.charter_doc_id || (role.charter ?? "").trim()),
+      has_charter: !!(await roleCharterOf(ctx, role)),
       breaches: role.overload_streak ?? 0,
       program_ended: programEnded,
     });

@@ -53,10 +53,15 @@ docs.doc_type        + "charter" | "brief"   (schema, CLI DOC_TYPE_ICONS, Create
 
 ## T2. Charter and brief
 
-- Charter: a doc the humans own. Created at provision from a template that
-  states the role's job in one paragraph, its scope, and the rules. Any
-  session carrying `standing_role_id` or `org_role_id` may not write a charter
-  doc (server check in docs.update keyed on the stored doc_type).
+- Charter: a doc the humans own, and the charter's only home: the role row
+  holds `charter_doc_id` and no text. Created with the role, from the words
+  the hire gave or else the role's job in one sentence. Every reader (the role
+  page, the org tree, `cast brief`, the router, the role card) and every
+  writer (the role page, `cast role update --charter`, a proposal's charter
+  edit, a template loader) goes through `lib/roleCharter.ts`; a charter edit
+  is logged and undone as a write to the doc's content. Any session carrying
+  `standing_role_id` or `org_role_id` may not write a charter doc (server
+  check in docs.update keyed on the stored doc_type).
 - Brief: a doc the role owns. Body = narrative (first line is the state line,
   then `Status:`/`Next:`/`Blocked:` lines, then a few paragraphs with evidence
   links as short ids). `cast brief` prints facts + narrative; `cast brief edit -`

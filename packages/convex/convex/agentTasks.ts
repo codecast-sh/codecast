@@ -42,6 +42,7 @@ import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
 import { type TaskCtx, mayRewriteTrigger, roleTriggerRunnerOf, handRoleTriggersToRunner, projectQuiet, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill, projectRunsInline, scheduleProjectFire } from "./lib/agentTaskRows";
 import { isSpawnedWorker } from "./lib/workerSettleTrigger";
+import { roleCharterOf } from "./lib/roleCharter";
 export { refreshArmedTriggerKind, patchTask, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill };
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -964,6 +965,7 @@ export async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefin
   const to = role.reports_to;
   const parent: any = to?.kind === "role" ? await ctx.db.get(to.role_id) : to?.kind === "user" ? await ctx.db.get(to.user_id) : null;
   const reports_to = to?.kind === "role" ? (parent ? `@${parent.handle}` : "") : (parent?.name ?? "");
+  const charter = await roleCharterOf(ctx, role);
   const projects: any[] = (await Promise.all((role.scope?.project_ids ?? []).map((id: any) => ctx.db.get(id)))).filter(Boolean);
   const plans: any[] = (await Promise.all((role.scope?.plan_ids ?? []).map((id: any) => ctx.db.get(id)))).filter(Boolean);
   const served = await roleServedInitiatives(ctx, role);
@@ -978,7 +980,7 @@ export async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefin
     name: role.name,
     reports_to,
     scope: [...projects, ...plans].map((r) => r.title).filter(Boolean),
-    ...(firstLine(role.charter, 240) ? { charter: firstLine(role.charter, 240) } : {}),
+    ...(firstLine(charter, 240) ? { charter: firstLine(charter, 240) } : {}),
     goals: projects.map((p) => firstLine(p.goal, 160)).filter(Boolean).slice(0, 3),
     // What the area feeds, up to the top level goal, with each number read
     // against its target: the link from a role's day to the company's goals.

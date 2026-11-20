@@ -88,6 +88,7 @@ import { mintProjectShortId } from "./lib/projectShortId";
 type Ctx = { db: any };
 
 import { ANALYSIS_WINDOW_MS, IDLE_ROLE_DAYS, WAKE_HISTORY_DAYS, ANALYSIS_CAPS, LANDING_WINDOW_MS, LONG_RUNNING_MIN_AGE_MS } from "./lib/orgAnalysisCaps";
+import { roleCharterOf } from "./lib/roleCharter";
 export { ANALYSIS_WINDOW_MS, IDLE_ROLE_DAYS, WAKE_HISTORY_DAYS, ANALYSIS_CAPS, LANDING_WINDOW_MS, LONG_RUNNING_MIN_AGE_MS } from "./lib/orgAnalysisCaps";
 
 const bump = (m: Map<string, number>, k: string, by = 1) => m.set(k, (m.get(k) ?? 0) + by);
@@ -306,7 +307,7 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
       reports_to: parent,
       scope: scopeNames,
       whole_workspace: isWholeWorkspaceRole(role),
-      charter: (role.charter ?? "").slice(0, 400) || undefined,
+      charter: (await roleCharterOf(ctx, role)).slice(0, 400) || undefined,
       standing: !!role.anchor_id,
       checked_at: role.checked_at ?? null,
       hands,
@@ -1192,10 +1193,11 @@ export async function applyScope(ctx: Ctx, userId: Id<"users">, boundary: Bounda
 // person's accept authorises.
 export async function applyCharterEdit(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgCharterEditChange, opts: ApplyOpts): Promise<ApplyResult> {
   const role = await liveRole(ctx, boundary, p.handle);
-  const edited = applyCharterEdits(role.charter ?? "", p.edits);
+  const current = await roleCharterOf(ctx, role);
+  const edited = applyCharterEdits(current, p.edits);
   if (edited.error !== undefined) return { status: "error", error: `@${role.handle}'s charter: ${edited.error}` };
   const charter = edited.charter;
-  if (charter === (role.charter ?? "").trim()) return { status: "applied", note: `@${role.handle}: charter unchanged`, role: roleRef(role) };
+  if (charter === current) return { status: "applied", note: `@${role.handle}: charter unchanged`, role: roleRef(role) };
   await performUpdateRole(ctx, userId, { role_id: String(role._id), charter, human_decision: opts.human_decision });
   const did = p.edits.map((e) => (e.op === "replace" ? "a passage rewritten" : e.op === "add" ? "a line added" : "a passage cut"));
   return { status: "applied", note: `@${role.handle}: charter ${did.join(", ")} (${charter.length} characters)`, role: roleRef(role) };

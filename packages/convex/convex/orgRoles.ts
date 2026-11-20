@@ -57,6 +57,7 @@ import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgCh
 import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
 import { capsFor, countersNow, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
 import { cliDocWriter, docRevision, writeDocBody } from "./lib/docBody";
+import { defaultCharter, insertCharterDoc, roleCharterOf, writeRoleCharter } from "./lib/roleCharter";
 import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, findRoleNeedsInputTrigger, findRoleRoutine, findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
 import { autonomyChangeWords, defaultTrustFor, switchFromStageWord, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
@@ -419,7 +420,6 @@ async function performCreateRoleCore(
     scope,
     reports_to,
     status: "active",
-    charter: args.charter?.trim() || undefined,
     review_backend: normalizeBackend(args.review_backend),
     // The switch (org-staffing.md S23.1): on for every role a person hires.
     trust: defaultTrustFor({ handle }),
@@ -431,8 +431,12 @@ async function performCreateRoleCore(
     created_at: now,
     updated_at: now,
   });
+  // The charter's one home is its doc (lib/roleCharter), made with the role.
+  const { scopeNames, parentName } = await roleBootstrapOf(ctx, await ctx.db.get(id));
+  const charter = args.charter?.trim() || defaultCharter({ name }, scopeNames, parentName);
+  await ctx.db.patch(id, { charter_doc_id: await insertCharterDoc(ctx, userId, { name, team_id: args.team_id }, charter) });
   const created = await ctx.db.get(id);
-  await noteRoleChange(ctx, userId, "role", null, created);
+  await noteRoleChange(ctx, userId, "role", null, { ...created, charter });
   // The practical face (S13): drawn after the hire commits, so the generator
   // sees the role and every sibling icon as they stand.
   await (ctx as any).scheduler?.runAfter(0, internal.roleIcons.generateForRole, { role_id: id });
@@ -499,8 +503,14 @@ async function updateRole(
     overlaps = checked.overlaps;
     reports_outside = checked.outside_children;
   }
-  if (args.charter !== undefined) patch.charter = args.charter.trim() || undefined;
   if (args.status !== undefined) patch.status = args.status;
+  // The charter is its doc's text (lib/roleCharter): the edit writes the doc,
+  // and the log reads the text before and after.
+  const charterBefore = args.charter !== undefined ? await roleCharterOf(ctx, role) : undefined;
+  if (args.charter !== undefined) {
+    const created = await writeRoleCharter(ctx as any, userId, role, args.charter, args.from_session);
+    if (created) patch.charter_doc_id = created;
+  }
   // The areas this edit touches, and who owned each before it (S32).
   const touched = patch.scope ? areasOf([role, { scope: patch.scope }]) : [];
   const ownersBefore = touched.length ? await ownerSnapshot(ctx, role, touched) : null;
@@ -521,7 +531,8 @@ async function updateRole(
     });
   }
   const updated = await ctx.db.get(role._id);
-  await noteRoleChange(ctx, userId, patch.scope ? "scope" : "role_edit", role, updated);
+  const charterAfter = charterBefore !== undefined ? await roleCharterOf(ctx, updated) : undefined;
+  await noteRoleChange(ctx, userId, patch.scope ? "scope" : "role_edit", { ...role, charter: charterBefore }, { ...updated, charter: charterAfter });
   // A live role that GAINS scope takes over the sessions in it that report to
   // its host and to no role (org-roles-run-work.md R1). Here, in the one role
   // update, so every door that widens a scope inherits the takeover and the
@@ -1125,24 +1136,6 @@ function normalizeBackend(raw: string | undefined): string | undefined {
 
 export const TRUST_STAGES = ["understand", "decide", "direct"] as const;
 
-// Scope is opt in (org-staffing.md S26): a role that names no projects and no
-// plans looks after no area, and only the Head of People then stands for the
-// whole workspace.
-export function charterTemplate(role: { name: string; handle: string; charter?: string | null }, scopeNames: string[], parentName: string): string {
-  const job = scopeNames.length
-    ? `${role.name} looks after the work in its area on behalf of ${parentName}: it keeps the area's plans and tasks moving, reports what changed and why, and raises what needs a person with a recommendation.`
-    : `${role.name} works on behalf of ${parentName}: it runs its routine, answers what it is asked, and raises what needs a person with a recommendation.`;
-  const none = isHeadOfPeopleRole(role) ? `- the whole workspace, apart from what a lead looks after` : `- no area of its own`;
-  return [
-    `# Charter: ${role.name} (@${role.handle})`,
-    ``,
-    role.charter?.trim() || job,
-    ``,
-    `## Area`,
-    scopeNames.length ? scopeNames.map((n) => `- ${n}`).join("\n") : none,
-  ].join("\n");
-}
-
 function briefTemplate(role: { name: string }): string {
   return [
     `${role.name}: new, has not run yet`,
@@ -1151,15 +1144,15 @@ function briefTemplate(role: { name: string }): string {
   ].join("\n");
 }
 
-async function insertRoleDoc(ctx: Ctx, userId: Id<"users">, role: any, docType: "charter" | "brief", title: string, content: string): Promise<Id<"docs">> {
+async function insertBriefDoc(ctx: Ctx, userId: Id<"users">, role: any, content: string): Promise<Id<"docs">> {
   const now = Date.now();
   return await ctx.db.insert("docs", {
     user_id: userId,
     team_id: role.team_id ?? undefined,
-    title,
+    title: `Brief: ${role.name}`,
     content,
-    doc_type: docType,
-    source: docType === "charter" ? "human" : "agent",
+    doc_type: "brief",
+    source: "agent",
     created_at: now,
     updated_at: now,
   });
@@ -1232,8 +1225,8 @@ async function performProvisionRoleCore(
   const bootstrap = await roleBootstrapOf(ctx, role);
   const { scopeNames, parentName } = bootstrap;
   const patch: Record<string, any> = { updated_at: Date.now() };
-  if (!role.charter_doc_id) patch.charter_doc_id = await insertRoleDoc(ctx, userId, role, "charter", `Charter: ${role.name}`, charterTemplate(role, scopeNames, parentName));
-  if (!role.brief_doc_id) patch.brief_doc_id = await insertRoleDoc(ctx, userId, role, "brief", `Brief: ${role.name}`, briefTemplate(role));
+  if (!role.charter_doc_id) patch.charter_doc_id = await insertCharterDoc(ctx, userId, role, defaultCharter(role, scopeNames, parentName));
+  if (!role.brief_doc_id) patch.brief_doc_id = await insertBriefDoc(ctx, userId, role, briefTemplate(role));
   if (!role.trust) patch.trust = defaultTrustFor(role);
   const agentType = args.agent_type ? (normalizeBackend(args.agent_type) === "claude" ? "claude_code" : normalizeBackend(args.agent_type)) : undefined;
   const provisioned = await provisionStandingAgent(ctx, userId, {
@@ -1992,7 +1985,7 @@ export async function performBriefEdit(ctx: any, userId: Id<"users">, args: { ro
   const briefDoc = briefDocId ? await ctx.db.get(briefDocId) : null;
   let revision = docRevision(content, 0);
   if (!briefDoc) {
-    briefDocId = await insertRoleDoc(ctx, userId, role, "brief", `Brief: ${role.name}`, content);
+    briefDocId = await insertBriefDoc(ctx, userId, role, content);
     await ctx.db.patch(role._id, { brief_doc_id: briefDocId, updated_at: now });
   } else {
     // `base` is the revision `cast brief` handed out: a person editing the

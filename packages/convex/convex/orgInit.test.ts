@@ -6,6 +6,7 @@ import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeA
 import { readGoalCandidates, readStatedGoals } from "./orgSaid";
 import type { AskModel } from "./lib/statedGoals";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
+import { charterText, giveCharter } from "./roleCharter.testkit";
 
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
 // bounded and access checked, and applying an answered proposal is idempotent.
@@ -693,14 +694,15 @@ describe("cast org apply", () => {
     const a = await performApplyDecision(ctx, ME as any, "sd-10", { provision: false });
     expect(a).toMatchObject({ status: "applied", role: { handle: "growth", short_id: "or-1" } });
     const growth = await db.get("org_roles_1" as any) ?? (await db.query("org_roles").withIndex("by_short_id", (q: any) => q.eq("short_id", "or-1")).first());
-    expect(growth).toMatchObject({ name: "Head of Growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, charter: "Owns growth.", caps: { wakes_per_day: 12 } });
+    expect(growth).toMatchObject({ name: "Head of Growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, caps: { wakes_per_day: 12 } });
+    expect(await charterText(db, growth)).toBe("Owns growth.");
 
     const b = await performApplyDecision(ctx, ME as any, "sd-11", { provision: false });
     expect(b).toMatchObject({ status: "applied", role: { handle: "landing" } });
     const landing = await db.query("org_roles").withIndex("by_short_id", (q: any) => q.eq("short_id", "or-2")).first();
     expect(landing.reports_to).toEqual({ kind: "role", role_id: growth._id });
     expect(landing.scope).toEqual({ project_ids: [], plan_ids: [PLAN] });
-    expect(landing.charter).toContain("Report weekly, not daily.");
+    expect(await charterText(db, landing)).toContain("Report weekly, not daily.");
 
     expect(await performApplyDecision(ctx, ME as any, "sd-12", { provision: false })).toMatchObject({ status: "skipped" });
     expect(await performApplyDecision(ctx, ME as any, "sd-13", { provision: false })).toMatchObject({ status: "unanswered" });
@@ -717,12 +719,13 @@ describe("cast org apply", () => {
   test("a handle the person already gave a role by hand is refused, never adopted", async () => {
     const db = fixtures({
       org_roles: [
-        { _id: "org_roles_hand", short_id: "or-3", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth (mine)", handle: "growth", scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE }, charter: "My own words.", status: "active", created_by: ME, created_at: 1, updated_at: 1 },
+        { _id: "org_roles_hand", short_id: "or-3", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth (mine)", handle: "growth", scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE }, status: "active", created_by: ME, created_at: 1, updated_at: 1 },
       ],
       session_decisions: [
         proposalDecision("sd_a", "sd-40", { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-1"] }, charter: "Owns growth.", caps: { wakes_per_day: 12 } }, { status: "answered", answer_index: 0 }),
       ],
     });
+    await giveCharter(db, "org_roles_hand", "My own words.");
     const ctx = ctxOf(db);
     const r = await performApplyDecision(ctx, ME as any, "sd-40", { provision: false });
     // Read the message once: bun's toMatchObject with an asymmetric matcher
@@ -733,7 +736,8 @@ describe("cast org apply", () => {
     expect(message).toContain("pick another handle, or skip");
     // The hand made role is untouched: scope, parent, charter and caps.
     const hand = await db.get("org_roles_hand" as any);
-    expect(hand).toMatchObject({ scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE }, charter: "My own words." });
+    expect(hand).toMatchObject({ scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE } });
+    expect(await charterText(db, hand)).toBe("My own words.");
     expect(hand.caps).toBeUndefined();
     // Not stamped: answering with a new handle makes the same decision apply.
     expect((await db.get("sd_a" as any)).applied_at).toBeUndefined();

@@ -52,7 +52,7 @@ function fixtures(extra: Record<string, any[]> = {}) {
     teams: [{ _id: TEAM, name: "Acme" }],
     org_roles: [
       { _id: GROWTH, short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth lead", handle: "growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_growth", caps: { hands_per_day: 6, wakes_per_day: 4, tokens_per_day: 400_000 }, counters: { day: new Date(NOW).toISOString().slice(0, 10), hands: 2, wakes: 4, tokens: 1000 }, created_by: ME, created_at: NOW - 30 * D, updated_at: 1 },
-      { _id: BILLING, short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Billing lead", handle: "billing", scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_billing", charter: "Owns billing.", created_by: ME, created_at: NOW - 40 * D, updated_at: 1 },
+      { _id: BILLING, short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Billing lead", handle: "billing", scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_billing", charter_doc_id: "docs_billing_charter", created_by: ME, created_at: NOW - 40 * D, updated_at: 1 },
     ],
     org_role_history: [
       { _id: "h1", role_id: GROWTH, user_id: ME, actor_type: "user", action: "scope", created_at: NOW - 3 * D },
@@ -92,7 +92,11 @@ function fixtures(extra: Record<string, any[]> = {}) {
       task("ct-loose1", { project_id: undefined, plan_id: "plans_loose" }),
       task("ct-loose2", { project_id: undefined, plan_id: "plans_loose", status: "done" }),
     ],
-    docs: [],
+    // A role's charter is its doc's text (lib/roleCharter).
+    docs: [
+      { _id: "docs_billing_charter", user_id: ME, team_id: TEAM, doc_type: "charter", content: "Owns billing." },
+      { _id: "docs_hop_charter", user_id: ME, team_id: TEAM, doc_type: "charter", content: "x" },
+    ],
     conversations: [
       conv(S_GROWTH, { standing_role_id: GROWTH, anchor_id: "anchors_growth", persistent: true }),
       conv(S_BILLING, { standing_role_id: BILLING, anchor_id: "anchors_billing", persistent: true, project_path: "/repo/elsewhere" }),
@@ -297,7 +301,7 @@ describe("org.health", () => {
     })), ME as any, TEAM, NOW);
     expect(owned.company.unowned_projects).toEqual([]);
     const db = fixtures();
-    await db.insert("org_roles", { short_id: "or-9", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Head of People", handle: "head-of-people", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", charter: "x", created_by: ME, created_at: NOW - 30 * D, updated_at: 1 });
+    await db.insert("org_roles", { short_id: "or-9", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Head of People", handle: "head-of-people", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", charter_doc_id: "docs_hop_charter", created_by: ME, created_at: NOW - 30 * D, updated_at: 1 });
     const whole = await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW);
     // Hiring the head of people does not turn the unowned signal off.
     expect(whole.company.unowned_projects).toEqual([{ id: R, title: "Orphan" }]);
@@ -331,7 +335,7 @@ describe("org.health", () => {
     const db = fixtures({
       org_roles: [
         { _id: GROWTH, short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth lead", handle: "growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_growth", caps: { hands_per_day: 6, wakes_per_day: 4, tokens_per_day: 400_000 }, counters: { day: new Date(NOW).toISOString().slice(0, 10), hands: 2, wakes: 4, tokens: 1000 }, created_by: ME, created_at: NOW - 30 * D, updated_at: 1 },
-        { _id: BILLING, short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Billing lead", handle: "billing", scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_billing", charter: "Owns billing.", tenure: { kind: "program", ends: { plan: "plans_done" }, then: "retire" }, created_by: ME, created_at: NOW - 40 * D, updated_at: 1 },
+        { _id: BILLING, short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Billing lead", handle: "billing", scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_billing", charter_doc_id: "docs_billing_charter", tenure: { kind: "program", ends: { plan: "plans_done" }, then: "retire" }, created_by: ME, created_at: NOW - 40 * D, updated_at: 1 },
       ],
     });
     const r = await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW);

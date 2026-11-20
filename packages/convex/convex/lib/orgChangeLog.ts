@@ -67,7 +67,7 @@ export type OrgWrite = { table: string; id: string; before: Record<string, any>;
 
 const FIELDS: Record<string, string[]> = {
   // A role's own settings too (given name, the handles a rename left, its line, its two switches), so an undo takes back every one a role_edit or its own command moved.
-  org_roles: ["status", "name", "handle", "avatar", "charter", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id", "authority", "given_name", "previous_handles", "line_workflow_slug", "hires_freely", "keeps_reports_inside"],
+  org_roles: ["status", "name", "handle", "avatar", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id", "authority", "given_name", "previous_handles", "line_workflow_slug", "hires_freely", "keeps_reports_inside"],
   conversations: ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id", "title", "title_is_custom", "seat_previous", "persistent", "status", "inbox_pinned_at"],
   anchors: ["org_role_id", "status"],
   users: ["bot_kind"],
@@ -76,7 +76,8 @@ const FIELDS: Record<string, string[]> = {
   tasks: ["status", "status_id", "assignee", "project_id", "closed_at", "review_verdict", "execution_status"],
   plans: ["status", "project_id", "owner_role_id"],
   projects: ["status", "description", "owner_role_id", "goal", "success_metrics", "priority", "non_goals", "risks", "budget"],
-  docs: ["project_id"],
+  // A role's charter is its doc's text (lib/roleCharter), so a charter edit is a write to that doc's content; no other doc's body is the log's.
+  docs: ["project_id", "content"],
   // A goal (I1, revised): its status (a create reads from nothing to proposed; an undone create is cancelled, never erased), who drives it, the projects that carry it, the goal it feeds, its metrics with the values a dropped metric took with it, and its intent record (I5).
   initiatives: ["status", "owner", "project_ids", "parent_initiative_id", "metrics", "scoreboard", "score_history", "why", "done_when", "milestones", "questions", "decisions", "sources"],
   // An accepted upgrade waits on the instance row for the host step (org-hire.md H9); until then the acceptance is the one thing an undo can withdraw.
@@ -89,6 +90,7 @@ function recordWrite(s: State, table: string, id: string, before: any, after: an
   const prior = s.writes.get(id) ?? { table, id, before: {}, after: {} };
   // An insert reads from the tombstone the undo will leave: a retired role, a done project, a cancelled goal (with nobody driving it and no projects), never an erasure.
   keys ??= before ? FIELDS[table] : table === "anchors" ? ["status", "org_role_id"] : table === "conversations" ? ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id"] : table === "org_roles" || table === "projects" || table === "agent_tasks" ? ["status"] : table === "initiatives" ? ["status", "owner", "project_ids"] : [];
+  if (table === "docs" && (before ?? after)?.doc_type !== "charter") keys = keys.filter((key) => key !== "content");
   for (const key of keys) {
     const was = before ? before[key] ?? null : table === "org_roles" ? "retired" : table === "projects" ? "done" : table === "anchors" ? key === "status" ? "decommissioned" : null : table === "conversations" ? null : table === "initiatives" ? key === "status" ? "cancelled" : key === "project_ids" ? [] : null : "cancelled";
     const now = after?.[key] ?? null;

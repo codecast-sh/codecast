@@ -194,8 +194,8 @@ function viewerGoals(tree: OrgTree, role: OrgRole, people: BriefPerson[] | undef
 function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
   const { tree, role } = p;
   const [editingCharter, setEditingCharter] = useState(false);
-  // The role's own short statement reads here; the charter document (its
-  // longer form, when the role has one) opens under Edit.
+  // The charter is its doc (the tree carries the doc's text as `charter`):
+  // it reads here and opens for editing under Edit.
   const charter = (role.charter ?? "").trim() || (p.brief?.charter ?? "").trim();
   const me = viewerGoals(tree, role, p.brief?.facts?.people);
   return (
@@ -212,9 +212,7 @@ function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
         {editingCharter ? (
           <ScopeCharterTab role={role} charter={charter} canEdit={p.canEdit} backHref={p.backHref} onUpdateCharter={(v) => p.onUpdate({ charter: v })} />
         ) : charter ? (
-          role.charter?.trim()
-            ? <p className="px-2.5 text-[13px] leading-relaxed whitespace-pre-wrap" style={{ color: "var(--sol-text-secondary)" }} data-role-charter>{charter}</p>
-            : <div className="px-2.5 text-[13px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} data-role-charter><MarkdownRenderer content={charter} /></div>
+          <div className="px-2.5 text-[13px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} data-role-charter><MarkdownRenderer content={charter} /></div>
         ) : (
           <p className="px-2.5 text-[13px]" style={{ color: "var(--sol-text-dim)" }}>Nobody has written what this role is for yet.</p>
         )}

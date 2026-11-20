@@ -47,6 +47,7 @@ export { markdownToDoc, writeDocBody, docRevision } from "./lib/docBody";
 import { docTitleFromContent, docTypeChangeAllowed, draftTextNodes, renderDocMentionExcerpt, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { conversationProjectRoot, knownCheckoutRoots } from "./projectPaths";
+import { refuseRoleCharterWrite } from "./lib/roleCharter";
 export { canAccessDoc };
 
 function generatePlanShortId(): string {
@@ -591,20 +592,6 @@ export const get = query({
     return { ...doc, revision: docRevision(doc.content, live.version), live_unsaved: !!live.unsaved };
   },
 });
-
-// A charter belongs to the humans (org-roles-standing.md T2): no session
-// carrying a standing or hand pointer may write one. Keyed on the STORED doc
-// type, so retyping the doc in the same call cannot slip past it, and on a
-// session the caller RUNS (resolveSessionConversation resolves only rows the
-// caller can see; the ownership check keeps a teammate's id from mattering).
-export async function refuseRoleCharterWrite(ctx: any, userId: Id<"users">, doc: any, sessionRef: string | undefined): Promise<void> {
-  if (doc.doc_type !== "charter" || !sessionRef) return;
-  const caller = await resolveSessionConversation(ctx, userId, sessionRef);
-  if (!caller || String(caller.user_id) !== String(userId)) return;
-  if (caller.standing_role_id || caller.org_role_id) {
-    throw new Error("A charter is written by people: a role's session or a hand may read it but not change it");
-  }
-}
 
 export const update = mutation({
   args: {

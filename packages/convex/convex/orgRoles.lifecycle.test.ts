@@ -4,13 +4,14 @@ import * as path from "node:path";
 import { makeFakeDb } from "./testDb";
 import { applyCancel, applyPause } from "./agentTasks";
 import { briefingFor, performRebriefRoles, performSetCleanChat } from "./anchors";
-import { charterTemplate, ensureRoleRoutine, performCreateRole, performWakeRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, performMoveRole, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
+import { ensureRoleRoutine, performCreateRole, performWakeRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, performMoveRole, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
 import { ROLE_CHECK_PROMPT } from "./lib/orgRoutine";
 import { roleRunner, seatPlace } from "./lib/seatPlace";
 import { performReparentSession } from "./sessionOwnership";
 import { killConversation } from "./conversations";
 import { applyHideTransition } from "./cleanup";
 import { isBootstrapPrompt, isSessionMessage } from "@codecast/shared/contracts";
+import { charterText } from "./roleCharter.testkit";
 
 // A role's lifecycle a person can trust (docs/architecture/org-staffing.md
 // S25 to S28): pause and resume touch only the triggers the role paused, a
@@ -187,10 +188,9 @@ describe("what a person and a role read", () => {
     const opening = tables.pending_messages.map((p) => String(p.content)).find((c) => isBootstrapPrompt(c))!;
     expect(opening).toContain("You look after no area of your own");
     expect(opening).not.toMatch(/whole workspace|You own/);
-    expect(charterTemplate(role, [], "Me")).toContain("- no area of its own");
-    expect(charterTemplate(role, [], "Me")).not.toContain("whole workspace");
-    expect(charterTemplate({ name: "Head of People", handle: "head-of-people" }, [], "Me")).toContain("- the whole workspace");
-    expect(charterTemplate(role, ["project Infra"], "Me")).toContain("looks after the work in its area");
+    // Its charter, born with it as its doc, says the same.
+    expect(await charterText(ctx.db, role)).toMatch(/works on behalf of Me/);
+    expect(await charterText(ctx.db, role)).not.toContain("whole workspace");
   });
 
   test("a rebrief sends a role its role opening, and the sweep reaches every live role once", async () => {

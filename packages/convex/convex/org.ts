@@ -32,6 +32,7 @@ import { isActiveTask } from "@codecast/shared/tasks";
 import { findInitiative } from "./lib/initiativeRef";
 import { canReadCall } from "./transcripts";
 import { docLiveState, docRevision } from "./lib/docBody";
+import { roleCharterOf } from "./lib/roleCharter";
 
 // The org page's read side (docs/architecture/org-roles.md S3, S4): one query
 // returns the workspace's reporting tree — people, roles, anchors, and every
@@ -320,13 +321,16 @@ async function orgRoleRow(ctx: Ctx, role: any, anchors: ReturnType<typeof orgAnc
   };
   const standing = lastOf((a) => !!a.org_role_id && String(a.org_role_id) === String(role._id))
     ?? (role.anchor_id ? lastOf((a) => String(a.anchor_id) === String(role.anchor_id)) : undefined);
-  const [projects, plans] = await Promise.all([
+  const [projects, plans, charter] = await Promise.all([
     Promise.all(role.scope.project_ids.map((id: any) => ctx.db.get(id))),
     Promise.all(role.scope.plan_ids.map((id: any) => ctx.db.get(id))),
+    roleCharterOf(ctx, role),
   ]);
   const live = standing as (typeof standing & { short_id?: string; state?: any; state_line?: any; state_status?: any; state_at?: any }) | undefined;
   return {
     ...role,
+    // The charter as its doc says it (lib/roleCharter): read here, never stored on the row.
+    charter,
     // The face (org-staffing.md S13): the chosen key, else the handle's
     // default, so every node draws one. Tenure (S10) rides through `...role`.
     avatar: avatarOf(role),
@@ -1573,10 +1577,10 @@ export const roleCard = query({
     if (!userId) return null;
     const role = await resolveRoleRef(ctx, args.role_id);
     if (!role || !(await userCanAccessRole(ctx, userId, role))) return null;
-    const [projects, plans, charterDoc, anchor] = await Promise.all([
+    const [projects, plans, charterText, anchor] = await Promise.all([
       Promise.all((role.scope?.project_ids ?? []).map((id: any) => ctx.db.get(id))),
       Promise.all((role.scope?.plan_ids ?? []).map((id: any) => ctx.db.get(id))),
-      role.charter_doc_id ? ctx.db.get(role.charter_doc_id) : Promise.resolve(null),
+      roleCharterOf(ctx, role),
       role.anchor_id ? ctx.db.get(role.anchor_id) : Promise.resolve(null),
     ]);
     const standing: any = (anchor as any)?.conversation_id ? await ctx.db.get((anchor as any).conversation_id) : null;
@@ -1588,7 +1592,6 @@ export const roleCard = query({
       const r: any = await ctx.db.get(role.reports_to.role_id);
       reports_to = r ? { kind: "role", name: r.name, short_id: r.short_id, avatar: avatarOf(r), icon: r.icon ?? undefined } : null;
     }
-    const charterText: string = ((charterDoc as any)?.content ?? role.charter ?? "").trim();
     // The first paragraph, minus a leading markdown heading, capped for a card.
     const charter = charterText.replace(/^#+[^\n]*\n+/, "").split(/\n\s*\n/)[0]?.trim().slice(0, 280) ?? "";
     return {
@@ -1618,7 +1621,6 @@ export const brief = query({
     // `role` is untyped (resolveRoleRef), so the ids below resolve to the
     // union of every table; the rows are read as plain objects.
     const briefDoc: any = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
-    const charterDoc: any = role.charter_doc_id ? await ctx.db.get(role.charter_doc_id) : null;
     const anchor: any = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
     const standing: any = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
     // The role's routine (org-staffing.md S25): when it last ran and runs next.
@@ -1642,7 +1644,7 @@ export const brief = query({
       brief_doc_id: role.brief_doc_id ?? null,
       // What `cast brief edit` computed from this read sends back as its base.
       brief_revision: briefDoc ? docRevision(briefDoc.content, (await docLiveState(ctx, briefDoc._id)).version) : null,
-      charter: charterDoc?.content ?? role.charter ?? "",
+      charter: await roleCharterOf(ctx, role),
       charter_doc_id: role.charter_doc_id ?? null,
     };
   },
