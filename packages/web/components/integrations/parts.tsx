@@ -91,14 +91,14 @@ export function ConfirmButton({
       <button
         type="button"
         onClick={() => setArmed(true)}
-        className={cn("rounded-sm text-meta text-sol-red hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring/60", className)}
+        className={cn("rounded-sm text-meta text-sol-red hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring/60 [@media(pointer:coarse)]:-mr-3 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-3", className)}
       >
         {label}
       </button>
     );
   }
   return (
-    <span className="inline-flex items-center gap-2" data-armed>
+    <span className="inline-flex items-center gap-2">
       {question && <span className="text-meta text-sol-text-dim">{question}</span>}
       <button
         type="button"
