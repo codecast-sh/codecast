@@ -718,7 +718,9 @@ describe("command groups stay off the boot graph", () => {
     // 613 the same day: remote/localSession.ts, out of remote/session-move.ts, the same split.
     // 615 the same day: contracts/fileAttachment.ts (no imports) and attachedFileDownload.ts,
     // which saves a file attached on the web next to the agent before its prompt is delivered.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(615);
+    // 616 on 2026-11-20: subagentFinish.ts (node imports only), which marks a finished
+    // Task subagent completed and reopens it when its transcript grows.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(616);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
