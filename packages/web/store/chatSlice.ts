@@ -648,6 +648,8 @@ export type ChatSliceActions = {
    *  caller mints the client id (newPageCommentClientId) because the dispatch
    *  effect reads it from this one argument object. */
   addPageComment: (o: { artifactId: string; text: string; parentId?: string; clientId: string }) => void;
+  /** The page owner resolving (or reopening) one comment on its discussion. */
+  resolvePageComment: (artifactId: string, commentId: string, resolved: boolean) => void;
   /** Drop local rows a fresh listMine page no longer returns (revoked access). */
   pruneThreadInbox: (keepIds: string[], teamId: string | undefined | null, floorActivityAt: number) => void;
   setChannelNotifyLevel: (channelId: string, level: ChatNotifyLevel) => void;
@@ -1291,6 +1293,11 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       }
     }),
 
+    resolvePageComment: action(function (this: ChatDraft, artifactId: string, commentId: string, resolved: boolean) {
+      const c = this.pageThreads[artifactId]?.comments.find((x) => x._id === commentId);
+      if (c) c.status = resolved ? "resolved" : "open";
+    }),
+
     updateChatChannel: action(function (this: ChatDraft, channelId: string, fields: { name?: string; topic?: string }) {
       const channel = this.chatChannels[channelId];
       if (!channel) return;
@@ -1534,6 +1541,22 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
  *  channel's page never prunes another's, and the two collections with an
  *  optimistic create carry the altKey that supersedes their stub. */
 /** Client id for an optimistic page comment (the server dedupes on it). */
+/** A push of pageThreads rows with this window's unsent reply stubs carried
+ *  forward: a push racing the server's write would otherwise clobber the reply
+ *  for a beat. A stub retires when the echoed row carries its client_id, or
+ *  after a minute (the send failed or the outbox is retrying). */
+export function withPageCommentStubs(pages: PageThreadRow[], local: Record<string, PageThreadRow | undefined>): PageThreadRow[] {
+  return pages.map((p) => {
+    const prev = local[String(p._id)];
+    if (!prev) return p;
+    const echoed = new Set((p.comments ?? []).map((c) => c.client_id).filter(Boolean));
+    const stubs = (prev.comments ?? []).filter(
+      (c) => c._id.startsWith("pagecmtstub-") && !echoed.has(c.client_id) && c.created_at > Date.now() - 60_000,
+    );
+    return stubs.length ? { ...p, comments: [...(p.comments ?? []), ...stubs] } : p;
+  });
+}
+
 export function newPageCommentClientId(): string {
   return `pagecmt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

@@ -27,6 +27,7 @@ import { useSyncCollection } from "./useSyncCollection";
 import { isConvexId } from "../lib/entityLinks";
 import { commentsFromReviewOn } from "../lib/commentSource";
 import { ingestTaskDetail } from "./useSyncTasks";
+import { withPageCommentStubs } from "../store/chatSlice";
 import { questionCards } from "../lib/threadCards";
 import { GLOBAL_THREAD_KEY, fileThreadKey, parseCommentThreadRootKey, webThreadKeyFromAnchor, type Comment } from "../lib/commentThread";
 import { useChatMembers, useChatRail, useMessageViews } from "./useChatSync";
@@ -134,20 +135,7 @@ export function useThreadsInboxSync(): {
       if (data.payload?.codeComments?.length) syncTable("codeComments", data.payload.codeComments);
       for (const task of data.payload?.tasks ?? []) ingestTaskDetail(task, { partialComments: true });
       if (data.payload?.pages?.length) {
-        // Carry local optimistic reply stubs forward: a push racing the
-        // server's write would otherwise clobber the reply for a beat. A stub
-        // retires when the echoed row carries its client_id, or after a
-        // minute (the send failed or the outbox is retrying).
-        const local = useInboxStore.getState().pageThreads as Record<string, any>;
-        const merged = data.payload.pages.map((p: any) => {
-          const prev = local[String(p._id)];
-          if (!prev) return p;
-          const echoed = new Set((p.comments ?? []).map((c: any) => c.client_id).filter(Boolean));
-          const stubs = (prev.comments ?? []).filter(
-            (c: any) => c._id.startsWith("pagecmtstub-") && !echoed.has(c.client_id) && c.created_at > Date.now() - 60_000,
-          );
-          return stubs.length ? { ...p, comments: [...(p.comments ?? []), ...stubs] } : p;
-        });
+        const merged = withPageCommentStubs(data.payload.pages, useInboxStore.getState().pageThreads as Record<string, any>);
         syncTable("pageThreads", merged);
       }
     },

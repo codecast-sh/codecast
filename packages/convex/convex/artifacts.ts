@@ -2187,3 +2187,53 @@ export const getShared = query({
     };
   },
 });
+
+// The phone's page screen (mobile app/page/[slug].tsx) reads a page's discussion here, in the shape the store's
+// pageThreads rows hold (threadPageCodeKinds pageKind.load), so the reply stub addPageComment writes and this push
+// meet in one row. Who sees what follows the page itself: a reader the page admits sees its open comments, as
+// ?meta=1 shows every viewer; the owner and teammates who may steer its agent see the resolved ones too.
+export const discussionForApp = query({
+  args: { slug: v.string(), decision: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const artifact = await ctx.db.query("artifacts").withIndex("by_slug", (q) => q.eq("slug", args.slug)).first();
+    if (!artifact || isExpired(artifact)) return null;
+    if (isGated(artifact) && !(await unlockKeys(ctx, userId, artifact, args.decision))) return null;
+    const { role } = await accountAdmission(ctx, artifact, userId);
+    const rows = await ctx.db
+      .query("artifact_comments")
+      .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
+      .collect();
+    const comments = rows
+      .filter((c) => c.status === "open" || !!role)
+      .sort((a, b) => a.created_at - b.created_at)
+      .map(({ author_email: _email, ...c }) => c);
+    return {
+      _id: String(artifact._id),
+      slug: artifact.slug,
+      title: artifact.title,
+      kind: artifact.kind,
+      user_id: String(artifact.user_id),
+      updated_at: artifact.updated_at,
+      comments_disabled: !!artifact.comments_disabled,
+      comments,
+    };
+  },
+});
+
+// Resolve or reopen one comment from inside the app, as the page's owner. The served page resolves through its
+// owner_key (artifactsHttp manage → applyManage); the app holds the owner's account instead.
+export const setCommentStatusForApp = mutation({
+  args: { comment_id: v.id("artifact_comments"), resolved: v.boolean() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Sign in required");
+    const comment = await ctx.db.get(args.comment_id);
+    if (!comment) return { ok: false as const };
+    const artifact = await ctx.db.get(comment.artifact_id);
+    if (!artifact || artifact.user_id !== userId) throw new Error("Only the page owner can resolve comments");
+    await ctx.db.patch(comment._id, { status: args.resolved ? "resolved" : "open" });
+    return { ok: true as const };
+  },
+});

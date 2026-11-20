@@ -29,6 +29,12 @@ export type PageInfo = {
 
 export type PageRef = { slug: string; decision?: string | null };
 
+/** The "&m=..&k=..&e=.." a frame or pane address needs to pass a page's gates; empty for an open page. */
+export function pageGateKeys(info: PageInfo | undefined): string {
+  if (!info?.gated) return "";
+  return `${info.m ? `&m=${info.m}` : ""}${info.k ? `&k=${info.k}` : ""}${info.e ? `&e=${info.e}` : ""}`;
+}
+
 const selectRows = (rows: any) => (Array.isArray(rows) ? rows.map((r) => ({ ...r, _id: r.slug })) : rows);
 
 /** Feeds pageEmbeds from artifacts.embedInfo once the caller says the viewer is settled. Web's usePageEmbedFeed

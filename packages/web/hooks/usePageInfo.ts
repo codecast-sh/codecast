@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { hasStoredAuthToken } from "../lib/localAuth";
 import { useServerAuthSettled } from "./useServerAuthSettled";
-import { usePageEmbedQuery, type PageInfo, type PageRef } from "./pageEmbedQuery";
+import { pageGateKeys, usePageEmbedQuery, type PageInfo, type PageRef } from "./pageEmbedQuery";
 
 export type { PageInfo, PageRef };
 
@@ -29,11 +29,7 @@ export function usePageInfoRow(slug: string): PageInfo | undefined {
   return (useInboxStore.getState() as any).pageEmbeds?.[slug];
 }
 
-/** The "&m=..&k=..&e=.." a frame or pane address needs to pass a page's gates; empty for an open page. */
-export function pageGateKeys(info: PageInfo | undefined): string {
-  if (!info?.gated) return "";
-  return `${info.m ? `&m=${info.m}` : ""}${info.k ? `&k=${info.k}` : ""}${info.e ? `&e=${info.e}` : ""}`;
-}
+export { pageGateKeys };
 
 /** A page's info, fed and read: the row paints at once when this viewer has seen the page before. */
 export function usePageInfo(slug: string, decision?: string | null) {

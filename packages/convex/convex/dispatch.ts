@@ -3005,6 +3005,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       comments: [{ text: o.text }],
     });
   },
+  // The owner resolving or reopening one comment on a published page (the
+  // phone's page screen). Idempotent, so the plain optimistic path is enough.
+  resolvePageComment: async (ctx, _userId, [, commentId, resolved]: [string, string, boolean]) => {
+    if (!isServerId(commentId)) return;
+    return await ctx.runMutation!(api.artifacts.setCommentStatusForApp, {
+      comment_id: commentId as Id<"artifact_comments">,
+      resolved: !!resolved,
+    });
+  },
   setChannelNotifyLevel: async (
     ctx,
     _userId,
