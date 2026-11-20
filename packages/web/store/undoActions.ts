@@ -114,6 +114,12 @@ function afterSessionExits(ids: string[], commit: (leaving: Map<string, Element 
   return Promise.all(exits.map(([, exit]) => exit.done)).then(run);
 }
 
+// One killSessions dispatch carries a patch per conversation, keyed by id, and
+// Convex refuses an argument object with more than 1024 keys. A kill of
+// thousands (select all on the sessions page) went out as one dispatch, was
+// refused on every retry and never reached the server, so it is sent in slices.
+const KILL_DISPATCH_ROWS = 500;
+
 /** Animate a session card sliding out, then stash or kill it. */
 export function animatedHideSession(id: string, mode: HideSessionMode, opts?: HideSessionOpts) {
   void animatedHideSessions([id], mode, opts);
@@ -129,7 +135,12 @@ export async function animatedHideSessions(ids: string[], mode: HideSessionMode,
     const store = useInboxStore.getState();
     if (mode === "kill") {
       if (list.length === 1) store.killSession(list[0]!);
-      else store.killSessions(list);
+      else if (list.length <= KILL_DISPATCH_ROWS) store.killSessions(list);
+      else {
+        undoAsOne(`Killed ${counted(list.length, "session")} (agents stay stopped on undo)`, () => {
+          for (let i = 0; i < list.length; i += KILL_DISPATCH_ROWS) store.killSessions(list.slice(i, i + KILL_DISPATCH_ROWS));
+        });
+      }
     } else {
       const verb = opts?.hidden ? "Stashed and hid" : "Stashed";
       undoAsOne(`${verb} ${counted(list.length, "session")}`, () => {

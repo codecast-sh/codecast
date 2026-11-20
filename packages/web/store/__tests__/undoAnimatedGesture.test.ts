@@ -100,3 +100,27 @@ describe("a gesture's write after its exit animation is registered before the wa
     expect(src).not.toMatch(/await [^;]*(exitFinished|startSessionExit)/);
   });
 });
+
+// Convex refuses a dispatch argument object with more than 1024 keys, and a
+// kill dispatch keys its patch by conversation id. A kill of thousands went out
+// as one dispatch, was refused on every retry and never reached the server.
+describe("a kill of thousands goes out in slices the server accepts", () => {
+  test("every killSessions call carries at most 500 rows, and the gesture is one undo", async () => {
+    _resetUndoStacks();
+    document.body.innerHTML = "";
+    const ids = Array.from({ length: 1201 }, (_, i) => i.toString(36).padStart(32, "k"));
+    const rows = Object.fromEntries(ids.map((id) => [id, { _id: id, title: id, updated_at: 1 }]));
+    useInboxStore.setState({ pending: {}, sessions: rows, conversations: structuredClone(rows) } as any);
+    const real = useInboxStore.getState().killSessions;
+    const sizes: number[] = [];
+    useInboxStore.setState({ killSessions: (list: string[]) => { sizes.push(list.length); real(list); } } as any);
+    try {
+      await animatedHideSessions(ids, "kill");
+    } finally {
+      useInboxStore.setState({ killSessions: real } as any);
+    }
+    expect(sizes).toEqual([500, 500, 201]);
+    expect(ids.every((id) => !!row(id)?.inbox_dismissed_at)).toBe(true);
+    expect(getUndoHistory().items).toHaveLength(1);
+  });
+});
