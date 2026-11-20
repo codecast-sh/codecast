@@ -342,7 +342,6 @@ import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, r
 import { classifyTmuxLiveness } from "./tmuxLiveness.js";
 import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
 import { ghosttyPane } from "./ghostty.js";
-import { orcaPane } from "./orca.js";
 import type { PaneTransport } from "./paneTransport.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
 import { BlankStartHoldError, RunLimitHoldError, TerminalHoldError } from "./terminalHold.js";
@@ -19521,15 +19520,16 @@ function getTerminalLabel(termProgram?: string): string {
   }
 }
 
-// Terminals where we know there's no direct injection API — tmux required
-const TMUX_ONLY_TERMINALS = new Set(["Alacritty"]);
-
 // The terminals injectViaTerminal has an injector for. AppleScript reaches only
 // iTerm2 and Terminal.app, so any other terminal that names itself (vscode,
 // WarpTerminal, …) owns a tty neither app has: sending it down that path failed
-// every attempt, and a failure streak stops the person's own agent. tmux is
-// reached upstream, and an unnamed terminal keeps the AppleScript default.
+// every attempt, and a failure streak stops the person's own agent. Alacritty
+// has no injection API at all. tmux is reached upstream, and an unnamed
+// terminal keeps the AppleScript default.
 const INJECTABLE_TERMINALS = new Set(["iTerm.app", "Apple_Terminal", "kitty", "WezTerm", "herdr", "ghostty", "Orca", "tmux"]);
+
+/** Orca's transport, loaded on first use: only an agent in an Orca tab needs it, and the daemon boots without it. */
+const orcaPane: typeof import("./orca.js").orcaPane = async (...args) => (await import("./orca.js")).orcaPane(...args);
 
 /** A terminal codecast cannot type into, so a live agent in it is held rather than retried. */
 function terminalLacksInjector(termProgram?: string): boolean {
@@ -19902,9 +19902,6 @@ export async function injectViaTerminal(
   if (termProgram === "Orca") {
     const paneKey = opts.pid ? orcaPaneKeyOf(opts.pid) : undefined;
     return injectThroughPane(await orcaPane(paneKey, bracketed, log), content, keystrokes);
-  }
-  if (termProgram && TMUX_ONLY_TERMINALS.has(termProgram)) {
-    throw new Error(`${getTerminalLabel(termProgram)} does not support direct injection — use tmux for this terminal`);
   }
   if (terminalLacksInjector(termProgram)) throw new TerminalHoldError(getTerminalLabel(termProgram));
   // Apple_Terminal, iTerm.app, unnamed → existing AppleScript path

@@ -282,6 +282,16 @@ export async function listEveryServer(
   return { stdout: joinListings(outputs), unanswered };
 }
 
+/**
+ * This environment with no inherited `TMUX`/`TMUX_PANE`. Run from inside a
+ * pane, those point every `tmux` command at that pane's server rather than the
+ * default one, and a child that starts tmux refuses to nest.
+ */
+export function outsideTmuxEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const { TMUX: _tmux, TMUX_PANE: _pane, ...rest } = env;
+  return rest;
+}
+
 /** The socket a `$TMUX` value names, by file name; "default" for the shared server or none. */
 export function socketOfTmuxEnv(tmux: string | undefined): string {
   return tmux ? path.basename(tmux.split(",")[0] ?? "") || "default" : "default";

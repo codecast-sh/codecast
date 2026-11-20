@@ -8,23 +8,13 @@ import { claimHerdViewer } from "./herdViewer.js";
 import { formatElapsed, formatProgress, requestHerdTake, resolveSessionRef } from "./herdTake.js";
 import { readLocalConversationMap } from "./localConversationMap.js";
 import { readTitleCache } from "./titleCache.js";
-import { SESSION_SOCKET_PREFIX } from "./tmuxRoute.js";
+import { SESSION_SOCKET_PREFIX, outsideTmuxEnv } from "./tmuxRoute.js";
 import { snapshotProcessTableAsync, type ProcRow } from "./processTable.js";
 import { ensureTmux, listCodecastPanes, parseCodecastPaneRows, PANE_LIST_FORMAT, tmuxRun, tmuxRunAsync, type CodecastPane } from "./tmux.js";
 
-/** The environment herdr's server hands its panes. A server started from
- *  inside tmux would pass TMUX on, and every pane's `tmux attach` would refuse
- *  to nest. */
-function herdEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  delete env.TMUX;
-  delete env.TMUX_PANE;
-  return env;
-}
-
 async function ensureHerdServer(bin: string, socketPath: string): Promise<boolean> {
   if (await herdrAlive(socketPath)) return true;
-  spawn(bin, ["--session", HERD_SESSION, "server"], { detached: true, stdio: "ignore", env: herdEnv() }).unref();
+  spawn(bin, ["--session", HERD_SESSION, "server"], { detached: true, stdio: "ignore", env: outsideTmuxEnv() }).unref();
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 200));
@@ -110,7 +100,7 @@ export async function runHerdCommand(
   process.once("SIGHUP", stop);
   try {
     await syncHerd(socketPath, []);
-    viewer = spawn(bin, ["--session", HERD_SESSION], { stdio: "inherit", env: herdEnv() });
+    viewer = spawn(bin, ["--session", HERD_SESSION], { stdio: "inherit", env: outsideTmuxEnv() });
     viewer.once("exit", () => { closed = true; });
     viewer.once("error", (err) => { console.error(err.message); closed = true; });
     let nextRefresh = 0;
