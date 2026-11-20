@@ -77,8 +77,22 @@ function ceremonyRp(origin?: string): { rp_id: string } | { error: string } {
   return { rp_id: rpIdFor(origin ?? siteUrl()) };
 }
 
-/** Every origin passkeys run on that answers to this relying party; none for a relying party they no longer run for. */
-const originsFor = (rpId: string) => [...passkeyOrigins()].filter((o) => rpIdFor(o) === rpId);
+/**
+ * The phone app's signing certificate, as public/.well-known/assetlinks.json
+ * lists it. Android's Credential Manager names a native ceremony's origin by
+ * the hash of the certificate that signed the app; iOS names it by the
+ * associated domain, which is the web's origin already.
+ */
+const ANDROID_APP_CERT_SHA256 = "F9:B9:DA:55:6A:22:2A:B8:94:40:B3:91:FF:CE:8A:95:73:C8:93:7B:BA:2E:4C:F7:4F:22:D5:BA:4E:1D:A2:85";
+
+export const androidAppOrigin = (certSha256: string) =>
+  `android:apk-key-hash:${isoBase64URL.fromBuffer(Uint8Array.from(certSha256.split(":"), (h) => parseInt(h, 16)))}`;
+
+/** Every origin passkeys run on that answers to this relying party, the phone app's for the web's; none for a relying party they no longer run for. */
+export const originsFor = (rpId: string) => {
+  const web = [...passkeyOrigins()].filter((o) => rpIdFor(o) === rpId);
+  return web.length && rpId === rpIdFor(siteUrl()) ? [...web, androidAppOrigin(ANDROID_APP_CERT_SHA256)] : web;
+};
 
 /** Whether a passkey may confirm a challenge for this relying party: made for it, and a relying party passkeys still run for. */
 const confirmsFor = (p: Doc<"passkeys">, rpId: string) => p.rp_id === rpId && originsFor(rpId).length > 0;

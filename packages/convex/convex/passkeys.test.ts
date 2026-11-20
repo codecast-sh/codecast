@@ -13,6 +13,7 @@ import schema from "./schema";
 import { hashToken } from "./apiTokens";
 import { allModules } from "./testModules.testkit";
 import { softAuthenticator, type SoftAuthenticator } from "./passkeys.testkit";
+import { androidAppOrigin, originsFor } from "./passkeys";
 import { isPresenceRequired, type PresenceAction } from "@codecast/shared/contracts/secrets";
 
 setDefaultTimeout(60_000);
@@ -196,6 +197,27 @@ test("the local dev origins take no ceremony on a deployment that has not opted 
     await ctx.db.patch(p._id, { rp_id: "localhost" });
   });
   expect(await as(ana).action(api.passkeys.presenceBegin, { action: "reveal", target: live, origin: ORIGIN })).toMatchObject({ needs_passkey: true });
+});
+
+test("the phone app runs the ceremony itself: iOS answers as the web's origin, Android as the app's certificate", async () => {
+  const { t, as, ana, acme } = await seed();
+  const live = await askFirstSecret(t, as, ana, acme);
+  const android = androidAppOrigin("F9:B9:DA:55:6A:22:2A:B8:94:40:B3:91:FF:CE:8A:95:73:C8:93:7B:BA:2E:4C:F7:4F:22:D5:BA:4E:1D:A2:85");
+  expect(android).toBe("android:apk-key-hash:-bnaVWoiKriUQLOR_86KlXPIk3u6Lkz3TyLVuk4dooU");
+  expect(originsFor("codecast.sh")).toEqual([ORIGIN, android]);
+  expect(originsFor("localhost")).toEqual([]);
+  const auth = await softAuthenticator();
+  // The phone names no origin: the ceremony is the web's relying party.
+  const begun = await as(ana).action(api.passkeys.registrationBegin, {});
+  expect(begun.options.rp.id).toBe("codecast.sh");
+  expect(await t.action(api.passkeys.registrationFinish, { challenge_id: begun.challenge_id, response: await auth.register(begun.options, android), name: "Codecast on Pixel 9" })).toMatchObject({ first: true });
+  for (const origin of [android, ORIGIN]) {
+    const asked = await as(ana).action(api.passkeys.presenceBegin, { action: "reveal", target: live });
+    expect((await t.action(api.passkeys.presenceFinish, { challenge_id: asked.challenge_id, response: await auth.assert(asked.options, origin) })).granted).toBe(true);
+  }
+  const otherApp = androidAppOrigin("00:".repeat(31) + "00");
+  const asked = await as(ana).action(api.passkeys.presenceBegin, { action: "reveal", target: live });
+  expect((await t.action(api.passkeys.presenceFinish, { challenge_id: asked.challenge_id, response: await auth.assert(asked.options, otherApp) })).error).toMatch(/could not be verified/);
 });
 
 test("a dev deployment that opts in takes the local origins", async () => {

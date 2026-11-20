@@ -2,7 +2,7 @@
   "applinks": {
     "details": [
       {
-        "appIDs": ["KHZ74QAPB7.com.ashotp.codecast"],
+        "appIDs": ["WRG9THCK9Q.com.ashotp.codecast", "KHZ74QAPB7.com.ashotp.codecast"],
         "components": [
           { "/": "/session/*" },
           { "/": "/sessions/*" },
@@ -19,5 +19,8 @@
         ]
       }
     ]
+  },
+  "webcredentials": {
+    "apps": ["WRG9THCK9Q.com.ashotp.codecast"]
   }
 }

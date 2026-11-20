@@ -22,7 +22,8 @@ export interface PresenceHandoffDeps {
   /** The web origin the /confirm page is served from. */
   webBase: string;
   begin: (action: PresenceAction, target: string) => Promise<OpenedChallenge>;
-  enroll: () => Promise<OpenedChallenge>;
+  /** Open an enrollment; a second passkey passes an add_passkey `grant`. */
+  enroll: (grant?: PresenceGrant) => Promise<OpenedChallenge>;
   /** Show a page; resolves when the person closes it, or with "opened" when the browser cannot say (Android). */
   open: (url: string) => Promise<"closed" | "opened">;
   /** Close the page this opened, once the challenge settled. */
@@ -51,6 +52,23 @@ export async function confirmPresenceViaWeb(action: PresenceAction, target: stri
   }
   if ("error" in opened) throw new Error(opened.error);
   return (await onConfirmPage(opened.challenge_id, deps)) === "granted" ? opened.grant ?? null : null;
+}
+
+/**
+ * Settings' Add on a client that hands off: the first passkey enrolls at
+ * once; another first confirms add_passkey with one already there, then
+ * enrolls spending that grant. True once the new passkey is stored.
+ */
+export async function addPasskeyViaWeb(hasPasskeys: boolean, deps: PresenceHandoffDeps): Promise<boolean> {
+  let grant: PresenceGrant | undefined;
+  if (hasPasskeys) {
+    const granted = await confirmPresenceViaWeb("add_passkey", "self", deps);
+    if (!granted) return false;
+    grant = granted;
+  }
+  const opened = await deps.enroll(grant);
+  if ("error" in opened) throw new Error(opened.error);
+  return (await onConfirmPage(opened.challenge_id, deps)) === "used";
 }
 
 /**

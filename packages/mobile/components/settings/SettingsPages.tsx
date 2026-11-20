@@ -377,6 +377,7 @@ function DevicesPage() {
 
 function SecurityPage() {
   useTheme();
+  const router = useRouter();
   const { isBiometricAvailable, isBiometricEnabled, enableBiometric, disableBiometric } = useAuth();
   const handleToggleBiometric = async () => {
     if (isBiometricEnabled) {
@@ -398,6 +399,9 @@ function SecurityPage() {
             <RNText style={settingsStyles.muted}>Biometric authentication not available</RNText>
           </RNView>
         )}
+      </SettingsGroup>
+      <SettingsGroup>
+        <NavRow icon="key" label="Touch ID" description="Passkeys for the Vault" onPress={() => router.push('/passkeys')} />
       </SettingsGroup>
     </SettingsScroll>
   );
