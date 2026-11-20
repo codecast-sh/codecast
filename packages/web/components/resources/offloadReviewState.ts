@@ -6,7 +6,8 @@
 // opened on, so a new sample never reorders or re-picks what the person is
 // looking at. Pressing Move confirms the checks no machine can prove, recorded
 // per session as such, never as a passed check. Blockers cannot be overridden.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { WAIT_PRESETS } from "../../lib/migrationPlan";
 import { memoryUsed } from "./resourceModel";
 import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadSelection, ResourceActions, ResourceSession } from "./types";
@@ -110,7 +111,7 @@ export function useOffloadReview({ plan: livePlan, sessions, initialSelected, ac
   // The server's dry run runs once on open, so its blockers show before anyone presses Move.
   const preflight = actions?.onPreflight;
   const firstCheck = useRef(true);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!firstCheck.current || !preflight || canMove.length === 0) return;
     firstCheck.current = false;
     preflight(canMove.map((c) => ({ sessionId: c.sessionId, destinationId: destOf(c), attested: [] })));
@@ -121,14 +122,13 @@ export function useOffloadReview({ plan: livePlan, sessions, initialSelected, ac
   const asked = useRef(new Set<string>());
   const toRehearse = going.filter((c) => { const r = rehearsalOf(c); return (!r || r.status === "failed") && !asked.current.has(`${c.sessionId}:${destOf(c)}`); });
   const rehearseKey = toRehearse.map((c) => `${c.sessionId}:${destOf(c)}`).join(",");
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!rehearse || !rehearseKey) return;
     const t = setTimeout(() => {
       for (const c of toRehearse) asked.current.add(`${c.sessionId}:${destOf(c)}`);
       rehearse(toRehearse.map((c) => ({ sessionId: c.sessionId, destinationId: destOf(c), attested: [] })));
     }, 600);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rehearseKey]);
 
   const sumOf = (cs: OffloadCandidate[]) => ({
