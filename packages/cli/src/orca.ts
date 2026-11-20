@@ -69,6 +69,20 @@ export function terminalForPaneKey(terminals: OrcaTerminal[], paneKey: string): 
   return terminals.find((t) => `${t.tabId}:${t.leafId}` === paneKey) ?? null;
 }
 
+/**
+ * The terminal's last SCREEN_ROWS rows. A plain `read --limit` returns only
+ * what arrived since the runtime's own read position: one line (`❯ BBB`) for
+ * an idle Claude Code, where the dialog guard needs the composer and anything
+ * drawn above it. A cursor read from the latest cursor back returns the rows.
+ */
+export async function readOrcaScreen(call: (args: string[]) => Promise<any>, handle: string): Promise<string> {
+  const latest = Number((await call(["terminal", "read", "--terminal", handle, "--limit", "1"]))?.terminal?.latestCursor);
+  if (!Number.isFinite(latest)) throw new Error(`orca: no cursor for terminal ${handle}`);
+  const from = Math.max(0, latest - SCREEN_ROWS);
+  const tail = (await call(["terminal", "read", "--terminal", handle, "--cursor", String(from), "--limit", String(SCREEN_ROWS)]))?.terminal?.tail;
+  return Array.isArray(tail) ? tail.join("\n") : "";
+}
+
 export type OrcaIo = {
   cli: () => string | null;
   run: (cli: string, args: string[]) => Promise<string>;
@@ -112,9 +126,6 @@ export async function orcaPane(paneKey: string | undefined, bracketed: boolean, 
     },
     sendKey: (key) => send(orcaKeyBytes(key)),
     sendKeystrokes: (keys) => send(keys),
-    readScreen: async () => {
-      const tail = (await call(["terminal", "read", "--terminal", handle, "--limit", String(SCREEN_ROWS)]))?.terminal?.tail;
-      return Array.isArray(tail) ? tail.join("\n") : "";
-    },
+    readScreen: () => readOrcaScreen(call, handle),
   };
 }

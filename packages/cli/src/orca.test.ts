@@ -9,17 +9,23 @@ const list = (terminals: unknown[]) => JSON.stringify({ id: "x", ok: true, resul
 
 function fakeIo(terminals: unknown[] = [{ handle: "term_live", tabId: "tab-1", leafId: "leaf-2", writable: true }]) {
   const sent: string[] = [];
+  const reads: string[] = [];
   const io: OrcaIo = {
     cli: () => "/Applications/Orca.app/Contents/Resources/bin/orca",
     run: async (_cli, args) => {
       if (args[1] === "list") return list(terminals);
       expect(args.slice(2, 4)).toEqual(["--terminal", "term_live"]);
       if (args[1] === "send") { sent.push(args[args.indexOf("--text") + 1]); return JSON.stringify({ ok: true, result: {} }); }
-      if (args[1] === "read") return JSON.stringify({ ok: true, result: { terminal: { tail: ["one", "❯ "] } } });
+      if (args[1] === "read") {
+        reads.push(args.slice(4).join(" "));
+        // Without a cursor Orca answers only what arrived since its own read position.
+        if (!args.includes("--cursor")) return JSON.stringify({ ok: true, result: { terminal: { tail: ["❯ "], latestCursor: "500" } } });
+        return JSON.stringify({ ok: true, result: { terminal: { tail: ["one", "❯ "], latestCursor: "500" } } });
+      }
       throw new Error(`unexpected ${args.join(" ")}`);
     },
   };
-  return { io, sent };
+  return { io, sent, reads };
 }
 
 describe("orca", () => {
@@ -50,7 +56,7 @@ describe("orca", () => {
   // The handle an agent was started with goes stale when Orca restarts; its
   // pane key does not, so the live handle is looked up from it each time.
   test("addresses the live terminal for the agent's pane key", async () => {
-    const { io, sent } = fakeIo([
+    const { io, sent, reads } = fakeIo([
       { handle: "term_other", tabId: "tab-1", leafId: "leaf-9" },
       { handle: "term_live", tabId: "tab-1", leafId: "leaf-2", writable: true },
     ]);
@@ -60,6 +66,7 @@ describe("orca", () => {
     await pane.sendKeystrokes("\x1b");
     expect(sent).toEqual(["\x1b[200~hi\x1b[201~", "\r", "\x1b"]);
     expect(await pane.readScreen()).toBe("one\n❯ ");
+    expect(reads).toEqual(["--limit 1 --json", "--cursor 440 --limit 60 --json"]);
   });
 
   test("a pane Orca no longer lists is a failure, not a hold", async () => {

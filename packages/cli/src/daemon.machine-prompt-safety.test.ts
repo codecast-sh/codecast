@@ -265,7 +265,7 @@ function fixture(transport = "tmux", cached = true) {
       cli: () => "/Applications/Orca.app/Contents/Resources/bin/orca",
       run: async (_cli: string, args: string[]) => {
         if (args[1] === "list") return JSON.stringify({ ok: true, result: { terminals: [{ handle: "term_t", tabId: "tab-1", leafId: "leaf-2", writable: true }] } });
-        if (args[1] === "read") return JSON.stringify({ ok: true, result: { terminal: { tail: capture().split("\n") } } });
+        if (args[1] === "read") return JSON.stringify({ ok: true, result: { terminal: { latestCursor: "100", tail: args.includes("--cursor") ? capture().split("\n") : [] } } });
         const text = args[args.indexOf("--text") + 1];
         if (text === "\r") input("Enter");
         else if (text.startsWith("\x1b[200~")) input("paste", text.slice(6, -6));
