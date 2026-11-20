@@ -128,14 +128,17 @@ export function isStrippedCommand(content: string): { cmdName: string; rest: str
 // and it must be checked strictly: `isCommandMessage` also matches command
 // *output* (<local-command-stdout>), and a long message the user typed minutes
 // after running a command must stay a normal message, not get swallowed into a
-// collapsed "/skill" block. Returns the command name (no leading slash), or
-// null when the message is not an expansion echo.
+// collapsed "/skill" block. A short body (a one-line command template) folds
+// only on the invocation's exact timestamp, which no message a person types
+// can share; a long one keeps a 10s window. Returns the command name (no
+// leading slash), or null when the message is not an expansion echo.
 export function commandExpansionName(
   prev: { content?: string | null; timestamp?: number } | null | undefined,
   msg: { content?: string | null; timestamp?: number },
 ): string | null {
   const prevContent = prev?.content?.trim();
-  if (!prevContent || !msg.content || msg.content.trim().length <= 200) return null;
+  const body = msg.content?.trim();
+  if (!prevContent || !body) return null;
   // The invocation leads with its tags (name/message order varies by CC
   // version), or, when it was sent from the app, holds the typed "/cmd args"
   // the pending row adopted onto Claude Code's tagged echo.
@@ -144,7 +147,8 @@ export function commandExpansionName(
     : null;
   if (!command) return null;
   if (prev?.timestamp == null || msg.timestamp == null) return null;
-  if (Math.abs(msg.timestamp - prev.timestamp) >= 10_000) return null;
+  const gap = Math.abs(msg.timestamp - prev.timestamp);
+  if (body.length <= 200 ? gap !== 0 : gap >= 10_000) return null;
   return command.name;
 }
 
