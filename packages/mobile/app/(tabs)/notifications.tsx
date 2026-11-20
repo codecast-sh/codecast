@@ -12,8 +12,8 @@ import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { NotificationListSkeleton } from '@/components/SkeletonLoader';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { MobileIdentityFace, useSessionIdentityRow } from '@/components/identity';
-import { openLink } from '@/lib/links';
-import { CODECAST_BASE_URL } from '@codecast/shared/entities';
+import { openAppRoute } from '@/lib/links';
+import { mobileNotificationRoute } from '@/lib/linkRoutes';
 import { cleanNotificationBody } from '@codecast/web/lib/notificationText';
 import {
   notificationActor,
@@ -283,43 +283,7 @@ export default function NotificationsScreen() {
 
   const handlePress = (notification: Notification) => {
     if (!notification.read) markAsRead(notification._id);
-    // A deep link wins (artifact comments open the published page).
-    if (notification.link) {
-      void openLink(notification.link);
-      return;
-    }
-    // A machine has no screen in the app. The daemon's overload alert opens the
-    // devices roster on the web, which is where a person can act on it, and
-    // matches where the same notification lands on web.
-    if (notification.entity_type === "device") {
-      void openLink(`${CODECAST_BASE_URL}/settings/devices`);
-      return;
-    }
-    // An overloaded machine opens its offload review on the web, where load can be moved off.
-    if (notification.entity_type === "machine" && notification.entity_id) {
-      void openLink(`${CODECAST_BASE_URL}/resources?offload=${encodeURIComponent(notification.entity_id)}`);
-      return;
-    }
-    // A metric alert opens its watch on the web, where its chart and fix live.
-    if (notification.entity_type === "metric_watch" && notification.entity_id) {
-      void openLink(`${CODECAST_BASE_URL}/ops/metrics/${encodeURIComponent(notification.entity_id)}`);
-      return;
-    }
-    if (notification.entity_type && notification.entity_id && notification.entity_type !== "conversation") {
-      const routes: Record<string, string> = { task: "/task/", doc: "/doc/", plan: "/plan/", chat_channel: "/chat/" };
-      const base = routes[notification.entity_type];
-      if (base) {
-        // A chat notification names the exact message; the screen scrolls to it.
-        const suffix = notification.entity_type === "chat_channel" && notification.chat_message_id
-          ? `?m=${notification.chat_message_id}`
-          : "";
-        router.push(`${base}${notification.entity_id}${suffix}` as any);
-        return;
-      }
-    }
-    if (notification.conversation_id) {
-      router.push(`/session/${notification.conversation_id}`);
-    }
+    openAppRoute(router, mobileNotificationRoute(notification));
   };
 
   const handleMarkRead = (notification: Notification) => {

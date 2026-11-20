@@ -21,7 +21,6 @@ import { Text as RNText } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { Mono, uiFace } from '@/constants/fonts';
 import { optionalNative } from '@/lib/optionalNative';
-import { openWebPage, WEB_ORIGIN } from '@/lib/links';
 import { ObjectHeader, ObjectMissing, SectionLabel, FactChip, objectStyles } from '@/components/objects/ObjectParts';
 import { GroupRefRow, GroupRow, ReplayRow, Vital, ago, clock, opsStyles } from '@/components/ops/OpsRows';
 import { parseReplayTimeline, rowAt, type TimelineKind, type TimelineRow } from '@/lib/replayTimeline';
@@ -127,7 +126,6 @@ function ReplayBody({ replay, timeline, askedT, now }: { replay: OpsReplay; time
         shortId={shortId}
         refId={momentRef}
         title={personLabel(replay.user)}
-        menu={[{ label: 'Open on the web', onPress: () => { void openWebPage(`${WEB_ORIGIN}/ops/replays/${shortId}${askedT !== null ? `?t=${Math.round(askedT / 1000)}` : ''}`); } }]}
       />
       <ScrollView ref={scroller} style={objectStyles.container} contentContainerStyle={objectStyles.content}>
         <RNText style={styles.person} numberOfLines={2} selectable>

@@ -9,13 +9,12 @@
 // (components/ops/sourceHealth), computed from the same rows.
 import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { isCiRunRecord } from '@codecast/shared/contracts/signalFingerprint';
 import { Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, Spacing, themedStyles, useTheme, type Palette } from '@/constants/Theme';
 import { appAlert } from '@/lib/popups';
-import { openWebPage, WEB_ORIGIN } from '@/lib/links';
 import { ActionButton, ObjectHeader, ObjectMissing, MoreToggle, SectionLabel, FactChip, objectStyles } from '@/components/objects/ObjectParts';
 import { GroupRow, ReplayRow, Vital, ago, opsStyles } from '@/components/ops/OpsRows';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
@@ -76,7 +75,6 @@ function SourceBody({ source }: { source: OpsSource }) {
         type="source"
         shortId={source.short_id}
         title={source.name}
-        menu={[{ label: 'Open on the web', onPress: () => { void openWebPage(`${WEB_ORIGIN}/ops?source=${encodeURIComponent(source.name)}`); } }]}
       />
       <ScrollView style={objectStyles.container} contentContainerStyle={objectStyles.content}>
         <RNText style={objectStyles.title} selectable>{source.name}</RNText>
@@ -169,11 +167,12 @@ function DayBars({ days, color }: { days: number[]; color: string }) {
 
 function WatchRow({ w, now, first }: { w: OpsWatch; now: number; first: boolean }) {
   const Theme = useTheme();
+  const router = useRouter();
   const alert = w.state === 'alert';
   const c = w.status === 'paused' ? Theme.textMuted0 : alert ? Theme.red : w.last_error ? Theme.orange : Theme.green;
   const line = w.threshold !== undefined ? `${w.direction} ${formatValue(w.threshold, w.unit)}` : null;
   return (
-    <TouchableOpacity style={[styles.watch, !first && styles.rule]} onPress={() => { void openWebPage(`${WEB_ORIGIN}/ops/metrics/${w.short_id}`); }} activeOpacity={0.6}>
+    <TouchableOpacity style={[styles.watch, !first && styles.rule]} onPress={() => router.push(`/metric/${w.short_id || w._id}` as never)} activeOpacity={0.6}>
       <RNView style={[styles.dot, { backgroundColor: c }]} />
       <RNView style={{ flex: 1, minWidth: 0 }}>
         <RNText style={styles.watchName} numberOfLines={1}>{w.name}</RNText>
@@ -182,8 +181,7 @@ function WatchRow({ w, now, first }: { w: OpsWatch; now: number; first: boolean 
         </RNText>
       </RNView>
       <RNText style={[styles.watchValue, { color: alert ? Theme.red : Theme.text }]}>{w.last_value !== null ? formatValue(w.last_value, w.unit) : '—'}</RNText>
-      {/* A metric has no phone screen yet: the row opens its web page. */}
-      <FontAwesome name="external-link" size={11} color={Theme.textDim} />
+      <FontAwesome name="angle-right" size={14} color={Theme.textDim} />
     </TouchableOpacity>
   );
 }

@@ -6,6 +6,7 @@ import {
   shortenUrl,
   urlPattern,
   isMentionStart,
+  mobileNotificationRoute,
 } from './linkRoutes';
 import { MOBILE_SETTINGS_SECTIONS } from './settingsSections';
 
@@ -148,11 +149,12 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/projects')).toBeNull();
   });
 
-  test('app pages that are not objects stay external', () => {
-    // A published artifact is a web page, not a mobile screen — sending it to a
-    // route would 404 inside the app.
-    expect(mobileRouteForUrl('https://codecast.sh/a/my-report')).toBeNull();
-    // A web settings section with no phone page.
+  test('a published page opens its screen in the app', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/a/my-report')).toBe('/page/my-report');
+    expect(mobileRouteForUrl('https://codecast.sh/a/my-report?c=k1')).toBe('/page/my-report?c=k1');
+  });
+
+  test('a web settings section with no phone page has no route', () => {
     expect(mobileRouteForUrl('https://codecast.sh/settings/keyboard')).toBeNull();
     expect(mobileRouteForUrl('https://codecast.sh/settings/devices/extra')).toBeNull();
   });
@@ -308,5 +310,35 @@ describe('source, replay and Ops issue links', () => {
   test('an Ops issue page opens the phone issue screen', () => {
     expect(mobileRouteForUrl('https://codecast.sh/ops/issues/eg-2242')).toBe('/issue/eg-2242');
     expect(mobileRouteForUrl('/ops/issues/eg-2242')).toBe('/issue/eg-2242');
+  });
+});
+
+describe('mobileNotificationRoute', () => {
+  test('a stored path link opens its native screen', () => {
+    expect(mobileNotificationRoute({ link: '/decisions/sd-3816', entity_type: 'task', entity_id: 'abc' })).toBe('/decisions/sd-3816');
+    expect(mobileNotificationRoute({ link: '/workflows/runs/jx7run', entity_type: 'task', entity_id: 'abc' })).toBe('/run/jx7run');
+    expect(mobileNotificationRoute({ link: 'https://codecast.sh/a/report-x?c=c1', entity_type: 'artifact', entity_id: 'report-x' })).toBe('/page/report-x?c=c1');
+  });
+
+  test('entity notifications open their screens, never the web', () => {
+    expect(mobileNotificationRoute({ entity_type: 'task', entity_id: 'ct-1' })).toBe('/task/ct-1');
+    expect(mobileNotificationRoute({ entity_type: 'chat_channel', entity_id: 'jx7abcdefghijklmnopqrstuvwxyz012', chat_message_id: 'jn7m' }))
+      .toBe('/chat/jx7abcdefghijklmnopqrstuvwxyz012?m=jn7m');
+    expect(mobileNotificationRoute({ entity_type: 'device', entity_id: 'd1' })).toBe('/settings/devices');
+    expect(mobileNotificationRoute({ entity_type: 'machine', entity_id: 'dev-9' })).toBe('/offload/dev-9');
+    expect(mobileNotificationRoute({ entity_type: 'metric_watch', entity_id: 'mw-4' })).toBe('/metric/mw-4');
+    expect(mobileNotificationRoute({ entity_type: 'weekly_card', entity_id: '2026-W47' })).toBe('/week?w=2026-W47');
+    expect(mobileNotificationRoute({ entity_type: 'passkey', entity_id: 'pk' })).toBe('/passkeys');
+    expect(mobileNotificationRoute({ entity_type: 'team', entity_id: 't' })).toBe('/settings/team');
+    expect(mobileNotificationRoute({ entity_type: 'org_role', entity_id: 'or-35' })).toBe('/org/or-35');
+  });
+
+  test('a session notification opens the session; one with nothing to name opens the inbox', () => {
+    expect(mobileNotificationRoute({ conversation_id: 'jx7c6zk' })).toBe('/session/jx7c6zk');
+    expect(mobileNotificationRoute({})).toBe('/(tabs)/inbox');
+  });
+
+  test('a link with no screen falls back to its entity', () => {
+    expect(mobileNotificationRoute({ link: '/somewhere/unknown', entity_type: 'task', entity_id: 'ct-2' })).toBe('/task/ct-2');
   });
 });

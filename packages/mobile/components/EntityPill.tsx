@@ -9,9 +9,9 @@ import { useSyncOrgProposal } from '@codecast/web/hooks/useSyncOrgProposals';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme } from '@/constants/Theme';
-import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, entityRoute, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, CODECAST_BASE_URL, type EntityType } from '@codecast/shared/entities';
+import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
-import { openLink, openWebPage } from '@/lib/links';
+import { openLink } from '@/lib/links';
 import { replayTitle } from '@codecast/web/components/ops/opsModel';
 import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
 import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
@@ -224,15 +224,11 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   // The type → screen table is shared with the link opener and the deep-link
   // handler (lib/links).
   const route = targetId ? mobileEntityRoute(type, targetId) : null;
-  // A replay pill keeps its moment (`rp-12@1:23`) and a proposal pill its
-  // change (`op-55#3`), which their screens open at. An id the phone cannot
-  // route (no screen for it) opens the web page in the in-app browser.
-  const webPage = !route && type === 'replay' && entity ? entityRoute('replay', rawId) : !route && (type === 'deploy' || type === 'flow') ? entityRoute(type, rawId) : null;
 
   return (
     <RNText
       style={[styles.pill, { backgroundColor: color + '1a', color }]}
-      onPress={to ? () => void openLink(to) : route ? () => router.push(route as any) : webPage ? () => void openWebPage(`${CODECAST_BASE_URL}${webPage}`) : undefined}
+      onPress={to ? () => void openLink(to) : route ? () => router.push(route as any) : undefined}
       onLongPress={messageLongPress ? () => messageLongPress([{ label: 'Copy ID', text: entity?.short_id ?? rawId }]) : undefined}
       suppressHighlighting
     >
