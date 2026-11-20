@@ -1811,10 +1811,6 @@ export default defineSchema({
       v.object({ kind: v.literal("role"), role_id: v.id("org_roles") }),
     ),
     status: v.union(v.literal("active"), v.literal("paused"), v.literal("retired")),
-    // Read and written by nothing: the charter is its doc (charter_doc_id,
-    // lib/roleCharter). migrations:foldRoleCharters moves what rows still hold
-    // into the doc; the field goes once that has run in prod.
-    charter: v.optional(v.string()),
     anchor_id: v.optional(v.id("anchors")), // reserved: the standing session
     // Chat channels whose lines ride the role's wake frame (agent-channels.md
     // C1/C2 pull mode). Edited by orgChannels.follow/unfollow.

@@ -442,6 +442,7 @@ import type * as lib_repoRefreshSpec from "../lib/repoRefreshSpec.js";
 import type * as lib_repoSearch from "../lib/repoSearch.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_reviewAnswered from "../lib/reviewAnswered.js";
+import type * as lib_roleCharter from "../lib/roleCharter.js";
 import type * as lib_roleIconGenerator from "../lib/roleIconGenerator.js";
 import type * as lib_roleIconRaster from "../lib/roleIconRaster.js";
 import type * as lib_roleIconValidator from "../lib/roleIconValidator.js";
@@ -1252,6 +1253,7 @@ declare const fullApi: ApiFromModules<{
   "lib/repoSearch": typeof lib_repoSearch;
   "lib/requireUser": typeof lib_requireUser;
   "lib/reviewAnswered": typeof lib_reviewAnswered;
+  "lib/roleCharter": typeof lib_roleCharter;
   "lib/roleIconGenerator": typeof lib_roleIconGenerator;
   "lib/roleIconRaster": typeof lib_roleIconRaster;
   "lib/roleIconValidator": typeof lib_roleIconValidator;
