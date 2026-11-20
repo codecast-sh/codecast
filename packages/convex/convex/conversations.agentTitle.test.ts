@@ -48,3 +48,14 @@ describe("updateTitle agent_guess", () => {
     expect(await s.title()).toBe("Mine");
   });
 });
+
+// A CLI older than 2026-11-04 titled a session from its raw opening message,
+// so a pasted brief named the session "<pasted_content id=…> Requested by…",
+// and every chat line, decision card and notification repeated the tag.
+describe("updateTitle stores a title as a person reads it", () => {
+  test("drops paste markers and folds the lines", async () => {
+    const s = await setup({});
+    await s.guess("<pasted_content id=\"375a\">\nRequested by Ashot (#team, Nov 3 2026)");
+    expect(await s.title()).toBe("Requested by Ashot (#team, Nov 3 2026)");
+  });
+});

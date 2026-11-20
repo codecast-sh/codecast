@@ -34,7 +34,7 @@ import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { resolveActor } from "./lib/actor";
 import { nextChatStamp, patchChat } from "./lib/chatRows";
 import { chatWaitClientId, parseChatWaitClientId } from "./lib/chatWakeIds";
-import { oneLine } from "./chatText";
+import { sessionLineTitle } from "./chatText";
 import { grantSessionRoom, grantTargetOf } from "./chatAccess";
 
 /** How often an open row checks that its session is still running. */
@@ -74,6 +74,9 @@ export async function openSessionReply(
      *  relayed into the session that started it), or nothing (another
      *  session's line set it off, which must not open a DM for a sibling). */
     grant: "room" | "thread" | false;
+    /** The thread a "thread" grant opens, when the row waits elsewhere (an
+     *  answer at the top of a DM to the session's line there). */
+    grantThreadId?: Id<"chat_messages">;
   },
 ): Promise<Id<"chat_messages"> | null> {
   if (!opts.wakeId) return null;
@@ -81,9 +84,10 @@ export async function openSessionReply(
   // The wake carried this room's line into the session, held or not: it may
   // read the room now (chatAccess sessionMayReadChannel).
   const grant = opts.grant;
-  if (wake && grant && (grant === "room" || opts.threadRootId)) {
+  const grantThread = opts.grantThreadId ?? opts.threadRootId;
+  if (wake && grant && (grant === "room" || grantThread)) {
     const target = await ctx.db.get(wake.conversation_id);
-    if (target) await grantSessionRoom(ctx, opts.channel, grantTargetOf(target), grant === "thread" ? "relay" : "wake", grant === "thread" ? opts.threadRootId : undefined);
+    if (target) await grantSessionRoom(ctx, opts.channel, grantTargetOf(target), grant === "thread" ? "relay" : "wake", grant === "thread" ? grantThread : undefined);
   }
   // A held note is read on the session's next turn, not now: nothing is thinking.
   if (!wake?.client_id || wake.status === "held" || !UNREAD_WAKE.has(wake.status)) return null;
@@ -118,7 +122,7 @@ export async function openSessionReply(
     client_id: clientId,
     origin: "agent",
     origin_session_id: sessionId,
-    origin_session_title: conversation.title && !conversation.is_private ? oneLine(conversation.title, 80) : undefined,
+    origin_session_title: conversation.is_private ? undefined : sessionLineTitle(conversation.title),
     origin_agent_type: conversation.agent_type,
     created_at: await nextChatStamp(ctx, opts.channel._id),
     updated_at: now,

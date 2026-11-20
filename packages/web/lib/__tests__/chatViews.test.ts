@@ -15,6 +15,7 @@ import {
   type ChatMember,
 } from "../chatViews";
 import type { ChatMessageRow, ChatReactionRow } from "../../store/chatSlice";
+import { sessionPersonasFrom } from "../../hooks/useChatSync";
 import { dmOtherIds, sessionDmKeyFor } from "@codecast/shared/chat";
 
 const ME: ChatMember = { _id: "u1", name: "Ashot", github_username: "Ashot", email: "ashot@codecast.sh" };
@@ -243,6 +244,22 @@ describe("sessionAuthorFor", () => {
     const human = toMessageView(row({ _id: "s3", user_id: "u2", origin_session_id: "x", origin_session_title: "T" } as any), base);
     expect(human.author.session).toBeUndefined();
     expect(human.author.name).toBe("Maya");
+  });
+});
+
+describe("sessionPersonasFrom", () => {
+  // A chat row names its session by conversation id; the store's session row
+  // carries that as _id and the agent's own id as session_id. Keyed by only
+  // session_id, a renamed session's lines kept the title they were sent under.
+  test("finds a session by its conversation id and by its agent session id", () => {
+    const lookup = sessionPersonasFrom({ c1: { _id: "c1", session_id: "uuid-1", title: "<pasted_content id=\"375a\">\nKey vault migration", agent_type: "claude_code" } }, null, {} as any);
+    expect(lookup("c1")?.title).toBe("Key vault migration");
+    expect(lookup("uuid-1")?.title).toBe("Key vault migration");
+  });
+
+  test("a line from a session the viewer does not hold reads its stamped title without paste markers", () => {
+    const view = toMessageView(row({ _id: "s9", user_id: "u2", origin: "agent", origin_session_id: "c9", origin_session_title: "<pasted_content id=\"375a\"> Requested by Ashot" } as any), { members: byId, viewerId: ME._id });
+    expect(view.author.name).toBe("Requested by Ashot");
   });
 });
 
