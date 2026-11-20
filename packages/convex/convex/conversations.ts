@@ -95,8 +95,9 @@ import {
   resolveVisibilityMode,
   buildShareUpdate,
   buildPathRestampUpdate,
+  teamFloorScope,
   type AccessLevel,
-  type TeamFeedFilter,
+  type TeamFloor,
   matchDirectoryMapping,
 } from "./privacy";
 import { currentMembershipVisibility, effectiveMembershipVisibility } from "./teamVisibility";
@@ -461,15 +462,14 @@ async function resolveReadScope(
   }
   if (opts.mineOnly) teamIds = [];
 
-  const feedFilters = new Map<string, TeamFeedFilter>();
+  const floors = new Map<string, TeamFloor>();
   const teamNames = new Map<string, string>();
   const userById = new Map<string, Doc<"users">>();
   for (const teamId of teamIds) {
-    const ff = await createTeamFeedFilter(ctx, teamId);
-    feedFilters.set(teamId.toString(), ff);
+    const floor = await teamFloorScope(ctx, teamId);
+    floors.set(teamId.toString(), floor);
     if (opts.allTeams) teamNames.set(teamId.toString(), (await ctx.db.get(teamId))?.name ?? "");
-    const members = await Promise.all(ff.memberships.map((m) => ctx.db.get(m.user_id)));
-    for (const u of members) if (u) userById.set(u._id.toString(), u);
+    for (const u of floor.members) userById.set(u._id.toString(), u);
   }
   const teamUsers = [...userById.values()];
   userById.set(userId.toString(), user);
@@ -482,19 +482,16 @@ async function resolveReadScope(
   const isOwn = (conv: Doc<"conversations">) =>
     conv.user_id.toString() === userId.toString() &&
     (ownAnywhere || (scopeTeam ? String(conv.team_id ?? "") === scopeTeam : !conv.team_id));
-  const teamFilterFor = (conv: Doc<"conversations">): TeamFeedFilter | undefined => {
-    if (!conv.team_id || !userById.has(conv.user_id.toString())) return undefined;
-    return feedFilters.get(conv.team_id.toString());
-  };
+  const floorFor = (conv: Doc<"conversations">) => (conv.team_id ? floors.get(conv.team_id.toString()) : undefined);
   const isVisible = (conv: Doc<"conversations">): boolean => {
     if (isRunLog(conv)) return false;
     if (isOwn(conv)) return true;
-    return teamFilterFor(conv)?.isVisible(conv) ?? false;
+    return floorFor(conv)?.isVisible(conv) ?? false;
   };
   const contentVisible = (conv: Doc<"conversations">): boolean => {
     if (isRunLog(conv)) return false;
     if (isOwn(conv)) return true;
-    return teamFilterFor(conv)?.contentVisible(conv) ?? false;
+    return floorFor(conv)?.contentVisible(conv) ?? false;
   };
   const workspaceOf = (conv: Doc<"conversations">) => (conv.team_id ? `team:${conv.team_id}` : `user:${userId}`);
   const teamNameOf = (conv: Doc<"conversations">) => (conv.team_id ? teamNames.get(conv.team_id.toString()) : undefined);

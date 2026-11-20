@@ -18,11 +18,12 @@ import { SHARED_CALL_AUDIO_PATH, sharedCallAudio, sharedCallVideo } from "./lib/
 import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMirror";
 import { ipRateLimited } from "./lib/httpRateLimit";
 import { cliAuthRequest } from "./cliAuthHttp";
-import { registerCliRoute, type CliRouteOptions } from "./lib/cliRoute";
+import { registerCliPreflight, registerCliRoute, type CliRouteOptions } from "./lib/cliRoute";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
 import { ENROLL_PATH, enrollHttp } from "./lib/enrollHttp";
+import { TEAM_SESSIONS_PATH, teamSessionsHttp } from "./lib/teamReadKeyHttp";
 import { REPLAY_CHUNK_PATH, REPLAY_FRAME_ADMIT_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayFrameAdmit, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
 import { signReplayChunks } from "./lib/replayChunks";
 import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
@@ -130,20 +131,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/exchange-token",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/exchange-token");
 
 // pi on a cast machine reaches the model through here, with its machine's key.
 http.route({ pathPrefix: CAST_MODEL_PROXY_PATH + "/", method: "POST", handler: castModelProxy });
@@ -201,24 +189,12 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/claim-auth",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/claim-auth");
 
 // A managed device presents its MDM profile's enrollment token
 // (lib/enrollHttp.enrollHttp).
 http.route({ path: ENROLL_PATH, method: "POST", handler: enrollHttp });
+http.route({ path: TEAM_SESSIONS_PATH, method: "GET", handler: teamSessionsHttp });
 
 // The install callback is a plain function (lib/githubInstallCallback.ts) so
 // a test can drive the real handler.
@@ -644,20 +620,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/search",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/search");
 
 http.route({
   path: "/cli/read",
@@ -719,20 +682,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/read",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/read");
 
 http.route({
   path: "/cli/export",
@@ -783,20 +733,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/export",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/export");
 
 http.route({
   path: "/cli/local-checkouts",
@@ -833,20 +770,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/local-checkouts",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/local-checkouts");
 
 http.route({
   path: "/cli/feed",
@@ -915,20 +839,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/feed",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/feed");
 
 // Record the stable-context feed a session was started with (posted by
 // `cast stable-context` / the daemon's Codex launch). Body: { api_token,
@@ -970,20 +881,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/stable-context",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/stable-context");
 
 http.route({
   path: "/cli/inbox",
@@ -1037,20 +935,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/inbox",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/inbox");
 
 http.route({
   path: "/cli/sessions",
@@ -1088,20 +973,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/sessions",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/sessions");
 
 http.route({
   path: "/cli/bookmark",
@@ -1153,20 +1025,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/bookmark",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/bookmark");
 
 http.route({
   path: "/cli/bookmark/list",
@@ -1216,20 +1075,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/bookmark/list",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/bookmark/list");
 
 http.route({
   path: "/cli/bookmark/delete",
@@ -1287,20 +1133,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/bookmark/delete",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/bookmark/delete");
 
 http.route({
   path: "/cli/decisions",
@@ -1354,20 +1187,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/decisions",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/decisions");
 
 http.route({
   path: "/cli/decisions/add",
@@ -1425,20 +1245,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/decisions/add",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/decisions/add");
 
 http.route({
   path: "/cli/decisions/delete",
@@ -1488,20 +1295,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/decisions/delete",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/decisions/delete");
 
 // `cast decide` — an agent hands its human one explicit decision (question +
 // options + context, optionally a published HTML report). Distinct from
@@ -1633,20 +1427,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/decide",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/decide");
 
 // The race verbs (docs/architecture/decisions-as-documents.md D2, D6): a role
 // on the ladder recommends from its session; a person in the
@@ -1781,20 +1562,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/patterns",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/patterns");
 
 http.route({
   path: "/cli/patterns/add",
@@ -1848,20 +1616,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/patterns/add",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/patterns/add");
 
 http.route({
   path: "/cli/patterns/show",
@@ -1911,20 +1666,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/patterns/show",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/patterns/show");
 
 http.route({
   path: "/cli/patterns/delete",
@@ -1974,20 +1716,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/patterns/delete",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/patterns/delete");
 
 http.route({
   path: "/cli/similar",
@@ -2048,20 +1777,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/similar",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/similar");
 
 http.route({
   path: "/cli/blame",
@@ -2111,20 +1827,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/blame",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/blame");
 
 // Line-level blame resolution: maps git blame SHAs (and uncommitted line
 // texts) to the sessions that produced them. The file-level /cli/blame above
@@ -2180,20 +1883,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/blame/resolve",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/blame/resolve");
 
 http.route({
   path: "/cli/sync-settings",
@@ -2241,20 +1931,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/sync-settings",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/sync-settings");
 
 http.route({
   path: "/cli/sync-settings/update",
@@ -2304,20 +1981,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/sync-settings/update",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/sync-settings/update");
 
 http.route({
   path: "/cli/log",
@@ -2366,20 +2030,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/log",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/log");
 
 http.route({
   path: "/cli/log-batch",
@@ -2432,20 +2083,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/log-batch",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/log-batch");
 
 http.route({
   path: "/cli/teams",
@@ -2493,20 +2131,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/teams",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/teams");
 
 http.route({
   path: "/cli/teams/mappings",
@@ -2554,20 +2179,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/teams/mappings",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/teams/mappings");
 
 http.route({
   path: "/cli/teams/mappings/update",
@@ -2621,20 +2233,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/teams/mappings/update",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/teams/mappings/update");
 
 http.route({
   path: "/cli/conversations/count",
@@ -2683,20 +2282,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/conversations/count",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/conversations/count");
 
 http.route({
   path: "/cli/conversations/delete-by-path",
@@ -2757,20 +2343,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/conversations/delete-by-path",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/conversations/delete-by-path");
 
 http.route({
   path: "/cli/teams/projects",
@@ -2819,20 +2392,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/teams/projects",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/teams/projects");
 
 http.route({
   path: "/cli/heartbeat",
@@ -2997,20 +2557,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/heartbeat",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/heartbeat");
 
 http.route({
   path: "/cli/command-result",
@@ -3054,20 +2601,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/command-result",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/command-result");
 
 
 http.route({
@@ -3121,20 +2655,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/fork",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/fork");
 
 http.route({
   path: "/cli/tree",
@@ -3180,20 +2701,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tree",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tree");
 
 // --- Agent Tasks endpoints ---
 
@@ -3227,20 +2735,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/create",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/create");
 
 http.route({
   path: "/cli/tasks/list",
@@ -3301,20 +2796,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/list",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/list");
 
 http.route({
   path: "/cli/tasks/due",
@@ -3345,20 +2827,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/due",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/due");
 
 http.route({
   path: "/cli/tasks/claim",
@@ -3390,20 +2859,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/claim",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/claim");
 
 http.route({
   path: "/cli/tasks/renew-lease",
@@ -3435,20 +2891,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/renew-lease",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/renew-lease");
 
 http.route({
   path: "/cli/tasks/complete",
@@ -3487,20 +2930,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/complete",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/complete");
 
 http.route({
   path: "/cli/tasks/fail",
@@ -3533,20 +2963,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/fail",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/fail");
 
 http.route({
   path: "/cli/tasks/cancel",
@@ -3577,20 +2994,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/cancel",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/cancel");
 
 http.route({
   path: "/cli/tasks/pause",
@@ -3621,20 +3025,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/pause",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/pause");
 
 http.route({
   path: "/cli/tasks/resume",
@@ -3665,20 +3056,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/resume",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/resume");
 
 http.route({
   path: "/cli/tasks/run",
@@ -3710,20 +3088,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/run",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/run");
 
 // `cast trigger update` — edit a trigger in place; every effective edit is
 // recorded in agent_task_revisions (version history + audit log).
@@ -3775,20 +3140,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/update",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/update");
 
 // `cast trigger history` — the trigger's edit log with actor names resolved.
 http.route({
@@ -3820,20 +3172,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/history",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/history");
 
 // --- Task Layer Routes ---
 

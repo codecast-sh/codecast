@@ -103,7 +103,7 @@ packages/convex/convex/githubWebhooks.checks.test.ts 850
 packages/convex/convex/githubWebhooks.ts 2350
 packages/convex/convex/googleOAuth.test.ts 1100
 packages/convex/convex/googleOAuth.ts 1000
-packages/convex/convex/http.ts 5450
+packages/convex/convex/http.ts 4800
 packages/convex/convex/inboxFilters.test.ts 1200
 packages/convex/convex/ingest.ts 1450
 packages/convex/convex/issueSync.ts 1900

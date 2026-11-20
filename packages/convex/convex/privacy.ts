@@ -1,6 +1,6 @@
 import { matchDirectoryMapping } from "@codecast/shared/team/directoryRules";
-import { repositoryKeyOfRemote, teamVisibleConvTeam as sharedTeamVisibleConvTeam } from "@codecast/shared/contracts";
-import { Id } from "./_generated/dataModel";
+import { isRunLog, repositoryKeyOfRemote, teamVisibleConvTeam as sharedTeamVisibleConvTeam, type RunLogIdentity } from "@codecast/shared/contracts";
+import { Doc, Id } from "./_generated/dataModel";
 import { isSessionOwner } from "./sessionOwners";
 import { currentMembershipVisibility, effectiveMembershipVisibility, isVisibilityShareable, type MembershipVisibilityFacts } from "./teamVisibility";
 
@@ -337,6 +337,34 @@ export async function createTeamFeedFilter(
   const getVisibility = (userId: string): string => currentMembershipVisibility(membershipMap.get(userId));
 
   return { isVisible, contentVisible, getVisibility, getVisibilityFor, memberships };
+}
+
+// ── Team floor ──
+// What every member of a team sees of the team's sessions, before anything
+// granted to one viewer (their own sessions, owner rows, mention grants, share
+// links): the feed filter's rule, for sessions whose owner is a member now,
+// never a run log. The member feed and search (conversations.ts
+// resolveReadScope) and team read keys (teamReadKeys.ts) both read through it.
+export type TeamFloor = {
+  filter: TeamFeedFilter;
+  /** The team's current members. */
+  members: Doc<"users">[];
+  isVisible: (conversation: ConversationForFeed & RunLogIdentity) => boolean;
+  contentVisible: (conversation: ConversationForFeed & RunLogIdentity) => boolean;
+};
+
+export async function teamFloorScope(ctx: DbCtx, teamId: Id<"teams">): Promise<TeamFloor> {
+  const filter = await createTeamFeedFilter(ctx, teamId);
+  const members: Doc<"users">[] = (await Promise.all(filter.memberships.map((m) => ctx.db.get(m.user_id)))).filter(Boolean);
+  const memberIds = new Set(members.map((u) => String(u._id)));
+  const onFloor = (conversation: ConversationForFeed & RunLogIdentity) =>
+    memberIds.has(String(conversation.user_id)) && !isRunLog(conversation);
+  return {
+    filter,
+    members,
+    isVisible: (conversation) => onFloor(conversation) && filter.isVisible(conversation),
+    contentVisible: (conversation) => onFloor(conversation) && filter.contentVisible(conversation),
+  };
 }
 
 // ── Profile activity visibility ──

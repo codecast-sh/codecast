@@ -111,3 +111,21 @@ test("cast search and the CLI feed read the active team unless asked for every t
   const feedAll: any = await t.query(api.conversations.feedForCLI, { api_token: token, all_teams: true });
   expect(byTitle(feedAll.conversations)["quokka other"]?.team).toBe("O");
 });
+
+test("an all-teams feed never lists a session in a team its owner has left", async () => {
+  const { t, T, O } = await seed();
+  // Still in T with the viewer, gone from O, where a session of theirs stays routed.
+  await t.run(async (ctx) => {
+    const former = await ctx.db.insert("users", { name: "Formertm", email: "former@x.com" } as any);
+    await ctx.db.insert("team_memberships", { user_id: former, team_id: T, role: "member", joined_at: 0, visibility: "full" } as any);
+    const now = Date.now();
+    await ctx.db.insert("conversations", {
+      user_id: former, team_id: O, is_private: false, agent_type: "claude_code", session_id: "left-o", title: "quokka left O",
+      started_at: now - 1000, updated_at: now, message_count: 1, status: "active",
+    } as any);
+  });
+
+  const feedAll: any = await t.query(api.conversations.feedForCLI, { api_token: token, all_teams: true });
+  expect(byTitle(feedAll.conversations)["quokka left O"]).toBeUndefined();
+  expect(byTitle(feedAll.conversations)["quokka other"]?.team).toBe("O");
+});
