@@ -665,7 +665,7 @@ export const clearCopiedChildStashStamps = internalMutation({
     if (args.user_id) {
       const r = await clearCopiedStashPage(ctx, args.user_id, dry_run, args.cursor ?? null, 100);
       if (!dry_run && !r.done) {
-        await ctx.scheduler.runAfter(0, internal.migrations.clearCopiedChildStashStamps, { user_id: args.user_id, dry_run, cursor: r.cursor });
+        await ctx.scheduler.runAfter(0, internal.migrations.clearCopiedChildStashStamps, { user_id: args.user_id, dry_run, cursor: r.cursor ?? undefined });
       }
       return { dry_run, user_id: args.user_id, ...r };
     }
@@ -676,7 +676,7 @@ export const clearCopiedChildStashStamps = internalMutation({
         await ctx.scheduler.runAfter(0, internal.migrations.clearCopiedChildStashStamps, { user_id: u._id, dry_run });
         continue;
       }
-      const r = await clearCopiedStashPage(ctx, u._id, true, null, 40);
+      const r = await clearCopiedStashPage(ctx, u._id, true, "peek", 40);
       if (r.examined || !r.done) perUser.push({ user_id: u._id, ...r });
     }
     if (!dry_run && !users.isDone) {
@@ -686,11 +686,15 @@ export const clearCopiedChildStashStamps = internalMutation({
   },
 });
 
-async function clearCopiedStashPage(ctx: { db: any }, userId: any, dryRun: boolean, cursor: string | null, numItems: number) {
-  const page = await ctx.db
+// A "peek" reads a first page with take: Convex allows one paginate per
+// function, and the all-users dry run already spends it on the users table.
+async function clearCopiedStashPage(ctx: { db: any }, userId: any, dryRun: boolean, cursor: string | null | "peek", numItems: number) {
+  const stashedRows = () => ctx.db
     .query("conversations")
-    .withIndex("by_user_stashed", (q: any) => q.eq("user_id", userId).gt("inbox_stashed_at", 0))
-    .paginate({ cursor, numItems });
+    .withIndex("by_user_stashed", (q: any) => q.eq("user_id", userId).gt("inbox_stashed_at", 0));
+  const page = cursor === "peek"
+    ? await stashedRows().take(numItems).then((rows: any[]) => ({ page: rows, continueCursor: null, isDone: rows.length < numItems }))
+    : await stashedRows().paginate({ cursor, numItems });
   // Whether another child of the same parent carries this exact stamp: the
   // rows sharing one stamp are one gesture, read off the same index.
   const shared = new Map<string, boolean>();
@@ -730,7 +734,7 @@ async function clearCopiedStashPage(ctx: { db: any }, userId: any, dryRun: boole
     [dryRun ? "would_clear" : "cleared"]: cleared,
     kept_explicit: kept,
     by_reason,
-    cursor: page.continueCursor as string,
+    cursor: page.continueCursor as string | null,
     done: page.isDone as boolean,
   };
 }

@@ -40,6 +40,19 @@ function world() {
 }
 
 const run = (ctx: any, args: any) => (clearCopiedChildStashStamps as any)._handler(ctx, args);
+
+// Convex runs one paginated query per function and throws on a second.
+function onePaginatePerRun(ctx: any) {
+  let paginates = 0;
+  const wrap = (q: any): any => new Proxy(q, {
+    get: (t, k) => typeof t[k] !== "function" ? t[k] : (...a: any[]) => {
+      if (k === "paginate" && ++paginates > 1) throw new Error("ran multiple paginated queries");
+      const out = t[k](...a);
+      return out && typeof out === "object" && typeof out.then !== "function" ? wrap(out) : out;
+    },
+  });
+  return { ...ctx, db: { ...ctx.db, get: ctx.db.get, patch: ctx.db.patch, query: (table: string) => wrap(ctx.db.query(table)) } };
+}
 const CLEARED = ["copied", "moved", "orphaned", "left_a", "left_b"];
 
 describe("migrations.clearCopiedChildStashStamps", () => {
@@ -65,7 +78,7 @@ describe("migrations.clearCopiedChildStashStamps", () => {
   test("a dry run writes nothing and schedules nothing", async () => {
     const w = world();
     expect(await run(w.ctx, { user_id: "u1", dry_run: true })).toMatchObject({ examined: 6, would_clear: 5, kept_explicit: 1 });
-    expect(await run(w.ctx, { dry_run: true })).toMatchObject({ users_scanned: 2, users: [{ user_id: "u1", would_clear: 5 }] });
+    expect(await run(onePaginatePerRun(w.ctx), { dry_run: true })).toMatchObject({ users_scanned: 2, users: [{ user_id: "u1", would_clear: 5 }] });
     for (const id of CLEARED) expect(w.stamp(id)).not.toBeUndefined();
     expect(w.scheduled).toEqual([]);
   });
