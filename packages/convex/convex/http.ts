@@ -4138,7 +4138,7 @@ cliRoute("/cli/brief/get", async (ctx, { from_session, ...body }) => {
   // A whole workspace role places what reaches no goal (ct-95900): the read
   // runs in its own query budget beside the brief's.
   if (brief?.facts?.scope?.whole_workspace) {
-    brief.facts.unplaced = await ctx.runQuery((api as any).orgUnplaced.part, { api_token: body.api_token, ...(brief.role.team_id ? { team_id: brief.role.team_id } : {}) }).catch(() => null);
+    brief.facts.unplaced = await ctx.runQuery((api as any).orgUnplaced.part, { api_token: body.api_token, ...(brief.role.team_id ? { team_id: brief.role.team_id } : {}) }).catch((e: unknown) => { brief.facts.unplaced_unread = String(e instanceof Error ? e.message : e).split("\n")[0].slice(0, 200); return undefined; });
   }
   // Read from the role's own session, the brief's "changed since" clock moves
   // to now (org-staffing.md S25); a person reading it moves nothing.

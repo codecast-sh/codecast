@@ -146,6 +146,12 @@ const ctxOf = (db: any) => ({ db }) as any;
 const codes = (flags: { code: string }[]) => flags.map((f) => f.code).sort();
 
 describe("org.health", () => {
+  test("an unplaced read that failed leaves the rest of health whole and says why (review finding 3)", async () => {
+    const r: any = await computeOrgHealth(ctxOf(fixtures()), ME as any, TEAM, NOW, { unplaced: { unread: "Too many reads" } });
+    expect(r.company.unplaced_unread).toBe("Too many reads");
+    expect(r.company.unplaced).toBeUndefined();
+    expect(Array.isArray(r.company.unfiled_plans)).toBe(true);
+  });
   test("a role flagged at the previous review reads as the second breach", async () => {
     const db = fixtures();
     await db.patch(GROWTH as any, { overload_streak: 1 });

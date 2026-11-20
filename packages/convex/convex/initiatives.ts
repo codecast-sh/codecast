@@ -715,7 +715,7 @@ export async function ownerLabel(ctx: Ctx, owner: Owner | undefined): Promise<st
 /** A project's plans read for its open ones; past this the oldest are not seen. */
 const OPEN_PLANS_READ = 300;
 async function projectSummaries(ctx: Ctx, userId: Id<"users">, initiative: any) {
-  const refOf = sessionRefs(ctx);
+  const refOf = sessionRefs(ctx, userId);
   const out = [];
   for (const id of initiative.project_ids) {
     const project = await ctx.db.get(id);

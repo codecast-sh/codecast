@@ -23,7 +23,7 @@ import { canAccessChannel } from "./chatAccess";
 import type { VendorGate } from "./lib/vendorGuard";
 import type { AskModel, StatedGoals } from "./lib/statedGoals";
 import { goalModelAsk, readGoalCandidates, readSaid, readStatedGoals } from "./orgSaid";
-import { computeCoverage, withUnplaced } from "./lib/orgCoverage";
+import { computeCoverage, unplacedOrUnread, withUnplaced } from "./lib/orgCoverage";
 import { planDriverRefs, readUnplaced } from "./orgUnplaced";
 import { isActiveTask } from "@codecast/shared/tasks";
 import { DAILY_CAP_KEYS, type LandedCommit } from "@codecast/shared/contracts/orgCapacity";
@@ -617,7 +617,7 @@ export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, tea
   const userNames: Record<string, string> = {};
   for (const i of initiatives) if (i.owner?.kind === "user") userNames[String(i.owner.user_id)] ??= (await ctx.db.get(i.owner.user_id))?.name ?? "";
   // The session driving each open plan a goal lists (ct-95899).
-  const drivers = await planDriverRefs(ctx, plans, initiatives);
+  const drivers = await planDriverRefs(ctx, userId, plans, initiatives);
   const coverage = computeCoverage({ projects, plans: plans.map((p: any) => ({ ...p, driver: drivers.get(String(p._id)) ?? null })), tasks, roles: scan.roles, areas: activity.areas, initiatives, userNames });
   return { activity, coverage, repos: reposFromScan(scan) };
 }
@@ -824,7 +824,7 @@ export const analysisInputs = action({
       ctx.runQuery(part, { ...args, part: "work", now }),
       ctx.runQuery(part, { ...args, part: "activity", now, tasks }),
       // What reaches no goal, from whole tables, in its own read budget (ct-95900).
-      ctx.runQuery((api as any).orgUnplaced.part, { ...args, now }),
+      unplacedOrUnread(ctx.runQuery((api as any).orgUnplaced.part, { ...args, now })),
     ]);
     if (!work) return null;
     const [org, signals, goalRead] = await Promise.all([

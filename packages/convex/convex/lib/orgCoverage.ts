@@ -115,6 +115,8 @@ export type OrgCoverage = {
   with_lead_paused: number;
   /** What reaches no goal, from whole tables (computeUnplaced); absent when the caller read none. */
   unplaced?: OrgUnplaced;
+  /** The unplaced reading failed: why. `unplaced` is then absent. */
+  unplaced_unread?: string;
   outside: {
     plans: Array<{ short_id: string; title: string; open_tasks: number }>;
     open_tasks: number;
@@ -304,7 +306,10 @@ export function computeUnplaced(input: UnplacedInputs): OrgUnplaced {
     .map((p) => ({ p, last: Math.max(p.updated_at, p.tasks.last_at ?? 0) }))
     .filter(({ p, last }) => isOpenStatus(p.status) && (p.tasks.open > 0 || now - last < UNPLACED_EMPTY_PLAN_MS))
     .map(({ p, last }) => ({ short_id: p.short_id, title: p.title, status: p.status, open_tasks: p.tasks.open, done_tasks: p.tasks.done, created_at: p.created_at, age_days: ageDays(now, p.created_at), last_activity_at: last, driver: p.driver }))
-    .sort(newest);
+    // Plans with open work first, then the newest: the cap below never drops a
+    // plan with open tasks for a newer empty one (outside.plans and health's
+    // unfiled plans read this list).
+    .sort((a, b) => Number(b.open_tasks > 0) - Number(a.open_tasks > 0) || newest(a, b));
 
   const projects: UnplacedProject[] = input.projects
     .filter((p) => p.status === "active" && !p.has_goal && (p.open_tasks > 0 || p.open_plans > 0))
@@ -350,11 +355,24 @@ export function computeUnplaced(input: UnplacedInputs): OrgUnplaced {
 }
 const isOpenStatus = (s: string) => !isClosedPlan(s);
 
+/** The unplaced reading failed (a read limit, a timeout): the rest of the
+ *  answer still returns, and says this part was not read and why. */
+export type UnplacedUnread = { unread: string };
+/** The unplaced part's answer, or why it has none: a failure there never fails the caller (inputs, health, the brief). */
+export async function unplacedOrUnread(read: Promise<OrgUnplaced | null>): Promise<OrgUnplaced | UnplacedUnread | null> {
+  try {
+    return await read;
+  } catch (e) {
+    return { unread: String(e instanceof Error ? e.message : e).split("\n")[0].slice(0, 200) };
+  }
+}
+
 /** Coverage with the unplaced reading beside it. `outside.plans` is then
  *  read from it: its open task counts come from an index read per plan, where
  *  the sample missed a plan whose open tasks fell outside the capped read
  *  (Union pl-1043 and pl-792, 2026-11-17). */
-export function withUnplaced(c: OrgCoverage, unplaced: OrgUnplaced | null | undefined): OrgCoverage {
+export function withUnplaced(c: OrgCoverage, unplaced: OrgUnplaced | UnplacedUnread | null | undefined): OrgCoverage {
   if (!unplaced) return c;
+  if ("unread" in unplaced) return { ...c, unplaced_unread: unplaced.unread };
   return { ...c, unplaced, outside: { ...c.outside, plans: unplaced.plans.filter((p) => p.open_tasks > 0).map((p) => ({ short_id: p.short_id, title: p.title, open_tasks: p.open_tasks })) } };
 }

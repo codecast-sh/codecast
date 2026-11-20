@@ -1,4 +1,4 @@
-import type { OrgUnplaced } from "./lib/orgCoverage";
+import { unplacedOrUnread, type OrgUnplaced, type UnplacedUnread } from "./lib/orgCoverage";
 import { action, query } from "./functions";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { api } from "./_generated/api";
@@ -405,7 +405,9 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
 
 export type OrgHealth = Awaited<ReturnType<typeof computeOrgHealth>>;
 
-export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, opts?: { decisions?: HealthDecisions; work?: WorkTasks; unplaced?: OrgUnplaced | null }) {
+export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, opts?: { decisions?: HealthDecisions; work?: WorkTasks; unplaced?: OrgUnplaced | UnplacedUnread | null }) {
+  const unplacedRead = opts?.unplaced ?? null;
+  const unplaced = unplacedRead && !("unread" in unplacedRead) ? unplacedRead : null;
   const cut7 = now - HEALTH_WINDOW_7D_MS;
   const scan: OrgScan = await collectOrgSessions(ctx, userId, teamId, now);
   const roles: any[] = scan.roles;
@@ -875,8 +877,8 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     // Counted per plan by index when the unplaced reading came with the call
     // (healthReport, the area watch); the task sample misses a plan whose
     // open tasks fall outside the capped read.
-    unfiled_plans: opts?.unplaced
-      ? opts.unplaced.plans.filter((p) => p.open_tasks > 0).map((p) => ({ id: planIdByShort.get(p.short_id) ?? p.short_id, title: p.title, short_id: p.short_id, open_tasks: p.open_tasks }))
+    unfiled_plans: unplaced
+      ? unplaced.plans.filter((p) => p.open_tasks > 0).map((p) => ({ id: planIdByShort.get(p.short_id) ?? p.short_id, title: p.title, short_id: p.short_id, open_tasks: p.open_tasks }))
       : plans.filter((p) => !p.project_id && !PLAN_CLOSED.has(p.status) && (openByPlan.get(String(p._id)) ?? 0) > 0)
         .map((p) => ({ id: String(p._id), title: p.title, short_id: p.short_id ?? undefined, open_tasks: openByPlan.get(String(p._id))! })),
     plans_without_goal: plans.filter((p) => p.status === "active" && !(p.goal ?? "").trim()).map((p) => ({ id: String(p._id), title: p.title })),
@@ -890,7 +892,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     workspace: teamId ? { kind: "team" as const, id: String(teamId) } : { kind: "user" as const, id: String(userId) },
     roles: roleRows,
     people,
-    company: { ...company, flags: capacityFlags({ kind: "company", ...company }), ...(opts?.unplaced ? { unplaced: opts.unplaced } : {}) },
+    company: { ...company, flags: capacityFlags({ kind: "company", ...company }), ...(unplaced ? { unplaced } : {}), ...(unplacedRead && "unread" in unplacedRead ? { unplaced_unread: unplacedRead.unread } : {}) },
     truncated: { sessions: scan.truncated, tasks: tasksTruncated, plans: plans.length >= HEALTH_CAPS.plans, projects: projects.length >= HEALTH_CAPS.projects, decisions: decisionsTruncated },
     generated_at: now,
   };
@@ -938,7 +940,7 @@ export const healthCorePart = query({
   handler: async (ctx, args): Promise<any> => {
     const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
     if (!userId) return null;
-    return computeOrgHealth(ctx, userId, args.team_id, args.now ?? Date.now(), { decisions: args.decisions as HealthDecisions | undefined, work: args.work as WorkTasks | undefined, unplaced: args.unplaced as OrgUnplaced | undefined });
+    return computeOrgHealth(ctx, userId, args.team_id, args.now ?? Date.now(), { decisions: args.decisions as HealthDecisions | undefined, work: args.work as WorkTasks | undefined, unplaced: args.unplaced as OrgUnplaced | UnplacedUnread | undefined });
   },
 });
 
@@ -950,7 +952,7 @@ export const healthReport = action({
       ctx.runQuery((api as any).orgHealth.healthDecisionsPart, { ...args, now }),
       ctx.runQuery((api as any).orgHealth.healthWorkPart, { ...args, now }),
       // What reaches no goal (ct-95900), counted from whole tables in its own budget.
-      ctx.runQuery((api as any).orgUnplaced.part, { ...args, now }),
+      unplacedOrUnread(ctx.runQuery((api as any).orgUnplaced.part, { ...args, now })),
     ]);
     if (decisions === null || work === null) return null;
     return ctx.runQuery((api as any).orgHealth.healthCorePart, { ...args, now, decisions, work, unplaced });
