@@ -272,6 +272,35 @@ function readJson(file: string): any {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
 }
 
+/**
+ * The loopback ports a review session may connect to beyond the harness's own: each port the gateway's env points
+ * at on this machine. The closed sandbox refuses every other connection, so without them `./xrun` reached the
+ * gateway's address and was refused (curl exit 7, Nov 20).
+ */
+export function gatewayPorts(gatewayEnv: Record<string, string>): number[] {
+  const ports = new Set<number>();
+  for (const value of Object.values(gatewayEnv)) {
+    let url: URL;
+    try { url = new URL(value); } catch { continue; }
+    const port = Number(url.port);
+    if (["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && Number.isInteger(port) && port > 0 && port !== 443) ports.add(port);
+  }
+  return [...ports];
+}
+
+/**
+ * The harness env of a review session. The harness keeps only an allowlist of the agent's env (prompt-dry-run.ts
+ * keepEnv), so the gateway's variables pass by name in DRY_RUN_PASS_ENV: without that the judge's `./xrun` never saw
+ * the gateway's address, fell through to production, which the sandbox refuses, and confirmed 1 cause in 51 (Nov 20).
+ * The gateway's port is let through the sandbox separately (gatewayPorts).
+ */
+export function runEnv(gatewayEnv: Record<string, string>, castDir: string, base: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const home = os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pass = [...new Set([...(base.DRY_RUN_PASS_ENV ?? "").split(","), ...Object.keys(gatewayEnv)].map((n) => n.trim()).filter(Boolean))].join(",");
+  // The harness's guard hands reads to the first real `cast` on PATH (a script that runs bun), and a daemon started by launchd has neither there.
+  return reviewEnv(base, { ...gatewayEnv, ...(pass ? { DRY_RUN_PASS_ENV: pass } : {}), DRY_RUN_HIDE_REGEX: `^${home}/.*/\\.env`, PATH: [castDir, path.dirname(bunPath()), base.PATH].filter(Boolean).join(path.delimiter) });
+}
+
 /** Start one review's session in its run directory (`dir`, else the runner's own for the review); resolves once the harness is running. */
 export function startRun(claim: ReviewClaim, account: string, o: { checkout: string; gatewayEnv: Record<string, string>; harness: string; castDir: string; dir?: string }): RunFiles {
   const dir = o.dir ?? path.join(runsDir(), claim.review);
@@ -289,10 +318,9 @@ export function startRun(claim: ReviewClaim, account: string, o: { checkout: str
     "--model", claim.judge.model, "--max-turns", String(agent.max_turns), "--tools", agent.tools.join(","),
     "--cwd", path.join(o.checkout, agent.cwd), "--read-only", "--account", account,
     ...(agent.claude_md ? ["--claude-md", path.join(dir, "CLAUDE.md")] : []),
+    ...gatewayPorts(o.gatewayEnv).flatMap((port) => ["--allow-port", String(port)]),
   ];
-  const home = os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // The harness's guard hands reads to the first real `cast` on PATH (a script that runs bun), and a daemon started by launchd has neither there.
-  const env = reviewEnv(process.env, { ...o.gatewayEnv, DRY_RUN_HIDE_REGEX: `^${home}/.*/\\.env`, PATH: [o.castDir, path.dirname(bunPath()), process.env.PATH].filter(Boolean).join(path.delimiter) });
+  const env = runEnv(o.gatewayEnv, o.castDir);
   const out = fs.openSync(path.join(dir, "harness.log"), "w");
   const child = spawn(bunPath(), argv, { cwd: dir, env, stdio: ["ignore", out, out], detached: true });
   // A review is batch work nobody waits on. At the default priority a dozen of

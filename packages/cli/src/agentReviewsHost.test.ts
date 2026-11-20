@@ -34,3 +34,25 @@ test("the week stops an account at 85%", () => {
 test("the 5-hour window stops an account at 95%, not at the week's 85%", () => {
   expect(rankAccounts([{ name: "a", usage: windows(90, 20) }, { name: "b", usage: windows(95, 20) }], cfg, none, none, NOW)).toEqual(["a"]);
 });
+
+// The harness keeps only an allowlist of a session's env (prompt-dry-run.ts keepEnv). The judge's gateway variables
+// must pass by name, or `./xrun` falls through to production, which the sandbox refuses (1 cause confirmed in 51, Nov 20).
+test("a review session's env names the gateway's variables for the harness to pass, beside any already named", async () => {
+  const { runEnv } = await import("./agentReviewsHost");
+  const gateway = { XRUN_API_URL: "http://127.0.0.1:4100", XRUN_INTERNAL_KEY: "gateway" };
+  const env = runEnv(gateway, "/opt/cast", { PATH: "/usr/bin", DRY_RUN_PASS_ENV: "STUB_URL" });
+  expect(env.XRUN_API_URL).toBe("http://127.0.0.1:4100");
+  expect(env.XRUN_INTERNAL_KEY).toBe("gateway");
+  expect(env.DRY_RUN_PASS_ENV.split(",").sort()).toEqual(["STUB_URL", "XRUN_API_URL", "XRUN_INTERNAL_KEY"]);
+  expect(env.PATH.startsWith("/opt/cast")).toBe(true);
+  expect(runEnv({}, "/opt/cast", { PATH: "/usr/bin" }).DRY_RUN_PASS_ENV).toBeUndefined();
+});
+
+// The closed sandbox refuses every loopback port but the harness's own, so the gateway's port is passed as --allow-port
+// (curl exit 7 from the judge's `./xrun`, Nov 20).
+test("a review session may reach the gateway's loopback port, and only loopback ports", async () => {
+  const { gatewayPorts } = await import("./agentReviewsHost");
+  expect(gatewayPorts({ XRUN_API_URL: "http://127.0.0.1:4100", XRUN_INTERNAL_KEY: "gateway" })).toEqual([4100]);
+  expect(gatewayPorts({ A: "http://localhost:5200/x", B: "http://127.0.0.1:5200" })).toEqual([5200]);
+  expect(gatewayPorts({ XRUN_API_URL: "https://outreach-api.fly.dev", OTHER: "http://10.0.0.5:4100", K: "secret" })).toEqual([]);
+});
