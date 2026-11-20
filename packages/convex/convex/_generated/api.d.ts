@@ -91,6 +91,7 @@ import type * as changesWeek from "../changesWeek.js";
 import type * as chat from "../chat.js";
 import type * as chatAccess from "../chatAccess.js";
 import type * as chatAgents from "../chatAgents.js";
+import type * as chatDm from "../chatDm.js";
 import type * as chatExcerpt from "../chatExcerpt.js";
 import type * as chatHandoff from "../chatHandoff.js";
 import type * as chatRounds from "../chatRounds.js";
@@ -902,6 +903,7 @@ declare const fullApi: ApiFromModules<{
   chat: typeof chat;
   chatAccess: typeof chatAccess;
   chatAgents: typeof chatAgents;
+  chatDm: typeof chatDm;
   chatExcerpt: typeof chatExcerpt;
   chatHandoff: typeof chatHandoff;
   chatRounds: typeof chatRounds;
