@@ -94,11 +94,7 @@ export function TeamReadKeys({ teamId, teamName }: { teamId: Id<"teams">; teamNa
       ) : (
         <NewKey teamId={teamId} teamName={teamName} nameField={nameField} loading={!keys} full={live >= MAX_LIVE_TEAM_READ_KEYS} onMinted={setMinted} />
       )}
-      {!keys && (
-        <div role="status" className="flex h-[57px] items-center px-4 text-xs text-sol-text-dim sm:px-5" data-read-key-loading>
-          Loading keys…
-        </div>
-      )}
+      {!keys && <div aria-hidden className="h-[57px]" data-read-key-loading />}
       {listed.filter(isLive).map((k) => (
         <KeyLine key={k._id} teamId={teamId} row={k} now={now} />
       ))}
