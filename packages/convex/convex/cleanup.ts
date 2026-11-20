@@ -9,6 +9,7 @@ import { cancelTasksBoundToConversation } from "./lib/agentTaskRows";
 import { cancelQueuedMessagesOnKill } from "./pendingMessages";
 import { subagentEnded } from "./subagentFleet";
 import { nestParentIdOf } from "./ccAccountsShared";
+import { isOrphanOrSubagent } from "./inboxFilters";
 
 // ---------------------------------------------------------------------------
 // Abandoned empty-conversation GC.
@@ -382,10 +383,10 @@ export async function applyHideTransition(
       canceledMessages = await cancelQueuedMessagesOnKill(ctx, doc._id);
     }
   }
-  // The nested group (Task subagents + agent-team teammates) always comes down
-  // with the card, no matter which surface asked — the group is one unit. Runs
-  // on every hide SET (not just fresh transitions) because a stash has action
-  // "none" yet must still take its children, and the per-child already-hidden
+  // The nested group comes down with the card, no matter which surface asked
+  // (cascadeHideToNestedChildren says which children a stash takes). Runs on
+  // every hide SET (not just fresh transitions) because a stash has action
+  // "none" yet must still take its teammates, and the per-child already-hidden
   // guard inside makes re-asserts cheap and race-safe. The cascade's own
   // per-child transition call opts out to stay single-level.
   let cascaded = 0;
@@ -398,13 +399,17 @@ export async function applyHideTransition(
 // A hide gesture on a session takes its NESTED group with it — the same set
 // the inbox renders beneath the card (nestParentIdOf): Task subagents
 // (parent_conversation_id) and agent-team teammates (spawned_by +
-// agent_team_name). A teammate whose lead disappears deliberately floats as a
-// first-class card — the categorizer can't hide it — so the cascade is the
-// only place the group can come down together. The web store sweeps its own
-// gesture optimistically (hideSessionInDraft); this server twin is what makes
-// cast kill/dismiss and every non-web caller behave the same. Single level,
-// matching the web sweep: a hidden child's own Task subagents become orphans,
-// which the inbox already hides.
+// agent_team_name). A dismiss or kill stamps and tears down every child. A
+// stash stamps only the children that are inbox members of their own
+// (teammates, plan handoffs): server windows and rideLeadPlacements read their
+// stamps. A child that is never its own member (isOrphanOrSubagent: a Task
+// subagent, a workflow sub, an orphan) takes no stash stamp; every reader
+// files it with its parent instead (placeInboxRows, the idle-pane reaper's
+// lifecycle facts), so it follows the parent back out on any restore. The web
+// store sweeps its own gesture optimistically (hideSessionInDraft); this
+// server twin is what makes cast kill/dismiss and every non-web caller behave
+// the same. Single level, matching the web sweep: a hidden child's own Task
+// subagents become orphans, which the inbox already hides.
 //
 // Idempotent against the web race: a child already carrying the hide flag is
 // skipped, so whichever of the client's per-child patch or this cascade lands
@@ -445,6 +450,7 @@ export async function cascadeHideToNestedChildren(
     if (idStr === leadId || seen.has(idStr)) continue;
     seen.add(idStr);
     if (nestParentIdOf(child) !== leadId) continue;
+    if (field === "inbox_stashed_at" && isOrphanOrSubagent(child)) continue;
     if (child[field] && !opts?.forceKill) continue; // quiet re-assert — never re-kill
     childIds.push(idStr);
   }

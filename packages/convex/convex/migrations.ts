@@ -13,6 +13,7 @@ import { sessionWork } from "./lib/orgOwnership";
 import { ownsWork } from "@codecast/shared/contracts/orgLead";
 import { roleSubject, withOrgChange } from "./lib/orgChangeLog";
 import { isHandBriefing } from "./spawn";
+import { isOrphanOrSubagent } from "./inboxFilters";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -639,3 +640,97 @@ export const backfillProjectTaskCounts = internalMutation({
     return { dropped, scanned, done };
   },
 });
+
+// One-time cleanup: a parent's stash used to copy its stamp onto every nested
+// child (isOrphanOrSubagent), and no restore of the parent cleared the copies,
+// so each child stayed stashed as a card of its own after its parent came back
+// or moved to another account. A child now rides its parent's stash, and a
+// stamp of its own means an act on the child (the person stashed it, or its
+// trigger run was folded). This clears the stamps that are provably copies:
+// the parent is missing or another user's, the parent is stashed and the child
+// was stamped at or after it, or a sibling carries the very same stamp (one
+// gesture stamped the group). A trigger run (agent_task_id) is folded by its
+// own stamp and is never touched, nor is a workflow sub without a parent
+// pointer or any non-nested row. Running it twice clears nothing new. With
+// `user_id` a dry run reports one page of that user's stashed rows (pass
+// `cursor` on for the next) and a real run walks them all. Without it, a real
+// run schedules one run per user, and a dry run reports a first page for each
+// user in one page of the users table.
+//   packages/convex/run.sh migrations:clearCopiedChildStashStamps '{"dry_run":true}'
+//   packages/convex/run.sh migrations:clearCopiedChildStashStamps '{"dry_run":false}'
+export const clearCopiedChildStashStamps = internalMutation({
+  args: { user_id: v.optional(v.id("users")), dry_run: v.boolean(), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const { dry_run } = args;
+    if (args.user_id) {
+      const r = await clearCopiedStashPage(ctx, args.user_id, dry_run, args.cursor ?? null, 100);
+      if (!dry_run && !r.done) {
+        await ctx.scheduler.runAfter(0, internal.migrations.clearCopiedChildStashStamps, { user_id: args.user_id, dry_run, cursor: r.cursor });
+      }
+      return { dry_run, user_id: args.user_id, ...r };
+    }
+    const users = await ctx.db.query("users").paginate({ cursor: args.cursor ?? null, numItems: dry_run ? 10 : 100 });
+    const perUser: any[] = [];
+    for (const u of users.page) {
+      if (!dry_run) {
+        await ctx.scheduler.runAfter(0, internal.migrations.clearCopiedChildStashStamps, { user_id: u._id, dry_run });
+        continue;
+      }
+      const r = await clearCopiedStashPage(ctx, u._id, true, null, 40);
+      if (r.examined || !r.done) perUser.push({ user_id: u._id, ...r });
+    }
+    if (!dry_run && !users.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.clearCopiedChildStashStamps, { dry_run, cursor: users.continueCursor });
+    }
+    return { dry_run, users_scanned: users.page.length, users: perUser, cursor: users.continueCursor, done: users.isDone };
+  },
+});
+
+async function clearCopiedStashPage(ctx: { db: any }, userId: any, dryRun: boolean, cursor: string | null, numItems: number) {
+  const page = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_stashed", (q: any) => q.eq("user_id", userId).gt("inbox_stashed_at", 0))
+    .paginate({ cursor, numItems });
+  // Whether another child of the same parent carries this exact stamp: the
+  // rows sharing one stamp are one gesture, read off the same index.
+  const shared = new Map<string, boolean>();
+  const sharesStampWithSibling = async (row: any) => {
+    const key = `${row.parent_conversation_id}:${row.inbox_stashed_at}`;
+    let hit = shared.get(key);
+    if (hit === undefined) {
+      const twins = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_stashed", (q: any) => q.eq("user_id", userId).eq("inbox_stashed_at", row.inbox_stashed_at))
+        .filter((q: any) => q.eq(q.field("parent_conversation_id"), row.parent_conversation_id))
+        .take(2);
+      hit = twins.length > 1;
+      shared.set(key, hit);
+    }
+    return hit;
+  };
+  const by_reason = { parent_missing: 0, parent_other_user: 0, copied_from_stashed_parent: 0, shared_with_sibling: 0 };
+  let examined = 0;
+  let kept = 0;
+  for (const row of page.page) {
+    if (!row.inbox_stashed_at || !isOrphanOrSubagent(row) || !row.parent_conversation_id || row.agent_task_id) continue;
+    examined++;
+    const parent: any = await ctx.db.get(row.parent_conversation_id);
+    const reason: keyof typeof by_reason | null = !parent ? "parent_missing"
+      : parent.user_id !== row.user_id ? "parent_other_user"
+      : parent.inbox_stashed_at && row.inbox_stashed_at >= parent.inbox_stashed_at ? "copied_from_stashed_parent"
+      : (await sharesStampWithSibling(row)) ? "shared_with_sibling"
+      : null;
+    if (!reason) { kept++; continue; }
+    by_reason[reason]++;
+    if (!dryRun) await ctx.db.patch(row._id, { inbox_stashed_at: undefined, inbox_stash_hidden: undefined });
+  }
+  const cleared = Object.values(by_reason).reduce((a, b) => a + b, 0);
+  return {
+    examined,
+    [dryRun ? "would_clear" : "cleared"]: cleared,
+    kept_explicit: kept,
+    by_reason,
+    cursor: page.continueCursor as string,
+    done: page.isDone as boolean,
+  };
+}

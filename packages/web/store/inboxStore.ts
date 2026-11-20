@@ -4241,21 +4241,48 @@ export function placeInboxRows(
   const dismissed: InboxSession[] = [];
   const stashed: InboxSession[] = [];
   const snoozed: InboxSession[] = [];
+  const stashedIds = new Set<string>();
+  const childRows: InboxSession[] = [];
   for (const s of Object.values(visibleSessions)) {
     const p = placements.get(s._id) ?? null;
-    // A placed row files by its placement; a stub or child row by its own
-    // stamps. An anchor's standing thread lives in its own space unless hard
-    // blocked — the shared `hidden` bucket, never rendered here.
-    const subagent = isOrphanOrSubagent(s);
-    const hidden = subagent
-      ? !!s.inbox_killed_at || !!s.inbox_stashed_at || (s.inbox_snoozed_until ?? 0) > now
-      : isSessionHidden(s);
-    const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "snoozed" || p.bucket === "hidden" : hidden;
+    // An unplaced child row files after every parent (below).
+    if (!p && isOrphanOrSubagent(s)) { childRows.push(s); continue; }
+    // A placed row files by its placement; a stub by its own stamps. An
+    // anchor's standing thread lives in its own space unless hard blocked —
+    // the shared `hidden` bucket, never rendered here.
+    const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "snoozed" || p.bucket === "hidden" : isSessionHidden(s);
     // The rank reads the SAME verdict the section files under (rankVerdictOf).
     if (!setAside) activeKeyed.push({ s, rank: sessionSortRank(s, p), key: sessionSortKey(s, p, now) });
-    if (p ? p.bucket === "dismissed" : !subagent && isSessionDismissed(s)) dismissed.push(s);
-    if (p ? p.bucket === "stashed" : isSessionStashed(s)) stashed.push(s);
+    if (p ? p.bucket === "dismissed" : isSessionDismissed(s)) dismissed.push(s);
+    if (p ? p.bucket === "stashed" : isSessionStashed(s)) { stashed.push(s); stashedIds.add(s._id); }
     if (p?.bucket === "snoozed") snoozed.push(s);
+  }
+  // A child row (a Task subagent, a workflow sub, an orphan) takes no stash
+  // stamp from its parent: it is stashed while the row it rides is (its
+  // nearest non-nested ancestor), so Stashed nests it under that card and any
+  // restore of the parent brings it back. A stamp of its own is an act on the
+  // child itself (the person stashed it, or its trigger run was folded) and
+  // takes it off the parent's card into Stashed. A child whose parent is
+  // outside the viewer's scope (another account, deleted, not loaded) is never
+  // a card in any list. A child with no parent pointer (a workflow sub) has no
+  // parent to ride and files by its own stamps.
+  const nestRootMemo = new Map<string, string | null>();
+  const nestRootOf = (s: InboxSession): string | null => {
+    if (!isOrphanOrSubagent(s) || !nestParentIdOf(s)) return s._id;
+    const known = nestRootMemo.get(s._id);
+    if (known !== undefined) return known;
+    nestRootMemo.set(s._id, null); // a parent cycle has no root
+    const parent = scoped[nestParentIdOf(s) ?? ""];
+    const root = parent ? nestRootOf(parent) : null;
+    nestRootMemo.set(s._id, root);
+    return root;
+  };
+  for (const s of childRows) {
+    const root = nestRootOf(s);
+    const ridesStash = root !== null && stashedIds.has(root) && !s.inbox_killed_at;
+    const hidden = ridesStash || !!s.inbox_killed_at || !!s.inbox_stashed_at || (s.inbox_snoozed_until ?? 0) > now;
+    if (!hidden) activeKeyed.push({ s, rank: sessionSortRank(s, null), key: sessionSortKey(s, null, now) });
+    if (root !== null && (ridesStash || isSessionStashed(s))) stashed.push(s);
   }
   activeKeyed.sort(compareRankedSessions);
   const sorted = activeKeyed.map((x) => x.s);
@@ -9069,9 +9096,15 @@ function hideSessionInDraft(
   // behind as loose top-level needs-input cards — a teammate with an absent
   // lead deliberately floats first-class, so the categorizer can't hide it;
   // the cascade is the only place the group can be taken down together.
-  const childIds = sessionValues
+  const groupIds = sessionValues
     .filter((s) => s._id !== id && nestParentIdOf(s) === id)
     .map((s) => s._id);
+  // A stash leaves nested children (isOrphanOrSubagent) unstamped: they file
+  // with their parent at read time (placeInboxRows), so restoring the parent
+  // brings them back with it. A kill still takes every child down.
+  const childIds = mode === "stash"
+    ? groupIds.filter((cid) => !isOrphanOrSubagent(draft.sessions[cid]))
+    : groupIds;
   const allIds = [id, ...childIds];
   // The viewer. A session whose user_id isn't ours was injected into this cache
   // by viewing/searching a TEAMMATE's session — we can't durably hide it.
@@ -9079,7 +9112,7 @@ function hideSessionInDraft(
   const hidden: string[] = [];
   const forgotten: string[] = [];
   const writes: HideResult["writes"] = {};
-  const newSessionId = sessionPastRemoved(draft, allIds);
+  const newSessionId = sessionPastRemoved(draft, [id, ...groupIds]);
   for (const sid of allIds) {
     // A local-only stub (optimistic create that never landed server-side)
     // can't be hidden durably: the server never knew it, so the reconcile's

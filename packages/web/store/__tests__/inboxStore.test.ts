@@ -5,6 +5,7 @@ import { _resetSnapshotLedger } from "../idbCollectionDiff";
 import { isPersistedStoreKey } from "../idbCache";
 import { ingestPlanDetail } from "../../hooks/useSyncPlans";
 import { placeSections } from "./placeTestHarness";
+import { hiddenBucketTree } from "../hiddenBucketTree";
 import { DispatchNotWiredError } from "../mutativeMiddleware";
 import { declareViewNav } from "../viewNav";
 
@@ -1937,13 +1938,21 @@ describe("kill/stash cascade takes the whole nested group", () => {
     expect(activeIds).not.toContain(TEAMMATE);
   });
 
-  it("stashing a lead stashes the same nested group", () => {
+  it("stashing a lead stamps its teammates; its Task subagents ride it unstamped", () => {
     useInboxStore.getState().stashSession(LEAD);
 
     const s = useInboxStore.getState();
     expect(isSessionStashed(s.sessions[LEAD])).toBe(true);
-    expect(isSessionStashed(s.sessions[TASK_SUB])).toBe(true);
+    expect(s.sessions[TASK_SUB].inbox_stashed_at ?? null).toBeNull();
     expect(isSessionStashed(s.sessions[TEAMMATE])).toBe(true);
+    const stashed = placeSections(s.sessions, new Set()).stashed;
+    expect(hiddenBucketTree(stashed).subsByTop.get(LEAD)?.map((x) => x._id)).toContain(TASK_SUB);
+
+    // Restoring the lead brings the subagent back under it: nothing to un-stamp.
+    useInboxStore.getState().restoreSession(LEAD);
+    const back = placeSections(useInboxStore.getState().sessions, new Set());
+    expect(back.stashed.map((x) => x._id)).not.toContain(TASK_SUB);
+    expect(back.subsByParent.get(LEAD)?.map((x) => x._id)).toContain(TASK_SUB);
     expect(isSessionStashed(s.sessions[SPAWN_NO_TEAM])).toBe(false);
     expect(isSessionStashed(s.sessions[SPAWN_TEAM_LEAD])).toBe(false);
     expect(isSessionStashed(s.sessions[FORK])).toBe(false);

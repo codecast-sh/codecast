@@ -228,7 +228,8 @@ describe("the questions bucket", () => {
     expect(placed.questions).toEqual([]);
     expect(placed.isQuestion(stashed)).toBe(false);
     expect(placed.isQuestion(dismissed)).toBe(false);
-    expect(ids(placed.stashed)).toEqual(["st1"]);
+    // The stashed parent's child rides it into Stashed (nested under its card).
+    expect(ids(placed.stashed)).toEqual(["st1", "sub-st1"]);
     expect(ids(placed.dismissed)).toEqual(["dx1"]);
   });
 

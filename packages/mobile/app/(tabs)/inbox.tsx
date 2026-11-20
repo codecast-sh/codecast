@@ -16,6 +16,7 @@ import {
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels,
   sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
+import { hiddenBucketTree, killAllIds } from '@codecast/web/store/hiddenBucketTree';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
 import { DecisionsBadge } from '@/components/decisions/DecisionsBadge';
 import { useTriggers } from '@codecast/web/hooks/useSyncTriggers';
@@ -375,6 +376,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const filteredDormant = useMemo(() => chipFilter(dormant), [chipFilter, dormant]);
   const filteredWorking = useMemo(() => chipFilter(working), [chipFilter, working]);
   const filteredStashed = useMemo(() => chipFilter(stashedSessions), [chipFilter, stashedSessions]);
+  // A stashed card's subagents ride it: they open from its conversation, and
+  // "Kill all" names only the rows a kill does not already take down.
+  const stashedCards = useMemo(() => hiddenBucketTree(filteredStashed).topLevel, [filteredStashed]);
   const filteredKilled = useMemo(() => chipFilter(dismissedOnly), [chipFilter, dismissedOnly]);
 
   // Schedules in the inbox (mirrors GlobalSessionPanel). The same per-user
@@ -508,7 +512,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           activeOpacity={0.7}
         >
           <FontAwesome name={showStashed ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
-          <RNText style={styles.dismissedToggleText}>Stashed <RNText style={styles.sectionCount}>{filteredStashed.length}</RNText></RNText>
+          <RNText style={styles.dismissedToggleText}>Stashed <RNText style={styles.sectionCount}>{stashedCards.length}</RNText></RNText>
         </TouchableOpacity>
         <RNView style={styles.hiddenToggleDivider} />
         <TouchableOpacity
@@ -520,9 +524,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           <RNText style={styles.dismissedToggleText}>Killed <RNText style={styles.sectionCount}>{filteredKilled.length}</RNText></RNText>
         </TouchableOpacity>
       </RNView>
-      {showStashed && filteredStashed.length > 0 && (
+      {showStashed && stashedCards.length > 0 && (
         <TouchableOpacity
-          onPress={() => confirmKillAllStashed(filteredStashed.map(s => s._id))}
+          onPress={() => confirmKillAllStashed(killAllIds(filteredStashed))}
           style={styles.killAllBtn}
           activeOpacity={0.7}
         >
@@ -531,10 +535,10 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       )}
       {showStashed && (
         <RNView style={styles.dismissedSection}>
-          {filteredStashed.length === 0 ? (
+          {stashedCards.length === 0 ? (
             <RNText style={styles.dismissedEmpty}>No stashed sessions</RNText>
           ) : (
-            filteredStashed.map(s => (
+            stashedCards.map(s => (
               <HiddenSessionRow
                 key={s._id}
                 session={s as SessionData}
@@ -569,7 +573,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         </RNView>
       )}
     </RNView>
-  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, openSession, handleRestore, confirmKillAllStashed, heldKillId, appearance]);
+  ), [schedulePartition, showStashed, showKilled, filteredStashed, stashedCards, filteredKilled, openSession, handleRestore, confirmKillAllStashed, heldKillId, appearance]);
 
   // What the inbox is narrowed to, named in the title: a label or a project
   // picked in the slide-out panel. The clear mark beside it goes back to all.
