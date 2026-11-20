@@ -333,6 +333,7 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
+import { SubagentFinishTracker } from "./subagentFinish.js";
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, launchScopeRefusal, markLaunched, transcriptScopeRefusal, wasLaunched, watchDirFilter, watchFilter } from "./syncScope.js";
 import { folderOnThisMachine } from "@codecast/shared/team/folderLists";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
@@ -12284,6 +12285,10 @@ export function resetSubagentActivityForTests(): void {
   subagentCoverageLost = false;
 }
 
+// Marks a finished Task subagent completed after its transcript goes quiet,
+// and reopens it when its transcript grows again (subagentFinish.ts).
+export const subagentFinish = new SubagentFinishTracker();
+
 // Cap how many bytes a single sync pass reads from a file. A large unsynced
 // backlog (e.g. an old, image-heavy session that gets resumed) used to be re-read
 // in full every pass and synced as one all-or-nothing batch — which never completed
@@ -12514,6 +12519,7 @@ async function processSessionFilePass(
       if (metadata.backupAttempted) bakImageRecoveryDone.add(filePath);
       permissionJustResolved.consume(sessionId, permissionObservation);
     });
+    if (isSubagent) void subagentFinish.noteGrowth(filePath, conversationId, syncService);
     await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processSessionFilePass(
       filePath,
       sessionId,
@@ -12695,6 +12701,7 @@ async function processSessionFilePass(
         conversationId = await syncService.createConversation(createParams);
         conversationId = finishCreate(conversationId);
         if (createParams.agentTaskId) forgetTriggerRun(sessionId);
+        if (isSubagent) subagentFinish.noteCreated(filePath);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         if (isPlanHandoff && parentConversationId) {
@@ -13012,6 +13019,7 @@ async function processSessionFilePass(
       permissionJustResolved.consume(sessionId, permissionObservation);
       markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
     });
+    if (isSubagent) void subagentFinish.noteGrowth(filePath, conversationId, syncService);
     log(`Synced ${messages.length} messages for session ${sessionId} [SYNC-TIMING] pass_started=${new Date(passStartedAt).toISOString()} pass=${Date.now() - passStartedAt}ms`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -34789,6 +34797,7 @@ async function main(): Promise<void> {
       sync.stop();
     }
     transcriptRetryOwners.stop();
+    subagentFinish.stop();
 
     if (releasePidFileIfOwned(PID_FILE, process.pid)) {
       log("PID file removed");
