@@ -15,6 +15,11 @@ type DispatchSelfHealOptions = {
   bindDispatch: () => boolean;
   isDispatchWired: () => boolean;
   drainOutbox: () => void;
+  // False while the socket is anonymous. Every parked row a drain sends then
+  // comes back UNAUTHENTICATED (kept, retryable), so the 30s tick would replay
+  // the whole outbox, ladder and all, for as long as the window stays open
+  // signed out. The caller drains once when auth returns.
+  canDrain?: () => boolean;
   clearDispatch: () => void;
   browserWindow: BrowserWindowLike | null;
   browserDocument: BrowserDocumentLike | null;
@@ -31,6 +36,7 @@ export function installBrowserDispatchSelfHeal({
   bindDispatch,
   isDispatchWired,
   drainOutbox,
+  canDrain = () => true,
   clearDispatch,
   browserWindow,
   browserDocument,
@@ -48,6 +54,7 @@ export function installBrowserDispatchSelfHeal({
   }
 
   const drain = () => {
+    if (!canDrain()) return;
     if (!isDispatchWired() && !bindDispatch()) return;
     drainOutbox();
   };

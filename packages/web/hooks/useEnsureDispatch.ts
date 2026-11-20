@@ -8,6 +8,7 @@ import { useWatchEffect } from "./useWatchEffect";
 import { installBrowserDispatchSelfHeal } from "./dispatchRecovery";
 import { applyDispatchFailure, makeDispatchBinding, newDispatchAckState } from "../lib/dispatchBinding";
 import { withHostedKick } from "../lib/hostedKick";
+import { useServerAuthenticated } from "./useServerAuthSettled";
 
 // Sync-log ack opt-in latch, shared by every mount for the page session: it
 // flips false the first time the server rejects the ack_positions arg (see
@@ -27,6 +28,14 @@ function deepMerge(target: any, source: any): any {
   }
   return result;
 }
+
+// _drainOutbox / _isDispatchWired are injected onto the store by
+// mutativeMiddleware (siblings of _setDispatch).
+const getDispatchRecoveryStore = () =>
+  useInboxStore.getState() as unknown as {
+    _drainOutbox: () => void;
+    _isDispatchWired: () => boolean;
+  };
 
 // Wires the store's server dispatch (store.sendMessage etc. route through this).
 // _setDispatch / _setDispatchError just set module-level refs, so calling this
@@ -61,6 +70,15 @@ export function useEnsureDispatch() {
   const kick = useAction(api.assistant.entry.kick);
   const kickRef = useRef(kick);
   kickRef.current = kick;
+  // A failed token refresh leaves the socket anonymous while the tree stays
+  // mounted (useServerAuthSettled). Recovery drains wait it out, and the
+  // return of auth is itself the signal to re-drive what parked meanwhile.
+  const authenticated = useServerAuthenticated();
+  const authenticatedRef = useRef(authenticated);
+  authenticatedRef.current = authenticated;
+  useWatchEffect(() => {
+    if (authenticated) getDispatchRecoveryStore()._drainOutbox?.();
+  }, [authenticated]);
 
   useWatchEffect(() => {
     _setDispatchError(applyDispatchFailure);
@@ -81,20 +99,12 @@ export function useEnsureDispatch() {
     // `window` exists in React Native but has no browser event APIs (and there's
     // no `document`), so an SSR-style `typeof window === "undefined"` check passes
     // and then crashes on `window.addEventListener`. Require the real APIs.
-    const getDispatchRecoveryStore = () => {
-      const store = useInboxStore.getState() as unknown as {
-        _drainOutbox: () => void;
-        _isDispatchWired: () => boolean;
-      };
-      return store;
-    };
-    // _drainOutbox / _isDispatchWired are injected onto the store by
-    // mutativeMiddleware (siblings of _setDispatch). These browser signals are
-    // the recovery path for socket/connectivity stalls.
+    // These browser signals are the recovery path for socket/connectivity stalls.
     return installBrowserDispatchSelfHeal({
       bindDispatch,
       isDispatchWired: () => getDispatchRecoveryStore()._isDispatchWired(),
       drainOutbox: () => getDispatchRecoveryStore()._drainOutbox(),
+      canDrain: () => authenticatedRef.current,
       clearDispatch: () => _clearDispatch(ownerRef.current),
       browserWindow:
         typeof window !== "undefined" && typeof window.addEventListener === "function"

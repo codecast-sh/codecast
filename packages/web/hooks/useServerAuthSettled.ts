@@ -40,17 +40,16 @@ export function authSettledLatch(settled: boolean, isAuthenticated: boolean): bo
   return settled || isAuthenticated;
 }
 
-/** Both halves of the server auth signal a feeder acts on. `settled`: the
- *  server has confirmed this caller at least once (latched). `identityLost`:
- *  it did, and the socket is anonymous now, so any answer is a stranger's. */
-export function useServerAuthState(): { settled: boolean; identityLost: boolean } {
+/** The live, unlatched server signal: is the socket authenticated right now?
+ *  A tree with no auth provider reads true (see useServerAuthState). */
+export function useServerAuthenticated(): boolean {
   // useConvexAuth THROWS when no auth provider is an ancestor — it does not
   // report "not authenticated". A tree that mounts a feeder under a plain
   // ConvexProvider (the hibernation harness, _chatpage, any embed) would then
   // crash on render instead of degrading, which is a far worse failure than
   // the UNAUTHENTICATED reports this gate exists to stop. Where there is no
   // auth handshake there is no race to protect against, so a missing provider
-  // reads as settled and the feeder subscribes exactly as it did before.
+  // reads as authenticated and the feeder subscribes exactly as it did before.
   //
   // The hook count is stable either way: useConvexAuth reads its context
   // before it decides to throw, so this branch costs the same one useContext
@@ -62,6 +61,14 @@ export function useServerAuthState(): { settled: boolean; identityLost: boolean 
   } catch {
     isAuthenticated = true;
   }
+  return isAuthenticated;
+}
+
+/** Both halves of the server auth signal a feeder acts on. `settled`: the
+ *  server has confirmed this caller at least once (latched). `identityLost`:
+ *  it did, and the socket is anonymous now, so any answer is a stranger's. */
+export function useServerAuthState(): { settled: boolean; identityLost: boolean } {
+  const isAuthenticated = useServerAuthenticated();
   const settled = useRef(false);
   // useConvexAuth re-renders us when it flips, so reading the latch in the
   // same pass it is written is enough — no effect, no extra commit.
