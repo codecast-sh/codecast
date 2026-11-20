@@ -3,7 +3,8 @@
 // mention grammar or the preview sanitizer.
 
 import { parseQueryTerms } from "@codecast/shared/search";
-import { INVISIBLE_RE, plainPreview } from "@codecast/shared/chat";
+import { INVISIBLE_RE, oneLine, plainPreview } from "@codecast/shared/chat";
+import { titleLine } from "@codecast/shared/contracts";
 
 // Chat rows sync to every team member's browser and land in IndexedDB on every
 // one of their devices, so the content cap is much tighter than the search
@@ -62,6 +63,13 @@ export { MAX_MENTIONS, extractMentionHandles, mentionsHere, botHandle, emailLoca
 // so a client renders a room's preview from the stored row with the same rules
 // the server applies to a push or a notification.
 export { INVISIBLE_RE, oneLine, plainPreview } from "@codecast/shared/chat";
+
+/** The session title a chat line is stamped with: paste markers out, one
+ *  line, 80 characters. Undefined when the session has no title to show. */
+export function sessionLineTitle(title: string | null | undefined): string | undefined {
+  const t = titleLine(title);
+  return t ? oneLine(t, 80) : undefined;
+}
 
 /** Whether a message holds every "quoted phrase" of a query, as a person
  *  reads it (markdown flattened, whitespace folded). The search index matches

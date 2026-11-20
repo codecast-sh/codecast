@@ -11,7 +11,7 @@ import * as path from "node:path";
 import {
   bridgeEndpointIfConfigured, connectRealBridge, engineBrowserFor, requireRealBridge, explicitTarget, extensionReady, isRealMode, ownedRealTab, pruneRealTabs, realModeHint,
   realTabOwnership, rememberRealTab, resolveRealTarget, setStickyTarget, splitTargetFlags, stickyTarget, walledOffFromExtension,
-  hostOwnsBrowser, isPaneMode,
+  hostOwnsBrowser, isPaneMode, prepareHostChrome, selectHostBrowser, hostChromeExtension,
 } from "./real.js";
 import * as http from "node:http";
 import { startBridgeHost, writeBridgeState, type BridgeState, type RunningHost } from "./host.js";
@@ -518,6 +518,55 @@ describe("a remote host's browser", () => {
     expect(stickyTarget("s1", { settle: true })).toBe("clone");
     expect(isRealMode({}, "s1")).toBe(false);
     expect(isPaneMode({ pane: true }, "s1")).toBe(false);
+  });
+
+  describe("with the extension cast put in the host's own Chrome", () => {
+    const hostPaired = (extra: Partial<BridgeState> = {}) =>
+      writeBridgeState({ port: 41998, token: "t".repeat(64), extensionSeenAt: Date.now(), hostChrome: true, ...extra });
+    let prevOptOut: string | undefined;
+    beforeEach(() => { prevOptOut = process.env.CAST_BROWSER_HOST_EXTENSION; delete process.env.CAST_BROWSER_HOST_EXTENSION; });
+    afterEach(() => {
+      if (prevOptOut === undefined) delete process.env.CAST_BROWSER_HOST_EXTENSION;
+      else process.env.CAST_BROWSER_HOST_EXTENSION = prevOptOut;
+    });
+
+    test("the host still owns its browser: the pairing is not a human's Chrome", () => {
+      hostPaired();
+      expect(hostOwnsBrowser()).toBe(true);
+    });
+
+    test("a verb without a page uses the extension only when it is already connected, and never launches Chrome", async () => {
+      hostPaired();
+      const notes: string[] = [];
+      await prepareHostChrome("tabs", (l) => notes.push(l));
+      expect(stickyTarget("s3")).toBe("clone");
+      expect(notes).toEqual([]);
+      hostPaired({ hostPid: process.pid, extensionConnected: true });
+      await prepareHostChrome("status");
+      expect(hostChromeExtension().live).toBe(true);
+      expect(stickyTarget("s3")).toBe("real");
+    });
+
+    test("the bridge host's own verb never starts a bridge host or a Chrome", async () => {
+      hostPaired();
+      await prepareHostChrome("bridge-host");
+      expect(stickyTarget("s4")).toBe("clone");
+    });
+
+    test("CAST_BROWSER_HOST_EXTENSION=0 keeps the host on CDP alone", async () => {
+      hostPaired({ hostPid: process.pid, extensionConnected: true });
+      process.env.CAST_BROWSER_HOST_EXTENSION = "0";
+      await prepareHostChrome("open");
+      expect(stickyTarget("s5")).toBe("clone");
+    });
+
+    test("the laptop's link is still asked first", async () => {
+      hostPaired();
+      fs.writeFileSync(path.join(dir, "browser", "laptop-link.json"), JSON.stringify({ v: 1, port: await freePort(), token: "k".repeat(64), hostId: "i-test", laptop: "laptop-1", linkedAt: Date.now() }));
+      const v = await selectHostBrowser(() => {});
+      expect(v?.mode).toBe("host");
+      expect(v?.laptop).toBe("laptop-1");
+    });
   });
 
   test("a remote box someone paired an extension on keeps the human's Chrome", () => {

@@ -23,7 +23,6 @@
 // nothing twice.
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "../proc.js";
 import type { EnvCase, EnvDeclaration, EnvLevel, EnvResult, EnvSplit, EnvStanding } from "@codecast/shared/contracts/envs";
 import { CLIMB_AA_RUNS, baseMeanCases, changedCases, halve, levelCanSee, levelNoise, readClimbCard, separates, type ClimbBudget, type ClimbCard, type LevelNoise } from "@codecast/shared/contracts/climb";
 import { parseEnvsText } from "../envDeclaration.js";
@@ -31,6 +30,7 @@ import { parseLineProfileText, resolveLineProfile } from "../lineProfile.js";
 import { StoreTampered, archiveSealed, readSealed, writeSealed } from "./store.js";
 import type { ClimbBase } from "./base.js";
 import { movedHistory, pairedTerms } from "./noise.js";
+import { gateLimitS, gateLog, runGate } from "./gate.js";
 import { MetricUnread, readability as readabilityOf, type Readability } from "./readability.js";
 import { resolveCommand, withDirs, graderPackageDirs, gradingGlobs, inadmissible, packagesPrint, pinsAScript, protectedDigest, tryGit } from "./protect.js";
 
@@ -88,6 +88,8 @@ export type ClimbState = {
   ledger: { usd: number; runs: number; done: Record<string, Done>; failed: Record<string, Failed> };
   /** The product eval gate's verdict per candidate sha (on trust: it is not filed anywhere); a void verdict is never kept here. */
   gates: Record<string, number>;
+  /** Each finished eval gate run's duration (ms; twice the longest is the next limit), and per candidate sha why its gate was stopped at the limit. */
+  gate_ms?: number[]; gate_stuck?: Record<string, string>;
   /** Script paths the eval command names that the climb could not reach at the base (protect.ts resolveCommand). */
   gate_unreached?: string[];
   /** How many times the eval gate ran, void runs included: each counts against the run limit. */
@@ -721,7 +723,10 @@ async function guardView(v: View, opts: { env?: Record<string, string>; rerunVoi
             if (protectedDigest(tree, evalFiles) !== evalDigest) return -2;
             // The gate runs the base's copies: the tree's files under $project_path, which hash as the base's.
             const project = reach.project !== undefined ? { project_path: path.join(tree, reach.project) } : {};
-            spawnSync("bash", ["-c", command], { cwd: tree, stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, ...opts.env, ...project, run_dir: gdir, branch: c.branch, worktree: "" } });
+            const limit = gateLimitS(v.io.root, s.base, s.gate_ms ?? []);
+            const g = await runGate(command, { cwd: tree, env: { ...process.env, ...opts.env, ...project, run_dir: gdir, branch: c.branch, worktree: "" }, limitS: limit.s, log: gateLog(gdir) });
+            if (g.timedOut) { (s.gate_stuck ??= {})[c.sha!] = `the eval gate ran past its ${limit.s < 120 ? `${limit.s} second` : `${Math.round(limit.s / 60)} minute`} limit (${limit.from}) and was stopped: ${command}; its last output: ${g.tail}`; return -4; }
+            s.gate_ms = [...(s.gate_ms ?? []), g.ms];
             if (!fs.existsSync(path.join(gdir, "reps.json"))) return -1;
             return v.io.evalResult(path.join(gdir, "reps.json"), path.join(gdir, "eval-result.json"));
           });
@@ -731,7 +736,7 @@ async function guardView(v: View, opts: { env?: Record<string, string>; rerunVoi
         else s.gates[c.sha!] = code;
         save(v.dir, s);
       }
-      verdicts.push(code === -3 && s.gate_unreached?.length ? { verdict: "fail", why: `the product's eval command names ${s.gate_unreached.join(", ")}, which the climb could not find at the base under the command's own directories, so it cannot hold the gate still` } : gateVerdict(code));
+      verdicts.push(code === -4 ? { verdict: "void", why: s.gate_stuck?.[c.sha!] ?? "the eval gate ran past its limit and was stopped" } : code === -3 && s.gate_unreached?.length ? { verdict: "fail", why: `the product's eval command names ${s.gate_unreached.join(", ")}, which the climb could not find at the base under the command's own directories, so it cannot hold the gate still` } : gateVerdict(code));
     }
     const fails = verdicts.filter((x) => x.verdict === "fail").map((x) => x.why);
     const voids = verdicts.filter((x) => x.verdict === "void").map((x) => x.why);

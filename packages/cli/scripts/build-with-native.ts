@@ -114,6 +114,23 @@ export const COMPUTER_HELPER_BUNDLE_NAME = "codecast computer";
 export const COMPUTER_HELPER_PAYLOAD = path.join(import.meta.dir, "../src/computer/helper.tar");
 
 /**
+ * Where the Codecast Chrome extension waits to be bundled, the same tracked
+ * empty file pattern as the helper above. A cloud host has no human to
+ * install the extension from the Web Store, so its Chrome loads the copy its
+ * own CLI carries (src/browser/hostExtension.ts), which always matches the
+ * bridge protocol of that CLI.
+ */
+export const BROWSER_EXTENSION_PAYLOAD = path.join(import.meta.dir, "../src/browser/extension.tar");
+
+/** Tar the extension's shipped files (browser-extension/shipped.mjs) into the payload. */
+export async function packBrowserExtension(output = BROWSER_EXTENSION_PAYLOAD): Promise<number> {
+  const { SHIPPED } = await import("../../browser-extension/shipped.mjs");
+  // COPYFILE_DISABLE keeps macOS tar from adding ._ resource-fork entries.
+  run("/usr/bin/env", ["COPYFILE_DISABLE=1", "tar", "-cf", output, "-C", path.join(import.meta.dir, "../../browser-extension"), ...SHIPPED]);
+  return fs.statSync(output).size;
+}
+
+/**
  * Compile the computer helper, wrap it in the app bundle that owns its TCC
  * grant, and write a tar of that bundle to `output`. A directory cannot be
  * embedded as one file, so the tar is the payload and the CLI unpacks it at the
@@ -214,12 +231,14 @@ if (import.meta.main) {
     } else {
       fs.writeFileSync(COMPUTER_HELPER_PAYLOAD, "");
     }
+    console.error(`browser extension: ${await packBrowserExtension()} bytes embedded`);
     run(process.execPath, ["build", ...args, ...workerBuildArgs(path.join(import.meta.dir, "../src")), ...(SPLIT_COMPILED_BUILDS ? ["--splitting"] : []), ...EXTERNAL_WS, "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`]);
     if (SPLIT_COMPILED_BUILDS) dropChunkSourcemaps();
   } finally {
     // Leave the tracked placeholder empty again: the payload belongs in the
     // built binary, never in the working tree.
     fs.writeFileSync(COMPUTER_HELPER_PAYLOAD, "");
+    fs.writeFileSync(BROWSER_EXTENSION_PAYLOAD, "");
     fs.rmSync(stage, { recursive: true, force: true });
   }
 }
