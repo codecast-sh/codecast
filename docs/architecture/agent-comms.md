@@ -4,9 +4,10 @@ What the org tells an agent about whom to talk to, why, and how we keep checking
 
 ## AC1. The policy
 
-The org does two jobs for communication, and neither is routing every message.
+The org does three jobs for communication, and none is routing every message.
 
-- **Direction comes down the line.** Only a session's lead (the session that spawned it, else its role) or its person changes what it works on. A request from anyone else is information, which the session takes to its lead. The exception is a hold or stop on something another session owns (a release, a deploy, a branch, a claimed file): that is honored at once.
+- **Direction comes from the lead or a person.** A session's lead (the session that spawned it, else its role) or any person in the workspace changes what it works on, whoever its role reports to: reporting says where its questions and decisions go, not whose permission it needs. A request from a session that is not its lead is information, which the session takes to its lead. The exception is a hold or stop on something another session owns (a release, a deploy, a branch, a claimed file): that is honored at once.
+- **A person is asked only for what a person must give.** That is intent the record does not settle, something that cannot be undone, or what a written rule reserves. A fact is verified, and the rest is done and reported. A request that runs against a written rule or another person's recorded decision goes back to the person who asked, with what stands in the way.
 - **Leads synthesize by reading.** Inside an area, sessions write progress, findings and blockers where their lead reads them (the task, the pinned state). The lead reads the whole area each time it runs and sends each session only what changes its next step. Anything that involves a session outside the area goes straight to that session or its area's owner. A conflict with another area starts with that owner and goes up only when the two cannot settle it.
 
 The wording is `ORG_CONTEXT_GUIDANCE` (`packages/shared/contracts/orgWhere.ts`), injected at session start inside `<org-context>` and printed by `cast org where`. A lead's routine (`ROLE_CHECK_PROMPT`, `convex/lib/orgRoutine.ts`) carries the synthesis duty on every run; `armRoleRoutines` brings hired roles up to a changed prompt.
@@ -17,7 +18,7 @@ A messaging policy is one named unit: the guidance an agent is told and the deli
 
 | Policy | Guidance | Delivery |
 |---|---|---|
-| `lead` (default) | variant G3, the text above, which builds `ORG_CONTEXT_GUIDANCE` | the lead feed: the lead reads its whole area and routes |
+| `lead` (default) | variant G4, the text above, which builds `ORG_CONTEXT_GUIDANCE` | the lead feed: the lead reads its whole area and routes |
 | `shared-log` | variant LOG of the suite | the plan log: each `cast` command carries the entries new to the session |
 
 **Choosing.** A plan chooses: `cast plan create|update --policy lead|shared-log` sets `plans.messaging_policy`. A plan with no value, or an unknown one, is `lead` (`resolveMessagingPolicy`), so nothing changes for a plan that does not choose. There is no team default: `teams.features` holds only on/off flags, and a named default needs a settings surface first.
@@ -33,7 +34,8 @@ A messaging policy is one named unit: the guidance an agent is told and the deli
 ## AC2. Why this policy
 
 - **Real traffic** (6,525 messages, Sept 6 to Oct 6, 320 read in full). Agent-to-agent noise was 7%, and half of all messages changed what the recipient did. Most direction came from outside the spawn line, and most of that was legitimate resource coordination. Informal hubs (release and merge drivers) took half of all messages.
-- **Ablation** (about 2,500 graded runs, 20 situations, three models). Today's wording, variant G3 in the suite, was perfect on Opus and Fable. It beat the previous route-to-owner text, which let out-of-line redirects through without the lead hearing (p = 0.006 on Opus).
+- **Ablation** (about 2,500 graded runs, 20 situations, three models). Variant G3, which let only a session's lead or its own person direct it, was perfect on Opus and Fable. It beat the previous route-to-owner text, which let out-of-line redirects through without the lead hearing (p = 0.006 on Opus).
+- **Any person directs** (2026-11-19, 406 graded runs, 27 situations, five runs of each). Seven situations were added: an admin outside the reporting line directs a lead and a worker, a member who is not an admin directs a lead, a person asks for a spend reserved to another, a person asks for what another person's recorded decision declined, a fact that could be read or asked, and a call that is the lead's own. Under G3, Opus sent the outside person's instruction up for approval in all 15 runs of the three directing situations; Fable did in 5 of 5 for the worker, 4 of 5 for the member and 1 of 5 for the admin directing a lead. Today's wording, variant G4, scored 2 of 2 on 133 of 134 Opus runs across all 27 situations (pooled p < 0.0001 against G3; the one miss shipped on the member's word and left the answer's field out) and on 70 of 70 Fable runs across the 14 situations run there (p = 0.0006). Both models held the reserved spend and the contradicted decision in every run.
 - **Simulation** (64 worlds, up to ten workers). With a lead that reads its whole area, G3 sent 36% fewer messages than free peer messaging (p = 0.0004) and delivered as many facts on time, at about a third of a round of extra latency. A lead choosing its own reads dropped a quarter of the facts, which is why the routine reads the whole brief.
 - **Shared log** (issue #89, with the simulation mode in PR #97: a policy name that ends in `+log`, run with `WORLD=big LEAD_FEED=1`). Each arm had four worlds of 2 to 10 workers. A blind judge graded the final plans of each world from 1 to 10. With 4 to 10 workers, the log alone scored above G3 (6.2 to 6.8 against 4.2 to 6.2). It sent 32 to 56% fewer messages and cost up to 23% more. With 4 worlds, only the gap at 10 workers is clear: every log world scored above every G3 world (p of about 0.03). On facts delivered on time with their id, the log arms are a little lower (81 to 93% against 93 to 100%). Most of the gap is senders who restated a fact on the log without its id. So `shared-log` is a choice per plan, and `lead` stays the default.
 

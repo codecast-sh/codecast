@@ -27,10 +27,10 @@ describe("messaging policies", () => {
     expect(isMessagingPolicyName(3)).toBe(false);
   });
 
-  test("lead is variant G3 word for word, delivered by the lead's feed", () => {
-    expect(MESSAGING_POLICIES.lead.guidance).toBe(variant("G3"));
+  test("lead is variant G4 word for word, delivered by the lead's feed", () => {
+    expect(MESSAGING_POLICIES.lead.guidance).toBe(variant("G4"));
     expect(MESSAGING_POLICIES.lead.delivery).toBe("lead-feed");
-    expect(ORG_CONTEXT_GUIDANCE.startsWith(`${variant("G3")}\n\n`)).toBe(true);
+    expect(ORG_CONTEXT_GUIDANCE.startsWith(`${variant("G4")}\n\n`)).toBe(true);
   });
 
   test("shared-log carries variant LOG and names the command for each entry type", () => {

@@ -19,9 +19,9 @@ HARNESS = os.path.join(REPO, "packages/cli/scripts/prompt-dry-run.ts")
 MESSAGING = live_messaging()
 PAR = int(os.environ.get("PAR", "6"))
 
-def system_for(variant, who):
+def system_for(variant, who, org=ORG):
     guidance = open(f"{HERE}/variants/{variant}.md").read().strip()
-    block = f"<org-context>\n{ORG}\n\n{WHO[who]}\n{LIVE}\n" + (f"\n{guidance}\n" if guidance else "") + "</org-context>"
+    block = f"<org-context>\n{org}\n\n{WHO[who]}\n{LIVE}\n" + (f"\n{guidance}\n" if guidance else "") + "</org-context>"
     return ("You are an AI agent session working inside codecast, a system where many agent sessions and a few people work together. "
             "The instructions below are part of your standing context.\n\n" + MESSAGING + "\n\n" + block)
 
@@ -31,7 +31,7 @@ def one(job):
     if os.path.exists(f"{d}/graded.json"): return json.load(open(f"{d}/graded.json"))
     os.makedirs(d, exist_ok=True)
     subprocess.run(["rm", "-rf", f"{d}/h"])
-    open(f"{d}/system.md", "w").write(system_for(v, sc["who"]))
+    open(f"{d}/system.md", "w").write(system_for(v, sc["who"], sc["org"]))
     open(f"{d}/prompt.md", "w").write(f"{sc['situation']}\n\n{TOOLS}\n\n{FORMAT}")
     subprocess.run(["bun", HARNESS, "--run", f"{d}/h", "--prompt", f"{d}/prompt.md", "--system", f"{d}/system.md", "--model", model, "--call", "--max-output-tokens", "4000", "--account", os.environ.get("ACCOUNT", "claude7")],
                    stdout=subprocess.DEVNULL, stderr=open(f"{d}/err.txt", "w"), timeout=900)
