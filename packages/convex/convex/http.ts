@@ -1569,6 +1569,8 @@ http.route({
                 stack: body.stack,
                 category: body.category,
                 card: body.card,
+                impact: typeof body.impact === "number" ? body.impact : undefined,
+                impact_reason: typeof body.impact_reason === "string" ? body.impact_reason : undefined,
               });
       } else {
         if (!session_id || !question || !Array.isArray(options)) {
@@ -1605,6 +1607,9 @@ http.route({
           run: typeof body.run === "string" ? body.run : undefined,
           // LM5: the expectations proposal the decision settles.
           proposal: body.proposal,
+          // How much getting it answered matters, 1-5.
+          impact: typeof body.impact === "number" ? body.impact : undefined,
+          impact_reason: typeof body.impact_reason === "string" ? body.impact_reason : undefined,
         });
       }
 
