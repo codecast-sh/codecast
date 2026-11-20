@@ -150,7 +150,7 @@
         "questions": 0,
         "pinned": 1,
         "new": 0,
-        "needs_input": 4,
+        "needs_input": 3,
         "done": 0,
         "dormant": 0,
         "working": 5,
@@ -164,7 +164,7 @@
         "questions": 0,
         "pinned": 0,
         "new": 0,
-        "needs_input": 2,
+        "needs_input": 3,
         "done": 0,
         "dormant": 0,
         "working": 0,
@@ -175,7 +175,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "6e40b05ab4660b7e",
+    "set_digest": "6f40b1ed064c90f7",
     "placements": {
       "dismissedleadz130000000000000000": [
         "dismissed",
@@ -185,7 +185,7 @@
       "edgez400000000000000000000000000": [
         "needs_input",
         "needs_input",
-        false
+        true
       ],
       "handoffnotariderz160000000000000": [
         "needs_input",

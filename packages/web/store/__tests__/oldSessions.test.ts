@@ -162,7 +162,7 @@ describe("computeInboxMembership — the shared selection over the replica", () 
       EPOCH,
     );
     expect(m.belowFold.has(fresh)).toBe(false);
-    expect(m.belowFold.has(edge)).toBe(false); // at the cut, not under it
+    expect(m.belowFold.has(edge)).toBe(true); // the first row past the gap folds too
     expect(m.belowFold.has(folded)).toBe(true);
     expect(m.belowFold.has(oldPin)).toBe(false);
   });
@@ -191,11 +191,11 @@ describe("partitionWorkingSet — show-old inside the computation, overlays as p
       [folded]: sess({ _id: folded, updated_at: NOW - 14 * HOUR }),
     };
     const off = partitionWorkingSet(rows, membershipOf(rows), { showOld: false });
-    expect(Object.keys(off.visibleSessions).sort()).toEqual([fresh, edge].sort());
-    expect(off.oldCount).toBe(1);
+    expect(Object.keys(off.visibleSessions)).toEqual([fresh]);
+    expect(off.oldCount).toBe(2);
     const on = partitionWorkingSet(rows, membershipOf(rows), { showOld: true });
     expect(Object.keys(on.visibleSessions).sort()).toEqual([fresh, edge, folded].sort());
-    expect(on.oldCount).toBe(1);
+    expect(on.oldCount).toBe(2);
   });
 
   it("declared overlays pass through: create stub, child rows, the focused session, kept drafts", () => {

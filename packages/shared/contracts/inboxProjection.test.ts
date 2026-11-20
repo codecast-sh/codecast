@@ -541,9 +541,10 @@ describe("computeFold", () => {
     ];
     const { members } = selectWorkingSet(rows, EPOCH);
     const { belowFold, cutoff } = computeFold(members);
-    // The row AT the gap is the cut and never folds itself.
+    // The cut is the first activity past the gap, and that row folds with
+    // everything older: filing the oldest shown row must not surface it.
     expect(cutoff).toBe(EPOCH - 15 * HOUR);
-    expect(belowFold.has("edge")).toBe(false);
+    expect(belowFold.has("edge")).toBe(true);
     expect(belowFold.has("old")).toBe(true);
     expect(belowFold.has("old_pin")).toBe(false);
     expect(belowFold.has("old_owned")).toBe(false);
@@ -563,7 +564,7 @@ describe("computeFold", () => {
     ], EPOCH);
     const { belowFold, cutoff } = computeFold(bridged.members);
     expect(cutoff).toBe(EPOCH - 16 * HOUR);
-    expect(belowFold.has("old")).toBe(false); // at the cut, not under it
+    expect(belowFold.has("old")).toBe(true); // the first row past the gap folds
   });
 });
 
@@ -590,12 +591,12 @@ describe("projectInbox", () => {
     expect(p.placements.get("anchor")).toMatchObject({ bucket: "hidden" });
     expect(p.placements.get("folded")).toMatchObject({ bucket: "needs_input", below_fold: true });
     expect(p.placements.has("sub")).toBe(false);
-    expect(p.placements.get("edge")).toMatchObject({ bucket: "needs_input", below_fold: false });
+    expect(p.placements.get("edge")).toMatchObject({ bucket: "needs_input", below_fold: true });
     // Hidden rows enter entries and the digest but never the tallies.
     expect(p.entries.find(([id]) => id === "anchor")).toEqual(["anchor", "hidden", false]);
     expect(p.tally.shown.hidden).toBe(0);
-    expect(p.tally.shown.needs_input).toBe(2);
-    expect(p.tally.folded.needs_input).toBe(1);
+    expect(p.tally.shown.needs_input).toBe(1);
+    expect(p.tally.folded.needs_input).toBe(2);
     expect(p.tally.shown.questions).toBe(1);
     expect(p.tally.shown.pinned).toBe(1);
     expect(p.tally.shown.working).toBe(1);
@@ -616,7 +617,7 @@ describe("projectInbox", () => {
     expect(p.placements.get("mate")).toMatchObject({ bucket: "working", work_state: "needs_input", below_fold: false });
     expect(p.placements.get("mate_of_folded")).toMatchObject({ bucket: "needs_input", below_fold: true });
     expect(p.tally.shown.working).toBe(2);
-    expect(p.tally.folded.needs_input).toBe(2);
+    expect(p.tally.folded.needs_input).toBe(3);
     expect(p.set_digest).toBe(digestProjection(p.entries));
   });
 
@@ -750,9 +751,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 27", () => {
+  test("the caps are the single source and the version is 28", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200, adopted: 100 });
-    expect(INBOX_PROJECTION_VERSION).toBe(27);
+    expect(INBOX_PROJECTION_VERSION).toBe(28);
   });
 });
 
@@ -872,7 +873,8 @@ describe("isBelowFoldAt — the per-row fold rule computeFold's loop reads", () 
   test("no cut, exempt rows and queued work never fold; otherwise under the cut folds", () => {
     expect(isBelowFoldAt(base, 0)).toBe(false);
     expect(isBelowFoldAt(base, 200)).toBe(true);
-    expect(isBelowFoldAt({ ...base, updated_at: 200 }, 200)).toBe(false);
+    expect(isBelowFoldAt({ ...base, updated_at: 200 }, 200)).toBe(true);
+    expect(isBelowFoldAt({ ...base, updated_at: 201 }, 200)).toBe(false);
     expect(isBelowFoldAt({ ...base, has_pending_messages: true }, 200)).toBe(false);
     for (const exempt of [{ inbox_pinned_at: 1 }, { inbox_dismissed_at: 1 }, { inbox_stashed_at: 1 }, { owned_by_me: true }]) {
       expect(isFoldExempt({ ...base, ...exempt })).toBe(true);
