@@ -252,7 +252,7 @@ function KeyLine({ teamId, row, now }: { teamId: Id<"teams">; row: KeyRow; now: 
           <ConfirmButton
             label="Revoke"
             question="Anything using this key loses access now."
-            className="text-sol-text-dim hover:text-sol-red hover:no-underline"
+            className="text-sol-text-dim hover:no-underline [@media(hover:hover)]:hover:text-sol-red"
             onConfirm={() => useInboxStore.getState().revokeTeamReadKey(String(teamId), String(row._id))}
           />
         </div>
