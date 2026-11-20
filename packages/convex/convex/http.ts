@@ -43,6 +43,8 @@ import {
 
 const http = httpRouter();
 // A `cast` route on this router: POST + OPTIONS, the device-binding gate and the CLI error shape (lib/cliRoute.ts).
+// A decision's 1-5 weight from `cast decide --impact`, on ask and on edit.
+const decisionImpactOf = (body: any) => ({ impact: typeof body.impact === "number" ? body.impact : undefined, impact_reason: typeof body.impact_reason === "string" ? body.impact_reason : undefined });
 const cliRoute = (path: string, handler: (ctx: any, body: any) => Promise<any>, opts?: CliRouteOptions) => registerCliRoute(http, path, handler, opts);
 
 auth.addHttpRoutes(http);
@@ -1568,9 +1570,7 @@ http.route({
                 station: body.station,
                 stack: body.stack,
                 category: body.category,
-                card: body.card,
-                impact: typeof body.impact === "number" ? body.impact : undefined,
-                impact_reason: typeof body.impact_reason === "string" ? body.impact_reason : undefined,
+                card: body.card, ...decisionImpactOf(body),
               });
       } else {
         if (!session_id || !question || !Array.isArray(options)) {
@@ -1606,10 +1606,7 @@ http.route({
           // `cast decide --run`: a cast command for a person to run (commandRun.ts).
           run: typeof body.run === "string" ? body.run : undefined,
           // LM5: the expectations proposal the decision settles.
-          proposal: body.proposal,
-          // How much getting it answered matters, 1-5.
-          impact: typeof body.impact === "number" ? body.impact : undefined,
-          impact_reason: typeof body.impact_reason === "string" ? body.impact_reason : undefined,
+          proposal: body.proposal, ...decisionImpactOf(body),
         });
       }
 

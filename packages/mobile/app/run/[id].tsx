@@ -33,6 +33,7 @@ import { codeFont } from '@/constants/fonts';
 import { copyToClipboard } from '@/lib/clipboard';
 import { appAlert } from '@/lib/popups';
 import { mobileRouteForUrl } from '@/lib/linkRoutes';
+import { openAppRoute } from '@/lib/links';
 import { ActionButton, FactChip, FactRow, Facts, LinkRow, MoreToggle, ObjectHeader, ObjectMissing, SectionLabel, objectStyles } from '@/components/objects/ObjectParts';
 
 type IconName = React.ComponentProps<typeof FontAwesome>['name'];
@@ -94,7 +95,7 @@ export default function RunScreen() {
   const runId = (rawId ?? '').trim();
   const now = useCoarseNow(30_000);
   const go = (route: string) => router.push(route as never);
-  const goHref = (href: string) => { const r = mobileRouteForUrl(href); if (r) go(r); };
+  const goHref = (href: string) => { const r = mobileRouteForUrl(href); if (r) openAppRoute(router, r); };
 
   const run = useWorkflowRun(runId || null) as Run | null | undefined;
   const workflow = useWorkflow(run?.workflow_id) as { nodes?: Array<{ id: string; label?: string; type?: string }>; label?: string; name?: string; slug?: string } | null | undefined;

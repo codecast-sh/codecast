@@ -27,7 +27,7 @@
  * (sync.ts) and the screencast a viewer watches.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "../proc.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
