@@ -51,6 +51,37 @@ control Google Chrome.
 Chrome warns that the extension can use the debugger API. That is the point:
 `chrome.debugger` is what lets cast drive tabs.
 
+## On a cloud host
+
+A cloud host (Linux or a cloud Mac) has no person to install from the Web
+Store or press **Pair**, so cast does both on the Chrome it runs there:
+
+- **Which Chrome.** A session on a host drives its owner's laptop Chrome
+  through the laptop link while the laptop is online, and the host's own
+  Chrome otherwise. The host's Chrome renders on the host's screen (Xvfb on
+  Linux, the login session on a Mac), which the app shows in a session's
+  watch pane and the host screen pane.
+- **Install.** Every cast build carries this directory (`shipped.mjs` lists
+  the files; the build writes them into `packages/cli/src/browser/extension.tar`).
+  The host's Chrome starts with `--enable-unsafe-extension-debugging`, and cast
+  loads the carried copy over CDP (`Extensions.loadUnpacked`) on every start:
+  branded Chrome ignores `--load-extension` since 137, and a Mac honours
+  force-install policy only under MDM. The manifest `key` gives the load the
+  Store's id. The host's extension always matches its cast, whatever the
+  Store has published.
+- **Pairing.** The first time, cast mints a one-time code on the host's own
+  bridge and hands it to the extension's worker over CDP, the two steps the
+  options page's **Pair** button runs. The key lives in the profile, so later
+  starts reconnect without pairing.
+- **Logins.** `cast browser sync <site>` on the host asks the laptop to carry
+  that site's cookies from its Chrome into the host's Chrome.
+
+`cast browser extension status` on a host says which Chrome a session uses
+and whether the extension is connected. `CAST_BROWSER_HOST_EXTENSION=0` drives
+the host's Chrome over CDP alone. Each user on a host gets a bridge port of
+their own (40000 plus their uid modulo 1700), so several logins on one box do
+not collide.
+
 ## Why there is an offscreen page
 
 Chrome treats a bare service worker as disposable: it ends the worker after

@@ -14,10 +14,10 @@ import * as path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
 import { freePort } from "../instance.js";
-import { bridgeHostPlistXml, probeHost, proveBridgeHost, startBridgeHost, type RunningHost } from "./host.js";
+import { bridgeHostPlistXml, defaultPort, probeHost, proveBridgeHost, REMOTE_BRIDGE_PORT_BASE, startBridgeHost, type RunningHost } from "./host.js";
 import { CLOSE_EXTENSION_STANDBY, CLOSE_HANDSHAKE_TIMEOUT } from "./protocol.js";
 import { dial, FakeExtension, TEST_TOKEN as TOKEN } from "./host.testutil.js";
-import { BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
+import { BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
 
 let host: RunningHost | null = null;
 
@@ -958,5 +958,22 @@ describe("bridge host guardrails", () => {
     expect(ext.seen.slice(before).filter((m) => m.op === "cdp" && m.method === "Page.navigate")).toEqual([]);
     conn.close();
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("the bridge's default port", () => {
+  test("a laptop keeps the port the Web Store extension knows", () => {
+    expect(defaultPort({}, false, 501)).toBe(BRIDGE_DEFAULT_PORT);
+  });
+  test("each user on a cloud host gets their own, so a second login's bridge is never turned away", () => {
+    const a = defaultPort({}, true, 501);
+    const b = defaultPort({}, true, 502);
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(BRIDGE_DEFAULT_PORT);
+    expect(a).toBeGreaterThanOrEqual(REMOTE_BRIDGE_PORT_BASE);
+    expect(a).toBeLessThan(BRIDGE_DEFAULT_PORT);
+  });
+  test("CAST_BRIDGE_PORT wins everywhere", () => {
+    expect(defaultPort({ CAST_BRIDGE_PORT: "47311" }, true, 501)).toBe(47311);
   });
 });

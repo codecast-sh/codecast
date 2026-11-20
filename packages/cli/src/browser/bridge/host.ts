@@ -60,9 +60,10 @@ import { serveBridge, type BridgeSocket } from "./transport.js";
 import { spawn, spawnSync } from "../../proc.js";
 import { isPidAlive } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
+import { isRemoteDevice } from "../../remote/device.js";
 import { withSession, type CdpEndpoint } from "../cdp.js";
 import {
-  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_EXTENSION_STANDBY, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, isWebAuthnMethod, randomNonce, secretMatches, tabIdOfTarget,
+  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, LINK_HOST_PORT_BASE, LINK_HOST_PORT_SPAN, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_EXTENSION_STANDBY, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, isWebAuthnMethod, randomNonce, secretMatches, tabIdOfTarget,
   targetIdOfTab, WEBAUTHN_REFUSAL, type BridgeGroup, type BridgeReply, type BridgeTab,
 } from "./protocol.js";
 import { eventMessage, RawJson, readEventFrame, readReplyFrame, replyId, replyMessage, TrafficMeter, UNRELAYED_EVENTS } from "./frames.js";
@@ -93,6 +94,9 @@ export interface BridgeState {
   extensionConnected?: boolean;
   /** When the extension last proved itself: "paired" means this is set. */
   extensionSeenAt?: number;
+  /** The paired extension lives in this cloud host's own Chrome, which cast
+   *  launched and paired itself (hostExtension.ts), not in a human's Chrome. */
+  hostChrome?: boolean;
   /** The Chrome profile directory ("Default", "Profile 2") the extension was
    *  last paired in. Pages for the extension and Chrome launches name it
    *  (chromeProfiles.ts), so they never land in a profile without it. */
@@ -157,10 +161,23 @@ export function updateBridgeHostState(
   return true;
 }
 
-function defaultPort(): number {
-  const env = parseInt(process.env.CAST_BRIDGE_PORT ?? "", 10);
-  return Number.isFinite(env) && env > 0 ? env : BRIDGE_DEFAULT_PORT;
+/**
+ * The port a new bridge config takes. A laptop keeps the one the Web Store
+ * extension knows. A cloud host can hold several people's logins (a shared
+ * team box, a Mac with a second login), and the first user's bridge on the
+ * shared port turned every other user's away as an impostor, so there each
+ * user gets their own, from their uid. A host's extension is paired with its
+ * port explicitly (hostExtension.ts), so it needs no default to find it.
+ */
+export function defaultPort(env: NodeJS.ProcessEnv = process.env, remote = isRemoteDevice(), uid = process.getuid?.() ?? 0): number {
+  const fromEnv = parseInt(env.CAST_BRIDGE_PORT ?? "", 10);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return remote ? REMOTE_BRIDGE_PORT_BASE + (uid % REMOTE_BRIDGE_PORT_SPAN) : BRIDGE_DEFAULT_PORT;
 }
+
+/** Per-user bridge ports on a remote device: below the shared default and the laptop links' range (laptopLink.ts LINK_HOST_PORT_BASE). */
+export const REMOTE_BRIDGE_PORT_BASE = 40_000;
+export const REMOTE_BRIDGE_PORT_SPAN = 1_700;
 
 /** Create the token+port config on first use; never regenerates an existing token. */
 export function ensureBridgeConfig(): BridgeState {
@@ -1697,7 +1714,14 @@ export async function startBridgeHost(opts: {
     if (!hostHeader) return false;
     const m = /^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/.exec(hostHeader);
     if (!m) return false;
-    return LOOPBACK_HOSTS.has(m[1]) && (!m[2] || parseInt(m[2], 10) === port);
+    if (!LOOPBACK_HOSTS.has(m[1])) return false;
+    if (!m[2]) return true;
+    // A cloud host reaches this bridge through its laptop link, a reverse
+    // forward from a port of its own (laptopLink.ts linkHostPort), and its
+    // client names that port. The loopback name is what refuses a rebound
+    // page; the port only says which forward the request came through.
+    const asked = parseInt(m[2], 10);
+    return asked === port || (asked >= LINK_HOST_PORT_BASE && asked < LINK_HOST_PORT_BASE + LINK_HOST_PORT_SPAN);
   };
 
   /** Set once a retire is granted: the host is about to exit, so new work is turned away with a retry. */

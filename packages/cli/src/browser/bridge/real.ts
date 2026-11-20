@@ -149,7 +149,7 @@ let hostBrowserVerdict: LinkVerdict | null = null;
 export async function selectHostBrowser(note: (line: string) => void = (l) => console.error(fmt.muted(l))): Promise<LinkVerdict | null> {
   laptopBridge = null;
   hostBrowserVerdict = null;
-  if (!isRemoteDevice() || extensionPaired()) return null;
+  if (!isRemoteDevice() || humanExtensionPaired()) return null;
   const link = readLaptopLink();
   // The link's own connection removes the file when it ends, so a laptop
   // that just went away usually leaves no file at all: still a switch. A
@@ -166,6 +166,70 @@ export async function selectHostBrowser(note: (line: string) => void = (l) => co
   if (line) note(line);
   return v;
 }
+
+/** A human's Chrome paired on this remote box: it keeps the ordinary default, and no laptop stands in for it. */
+function humanExtensionPaired(): boolean {
+  const state = readBridgeState();
+  return !!state?.token && !!state.extensionSeenAt && !state.hostChrome;
+}
+
+/**
+ * Whether this invocation drives the host's own Chrome through its extension
+ * (hostExtension.ts), decided by prepareHostChrome. False drives it over CDP
+ * alone, the way a host did before it carried the extension.
+ */
+let hostChromeLive = false;
+let hostChromeReason: string | null = null;
+
+/**
+ * The verbs that act on a page, and so may start the host's Chrome to get
+ * one. Every other verb (status, tabs, stop, sync, the bridge host itself)
+ * uses the extension only when it is already up: a list of the verbs that
+ * may launch, so a new or internal verb never launches by accident.
+ */
+const PAGE_VERBS = new Set([
+  "open", "snapshot", "read", "click", "type", "fill", "press", "hover", "focus", "select", "scroll", "upload", "download", "drag",
+  "wait", "text", "get", "diff", "back", "forward", "reload", "tab", "console", "errors", "network", "cookies", "storage", "inspect",
+  "react", "vitals", "a11y", "trace", "record", "shot", "do", "show", "find", "eval", "viewport", "dialogs", "start", "handoff", "subscribe", "type-secret",
+]);
+
+/** Verbs that act on the whole profile rather than a tab: on a host they always take CDP to its Chrome. */
+const PROFILE_VERBS = new Set(["sync", "login", "grant"]);
+
+/**
+ * On a cloud host whose sessions use its own Chrome: bring that Chrome up
+ * with the Codecast extension loaded and paired, so the verb runs through the
+ * bridge like it does on a laptop (handoff cards, the session's tab group).
+ * Anything that stops that leaves this verb on CDP alone, said once.
+ * `CAST_BROWSER_HOST_EXTENSION=0` keeps a host on CDP alone.
+ */
+export async function prepareHostChrome(verb: string, note: (line: string) => void = (l) => console.error(fmt.muted(l))): Promise<void> {
+  hostChromeLive = false;
+  hostChromeReason = null;
+  if (!hostOwnsBrowser() || process.env.CAST_BROWSER_HOST_EXTENSION === "0") return;
+  const { hostExtensionDir, readyHostChrome } = await import("../hostExtension.js");
+  if (!hostExtensionDir()) {
+    hostChromeReason = "this cast carries no copy of the extension";
+    return;
+  }
+  // Cookies and site permissions are the profile's, reached over the host
+  // Chrome's own CDP port (sync.ts carries logins in there); through the
+  // extension they would be refused as a human's Chrome (cliEngine CLONE_ONLY).
+  if (PROFILE_VERBS.has(verb)) return;
+  if (!PAGE_VERBS.has(verb)) {
+    hostChromeLive = extensionReady();
+    return;
+  }
+  const r = await readyHostChrome((l) => note(`  ${l}`)).catch((err: Error) => ({ ok: false as const, reason: err.message }));
+  hostChromeLive = r.ok;
+  if (!r.ok) {
+    hostChromeReason = r.reason;
+    note(`  this host's Chrome runs without the Codecast extension for now: ${r.reason}`);
+  } else if (r.paired) note("  paired the Codecast extension in this host's Chrome");
+}
+
+/** What prepareHostChrome found, for status: driven through the extension, or why not. */
+export const hostChromeExtension = (): { live: boolean; reason: string | null } => ({ live: hostChromeLive, reason: hostChromeReason });
 
 /** What selectHostBrowser decided this invocation, for status. */
 export const hostBrowserChoice = (): LinkVerdict | null => hostBrowserVerdict;
@@ -205,7 +269,7 @@ export function hostOwnsBrowser(): boolean {
 export function hostHasNoHumanChrome(): boolean {
   if (!isRemoteDevice()) return false;
   const state = readBridgeState();
-  return !state?.token || !state.extensionSeenAt;
+  return !state?.token || !state.extensionSeenAt || !!state.hostChrome;
 }
 
 /**
@@ -215,7 +279,8 @@ export function hostHasNoHumanChrome(): boolean {
  * the pane is reported closed (desktopPane.ts resolveDesktopPane).
  */
 export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): StickyMode {
-  if (isAdvancedClone() || hostOwnsBrowser()) return "clone";
+  if (isAdvancedClone()) return "clone";
+  if (hostOwnsBrowser()) return hostChromeLive ? "real" : "clone";
   if (explicitTarget(sessionKey) === "pane") return "pane";
   if (opts.settle) setStickyTarget(sessionKey, "real");
   return "real";
@@ -458,6 +523,13 @@ export async function connectRealBridge(
   // its host or its Chrome, so its status is the whole answer.
   if (laptopBridge) return { bridge: { ...laptopBridge, started: false }, status: await bridgeStatus(laptopBridge) };
   const note = deps.note ?? ((line: string) => console.error(fmt.muted(`  ${line}`)));
+  // The host's own Chrome is cast's to start and pair, never a human's to wake.
+  if (hostOwnsBrowser() && hostChromeLive) {
+    const { readyHostChrome } = await import("../hostExtension.js");
+    const r = await readyHostChrome(note);
+    if (!r.ok) throw new Error(`this host's Chrome lost its Codecast extension: ${r.reason}`);
+    return { bridge: { ...r.bridge, started: false }, status: r.status };
+  }
   const bridge = await ensureBridgeHost(start, { note });
   const w: ExtensionWaits = { grace: EXTENSION_RECONNECT_GRACE_MS, alarm: EXTENSION_ALARM_MS, wake: EXTENSION_WAKE_WAIT_MS, launch: CHROME_LAUNCH_WAIT_MS, ...deps.waits };
   let status = await waitForExtension(bridge, w.grace);
