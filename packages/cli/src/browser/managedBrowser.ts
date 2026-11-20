@@ -30,6 +30,7 @@ import { displayRefusal } from "../hosts/providers/registry.js";
 import { fmt, icons } from "../colors.js";
 import { isReachable } from "./recovery.js";
 import { hostHasNoHumanChrome } from "./bridge/real.js";
+import { loadHostExtension } from "./hostExtension.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
 
 const OK = `${fmt.success(icons.check)}`;
@@ -175,6 +176,8 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
 
     const [w, h] = o.size.split("x").map((n) => parseInt(n, 10));
     const port = await freePort();
+    // A host's Chrome is cast's own, and carries the Codecast extension (hostExtension.ts).
+    const hostChrome = !sourceProfile && hostHasNoHumanChrome();
     let pid: number;
     try {
       pid = await launchManagedChrome({
@@ -184,10 +187,14 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
         channel: o.channel,
         windowSize: { width: w || 1440, height: h || 900 },
         fakeMedia: o.fakeMedia,
+        extensionDebugging: hostChrome,
       });
     } catch (err) {
       die((err as Error).message);
     }
+    const hostExtension = hostChrome
+      ? await loadHostExtension(port).then(() => true as const, (err: Error) => err.message)
+      : undefined;
 
     const state: InstanceState = {
       pid, port, userDataDir,
@@ -198,9 +205,11 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
       startedAt: Date.now(),
       fakeMedia: !!o.fakeMedia,
       activeTargetId: null,
+      ...(hostExtension !== undefined ? { hostExtension } : {}),
     };
     writeState(state);
     console.log(`${OK} browser up — pid ${pid}, CDP 127.0.0.1:${port}${o.headless ? ", headless" : ""}`);
+    if (typeof hostExtension === "string") console.log(`${WARN} the Codecast extension did not load: ${hostExtension}`);
     if (!o.quiet) {
       if (sourceProfile) {
         console.log(

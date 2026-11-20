@@ -24,7 +24,7 @@ import { findProfile, mintPairingCode, PAIRING_CODE_TTL_MS, readPairing, revokeA
 import { describeProfile, extensionProfiles, matchProfile, pickBridgeProfile, unconnectedLastUsed, type ExtensionProfiles } from "./chromeProfiles.js";
 import type { RealProfile } from "../profile.js";
 import { BRIDGE_EXTENSION_ID, BRIDGE_STORE_URL, bridgePairingUrl } from "./protocol.js";
-import { connectRealBridge, hostBrowserChoice, hostOwnsBrowser, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
+import { connectRealBridge, hostBrowserChoice, hostChromeExtension, hostOwnsBrowser, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
 import { CHROME_LAUNCHER_NAME, installChromeLauncher, openInRealChrome, REAL_CHROME_LAUNCH_ARGS, restartRealChrome, settlePairingPage } from "./realChrome.js";
 import { ownedDesktopPane, PANE_HOW_TO } from "../desktopPane.js";
 import { agentSetupPageLink } from "../../agentSetupPage.js";
@@ -80,7 +80,12 @@ function printHostBrowser(): void {
   console.log(`target: ${fmt.highlight("host")}${fmt.muted(" (this host's own Chrome, on the screen the session's browser view and `cast hosts vnc` show)")}`);
   const choice = hostBrowserChoice();
   if (choice?.mode === "host") console.log(`${WARN} ${choice.laptop ? `${choice.laptop}'s Chrome` : "the laptop's Chrome"} is not in use: ${choice.reason}`);
-  console.log(fmt.muted("  no extension needed: `cast browser open <url>` starts it; `cast browser sync <site>` carries a login in from the owner's laptop"));
+  const ext = hostChromeExtension();
+  const state = readBridgeState();
+  if (ext.live) console.log(`${OK} Codecast extension connected in this host's Chrome${state?.port ? fmt.muted(` (bridge on 127.0.0.1:${state.port})`) : ""}: handoff cards and the session's tab group work here`);
+  else if (ext.reason) console.log(`${WARN} driving this host's Chrome without the Codecast extension: ${ext.reason}`);
+  else console.log(fmt.muted("  Codecast extension: not running yet; the next `cast browser open <url>` starts this host's Chrome with it, already paired"));
+  console.log(fmt.muted("  `cast browser sync <site>` carries a login in from the owner's laptop Chrome"));
 }
 
 /** On a cloud host driving its laptop's Chrome: which laptop, and is the extension there. */

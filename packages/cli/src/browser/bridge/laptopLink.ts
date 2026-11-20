@@ -160,8 +160,15 @@ export const revokedVerdict = (laptop: string, hostId: string): LinkVerdict => (
   reason: `${laptop} refused this host's key (revoked there). To let this host use that Chrome again, ask your person with a Yes card: ${askToRun("Let this cloud host use the Chrome on your laptop again?", `cast browser extension link --host ${hostId}`, RUN_ON_LAPTOP)}`,
 });
 
-/** The whole probe's budget: a dead laptop costs a session this much per command, no more. */
-export const LINK_PROBE_BUDGET_MS = 1_500;
+/**
+ * The whole probe's budget: a laptop that stopped answering costs a session
+ * this much per command, no more. A laptop that went away usually costs
+ * nothing, because its link's port refuses at once. Two round trips through
+ * the reverse tunnel took 0.3 to 3.4 s each from a loaded laptop on an
+ * ordinary connection (2026-11-19), so a tighter budget sent every host
+ * session to its own Chrome while the laptop's was there.
+ */
+export const LINK_PROBE_BUDGET_MS = 5_000;
 
 /**
  * Does the link reach a bridge that holds this host's token, with the

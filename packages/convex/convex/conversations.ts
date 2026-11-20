@@ -14,6 +14,7 @@ import { cloudPlacementFor,
   checkoutInUseMessage,
   posixRepoBasename,
   agentTypeChangeRefusal,
+  titleLine,
 } from "@codecast/shared/contracts";
 import { enqueueCloudSpawn } from "./cloudPlacement";
 import { isConversationSafetyBlocked, safetyBlockPatch } from "./conversationSafety";
@@ -1385,6 +1386,11 @@ async function ownedParentConversationId(
   return parent._id;
 }
 
+/** A session title as stored: paste markers out, one line. Undefined when nothing is left. */
+function storedTitle(title: string | undefined): string | undefined {
+  return title === undefined ? undefined : titleLine(title) || undefined;
+}
+
 export const createConversation = mutation({
   args: {
     user_id: v.id("users"),
@@ -1462,6 +1468,9 @@ export const createConversation = mutation({
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Stored as a person reads it: an older CLI titled a session from the raw
+    // opening message, paste markers (`<pasted_content id=…>`) and all.
+    const title = storedTitle(args.title);
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
@@ -1582,8 +1591,8 @@ export const createConversation = mutation({
       agent_type: args.agent_type,
       session_id: args.session_id,
       slug: args.slug,
-      title: args.title,
-      ...(args.title && args.title_is_custom ? { title_is_custom: true } : {}),
+      title,
+      ...(title && args.title_is_custom ? { title_is_custom: true } : {}),
       project_hash: args.project_hash,
       project_path: args.project_path,
       owner_device_id: args.owner_device_id,
@@ -1695,7 +1704,7 @@ export const createConversation = mutation({
         team_id: resolvedTeamId,
         actor_user_id: args.user_id,
         event_type: "session_started" as const,
-        title: args.title || (args.slug ? formatSlugAsTitle(args.slug) : "New session"),
+        title: title || (args.slug ? formatSlugAsTitle(args.slug) : "New session"),
         description: args.project_path,
         related_conversation_id: conversationId,
         metadata: {
@@ -5437,13 +5446,14 @@ export const updateTitle = mutation({
       throw new Error("Unauthorized: can only update your own conversations");
     }
 
+    const title = storedTitle(args.title) ?? args.title;
     const replaceable = args.agent_guess
       ? !conversation.title_is_custom && conversation.subtitle === undefined
       : !conversation.title_is_custom || (!!conversation.title && !!args.replaces?.includes(conversation.title));
-    const changed = replaceable && (conversation.title !== args.title || (!!args.title_is_custom && !conversation.title_is_custom));
+    const changed = replaceable && (conversation.title !== title || (!!args.title_is_custom && !conversation.title_is_custom));
     if (changed) {
       await ctx.db.patch(args.conversation_id, {
-        title: args.title,
+        title,
         ...(args.title_is_custom ? { title_is_custom: true } : {}),
       });
     }

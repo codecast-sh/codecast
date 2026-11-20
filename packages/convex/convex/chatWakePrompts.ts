@@ -152,7 +152,26 @@ export function buildSessionRelay(opts: {
   /** False when not even the thread is open to it (an answer to its own
    *  mention in such a DM): the wake then carries no read command at all. */
   threadOpen?: boolean;
+  /** The person answered this session's line at the top of a DM, not in its
+   *  thread: the answer goes at the top too. */
+  inline?: boolean;
 }): string {
+  if (opts.inline) {
+    return buildChatWake({
+      ...opts,
+      threadRootId: undefined,
+      channelEntries: [],
+      // The phrasing the client parser keys on (parseChatWakePrompt).
+      lead: `${opts.askerName} messaged you directly.`,
+      tail: [
+        "Reply with:",
+        `  cast chat send --channel ${opts.channelId} "<your reply>"`,
+        "",
+        "Answer once, concisely: a short comment a colleague would send in chat, not a report.",
+        "If the line wants nothing from you, do nothing.",
+      ],
+    });
+  }
   return buildChatWake({
     ...opts,
     // The phrasing the client parser keys on (parseChatWakePrompt).
