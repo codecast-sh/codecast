@@ -219,3 +219,34 @@ export const WEEK_CARD_INSTALL = "curl -fsSL codecast.sh/i/scorecard | sh";
 /** The card's drawn size: the social image size a link unfurls to. */
 export const WEEK_CARD_W = 1200;
 export const WEEK_CARD_H = 630;
+
+/** What the card draws beyond the raw stats, one derivation for every renderer (the web's 1200x630 card, the phone's card). */
+export function weekCardFigures(stats: WeekCardStats) {
+  const total = stats.agents.reduce((t, a) => t + a.sessions, 0) || 1;
+  const top = stats.agents.slice(0, 5);
+  const other = stats.agents.slice(5).reduce((t, a) => t + a.sessions, 0);
+  const busiest = stats.busiest_day >= 0 ? stats.days[stats.busiest_day] : null;
+  const extras: Array<[string, string]> = [];
+  if (busiest) extras.push(["busiest day", `${WEEK_DAY_NAMES[stats.busiest_day]} · ${busiest.hours}h`]);
+  if (stats.active_days > 0) extras.push(["per active day", `${Math.round((stats.agent_hours / stats.active_days) * 10) / 10}h`]);
+  if (stats.tokens !== null) extras.push(["tokens", formatCount(stats.tokens)]);
+  return {
+    maxHours: Math.max(1, ...stats.days.map((d) => d.hours)),
+    /** Agents by share of sessions: the top five, then the rest as Other. */
+    shares: other ? [...top, { name: "Other", sessions: other }] : top,
+    /** A share as the card prints it ("12%", "<1%"). */
+    pct: (n: number) => {
+      const p = (n / total) * 100;
+      return p > 0 && p < 1 ? "<1%" : `${Math.round(p)}%`;
+    },
+    fraction: (n: number) => n / total,
+    machines: stats.machines.kinds.map((k) => `${k.count} ${DEVICE_KIND_LABEL[k.kind]}${k.count === 1 || k.kind === "linux" ? "" : "s"}`).join(" · "),
+    extras,
+  };
+}
+
+/** The line a shared card's post carries beside its link. */
+export function weekCardShareText(s: WeekCardStats): string {
+  const agents = s.agents.slice(0, 3).map((a) => a.name).join(", ");
+  return `My week with coding agents: ${s.sessions} sessions, ${s.agent_hours}h with agents working${agents ? ` (${agents})` : ""}`;
+}
