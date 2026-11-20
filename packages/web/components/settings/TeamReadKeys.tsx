@@ -14,7 +14,7 @@ import { useMutation } from "convex/react";
 import { ConvexError } from "convex/values";
 import type { FunctionReturnType } from "convex/server";
 import { toast } from "sonner";
-import { KeyRound } from "lucide-react";
+import { ChevronRight, KeyRound } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
@@ -75,6 +75,8 @@ export function TeamReadKeys({ teamId, teamName }: { teamId: Id<"teams">; teamNa
   const ended = listed.filter((k) => !isLive(k));
   return (
     <SettingsSection
+      // On a touch screen every button and the disclosure is at least 44 px tall.
+      className="[@media(pointer:coarse)]:[&_button]:min-h-11 [@media(pointer:coarse)]:[&_summary]:min-h-11"
       title="Read-only keys"
       icon={KeyRound}
       description="A read-only key lets a server list the team's shared sessions, without their messages."
@@ -83,21 +85,31 @@ export function TeamReadKeys({ teamId, teamName }: { teamId: Id<"teams">; teamNa
       {minted ? (
         <MintedKey
           minted={minted}
-          onDone={() => {
+          onDone={(fromKeyboard) => {
             flushSync(() => setMinted(null));
-            nameField.current?.focus();
+            // A tap would open the phone's keyboard.
+            if (fromKeyboard) nameField.current?.focus();
           }}
         />
       ) : (
         <NewKey teamId={teamId} teamName={teamName} nameField={nameField} loading={!keys} full={live >= MAX_LIVE_TEAM_READ_KEYS} onMinted={setMinted} />
       )}
-      {!keys && <div aria-hidden className="h-[57px] animate-pulse bg-sol-bg-highlight/30" data-read-key-loading />}
+      {!keys && (
+        <div role="status" className="flex h-[57px] items-center px-4 text-xs text-sol-text-dim sm:px-5" data-read-key-loading>
+          Loading keys…
+        </div>
+      )}
       {listed.filter(isLive).map((k) => (
         <KeyLine key={k._id} teamId={teamId} row={k} now={now} />
       ))}
       {ended.length > 0 && (
-        <details className="divide-y divide-sol-border/40 modern:divide-sol-border/70" data-read-key-ended>
-          <summary className="cursor-pointer select-none px-4 py-2.5 text-xs text-sol-text-dim hover:text-sol-text focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring/60 sm:px-5">
+        <details
+          className="group divide-y divide-sol-border/40 modern:divide-sol-border/70"
+          onToggle={(e) => e.currentTarget.open && e.currentTarget.querySelector("summary + *")?.scrollIntoView({ block: "nearest" })}
+          data-read-key-ended
+        >
+          <summary className="flex cursor-pointer list-none select-none items-center gap-1.5 px-4 py-2.5 text-xs text-sol-text-dim hover:text-sol-text focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring/60 sm:px-5 [&::-webkit-details-marker]:hidden">
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-90" />
             {ended.length} ended {ended.length === 1 ? "key" : "keys"}
           </summary>
           {ended.map((k) => (
@@ -156,8 +168,8 @@ function NewKey({ teamId, teamName, nameField, loading, full, onMinted }: {
           onTurnOn={() => void mint()}
           onTurnOff={() => {}}
           trigger={({ press, reviewing }) => (
-            <Button variant="ghost" size="sm" className="h-7 px-2" onClick={press} disabled={loading || full || creating} aria-haspopup="dialog" aria-expanded={reviewing} data-read-key-create>
-              <span className="grid justify-items-center">
+            <Button variant="ghost" size="sm" className="-mr-2 h-7 px-2" onClick={press} disabled={loading || full || creating} aria-haspopup="dialog" aria-expanded={reviewing} data-read-key-create>
+              <span className="grid justify-items-end">
                 <span aria-hidden className="invisible col-start-1 row-start-1">Creating…</span>
                 <span className="col-start-1 row-start-1">{creating ? "Creating…" : "Create"}</span>
               </span>
@@ -175,7 +187,7 @@ function NewKey({ teamId, teamName, nameField, loading, full, onMinted }: {
 }
 
 /** The new key, shown this one time. Out of both session recorders: codecast's (data-private) and PostHog's (ph-no-capture). */
-function MintedKey({ minted, onDone }: { minted: Minted; onDone: () => void }) {
+function MintedKey({ minted, onDone }: { minted: Minted; onDone: (fromKeyboard: boolean) => void }) {
   const key = useCopy();
   const curl = useCopy();
   return (
@@ -186,7 +198,7 @@ function MintedKey({ minted, onDone }: { minted: Minted; onDone: () => void }) {
       </div>
       <code className="block select-all break-all rounded-md border border-sol-border/70 bg-sol-bg-highlight/40 px-2 py-1.5 font-mono text-xs leading-4 text-sol-text">{minted.key}</code>
       <div className="flex flex-wrap items-center gap-1.5">
-        <Button variant="cyan" size="sm" className="[@media(pointer:coarse)]:min-h-11" onClick={() => key.copy(() => minted.key)}>
+        <Button variant="cyan" size="sm" onClick={() => key.copy(() => minted.key)}>
           <span className="grid justify-items-center">
             <span aria-hidden className="invisible col-start-1 row-start-1">Copy failed</span>
             <span className="col-start-1 row-start-1">{key.state === "copied" ? "Copied" : key.state === "failed" ? "Copy failed" : "Copy key"}</span>
@@ -195,7 +207,6 @@ function MintedKey({ minted, onDone }: { minted: Minted; onDone: () => void }) {
         <Button
           variant="ghost"
           size="sm"
-          className="[@media(pointer:coarse)]:min-h-11"
           onClick={() => curl.copy(() => `curl -H "Authorization: Bearer ${minted.key}" ${CONVEX_URL}/cli/v1/team/sessions`)}
         >
           <span className="grid justify-items-center">
@@ -204,7 +215,7 @@ function MintedKey({ minted, onDone }: { minted: Minted; onDone: () => void }) {
           </span>
         </Button>
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" className="-mr-2.5 text-sol-text-dim" onClick={onDone}>Done</Button>
+        <Button variant="ghost" size="sm" className="-mr-2.5 text-sol-text-dim" onClick={(e) => onDone(e.detail === 0)}>Done</Button>
       </div>
     </div>
   );
@@ -220,33 +231,31 @@ function KeyLine({ teamId, row, now }: { teamId: Id<"teams">; row: KeyRow; now: 
     ended ? null : daysLeft === 1 ? "1 day left" : `${daysLeft} days left`,
   ].filter((d): d is string => !!d);
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:px-5" data-read-key={ended ?? "live"}>
-      <div className="row-start-1 min-w-0">
+    // The name is sized by its own text, so an armed Revoke sits beside a short
+    // name and drops under a long one, and the name never re-wraps.
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:px-5" data-read-key={ended ?? "live"}>
+      <div className="max-w-[calc(100%-4.5rem)] flex-none">
         <div className={`break-words text-sm ${ended ? "text-sol-text-dim" : "text-sol-text"}`}>{row.name}</div>
         {/* Every item has a leading dot; the one that starts a line is clipped. */}
         <div className="overflow-hidden text-xs text-sol-text-dim">
           <div className="-ml-3 flex flex-wrap">
             {details.map((d, i) => (
-              <span key={i} className={`relative whitespace-nowrap pl-3 before:absolute before:left-1 before:content-['·'] ${i === 0 ? "font-mono" : ""}`}>{d}</span>
+              <span key={i} className={`relative whitespace-nowrap pl-3 before:absolute before:left-0 before:w-3 before:text-center before:content-['·'] ${i === 0 ? "font-mono" : ""}`}>{d}</span>
             ))}
           </div>
         </div>
       </div>
       {ended ? (
-        <span className="text-xs text-sol-text-dim">{ended}</span>
+        <span className="ml-auto text-xs text-sol-text-dim">{ended}</span>
       ) : (
-        <>
-          {/* Holds the Revoke column, so on a phone the name keeps its width while the confirm opens on the line below. */}
-          <span aria-hidden className="invisible col-start-2 row-start-1 text-meta">Revoke</span>
-          <div className="col-start-2 row-start-1 flex items-center justify-end max-sm:has-[[data-armed]]:row-start-2 max-sm:has-[[data-armed]]:[grid-column:1/-1]">
-            <ConfirmButton
-              label="Revoke"
-              question="Anything using this key loses access now."
-              className="text-sol-text-dim hover:text-sol-red hover:no-underline"
-              onConfirm={() => useInboxStore.getState().revokeTeamReadKey(String(teamId), String(row._id))}
-            />
-          </div>
-        </>
+        <div className="ml-auto flex max-w-full items-center">
+          <ConfirmButton
+            label="Revoke"
+            question="Anything using this key loses access now."
+            className="text-sol-text-dim hover:text-sol-red hover:no-underline"
+            onConfirm={() => useInboxStore.getState().revokeTeamReadKey(String(teamId), String(row._id))}
+          />
+        </div>
       )}
     </div>
   );
