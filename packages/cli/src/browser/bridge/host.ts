@@ -93,6 +93,9 @@ export interface BridgeState {
   extensionConnected?: boolean;
   /** When the extension last proved itself: "paired" means this is set. */
   extensionSeenAt?: number;
+  /** The paired extension lives in this cloud host's own Chrome, which cast
+   *  launched and paired itself (hostExtension.ts), not in a human's Chrome. */
+  hostChrome?: boolean;
   /** The Chrome profile directory ("Default", "Profile 2") the extension was
    *  last paired in. Pages for the extension and Chrome launches name it
    *  (chromeProfiles.ts), so they never land in a profile without it. */

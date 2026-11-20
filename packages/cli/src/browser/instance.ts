@@ -45,6 +45,9 @@ export interface InstanceState {
   /** Launched with Chrome's fake camera/mic (a test pattern and a tone), so
    *  getUserMedia works on machines with no devices. Launch-time only. */
   fakeMedia?: boolean;
+  /** A cloud host's Chrome: true once the Codecast extension is loaded into
+   *  it, else why it is not (hostExtension.ts). Absent everywhere else. */
+  hostExtension?: true | string;
   /**
    * Set when the browser runs on another machine, reached through an SSH port
    * forward. Its presence is what turns on credential provisioning: a local
@@ -271,6 +274,10 @@ export interface LaunchOptions {
   /** Fake camera/mic devices, for machines without real ones. Per-origin
    *  permission is separate: `cast browser grant camera microphone`. */
   fakeMedia?: boolean;
+  /** Let a CDP client load an unpacked extension (Extensions.loadUnpacked):
+   *  how a cloud host puts the Codecast extension into its own Chrome
+   *  (hostExtension.ts). Only loopback reaches the debugging port. */
+  extensionDebugging?: boolean;
 }
 
 /** The Chrome command line for a managed launch. Pure, so the flag set is
@@ -308,6 +315,7 @@ export function chromeLaunchArgs(opts: LaunchOptions): string[] {
     // agent verification work, never a human's browsing).
     ...(opts.fakeMedia ? ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] : []),
     ...(opts.headless ? ["--headless=new"] : []),
+    ...(opts.extensionDebugging ? ["--enable-unsafe-extension-debugging"] : []),
     ...keychainArgs(),
     "about:blank",
   ];
