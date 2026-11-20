@@ -27,6 +27,7 @@ import {
 } from "../../../../../lib/line/problemTable";
 import type { LineSelection } from "../../../../../lib/line/lineWorkspaceUrl";
 import type { LineWorkspace } from "../../../../../hooks/useLineWorkspace";
+import { taskCommentsOf } from "../../../../../lib/taskComments";
 
 export type ProblemList = ReturnType<typeof useProblemList>;
 
@@ -99,7 +100,7 @@ function problemFacts(model: LineModel, workspace: LineWorkspace) {
         awaitsFindings: task?.readiness === "needs_context" && waitsForFindings(task.readiness_note),
         underBar: underBarOf(task as Parameters<typeof underBarOf>[0], barOf(task)),
         failedStep: failedStep.get(id)?.label ?? null, failedNode: failedStep.get(id)?.node ?? null, lineOn: lineOn(task?.project_id), lead: task?.project_id ? workspace.admissions.get(task.project_id)?.role?.handle ?? null : null, idle: task?.project_id ? workspace.trialHeld?.get(task.project_id) ?? null : null, assigneeName: task?.assignee ? workspace.names.get(task.assignee) ?? null : null,
-        notes: (task as { comments?: ProblemFacts["notes"] } | null)?.comments, trial: trial.has(id),
+        notes: task ? taskCommentsOf(task as { comments?: ProblemFacts["notes"]; recent_comments?: ProblemFacts["notes"] }) as ProblemFacts["notes"] : undefined, trial: trial.has(id),
         aboutSteps: lineStepsOf(task?.cause?.fingerprints),
         handoff: (task as { verification_evidence?: string | null } | null)?.verification_evidence ?? null,
         shipOutput: landingOutput(newest.get(id)?.node_statuses as Parameters<typeof landingOutput>[0]),

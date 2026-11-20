@@ -6,7 +6,7 @@
 // picked: the session is the run's subject, so what a stage finds comes back
 // to it. While a run is in flight, or once one has ended, the chip says where
 // the change is and the panel shows that run, with the person's part in it.
-import { useMemo, useState } from "react";
+import { useMemo, useState, memo } from "react";
 import Link from "next/link";
 import { Rocket } from "lucide-react";
 import { useWorkspaceFeature } from "../../../lib/teamFeatures";
@@ -26,9 +26,9 @@ import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import "../../ship/ship.css";
 
 /** Shown only where the workspace has Flows on: off, the button is gone with the rest of the feature. */
-export function RunThroughFlow(props: { conversationId: string; sessionTitle: string }) {
+export const RunThroughFlow = memo(function RunThroughFlow(props: { conversationId: string; sessionTitle: string }) {
   return useWorkspaceFeature("line") ? <ShipButton {...props} /> : null;
-}
+});
 
 /** The newest flow press this session was sent, when no run has started since: the run it asked for is starting. */
 function useAskedAt(conversationId: string, newestRunAt: number): number | null {
