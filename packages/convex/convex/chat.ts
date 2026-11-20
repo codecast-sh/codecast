@@ -85,7 +85,7 @@ import {
   notifyLevelAllows,
   oneLine,
   plainPreview,
-  searchSnippet, holdsQueryPhrases, emailLocalHandle, memberHandle } from "./chatText";
+  searchSnippet, holdsQueryPhrases, emailLocalHandle, memberHandle, sessionLineTitle } from "./chatText";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { parseQueryTerms } from "@codecast/shared/search";
 import { chatMentionClientId, chatRelayClientId, parseChatMentionClientId, parseChatRelayClientId } from "./lib/chatWakeIds";
@@ -2351,8 +2351,11 @@ export const sendMessage = mutation({
     let relay: RelayResult = { delivered: false, skipped: null, session_short_id: null, conversation_id: null };
     if (message) {
       try {
+        // A line at the top of a DM that answers a session's line there goes
+        // to that session, as a reply on that line would.
+        const answered = root ? null : await dmSessionLineAnswered(ctx, channel, message);
         relay = await maybeRelayToOriginSession(ctx, {
-          channel, message, root, senderId: userId, senderName: actorName,
+          channel, message, root: root ?? answered, senderId: userId, senderName: actorName, inline: !!answered,
         });
       } catch (error) {
         relay = {
@@ -2573,7 +2576,7 @@ export async function postChatMessage(
     if (conv) {
       originSession = {
         id: conv._id.toString(),
-        title: conv.title ? oneLine(conv.title, 80) : undefined,
+        title: sessionLineTitle(conv.title),
         agent_type: conv.agent_type,
       };
     }
@@ -2766,7 +2769,7 @@ export const repairMissingOriginSession = internalMutation({
     );
     if (!conversation) throw new Error("Session is not owned by the message author");
     const sessionId = conversation._id.toString();
-    const title = conversation.title ? oneLine(conversation.title, 80) : undefined;
+    const title = sessionLineTitle(conversation.title);
     if (
       message.origin_session_id === sessionId
       && message.origin_session_title === title
@@ -3814,6 +3817,58 @@ async function anchorTurnInFlight(
     && isAgentTurnInFlight(row.agent_status)) ?? null;
 }
 
+// A person's line at the top of a direct message answers whatever the other
+// side said last there. When that was a session's line (`cast chat dm`), the
+// line goes back to that session, the way a reply in that line's thread does:
+// a DM reads as one conversation, and nobody answers a question in its thread.
+// A DM with a role's bot is the anchor's (every line there wakes it), a DM
+// with agent members reaches them as members, and a person's own session asked
+// the other side: none of those is answered here.
+const DM_ANSWER_SCAN = 20;
+async function dmSessionLineAnswered(
+  ctx: MutationCtx,
+  channel: Doc<"chat_channels">,
+  message: Doc<"chat_messages">,
+): Promise<Doc<"chat_messages"> | null> {
+  if (channel.kind !== "dm" || message.thread_root_id || message.origin === "agent" || message.author_kind === "agent") return null;
+  // A session's own DM room (or any room with agent members) hands every line
+  // to its members already (deliverToChannelAgents).
+  if (await dmAnchorFor(ctx, channel) || (await channelAgentRows(ctx, channel._id)).length > 0) return null;
+  const recent = await ctx.db
+    .query("chat_messages")
+    .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id).lt("created_at", message.created_at))
+    .order("desc")
+    .filter((q) => q.eq(q.field("thread_root_id"), undefined))
+    .take(DM_ANSWER_SCAN);
+  for (const row of recent) {
+    if (row.deleted_at || row.agent_status || isSilentAgentRow(row)) continue;
+    const sessionLine = row.origin === "agent" && !!row.origin_session_id && row.author_kind !== "agent";
+    // The sender's own earlier lines ("hm", then "do it") answer the same line.
+    if (String(row.user_id) === String(message.user_id) && !sessionLine) continue;
+    return sessionLine && String(row.user_id) !== String(message.user_id) ? row : null;
+  }
+  return null;
+}
+
+async function dmExchange(
+  ctx: MutationCtx,
+  channel: Doc<"chat_channels">,
+  asked: Doc<"chat_messages">,
+  answer: Doc<"chat_messages">,
+  isSelf: (row: Doc<"chat_messages">) => boolean,
+  senderName: string,
+): Promise<Array<{ name: string; content: string }>> {
+  const rows = await ctx.db
+    .query("chat_messages")
+    .withIndex("by_channel_created", (q: any) =>
+      q.eq("channel_id", channel._id).gte("created_at", asked.created_at).lte("created_at", answer.created_at))
+    .filter((q) => q.eq(q.field("thread_root_id"), undefined))
+    .take(DM_ANSWER_SCAN + 2);
+  return rows
+    .filter((row) => !row.deleted_at && !row.agent_status && !isSilentAgentRow(row))
+    .map((row) => ({ name: isSelf(row) ? "You (earlier)" : senderName, content: row.content }));
+}
+
 // A person replying on a thread a SESSION started goes back into that session.
 //
 // A session that posts to chat (`cast chat send` stamps origin:"agent" and its
@@ -3848,6 +3903,9 @@ async function maybeRelayToOriginSession(
     /** A session that posted in this thread without starting it: a person's
      *  reply reaches it too (threadPosters), as a participant. */
     participant?: string;
+    /** The line is at the top of a DM and answers `root` there
+     *  (dmSessionLineAnswered): the session answers at the top too. */
+    inline?: boolean;
   },
 ): Promise<RelayResult> {
   const no = (skipped: string | null) => ({ delivered: false, skipped, session_short_id: null, conversation_id: null });
@@ -3931,15 +3989,20 @@ async function maybeRelayToOriginSession(
   await wakeCaps?.();
 
   const nonce = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-  const { entries, channelEntries } = await collectChatExcerpt(ctx, {
-    channel: opts.channel,
-    root,
-    message: opts.message,
-    senderName: opts.senderName,
-    threadRootId: root._id,
-    // The session's own earlier lines read as its own words.
-    isSelf: (row) => !!row.origin_session_id && row.origin_session_id === String(conversation._id),
-  });
+  // The session's own earlier lines read as its own words.
+  const isSelf = (row: Doc<"chat_messages">) => !!row.origin_session_id && row.origin_session_id === String(conversation._id);
+  const { entries, channelEntries } = opts.inline
+    // An answer at the top of a DM quotes the exchange alone: the session's
+    // line and the person's lines since, which were all addressed to it.
+    ? { entries: await dmExchange(ctx, opts.channel, root, opts.message, isSelf, opts.senderName), channelEntries: [] }
+    : await collectChatExcerpt(ctx, {
+      channel: opts.channel,
+      root,
+      message: opts.message,
+      senderName: opts.senderName,
+      threadRootId: root._id,
+      isSelf,
+    });
   // A DM the session is not part of opens to it one thread at a time
   // (chatAccess): the wake carries the thread, never the room's other lines.
   const roomOpen = opts.channel.kind !== "dm" || await sessionMayReadChannel(
@@ -3965,10 +4028,17 @@ async function maybeRelayToOriginSession(
       // A relay to the thread's starter opens the thread (openSessionReply
       // below); an answer to a mention the session made opens nothing.
       threadOpen: roomOpen || !mentionReply,
+      inline: opts.inline,
     }),
     client_id: key,
   });
-  await openSessionReply(ctx, { channel: opts.channel, threadRootId: root._id, wakeId, grant: mentionReply ? false : "thread" });
+  await openSessionReply(ctx, {
+    channel: opts.channel,
+    threadRootId: opts.inline ? undefined : root._id,
+    grantThreadId: root._id,
+    wakeId,
+    grant: mentionReply ? false : "thread",
+  });
   return {
     delivered: true,
     skipped: null,
