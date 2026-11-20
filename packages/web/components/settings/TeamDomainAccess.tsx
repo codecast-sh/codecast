@@ -29,6 +29,10 @@ export function TeamDomainAccess({ teamId }: { teamId: Id<"teams"> }) {
 
   const domain = settings.enabled_domain ?? settings.admin_domain;
   const canOpen = !!settings.admin_domain && settings.admin_domain_proven;
+  // The team is open to one domain and this admin's proven address is at
+  // another (they moved their account, or another admin opened it): turning
+  // it on again opens it to theirs, so offer that as one press.
+  const switchTo = settings.enabled_domain && canOpen && settings.admin_domain !== settings.enabled_domain ? settings.admin_domain : null;
   const toggle = (on: boolean) => {
     setBusy("toggle");
     setDiscoverable({ team_id: teamId, enabled: on })
@@ -47,6 +51,15 @@ export function TeamDomainAccess({ teamId }: { teamId: Id<"teams"> }) {
     <SettingsSection
       title="Coworkers"
       icon={AtSign}
+      actions={
+        <button
+          type="button"
+          onClick={() => useInboxStore.getState().openSettingsModal("accounts")}
+          className="text-meta text-sol-text-muted hover:text-sol-text"
+        >
+          Your email
+        </button>
+      }
       description={
         domain
           ? `People who sign in with a verified @${domain} address can find this team and ask to join. You approve each one. Nobody else learns the team exists.`
@@ -70,6 +83,13 @@ export function TeamDomainAccess({ teamId }: { teamId: Id<"teams"> }) {
           aria-label="Let coworkers find this team"
         />
       </SettingsRow>
+      {switchTo && (
+        <SettingsRow label={`Open to @${switchTo} instead`}>
+          <Button size="sm" variant="outline" disabled={busy === "toggle"} onClick={() => toggle(true)}>
+            Switch
+          </Button>
+        </SettingsRow>
+      )}
       {requests.map((r) => {
         const who = r.name || r.email || "Someone";
         return (

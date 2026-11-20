@@ -11,6 +11,7 @@
 import type * as accessLog from "../accessLog.js";
 import type * as accessLogSchema from "../accessLogSchema.js";
 import type * as accountDelete from "../accountDelete.js";
+import type * as accountEmail from "../accountEmail.js";
 import type * as accountPool from "../accountPool.js";
 import type * as accountPoolSchema from "../accountPoolSchema.js";
 import type * as accountSwitch from "../accountSwitch.js";
@@ -820,6 +821,7 @@ declare const fullApi: ApiFromModules<{
   accessLog: typeof accessLog;
   accessLogSchema: typeof accessLogSchema;
   accountDelete: typeof accountDelete;
+  accountEmail: typeof accountEmail;
   accountPool: typeof accountPool;
   accountPoolSchema: typeof accountPoolSchema;
   accountSwitch: typeof accountSwitch;

@@ -159,7 +159,9 @@ describe("proving an address with a code", () => {
     const row = (await db.query("work_email_codes").withIndex("by_user", (q: any) => q.eq("user_id", UNPROVEN)).first());
     expect(JSON.stringify(row)).not.toContain(code);
 
-    await expect(call(confirmWorkEmailCode, db, UNPROVEN, { code: code === "111111" ? "222222" : "111111" })).rejects.toThrow(/not right/);
+    // A wrong code is returned, not thrown, so the try it cost is kept (lib/emailProof).
+    expect(await call(confirmWorkEmailCode, db, UNPROVEN, { code: code === "111111" ? "222222" : "111111" })).toEqual({ proven: false, error: "That code is not right" });
+    expect((await db.query("work_email_codes").withIndex("by_user", (q: any) => q.eq("user_id", UNPROVEN)).first()).attempts).toBe(1);
     expect(await call(confirmWorkEmailCode, db, UNPROVEN, { code })).toEqual({ proven: true });
     expect((await db.get(UNPROVEN)).emailVerificationTime).toBeGreaterThan(0);
     expect((await call(teamsForMyDomain, db, UNPROVEN)).teams.map((t: any) => t.name)).toEqual(["Acme"]);

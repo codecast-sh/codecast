@@ -1,12 +1,13 @@
 import { OtherAddresses } from "../../../components/settings/OtherAddresses";
 import { PasskeysSection } from "../../../components/settings/PasskeysSection";
+import { SignInEmail } from "../../../components/settings/SignInEmail";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useState, Suspense } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Check, Circle, Github, ListChecks, Mail, TriangleAlert } from "lucide-react";
+import { Check, Circle, Github, ListChecks, TriangleAlert } from "lucide-react";
 import { AppLoader } from "../../../components/AppLoader";
 import { useCodecastSignOut } from "../../../hooks/useCodecastSignOut";
 import { Button } from "../../../components/ui/button";
@@ -151,22 +152,7 @@ function AccountsContent() {
           )}
         </SettingsRow>
 
-        <SettingsRow
-          icon={Mail}
-          label="Email"
-          description={
-            hasEmail ? (
-              <span className="inline-flex items-center gap-1 text-sol-green">
-                <Check className="h-3.5 w-3.5" />
-                {user.email}
-              </span>
-            ) : (
-              "Not configured"
-            )
-          }
-        >
-          {hasEmail ? "Primary" : "Not set"}
-        </SettingsRow>
+        <SignInEmail />
 
         <OtherAddresses />
 
