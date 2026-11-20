@@ -57,9 +57,13 @@ export function typingEditors(editors: Record<string, number>, now = Date.now())
   return Object.entries(editors).filter(([, at]) => now - at < TYPING_MS).map(([id]) => id);
 }
 
-/** A row from someone whose box is in the shared draft (it reports a caret). */
+/**
+ * A row from someone whose box is in the shared draft, focused or not. Its
+ * caret alone would not say: an unfocused box reports none, and its words
+ * would be taken for a leftover nobody is in and replaced on join.
+ */
 export function inSharedDraft(row: PresenceRow): boolean {
-  return row.cursor_pos != null;
+  return !!row.in_draft;
 }
 
 function serverOf(convex: ReturnType<typeof useConvex>): SharedDraftServer {

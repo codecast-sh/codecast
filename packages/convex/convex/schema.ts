@@ -8149,6 +8149,9 @@ export default defineSchema({
     anchor: v.optional(v.object({ message_id: v.string(), offset: v.number() })),
     anchor_at: v.optional(v.number()),
     claims: v.optional(v.array(v.object({ user_id: v.id("users"), text: v.string(), at: v.number(), how: v.optional(v.string()) }))),
+    // compose: rows only. This person's box has joined the shared draft, focused
+    // or not; cursor_pos is set only while it is focused.
+    in_draft: v.optional(v.boolean()),
     updated_at: v.number(),
   })
     .index("by_doc", ["doc_id"])

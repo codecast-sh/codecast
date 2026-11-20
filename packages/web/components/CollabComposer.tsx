@@ -11,7 +11,8 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useRunnerSilence } from "../hooks/useRunnerSilence";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useDocPresence, type PresenceRow } from "../hooks/useDocPresence";
-import { composerPresenceEnabled, typingRows, presenceMember, setCoPresent } from "../lib/composerPresence";
+import { composerPresenceEnabled, hasCoOwner, typingRows, presenceMember, setCoPresent } from "../lib/composerPresence";
+import { useOwnersFromStore } from "./OwnersBadge";
 import { useInboxStore } from "../store/inboxStore";
 import { isConvexId } from "../lib/entityLinks";
 import { PresenceFacepile } from "./PresenceFacepile";
@@ -50,9 +51,9 @@ import { teamMembersOf } from "../lib/activeTeam";
 // Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
 // synthetic "compose:<conversationId>" id, so each side sees who else is in the box
 // and the words they're forming — the "type with me" signal. Broadcast is gated by
-// the hook: a collaborator always announces themselves (forceBroadcast); the owner
-// only announces once a collaborator has actually appeared, so a solo session
-// writes nothing.
+// the hook: a collaborator always announces themselves (forceBroadcast), and so
+// does an owner of a session with another owner; a sole owner only announces
+// once a collaborator has actually appeared, so a solo session writes nothing.
 
 function useComposerPresence(
   conversationId: string,
@@ -72,6 +73,7 @@ function useComposerPresence(
     docId: `compose:${conversationId}`,
     draftText: previewText,
     cursor: shared.active ? shared.caret : null,
+    inDraft: shared.active,
     anchor: anchor ? { message_id: anchor.messageId, offset: anchor.offset } : null,
     enabled: opts.enabled,
     forceBroadcast: opts.forceBroadcast,
@@ -192,7 +194,13 @@ export const OwnerComposerPresence = memo(function OwnerComposerPresence({
   const ownSideQuestion = parseSideQuestion(stored) !== null;
   const draft = ownSideQuestion ? "" : stored;
   const me = useInboxStore((s) => personName(s.currentUser));
-  const present = useComposerPresence(conversationId, draft, { enabled: true, forceBroadcast: false });
+  // Another owner opens this same box, and waits for someone to appear just as
+  // I do: on a co-owned session neither would ever announce itself first.
+  const owners = useOwnersFromStore(conversationId);
+  const runner = useInboxStore((s) => (s.conversations[conversationId]?.user_id ?? null) as string | null);
+  const myId = owners.currentUser?._id ? String(owners.currentUser._id) : null;
+  const coOwned = hasCoOwner(owners.ownerIds, runner, myId);
+  const present = useComposerPresence(conversationId, draft, { enabled: true, forceBroadcast: coOwned });
   const shared = useSharedDraftStatus(conversationId);
   const people = useConversationChatPeople(conversationId, present);
   const rootRef = useRef<HTMLDivElement>(null);

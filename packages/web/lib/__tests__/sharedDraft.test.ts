@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { joinPlan, joinedText, textEdit, SharedDraftSession, type SharedDraftServer } from "../sharedDraft";
+import { inSharedDraft } from "../../hooks/useSharedDraft";
 
 /** docSync's step log in memory: the same version rules getSteps/submitSteps apply. */
 function fakeServer() {
@@ -102,6 +103,32 @@ describe("SharedDraftSession", () => {
     expect(a.shown.at(-1)).toBe("please fix the login bug");
     expect(a.edits).toContain("cam");
     expect(b.edits).toContain("ann");
+  });
+
+  it("joining never replaces the words of a box already in the draft, focused or not", async () => {
+    const { server } = fakeServer();
+    const ann = box(server, "ann~1");
+    const cam = box(server, "cam~1");
+    // Ann's box is in the draft but not focused: her row has no caret, only in_draft.
+    await ann.s.join(() => "fix the login bug", { seed: true, othersLive: () => false });
+    await settle();
+    const annRow = { user_id: "ann", user_name: "Ann", user_color: "#000", in_draft: true };
+    expect(annRow).not.toHaveProperty("cursor_pos");
+    expect(inSharedDraft(annRow)).toBe(true);
+    // Cam (an owner too) opens the page still holding older words of his own: they go under Ann's.
+    expect(await cam.s.join(() => "old idea", { seed: true, othersLive: () => [annRow].some(inSharedDraft) })).toBe("fix the login bug\n\nold idea");
+  });
+
+  it("a leftover draft nobody is in is replaced by the owner's newer words, though others are on the page", async () => {
+    const { server } = fakeServer();
+    const old = box(server, "ann~1");
+    await old.s.join(() => "fix the login bug", { seed: true, othersLive: () => false });
+    await settle();
+    old.s.close();
+    // Cam is on the page (a row) but his box has not joined: the draft is a leftover.
+    const camRow = { user_id: "cam", user_name: "Cam", user_color: "#000" };
+    const ann = box(server, "ann~2");
+    expect(await ann.s.join(() => "fix the login bug on mobile", { seed: true, othersLive: () => [camRow].some(inSharedDraft) })).toBe("fix the login bug on mobile");
   });
 
   it("applies steps it already holds once, whichever answer brings them", async () => {
