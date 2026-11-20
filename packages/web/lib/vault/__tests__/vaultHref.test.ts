@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FILES_ROUTE, filesHref, isFilesPath, legacyFilesHref } from "../vaultHref";
+import { FILES_ROUTE, filesHref, isFilesPath, legacyFilesHref, sameNamedCheckoutPaths } from "../vaultHref";
 
 describe("filesHref", () => {
   test("mints the canonical /files route, never the legacy one", () => {
@@ -64,5 +64,27 @@ describe("legacyFilesHref", () => {
     expect(legacyFilesHref("/vault")).toBeNull();
     expect(legacyFilesHref("/vault?s=sec-12")).toBeNull();
     expect(legacyFilesHref("/files?f=a.md")).toBeNull();
+  });
+});
+
+describe("sameNamedCheckoutPaths", () => {
+  const roots = ["/Users/ada/src/union-mobile", "/Users/ada/src/union-mobile-wt", "/Users/ada/src/codecast/"];
+  test("maps a teammate's checkout path onto the same-named checkout here", () => {
+    expect(sameNamedCheckoutPaths("/Users/jason/code/union-mobile/docs/line/prompting.md", roots)).toEqual([
+      "/Users/ada/src/union-mobile/docs/line/prompting.md",
+    ]);
+  });
+  test("maps a cloud host path and the repo folder itself", () => {
+    expect(sameNamedCheckoutPaths("/home/ubuntu/work/codecast", roots)).toEqual(["/Users/ada/src/codecast"]);
+  });
+  test("puts the outermost folder first", () => {
+    expect(sameNamedCheckoutPaths("/Users/jason/code/union-mobile/docs/x.md", [
+      "/Users/ada/notes/docs",
+      "/Users/ada/src/union-mobile",
+    ])).toEqual(["/Users/ada/src/union-mobile/docs/x.md", "/Users/ada/notes/docs/x.md"]);
+  });
+  test("offers nothing for a path already in a checkout here or with no matching folder", () => {
+    expect(sameNamedCheckoutPaths("/Users/ada/src/union-mobile/README.md", roots)).toEqual([]);
+    expect(sameNamedCheckoutPaths("/Users/jason/code/other/README.md", roots)).toEqual([]);
   });
 });
