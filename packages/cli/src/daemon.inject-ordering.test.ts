@@ -133,7 +133,8 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     // no preceding mark means the mark is after the paste (or missing) -- the doubled-message race.
     // Optional client routing remains explicit in these patterns: tmux accepts a
     // client-id expression, while direct terminal delivery accepts exactly the
-    // `{ agentType: detectedType }` safety option. The latter is deliberately not
+    // `{ agentType: detectedType }` safety option, plus the agent's `pid` (Orca
+    // finds its terminal from the agent's environment). The latter is deliberately not
     // a loose "anything until )" match, so a renamed/moved delivery call still
     // fails this guard instead of silently reducing the number of audited sites.
     // The two tmux paths now run inside `deliveryStep`, which times the step and
@@ -142,7 +143,7 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     const directPasteCallSites = [
       /await\s+deliveryStep\([^)]*?,\s*\(\)\s*=>\s*injectViaTmux\(\s*startedTmuxTarget\s*,\s*content\s*(?:,\s*[^)]*)?\)/g,
       /await\s+deliveryStep\([^)]*?,\s*\(\)\s*=>\s*injectViaTmux\(\s*injectTarget\s*,\s*content\s*(?:,\s*[^)]*)?\)/g,
-      /await\s+injectViaTerminal\(\s*live\.proc\.tty\s*,\s*content\s*,\s*live\.proc\.termProgram\s*(?:,\s*\{\s*agentType:\s*detectedType\s*,?\s*\})?\s*\)/g,
+      /await\s+injectViaTerminal\(\s*live\.proc\.tty\s*,\s*content\s*,\s*live\.proc\.termProgram\s*(?:,\s*\{\s*agentType:\s*detectedType\s*,(?:\s*pid:\s*live\.proc\.pid\s*,)?\s*\})?\s*\)/g,
     ];
 
     let totalSitesChecked = 0;

@@ -15,7 +15,7 @@ export const SESSION_ENV_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "C
 /** Env credentials Claude bills ahead of its credential store, so an inherited
  *  one (a dotfile, a unit's EnvironmentFile, tmux) survives every switch. */
 export const STORE_OUTRANKING_ENV = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
-const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM", "CLAUDE_SECURESTORAGE_CONFIG_DIR", ...STORE_OUTRANKING_ENV];
+const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM", "ORCA_PANE_KEY", "CLAUDE_SECURESTORAGE_CONFIG_DIR", ...STORE_OUTRANKING_ENV];
 
 /** An environment that names no session: for what the daemon starts on its own behalf. */
 export function withoutSessionIds<T extends Record<string, string | undefined>>(env: T): T {
@@ -107,6 +107,11 @@ export function terminalProgramOf(pid: number, read: (pid: number) => Env | null
   return read(pid)?.TERM_PROGRAM || undefined;
 }
 
+/** The Orca pane ("<tabId>:<leafId>") a process was started in; orca.ts finds its live terminal from it. */
+export function orcaPaneKeyOf(pid: number, read: (pid: number) => Env | null = readEnv): string | undefined {
+  return read(pid)?.ORCA_PANE_KEY || undefined;
+}
+
 /**
  * Whether a Claude Code process reads its login from the credential store at
  * `storeDir`. Only a process launched with that store follows a switch that
@@ -142,6 +147,7 @@ export function terminalProgramForApp(comm: string): string | undefined {
   if (/^alacritty$/i.test(name)) return "Alacritty";
   if (/^tmux/.test(name)) return "tmux";
   if (/^herdr$/.test(name)) return "herdr";
+  if (/^Orca( Helper)?$/.test(name)) return "Orca";
   return undefined;
 }
 

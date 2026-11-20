@@ -54,12 +54,24 @@ export function clientAcceptsBracketedPaste(agentType?: AgentClientId): boolean 
 }
 
 /**
+ * Text with no bracketed-paste marker left in it. A message carrying
+ * `ESC[201~` would end the paste it is wrapped in, and the rest of it would
+ * reach the agent as typed keys (a newline there submits). Removing a marker
+ * can join the text around it into a new one, so this repeats until none is left.
+ */
+function withoutPasteMarkers(text: string): string {
+  let out = text;
+  while (/\x1b\[20[01]~/.test(out)) out = out.replace(/\x1b\[20[01]~/g, "");
+  return out;
+}
+
+/**
  * Shape message text for terminal injection. Line endings are normalized,
  * trailing newlines are removed so the caller's discrete Enter submits, and
  * unbracketed transports flatten internal newlines to keep the prompt whole.
  */
 export function prepareInjectedContent(content: string, opts: { bracketed: boolean }): string {
-  const normalized = content.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+  const normalized = withoutPasteMarkers(content).replace(/\r\n?/g, "\n").replace(/\n+$/, "");
   const shaped = opts.bracketed ? normalized : normalized.replace(/\n/g, " ");
   // An empty paste would leave an existing draft untouched; the following Enter
   // could then submit that draft. A single space safely makes the paste explicit.

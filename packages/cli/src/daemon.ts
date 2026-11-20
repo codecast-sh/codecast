@@ -414,7 +414,7 @@ import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decode
 import { collectMachineResources, processesStartedOutside, readHostPressure } from "./systemResources.js";
 import { setBackgroundSessions, setGovernorBackground, holdForDelivery, isDeliveryHeld } from "./backgroundPriority.js";
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
-import { followsCredentialStore, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
+import { followsCredentialStore, orcaPaneKeyOf, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
 import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState, agentAtLoginScreen } from "./tmuxPaneState.js";
 import {
@@ -13081,7 +13081,7 @@ async function processSessionFilePass(
                     await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
                     log(`Injected '${key}' via tmux for session ${sessionId.slice(0, 8)}`);
                   } else {
-                    await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true });
+                    await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true, pid: proc.pid });
                     log(`Injected '${key}' via terminal for session ${sessionId.slice(0, 8)}`);
                   }
                 } catch (err) {
@@ -19515,12 +19515,26 @@ function getTerminalLabel(termProgram?: string): string {
     case "kitty": return "Kitty";
     case "WezTerm": return "WezTerm";
     case "Alacritty": return "Alacritty";
+    case "Orca": return "Orca";
     default: return termProgram || "iTerm2";
   }
 }
 
-// Terminals where we know there's no direct injection API — tmux required
-const TMUX_ONLY_TERMINALS = new Set(["Alacritty"]);
+// The terminals injectViaTerminal has an injector for. AppleScript reaches only
+// iTerm2 and Terminal.app, so any other terminal that names itself (vscode,
+// WarpTerminal, …) owns a tty neither app has: sending it down that path failed
+// every attempt, and a failure streak stops the person's own agent. Alacritty
+// has no injection API at all. tmux is reached upstream, and an unnamed
+// terminal keeps the AppleScript default.
+const INJECTABLE_TERMINALS = new Set(["iTerm.app", "Apple_Terminal", "kitty", "WezTerm", "herdr", "ghostty", "Orca", "tmux"]);
+
+/** Orca's transport, loaded on first use: only an agent in an Orca tab needs it, and the daemon boots without it. */
+const orcaPane: typeof import("./orca.js").orcaPane = async (...args) => (await import("./orca.js")).orcaPane(...args);
+
+/** A terminal codecast cannot type into, so a live agent in it is held rather than retried. */
+function terminalLacksInjector(termProgram?: string): boolean {
+  return !!termProgram && !INJECTABLE_TERMINALS.has(termProgram);
+}
 
 // ── AppleScript injection (iTerm2 + Terminal.app) ──────────────────────────
 // Extracted from original injectViaTerminal — logic is identical
@@ -19869,7 +19883,7 @@ export async function injectViaTerminal(
   tty: string,
   content: string,
   termProgram?: string,
-  opts: { keystrokes?: boolean; agentType?: AgentClientId } = {},
+  opts: { keystrokes?: boolean; agentType?: AgentClientId; pid?: number } = {},
 ): Promise<void> {
   const keystrokes = opts.keystrokes ?? false;
   const bracketed = clientAcceptsBracketedPaste(opts.agentType);
@@ -19885,10 +19899,12 @@ export async function injectViaTerminal(
   if (termProgram === "ghostty") {
     return injectViaGhostty(tty, content, keystrokes, bracketed);
   }
-  if (termProgram && TMUX_ONLY_TERMINALS.has(termProgram)) {
-    throw new Error(`${getTerminalLabel(termProgram)} does not support direct injection — use tmux for this terminal`);
+  if (termProgram === "Orca") {
+    const paneKey = opts.pid ? orcaPaneKeyOf(opts.pid) : undefined;
+    return injectThroughPane(await orcaPane(paneKey, bracketed, log), content, keystrokes);
   }
-  // Apple_Terminal, iTerm.app, unknown → existing AppleScript path
+  if (terminalLacksInjector(termProgram)) throw new TerminalHoldError(getTerminalLabel(termProgram));
+  // Apple_Terminal, iTerm.app, unnamed → existing AppleScript path
   return injectViaAppleScript(tty, content, termProgram, keystrokes, bracketed);
 }
 
@@ -28142,7 +28158,7 @@ async function deliverMessageIntoSession(
       // every wake to one session retried into an empty osascript for hours on
       // 2026-09-07. Fall through to the resume paths instead.
       logDelivery(`Live process pid=${live.proc.pid} has no tty — no terminal to inject into`);
-    } else if (live.proc.termProgram && TMUX_ONLY_TERMINALS.has(live.proc.termProgram)) {
+    } else if (terminalLacksInjector(live.proc.termProgram)) {
       // Nothing can type into this window, and the agent is the person's own
       // process: hold with a reason they can see (terminalHold.ts).
       throw new TerminalHoldError(termLabel);
@@ -28159,6 +28175,7 @@ async function deliverMessageIntoSession(
         handedOver = true;
         await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
           agentType: detectedType,
+          pid: live.proc.pid,
         });
         logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
         return true;
@@ -32552,7 +32569,7 @@ async function main(): Promise<void> {
                           if (tmuxTarget) {
                             await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
                           } else {
-                            await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true });
+                            await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true, pid: proc.pid });
                           }
                           log(`Injected '${key}' for session ${sessionId.slice(0, 8)}`);
                           sendAgentStatus(syncService, convId, sessionId, "working");
@@ -34536,7 +34553,7 @@ async function main(): Promise<void> {
                   }
                   if (!injected) {
                     try {
-                      await injectViaTerminal(proc.tty, approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true });
+                      await injectViaTerminal(proc.tty, approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true, pid: proc.pid });
                       injected = true;
                     } catch {}
                   }

@@ -28,6 +28,7 @@ import { BlankStartHoldError, RunLimitHoldError, TerminalHoldError } from "./ter
 import { ForeignWriterHoldError } from "./foreignSessionWriter";
 import { BackendSwitchHoldError } from "./claudeSdk/switchBackend";
 import { ghosttyPane } from "./ghostty";
+import { orcaPane } from "./orca";
 import { unreachableTerminalOf } from "../../shared/contracts/deliveryHold";
 import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, isClaudeRewindDialog } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
@@ -258,6 +259,21 @@ function fixture(transport = "tmux", cached = true) {
       sendKeys: async (_tty: string, keys: string[]) => { for (const key of keys) input(["\r", "Return"].includes(key) ? "Enter" : key); },
       readScreen: async () => capture(),
     }),
+    // Orca's CLI: one live terminal for the agent's pane; `send --text` writes raw bytes.
+    orcaPaneKeyOf: () => "tab-1:leaf-2",
+    orcaPane: (paneKey: string | undefined, bracketed: boolean, log: (line: string) => void) => orcaPane(paneKey, bracketed, log, {
+      cli: () => "/Applications/Orca.app/Contents/Resources/bin/orca",
+      run: async (_cli: string, args: string[]) => {
+        if (args[1] === "list") return JSON.stringify({ ok: true, result: { terminals: [{ handle: "term_t", tabId: "tab-1", leafId: "leaf-2", writable: true }] } });
+        if (args[1] === "read") return JSON.stringify({ ok: true, result: { terminal: { latestCursor: "100", tail: args.includes("--cursor") ? capture().split("\n") : [] } } });
+        const text = args[args.indexOf("--text") + 1];
+        if (text === "\r") input("Enter");
+        else if (text.startsWith("\x1b[200~")) input("paste", text.slice(6, -6));
+        else if (/^[0-9]$/.test(text)) input(text);
+        else input("paste", text);
+        return JSON.stringify({ ok: true, result: {} });
+      },
+    }),
     hasOpenBackgroundWork: () => false, subagentActiveAgoMs: () => Infinity,
     planSessionTeardown, acquireSessionProcessOwnership: async () => "owned",
     reapPidTree: async (pid: number) => { reaped.push(pid); return 1; }, sessionProcessCache: new Map(),
@@ -300,12 +316,12 @@ function fixture(transport = "tmux", cached = true) {
       "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption", "isClaudeIdleResumeDialog", "isIdleResumeOptionRow",
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
-      "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "injectViaGhostty", "herdrKey", "injectViaHerdr", "noteUnreachableAgent", "injectThroughPane", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
+      "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "injectViaGhostty", "herdrKey", "injectViaHerdr", "noteUnreachableAgent", "injectThroughPane", "normalizeTty", "getTerminalLabel", "terminalLacksInjector", "injectViaTerminal",
       "deliverMessage", "deliverMessageIntoSession", "launchPromptCarried", "settleLaunchPrompt", "injectedMarkSettled", "rependAfterAttempt",
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho", "heldFatal",
     ];
     const constants = [
-      "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "UNREADABLE_SCREEN_HOLD_REASON", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
+      "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "UNREADABLE_SCREEN_HOLD_REASON", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "INJECTABLE_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "PANE_REBUILD_THRESHOLD", "PANE_REBUILD_WINDOW_MS", "PANE_REBUILD_MIN_GAP_MS", "unresolvablePanes", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
       "ANSI_ESCAPE_RE", "MACHINE_WAKE_IDLE_RESUME_CHOICE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME", "STARTED_FATAL_CONFIRM_MS", "fatalPaneSince",
     ].map(name => {
@@ -988,7 +1004,7 @@ describe("machine prompt delivery safety", () => {
     await expect(f.probeStartedPane(entry, f.assertPromptAbsent)).rejects.toThrow("human answer");
   });
 
-  for (const transport of ["kitty", "WezTerm", "ghostty", "iTerm.app", "Apple_Terminal"]) {
+  for (const transport of ["kitty", "WezTerm", "ghostty", "Orca", "iTerm.app", "Apple_Terminal"]) {
     for (const format of [session]) test.each([menu, confirmation])(`${transport}: ${format.name} literal dialog stays composer text: %s`, async literal => {
       const f = fixture(transport);
       f.state.menu = null;
@@ -1030,7 +1046,7 @@ describe("machine prompt delivery safety", () => {
     });
   }
 
-  test.each(["kitty", "WezTerm", "ghostty", "iTerm.app"])("%s rechecks after paste before submitting", async transport => {
+  test.each(["kitty", "WezTerm", "ghostty", "Orca", "iTerm.app"])("%s rechecks after paste before submitting", async transport => {
     const f = fixture(transport);
     f.state.menu = null;
     f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = menu; };
@@ -1066,7 +1082,9 @@ describe("machine prompt delivery safety", () => {
   // sender saw only "Connecting...". It is held now, naming the terminal, at a
   // slow recheck that spends no retries, and the person's process is left alone.
   // Ghostty is typed into through AppleScript, so it holds only when that is out of reach.
-  test.each([["Alacritty", "Alacritty"], ["ghostty", "Ghostty"]])("a live agent in %s is held with the terminal named, never retried or replaced", async (transport, label) => {
+  // A terminal with no injector at all (VS Code's) once went down the iTerm2
+  // AppleScript path and failed every attempt, as Orca did before it had one.
+  test.each([["Alacritty", "Alacritty"], ["ghostty", "Ghostty"], ["vscode", "vscode"]])("a live agent in %s is held with the terminal named, never retried or replaced", async (transport, label) => {
     const f = fixture(transport);
     f.state.ghosttyScriptable = false;
     f.hooks.resume = () => { throw new Error("resumed beside the person's own process"); };
