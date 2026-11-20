@@ -138,6 +138,13 @@ describe("resumeFailedRunCore (cast workflow resume)", () => {
     expect(commandArgs(tables)).toEqual([{ command: "run_workflow", device: "dev-mini", args: { workflow_run_id: RUN } }]);
   });
 
+  test("a station the run stood at when its runner stopped no longer reads running once the run goes on from another", async () => {
+    // ct-97276: a reboot stopped the runner at Hold; resumed at Guard, Hold still read "running" beside it.
+    const { ctx, tables } = await failed({ node_statuses: [{ node_id: "guard", status: "completed", outcome: "failure", started_at: NOW - 9 }, { node_id: "hold", status: "running", started_at: NOW - 5, visits: 1 }] });
+    await resumeFailedRunCore(ctx, HOST, RUN, "guard", {}, NOW + 1);
+    expect(tables.workflow_runs[0].node_statuses).toEqual([{ node_id: "guard", status: "completed", outcome: "failure", started_at: NOW - 9 }, { node_id: "hold", status: "pending", started_at: undefined, activity: undefined, visits: 1 }]);
+  });
+
   test("queued, a resume is recorded for the line's sweep and starts nothing yet", async () => {
     const { ctx, tables } = await failed();
     expect(await resumeFailedRunCore(ctx, HOST, RUN, "verify", { queue: true }, NOW + 1)).toMatchObject({ resumed_at: "verify", queued: true });

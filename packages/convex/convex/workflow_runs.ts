@@ -1632,7 +1632,10 @@ export async function resumeRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"wo
 export async function resumeRunAt(ctx: Ctx, _by: Id<"users">, run: Doc<"workflow_runs">, node: string, now: number, opts: { newAttempt?: boolean } = {}): Promise<{ from_start: boolean }> {
   const fromStart = !tookPastStart(run);
   const at = fromStart ? { status: "pending" as const, current_node_id: undefined } : { status: "running" as const, current_node_id: node };
-  await ctx.db.patch(run._id, { ...at, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, resume_queued: undefined, ...(opts.newAttempt || fromStart ? { visits_reset_at: now } : {}), updated_at: now });
+  // A station the run stood at when its runner stopped reads running until a runner reports it again; one the run no
+  // longer goes on from never will, so it goes back to pending (ct-97276: Hold read running beside the resumed Guard).
+  const node_statuses = (run.node_statuses ?? []).map((n) => (n.status === "running" && (fromStart || n.node_id !== node) ? { ...n, status: "pending" as const, started_at: undefined, activity: undefined } : n));
+  await ctx.db.patch(run._id, { ...at, node_statuses, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, resume_queued: undefined, ...(opts.newAttempt || fromStart ? { visits_reset_at: now } : {}), updated_at: now });
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task?.execution_status === "blocked") await patchTask(ctx, task, { execution_status: undefined, execution_concerns: undefined });
   // The machine's daemon takes commands for its own account: the run's, whoever asked for the resume.
