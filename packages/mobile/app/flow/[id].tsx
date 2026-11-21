@@ -221,7 +221,7 @@ function Routes({ routes }: { routes: SideRoute[] }) {
   );
 }
 
-const TEXT_WORD = { prompt: 'Prompt', system: 'System prompt', script: 'Script', doc: 'Decision document' } as const;
+const TEXT_WORD = { prompt: 'Prompt', guide: "Project's guidance", system: 'System prompt', script: 'Script', doc: 'Decision document' } as const;
 
 /** One step, whole: who does it and with what, the words it runs, and where each outcome sends the work. */
 function StepSheet({ flow, step, onClose, onOpenFlow }: { flow: AppFlow; step: DiagramStep | null; onClose: () => void; onOpenFlow: (slug: string) => void }) {
