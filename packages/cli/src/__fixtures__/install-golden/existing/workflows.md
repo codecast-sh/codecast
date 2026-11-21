@@ -57,6 +57,14 @@ cast flow run change                # this session's own edits through a library
 cast flow run - <<'EOF' … EOF       # a flow written here (extends a backbone, or whole)
 ```
 
+Asked to change the project's pipeline (add a lint check, tell Review about a house rule, skip a step, run e2e only when some paths change), make the edit with `cast flow edit`, never by rewriting the flow: it writes one line in `.codecast/flows/<flow>.cast`, validates it, and prints the edit for the conversation. It commits nothing; the edit ships through the pipeline like any change.
+
+```bash
+cast flow edit change add lint --after check --run "bun run lint"   # or --agent "<prompt>", --person "<question>"; --when "<globs>"
+cast flow edit change guide review "Also check the migrations"      # appended to the inherited prompt (prompt replaces it)
+cast flow edit change skip decide | when e2e "landing/**" | undo review
+```
+
 `cast guide workflows` shows the graph syntax, segments, slots and import.
 <!-- cast @VERSION@ -->
 <!-- /codecast-workflows -->

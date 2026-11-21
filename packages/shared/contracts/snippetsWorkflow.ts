@@ -24,6 +24,14 @@ cast flow run change                # this session's own edits through a library
 cast flow run - <<'EOF' … EOF       # a flow written here (extends a backbone, or whole)
 \`\`\`
 
+Asked to change the project's pipeline (add a lint check, tell Review about a house rule, skip a step, run e2e only when some paths change), make the edit with \`cast flow edit\`, never by rewriting the flow: it writes one line in \`.codecast/flows/<flow>.cast\`, validates it, and prints the edit for the conversation. It commits nothing; the edit ships through the pipeline like any change.
+
+\`\`\`bash
+cast flow edit change add lint --after check --run "bun run lint"   # or --agent "<prompt>", --person "<question>"; --when "<globs>"
+cast flow edit change guide review "Also check the migrations"      # appended to the inherited prompt (prompt replaces it)
+cast flow edit change skip decide | when e2e "landing/**" | undo review
+\`\`\`
+
 \`cast guide workflows\` shows the graph syntax, segments, slots and import.
 ${WORKFLOW_SNIPPET_END}
 `;
@@ -81,6 +89,18 @@ digraph trial {
   review -> build
   card [shape=hexagon]
   card -> exit
+}
+\`\`\`
+
+A variant edits its backbone one line at a time, and each line desugars into the edges you would write by hand (the graph hashes the same); \`cast flow edit <flow> add|guide|prompt|run|skip|when|undo\` writes them, and \`cast flow show <flow>\` prints them in words:
+
+\`\`\`dot
+digraph change {
+  graph [extends="change"]
+  lint   [after="check", label="Lint", shape=parallelogram, script="bun run lint"]  // check -> lint -> review; fails back like Check (fix= elsewhere)
+  review [guide="@change/review.md"]          // appended to Review's inherited prompt; review__review [...] edits a segment's station
+  e2e    [after="check", when="landing/**", shape=parallelogram, script="bun e2e"]  // runs only when $change_files touches it
+  decide [skip=true]                          // review -> ship; what only Decide reached goes too
 }
 \`\`\`
 
