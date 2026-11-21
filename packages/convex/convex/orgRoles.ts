@@ -1212,7 +1212,9 @@ export async function performProvisionRole(
 }
 
 // `fresh` always starts a new session: a project's session is never seated.
-type ProvisionRoleArgs = { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string; fresh?: boolean };
+// `host_user_id` runs and bills the new session when it is not the caller (a
+// restart keeps the seat on its runner); the caller is still who is authorized.
+type ProvisionRoleArgs = { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string; fresh?: boolean; host_user_id?: Id<"users"> };
 
 async function performProvisionRoleCore(
   ctx: any,
@@ -1232,7 +1234,7 @@ async function performProvisionRoleCore(
   if (!role.brief_doc_id) patch.brief_doc_id = await insertBriefDoc(ctx, userId, role, briefTemplate(role));
   if (!role.trust) patch.trust = defaultTrustFor(role);
   const agentType = args.agent_type ? (normalizeBackend(args.agent_type) === "claude" ? "claude_code" : normalizeBackend(args.agent_type)) : undefined;
-  const provisioned = await provisionStandingAgent(ctx, userId, {
+  const provisioned = await provisionStandingAgent(ctx, args.host_user_id ?? userId, {
     scope_type: role.scope_type,
     team_id: role.team_id ?? undefined,
     name: role.name,
@@ -1794,7 +1796,9 @@ async function performResumeRoleCore(ctx: any, userId: Id<"users">, args: { role
 // conversation instead, seeded the way a first standing session is, and
 // retires the old one: its routines cancelled, its anchor decommissioned, its
 // seat markers cleared, and its thread kept as the role's previous standing
-// session.
+// session. The new session runs where the old one ran (its runner, not the
+// caller), and a project whose canonical session was the old seat points at
+// the new one.
 export async function performRestartRole(ctx: any, userId: Id<"users">, args: { role_id: string; fresh?: boolean }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const conv = await standingConversationOf(ctx, role);
@@ -1820,7 +1824,18 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
       // A backend a device can start (not the hosted assistant's).
       agent_type: BACKENDS.has(conv.agent_type) ? conv.agent_type : undefined,
       fresh: true,
+      host_user_id: conv.user_id,
     });
+    if (provisioned.conversation_id) {
+      const inBoundary: any[] = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", boundaryKey(role))).collect();
+      const inScope = await Promise.all((role.scope?.project_ids ?? []).map((id: any) => ctx.db.get(id)));
+      const repointed = new Set<string>();
+      for (const project of [...inBoundary, ...inScope]) {
+        if (!project || repointed.has(String(project._id)) || String(project.default_session_id ?? "") !== String(conv._id)) continue;
+        repointed.add(String(project._id));
+        await ctx.db.patch(project._id, { default_session_id: provisioned.conversation_id });
+      }
+    }
     return { role_id: role._id, conversation_id: provisioned.conversation_id, short_id: provisioned.short_id, fresh: true, previous_conversation_id: conv._id, previous_short_id: previous.short_id };
   });
 }
