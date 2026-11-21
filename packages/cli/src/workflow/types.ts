@@ -154,6 +154,8 @@ export interface WorkflowGraph {
   edits?: FlowEditChange[];
   /** The base stations a skip took off the path, with the ones nothing reached after it: not part of the graph's hash. */
   pruned?: string[];
+  /** Stations that run only when the change touches their paths (when=), with those paths: not part of the graph's hash. */
+  gated?: Record<string, string[]>;
 }
 
 export interface WorkflowRunState {

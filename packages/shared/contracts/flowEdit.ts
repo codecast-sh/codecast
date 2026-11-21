@@ -20,6 +20,12 @@ export type FlowEditChange = {
   before?: string;
   /** add: where a failure goes, when not the anchor's own way back. */
   fix?: string;
+  /** add: nothing leads back from a failure of the station before it, so a failure of this one ends the run. */
+  ends_on_failure?: true;
+  /** undo: the station was the project's own, so undoing it takes it out. */
+  added?: true;
+  /** run: what the station ran before (its first line), when the command replaced one the base wrote. */
+  replaces?: string;
   /** when: the paths the change must touch for the station to run. */
   paths?: string[];
   /** guide: the guidance text as the station reads it, appended after the inherited prompt (and the station it landed on). */
@@ -44,19 +50,31 @@ export type FlowEdit = {
 /** The fence body a transcript draws an edit from: ```flow {"edit": {...}}. */
 export type FlowEditFence = { edit: FlowEdit };
 
-/** Splits `when=` paths: "landing/**, backend/src/routes/**". */
-export const whenPaths = (spec: string): string[] => spec.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+/** Splits `when=` paths on commas and spaces outside braces: "landing/**, {api,web}/src/**". */
+export function whenPaths(spec: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let depth = 0;
+  for (const ch of spec) {
+    if (ch === "{") depth++;
+    if (ch === "}") depth = Math.max(0, depth - 1);
+    if (!depth && (ch === "," || /\s/.test(ch))) { if (cur) out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 
 /** One edit as words: "+ Lint after Check", "~ Review: guidance added", "Decide skipped", "Lint runs when landing/**". */
 export function flowEditWords(c: FlowEditChange, labelOf: (id: string) => string = (id) => id): string {
   const name = c.label ?? labelOf(c.station);
   switch (c.op) {
-    case "add": return `+ ${name} ${c.before ? `before ${labelOf(c.before)}` : `after ${labelOf(c.after ?? "")}`}${c.fix ? `, failing to ${labelOf(c.fix)}` : ""}`;
+    case "add": return `+ ${name} ${c.before ? `before ${labelOf(c.before)}` : `after ${labelOf(c.after ?? "")}`}${c.fix ? `, failing to ${labelOf(c.fix)}` : c.ends_on_failure ? "; a failure ends the run" : ""}`;
     case "guide": return `~ ${name}: guidance added`;
     case "prompt": return `~ ${name}: prompt replaced`;
-    case "run": return `~ ${name}: runs a new command`;
+    case "run": return `~ ${name}: runs a new command${c.replaces ? `, replacing ${c.replaces}` : ""}`;
     case "skip": return `${name} skipped`;
     case "when": return c.paths?.length ? `${name} runs when ${c.paths.join(", ")}` : `${name} always runs`;
-    case "undo": return `${name}: back to the base`;
+    case "undo": return c.added ? `- ${name}` : `${name}: back to the base`;
   }
 }

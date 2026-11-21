@@ -242,7 +242,11 @@ describe("evalCondition: the language", () => {
     expect(evalCondition('change_files touches "packages/we"', files)).toBe(false);
     expect(evalCondition('not change_files touches "backend/**"', files)).toBe(true);
     expect(evalCondition('(outcome = success) and change_files touches "**/*.tsx"', files)).toBe(true);
-    expect(evalCondition('change_files touches "landing/**"', { ...ctx, change_files: "" })).toBe(false);
+    // An empty list is a change whose files nobody read (a branch run before they are filled): unknown, so it runs.
+    expect(evalCondition('change_files touches "landing/**"', { ...ctx, change_files: "" })).toBe(true);
+    expect(evalCondition('not change_files touches "landing/**"', { ...ctx, change_files: "" })).toBe(false);
+    expect(evalCondition('change_files touches "{a,b}/**"', { ...ctx, change_files: "b/x.ts" })).toBe(true);
+    expect(evalCondition('change_files touches "{a,b}/**, docs/"', { ...ctx, change_files: "c/x.ts" })).toBe(false);
     // No change files known: the gated station runs rather than passing unseen.
     expect(evalCondition('change_files touches "landing/**"', ctx)).toBe(true);
     expect(evalCondition('not change_files touches "landing/**"', ctx)).toBe(false);

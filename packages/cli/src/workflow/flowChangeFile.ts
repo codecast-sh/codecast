@@ -4,6 +4,7 @@
 // flowChange.ts so the runner reads it without loading the freeze.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 
 export type FrozenChange = {
   source: "session" | "branch" | "task" | "pr";
@@ -27,6 +28,23 @@ export type FrozenChange = {
 };
 
 const CHANGE_FILE = "change.json";
+
+/**
+ * The files a branch changes against the repository's main line: `git diff --name-only <merge-base>..<branch>`,
+ * where main is origin's HEAD, else origin/main, origin/master, main or master. Empty when none of that can be read,
+ * which a station gated on paths (when=) reads as unknown, so it runs.
+ */
+export function branchChangePaths(top: string, branch: string): string[] {
+  const git = (...args: string[]) => {
+    const r = spawnSync("git", ["-C", top, ...args], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+    return r.status === 0 ? r.stdout.trim() : null;
+  };
+  const head = git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD");
+  const main = [head, "origin/main", "origin/master", "main", "master"].find((b) => b && b !== branch && git("rev-parse", "--verify", "--quiet", b) !== null);
+  const base = main ? git("merge-base", main, branch) : null;
+  const out = base ? git("diff", "--name-only", `${base}..${branch}`) : null;
+  return out ? out.split("\n").filter(Boolean) : [];
+}
 
 /** Leave the change where the run's stations read it: `$run_dir/change.json`. */
 export function writeFrozenChange(runDir: string, change: FrozenChange): string {
@@ -64,7 +82,8 @@ export function frozenChangeContext(runDir: string | undefined): Record<string, 
       branch: change.branch,
       ...(change.session ? { change_session: change.session } : {}),
       ...(change.conversation ? { change_conversation: change.conversation } : {}),
-      change_files: (change.paths ?? []).join(" "),
+      // No paths is a change whose files were not read: left unset, so `touches` reads it as unknown.
+      ...(change.paths?.length ? { change_files: change.paths.join(" ") } : {}),
       change_return: changeReturnWords(change),
     };
   } catch {

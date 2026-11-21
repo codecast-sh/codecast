@@ -11,9 +11,10 @@
 // `touches` reads its left side as paths (space-separated, as $change_files
 // holds them) and its right as globs (comma- or space-separated): true when
 // any path matches any glob. A glob ending in `/`, or one with no glob
-// characters, matches everything under that directory too. A left side that
-// names no context value (a run with no change files known) touches
-// everything, so a station gated on paths runs rather than passing unseen.
+// characters, matches everything under that directory too; braces hold
+// alternatives (`{api,web}/**`). A left side that names no context value, or an
+// empty one (a run with no change files known), touches everything, so a
+// station gated on paths runs rather than passing unseen.
 // An operand is a quoted string (taken as written) or a bare word. A bare word
 // that names a context key reads its value; `context.<key>` reads `<key>`;
 // `<node>.json.<path>` reads a field of that node's JSON output. Any other
@@ -26,6 +27,7 @@
 // context value that is non-empty and not "false" or "0".
 
 import { lastJsonBlock } from "@codecast/shared/contracts";
+import { whenPaths } from "@codecast/shared/contracts/flowEdit";
 
 type Token =
   | { kind: "op"; value: string }
@@ -47,7 +49,7 @@ const CMP_OPS = new Set(["=", "==", "!=", ">", "<", ">=", "<=", "contains", "tou
 /** Whether any of `paths` (space-separated) matches any of `globs` (comma- or space-separated). */
 export function pathsTouch(paths: string, globs: string): boolean {
   const files = paths.split(/\s+/).filter(Boolean).map((f) => f.replace(/^\.\//, ""));
-  return globs.split(/[\s,]+/).filter(Boolean).some((raw) => {
+  return whenPaths(globs).some((raw) => {
     const g = raw.replace(/^\.\//, "");
     if (!/[*?[{]/.test(g)) {
       const dir = g.replace(/\/+$/, "");
@@ -204,7 +206,7 @@ function evalNode(node: Node, context: Record<string, string>): boolean {
       if (node.op === "contains") return a.includes(b);
       if (node.op === "touches") {
         const paths = node.left.quoted ? a : lookupContextVar(context, node.left.text);
-        return paths === undefined || pathsTouch(paths, b);
+        return paths === undefined || !paths.trim() || pathsTouch(paths, b);
       }
       const na = asNumber(a);
       const nb = asNumber(b);

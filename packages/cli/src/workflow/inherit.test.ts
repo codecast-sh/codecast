@@ -152,7 +152,8 @@ describe("variant edits: after=, before=, skip, when=, guide=", () => {
       .replace("start -> investigate -> build -> review", "start -> investigate -> build -> lint")
       .replace("push -> exit", `push -> exit\n  lint -> review [condition="outcome = success"]`)));
     expect(graphHash(g)).toBe(graphHash(written));
-    expect(g.edits).toEqual([{ op: "add", station: "lint", label: "lint", after: "build" }]);
+    // build has no way back, so a failing lint ends the run, and the edit says so.
+    expect(g.edits).toEqual([{ op: "add", station: "lint", label: "lint", after: "build", ends_on_failure: true }]);
   });
 
   test("a failed inserted station goes the way its anchor goes back; fix= overrides it", () => {
@@ -192,10 +193,11 @@ describe("variant edits: after=, before=, skip, when=, guide=", () => {
   });
 
   test("when= runs a station only when the change touches its paths, and goes past it otherwise", () => {
-    const g = parse(`digraph v { graph [extends="live.cast"] lint [after="build", when="web/**, docs/", shape=parallelogram, script="bun lint"] }`);
+    const g = parse(`digraph v { graph [extends="live.cast", takes="task,branch"] lint [after="build", when="web/**, docs/", shape=parallelogram, script="bun lint"] }`);
     expect(validateWorkflow(g)).toEqual([]);
     const t = 'change_files touches \\"web/**, docs/\\"';
     const written = hand(liveAs("v", (s) => s
+      .replace("on_failure=stop]", `on_failure=stop, takes="task,branch"]`)
       .replace("push [shape", `lint [shape=parallelogram, script="bun lint"]\n  push [shape`)
       .replace("start -> investigate -> build -> review", `start -> investigate -> build\n  build -> lint [condition="${t}"]\n  build -> review [condition="not ${t}"]`)
       .replace("push -> exit", `push -> exit\n  lint -> review [condition="outcome = success"]`)));
@@ -229,7 +231,7 @@ describe("variant edits: after=, before=, skip, when=, guide=", () => {
     const g = parse(`digraph v { graph [extends="live.cast"] investigate [skip=true] build [retry_target="investigate"] }`);
     expect(validateWorkflow(g)).toEqual(['build [retry_target="investigate"] names investigate, and this flow skips investigate: point retry_target at a station that stays, or stop skipping investigate']);
     const r = parse(`digraph v { graph [extends="live.cast"] investigate [skip=true] build [prompt="Fix what $investigate.output found"] }`);
-    expect(validateWorkflow(r)).toEqual(["build's prompt reads investigate, and this flow skips investigate: change build's prompt, or stop skipping investigate"]);
+    expect(validateWorkflow(r)).toEqual(["build's prompt reads $investigate, and this flow skips investigate: change build's prompt, or stop skipping investigate"]);
   });
 });
 
@@ -290,6 +292,18 @@ describe("variant edits on the shipped change flow", () => {
     expect(g.nodes.get("review__review")!.model).toBe("opus");
     expect(() => variantOf(`  review__reviewer [model="opus"]`)).toThrow("review__reviewer [...] changes a station of the review segment, which has no reviewer; its stations: review__review");
     expect(() => variantOf(`  check [guide="x"]`)).toThrow("check [guide=...]: no station of check reads a prompt (its steps: check__verify); guide= changes an agent's prompt");
+  });
+
+  test("skipping check is not refused for prose that says 'check' or a file named rebase-check.log", () => {
+    const g = variantOf(`  check [skip=true]`);
+    expect(validateWorkflow(g)).toEqual([]);
+    expect(g.pruned).toEqual(["check", "fix_check", "unchecked"]);
+  });
+
+  test("a station another one names (Decide's answerer) cannot be gated on paths either", () => {
+    const g = variantOf(`  review [when="src/**"]`);
+    expect(validateWorkflow(g)).toEqual(['decide__decide [answerer="review__review"] names review__review, and review runs only when the change touches src/**: point answerer at a station that always runs, or drop review\'s when=']);
+    expect(g.gated).toEqual({ review: ["src/**"] });
   });
 
   test("skipping review leaves decide's answerer dangling, and validation says so", () => {

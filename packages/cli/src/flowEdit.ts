@@ -40,6 +40,8 @@ export interface FlowEditPlan {
   /** The flow's main path after the edit: "Check → Lint → Review → Land → Deploy". */
   path: string;
   created: boolean;
+  /** The edit took the project's flow back to nothing, so the file went (the library's flow runs again). */
+  removed: boolean;
 }
 
 const readDisk: ReadFile = (abs) => (fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf8") : null);
@@ -101,14 +103,27 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
   };
   const ownDecl = (id: string) => !!findNodeStmt(before!, id);
   const ownAdded = (id: string) => ownDecl(id) && (nodeAttrRaw(before!, id, "after") !== null || nodeAttrRaw(before!, id, "before") !== null);
-  const promptRef = (id: string) => `${flow}/${id}.md`;
-  const writeText = (id: string, text: string) => {
+  // A prompt and the guidance on top of it live in their own files, so writing one never overwrites the other.
+  const promptRef = (id: string, kind: "prompt" | "guide" = "prompt") => `${flow}/${id}${kind === "guide" ? ".guide" : ""}.md`;
+  const writeText = (id: string, text: string, kind: "prompt" | "guide" = "prompt") => {
     if (!text.trim()) throw new FlowEditError(`the text for ${id} is empty`);
-    overlay.set(path.join(dir, promptRef(id)), text.endsWith("\n") ? text : `${text}\n`);
-    return dotQuote(`@${promptRef(id)}`);
+    overlay.set(path.join(dir, promptRef(id, kind)), text.endsWith("\n") ? text : `${text}\n`);
+    return dotQuote(`@${promptRef(id, kind)}`);
   };
   let src = before;
   const set = (id: string, attrs: Record<string, string | null>) => { src = upsertNodeAttrs(src, id, attrs); };
+  /** Takes a station's lines out of the file (its own, and its segment stations'), with the text files only they named. */
+  const dropStation = (s: string): boolean => {
+    const ids = nodeStmtIds(src).filter((x) => x === s || x.startsWith(`${s}${SEGMENT_SEP}`));
+    for (const x of ids) {
+      for (const kind of ["prompt", "guide"] as const) {
+        const m = /^"@([^"]+)"$/.exec(nodeAttrRaw(src, x, kind) ?? "");
+        if (m && m[1] === promptRef(x, kind) && read(path.join(dir, m[1])) !== null) overlay.set(path.join(dir, m[1]), null);
+      }
+      src = dropNodeStmt(src, x);
+    }
+    return ids.length > 0;
+  };
   const changes: FlowEditChange[] = [];
   const id = req.station;
 
@@ -143,7 +158,9 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
       if (req.op === "guide" && ownAdded(s)) throw new FlowEditError(`${s} is this project's own station, so there is no inherited prompt to add to: change it with cast flow edit ${flow} prompt ${s} "<text>"`);
       const n = now.nodes.get(s)!;
       if (n.type === "command") throw new FlowEditError(`${label(s)} runs a command, not a prompt: change it with cast flow edit ${flow} run ${s} "<command>"`);
-      set(s, req.op === "guide" ? { guide: writeText(s, req.text) } : { prompt: writeText(s, req.text), guide: null });
+      const asks = n.type === "human" || (n.segment_entry && [...now.nodes.values()].some((x) => x.id.startsWith(`${s}${SEGMENT_SEP}`) && x.type === "human"));
+      if (asks && req.op === "guide") throw new FlowEditError(`${label(s)} is a person's question, not an agent's prompt: change the question with cast flow edit ${flow} prompt ${s} "<text>"`);
+      set(s, req.op === "guide" ? { guide: writeText(s, req.text, "guide") } : { prompt: writeText(s, req.text) });
       changes.push({ op: req.op, station: s });
       break;
     }
@@ -160,14 +177,18 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
         throw new FlowEditError(`${label(s)} is ${n.type === "human" ? "a person's question" : "an agent"}, not a command: change what it reads with cast flow edit ${flow} prompt ${s} "<text>"`);
       }
       set(target, { script: dotQuote(req.cmd), ...(target === s ? { shape: "parallelogram" } : {}) });
-      changes.push({ op: "run", station: target });
+      // A command that replaces one the backbone wrote (Deploy's wait, Check's command) says what it replaces.
+      const old = ownAdded(target) ? null : now.nodes.get(target)?.script;
+      // Named by the command it ends in (`cd "$wt" && cast flow await-deploy ...` is cast flow await-deploy).
+      const was = old && old !== req.cmd ? old.split(/&&|;|\n/).map((p) => p.trim()).filter(Boolean).pop()!.split(/\s+/).slice(0, 3).join(" ") : null;
+      changes.push({ op: "run", station: target, ...(was ? { replaces: was } : {}) });
       break;
     }
     case "skip": {
       const s = station(id);
       if (ownAdded(s)) {
-        src = dropNodeStmt(src, s);
-        changes.push({ op: "undo", station: s, label: label(s) });
+        dropStation(s);
+        changes.push({ op: "undo", station: s, added: true });
       } else {
         // A skipped station runs nothing: what this file says about it goes with the skip.
         for (const x of nodeStmtIds(src).filter((x) => x.startsWith(`${s}${SEGMENT_SEP}`))) src = dropNodeStmt(src, x);
@@ -185,14 +206,8 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
       break;
     }
     case "undo": {
-      const ids = nodeStmtIds(before).filter((x) => x === id || x.startsWith(`${id}${SEGMENT_SEP}`));
-      for (const x of ids) {
-        const ref = nodeAttrRaw(src, x, "prompt") ?? nodeAttrRaw(src, x, "guide");
-        src = dropNodeStmt(src, x);
-        const m = ref ? /^"@([^"]+)"$/.exec(ref) : null;
-        if (m && m[1] === promptRef(x) && read(path.join(dir, m[1])) !== null) overlay.set(path.join(dir, m[1]), null);
-      }
-      if (ids.length) changes.push({ op: "undo", station: id, label: label(id) });
+      const added = ownAdded(id);
+      if (dropStation(id)) changes.push({ op: "undo", station: id, ...(added ? { added: true as const } : {}) });
       break;
     }
   }
@@ -201,6 +216,13 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
   const after = parse(file, reader);
   const errors = validateWorkflow(after);
   if (errors.length) throw new FlowEditError(`the flow would not run: ${errors.join("; ")}`);
+  // A file this tool made that is back to saying nothing goes, so it no longer shadows the library's flow.
+  if (src === newVariantSource(flow)) overlay.set(file, null);
+  // The engine knows what the placed station does on a failure (its anchor's way back, or the end of the run).
+  for (const c of changes) {
+    const made = c.op === "add" ? after.edits?.find((e) => e.op === "add" && e.station === c.station) : undefined;
+    if (made?.ends_on_failure) c.ends_on_failure = true;
+  }
 
   const writes: FlowEditPlan["writes"] = [];
   let diff = "";
@@ -220,13 +242,21 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
     diff,
     path: flowPathWords(foldFlow([...after.nodes.values()], after.edges)).path,
     created: existing === null && writes.some((w) => w.file === file),
+    removed: existing !== null && writes.some((w) => w.file === file && w.content === null),
   };
 }
 
-/** Writes a plan's files (a null content deletes the file). */
+/** Writes a plan's files (a null content deletes the file, and the directories that leaves empty up to `.codecast`). */
 export function applyFlowEdit(plan: FlowEditPlan): void {
   for (const w of plan.writes) {
-    if (w.content === null) { if (fs.existsSync(w.file)) fs.rmSync(w.file); continue; }
+    if (w.content === null) {
+      if (fs.existsSync(w.file)) fs.rmSync(w.file);
+      for (let d = path.dirname(w.file); path.basename(d) !== "" && fs.existsSync(d) && !fs.readdirSync(d).length; d = path.dirname(d)) {
+        fs.rmdirSync(d);
+        if (path.basename(d) === ".codecast") break;
+      }
+      continue;
+    }
     fs.mkdirSync(path.dirname(w.file), { recursive: true });
     const tmp = `${w.file}.tmp-${process.pid}`;
     fs.writeFileSync(tmp, w.content);

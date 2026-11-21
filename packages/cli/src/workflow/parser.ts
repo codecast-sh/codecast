@@ -4,7 +4,7 @@ import * as path from "path";
 import { createHash } from "crypto";
 import { conditionError } from "./condition";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
-import { SEGMENT_SEP } from "@codecast/shared/contracts/flowPool";
+import { SEGMENT_SEP, passScore, segmentTopOf } from "@codecast/shared/contracts/flowPool";
 import { whenPaths, type FlowEditChange } from "@codecast/shared/contracts/flowEdit";
 import { teamFlowFile } from "./teamFlowIndex";
 
@@ -364,6 +364,8 @@ interface RawGraph {
   edits?: FlowEditChange[];
   /** Base stations the variant's skips took off the path. */
   pruned?: string[];
+  /** Stations that run only when the change touches their paths (when=), with those paths. */
+  gated?: Record<string, string[]>;
 }
 
 /** Reads a file for the parser: absolute path in, its text or null when there is none. */
@@ -574,10 +576,39 @@ function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr>>, wri
   };
   const passingOut = (id: string) => routesOf(id).pass;
   const onePassTarget = (id: string, what: string): string => {
-    const to = [...new Set(passingOut(id).map((e) => e.to))];
+    const out = passingOut(id);
+    const to = [...new Set(out.map((e) => e.to))];
     if (to.length === 1) return to[0];
-    if (!to.length) throw new Error(`${what}: ${id} has no way on when it passes, so there is nowhere to join; name a station that leads on`);
-    throw new Error(`${what}: ${id} goes on to ${to.join(" and ")} when it passes, so there is no one way on; name one of them instead (before="${to[0]}")`);
+    const onward = to.filter((t) => !isExit(nodes.get(t)));
+    const ends = to.filter((t) => isExit(nodes.get(t)));
+    if (!onward.length) throw new Error(`${what}: ${id} has no station after it when it passes${ends.length ? ` (it ends at ${ends.join(", ")})` : ""}, so there is nowhere to join; name a station that leads on`);
+    // The station a passing run most likely goes on to: the route whose condition reads most like a pass.
+    const best = out.filter((e) => onward.includes(e.to)).sort((a, b) => passScore(b) - passScore(a))[0].to;
+    throw new Error(`${what}: ${id} goes on to ${onward.join(", ")}${ends.length ? ` (and ends at ${ends.join(", ")})` : ""} by what it finds, so there is no one way on; place the station before one of them (before="${best}")`);
+  };
+  // A fan-out runs only the stations its edges name, side by side, and goes on from the first join after them
+  // (runner.ts executeFanout): a station placed, skipped or gated among them would not run as written.
+  const isShape = (id: string, shape: string) => shapeOf(nodes.get(id) ?? {}) === shape;
+  const fanAt = (x: string): { fan: string; join: string | null; isJoin: boolean } | null => {
+    const fanOf = (b: string) => edges.find((e) => e.to === b && isShape(e.from, "component"))?.from;
+    const joinOf = (fan: string) => edges.filter((e) => e.from === fan).flatMap((e) => edges.filter((f) => f.from === e.to).map((f) => f.to)).find((t) => isShape(t, "tripleoctagon")) ?? null;
+    if (isShape(x, "component")) return { fan: x, join: joinOf(x), isJoin: false };
+    const fan = fanOf(x);
+    if (fan) return { fan, join: joinOf(fan), isJoin: false };
+    if (isShape(x, "tripleoctagon")) {
+      const from = edges.filter((e) => e.to === x).map((e) => fanOf(e.from)).find(Boolean);
+      if (from) return { fan: from, join: x, isJoin: true };
+    }
+    return null;
+  };
+  const notInFan = (x: string, what: string, doing: string) => {
+    const f = fanAt(x);
+    if (!f) return;
+    const where = x === f.fan ? `${x} is a fan-out, which runs its branches side by side`
+      : f.isJoin ? `${x} is where the ${f.fan} fan-out joins its side-by-side branches`
+      : `${x} is a branch of the ${f.fan} fan-out, which runs its branches side by side${f.join ? ` and goes on from ${f.join}` : ""}`;
+    const instead = f.join ? `use the station before the fan-out (before="${f.fan}") or after the join (after="${f.join}")` : `use the station before the fan-out (before="${f.fan}")`;
+    throw new Error(`${what}: ${where}, so ${doing} would not run as written; ${instead}`);
   };
   const reachable = () => {
     const seen = new Set<string>();
@@ -610,13 +641,19 @@ function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr>>, wri
   const skipped: string[] = [];
   for (const [id, a] of own) {
     if (!truthy(a.skip)) continue;
+    const sk = nodes.get(id);
+    if (sk && (shapeOf(sk) === "Mdiamond" || isExit(sk))) throw new Error(`${say(id, "skip", "true")}: ${id} ${shapeOf(sk) === "Mdiamond" ? "starts" : "ends"} the flow, so it cannot be skipped; skip a station between them`);
     if (!baseIds.has(id)) throw new Error(`${say(id, "skip", "true")}: ${baseName} has no station ${id} to skip; its stations: ${stations()}`);
     if (a.after !== undefined || a.before !== undefined) throw new Error(`${say(id, "skip", "true")}: a station is either skipped or placed, not both`);
     const changed = [...overrides.keys()].filter((k) => k === id || k.startsWith(`${id}${SEGMENT_SEP}`));
     // A base's changes to a station this file skips go with it; this file's own are a contradiction to name.
     for (const k of changed.filter((k) => !ownOverrides.has(k))) overrides.delete(k);
     if (changed.some((k) => ownOverrides.has(k))) throw new Error(`${say(id, "skip", "true")}: this file also changes ${changed.filter((k) => ownOverrides.has(k)).join(", ")}; a skipped station runs nothing, so drop those lines or the skip`);
+    notInFan(id, say(id, "skip", "true"), "skipping it");
     const to = onePassTarget(id, say(id, "skip", "true"));
+    // A station whose way back was the skipped one would go straight back to itself: a loop with nothing in it.
+    const loop = edges.find((e) => e.to === id && e.from === to);
+    if (loop) throw new Error(`${say(id, "skip", "true")}: ${to} goes to ${id}${loop.condition ? ` when ${loop.condition}` : ""}, and ${id} goes on to ${to}, so skipping it would send ${to} straight back to itself, again and again; skip another station, or write ${to}'s edges here`);
     edges = edges.filter((e) => e.from !== id).map((e) => (e.to === id ? { ...e, to } : e));
     nodes.delete(id);
     fills.delete(id);
@@ -653,48 +690,64 @@ function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr>>, wri
     if (!nodes.has(anchor) && !edges.some((e) => e.from === anchor || e.to === anchor)) throw new Error(`${what}: ${baseName} has no station ${anchor}; its stations: ${stations()}`);
     if (shapeOf(nodes.get(anchor) ?? {}) === "Mdiamond" && anchorKey === "before") throw new Error(`${what}: nothing comes before the start; place ${id} after="${anchor}"`);
     if (isExit(nodes.get(anchor)) && anchorKey === "after") throw new Error(`${what}: ${anchor} ends the flow; place ${id} before="${anchor}"`);
+    if (anchorKey === "before" || !isShape(anchor, "tripleoctagon")) notInFan(anchor, what, `placing ${id} ${anchorKey} it`);
     // The way back a failure takes: fix=, else the anchor's own (to a station, not an end).
     let fix: string | null = null;
     if (a.fix !== undefined) {
       fix = String(a.fix);
       if (!nodes.has(fix) && !edges.some((e) => e.from === fix || e.to === fix)) throw new Error(`${say(id, "fix", fix)}: there is no station ${fix} to send a failure to; its stations: ${stations()}`);
     } else {
-      const back = [...new Set(routesOf(anchor).back.filter((e) => !isExit(nodes.get(e.to))).map((e) => e.to))];
-      if (back.length > 1) throw new Error(`${what}: ${anchor} fails back to ${back.join(" or ")}, so it is not clear where ${id}'s failure goes; add fix="${back[0]}"`);
+      const ways = routesOf(anchor).back.filter((e) => !isExit(nodes.get(e.to)));
+      const back = [...new Set(ways.map((e) => e.to))];
+      if (back.length > 1 && !ways.some(mentionsFailure)) throw new Error(`${what}: ${anchor} routes on its exit codes or output (to ${back.join(", ")}), not on a failure, so none of them is ${id}'s way back; name where a failure of ${id} goes with fix="<station>"`);
+      if (back.length > 1) throw new Error(`${what}: ${anchor} fails back to ${back.join(" or ")}, so it is not clear where ${id}'s failure goes; name one with fix="${back[0]}"`);
       fix = back[0] ?? null;
     }
+    let on: string;
     if (anchorKey === "after") {
       const from = lastAfter.get(anchor) ?? anchor;
-      const to = onePassTarget(from, what);
+      on = onePassTarget(from, what);
       const pass = new Set(passingOut(from));
       edges = edges.map((e) => (pass.has(e) ? { ...e, to: id } : e));
-      edges.push({ from: id, to, condition: "outcome = success" });
       lastAfter.set(anchor, id);
     } else {
+      on = anchor;
       edges = edges.map((e) => (e.to === anchor ? { ...e, to: id } : e));
-      edges.push({ from: id, to: anchor, condition: "outcome = success" });
     }
-    if (fix) edges.push({ from: id, to: fix, condition: "outcome = failure", label: `${String(a.label ?? id).toLowerCase()} failed` });
-    edits.push({ op: "add", station: id, label: String(a.label ?? id), [anchorKey]: anchor, ...(a.fix !== undefined ? { fix: String(a.fix) } : {}) });
+    // A person's gate offers its choices as labelled edges (runner.ts executeRemoteHumanGate): go on, or send it back.
+    const gate = shapeOf(a) === "hexagon";
+    const name = String(a.label ?? id);
+    const labelOf = (x: string) => String(nodes.get(x)?.label ?? x.replace(/[-_]+/g, " ").replace(/^\w/, (c) => c.toUpperCase()));
+    if (gate) edges.push({ from: id, to: on, label: `[Y] Go on :: ${labelOf(on)}` });
+    else edges.push({ from: id, to: on, condition: "outcome = success" });
+    if (fix && gate) edges.push({ from: id, to: fix, label: `[N] Send back :: ${labelOf(fix)}` });
+    else if (fix) edges.push({ from: id, to: fix, condition: "outcome = failure", label: `${name.toLowerCase()} failed` });
+    edits.push({ op: "add", station: id, label: name, [anchorKey]: anchor, ...(a.fix !== undefined ? { fix: String(a.fix) } : {}), ...(!fix ? { ends_on_failure: true as const } : {}) });
   }
 
   // Path conditions last, around the station where it now stands.
+  const gated: Record<string, string[]> = { ...(raw.gated ?? {}) };
   for (const [id, a] of own) {
     if (a.when === undefined) continue;
     const paths = whenPaths(String(a.when));
     const what = say(id, "when", a.when);
     if (!paths.length) throw new Error(`${what}: name the paths the change must touch (when="src/**, docs/*.md")`);
     if (!nodes.has(id)) throw new Error(`${what}: ${baseName} has no station ${id}; its stations: ${stations()}`);
+    const takes = String(raw.attrs.takes ?? "task").split(/[\s,]+/).filter(Boolean);
+    if (!takes.includes("branch")) throw new Error(`${what}: ${baseName} runs on a ${takes.join(" and a ")}, not on a change's files, so nothing tells it which paths changed; when= works on flows that take a branch (change, quick-change)`);
+    notInFan(id, what, "gating it");
     const to = onePassTarget(id, what);
     const touches = `change_files touches ${JSON.stringify(paths.join(", "))}`;
     const into = edges.filter((e) => e.to === id && e.from !== id);
     if (!into.length) throw new Error(`${what}: nothing leads into ${id}, so there is no way past it`);
     edges = edges.flatMap((e) => (e.to === id && e.from !== id ? [{ ...e, condition: andCondition(e.condition, touches) }, { from: e.from, to, condition: andCondition(e.condition, `not ${touches}`) }] : [e]));
     edits.push({ op: "when", station: id, paths });
+    gated[id] = paths;
   }
 
   for (const a of nodes.values()) for (const k of VARIANT_KEYS) if (k !== "guide") delete a[k];
-  return { ...raw, nodes, edges, fills, overrides, edits, pruned: [...(raw.pruned ?? []), ...pruned] };
+  for (const id of pruned) delete gated[id];
+  return { ...raw, nodes, edges, fills, overrides, edits, pruned: [...(raw.pruned ?? []), ...pruned], gated };
 }
 
 /** A variant's attributes for stations inside its segments, applied once they are expanded (an override of a station that is not there is refused). */
@@ -734,6 +787,7 @@ function withGuides(raw: RawGraph, read: ReadFile | null, sources: Set<string>):
     if (a.guide === undefined) continue;
     const guide = String(a.guide);
     delete a.guide;
+    if (shapeOf(a) === "hexagon") throw new Error(`${raw.name}: ${id} [guide=...]: ${id} is a person's question, not an agent's prompt; guide= adds to what an agent reads`);
     if (typeof a.prompt !== "string" || !a.prompt) throw new Error(`${raw.name}: ${id} [guide=...] adds to a prompt, and ${id} has none; write prompt= instead`);
     if (!read) { out.push({ node: id, text: null }); continue; }
     const text = inlineRef(guide, read, sources).replace(/\s+$/, "");
@@ -761,6 +815,7 @@ function buildGraph(raw: RawGraph): WorkflowGraph {
   if (a.takes) graph.takes = String(a.takes).split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
   if (raw.edits?.length) graph.edits = raw.edits;
   if (raw.pruned?.length) graph.pruned = raw.pruned;
+  if (raw.gated && Object.keys(raw.gated).length) graph.gated = raw.gated;
   for (const [id, attrs] of raw.nodes) graph.nodes.set(id, Parser.buildNode(id, attrs));
   // Ensure nodes referenced in edges exist (as placeholder agent nodes)
   for (const e of raw.edges) for (const id of [e.from, e.to]) if (!graph.nodes.has(id)) graph.nodes.set(id, Parser.buildNode(id, {}));
@@ -992,26 +1047,53 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
   }
 
   // A station named by another (who answers a gate, where a retry goes) must still be there, and so must one a $ref reads.
+  // Only a real reference counts: `$review.output` or `$review__review.x` in text, `review.exit` in a condition.
   const gone = new Set(graph.pruned ?? []);
-  const goneRef = (text: string) => [...gone].find((id) => new RegExp(`(^|[^\\w.])\\$?${id}(\\.|${SEGMENT_SEP})`).test(text));
+  const gated = graph.gated ?? {};
+  const esc = (id: string) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const textRef = (text: string, ids: Iterable<string>) => [...ids].find((id) => new RegExp(`\\$${esc(id)}(\\.|${SEGMENT_SEP})`).test(text));
+  const condRef = (cond: string, ids: Iterable<string>) => [...ids].find((id) => new RegExp(`(^|[^\\w.$])${esc(id)}(\\.|${SEGMENT_SEP})`).test(cond.replace(/"[^"]*"/g, "")));
+  const runsWhen = (id: string) => `runs only when the change touches ${gated[id].join(", ")}`;
   for (const node of graph.nodes.values()) {
+    const others = (ids: Iterable<string>) => [...ids].filter((id) => id !== segmentTopOf(node.id));
     for (const f of ID_FIELDS) {
       const v = (node as unknown as Record<string, unknown>)[f];
-      if (typeof v !== "string" || graph.nodes.has(v)) continue;
-      const top = v.split(SEGMENT_SEP)[0];
-      errors.push(gone.has(top)
-        ? `${node.id} [${f}="${v}"] names ${v}, and this flow skips ${top}: point ${f} at a station that stays, or stop skipping ${top}`
-        : `${node.id} [${f}="${v}"] names no station of this flow`);
+      if (typeof v !== "string") continue;
+      const top = segmentTopOf(v);
+      if (!graph.nodes.has(v)) {
+        errors.push(gone.has(top)
+          ? `${node.id} [${f}="${v}"] names ${v}, and this flow skips ${top}: point ${f} at a station that stays, or stop skipping ${top}`
+          : `${node.id} [${f}="${v}"] names no station of this flow`);
+      } else if (gated[top] && top !== segmentTopOf(node.id)) {
+        errors.push(`${node.id} [${f}="${v}"] names ${v}, and ${top} ${runsWhen(top)}: point ${f} at a station that always runs, or drop ${top}'s when=`);
+      }
     }
     for (const f of ["prompt", "script", "doc", "card", "stop"] as const) {
       const text = node[f];
-      const ref = typeof text === "string" && gone.size ? goneRef(text) : undefined;
-      if (ref) errors.push(`${node.id}'s ${f} reads ${ref}, and this flow skips ${ref}: change ${node.id}'s ${f}, or stop skipping ${ref}`);
+      if (typeof text !== "string") continue;
+      const skippedRef = textRef(text, gone);
+      if (skippedRef) errors.push(`${node.id}'s ${f} reads $${skippedRef}, and this flow skips ${skippedRef}: change ${node.id}'s ${f}, or stop skipping ${skippedRef}`);
+      const gatedRef = textRef(text, others(Object.keys(gated)));
+      if (gatedRef) errors.push(`${node.id}'s ${f} reads $${gatedRef}, and ${gatedRef} ${runsWhen(gatedRef)}: change ${node.id}'s ${f}, or drop ${gatedRef}'s when=`);
     }
   }
   for (const edge of graph.edges) {
-    const ref = edge.condition && gone.size ? goneRef(edge.condition.replace(/"[^"]*"/g, "")) : undefined;
+    if (!edge.condition) continue;
+    const ref = condRef(edge.condition, gone);
     if (ref) errors.push(`Edge ${edge.from} -> ${edge.to} condition "${edge.condition}" reads ${ref}, and this flow skips ${ref}`);
+    const g = condRef(edge.condition, Object.keys(gated).filter((id) => id !== segmentTopOf(edge.from)));
+    if (g) errors.push(`Edge ${edge.from} -> ${edge.to} condition "${edge.condition}" reads ${g}, and ${g} ${runsWhen(g)}`);
+  }
+
+  // A fan-out runs only its branches and goes on from the first join after them (runner.ts executeFanout).
+  for (const fan of [...graph.nodes.values()].filter((n) => n.type === "parallel_fanout")) {
+    const branches = graph.edges.filter((e) => e.from === fan.id).map((e) => e.to);
+    const join = branches.flatMap((b) => graph.edges.filter((e) => e.from === b).map((e) => e.to)).find((t) => graph.nodes.get(t)?.type === "parallel_fanin");
+    if (!join) continue;
+    for (const b of branches) {
+      const off = graph.edges.filter((e) => e.from === b && e.to !== join).map((e) => e.to);
+      if (off.length) errors.push(`${fan.id}'s branch ${b} goes on to ${off.join(", ")}, but a fan-out runs only its branches and goes on from ${join}: lead ${b} straight to ${join}`);
+    }
   }
 
   // Check command nodes have scripts
@@ -1042,7 +1124,7 @@ const sortedAttrs = (o: object) => Object.fromEntries(Object.entries(o).filter((
 export function graphHash(graph: WorkflowGraph): string {
   const sorted = sortedAttrs;
   // Where the graph was read from is not what it is.
-  const { nodes, edges, sources: _sources, edits: _edits, pruned: _pruned, ...attrs } = graph;
+  const { nodes, edges, sources: _sources, edits: _edits, pruned: _pruned, gated: _gated, ...attrs } = graph;
   const canonical = JSON.stringify({
     graph: sorted(attrs),
     nodes: [...nodes.values()].sort((a, b) => a.id.localeCompare(b.id)).map(sorted),

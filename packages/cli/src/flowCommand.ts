@@ -313,9 +313,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const plan = planFlowEdit(root, slug, req);
         if (!opts.dryRun) applyFlowEdit(plan);
         if (opts.json) { console.log(JSON.stringify({ ...plan.edit, changed: plan.changed, dry_run: !!opts.dryRun, path: plan.path, diff: plan.diff }, null, 2)); return; }
-        if (!plan.changed) { console.log(`${plan.edit.file} already says this; nothing to change`); return; }
+        if (!plan.changed) { console.log(op === "undo" ? `${plan.edit.file} makes no edit to ${station}; nothing to undo` : `${plan.edit.file} already says this; nothing to change`); return; }
         for (const w of plan.words) console.log(w);
-        console.log(dim(`${opts.dryRun ? "would write" : plan.created ? "created" : "wrote"} ${plan.writes.map((w) => path.relative(root, w.file)).join(", ")} · ${plan.path}`));
+        console.log(dim(`${opts.dryRun ? "would write" : plan.created ? "created" : plan.removed ? "removed (the library's flow runs again)" : "wrote"} ${plan.writes.map((w) => path.relative(root, w.file)).join(", ")} · ${plan.path}`));
         console.log(`\n${plan.diff.trimEnd()}\n`);
         console.log("```flow");
         console.log(JSON.stringify({ edit: plan.edit }));
@@ -462,7 +462,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (branch) {
         const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();
         if (!head) { console.error(`No branch ${branch} here`); process.exit(1); }
-        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps)), base: head, tip: head, branch, worktree, paths: [], shared: [], held: [] };
+        const { branchChangePaths } = await import("./workflow/flowChangeFile.js");
+        // The files the branch changes, so a station gated on paths (when=) runs when they say it should.
+        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps)), base: head, tip: head, branch, worktree, paths: branchChangePaths(top, branch), shared: [], held: [] };
       } else if (sessionRef) {
         const { freezeSessionChange } = await import("./workflow/flowChange.js");
         try {

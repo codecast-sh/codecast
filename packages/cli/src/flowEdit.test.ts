@@ -42,28 +42,51 @@ describe("cast flow edit change", () => {
     const root = repo();
     const plan = edit(root, { op: "guide", station: "Review", text: "Also check X." });
     expect(plan.words).toEqual(["~ Review: guidance added"]);
-    expect(flowFile(root)).toContain(`review [guide="@change/review.md"]`);
-    expect(fs.readFileSync(path.join(root, ".codecast/flows/change/review.md"), "utf8")).toBe("Also check X.\n");
+    expect(flowFile(root)).toContain(`review [guide="@change/review.guide.md"]`);
+    expect(fs.readFileSync(path.join(root, ".codecast/flows/change/review.guide.md"), "utf8")).toBe("Also check X.\n");
     expect(parseWorkflowFile(path.join(root, ".codecast/flows/change.cast")).nodes.get("review__review")!.prompt).toEndWith("\n\nAlso check X.");
     const undo = edit(root, { op: "undo", station: "review" });
     expect(undo.words).toEqual(["Review: back to the base"]);
-    expect(flowFile(root)).not.toContain("review [");
-    expect(fs.existsSync(path.join(root, ".codecast/flows/change/review.md"))).toBe(false);
+    // Back to saying nothing, the file this tool made goes with its directory, so the library's flow runs again.
+    expect(undo.removed).toBe(true);
+    expect(fs.existsSync(path.join(root, ".codecast"))).toBe(false);
+    expect(planFlowEdit(root, "change", { op: "undo", station: "review" }).changed).toBe(false);
   });
 
   test("skip and when read as what they do; skipping a station the project added takes it out", () => {
     const root = repo();
-    edit(root, { op: "guide", station: "decide", text: "Ask about X." });
+    edit(root, { op: "prompt", station: "decide", text: "Ask about X." });
     expect(edit(root, { op: "skip", station: "decide" }).words).toEqual(["Decide skipped"]);
     expect(flowFile(root)).toContain(`decide [skip=true]`);
-    expect(flowFile(root)).not.toContain("guide=");
+    expect(flowFile(root)).not.toContain("prompt=");
     edit(root, { op: "add", station: "e2e", after: "check", run: "bun e2e", label: "E2E" });
     expect(edit(root, { op: "when", station: "e2e", paths: "landing/**, backend/src/routes/**" }).words).toEqual(["E2E runs when landing/**, backend/src/routes/**"]);
     expect(flowFile(root)).toContain(`when="landing/**, backend/src/routes/**"`);
     expect(edit(root, { op: "when", station: "e2e", paths: "always" }).words).toEqual(["E2E always runs"]);
     expect(flowFile(root)).not.toContain("when=");
-    expect(edit(root, { op: "skip", station: "e2e" }).words).toEqual(["E2E: back to the base"]);
+    expect(edit(root, { op: "skip", station: "e2e" }).words).toEqual(["- E2E"]);
     expect(flowFile(root)).not.toContain("e2e");
+  });
+
+  test("a prompt and guidance on one station live in separate files, so neither overwrites the other", () => {
+    const root = repo();
+    edit(root, { op: "prompt", station: "review", text: "Review it fully." });
+    edit(root, { op: "guide", station: "review", text: "Also check migrations." });
+    expect(flowFile(root)).toContain(`review [prompt="@change/review.md", guide="@change/review.guide.md"]`);
+    expect(parseWorkflowFile(path.join(root, ".codecast/flows/change.cast")).nodes.get("review__review")!.prompt).toBe("Review it fully.\n\nAlso check migrations.");
+  });
+
+  test("words: a skipped station undone reads by its name, a replaced command says what it replaced", () => {
+    const root = repo();
+    edit(root, { op: "skip", station: "decide" });
+    expect(edit(root, { op: "undo", station: "decide" }).words).toEqual(["Decide: back to the base"]);
+    expect(edit(root, { op: "run", station: "deploy", cmd: "echo deployed" }).words).toEqual(["~ Deploy: runs a new command, replacing cast flow await-deploy"]);
+    expect(() => planFlowEdit(root, "change", { op: "guide", station: "decide", text: "x" })).toThrow('Decide is a person\'s question, not an agent\'s prompt: change the question with cast flow edit change prompt decide "<text>"');
+    const ends = repo({
+      "line/flow.cast": `digraph flow {\n  graph [kind="line", takes="task,branch"]\n  start [shape=Mdiamond]\n  pr [shape=parallelogram, script="true"]\n  exit [shape=Msquare]\n  nopr [shape=Msquare, stop="no pr"]\n  start -> pr\n  pr -> exit [condition="outcome = success"]\n  pr -> nopr\n}\n`,
+      ".codecast/flows/flow.cast": `digraph flow { graph [extends="../../line/flow.cast"] }\n`,
+    });
+    expect(edit(ends, { op: "add", station: "lint", after: "pr", run: "true" }, "flow").words).toEqual(["+ Lint after pr; a failure ends the run"]);
   });
 
   test("comments and the rest of a hand-written file stay; a repo flow that extends a file gets the line", () => {
