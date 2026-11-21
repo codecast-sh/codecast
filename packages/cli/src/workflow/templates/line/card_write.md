@@ -11,7 +11,7 @@ Facts
 
 - The problem: `cast task context $task_id`, and each finding behind it with
   `cast signal show <sg-N>`: what someone met, in their words or the judge's.
-- The change: `git diff $default_branch...$branch`, checked out at `cast ws
+- The change: `git diff $diff_base...$branch`, checked out at `cast ws
   path $worktree`. When it rewrites a prompt, the words an agent now follows
   are what changed for people.
 - What the run measured, as data: the failing check before and after, the
