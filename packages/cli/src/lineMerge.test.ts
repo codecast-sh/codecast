@@ -161,6 +161,48 @@ describe("mergeBranch", () => {
     } finally { r.done(); }
   });
 
+  // ct-98089: Union's ct-97881 replaced two young files with one, main had not touched them, and the guard read the
+  // deletion as undoing their creation.
+  test("a branch that deletes files main created lands when nothing else it lands sets main back: the deletion is its own", () => {
+    const r = gitRepo();
+    try {
+      r.commit("line/check.md", "check\n", "add check");
+      r.commit("line/reconcile.md", "reconcile\n", "add reconcile");
+      r.git(r.work, "push", "-q", "origin", "main");
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.git(r.work, "rm", "-q", "line/check.md", "line/reconcile.md");
+      r.commit("line/review.md", "review\n", "fix: one review step replaces check and reconcile");
+      r.git(r.work, "push", "-q", "origin", "b");
+      r.advanceMain("m.txt", "main moved\n");
+      const out = mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null });
+      expect(out.kind).toBe("merged");
+      expect(r.git(r.origin, "ls-tree", "-r", "--name-only", "main")).toBe("a.txt\nline/review.md\nm.txt");
+    } finally { r.done(); }
+  });
+
+  test("a deletion of the branch's own is held with the rest when the landing also sets main back, as a squash over a stale tree does", () => {
+    const r = gitRepo();
+    try {
+      r.commit("old.txt", "old\n", "add old");
+      r.git(r.work, "push", "-q", "origin", "main");
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.git(r.work, "rm", "-q", "old.txt");
+      r.commit("b.txt", "fix\n", "fix: b, and old goes");
+      r.advanceMain("a.txt", "one\ntwo\n");
+      r.git(r.work, "fetch", "-q", "origin");
+      r.git(r.work, "reset", "-q", "--soft", "origin/main");
+      r.git(r.work, "commit", "-q", "-m", "fix: b, squashed");
+      r.git(r.work, "push", "-q", "-f", "origin", "b");
+      const main = r.git(r.origin, "rev-parse", "main");
+      const out = mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null });
+      expect(out.kind).toBe("left");
+      const reason = out.kind === "left" ? out.reason : "";
+      expect(reason).toContain("a.txt from ");
+      expect(reason).toContain("old.txt from ");
+      expect(r.git(r.origin, "rev-parse", "main")).toBe(main);
+    } finally { r.done(); }
+  });
+
   test("a branch whose files the default branch also changed is left, naming them, and nothing is pushed", () => {
     const r = gitRepo();
     try {

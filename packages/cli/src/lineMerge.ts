@@ -77,7 +77,7 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
   for (let attempt = 1; ; attempt++) {
     const landing = landingCommit(exec, cwd, branch, into, sha);
     if ("reason" in landing) return { kind: "left", reason: landing.reason };
-    const undone = undoneChanges(exec, cwd, exec("git", ["rev-parse", `origin/${into}`], cwd).stdout.trim(), landing.sha);
+    const undone = undoneChanges(exec, cwd, exec("git", ["rev-parse", `origin/${into}`], cwd).stdout.trim(), landing.sha, { head: sha });
     if (undone.length) return { kind: "left", reason: undoneReason(branch, into, undone) };
     const push = exec("git", ["push", "origin", `${landing.sha}:refs/heads/${into}`], cwd);
     if (push.status === 0) {
@@ -97,20 +97,38 @@ const lines = (text: string) => text.split("\n").map((l) => l.trim()).filter(Boo
  *  to them, each with the change it undoes. A commit squashed onto the default branch's head over a tree built on an
  *  older default branch carries all the work that landed in between back out, as a fast forward that every other
  *  check passes: on Nov 10 one such commit undid nine commits on Union's main. Reads each touched file's last
- *  `depth` changes on the default branch, and stops after `most` hits. */
-export function undoneChanges(exec: Exec, cwd: string, onto: string, landing: string, depth = 8, most = 5): Array<{ file: string; commit: string }> {
+ *  `depth` changes on the default branch, and stops after `most` files it would set back.
+ *
+ *  A file the landing deletes reads as missing, which is also what it was before the commit that created it, so a
+ *  deliberate deletion of any file with fewer than `depth` changes looked like undoing its creation (ct-98089: Union's
+ *  ct-97881 replaced two files with one and was refused). A stale tree drops main's new files the same way, but it
+ *  sets main's other recent changes back with them. So a deletion passes as the change's own when the branch's own
+ *  commits, from where `head` left `onto`, deleted the file and the landing sets nothing else back. */
+export function undoneChanges(exec: Exec, cwd: string, onto: string, landing: string, opts: { head?: string; depth?: number; most?: number } = {}): Array<{ file: string; commit: string }> {
+  const { head = landing, depth = 8, most = 5 } = opts;
   const git = (...args: string[]) => exec("git", args, cwd);
   // `rev:path` reads the path from the repository's top, wherever in it the step runs; a missing file reads empty.
   const blob = (rev: string, file: string) => { const r = git("rev-parse", "--verify", "-q", `${rev}:${file}`); return r.status === 0 ? r.stdout.trim() : ""; };
-  const out: Array<{ file: string; commit: string }> = [];
+  const setBack: Array<{ file: string; commit: string }> = [];
+  const dropped: Array<{ file: string; commit: string }> = [];
   for (const file of lines(git("diff", "--name-only", "--no-renames", onto, landing).stdout)) {
     const mine = blob(landing, file);
     if (mine === blob(onto, file)) continue;
     const commit = lines(git("log", "--format=%H", "-n", String(depth), onto, "--", `:(top,literal)${file}`).stdout).find((c) => blob(`${c}^`, file) === mine);
-    if (commit) out.push({ file, commit });
-    if (out.length >= most) break;
+    if (commit) (mine ? setBack : dropped).push({ file, commit });
+    if (setBack.length >= most) break;
   }
-  return out;
+  if (setBack.length || !dropped.length) return [...setBack, ...dropped].slice(0, most);
+  const deleted = branchDeletions(git, onto, head);
+  return dropped.filter((d) => !deleted.has(d.file)).slice(0, most);
+}
+
+/** The files the branch's own commits deleted, from where `head` left `onto`: a branch built before a file existed
+ *  never deleted it, however its tree reads. */
+function branchDeletions(git: (...args: string[]) => ReturnType<Exec>, onto: string, head: string): Set<string> {
+  const base = git("merge-base", onto, head).stdout.trim();
+  if (!base) return new Set();
+  return new Set(lines(git("log", "--format=", "--name-only", "--no-renames", "--diff-filter=D", `${base}..${head}`).stdout));
 }
 
 const undoneReason = (branch: string, into: string, undone: Array<{ file: string; commit: string }>) =>
