@@ -120,16 +120,25 @@ through `orgRoles.markBriefRead`).
 - Restart: `orgRoles.restart` kills and resumes the standing conversation in
   place (`enqueueKillAndResume`); the first frame after a restart carries the
   brief in full and the charter text. `fresh: true` (`cast role restart <h>
-  --fresh`) starts a new standing session instead: the old seat's routines are
-  cancelled, its anchor decommissioned (kill, bot off the roster), its seat
-  markers (`standing_role_id`, `anchor_id`, `acting_user_id`) cleared, and it
-  is recorded as `org_roles.previous_standing_conversation_id`. The role is
-  then provisioned as on its first seating (new bot, anchors row, conversation,
+  --fresh`) starts a new standing session instead. It refuses a paused role
+  (resume it first) and a seat whose runner has left the team (`cast role
+  move` it first). The old seat's routines are cancelled, its anchor
+  decommissioned (kill, bot off the roster), its seat markers
+  (`standing_role_id`, `anchor_id`, `acting_user_id`) cleared, and it is
+  recorded as `org_roles.previous_standing_conversation_id`. The role is then
+  provisioned as on its first seating (new bot, anchors row, conversation,
   opening message, routine) with the old session's project path, model and
   backend, and never seats a project's session. The new session runs and
-  bills on the old one's runner (its `user_id`), whoever asked for the
-  restart; the caller is only who is authorized. A project whose
-  `default_session_id` was the old seat points at the new one.
+  bills on the old one's runner (its `user_id`) and starts on its machine
+  (`owner_device_id`), whoever asked; the caller is only who is authorized.
+  The old anchor's `anchor_channels` move to the new anchor, so Slack keeps
+  routing. The new check carries the old one's cadence, precheck and focus,
+  and stays cancelled or paused if the person cancelled or paused the old
+  one. Projects whose `default_session_id` was the old seat
+  (`projects.by_default_session`) point at the new one. A second press while
+  the fresh seat is under ten minutes old and has no messages returns it
+  unchanged. The org log row carries `effects.restarted_fresh`, and the
+  history refuses to undo it: the old session is already killed.
 
 ## T5. CLI
 
