@@ -1,6 +1,6 @@
 import { useCallback, useContext } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { useLocation } from "react-router";
+import { useRouter } from "next/navigation";
+import { useReadPathname } from "./useReadPathname";
 import { useInboxStore, sessionRowFromSummary } from "../store/inboxStore";
 import { isInboxSessionView, resolveSessionSelectKind, type SessionSelectKind } from "../lib/inboxRouting";
 import { divertSessionOpen } from "../lib/openIntent";
@@ -54,11 +54,12 @@ export function openConversationBeside(id: string) {
  */
 export function useOpenLinkedSession() {
   const router = useRouter();
-  const pathname = usePathname();
-  // Real browser URL: `pathname` is tab-aware and reports the carried tab route
-  // on Settings, so the settings check must come from the router (see
+  // Both paths are read on click, not subscribed: every linked pill in a
+  // transcript uses this, and a subscription re-rendered all of them on each
+  // navigation. The pane path is tab-aware and reports the carried tab route
+  // on Settings, so the settings check reads the real browser URL (see
   // resolveSessionSelectKind's doc).
-  const routerLocation = useLocation();
+  const readPathname = useReadPathname();
   // Under fixture entities (the homepage hero) a linked session is not a real
   // row: opening it would seed the store with a fixture and navigate away.
   const fixtures = useContext(EntityFixtureContext);
@@ -78,8 +79,8 @@ export function useOpenLinkedSession() {
     }
     const narrow = typeof window !== "undefined" && window.innerWidth < MOBILE_MAX_WIDTH;
     const kind = resolveSessionSelectKind({
-      isOnSettingsPage: routerLocation.pathname.startsWith("/settings"),
-      isOnInboxPage: isInboxSessionView(pathname, store.currentConversation?.source),
+      isOnSettingsPage: window.location.pathname.startsWith("/settings"),
+      isOnInboxPage: isInboxSessionView(readPathname(), store.currentConversation?.source),
     });
     const open = resolveLinkedSessionOpen(kind, narrow);
     if (open === "route") {
@@ -87,5 +88,5 @@ export function useOpenLinkedSession() {
     } else {
       store.navigateToSession(sid);
     }
-  }, [router, pathname, routerLocation.pathname, fixtures]);
+  }, [router, readPathname, fixtures]);
 }
