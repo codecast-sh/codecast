@@ -347,7 +347,7 @@ describe("line.cast template", () => {
     expect(review).toContain("$branch");
     expect(review).toContain("$task_title");
     expect(review).toContain("$acceptance_criteria");
-    expect(review).toContain("$default_branch...$branch");
+    expect(review).toContain("$diff_base...$branch");
     expect(review).not.toContain("$task_description");
     expect(review).toContain("cast task verdict $task_id approve|changes|reject --note -");
     expect(graph.nodes.get("analyze")?.prompt).toContain("cast task update $task_id --steps -");
