@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { joinPlan, joinedText, textEdit, SharedDraftSession, type SharedDraftServer } from "../sharedDraft";
-import { inSharedDraft } from "../../hooks/useSharedDraft";
+import { inSharedDraft, othersWriting, waitsToJoin } from "../../hooks/useSharedDraft";
 
 /** docSync's step log in memory: the same version rules getSteps/submitSteps apply. */
 function fakeServer() {
@@ -129,6 +129,53 @@ describe("SharedDraftSession", () => {
     const camRow = { user_id: "cam", user_name: "Cam", user_color: "#000" };
     const ann = box(server, "ann~2");
     expect(await ann.s.join(() => "fix the login bug on mobile", { seed: true, othersLive: () => [camRow].some(inSharedDraft) })).toBe("fix the login bug on mobile");
+  });
+
+  it("two owners arriving together, each holding words: they join one at a time and both keep their words", async () => {
+    const { server } = fakeServer();
+    const ann = box(server, "ann~1");
+    const cam = box(server, "cam~1");
+    // Each sees the other's row, still outside the draft, carrying its own words.
+    const annOut = { user_id: "ann", user_name: "Ann", user_color: "#000", draft_text: "ship the auth fix" };
+    const camOut = { user_id: "cam", user_name: "Cam", user_color: "#000", draft_text: "check the mobile build" };
+    expect(waitsToJoin([camOut], "ann", "ship the auth fix")).toBe(false);
+    expect(waitsToJoin([annOut], "cam", "check the mobile build")).toBe(true);
+    // Ann goes first; her join resolves once her words are on the server.
+    expect(await ann.s.join(() => "ship the auth fix", { seed: true, othersLive: () => othersWriting([camOut]) })).toBe("ship the auth fix");
+    // Her row now reports she is in the draft (and carries no words of its own): Cam may join, and finds hers.
+    const annIn = { user_id: "ann", user_name: "Ann", user_color: "#000", in_draft: true };
+    expect(waitsToJoin([annIn], "cam", "check the mobile build")).toBe(false);
+    expect(await cam.s.join(() => "check the mobile build", { seed: true, othersLive: () => othersWriting([annIn]) })).toBe("ship the auth fix\n\ncheck the mobile build");
+    await settle();
+    const r = await server.steps("compose:c1", 0);
+    ann.s.receive(0, r.steps, r.clientIds);
+    expect(ann.s.text).toBe("ship the auth fix\n\ncheck the mobile build");
+  });
+
+  it("join resolves only once its words are on the server, so the box that waited on it finds them", async () => {
+    const { server, head } = fakeServer();
+    const slow: SharedDraftServer = { ...server, submit: (...a) => new Promise((r) => setTimeout(() => r(server.submit(...a)), 20)) };
+    const ann = box(slow, "ann~1");
+    await ann.s.join(() => "ship the auth fix", { seed: true, othersLive: () => false });
+    expect(head()).toBeGreaterThan(0);
+  });
+
+  it("a box whose words are in the draft before its row says so keeps them when an owner joins", async () => {
+    const { server } = fakeServer();
+    const cam = box(server, "cam~1");
+    const ann = box(server, "ann~1");
+    await cam.s.join(() => "check the mobile build", { seed: true, othersLive: () => false });
+    // Cam's in_draft has not reached Ann yet: his row still carries his own words.
+    const camOut = { user_id: "cam", user_name: "Cam", user_color: "#000", draft_text: "check the mobile build" };
+    expect(inSharedDraft(camOut)).toBe(false);
+    expect(await ann.s.join(() => "ship the auth fix", { seed: true, othersLive: () => othersWriting([camOut]) })).toBe("check the mobile build\n\nship the auth fix");
+  });
+
+  it("an empty box never waits to join; a row with no words never holds anyone up", () => {
+    const annOut = { user_id: "ann", user_name: "Ann", user_color: "#000", draft_text: "ship it" };
+    expect(waitsToJoin([annOut], "cam", "   ")).toBe(false);
+    expect(waitsToJoin([{ user_id: "ann", user_name: "Ann", user_color: "#000", draft_text: " " }], "cam", "mine")).toBe(false);
+    expect(othersWriting([{ user_id: "ann", user_name: "Ann", user_color: "#000" }])).toBe(false);
   });
 
   it("applies steps it already holds once, whichever answer brings them", async () => {
