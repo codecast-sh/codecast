@@ -8720,6 +8720,10 @@ export default defineSchema({
     // The line's merge step landed (the-line.md L12): what went where, when.
     // `authorized`: on a merge no role is behind, the person whose word allowed it and why (orgLineMerge.personAuthorized).
     merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()), authorized: v.optional(v.object({ user_id: v.id("users"), why: v.string() })) })),
+    // The run's own graph cleared it to land with no card (orgLineMerge.clearForMerge): when, the script station that
+    // wrote it and its words, the runner's account, and the attempt (runAttempt). Valid only in that attempt; every
+    // resume, reask and land-again drops it.
+    merge_cleared: v.optional(v.object({ at: v.number(), node_id: v.string(), why: v.string(), by: v.id("users"), attempt: v.number() })),
     graph_hash: v.optional(v.string()), // LE14: content hash of the graph the runner executed (parser.graphHash)
     graph_nodes: v.optional(v.array(v.object({ id: v.string(), h: v.string() }))), // LE14: each station's hash in that graph (parser.graphNodeHashes)
     // The machine whose runner drives the run (its device id): where the run

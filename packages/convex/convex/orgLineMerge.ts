@@ -8,8 +8,8 @@
 // the push; the second re-reads the allowance inside the write, so two runs
 // cannot both take the last merge of the day. A run no role is behind merges
 // on a person's word instead (`personAuthorized`): a Ship on a card of the
-// task, or, for a run whose own graph cleared it to land without a card, the
-// person who started it.
+// task, or, for a run a script station of its own graph cleared to land
+// (`clearForMerge`), the person who started it.
 
 import { mutation, query } from "./functions";
 import { v } from "convex/values";
@@ -120,52 +120,97 @@ async function runAndRole(ctx: any, userId: Id<"users">, runRef: string): Promis
 // Every refusal ends with these words: a flow reads them to ask at the card instead (a repo's change flow does).
 const NOTHING_AUTHORIZES = "so nothing authorizes the merge";
 
-const isShip = (card: any): boolean => /^ship\b/i.test(String(card.options?.[card.answer_index ?? -1]?.label ?? "").trim());
-const answerLabel = (card: any): string => String(card.options?.[card.answer_index ?? -1]?.label ?? card.answer_text ?? "something other than Ship").trim();
+const optionIsShip = (label: unknown): boolean => /^ship\b/i.test(String(label ?? "").trim());
+const isShipAnswer = (card: any): boolean => card.status === "answered" && optionIsShip(card.options?.[card.answer_index ?? -1]?.label);
+const offersShip = (card: any): boolean => (card.options ?? []).some((o: any) => optionIsShip(o?.label));
 const cardRef = (card: any): string => card.short_id ?? String(card._id);
+// "answered Revise on sd-N" / "dismissed sd-N": what a verdict was, for a refusal.
+const verdictWords = (card: any, ref = cardRef(card)): string =>
+  card.status === "dismissed" ? `dismissed ${ref}` : `answered ${String(card.options?.[card.answer_index ?? -1]?.label ?? card.answer_text ?? "something other than Ship").trim()} on ${ref}`;
+// A person's verdict: an answer a user gave, or a dismissal a user made (a dismissal names its person in answered_by,
+// or, on older rows, only in resolved_by). A withdrawal names nobody: the asker took its own question back.
+const byPerson = (card: any): boolean =>
+  card.answered_by ? card.answered_by.kind === "user" : card.status === "dismissed" && !!card.resolved_by;
+const newestFirst = (a: any, b: any) => (b.resolved_at ?? b.created_at ?? 0) - (a.resolved_at ?? a.created_at ?? 0);
+
+/** The attempt a run is on: a resume that counts as a new attempt moves it, and a cleared stamp holds only for the
+ *  attempt it was written in (`run.merge_cleared.attempt`). */
+export const runAttempt = (run: { visits_reset_at?: number; created_at: number }): number => run.visits_reset_at ?? run.created_at;
 
 /**
  * The person whose word lets a run no role is behind merge, or a refusal (thrown).
  *
- * The cards are every gate card of every run of the run's task (`session_decisions.by_task`), with the run's own
- * card (`gate_decision_id`). Only a person's answer is an answer: `answered`, by a user. A role's answer and a
- * withdrawn card are none.
- * - A card of this run still waiting refuses: the run asked, and nobody has answered.
- * - Otherwise the newest answer a person gave decides. Ship authorizes, as that person, whichever run's card it
- *   was on, so a rerun of a task already shipped at its card does not ask again; any other answer refuses until a
- *   person answers Ship on a later card.
- * - With no answer, a run that asked no card reached Land because its own graph cleared it, and the person who
- *   started it (`run.user_id`) authorizes it. A run asked a card when any card names it, its row names one, or it
- *   stopped at a gate (`gate_node_id`, written before the gate asks and kept after). A run with no task has no
- *   cards to read, and an agent account is no person: neither merges without a Ship.
+ * A card counts when it is a gate card (it names a run) that offered Ship; a failure gate's "Reopen" or "Drop the
+ * task" is no word on shipping. Cards are read off the task's index by status, newest first
+ * (`session_decisions.by_task`), plus the run's own `gate_decision_id`. Rules, in order:
+ * 1. A card of this run still waiting refuses: the run asked, and nobody has answered.
+ * 2. This run's own decided cards: the newest decides, whoever gave it. A person's Ship authorizes; a role's or a
+ *    policy's Ship is no person's, and Revise, Drop or a dismissal refuses.
+ * 3. Otherwise the task's newest person verdict on another run's card (an answer or a dismissal by a user): Ship
+ *    carries over to this rerun, as that person; anything else refuses until a person answers Ship on a later
+ *    card. A Ship covers the task, not a commit: the newest verdict is what revokes it.
+ * 4. Otherwise a run its own graph cleared to land: the stamp a script station wrote (`clearForMergeCore`) in the
+ *    run's current attempt, and the person who started the run (`run.user_id`) authorizes it. Every resume, reask
+ *    and land-again drops the stamp, so it is never inferred from what a run lacks. An agent account is no person.
  */
 export async function personAuthorized(ctx: any, run: any): Promise<PersonAuthorization> {
-  const ofTask: any[] = run.task_id
-    ? await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", run.task_id)).take(500)
-    : [];
-  const cards = ofTask.filter((d) => !!d.workflow_run_id && !d.trial);
-  if (run.gate_decision_id && !cards.some((d) => String(d._id) === String(run.gate_decision_id))) {
+  const byStatus = (status: string) => run.task_id
+    ? ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", run.task_id).eq("status", status)).order("desc").take(100)
+    : Promise.resolve([]);
+  const [pending, answered, dismissed] = await Promise.all([byStatus("pending"), byStatus("answered"), byStatus("dismissed")]);
+  const rows: any[] = [...pending, ...answered, ...dismissed];
+  if (run.gate_decision_id && !rows.some((d) => String(d._id) === String(run.gate_decision_id))) {
     const own = await ctx.db.get(run.gate_decision_id);
-    if (own) cards.push(own);
+    if (own) rows.push(own);
   }
   const isOwn = (d: any) => String(d.workflow_run_id ?? "") === String(run._id) || String(d._id) === String(run.gate_decision_id ?? "");
-  const waiting = cards.find((d) => isOwn(d) && d.status === "pending");
+  const waiting = rows.find((d) => isOwn(d) && d.status === "pending");
   if (waiting) throw new Error(`No role started this run and its card ${cardRef(waiting)} is still waiting on a person, ${NOTHING_AUTHORIZES}`);
-  const answers = cards
-    .filter((d) => d.status === "answered" && d.answered_by?.kind === "user")
-    .sort((a, b) => (b.resolved_at ?? b.created_at ?? 0) - (a.resolved_at ?? a.created_at ?? 0));
-  const last = answers[0];
-  if (last) {
-    if (!isShip(last)) throw new Error(`No role started this run and a person answered ${answerLabel(last)} on ${cardRef(last)}, the task's newest answer, ${NOTHING_AUTHORIZES}`);
-    return { user_id: String(last.answered_by.id), why: isOwn(last) ? `ship on card ${cardRef(last)}` : `ship on earlier run's card ${cardRef(last)}` };
+  const decided = rows.filter((d) => (d.status === "answered" || d.status === "dismissed") && !d.trial && offersShip(d) && (isOwn(d) || !!d.workflow_run_id)).sort(newestFirst);
+
+  const own = decided.find(isOwn);
+  if (own) {
+    if (isShipAnswer(own) && own.answered_by?.kind === "user") return { user_id: String(own.answered_by.id), why: `ship on card ${cardRef(own)}` };
+    const who = own.answered_by?.kind && own.answered_by.kind !== "user" ? `a ${own.answered_by.kind}` : "a person";
+    throw new Error(`No role started this run and ${who} ${verdictWords(own, `its card ${cardRef(own)}`)}, ${NOTHING_AUTHORIZES}`);
   }
-  if (cards.some(isOwn) || run.gate_node_id) throw new Error(`No role started this run and no person answered Ship on its card, ${NOTHING_AUTHORIZES}`);
-  if (!run.task_id) throw new Error(`No role started this run, it has no task whose cards show it asked none, and no person answered Ship on a card, ${NOTHING_AUTHORIZES}`);
+  const earlier = decided.find(byPerson);
+  if (earlier) {
+    if (isShipAnswer(earlier)) return { user_id: String(earlier.answered_by.id), why: `ship on earlier run's card ${cardRef(earlier)}` };
+    throw new Error(`No role started this run and a person ${verdictWords(earlier)}, the task's newest verdict, ${NOTHING_AUTHORIZES}`);
+  }
+  const stamp = run.merge_cleared;
+  if (!stamp || stamp.attempt !== runAttempt(run)) throw new Error(`No role started this run, its graph did not clear it to land, and no person answered Ship on a card, ${NOTHING_AUTHORIZES}`);
   const starter: any = await ctx.db.get(run.user_id);
   if (!starter || starter.is_bot) throw new Error(`No role started this run, an agent account started it, and no person answered Ship on a card, ${NOTHING_AUTHORIZES}`);
   const name = starter.name || starter.github_username || starter.email?.split("@")[0] || String(starter._id);
-  return { user_id: String(run.user_id), why: `cleared by the run's own graph, started by ${name}` };
+  return { user_id: String(run.user_id), why: `cleared by the run's own graph at ${stamp.node_id} (${stamp.why}), started by ${name}` };
 }
+
+/**
+ * `cast workflow clear <run> --why`: the run's own graph cleared it to land with no card (a founder-intent read that
+ * passed). Written only by the run's own runner account, while the run is running, from the station it stands at,
+ * and only from a script station: a station with a session (an agent) cannot clear its own change. The stamp names
+ * the run's attempt, and anything that moves the run back (workflow_runs.resumeRunAt, landAgainCore) drops it.
+ */
+export async function clearForMergeCore(ctx: any, userId: Id<"users">, args: { run_id: string; why: string }, now = Date.now()): Promise<{ run_id: string; node_id: string; attempt: number }> {
+  const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
+  if (!run || String(run.user_id) !== String(userId)) throw new Error("Only the run's own runner clears it to land");
+  const why = args.why.trim();
+  if (!why) throw new Error("--why says what cleared the run to land");
+  if (run.status !== "running" || !run.current_node_id) throw new Error(`The run is ${run.status}: only a running station clears it to land`);
+  const station = (run.node_statuses ?? []).find((n: any) => n.node_id === run.current_node_id);
+  if (!station || station.status !== "running") throw new Error(`${run.current_node_id} is not running: only the station the run stands at clears it`);
+  if (station.session_id) throw new Error(`${run.current_node_id} is an agent's station: only a script station of the graph clears a run to land`);
+  const attempt = runAttempt(run);
+  await ctx.db.patch(run._id, { merge_cleared: { at: now, node_id: run.current_node_id, why: why.slice(0, 500), by: userId, attempt }, updated_at: now });
+  return { run_id: String(run._id), node_id: run.current_node_id, attempt };
+}
+
+export const clearForMerge = mutation({
+  args: { api_token: v.string(), run_id: v.string(), why: v.string() },
+  handler: async (ctx, { api_token, ...args }) => clearForMergeCore(ctx, await requireToken(ctx, api_token), args),
+});
 
 const PERSON_ALLOWANCE = { on: true, used: 0, limit: null, grant: null, allowed: true, reason: null, mode: "count" as const, bar: null, measured: null };
 
