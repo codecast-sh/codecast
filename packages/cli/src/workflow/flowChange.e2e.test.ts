@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { freezeSessionChange, frozenChangeContext, writeFrozenChange } from "./flowChange";
+import { freezeSessionChange, frozenChangeContext, NoSessionChange, writeFrozenChange } from "./flowChange";
 import { parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
 
@@ -114,7 +114,7 @@ describe("a session's change runs through a flow", () => {
     // The run starts on the change: its stations read $branch and $worktree from the run's files.
     const flow = parseWorkflowSource(`digraph change {
       start [shape=Mdiamond]
-      look [label="Look", shape=parallelogram, script="git -C $project_path show --stat --format=%s $branch > $run_dir/seen.txt && echo $worktree >> $run_dir/seen.txt"]
+      look [label="Look", shape=parallelogram, script="git -C $project_path show --stat --format=%s $branch > $run_dir/seen.txt && echo diff_base=$diff_base >> $run_dir/seen.txt && echo $worktree >> $run_dir/seen.txt"]
       done [shape=Msquare]
       start -> look -> done
     }`);
@@ -132,6 +132,8 @@ describe("a session's change runs through a flow", () => {
     const seen = fs.readFileSync(path.join(runDir, "seen.txt"), "utf-8");
     expect(seen).toContain("feat(src): speed up the api");
     for (const p of change.paths) expect(seen).toContain(p);
+    // A reviewer's diff starts where the change was cut: HEAD here, with no upstream.
+    expect(seen).toContain(`diff_base=${headBefore}`);
     expect(seen.trim().endsWith("change-ct-1")).toBe(true);
   }, 60_000);
 
@@ -162,7 +164,9 @@ describe("a session's change runs through a flow", () => {
     git(root, "commit", "-qm", "base");
     write(root, "a.txt", "b\n");
     transcript("sess-c", "jx7ccccccccccccccccccccccccccccc", [tool(root, "Edit", { file_path: path.join(root, "a.txt"), old_string: "a", new_string: "b" }, 10_000)]);
-    await expect(freezeSessionChange(root, "jx7zzzz", { branch: "codecast/x", worktree: "x" })).rejects.toThrow(/No uncommitted change/);
+    const refused = freezeSessionChange(root, "jx7zzzz", { branch: "codecast/x", worktree: "x" });
+    await expect(refused).rejects.toThrow(/No uncommitted change/);
+    await expect(refused).rejects.toBeInstanceOf(NoSessionChange);
   });
 });
 
@@ -217,10 +221,41 @@ describe("a session's change is cut on fresh upstream", () => {
     expect(git(root, "show", `${change.tip}:a.ts`)).toBe("export const a = 2;");
     expect(git(root, "show", `${change.tip}:b.ts`)).toBe("export const b = 2;");
     expect(git(root, "diff", "--name-only", fresh, change.tip)).toBe("a.ts");
+    // The local main lags, so a reviewer diffs from where the change was cut: from main it would show upstream's b.ts too.
+    const runDir = path.join(root, ".git", "run-fresh");
+    writeFrozenChange(runDir, change);
+    expect(frozenChangeContext(runDir).diff_base).toBe(fresh);
+    expect(git(root, "diff", "--name-only", `${frozenChangeContext(runDir).diff_base}...codecast/fresh`)).toBe("a.ts");
+    expect(git(root, "diff", "--name-only", "main...codecast/fresh").split("\n").sort()).toEqual(["a.ts", "b.ts"]);
     // The fetch moved the remote-tracking ref, nothing else.
     expect(git(root, "rev-parse", "origin/main")).toBe(fresh);
     expect(shared()).toEqual(before);
   }, 30_000);
+
+  test("a run with no frozen change diffs from the default branch", async () => {
+    freshState();
+    const root = path.join(sandbox, "plain");
+    fs.mkdirSync(root);
+    git(root, "init", "-q", "-b", "main");
+    write(root, "a.txt", "a\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "base");
+    const flow = parseWorkflowSource(`digraph plain {
+      start [shape=Mdiamond]
+      look [label="Look", shape=parallelogram, script="mkdir -p $run_dir && echo $diff_base > $run_dir/base.txt"]
+      done [shape=Msquare]
+      start -> look -> done
+    }`);
+    const runDir = lineRunDir(root, runSlug(flow, { task_id: "ct-2" }, "run"));
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      expect(await runWorkflow(flow, { cwd: root, taskId: "ct-2" })).toBe("completed");
+    } finally {
+      console.log = orig;
+    }
+    expect(fs.readFileSync(path.join(runDir, "base.txt"), "utf-8").trim()).toBe("main");
+  }, 60_000);
 
   test("upstream changed the same lines: the branch stays on HEAD and the conflict is recorded", async () => {
     const { root, upstream, shared, session } = lagging("upbb");
