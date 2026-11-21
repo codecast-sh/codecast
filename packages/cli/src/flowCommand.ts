@@ -332,6 +332,12 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const roster = inboxRosterVia((route, body) => deps.cliPost(route, body));
       const pass = opts.checkout ? await previewCheckoutChange(top, { roster }).catch((err) => { console.error(err.message); process.exit(1); }) : null;
       if (pass && !pass.groups.length) { console.error(new NoCheckoutChange(top, pass.held).message); process.exit(1); }
+      // A change upstream already holds has nothing to land: nothing is made for it.
+      const landed = preview?.landed ?? pass?.landed;
+      if (landed) {
+        console.log(`${preview ? `Session ${preview.session}'s change` : "The shared checkout's change"} is already on ${(preview ?? pass)!.upstream} at ${landed.slice(0, 10)}: nothing to run.`);
+        return;
+      }
       // A session's change runs on the session's own task (flows.md FL4): the one it is bound to, else one made and
       // bound to it below, so the run's messages and a second run find the same task, branch and worktree.
       const subjectRun = !task && !branch && !!preview;
@@ -403,7 +409,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const { freezeCheckoutChange } = await import("./workflow/flowChange.js");
         try {
           // The session that ran this hears the findings that name none of the change's files.
-          change = { ...(await freezeCheckoutChange(top, { branch: `codecast/${worktree}`, worktree, title: changeTitle, roster })), ...(await callingSubject(deps)) };
+          change = { ...(await freezeCheckoutChange(top, { branch: `codecast/${worktree}`, worktree, title: changeTitle, roster, fetched: true })), ...(await callingSubject(deps)) };
         } catch (err) {
           console.error(err instanceof Error ? err.message : String(err));
           process.exit(1);
@@ -411,13 +417,16 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       } else if (sessionRef) {
         const { freezeSessionChange } = await import("./workflow/flowChange.js");
         try {
-          change = await freezeSessionChange(top, sessionRef, { branch: `codecast/${worktree}`, worktree, title: changeTitle, only });
+          change = await freezeSessionChange(top, sessionRef, { branch: `codecast/${worktree}`, worktree, title: changeTitle, only, fetched: true });
         } catch (err) {
           console.error(err instanceof Error ? err.message : String(err));
           process.exit(1);
         }
       }
       if (change) {
+        const { behindWords } = await import("./workflow/flowChangeFile.js");
+        const behind = behindWords(change);
+        if (behind) console.error(`  behind upstream: ${behind}`);
         // The workspace's setup (its install) runs here, before the run starts: it can take minutes.
         if (!opts.json) console.error(dim(`  making worktree ${worktree} on ${change.branch} (its setup can take a few minutes)`));
         const ws = await cast(["ws", "acquire", worktree, "--branch", change.branch, "--skip-pool", "--json"], top);
