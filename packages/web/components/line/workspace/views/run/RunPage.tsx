@@ -26,6 +26,7 @@ import { stageTrack } from "../../../../../lib/line/stageTrack";
 import { useTrialCards } from "../../../../../hooks/useSyncTrial";
 import { useStationInput } from "../../../../../hooks/useLineWorkspace";
 import { useSyncTaskSignals } from "../../../../../hooks/useSyncSignals";
+import { useSyncTaskDetail } from "../../../../../hooks/useSyncTasks";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { StageTrack } from "../../../widgets/StageTrack";
@@ -69,6 +70,8 @@ export function RunPage({ model, workspace, selection, select, href }: LineViewP
   const heldRun = heldTask !== null;
   const stored = useInboxStore((s) => (run ? ((s as unknown as { workflowRuns?: Record<string, TraceRun> }).workflowRuns?.[run.id] ?? null) : null));
   const raw = (stored ? settledRun(stored) : null) ?? (workspace.rows.runs.find((r) => r._id === run?.id) as TraceRun | undefined) ?? null;
+  // Reviews are comments: the case's whole thread comes from its detail (a list row carries only a count).
+  useSyncTaskDetail(caseId ?? undefined);
   const task = useMemo(() => (caseId ? (workspace.rows.tasks as unknown as TaskRow[]).find((x) => x._id === caseId) ?? null : null), [workspace.rows.tasks, caseId]);
   const reviews = useMemo(() => reviewsOf(task), [task]);
   const trace = useMemo(() => (run ? runTrace(model, run, raw, { reviews }) : []), [model, run, raw, reviews]);

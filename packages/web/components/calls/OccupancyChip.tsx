@@ -1,5 +1,5 @@
 import { useCallsAvailable } from "../../lib/teamFeatures";
-import { useCallback } from "react";
+import { useCallback, memo } from "react";
 import type { FaceRow } from "../../lib/faces/faceRow";
 import { useFaceRowSelect } from "../../hooks/useFaceRow";
 import { roomHeldAsBurst } from "../../lib/faces/faceRow";
@@ -233,7 +233,7 @@ function GuestsWaitingAtDoor({ roomKey, ring, anchorTitle, channelMemberCount, h
 // Session headers: the room of one conversation, and the one room where the
 // agent is listening — a session huddle transcribes into its own session live
 // (transcripts.start seeds the route), so the tooltip says so.
-export function SessionHuddleButton({ conversationId }: { conversationId: string }) {
+export const SessionHuddleButton = memo(function SessionHuddleButton({ conversationId }: { conversationId: string }) {
   return (
     <HuddleWithGuest
       roomKey={sessionRoomKey(conversationId)}
@@ -241,4 +241,4 @@ export function SessionHuddleButton({ conversationId }: { conversationId: string
       compact
     />
   );
-}
+});

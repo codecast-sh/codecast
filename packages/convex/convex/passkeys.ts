@@ -40,7 +40,7 @@ import { action, internalMutation, internalQuery, mutation, query } from "./func
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { consumePresence, grantChallengeId, grantString } from "./lib/presence";
-import { pendingApproval } from "./lib/secretApprovals";
+import { pendingApprovals } from "./lib/secretApprovals";
 import { runPresenceLabel } from "./lib/commandRuns";
 import { heldKeysFor } from "./lib/accessKeys";
 import { sha256Hex } from "./lib/hash";
@@ -48,6 +48,7 @@ import { passkeyOrigins, siteUrl } from "./lib/siteUrl";
 import { emitNotification } from "./notificationRouter";
 import {
   PRESENCE_ACTIONS,
+  PRESENCE_PHRASE,
   PRESENCE_TTL_MS,
   presenceRequiredMessage,
   type PasskeyMeta,
@@ -100,14 +101,23 @@ export const list = query({
     const rows = await passkeysOf(ctx, userId);
     return rows
       .sort((a, b) => b.created_at - a.created_at)
-      .map((r) => ({ _id: String(r._id), name: r.name, created_at: r.created_at, last_used_at: r.last_used_at }));
+      .map((r) => ({
+        _id: String(r._id),
+        name: r.name,
+        created_at: r.created_at,
+        last_used_at: r.last_used_at,
+        ...(r.kind === "device_key" ? { device_key: r.credential_id } : {}),
+      }));
   },
 });
 
 /** The WebAuthn options a pending challenge's ceremony runs with, rebuilt from the row so the /confirm page can fetch them by id. */
 async function optionsFor(ctx: any, row: Doc<"passkey_challenges">) {
   const now = Date.now();
-  const passkeys = (await passkeysOf(ctx, row.user_id)).filter((p) => (row.purpose === "presence" ? confirmsFor(p, row.rp_id) : p.rp_id === row.rp_id));
+  // Device keys sign the challenge directly (deviceKeys.ts); a WebAuthn ceremony offers only WebAuthn credentials.
+  const passkeys = (await passkeysOf(ctx, row.user_id)).filter(
+    (p) => !p.kind && (row.purpose === "presence" ? confirmsFor(p, row.rp_id) : p.rp_id === row.rp_id),
+  );
   const credentials = passkeys.map((p) => ({ id: p.credential_id, transports: p.transports }));
   const challenge = isoBase64URL.toBuffer(row.challenge);
   const timeout = PRESENCE_TTL_MS;
@@ -157,6 +167,7 @@ export const challenge = query({
       status,
       action: row.action,
       expires_at: row.expires_at,
+      ...(row.from ? { from: row.from } : {}),
       ...(open || owner ? { label: row.label } : {}),
       ...(open ? { options: await optionsFor(ctx, row) } : {}),
     };
@@ -169,7 +180,7 @@ export const challenge = query({
 async function presenceSubject(ctx: any, userId: Id<"users">, action: PresenceAction, target: string): Promise<{ label?: string } | { error: string }> {
   const missing = { error: "Nothing to confirm: it was removed, or it is not yours" };
   if (action === "add_passkey") return target === String(userId) ? {} : missing;
-  if (action === "reveal" || action === "ask_first_off") {
+  if (action === "reveal" || action === "ask_first_off" || action === "touch_id_off") {
     const id = ctx.db.normalizeId("secrets", target);
     const row = id ? await ctx.db.get(id) : null;
     return row && (await heldKeysFor(ctx, userId)).has(row.workspace) ? { label: row.name } : missing;
@@ -184,10 +195,11 @@ async function presenceSubject(ctx: any, userId: Id<"users">, action: PresenceAc
       return label ? { label } : missing;
     }
     if (String(row.user_id) !== String(userId)) return missing;
-    const approval = await pendingApproval(ctx, row._id);
-    if (!approval) return { error: "Only an Ask first read or a Run card takes Touch ID" };
-    const [secret, conversation] = await Promise.all([ctx.db.get(approval.secret_id), ctx.db.get(approval.conversation_id)]);
-    return secret && conversation ? { label: `${secret.name} for ${conversation.short_id ?? "a session"}` } : missing;
+    const approvals = await pendingApprovals(ctx, row._id);
+    if (!approvals.length) return { error: "Only an Ask first read or a Run card takes Touch ID" };
+    const [conversation, ...secrets] = await Promise.all([ctx.db.get(approvals[0].conversation_id), ...approvals.map((a) => ctx.db.get(a.secret_id))]);
+    const names = secrets.filter(Boolean).map((s: any) => s.name);
+    return names.length && conversation ? { label: `${names.join(", ")} for ${conversation.short_id ?? "a session"}` } : missing;
   }
   const id = ctx.db.normalizeId("passkeys", target);
   const row = id ? await ctx.db.get(id) : null;
@@ -206,6 +218,7 @@ export const openChallenge = internalMutation({
     grant_hash: v.optional(v.string()),
     // register: the add_passkey grant a second passkey spends.
     grant: v.optional(v.string()),
+    from: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -239,11 +252,21 @@ export const openChallenge = internalMutation({
       status: "pending",
       grant_hash: args.grant_hash,
       authorized_by,
+      ...(args.from ? { from: args.from.slice(0, MAX_NAME) } : {}),
       created_at: now,
       expires_at: now + PRESENCE_TTL_MS,
     });
     const row = (await ctx.db.get(id))!;
-    return { challenge_id: String(id), options: await optionsFor(ctx, row), expires_at: row.expires_at };
+    // Which device keys could answer it, so an app holding one signs instead of handing off; and whether a WebAuthn passkey could.
+    const usable = passkeys.filter((p) => (args.purpose === "presence" ? confirmsFor(p, args.rp_id) : p.rp_id === args.rp_id));
+    return {
+      challenge_id: String(id),
+      options: await optionsFor(ctx, row),
+      expires_at: row.expires_at,
+      ...(label ? { label } : {}),
+      device_keys: usable.filter((p) => p.kind === "device_key").map((p) => p.credential_id),
+      webauthn: usable.some((p) => !p.kind),
+    };
   },
 });
 
@@ -256,13 +279,13 @@ const random32 = () => isoBase64URL.fromBuffer(crypto.getRandomValues(new Uint8A
  * an add_passkey `grant` here, before the ceremony.
  */
 export const registrationBegin = action({
-  args: { origin: v.optional(v.string()), grant: v.optional(v.string()) },
+  args: { origin: v.optional(v.string()), grant: v.optional(v.string()), from: v.optional(v.string()) },
   handler: async (ctx, args): Promise<any> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { error: "Sign in to codecast to set up Touch ID" };
     const rp = ceremonyRp(args.origin);
     if ("error" in rp) return rp;
-    return await ctx.runMutation(internal.passkeys.openChallenge, { user_id: userId, purpose: "register", challenge: random32(), rp_id: rp.rp_id, grant: args.grant });
+    return await ctx.runMutation(internal.passkeys.openChallenge, { user_id: userId, purpose: "register", challenge: random32(), rp_id: rp.rp_id, grant: args.grant, from: args.from });
   },
 });
 
@@ -275,7 +298,7 @@ export const registrationBegin = action({
  * passkey to assert with yet.
  */
 export const presenceBegin = action({
-  args: { action: actionValidator, target: v.optional(v.string()), origin: v.optional(v.string()) },
+  args: { action: actionValidator, target: v.optional(v.string()), origin: v.optional(v.string()), from: v.optional(v.string()) },
   handler: async (ctx, args): Promise<any> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { error: "Sign in to codecast to confirm with Touch ID" };
@@ -292,6 +315,7 @@ export const presenceBegin = action({
       challenge: random32(),
       rp_id: rp.rp_id,
       grant_hash: await sha256Hex(secret),
+      from: args.from,
     });
     return "error" in opened ? opened : { ...opened, grant: grantString(opened.challenge_id, secret) };
   },
@@ -329,6 +353,7 @@ export const storePasskey = internalMutation({
     counter: v.number(),
     transports: v.optional(v.array(v.string())),
     name: v.string(),
+    kind: v.optional(v.literal("device_key")),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -351,6 +376,7 @@ export const storePasskey = internalMutation({
       transports: args.transports,
       rp_id: row!.rp_id,
       name: args.name,
+      ...(args.kind ? { kind: args.kind } : {}),
       created_at: now,
     });
     const user = await ctx.db.get(userId);
@@ -445,7 +471,7 @@ export const presenceFinish = action({
     const closed = closedReason(got?.row, "presence", Date.now());
     if (closed) return { error: closed };
     const { row, passkey } = got!;
-    if (!passkey || passkey.rp_id !== row.rp_id) return { error: "This passkey is not set up for the account that asked" };
+    if (!passkey || passkey.kind || passkey.rp_id !== row.rp_id) return { error: "This passkey is not set up for the account that asked" };
     let verified;
     try {
       verified = await verifyAuthenticationResponse({
@@ -465,6 +491,57 @@ export const presenceFinish = action({
       passkey_id: passkey._id,
       counter: verified.authenticationInfo.newCounter,
     });
+  },
+});
+
+/**
+ * The signed-in person's presence challenges still waiting, newest first, for
+ * another of their devices to confirm (the phone's Face ID). Each carries what
+ * it confirms and which device asked; never the grant string, which stays
+ * with the asker.
+ */
+export const waiting = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const now = Date.now();
+    const rows = await ctx.db
+      .query("passkey_challenges")
+      .withIndex("by_user_status", (q) => q.eq("user_id", userId).eq("status", "pending"))
+      .collect();
+    return rows
+      .filter((r) => r.purpose === "presence" && r.expires_at > now)
+      .sort((a, b) => b.created_at - a.created_at)
+      .map((r) => ({ challenge_id: String(r._id), action: r.action!, label: r.label, from: r.from, expires_at: r.expires_at }));
+  },
+});
+
+/**
+ * Ask the person's phone to confirm a challenge another device opened: one
+ * push, which opens the app on its waiting list (`waiting`). The challenge id
+ * authorises it, as on /confirm, and it only ever reaches the challenge's own
+ * person, once per challenge, while it is pending.
+ */
+export const askPhone = mutation({
+  args: { challenge_id: v.string() },
+  handler: async (ctx, args): Promise<{ sent: boolean }> => {
+    const id = ctx.db.normalizeId("passkey_challenges", args.challenge_id);
+    const row = id ? await ctx.db.get(id) : null;
+    if (!row || row.purpose !== "presence" || stateOf(row, Date.now()) !== "pending" || row.phone_asked_at) return { sent: false };
+    const user = await ctx.db.get(row.user_id);
+    if (!user?.push_token) return { sent: false };
+    await ctx.db.patch(row._id, { phone_asked_at: Date.now() });
+    await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
+      push_token: user.push_token,
+      title: `Confirm to ${PRESENCE_PHRASE[row.action!]}`,
+      body: [row.label, row.from && `from ${row.from}`].filter(Boolean).join(" · ") || "Open Codecast to confirm",
+      interruption_level: "time-sensitive",
+      ttl: Math.ceil(Math.max(0, row.expires_at - Date.now()) / 1000),
+      data: { type: "presence_confirm", challenge_id: String(row._id) },
+      user_id: row.user_id,
+    });
+    return { sent: true };
   },
 });
 
