@@ -2194,7 +2194,8 @@ export class SyncService {
   // the server then leaves a HIDDEN stash (`cast stash --hide`) in place so a
   // looping session keeps working out of the user's active queue; a plain
   // stash pops back into the inbox on the wake. Human/agent sends omit it.
-  async sendMessageToSession(conversationId: string, content: string, origin?: "scheduler"): Promise<string | null> {
+  // A `clientId` makes a retried send land once.
+  async sendMessageToSession(conversationId: string, content: string, origin?: "scheduler", clientId?: string): Promise<string | null> {
     if (!this.apiToken) return null;
     return this.guarded(async () => {
       const result = await this.mutate(
@@ -2203,6 +2204,7 @@ export class SyncService {
           conversation_id: conversationId,
           content,
           ...(origin ? { origin } : {}),
+          ...(clientId ? { client_id: clientId } : {}),
           api_token: this.apiToken,
         },
       );
