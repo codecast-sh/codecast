@@ -280,7 +280,11 @@ session has that session as its subject too (`callingSubject` in
 `flowCommand.ts` writes it into `change.json`): the session fixes the change by
 committing to the branch (pushing, for a pull request), and the run reads the
 branch again rather than freezing edits (`$change_return` in the briefs says
-which). Started from a plain shell it has no subject, so its first fixable stop
+which). A pull request's branch is fetched into `origin/<branch>`, since the
+run's worktree has the branch checked out, and the worktree that has it (or
+the branch, when none does) moves to the fetched tip; a fetch that fails, or a
+worktree on the branch holding uncommitted work, stops the run and says which.
+Started from a plain shell it has no subject, so its first fixable stop
 ends it with what the stage found.
 
 A check the machine could not run (LP4: the check exits 2, say no test
