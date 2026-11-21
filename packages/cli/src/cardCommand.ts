@@ -4,8 +4,8 @@
 // eval-result.json, a recorded proof, the branch's diff), takes what the
 // author decided (its recommendation, and the findings the change covers, from
 // which reach is counted) plus any optional card words, validates, writes
-// card.json beside card.html, and with --publish publishes the page through
-// the same path as `cast publish --task`, so it lands on the task as evidence.
+// card.json beside card.html. It publishes nothing: the card reaches people
+// only as the decision it is posted with, at /decisions/<sd-N> (LE10).
 //
 // The assembly, validation and rendering live in @codecast/shared so a
 // workflow node and the web build the same card.
@@ -35,7 +35,6 @@ import type { EvalResult } from "@platform/evals/contract";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
-import { printPublishResult, publishOnce } from "./publish.js";
 import { runGit } from "./repoMirror.js";
 import { stdinText } from "./sendBody.js";
 
@@ -55,7 +54,6 @@ interface BuildOptions {
   base?: string;
   dir?: string;
   out?: string;
-  publish?: boolean;
   json?: boolean;
 }
 
@@ -344,24 +342,8 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
   fs.writeFileSync(outJson, JSON.stringify(card, null, 2) + "\n");
   fs.writeFileSync(outHtml, renderChangeCardHtml(card));
 
-  let published: any = null;
-  if (options.publish && !errors.length) {
-    try {
-      const { result, title } = await publishOnce(
-        deps,
-        outHtml,
-        { task: task.short_id },
-        { sessionRef: deps.detectCurrentSessionId() ?? undefined, withThumb: true, forceNew: false, exitOnError: false },
-      );
-      published = result;
-      if (!options.json) printPublishResult(result, title);
-    } catch (err) {
-      fail(`Card publish failed: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
   if (options.json) {
-    console.log(JSON.stringify({ card, ...(problem ? { problem } : {}), errors, card_json: outJson, card_html: outHtml, ...(published ? { published } : {}) }, null, 2));
+    console.log(JSON.stringify({ card, ...(problem ? { problem } : {}), errors, card_json: outJson, card_html: outHtml }, null, 2));
   } else {
     console.log(`${fmt.label("card:")} ${outJson}`);
     console.log(`${fmt.label("page:")} ${outHtml}`);
@@ -369,7 +351,6 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
     if (errors.length) {
       console.error(fmt.error(`\nThe card is not ready (${errors.length}):`));
       for (const e of errors) console.error(`  ${e}`);
-      if (options.publish) console.error(fmt.muted("\nNot published. Fix the fields above and build again."));
     }
   }
   if (errors.length) process.exit(1);
@@ -462,7 +443,7 @@ export function registerCardCommand(program: Command, deps: PublishDeps): void {
 
   card
     .command("build")
-    .description("Assemble, validate and render the change card for a task: card.json and card.html; --publish attaches it as evidence")
+    .description("Assemble, validate and render the change card for a task: card.json and card.html")
     .requiredOption("--task <ct-N>", "The problem the card is for")
     .option("--eval-result <file>", "The eval station's eval-result.json: verdicts, proven freezes, flipped examples")
     .option("--proof <file>", "A proof recorded outside evals: { before: Check[], after: Check[] }, red then green")
@@ -477,7 +458,6 @@ export function registerCardCommand(program: Command, deps: PublishDeps): void {
     .option("--base <ref>", "Base for the diff stats (default: the eval result's base, else origin/main)")
     .option("--dir <dir>", "A run's directory: reads eval-result.json and proof.json from it when present, and writes card.json there")
     .option("--out <file>", "Where card.json goes (default: card.json, in --dir when given); the page goes beside it as .html")
-    .option("--publish", "Publish the page and attach it to the task as evidence (only when the card is valid)")
-    .option("--json", "Print { card, errors, card_json, card_html, published }")
+    .option("--json", "Print { card, errors, card_json, card_html }")
     .action((options: BuildOptions) => buildCard(deps, options));
 }

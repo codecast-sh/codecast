@@ -395,11 +395,12 @@ dated words, applies on its own; any other change waits for the project's person
     description: `The change card: one change and its proof, the page a person answers Ship, Revise or Drop on
 
   cast card build --task ct-N [--eval-result eval-result.json] [--proof proof.json]
-    [--wrong -] [--change -] [--recommend ship|revise|drop --why -] [--out card.json] [--publish] [--json]
+    [--wrong -] [--change -] [--recommend ship|revise|drop --why -] [--out card.json] [--json]
 
 Assembles the card from the task (problem, goal, verify, review, PR), the eval result, the
 branch diff and the run cost; validates it and names every field that is missing or wrong;
-writes card.json and card.html. --publish attaches the page to the task as evidence.`,
+writes card.json and card.html, a local preview. The card is published only as the decision it
+is posted with (cast decide --card), at /decisions/<sd-N>.`,
     load: () => import("./cardCommand.js").then((m) => m.registerCardCommand),
   },
   {

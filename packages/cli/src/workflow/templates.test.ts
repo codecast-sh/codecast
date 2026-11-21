@@ -632,7 +632,7 @@ describe("line.cast station scripts", () => {
       ["task", "done", "ct-1", "-m", "Dissolved: the miss did not reproduce. The evidence is in the prove comment."],
       ["task", "update", "ct-1", "--watch-days", "7"],
       ["card", "build", "--task", "ct-1", "--dir", dir, "--base", "main", "--json"],
-      ["card", "build", "--task", "ct-1", "--dir", dir, "--base", "main", "--publish", "--words", words],
+      ["card", "build", "--task", "ct-1", "--dir", dir, "--base", "main", "--words", words],
     ]);
   });
 });

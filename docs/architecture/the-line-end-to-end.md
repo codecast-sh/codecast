@@ -54,7 +54,7 @@ The line's nine words (the-line.md L1) stand. This document adds four.
 |---|---|---|
 | signal | one observation from the world, typed at its source | `signals` |
 | cause | a task that signals attach to; the unit of work on the line | `tasks` with `cause` fields |
-| card | the fixed-shape summary of one change and its proof (LE10) | `shared/contracts/changeCard.ts`, published page on the task |
+| card | the fixed-shape summary of one change and its proof (LE10), drawn on its decision | `shared/contracts/changeCard.ts`, `/decisions/<sd-N>` |
 | watch | the period after ship when the cause's signals are counted again | `tasks.watch_until` |
 
 ## LE3. Sense: signals are typed at the source
@@ -294,8 +294,12 @@ fail is `changes`.
 ## LE10. The card
 
 Every run ends in one card, whatever the category. The contract lives in
-`packages/shared/contracts/changeCard.ts`; one renderer turns it into the HTML
-page attached to the task and shown inline in the decision.
+`packages/shared/contracts/changeCard.ts`. The card rides on the run's one
+decision (the gate's `card` attribute) and has one page, that decision's
+`/decisions/<sd-N>`: the thread's inline card, the queue row and the task's
+open decision are its compact form and open that page. `cast card build`
+writes `card.json` for the gate and publishes nothing beside it; its local
+`card.html` is a preview for whoever runs it.
 
 ```
 ChangeCard {

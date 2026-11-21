@@ -143,7 +143,7 @@ digraph line {
   card_write [label="Present", shape=tab, backend=session, agent=claude, max_visits=2, prompt="@line/card_write.md"]
 
   card [label="Card", shape=parallelogram, timeout=300,
-    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && cast card build --task $task_id --dir $run_dir --base $default_branch --publish --words $card_write.json"]
+    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && cast card build --task $task_id --dir $run_dir --base $default_branch --words $card_write.json"]
 
   decide [label="Decide", shape=hexagon, category=review, asker=card_write,
     prompt="$card_write.json.question",
