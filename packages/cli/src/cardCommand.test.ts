@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "fs";
+import * as path from "path";
+import { parseWorkflowSource } from "./workflow/parser.js";
+import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
 import { authorConfidence, authorReach, caseNotLive, countedReach, mergeTreeConflicts, parseShortstat, problemFacts, proposalProof, runCost, taskWorkspaceScope } from "./cardCommand.js";
 
 describe("cast card build inputs", () => {
@@ -75,5 +79,16 @@ describe("a proposal card's case and proof", () => {
     expect(proposalProof(JSON.stringify({ outcome: "red", rung: "replay", prior_art: "ct-59425 1eadcef23a: still red with it applied", check: "x" }))).toEqual({ rung: "replay", outcome: "red", prior_art: "ct-59425 1eadcef23a: still red with it applied" });
     expect(proposalProof(".json")).toBeNull();
     expect(proposalProof(JSON.stringify({ outcome: "red" }))).toBeNull();
+  });
+});
+
+describe("one page per change decision (ct-59115)", () => {
+  test("a line run attaches no published card page beside /decisions/<sd-N>", () => {
+    const publishing = Object.entries(BUILTIN_WORKFLOW_TEMPLATES).flatMap(([name, source]) =>
+      [...parseWorkflowSource(source).nodes.entries()]
+        .filter(([, n]) => /cast card build\b[^;&|]*--publish\b/.test(n.script ?? ""))
+        .map(([id]) => `${name}:${id}`));
+    const buildPublishes = /publishOnce\(/.test(fs.readFileSync(path.join(import.meta.dir, "cardCommand.ts"), "utf-8"));
+    expect(buildPublishes ? publishing : []).toEqual([]);
   });
 });
