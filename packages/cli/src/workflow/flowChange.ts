@@ -60,9 +60,12 @@ export class NoSessionChange extends Error {
  * slow or asking for credentials, it gives up and upstream reads as last fetched.
  */
 async function fetchUpstream(root: string, upstream: string): Promise<void> {
-  if (upstream === "HEAD") return;
-  const args = ["-C", root, "fetch", "--quiet", upstream.split("/")[0], upstream.split("/").slice(1).join("/")];
-  await execFileAsync("git", args, { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).catch(() => {});
+  if (upstream !== "HEAD") await fetchRef(root, upstream.split("/")[0], upstream.split("/").slice(1).join("/")).catch(() => {});
+}
+
+/** A fetch that gives up after a minute and never prompts for credentials. */
+function fetchRef(root: string, remote: string, refspec: string) {
+  return execFileAsync("git", ["-C", root, "fetch", "--quiet", remote, refspec], { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
 }
 
 /**
@@ -222,19 +225,50 @@ export async function originTip(root: string, branch: string): Promise<string> {
   return git(root, ["rev-parse", "--verify", "--quiet", remoteRef]).catch(() => "");
 }
 
+/** The worktree that has `branch` checked out, or null. */
+async function checkedOutAt(root: string, branch: string): Promise<string | null> {
+  for (const entry of (await git(root, ["worktree", "list", "--porcelain"])).split("\n\n")) {
+    const lines = entry.split("\n");
+    if (lines.includes(`branch refs/heads/${branch}`)) return lines.find((l) => l.startsWith("worktree "))?.slice("worktree ".length) ?? null;
+  }
+  return null;
+}
+
 /**
  * Where a named branch stands now, against what the run last froze. The session fixing it may be on another machine
  * (a run started over ssh), where its commit reaches this checkout only through origin. The run's worktree holds no
  * work of its own, so the side that moved since the freeze holds the fix: this checkout's branch off the frozen tip
- * first, else origin's off the tip it had then (`remote_tip`), rebased or force-pushed included.
+ * first, else origin's off the tip it had then (`remote_tip`), rebased or force-pushed included. Origin's branch is
+ * fetched into its remote-tracking ref (a fetch into the branch itself is refused while a worktree has it checked
+ * out); a pull request's session only pushes, so a fetch of its branch that fails stops the refreeze rather than read
+ * as nothing new. When origin's tip wins, the local branch follows it: the worktree that has it checked out is reset
+ * to it, never over uncommitted work, or the ref moves when none does.
  */
 async function branchTip(root: string, change: FrozenChange): Promise<{ tip: string; remote_tip?: string }> {
+  const tracking = `refs/remotes/origin/${change.branch}`;
+  const fetched = change.source === "pr"
+    ? fetchRef(root, "origin", `+refs/heads/${change.branch}:${tracking}`).then(
+      () => git(root, ["rev-parse", tracking]),
+      (err: { stderr?: string; message: string }) => { throw new Error(`Could not fetch the pull request's branch ${change.branch} from origin: ${(err.stderr || err.message).trim()}`); },
+    )
+    : originTip(root, change.branch);
   const [local, remote] = await Promise.all([
     git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${change.branch}`]).catch(() => ""),
-    originTip(root, change.branch),
+    fetched,
   ]);
   const pushed = !!remote && remote !== (change.remote_tip ?? "") && remote !== change.tip;
   const tip = local && local !== change.tip ? local : pushed ? remote : local || change.tip;
+  if (tip !== local) {
+    const holder = await checkedOutAt(root, change.branch);
+    if (!holder) {
+      await git(root, ["update-ref", `refs/heads/${change.branch}`, tip]);
+    } else {
+      if (await git(holder, ["status", "--porcelain", "--untracked-files=no"])) {
+        throw new Error(`The branch ${change.branch} is checked out in ${holder}, which holds uncommitted work: finish or clear it there, then the run can take the branch's new commits`);
+      }
+      await git(holder, ["reset", "--quiet", "--hard", tip]);
+    }
+  }
   return { tip, ...(remote ? { remote_tip: remote } : {}) };
 }
 
