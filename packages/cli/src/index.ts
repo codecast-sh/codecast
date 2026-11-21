@@ -14537,12 +14537,13 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
       pause: "Pause a role: its triggers pause, and the sessions under it stop at a safe point",
       resume: "Resume a paused role: the triggers its pause paused run again",
       retire: "Retire a role; its area falls back to the role that covers it, else its sessions to their owners",
-      restart: "Restart the role's standing session",
+      restart: "Restart the role's standing session in place; --fresh starts a new one seeded like a first standing session and retires the old",
     }[verb])
     .argument("<handle>", "@handle, or-N, or id")
     .option("--team <name|id>", "Team workspace");
   // The standing session's fate is a question only retiring asks.
   if (verb === "retire") cmd.option("--standing <keep|retire>", "Keep the standing session running as a plain agent (default for the head of people) or retire it with the role");
+  if (verb === "restart") cmd.option("--fresh", "Start a new standing session (new conversation, opening and routine) and retire the old one; its thread stays linked from the role");
   cmd
     .option("--json", "Machine-readable output")
     .action(async (handle: string, options: any) => {
@@ -14551,8 +14552,12 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
         process.exit(1);
       }
       const role_id = await resolveRoleId(handle, options.team);
-      const result = await cliPost(verb === "retire" ? "/cli/org/retire" : `/cli/role/${verb}`, verb === "retire" ? { role_id, standing_session: options.standing, from_session: callingSession() } : { role_id });
+      const result = await cliPost(verb === "retire" ? "/cli/org/retire" : `/cli/role/${verb}`, verb === "retire" ? { role_id, standing_session: options.standing, from_session: callingSession() } : verb === "restart" && options.fresh ? { role_id, fresh: true } : { role_id });
       if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+      if (verb === "restart" && options.fresh) {
+        console.log(`${c.green}✓${c.reset} @${handle.replace(/^@/, "")} starts fresh in ${result.short_id} ${c.dim}(previous session ${result.previous_short_id} retired)${c.reset}`);
+        return;
+      }
       const extra = verb === "pause" && result.interrupted ? ` ${c.dim}(${result.interrupted} session${result.interrupted === 1 ? "" : "s"} told to stop at a safe point)${c.reset}` : "";
       console.log(`${c.green}✓${c.reset} ${verb === "restart" ? "restarting" : verb + "d"} @${handle.replace(/^@/, "")}${extra}`);
     });
