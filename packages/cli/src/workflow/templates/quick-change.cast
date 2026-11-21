@@ -16,7 +16,7 @@ digraph "quick-change" {
   check  [flow="check", slot="Prove the change does what it should"]
   review [flow="review"]
   ship   [flow="ship", label="Land"]
-  deploy [flow="deploy", send="release"]
+  deploy [flow="deploy"]
   exit [shape=Msquare, label="Live"]
 
   fix_check [label="Fix check", backend=subject, max_visits=3,

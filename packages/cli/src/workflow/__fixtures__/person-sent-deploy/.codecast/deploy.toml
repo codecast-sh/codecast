@@ -1,0 +1,15 @@
+# A synthetic team's deploy targets, for awaitDeploy.personSent.test.ts: production is a
+# release target that runs here, yet a person sends it ([line.deploy] in line.toml), so a
+# change run must never send it.
+[[target]]
+name = "production"
+when = ["api/**", "workers/**", "package.json"]
+run = "./scripts/deploy.sh --sha $sha --actor $actor"
+live = "marker"
+policy = "release"
+
+[[target]]
+name = "site"
+runs = "push"
+when = ["site/**"]
+live = "github-status:site"

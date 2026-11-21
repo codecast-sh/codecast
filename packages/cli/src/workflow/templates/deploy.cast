@@ -1,22 +1,33 @@
-// A segment (flows.md FL2, FL4): after a change lands, the run waits for the
-// deploy that carries it on every target its files touch (deploys.md DP10 to
-// DP13), and ends live with the dp-N per target, or stopped when that deploy
-// failed. With `send="release"` it first sends the targets the change touches
-// whose policy is `release` (`cast deploy`, deploys.md DP15), as a release of
-// main does; every other target goes out by its own policy (a press, CI on
-// main, a push that deploys itself). The wait parks: while it stands here the run
-// holds no slot and no session. A change that never lands waits out the
-// station's week. A flow that composes it may name targets the change does
-// not wait for (`except="aivery-operator"`): one held back on purpose, whose
-// live sha is not what the change's watch should start on.
+// A segment (flows.md FL2, FL4): after Merge, the run takes the commit it put
+// on the default branch ($run_dir/merge.json, else the merge recorded on the
+// run) out to every target the change's files touch (deploys.md DP10 to DP15),
+// and ends Live only when every one of them carries it. It sends the `release`
+// targets (`cast deploy`; `send` defaults to release, the library's default),
+// waits on the ones that deploy themselves (`push`, and `auto` once main CI is
+// green), and only waits, never sends, on `press` targets and the target the
+// line profile's [line.deploy] sends: a person or a role sends those, and the
+// run gives them a day. A flow that composes it with `send=""` sends nothing
+// and only waits (a team whose deploys a person sends). Every wait names its
+// target, what it waits for, how long it has waited and its deadline; a missed
+// deadline, or the wait's cap (the longest deadline and an hour), posts one
+// blocker on the task and stops at Deploy stuck. A run with no merged commit
+// stops at once at Not merged. The wait parks: while it stands here the run
+// holds no slot and no session. A flow that composes it may name targets the
+// change does not wait for (`except="aivery-operator"`): one held back on
+// purpose, whose live sha is not what the change's watch should start on; it
+// still holds the targets that go after it.
 digraph deploy {
-  graph [kind="segment", label="Deploy", description="Send the landed change's release targets when asked to, and wait until it is live on every target it touches", takes="branch", params="except send"]
+  graph [kind="segment", label="Deploy", description="Send the merged change's release targets, and wait until it is live on every target it touches", takes="branch", params="except send=release"]
   start [shape=Mdiamond]
-  wait [label="Go live", shape=parallelogram, parks=true, timeout=604800,
-    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && cast flow await-deploy --branch $branch --base $default_branch --run $run_id --node $station_id --files \"$change_files\" --except \"$except\" --send \"$send\""]
-  live   [shape=Msquare, label="Live"]
-  failed [shape=Msquare, label="Deploy failed", stop="$wait.output"]
+  wait [label="Go live", shape=parallelogram, parks=true, timeout=90900,
+    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && cast flow await-deploy --merge \"$run_dir/merge.json\" --base $default_branch --branch \"$branch\" --run $run_id --node $station_id --task \"$task_id\" --files \"$change_files\" --except \"$except\" --send \"$send\""]
+  live     [shape=Msquare, label="Live"]
+  unmerged [shape=Msquare, label="Not merged", stop="$wait.output"]
+  stuck    [shape=Msquare, label="Deploy stuck", stop="$wait.output"]
+  failed   [shape=Msquare, label="Deploy failed", stop="$wait.output"]
   start -> wait
-  wait -> live   [condition="outcome = success"]
-  wait -> failed [condition="outcome = failure"]
+  wait -> live     [condition="outcome = success"]
+  wait -> unmerged [condition="outcome = failure and wait.exit_code = 4"]
+  wait -> stuck    [condition="outcome = failure and wait.exit_code = 5"]
+  wait -> failed   [condition="outcome = failure and wait.exit_code != 4 and wait.exit_code != 5"]
 }

@@ -113,6 +113,31 @@ describe("recordMergeCore", () => {
     expect(mergeAllowance(role(), NOW + 2)).toMatchObject({ allowed: false, used: 2 });
   });
 
+  // `cast flow landed` finds where the change landed; it made no merge, so it spends no allowance.
+  test("an observed landing stamps the run only: no count, no task comment, no word to the role", async () => {
+    const { ctx, tables, role } = world({ line_merge: true, authority: [grant()] });
+    const out = await recordMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", sha: "abc123def4567890", branch: "codecast/line-ct-7", into: "main", observed: true }, NOW);
+    expect(out).toEqual({ observed: true });
+    expect(tables.workflow_runs[0].merge).toEqual({ sha: "abc123def4567890", branch: "codecast/line-ct-7", into: "main", at: NOW });
+    expect(role().counters?.merges ?? 0).toBe(0);
+    expect(tables.task_comments ?? []).toEqual([]);
+    expect((tables.pending_messages ?? []).filter((p) => p.conversation_id === STANDING)).toEqual([]);
+  });
+
+  test("an observed landing fills an empty merge only, never replacing one already recorded", async () => {
+    const { ctx, tables } = world({ line_merge: true, authority: [grant()] });
+    const recorded = { sha: "aaa111", branch: "codecast/line-ct-7", into: "main", at: NOW - 5 };
+    tables.workflow_runs[0].merge = recorded;
+    expect(await recordMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", sha: "bbb222", branch: "x", into: "main", observed: true }, NOW)).toEqual({ observed: true, kept: "aaa111" });
+    expect(tables.workflow_runs[0].merge).toEqual(recorded);
+  });
+
+  test("only the run's own runner records an observed landing, before any role or authorization is read", async () => {
+    const { ctx, tables } = world({ line_merge: true, authority: [grant()] });
+    await expect(recordMergeCore(ctx, "users_someone_else" as any, { run_id: "workflow_runs_1", sha: "bbb222", branch: "x", into: "main", observed: true }, NOW)).rejects.toThrow("Forbidden");
+    expect(tables.workflow_runs[0].merge).toBeUndefined();
+  });
+
 });
 
 // A run no role is behind merges on a person's word (orgLineMerge.personAuthorized): a Ship on a card of the task,
@@ -165,6 +190,14 @@ describe("a merge no role is behind", () => {
   const merged = { run_id: "workflow_runs_1", sha: "abc123def456", branch: "codecast/line-ct-7", into: "main" };
   const check = (ctx: any) => checkMergeCore(ctx, HOST as any, "workflow_runs_1");
   const clear = (ctx: any, why = "founder-intent read: ship", head_sha = HEAD) => clearForMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", why, head_sha }, NOW + 1);
+
+  // A quick-change run: no role behind it, no Ship card, no clear stamp. Its observed landing authorizes nothing, so it records.
+  test("a run nothing authorizes may still record an observed landing", async () => {
+    const { ctx, run } = solo();
+    await expect(check(ctx)).rejects.toThrow("nothing authorizes the merge");
+    expect(await recordMergeCore(ctx, HOST as any, { ...merged, observed: true }, NOW)).toEqual({ observed: true });
+    expect(run().merge).toEqual({ sha: merged.sha, branch: merged.branch, into: "main", at: NOW });
+  });
 
   test("a run its graph cleared merges under the person who started it, recorded with the station's words", async () => {
     const { ctx, tables, run } = solo();

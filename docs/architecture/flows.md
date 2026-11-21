@@ -518,42 +518,67 @@ Before exiting, the station waits up to fifteen minutes to take the lease back,
 then sends main. A station stopped while it sends a step again says, on the way
 out, that production may run a backend the default branch lacks.
 
-### Deploy: the run waits for the deploy that carries the change
+### Deploy: the run takes the merged commit live
 
-Both change flows end at Deploy, after Land (the `ship` segment, labelled Land
-there). The `deploy` segment is one station with `parks=true`: while the run
-stands there it holds no machine slot and no session. The station runs `cast
-flow await-deploy --branch $branch --base $default_branch` in the run's
-worktree, which first waits for the change to land on the default branch (the
-branch itself once main holds it, else a squash commit whose every file reads
-as the branch left it), then reads the repository's deploy targets as `cast
-line deploy targets --json` prints them (deploys.md DP10 to DP13) and keeps
-the targets whose paths the change's files touch. A target is live once a
-deploy recorded live has a sha the landed commit is an ancestor of, decided
-with git in the worktree, so it needs no main-order data from the server; the
-first such deploy is the dp-N that took it live. It has failed when the newest
-deploy that holds the commit failed and none live holds it since. Unless the
-flow asks it to send (below), the wait starts no deploy: a target's own policy does (a press, CI going green on main,
-a push that deploys itself). When every touched target is live it prints
-`Live: <sha> on <target> dp-N, ...` and the run ends there; the session's end
-message carries that line. A failed deploy ends the run at "Deploy failed" with
-the dp-N and its note. A change no target ships passes at once, and one that
-never lands waits out the station's week. A flow that composes the segment may
-name targets the change does not wait for, `deploy [flow="deploy",
-except="aivery-operator"]`: one held back on purpose, whose live sha is not where
-the change's watch should start. With `send="release"` (the shipped `change`
-and `quick-change` set it) the station first sends the targets the landed
-change touches whose policy is `release`, through `cast deploy` (deploys.md
-DP15), so a change flow deploys what the repository says goes out with every
-release; without it the wait starts nothing. Union's fix flows end this way: Merge (or Ready
-to land), then Deploy, then Watch, so a cause closes Done and starts its watch
-only once production runs it, and a failed deploy leaves it In Review with a
-blocker.
+A change flow ends at Deploy, after Merge. The `deploy` segment is one station
+with `parks=true`: while the run stands there it holds no machine slot and no
+session. The station runs `cast flow await-deploy --merge $run_dir/merge.json`
+in the run's worktree. It starts only from the sha Merge wrote there, else the
+merge recorded on the run (`run.merge.sha`, which `cast line merge` writes
+without a merge.json): with neither, or a sha that is not on origin's default
+branch, the run stops at once at Not merged. The `ship` segment writes the same file. After Land's command exits
+0 it runs `cast flow landed`, which finds the commit on origin's default branch
+that carries the branch (the tip itself, a squash whose files read as the
+branch left them, or the first commit a replay already holds, where merging the
+branch in changes nothing; a change that only deletes files needs one of the
+other two, since main may have moved them) and that the
+branch changed something of its own since its fork, read before the land
+command ran and kept in `$run_dir/since`. It records that commit on the run as
+its merge through the record `cast line merge` and the Merge station use
+(`/cli/line/merge/record`), as an observed landing: only the run's own runner
+may make it, it spends no merge allowance, says nothing on the task, and fills
+an empty `run.merge` only, never one the Merge station recorded. So
+`run.merge.sha` is the one landed truth whatever path landed the change; a
+record that fails is logged and Land goes on. With none, Land fails at Not shipped ("Land reported success but
+<branch> is not on main: nothing was merged"), so a land command that never
+committed can never send a run on to Deploy. Without a ship command, Land's
+`cast ship run` only starts Ship's session, which merges the pull request
+later: Land waits up to an hour for that merge, naming the pull request on the
+card, and a pull request still open then ends Land at Not shipped with a
+progress note naming it and saying this run will not deploy the change, not a
+blocker. A known cost: Land does not park, so that wait
+holds a machine slot for up to the hour. Rebase's already-landed exit writes the file too,
+for the commit that already carries the change, starting from the fork Land kept
+(after a fast-forward the branch's fork is its own tip), else the commit the run
+froze the change on; with neither it writes nothing, since a branch with no
+commit of its own also sits on main. Of the targets the change's
+files touch (`cast line deploy targets --json`, deploys.md DP10 to DP13) Deploy
+sends the `release` ones (`send` defaults to release, the library's default),
+waits on the `push` and `auto` ones, and only waits, a day by default, never
+sending, on `press` targets and the line profile's own deploy target, which a
+person or a role sends (deploys.md DP15 has the rules): the run ends Live only
+when every touched target carries the change. A flow whose
+deploys a person sends composes it `deploy [send=""]`: it sends nothing and
+only waits. A target is live once a deploy recorded live has a sha the merged
+commit is an ancestor of, decided with git in the worktree; the first such
+deploy is the dp-N that took it live. While it waits, the card shows each
+target with what it waits for, how long and its deadline (`cli: dp-13 sending
+1a2b3c4 (12m of 45m)`). When every touched target is live it prints `Live: <sha>
+on <target> dp-N, ...` and the run ends there; the session's end message
+carries that line. A failed deploy ends the run at Deploy failed with the dp-N
+and its note. A target past its `deadline`, or the wait's cap (the longest
+deadline and an hour), posts one blocker on the task and ends the run at Deploy
+stuck. A change no target ships passes at once. A flow that composes the segment may name targets
+the change does not wait for, `deploy [flow="deploy", except="aivery-operator"]`:
+one held back on purpose, whose live sha is not where the change's watch should
+start; it still holds the targets that go after it. Union's fix flows end this way: Merge, then Deploy, then Watch, so a
+cause closes Done and starts its watch only once production runs it, and a
+failed deploy leaves it In Review with a blocker.
 
-A segment declares the attributes it reads with `params="except"` in its graph
-line; `$except` in its stations is the composing node's attribute, empty when the
-node sets none. The value lands in a script as written, so the parser holds it to
-words, names and paths.
+A segment declares the attributes it reads with `params="except send=release"`
+in its graph line; `$except` in its stations is the composing node's attribute,
+else the default written after `=`, else empty. The value lands in a script as
+written, so the parser holds it to words, names and paths.
 
 While the session works, the run carries `waiting_on_session` (`node_id`,
 `conversation_id`, `since`, `note`: what was sent, cut short), cleared when the

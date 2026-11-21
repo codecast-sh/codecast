@@ -203,17 +203,20 @@ export const runIsLive = (run: { status: string } | null | undefined) => !!run &
 /** The few words for who acts at a stage. */
 export const WHO_WORDS: Record<StageWho, string> = { session: "This session", agent: "Agent", you: "You", auto: "Automatic" };
 
-/** The targets a Deploy stage's line names: "live on web dp-12, waiting for backend, cli (going out in dp-13)". */
+/**
+ * The targets a Deploy stage's line names (`cast flow await-deploy`): while it waits, one `<target>: <state>` per
+ * target ("backend: live in dp-12; cli: dp-13 sending 4a6e413 (6m of 60m); web: waiting for its push deploy ..."),
+ * and once done "Live: 4a6e413 on backend dp-12, cli dp-13."
+ */
 export function targetsFromLine(line: string | null | undefined): TargetState[] {
   if (!line) return [];
+  const done = line.match(/^Live:\s*\S+\s+on\s+([^.;]+)/i)?.[1];
+  if (done) return [...done.matchAll(/([a-z][a-z0-9-]{0,31})\s+(dp-\d+)/g)].map((m) => ({ name: m[1], state: "live", deploy: m[2] }));
   const out: TargetState[] = [];
-  const liveOn = line.match(/\blive on ([^.;()]+?)(?:[,;.]\s*waiting|[.;]|$)/i)?.[1] ?? line.match(/^Live:\s*\S+\s+on\s+([^.;]+)/i)?.[1] ?? "";
-  for (const m of liveOn.matchAll(/([a-z][a-z0-9-]{0,31})\s+(dp-\d+)/g)) out.push({ name: m[1], state: "live", deploy: m[2] });
-  const waiting = line.match(/\bwaiting for ([a-z0-9, -]+?)(?:\s*\(going out in (dp-\d+)\))?\s*[.;]?\s*$/i);
-  if (waiting && !/to land on main/.test(line)) {
-    for (const name of waiting[1].split(/\s*,\s*|\s+and\s+/).map((x) => x.trim()).filter(Boolean)) {
-      if (!out.some((t) => t.name === name)) out.push({ name, state: waiting[2] ? "deploying" : "waiting", ...(waiting[2] ? { deploy: waiting[2] } : {}) });
-    }
+  for (const m of line.matchAll(/(?:^|;\s*)([a-z][a-z0-9-]{0,31}):\s*([^;]*)/g)) {
+    const live = m[2].match(/^live in (dp-\d+)/);
+    const going = m[2].match(/^(dp-\d+) sending\b/);
+    out.push(live ? { name: m[1], state: "live", deploy: live[1] } : going ? { name: m[1], state: "deploying", deploy: going[1] } : { name: m[1], state: "waiting" });
   }
   return out;
 }

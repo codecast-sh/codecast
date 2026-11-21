@@ -118,8 +118,11 @@ describe("expanding a segment", () => {
     const wait = (attrs: string) => parseWorkflowSource(main(attrs), root).nodes.get("deploy__wait")!.script!;
     expect(wait(`, except="aivery-operator"`)).toContain(`--except "aivery-operator"`);
     expect(wait("")).toContain(`--except ""`);
+    // send defaults to release; a flow whose deploys a person sends composes it empty and only waits.
+    expect(wait("")).toContain(`--send "release"`);
+    expect(wait(`, send=""`)).toContain(`--send ""`);
     // Run vars are left for the runner; only the declared param is filled in.
-    expect(wait(`, except="x"`)).toContain("--branch $branch");
+    expect(wait(`, except="x"`)).toContain(`--merge "$run_dir/merge.json"`);
     expect(() => parseWorkflowSource(main(`, except="a; rm -rf ."`), root)).toThrow(/may hold only words/);
   });
 

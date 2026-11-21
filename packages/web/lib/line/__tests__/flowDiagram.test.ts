@@ -30,7 +30,7 @@ describe("a flow as a diagram", () => {
     expect(routes(0)).toEqual([["back", "Checks failed", "this session"], ["stop", "Not checked here", null]]);
     expect(routes(1)).toEqual([["back", "Changes asked", "this session"], ["stop", "Rejected", null]]);
     expect(routes(2)).toEqual([["back", "Revise", "this session"], ["stop", "Dropped", null]]);
-    expect(routes(4)).toEqual([["stop", "Deploy failed", null]]);
+    expect(routes(4)).toEqual([["stop", "Not merged", null], ["stop", "Deploy stuck", null], ["stop", "Deploy failed", null]]);
   });
 
   test("a segment's plain end is not a route off its last step", () => {

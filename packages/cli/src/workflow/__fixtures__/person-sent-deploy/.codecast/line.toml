@@ -1,0 +1,5 @@
+# A synthetic team's line deploy, for awaitDeploy.personSent.test.ts: a person presses Deploy.
+[line.deploy]
+target = "production"
+trigger = "person"
+command = "./scripts/deploy.sh --sha $sha --actor $actor"

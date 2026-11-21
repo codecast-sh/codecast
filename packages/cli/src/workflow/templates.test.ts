@@ -119,7 +119,7 @@ describe("line.cast template", () => {
       "assignee", "project_path", "default_branch", "run_id", "run_date", "worktree", "branch", "human_message", "goal", "outcome",
       "run_dir", "cause_history", "last_error", "sent_back", "diff_base", ...Object.keys(EMPTY_VARS),
       // A change frozen from a session (frozenChangeContext): empty on a run with none.
-      "change_session",
+      "change_session", "change_files",
       // The station running, as the graph names it (runNodeLoop).
       "station_id",
     ]);
@@ -424,7 +424,7 @@ describe("line.cast station scripts", () => {
     const bin = path.join(tmp, "bin");
     fs.mkdirSync(bin);
     log = path.join(tmp, "cast.log");
-    fs.writeFileSync(path.join(bin, "cast"), `#!/bin/bash\nif [ "$1 $2" = "ws path" ]; then echo "${repo}"; exit 0; fi\nfor a in "$@"; do printf '%s\\n' "$a"; done >> "${log}"\necho --- >> "${log}"\nif [ "$1 $2" = "env eval" ] && [ -n "$FAKE_ENV_EVAL" ]; then echo "$FAKE_ENV_EVAL"; fi\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "cast"), `#!/bin/bash\nif [ "$1 $2" = "ws path" ]; then echo "${repo}"; exit 0; fi\nfor a in "$@"; do printf '%s\\n' "$a"; done >> "${log}"\necho --- >> "${log}"\nif [ "$1 $2" = "env eval" ] && [ -n "$FAKE_ENV_EVAL" ]; then echo "$FAKE_ENV_EVAL"; fi\nif [ "$1 $2" = "flow landed" ] && [ -n "$FAKE_NOT_LANDED" ]; then echo "$FAKE_NOT_LANDED"; exit ${"$"}{FAKE_LANDED_CODE:-1}; fi\n`, { mode: 0o755 });
     env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -595,22 +595,61 @@ describe("line.cast station scripts", () => {
   });
 
   test("ship runs the project's ship command and puts the one line it prints on the task; without one it runs Ship, which never merges on its own", () => {
-    const none = run("ship", {});
+    const branch = "codecast/line-ct-1";
+    const landedCall = ["flow", "landed", "--branch", branch, "--base", "main", "--files", "web/a.ts", "--since", "", "--out", `${runDir()}/merge.json`, "--run", "run_1"];
+    const none = run("ship", { branch, change_files: "web/a.ts", run_id: "run_1", station_id: "ship__ship" });
     expect(none.code).toBe(0);
     expect(calls()).toEqual([
       ["ship", "run", "--task", "ct-1"],
-      ["task", "comment", "ct-1", "Shipping: cast ship run exited 0 and said nothing", "-t", "progress"],
+      // Ship's session merges its pull request later: Land waits for it, an hour at most.
+      [...landedCall, "--wait", "3600", "--node", "ship__ship"],
+      ["task", "comment", "ct-1", "Shipped: cast ship run exited 0 and said nothing", "-t", "progress"],
     ]);
     fs.rmSync(log);
-    const ok = run("ship", { branch: "codecast/line-ct-1", run_id: "run_1", "line.commands.ship": 'echo "squashing" >&2; echo; echo "merged $branch for $task_id ($run_id); deploy pending"' });
+    const ok = run("ship", { branch, change_files: "web/a.ts", run_id: "run_1", "line.commands.ship": 'echo "squashing" >&2; echo; echo "merged $branch for $task_id ($run_id); deploy pending"' });
     expect(ok.code).toBe(0);
     expect(ok.out).toContain("squashing");
     const refused = run("ship", { "line.commands.ship": 'echo "not merged: no green eval gate"; exit 1' });
     expect(refused.code).toBe(1);
     expect(calls()).toEqual([
+      landedCall,
       ["task", "comment", "ct-1", "Shipped: merged codecast/line-ct-1 for ct-1 (run_1); deploy pending", "-t", "progress"],
       ["task", "comment", "ct-1", "Not shipped: not merged: no green eval gate", "-t", "blocker"],
     ]);
+  });
+
+  // Nov 21 (ct-98322): the profile's ship command applied the change to a working tree and exited 0. Land said
+  // Shipped and Deploy waited a week for a commit on main that never came.
+  test("ship fails at Not shipped when the land command exited 0 but nothing reached main, and drops a stale merge.json", () => {
+    const branch = "codecast/line-ct-1";
+    const nothing = `Land reported success but ${branch} is not on main: nothing was merged`;
+    fs.mkdirSync(runDir(), { recursive: true });
+    fs.writeFileSync(path.join(runDir(), "merge.json"), '{"sha":"stale"}\n');
+    env.FAKE_NOT_LANDED = nothing;
+    const applied = run("ship", { branch, "line.commands.ship": 'echo "applied to the main checkout"' });
+    const spawned = run("ship", { branch });
+    delete env.FAKE_NOT_LANDED;
+    expect(applied.code).toBe(1);
+    expect(applied.out.trim().split("\n").pop()).toBe(nothing);
+    expect(spawned.code).toBe(1);
+    expect(spawned.out.trim().split("\n").pop()).toBe(nothing);
+    expect(fs.existsSync(path.join(runDir(), "merge.json"))).toBe(false);
+    expect(calls().filter((c) => c[0] === "task")).toEqual([
+      ["task", "comment", "ct-1", `Not shipped: ${nothing}`, "-t", "blocker"],
+      ["task", "comment", "ct-1", `Not shipped: ${nothing}`, "-t", "blocker"],
+    ]);
+  });
+
+  test("ship ends at Not shipped without a blocker when Ship's pull request is still open after the wait", () => {
+    const open = "The ship session's pull request https://github.com/o/r/pull/7 has not merged after 60m, so this run will not deploy the change";
+    env.FAKE_NOT_LANDED = open;
+    env.FAKE_LANDED_CODE = "2";
+    const waited = run("ship", { branch: "codecast/line-ct-1" });
+    delete env.FAKE_NOT_LANDED;
+    delete env.FAKE_LANDED_CODE;
+    expect(waited.code).toBe(1);
+    expect(waited.out.trim().split("\n").pop()).toBe(open);
+    expect(calls().filter((c) => c[0] === "task")).toEqual([["task", "comment", "ct-1", `Not shipped: ${open}`, "-t", "progress"]]);
   });
 
   test("ship passes exit 7 through with the brief the command printed as the run's own builder file, counts the run's rounds, and adds no comment of its own", () => {

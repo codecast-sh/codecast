@@ -436,7 +436,19 @@ export const check = query({
  *  run and the task, and reported in the role's own thread. Refused when the
  *  allowance is gone by now (the runner then says so and leaves the merge to
  *  a person; the push has already landed, so this is the count, not a gate). */
-export async function recordMergeCore(ctx: any, userId: Id<"users">, args: { run_id: string; sha: string; branch: string; into: string; pr_url?: string }, now = Date.now()): Promise<any> {
+export async function recordMergeCore(ctx: any, userId: Id<"users">, args: { run_id: string; sha: string; branch: string; into: string; pr_url?: string; observed?: boolean }, now = Date.now()): Promise<any> {
+  if (args.observed) {
+    // A landing found on the default branch (`cast flow landed`), not a merge the line made: it authorizes nothing,
+    // so it needs no role and no Ship, only the run's own runner (its owner). It fills an empty run.merge as where the
+    // change landed and never replaces a merge already recorded; it counts against no allowance, says nothing on the
+    // task and tells no role.
+    const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
+    if (!run) throw new Error(`No run ${args.run_id}`);
+    if (run.user_id !== userId) throw new Error("Forbidden");
+    if (run.merge) return { observed: true, kept: run.merge.sha };
+    await ctx.db.patch(run._id, { merge: { sha: args.sha, branch: args.branch, into: args.into, at: now, ...(args.pr_url ? { pr_url: args.pr_url } : {}) } });
+    return { observed: true };
+  }
   const { run, role, authorizedBy } = await runAndRole(ctx, userId, args.run_id);
   if (!role) {
     // Authorized by a person: record the merge, who authorized it and why on the run and the task, no role to count it against.
@@ -476,7 +488,7 @@ export async function recordMergeCore(ctx: any, userId: Id<"users">, args: { run
 }
 
 export const record = mutation({
-  args: { api_token: v.string(), run_id: v.string(), sha: v.string(), branch: v.string(), into: v.string(), pr_url: v.optional(v.string()) },
+  args: { api_token: v.string(), run_id: v.string(), sha: v.string(), branch: v.string(), into: v.string(), pr_url: v.optional(v.string()), observed: v.optional(v.boolean()) },
   handler: async (ctx, { api_token, ...args }) => recordMergeCore(ctx, await requireToken(ctx, api_token), args),
 });
 

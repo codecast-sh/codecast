@@ -72,11 +72,11 @@ export function shipRuns(now: number, viewerId: string, workspace: string, conve
     { ...base, _id: GALLERY_FLOW.shipDecide, status: "paused", current_node_id: "decide__decide", gate_prompt: "Ship the inbox divider rename?", gate_decision_id: refs.decision, gate_decision_short_id: refs.decisionShort,
       node_statuses: [...through("check__verify", "review__review"), status("decide__decide", "running")] },
     { ...base, _id: GALLERY_FLOW.shipDeploy, status: "running", current_node_id: "deploy__wait",
-      node_statuses: [...through("check__verify", "review__review", "decide__decide", "ship__rebase", "ship__ship"), { ...status("deploy__wait", "running"), result_preview: "4a6e413b2c landed; live on web dp-12, waiting for backend." }] },
+      node_statuses: [...through("check__verify", "review__review", "decide__decide", "ship__rebase", "ship__ship"), { ...status("deploy__wait", "running"), result_preview: "backend: dp-13 sending 4a6e413 (6m of 60m)" }] },
     // The run that carried the skip edit (it ran the graph the edit built), out in dp-90003.
     { ...base, _id: GALLERY_FLOW.editLive, graph_hash: readEdit(EDIT_SKIP_FENCE)!.graph_hash, task_short_id: "ct-4111", task_title: "Skip Decide on this repo's changes", status: "completed", current_node_id: "exit",
       node_statuses: [...through("check__verify", "review__review", "ship__rebase", "ship__ship"), { ...status("deploy__wait", "completed"), result_preview: `Live: 4a6e413b2c on web ${refs.liveDeploy}.` }] },
     { ...base, _id: GALLERY_FLOW.shipLive, status: "completed", current_node_id: "exit",
-      node_statuses: [...through("check__verify", "review__review", "decide__decide", "ship__rebase", "ship__ship"), { ...status("deploy__wait", "completed"), result_preview: "Live: 4a6e413b2c on backend dp-13, web dp-12." }] },
+      node_statuses: [...through("check__verify", "review__review", "decide__decide", "ship__rebase", "ship__ship"), { ...status("deploy__wait", "completed"), result_preview: "Live: 4a6e413 on backend dp-13, web dp-12." }] },
   ];
 }

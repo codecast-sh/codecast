@@ -177,8 +177,9 @@ digraph line {
   // red CI and three others) spends no visit.
   rebase [label="Rebase", shape=parallelogram, max_visits=4, max_free_visits=6, timeout=3600, script="@line/rebase.sh"]
 
-  // A ship command that lands through a pull request waits on its CI (8 to 25 minutes): the station parks.
-  ship [label="Ship", shape=parallelogram, parks=true, timeout=3600, script="@line/ship.sh"]
+  // A ship command that lands through a pull request waits on its CI (8 to 25 minutes), and Land then waits up to
+  // an hour for the merge: the station parks.
+  ship [label="Ship", shape=parallelogram, parks=true, timeout=4500, script="@line/ship.sh"]
 
   watch [label="Watch", shape=parallelogram, script="cast task update $task_id --watch-days $line.watch_days"]
 

@@ -61,14 +61,15 @@ describe("journeyOf", () => {
 });
 
 test("targetsFromLine reads the Deploy stage's line", () => {
-  expect(targetsFromLine("4a6e413b2c landed; live on web dp-12, waiting for backend, cli (going out in dp-13).")).toEqual([
+  expect(targetsFromLine("web: live in dp-12; backend: dp-13 sending 4a6e413 (6m of 60m); cli: waiting on main CI at 9f8e7d6 (red: test-cli; 6m of 45m)")).toEqual([
     { name: "web", state: "live", deploy: "dp-12" },
     { name: "backend", state: "deploying", deploy: "dp-13" },
-    { name: "cli", state: "deploying", deploy: "dp-13" },
+    { name: "cli", state: "waiting" },
   ]);
-  expect(targetsFromLine("86402bc333 landed; waiting for scratch-e2e.")).toEqual([{ name: "scratch-e2e", state: "waiting" }]);
-  expect(targetsFromLine("Live: 4a6e413b2c on backend dp-13, web dp-12.")).toEqual([{ name: "backend", state: "live", deploy: "dp-13" }, { name: "web", state: "live", deploy: "dp-12" }]);
-  expect(targetsFromLine("Waiting for codecast/change-ct-1 to land on main.")).toEqual([]);
+  expect(targetsFromLine("scratch-e2e: waiting for its push deploy to carry 86402bc (2m of 30m)")).toEqual([{ name: "scratch-e2e", state: "waiting" }]);
+  expect(targetsFromLine("Live: 4a6e413 on backend dp-13, web dp-12. desktop goes out on a press.")).toEqual([{ name: "backend", state: "live", deploy: "dp-13" }, { name: "web", state: "live", deploy: "dp-12" }]);
+  expect(targetsFromLine("Sending backend, cli for 4a6e413.")).toEqual([]);
+  expect(targetsFromLine("Deploy stuck: cli is not live with 4a6e413 after 45m (last: dp-13 sending 4a6e413).")).toEqual([]);
 });
 
 test("readableWhy cuts long reasons at a word", () => {

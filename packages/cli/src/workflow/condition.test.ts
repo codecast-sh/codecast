@@ -197,6 +197,19 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and check__failed.json.exit = unjudged", { outcome: "failure", "check__failed.json.exit": "failed" }, false],
     ["outcome = failure and check__unjudged.json.exit != unjudged", { outcome: "failure", "check__unjudged.json.exit": "unjudged" }, false],
     ["outcome = failure and check__unjudged.json.exit = unjudged", { outcome: "failure", "check__unjudged.json.exit": "unjudged" }, true],
+    // The deploy segment's wait (deploys.md): exit 4 merged nothing, exit 5 is stuck past a deadline, anything else failed.
+    ["outcome = failure and wait.exit_code = 4", { outcome: "failure", "wait.exit_code": "4" }, true],
+    ["outcome = failure and wait.exit_code = 4", { outcome: "failure", "wait.exit_code": "1" }, false],
+    ["outcome = failure and wait.exit_code = 5", { outcome: "failure", "wait.exit_code": "5" }, true],
+    ["outcome = failure and wait.exit_code = 5", { outcome: "failure", "wait.exit_code": "4" }, false],
+    ["outcome = failure and wait.exit_code != 4 and wait.exit_code != 5", { outcome: "failure", "wait.exit_code": "1" }, true],
+    ["outcome = failure and wait.exit_code != 4 and wait.exit_code != 5", { outcome: "failure", "wait.exit_code": "5" }, false],
+    ["outcome = failure and deploy__wait.exit_code = 4", { outcome: "failure", "deploy__wait.exit_code": "4" }, true],
+    ["outcome = failure and deploy__wait.exit_code = 4", { outcome: "failure", "deploy__wait.exit_code": "5" }, false],
+    ["outcome = failure and deploy__wait.exit_code = 5", { outcome: "failure", "deploy__wait.exit_code": "5" }, true],
+    ["outcome = failure and deploy__wait.exit_code = 5", { outcome: "success", "deploy__wait.exit_code": "5" }, false],
+    ["outcome = failure and deploy__wait.exit_code != 4 and deploy__wait.exit_code != 5", { outcome: "failure", "deploy__wait.exit_code": "1" }, true],
+    ["outcome = failure and deploy__wait.exit_code != 4 and deploy__wait.exit_code != 5", { outcome: "failure", "deploy__wait.exit_code": "4" }, false],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {

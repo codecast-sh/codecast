@@ -11,6 +11,8 @@ import { extractJsonOutput } from "./condition.js";
 // `cast` that answers `ws path` and records task comments.
 
 const SCRIPT = fs.readFileSync(path.join(import.meta.dir, "templates/line/rebase.sh"), "utf-8");
+const SHIP = fs.readFileSync(path.join(import.meta.dir, "templates/line/ship.sh"), "utf-8");
+const LANDED = path.join(import.meta.dir, "landed.ts");
 
 describe("line rebase station", () => {
   let root: string;
@@ -38,7 +40,7 @@ describe("line rebase station", () => {
   };
   const station = (check = "true") => {
     const context: Record<string, string> = {
-      worktree: "line-ct-1", branch: "codecast/line-ct-1", default_branch: "main", task_id: "ct-1",
+      worktree: "line-ct-1", branch: "codecast/line-ct-1", default_branch: "main", task_id: "ct-1", run_id: "run1",
       run_dir: path.join(root, "run"), "line.commands.check": check,
     };
     const r = spawnSync("bash", ["-c", expandScriptVars(SCRIPT, context)], {
@@ -67,11 +69,91 @@ describe("line rebase station", () => {
     fs.writeFileSync(path.join(bin, "cast"), `#!/bin/bash
 if [ "$1 $2" = "ws path" ]; then echo "${work}"; exit 0; fi
 if [ "$1 $2" = "task comment" ]; then printf '%s\\n' "$4" >> "${comments}"; echo "ok Comment added to $3"; exit 0; fi
+if [ "$1 $2" = "flow landed" ]; then printf '%s\\n' "$@" > "${root}/landed-args"; [ -n "$REAL_LANDED" ] && { shift 2; exec bun "${root}/landed-shim.ts" "$@"; }; exit 0; fi
 exit 1
 `, { mode: 0o755 });
   });
 
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // The real `cast flow landed` check, without the server: the fake cast runs it when REAL_LANDED is set.
+  const shim = () => fs.writeFileSync(path.join(root, "landed-shim.ts"), `import { runLanded } from ${JSON.stringify(LANDED)};
+const a = process.argv.slice(2); const o: Record<string, string> = {};
+for (let i = 0; i < a.length; i += 2) o[a[i].replace(/^--/, "")] = a[i + 1];
+process.exit(await runLanded(process.cwd(), o as any));
+`);
+  // ship.sh as the runner runs it, with the project's ship command.
+  const ship = (command: string) => {
+    shim();
+    const context: Record<string, string> = {
+      worktree: "line-ct-1", branch: "codecast/line-ct-1", default_branch: "main", task_id: "ct-1", run_id: "run1",
+      run_dir: path.join(root, "run"), "line.commands.ship": command,
+    };
+    const r = spawnSync("bash", ["-c", expandScriptVars(SHIP, context)], {
+      cwd: work, encoding: "utf-8",
+      env: { ...process.env, REAL_LANDED: "1", PATH: `${bin}:${process.env.PATH}`, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+    });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const mergeSha = () => JSON.parse(fs.readFileSync(path.join(root, "run", "merge.json"), "utf-8")).sha;
+
+  // A fast-forward lands the branch as itself, so its fork from main is its own tip afterwards: Land reads the fork
+  // before landing and keeps it, and a later rebase that finds the change already landed starts from that.
+  test("a fast-forward landing writes the branch tip to merge.json from Land and again from a later already-landed rebase", () => {
+    const tip = git(work, "rev-parse", "HEAD");
+    const before = git(work, "rev-parse", "origin/main");
+    const landed = ship("git push -q origin HEAD:main");
+    expect(landed.code).toBe(0);
+    expect(mergeSha()).toBe(tip);
+    expect(fs.readFileSync(path.join(root, "run", "since"), "utf-8").trim()).toBe(before);
+    // The rebase station reads the environment this process has.
+    process.env.REAL_LANDED = "1";
+    try {
+      const again = station();
+      expect(again.json).toMatchObject({ rebased: true, landed: true });
+      expect(mergeSha()).toBe(tip);
+      // With no fork kept and no frozen change, nothing says this tip on main is the change: no merge.json.
+      fs.rmSync(path.join(root, "run", "since"));
+      station();
+      expect(fs.existsSync(path.join(root, "run", "merge.json"))).toBe(false);
+    } finally {
+      delete process.env.REAL_LANDED;
+    }
+  });
+
+  // A branch with no commit of its own sits on an old main commit: nothing of it is left to ship, and nothing says
+  // its tip is the change, so no merge.json is written and Deploy says nothing was merged.
+  test("a branch with no commit of its own is never written as landed", () => {
+    git(work, "reset", "-q", "--hard", "origin/main");
+    git(work, "push", "-q", "-f", "origin", "codecast/line-ct-1");
+    const r = station();
+    expect(r.json).toMatchObject({ rebased: true, landed: true });
+    expect(fs.existsSync(path.join(root, "landed-args"))).toBe(false);
+    expect(fs.existsSync(path.join(root, "run", "merge.json"))).toBe(false);
+  });
+
+  test("with no fork kept by Land, the commit the run froze the change on says where it started", () => {
+    const start = git(work, "rev-parse", "HEAD~1");
+    fs.mkdirSync(path.join(root, "run"), { recursive: true });
+    fs.writeFileSync(path.join(root, "run", "change.json"), JSON.stringify({ source: "session", base: start, tip: "x", branch: "codecast/line-ct-1", worktree: "line-ct-1", paths: ["intro.txt"] }, null, 2));
+    git(work, "push", "-q", "origin", "HEAD:main");
+    shim();
+    process.env.REAL_LANDED = "1";
+    try {
+      station();
+    } finally {
+      delete process.env.REAL_LANDED;
+    }
+    expect(fs.readFileSync(path.join(root, "landed-args"), "utf-8")).toContain(`--since\n${start}\n`);
+    expect(mergeSha()).toBe(git(work, "rev-parse", "HEAD"));
+  });
+
+  test("a land command that exits 0 with nothing on main ends Land at Not shipped", () => {
+    const r = ship("echo applied to a working tree");
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("Land reported success but codecast/line-ct-1 is not on main: nothing was merged");
+    expect(fs.existsSync(path.join(root, "run", "merge.json"))).toBe(false);
+  });
 
   test("a branch the default branch moved under is rebased, checked, and goes on to ship", () => {
     landOnMain("other.txt", "y\n", "someone else's change");
@@ -113,6 +195,25 @@ exit 1
     expect(r.json).toMatchObject({ rebased: true, landed: true });
     expect(r.json.why).toContain(landed.slice(0, 10));
     expect(r.comments).toContain(`Already on main as ${landed.slice(0, 10)}`);
+  });
+
+  // Deploy starts from merge.json; the already-landed route skips Land, so the rebase station writes it there.
+  test("a change already on the default branch has its commit written where Deploy starts, and a stale merge.json goes first", () => {
+    fs.mkdirSync(path.join(root, "run"), { recursive: true });
+    fs.writeFileSync(path.join(root, "run", "merge.json"), '{"sha":"stale"}\n');
+    const was = git(work, "rev-parse", "HEAD");
+    const fork = git(work, "rev-parse", "HEAD~1");
+    const other = path.join(root, "hand");
+    git(root, "clone", "-q", origin, other);
+    fs.writeFileSync(path.join(other, "intro.txt"), "say which side offers what to whom\n");
+    git(other, "commit", "-qam", "fix(ct-1): squashed");
+    git(other, "push", "-q", "origin", "main");
+    const r = station();
+    expect(r.json).toMatchObject({ rebased: true, landed: true });
+    expect(fs.existsSync(path.join(root, "run", "merge.json"))).toBe(false);
+    expect(fs.readFileSync(path.join(root, "landed-args"), "utf-8").trim().split("\n")).toEqual([
+      "flow", "landed", "--branch", was, "--as", "codecast/line-ct-1", "--base", "main", "--files", "", "--since", fork, "--out", path.join(root, "run", "merge.json"), "--run", "run1",
+    ]);
   });
 
   test("a change main already carries, reworked after review, conflicts with a note naming main's commit and asking to keep both sides", () => {
