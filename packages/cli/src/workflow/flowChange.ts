@@ -40,6 +40,13 @@ async function lastCommitTimes(root: string, paths: string[]): Promise<Map<strin
   return out;
 }
 
+/** No changed file in the checkout was written by the session: it has nothing uncommitted here. */
+export class NoSessionChange extends Error {
+  constructor(root: string, session: string) {
+    super(`No uncommitted change in ${root} was written by session ${session}`);
+  }
+}
+
 /** What a session's change would hold, read from the frozen tree: its files, the ones another session also wrote, and the ones held out. */
 export async function previewSessionChange(root: string, session: string, only?: ReadonlyArray<string> | null) {
   // Without an upstream, HEAD stands in: stale copies are still read from its history.
@@ -49,7 +56,7 @@ export async function previewSessionChange(root: string, session: string, only?:
   const { frozen, attribution, credentials, stale } = await freezeAndAttribute(root, upstream);
   const heldWhy = (p: string) => credentials.get(p) ?? (stale.has(p) ? `a stale copy: ${stale.get(p)!.reason}` : undefined);
   const mine = attribution.sessions.find((s) => sessionMatches(s, session));
-  if (!mine) throw new Error(`No uncommitted change in ${root} was written by session ${session}`);
+  if (!mine) throw new NoSessionChange(root, session);
   // A write is in a file's uncommitted diff only when it came after the file's last commit.
   const committedAt = await lastCommitTimes(root, frozen.changes.map((c) => c.path));
   const inDiff = (s: SessionEdits, p: string) => (s.edits.get(p) ?? 0) > (committedAt.get(p) ?? 0);

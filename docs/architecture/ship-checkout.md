@@ -118,7 +118,9 @@ upstream's blob of it (`.git/codecast/level-conflicts.json`): a writer hears
 again only when upstream changes that file, so on a busy main a standing
 conflict costs one `ls-tree` a sweep and no attribution. A path no transcript
 explains sends nothing and is named in the daemon's `[LEVEL]` log line; it is
-attributed again when upstream changes it. A clean level, or a checkout found
+attributed again every 15 minutes, since a transcript can reach the sync
+ledger after the write it records, and whenever upstream changes the file. A
+clean level, or a checkout found
 already level, clears the record and the merge files.
 
 ## Fix forward
