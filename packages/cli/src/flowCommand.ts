@@ -18,6 +18,7 @@ import { flowLine } from "./workflow/flowPool.js";
 import type { Workspace } from "./resolveWorkspace.js";
 import { choiceOption } from "./argChecks.js";
 import { staleRepoFlow } from "./workflow/staleRepoFlow.js";
+import { registerFlowStations } from "./flowStations.js";
 import { registerFlowEditCommand } from "./flowEditCommand.js";
 import { registerFlowAwaitDeployCommand } from "./flowAwaitDeployCommand.js";
 import { baseOf, graphOf, printVariantChanges } from "./flowBase.js";
@@ -715,7 +716,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         for (const line of liveFlowLines(l, { top: 3, bold, dim })) console.log(line);
       });
   }
-  return flow;
+  return registerFlowStations(flow, deps);
 }
 
 /** The team's live flows, or why they could not be read (the pool still lists without them). */

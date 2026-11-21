@@ -46,6 +46,7 @@ principles = ["outreach/docs/line/principles.md"]
 prompting = "outreach/docs/line/prompting.md"   # omitted: codecast's standard
 size_budget = 400                    # changed lines before a run returns to plan
 watch_days = 7
+ci_paths = ["scripts/ci/**"]         # beyond .github/** and .codecast/**, what decides what CI runs; read from the base, a change touching one goes to a person
 
 [line.commands]                      # run from the run's worktree; $vars expand
 check = "cast check && cd outreach/backend && bun run test:touched"
