@@ -461,8 +461,7 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   try {
     const { refreezeSessionChange } = await import("./flowChange.js");
     const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
-    context["branch"] = change.branch;
-    context["change_files"] = change.paths.join(" ");
+    Object.assign(context, frozenChangeContext(context["run_dir"]));
     const said = moved
       ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
       : "the session's change is as it was: the stage runs again on the same change";
@@ -486,13 +485,17 @@ function lastSaid(state: WorkflowRunState): string | undefined {
 }
 
 /**
- * Tell the run's subject something in its own turn; a run with no subject, or a dry run, says nothing. News it need
- * not act on (`inform`) is not worth resuming a parked session for, so a hibernated subject is not told.
+ * Tell the run's subject something in its own turn; a run with no subject, or a dry run, says nothing. A send resumes
+ * a parked session and revives a killed one, so news it need not act on passes `unless`, which names the rows not
+ * worth that: a subject that reads so is not told.
  */
-async function tellSubject(options: RunOptions, context: Record<string, string>, body: string, inform = false): Promise<void> {
+async function tellSubject(options: RunOptions, context: Record<string, string>, body: string, unless?: (row: any) => boolean): Promise<void> {
   const subject = subjectOf(context);
   if (!subject || options.dryRun) return;
-  if (inform && (await subjectRow((route, b) => cliCall(options, route, b), subject))?.agent_status === "hibernated") return;
+  if (unless && unless(await subjectRow((route, b) => cliCall(options, route, b), subject))) {
+    console.log(`${c.dim}  ${subject.shortId} is parked or stopped: not woken to hear this${c.reset}`);
+    return;
+  }
   await cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body, wake: true });
 }
 
@@ -1798,6 +1801,8 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   const initialContext: Record<string, string> = {};
   initialContext["project_path"] = cwd;
   initialContext["default_branch"] = detectDefaultBranch(cwd);
+  // Where a reviewer's diff starts ($diff_base...$branch): the default branch, unless the run's change says where it was cut.
+  initialContext["diff_base"] = initialContext["default_branch"];
   // The run's own id, for a node that reports to the server about this run
   // (the line's merge step, the-line.md L12). Empty on a run with no row.
   initialContext["run_id"] = options.runId ?? "";
@@ -2004,8 +2009,9 @@ async function driveRun(
       });
     }
 
-    // A retired subject is not told: the send would resume it just to read that the run is over.
-    if (!retired) await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: false, lastOutput: lastSaid(state) }));
+    // A retired subject is not told, nor one already stopped: the send would revive it just to read that the run is
+    // over. A failed run's end message (below) revives it on purpose, so the failure reaches someone.
+    if (!retired) await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: false, lastOutput: lastSaid(state) }), (row) => !!row?.is_killed);
 
     // Log completion to bound plan
     if (options.planId && options.apiToken && options.convexSiteUrl && !options.dryRun) {
@@ -2308,7 +2314,7 @@ async function runNodeLoop(
     // A gate's answer reaches the session the change came from, unless where it routes says it anyway: a station the
     // session does (a Revise note) or a stop (the run's end message). A question back to the reviewer is no answer.
     if (current.type === "human" && outcome !== "failure" && next && next.backend !== "subject" && next.segment_exit !== "stop" && !state.context["human.gate.question"] && state.context["human.gate.label"]) {
-      await tellSubject(options, state.context, gateAnswerMessage(current.segment_label ?? current.label, state.context["human.gate.label"], state.context["human.message"]), true);
+      await tellSubject(options, state.context, gateAnswerMessage(current.segment_label ?? current.label, state.context["human.gate.label"], state.context["human.message"]), (row) => row?.agent_status === "hibernated");
     }
     if (stationBlocked && !next) {
       console.log(`\n${c.yellow}  '${current.label}' is waiting on a person; the run stops here${c.reset}`);

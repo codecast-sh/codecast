@@ -19,9 +19,9 @@ digraph judge {
   graph [kind="segment", label="Judge", description="A model scores the change's risk from its diff and the repository's guidelines, blind to who made it", takes="branch", params="above=50"]
   start [shape=Mdiamond]
   guidelines [label="Guidelines", shape=parallelogram, timeout=120,
-    script="cast flow blind guidelines --base $default_branch --head $branch"]
+    script="cast flow blind guidelines --base $diff_base --head $branch"]
   diff [label="Diff", shape=parallelogram, timeout=120,
-    script="cast flow blind diff --base $default_branch --head $branch --redact $branch $worktree $change_session $change_conversation"]
+    script="cast flow blind diff --base $diff_base --head $branch --redact $branch $worktree $change_session $change_conversation"]
   judge [label="Judge", shape=note, model="claude-sonnet-5-5", max_tokens=2000, prompt="@judge/risk.md"]
   low      [shape=Msquare, label="Low risk"]
   high     [shape=Msquare, label="High risk"]
