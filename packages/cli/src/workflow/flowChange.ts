@@ -22,6 +22,7 @@ import { isAncestor, replayOnto } from "../land/replay.js";
 import { defaultMessage, freezeAndAttribute, makePlan, trailerFor, upstreamRef, type FrozenAttribution } from "../land/shipCheckout.js";
 import type { SessionEdits } from "../land/attribute.js";
 import type { RosterRow } from "../land/scan.js";
+import * as fs from "node:fs";
 import { execFileAsync } from "../proc.js";
 import { git, gitTry } from "../wipSnapshot.js";
 import type { FrozenChange } from "./flowChangeFile.js";
@@ -232,9 +233,11 @@ async function checkedOutAt(root: string, branch: string): Promise<string | null
  * fetched first, into origin's remote-tracking ref: a fetch into the branch itself is refused while a worktree (the
  * run's own, from an earlier stage) has it checked out. The local branch then follows: the worktree that has it
  * checked out is reset to the fetched tip, or the ref moves when none does. A worktree holding uncommitted work is
- * never reset, and a fetch that fails is never read as "nothing new": either stops the refreeze, saying why.
+ * never reset, nor one other than the run's own (`runWorktree`) that the fetched tip does not fast-forward, since
+ * that would drop its commits; the run's own holds no work, so it follows a force-push too. Neither, nor a fetch that
+ * fails, is ever read as "nothing new": each stops the refreeze, saying why.
  */
-async function branchTip(root: string, change: FrozenChange): Promise<string> {
+async function branchTip(root: string, change: FrozenChange, runWorktree: string | null): Promise<string> {
   if (change.source !== "pr") return git(root, ["rev-parse", `refs/heads/${change.branch}`]);
   const tracking = `refs/remotes/origin/${change.branch}`;
   await fetchRef(root, "origin", `+refs/heads/${change.branch}:${tracking}`).catch((err: { stderr?: string; message: string }) => {
@@ -247,6 +250,12 @@ async function branchTip(root: string, change: FrozenChange): Promise<string> {
   } else {
     if (await git(holder, ["status", "--porcelain", "--untracked-files=no"])) {
       throw new Error(`The pull request's branch ${change.branch} is checked out in ${holder}, which holds uncommitted work: finish or clear it there, then the run can take the branch's new commits`);
+    }
+    const real = (p: string) => { try { return fs.realpathSync(p); } catch { return p; } };
+    const head = await git(holder, ["rev-parse", "HEAD"]);
+    if ((!runWorktree || real(holder) !== real(runWorktree)) && !(await isAncestor(root, head, tip))) {
+      const lost = (await git(root, ["log", "--format=%h %s", `${tip}..${head}`])).split("\n").filter(Boolean);
+      throw new Error(`The pull request's branch ${change.branch} is checked out in ${holder}, which has commits the pushed branch lacks (${lost.join("; ")}): moving it would drop them, so push or move them there first`);
     }
     await git(holder, ["reset", "--quiet", "--hard", tip]);
   }
@@ -281,7 +290,7 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
     ? await refreezeCheckoutChange(root, before, opts.roster)
     : before.source === "session"
     ? await freezeSessionChange(root, before.conversation ?? before.session!, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null })
-    : { ...before, tip: await branchTip(root, before) };
+    : { ...before, tip: await branchTip(root, before, worktreePath) };
   const tree = (rev: string) => git(root, ["rev-parse", `${rev}^{tree}`]).then((s) => s.trim()).catch(() => rev);
   const moved = (await tree(before.tip)) !== (await tree(change.tip));
   // The run's worktree holds no work of its own: it is the change, so it follows the new tip.
