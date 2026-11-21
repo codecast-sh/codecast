@@ -2023,6 +2023,12 @@ export const recardForCli = mutation({
   },
 });
 
+/** A trial card's rebuild puts its run back at `at` on the graph given, from fresh: nothing it asked stays on the row,
+ *  nor a clearance to land (merge_cleared), which belonged to the attempt it replaces. */
+export async function restartRunFresh(ctx: { db: any }, runId: Id<"workflow_runs">, graph: { workflow_id?: Id<"workflows">; workflow_name?: string }, at: string, now: number): Promise<void> {
+  await ctx.db.patch(runId, { ...graph, fresh_branch: true, merge_cleared: undefined, status: "running", current_node_id: at, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, updated_at: now });
+}
+
 /**
  * `cast line trial rebuild <tc-N>`: a waiting change card whose branch is
  * stale against main goes back to the line's `fresh` station, which rebases
@@ -2053,7 +2059,7 @@ export const rebuildForCli = mutation({
     // read again from its file (fresh_branch makes the daemon re-read it; on a resume it never resets the branch).
     const current = (await dueProblems(ctx, project)).like.product;
     const graph = current && current.workflow_id !== run.workflow_id ? { workflow_id: current.workflow_id, workflow_name: current.workflow_name } : {};
-    await ctx.db.patch(run._id, { ...graph, fresh_branch: true, merge_cleared: undefined, status: "running", current_node_id: args.from ?? "fresh", gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, updated_at: now });
+    await restartRunFresh(ctx, run._id, graph, args.from ?? "fresh", now);
     await ctx.db.patch(row._id, { rebuild_at: now, updated_at: now });
     await queueRunOnDaemon(ctx as any, userId, run._id, { device: run.runner_device, now });
     return { short_id: row.short_id, run_id: run._id, stale: stale.detail };

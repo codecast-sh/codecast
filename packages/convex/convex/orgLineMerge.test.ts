@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import schema from "./schema";
 import { resumeFailedRunCore } from "./failedRunResume";
+import { landAgainCore, reaskRunCore } from "./workflow_runs";
+import { restartRunFresh } from "./lineTrial";
 import { MERGE_AUTHORITY_ID, checkMergeCore, clearForMergeCore, mergeAllowance, performSetLineMerge, prUrlFromEvidence, recordMergeCore } from "./orgLineMerge";
 import { lineOfRole } from "./orgRoles";
 
@@ -123,7 +125,15 @@ describe("a merge no role is behind", () => {
       org_roles: [], anchors: [],
       conversations: [{ _id: "conversations_hand", session_id: "hand", user_id: HOST, team_id: TEAM, status: "active", title: "Implement", agent_type: "claude_code", message_count: 1, updated_at: NOW, owner_device_id: "dev" }],
       tasks: [{ _id: "tasks_1", short_id: "ct-7", title: "Add the thing", status: "open", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, created_at: 1, updated_at: 1 }],
-      workflow_runs: [{ _id: "workflow_runs_1", user_id: HOST, task_id: "tasks_1", primary_conversation_id: "conversations_hand", status: "running", workspace: `team:${TEAM}`, team_id: TEAM, runner_device: "dev",
+      // The composed graph the runner pushed at start: Intent gate is a script station, the rest are sessions'.
+      workflows: [{ _id: "workflows_change", user_id: HOST, name: "change", slug: "change", edges: [], nodes: [
+        { id: "review__review", label: "Review", shape: "box", type: "agent" },
+        { id: "intent_gate", label: "Land without asking?", shape: "parallelogram", type: "command", script: "bun gate.ts" },
+        { id: "fix_review", label: "Address review", shape: "box", type: "agent", backend: "subject" },
+        { id: "implement", label: "Implement", shape: "box", type: "agent" },
+        { id: "rebase", label: "Rebase", shape: "parallelogram", type: "command", script: "@line/rebase.sh" },
+      ] }],
+      workflow_runs: [{ _id: "workflow_runs_1", user_id: HOST, task_id: "tasks_1", workflow_id: "workflows_change", primary_conversation_id: "conversations_hand", status: "running", workspace: `team:${TEAM}`, team_id: TEAM, runner_device: "dev",
         current_node_id: "intent_gate", node_statuses: [{ node_id: "review__review", status: "completed", session_id: "rev" }, { node_id: "intent_gate", status: "running" }], created_at: NOW, updated_at: NOW }],
       session_decisions: [], projects: [], daemon_commands: [], managed_sessions: [],
       task_comments: [], pending_messages: [], org_role_history: [], org_changes: [], docs: [], counters: [], thread_reads: [], entity_subscriptions: [],
@@ -159,7 +169,25 @@ describe("a merge no role is behind", () => {
     await expect(clearForMergeCore(other.ctx, "users_someone" as any, { run_id: "workflow_runs_1", why: "x" })).rejects.toThrow("Only the run's own runner");
     const agent = solo();
     Object.assign(agent.run(), { current_node_id: "implement", node_statuses: [{ node_id: "implement", status: "running", session_id: "impl" }] });
-    await expect(clear(agent.ctx)).rejects.toThrow("implement is an agent's station");
+    await expect(clear(agent.ctx)).rejects.toThrow("implement is not a script station of the run's graph");
+    // A fix station hands work back to the change's own session: the runner reports it running with no session of
+    // its own, waiting on that session. In quick-change (no Decide) a stamp from there would land unasked.
+    const fix = solo();
+    Object.assign(fix.run(), { current_node_id: "fix_review", waiting_on_session: { node_id: "fix_review", conversation_id: "conversations_hand", since: NOW, note: "Address the review" },
+      node_statuses: [{ node_id: "fix_review", status: "running" }] });
+    await expect(clear(fix.ctx)).rejects.toThrow("fix_review is not a script station of the run's graph: only a flow's script station clears a run to land");
+    expect(fix.run().merge_cleared).toBeUndefined();
+    await expect(check(fix.ctx)).rejects.toThrow("its graph did not clear it to land");
+    // The graph is the signal, not the report: a session station with no session reported and no wait is still refused.
+    delete fix.run().waiting_on_session;
+    await expect(clear(fix.ctx)).rejects.toThrow("fix_review is not a script station");
+    // A script station the run waits on its session from, and a station the graph does not name, are refused too.
+    const waiting = solo();
+    waiting.run().waiting_on_session = { node_id: "intent_gate", conversation_id: "conversations_hand", since: NOW, note: "x" };
+    await expect(clear(waiting.ctx)).rejects.toThrow("intent_gate is not a script station");
+    const unknown = solo();
+    Object.assign(unknown.run(), { current_node_id: "mystery", node_statuses: [{ node_id: "mystery", status: "running" }] });
+    await expect(clear(unknown.ctx)).rejects.toThrow("mystery is not a script station");
     const paused = solo();
     paused.run().status = "paused";
     await expect(clear(paused.ctx)).rejects.toThrow("only a running station clears it");
@@ -264,6 +292,33 @@ describe("a merge no role is behind", () => {
     waiting.tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_0", status: "pending", answer_index: undefined, answered_by: undefined, resolved_at: undefined }));
     await clear(waiting.ctx);
     expect(await check(waiting.ctx)).toMatchObject({ allowed: true });
+  });
+
+  test("reask, land-again and a trial rebuild each drop the stamp, though none moves the attempt", async () => {
+    // Reask: the run waits at its card; asked again, it picks up at the gate with nothing it was cleared for.
+    const reask = solo();
+    await clear(reask.ctx);
+    Object.assign(reask.run(), { status: "paused", gate_node_id: "decide__decide", current_node_id: "decide__decide" });
+    await reaskRunCore(reask.ctx, HOST as any, "workflow_runs_1" as any, {}, NOW + 2);
+    expect(reask.run()).toMatchObject({ status: "running", current_node_id: "decide__decide" });
+    expect(reask.run().visits_reset_at).toBeUndefined();
+    expect(reask.run().merge_cleared).toBeUndefined();
+
+    // Land again: an ended run answered Ship whose landing step was refused for being behind picks up at Rebase.
+    const land = solo();
+    await clear(land.ctx);
+    Object.assign(land.run(), { status: "completed", gate_response: "S", node_statuses: [{ node_id: "ship", status: "failed", result_preview: "line: codecast/line-ct-7 is behind origin/main; rebase it first" }] });
+    await landAgainCore(land.ctx, HOST as any, "workflow_runs_1" as any);
+    expect(land.run()).toMatchObject({ status: "running", current_node_id: "rebase" });
+    expect(land.run().merge_cleared).toBeUndefined();
+    await expect(check(land.ctx)).rejects.toThrow("its graph did not clear it to land");
+
+    // A trial card's rebuild puts the run back at its fresh station.
+    const rebuild = solo();
+    await clear(rebuild.ctx);
+    await restartRunFresh(rebuild.ctx, "workflow_runs_1" as any, {}, "fresh", NOW + 3);
+    expect(rebuild.run()).toMatchObject({ status: "running", current_node_id: "fresh", fresh_branch: true });
+    expect(rebuild.run().merge_cleared).toBeUndefined();
   });
 
   test("a trial project's run never merges, cleared or shipped", async () => {
