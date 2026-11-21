@@ -22714,7 +22714,7 @@ workflow
 
 workflow
   .command("clear <run>")
-  .description("From a script station of a run's own graph: the graph cleared the change to land with no card (a founder-intent read that passed). A run no role is behind then merges under the person who started it. Only the station the run stands at may call it, and only a script station; a resume, reask or land-again drops it. <run> is the run id ($run_id in a station's script)")
+  .description("For a flow's script station only (shape=parallelogram, script=...): the run's own graph cleared the change to land with no card (a founder-intent read that passed). A run no role is behind then merges under the person who started it. Refused from any agent or session station, fix stations included, and from any station but the one the run stands at; a resume, reask or land-again drops it. <run> is the run id ($run_id in the station's script)")
   .requiredOption("--why <text>", "What cleared it, recorded with the merge")
   .option("--json", "Machine-readable output")
   .action(async (run: string, options: { why: string; json?: boolean }) => {

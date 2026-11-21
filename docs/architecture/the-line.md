@@ -323,8 +323,14 @@ newest first (`session_decisions.by_task`), with the run's own
   (`orgLineMerge.clearForMerge`), which stamps `workflow_runs.merge_cleared`
   (when, the station, its words, the runner's account, the attempt). Only the
   run's own runner account may write it, while the run is running, from the
-  station it stands at, and never from a station with a session, so an agent
-  cannot clear its own change. The stamp holds only in the attempt it was
+  station it stands at, and only when the graph the run executes (its
+  `workflows` row, the composed graph the runner pushed at start) names that
+  station `command` (shape parallelogram), the runner reported no session on
+  it, and the run is not waiting on its change's session. So no agent station
+  clears its own change, the fix stations that hand work back to that session
+  included. An agent that fakes the runner's progress reports could still
+  stamp; whoever holds the owner's token and git credentials can push main
+  anyway. The stamp holds only in the attempt it was
   written in (`visits_reset_at`, else `created_at`), and every way a run is
   moved back drops it: `resumeRunAt` (resume, queued resume, reask, the trial's
   resumes), `landAgainCore` and a trial rebuild. The person who started the run

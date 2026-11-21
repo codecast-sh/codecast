@@ -190,8 +190,12 @@ export async function personAuthorized(ctx: any, run: any): Promise<PersonAuthor
 /**
  * `cast workflow clear <run> --why`: the run's own graph cleared it to land with no card (a founder-intent read that
  * passed). Written only by the run's own runner account, while the run is running, from the station it stands at,
- * and only from a script station: a station with a session (an agent) cannot clear its own change. The stamp names
- * the run's attempt, and anything that moves the run back (workflow_runs.resumeRunAt, landAgainCore) drops it.
+ * and only from a script station: the graph the run executes (its `workflows` row, the composed graph the runner
+ * pushed at start) names that station `command` (shape parallelogram), the runner reported no session on it, and the
+ * run is not waiting on its change's session (a fix station hands work to that session and reports none). The stamp
+ * names the run's attempt, and anything that moves the run back (workflow_runs.resumeRunAt, landAgainCore, a trial
+ * rebuild) drops it.
+ * An agent that fakes the runner's progress reports could still stamp; whoever holds the owner's token and git can push main anyway.
  */
 export async function clearForMergeCore(ctx: any, userId: Id<"users">, args: { run_id: string; why: string }, now = Date.now()): Promise<{ run_id: string; node_id: string; attempt: number }> {
   const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
@@ -201,7 +205,10 @@ export async function clearForMergeCore(ctx: any, userId: Id<"users">, args: { r
   if (run.status !== "running" || !run.current_node_id) throw new Error(`The run is ${run.status}: only a running station clears it to land`);
   const station = (run.node_statuses ?? []).find((n: any) => n.node_id === run.current_node_id);
   if (!station || station.status !== "running") throw new Error(`${run.current_node_id} is not running: only the station the run stands at clears it`);
-  if (station.session_id) throw new Error(`${run.current_node_id} is an agent's station: only a script station of the graph clears a run to land`);
+  const node = run.workflow_id ? ((await ctx.db.get(run.workflow_id))?.nodes ?? []).find((n: any) => n.id === run.current_node_id) : null;
+  if (station.session_id || run.waiting_on_session || node?.type !== "command") {
+    throw new Error(`${run.current_node_id} is not a script station of the run's graph: only a flow's script station clears a run to land`);
+  }
   const attempt = runAttempt(run);
   await ctx.db.patch(run._id, { merge_cleared: { at: now, node_id: run.current_node_id, why: why.slice(0, 500), by: userId, attempt }, updated_at: now });
   return { run_id: String(run._id), node_id: run.current_node_id, attempt };
