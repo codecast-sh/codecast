@@ -4,6 +4,8 @@
 // phone, reporting failures as toasts here.
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { ConvexError } from "convex/values";
+import { humanizeConvexError } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
 import { captureError } from "../lib/analytics";
 import { serverErrorText } from "../lib/errorCause";
@@ -18,6 +20,7 @@ const showError = (text: string) => toast.error(text, { id: text });
 
 function report(surface: string) {
   return (e: unknown) => {
+    if (e instanceof ConvexError) { showError(humanizeConvexError(e)); return; }
     const err = e instanceof Error ? e : new Error(String(e));
     captureError(err, { surface });
     showError(serverErrorText(err));

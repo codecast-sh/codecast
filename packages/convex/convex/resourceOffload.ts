@@ -1,6 +1,6 @@
 import type { ResourceOffloadIntent, ResourceOffloadBatchId } from "@codecast/shared/contracts/resourceOffloadIntent";
 import { resourceOffloadSelection } from "./resourceOffloadSchema";
-import { v, type Infer } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./functions";
 import type { QueryCtx } from "./_generated/server";
@@ -17,12 +17,15 @@ type Check = { session_id: string; destination_id: string; blockers: string[]; p
 /** The most sessions one call checks or moves. */
 export const OFFLOAD_MAX_SESSIONS = 50;
 
+/** A refusal the person reads; prod redacts a plain Error to "Server Error". */
+const offloadRefusal = (message: string) => new ConvexError(message);
+
 function validateRequest(args: CheckArgs) {
-  if (!args.selections.length || args.selections.length > OFFLOAD_MAX_SESSIONS) throw new Error(`Select between 1 and ${OFFLOAD_MAX_SESSIONS} sessions`);
-  if (!Number.isFinite(args.wait_for_idle_ms) || args.wait_for_idle_ms < 60_000) throw new Error("Allow at least a minute to reach a safe turn boundary");
-  if (new Set(args.selections.map(s => s.session_id)).size !== args.selections.length) throw new Error("A session may only be selected once");
-  if (args.selections.some(s => s.attested.length > 40 || s.attested.some(a => a.length > 500))) throw new Error("Too many prerequisite attestations");
-  for (const s of args.selections) { const bad = invalidBringPaths(s.bring); if (bad) throw new Error(bad); }
+  if (!args.selections.length || args.selections.length > OFFLOAD_MAX_SESSIONS) throw offloadRefusal(`Select between 1 and ${OFFLOAD_MAX_SESSIONS} sessions`);
+  if (!Number.isFinite(args.wait_for_idle_ms) || args.wait_for_idle_ms < 60_000) throw offloadRefusal("Allow at least a minute to reach a safe turn boundary");
+  if (new Set(args.selections.map(s => s.session_id)).size !== args.selections.length) throw offloadRefusal("A session may only be selected once");
+  if (args.selections.some(s => s.attested.length > 40 || s.attested.some(a => a.length > 500))) throw offloadRefusal("Too many prerequisite attestations");
+  for (const s of args.selections) { const bad = invalidBringPaths(s.bring); if (bad) throw offloadRefusal(bad); }
 }
 
 /**
@@ -37,7 +40,7 @@ export const preflight = query({
     if (!userId) throw new Error("Authentication required");
     validateRequest(args);
     const result = await offloadChecks(ctx, userId, args);
-    if ("refused" in result) throw new Error(result.refused);
+    if ("refused" in result) throw offloadRefusal(result.refused);
     return { checks: result.checks };
   },
 });
@@ -73,7 +76,7 @@ export const start = mutation({
       }
     }
     const refuse = async (reason: string) => {
-      if (!intent || !args.batch_ids || args.dry_run) throw new Error(reason);
+      if (!intent || !args.batch_ids || args.dry_run) throw offloadRefusal(reason);
       return { checks: [], batches: await recordRefusal(ctx, userId, intent, args.batch_ids, reason), error: reason };
     };
     const checked = await offloadChecks(ctx, userId, args);
@@ -94,7 +97,7 @@ export const start = mutation({
       const refused = here.filter(s => refusal.has(s.session_id));
       if (moving.length) {
         const result = await performCreateBatch(ctx, userId, { conversation_ids: moving.map(s => s.conversation_id), to_device_id, batch_id, resource_offload: intent, wait_for_idle_ms: args.wait_for_idle_ms, interrupt_on_timeout: false }, Date.now());
-        if (result.skipped.length) throw new Error("The selection changed during preflight; refresh and try again");
+        if (result.skipped.length) throw offloadRefusal("The selection changed during preflight; refresh and try again");
         batches.push(result);
       }
       if (refused.length && intent && batch_id) {
