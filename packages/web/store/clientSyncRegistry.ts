@@ -997,6 +997,17 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, altKey: "client_key", deepFields: ["sessions", "steps", "tasks"] },
     feeds: ["deployTargets.view", "deployRefs.recentForTeam"],
   },
+  // Each repository's pipeline (pipeline.md PL6, contracts/pipeline.ts): its
+  // change and release flows as its checkout resolves them, one row per
+  // repository keyed by it, published beside its deploy targets. Delta, as
+  // deployTargets: one team's feed must not drop another team's rows.
+  pipelines: {
+    persistence: { kind: "collection", key: "pipelines" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, workspace",
+    sync: { isDelta: true, deepFields: ["change", "release"] },
+    feeds: ["pipelines.forTeam"],
+  },
   // How far a merged pull request or a main commit has gone toward production
   // (deploys.md DP16), keyed by its `owner/repo#N` or `owner/repo@sha`. Each
   // pill that names one feeds its own row, so delta.
@@ -2203,6 +2214,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   lineOccurrences: "shared",
   lineDeploys: "shared",
   deployTargets: "shared",
+  pipelines: "shared",
   teamDeploys: "shared",
   deployReach: "local",
   liveFlows: "shared",
