@@ -8718,7 +8718,8 @@ export default defineSchema({
     // Public sharing: "anyone with the link" (publicShare.ts).
     share_token: v.optional(v.string()),
     // The line's merge step landed (the-line.md L12): what went where, when.
-    merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()) })),
+    // `authorized`: on a merge no role is behind, the person whose word allowed it and why (orgLineMerge.personAuthorized).
+    merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()), authorized: v.optional(v.object({ user_id: v.id("users"), why: v.string() })) })),
     graph_hash: v.optional(v.string()), // LE14: content hash of the graph the runner executed (parser.graphHash)
     graph_nodes: v.optional(v.array(v.object({ id: v.string(), h: v.string() }))), // LE14: each station's hash in that graph (parser.graphNodeHashes)
     // The machine whose runner drives the run (its device id): where the run

@@ -22,7 +22,8 @@ export type MergeCheck = {
   on: boolean;
   used: number;
   limit: number | null;
-  role: { handle: string; short_id: string; name: string } | null; // null: a person answered Ship on a run no role started
+  role: { handle: string; short_id: string; name: string } | null; // null: no role started the run; `authorized` says whose word lets it merge
+  authorized?: { user_id: string; why: string };
   task: { short_id: string; title: string; pr_url: string | null } | null;
 };
 
