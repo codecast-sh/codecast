@@ -144,9 +144,12 @@ blob of it, the blob on disk, the writer and whether it was briefed. On a
 busy main a standing conflict costs an `ls-tree` and a `hash-object` a sweep
 and no attribution. Upstream changing the file briefs again; the file
 changing on disk attributes again and briefs only a new writer. A path no
-transcript explains, or a brief the server refused, is tried again after 15
+transcript explains, or a brief that failed, is tried again after 15
 minutes, since a transcript can reach the sync ledger after the write it
 records; the daemon's `[LEVEL]` log line names writerless paths every sweep.
+A writer the server will never deliver to (a teammate's session, which this
+machine's token may not message) is named in that line and tried again only
+when either blob changes.
 A machine that is signed out attributes nothing. A clean level, or a
 checkout found already level, clears the record and the merge files.
 
