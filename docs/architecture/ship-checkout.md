@@ -104,6 +104,21 @@ content (pushed from a detached worktree) is levelled: `git cherry` marks
 them, and that state used to block every Convex deploy from the tree.
 `cast config level_checkouts_enabled false` turns the sweep off on a machine.
 
+A level is all or nothing: one file changed here and upstream without a
+clean three-way merge holds the whole checkout where it is, because moving
+HEAD past a file still at its old base's content is the stale copy above.
+The writer of that file is the one who can unblock it, so the sweep tells
+them (`land/levelConflicts.ts`). Each conflicting path is attributed to the
+session that wrote it last, as the ship pass attributes its groups, and that
+session gets one message naming its conflicting files, the upstream commits
+that touched each, and a three-way merge with conflict markers saved under
+`.git/codecast/level-conflicts/<path>`. Once its file carries upstream's
+change, the next sweep levels by itself. A writer hears once per path set and
+upstream sha (`.git/codecast/level-conflicts.json` records what was sent),
+again when upstream moves, and never for a path no transcript explains: that
+path is only named in the daemon's `[LEVEL]` log line. A clean level, or a
+checkout found already level, clears the record and the merge files.
+
 ## Fix forward
 
 A pass checks only what is fast; CI runs the rest after the push. A standing
