@@ -14,6 +14,11 @@
 // the other; only a card answer (a poll) goes through, because it is what
 // closes the prompt. Keying the hold on the author let a typed message paste
 // into a dialog a session message had just been refused (2026-09-15).
+//
+// A slash command that reaches a Claude pane mid-turn is held the same way:
+// typed into the turn it would be queued and dropped, never run. Its hold is
+// released when the turn settles (sendAgentStatus), and the window is the
+// fallback when no settle is seen.
 export const PROMPT_HOLD_MS = 45_000;
 
 const holds = new Map<string, number>();

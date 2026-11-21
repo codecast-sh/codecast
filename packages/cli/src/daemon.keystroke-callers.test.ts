@@ -37,7 +37,7 @@ function fixture(writeSucceeded = true) {
     isManagedTmuxName: (name: string) => name.startsWith("ct-"), isSafeStatusSessionId,
     terminalToken: () => "token", isSupersededAppServerSession: () => false,
     hibernationInFlight: new Map(), lastWorkingStatusSent: new Map(), WORKING_STATUS_THROTTLE_MS: 10_000,
-    statusFlipStartsTurn: () => false, markTurnStarted: () => {}, pendingOpenTaskReports: new Map(),
+    statusFlipStartsTurn: () => false, markTurnStarted: () => {}, statusFlipEndsTurn: () => false, releasePromptHold: () => false, pendingOpenTaskReports: new Map(),
     SETTLE_STATUSES_WITH_TASKS: new Set(["idle"]), SETTLE_VERDICT_STATUSES: new Set(),
     turnCompletedAtBySession: new Map(), serializeSessionStatus: (_sid: string, write: () => unknown) => write(),
     hibernatedSessions: new Set(), lastOpenTasksSentJson: new Map(),

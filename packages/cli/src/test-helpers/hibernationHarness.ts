@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
 import * as policy from "../hibernation.js";
 import { functionBlock } from "./sourceRegion.js";
 import { withTmuxSession } from "../tmuxRoute.js";
+import { releasePromptHold } from "../pendingPromptHold.js";
 
 const names = [
   "collectHibernationCandidates", "hibernationRefusalReason", "hibernateSessionNow", "runHibernationPass",
@@ -11,7 +12,7 @@ const names = [
   "trackSessionPaneForTests", "sessionParkStateForTests", "setSyncServiceForTests",
   "wakeStatusAfterPark", "clearHibernationPark", "forgetHibernationPark", "clearSessionTrackingForKill",
   "subagentParentSessionFromPath", "noteSubagentActivity", "subagentActiveAgoMs", "resetSubagentActivityForTests",
-  "sendAgentStatus", "markTurnStarted", "statusFlipStartsTurn", "reapOneTerminal", "withTmuxLock", "injectViaTmux",
+  "sendAgentStatus", "markTurnStarted", "statusFlipStartsTurn", "statusFlipEndsTurn", "reapOneTerminal", "withTmuxLock", "injectViaTmux",
   "knownAgentStatus",
 ] as const;
 
@@ -37,7 +38,9 @@ export function createHibernationHarness() {
     throw new Error(`Unexpected IO: ${kind}`);
   };
   const deps = {
-    ...policy, path, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, SETTLE_VERDICT_STATUSES,
+    ...policy, path, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES,
+    // The real hold registry: a settle releases the hold a test placed, and is a no-op otherwise.
+    releasePromptHold,
     isSupersededAppServerSession: () => false,
     keystrokeInference: { cancel: () => {} },
     serializeSessionStatus: (_id: string, fn: () => Promise<unknown>) => fn(),

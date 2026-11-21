@@ -14,7 +14,7 @@ import { handoffParentSessionId, linkPlanHandoffChild, planHandoffTarget } from 
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isValidBrowserStreamKey, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
-import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
+import { CLOUD_START_RUN_MS, canonicalSlashCommand, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { materializeFileTags } from "@codecast/shared/contracts";
 import { downloadAttachedFile } from "./attachedFileDownload.js";
@@ -416,7 +416,7 @@ import { setBackgroundSessions, setGovernorBackground, holdForDelivery, isDelive
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { followsCredentialStore, orcaPaneKeyOf, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState, agentAtLoginScreen } from "./tmuxPaneState.js";
+import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, claudeTurnRunningOnPane, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState, agentAtLoginScreen } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -2029,6 +2029,14 @@ export function statusFlipStartsTurn(prevStatus: AgentStatus | undefined, status
   if (prevStatus && DECLARED_VERDICT_STATUSES.has(prevStatus)) return false;
   return true;
 }
+
+// Whether a status transition ends a turn: from working, or stopped inside the
+// turn on a prompt, to anything else. A slash command held for the turn's end
+// (injectViaTmuxInner) goes in at this moment rather than when its hold lapses.
+export function statusFlipEndsTurn(prevStatus: AgentStatus | undefined, status: AgentStatus): boolean {
+  const inTurn = (s: string) => ACTIVE_AGENT_STATUSES.has(s) || MID_TURN_AGENT_STATUSES.has(s);
+  return !!prevStatus && inTurn(prevStatus) && !inTurn(status);
+}
 const DAEMON_BOOTED_AT = Date.now();
 const lastHeartbeatLogged = new Map<string, { status: string; ts: number; since: number }>();
 const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
@@ -2656,6 +2664,11 @@ function sendAgentStatus(
     markTurnStarted(sessionId, Date.now());
   }
   lastSentAgentStatus.set(sessionId, status);
+  // Every settle passes here, the Stop hook's and the pane reconcile's alike (a
+  // turn that ends on an API error, as at a usage limit, sends no Stop). A
+  // slash command held for the turn's end gets its next look now; a dialog
+  // hold that is still up only costs one refused attempt.
+  if (statusFlipEndsTurn(prevStatus, status)) releasePromptHold(conversationId);
   // The open-task report a settle just computed rides along with its verdict;
   // any other status drops it (a turn start makes the parked picture moot).
   const openTasks = pendingOpenTaskReports.get(sessionId);
@@ -17842,6 +17855,9 @@ class InputBlockedError extends Error {
   }
 }
 
+// What a slash command held for a running turn's end shows its sender (see injectViaTmuxInner).
+export const MID_TURN_COMMAND_HOLD_REASON = "waiting for the agent's turn to end: a slash command sent mid-turn would not run";
+
 // A live agent whose screen matches nothing the classifier knows. The message
 // stays "AGENT_UNKNOWN_STATE" for the pane-rebuild count; the screen rides
 // along so the held message can show its sender what the terminal shows.
@@ -17953,7 +17969,7 @@ export function autoContinueArmedOnPane(region: string): boolean {
   return region.split("\n").some((line) => isClaudeAutoContinueLine(line));
 }
 
-export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines?: number, pastDialog = false): Promise<{ busy: boolean }> {
+export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines?: number, pastDialog = false): Promise<{ busy: boolean; turnRunning: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
   const startedAt = Date.now();
@@ -18010,7 +18026,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
       await escapeOnce("automatic continue wait", `Cancelling Claude Code's automatic continue wait in ${target} (one Escape) before delivering`);
       continue;
     }
-    if (state === "idle") return { busy: false };
+    if (state === "idle") return { busy: false, turnRunning: false };
     if (state === "exited") {
       throw new Error("SESSION_EXITED: agent has exited, refusing to inject into bare shell");
     }
@@ -18020,14 +18036,16 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     // interrupted; Claude Code queues the pasted message and hands it to the
     // model with the next tool result (a queued_command attachment), or when
     // the turn ends if no tool call comes. verifyTmuxSubmitAfterPaste confirms
-    // it reached the queue.
-    if (state === "busy") return { busy: true };
+    // it reached the queue. A queued slash command never runs, so the caller
+    // holds one while turnRunning says a turn is really running (busy alone
+    // also covers idle panes that are safe to type into).
+    if (state === "busy") return { busy: true, turnRunning: claudeTurnRunningOnPane(region) };
 
     // A dialog only a person can answer: no key of ours is safe, and a paste
     // lands in no composer. The delivery layer holds the message (see
     // pendingPromptHold) until the scraped card is answered.
     if (state === "menu") {
-      if (pastDialog) return { busy: false };
+      if (pastDialog) return { busy: false, turnRunning: false };
       throw new InputBlockedError("terminal is waiting for a human answer", undefined, holdScreen(stdout));
     }
     if (state === "signed_out") throw signedOutError(agentType, holdScreen(stdout));
@@ -18114,7 +18132,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
       if (headless) throw new TerminalHoldError(`a headless ${headless} run`, "it goes out when the run ends");
       // The sender saw this screen on the held message and chose Send anyway:
       // the message goes in, as it does past a dialog they chose to send past.
-      if (pastDialog) return { busy: false };
+      if (pastDialog) return { busy: false, turnRunning: false };
       log(`Unrecognized live UI in ${target}, deferring: ${region.replace(/\s+/g, " ").slice(0, 240)}`);
       throw new UnreadableScreenError(holdScreen(stdout));
     }
@@ -19102,7 +19120,17 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     log(`Answering "${menu!.question}" in ${target} with the person's message`);
     return injectViaTmuxInner(target, reply, agentType, opts);
   }
-  await ensureTmuxReady(target, agentType, (pane) => assertPromptAbsent(pane, sanitized, pastDialog), captureLines, pastDialog);
+  const ready = await ensureTmuxReady(target, agentType, (pane) => assertPromptAbsent(pane, sanitized, pastDialog), captureLines, pastDialog);
+  // A slash command typed into a running turn never runs: Claude Code queues
+  // it, and the queued command is dropped, not run when the turn ends. The
+  // web's "/model opus" went in this way while a resumed session's "continue"
+  // was running, and the session stayed on Fable (jx7ey2y, 2026-11-20). It
+  // waits for the turn to end: held like a dialog, the conversation is skipped
+  // until the turn settles (sendAgentStatus releases the hold), so every
+  // message behind it keeps its place. Send anyway types it regardless.
+  if (ready.turnRunning && !pastDialog && (agentType ?? "claude") === "claude" && canonicalSlashCommand(sanitized) !== null) {
+    throw new InputBlockedError("a turn is running, and a slash command typed into it never runs", MID_TURN_COMMAND_HOLD_REASON);
+  }
 
   // First LINE, not first 40 characters: the submit verifier looks for this
   // text at the prompt, and a composer that holds the message as real text

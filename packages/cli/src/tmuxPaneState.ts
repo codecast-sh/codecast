@@ -258,6 +258,19 @@ export const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽*]\s+\S[^\n]*…\s
 // the pane deferred as AGENT_UNKNOWN_STATE for four hours (2026-11-07, jx7aztd).
 export const CLAUDE_OVERPAINTED_RULE = /^\s*[·✢✳✶✻✽*][─━][^\n]*[─━]{10,}\s*$/m;
 
+// A spinner frame, or the "esc to interrupt" hint: drawn only while a turn runs.
+export const TURN_SPINNER_OR_INTERRUPT = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i;
+
+// Whether the pane shows a turn running now, by the marks only a running turn
+// draws. Narrower than classifyTmuxLiveState's "busy", which also reads two
+// idle shapes as busy because typing into them is safe either way: the
+// overpainted rule an idle compaction leaves (for hours), and a lead's
+// teammate panel. A slash command held for a turn's end is not safe either
+// way: on those shapes it would wait for a turn that is not running.
+export function claudeTurnRunningOnPane(region: string): boolean {
+  return TURN_SPINNER_OR_INTERRUPT.test(region) || CLAUDE_TURN_STATUS_LINE.test(region);
+}
+
 // A draft taller than Claude Code's composer scrolls inside the box, and the
 // box's rules then count the hidden lines: "─── ↑ 74 more ───…" on top, where
 // the ❯ row has scrolled out of view, and "─── ↓ 3 more ───…" at the bottom.
@@ -308,7 +321,7 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // busy: "not reading input yet" is a stronger statement than "a turn is
   // running", and the type-ahead paste busy allows is exactly what is unsafe here.
   if (/^\s*Resuming session[.…]/mi.test(newestPaintedFrame(region))) return "starting";
-  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i.test(region)) return "busy";
+  if (TURN_SPINNER_OR_INTERRUPT.test(region)) return "busy";
   // Claude Code's own turn status line: a cycling asterisk glyph, a verb, an
   // ellipsis, then the elapsed time in parentheses — "✶ Perambulating… (50s ·
   // ↓ 161 tokens)". v2.1.270 prints no "esc to interrupt" anywhere on such a

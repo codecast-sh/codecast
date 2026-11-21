@@ -14,7 +14,7 @@ import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor,
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 import { DeliveryEchoLedger } from "./deliveryEchoLedger";
-import { stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
+import { canonicalSlashCommand, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
 import { parseTranscriptFor } from "./parser";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice, parseDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer";
@@ -36,6 +36,7 @@ import { planSessionTeardown } from "./sessionProcessMatcher";
 import { planHandoffTarget } from "./planHandoff";
 import { waitForHandHost } from "./handHostGrace";
 import { materializeFileTags } from "../../shared/contracts/fileAttachment";
+import { createHibernationHarness } from "./test-helpers/hibernationHarness";
 
 
 // The fixture lifts delivery code out of daemon.ts by name; the pane classifiers
@@ -48,7 +49,8 @@ const session = (body: string) => `<session-message from="jxsrc01">\n${body}\n</
 const menu = "Ship the change?\n❯ 1. Deploy\n  2. Deny\nEnter to select · Esc to cancel";
 const cursorMenu = "Ship the change?\n❯ 1. Deploy\n  2. Deny";
 const confirmation = "Confirm deployment\nPress Enter to continue · Esc to cancel";
-const box = (text = "", busy = false) => `────────────────────────────────────────\n❯ ${text}\n────────────────────────────────────────\n${busy ? "esc to interrupt" : "? for shortcuts"}`;
+const rule = "────────────────────────────────────────";
+const box = (text = "", busy = false, topRule = rule) => `${topRule}\n❯ ${text}\n${rule}\n${busy ? "esc to interrupt" : "? for shortcuts"}`;
 const fail = (name: string) => () => { throw new Error(`Unexpected effect: ${name}`); };
 
 let fixtureFactory: ((...args: any[]) => any) | undefined;
@@ -56,7 +58,7 @@ let fixtureFactory: ((...args: any[]) => any) | undefined;
 function fixture(transport = "tmux", cached = true) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-prompt-guard-"));
   scratch.push(directory);
-  const state = { menu: menu as string | null, composer: "", history: "", busy: false, captureFailure: false, captures: 0, ghosttyScriptable: true };
+  const state = { menu: menu as string | null, composer: "", history: "", busy: false, topRule: undefined as string | undefined, captureFailure: false, captures: 0, ghosttyScriptable: true };
   const events: string[] = [];
   const bodies: string[] = [];
   const commands: string[] = [];
@@ -80,7 +82,7 @@ function fixture(transport = "tmux", cached = true) {
     hooks.capture();
     state.captures++;
     if (state.captureFailure) throw new Error("fixture capture unavailable");
-    return state.menu ?? `${state.history}\n${box(state.composer, state.busy)}`;
+    return state.menu ?? `${state.history}\n${box(state.composer, state.busy, state.topRule)}`;
   };
   const input = (event: string, text?: string) => {
     events.push(event);
@@ -294,7 +296,7 @@ function fixture(transport = "tmux", cached = true) {
     // along: a private one per fixture, so no test reads the machine's.
     tmuxDeliveryJournal: () => (journal ??= new TmuxDeliveryJournal(path.join(directory, "delivery.sqlite"))),
     deliveryEchoLedger: () => (echoes ??= new DeliveryEchoLedger(path.join(directory, "echoes.sqlite"))),
-    stampDeliveryId, withoutDeliveryId,
+    stampDeliveryId, withoutDeliveryId, canonicalSlashCommand,
     parseTranscriptFor,
     selfHealIfTimersStalled: () => {}, assertLegacyDeliveryEnvelope: () => {},
     messagesInFlight: new Map(), conversationDeliveryActive: new Set(), injectedMessageTs,
@@ -307,7 +309,7 @@ function fixture(transport = "tmux", cached = true) {
   if (!fixtureFactory) {
     const names = [
       "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog", "isCursorLoginScreen", "isCodexLoginScreen", "isGrokLoginScreen", "agentAtLoginScreen", "isAgentLoginScreen", "signedOutError", "composerReadHeight", "isClaudeBypassWarning",
-      "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
+      "classifyTmuxLiveState", "claudeTurnRunningOnPane", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "isDeliveryVerdict", "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "autoContinueArmedOnPane", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "promptIsOwnText", "holdScreen", "surfaceHeldDialog", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "composerTextStart", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
@@ -321,7 +323,7 @@ function fixture(transport = "tmux", cached = true) {
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho", "heldFatal",
     ];
     const constants = [
-      "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "UNREADABLE_SCREEN_HOLD_REASON", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "INJECTABLE_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
+      "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "UNREADABLE_SCREEN_HOLD_REASON", "MID_TURN_COMMAND_HOLD_REASON", "TURN_SPINNER_OR_INTERRUPT", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "INJECTABLE_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "PANE_REBUILD_THRESHOLD", "PANE_REBUILD_WINDOW_MS", "PANE_REBUILD_MIN_GAP_MS", "unresolvablePanes", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
       "ANSI_ESCAPE_RE", "MACHINE_WAKE_IDLE_RESUME_CHOICE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME", "STARTED_FATAL_CONFIRM_MS", "fatalPaneSince",
     ].map(name => {
@@ -364,7 +366,7 @@ function fixture(transport = "tmux", cached = true) {
       "const handlePendingMessagesUpdate = handlePendingMessageBatch;",
     ].join("\n").replace(/^export /gm, "");
     fixtureFactory = new Function(...Object.keys(deps), new Bun.Transpiler({ loader: "ts" }).transformSync(code) +
-      "; return { deliverMessage, injectViaTmux, injectViaTerminal, handlePendingMessagesUpdate, scheduleMessageRetry, parsePollMessage, parseInteractivePrompt, buildAppleScript, inputGuard, assertPromptAbsent, InputBlockedError, autoResumeSessionInner, probeStartedPane, resumeReadiness, resumeWarnings, propagation: [propagation0, propagation1, propagation2, propagation3] };") as (...args: any[]) => any;
+      "; return { deliverMessage, injectViaTmux, injectViaTerminal, handlePendingMessagesUpdate, scheduleMessageRetry, parsePollMessage, parseInteractivePrompt, buildAppleScript, inputGuard, assertPromptAbsent, InputBlockedError, autoResumeSessionInner, probeStartedPane, resumeReadiness, resumeWarnings, propagation: [propagation0, propagation1, propagation2, propagation3], MID_TURN_COMMAND_HOLD_REASON };") as (...args: any[]) => any;
   }
   const api = fixtureFactory(...Object.values(deps));
   return {
@@ -636,6 +638,63 @@ describe("machine prompt delivery safety", () => {
     await expect(f.deliver(session("new context"))).resolves.toBe(true);
     expect(f.bodies).toEqual([session("new context")]);
     expect(f.events).not.toContain("Escape");
+  });
+
+  // jx7ey2y, 2026-11-20: the web's "/model opus" was typed into the turn a
+  // resumed session's "continue" had started. Claude Code queued it and never
+  // ran it, so the session stayed on Fable and every resume relaunched it there.
+  describe("a slash command sent mid-turn", () => {
+    const queue = [{ _id: "model", content: "/model opus" }, { _id: "next", content: "continue" }];
+    const midTurn = () => {
+      const f = fixture();
+      f.state.menu = null;
+      f.pendingInteractivePrompts.clear();
+      f.state.busy = true;
+      return f;
+    };
+
+    test("waits out the turn, then goes in ahead of the message queued behind it", async () => {
+      const f = midTurn();
+      await f.scan(queue);
+      // Nothing typed. The command is held with its reason, without spending a retry.
+      expect(f.bodies).toEqual([]);
+      expect(f.state.composer).toBe("");
+      expect(f.events).toEqual(["hold:model"]);
+      expect(f.holds).toEqual([{ id: "model", holdReason: f.MID_TURN_COMMAND_HOLD_REASON }]);
+      expect(f.timers.filter((t: { ms: number; cancelled: boolean }) => t.ms === 1000 && !t.cancelled)).toEqual([]);
+      // While the turn runs the conversation is skipped, so "continue" stays behind it.
+      await f.scan(queue);
+      expect(f.bodies).toEqual([]);
+      expect(f.events).toEqual(["hold:model"]);
+      // The turn settles: the status write releases the hold and runs the scan again.
+      let redriven = 0;
+      setPendingRedrive(() => { redriven++; });
+      f.state.busy = false;
+      const status = createHibernationHarness();
+      status.trackSessionPaneForTests("sid", "target", { status: "thinking" });
+      status.sendAgentStatus({ updateSessionAgentStatus: async () => true }, "conv", "sid", "idle");
+      expect(redriven).toBe(1);
+      expect(promptHoldRemainingMs("conv")).toBe(0);
+      await f.scan(queue);
+      expect(f.bodies).toEqual(["/model opus", "continue"]);
+    });
+
+    test("is not held on an idle pane that only reads busy", async () => {
+      // An idle compaction leaves the turn status line painted over the
+      // composer's top rule (jx7aztd). That pane reads busy, but no turn runs
+      // there, and a command held on it would wait for hours.
+      const f = midTurn();
+      f.state.busy = false;
+      f.state.topRule = `✽─Jitterbugging… ───1──4──13${"─".repeat(40)}`;
+      await f.scan([queue[0]]);
+      expect(f.bodies).toEqual(["/model opus"]);
+    });
+
+    test("goes in mid-turn when the sender chose Send anyway", async () => {
+      const f = midTurn();
+      await f.scan([{ ...queue[0], delivery_force: true }]);
+      expect(f.bodies).toEqual(["/model opus"]);
+    });
   });
 
   for (const cached of [true, false]) test.each([
