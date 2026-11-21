@@ -15,7 +15,7 @@
 
 /* Main sits between the lanes: a rail with each target on it. */
 .rpl-main { position: relative; display: flex; align-items: flex-start; gap: 12px; min-width: 0; padding: 10px 0; border-top: 1px solid var(--lw-rule); border-bottom: 1px solid var(--lw-rule); }
-.rpl-main-name { flex: none; width: 44px; padding-top: 4px; font-family: var(--font-mono, inherit); font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink-2); }
+.rpl-main-name { flex: none; width: 52px; padding: 4px 0 0 2px; font-family: var(--font-mono, inherit); font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink-2); }
 .rpl-targets { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; margin: 0; padding: 0; list-style: none; }
 .rpl-target { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--lw-rule); background: var(--lw-card); }
 .rpl-target-link { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; color: inherit; text-decoration: none; min-width: 0; }
@@ -37,6 +37,8 @@
 .rpl-target-ref { color: var(--lw-ink-2); text-decoration: underline; text-underline-offset: 2px; }
 .rpl-waiting { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; max-width: 100%; }
 .rpl-waiting > * { min-width: 0; max-width: 100%; overflow: hidden; }
+.rpl-waiting-session { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sol-blue); text-decoration: none; }
+.rpl-waiting-session:hover { text-decoration: underline; }
 
 /* A station's panel: the pipeline's facts about it, then its recent runs. */
 .rpl-facts { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -45,7 +47,7 @@
 .rpl-fact[data-tone="quiet"] { color: var(--lw-ink-3); }
 .rpl-fact[data-mono] { font-family: var(--font-mono, inherit); font-weight: 500; }
 .rpl-runs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
-.rpl-run { display: grid; grid-template-columns: 62px minmax(0, 1fr) auto auto; gap: 10px; align-items: baseline; padding: 4px 6px; border-radius: 6px; color: inherit; text-decoration: none; font-size: var(--lw-fs-sm); }
+.rpl-run { display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 4px 6px; border-radius: 6px; color: inherit; text-decoration: none; font-size: var(--lw-fs-sm); }
 .rpl-run:hover { background: var(--lw-sunk); }
 .rpl-run-state { font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-3); }
 .rpl-run[data-status="running"] .rpl-run-state { color: var(--lw-person); }
@@ -128,3 +130,40 @@
   .rpl-strip-sum { display: inline; }
   .rpl-strip-target { margin-right: 10px; }
 }
+
+/* Editing the pipeline (pipeline.md PL5): Edit on each lane and station, and one composer under the lane it edits. */
+.rpl-lane-editbtn { margin-left: auto; height: 24px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--lw-rule); background: var(--lw-card); color: var(--lw-ink); font: inherit; font-size: var(--lw-fs-xs); font-weight: 600; cursor: pointer; }
+.rpl-lane-editbtn:hover { border-color: var(--lw-ink-3); }
+.rpl-edit-slot { display: inline-flex; gap: 6px; margin-left: auto; }
+.rpl-edit-slot .rpl-lane-editbtn { margin-left: 0; }
+.rpl-fact-link { text-decoration: none; }
+.rpl-fact-link:hover { text-decoration: underline; }
+.rpl-compose { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; padding: 12px 14px 14px; border: 1px solid color-mix(in srgb, var(--sol-cyan) 40%, var(--lw-rule)); border-radius: 10px; background: var(--lw-card); min-width: 0; }
+.rpl-compose-head { display: flex; align-items: baseline; gap: 10px; }
+.rpl-compose-head .fsp-close { margin-left: auto; }
+.rpl-compose-title { font-size: var(--lw-fs-base); font-weight: 650; color: var(--lw-ink); }
+.rpl-compose-ops { display: flex; flex-wrap: wrap; gap: 4px; }
+.rpl-compose-op { height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--lw-rule); background: transparent; color: var(--lw-ink-2); font: inherit; font-size: var(--lw-fs-xs); font-weight: 600; cursor: pointer; }
+.rpl-compose-op[aria-selected="true"] { color: var(--lw-ink); border-color: color-mix(in srgb, var(--sol-cyan) 60%, transparent); background: color-mix(in srgb, var(--sol-cyan) 10%, transparent); }
+.rpl-compose-op:disabled { opacity: .4; cursor: default; }
+.rpl-compose-form { display: flex; flex-direction: column; gap: 8px; }
+.rpl-field { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 10px; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.rpl-field-top { align-items: start; }
+.rpl-field > span:first-child { font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-3); }
+.rpl-field input, .rpl-field textarea, .rpl-field select, .rpl-inline select { width: 100%; min-width: 0; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--lw-rule); background: var(--lw-paper); color: var(--lw-ink); font: inherit; font-size: var(--lw-fs-sm); }
+.rpl-field textarea { resize: vertical; line-height: 1.45; }
+.rpl-inline { display: flex; gap: 6px; min-width: 0; }
+.rpl-inline select:first-child { width: auto; flex: none; }
+.rpl-mono { font-family: var(--font-mono, inherit) !important; font-size: var(--lw-fs-xs) !important; }
+.rpl-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--lw-sunk); width: max-content; }
+.rpl-seg button { height: 24px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: var(--lw-ink-2); font: inherit; font-size: var(--lw-fs-xs); font-weight: 600; cursor: pointer; }
+.rpl-seg button[aria-checked="true"] { background: var(--lw-card); color: var(--lw-ink); box-shadow: 0 1px 2px color-mix(in srgb, var(--sol-text) 12%, transparent); }
+.rpl-inherited { margin: 0; max-height: 180px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--lw-sunk); color: var(--lw-ink-2); font-size: var(--lw-fs-xs); line-height: 1.5; white-space: pre-wrap; }
+.rpl-compose-preview { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--lw-rule-2); min-width: 0; }
+.rpl-compose-words { font-size: var(--lw-fs-sm); font-weight: 600; color: var(--lw-ink); }
+.rpl-compose-cmd summary { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); cursor: pointer; }
+.rpl-compose-cmd code { display: block; margin-top: 4px; font-family: var(--font-mono, inherit); font-size: var(--lw-fs-2xs); color: var(--lw-ink-2); overflow-wrap: anywhere; }
+.rpl-compose-foot { display: flex; align-items: center; gap: 12px; }
+.rpl-primary { height: 30px; padding: 0 14px; border-radius: 7px; border: 0; background: var(--lw-ink); color: var(--lw-paper); font: inherit; font-size: var(--lw-fs-sm); font-weight: 650; cursor: pointer; }
+.rpl-primary:disabled { opacity: .4; cursor: default; }
+@media (max-width: 640px) { .rpl-field { grid-template-columns: 1fr; gap: 4px; } }

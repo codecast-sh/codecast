@@ -99,7 +99,7 @@ function codecast(): Pipeline {
     return n?.type === "command" ? n.script ?? null : undefined;
   }, BUILTIN_WORKFLOW_TEMPLATES.change);
   const read = (f: string) => fs.readFileSync(path.join(ROOT, f), "utf-8");
-  return { repository: "codecast-sh/codecast", published_at: 0, head_sha: null, device_id: null, change, release: release(lineDeployOf(read(".codecast/line.toml")), ROOT) };
+  return { repository: "codecast-sh/codecast", published_at: 0, head_sha: null, root: null, recent: { paths: [], commits: [], dropped: 0 }, device_id: null, change, release: release(lineDeployOf(read(".codecast/line.toml")), ROOT) };
 }
 
 // A repo that wrote its change flow whole, the shape a team's own flow takes (PR, CI and review side by side, a brief
@@ -159,7 +159,7 @@ function example(): Pipeline {
     const n = g.nodes.get(id);
     return n?.type === "command" ? n.script ?? null : undefined;
   }, EXAMPLE_FLOW);
-  return { repository: "example-org/example-app", published_at: 0, head_sha: null, device_id: null, change, release: release({}, dir) };
+  return { repository: "example-org/example-app", published_at: 0, head_sha: null, root: null, recent: { paths: [], commits: [], dropped: 0 }, device_id: null, change, release: release({}, dir) };
 }
 
 const fixtures = [example(), codecast()];

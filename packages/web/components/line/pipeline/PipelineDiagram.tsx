@@ -12,16 +12,22 @@ import Link from "next/link";
 import { FlowDiagram, type StepPick } from "../widgets/FlowDiagram";
 import { routeTail } from "../../../lib/line/flowDiagram";
 import { FlowStationPanel } from "../widgets/FlowStationPanel";
-import { EntityIdPill } from "../../EntityIdPill";
 import { agoWords, spanWords, laneStationDetails, pipelineStation, stationRuns, WHO_WORDS, type MainTarget, type PipelineLane, type PipelineModel } from "../../../lib/line/pipelineModel";
 import type { AppFlow } from "../../../lib/line/flowPool";
-import type { Pipeline } from "../../../lib/line/pipelineTypes";
+import type { Pipeline, PipelineStation } from "../../../lib/line/pipelineTypes";
 import { runHref } from "../../../lib/decisionLinks";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
+import { useEditWhere } from "../../../hooks/usePipelines";
+import { EditComposer, type ComposerStart } from "./EditComposer";
+import { pipelineCheckout } from "../../../lib/line/pipelineModel";
+import { opsFor, type EditOp } from "../../../lib/line/pipelineEdit";
 import "./pipeline.css";
 
 type LaneName = "change" | "release";
 type Picked = { lane: LaneName; pick: StepPick } | null;
+
+/** A session's title as a person reads it, markup a prompt pasted into it left out; never its id. */
+const sessionTitle = (title: string | null | undefined) => (title ?? "").replace(/<\/?[a-z_][^>]*>/gi, " ").replace(/\s+/g, " ").trim() || "untitled session";
 
 /** One deploy on the Deploys page. */
 const deployHref = (teamId: string | null, deploy: string) => `/deploys?${teamId ? `team=${teamId}&` : ""}deploy=${encodeURIComponent(deploy)}`;
@@ -37,25 +43,32 @@ const TONE_WORDS = { going: "going out", failed: "failed", waiting: "waiting", c
 
 export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, teamId, compact = false }: { model: PipelineModel; pipeline: Pipeline; teamId: string | null; compact?: boolean }) {
   const [picked, setPicked] = useState<Picked>(null);
+  // One edit composed at a time, under the lane it edits; opening it closes a station's panel.
+  const [composing, setComposing] = useState<ComposerStart | null>(null);
+  const where = useEditWhere(compact ? null : pipeline);
   if (compact) return <PipelineStrip model={model} />;
-  const onPick = (lane: LaneName) => (p: StepPick) => setPicked((cur) => (cur?.lane === lane && cur.pick.id === p.id ? null : { lane, pick: p }));
+  const onPick = (lane: LaneName) => (p: StepPick) => { setComposing(null); setPicked((cur) => (cur?.lane === lane && cur.pick.id === p.id ? null : { lane, pick: p })); };
+  const compose = (start: ComposerStart) => { setPicked(null); setComposing(start); };
+  const firstStation = (l: PipelineLane) => l.flow.stations.find((s) => s.main && s.who !== "rule")?.id ?? null;
   const lane = (name: LaneName, l: PipelineLane, head: ReactNode, run: PipelineModel["release"]["run"] = null) => (
     <section className="rpl-lane" data-lane={name} aria-label={name === "change" ? "Every change" : "Every release"}>
       {head}
-      <FlowDiagram flow={l.drawn} diagram={l.diagram} run={run} marks={l.marks} quietRoutes picked={picked?.lane === name ? picked.pick.id : null} onPick={onPick(name)} />
-      {picked?.lane === name ? <StationPanel lane={name} l={l} model={model} pipeline={pipeline} pick={picked.pick} run={run} onClose={() => setPicked(null)} /> : null}
+      <FlowDiagram flow={l.drawn} diagram={l.diagram} run={run} marks={l.marks} quietRoutes picked={picked?.lane === name ? picked.pick.id : null} onPick={onPick(name)}
+        onAdd={(after) => compose({ lane: name, op: "add", station: after ?? firstStation(l), at: after ? "after" : "before" })} />
+      {picked?.lane === name ? <StationPanel lane={name} l={l} model={model} pipeline={pipeline} pick={picked.pick} run={run} onClose={() => setPicked(null)} onEdit={(op, station) => compose({ lane: name, op, station, at: "after" })} /> : null}
+      {composing?.lane === name ? <EditComposer key={`${composing.op}:${composing.station}:${composing.at}`} pipeline={pipeline} start={composing} where={where} recent={pipelineCheckout(pipeline).recent} onClose={() => setComposing(null)} /> : null}
     </section>
   );
   return (
     <div className="rpl">
-      {lane("change", model.change, <LaneHead title="Every change" l={model.change} live={model.change.inFlight ? `${model.change.inFlight} in flight` : null} edit />)}
+      {lane("change", model.change, <LaneHead title="Every change" l={model.change} live={model.change.inFlight ? `${model.change.inFlight} in flight` : null} onEdit={() => compose({ lane: "change", op: "add", station: firstStation(model.change), at: "after" })} />)}
       <MainRail model={model} teamId={teamId} />
-      {lane("release", model.release, <LaneHead title="Every release" l={model.release} live={model.release.run ? "going out" : null} outside={model.release.outside} stuck={model.release.stuck} teamId={teamId} />, model.release.run)}
+      {lane("release", model.release, <LaneHead title="Every release" l={model.release} live={model.release.run ? "going out" : null} outside={model.release.outside} stuck={model.release.stuck} teamId={teamId} onEdit={() => compose({ lane: "release", op: "when", station: firstStation(model.release), at: "after" })} />, model.release.run)}
     </div>
   );
 });
 
-function LaneHead({ title, l, live, outside = null, stuck = null, edit = false, teamId = null }: { title: string; l: PipelineLane; live: string | null; outside?: string | null; stuck?: PipelineModel["release"]["stuck"]; edit?: boolean; teamId?: string | null }) {
+function LaneHead({ title, l, live, outside = null, stuck = null, onEdit, teamId = null }: { title: string; l: PipelineLane; live: string | null; outside?: string | null; stuck?: PipelineModel["release"]["stuck"]; onEdit: () => void; teamId?: string | null }) {
   return (
     <header className="rpl-lane-head">
       <span className="rpl-lane-title">{title}</span>
@@ -67,8 +80,8 @@ function LaneHead({ title, l, live, outside = null, stuck = null, edit = false, 
       {stuck ? <span className="rpl-lane-stuck"><Link href={deployHref(teamId, stuck.deploy)}>{stuck.deploy}</Link> stuck {spanWords(stuck.for)}{stuck.outside ? " · sent outside codecast, never reported live" : ""}</span>
         : outside ? <span className="rpl-lane-outside">going out {outside} · steps not tracked</span>
         : live ? <span className="rpl-lane-live">{live}</span> : null}
-      {/* ct-98678 puts Edit on each station; until then a change to this flow is a sentence in a conversation. */}
-      {edit ? <span className="rpl-lane-edit">change it in a conversation: <code>cast flow edit {l.flow.slug}</code></span> : null}
+      {l.proposals.length ? <span className="rpl-lane-fact" data-tone="own">{l.proposals.length} proposed</span> : null}
+      <button type="button" className="rpl-lane-editbtn" onClick={onEdit} data-pipeline-edit>Edit</button>
     </header>
   );
 }
@@ -112,11 +125,16 @@ function MainRail({ model, teamId }: { model: PipelineModel; teamId: string | nu
 
 /** The sessions whose commits wait on main for a target. */
 function Waiting({ groups }: { groups: MainTarget["groups"] }) {
-  const named = groups.filter((g) => g.session?.short_id);
-  const rest = groups.length - Math.min(named.length, 3);
+  const sessions = groups.filter((g) => g.session);
+  const rest = groups.length - Math.min(sessions.length, 3);
   return (
     <span className="rpl-waiting">
-      {named.slice(0, 3).map((g) => <EntityIdPill key={g.key} shortId={g.session!.short_id!} />)}
+      {/* A session by its title; its id only on hover. */}
+      {sessions.slice(0, 3).map((g) => (
+        <Link key={g.key} href={`/conversation/${g.session!.conversation_id}`} className="rpl-waiting-session" title={g.session!.short_id ?? undefined}>
+          {sessionTitle(g.session!.title)}
+        </Link>
+      ))}
       {rest > 0 ? <span className="rpl-target-how">+{rest}</span> : null}
     </span>
   );
@@ -126,9 +144,11 @@ const OWN_WORDS = { added: "added here", changed: "changed here", inherited: "in
 const RUN_WORDS: Record<string, string> = { running: "running", pending: "waiting", paused: "paused", completed: "done", failed: "failed" };
 
 /** One station open: what it runs (FlowStationPanel), and the pipeline's facts about it: scope, own or inherited, when, recent runs. */
-function StationPanel({ lane, l, model, pipeline, pick, run, onClose }: { lane: LaneName; l: PipelineLane; model: PipelineModel; pipeline: Pipeline; pick: StepPick; run: PipelineModel["release"]["run"]; onClose: () => void }) {
+function StationPanel({ lane, l, model, pipeline, pick, run, onClose, onEdit }: { lane: LaneName; l: PipelineLane; model: PipelineModel; pipeline: Pipeline; pick: StepPick; run: PipelineModel["release"]["run"]; onClose: () => void; onEdit: (op: EditOp, station: string) => void }) {
   const flow = useMemo<AppFlow>(() => ({ ...l.drawn, where: "team", workflowId: null, stationDetails: laneStationDetails(l.flow) }), [l]);
-  const station = pipelineStation(pipeline, lane, pick.id);
+  // The lane's flow holds proposed stations too, so a ghost opens like any station.
+  const station = l.flow.stations.find((s) => s.id === pick.id) ?? pipelineStation(pipeline, lane, pick.id);
+  const proposal = l.proposals.find((x) => (x.edit.op === "add" ? x.edit.id : x.edit.station) === station?.id) ?? null;
   const now = useCoarseNow(60_000);
   const recent = lane === "change" && station ? stationRuns(model.change.runs, station.id) : [];
   return (
@@ -144,8 +164,8 @@ function StationPanel({ lane, l, model, pipeline, pick, run, onClose }: { lane: 
           <span className="rpl-fact" data-mono={station.when?.length ? "" : undefined}>{station.when?.length ? `when ${station.when.join(", ")}` : "always"}</span>
           {lane === "release" && station.runs === null ? <span className="rpl-fact" data-tone="quiet">no command · passes</span> : null}
           {station.waits ? <span className="rpl-fact">waits for the deploy · sends none</span> : null}
-          {/* ct-98678: the station's Edit opens here (an edit drafted as a session's change, pipeline.md PL5). */}
-          <StationEditSlot />
+          {proposal ? <Link href={`/conversation/${proposal.session.id}`} className="rpl-fact rpl-fact-link" data-tone="own">proposed · {sessionTitle(proposal.session.title)}</Link> : null}
+          <StationEditSlot station={station} onEdit={onEdit} />
         </div>
       ) : null}
       {lane === "release" && station?.targets?.length ? (
@@ -159,10 +179,9 @@ function StationPanel({ lane, l, model, pipeline, pick, run, onClose }: { lane: 
         <ul className="rpl-runs" aria-label="Recent runs">
           {recent.map((r) => (
             <li key={r._id}>
-              <Link href={runHref(r._id)} className="rpl-run" data-status={r.status}>
+              <Link href={runHref(r._id)} className="rpl-run" data-status={r.status} title={r.task_short_id ?? undefined}>
                 <span className="rpl-run-state">{RUN_WORDS[r.status] ?? r.status}</span>
                 <span className="rpl-run-title">{r.task_title || "Change"}</span>
-                {r.task_short_id ? <span className="rpl-run-ref">{r.task_short_id}</span> : null}
                 <span className="rpl-run-at">{agoWords(r.updated_at ?? r.created_at, now)}</span>
               </Link>
             </li>
@@ -173,14 +192,21 @@ function StationPanel({ lane, l, model, pipeline, pick, run, onClose }: { lane: 
   );
 }
 
-/** The Edit slot ct-98678 fills: nothing until an edit can be drafted from here. */
-function StationEditSlot() {
-  return null;
+/** A station's edits from its panel (pipeline.md PL5): the one it most likely needs, and a station after it. */
+function StationEditSlot({ station, onEdit }: { station: Pick<PipelineStation, "id" | "prompt" | "runs" | "who">; onEdit: (op: EditOp, station: string) => void }) {
+  const ops = opsFor(station);
+  const first: EditOp = ops.has("guide") ? "guide" : ops.has("run") ? "run" : "when";
+  return (
+    <span className="rpl-edit-slot">
+      <button type="button" className="rpl-lane-editbtn" onClick={() => onEdit(first, station.id)} data-station-edit>Edit</button>
+      <button type="button" className="rpl-lane-editbtn" onClick={() => onEdit("add", station.id)}>Add after</button>
+    </span>
+  );
 }
 
 /** A pipeline as a compact strip (the list's card): each lane its passing path as named steps, main its targets.
  *  Narrower than a strip reads (the card under 440px), each lane folds to one line of figures. */
-function PipelineStrip({ model }: { model: PipelineModel }) {
+export function PipelineStrip({ model }: { model: PipelineModel }) {
   return (
     <div className="rpl-strip">
       <StripLane title="Every change" l={model.change} live={model.change.inFlight ? `${model.change.inFlight} in flight` : null} />

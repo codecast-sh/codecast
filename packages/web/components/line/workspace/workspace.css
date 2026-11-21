@@ -581,6 +581,16 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-routes-fold:hover > .fd-routes, .fd-routes-fold:focus-within > .fd-routes, .fd-routes-fold[data-open] > .fd-routes { display: flex; }
 .fd[data-quiet] .fd-route:not([data-taken]) { color: var(--lw-ink-2); border-color: var(--lw-rule); background: transparent; }
 .fd[data-quiet] .fd-route:not([data-taken]) .fd-route-mark { color: var(--lw-ink-3); }
+/* A proposed edit not live yet (pipeline.md PL5): a ghost of the step, dashed; a proposed skip struck through. The "+" on
+   an arrow proposes a new station there. */
+.fd-step[data-proposed], .fd-seg[data-proposed] { border-style: dashed; border-color: color-mix(in srgb, var(--sol-cyan) 60%, transparent); background: color-mix(in srgb, var(--sol-cyan) 5%, transparent); }
+.fd-step[data-proposed] .fd-step-name { color: var(--lw-ink-2); }
+.fd-step[data-skipped] .fd-step-name { text-decoration: line-through; color: var(--lw-ink-3); }
+.fd-mark[data-mark="proposed"] { height: auto; min-height: 17px; padding: 1px 5px; white-space: normal; line-height: 1.3; color: var(--sol-cyan); background: transparent; border: 1px dashed color-mix(in srgb, var(--sol-cyan) 55%, transparent); max-width: 150px; }
+button.fd-add { position: relative; display: inline-grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; color: var(--lw-ink-3); }
+button.fd-add > span { position: absolute; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; font-size: 12px; font-weight: 700; line-height: 1; color: var(--lw-ink-2); background: var(--lw-card); border: 1px solid var(--lw-rule); opacity: 0; transition: opacity .15s; }
+.fd-cell:hover button.fd-add > span, button.fd-add:focus-visible > span { opacity: 1; }
+button.fd-add:hover > span { color: var(--lw-on-accent); background: var(--sol-cyan); border-color: var(--sol-cyan); }
 .fd-step[data-written] { border-color: color-mix(in srgb, var(--sol-violet) 45%, transparent); }
 .fd-seg-name { margin: -2px 0 0 2px; white-space: nowrap; font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .02em; color: var(--lw-ink-2); }
 .fd-seg-steps { display: flex; align-items: flex-start; }

@@ -13,6 +13,11 @@ import { flowDiagram, type DiagramStep, type FlowDiagramModel, type SideRoute, t
 import type { ShippedFlow } from "./flowPool";
 import { isOpen, sourceWord, targetNow, targetTone, type DeployTargetRow, type TargetTone, type TeamDeployRow } from "../deploys/targets";
 import type { Pipeline, PipelineFlow, PipelineStation, PipelineTarget } from "./pipelineTypes";
+import { applyEdit, editLive, editsOfMessage, editStation, type PipelineEdit } from "./pipelineEdit";
+import { recentFiles } from "@codecast/shared/contracts/pipeline";
+
+/** An edit a session was started to make, not live yet: drawn as a ghost on its lane. */
+export type PendingEdit = { flow: string; edit: PipelineEdit; session: { id: string; title: string } };
 
 /** A run as the pipeline reads it: which flow, where it stands, in which checkout. */
 export type PipelineRun = {
@@ -37,6 +42,8 @@ export type PipelineLane = {
   drawn: ShippedFlow;
   diagram: FlowDiagramModel;
   marks: Record<string, StepMark>;
+  /** Edits proposed and not live yet, drawn in as ghosts. */
+  proposals: PendingEdit[];
   own: number;
   inherited: number;
 };
@@ -109,7 +116,10 @@ function markOf(s: PipelineStation, here: readonly string[], release: boolean): 
   };
 }
 
-function lane(flow: PipelineFlow, here: Map<string, string[]>, release: boolean): PipelineLane {
+function lane(published: PipelineFlow, here: Map<string, string[]>, release: boolean, pending: readonly PendingEdit[] = []): PipelineLane {
+  // Proposals not live yet are drawn in, each marked as the proposal it is.
+  const open = pending.filter((x) => x.flow === published.slug && !editLive(published, x.edit));
+  const flow = open.reduce((f, x) => applyEdit(f, x.edit), published);
   const drawn = drawnFlow(flow);
   const { diagram, shared } = sharedRoutes(flowDiagram(drawn));
   // A station off the passing path (a fix, a brief) is not drawn: what stands there counts on the step whose route leads to it.
@@ -132,8 +142,13 @@ function lane(flow: PipelineFlow, here: Map<string, string[]>, release: boolean)
     const m = markOf(s, counts.get(s.id) ?? [], release);
     marks[s.id] = whole ? { ...m, own: null } : m;
   }
-  const own = flow.stations.filter((s) => s.own !== "inherited").length;
-  return { flow, drawn, diagram, shared, marks, own, inherited: flow.stations.length - own };
+  for (const x of open) {
+    const id = editStation(x.edit);
+    if (!marks[id]) continue;
+    marks[id] = { ...marks[id], proposed: `proposed · ${x.session.title}`, ...(x.edit.op === "skip" ? { skipped: true as const } : {}) };
+  }
+  const own = published.stations.filter((s) => s.own !== "inherited").length;
+  return { flow, drawn, diagram, shared, marks, own, inherited: published.stations.length - own, proposals: open };
 }
 
 /** The fewest steps that must share a route before the lane says it once instead of under each. */
@@ -187,7 +202,7 @@ const stepLabel = (id: string | null | undefined) => (id ? LINE_DEPLOY_STEP_LABE
  * The pipeline with what is on it now. `runs` are the workspace's runs (this repo's change runs are picked out);
  * `targets` and `deploys` are the team's (this repo's are picked out).
  */
-export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], targets: readonly DeployTargetRow[] = [], deploys: readonly TeamDeployRow[] = [], now: number = 0): PipelineModel {
+export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], targets: readonly DeployTargetRow[] = [], deploys: readonly TeamDeployRow[] = [], now: number = 0, pending: readonly PendingEdit[] = []): PipelineModel {
   /** An open deploy that has sat too long without going live, and for how long; null while it is still moving. */
   const stuckFor = (d: TeamDeployRow | null) => {
     if (!d || !now) return null;
@@ -196,7 +211,7 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
   };
   const repo = p.repository.toLowerCase();
   const changeRuns = runs.filter((r) => (r.workflow_slug ?? r.workflow_name) === p.change.slug && runInRepo(r, repo));
-  const change = lane(p.change, changesHere(p.change, changeRuns), false);
+  const change = lane(p.change, changesHere(p.change, changeRuns), false, pending);
   const live = changeRuns.filter((r) => LIVE.has(r.status));
 
   const mine = targets.filter((t) => t.repository.toLowerCase() === repo);
@@ -230,7 +245,7 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
     .map((d) => ({ deploy: d.short_id, for: stuckFor(d)!, outside: !d.steps?.length }))[0] ?? null;
   const here = new Map<string, string[]>();
   if (run?.current_node_id) here.set(run.current_node_id, [open!.short_id]);
-  const release = lane(p.release, here, true);
+  const release = lane(p.release, here, true, pending);
 
   return {
     repository: p.repository,
@@ -288,3 +303,25 @@ export function agoWords(ts: number, now: number): string {
 
 /** One pipeline's own address (pipeline.md PL6). */
 export const pipelineHref = (repository: string) => `/flows/pipeline?repo=${encodeURIComponent(repository)}`;
+
+/** The edits sessions in this repo were started to make: each session's first message opens with its `cast flow edit`
+ *  commands (editSessionMessage). A session ended without shipping them stops proposing. */
+export function pendingEdits(
+  repository: string,
+  sessions: ReadonlyArray<{ id: string; title: string | null | undefined; project_path?: string | null; ended?: boolean }>,
+  firstMessage: (id: string) => string | null | undefined,
+): PendingEdit[] {
+  const out: PendingEdit[] = [];
+  for (const s of sessions) {
+    if (s.ended || !runInRepo({ project_path: s.project_path }, repository)) continue;
+    for (const x of editsOfMessage(firstMessage(s.id))) out.push({ ...x, session: { id: s.id, title: s.title?.trim() || "a new session" } });
+  }
+  return out;
+}
+
+/** The repo's checkout on the machine that publishes its pipeline, and the last changes on its default branch with
+ *  their files (contracts/pipeline `root`, `recent`). Rows published before them read no checkout and no changes. */
+export function pipelineCheckout(p: Pipeline): { root: string | null; device: string | null; recent: Array<{ files: string[] }> | null } {
+  const r = p.recent;
+  return { root: p.root ?? null, device: p.device_id, recent: r?.commits?.length ? r.commits.map((c) => ({ files: recentFiles(r, c) })) : null };
+}

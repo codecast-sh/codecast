@@ -31,7 +31,7 @@ export const PipelineNav = memo(function PipelineNav({ figures, at, open, settli
         {/* What the number counts (For you's label already says it), then the stage's state. */}
         <span className="pn-state">
           {stage !== "decisions" ? <span className="pn-unit">{f.unit}</span> : null}
-          {f.state.map((s, i) => <span key={i} className="pl-word" data-tone={s.tone}><i aria-hidden />{s.words}</span>)}
+          {f.state.map((s, i) => <span key={i} className="pl-word" data-tone={s.tone} title={s.words}><i aria-hidden /><span className="pl-word-t">{s.words}</span></span>)}
         </span>
       </button>
     );

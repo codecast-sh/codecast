@@ -69,7 +69,9 @@ const STATE_MARK: Record<StepState, string> = { idle: "", done: "✓", current: 
  *  `diagram`: the flow's model as the host already shaped it (a pipeline lane says a shared route once), else the flow's own. */
 /** `quietRoutes`: the passing path leads; each step's other ways fold into one "N other ways" that opens on hover or press
  *  (a pipeline, where the path is what a person reads), and a fan-out always shows its branches by name. */
-export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact = false, picked = null, onPick, marks, diagram, quietRoutes = false }: { flow: ShippedFlow; run?: RunLike; compact?: boolean; marks?: Readonly<Record<string, StepMark>>; diagram?: FlowDiagramModel; quietRoutes?: boolean } & Partial<Pick>) {
+/** `onAdd`: the arrow before each passing-path step is a "+" that proposes a station there, after the step before it
+ *  (null: before the first step). */
+export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact = false, picked = null, onPick, marks, diagram, quietRoutes = false, onAdd }: { flow: ShippedFlow; run?: RunLike; compact?: boolean; marks?: Readonly<Record<string, StepMark>>; diagram?: FlowDiagramModel; quietRoutes?: boolean; onAdd?: (afterId: string | null) => void } & Partial<Pick>) {
   const model = useMemo(() => diagram ?? flowDiagram(flow), [diagram, flow]);
   const states = useMemo(() => stepStates(model, run), [model, run]);
   const pick: Pick = { picked, onPick };
@@ -88,7 +90,9 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
   const cell = (s: DiagramStep, i: number, lead: boolean) => (
     <li key={s.id} className="fd-cell" data-rail={rail(i)} data-drop={lastReturn >= 0 && i > hubAt && (folded(s) ? returnsTo(s, railTo) : dropsToRail(s, railTo)) ? "" : undefined} data-hub={i === hubAt ? "" : undefined}>
       <div className="fd-cell-main">
-        {lead ? <span className="fd-arrow" aria-hidden /> : null}
+        {lead ? (onAdd && !compact
+          ? <button type="button" className="fd-arrow fd-add" aria-label={`Add a station before ${s.label}`} title={`Add a station before ${s.label}`} onClick={() => onAdd(model.steps[i - 1]?.id ?? null)} data-fd-add={s.id}><span aria-hidden>+</span></button>
+          : <span className="fd-arrow" aria-hidden />) : null}
         {folded(s) ? <Step step={{ ...s, side: foldedRoutes(s) }} state={states.get(s.id) ?? "idle"} compact={compact} run={run} pick={pick} fold={{ count: s.inner.length, words: s.kind === "parallel" ? "at once" : "steps", toggle: () => toggle(s.id) }} />
           : s.kind === "parallel" ? <Segment step={s} states={states} compact={compact} run={run} pick={pick} parallel onFold={quietRoutes ? undefined : () => toggle(s.id)} />
           : s.kind === "segment" && s.inner.length > 1 ? <Segment step={s} states={states} compact={compact} run={run} pick={pick} onFold={() => toggle(s.id)} />
@@ -141,7 +145,7 @@ function Segment({ step, states, compact, run, pick, parallel = false, onFold }:
   // Quiet (a pipeline), the stacked branches say they run side by side; the frame keeps only its name.
   const name = <>{step.label}{parallel && !quiet ? <span className="fd-seg-par"> · {step.inner.length} side by side</span> : null}{written(step) ? <span className="fd-seg-tag">written here</span> : null}</>;
   return (
-    <div className="fd-seg" data-own={mark?.own ?? undefined} data-state={state} data-parallel={parallel ? "" : undefined} data-written={written(step) ? "" : undefined} data-picked={pick.picked === step.id ? "" : undefined} title={slotTitle(step)}>
+    <div className="fd-seg" data-own={mark?.own ?? undefined} data-proposed={mark?.proposed ? "" : undefined} data-skipped={mark?.skipped ? "" : undefined} data-state={state} data-parallel={parallel ? "" : undefined} data-written={written(step) ? "" : undefined} data-picked={pick.picked === step.id ? "" : undefined} title={slotTitle(step)}>
       {pick.onPick
         ? <button type="button" className="fd-seg-name" aria-pressed={pick.picked === step.id} onClick={() => pick.onPick!({ id: step.id, kind: step.kind })} data-fd-pick={step.id}>{name}</button>
         : <div className="fd-seg-name">{name}</div>}
@@ -172,7 +176,7 @@ function Step({ step, state, compact, run, pick, fold, markId }: { step: Diagram
       {state !== "idle" ? <span className="fd-dot" aria-label={state}>{STATE_MARK[state]}</span> : null}
     </>
   );
-  const attrs = { className: "fd-step", "data-kind": step.kind, "data-own": mark?.own ?? undefined, "data-passes": mark?.passes ? "" : undefined, "data-state": state, "data-folded": fold ? "" : undefined, "data-slot": step.slot?.filled === "empty" ? "" : undefined, "data-written": written(step) ? "" : undefined, title: slotTitle(step) ?? `${step.label}: ${WHO[step.kind].word}` };
+  const attrs = { className: "fd-step", "data-kind": step.kind, "data-own": mark?.own ?? undefined, "data-passes": mark?.passes ? "" : undefined, "data-proposed": mark?.proposed ? "" : undefined, "data-skipped": mark?.skipped ? "" : undefined, "data-state": state, "data-folded": fold ? "" : undefined, "data-slot": step.slot?.filled === "empty" ? "" : undefined, "data-written": written(step) ? "" : undefined, title: slotTitle(step) ?? `${step.label}: ${WHO[step.kind].word}` };
   return (
     <div className="fd-step-wrap">
       {fold
@@ -224,12 +228,13 @@ const OWN_WORD: Record<NonNullable<StepMark["own"]>, string> = { added: "added",
 function MarkRow({ mark, compact = false }: { mark: StepMark; compact?: boolean }) {
   const own = mark.own ? <span className="fd-mark" data-mark="own" title={mark.changed?.join(", ") || undefined}>{OWN_WORD[mark.own]}</span> : null;
   const here = mark.here ? <span className="fd-mark" data-mark="here" title={mark.hereNames?.join("\n") || undefined}>{mark.here} here</span> : null;
-  if (compact) return here || own ? <div className="fd-marks">{here}{own}</div> : null;
-  if (!own && !here && !mark.when && !mark.passes && !mark.varies && !mark.waits) return null;
+  const proposed = mark.proposed ? <span className="fd-mark" data-mark="proposed" title={mark.proposed}>{mark.skipped ? "skip " : ""}{mark.proposed}</span> : null;
+  if (compact) return here || own || proposed ? <div className="fd-marks">{here}{proposed ?? own}</div> : null;
+  if (!own && !here && !proposed && !mark.when && !mark.passes && !mark.varies && !mark.waits) return null;
   return (
     <div className="fd-marks">
-      {here}
-      {own}
+      {proposed}
+      {proposed ? null : own}
       {mark.when ? <span className="fd-mark" data-mark="when" title={`Runs only when a change touches ${mark.when}`}>{mark.when}</span> : null}
       {mark.passes ? <span className="fd-caption">no command</span> : null}
       {mark.varies ? <span className="fd-mark">varies by target</span> : null}
