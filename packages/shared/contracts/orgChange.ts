@@ -136,6 +136,9 @@ export type OrgLogEffects = {
   rows_moved?: Array<{ table: "tasks" | "plans" | "docs"; id: string }>;
   /** A role seated on a session that already ran. */
   seat?: { conversation_id: string; short_id: string; previous_title?: string; kept?: boolean };
+  /** A fresh restart retired this standing session for a new one. It kills
+   *  the old session, so the history cannot undo it. */
+  restarted_fresh?: { previous: { conversation_id: string; short_id: string } };
 };
 
 export type OrgLogRow = {

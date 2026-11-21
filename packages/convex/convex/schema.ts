@@ -6244,6 +6244,8 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_workspace", ["workspace"])
     .index("by_short_id", ["short_id"])
+    // A fresh role restart moves projects off the seat it retires.
+    .index("by_default_session", ["default_session_id"])
     // Trial projects that start their own runs (lineTrial.dispatch).
     .index("by_trial_dispatch_cap", ["line_trial.dispatch.cap_usd"])
     // Trial projects (lineTrial.priceRunsTick prices their runs).

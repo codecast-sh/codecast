@@ -2,7 +2,7 @@ import { internalMutation, mutation, query } from "./functions";
 import { roleRunner } from "./lib/seatPlace";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
+import { applyCancel, applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, patchTask, ensureRoleEventTriggers, insertTask } from "./agentTasks";
 import { handRoleTriggersToRunner, mayRewriteTrigger } from "./lib/agentTaskRows";
 import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
@@ -1214,7 +1214,8 @@ export async function performProvisionRole(
 // `fresh` always starts a new session: a project's session is never seated.
 // `host_user_id` runs and bills the new session when it is not the caller (a
 // restart keeps the seat on its runner); the caller is still who is authorized.
-type ProvisionRoleArgs = { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string; fresh?: boolean; host_user_id?: Id<"users"> };
+// `target_device_id` places a new session on that machine.
+type ProvisionRoleArgs = { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string; fresh?: boolean; host_user_id?: Id<"users">; target_device_id?: string };
 
 async function performProvisionRoleCore(
   ctx: any,
@@ -1241,6 +1242,7 @@ async function performProvisionRoleCore(
     project_path: args.project_path ?? adopt?.project_path ?? undefined,
     model: args.model,
     agent_type: agentType as any,
+    target_device_id: args.target_device_id,
     role: { _id: role._id, bootstrap, adopt, announce: adopt ? args.announce : undefined },
   });
   patch.anchor_id = provisioned.anchor_id;
@@ -1796,9 +1798,13 @@ async function performResumeRoleCore(ctx: any, userId: Id<"users">, args: { role
 // conversation instead, seeded the way a first standing session is, and
 // retires the old one: its routines cancelled, its anchor decommissioned, its
 // seat markers cleared, and its thread kept as the role's previous standing
-// session. The new session runs where the old one ran (its runner, not the
-// caller), and a project whose canonical session was the old seat points at
-// the new one.
+// session. The new session runs where the old one ran (its runner and its
+// machine, not the caller's), keeps the old seat's Slack channels and its
+// check's tuning (or its cancel), and a project whose canonical session was
+// the old seat points at the new one. A fresh restart cannot be undone from
+// the org history: the old session is already killed.
+const FRESH_SEAT_GRACE_MS = 10 * 60_000;
+
 export async function performRestartRole(ctx: any, userId: Id<"users">, args: { role_id: string; fresh?: boolean }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const conv = await standingConversationOf(ctx, role);
@@ -1808,13 +1814,30 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
     return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id };
   }
   if (role.status === "retired") throw new Error("That role is retired");
+  // A fresh seat would start its routines and opening as if the role ran.
+  if (role.status === "paused") throw new Error(`@${role.handle} is paused: resume it first (cast role resume @${role.handle}), then restart it fresh`);
+  const shortOf = (c: any) => c.short_id ?? String(c._id).slice(0, 7);
+  // A second press: the seat a fresh restart started moments ago, before it
+  // said anything, is already the fresh session.
+  if (role.previous_standing_conversation_id && String(role.previous_standing_conversation_id) !== String(conv._id)
+    && !conv.message_count && Date.now() - (conv.started_at ?? 0) < FRESH_SEAT_GRACE_MS) {
+    const prev = await ctx.db.get(role.previous_standing_conversation_id);
+    return { role_id: role._id, conversation_id: conv._id, short_id: shortOf(conv), fresh: true, already_fresh: true, previous_conversation_id: role.previous_standing_conversation_id, previous_short_id: prev ? shortOf(prev) : undefined };
+  }
+  // The new seat is hosted by the old seat's runner, who must still be on the team.
+  if (role.scope_type === "team" && role.team_id) {
+    const member = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", conv.user_id).eq("team_id", role.team_id)).first();
+    if (false) throw new Error(`${personName(await ctx.db.get(conv.user_id))}, who runs @${role.handle}'s seat, is no longer on the team: run cast role move @${role.handle} on a team member's machine first, then restart it fresh`);
+  }
   return withOrgChange(ctx, userId, { kind: "adopt" }, async () => {
     const now = Date.now();
     const anchor = await ctx.db.get(role.anchor_id);
-    const previous = { conversation_id: String(conv._id), short_id: conv.short_id ?? String(conv._id).slice(0, 7) };
-    await noteOrgChange(ctx, userId, whereOfRole(role), { kind: "adopt", subject: roleSubject(role), before: { standing_session: previous } });
+    const previous = { conversation_id: String(conv._id), short_id: shortOf(conv) };
+    await noteOrgChange(ctx, userId, whereOfRole(role), { kind: "adopt", subject: roleSubject(role), before: { standing_session: previous }, effects: { restarted_fresh: { previous } } });
+    const oldRoutine = await findRoleRoutineInAnyStatus(ctx, role, conv);
+    const channels: any[] = anchor ? await ctx.db.query("anchor_channels").withIndex("by_anchor", (q: any) => q.eq("anchor_id", anchor._id)).collect() : [];
     await cancelTasksOriginatingFrom(ctx, conv._id, now);
-    if (anchor && anchor.status !== "decommissioned") await decommissionAnchorRow(ctx, anchor);
+    if (anchor && anchor.status !== "decommissioned") await decommissionAnchorRow(ctx, anchor, { keepChannels: true });
     await ctx.db.patch(conv._id, { standing_role_id: undefined, anchor_id: undefined, acting_user_id: undefined, updated_at: now });
     await ctx.db.patch(role._id, { previous_standing_conversation_id: conv._id, updated_at: now });
     const provisioned = await performProvisionRole(ctx, userId, {
@@ -1825,16 +1848,30 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
       agent_type: BACKENDS.has(conv.agent_type) ? conv.agent_type : undefined,
       fresh: true,
       host_user_id: conv.user_id,
+      target_device_id: conv.owner_device_id ?? undefined,
     });
-    if (provisioned.conversation_id) {
-      const inBoundary: any[] = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", boundaryKey(role))).collect();
-      const inScope = await Promise.all((role.scope?.project_ids ?? []).map((id: any) => ctx.db.get(id)));
-      const repointed = new Set<string>();
-      for (const project of [...inBoundary, ...inScope]) {
-        if (!project || repointed.has(String(project._id)) || String(project.default_session_id ?? "") !== String(conv._id)) continue;
-        repointed.add(String(project._id));
-        await ctx.db.patch(project._id, { default_session_id: provisioned.conversation_id });
+    for (const ch of channels) await ctx.db.patch(ch._id, { anchor_id: provisioned.anchor_id });
+    const standing = provisioned.conversation_id ? await ctx.db.get(provisioned.conversation_id) : null;
+    const newRoutine = standing ? await findRoleRoutineInAnyStatus(ctx, role, standing) : null;
+    if (oldRoutine && newRoutine) {
+      // S25: a check the person cancelled stays cancelled, one they paused stays paused.
+      if (!isLiveTrigger(oldRoutine)) await applyCancel(ctx, newRoutine);
+      else {
+        const interval = oldRoutine.interval_ms ?? newRoutine.interval_ms;
+        await patchTask(ctx, newRoutine, {
+          interval_ms: interval,
+          run_at: interval ? now + interval : newRoutine.run_at,
+          precheck: oldRoutine.precheck,
+          role_focus: oldRoutine.role_focus,
+          tune_why: oldRoutine.tune_why,
+          tuned_at: oldRoutine.tuned_at,
+        });
+        if (oldRoutine.status === "paused") await applyPause(ctx, (await ctx.db.get(newRoutine._id))!);
       }
+    }
+    if (provisioned.conversation_id) {
+      const pointing: any[] = await ctx.db.query("projects").withIndex("by_default_session", (q: any) => q.eq("default_session_id", conv._id)).collect();
+      for (const project of pointing) await ctx.db.patch(project._id, { default_session_id: provisioned.conversation_id });
     }
     return { role_id: role._id, conversation_id: provisioned.conversation_id, short_id: provisioned.short_id, fresh: true, previous_conversation_id: conv._id, previous_short_id: previous.short_id };
   });
