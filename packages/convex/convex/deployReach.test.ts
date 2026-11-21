@@ -109,6 +109,17 @@ describe("a merged pull request's reach", () => {
     expect((await w.reach("acme/app#12")).targets[0]).toMatchObject({ state: "rolled_back", deploy: { short_id: "dp-3" }, now: { short_id: "dp-9" } });
   });
 
+  test("a target that names no paths says nothing beside targets that do (Union's line-profile apps beside production)", async () => {
+    const w = await world();
+    w.t.deploy_targets.push({ ...w.t.deploy_targets[0], _id: "tgt_ops", name: "ops", paths: [] });
+    await w.mark("web", 4, "live", NOW - 4_000);
+    const r = await w.reach("acme/app#12");
+    expect([r.state, r.targets.map((x: any) => x.target)]).toEqual(["live", ["web"]]);
+    // In a repository whose targets name no paths, every target ships every change.
+    for (const t of w.t.deploy_targets) t.paths = [];
+    expect((await w.reach("acme/app#12")).targets.map((x: any) => x.target).sort()).toEqual(["api", "ops", "web"]);
+  });
+
   test("with no files on the row, the merge commit's files decide the targets", async () => {
     const w = await world();
     w.t.pull_requests[0].files = undefined;

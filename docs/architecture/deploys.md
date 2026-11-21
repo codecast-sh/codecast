@@ -486,6 +486,10 @@ follow-ups lives in its `.codecast/deploy.toml`, not in the skill.
 A merged pull request (`owner/repo#N`) or a commit on main (`owner/repo@sha`)
 reads its reach through `deployReach.get`: for each target whose paths the
 change touches (the pull request's files, else its merge commit's), one of
+the states below. A target that names no paths ships every change only in a
+repository whose targets name none; beside targets that name theirs (Union's
+production beside its line-profile apps) it is left out, since it cannot say
+what a change touches.
 
 | State | When |
 |---|---|

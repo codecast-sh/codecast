@@ -28,8 +28,12 @@ async function reachOf(ctx: any, userId: any, repository: string, change: ReachC
     if (!places.has(sha)) places.set(sha, (await commitBySha(ctx, repository, sha))?.main_at ?? null);
     return places.get(sha)!;
   };
+  // A target that names no paths ships "every path" only in a repository whose targets name none: beside targets that
+  // say what they ship (Union's production beside its line-profile apps), it says nothing about what a change touches.
+  const someNamePaths = rows.some((t) => t.paths.length > 0);
   const targets: Array<{ target: string; deploys: ReachDeploy[] }> = [];
   for (const t of rows) {
+    if (someNamePaths && t.paths.length === 0) continue;
     if (!access.has(t.workspace)) access.set(t.workspace, await workspaceGrantsAccess(ctx, userId, t.workspace));
     if (!access.get(t.workspace) || !commitTouchesTarget(t.paths, files)) continue;
     // Reach reads back to the first live deploy that held the change; an older one only names which deploy took it out.
