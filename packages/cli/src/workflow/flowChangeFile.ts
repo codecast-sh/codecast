@@ -16,11 +16,14 @@ export type FrozenChange = {
   only?: string[];
   /** The commit message title the change was frozen under. */
   title?: string;
+  /** The commit the change sits on: the fetched upstream it was replayed onto, else the checkout's HEAD. */
   base: string;
   tip: string;
   /** Origin's tip of the branch when the change was last frozen, if origin has it: origin holds a fix only once it
    *  moves off this, so a copy pushed before a local rebase never replaces the change. */
   remote_tip?: string;
+  /** Set when replaying onto upstream conflicted: the change stays on HEAD, behind this upstream commit, and these paths conflict. */
+  behind?: { upstream: string; conflicts: string[] };
   branch: string;
   worktree: string;
   paths: string[];

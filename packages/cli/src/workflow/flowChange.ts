@@ -2,7 +2,9 @@
 // session in a shared checkout leaves its edits uncommitted beside everyone
 // else's; the flow runs on a commit of exactly that session's files, made from
 // the frozen tree the way `cast ship checkout` makes its commits, on a branch
-// of its own, so nothing in the shared tree moves.
+// of its own, so nothing in the shared tree moves. The commit is built on HEAD,
+// the base its frozen content grew from, then replayed onto the freshly
+// fetched upstream, so every stage tests the change on what it would land on.
 //
 // Every file the session wrote goes in, including one another session also
 // wrote after it (attribution is per file, so that file carries the other
@@ -10,9 +12,10 @@
 // wrote would run the flow on part of its change, which is worse than carrying
 // a neighbour's edit the change names.
 import { buildCommits } from "../land/commitGroups.js";
+import { isAncestor, replayOnto } from "../land/replay.js";
 import { defaultMessage, freezeAndAttribute, upstreamRef } from "../land/shipCheckout.js";
 import type { SessionEdits } from "../land/attribute.js";
-import { git } from "../wipSnapshot.js";
+import { git, gitTry } from "../wipSnapshot.js";
 import type { FrozenChange } from "./flowChangeFile.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 
@@ -41,6 +44,8 @@ async function lastCommitTimes(root: string, paths: string[]): Promise<Map<strin
 export async function previewSessionChange(root: string, session: string, only?: ReadonlyArray<string> | null) {
   // Without an upstream, HEAD stands in: stale copies are still read from its history.
   const upstream = await upstreamRef(root).catch(() => "HEAD");
+  // Fetched first, as a ship plan fetches, so the stale-copy guard and the replay read upstream as it is now; offline, as last fetched.
+  if (upstream !== "HEAD") await gitTry(root, ["fetch", "--quiet", upstream.split("/")[0], upstream.split("/").slice(1).join("/")]);
   const { frozen, attribution, credentials, stale } = await freezeAndAttribute(root, upstream);
   const heldWhy = (p: string) => credentials.get(p) ?? (stale.has(p) ? `a stale copy: ${stale.get(p)!.reason}` : undefined);
   const mine = attribution.sessions.find((s) => sessionMatches(s, session));
@@ -56,22 +61,35 @@ export async function previewSessionChange(root: string, session: string, only?:
   const shared = paths
     .map((p) => ({ path: p, also: attribution.sessions.filter((s) => s !== mine && inDiff(s, p)).map(idOf) }))
     .filter((s) => s.also.length);
-  return { frozen, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held };
+  return { frozen, upstream, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held };
 }
 
 /**
  * Commit the files `session` wrote, at their frozen content, on top of the
- * checkout's HEAD, and point `branch` at it. The shared tree, its index and
- * HEAD are untouched. Throws when the session wrote nothing that is changed.
+ * checkout's HEAD (the base their content grew from, so the diff reverts
+ * nothing), then replay that onto the freshly fetched upstream with the
+ * checkout's own unlanded commits, as a ship does, and point `branch` at the
+ * result. When the replay conflicts the branch stays on the HEAD-based commit
+ * and the change records it is `behind`, for a later stage to resolve. The
+ * shared tree, its index and HEAD are untouched. Throws when the session wrote
+ * nothing that is changed.
  */
 export async function freezeSessionChange(root: string, session: string, opts: { branch: string; worktree: string; title?: string | null; only?: ReadonlyArray<string> | null }): Promise<FrozenChange> {
-  const { frozen, session: id, conversation, paths, shared, held } = await previewSessionChange(root, session, opts.only);
+  const { frozen, upstream, session: id, conversation, paths, shared, held } = await previewSessionChange(root, session, opts.only);
   if (!paths.length) throw new Error(`Session ${id} wrote nothing here that can go in a change${held.length ? ` (held: ${held.map((h) => `${h.path}, ${h.why}`).join("; ")})` : ""}`);
-  const { tip } = await buildCommits(root, frozen, [{ message: defaultMessage(opts.title ?? null, paths), paths }]);
+  const { tip: onHead } = await buildCommits(root, frozen, [{ message: defaultMessage(opts.title ?? null, paths), paths }]);
+  let [base, tip] = [frozen.base, onHead];
+  let behind: FrozenChange["behind"];
+  const upstreamSha = upstream === "HEAD" ? null : await gitTry(root, ["rev-parse", `${upstream}^{commit}`]);
+  if (upstreamSha && !(await isAncestor(root, upstreamSha, frozen.base))) {
+    const replayed = await replayOnto(root, upstreamSha, onHead, upstreamSha).catch((err: Error) => ({ ok: false as const, conflicts: [] as string[], reason: err.message }));
+    if (replayed.ok) [base, tip] = [upstreamSha, replayed.tip];
+    else behind = { upstream: upstreamSha, conflicts: replayed.conflicts };
+  }
   await git(root, ["update-ref", `refs/heads/${opts.branch}`, tip]);
   return {
-    source: "session", session: id, ...(conversation ? { conversation } : {}), base: frozen.base, tip, branch: opts.branch, worktree: opts.worktree, paths, shared, held,
-    ...(opts.only?.length ? { only: [...opts.only] } : {}), ...(opts.title ? { title: opts.title } : {}),
+    source: "session", session: id, ...(conversation ? { conversation } : {}), base, tip, branch: opts.branch, worktree: opts.worktree, paths, shared, held,
+    ...(behind ? { behind } : {}), ...(opts.only?.length ? { only: [...opts.only] } : {}), ...(opts.title ? { title: opts.title } : {}),
   };
 }
 
