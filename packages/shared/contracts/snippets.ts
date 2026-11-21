@@ -1161,9 +1161,9 @@ export const DECIDE_SNIPPET_END = "<!-- /codecast-decide -->";
 export const DECIDE_SNIPPET = `
 ## Asking for a decision
 
-\`cast decide\` queues a question the human clears in one sitting, so unlike asking inline (in prose or your harness's question tool) it does not stop them mid-thought. It still costs them an answer, so ask only when it is theirs: intent nothing written settles, a fact only they hold, money beyond the run's budget, or an irreversible change whose mistake reaches many people. Decide the rest and say what you chose. What more reading answers, a status update, a probe or test, or deleting data the system rebuilds or exists to discard is never a card.
+\`cast decide\` queues a question, so unlike an inline ask it does not stop the human mid-thought. Each still costs an answer, so ask only when it is theirs: intent nothing written settles, a fact only they hold, money beyond the run's budget, or an irreversible change whose mistake hits many. Decide the rest and say what you chose. Never a card: what reading answers, a status update, a probe or test, or deleting disposable or rebuildable data.
 
-First check that no earlier card (\`cast decide ls\`), ruling or project instruction answers it: an answer given is not asked again. \`--category production|billing|data|access|external|product|limit\` makes a card a person's alone; without one it is \`review\`, open to a granted role.
+Never re-ask what an earlier card (\`cast decide ls\`), ruling or project instruction answered. \`--category production|billing|data|access|external|product|limit\` makes a card a person's alone; else it is \`review\`, open to a granted role.
 
 \`\`\`bash
 cast decide "<one question>" \\

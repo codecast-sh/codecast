@@ -125,6 +125,16 @@ describe("a trial project's gate is its station's decision, in the trial's stack
     expect(tables.trial_cards[0].decision_id).toBe(posted.id);
   });
 
+  test("the gate sets who may answer the station's post it adopts: its declared category, else a person", async () => {
+    for (const [declared, expected] of [[undefined, "unknown"], ["production", "production"]] as const) {
+      const { ctx, tables } = seed();
+      station(tables);
+      await askCore(ctx, { userId: HOST }, { session_id: "sess-station", question: "Ship it?", options: [{ label: "Drop" }, { label: "Approve" }] });
+      await pause(ctx, "proposal_gate", proposalChoices, { asker_session_id: "jx7stat", ...(declared ? { category: declared } : {}) });
+      expect(tables.session_decisions[0].category).toBe(expected);
+    }
+  });
+
   test("a station's report and option pages get the trial's page password; a page already gated keeps its own", async () => {
     const { ctx, tables } = seed();
     station(tables);

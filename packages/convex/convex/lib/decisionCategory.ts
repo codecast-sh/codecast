@@ -2,11 +2,12 @@
 // (docs/architecture/decisions-as-documents.md D1).
 //
 // A category decides who may answer. The open categories may be delegated to a
-// role under a grant; the protected ones and `limit` are always held by a
-// person. The asker names the category, because only the asker knows whose
-// call the answer is: card text describes the situation, not who should
-// answer it. `unknown` is read on older rows only: the server never assigns
-// it, and a person holds a row that carries it.
+// role under a grant; the protected ones, `limit` and `unknown` are always held
+// by a person. The asker names the category, because only the asker knows
+// whose call the answer is: card text describes the situation, not who should
+// answer it. `unknown` is the server's own value, never an asker's: a decision
+// a workflow run asks of a person (a gate, the card a gate adopts, a failure
+// gate) that declares no category, and the admins' areas card.
 
 export const OPEN_CATEGORIES = ["approach", "scope", "priority", "retry", "review", "allocation"] as const;
 export const PROTECTED_CATEGORIES = ["production", "billing", "data", "access", "external", "product"] as const;
@@ -36,7 +37,14 @@ export function isHumanOnlyCategory(category: string | undefined): boolean {
 
 // The assignment (D1): the asker's proposal from the vocabulary stands. No
 // proposal, or one outside the vocabulary (kept in category_proposed by the
-// caller), is `review`, which a role may answer under a grant.
-export function assignCategory(proposed: string | undefined): DecisionCategory {
-  return isDecisionCategory(proposed) && proposed !== "unknown" ? proposed : "review";
+// caller), is the fallback: `review`, which a role may answer under a grant,
+// for an agent's own card; `unknown`, which a person holds, for a run's.
+export function assignCategory(proposed: string | undefined, fallback: "review" | "unknown" = "review"): DecisionCategory {
+  return isDecisionCategory(proposed) && proposed !== "unknown" ? proposed : fallback;
+}
+
+// A decision a workflow run asks (its gate, the card its gate adopts, a failure
+// gate): the category the flow declares, else a person's.
+export function runCategory(declared: string | undefined): DecisionCategory {
+  return assignCategory(declared, "unknown");
 }

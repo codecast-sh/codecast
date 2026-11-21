@@ -6,7 +6,8 @@ import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { killConversation } from "./conversations";
-import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, userMayRead, withdrawCore, GATE_PRESENT_AGAIN, type AnsweredBy } from "./sessionDecisions";
+import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, refreshHolder, userMayRead, withdrawCore, GATE_PRESENT_AGAIN, type AnsweredBy } from "./sessionDecisions";
+import { runCategory } from "./lib/decisionCategory";
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, costParts, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
@@ -253,10 +254,16 @@ export async function pauseAtGateCore(
       workflow_run_id: args.run_id,
       gate_node_id: args.node_id,
       blocking: true,
+      // The gate, not its station, decides who may answer: the category the flow declares on it, else a person.
+      category: runCategory(args.category),
       ...(task ? { task_id: task._id, station: task.status_id ?? task.status } : {}),
       ...(stackRow ? await joinStack(ctx, stackRow, own, now) : {}),
       updated_at: now,
     });
+    if (own.status === "pending") {
+      const adopted = await ctx.db.get(own._id);
+      if (adopted) await refreshHolder(ctx, adopted as any, now);
+    }
     // The session's options in its own order, each keyed to the edge it names (an answer routes by option index).
     const choices = gateMirror(own.options, args.choices);
     const answered = own.status === "answered" ? { gate_response: gateResponseOf(choices[own.answer_index ?? -1]?.key, own.answer_text, own.options[own.answer_index ?? -1]?.label), status: "running" as const } : {};

@@ -10,7 +10,7 @@ policies, and binds it to the task and station it blocks.
 
 ```
 kind?               "single" | "multi" | "rank" | "form"     default single
-category?           string   from the vocabulary below (the asker's proposal, else review)
+category?           string   from the vocabulary below (the asker's proposal, else review; a run's, else unknown)
 category_proposed?  string
 doc_id?             Id<docs>  rich body (markdown doc); report_slug stays for a published page
 options[i]          + body_md?, evidence?: { label, url }[], cost?: string, risk?: string, page_slug?: string
@@ -47,14 +47,19 @@ decision_grants    role_id, category, scope_key: string ("role:<id>" | "project:
 
 Vocabulary: `approach`, `scope`, `priority`, `retry`, `review`, `allocation`,
 and the protected set `production`, `billing`, `data`, `access`, `external`,
-`product`, plus `limit` (raising a cap). Protected and `limit` are always human
-held; the open six may be answered by a role under a grant. The asker's
-proposal (`cast decide --category`) stands, because only the asker knows whose
-call the answer is: card text describes the situation, not who should answer
-it. No proposal, or one outside the vocabulary, is `review`. A `--run` card
-runs a command in the person's name, so the server sets it to `access` unless
-the asker proposed another protected category. `unknown` is never assigned; a
-row that carries it is human held.
+`product`, plus `limit` (raising a cap) and `unknown`. Protected, `limit` and
+`unknown` are always human held; the open six may be answered by a role under
+a grant. The asker's proposal (`cast decide --category`) stands, because only
+the asker knows whose call the answer is: card text describes the situation,
+not who should answer it. No proposal, or one outside the vocabulary, is
+`review`, so a `review` grant covers every agent card asked without a
+category and the change flow's Ship cards, whose gate declares `review`:
+granting `review` grants both. A decision a workflow run asks of a person (a
+gate's own ask, a failure gate, a card one of its stations posts) falls back
+to `unknown`, and a gate that adopts a station's card sets it to the category
+the gate declares, else `unknown`; an agent cannot propose `unknown`. A `--run`
+card runs a command in the person's name, so the server sets it to `access`
+unless the asker proposed another protected category.
 
 ## D2. The race
 
