@@ -3712,6 +3712,7 @@ export const getTeamsForCLI = query({
           icon: team.icon,
           icon_color: team.icon_color,
           features: team.features,
+          default_flow: team.default_flow ?? null,
           role: m.role,
           visibility: currentMembershipVisibility(m),
         };

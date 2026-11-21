@@ -645,6 +645,7 @@ import type * as pendingMessageWrites from "../pendingMessageWrites.js";
 import type * as pendingMessages from "../pendingMessages.js";
 import type * as permissionRules from "../permissionRules.js";
 import type * as permissions from "../permissions.js";
+import type * as pipelines from "../pipelines.js";
 import type * as planLog from "../planLog.js";
 import type * as planTaskProjectBackfill from "../planTaskProjectBackfill.js";
 import type * as planTemplates from "../planTemplates.js";
@@ -1462,6 +1463,7 @@ declare const fullApi: ApiFromModules<{
   pendingMessages: typeof pendingMessages;
   permissionRules: typeof permissionRules;
   permissions: typeof permissions;
+  pipelines: typeof pipelines;
   planLog: typeof planLog;
   planTaskProjectBackfill: typeof planTaskProjectBackfill;
   planTemplates: typeof planTemplates;

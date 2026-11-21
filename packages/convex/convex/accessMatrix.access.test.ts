@@ -93,6 +93,8 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "teamKit.webListTeamKitItems": () => [{}],
   // One team's deploy targets; a target is always a team's, so only the team placements exist.
   "deployTargets.view": (ids) => [{ team_id: ids.T }, { team_id: ids.O }],
+  // One team's pipelines (pipeline.md PL6), asked of both teams; a pipeline is always a team's.
+  "pipelines.forTeam": (ids) => [{ team_id: ids.T }, { team_id: ids.O }],
   // One team's newest deploys across its targets, asked of both teams.
   "deployRefs.recentForTeam": (ids) => [{ team_id: ids.T }, { team_id: ids.O }],
   "ingest.searchGroups": (ids) => listArgs(ids).map((a) => ({ ...a, q: "boom" })),
@@ -176,7 +178,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     };
     let n = 0;
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
-    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, messageFeed: {}, workflowRuns: {}, envStandings: {} };
+    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, pipelines: {}, messageFeed: {}, workflowRuns: {}, envStandings: {} };
     const groupRefs: Record<string, string> = {};
     for (const [place, p] of Object.entries(placements)) {
       rows.tasks[place] = await db.insert("tasks", { ...p, ...base(place), short_id: `ct-${++n}`, task_type: "task", priority: "medium", source: "human", status: "open" });
@@ -218,6 +220,9 @@ async function seed(t: ReturnType<typeof convexTest>) {
       rows.opsReplays[place] = await db.insert("replays", { ...ws, source_id, short_id: `rp-${++n}`, provider: "sdk", external_id: `ext-${place}`, started_at: now - 5_000, counts: { clicks: 0, errors: 0, failed_requests: 0 }, group_ids: [], chunk_keys: [], created_at: now, updated_at: now } as any);
       if (place === "team" || place === "other") {
         await db.insert("deploy_targets", { workspace: p.workspace, repository: "acme/app", name: "web", runs: "push", live: { kind: "marker" }, policy: "press", paths: [], publisher_user_id: p.user_id, published_at: now, updated_at: now } as any);
+        const repository = `acme/${place}-app`;
+        const lane = { slug: "change", label: "Change", base: "change", file: null, removed: [], graph: { nodes: [], edges: [] }, stations: [] };
+        rows.pipelines[place] = await db.insert("pipelines", { workspace: p.workspace, repository, change: lane, release: { ...lane, slug: "line-deploy", targets: [] }, hash: place, publisher_user_id: p.user_id, published_at: now, updated_at: now } as any);
         rows.teamDeploys[place] = await db.insert("deploys", { short_id: `dp-${++n}`, workspace: p.workspace, target: "web", repository: "acme/app", status: "live", trigger: "person", source: "test", event_ids: [], carries: [], created_at: now, updated_at: now } as any);
       }
     }
@@ -239,6 +244,7 @@ const EXPECTED_FOR: Record<string, Record<Who, string[]>> = {
   liveFlows: { ...EXPECTED, owner: ["team"] },
   flowMaps: { ...EXPECTED, owner: ["personal", "team"] },
   teamDeploys: { ...EXPECTED, owner: ["team"] },
+  pipelines: { ...EXPECTED, owner: ["team"] },
 };
 
 function rowIdsOf(result: unknown): string[] {

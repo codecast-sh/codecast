@@ -99,4 +99,27 @@ export const deployTables = {
     finished_at: v.number(),
   })
     .index("by_workspace_finished", ["workspace", "finished_at"]),
+
+  // One repository's pipeline (docs/architecture/pipeline.md PL6;
+  // contracts/pipeline.ts): its change and release flows as its checkout
+  // resolves them, published beside its deploy targets from the same machine.
+  // One row per workspace and repository, replaced whole on each publish.
+  pipelines: defineTable({
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    repository: v.string(),
+    // PipelineFlow, and PipelineFlow & { targets }: derived from the checkout, drawn as sent.
+    change: v.any(),
+    release: v.any(),
+    device_id: v.optional(v.string()),
+    // The commit it was built from and when that commit was made: a publish from an older commit is refused.
+    head_sha: v.optional(v.string()),
+    head_at: v.optional(v.number()),
+    // A hash of what was published, so a republish of the same files writes nothing.
+    hash: v.string(),
+    publisher_user_id: v.id("users"),
+    published_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_workspace_repository", ["workspace", "repository"]),
 };

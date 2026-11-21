@@ -3468,6 +3468,9 @@ cliRoute("/cli/deploys/get", async (ctx, body) => ctx.runQuery(api.deploys.get, 
 cliRoute("/cli/deploys/targets/publish", async (ctx, body) => ctx.runMutation(api.deployTargets.publish, body), { forwardDeviceId: true });
 cliRoute("/cli/deploys/targets", async (ctx, body) => ctx.runQuery(api.deployTargets.view, body));
 cliRoute("/cli/deploys/targets/poll", async (ctx, body) => ctx.runAction(api.deployTargets.pollNow, body));
+// A repository's pipeline (pipeline.md PL6), published beside its deploy targets, and read back per team.
+cliRoute("/cli/pipelines/publish", async (ctx, body) => ctx.runMutation(api.pipelines.publish, body), { forwardDeviceId: true });
+cliRoute("/cli/pipelines", async (ctx, body) => ctx.runQuery(api.pipelines.forTeam, body));
 cliRoute("/cli/deploys/target/request", async (ctx, body) => ctx.runMutation(api.deployTargets.request, body));
 cliRoute("/cli/deploys/target/for-deploy", async (ctx, body) => ctx.runQuery(api.deployTargets.forDeploy, body));
 cliRoute("/cli/deploys/main-commits", async (ctx, body) => ctx.runMutation(api.deployTargets.reportMainCommits, body));
