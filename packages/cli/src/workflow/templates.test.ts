@@ -117,7 +117,7 @@ describe("line.cast template", () => {
       "task_id", "task_title", "task_description", "acceptance_criteria", "task_status", "execution_status",
       "review_verdict", "review_note", "handoff", "handoff_note", "goal_ref", "category", "risk", "readiness", "readiness_note",
       "assignee", "project_path", "default_branch", "run_id", "run_date", "worktree", "branch", "human_message", "goal", "outcome",
-      "run_dir", "cause_history", "last_error", "sent_back", ...Object.keys(EMPTY_VARS),
+      "run_dir", "cause_history", "last_error", "sent_back", "diff_base", ...Object.keys(EMPTY_VARS),
       // A change frozen from a session (frozenChangeContext): empty on a run with none.
       "change_session",
       // The station running, as the graph names it (runNodeLoop).
@@ -383,7 +383,7 @@ describe("line.cast template", () => {
     expect(review).toContain("$branch");
     expect(review).toContain("$task_title");
     expect(review).toContain("$acceptance_criteria");
-    expect(review).toContain("$default_branch...$branch");
+    expect(review).toContain("$diff_base...$branch");
     expect(review).not.toContain("$task_description");
     expect(review).toContain("cast task verdict $task_id approve|changes|reject --note -");
     expect(graph.nodes.get("analyze")?.prompt).toContain("cast task update $task_id --steps -");
