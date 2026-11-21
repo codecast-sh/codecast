@@ -6,7 +6,10 @@
 // `org_roles.line_merge`, off unless a person turns it on for that line. The
 // runner's merge node asks `check` before it touches git and `record` after
 // the push; the second re-reads the allowance inside the write, so two runs
-// cannot both take the last merge of the day.
+// cannot both take the last merge of the day. A run no role is behind merges
+// on a person's word instead (`personAuthorized`): a Ship on a card of the
+// task, or, for a run whose own graph cleared it to land without a card, the
+// person who started it.
 
 import { mutation, query } from "./functions";
 import { v } from "convex/values";
@@ -94,47 +97,98 @@ async function requireToken(ctx: any, apiToken: string): Promise<Id<"users">> {
   return auth.userId;
 }
 
+/** A person's word that authorizes a merge no role is behind: who, and why. */
+export type PersonAuthorization = { user_id: string; why: string };
+
 /**
  * Who authorizes this merge. A role's line merges under the role's merge
- * authority and allowance. A run with no role behind it merges because a
- * person answered Ship on its card: that answer is the authorization, so it
- * counts against no role's limit.
+ * authority and allowance. A run with no role behind it merges on a person's
+ * word, which counts against no role's limit (`personAuthorized`).
  */
-async function runAndRole(ctx: any, userId: Id<"users">, runRef: string): Promise<{ run: any; role: any; shippedBy: string | null }> {
+async function runAndRole(ctx: any, userId: Id<"users">, runRef: string): Promise<{ run: any; role: any; authorizedBy: PersonAuthorization | null }> {
   const run = await ctx.db.get(runRef as Id<"workflow_runs">);
   if (!run) throw new Error(`No run ${runRef}`);
   const role = await roleOfRun(ctx, run);
   if (role) {
     if (!(await userCanAccessRole(ctx, userId, role))) throw new Error("Forbidden");
-    return { run, role, shippedBy: null };
+    return { run, role, authorizedBy: null };
   }
   if (!(await canReadRun(ctx, userId, run))) throw new Error("Forbidden");
-  const shippedBy = await personShipped(ctx, run);
-  if (!shippedBy) throw new Error("No role started this run and no person answered Ship on its card, so nothing authorizes the merge");
-  return { run, role: null, shippedBy };
+  return { run, role: null, authorizedBy: await personAuthorized(ctx, run) };
 }
 
-/** The person who answered Ship on the run's card gate, or null. */
-async function personShipped(ctx: any, run: any): Promise<string | null> {
-  const decision: any = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
-  if (!decision || decision.status !== "answered" || decision.answered_by?.kind !== "user") return null;
-  const label: string = decision.options?.[decision.answer_index ?? -1]?.label ?? "";
-  return /^ship\b/i.test(label.trim()) ? decision.answered_by.id : null;
+// Every refusal ends with these words: a flow reads them to ask at the card instead (a repo's change flow does).
+const NOTHING_AUTHORIZES = "so nothing authorizes the merge";
+
+const isShip = (card: any): boolean => /^ship\b/i.test(String(card.options?.[card.answer_index ?? -1]?.label ?? "").trim());
+const answerLabel = (card: any): string => String(card.options?.[card.answer_index ?? -1]?.label ?? card.answer_text ?? "something other than Ship").trim();
+const cardRef = (card: any): string => card.short_id ?? String(card._id);
+
+/**
+ * The person whose word lets a run no role is behind merge, or a refusal (thrown).
+ *
+ * The cards are every gate card of every run of the run's task (`session_decisions.by_task`), with the run's own
+ * card (`gate_decision_id`). Only a person's answer is an answer: `answered`, by a user. A role's answer and a
+ * withdrawn card are none.
+ * - A card of this run still waiting refuses: the run asked, and nobody has answered.
+ * - Otherwise the newest answer a person gave decides. Ship authorizes, as that person, whichever run's card it
+ *   was on, so a rerun of a task already shipped at its card does not ask again; any other answer refuses until a
+ *   person answers Ship on a later card.
+ * - With no answer, a run that asked no card reached Land because its own graph cleared it, and the person who
+ *   started it (`run.user_id`) authorizes it. A run asked a card when any card names it, its row names one, or it
+ *   stopped at a gate (`gate_node_id`, written before the gate asks and kept after). A run with no task has no
+ *   cards to read, and an agent account is no person: neither merges without a Ship.
+ */
+export async function personAuthorized(ctx: any, run: any): Promise<PersonAuthorization> {
+  const ofTask: any[] = run.task_id
+    ? await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", run.task_id)).take(500)
+    : [];
+  const cards = ofTask.filter((d) => !!d.workflow_run_id && !d.trial);
+  if (run.gate_decision_id && !cards.some((d) => String(d._id) === String(run.gate_decision_id))) {
+    const own = await ctx.db.get(run.gate_decision_id);
+    if (own) cards.push(own);
+  }
+  const isOwn = (d: any) => String(d.workflow_run_id ?? "") === String(run._id) || String(d._id) === String(run.gate_decision_id ?? "");
+  const waiting = cards.find((d) => isOwn(d) && d.status === "pending");
+  if (waiting) throw new Error(`No role started this run and its card ${cardRef(waiting)} is still waiting on a person, ${NOTHING_AUTHORIZES}`);
+  const answers = cards
+    .filter((d) => d.status === "answered" && d.answered_by?.kind === "user")
+    .sort((a, b) => (b.resolved_at ?? b.created_at ?? 0) - (a.resolved_at ?? a.created_at ?? 0));
+  const last = answers[0];
+  if (last) {
+    if (!isShip(last)) throw new Error(`No role started this run and a person answered ${answerLabel(last)} on ${cardRef(last)}, the task's newest answer, ${NOTHING_AUTHORIZES}`);
+    return { user_id: String(last.answered_by.id), why: isOwn(last) ? `ship on card ${cardRef(last)}` : `ship on earlier run's card ${cardRef(last)}` };
+  }
+  if (cards.some(isOwn) || run.gate_node_id) throw new Error(`No role started this run and no person answered Ship on its card, ${NOTHING_AUTHORIZES}`);
+  if (!run.task_id) throw new Error(`No role started this run, it has no task whose cards show it asked none, and no person answered Ship on a card, ${NOTHING_AUTHORIZES}`);
+  const starter: any = await ctx.db.get(run.user_id);
+  if (!starter || starter.is_bot) throw new Error(`No role started this run, an agent account started it, and no person answered Ship on a card, ${NOTHING_AUTHORIZES}`);
+  const name = starter.name || starter.github_username || starter.email?.split("@")[0] || String(starter._id);
+  return { user_id: String(run.user_id), why: `cleared by the run's own graph, started by ${name}` };
 }
 
 const PERSON_ALLOWANCE = { on: true, used: 0, limit: null, grant: null, allowed: true, reason: null, mode: "count" as const, bar: null, measured: null };
 
-/** Before the merge: may this run's line merge now? Never writes. */
+/** Before the merge: may this run's line merge now? Never writes. A run no
+ *  role is behind says who authorizes it (`authorized`); the trial check
+ *  comes after, so a trial project's run never merges whoever said Ship. */
+export async function checkMergeCore(ctx: any, userId: Id<"users">, runId: string): Promise<any> {
+  const { run, role, authorizedBy } = await runAndRole(ctx, userId, runId);
+  const task: any = run.task_id ? await ctx.db.get(run.task_id) : null;
+  // A trial project's run never merges, whatever graph it runs (lineTrial.ts).
+  const trial = (await trialProjectOf(ctx, task)) ? { allowed: false, reason: "a trial project's run stops at the card: nothing merges" } : {};
+  return {
+    role: role ? { short_id: role.short_id, handle: role.handle, name: role.name } : null,
+    task: task ? { short_id: task.short_id, title: task.title, pr_url: prUrlFromEvidence(task.verification_evidence) } : null,
+    ...(authorizedBy ? { authorized: authorizedBy } : {}),
+    ...(role ? await roleMergeAllowance(ctx, role, Date.now()) : PERSON_ALLOWANCE),
+    ...trial,
+  };
+}
+
 export const check = query({
   args: { api_token: v.string(), run_id: v.string() },
-  handler: async (ctx, args) => {
-    const userId = await requireToken(ctx, args.api_token);
-    const { run, role } = await runAndRole(ctx, userId, args.run_id);
-    const task: any = run.task_id ? await ctx.db.get(run.task_id) : null;
-    // A trial project's run never merges, whatever graph it runs (lineTrial.ts).
-    const trial = (await trialProjectOf(ctx, task)) ? { allowed: false, reason: "a trial project's run stops at the card: nothing merges" } : {};
-    return { role: role ? { short_id: role.short_id, handle: role.handle, name: role.name } : null, task: task ? { short_id: task.short_id, title: task.title, pr_url: prUrlFromEvidence(task.verification_evidence) } : null, ...(role ? await roleMergeAllowance(ctx, role, Date.now()) : PERSON_ALLOWANCE), ...trial };
-  },
+  handler: async (ctx, args) => checkMergeCore(ctx, await requireToken(ctx, args.api_token), args.run_id),
 });
 
 /** After the push: the merge counted against the limit, recorded on the
@@ -142,20 +196,21 @@ export const check = query({
  *  allowance is gone by now (the runner then says so and leaves the merge to
  *  a person; the push has already landed, so this is the count, not a gate). */
 export async function recordMergeCore(ctx: any, userId: Id<"users">, args: { run_id: string; sha: string; branch: string; into: string; pr_url?: string }, now = Date.now()): Promise<any> {
-  const { run, role } = await runAndRole(ctx, userId, args.run_id);
+  const { run, role, authorizedBy } = await runAndRole(ctx, userId, args.run_id);
   if (!role) {
-    // Shipped by a person: record the merge on the run and the task, no role to count it against.
-    await ctx.db.patch(run._id, { merge: { sha: args.sha, branch: args.branch, into: args.into, at: now, ...(args.pr_url ? { pr_url: args.pr_url } : {}) } });
+    // Authorized by a person: record the merge, who authorized it and why on the run and the task, no role to count it against.
+    const by = authorizedBy!;
+    await ctx.db.patch(run._id, { merge: { sha: args.sha, branch: args.branch, into: args.into, at: now, ...(args.pr_url ? { pr_url: args.pr_url } : {}), authorized: { user_id: by.user_id as Id<"users">, why: by.why } } });
     const task: any = run.task_id ? await ctx.db.get(run.task_id) : null;
     if (task) {
       await insertTaskComment(ctx, task._id, {
         author: "line",
-        text: `merged ${args.branch} into ${args.into} at ${args.sha.slice(0, 10)}${args.pr_url ? ` (${args.pr_url})` : ""}, shipped at the card`,
+        text: `merged ${args.branch} into ${args.into} at ${args.sha.slice(0, 10)}${args.pr_url ? ` (${args.pr_url})` : ""}: authorized by ${by.why}`,
         comment_type: "review",
         conversation_id: run.primary_conversation_id ?? undefined,
       });
     }
-    return { used: 0, limit: null, over: false, reported: false };
+    return { used: 0, limit: null, over: false, reported: false, authorized: by };
   }
   const allowance = await roleMergeAllowance(ctx, role, now);
   const counters = countersFor(role, now);

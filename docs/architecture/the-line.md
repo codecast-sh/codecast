@@ -301,6 +301,31 @@ the Workflow section of the role page flip the switch; turning it on with no
 grant held needs the limit, which writes the grant through the one authority
 path (ninety days) in the same act. Human only, logged like the line.
 
+A run no role is behind (a flow a person's session started, `cast flow run
+change`) merges on a person's word instead, which counts against no role's
+limit (`orgLineMerge.personAuthorized`). The words are read off every gate
+card of every run of the run's task (`session_decisions.by_task`, with the
+run's own `gate_decision_id`); only `answered` by a user is an answer, so a
+role's answer or a withdrawn card is none.
+
+- A card of this run still waiting refuses the merge.
+- Otherwise the newest answer a person gave decides. Ship authorizes, on
+  whichever run's card it was, so a rerun of a task already shipped at its
+  card lands without asking again; any other answer (Revise, Drop) refuses
+  until a person answers Ship on a later card.
+- With no answer at all, a run that asked no card reached Land because its
+  own graph cleared it (a founder-intent read, `quick-change`), and the person
+  who started it (`workflow_runs.user_id`) authorizes it. A run asked a card
+  when any card names it, its row names one, or it stopped at a gate
+  (`gate_node_id`, written before a gate asks and kept after). A run with no
+  task, or one an agent account started, merges only on a Ship.
+
+The record says whose word it was and why (`workflow_runs.merge.authorized`:
+"ship on card sd-N", "ship on earlier run's card sd-N", "cleared by the run's
+own graph, started by X"), in the task's comment too. Every refusal ends "so
+nothing authorizes the merge", which a flow may read to ask at the card. A
+trial project's run never merges, whoever said Ship.
+
 The shipped line gains a `merge` node after an approving review:
 `review -> merge [approve]`, `merge -> exit`. It is a script node, `cast line
 merge --run $run_id --branch $branch --into $default_branch --cwd
