@@ -126,8 +126,10 @@ through `orgRoles.markBriefRead`).
   is recorded as `org_roles.previous_standing_conversation_id`. The role is
   then provisioned as on its first seating (new bot, anchors row, conversation,
   opening message, routine) with the old session's project path, model and
-  backend, and never seats a project's session. The new anchor is hosted by
-  the caller.
+  backend, and never seats a project's session. The new session runs and
+  bills on the old one's runner (its `user_id`), whoever asked for the
+  restart; the caller is only who is authorized. A project whose
+  `default_session_id` was the old seat points at the new one.
 
 ## T5. CLI
 
