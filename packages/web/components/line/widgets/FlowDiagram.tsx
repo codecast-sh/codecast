@@ -8,7 +8,7 @@
 // flow's end; a loop to another station names that station. The model is
 // lib/line/flowDiagram.ts; this only draws it.
 import { createContext, memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { flowDiagram, routeTail, runReached, SESSION_WORDS, stepStates, type DiagramStep, type SideRoute, type StepState } from "../../../lib/line/flowDiagram";
+import { flowDiagram, routeTail, runReached, SESSION_WORDS, stepStates, type DiagramStep, type FlowDiagramModel, type SideRoute, type StepMark, type StepState } from "../../../lib/line/flowDiagram";
 import type { ShippedFlow } from "../../../lib/line/flowPool";
 import { WHO } from "../../../lib/line/flowWho";
 
@@ -65,8 +65,10 @@ function useFitPath(content: unknown) {
 
 const STATE_MARK: Record<StepState, string> = { idle: "", done: "✓", current: "", stopped: "✕" };
 
-export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact = false, picked = null, onPick }: { flow: ShippedFlow; run?: RunLike; compact?: boolean } & Partial<Pick>) {
-  const model = useMemo(() => flowDiagram(flow), [flow]);
+/** `marks`: what a pipeline says on each step beside its name (who changed it, when it runs, what stands on it now), by step id.
+ *  `diagram`: the flow's model as the host already shaped it (a pipeline lane says a shared route once), else the flow's own. */
+export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact = false, picked = null, onPick, marks, diagram }: { flow: ShippedFlow; run?: RunLike; compact?: boolean; marks?: Readonly<Record<string, StepMark>>; diagram?: FlowDiagramModel } & Partial<Pick>) {
+  const model = useMemo(() => diagram ?? flowDiagram(flow), [diagram, flow]);
   const states = useMemo(() => stepStates(model, run), [model, run]);
   const pick: Pick = { picked, onPick };
   // A segment of several steps, or several running side by side, draws folded: one box with the routes that leave it;
@@ -88,7 +90,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
         {folded(s) ? <Step step={{ ...s, side: foldedRoutes(s) }} state={states.get(s.id) ?? "idle"} compact={compact} run={run} pick={pick} fold={{ count: s.inner.length, words: s.kind === "parallel" ? "at once" : "steps", toggle: () => toggle(s.id) }} />
           : s.kind === "parallel" ? <Segment step={s} states={states} compact={compact} run={run} pick={pick} parallel onFold={() => toggle(s.id)} />
           : s.kind === "segment" && s.inner.length > 1 ? <Segment step={s} states={states} compact={compact} run={run} pick={pick} onFold={() => toggle(s.id)} />
-          : s.kind === "segment" && s.inner.length === 1 ? <Step step={{ ...s.inner[0], label: s.label, side: [...s.inner[0].side, ...s.side], slot: s.slot }} state={states.get(s.inner[0].id) ?? "idle"} compact={compact} run={run} pick={pick} />
+          : s.kind === "segment" && s.inner.length === 1 ? <Step step={{ ...s.inner[0], label: s.label, side: [...s.inner[0].side, ...s.side], slot: s.slot }} markId={s.id} state={states.get(s.inner[0].id) ?? "idle"} compact={compact} run={run} pick={pick} />
           : <Step step={s} state={states.get(s.id) ?? "idle"} compact={compact} run={run} pick={pick} />}
       </div>
       {rail(i) ? <span className="fd-rail" aria-hidden /> : null}
@@ -105,6 +107,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
   // A flow run around one step reads in two rows: the way in, then that step and its stages to the end.
   const split = hubAt > 0 && !compact;
   return (
+    <Marks.Provider value={marks ?? null}>
     <RailTo.Provider value={railTo}>
     <div ref={fit} className="fd" data-compact={compact ? "" : undefined} data-has-run={run ? "" : undefined} data-pickable={onPick ? "" : undefined} data-returns={lastReturn >= 0 ? "" : undefined} data-rows={split ? "2" : undefined}>
       <div className="fd-rows">
@@ -122,18 +125,21 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
       </div>
     </div>
     </RailTo.Provider>
+    </Marks.Provider>
   );
 });
 
 /** A segment's steps in a row inside its frame; a fan-out's branches stacked, since they run side by side. */
 function Segment({ step, states, compact, run, pick, parallel = false, onFold }: { step: DiagramStep; states: Map<string, StepState>; compact: boolean; run: RunLike; pick: Pick; parallel?: boolean; onFold?: () => void }) {
   const state = states.get(step.id) ?? "idle";
+  const mark = useContext(Marks)?.[step.id];
   const name = <>{step.label}{parallel ? <span className="fd-seg-par"> · {step.inner.length} side by side</span> : null}{written(step) ? <span className="fd-seg-tag">written here</span> : null}</>;
   return (
-    <div className="fd-seg" data-state={state} data-parallel={parallel ? "" : undefined} data-written={written(step) ? "" : undefined} data-picked={pick.picked === step.id ? "" : undefined} title={slotTitle(step)}>
+    <div className="fd-seg" data-own={mark?.own ?? undefined} data-state={state} data-parallel={parallel ? "" : undefined} data-written={written(step) ? "" : undefined} data-picked={pick.picked === step.id ? "" : undefined} title={slotTitle(step)}>
       {pick.onPick
         ? <button type="button" className="fd-seg-name" aria-pressed={pick.picked === step.id} onClick={() => pick.onPick!({ id: step.id, kind: step.kind })} data-fd-pick={step.id}>{name}</button>
         : <div className="fd-seg-name">{name}</div>}
+      {mark ? <MarkRow mark={mark} /> : null}
       {onFold ? <button type="button" className="fd-seg-fold" onClick={onFold} aria-label={`Fold ${step.label}`} title={`Fold ${step.label} into one step`} data-fd-fold={step.id}>−</button> : null}
       <div className="fd-seg-steps">
         {step.inner.map((s, i) => (
@@ -149,7 +155,8 @@ function Segment({ step, states, compact, run, pick, parallel = false, onFold }:
 }
 
 /** `fold`: this box is a folded segment: it says how many steps it holds, and pressing it opens them. */
-function Step({ step, state, compact, run, pick, fold }: { step: DiagramStep; state: StepState; compact: boolean; run: RunLike; pick: Pick; fold?: { count: number; words: string; toggle: () => void } }) {
+function Step({ step, state, compact, run, pick, fold, markId }: { step: DiagramStep; state: StepState; compact: boolean; run: RunLike; pick: Pick; fold?: { count: number; words: string; toggle: () => void }; markId?: string }) {
+  const mark = useContext(Marks)?.[markId ?? step.id];
   const body = (
     <>
       <Who kind={step.kind} />
@@ -159,7 +166,7 @@ function Step({ step, state, compact, run, pick, fold }: { step: DiagramStep; st
       {state !== "idle" ? <span className="fd-dot" aria-label={state}>{STATE_MARK[state]}</span> : null}
     </>
   );
-  const attrs = { className: "fd-step", "data-kind": step.kind, "data-state": state, "data-folded": fold ? "" : undefined, "data-slot": step.slot?.filled === "empty" ? "" : undefined, "data-written": written(step) ? "" : undefined, title: slotTitle(step) ?? `${step.label}: ${WHO[step.kind].word}` };
+  const attrs = { className: "fd-step", "data-kind": step.kind, "data-own": mark?.own ?? undefined, "data-passes": mark?.passes ? "" : undefined, "data-state": state, "data-folded": fold ? "" : undefined, "data-slot": step.slot?.filled === "empty" ? "" : undefined, "data-written": written(step) ? "" : undefined, title: slotTitle(step) ?? `${step.label}: ${WHO[step.kind].word}` };
   return (
     <div className="fd-step-wrap">
       {fold
@@ -167,6 +174,7 @@ function Step({ step, state, compact, run, pick, fold }: { step: DiagramStep; st
         : pick.onPick
         ? <button type="button" {...attrs} aria-pressed={pick.picked === step.id} data-picked={pick.picked === step.id ? "" : undefined} onClick={() => pick.onPick!({ id: step.id, kind: step.kind })} data-fd-pick={step.id}>{body}</button>
         : <div {...attrs}>{body}</div>}
+      {mark ? <MarkRow mark={mark} compact={compact} /> : null}
       {!compact && step.side.length ? <Routes routes={step.side} run={run} /> : null}
     </div>
   );
@@ -197,6 +205,29 @@ const returnsTo = (step: DiagramStep, railTo: string): boolean => step.side.some
 /** A step drawn as one box that returns to the session drops its line to the rail; a frame's own steps sit inside it. */
 const dropsToRail = (step: DiagramStep, railTo: string) =>
   step.kind === "parallel" || (step.kind === "segment" && step.inner.length > 1) ? step.side.some((r) => ridesRail(r, railTo)) : returnsTo(step, railTo);
+
+/** A pipeline's marks by step id; null for a plain flow. */
+const Marks = createContext<Readonly<Record<string, StepMark>> | null>(null);
+
+const OWN_WORD: Record<NonNullable<StepMark["own"]>, string> = { added: "added", changed: "changed" };
+
+/** What a pipeline says under a step: how many changes stand on it now, the project's own mark, when it runs, that it passes. */
+function MarkRow({ mark, compact = false }: { mark: StepMark; compact?: boolean }) {
+  const own = mark.own ? <span className="fd-mark" data-mark="own" title={mark.changed?.join(", ") || undefined}>{OWN_WORD[mark.own]}</span> : null;
+  const here = mark.here ? <span className="fd-mark" data-mark="here" title={`${mark.here} ${mark.here === 1 ? "change" : "changes"} here now`}>{mark.here}</span> : null;
+  if (compact) return here || own ? <div className="fd-marks">{here}{own}</div> : null;
+  if (!own && !here && !mark.when && !mark.passes && !mark.varies && !mark.waits) return null;
+  return (
+    <div className="fd-marks">
+      {here}
+      {own}
+      {mark.when ? <span className="fd-mark" data-mark="when" title={`Runs only when a change touches ${mark.when}`}>{mark.when}</span> : null}
+      {mark.passes ? <span className="fd-mark" data-mark="passes">no command · passes</span> : null}
+      {mark.varies ? <span className="fd-mark">varies by target</span> : null}
+      {mark.waits ? <span className="fd-mark">waits · sends none</span> : null}
+    </div>
+  );
+}
 
 /** Where the drawing's ways back lead (the session, or the step a flow runs around): the routes that ride the rail. */
 const RailTo = createContext<string>(SESSION_WORDS);

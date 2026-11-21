@@ -558,6 +558,16 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-seg-tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: var(--lw-fs-2xs); font-weight: 600; letter-spacing: 0; color: var(--sol-violet); background: color-mix(in srgb, var(--sol-violet) 12%, transparent); }
 .fd-step[data-slot] { border-style: dashed; background: transparent; color: var(--lw-ink-3); }
 .fd-step[data-slot] .fd-seg-tag { color: var(--lw-ink-3); background: color-mix(in srgb, var(--lw-ink-3) 12%, transparent); }
+/* A pipeline's marks (pipeline.md PL7): the project's own steps accented, inherited ones calm, a release step with no command quiet. */
+.fd-marks { display: flex; flex-wrap: wrap; gap: 4px; max-width: 170px; }
+.fd-mark { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: 4px; font-size: var(--lw-fs-2xs); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; color: var(--lw-ink-3); background: color-mix(in srgb, var(--lw-ink-3) 11%, transparent); }
+.fd-mark[data-mark="own"] { color: var(--sol-cyan); background: color-mix(in srgb, var(--sol-cyan) 14%, transparent); }
+.fd-mark[data-mark="here"] { color: var(--lw-on-accent); background: var(--lw-person); min-width: 17px; justify-content: center; font-variant-numeric: tabular-nums; }
+.fd-mark[data-mark="when"] { font-family: var(--font-mono, inherit); }
+.fd-step[data-own] { border-color: color-mix(in srgb, var(--sol-cyan) 55%, transparent); background: color-mix(in srgb, var(--sol-cyan) 6%, var(--lw-card)); }
+.fd-seg[data-own] { border-color: color-mix(in srgb, var(--sol-cyan) 50%, transparent); }
+.fd-step[data-passes] { border-style: dashed; background: transparent; }
+.fd-step[data-passes] .fd-step-name { color: var(--lw-ink-3); font-weight: 500; }
 .fd-step[data-written] { border-color: color-mix(in srgb, var(--sol-violet) 45%, transparent); }
 .fd-seg-name { margin: -2px 0 0 2px; white-space: nowrap; font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .02em; color: var(--lw-ink-2); }
 .fd-seg-steps { display: flex; align-items: flex-start; }

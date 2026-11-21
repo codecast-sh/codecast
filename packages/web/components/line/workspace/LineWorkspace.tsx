@@ -56,6 +56,7 @@ import { DeploysMoved } from "./views/deploys/DeploysMoved";
 import { FlowsView } from "./views/flows/FlowsView";
 import { TimelineView } from "./views/events/TimelineView";
 import { LineSettingsStage } from "../settings/LineSettingsStage";
+import { PipelinesStage, RepoPipelineStage } from "../pipeline/PipelineStages";
 import { ShareControl } from "../../ShareControl";
 import "./workspace.css";
 
@@ -109,6 +110,8 @@ export type LineWorkspaceProps = {
   space?: LineSpaceState;
   /** The stage holds the drawn flow's settings (/flows/settings), inside the app's nav and switchers. */
   settings?: boolean;
+  /** The stage holds one repository's pipeline (/flows/pipeline?repo=), inside the app's nav and switchers. */
+  pipeline?: string | null;
   /** One flow's page (/flows/<owner>): its name heads the app, and its projects are the only filter. */
   flow?: FlowFrame;
 };
@@ -118,7 +121,9 @@ export type FlowFrame = { owner: string; name: string; projects: ReadonlyArray<{
 
 type LineWorkspaceModel = ReturnType<typeof useLineWorkspace>;
 
-export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space, settings = false, flow }: LineWorkspaceProps) {
+export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space, settings: settingsPage = false, pipeline = null, flow }: LineWorkspaceProps) {
+  // A page of the app at an address of its own (settings, a pipeline): it keeps its address, and the nav leaves for /flows.
+  const settings = settingsPage || pipeline !== null;
   // The address names a problem by its ref (ct-N); every view below reads its row id (caseRefs), and every write
   // through `select`/`href` names it by its ref again.
   const { selection: address, select: go, href: link } = useLineSelection();
@@ -292,7 +297,9 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   useStageWide(!embedded || selection.view === "foryou");
   const { forYou, processes: picks } = ws;
   const View = pageFor(selection);
-  const stage = settings ? null : pipelineStageOf(selection);
+  // The bare address is the team's pipelines (pipeline.md PL6); a role's flow page keeps its overview.
+  const landing = !settings && !flow && !embedded && selection.landing;
+  const stage = settings || landing ? null : pipelineStageOf(selection);
   const figures = useMemo(() => pipelineFigures(flowMap, forYou), [flowMap, forYou]);
   // Signals reads the flow map and Shipped what the store holds: neither waits on the line's feeds to answer.
   const ownFeeds = selection.view === "foryou" || selection.view === "signals" || selection.view === "shipped";
@@ -321,16 +328,20 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
           {!embedded && !flow && stage === "problems" && <ProjectFilter selected={projectId} rollups={ws.allRollups} projects={ws.projects} byProject={ws.byProject} open={ws.open} onPick={(p) => select({ project: p })} />}
           <div className="lw-head-right">
             {/* The view open here (a problem, a run, a decision) is in the address, so Share sends exactly what is on screen. Embedded, the address is the host's. */}
-            {!embedded && <ShareControl label={flow ? flow.name : "flow"} path={href({})} />}
-            <Link href={settingsHref} className="lw-iconbtn" aria-label="Flow settings" aria-current={settings ? "page" : undefined} title={withShortcut("Settings", "line.settings")} data-line-settings-link><SlidersHorizontal className="w-4 h-4" /></Link>
+            {/* A pipeline's page carries its own Share, for its own address. */}
+            {!embedded && pipeline === null && <ShareControl label={flow ? flow.name : "flow"} path={href({})} />}
+            <Link href={settingsHref} className="lw-iconbtn" aria-label="Flow settings" aria-current={settingsPage ? "page" : undefined} title={withShortcut("Settings", "line.settings")} data-line-settings-link><SlidersHorizontal className="w-4 h-4" /></Link>
           </div>
         </header>
         <div className="lw-app-body">
           {/* Until the feeds have answered, the counts are the cache's: shown dim, so a number about to move never reads as settled. */}
-          <PipelineNav figures={figures} at={stage} open={openStage} settling={!(ws.ready && ws.complete)} />
+          <PipelineNav figures={figures} at={stage} open={openStage} settling={!(ws.ready && ws.complete)} pipelines={landing || pipeline !== null} />
           <div className="lw-body" data-drawer-open={slideOpen && model && !settings ? "" : undefined}>
             <main className="lw-stage" ref={stageRef}>
-              {settings && model && !unresolved ? (
+              {/* The team's pipelines (the landing page) and one pipeline read the workspace alone, never the line's model. */}
+              {pipeline !== null ? <RepoPipelineStage workspace={space?.key ?? null} repository={pipeline} />
+              : landing ? <PipelinesStage workspace={space?.key ?? null} />
+              : settings && model && !unresolved ? (
                 <LineSettingsStage projectId={projectId} line={drawnLine} lines={picks} projects={ws.projects} rollups={ws.allRollups} processOf={ws.process.project} href={settingsAt} />
               ) : !model || unresolved || (!ws.complete && !ownFeeds) ? <Skeleton /> : (
                 // The page rises in only while the tab is on screen: a hidden tab runs no frames, so an entrance never

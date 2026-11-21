@@ -9,6 +9,8 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export type StationDetail = {
   prompt?: string;
+  /** A project's own guidance on top of the inherited prompt (pipeline.md PL3 `guide=`). */
+  guide?: string;
   script?: string;
   system?: string;
   doc?: string;
@@ -30,7 +32,7 @@ export type FlowStations = Record<string, StationDetail>;
 /** The shipped snapshot's form: texts named by index into its TEXTS. */
 export type PackedStations = Record<string, Record<string, string | number | boolean>>;
 
-const TEXT_FIELDS = ["prompt", "script", "system", "doc"] as const;
+const TEXT_FIELDS = ["prompt", "guide", "script", "system", "doc"] as const;
 const SETTING_FIELDS = ["model", "reasoning_effort", "backend", "agent", "definition", "isolated", "reviewer", "timeout", "max_visits", "max_retries", "parks", "output", "max_tokens"] as const;
 
 /** The stations of a stored graph (a workflows row, a session's flow), by node id. */

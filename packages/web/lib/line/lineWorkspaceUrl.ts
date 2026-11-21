@@ -50,7 +50,8 @@
 
 export const LINE_VIEWS = ["signals", "flows", "foryou", "timeline", "problems", "line", "deploys", "shipped", "volume"] as const;
 export type LineView = (typeof LINE_VIEWS)[number];
-/** What an address with no view opens: Steps, on its map (LANDING_MODE). */
+/** The view an address with no view reads as: Steps. The address itself is the landing page (the team's pipelines);
+ *  Steps on its map, LANDING_MODE, names `view=line&mode=map`. */
 export const DEFAULT_LINE_VIEW: LineView = "line";
 /** What only For you reads: an address naming one with no view opens For you. */
 const FORYOU_ONLY = ["need", "card", "decision"] as const;
@@ -128,6 +129,9 @@ function resolveView(v: string | null | undefined): [LineView, LineMode | null] 
   return null;
 }
 
+/** What names a place on Steps' map, so an address naming one with no view opens the map, not the landing page. */
+const MAP_PLACES = ["step", "source", "graph", "finding"] as const;
+
 export function readLineSelection(search: Search): LineSelection {
   // An older link named a problem's own chart `view=timeline&case=…`: that is the problem's page.
   const asked = search?.get("view") === "timeline" && search?.get("case") ? (["problems", null] as const)
@@ -141,7 +145,8 @@ export function readLineSelection(search: Search): LineSelection {
     view,
     // A mode the address names wins over the one an earlier view name implies (view=process&mode=notebook is the table).
     mode: modeOf(mode) ?? asked?.[1] ?? (asked ? DEFAULT_LINE_MODE : LANDING_MODE),
-    landing: !asked && view === DEFAULT_LINE_VIEW,
+    // A place on the map (a step, a source, a process) with no view is the map, as every link to one was written.
+    landing: !asked && view === DEFAULT_LINE_VIEW && !MAP_PLACES.some((k) => search?.get(PARAM[k])),
     project: ALL.has(project) ? null : project,
     flow: search?.get("flow") || null,
     graph: search?.get("graph") || null,
@@ -257,11 +262,14 @@ export function lineSelectionSearch(current: (Search & { toString(): string }) |
   if (p.step && p.stage === undefined) { del("stage"); del("item"); }
   // A review stage opens over Signals, whichever view it was opened from.
   if (q.get("stage") && (!q.get("view") || q.get("view") === "line")) q.set("view", "signals");
-  // Steps on its map is the landing page, and says nothing of its view; its table names the view and leaves the mode out.
+  // A mode names Steps: picked on the landing page, it opens Steps in that mode.
+  if (p.mode && !q.get("view") && before.landing) q.set("view", DEFAULT_LINE_VIEW);
+  // An address naming no view is the landing page, the team's pipelines (pipeline.md PL6), and says nothing of a mode.
+  // Steps names its view, its table leaving the mode out and its map saying so.
   const settled = readLineSelection(q);
-  if (settled.view !== DEFAULT_LINE_VIEW) q.delete("mode");
-  else if (settled.mode === LANDING_MODE) { q.delete("view"); q.delete("mode"); }
-  else { if (!q.get("view")) q.set("view", DEFAULT_LINE_VIEW); q.delete("mode"); }
+  if (settled.view !== DEFAULT_LINE_VIEW || settled.landing || settled.mode === DEFAULT_LINE_MODE) q.delete("mode");
+  else if (MAP_PLACES.some((k) => q.get(PARAM[k]))) { q.delete("view"); q.delete("mode"); }
+  else { q.delete("mode"); q.set("view", DEFAULT_LINE_VIEW); q.set("mode", LANDING_MODE); }
   // An address naming what only For you reads opens For you without saying so (readLineSelection).
   if (q.get("view") === "foryou" && FORYOU_ONLY.some((k) => q.get(PARAM[k]))) q.delete("view");
   const s = q.toString();

@@ -11,6 +11,9 @@ describe("the line app's selection in the URL", () => {
     expect(readLineSelection(q("tab=line&step=dissolve")).tab).toBeNull();
     expect(readLineSelection(q(""))).toMatchObject({ view: "line", mode: "map", landing: true });
     expect(readLineSelection(q("view=process")).landing).toBe(false);
+    // A place on the map with no view is the map, never the landing page.
+    expect(readLineSelection(q("step=prove")).landing).toBe(false);
+    expect(readLineSelection(q("view=line&mode=map"))).toMatchObject({ view: "line", mode: "map", landing: false });
     expect(readLineSelection(q("view=line")).mode).toBe("table");
     expect(readLineSelection(q("need=sd-6")).view).toBe("foryou");
     expect(readLineSelection(q("view=nope")).view).toBe("line");
@@ -54,13 +57,16 @@ describe("the line app's selection in the URL", () => {
     expect(lineSelectionSearch(q("view=problems"), { view: "foryou" })).toBe("?view=foryou");
     expect(lineSelectionSearch(q("view=problems"), { view: "flows" })).toBe("?view=flows");
     expect(lineSelectionSearch(q(""), { mode: "table" })).toBe("?view=line");
-    expect(lineSelectionSearch(q("view=line"), { mode: "map" })).toBe("");
+    expect(lineSelectionSearch(q("view=line"), { mode: "map" })).toBe("?view=line&mode=map");
+    // The bare address is the landing page (the team's pipelines); Steps' map names itself.
+    expect(lineSelectionSearch(q(""), { mode: "map" })).toBe("?view=line&mode=map");
+    expect(lineSelectionSearch(q("view=line&mode=map"), { view: "problems" })).toBe("?view=problems");
     expect(lineSelectionSearch(q(""), { view: "problems" })).toBe("?view=problems");
   });
 
   test("an earlier view name in a patch writes the page and mode that hold it", () => {
     expect(lineSelectionSearch(q(""), { view: "notebook" })).toBe("?view=line");
-    expect(lineSelectionSearch(q(""), { view: "graph" })).toBe("");
+    expect(lineSelectionSearch(q(""), { view: "graph" })).toBe("?view=line&mode=map");
     expect(lineSelectionSearch(q("view=problems&case=t1"), { view: "replay", run: "r1" })).toBe("?view=problems&case=t1&run=r1");
     expect(lineSelectionSearch(q(""), { view: "problems", case: "t1" })).toBe("?view=problems&case=t1");
     expect(lineSelectionSearch(q(""), { view: "inbox", decision: "sd-5" })).toBe("?decision=sd-5");
@@ -92,7 +98,7 @@ describe("the line app's selection in the URL", () => {
   });
 
   test("another page keeps only the selection it reads", () => {
-    expect(lineSelectionSearch(q("view=problems&run=r1&case=t1&step=prove"), { view: "line" })).toBe("");
+    expect(lineSelectionSearch(q("view=problems&run=r1&case=t1&step=prove"), { view: "line" })).toBe("?view=line&mode=map");
     expect(lineSelectionSearch(q("view=problems&case=t1"), { view: "foryou" })).toBe("?view=foryou");
     expect(lineSelectionSearch(q("need=sd-5"), { view: "problems" })).toBe("?view=problems");
     expect(lineSelectionSearch(q("view=line&source=s&step=x"), { view: "problems", case: "t1" })).toBe("?view=problems&source=s&case=t1");
