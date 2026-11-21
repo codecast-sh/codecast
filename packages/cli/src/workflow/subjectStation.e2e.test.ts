@@ -98,6 +98,8 @@ const graphIn = (root: string) => parseWorkflowSource(`digraph change {
 type Play = {
   /** The session pins dormant when it ends its turn. */
   dormant?: boolean;
+  /** When that dormant pin was set; by default as it is read, so after any brief. */
+  pinnedAt?: number;
   /** Fields the session's row reads with, over a settled live one; `briefed` says whether a brief has reached it. */
   row?: (briefed: boolean) => Record<string, unknown>;
   /** How many reads a brief's answer takes to show in the transcript (the station waits on it meanwhile). */
@@ -131,7 +133,7 @@ function server(fix: () => void, play: Play = {}) {
       else { messages += owed; owed = 0; }
       return reply({ sessions: [{ id: CONV, work_state: dormant ? "dormant" : "done", bucket: stashed ? "stashed" : "done", is_live: true, is_killed: false, message_count: messages, ...play.row?.(briefed) }] });
     }
-    if (route === "/cli/sessions/state/get" && dormant) return reply({ state: "Fixed it; the run re-checks when this turn ends", status: "dormant", at: Date.now() });
+    if (route === "/cli/sessions/state/get" && dormant) return reply({ state: "Fixed it; the run re-checks when this turn ends", status: "dormant", at: play.pinnedAt ?? Date.now() });
     if (route === "/cli/sessions/dismiss") stashed = true;
     if (route === "/cli/deploys/targets") return reply({ targets: play.targets?.() ?? [] });
     if (route === "/cli/sessions/retire") return reply(play.retire?.() ?? { retired: true, short_id: CONV.slice(0, 7) });
@@ -210,6 +212,30 @@ describe("the session is the run's subject", () => {
     const { outcome } = await start(root);
     expect(outcome).toBe("completed");
     expect(s.sent().at(-1)!.body).toContain("is over: Done.");
+  }, 60_000);
+
+  test("a dormant pin from before the brief is not its answer: the run waits for the turn the brief started to end (ct-98624)", async () => {
+    const { root, edit } = world("bad\n");
+    // Its row reads dormant throughout (the pin it left last turn). After the brief it works a while, between tool
+    // calls too (an idle status while the transcript grows), fixes a.txt at the end of the turn and goes quiet.
+    let reads = 0;
+    const s = server(() => {}, {
+      dormant: true,
+      pinnedAt: Date.now() - 3_600_000,
+      row: (briefed) => {
+        if (!briefed) return {};
+        reads++;
+        if (reads < 12) return { agent_status: reads % 4 ? "working" : "idle", message_count: 20 + reads };
+        if (reads === 12) edit("good\n");
+        return { agent_status: "idle", message_count: 40 };
+      },
+    });
+    const { outcome } = await start(root);
+    expect(outcome).toBe("completed");
+    expect(reads).toBeGreaterThanOrEqual(14);
+    // One brief: the run froze the change only once the turn had ended, so Check passed on the fix.
+    expect(s.sent().filter((m) => /^Check failed/.test(m.body))).toHaveLength(1);
+    expect(git(root, "show", "codecast/change-ct-9:a.txt")).toBe("good");
   }, 60_000);
 
   test("a session that never fixes it is sent back three times, then the run stops and says why", async () => {

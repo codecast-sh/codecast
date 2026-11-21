@@ -28,6 +28,12 @@ describe("the level sweep's clock", () => {
     expect(callers[0]).toBeLessThan(own.endLine);
   });
 
+  test("a level conflict brief goes out as a machine wake with a client id, never as a person's message", () => {
+    const sweep = functionBlock(source, "sweepLevelCheckouts").text;
+    expect(sweep).toMatch(/sendMessageToSession\(to, body, "scheduler", clientId\)/);
+    expect(sweep).not.toContain("/cli/messages/send");
+  });
+
   test("daemon start arms it on its own interval", () => {
     const main = functionBlock(source, "main");
     const lineStart = (n: number) => source.split("\n").slice(0, n - 1).join("\n").length + 1;
