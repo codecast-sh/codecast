@@ -17,7 +17,8 @@
  * commits leave the file alone costs an ls-tree and a hash-object per sweep
  * and sends nothing. Upstream changing the file briefs again; a change on disk
  * attributes again and briefs only a new writer. A path with no writer, or a
- * brief the server refused, is tried again after RETRY_MS. A clean level (or
+ * brief that failed, is tried again after RETRY_MS; a writer the server will
+ * never deliver to (a teammate's session) only when either blob changes. A clean level (or
  * a checkout found already level) clears the record and the merge files.
  *
  * The brief is a machine wake (origin "scheduler"), never a person's message:
@@ -34,8 +35,12 @@ import { gitTry } from "../wipSnapshot.js";
 import { attributeEdits, type Attribution } from "./attribute.js";
 import { worktreeBlobs, type LevelResult } from "./level.js";
 
-/** Deliver `body` to conversation `to` as a machine wake; true once the server took it. `clientId` makes a retry land once. */
-export type SendBrief = (to: string, body: string, clientId: string) => Promise<boolean>;
+/**
+ * Deliver `body` to conversation `to` as a machine wake. `clientId` makes a
+ * retry land once. "unreachable": the server refuses for good (a teammate's
+ * session, which this machine's token may not message).
+ */
+export type SendBrief = (to: string, body: string, clientId: string) => Promise<"sent" | "failed" | "unreachable">;
 
 export interface BriefDeps {
   /** Absent when this machine cannot reach the server: then nothing is attributed or briefed. */
@@ -53,6 +58,8 @@ interface PathState {
   owner: string | null;
   /** The owner has this brief (for this `up`). */
   briefed: boolean;
+  /** The server refuses to deliver to the owner; tried again only when `up` or `local` changes. */
+  unreachable?: boolean;
   /** When attribution or the send was last tried. */
   at: number;
 }
@@ -236,7 +243,8 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
     const up = ups.get(p)!.blob;
     const local = locals.get(p) ?? "missing";
     const sameUp = prev?.up === up;
-    if (prev && sameUp && !prev.briefed && now - prev.at < RETRY_MS) record.paths[p] = prev;
+    if (prev?.unreachable) { if (sameUp && prev.local === local) record.paths[p] = prev; else fresh.push(p); }
+    else if (prev && sameUp && !prev.briefed && now - prev.at < RETRY_MS) record.paths[p] = prev;
     else if (prev && sameUp && prev.briefed && prev.local === local) record.paths[p] = prev;
     else fresh.push(p);
   }
@@ -270,12 +278,11 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
     const merges = new Map<string, Merge>();
     for (const p of paths) merges.set(p, await writeMerge(root, dir, p, r.from, r.to, ups.get(p)!.mode));
     const body = await briefFor(root, r, raced, paths, merges);
-    const ok = await send(owner, body, clientIdFor(gitDir, owner, paths, ups)).catch(() => false);
-    notes.push(`${ok ? "briefed" : "brief failed to"} ${owner.slice(0, 7)} (${paths.join(", ")})`);
-    if (ok) {
-      for (const p of paths) record.paths[p] = { ...record.paths[p], briefed: true };
-      save();
-    }
+    const outcome = await send(owner, body, clientIdFor(gitDir, owner, paths, ups)).catch(() => "failed" as const);
+    if (outcome === "failed") { notes.push(`brief failed to ${owner.slice(0, 7)} (${paths.join(", ")})`); continue; }
+    if (outcome === "sent") notes.push(`briefed ${owner.slice(0, 7)} (${paths.join(", ")})`);
+    for (const p of paths) record.paths[p] = { ...record.paths[p], ...(outcome === "sent" ? { briefed: true } : { unreachable: true }) };
+    save();
   }
 
   const already = new Map<string, string[]>();
@@ -284,6 +291,12 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
     if (s?.briefed && s.owner && ![...toBrief.values()].some((ps) => ps.includes(p))) already.set(s.owner, [...(already.get(s.owner) ?? []), p]);
   }
   for (const [owner, paths] of already) notes.push(`already briefed ${owner.slice(0, 7)} (${paths.join(", ")})`);
+  const unreachable = new Map<string, string[]>();
+  for (const p of r.conflicts) {
+    const s = record.paths[p];
+    if (s?.unreachable && s.owner) unreachable.set(s.owner, [...(unreachable.get(s.owner) ?? []), p]);
+  }
+  for (const [owner, paths] of unreachable) notes.push(`${owner.slice(0, 7)} is a teammate's session; brief not sent (${paths.join(", ")})`);
   const waiting = r.conflicts.filter((p) => record.paths[p] && !record.paths[p].owner);
   if (waiting.length) notes.push(`no writer for ${waiting.join(", ")}`);
   return notes.join("; ") || null;
