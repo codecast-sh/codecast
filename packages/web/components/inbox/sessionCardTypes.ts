@@ -70,6 +70,9 @@ export type SessionCardViewProps = {
   /** The name the open conversation's header shows, when the container has
    *  one fresher than the row's own (SessionCard reads it for hosted rows). */
   liveTitle?: string;
+  /** This session's handle when another session in the list carries the same
+   *  title (lib/duplicateTitles), drawn beside the title; null otherwise. */
+  titleTag?: string | null;
   isFavorite: boolean;
   /** The user label the row is filed under, else the project name shows. */
   sessionLabel: string | null;

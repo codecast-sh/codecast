@@ -51,6 +51,7 @@ import {
   SessionProjectChip,
   SelectTick,
   UnreadDot,
+  TitleTag,
 } from "./SessionCardParts";
 
 const NO_PRS: readonly LinkedPr[] = [];
@@ -71,6 +72,7 @@ export function SessionCardView({
   onToggleSelect,
   isUnread,
   liveTitle,
+  titleTag = null,
   isFavorite,
   sessionLabel,
   variant = "default",
@@ -447,7 +449,7 @@ export function SessionCardView({
         tabIndex={0}
         // A hosted row is named by its title and time, so the star and the
         // state words nested in it never pile into the name a reader hears.
-        aria-label={isHostedAgentType(session.agent_type) ? `${displayTitle}, ${formatRowTime(session.updated_at, true)}` : undefined}
+        aria-label={isHostedAgentType(session.agent_type) ? `${displayTitle}${titleTag ? ` ${titleTag}` : ""}, ${formatRowTime(session.updated_at, true)}` : undefined}
         onClick={(e) => onSelect(session, e)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sol-cyan/60"
@@ -517,6 +519,7 @@ export function SessionCardView({
             titleClassName={`${isUnread && !isActive ? "font-semibold text-sol-text" : ""} ${isSlashCommand ? "font-mono text-sol-cyan" : ""}`}
             after={
               <>
+              {titleTag && <TitleTag tag={titleTag} />}
               {chrome.showDeviceIcon !== false && placeDevice && (
                 <span
                   data-sv-device={placeDevice.is_remote ? "cloud" : "elsewhere"}

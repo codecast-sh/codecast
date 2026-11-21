@@ -136,6 +136,8 @@ import { composerPresenceEnabled, hasCoPresent } from "../lib/composerPresence";
 import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { normalizeCastCategory, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState } from "./castCommand";
+import { sessionTitleTag } from "../lib/duplicateTitles";
+import { TitleTag } from "./inbox/SessionCardParts";
 import { useInboxStore, isConvexId, isIdleLandingStub, newProjectStartedBy, newProjectHref, viewerCommandsSession, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -3339,6 +3341,8 @@ const ConversationViewInner = (
     ? hostedTitle(conversation as any, null, () => firstUserPromptOf(messages)) || conversationTitle(null)
     : cleanTitle(conversation?.title || "New Session");
   const truncatedTitle = title.length > 60 ? title.slice(0, 57) + "..." : title;
+  // The handle beside a title another session shares, the one the card and the tab show.
+  const titleTag = useInboxStore((s) => sessionTitleTag(s.sessions, conversation?._id));
   const latestMessageTimestamp = useMemo(() => {
     for (let i = timeline.length - 1; i >= 0; i--) {
       const item = timeline[i];
@@ -4322,8 +4326,8 @@ const ConversationViewInner = (
                   />
                 ) : undefined}
                 text={identityRow
-                  ? <SessionIdentityLine row={identityRow} title={truncatedTitle} className="max-w-full align-bottom" />
-                  : truncatedTitle}
+                  ? <SessionIdentityLine row={identityRow} title={truncatedTitle} className="max-w-full align-bottom" after={titleTag ? <TitleTag tag={titleTag} /> : undefined} />
+                  : titleTag ? <>{truncatedTitle} <TitleTag tag={titleTag} /></> : truncatedTitle}
                 tooltip={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}
                 onDoubleClick={() => { if (isOwner) useInboxStore.setState({ renamingSessionId: conversation!._id }); }}
               />

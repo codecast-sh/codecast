@@ -27,7 +27,7 @@ import { SessionTaskChip } from "../work/SessionTaskChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { LinkedPrChips } from "../PrStatusChip";
 import { badgeVariants } from "../ui/badge";
-import { AssignedPingStrip, FoldedSubagentsMark, ForkCorner, SelectTick } from "./SessionCardParts";
+import { AssignedPingStrip, FoldedSubagentsMark, ForkCorner, SelectTick, TitleTag } from "./SessionCardParts";
 import { ModernAuthorChip, ModernBranchChip, ModernCardToolbar, ModernCommentsChip, ModernFactChip, ModernLinkChip, ModernPinGlyph, ModernProjectChip, ModernFlowChip } from "./ModernCardParts";
 import { SessionStatusMark, SessionStatusWord } from "./SessionStatusMark";
 import type { SessionCardViewProps } from "./SessionCardView";
@@ -75,6 +75,7 @@ export function ModernSessionCardView({
   onToggleSelect,
   isUnread,
   liveTitle,
+  titleTag = null,
   isFavorite,
   sessionLabel,
   variant = "default",
@@ -300,7 +301,7 @@ export function ModernSessionCardView({
       <div
         role="button"
         tabIndex={0}
-        aria-label={`${displayTitle}, ${meta.word}${line.reason ? `, ${line.reason}` : ""}${time ? `, ${time}` : ""}`}
+        aria-label={`${displayTitle}${titleTag ? ` ${titleTag}` : ""}, ${meta.word}${line.reason ? `, ${line.reason}` : ""}${time ? `, ${time}` : ""}`}
         onClick={(e) => onSelect(session, e)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className={`block w-full cursor-pointer text-left ${nested ? "py-1.5 pl-6 pr-3" : "py-2 pl-3 pr-3"} outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color:var(--focus-ring)]`}
@@ -317,6 +318,7 @@ export function ModernSessionCardView({
             className={`min-w-0 flex-1 ${nested ? "text-ui" : "text-body"} text-sol-text`}
             nameClassName={unread ? "font-semibold" : "font-medium"}
             titleClassName={`${unread ? "font-semibold" : isSetAside ? "font-normal" : "font-medium"} ${isSetAside ? "text-sol-text-muted" : "text-sol-text"} ${isSlashCommand ? "font-mono" : ""}`}
+            after={titleTag ? <TitleTag tag={titleTag} /> : undefined}
           />
           <span className="flex shrink-0 items-center gap-1.5">
             {line.reason && <span data-mc-compact-reason className={`hidden max-w-[9rem] truncate text-meta ${meta.text}`}>{line.reason}</span>}

@@ -43,7 +43,11 @@ const readState = mockInboxStore(() => ({
   sessionDecisions: { d1: { _id: "d1", conversation_id: "c-decide", status: "pending", blocking: true, in_queue: true } },
   blockedReviveRequestedAt: {},
   conversations: {},
-  sessions: { "c-lead": { _id: "c-lead", title: "Webhook retry rewrite" } },
+  sessions: {
+    "c-lead": { _id: "c-lead", title: "Webhook retry rewrite" },
+    "c-coord": { _id: "c-coord", short_id: "jx7coor", title: "Apple Calendar sync" },
+    "c-worker": { _id: "c-worker", short_id: "jx7work", title: "Apple Calendar sync", spawned_by_conversation_id: "c-coord" },
+  },
 }), {
   useTrackedStore: () => readState(),
 });
@@ -224,5 +228,33 @@ describe("the Modern session card", () => {
     expect(html).toContain("text-body");
     expect(html).toContain("text-ui");
     expect(html).toContain("text-meta");
+  });
+});
+
+// ct-97018: a coordinator and the worker it spawned, both "Apple Calendar sync".
+describe("sessions that share a title", () => {
+  const tag = (html: string) => html.match(/data-title-tag[^>]*>([^<]*)</)?.[1] ?? null;
+  const name = (html: string) => attr(html, "aria-label");
+  const coord = render({ _id: "c-coord", title: "Apple Calendar sync" }, { sectionStatus: "dormant" });
+  const worker = render({ _id: "c-worker", title: "Apple Calendar sync", spawned_by_conversation_id: "c-coord" }, { sectionStatus: "dormant" });
+
+  test("each card wears its own handle beside the title", () => {
+    expect(tag(coord)).toBe("jx7coor");
+    expect(tag(worker)).toBe("jx7work");
+  });
+
+  test("their accessible names differ by more than state and age", () => {
+    expect(name(coord)).toStartWith("Apple Calendar sync jx7coor, Dormant");
+    expect(name(worker)).toStartWith("Apple Calendar sync jx7work, Dormant");
+  });
+
+  test("the worker's parent link names the coordinator with its handle", () => {
+    expect(worker).toContain("Apple Calendar sync · jx7coor");
+  });
+
+  test("a uniquely titled card carries no tag", () => {
+    const html = render({ _id: "c-lead", title: "Webhook retry rewrite" });
+    expect(html).not.toContain("data-title-tag");
+    expect(name(html)).toStartWith("Webhook retry rewrite, ");
   });
 });

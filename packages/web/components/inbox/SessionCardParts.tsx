@@ -452,6 +452,11 @@ function getForkColor(id: string): string {
   return `hsl(${hue}, 65%, 55%)`;
 }
 
+/** The handle that tells a session apart from another of the same title. */
+export function TitleTag({ tag }: { tag: string }) {
+  return <span data-title-tag title="Another session has this title; this is its handle" className="shrink-0 self-center font-mono text-meta text-sol-text-dim">{tag}</span>;
+}
+
 export function ForkCorner({ colorKey }: { colorKey: string }) {
   const color = getForkColor(colorKey);
   return (

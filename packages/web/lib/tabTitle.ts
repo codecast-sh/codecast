@@ -14,6 +14,7 @@ import { dmOtherIds } from "@codecast/shared/chat";
 import { currentPagePath } from "./renamedPages";
 import { orgRefOfPath } from "../components/org/company/sheetStack";
 import { modernRecordTitle } from "./modernRecordTitle";
+import { sessionTitleTag, taggedTitle } from "./duplicateTitles";
 
 // Tab title derivation, kept out of TabBar.tsx so that module exports only
 // components: a helper export next to a component breaks React Fast Refresh
@@ -103,10 +104,11 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
     const s = sessions[sid];
     // A hosted conversation is named by what the person asked until its
     // title arrives, never by an id.
-    if (isHostedAgentType(s.agent_type)) return conversationTitle(s);
+    if (isHostedAgentType(s.agent_type)) return taggedTitle(conversationTitle(s), sessionTitleTag(sessions, sid));
     // Untitled: the 7-char short handle (what every cast link and command
-    // uses), never a slice of the agent's UUID.
-    return s.title || (isConvexId(sid) ? sid.slice(0, 7) : "Session");
+    // uses), never a slice of the agent's UUID. A title another session
+    // shares carries this one's handle, so the two tabs read apart.
+    return s.title ? taggedTitle(s.title, sessionTitleTag(sessions, sid)) : (isConvexId(sid) ? sid.slice(0, 7) : "Session");
   }
   const chat = chatTabTitle(tab.path, channels, members, viewerId);
   if (chat) return chat;

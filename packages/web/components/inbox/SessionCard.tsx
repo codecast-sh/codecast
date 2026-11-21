@@ -36,6 +36,7 @@ import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipSt
 import { sessionPullRequestsSig, titledSessionPullRequests } from "../../lib/sessionPullRequests";
 import { resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../lib/uiPrefDefaults";
 import { teamMembersOf } from "../../lib/activeTeam";
+import { sessionTitleTag, taggedTitle } from "../../lib/duplicateTitles";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -53,7 +54,8 @@ function cardChromeSig(clientState: any): string {
  *  string and never on the parent row's own churn. */
 function spawnedByTitleOf(s: any, spawnedById: string | null): string | null {
   if (!spawnedById) return null;
-  return (s.sessions[spawnedById]?.title || (s.conversations[spawnedById] as any)?.title) ?? null;
+  const title = (s.sessions[spawnedById]?.title || (s.conversations[spawnedById] as any)?.title) ?? null;
+  return title && taggedTitle(title, sessionTitleTag(s.sessions, spawnedById));
 }
 
 /** The conversation row's authorship fields only — the whole row's identity
@@ -182,6 +184,9 @@ export const SessionCard = memo(function SessionCard({
     // rule (hostedRowTitle), so the rail and the header agree from the first
     // seconds on. A string, so only a changed name wakes the card.
     (s) => liveCardTitle(s, cardId, hosted, session),
+    // This row's handle when another session shares its title: a string, so
+    // only a collision starting or ending wakes the card.
+    (s) => sessionTitleTag(s.sessions, cardId),
     // Where its work is on its way to production, as the chip's words.
     (s) => sessionShipSig(s as any, cardId),
     // Every pull request the session links, as their states in one string.
@@ -354,6 +359,7 @@ export const SessionCard = memo(function SessionCard({
       session={session}
       workProject={workProjectSig(st as any, cardId)}
       liveTitle={draftTitle || liveTitle || undefined}
+      titleTag={draftTitle ? null : sessionTitleTag(st.sessions, cardId)}
       roleAbove={roleAbove}
       now={coarseNow}
       chrome={chrome}
