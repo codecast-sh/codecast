@@ -130,15 +130,18 @@ through `orgRoles.markBriefRead`).
   opening message, routine) with the old session's project path, model and
   backend, and never seats a project's session. The new session runs and
   bills on the old one's runner (its `user_id`) and starts on its machine
-  (`owner_device_id`), whoever asked; the caller is only who is authorized.
+  (`owner_device_id`) while that machine is online, else where routing
+  sends it, whoever asked; the caller is only who is authorized.
   The old anchor's `anchor_channels` move to the new anchor, so Slack keeps
   routing. The new check carries the old one's cadence, precheck and focus,
-  and stays cancelled or paused if the person cancelled or paused the old
-  one. Projects whose `default_session_id` was the old seat
+  and stays cancelled or paused if the person cancelled (`completed` with no
+  `canceled_on_kill_at`) or paused the old one; a check that stopped by fault
+  (failed slots, or cancelled with its killed session) comes back armed. Projects whose `default_session_id` was the old seat
   (`projects.by_default_session`) point at the new one. A second press while
-  the fresh seat is under ten minutes old and has no messages returns it
-  unchanged. The org log row carries `effects.restarted_fresh`, and the
-  history refuses to undo it: the old session is already killed.
+  the fresh seat is under ten minutes old, has no messages, and the role's
+  latest log row is the restart that seated it returns it unchanged. The org log row carries `effects.restarted_fresh`, and the
+  history refuses to undo it, or any earlier entry it depends on: the old
+  session is already killed.
 
 ## T5. CLI
 
