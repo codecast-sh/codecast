@@ -22,6 +22,7 @@ import { isAncestor, replayOnto } from "../land/replay.js";
 import { defaultMessage, freezeAndAttribute, makePlan, trailerFor, upstreamRef, type FrozenAttribution } from "../land/shipCheckout.js";
 import type { SessionEdits } from "../land/attribute.js";
 import type { RosterRow } from "../land/scan.js";
+import { execFileAsync } from "../proc.js";
 import { git, gitTry } from "../wipSnapshot.js";
 import type { FrozenChange } from "./flowChangeFile.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
@@ -54,9 +55,30 @@ export class NoSessionChange extends Error {
   }
 }
 
-/** Fetched first, as a ship plan fetches, so the stale-copy guard and the replay read upstream as it is now; offline, as last fetched. */
+/**
+ * Fetched first, as a ship plan fetches, so the stale-copy guard and the replay read upstream as it is now. Offline,
+ * slow or asking for credentials, it gives up and upstream reads as last fetched.
+ */
 async function fetchUpstream(root: string, upstream: string): Promise<void> {
-  if (upstream !== "HEAD") await gitTry(root, ["fetch", "--quiet", upstream.split("/")[0], upstream.split("/").slice(1).join("/")]);
+  if (upstream === "HEAD") return;
+  const args = ["-C", root, "fetch", "--quiet", upstream.split("/")[0], upstream.split("/").slice(1).join("/")];
+  await execFileAsync("git", args, { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).catch(() => {});
+}
+
+/**
+ * The upstream commit when it already holds every one of `paths` at its frozen content, so the change has nothing
+ * left to land; else null. A checkout already holding upstream is not asked: there a match means its own commits
+ * moved the file and the change moves it back.
+ */
+async function landedOn(root: string, frozen: Frozen, upstream: string, paths: string[]): Promise<string | null> {
+  const upstreamSha = upstream === "HEAD" ? null : await gitTry(root, ["rev-parse", `${upstream}^{commit}`]);
+  if (!upstreamSha || !paths.length || (await isAncestor(root, upstreamSha, frozen.base))) return null;
+  const theirs = new Map(((await gitTry(root, ["ls-tree", "-r", "-z", upstreamSha, "--", ...paths])) ?? "").split("\0").filter(Boolean).map((l) => {
+    const tab = l.indexOf("\t");
+    return [l.slice(tab + 1), l.slice(0, tab).split(" ")[2]] as const;
+  }));
+  const ours = new Map(frozen.changes.map((c) => [c.path, c.blob]));
+  return paths.every((p) => (ours.get(p) ?? null) === (theirs.get(p) ?? null)) ? upstreamSha : null;
 }
 
 /** Why a frozen file stays out of every change (a credential, a stale copy), or undefined when it can go in. */
@@ -78,19 +100,21 @@ async function cutChange(root: string, frozen: Frozen, upstream: string, specs: 
   let behind: FrozenChange["behind"];
   const upstreamSha = upstream === "HEAD" ? null : await gitTry(root, ["rev-parse", `${upstream}^{commit}`]);
   if (upstreamSha && !(await isAncestor(root, upstreamSha, frozen.base))) {
-    const replayed = await replayOnto(root, upstreamSha, onHead, upstreamSha).catch((err: Error) => ({ ok: false as const, conflicts: [] as string[], reason: err.message }));
+    // A throw is a history the replay cannot carry (a merge commit in the checkout's own) or merge-tree failing, not a conflict.
+    const replayed = await replayOnto(root, upstreamSha, onHead, upstreamSha)
+      .catch((err: Error) => ({ ok: false as const, why: "unreplayable" as const, conflicts: [] as string[], reason: err.message }));
     if (replayed.ok) [base, tip] = [upstreamSha, replayed.tip];
-    else behind = { upstream: upstreamSha, conflicts: replayed.conflicts };
+    else behind = { upstream: upstreamSha, why: "why" in replayed ? replayed.why : "conflict", conflicts: replayed.conflicts, reason: replayed.reason };
   }
   await git(root, ["update-ref", `refs/heads/${branch}`, tip]);
   return { base, tip, ...(behind ? { behind } : {}) };
 }
 
 /** What a session's change would hold, read from the frozen tree: its files, the ones another session also wrote, and the ones held out. */
-export async function previewSessionChange(root: string, session: string, only?: ReadonlyArray<string> | null) {
+export async function previewSessionChange(root: string, session: string, only?: ReadonlyArray<string> | null, opts: { fetch?: boolean } = {}) {
   // Without an upstream, HEAD stands in: stale copies are still read from its history.
   const upstream = await upstreamRef(root).catch(() => "HEAD");
-  await fetchUpstream(root, upstream);
+  if (opts.fetch !== false) await fetchUpstream(root, upstream);
   const { frozen, attribution, credentials, stale } = await freezeAndAttribute(root, upstream);
   const heldWhy = heldReason({ credentials, stale });
   const mine = attribution.sessions.find((s) => sessionMatches(s, session));
@@ -106,20 +130,22 @@ export async function previewSessionChange(root: string, session: string, only?:
   const shared = paths
     .map((p) => ({ path: p, also: attribution.sessions.filter((s) => s !== mine && inDiff(s, p)).map(idOf) }))
     .filter((s) => s.also.length);
-  return { frozen, upstream, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held };
+  const landed = await landedOn(root, frozen, upstream, paths);
+  return { frozen, upstream, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held, landed };
 }
 
 /**
  * Commit the files `session` wrote, at their frozen content, and cut them onto
- * the freshly fetched upstream on `branch` (cutChange). Throws when the
+ * the freshly fetched upstream on `branch` (cutChange). `fetched` says the
+ * caller's preview just fetched, so this does not fetch again. Throws when the
  * session wrote nothing that is changed.
  */
-export async function freezeSessionChange(root: string, session: string, opts: { branch: string; worktree: string; title?: string | null; only?: ReadonlyArray<string> | null }): Promise<FrozenChange> {
-  const { frozen, upstream, session: id, conversation, paths, shared, held } = await previewSessionChange(root, session, opts.only);
+export async function freezeSessionChange(root: string, session: string, opts: { branch: string; worktree: string; title?: string | null; only?: ReadonlyArray<string> | null; fetched?: boolean }): Promise<FrozenChange> {
+  const { frozen, upstream, session: id, conversation, paths, shared, held, landed } = await previewSessionChange(root, session, opts.only, { fetch: !opts.fetched });
   if (!paths.length) throw new Error(`Session ${id} wrote nothing here that can go in a change${held.length ? ` (held: ${held.map((h) => `${h.path}, ${h.why}`).join("; ")})` : ""}`);
   const cut = await cutChange(root, frozen, upstream, [{ message: defaultMessage(opts.title ?? null, paths), paths }], opts.branch);
   return {
-    source: "session", session: id, ...(conversation ? { conversation } : {}), ...cut, branch: opts.branch, worktree: opts.worktree, paths, shared, held,
+    source: "session", session: id, ...(conversation ? { conversation } : {}), ...cut, ...(landed ? { landed } : {}), branch: opts.branch, worktree: opts.worktree, paths, shared, held,
     ...(opts.only?.length ? { only: [...opts.only] } : {}), ...(opts.title ? { title: opts.title } : {}),
   };
 }
@@ -150,9 +176,9 @@ export class NoCheckoutChange extends Error {
  * already frozen (a refreeze), given each file and the session that wrote it.
  * A pass needs an upstream to ship to, so a checkout without one is refused.
  */
-export async function previewCheckoutChange(root: string, opts: { roster?: Roster; keep?: (path: string, conversation: string | null) => boolean } = {}) {
+export async function previewCheckoutChange(root: string, opts: { roster?: Roster; keep?: (path: string, conversation: string | null) => boolean; fetch?: boolean } = {}) {
   const upstream = await upstreamRef(root);
-  await fetchUpstream(root, upstream);
+  if (opts.fetch !== false) await fetchUpstream(root, upstream);
   const fa = await freezeAndAttribute(root, upstream);
   const plan = await makePlan(root, { roster: opts.roster, fetch: false, frozen: fa });
   const keep = opts.keep ?? (() => true);
@@ -163,7 +189,8 @@ export async function previewCheckoutChange(root: string, opts: { roster?: Roste
     .filter((g) => g.paths.length);
   const heldWhy = heldReason(fa);
   const held = plan.groups.filter((g) => !g.ship).flatMap((g) => g.paths).filter((p) => keep(p, writerOf(p))).map((p) => ({ path: p, why: heldWhy(p) ?? "held" }));
-  return { frozen: fa.frozen, upstream, groups, held };
+  const landed = await landedOn(root, fa.frozen, upstream, groups.flatMap((g) => g.paths));
+  return { frozen: fa.frozen, upstream, groups, held, landed };
 }
 
 /**
@@ -173,8 +200,8 @@ export async function previewCheckoutChange(root: string, opts: { roster?: Roste
  * the session that wrote it; a file no session's edit names has no entry.
  * Throws NoCheckoutChange when nothing can ship.
  */
-export async function freezeCheckoutChange(root: string, opts: { branch: string; worktree: string; title?: string | null; roster?: Roster; keep?: (path: string, conversation: string | null) => boolean }): Promise<FrozenChange> {
-  const { frozen, upstream, groups, held } = await previewCheckoutChange(root, opts);
+export async function freezeCheckoutChange(root: string, opts: { branch: string; worktree: string; title?: string | null; roster?: Roster; keep?: (path: string, conversation: string | null) => boolean; fetched?: boolean }): Promise<FrozenChange> {
+  const { frozen, upstream, groups, held, landed } = await previewCheckoutChange(root, { ...opts, fetch: !opts.fetched });
   if (!groups.length) throw new NoCheckoutChange(root, held);
   const cut = await cutChange(root, frozen, upstream, groups.map((g) => ({ message: g.message.trim() + trailerFor(g), paths: g.paths })), opts.branch);
   const writers: NonNullable<FrozenChange["writers"]> = {};
@@ -183,7 +210,7 @@ export async function freezeCheckoutChange(root: string, opts: { branch: string;
     if (conversation) for (const p of g.paths) writers[p] = { conversation, session: g.session!.id ?? conversation.slice(0, 7) };
   }
   return {
-    source: "checkout", ...cut, branch: opts.branch, worktree: opts.worktree, paths: groups.flatMap((g) => g.paths).sort(), shared: [], held, writers,
+    source: "checkout", ...cut, ...(landed ? { landed } : {}), branch: opts.branch, worktree: opts.worktree, paths: groups.flatMap((g) => g.paths).sort(), shared: [], held, writers,
     ...(opts.title ? { title: opts.title } : {}),
   };
 }

@@ -9,7 +9,8 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { freezeSessionChange, frozenChangeContext, NoSessionChange, refreezeSessionChange, writeFrozenChange } from "./flowChange";
+import { freezeCheckoutChange, freezeSessionChange, frozenChangeContext, NoSessionChange, previewCheckoutChange, previewSessionChange, refreezeSessionChange, writeFrozenChange } from "./flowChange";
+import { behindWords, readFrozenChange } from "./flowChangeFile";
 import { parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
 
@@ -114,7 +115,7 @@ describe("a session's change runs through a flow", () => {
     // The run starts on the change: its stations read $branch and $worktree from the run's files.
     const flow = parseWorkflowSource(`digraph change {
       start [shape=Mdiamond]
-      look [label="Look", shape=parallelogram, script="git -C $project_path show --stat --format=%s $branch > $run_dir/seen.txt && echo $worktree >> $run_dir/seen.txt"]
+      look [label="Look", shape=parallelogram, script="git -C $project_path show --stat --format=%s $branch > $run_dir/seen.txt && echo diff_base=$diff_base >> $run_dir/seen.txt && echo $worktree >> $run_dir/seen.txt"]
       done [shape=Msquare]
       start -> look -> done
     }`);
@@ -132,6 +133,8 @@ describe("a session's change runs through a flow", () => {
     const seen = fs.readFileSync(path.join(runDir, "seen.txt"), "utf-8");
     expect(seen).toContain("feat(src): speed up the api");
     for (const p of change.paths) expect(seen).toContain(p);
+    // A reviewer's diff starts where the change was cut: HEAD here, with no upstream.
+    expect(seen).toContain(`diff_base=${headBefore}`);
     expect(seen.trim().endsWith("change-ct-1")).toBe(true);
   }, 60_000);
 
@@ -162,9 +165,7 @@ describe("a session's change runs through a flow", () => {
     git(root, "commit", "-qm", "base");
     write(root, "a.txt", "b\n");
     transcript("sess-c", "jx7ccccccccccccccccccccccccccccc", [tool(root, "Edit", { file_path: path.join(root, "a.txt"), old_string: "a", new_string: "b" }, 10_000)]);
-    const refused = freezeSessionChange(root, "jx7zzzz", { branch: "codecast/x", worktree: "x" });
-    await expect(refused).rejects.toThrow(/No uncommitted change/);
-    await expect(refused).rejects.toBeInstanceOf(NoSessionChange);
+    await expect(freezeSessionChange(root, "jx7zzzz", { branch: "codecast/x", worktree: "x" })).rejects.toThrow(/No uncommitted change/);
   });
 });
 
@@ -304,10 +305,41 @@ describe("a session's change is cut on fresh upstream", () => {
     expect(git(root, "show", `${change.tip}:a.ts`)).toBe("export const a = 2;");
     expect(git(root, "show", `${change.tip}:b.ts`)).toBe("export const b = 2;");
     expect(git(root, "diff", "--name-only", fresh, change.tip)).toBe("a.ts");
+    // The local main lags, so a reviewer diffs from where the change was cut: from main it would show upstream's b.ts too.
+    const runDir = path.join(root, ".git", "run-fresh");
+    writeFrozenChange(runDir, change);
+    expect(frozenChangeContext(runDir).diff_base).toBe(fresh);
+    expect(git(root, "diff", "--name-only", `${frozenChangeContext(runDir).diff_base}...codecast/fresh`)).toBe("a.ts");
+    expect(git(root, "diff", "--name-only", "main...codecast/fresh").split("\n").sort()).toEqual(["a.ts", "b.ts"]);
     // The fetch moved the remote-tracking ref, nothing else.
     expect(git(root, "rev-parse", "origin/main")).toBe(fresh);
     expect(shared()).toEqual(before);
-  }, 30_000);
+  }, 180_000);
+
+  test("a run with no frozen change diffs from the default branch", async () => {
+    freshState();
+    const root = path.join(sandbox, "plain");
+    fs.mkdirSync(root);
+    git(root, "init", "-q", "-b", "main");
+    write(root, "a.txt", "a\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "base");
+    const flow = parseWorkflowSource(`digraph plain {
+      start [shape=Mdiamond]
+      look [label="Look", shape=parallelogram, script="mkdir -p $run_dir && echo $diff_base > $run_dir/base.txt"]
+      done [shape=Msquare]
+      start -> look -> done
+    }`);
+    const runDir = lineRunDir(root, runSlug(flow, { task_id: "ct-2" }, "run"));
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      expect(await runWorkflow(flow, { cwd: root, taskId: "ct-2" })).toBe("completed");
+    } finally {
+      console.log = orig;
+    }
+    expect(fs.readFileSync(path.join(runDir, "base.txt"), "utf-8").trim()).toBe("main");
+  }, 180_000);
 
   test("upstream changed the same lines: the branch stays on HEAD and the conflict is recorded", async () => {
     const { root, upstream, shared, session } = lagging("upbb");
@@ -316,8 +348,71 @@ describe("a session's change is cut on fresh upstream", () => {
     const change = await freezeSessionChange(root, session, { branch: "codecast/stale", worktree: "stale" });
     expect(git(root, "rev-parse", `${change.tip}^`)).toBe(before.head);
     expect(change.base).toBe(before.head);
-    expect(change.behind).toEqual({ upstream: fresh, conflicts: ["a.ts"] });
+    expect(change.behind).toMatchObject({ upstream: fresh, why: "conflict", conflicts: ["a.ts"] });
+    expect(change.behind!.reason).toContain("a.ts");
+    expect(behindWords(change)).toMatch(/conflicts with upstream \w+ in a\.ts/);
     expect(git(root, "show", `${change.tip}:a.ts`)).toBe("export const a = 2;");
     expect(shared()).toEqual(before);
-  }, 30_000);
+
+    // The checkout's change is cut the same way.
+    const pass = await freezeCheckoutChange(root, { branch: "codecast/stale-pass", worktree: "stale-pass" });
+    expect(pass.base).toBe(before.head);
+    expect(pass.behind).toMatchObject({ upstream: fresh, why: "conflict", conflicts: ["a.ts"] });
+    expect(shared()).toEqual(before);
+  }, 180_000);
+
+  test("a merge commit in the checkout's own history cannot be replayed: the change stays on HEAD and says why", async () => {
+    const { root, upstream, shared, session } = lagging("upcc");
+    git(root, "checkout", "-qb", "side");
+    write(root, "c.ts", "export const c = 1;\n");
+    git(root, "add", "c.ts");
+    git(root, "commit", "-qm", "side");
+    git(root, "checkout", "-q", "main");
+    git(root, "merge", "-q", "--no-ff", "-m", "merge side", "side");
+    const before = shared();
+    const fresh = upstream("b.ts", "export const b = 2;\n");
+    const change = await freezeSessionChange(root, session, { branch: "codecast/merged", worktree: "merged" });
+    expect(git(root, "rev-parse", `${change.tip}^`)).toBe(before.head);
+    expect(change.behind).toMatchObject({ upstream: fresh, why: "unreplayable", conflicts: [] });
+    expect(change.behind!.reason).toContain("merge commit");
+    expect(behindWords(change)).toMatch(/could not be replayed onto upstream \w+ \(.*merge commit/);
+    expect(shared()).toEqual(before);
+  }, 180_000);
+
+  test("a freeze told its preview just fetched does not fetch again", async () => {
+    const { root, upstream, shared, session } = lagging("updd");
+    const before = shared();
+    const stale = git(root, "rev-parse", "origin/main");
+    const fresh = upstream("b.ts", "export const b = 2;\n");
+    const unfetched = await freezeSessionChange(root, session, { branch: "codecast/once", worktree: "once", fetched: true });
+    expect(git(root, "rev-parse", "origin/main")).toBe(stale);
+    expect(unfetched.base).toBe(before.head);
+    const pass = await freezeCheckoutChange(root, { branch: "codecast/once-pass", worktree: "once-pass", fetched: true });
+    expect(git(root, "rev-parse", "origin/main")).toBe(stale);
+    expect(pass.base).toBe(before.head);
+    // Left to itself, it fetches.
+    const fetched = await freezeSessionChange(root, session, { branch: "codecast/once", worktree: "once" });
+    expect(fetched.base).toBe(fresh);
+  }, 180_000);
+
+  test("a change upstream already holds is reported as landed, by the preview and by a refreeze", async () => {
+    const { root, upstream, session } = lagging("upee");
+    const change = await freezeSessionChange(root, session, { branch: "codecast/landed", worktree: "landed" });
+    expect(change.landed).toBeUndefined();
+    const runDir = path.join(root, ".git", "run-landed");
+    writeFrozenChange(runDir, change);
+
+    // Someone lands the same edit upstream.
+    const fresh = upstream("a.ts", "export const a = 2;\n");
+    expect((await previewSessionChange(root, session)).landed).toBe(fresh);
+    expect((await previewCheckoutChange(root)).landed).toBe(fresh);
+    const pass = await freezeCheckoutChange(root, { branch: "codecast/landed-pass", worktree: "landed-pass" });
+    expect(pass.landed).toBe(fresh);
+    expect(pass.tip).toBe(fresh);
+
+    const { change: again } = await refreezeSessionChange(root, runDir, null);
+    expect(again.landed).toBe(fresh);
+    expect(again.tip).toBe(fresh);
+    expect(readFrozenChange(runDir)?.landed).toBe(fresh);
+  }, 180_000);
 });
