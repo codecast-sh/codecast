@@ -731,7 +731,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--station <s>", "The task status (category or team status id) the task is held at until answered")
     .option("--stack <ds-N>", "Append to a decision stack (cast stack create); ls: list that stack's members")
     .option("--impact <n :: why>", 'How much getting this answered matters, 1-5, with a one-line why: "4 :: the release waits on it". 1 little rides on it; 3 ordinary; 5 work or money is stuck or at risk until it is answered. Orders the queue inside blocked and advisory')
-    .option("--category <c>", "Proposed category: approach|scope|priority|retry|review|allocation (the server may pin a protected one)")
+    .option("--category <c>", "Whose call it is. A person's alone: production|billing|data|access|external|product|limit. A role may answer under a grant: approach|scope|priority|retry|review|allocation (default review)")
     .option("--kind <k>", `single|multi|rank|form (default single)`)
     .option("--line <label>", "Ask for one line of text instead of a choice: a form with one text field (sets --kind form)")
     .option("--to <who>", "Who answers: a person's name, email or @handle in the session's workspace (repeatable; default: whoever the session reports to). pass: the one teammate it goes to", (val: string, acc: string[]) => [...acc, val], [] as string[])
@@ -1015,7 +1015,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       const task: string | undefined =
         options.task === false ? undefined : typeof options.task === "string" ? options.task : spec?.task ?? readTaskPulseFor(sessionId)?.task;
       const category: string | undefined = options.category ?? spec?.category;
-      if (category && !/^[a-z]+$/.test(category)) fail("--category is one lowercase word from the vocabulary (approach, scope, priority, retry, review, allocation).");
+      if (category && !/^[a-z]+$/.test(category)) fail("--category is one lowercase word from the vocabulary (a person's alone: production, billing, data, access, external, product, limit; a role's under a grant: approach, scope, priority, retry, review, allocation).");
 
       // Publish the report first (existing artifact pipeline) so the decision
       // row carries only the slug.
@@ -1061,7 +1061,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       // the row as a card keyed by the id, so both appear in the transcript.
       console.log(fmt.muted(`  id: ${decisionHandle(result)}`));
       if (result.category) {
-        console.log(fmt.muted(`  category: ${result.category}${result.category_pinned ? " (pinned by the server: a person answers this)" : category && category !== result.category ? ` (proposed ${category})` : ""}`));
+        console.log(fmt.muted(`  category: ${result.category}${category && category !== result.category ? ` (proposed ${category})` : ""}`));
       }
       if (result.task) console.log(fmt.muted(`  task: ${result.task.short_id} held at ${result.task.station}`));
       if (result.stack) console.log(fmt.muted(`  stack: ${result.stack.short_id}`));

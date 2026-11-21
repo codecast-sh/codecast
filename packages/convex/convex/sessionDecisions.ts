@@ -1172,9 +1172,9 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   const stack = trialProject ? await trialStackOf(ctx, trialProject, now) : bound.stack;
   if (trialProject) await gateTrialPages(ctx, trialProject, [args.report_slug, ...args.options.map((o) => o.page_slug)], now);
 
-  const assigned = assignCategory({ question: args.question, options: args.options, context_md: args.context_md }, args.category);
+  const assigned = assignCategory(args.category);
   // Running a command in the person's name is always the person's (never a role's under a grant).
-  const { category, pinned } = parsedRun && !isProtectedCategory(assigned.category) ? { category: "access", pinned: true } : assigned;
+  const category = parsedRun && !isProtectedCategory(assigned) ? "access" : assigned;
   const run: CommandRun | undefined = parsedRun
     ? {
         argv: parsedRun.argv,
@@ -1269,7 +1269,6 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       short_id: existing.short_id,
       updated: true,
       category,
-      category_pinned: pinned,
       holder: updated?.holder,
       stack: stack ? { id: stack._id, short_id: stack.short_id } : undefined,
       doc_id: docId,
@@ -1338,7 +1337,6 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     short_id,
     updated: false,
     category,
-    category_pinned: pinned,
     holder,
     grant_id: grant?._id,
     people: people.length,
@@ -1495,10 +1493,9 @@ export const edit = mutation({
     const conversation = args.doc_md ? await ctx.db.get(row.conversation_id) : null;
     const docId = args.doc_md && conversation ? await upsertDecisionDoc(ctx, conversation, question, args.doc_md, now, row.doc_id) : undefined;
 
-    // Options that changed may pin a protected category the old text did not;
-    // a new proposal is re-assigned the same way the ask assigned it.
+    // A new proposal is assigned the same way the ask assigned it.
     const proposed = args.category ?? row.category_proposed;
-    const { category } = assignCategory({ question, options, context_md: args.context_md ?? row.context_md }, proposed);
+    const category = assignCategory(proposed);
     const joined = stack ? await joinStack(ctx, stack, row as any, now) : {};
     const joinsStack = "stack_id" in joined;
     const trialProject = row.trial ? await trialProjectOf(ctx, task ?? (row.task_id ? await ctx.db.get(row.task_id) : null)) : null;

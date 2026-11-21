@@ -56,7 +56,7 @@ export function ThreeWays() {
     <Section
       id="why"
       title="Three ways an agent can handle a choice it cannot make alone"
-      lede={<>It can stop and ask, which pulls you out of your own work to read a transcript. Or it can pick alone, and you find out after code depends on the choice. Codecast puts the question in a queue instead. Because a queued question costs you almost nothing to receive, agents also queue the choices they would otherwise have made silently and mentioned in passing.</>}
+      lede={<>It can stop and ask, which pulls you out of your own work to read a transcript. Or it can pick alone, and you find out after code depends on the choice. Codecast puts the question in a queue instead, and the agent asks only what is yours to answer: everything else it decides and reports.</>}
       aside={<>The tracks below show an illustrative afternoon, made up rather than measured. They compare who loses time in each approach, and when.</>}
     >
       <div className="grid grid-cols-[72px_1fr] sm:grid-cols-[96px_1fr] gap-3 mb-2">
@@ -346,14 +346,15 @@ export function KeepTrue() {
 /* ── 8. What belongs in the queue ─────────────────────────────────────────── */
 
 const ASK: [string, string][] = [
-  ["Hard to reverse", "a schema, a data model, a protocol"],
-  ["Spends money or quota", "or touches billing, auth, or anything user facing in prod"],
-  ["Deletes or migrates data", "or drops something only a backup can bring back"],
-  ["Settled by taste", "speed against correctness, breadth against depth"],
-  ["A guess about the product", "what you want it to do, when nothing says"],
+  ["What you intend", "when nothing written settles it"],
+  ["A fact only you hold", "nothing in the code, the docs or past sessions says"],
+  ["Money beyond its budget", "spend the run was not given"],
+  ["An irreversible change that reaches many", "a mistake people outside the work would feel"],
 ];
 const NEVER: [string, string][] = [
   ["Anything more reading answers", "the code, the docs or past sessions already say"],
+  ["An answer already given", "an earlier card, a ruling or the project's instructions settle it"],
+  ["Removing data the system rebuilds", "or that exists to be thrown away"],
   ["A status update", "progress goes on the task"],
   ["A probe, a test, a layout sample", "every ask reaches your real queue and phone"],
 ];
@@ -364,7 +365,7 @@ export function Belongs() {
       id="rules"
       tone="sand"
       title="What an agent should and should not queue"
-      lede={<>Switching on <b style={{ color: TEXT, fontWeight: 600 }}>Decision queue</b> in <b style={{ color: TEXT, fontWeight: 600 }}>Agent features</b> teaches agents where the line is. Because the queue does not interrupt you, the bar sits lower than for an inline question: if the agent would have picked a direction and mentioned it in passing, it queues it.</>}
+      lede={<>Switching on <b style={{ color: TEXT, fontWeight: 600 }}>Decision queue</b> in <b style={{ color: TEXT, fontWeight: 600 }}>Agent features</b> teaches agents where the line is: a card is for an answer that is genuinely yours, and every other choice the agent makes itself and says what it chose.</>}
       aside={<>After posting, the agent writes nothing more about the decision. If its reply would only repeat the card, it ends the turn instead.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] md:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] gap-5">

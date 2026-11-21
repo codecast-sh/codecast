@@ -10,7 +10,7 @@ policies, and binds it to the task and station it blocks.
 
 ```
 kind?               "single" | "multi" | "rank" | "form"     default single
-category?           string   from the vocabulary below (server assigned; asker may propose)
+category?           string   from the vocabulary below (the asker's proposal, else review)
 category_proposed?  string
 doc_id?             Id<docs>  rich body (markdown doc); report_slug stays for a published page
 options[i]          + body_md?, evidence?: { label, url }[], cost?: string, risk?: string, page_slug?: string
@@ -47,12 +47,14 @@ decision_grants    role_id, category, scope_key: string ("role:<id>" | "project:
 
 Vocabulary: `approach`, `scope`, `priority`, `retry`, `review`, `allocation`,
 and the protected set `production`, `billing`, `data`, `access`, `external`,
-`product`, plus `limit` (raising a cap) and `unknown`. Protected, `limit` and
-`unknown` are always human held. The server assigns the category: the asker's
-proposal is accepted only when it is not looser than what a conservative
-classifier reads from the question and options (any option naming a deploy,
-purchase, deletion, access change, external message or product choice pins
-the category to the protected one).
+`product`, plus `limit` (raising a cap). Protected and `limit` are always human
+held; the open six may be answered by a role under a grant. The asker's
+proposal (`cast decide --category`) stands, because only the asker knows whose
+call the answer is: card text describes the situation, not who should answer
+it. No proposal, or one outside the vocabulary, is `review`. A `--run` card
+runs a command in the person's name, so the server sets it to `access` unless
+the asker proposed another protected category. `unknown` is never assigned; a
+row that carries it is human held.
 
 ## D2. The race
 

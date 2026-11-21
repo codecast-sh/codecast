@@ -573,6 +573,8 @@ async function askApproval(ctx: MutationCtx, conversation: Doc<"conversations">,
     // A call that looks harmless says why it asks (a page the person did
     // not name) above the draft.
     context_md: [stepAskWhy(call), approvalContext(call.input, { timezone, question })].filter(Boolean).join("\n\n"),
+    // Acting on the person's own accounts is theirs to approve, never a role's under a grant.
+    category: "access",
     blocking: true,
   });
   if (!asked?.id) throw new Error(asked?.error ?? "The approval could not be asked");

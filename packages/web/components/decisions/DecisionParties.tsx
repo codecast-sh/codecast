@@ -155,9 +155,8 @@ export function CategoryNote({
   className?: string;
 }) {
   const unset = !category || category === "unknown";
-  // Who set it, and whether the asker's proposal survived. The server pins a
-  // protected category whatever was proposed, and that disagreement is the
-  // one part of the provenance a reader acts on.
+  // Whether the asker's proposal survived: the server sets a card that runs a
+  // command to access, and a proposal outside the vocabulary to review.
   const overridden = !!proposed && !!category && proposed !== category;
   return (
     <span className={`inline-flex items-center gap-1.5 flex-wrap ${className}`} data-decision-category={category ?? "unknown"}>
@@ -168,7 +167,7 @@ export function CategoryNote({
       )}
       <span className="text-sol-text-dim">
         {categoryMeaning(category)}
-        {overridden && ` · the server pinned it; the asker proposed ${proposed}`}
+        {overridden && ` · the asker proposed ${proposed}`}
       </span>
     </span>
   );

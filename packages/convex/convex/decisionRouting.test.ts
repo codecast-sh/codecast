@@ -202,7 +202,7 @@ describe("ask time: what keeps today's rules", () => {
 
   test("a protected category keeps the chain", async () => {
     const { ctx, tables } = seed();
-    const r = await ask(ctx, { task: "ct-1", question: "Deploy the migration to production now?" });
+    const r = await ask(ctx, { task: "ct-1", question: "Deploy the migration to production now?", category: "production" });
     expect(row(tables, r.id).category).toBe("production");
     expect(askedOf(tables, r.id)).toEqual([HOST]);
   });

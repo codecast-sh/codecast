@@ -39,7 +39,7 @@ import * as path from "path";
 import { createStackCore, addToStackCore, removeFromStackCore, applyAutoDefaultsCore, delegateStack } from "./decisionStacks";
 
 // The W2 contract (docs/architecture/decisions-as-documents.md): category
-// pinning, inbox materialization, the ladder, a role answering under a grant,
+// assignment, inbox materialization, the ladder, a role answering under a grant,
 // a person's answer winning the race, stack auto defaults, and override
 // revocation. Driven through the exported core functions against the fake db.
 
@@ -454,10 +454,27 @@ describe("the race", () => {
       question: "Ship it?",
       options: [{ label: "Deploy to production" }, { label: "Wait" }],
       context_md: "ctx",
-      category: "approach",
+      category: "production",
     });
     expect(r.category).toBe("production");
     expect(tables.session_decisions[0].holder.kind).toBe("user");
+  });
+
+  test("the card's words never pick the category: a deletion with no proposal is review, and a granted role holds it", async () => {
+    const { ctx, tables } = seed({
+      decision_grants: [
+        { _id: "decision_grants_g1", role_id: "org_roles_lead", category: "review", scope_key: "role:org_roles_lead", granted_by: BOSS, granted_at: NOW, expires_at: Date.now() + GRANT_TTL_MS },
+      ],
+    });
+    const r = await askCore(ctx, { userId: HOST }, {
+      session_id: "sess-ask",
+      question: "Clear out the test rows?",
+      options: [{ label: "Delete the old rows in production" }, { label: "Keep them" }],
+      context_md: "They cost $4.50 a month.",
+    });
+    expect(r.category).toBe("review");
+    expect(tables.session_decisions[0].category_proposed).toBeUndefined();
+    expect(tables.session_decisions[0].holder).toEqual({ kind: "role", id: "org_roles_lead" });
   });
 });
 
@@ -602,7 +619,7 @@ describe("stacks", () => {
     expect(tables.decision_grants.every((g) => g.scope_key === `stack:${s.id}`)).toBe(true);
     expect(tables.session_decisions[0].holder).toEqual({ kind: "role", id: "org_roles_lead" });
     // A protected member stays with the people.
-    await askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Q2", options: [{ label: "Delete the table" }, { label: "Keep" }], context_md: "ctx", stack: s.short_id });
+    await askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Q2", options: [{ label: "Delete the table" }, { label: "Keep" }], context_md: "ctx", category: "data", stack: s.short_id });
     expect(tables.session_decisions[1].holder.kind).toBe("user");
   });
 });

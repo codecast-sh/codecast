@@ -90,8 +90,9 @@ test("the category says who may answer, and an unmet one is not an alarm", async
   expect(container.querySelector(".text-sol-red")).toBeNull();
   unmount();
 
-  const { container: pinned, unmount: u2 } = await mount(<CategoryNote category="data" proposed="approach" />);
-  expect(pinned.textContent).toContain("data");
-  expect(pinned.textContent).toContain("the server pinned it; the asker proposed approach");
+  // A card that runs a command is the person's (access), whatever was proposed.
+  const { container: set, unmount: u2 } = await mount(<CategoryNote category="access" proposed="approach" />);
+  expect(set.textContent).toContain("access");
+  expect(set.textContent).toContain("the asker proposed approach");
   u2();
 });
