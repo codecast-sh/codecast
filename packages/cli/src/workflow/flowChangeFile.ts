@@ -15,8 +15,11 @@ export type FrozenChange = {
   only?: string[];
   /** The commit message title the change was frozen under. */
   title?: string;
+  /** The commit the change sits on: the fetched upstream it was replayed onto, else the checkout's HEAD. */
   base: string;
   tip: string;
+  /** Set when replaying onto upstream conflicted: the change stays on HEAD, behind this upstream commit, and these paths conflict. */
+  behind?: { upstream: string; conflicts: string[] };
   branch: string;
   worktree: string;
   paths: string[];
