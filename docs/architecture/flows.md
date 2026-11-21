@@ -280,12 +280,17 @@ session has that session as its subject too (`callingSubject` in
 `flowCommand.ts` writes it into `change.json`): the session fixes the change by
 committing to the branch (pushing, for a pull request), and the run reads the
 branch again rather than freezing edits (`$change_return` in the briefs says
-which). Started from a plain shell (say over ssh on another machine), its
-subject is the session the task's change came from (`change_session` on
-`/cli/work/get`): the session bound to it, else the newest live session that
-handed it off (`cast task handoff`). A run with no spawner asks its gates from that session, so the card opens where
-the work is rather than on the run's own log. With neither, it has no
-subject, and its first fixable stop ends it with what the stage found.
+which). The branch is fetched into `origin/<branch>`, since the run's
+worktree has it checked out; when origin's tip holds the fix, the worktree
+that has the branch (or the branch, when none does) moves to it. A pull
+request's fetch that fails, or a worktree on the branch holding uncommitted
+work, stops the run and says which. Started from a plain shell (say over ssh
+on another machine), its subject is the session the task's change came from
+(`change_session` on `/cli/work/get`): the session bound to it, else the
+newest live session that handed it off (`cast task handoff`). A run with no
+spawner asks its gates from that session, so the card opens where the work is
+rather than on the run's own log. With neither, it has no subject, and its
+first fixable stop ends it with what the stage found.
 
 A check the machine could not run (LP4: the check exits 2, say no test
 database could be built) is not a finding about the change. Check routes it to
