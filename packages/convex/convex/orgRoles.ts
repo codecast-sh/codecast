@@ -1206,19 +1206,22 @@ async function requireAdoptable(ctx: Ctx, userId: Id<"users">, role: any, ref: s
 export async function performProvisionRole(
   ctx: any,
   userId: Id<"users">,
-  args: { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string },
+  args: ProvisionRoleArgs,
 ): Promise<any> {
   return withOrgChange(ctx, userId, { kind: "adopt" }, () => performProvisionRoleCore(ctx, userId, args));
 }
 
+// `fresh` always starts a new session: a project's session is never seated.
+type ProvisionRoleArgs = { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string; fresh?: boolean };
+
 async function performProvisionRoleCore(
   ctx: any,
   userId: Id<"users">,
-  args: { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string },
+  args: ProvisionRoleArgs,
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
-  const projectSession = args.adopt_conversation_id ? undefined : await projectSessionToSeat(ctx, role);
+  const projectSession = args.adopt_conversation_id || args.fresh ? undefined : await projectSessionToSeat(ctx, role);
   const adopt = args.adopt_conversation_id
     ? await requireAdoptable(ctx, userId, role, args.adopt_conversation_id)
     : projectSession ? await requireAdoptable(ctx, userId, role, projectSession).catch(() => undefined) : undefined;
@@ -1787,13 +1790,39 @@ async function performResumeRoleCore(ctx: any, userId: Id<"users">, args: { role
   return await ctx.db.get(role._id);
 }
 
-// restart — kill and resume the standing session.
-export async function performRestartRole(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
+// restart — kill and resume the standing session. `fresh` starts a new
+// conversation instead, seeded the way a first standing session is, and
+// retires the old one: its routines cancelled, its anchor decommissioned, its
+// seat markers cleared, and its thread kept as the role's previous standing
+// session.
+export async function performRestartRole(ctx: any, userId: Id<"users">, args: { role_id: string; fresh?: boolean }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const conv = await standingConversationOf(ctx, role);
   if (!conv) throw new Error("This role has no standing session yet (cast role create provisions one, or run cast role provision)");
-  await enqueueKillAndResume(ctx, conv.user_id, conv);
-  return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id };
+  if (!args.fresh) {
+    await enqueueKillAndResume(ctx, conv.user_id, conv);
+    return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id };
+  }
+  if (role.status === "retired") throw new Error("That role is retired");
+  return withOrgChange(ctx, userId, { kind: "adopt" }, async () => {
+    const now = Date.now();
+    const anchor = await ctx.db.get(role.anchor_id);
+    const previous = { conversation_id: String(conv._id), short_id: conv.short_id ?? String(conv._id).slice(0, 7) };
+    await noteOrgChange(ctx, userId, whereOfRole(role), { kind: "adopt", subject: roleSubject(role), before: { standing_session: previous } });
+    await cancelTasksOriginatingFrom(ctx, conv._id, now);
+    if (anchor && anchor.status !== "decommissioned") await decommissionAnchorRow(ctx, anchor);
+    await ctx.db.patch(conv._id, { standing_role_id: undefined, anchor_id: undefined, acting_user_id: undefined, updated_at: now });
+    await ctx.db.patch(role._id, { previous_standing_conversation_id: conv._id, updated_at: now });
+    const provisioned = await performProvisionRole(ctx, userId, {
+      role_id: String(role._id),
+      project_path: conv.project_path ?? undefined,
+      model: conv.model ?? anchor?.model ?? undefined,
+      // A backend a device can start (not the hosted assistant's).
+      agent_type: BACKENDS.has(conv.agent_type) ? conv.agent_type : undefined,
+      fresh: true,
+    });
+    return { role_id: role._id, conversation_id: provisioned.conversation_id, short_id: provisioned.short_id, fresh: true, previous_conversation_id: conv._id, previous_short_id: previous.short_id };
+  });
 }
 
 // move — run a role on the caller's machine: its standing session is pulled
@@ -2172,7 +2201,7 @@ export const resume = mutation({
   handler: async (ctx, { api_token, ...args }) => performResumeRole(ctx, await requireCaller(ctx, api_token), args),
 });
 export const restart = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string() },
+  args: { api_token: v.optional(v.string()), role_id: v.string(), fresh: v.optional(v.boolean()) },
   handler: async (ctx, { api_token, ...args }) => performRestartRole(ctx, await requireCaller(ctx, api_token), args),
 });
 export const move = mutation({
