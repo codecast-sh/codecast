@@ -9432,8 +9432,8 @@ export default defineSchema({
   // this hour. `key` names what is counted ("post:<channel>:<poster>",
   // "root:<channel>:<poster>", "mention_from:<user>", "mention_from:<user>:<session>"
   // for a mention reply charged to the replying session, "mention_to:<target>")
-  // and `bucket` is the window it counts in (a UTC day "2026-09-12" or hour
-  // "2026-09-12T14"). One row per (key, bucket); old buckets are simply never
+  // and `bucket` is the window it counts in (a UTC day "2026-09-12", an hour
+  // "2026-09-12T14", or in a DM the person's latest line "since:<created_at>"). One row per (key, bucket); old buckets are simply never
   // read again. Separate from `rate_limits`, whose window is one minute.
   chat_agent_quota: defineTable({
     key: v.string(),

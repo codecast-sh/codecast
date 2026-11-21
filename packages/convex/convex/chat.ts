@@ -4275,7 +4275,10 @@ async function wakeAnchorTurn(
 
 // ── Agent noise rules (docs/architecture/agent-channels.md C2/C3) ────────────
 
-// Refuse the line when this poster is over its daily cap in this channel.
+// Refuse the line when this poster is over its cap in this channel. A room
+// counts per UTC day. A DM counts since a person last wrote there: a person's
+// line opens a fresh count, so a conversation they drive is never refused,
+// while narration nobody answers stops at the same 30 lines and 5 roots.
 // Counted before the insert; the mutation rolls back as a whole on a throw, so
 // a refused line does not spend the count it was refused for.
 async function enforceAgentPostQuota(
@@ -4284,24 +4287,50 @@ async function enforceAgentPostQuota(
   posterKey: string,
   isRoot: boolean,
 ): Promise<void> {
-  const day = dayBucket();
-  const where = channel.kind === "dm" ? "this conversation" : `#${channel.name}`;
+  const dm = channel.kind === "dm";
+  const bucket = dm ? await dmQuotaBucket(ctx, channel._id) : dayBucket();
+  const where = dm ? "this conversation" : `#${channel.name}`;
+  const perDay = !bucket.startsWith("since:");
   if (isRoot) {
-    const roots = await takeQuota(ctx, `root:${channel._id}:${posterKey}`, day, AGENT_ROOTS_PER_CHANNEL_DAY);
+    const roots = await takeQuota(ctx, `root:${channel._id}:${posterKey}`, bucket, AGENT_ROOTS_PER_CHANNEL_DAY);
     if (!roots.ok) {
       chatFail(
         "RATE_LIMITED",
-        `An agent may start at most ${AGENT_ROOTS_PER_CHANNEL_DAY} threads per day in ${where}; reply in an existing thread instead (--thread <root>)`,
+        `An agent may start at most ${AGENT_ROOTS_PER_CHANNEL_DAY} threads ${perDay ? "per day " : ""}in ${where}${perDay ? "" : " until a person writes in it"}; reply in an existing thread instead (--thread <root>)`,
       );
     }
   }
-  const posts = await takeQuota(ctx, `post:${channel._id}:${posterKey}`, day, AGENT_POSTS_PER_CHANNEL_DAY);
+  const posts = await takeQuota(ctx, `post:${channel._id}:${posterKey}`, bucket, AGENT_POSTS_PER_CHANNEL_DAY);
   if (!posts.ok) {
     chatFail(
       "RATE_LIMITED",
-      `An agent may post at most ${AGENT_POSTS_PER_CHANNEL_DAY} lines per day in ${where}; the cap resets at midnight UTC`,
+      perDay
+        ? `An agent may post at most ${AGENT_POSTS_PER_CHANNEL_DAY} lines per day in ${where}; the cap resets at midnight UTC`
+        : `An agent may post at most ${AGENT_POSTS_PER_CHANNEL_DAY} lines in ${where} until a person writes in it`,
     );
   }
+}
+
+// The DM's count window: the newest line a person wrote ("since:<created_at>",
+// "since:0" before anyone has). Agent lines since that line are bounded by the
+// cap itself, so the walk is short; past DM_QUOTA_SCAN agent lines with no
+// person among them it falls back to the room rule, one count per UTC day.
+const DM_QUOTA_SCAN = 300;
+
+async function dmQuotaBucket(ctx: MutationCtx, channelId: Id<"chat_channels">): Promise<string> {
+  const bots = new Map<string, boolean>();
+  let scanned = 0;
+  for await (const row of ctx.db
+    .query("chat_messages")
+    .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channelId))
+    .order("desc")) {
+    if (++scanned > DM_QUOTA_SCAN) return `day:${dayBucket()}`;
+    if (row.origin === "agent" || row.author_kind === "agent") continue;
+    const key = row.user_id.toString();
+    if (!bots.has(key)) bots.set(key, !!(await ctx.db.get(row.user_id))?.is_bot);
+    if (!bots.get(key)) return `since:${row.created_at}`;
+  }
+  return "since:0";
 }
 
 type MentionWakeResult = { roles: number; sessions: number; folded: number; skipped: string[] };

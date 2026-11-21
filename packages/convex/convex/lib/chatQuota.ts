@@ -6,14 +6,16 @@
 // refuses (an agent over its daily post cap) and a caller that degrades (a
 // mention that folds instead of waking) both branch on the answer.
 //
-// Windows are UTC calendar buckets, not sliding: "30 lines per day" means
-// today, which is the number a person can reason about when a bot goes quiet.
+// Windows are buckets, not sliding: in a room "30 lines per day" means the UTC
+// day, which is the number a person can reason about when a bot goes quiet; in
+// a DM the bucket is the person's latest line there, so their reply resets it.
 
 import type { MutationCtx } from "../_generated/server";
 
 // The agent noise rules (docs/architecture/agent-channels.md C2/C3), counted
 // in chat_agent_quota. A role or session posts at most this many lines per
-// channel per UTC day, starts at most this many thread roots, and a mention
+// room per UTC day (in a DM, since a person last wrote there), starts at most
+// this many thread roots in the same window, and a mention
 // wakes at most this often per sender and per target per hour — over the cap
 // the send is refused (posts) or the mention folds (wakes).
 export const AGENT_POSTS_PER_CHANNEL_DAY = 30;

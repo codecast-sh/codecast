@@ -3564,6 +3564,49 @@ describe("agent channels: roles and sessions in chat", () => {
       .rejects.toMatchObject({ data: { code: "RATE_LIMITED" } });
   });
 
+  test("in a DM an agent's caps count since a person last wrote there, so a person's line restarts them", async () => {
+    const DM = "chat_channels_dm" as any;
+    const dmSeed = (extra: Record<string, any[]> = {}) => seed({
+      chat_channels: [...channels(), {
+        _id: DM, team_id: TEAM, name: "", kind: "dm", dm_key: dmKeyFor(String(TEAM), [ALICE, BOB].map(String)),
+        workspace: `restricted:${DM}`, created_by: ALICE, created_at: 1_000, updated_at: 1_000,
+      }],
+      chat_channel_members: [
+        { _id: "cm-a", channel_id: DM, user_id: ALICE, added_by: ALICE, added_at: 1 },
+        { _id: "cm-b", channel_id: DM, user_id: BOB, added_by: ALICE, added_at: 1 },
+      ],
+      ...extra,
+    });
+    const ctx = context(ALICE, dmSeed());
+    const agent = { channel_id: DM, origin: "agent" as const, origin_session_id: "sess-alice" };
+    const roots: string[] = [];
+    for (let i = 0; i < 5; i++) roots.push((await call(sendMessage, ctx, { ...agent, content: `root ${i}` })).message_id);
+    await expect(call(sendMessage, ctx, { ...agent, content: "root 6" }))
+      .rejects.toMatchObject({ data: { code: "RATE_LIMITED", message: expect.stringContaining("at most 5 threads in this conversation until a person writes in it") } });
+    for (let i = 0; i < 25; i++) await call(sendMessage, ctx, { ...agent, content: `reply ${i}`, thread_root_id: roots[0] });
+    await expect(call(sendMessage, ctx, { ...agent, content: "line 31", thread_root_id: roots[0] }))
+      .rejects.toMatchObject({ data: { code: "RATE_LIMITED", message: expect.stringContaining("at most 30 lines in this conversation until a person writes in it") } });
+
+    // Bob answers: both counts start again.
+    await call(sendMessage, as(ctx, BOB), { channel_id: DM, content: "and the eval for case 12?" });
+    await call(sendMessage, ctx, { ...agent, content: "case 12 passes" });
+    await call(sendMessage, ctx, { ...agent, content: "details", thread_root_id: roots[0] });
+
+    // An agent's line is not a person's: neither an anchor's reply nor a bot
+    // writing through chat.send restarts the count.
+    const capped = context(ALICE, dmSeed({
+      chat_messages: [
+        { _id: "dm-person", team_id: TEAM, channel_id: DM, user_id: BOB, content: "status?", created_at: 100, updated_at: 100 },
+        { _id: "dm-anchor", team_id: TEAM, channel_id: DM, user_id: BOT, author_kind: "agent", content: "green", created_at: 200, updated_at: 200 },
+        { _id: "dm-bot", team_id: TEAM, channel_id: DM, user_id: BOT, author_kind: "user", content: "digest", created_at: 300, updated_at: 300 },
+        { _id: "dm-session", team_id: TEAM, channel_id: DM, user_id: BOB, origin: "agent", content: "noted", created_at: 400, updated_at: 400 },
+      ],
+      chat_agent_quota: [{ _id: "q1", key: `post:${DM}:${ALICE}:sess-alice`, bucket: "since:100", count: 30, updated_at: 1 }],
+    }));
+    await expect(call(sendMessage, capped, { ...agent, content: "one more", thread_root_id: "dm-person" }))
+      .rejects.toMatchObject({ data: { code: "RATE_LIMITED", message: expect.stringContaining("until a person writes in it") } });
+  });
+
   test("an agent line rings the bell but never pushes a phone", async () => {
     const ctx = context(ALICE, seed({ chat_reads: [readRow(BOB, "all")] }));
     await call(sendMessage, ctx, { channel_id: CHANNEL, content: "machine line", origin: "agent", origin_session_id: "sess-alice" });
