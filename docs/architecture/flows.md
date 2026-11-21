@@ -233,8 +233,10 @@ commit or the default branch has it; an attribution that fails keeps it). The
 runner kills it (its transcript stays, and a later send revives it), sends no
 end message, which would only resume it to read "done", and says so in the
 exit station's `result_preview` ("Retired jx7...: its change is on main at
-..."). Otherwise the session hears the end as below; a failed run's end message
-is an ordinary send, so the session comes back to the inbox.
+..."). A subject already killed when a run completes (someone retired it, or
+an earlier run did) is not told either. Otherwise the session hears the end as
+below; a failed run's end message is an ordinary send that revives a killed
+subject on purpose, so the failure reaches someone.
 
 The `change` flow (and `quick-change`, the same without Decide) routes every
 stop it can fix to such a station; the briefs live in `templates/change/`: a failed

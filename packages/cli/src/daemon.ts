@@ -22085,19 +22085,13 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
   }
   if (!roots.size) return;
   const { sweepOne } = await import("./land/levelSweep.js");
-  // A conflict that holds a checkout back is briefed to the session that wrote the file.
-  const send = async (to: string, body: string): Promise<boolean> => {
-    const siteUrl = getSiteUrl();
-    const token = getAuthToken();
-    if (!siteUrl || !token) return false;
-    const resp = await fetch(`${siteUrl}/cli/messages/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_token: token, to, body, wake: true }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    return resp.ok && !((await resp.json().catch(() => null)) as { error?: unknown } | null)?.error;
-  };
+  // A conflict that holds a checkout back is briefed to the session that wrote
+  // the file, as a machine wake: a person's message would clear its pinned
+  // state and pull it into the inbox.
+  const svc = syncServiceRef;
+  const send = svc && getAuthToken()
+    ? async (to: string, body: string, clientId: string) => !!(await svc.sendMessageToSession(to, body, "scheduler", clientId))
+    : undefined;
   for (const root of roots) {
     const line = await sweepOne(root, { send }).catch(() => null);
     if (line) log(`[LEVEL] ${line}`);
