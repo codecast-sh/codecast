@@ -156,7 +156,8 @@ export function CategoryNote({
 }) {
   const unset = !category || category === "unknown";
   // Whether the asker's proposal survived: the server sets a card that runs a
-  // command to access, and a proposal outside the vocabulary to review.
+  // command to access and a proposal outside the vocabulary to unknown, a run's
+  // card is only tightened, and a gate sets the card it adopts.
   const overridden = !!proposed && !!category && proposed !== category;
   return (
     <span className={`inline-flex items-center gap-1.5 flex-wrap ${className}`} data-decision-category={category ?? "unknown"}>

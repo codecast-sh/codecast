@@ -41,7 +41,7 @@ export { sameCode };
 import { validateJudgeFixCard, type JudgeFixCard } from "@codecast/shared/contracts/judgeFix";
 import { isJudgeProblem, JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
 import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, resumeRunAt, stationSession, type GateChoice } from "./workflow_runs";
-import { runCategory } from "./lib/decisionCategory";
+import { adoptedCategory } from "./lib/decisionCategory";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, routeToRole, syncDecisionInbox, tellHearingRole, userMayRead, withdrawClosedProblemAsks, withdrawCore } from "./sessionDecisions";
 import { gateMirror } from "./lib/gateChoices";
 import { fileTrialCard, trialDeciderOf, trialProjectOf, trialStackOf } from "./lib/trialDecision";
@@ -98,8 +98,8 @@ export async function askTrialGate(
       workflow_run_id: run._id,
       gate_node_id: args.node_id,
       blocking: true,
-      // The gate, not its station, decides who may answer: the category the flow declares on it, else a person.
-      category: runCategory(args.category),
+      // Who may answer: a person's category the station named, else the one the flow declares on the gate, else a person.
+      category: adoptedCategory(own.category, args.category),
       trial: true,
       hops: told ? own.hops : routed.ladder.hops,
       asked_user_ids: routed.people,

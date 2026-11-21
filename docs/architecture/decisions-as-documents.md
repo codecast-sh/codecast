@@ -58,11 +58,12 @@ outside the vocabulary is `unknown` (the CLI refuses it). Asked again or
 edited without a proposal, a card keeps its category. A decision serving a
 workflow run is human held unless the run says otherwise: the run's own asks
 (a gate, the runner's failure card) take the category the gate declares, else
-`unknown`; a card a station posts (a session whose parent is the run's
-primary conversation) is `unknown` unless it proposes a human held category;
-a gate that adopts a station's card sets the category it declares, else
-`unknown`; and an asker who re-asks or edits a run's card may only tighten
-it. Separately, a lead on a run's ladder that starts work on its own answers
+`unknown`; a card a station posts (a session whose parent is the primary
+conversation of a live run, whether the run's own log or a person's session
+that hosts it) is `unknown` unless it proposes a human held category; a gate
+that adopts a station's card keeps a protected or `limit` category the
+station named, else sets the category it declares, else `unknown`; and an
+asker who re-asks or edits a run's card may only tighten it. Separately, a lead on a run's ladder that starts work on its own answers
 the run's change cards whatever their category (`isChangeCard`). A `--run`
 card runs a command in the person's name, so the server sets it to `access`
 unless the asker proposed another protected category.

@@ -57,6 +57,28 @@ describe("a run's decisions are a person's unless the flow says otherwise", () =
     expect(tables.session_decisions[0].category).toBe("production");
   });
 
+  test("a run launched from the composer: its host session is the primary, and its stations' cards are a person's while it runs", async () => {
+    const { ctx, tables } = await seed();
+    // useWorkflowLaunch passes existing_conversation_id: the person's session hosts the run with only workflow_run_id.
+    tables.conversations.push({ _id: "conversations_host", session_id: "sess-host", user_id: HOST, team_id: TEAM, message_count: 9, workflow_run_id: RUN });
+    tables.workflow_runs[0].primary_conversation_id = "conversations_host";
+    tables.conversations.push({ ...station, parent_conversation_id: "conversations_host" });
+    await stationAsks(ctx);
+    expect(tables.session_decisions[0].category).toBe("unknown");
+    // Once the run ends, a worker of the host session asks as an ordinary agent.
+    tables.workflow_runs[0].status = "completed";
+    await stationAsks(ctx, { question: "Which parser?" });
+    expect(tables.session_decisions[1].category).toBe("review");
+  });
+
+  test("a gate only tightens: a person's category the station named stands under a review gate", async () => {
+    const { ctx, tables } = await seed();
+    tables.conversations.push(station);
+    await stationAsks(ctx, { category: "production" });
+    await gate(ctx, { category: "review" });
+    expect(tables.session_decisions[0].category).toBe("production");
+  });
+
   test("the gate sets who may answer the card it adopts: its declared category, else a person", async () => {
     for (const [declared, expected] of [[undefined, "unknown"], ["production", "production"], ["review", "review"]] as const) {
       const { ctx, tables } = await seed();

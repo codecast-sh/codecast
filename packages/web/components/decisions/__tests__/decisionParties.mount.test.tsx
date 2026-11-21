@@ -79,7 +79,7 @@ test("a person renders with their face and links to their profile", async () => 
 
 test("the category says who may answer, and an unmet one is not an alarm", async () => {
   expect(categoryMeaning(undefined)).toBe("the asker proposed none, so a person answers it");
-  expect(categoryMeaning("unknown")).toBe("the asker proposed none, so a person answers it");
+  expect(categoryMeaning("unknown")).toBe("a person answers it: a run's card, or a category outside the list");
   expect(categoryMeaning("approach")).toContain("a role can earn");
   expect(categoryMeaning("production")).toContain("always a person");
 

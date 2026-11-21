@@ -70,6 +70,8 @@ When several decisions belong together, such as a launch checklist, switch the D
 ## What agents are told
 
 - One question per decision, with the reasoning written so you can answer without opening the session.
-- Ask before choices that are hard to reverse, that spend money, that touch production or user data, or that come down to taste.
-- Never ask what reading more code would answer, and never use the queue for status updates.
+- Ask only when the answer is genuinely yours: what you intend where nothing written settles it, a fact only you hold, money beyond what the run was given, or an irreversible change whose mistake would reach many people. Everything else they decide and say what they chose.
+- Never ask again what an earlier card, a ruling or the project's instructions already answered.
+- Mark a question as yours alone (a protected category) when the answer deploys, spends, changes access or messages people outside the team.
+- Never ask what reading more code would answer, never use the queue for status updates, and never ask to remove data the system rebuilds or exists to discard.
 - Keep the ask correct: edit the open question when the facts change, and withdraw it when it no longer matters. A withdrawn question shows as withdrawn in the conversation.

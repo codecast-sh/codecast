@@ -54,6 +54,14 @@ export function runCategory(declared: string | undefined): DecisionCategory {
   return assignCategory(declared, "unknown");
 }
 
+// The category a gate leaves the card it adopts with: a person's category the
+// station named stands (a gate only tightens); otherwise the gate's declared
+// one, else a person's. A station's card with none carries the server's
+// `unknown`, which the gate's word replaces.
+export function adoptedCategory(card: string | undefined, declared: string | undefined): DecisionCategory {
+  return isDecisionCategory(card) && card !== "unknown" && isHumanOnlyCategory(card) ? card : runCategory(declared);
+}
+
 // The category an ask or an edit leaves a decision with (D1).
 // - `current`: the open row's category on a re-ask or an edit (null for a new
 //   ask). Without a proposal it stays.

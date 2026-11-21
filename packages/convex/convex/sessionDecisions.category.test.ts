@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assignCategory, categoryFor, isHumanOnlyCategory } from "./lib/decisionCategory";
+import { adoptedCategory, assignCategory, categoryFor, isHumanOnlyCategory } from "./lib/decisionCategory";
 
 describe("category assignment", () => {
   test("the asker's proposal stands, open or protected", () => {
@@ -46,5 +46,14 @@ describe("categoryFor", () => {
     expect(categoryFor("production", { current: "review", runDeclares: false, runs: true })).toBe("production");
     // A row from before categories keeps a person's hold.
     expect(categoryFor(undefined, { current: undefined, runDeclares: false, runs: false })).toBe("unknown");
+  });
+});
+
+describe("adoptedCategory", () => {
+  test("a gate keeps a person's category the station named, and otherwise sets its own, else a person's", () => {
+    expect(adoptedCategory("production", "review")).toBe("production");
+    expect(adoptedCategory("unknown", "review")).toBe("review");
+    expect(adoptedCategory("unknown", undefined)).toBe("unknown");
+    expect(adoptedCategory("approach", "data")).toBe("data");
   });
 });
