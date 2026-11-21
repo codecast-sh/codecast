@@ -85,6 +85,15 @@ export async function callingSubject(deps: Pick<FlowDeps, "cliPost" | "callingSe
   return made?.conversation_id ? { session: String(made.short_id), conversation: String(made.conversation_id) } : undefined;
 }
 
+/**
+ * What a run on a task named alone works on: the branch an earlier run of the task left in `top` (named for the run's
+ * worktree, or a line's), else the calling session's own edits, else nothing it can run on.
+ */
+export function taskChange(top: string, worktree: string, task: string, callingSession: string | undefined): { branch: string } | { session: string } | null {
+  const known = [`codecast/${worktree}`, `line-${task}`, `codecast/line-${task}`].find((b) => spawnSync("git", ["-C", top, "rev-parse", "--verify", "--quiet", b]).status === 0);
+  return known ? { branch: known } : callingSession ? { session: callingSession } : null;
+}
+
 /** The task a session is bound to (its task pulse, written by `cast task start`), while that task is still open. */
 async function boundOpenTask(agentSession: string | undefined, deps: Pick<FlowDeps, "cliPost">): Promise<string | undefined> {
   const { readTaskPulseFor } = await import("./taskPulse.js");
@@ -346,7 +355,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (!top) { console.error("cast flow run works inside a git checkout"); process.exit(1); }
 
       // Which change: a branch or PR names its own; else a session's edits, unless only a task was named.
-      const sessionRef = opts.checkout ? undefined : typeof opts.session === "string" ? opts.session : opts.session === true || (!opts.task && !opts.branch && !opts.pr) ? deps.callingSession() : undefined;
+      let sessionRef = opts.checkout ? undefined : typeof opts.session === "string" ? opts.session : opts.session === true || (!opts.task && !opts.branch && !opts.pr) ? deps.callingSession() : undefined;
       if (!opts.task && !opts.branch && !opts.pr && !sessionRef && !opts.checkout) {
         console.error("Name the change: run this from inside a session (its own edits), or pass --task, --branch, --pr or --session <id>");
         process.exit(1);
@@ -366,6 +375,17 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const { runSlug, lineRunDir } = await import("./workflow/runner.js");
       const graph = parseWorkflowSource(found.source, found.file ? path.dirname(found.file) : cwd);
       let task = opts.task;
+      // A task named alone, when the flow works on a change: the branch an earlier run of it left, else the calling
+      // session's own edits, bound to that task rather than a new one, so its description and requester stay the run's.
+      if (task && !branch && !sessionRef && !opts.checkout && found.takes.includes("branch")) {
+        const taken = taskChange(top, runSlug(graph, { task_id: task }, "run"), task, deps.callingSession());
+        if (!taken) {
+          console.error(`${found.label} works on a change, and ${task} has no branch here yet: run it from inside the session that made the change (its own edits), or name the change with --branch or --pr`);
+          process.exit(1);
+        }
+        if ("branch" in taken) branch = taken.branch;
+        else sessionRef = taken.session;
+      }
       // A session's change is read first: a session with nothing here stops before anything is made.
       const { previewSessionChange, previewCheckoutChange, inboxRosterVia, NoCheckoutChange } = await import("./workflow/flowChange.js");
       const preview = sessionRef && !branch ? await previewSessionChange(top, sessionRef, only).catch((err) => { console.error(err.message); process.exit(1); }) : null;
@@ -426,15 +446,6 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (earlier && (branch || sessionRef || opts.checkout)) {
         const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
         if (dirty) { console.error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`); process.exit(1); }
-      }
-      // A task named alone brings the branch an earlier run of it left, when the flow works on a branch.
-      if (!branch && !sessionRef && !opts.checkout && task && found.takes.includes("branch")) {
-        const known = [`codecast/${worktree}`, `line-${task}`, `codecast/line-${task}`].find((b) => spawnSync("git", ["-C", top, "rev-parse", "--verify", "--quiet", b]).status === 0);
-        if (!known) {
-          console.error(`${found.label} works on a change, and ${task} has no branch here yet: run it from the session that made the change (its own edits), or name the change with --branch or --pr`);
-          process.exit(1);
-        }
-        branch = known;
       }
       if (branch) {
         const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();
