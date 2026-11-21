@@ -117,15 +117,23 @@ through `orgRoles.markBriefRead`).
 - Pause: `orgRoles.pause` sets status paused; flush holds; hands under the role
   receive one interrupt ("stop at a safe point"); the spawn path refuses new
   hands under a paused role. Resume flushes held rows as one wake.
-- Restart: `orgRoles.restart` calls the existing `restartSession` on the
-  standing conversation; the first frame after a restart carries the brief in
-  full and the charter text.
+- Restart: `orgRoles.restart` kills and resumes the standing conversation in
+  place (`enqueueKillAndResume`); the first frame after a restart carries the
+  brief in full and the charter text. `fresh: true` (`cast role restart <h>
+  --fresh`) starts a new standing session instead: the old seat's routines are
+  cancelled, its anchor decommissioned (kill, bot off the roster), its seat
+  markers (`standing_role_id`, `anchor_id`, `acting_user_id`) cleared, and it
+  is recorded as `org_roles.previous_standing_conversation_id`. The role is
+  then provisioned as on its first seating (new bot, anchors row, conversation,
+  opening message, routine) with the old session's project path, model and
+  backend, and never seats a project's session. The new anchor is hosted by
+  the caller.
 
 ## T5. CLI
 
 ```
 cast role create <name> --handle <h> [--project <ref>]... [--plan <ref>]... [--reports-to @handle|me] [--charter -] [--model m] [--no-session]
-cast role ls | show <h> | wake <h> "msg" | pause <h> | resume <h> | retire <h> | restart <h> | trust <h> <stage> | caps <h> --hands n --wakes n --tokens n
+cast role ls | show <h> | wake <h> "msg" | pause <h> | resume <h> | retire <h> | restart <h> [--fresh] | trust <h> <stage> | caps <h> --hands n --wakes n --tokens n
 cast brief [<h>] [--json]            # facts + narrative; inside a role, its own
 cast brief edit -                    # narrative from stdin (inside a role, or --for <h> as the parent)
 cast role wakes <h> [-n 20]          # the wake log
