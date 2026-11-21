@@ -3625,7 +3625,10 @@ export default defineSchema({
     .index("by_sha", ["sha"])
     .index("by_repository", ["repository"])
     .index("by_repository_timestamp", ["repository", "timestamp"])
-    .index("by_team_timestamp", ["team_id", "timestamp"]),
+    .index("by_team_timestamp", ["team_id", "timestamp"])
+    // Walked one row per repository to list the repositories a team's
+    // activity names (repos.ts repositoriesForUser).
+    .index("by_team_repository", ["team_id", "repository"]),
 
   // Per-edit file changes materialized at message ingest (materializeFileChanges
   // in messages.ts). Lets the diff viewer show the full session diff without
@@ -3859,7 +3862,9 @@ export default defineSchema({
     .index("by_repository_head", ["repository", "head_sha"])
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     // A team's pull requests touched in a trailing window (page data readers).
-    .index("by_team_updated", ["team_id", "updated_at"]),
+    .index("by_team_updated", ["team_id", "updated_at"])
+    // Walked one row per repository (repos.ts repositoriesForUser).
+    .index("by_team_repository", ["team_id", "repository"]),
 
   // A change guide a model wrote for a pull request whose author wrote none
   // (prGuides.ts, the PR page's Guide tab). One row per write, the newest

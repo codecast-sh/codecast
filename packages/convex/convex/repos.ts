@@ -224,19 +224,44 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
 
     // An installation with access to every repository lists none, so the
     // repositories we actually know about are the ones activity has named.
-    const prs = await ctx.db
-      .query("pull_requests")
-      .withIndex("by_team_id", (q: any) => q.eq("team_id", membership.team_id))
-      .take(500);
-    const commits = await ctx.db
-      .query("commits")
-      .withIndex("by_team_timestamp", (q: any) => q.eq("team_id", membership.team_id))
-      .order("desc")
-      .take(500);
-
-    for (const row of [...prs, ...commits]) add(row.repository, membership.team_id, false);
+    for (const table of ["pull_requests", "commits"] as const) {
+      for (const repository of await teamRepositories(ctx, table, membership.team_id)) {
+        add(repository, membership.team_id, false);
+      }
+    }
   }
   return [...found.values()].sort((a, b) => a.repository.localeCompare(b.repository));
+}
+
+/** Most distinct repositories one team's activity table is walked for. */
+const TEAM_REPOSITORY_WALK_CAP = 300;
+
+/**
+ * The distinct repositories a team's pull requests or commits name, one row
+ * read per repository: each step jumps past every row of the repository it
+ * just saw. Both rows are heavy (a pull request carries its files, commits and
+ * checks), and taking 500 of each per team to collect a few dozen names ran
+ * the query out of memory.
+ */
+async function teamRepositories(
+  ctx: { db: any },
+  table: "pull_requests" | "commits",
+  teamId: Id<"teams">,
+): Promise<string[]> {
+  const repositories: string[] = [];
+  // "" sorts below every real name and above a missing one, so rows with no
+  // repository are skipped.
+  let last = "";
+  while (repositories.length < TEAM_REPOSITORY_WALK_CAP) {
+    const row = await ctx.db
+      .query(table)
+      .withIndex("by_team_repository", (q: any) => q.eq("team_id", teamId).gt("repository", last))
+      .first();
+    if (!row) break;
+    repositories.push(row.repository);
+    last = row.repository;
+  }
+  return repositories;
 }
 
 export const listRepositories = query({
