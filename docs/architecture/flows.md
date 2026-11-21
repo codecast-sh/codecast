@@ -196,6 +196,18 @@ subject. A refreeze rebuilds it from the checkout as it is now, for the
 change's files and any file one of its writers now holds (a fix may add a
 test), still a commit per writer on the same branch.
 
+A station the subject would do (below) goes to the writers instead: the
+change's files that `$stop_reason` or the expanded brief names (by path, or by
+a basename no other file of the change shares) are grouped by the session
+that wrote them, and each writer gets the station's brief as a quiet send with
+a line naming its own failing files (`writersNamed`, `briefWriters`). The run
+waits on every briefed writer at once with the subject's wait, then freezes
+the pass again and goes on; the station's output names who was briefed. A
+finding that names no file of the change goes to the subject, and a run with
+none stops with it, as any run with no subject does. The writers are other
+people's sessions in a shared checkout, so nothing parks or retires them, nor
+the subject of a checkout's change.
+
 Every run binds to a task because the run's evidence, its gate decisions and
 its status already key on one (the-line.md L3, L6). The task is the record of
 the change; the session that made it stays linked to it.
@@ -280,7 +292,11 @@ session has that session as its subject too (`callingSubject` in
 `flowCommand.ts` writes it into `change.json`): the session fixes the change by
 committing to the branch (pushing, for a pull request), and the run reads the
 branch again rather than freezing edits (`$change_return` in the briefs says
-which). Started from a plain shell it has no subject, so its first fixable stop
+which). A pull request's branch is fetched into `origin/<branch>`, since the
+run's worktree has the branch checked out, and the worktree that has it (or
+the branch, when none does) moves to the fetched tip; a fetch that fails, or a
+worktree on the branch holding uncommitted work, stops the run and says which.
+Started from a plain shell it has no subject, so its first fixable stop
 ends it with what the stage found.
 
 A check the machine could not run (LP4: the check exits 2, say no test
