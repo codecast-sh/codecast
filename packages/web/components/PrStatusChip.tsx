@@ -40,12 +40,8 @@ export function PrStatusChip({
   /** Draw the face only, for a row that is itself the link. */
   plain?: boolean;
 }) {
-  // The panel above the composer reads a merged pull request's reach live. A
-  // card shows none: the row it would read can be days old.
-  const reach = useDeployReach(size === "panel" && status?.state === "merged" ? repoObjectId({ type: "pr", repository: status.repository, number: status.number }) : null);
   if (!status) return null;
   const { label, accent } = look ?? shepherdStyle(status.state);
-  const reachLook = reach ? REACH_LOOK[reach.state] : null;
   const href = prPath({ repository: status.repository, number: status.number });
   const body = (
     <>
@@ -53,7 +49,11 @@ export function PrStatusChip({
       <span className="tabular-nums">#{status.number}</span>
       {ci && <span data-pr-ci={ci} aria-hidden className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: accentVar(CI_WORDS[ci].accent) }} />}
       {label && <span className="opacity-80">{label}</span>}
-      {reachLook && <span data-pr-reach={reach!.state} style={{ color: accentVar(TONE_ACCENT[reachLook.tone]) }}>{label ? "· " : ""}{reachLook.word}</span>}
+      {/* The panel above the composer reads a merged pull request's reach live. A card,
+          drawn from props alone, shows none: the row it would read can be days old. */}
+      {size === "panel" && status.state === "merged" && (
+        <ChipReach refId={repoObjectId({ type: "pr", repository: status.repository, number: status.number })} after={!!label} />
+      )}
     </>
   );
   const chip = `inline-flex items-center gap-0.5 px-1 py-0 rounded border font-semibold text-meta ${className}`;
@@ -83,6 +83,14 @@ export function PrStatusChip({
       {body}
     </Link>
   );
+}
+
+/** A merged pull request's reach on the panel's chip: its word in its tone, or nothing. */
+function ChipReach({ refId, after }: { refId: string; after: boolean }) {
+  const reach = useDeployReach(refId);
+  if (!reach) return null;
+  const look = REACH_LOOK[reach.state];
+  return <span data-pr-reach={reach.state} style={{ color: accentVar(TONE_ACCENT[look.tone]) }}>{after ? "· " : ""}{look.word}</span>;
 }
 
 function linkedPrHover(pr: LinkedPr): string {

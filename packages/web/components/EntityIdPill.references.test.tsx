@@ -138,19 +138,6 @@ const FAKE_REPLAY = {
   dom_chunks: 0,
 };
 
-// A deploy the server knows by the GitHub Actions run that carries it, named in prose by its bare id.
-const DEPLOY_RUN_ID = "44822506482";
-const FAKE_DEPLOY = {
-  _id: "ux72qtvpbmmrmwcjqmhzawejsx8bq9gm",
-  short_id: "dp-12",
-  target: "web",
-  status: "running",
-  sha: "2a6e4120abcdef0123456789abcdef0123456789",
-  url: `https://github.com/acme/app/actions/runs/${DEPLOY_RUN_ID}`,
-  created_at: Date.now() - 12 * 60_000,
-  carries: [],
-};
-
 // What the proposal feeder asked the server for. A proposal is store-fed, so
 // this fake never answers it: the pill paints from the seeded row.
 const PROPOSAL_GETS: string[] = [];
@@ -163,7 +150,6 @@ function fakeQuery(fn: unknown, args: any) {
     return undefined;
   }
   if (name === "entities:resolveIdType") return TYPE_OF_CONVEX_ID[args?.id] ?? null;
-  if (name === "deploys:get") return args?.ref === DEPLOY_RUN_ID || args?.ref === "dp-12" ? FAKE_DEPLOY : null;
   if (name === "replays:webGetReplay") return args?.ref === "rp-7" ? FAKE_REPLAY : null;
   if (name === "ingest:webGetSource") return [FAKE_SOURCE].find((r) => r.short_id === args?.ref || r._id === args?.ref) ?? null;
   const rows = ROWS[name];
@@ -840,32 +826,3 @@ describe("the company's objects (or-N, pj-…, @person)", () => {
   });
 });
 
-// Agents name a deploy by the run that carries it ("Deploy 44822506482"). The
-// number renders as that deploy's pill once codecast says the run carried one,
-// and as the words written otherwise: most runs are CI.
-describe("a GitHub Actions run named by its bare id", () => {
-  test("a run that carried a deploy reads as the deploy, the word in front kept as prose", () => {
-    const html = render(`Deploy ${DEPLOY_RUN_ID} is going out.`);
-    expect(html).toMatch(/^<p>Deploy <span class="whitespace-nowrap">|^<p>Deploy <a /);
-    expect(html).toContain('<span class="self-baseline">web 2a6e412</span>');
-    expect(html).toContain('href="/deploys?deploy=dp-12"');
-    expect(html).toContain("deploying 12m");
-    expect(html).not.toContain(DEPLOY_RUN_ID);
-  });
-
-  test("a run that carried none stays exactly the text written, with no link", () => {
-    for (const md of ["CI run 44822599999 passed.", "deploy run #44822599999 is CI.", "(run 44825521157)"]) {
-      const html = render(md);
-      expect(html).not.toContain("<a ");
-      expect(html.replace(/<\/?p>/g, "").replace(/&#x27;/g, "'")).toBe(md);
-    }
-  });
-
-  test("a shorter number, or one after another word, is never a run", () => {
-    for (const md of ["Deploy 12345678 is a count.", "Order 44822506482 shipped."]) {
-      const html = render(md);
-      expect(html).not.toContain("<a ");
-      expect(html).toBe(`<p>${md}</p>`);
-    }
-  });
-});

@@ -149,16 +149,16 @@ function deployRecords(now: number, workspace: string) {
   return {
     teamDeploys,
     pullRequests: [
-      pr(D.prs.live, "Cap the Pages gallery read", "merged", 7 * hour),
+      pr(D.prs.live, "Page the Pages gallery read", "merged", 7 * hour),
       pr(D.prs.going_out, "Read-only team keys", "merged", 2 * hour),
       pr(D.prs.failed, "Move health checks behind the router", "merged", 90 * min),
       pr(D.prs.rolled_back, "Batch the inbox apply", "merged", 31 * hour),
       pr(D.prs.waiting, "Rename the inbox divider", "merged", 30 * min),
       pr(D.prs.open, "Messages reach Orca terminals", "open", 20 * min),
-      pr(D.prs.queued, "Cap the session index page", "merged", 70 * min),
+      pr(D.prs.queued, "Page the session index", "merged", 70 * min),
     ],
     // On main before backend's dp-90003 went live (128m ago) and before web's dp-90002 was asked for (82m ago).
-    commits: [{ _id: "gallerycommit0000000001", repository: D.repository, sha: D.commit, message: "fix(convex): cap the Pages gallery read\n\nLarge accounts timed out listing every page.", author_name: "Ashot", branch: "main", timestamp: now - 150 * min, insertions: 18, deletions: 4, files_changed: 2 }],
+    commits: [{ _id: "gallerycommit0000000001", repository: D.repository, sha: D.commit, message: "fix(convex): page the Pages gallery read\n\nLarge accounts timed out listing every page.", author_name: "Ashot", branch: "main", timestamp: now - 150 * min, insertions: 18, deletions: 4, files_changed: 2 }],
     deployReach: [
       reach(prRef(D.prs.live), "live", [["web", "live", D.liveWeb, null], ["backend", "live", D.live, null]]),
       reach(prRef(D.prs.going_out), "going_out", [["web", "going_out", D.goingOut, D.liveWeb]]),
