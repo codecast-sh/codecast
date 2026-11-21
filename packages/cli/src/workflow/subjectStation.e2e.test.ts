@@ -275,8 +275,9 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     expect(stashed).toBeLessThan(waitDone);
   }, 60_000);
 
-  /** A checkout with an origin, and a flow whose Land pushes the frozen change to origin's main (or, `lands: false`, does nothing). */
-  function landWorld(lands: boolean) {
+  const PUSH = "git -C $project_path push -q origin $branch:main";
+  /** A checkout with an origin, and a flow whose Land runs `land`: PUSH puts the frozen change on origin's main, `true` lands nothing. */
+  function landWorld(land: string) {
     const w = world("good\n");
     const origin = path.join(sandbox, `origin-${worlds}.git`);
     execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
@@ -287,7 +288,7 @@ describe("the subject between its turns: restarted, parked, retired", () => {
       graph [label="Change", on_failure=stop]
       start [shape=Mdiamond]
       check [flow="tcheck"]
-      land [label="Land", shape=parallelogram, script="${lands ? "git -C $project_path push -q origin $branch:main" : "true"}"]
+      land [label="Land", shape=parallelogram, script="${land}"]
       exit [shape=Msquare, label="Done"]
       start -> check -> land -> exit
     }`, w.root);
@@ -295,7 +296,7 @@ describe("the subject between its turns: restarted, parked, retired", () => {
   }
 
   test("a subject whose change is live and that has no other work is retired: killed, not told", async () => {
-    const { root, graph } = landWorld(true);
+    const { root, graph } = landWorld(PUSH);
     const s = server(() => {});
     expect((await start(root, graph)).outcome).toBe("completed");
     expect(git(root, "show", "origin/main:a.txt")).toBe("good");
@@ -306,7 +307,7 @@ describe("the subject between its turns: restarted, parked, retired", () => {
   }, 60_000);
 
   test("a parked subject is retired too, and is not resumed to hear a gate's answer", async () => {
-    const { root } = landWorld(true);
+    const { root } = landWorld(PUSH);
     const graph = parseWorkflowSource(`digraph change {
       graph [label="Change", on_failure=stop]
       start [shape=Mdiamond]
@@ -325,8 +326,44 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     expect(routes(s, "/cli/sessions/hibernate")).toEqual([]);
   }, 60_000);
 
+  test("a subject whose checkout has nothing uncommitted left (it pulled the landed main) is retired", async () => {
+    const { root, graph } = landWorld(`${PUSH} && git -C $project_path reset -q --hard origin/main`);
+    const s = server(() => {});
+    expect((await start(root, graph)).outcome).toBe("completed");
+    expect(git(root, "status", "--porcelain", "--", "a.txt")).toBe("");
+    expect(routes(s, "/cli/sessions/kill")).toHaveLength(1);
+    expect(s.sent()).toEqual([]);
+  }, 60_000);
+
+  test("a run that completes says nothing to a subject already stopped: no revival to read that it is over", async () => {
+    const { root, graph } = landWorld("true");
+    const s = server(() => {}, { row: () => ({ is_killed: true, is_live: false, work_state: "idle" }) });
+    expect((await start(root, graph)).outcome).toBe("completed");
+    expect(s.sent()).toEqual([]);
+    expect(routes(s, "/cli/sessions/kill")).toEqual([]);
+  }, 60_000);
+
+  test("a run that fails still tells a stopped subject, which revives it so the failure reaches someone", async () => {
+    const { root } = world("bad\n");
+    const graph = parseWorkflowSource(`digraph change {
+      graph [label="Change", on_failure=stop]
+      start [shape=Mdiamond]
+      check [flow="tcheck"]
+      stopped [shape=Msquare, label="Checks failed", stop="$stop_reason"]
+      exit [shape=Msquare, label="Done"]
+      start -> check -> exit
+      check -> stopped [condition="outcome = failure"]
+    }`, root);
+    const s = server(() => {}, { row: () => ({ is_killed: true, is_live: false, work_state: "idle" }) });
+    expect((await start(root, graph)).outcome).toBe("failed");
+    const told = s.sent();
+    expect(told).toHaveLength(1);
+    expect(told[0].body).toContain("stopped at Checks failed");
+    expect(told[0].quiet).toBeUndefined();
+  }, 60_000);
+
   test("a subject with another file of its own changed stays, and hears the end", async () => {
-    const { root, edit, graph } = landWorld(true);
+    const { root, edit, graph } = landWorld(PUSH);
     edit("more work\n", "b.txt");
     const s = server(() => {});
     expect((await start(root, graph, { only: ["a.txt"] })).outcome).toBe("completed");
@@ -336,7 +373,7 @@ describe("the subject between its turns: restarted, parked, retired", () => {
   }, 60_000);
 
   test("a change that did not land leaves its subject, who hears the end", async () => {
-    const { root, graph } = landWorld(false);
+    const { root, graph } = landWorld("true");
     const s = server(() => {});
     expect((await start(root, graph)).outcome).toBe("completed");
     expect(routes(s, "/cli/sessions/kill")).toEqual([]);
