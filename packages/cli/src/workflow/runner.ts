@@ -483,11 +483,11 @@ function lastSaid(state: WorkflowRunState): string | undefined {
   }
   return undefined;
 }
+
 /** One send of the run to its subject, named so a second attempt (or a second runner) lands it once: the server keeps the first message under a client_id. */
 function subjectSendKey(options: RunOptions, context: Record<string, string>, what: string): string {
   return `run:${options.runId || path.basename(context["run_dir"] || "local")}:${what}:${context[`${context["station_id"]}.visits`] || "1"}`;
 }
-
 
 /**
  * Send to the run's subject. Quiet (sendSessionMessage `quiet`): a subject stashed out of sight stays there. A
@@ -527,11 +527,11 @@ async function retireSubject(options: RunOptions, context: Record<string, string
   const keep = (why: string) => { console.log(`${c.dim}  ${subject.shortId} stays: ${why}${c.reset}`); return null; };
   const { landedCommit } = await import("./awaitDeploy.js");
   const landed = await landedCommit(cwd, branch, base, (context["change_files"] || "").split(" ").filter(Boolean)).catch(() => null);
+  if (!landed) return keep(`its change is not on ${base}`);
   // Merged is not live: a flow that ends at its merge leaves the deploy to come, and the session's end message is
   // where that reach shows. A flow that ends at Deploy already waited for live.
   const notLive = await notLiveYet(cwd, landed, (route, body) => cliCall(options, route, body));
   if (notLive) return keep(notLive);
-  if (!landed) return keep(`its change is not on ${base}`);
   const row = await subjectRow((route, body) => cliCall(options, route, body), subject);
   if (!subjectSettled(row)) return keep(row ? "it has not settled" : "it cannot be read");
   const other = await subjectOtherWork(cwd, subject, landed.sha, `origin/${base}`);
@@ -1956,10 +1956,10 @@ async function driveRun(
     for (const node of refreshedOnResume(graph, state.completed)) await executeCommand(node, state.context, cwd);
   }
 
-  // The machine driving the run, so the run is resumed there when its runner
   // A person who brought the subject back keeps it, across a resume too: the parker reads that off the run's context.
   parker?.bind(state.context);
 
+  // The machine driving the run, so the run is resumed there when its runner
   // dies (runResume.ts). Its own report: a server without the arg rejects it.
   if (options.runId && !options.dryRun) await reportRunner(options, state.currentNodeId, { runner_device: deviceId() });
 
