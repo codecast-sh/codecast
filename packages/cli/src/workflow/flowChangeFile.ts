@@ -4,7 +4,7 @@
 // flowChange.ts so the runner reads it without loading the freeze.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 
 export type FrozenChange = {
   source: "session" | "branch" | "task" | "pr";

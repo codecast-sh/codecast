@@ -11,14 +11,15 @@ import { commandGroup } from "./commandGroups.js";
 import { spawnSync } from "./proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { holdUntil, libraryTree, liveFlowLines, namesLiveFlow, variantChangeLines, variantChanges, variantSummary, type LibraryNode, type LiveFlow, type VariantChanges } from "./flowLibrary.js";
-import type { WorkflowGraph } from "./workflow/types.js";
-import { graphExtends, parseWorkflowSource } from "./workflow/parser.js";
+import { holdUntil, libraryTree, liveFlowLines, namesLiveFlow, variantChanges, variantSummary, type LibraryNode, type LiveFlow } from "./flowLibrary.js";
+import { parseWorkflowSource } from "./workflow/parser.js";
 import { describeFlow, flowLine, poolFlows, type PoolFlow, type PushedPoolRow } from "./workflow/flowPool.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
 import type { Workspace } from "./resolveWorkspace.js";
 import { choiceOption, notFoundLine } from "./argChecks.js";
 import { staleRepoFlow } from "./workflow/staleRepoFlow.js";
+import { registerFlowEditCommand } from "./flowEditCommand.js";
+import { baseOf, graphOf, printVariantChanges } from "./flowBase.js";
 
 /**
  * Why `cast ws acquire --json` left no worktree to run in, in words. A
@@ -118,25 +119,6 @@ Choosing a flow:
 
   cast flow show <flow> lists a flow's slots. A flow written here is kept in .codecast/session-flows/
   as this session's draft; its run draws in the conversation, where it can be saved to the library.
-`;
-
-/** `cast flow edit --help`: each edit as the line it writes. */
-const FLOW_EDIT_HELP = `
-Each edit writes one line in the project's .codecast/flows/<flow>.cast (created over the library
-flow when the repo has none) and a prompt's text beside it in .codecast/flows/<flow>/<station>.md.
-It validates the flow, prints the diff, and commits nothing.
-
-  cast flow edit change add lint --after check --run "bun run lint"      lint [after="check", ...]
-  cast flow edit change add e2e --after check --run "bun e2e" --when "landing/**"
-  cast flow edit change guide review "Also check the migrations"          review [guide="@change/review.md"]
-  cast flow edit change prompt review @review.md                          replaces the inherited prompt
-  cast flow edit change run lint "bun run lint --changed"
-  cast flow edit change when e2e "landing/**, backend/src/routes/**"      or: when e2e always
-  cast flow edit change skip decide                                       decide [skip=true]
-  cast flow edit change undo review                                       back to the library's
-
-A new station fails the way the station before it fails back (a check after Check goes to Fix check);
---fix <station> sends it elsewhere.
 `;
 
 export function registerFlowCommands(program: Command, deps: FlowDeps): Command {
@@ -299,65 +281,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (ref === "-") await keepSessionFlow(f, deps);
     });
 
-  flow
-    .command("edit <flow> <op> [args...]")
-    .description("Change how this project's flow differs from the library's, one typed edit at a time: add, guide, prompt, run, skip, when, undo")
-    .option("--after <station>", "add: put the new station after this one on the passing path")
-    .option("--before <station>", "add: put the new station before this one")
-    .option("--run <command>", "add: the station runs this command")
-    .option("--agent <prompt>", "add: the station is an agent with this prompt (text, @file or -)")
-    .option("--person <question>", "add: the station asks a person this")
-    .option("--when <globs>", "add: run it only when the change touches these paths (\"landing/**, src/api/**\")")
-    .option("--label <name>", "add: the station's name (default: from its id)")
-    .option("--fix <station>", "add: where its failure goes (default: the way back the station before it uses)")
-    .option("--dry-run", "Print what would change, write nothing")
-    .option("--json", "Print the edit as JSON")
-    .addHelpText("after", FLOW_EDIT_HELP)
-    .action(async (name: string, op: string, args: string[], opts: { after?: string; before?: string; run?: string; agent?: string; person?: string; when?: string; label?: string; fix?: string; dryRun?: boolean; json?: boolean }) => {
-      const { planFlowEdit, applyFlowEdit, argText, FlowEditError } = await import("./flowEdit.js");
-      const { readStdin } = await import("./workflow/sessionFlow.js");
-      const cwd = deps.realCwd();
-      const root = (spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim();
-      const fail = (msg: string): never => { console.error(`✗ ${msg}`); process.exit(1); };
-      if (!root) fail("cast flow edit writes the project's flow in its repository: run it inside the checkout");
-      const slug = name.replace(/\.cast$/, "");
-      const [station, ...rest] = args;
-      const usage: Record<string, string> = {
-        add: `cast flow edit ${slug} add <id> --after <station> --run "<command>"`,
-        guide: `cast flow edit ${slug} guide <station> "<text>"   (or @file, or - for stdin)`,
-        prompt: `cast flow edit ${slug} prompt <station> "<text>"   (or @file, or -)`,
-        run: `cast flow edit ${slug} run <station> "<command>"`,
-        skip: `cast flow edit ${slug} skip <station>`,
-        when: `cast flow edit ${slug} when <station> "<globs>"   (or always)`,
-        undo: `cast flow edit ${slug} undo <station>`,
-      };
-      if (!usage[op]) fail(`"${op}" is not an edit; the edits are ${Object.keys(usage).join(", ")}: ${usage.add}`);
-      const wantsText = ["guide", "prompt", "run", "when"].includes(op);
-      if (!station || (wantsText && rest.length === 0) || (!wantsText && rest.length > 0)) fail(`usage: ${usage[op]}`);
-      const text = rest.join(" ");
-      try {
-        const req =
-          op === "add" ? { op, station, after: opts.after, before: opts.before, run: opts.run, agent: opts.agent !== undefined ? argText(opts.agent, cwd, readStdin) : undefined, person: opts.person, when: opts.when, label: opts.label, fix: opts.fix } as const
-          : op === "guide" || op === "prompt" ? { op, station, text: argText(text, cwd, readStdin) } as const
-          : op === "run" ? { op, station, cmd: text } as const
-          : op === "when" ? { op, station, paths: text } as const
-          : { op: op as "skip" | "undo", station };
-        const plan = planFlowEdit(root, slug, req);
-        if (!opts.dryRun) applyFlowEdit(plan);
-        if (opts.json) { console.log(JSON.stringify({ ...plan.edit, changed: plan.changed, dry_run: !!opts.dryRun, path: plan.path, diff: plan.diff }, null, 2)); return; }
-        if (!plan.changed) { console.log(op === "undo" ? `${plan.edit.file} makes no edit to ${station}; nothing to undo` : `${plan.edit.file} already says this; nothing to change`); return; }
-        for (const w of plan.words) console.log(w);
-        console.log(dim(`${opts.dryRun ? "would write" : plan.created ? "created" : plan.removed ? "removed (the library's flow runs again)" : "wrote"} ${plan.writes.map((w) => path.relative(root, w.file)).join(", ")} · ${plan.path}`));
-        console.log(`\n${plan.diff.trimEnd()}\n`);
-        console.log("```flow");
-        console.log(JSON.stringify({ edit: plan.edit }));
-        console.log("```");
-        if (!opts.dryRun) console.log(dim("Not committed: the edit ships through the pipeline like any change."));
-      } catch (err) {
-        if (err instanceof FlowEditError) fail(err.message);
-        throw err;
-      }
-    });
+  registerFlowEditCommand(flow, deps);
 
   flow
     .command("publish <flow>")
@@ -739,41 +663,6 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
   return flow;
 }
 
-/** What a variant changes from the flow it extends, under its header. */
-function printVariantChanges(slug: string, base: PoolFlow | null, changes: VariantChanges | null): void {
-  if (!base) { console.log(dim(`extends ${slug}, which this library does not hold`)); return; }
-  const lines = changes ? variantChangeLines(changes) : [];
-  console.log(`extends ${bold(base.label)} ${dim(`(${slug})`)}${lines.length ? ", changing:" : changes ? ", changing nothing" : ""}`);
-  for (const l of lines) console.log(`  ${l}`);
-}
-
-/**
- * The flow a variant extends: the file its `extends` names, else the library flow of that name, never the variant
- * itself (a repo's change.cast that extends "change" shadows the shipped change in the pool, and extends that).
- */
-export function baseOf(found: FoundFlow, pool: ReadonlyArray<PoolFlow>): PoolFlow | null {
-  if (!found.extends) return null;
-  const shipped = Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, found.extends) ? describeFlow(found.extends, BUILTIN_WORKFLOW_TEMPLATES[found.extends], "shipped", null) : null;
-  return baseBeside(found) ?? pool.find((p) => p.slug === found.extends && (!p.file || p.file !== found.file)) ?? shipped;
-}
-
-/** A graph file's base read from where its `extends` points, for a variant whose base is not in the library. */
-function baseBeside(f: FoundFlow): PoolFlow | null {
-  let ext: string | undefined;
-  try { ext = f.file ? graphExtends(f.source) : undefined; } catch { return null; }
-  const file = ext ? path.resolve(path.dirname(f.file!), ext) : null;
-  if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) return null;
-  return describeFlow(path.basename(file).replace(/\.cast$/, ""), fs.readFileSync(file, "utf-8"), "repo", file);
-}
-
-/** A pool flow's parsed graph, or null when it has none or does not parse. */
-function graphOf(f: (PoolFlow & { source?: string }) | null | undefined): WorkflowGraph | null {
-  if (!f || f.errors.length) return null;
-  const source = f.source ?? (f.file ? fs.readFileSync(f.file, "utf-8") : BUILTIN_WORKFLOW_TEMPLATES[f.slug]);
-  if (!source) return null;
-  try { return parseWorkflowSource(source, f.file ? path.dirname(f.file) : undefined); } catch { return null; }
-}
-
 /** The team's live flows, or why they could not be read (the pool still lists without them). */
 async function readLive(deps: FlowDeps, team?: string): Promise<{ flows: LiveFlow[]; error: string | null }> {
   try {
@@ -790,7 +679,7 @@ async function readLive(deps: FlowDeps, team?: string): Promise<{ flows: LiveFlo
   }
 }
 
-type FoundFlow = PoolFlow & { source: string };
+export type FoundFlow = PoolFlow & { source: string };
 
 /** A session's 7-character codecast id, from whatever id the caller holds (its codecast id, or its agent's session id). */
 async function shortSessionId(session: string | null, deps: FlowDeps): Promise<string | null> {
