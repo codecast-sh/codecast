@@ -32,7 +32,7 @@ import { claudeProjectDirName } from "../projectPathResolver.js";
 import { frozenChangeContext } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
-import { startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
+import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { restoreRunTree } from "./runWorktree.js";
 
@@ -445,9 +445,8 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   if (row.is_killed) console.log(`  ${c.yellow}${subject.shortId} was stopped; the brief restarts it to work on this${c.reset}`);
   const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
   // Quiet: a subject stashed out of sight while the run went on stays there; it surfaces itself if it pins blocked.
-  // A backend older than this CLI refuses the arg it does not know, and a refused send delivered nothing: send it plain.
-  const send = (quiet: boolean) => cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body: brief, wake: true, ...(quiet ? { quiet } : {}) });
-  const sent = await send(true) ?? await send(false);
+  if (!options.runSession) console.log(`${c.dim}  this run has no session of its own, so the brief to ${subject.shortId} cannot go quietly: it brings it back to the inbox${c.reset}`);
+  const sent = await sendToSubject(options, subject, brief, subjectSendKey(options, context, node.id), true);
   if (!sent) {
     context["last_error"] = `Could not send ${node.label} to session ${subject.shortId}.${found}`;
     context["station_dead"] = node.id;
@@ -484,16 +483,35 @@ function lastSaid(state: WorkflowRunState): string | undefined {
   }
   return undefined;
 }
+/** One send of the run to its subject, named so a second attempt (or a second runner) lands it once: the server keeps the first message under a client_id. */
+function subjectSendKey(options: RunOptions, context: Record<string, string>, what: string): string {
+  return `run:${options.runId || path.basename(context["run_dir"] || "local")}:${what}:${context[`${context["station_id"]}.visits`] || "1"}`;
+}
+
 
 /**
- * Tell the run's subject something in its own turn; a run with no subject, or a dry run, says nothing. News it need
- * not act on (`inform`) is not worth resuming a parked session for, so a hibernated subject is not told.
+ * Send to the run's subject. Quiet (sendSessionMessage `quiet`): a subject stashed out of sight stays there. A
+ * backend older than this CLI refuses the arg it does not know, so a refused send goes again plain, under the same
+ * client_id: if the first did land (the answer was lost, not the send) the server keeps that one.
  */
-async function tellSubject(options: RunOptions, context: Record<string, string>, body: string, inform = false): Promise<void> {
+async function sendToSubject(options: RunOptions, subject: Subject, body: string, clientId: string, quiet: boolean): Promise<any> {
+  const send = (q: boolean) => cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body, wake: true, client_id: clientId, ...(q ? { quiet: true } : {}) });
+  return (quiet ? await send(true) : null) ?? await send(false);
+}
+
+/**
+ * Tell the run's subject something in its own turn; a run with no subject, or a dry run, says nothing. A send resumes
+ * a parked session and revives a killed one, so news it need not act on passes `unless`, which names the rows not
+ * worth that: a subject that reads so is not told.
+ */
+async function tellSubject(options: RunOptions, context: Record<string, string>, body: string, opts: { key: string; quiet?: boolean; unless?: (row: any) => boolean }): Promise<void> {
   const subject = subjectOf(context);
   if (!subject || options.dryRun) return;
-  if (inform && (await subjectRow((route, b) => cliCall(options, route, b), subject))?.agent_status === "hibernated") return;
-  await cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body, wake: true });
+  if (opts.unless && opts.unless(await subjectRow((route, b) => cliCall(options, route, b), subject))) {
+    console.log(`${c.dim}  ${subject.shortId} is parked or stopped: not woken to hear this${c.reset}`);
+    return;
+  }
+  await sendToSubject(options, subject, body, subjectSendKey(options, context, opts.key), !!opts.quiet);
 }
 
 /**
@@ -509,13 +527,19 @@ async function retireSubject(options: RunOptions, context: Record<string, string
   const keep = (why: string) => { console.log(`${c.dim}  ${subject.shortId} stays: ${why}${c.reset}`); return null; };
   const { landedCommit } = await import("./awaitDeploy.js");
   const landed = await landedCommit(cwd, branch, base, (context["change_files"] || "").split(" ").filter(Boolean)).catch(() => null);
+  // Merged is not live: a flow that ends at its merge leaves the deploy to come, and the session's end message is
+  // where that reach shows. A flow that ends at Deploy already waited for live.
+  const notLive = await notLiveYet(cwd, landed, (route, body) => cliCall(options, route, body));
+  if (notLive) return keep(notLive);
   if (!landed) return keep(`its change is not on ${base}`);
   const row = await subjectRow((route, body) => cliCall(options, route, body), subject);
   if (!subjectSettled(row)) return keep(row ? "it has not settled" : "it cannot be read");
   const other = await subjectOtherWork(cwd, subject, landed.sha, `origin/${base}`);
   if (other) return keep(other);
-  if (!(await cliCall(options, "/cli/sessions/kill", { session: subject.conversationId }))) return keep("it could not be stopped");
-  const said = `Retired ${subject.shortId}: its change is on ${base} at ${landed.sha.slice(0, 10)} and it has no other work.`;
+  // The server kills it only if nothing moved since this read and nothing would be cut off (cliRetireSession).
+  const retired = await cliCall(options, "/cli/sessions/retire", { session: subject.conversationId, expected_message_count: row.message_count ?? 0 });
+  if (!retired?.retired) return keep(retired?.reason ?? "it could not be retired");
+  const said = `Retired ${subject.shortId}: its change is live from ${base} at ${landed.sha.slice(0, 10)} and it has no other work.`;
   console.log(`  ${c.green}✓${c.reset} ${said}`);
   return said;
 }
@@ -1922,6 +1946,9 @@ async function driveRun(
   }
 
   // The machine driving the run, so the run is resumed there when its runner
+  // A person who brought the subject back keeps it, across a resume too: the parker reads that off the run's context.
+  parker?.bind(state.context);
+
   // dies (runResume.ts). Its own report: a server without the arg rejects it.
   if (options.runId && !options.dryRun) await reportRunner(options, state.currentNodeId, { runner_device: deviceId() });
 
@@ -2004,8 +2031,9 @@ async function driveRun(
       });
     }
 
-    // A retired subject is not told: the send would resume it just to read that the run is over.
-    if (!retired) await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: false, lastOutput: lastSaid(state) }));
+    // A retired subject is not told, nor one already stopped: the send would revive it just to read that the run is
+    // over. A failed run's end message (below) revives it on purpose, so the failure reaches someone.
+    if (!retired) await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: false, lastOutput: lastSaid(state) }), { key: "end", unless: (row) => !!row?.is_killed });
 
     // Log completion to bound plan
     if (options.planId && options.apiToken && options.convexSiteUrl && !options.dryRun) {
@@ -2046,7 +2074,7 @@ async function driveRun(
     // A run that got past a ship step's success landed its change, whatever stopped it after.
     const landed = state.completed.some((id) => /(^|__)(shipped|landed)$/.test(id));
     await parker?.stop();
-    await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: true, failReason: state.failReason, landed }));
+    await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: true, failReason: state.failReason, landed }), { key: "end" });
     return "failed";
   }
   return "completed";
@@ -2308,7 +2336,7 @@ async function runNodeLoop(
     // A gate's answer reaches the session the change came from, unless where it routes says it anyway: a station the
     // session does (a Revise note) or a stop (the run's end message). A question back to the reviewer is no answer.
     if (current.type === "human" && outcome !== "failure" && next && next.backend !== "subject" && next.segment_exit !== "stop" && !state.context["human.gate.question"] && state.context["human.gate.label"]) {
-      await tellSubject(options, state.context, gateAnswerMessage(current.segment_label ?? current.label, state.context["human.gate.label"], state.context["human.message"]), true);
+      await tellSubject(options, state.context, gateAnswerMessage(current.segment_label ?? current.label, state.context["human.gate.label"], state.context["human.message"]), { key: `${current.id}.answer`, quiet: true, unless: (row) => row?.agent_status === "hibernated" });
     }
     if (stationBlocked && !next) {
       console.log(`\n${c.yellow}  '${current.label}' is waiting on a person; the run stops here${c.reset}`);
