@@ -67,7 +67,15 @@ function prWorld(checkedOut = true) {
     git(seed, "push", "-q", origin, "fix");
     return git(origin, "rev-parse", "fix");
   };
-  return { root, origin, worktree: checkedOut ? worktree : null, runDir, first, push };
+  // The session rewrote the branch (a rebase) and force-pushed it: the old tip is not under the new one.
+  const forcePush = () => {
+    git(seed, "reset", "-q", "--hard", "HEAD~1");
+    write(seed, "a.ts", "export const a = 4;\n");
+    git(seed, "commit", "-qam", "rewritten");
+    git(seed, "push", "-qf", origin, "fix");
+    return git(origin, "rev-parse", "fix");
+  };
+  return { root, origin, worktree: checkedOut ? worktree : null, runDir, first, push, forcePush };
 }
 
 describe("a pull request's change is frozen again from what its session pushed", () => {
@@ -82,6 +90,35 @@ describe("a pull request's change is frozen again from what its session pushed",
     expect(git(worktree!, "rev-parse", "HEAD")).toBe(pushed);
     expect(fs.readFileSync(path.join(worktree!, "a.ts"), "utf-8")).toBe("export const a = 3;\n");
     expect(readFrozenChange(runDir)?.tip).toBe(pushed);
+  }, 180_000);
+
+  test("the run's own worktree follows a force-push: it holds no work of its own", async () => {
+    const { root, worktree, runDir, forcePush } = prWorld();
+    const pushed = forcePush();
+    const { change } = await refreezeSessionChange(root, runDir, worktree);
+    expect(change.tip).toBe(pushed);
+    expect(git(worktree!, "rev-parse", "HEAD")).toBe(pushed);
+  }, 180_000);
+
+  test("another worktree with the branch moves only when the pushed tip fast-forwards it", async () => {
+    const { root, worktree, runDir, push } = prWorld();
+    const pushed = push();
+    // Not the run's worktree: a fast-forward still moves it.
+    const { change } = await refreezeSessionChange(root, runDir, null);
+    expect(change.tip).toBe(pushed);
+    expect(git(worktree!, "rev-parse", "HEAD")).toBe(pushed);
+  }, 180_000);
+
+  test("another worktree with commits the pushed branch lacks is never moved, and the commits are named", async () => {
+    const { root, worktree, runDir, push } = prWorld();
+    push();
+    write(worktree!, "a.ts", "export const a = 'local';\n");
+    git(worktree!, "commit", "-qam", "unpushed local work");
+    const local = git(worktree!, "rev-parse", "HEAD");
+    const refused = refreezeSessionChange(root, runDir, null);
+    await expect(refused).rejects.toThrow(/checked out in .*run-wt, which has commits the pushed branch lacks \(\w+ unpushed local work\)/);
+    expect(git(worktree!, "rev-parse", "HEAD")).toBe(local);
+    expect(git(root, "rev-parse", "fix")).toBe(local);
   }, 180_000);
 
   test("with the branch checked out nowhere, the branch itself moves", async () => {
