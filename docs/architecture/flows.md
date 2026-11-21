@@ -159,15 +159,21 @@ A session's own edits in a shared checkout are frozen the way `cast ship
 checkout` freezes them (ship-checkout.md, `freezeAndAttribute`): every changed
 file the session wrote since that file's last commit becomes one commit on
 `codecast/<flow>-<task>`, and nothing in the shared tree, its index or HEAD
-moves. The upstream branch is fetched first (a failed fetch reads it as last
+moves. The upstream branch is fetched once per freeze, before the preview
+(60 seconds at most, never prompting; a failed fetch reads upstream as last
 fetched), so the stale-copy guard reads upstream as it is now. The commit is
 built on HEAD, the base its frozen content grew from, then replayed with the
 checkout's own unlanded commits onto that upstream in the object store
-(`replayOnto`), so Check and Review test the change on what it would land on.
-When the replay conflicts, the branch stays on the HEAD-based commit and
-`change.json` records `behind` (the upstream commit and the conflicting
-paths); Ship's rebase meets the same conflict and routes it to the session.
-A checkout already holding upstream, or with none, keeps the commit on HEAD.
+(`replayOnto`), so Check and Review test the change on what it would land on,
+and every reviewer's diff starts there (`$diff_base`, the change's `base`,
+else the default branch). When the replay fails, the branch stays on the
+HEAD-based commit and `change.json` records `behind`: a `conflict` (with its
+paths), which Ship's rebase meets again and routes to the session, or an
+`unreplayable` history (a merge commit in the checkout's own), with the
+reason; `cast flow run` prints it in one line. A checkout already holding
+upstream, or with none, keeps the commit on HEAD. A change whose every file
+upstream already holds at its frozen content is `landed`: `cast flow run`
+says so and starts nothing, and a refreeze records it and the run says so.
 Attribution is per file, so a file another session also wrote carries
 that session's lines too; the run includes it and names the other session
 rather than leave out part of the change. Credential files stay out. The
@@ -233,8 +239,10 @@ commit or the default branch has it; an attribution that fails keeps it). The
 runner kills it (its transcript stays, and a later send revives it), sends no
 end message, which would only resume it to read "done", and says so in the
 exit station's `result_preview` ("Retired jx7...: its change is on main at
-..."). Otherwise the session hears the end as below; a failed run's end message
-is an ordinary send, so the session comes back to the inbox.
+..."). A subject already killed when a run completes (someone retired it, or
+an earlier run did) is not told either. Otherwise the session hears the end as
+below; a failed run's end message is an ordinary send that revives a killed
+subject on purpose, so the failure reaches someone.
 
 The `change` flow (and `quick-change`, the same without Decide) routes every
 stop it can fix to such a station; the briefs live in `templates/change/`: a failed
