@@ -32,6 +32,7 @@ import { claudeProjectDirName } from "../projectPathResolver.js";
 import { frozenChangeContext } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
+import { startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { restoreRunTree } from "./runWorktree.js";
 
@@ -434,15 +435,19 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
     context["station_dead"] = node.id;
     return "failure";
   }
-  const read = await cliCall(options, "/cli/inbox", { session_ids: [subject.conversationId], show_all: true, limit: 5 });
-  const row = (read?.sessions || []).find((r: any) => r.id === subject.conversationId);
-  if (!row || row.is_killed) {
-    context["last_error"] = `The session the change came from (${subject.shortId}) ${row ? "was stopped" : "cannot be read"}, so nobody can work on what the run found.${found}`;
+  const row = await subjectRow((route, body) => cliCall(options, route, body), subject);
+  if (!row) {
+    context["last_error"] = `The session the change came from (${subject.shortId}) cannot be read, so nobody can work on what the run found.${found}`;
     context["station_dead"] = node.id;
     return "failure";
   }
+  // A subject someone stopped (or the run retired after an earlier land) still holds the change: the brief restarts it.
+  if (row.is_killed) console.log(`  ${c.yellow}${subject.shortId} was stopped; the brief restarts it to work on this${c.reset}`);
   const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
-  const sent = await cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body: brief, wake: true });
+  // Quiet: a subject stashed out of sight while the run went on stays there; it surfaces itself if it pins blocked.
+  // A backend older than this CLI refuses the arg it does not know, and a refused send delivered nothing: send it plain.
+  const send = (quiet: boolean) => cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body: brief, wake: true, ...(quiet ? { quiet } : {}) });
+  const sent = await send(true) ?? await send(false);
   if (!sent) {
     context["last_error"] = `Could not send ${node.label} to session ${subject.shortId}.${found}`;
     context["station_dead"] = node.id;
@@ -480,11 +485,39 @@ function lastSaid(state: WorkflowRunState): string | undefined {
   return undefined;
 }
 
-/** Tell the run's subject something in its own turn; a run with no subject, or a dry run, says nothing. */
-async function tellSubject(options: RunOptions, context: Record<string, string>, body: string): Promise<void> {
+/**
+ * Tell the run's subject something in its own turn; a run with no subject, or a dry run, says nothing. News it need
+ * not act on (`inform`) is not worth resuming a parked session for, so a hibernated subject is not told.
+ */
+async function tellSubject(options: RunOptions, context: Record<string, string>, body: string, inform = false): Promise<void> {
   const subject = subjectOf(context);
   if (!subject || options.dryRun) return;
+  if (inform && (await subjectRow((route, b) => cliCall(options, route, b), subject))?.agent_status === "hibernated") return;
   await cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body, wake: true });
+}
+
+/**
+ * Retire the run's subject once its change is on the default branch (flows.md FL4): the session has settled and
+ * nothing it wrote differs from what landed, so nothing is left for it to do. It is killed (its transcript stays, a
+ * send revives it) and the run says so; returns those words, or null when the subject stays.
+ */
+async function retireSubject(options: RunOptions, context: Record<string, string>, cwd: string): Promise<string | null> {
+  const subject = subjectOf(context);
+  const branch = context["branch"];
+  const base = context["default_branch"] || "main";
+  if (!subject || options.dryRun || !branch) return null;
+  const keep = (why: string) => { console.log(`${c.dim}  ${subject.shortId} stays: ${why}${c.reset}`); return null; };
+  const { landedCommit } = await import("./awaitDeploy.js");
+  const landed = await landedCommit(cwd, branch, base, (context["change_files"] || "").split(" ").filter(Boolean)).catch(() => null);
+  if (!landed) return keep(`its change is not on ${base}`);
+  const row = await subjectRow((route, body) => cliCall(options, route, body), subject);
+  if (!subjectSettled(row)) return keep(row ? "it has not settled" : "it cannot be read");
+  const other = await subjectOtherWork(cwd, subject, landed.sha, `origin/${base}`);
+  if (other) return keep(other);
+  if (!(await cliCall(options, "/cli/sessions/kill", { session: subject.conversationId }))) return keep("it could not be stopped");
+  const said = `Retired ${subject.shortId}: its change is on ${base} at ${landed.sha.slice(0, 10)} and it has no other work.`;
+  console.log(`  ${c.green}✓${c.reset} ${said}`);
+  return said;
 }
 
 async function waitOnStation(
@@ -1235,6 +1268,8 @@ export interface RunOptions {
   runSession?: string;
   /** Settle poll for session nodes (tests shorten it). */
   pollIntervalMs?: number;
+  /** How often the run checks whether its subject can be parked (SUBJECT_PARK_MS; tests shorten it). */
+  subjectParkMs?: number;
   /** How often a run waiting for a place at a capped station asks again (waitForStationPlace; tests shorten it). */
   stationPollMs?: number;
   /** How long a resumed run waits for the hand it left to be revived (REVIVE_GRACE_MS; tests shorten it). */
@@ -1814,17 +1849,26 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     console.error(`${c.yellow}Run ${options.runId} is already driven by pid ${claim.heldBy} on this machine${c.reset}`);
     return "invalid";
   }
+  // The session the change came from is parked while the run goes on without it (subjectPark.ts).
+  const subject = options.dryRun ? null : subjectOf(initialContext);
+  const parker = subject
+    ? startSubjectParker((route, body) => cliCall(options, route, body), subject, options.subjectParkMs ?? SUBJECT_PARK_MS, (line) => console.log(`${c.dim}  ${line}${c.reset}`))
+    : undefined;
   try {
-    return await driveRun(graph, options, cwd, initialContext, startNode, hash, graphNodeHashes);
+    return await driveRun(graph, options, cwd, initialContext, startNode, hash, graphNodeHashes, parker);
   } catch (err) {
     if (!(err instanceof RunEndedOnServer)) throw err;
     // Nothing is reported: the run's end, its task and its hands were settled when it ended.
     console.log(`\n${c.bold}${c.yellow}━━━ The run is over on the server (${err.message}): this runner stops ━━━${c.reset}`);
     return "failed";
   } finally {
+    await parker?.stop();
     claim?.release();
   }
 }
+
+// How often a run looks at its subject to park it: a long station (Deploy waits up to a week) keeps looking.
+const SUBJECT_PARK_MS = 60_000;
 
 async function driveRun(
   graph: WorkflowGraph,
@@ -1834,6 +1878,7 @@ async function driveRun(
   startNode: WorkflowNode,
   hash: string,
   graphNodeHashes: (g: WorkflowGraph) => Array<{ id: string; h: string }>,
+  parker?: SubjectParker,
 ): Promise<WorkflowRunOutcome> {
   // Where a resumed run continues: its checkpoint on this machine, else what the row holds.
   const resumeAt = options.resume && options.runId
@@ -1909,7 +1954,7 @@ async function driveRun(
   if (graph.goal) console.log(`${c.dim}Goal: ${graph.goal}${c.reset}`);
   console.log();
 
-  let current: WorkflowNode = await runNodeLoop(resumeAt ? graph.nodes.get(resumeAt.node_id)! : startNode, graph, state, nodeOutcomes, cwd, options);
+  let current: WorkflowNode = await runNodeLoop(resumeAt ? graph.nodes.get(resumeAt.node_id)! : startNode, graph, state, nodeOutcomes, cwd, options, parker);
 
   // An exit with `stop` ends the run on purpose, in the graph's own words for why.
   if (current.type === "exit" && current.stop && !state.failed) {
@@ -1931,7 +1976,7 @@ async function driveRun(
         console.log(`\n${c.yellow}  goal gate '${failedGate.label}' failed → retry_target '${retryNode.label}'${c.reset}\n`);
         // Re-enter the loop from the retry target. The initial run_status
         // "running" seed is NOT re-emitted here — it fires once per run.
-        current = await runNodeLoop(retryNode, graph, state, nodeOutcomes, cwd, options);
+        current = await runNodeLoop(retryNode, graph, state, nodeOutcomes, cwd, options, parker);
 
         // Re-check goal gates after retry loop
         if (current.type === "exit") {
@@ -1958,16 +2003,20 @@ async function driveRun(
       const queued = await queueTaskDecision(options, `${quotedTitle(state.context, options.taskId)}: review rejected. What next?`, note, current.id);
       await runComment(options, "blocker", `Review rejected; task left open as blocked.${queued ? " Decision queued to the run's owner." : " No decision queued: the run has no owning session."}`);
     }
+    await parker?.stop();
+    const retired = await retireSubject(options, state.context, cwd);
     if (options.runId) {
       await reportProgress(options, {
         current_node_id: current.id,
         node_id: current.id,
         node_status: "completed",
         run_status: "completed",
+        ...(retired ? { result_preview: retired } : {}),
       });
     }
 
-    await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: false, lastOutput: lastSaid(state) }));
+    // A retired subject is not told: the send would resume it just to read that the run is over.
+    if (!retired) await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: false, lastOutput: lastSaid(state) }));
 
     // Log completion to bound plan
     if (options.planId && options.apiToken && options.convexSiteUrl && !options.dryRun) {
@@ -2007,6 +2056,7 @@ async function driveRun(
     if (!requeued?.queued) await returnTaskOnFailure(options, graph, state); // a refused requeue (a trial's) fails as usual
     // A run that got past a ship step's success landed its change, whatever stopped it after.
     const landed = state.completed.some((id) => /(^|__)(shipped|landed)$/.test(id));
+    await parker?.stop();
     await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: true, failReason: state.failReason, landed }));
     return "failed";
   }
@@ -2036,6 +2086,7 @@ async function runNodeLoop(
   nodeOutcomes: Record<string, NodeOutcome>,
   cwd: string,
   options: RunOptions,
+  parker?: SubjectParker,
 ): Promise<WorkflowNode> {
   let current: WorkflowNode = startNode;
 
@@ -2111,6 +2162,8 @@ async function runNodeLoop(
 
     let outcome: NodeOutcome;
     const nodeStartedAt = Date.now();
+    // Every other station runs without the subject: a settled one leaves the inbox and is parked (subjectPark.ts).
+    if (current.backend !== "subject") await parker?.tick();
 
     if (options.dryRun) {
       console.log(`${c.dim}  [dry-run]${c.reset}`);
@@ -2133,7 +2186,10 @@ async function runNodeLoop(
     } else if (current.type === "parallel_fanin") {
       outcome = "success";
     } else if ((current.type === "agent" || current.type === "prompt") && current.backend === "subject") {
+      // The station is the subject's own: nothing parks it while it works on the brief.
+      await parker?.pause();
       outcome = await executeSubjectNode(current, graph, state.context, cwd, options);
+      parker?.resume();
     } else if ((current.type === "agent" || current.type === "prompt") && current.backend === "session") {
       outcome = await executeSessionNode(current, graph, state.context, cwd, options, () => checkpoint());
     } else if (current.type === "agent" || current.type === "prompt") {
@@ -2265,7 +2321,7 @@ async function runNodeLoop(
     // A gate's answer reaches the session the change came from, unless where it routes says it anyway: a station the
     // session does (a Revise note) or a stop (the run's end message). A question back to the reviewer is no answer.
     if (current.type === "human" && outcome !== "failure" && next && next.backend !== "subject" && next.segment_exit !== "stop" && !state.context["human.gate.question"] && state.context["human.gate.label"]) {
-      await tellSubject(options, state.context, gateAnswerMessage(current.segment_label ?? current.label, state.context["human.gate.label"], state.context["human.message"]));
+      await tellSubject(options, state.context, gateAnswerMessage(current.segment_label ?? current.label, state.context["human.gate.label"], state.context["human.message"]), true);
     }
     if (stationBlocked && !next) {
       console.log(`\n${c.yellow}  '${current.label}' is waiting on a person; the run stops here${c.reset}`);
