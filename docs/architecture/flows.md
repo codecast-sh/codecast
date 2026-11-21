@@ -149,7 +149,7 @@ it. The map groups an expanded segment's stations under the segment's name.
 
 | Flag | The change | Bound task |
 |---|---|---|
-| `--task ct-N` | the task's branch (`line-<task>`) | that task |
+| `--task ct-N` | the task's branch (`line-<task>`, or the one an earlier run of it left); with none, from inside a session, that session's own edits | that task |
 | `--session [id]` (the default from inside a session) | the session's own edits | the session's bound task while it is open, else a new task titled for the session and bound to it, so a second run finds the same task, branch and worktree |
 | `--branch <name>` | that branch | a new task titled for the branch |
 | `--pr <n>` | the pull request's head branch | the task linked to the pull request, else a new one |
