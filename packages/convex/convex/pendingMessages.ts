@@ -433,8 +433,8 @@ export async function enqueuePendingMessage(
     // turn in the session's shared queue (schema pending_messages.queued).
     queue?: boolean;
     // Work a session hands another out of sight: a flow run's brief to the
-    // session it runs for (flows.md FL4). A hidden stash survives it, as it
-    // survives a trigger's wake; everything else wakes as for any send.
+    // session it runs for (flows.md FL4). A hidden stash and a snooze survive
+    // it, as they survive a trigger's wake; everything else wakes as for any send.
     quiet?: boolean;
     // Why a hosted conversation wakes for this row, when the caller knows
     // better than the origin says (an answered approval). Ignored for every
@@ -597,7 +597,7 @@ export async function enqueuePendingMessage(
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
     ...(conversation.inbox_stashed_at && !((machineWake || fields.quiet) && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
-    ...(!machineWake && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
+    ...(!machineWake && !fields.quiet && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
     ...(answersThreadState ? answeredThreadStateFields() : {}),
     // New input opens a new turn, which owes its own report (workerSettle.ts).
     ...(conversation.reported_to_parent_at ? { reported_to_parent_at: undefined } : {}),
