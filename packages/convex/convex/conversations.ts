@@ -69,6 +69,8 @@ import { internal } from "./_generated/api";
 import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage } from "./pendingMessages";
 import { latestImagePreviewUrl, listConversationFileChanges } from "./lib/messageReads";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
+import { openBlockersOf } from "./lib/taskGraph";
+import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRunConversation } from "./lib/agentTaskRows";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId, stopAndSendForUser, insertEscapeCommand } from "./daemonCommandUtils";
@@ -8647,10 +8649,13 @@ async function enrichInboxSessionRow(
     if (p) active_plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
   }
 
-  let active_task: { _id: string; short_id: string; title: string; status: string } | undefined;
+  let active_task: { _id: string; short_id: string; title: string; status: string; blocked?: boolean } | undefined;
   if (!skip?.refs && conv.active_task_id) {
     const t = await getDoc(conv.active_task_id);
-    if (t) active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
+    if (t) {
+      const blocked = !isTerminalTaskStatus(t.status) && (!!t.waiting_since || (!!t.blocked_by?.length && (await openBlockersOf(ctx, t)).length > 0));
+      active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status, ...(blocked ? { blocked } : {}) };
+    }
   }
 
   // The card's workflow bar renders from these scalars alone (the run doc is

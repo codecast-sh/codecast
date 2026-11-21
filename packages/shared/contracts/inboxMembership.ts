@@ -13,6 +13,13 @@ export function isNoiseTitle(title: string | null | undefined): boolean {
   return NOISE_TITLE_PREFIXES.some((p) => t.startsWith(p));
 }
 
+// A `cast doctor` end-to-end probe's session (pickDoctorProjectDir): a
+// machine self-test nobody can act on.
+const DOCTOR_PROBE_PATH = /[\\/](?:\.codecast[\\/]doctor|\.codecast-doctor)[\\/]e2e-[^\\/]+(?:[\\/]|$)/;
+export function isDoctorProbePath(path: string | null | undefined): boolean {
+  return !!path && DOCTOR_PROBE_PATH.test(path);
+}
+
 // A row that can never be its own projection member: subagents, workflow subs,
 // and rows with a parent pointer but no parent message (orphans). Their state
 // surfaces only on the parent (asking rollup, producing grace). The exception

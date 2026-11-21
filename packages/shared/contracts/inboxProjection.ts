@@ -11,7 +11,7 @@ import { isLoopFresh, LOOP_OVERDUE_GRACE_MS, type LoopState } from "./loopState"
 import { openTasksVouchForWaiting } from "./openTasks";
 import { isHostedAgentType } from "./agentClients";
 import type { WorkState } from "./workState";
-import { isNoiseTitle, type InboxRowIdentity, type RunLogIdentity, isRunLog, isNestedIdentity, isOrphanOrSubagent, type RollupRow, rollupParentIdOf } from "./inboxMembership";
+import { isDoctorProbePath, isNoiseTitle, type InboxRowIdentity, type RunLogIdentity, isRunLog, isNestedIdentity, isOrphanOrSubagent, type RollupRow, rollupParentIdOf } from "./inboxMembership";
 // Field ownership (design C1): which channel writes which row field.
 export * from "./inboxFields";
 // Membership identity (subagents, rollups, stacked asks).
@@ -133,7 +133,10 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // trigger-run session ends its turn this way and the trigger resumes it.
 // v28: the first row past the fold's gap folds with everything older. It used
 // to stay shown, so filing the oldest shown row surfaced the next older one.
-export const INBOX_PROJECTION_VERSION = 28 as const;
+// v29: an open blocker on the bound task (active_task.blocked) is a wake, so a
+// dormant session parked on it stays dormant past the claim TTL; a `cast
+// doctor` e2e probe's session is never an inbox member.
+export const INBOX_PROJECTION_VERSION = 29 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -812,6 +815,7 @@ export interface InboxVisibilityRow extends InboxRowIdentity, RunLogIdentity {
   title?: string | null;
   inbox_killed_at?: number | null;
   inbox_pinned_at?: number | null;
+  project_path?: string | null;
 }
 
 // A stash that survives machine wakes ("stash and hide"). A plain stash is
@@ -883,6 +887,7 @@ export function isAssignedAwayFromViewer(
 export function shouldShowInInbox(conv: InboxVisibilityRow): boolean {
   if (isOrphanOrSubagent(conv)) return false;
   if (isRunLog(conv)) return false;
+  if (isDoctorProbePath(conv.project_path)) return false;
   if (conv.status === "completed" && (conv.message_count ?? 0) === 0) return false;
   if (isNoiseTitle(conv.title)) return false;
   if (conv.inbox_killed_at && !conv.inbox_pinned_at) return false;
@@ -1165,6 +1170,8 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   /** conversations.last_turn_origin: who started the latest turn. */
   last_turn_origin?: "person" | "machine" | null;
   armed_trigger_kind?: string | null;
+  /** The bound task, as enrichInboxSessionRow ships it; blocked while an open blocker or wait holds it back. */
+  active_task?: { blocked?: boolean | null } | null;
   /** conversations.agent_type: a hosted conversation's routine never parks it. */
   agent_type?: string | null;
   // The pull request this session shepherds (prShepherd.refreshConversationPrStatus).
@@ -1477,8 +1484,12 @@ export function placeProjectableRow(
   // will wake the session.
   // A child still producing (a --subagent worker the session waits on) is a
   // wake too: its result is the next turn.
+  // So is an open blocker on the bound task: clearing it wakes the owner
+  // (taskWaits.onUnblocked), and a blocker the viewer must clear asks through
+  // its own decision.
   const verifiedWake =
     (row.armed_trigger_kind ?? "none") !== "none" ||
+    !!row.active_task?.blocked ||
     childProducingAt(row, epoch) ||
     (!!loop && loop.status === "armed" && isLoopFresh(loop, epoch)) ||
     openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, rowHeartbeatAliveAt(row, epoch));

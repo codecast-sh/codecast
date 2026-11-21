@@ -112,6 +112,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // v28: the first row past the fold's gap folds (the edge rows in fold,
   // teammates and windows).
   28: "817c90c9dd300267",
+  // v29: a blocked bound task is a wake; doctor e2e probes are not members
+  // (no fixture holds either, so the expected blocks are unchanged).
+  29: "817c90c9dd300267",
 };
 
 type Expected = {
