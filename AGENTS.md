@@ -111,6 +111,16 @@ Most people use codecast through the app (web, desktop, phone), not the CLI. Use
 
 **Build simulator binaries with signing allowed.** A simulator build carries its entitlements in a `__TEXT,__entitlements` section of the binary. A build made with `CODE_SIGNING_ALLOWED=NO` has none, every keychain call fails ("A required entitlement isn't present"), and nobody can sign in on it. Check with `otool -s __TEXT __entitlements <App>.app/<App>`.
 
+## Self-healing infrastructure
+
+Principle CC-code-1 (`docs/line/principles.md`). The daemon, cloud hosts, the browser bridge, sync and sends are infrastructure people depend on; each must keep working and recover by itself.
+
+- **A known failure gets a recovery in code, not a workaround in a reply.** When a fix needs someone to restart the daemon, re-send, clear a cache or re-run a step, the change is incomplete: make the system do that step itself the next time the condition appears (`packages/web/plugins/depsCacheGuard.ts` restarts vite when its deps cache vanishes; `packages/cli/src/retryQueue.ts` retries what failed to send).
+- **Detect stuck states and name them.** Anything that can wait forever (a pending send, a sync backlog, an unresponsive daemon, a cloud session that never boots) carries a bound after which it is reported as stuck, as `packages/cli/src/syncHealth.ts` does with `STUCK_SYNC_THRESHOLD_MS`. A spinner with no end, or a row left `pending` with no way out, is a bug.
+- **A failure the person sees says so plainly and offers the recovery beside it.** It stays on screen long enough to read, names what failed, and puts the retry, reconnect or resend control next to the message. Long operations show progress and end with a clear result.
+- **A flow that cannot finish without the person becomes a guided step in the product**, never an instruction in the docs or a command to type.
+- **Fix the class, with a regression test.** A recurring failure on the daemon, cloud host or send path is fixed where it starts and pinned by a test of the recovery, so it does not come back as the next one-off.
+
 ## Render gallery (every transcript rendering in one conversation)
 
 `packages/web/lib/renderGallery.ts` is one conversation that holds a row of every kind a transcript draws: each user-row kind the classifier returns, markdown blocks and all four phone table layouts, every fence, references alone on a line, each tool family, every `cast` command card, failure banners, compaction progress, workflow events and system subtypes. Both apps draw it, so a renderer change is checked against everything at once, and web against mobile side by side.
