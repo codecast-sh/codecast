@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { staleRepoFlow } from "./flowCommand.js";
+import { staleRepoFlow } from "./workflow/staleRepoFlow.js";
 import { poolFlows } from "./workflow/flowPool.js";
 
 const tmp: string[] = [];

@@ -18,6 +18,7 @@ import { describeFlow, flowLine, poolFlows, type PoolFlow, type PushedPoolRow } 
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
 import type { Workspace } from "./resolveWorkspace.js";
 import { choiceOption, notFoundLine } from "./argChecks.js";
+import { staleRepoFlow } from "./workflow/staleRepoFlow.js";
 
 /**
  * Why `cast ws acquire --json` left no worktree to run in, in words. A
@@ -628,25 +629,6 @@ function printVariantChanges(slug: string, base: PoolFlow | null, changes: Varia
   const lines = changes ? variantChangeLines(changes) : [];
   console.log(`extends ${bold(base.label)} ${dim(`(${slug})`)}${lines.length ? ", changing:" : changes ? ", changing nothing" : ""}`);
   for (const l of lines) console.log(`  ${l}`);
-}
-
-/**
- * Why a flow found by name must not run here: it came from the library or the
- * team's pool, while the repo's default branch holds its own
- * `.codecast/flows/<slug>.cast` and this checkout (cut before it landed) does
- * not. Both sides are read at the repo root. Null when the flow is the repo's
- * own, or outside a repo with a default branch. Reads only local refs.
- */
-export function staleRepoFlow(f: Pick<PoolFlow, "slug" | "where">, cwd: string): string | null {
-  if (f.where === "repo") return null;
-  const git = (...args: string[]) => spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
-  const top = git("rev-parse", "--show-toplevel").stdout?.trim();
-  const rel = `.codecast/flows/${f.slug}.cast`;
-  if (!top || fs.existsSync(path.join(top, rel))) return null;
-  const head = git("symbolic-ref", "--short", "refs/remotes/origin/HEAD").stdout?.trim();
-  const ref = head || ["origin/main", "origin/master"].find((r) => git("rev-parse", "--verify", "--quiet", `${r}^{commit}`).status === 0);
-  if (!ref || git("cat-file", "-e", `${ref}:${rel}`).status !== 0) return null;
-  return `This checkout predates the repo's own ${f.slug} flow (${ref} has ${rel}), so the library's would run instead. Rebase onto ${ref}, or run from a checkout that has it (--library runs the library's anyway).`;
 }
 
 /** A graph file's base read from where its `extends` points, for a variant whose base is not in the library. */
