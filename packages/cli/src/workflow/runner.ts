@@ -29,7 +29,7 @@ import * as readline from "readline";
 import { c } from "../colors.js";
 import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
-import { frozenChangeContext } from "./flowChangeFile.js";
+import { behindWords, frozenChangeContext } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
@@ -460,11 +460,10 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   try {
     const { refreezeSessionChange } = await import("./flowChange.js");
     const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
-    context["branch"] = change.branch;
-    context["change_files"] = change.paths.join(" ");
-    const said = moved
-      ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
-      : "the session's change is as it was: the stage runs again on the same change";
+    Object.assign(context, frozenChangeContext(context["run_dir"]));
+    const said = (change.landed ? `the session's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
+      : moved ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
+      : "the session's change is as it was: the stage runs again on the same change") + (behindWords(change) ? `; ${behindWords(change)}` : "");
     console.log(`  ${c.green}✓${c.reset} ${said}`);
     recordNodeOutput(context, node.id, said);
   } catch (err) {
@@ -1822,6 +1821,8 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   const initialContext: Record<string, string> = {};
   initialContext["project_path"] = cwd;
   initialContext["default_branch"] = detectDefaultBranch(cwd);
+  // Where a reviewer's diff starts ($diff_base...$branch): the default branch, unless the run's change says where it was cut.
+  initialContext["diff_base"] = initialContext["default_branch"];
   // The run's own id, for a node that reports to the server about this run
   // (the line's merge step, the-line.md L12). Empty on a run with no row.
   initialContext["run_id"] = options.runId ?? "";
