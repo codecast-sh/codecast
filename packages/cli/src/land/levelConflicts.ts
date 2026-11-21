@@ -38,10 +38,12 @@ export interface BriefDeps {
 interface ConflictRecord {
   /** Key -> the conversation briefed about it. */
   briefed: Record<string, string>;
-  /** Keys no transcript explained; tried again when upstream changes the file. */
-  unattributed: string[];
+  /** Key -> when attribution last found no writer; tried again after UNATTRIBUTED_RETRY_MS or when upstream changes the file. */
+  unattributed: Record<string, number>;
 }
 
+/** A transcript can reach the sync ledger after the write it records, so a writerless path is asked about again this often. */
+export const UNATTRIBUTED_RETRY_MS = 15 * 60_000;
 /** A write older than this cannot be the one that left a file dirty. */
 const ATTRIBUTION_HORIZON_MS = 14 * 86_400_000;
 const BLOB_MAX_BUFFER = 256 * 1024 * 1024;
@@ -52,9 +54,9 @@ export const mergeDir = (gitDir: string) => path.join(gitDir, "codecast", "level
 function readRecord(gitDir: string): ConflictRecord {
   try {
     const r = JSON.parse(fs.readFileSync(recordFile(gitDir), "utf-8"));
-    if (r?.briefed && Array.isArray(r.unattributed)) return r;
+    if (r?.briefed && r.unattributed) return r;
   } catch {}
-  return { briefed: {}, unattributed: [] };
+  return { briefed: {}, unattributed: {} };
 }
 
 /** Each path's blob in `rev`, "deleted" when it has none. */
@@ -155,25 +157,26 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
   const blobs = await upstreamBlobs(root, r.to, r.conflicts);
   const keyOf = (p: string) => `${p}\n${blobs.get(p)}`;
   // Only the conflicts still standing stay recorded.
-  const record: ConflictRecord = { briefed: {}, unattributed: [] };
+  const record: ConflictRecord = { briefed: {}, unattributed: {} };
+  const now = deps.now ?? Date.now();
   const fresh: string[] = [];
   for (const p of r.conflicts) {
     const key = keyOf(p);
+    const tried = prior.unattributed[key];
     if (prior.briefed[key]) record.briefed[key] = prior.briefed[key];
-    else if (prior.unattributed.includes(key)) record.unattributed.push(key);
+    else if (tried !== undefined && now - tried < UNATTRIBUTED_RETRY_MS) record.unattributed[key] = tried;
     else fresh.push(p);
   }
 
   const notes: string[] = [];
   if (fresh.length) {
-    const now = deps.now ?? Date.now();
     const since = Math.max(oldestMtime(root, fresh, now) - 60_000, now - ATTRIBUTION_HORIZON_MS);
     const { owners } = (deps.attribute ?? attributeEdits)(root, fresh, { since });
     const byWriter = new Map<string, string[]>();
     for (const p of fresh) {
       const conv = owners.get(p)?.conversationId;
       if (conv) byWriter.set(conv, [...(byWriter.get(conv) ?? []), p]);
-      else record.unattributed.push(keyOf(p));
+      else record.unattributed[keyOf(p)] = now;
     }
     for (const [conv, paths] of byWriter) {
       paths.sort();
@@ -190,7 +193,7 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
     if (conv && !fresh.includes(p)) already.set(conv, [...(already.get(conv) ?? []), p]);
   }
   for (const [conv, paths] of already) notes.push(`already briefed ${conv.slice(0, 7)} (${paths.join(", ")})`);
-  const unattributed = r.conflicts.filter((p) => record.unattributed.includes(keyOf(p)));
+  const unattributed = r.conflicts.filter((p) => keyOf(p) in record.unattributed);
   if (unattributed.length) notes.push(`no writer for ${unattributed.join(", ")}`);
   writeRecord(gitDir, record);
   return notes.join("; ") || null;
