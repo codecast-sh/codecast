@@ -14555,7 +14555,7 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
       const result = await cliPost(verb === "retire" ? "/cli/org/retire" : `/cli/role/${verb}`, verb === "retire" ? { role_id, standing_session: options.standing, from_session: callingSession() } : verb === "restart" && options.fresh ? { role_id, fresh: true } : { role_id });
       if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
       if (verb === "restart" && options.fresh) {
-        console.log(`${c.green}✓${c.reset} @${handle.replace(/^@/, "")} starts fresh in ${result.short_id} ${c.dim}(previous session ${result.previous_short_id} retired)${c.reset}`);
+        console.log(`${c.green}✓${c.reset} @${handle.replace(/^@/, "")} ${result.already_fresh ? "already started fresh" : "starts fresh"} in ${result.short_id} ${c.dim}(previous session ${result.previous_short_id} retired)${c.reset}`);
         return;
       }
       const extra = verb === "pause" && result.interrupted ? ` ${c.dim}(${result.interrupted} session${result.interrupted === 1 ? "" : "s"} told to stop at a safe point)${c.reset}` : "";
