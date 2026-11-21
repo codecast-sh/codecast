@@ -466,6 +466,10 @@ export function outboxCoalesceKeyFor(
 // full minute is past anything contention explains.
 export const STORAGE_WATCHDOG_MS = 60_000;
 
+// A put IndexedDB aborted with TimeoutError is written again, this many times
+// in all, before the write counts as failed.
+const ENQUEUE_TIMEOUT_ATTEMPTS = 3;
+
 // When the watchdog timer fires far past its deadline, the event loop itself
 // was paused (hidden/frozen tab, system sleep) — the measurement is the pause,
 // not IndexedDB. Overshoot beyond this tolerance re-arms a short recheck
@@ -1419,15 +1423,27 @@ export function mutativeMiddleware(
           }
           tripped = true;
           overdueEnqueues++;
+          // One storage condition is one failure: replay grouping keys on the
+          // first line, so the action and the wait go on the second.
           console.error(
-            `[store] durable enqueue for "${entry.action}" still uncommitted after ${Math.round(elapsed())}ms — IndexedDB is unhealthy; delivery continues, durability is degraded${storageWatchdogHint ? ` (${storageWatchdogHint})` : ""}`,
+            `[store] durable enqueue still uncommitted — IndexedDB is unhealthy; delivery continues, durability is degraded${storageWatchdogHint ? ` (${storageWatchdogHint})` : ""}\n"${entry.action}" waiting ${Math.round(elapsed())}ms`,
           );
           storageHealthFn?.(false, elapsed());
         }, delayMs);
       };
       armWatchdog(watchdogMs);
       try {
-        await enqueue(entry);
+        // Chromium aborts a put that sat queued too long ("Transaction timed
+        // out due to inactivity"); nothing else writes this row again, so an
+        // action the server has not acked would be gone after a reload.
+        for (let attempt = 1; ; attempt++) {
+          try {
+            await enqueue(entry);
+            break;
+          } catch (error) {
+            if ((error as Error)?.name !== "TimeoutError" || attempt >= ENQUEUE_TIMEOUT_ATTEMPTS) throw error;
+          }
+        }
         settled = true;
         if (tripped) {
           overdueEnqueues--;
