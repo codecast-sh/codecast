@@ -1,18 +1,27 @@
 // Who may answer a run's decision (docs/architecture/decisions-as-documents.md D1): a gate's own ask, the card a
 // gate adopts from its presenting station, and the runner's failure card fall back to a person when the flow declares
-// no category; an edit keeps the category a row has.
+// no category; a re-ask or an edit keeps the category a card has, and a run's card is only ever tightened.
 import { describe, expect, test } from "bun:test";
+import { randomUUID } from "crypto";
 import { pauseAtGateCore } from "./workflow_runs";
 import { askCore, edit } from "./sessionDecisions";
 import { isHumanOnlyCategory } from "./lib/decisionCategory";
 import { HOST, TEAM, TOKEN, RUN, seed, pause } from "./workflow_runs.gate.testkit";
 
-const station = { _id: "conversations_card", session_id: "sess-card", user_id: HOST, team_id: TEAM, message_count: 40 };
+// A station hand as spawn.ts makes one: a random session id, its short id the row id's head, nested under the run's
+// log (conversations_primary in the testkit). The runner reports it to the gate by that short id.
+const STATION_SESSION = randomUUID();
+const station = { _id: "conversations_card", session_id: STATION_SESSION, short_id: "conver1", parent_conversation_id: "conversations_primary", user_id: HOST, team_id: TEAM, message_count: 40 };
 const cardChoices = [
   { key: "S", label: "[S] Ship", target: "trial_ship" },
   { key: "R", label: "[R] Revise", target: "revise_build" },
   { key: "D", label: "[D] Drop", target: "trial_drop" },
 ];
+const stationAsks = (ctx: any, extra: Record<string, unknown> = {}) =>
+  askCore(ctx, { userId: HOST }, { session_id: STATION_SESSION, question: "Ship it?", options: [{ label: "Ship it" }, { label: "Drop it" }], blocking: true, ...extra });
+const gate = (ctx: any, extra: Record<string, unknown> = {}) =>
+  pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "conver1", ...extra });
+const editAs = (ctx: any, id: string, fields: Record<string, unknown>) => (edit as any)._handler(ctx, { api_token: TOKEN, decision_id: id, ...fields });
 
 describe("a run's decisions are a person's unless the flow says otherwise", () => {
   test("a gate that declares no category asks a person, and so does the runner's failure card", async () => {
@@ -35,43 +44,79 @@ describe("a run's decisions are a person's unless the flow says otherwise", () =
     expect(isHumanOnlyCategory(failed.category)).toBe(true);
   });
 
+  test("a station's card is a person's from the moment it is posted, even proposed as review", async () => {
+    for (const proposed of [undefined, "review"]) {
+      const { ctx, tables } = await seed();
+      tables.conversations.push(station);
+      await stationAsks(ctx, proposed ? { category: proposed } : {});
+      expect(tables.session_decisions[0].category).toBe("unknown");
+    }
+    const { ctx, tables } = await seed();
+    tables.conversations.push(station);
+    await stationAsks(ctx, { category: "production" });
+    expect(tables.session_decisions[0].category).toBe("production");
+  });
+
   test("the gate sets who may answer the card it adopts: its declared category, else a person", async () => {
     for (const [declared, expected] of [[undefined, "unknown"], ["production", "production"], ["review", "review"]] as const) {
       const { ctx, tables } = await seed();
       tables.conversations.push(station);
-      // A presenting station posts a plain cast decide, with no category.
-      await askCore(ctx, { userId: HOST }, { session_id: "sess-card", question: "Ship it?", options: [{ label: "Ship it" }, { label: "Drop it" }], blocking: true });
-      expect(tables.session_decisions[0].category).toBe("review");
-      await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card", ...(declared ? { category: declared } : {}) });
+      await stationAsks(ctx);
+      expect((await gate(ctx, declared ? { category: declared } : {}) as any)?.error).toBeUndefined();
       const row = tables.session_decisions[0];
+      expect(tables.workflow_runs[0].gate_decision_id).toBe(row._id);
       expect(row.category).toBe(expected);
       expect(isHumanOnlyCategory(row.category)).toBe(expected !== "review");
       expect(row.holder.kind).toBe("user");
     }
   });
 
-  test("a card a run's station posts without a category is a person's before any gate takes it up, and keeps the gate's on a re-ask", async () => {
+  test("a station's re-ask keeps the gate's category, and its own --category may only tighten it", async () => {
     const { ctx, tables } = await seed();
-    tables.conversations.push({ ...station, workflow_run_id: RUN, is_workflow_sub: true });
-    const ask = () => askCore(ctx, { userId: HOST }, { session_id: "sess-card", question: "Ship it?", options: [{ label: "Ship it" }, { label: "Drop it" }], blocking: true });
-    await ask();
+    tables.conversations.push(station);
+    await stationAsks(ctx);
+    await gate(ctx);
     expect(tables.session_decisions[0].category).toBe("unknown");
-    await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card", category: "review" });
-    expect(tables.session_decisions[0].category).toBe("review");
-    await ask();
+    await stationAsks(ctx, { context_md: "One more case." });
+    await stationAsks(ctx, { category: "review" });
     expect(tables.session_decisions).toHaveLength(1);
-    expect(tables.session_decisions[0].category).toBe("review");
+    expect(tables.session_decisions[0].category).toBe("unknown");
+    await stationAsks(ctx, { category: "production" });
+    expect(tables.session_decisions[0].category).toBe("production");
   });
 
-  test("cast decide edit keeps a row's category unless it names a new one", async () => {
+  test("cast decide edit on a run's card may only tighten it", async () => {
     const { ctx, tables } = await seed();
-    const posted = await askCore(ctx, { userId: HOST }, { session_id: "sess-spawner", question: "Drop the old table?", options: [{ label: "Drop it" }, { label: "Keep it" }], category: "approach" });
-    // A pending row asked while card words still pinned a category.
-    Object.assign(tables.session_decisions[0], { category: "data" });
-    const edit_ = (fields: Record<string, any>) => (edit as any)._handler(ctx, { api_token: TOKEN, decision_id: String(posted.id), ...fields });
-    expect((await edit_({ context_md: "It has been empty since March." })).error).toBeUndefined();
-    expect(tables.session_decisions[0].category).toBe("data");
-    expect((await edit_({ category: "scope" })).error).toBeUndefined();
+    const r: any = await pause(ctx);
+    const id = String(tables.session_decisions[0]._id);
+    expect(r.ok).toBe(true);
+    expect((await editAs(ctx, id, { category: "review" })).error).toBeUndefined();
+    expect(tables.session_decisions[0].category).toBe("unknown");
+    expect((await editAs(ctx, id, { category: "production" })).error).toBeUndefined();
+    expect(tables.session_decisions[0].category).toBe("production");
+  });
+});
+
+describe("an agent's own card", () => {
+  test("a re-ask and an edit without --category keep its category; an edit with one sets it", async () => {
+    const { ctx, tables } = await seed();
+    const ask = (extra: Record<string, unknown> = {}) =>
+      askCore(ctx, { userId: HOST }, { session_id: "sess-spawner", question: "Drop the old table?", options: [{ label: "Drop it" }, { label: "Keep it" }], ...extra });
+    const posted = await ask({ category: "production" });
+    await ask({ context_md: "It has been empty since March." });
+    expect(tables.session_decisions).toHaveLength(1);
+    expect(tables.session_decisions[0].category).toBe("production");
+    expect((await editAs(ctx, String(posted.id), { context_md: "Still empty." })).error).toBeUndefined();
+    expect(tables.session_decisions[0].category).toBe("production");
+    expect((await editAs(ctx, String(posted.id), { category: "scope" })).error).toBeUndefined();
     expect(tables.session_decisions[0].category).toBe("scope");
+  });
+
+  test("no category is review; a word outside the vocabulary is a person's", async () => {
+    const { ctx } = await seed();
+    const ask = (question: string, category?: string) =>
+      askCore(ctx, { userId: HOST }, { session_id: "sess-spawner", question, options: [{ label: "Yes" }, { label: "No" }], ...(category ? { category } : {}) });
+    expect((await ask("Which parser?")).category).toBe("review");
+    for (const word of ["deploy", "security", "money"]) expect((await ask(`Q ${word}?`, word)).category).toBe("unknown");
   });
 });

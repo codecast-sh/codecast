@@ -1163,7 +1163,7 @@ export const DECIDE_SNIPPET = `
 
 \`cast decide\` queues a question, so unlike an inline ask it does not stop the human mid-thought. Each still costs an answer, so ask only when it is theirs: intent nothing written settles, a fact only they hold, money beyond the run's budget, or an irreversible change whose mistake hits many. Decide the rest and say what you chose. Never a card: what reading answers, a status update, a probe or test, or deleting disposable or rebuildable data.
 
-Never re-ask what an earlier card (\`cast decide ls\`), ruling or project instruction answered. \`--category production|billing|data|access|external|product|limit\` makes a card a person's alone; else it is \`review\`, open to a granted role.
+Never re-ask what an earlier card (\`cast decide ls\`), ruling or project instruction answered. When the answer deploys, spends, changes access or messages outside the team, pass \`--category production|billing|data|access|external|product|limit\`: the card is then a person's alone, else \`review\`, open to a granted role.
 
 \`\`\`bash
 cast decide "<one question>" \\

@@ -33,7 +33,7 @@ import { roleOfConversation } from "./lib/actor";
 import { headOfPeopleIn, projectLeadRole, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { gateMirror, gateResponseOf, optionMoves } from "./lib/gateChoices";
-import { assignCategory, isHumanOnlyCategory, isProtectedCategory, runCategory } from "./lib/decisionCategory";
+import { categoryFor, isHumanOnlyCategory, isProtectedCategory } from "./lib/decisionCategory";
 import { syncDecisionInbox } from "./lib/decisionInbox";
 import { answerLabel, normalizeVerdict, verdictOfRow, type Verdict } from "./lib/decisionVerdict";
 import { noticeAreaOwner, routeByArea } from "./decisionRouting";
@@ -44,7 +44,7 @@ import { humanStarterUser, listSessionOwnerIds } from "./sessionOwners";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
-import { gateTrialPages, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
+import { gateTrialPages, runOfStation, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
 import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
 import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
@@ -1203,12 +1203,13 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       }));
 
   const existing = openRows.find((r) => r.question === args.question);
-  // A run's decision falls back to a person: its gate, a failure gate, or a card one of its stations posts (the gate
-  // that adopts it applies the flow's category). An adopted card keeps that category when its station re-asks it.
-  const runBound = !!args.workflow_run_id || !!(conversation.is_workflow_sub && conversation.workflow_run_id);
-  const assigned = existing?.workflow_run_id && args.category === undefined
-    ? runCategory(existing.category)
-    : runBound ? runCategory(args.category) : assignCategory(args.category);
+  // Who may answer (D1): the run's own asks take the flow's category; a card a session of the run posts, or one a gate
+  // took up, is a person's unless the gate says otherwise; a re-ask keeps the open card's category.
+  const assigned = categoryFor(args.category, {
+    current: existing ? existing.category : null,
+    runDeclares: !!args.workflow_run_id,
+    runs: !!args.workflow_run_id || !!existing?.workflow_run_id || !!(await runOfStation(ctx, conversation)),
+  });
   // Running a command in the person's name is always the person's (never a role's under a grant).
   const category = parsedRun && !isProtectedCategory(assigned) ? "access" : assigned;
   const docId = args.doc_md ? await upsertDecisionDoc(ctx, conversation, args.question, args.doc_md, now, existing?.doc_id) : undefined;
@@ -1498,9 +1499,10 @@ export const edit = mutation({
     const conversation = args.doc_md ? await ctx.db.get(row.conversation_id) : null;
     const docId = args.doc_md && conversation ? await upsertDecisionDoc(ctx, conversation, question, args.doc_md, now, row.doc_id) : undefined;
 
-    // A new proposal is assigned the way the ask assigned it; without one the row keeps its category.
+    // Without a proposal the row keeps its category; a run's card is only tightened (categoryFor).
     const proposed = args.category ?? row.category_proposed;
-    const category = args.category === undefined ? row.category : row.workflow_run_id ? runCategory(args.category) : assignCategory(args.category);
+    const asker = row.workflow_run_id ? null : await ctx.db.get(row.conversation_id);
+    const category = categoryFor(args.category, { current: row.category, runDeclares: false, runs: !!row.workflow_run_id || !!(await runOfStation(ctx, asker)) });
     const joined = stack ? await joinStack(ctx, stack, row as any, now) : {};
     const joinsStack = "stack_id" in joined;
     const trialProject = row.trial ? await trialProjectOf(ctx, task ?? (row.task_id ? await ctx.db.get(row.task_id) : null)) : null;

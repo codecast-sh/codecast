@@ -51,13 +51,19 @@ and the protected set `production`, `billing`, `data`, `access`, `external`,
 `unknown` are always human held; the open six may be answered by a role under
 a grant. The asker's proposal (`cast decide --category`) stands, because only
 the asker knows whose call the answer is: card text describes the situation,
-not who should answer it. No proposal, or one outside the vocabulary, is
-`review`, so a `review` grant covers every agent card asked without a
-category and the change flow's Ship cards, whose gate declares `review`:
-granting `review` grants both. A decision a workflow run asks of a person (a
-gate's own ask, a failure gate, a card one of its stations posts) falls back
-to `unknown`, and a gate that adopts a station's card sets it to the category
-the gate declares, else `unknown`; an agent cannot propose `unknown`. A `--run`
+not who should answer it. No proposal is `review`, so a `review` grant covers
+every agent card asked without a category and the change flow's Ship cards,
+whose gate declares `review`: granting `review` grants both. A proposal
+outside the vocabulary is `unknown` (the CLI refuses it). Asked again or
+edited without a proposal, a card keeps its category. A decision serving a
+workflow run is human held unless the run says otherwise: the run's own asks
+(a gate, the runner's failure card) take the category the gate declares, else
+`unknown`; a card a station posts (a session whose parent is the run's
+primary conversation) is `unknown` unless it proposes a human held category;
+a gate that adopts a station's card sets the category it declares, else
+`unknown`; and an asker who re-asks or edits a run's card may only tighten
+it. Separately, a lead on a run's ladder that starts work on its own answers
+the run's change cards whatever their category (`isChangeCard`). A `--run`
 card runs a command in the person's name, so the server sets it to `access`
 unless the asker proposed another protected category.
 

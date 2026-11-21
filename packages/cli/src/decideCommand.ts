@@ -33,6 +33,7 @@
 // contract, so it reuses cliFetch auth and the artifact publish payload builder rather than its own plumbing.
 import { RUN_OPTIONS, commandLine, parseRunCommand } from "@codecast/shared/contracts/commandRun";
 import { invalidImpact } from "@codecast/shared/contracts/decisionImpact";
+import { invalidCategory } from "@codecast/shared/contracts/decisionCategory";
 import * as fs from "fs";
 import * as http from "http";
 import * as path from "path";
@@ -957,7 +958,11 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         if (typeof options.task === "string" || spec?.task) changes.task = typeof options.task === "string" ? options.task : spec?.task;
         if (options.station ?? spec?.station) changes.station = options.station ?? spec?.station;
         if (options.stack ?? spec?.stack) changes.stack = options.stack ?? spec?.stack;
-        if (options.category ?? spec?.category) changes.category = options.category ?? spec?.category;
+        if (options.category ?? spec?.category) {
+          const badCategory = invalidCategory(options.category ?? spec?.category);
+          if (badCategory) fail(badCategory);
+          changes.category = options.category ?? spec?.category;
+        }
         Object.assign(changes, resolveImpact(options.impact, spec));
         if (options.report) {
           const report = await publishReport(deps, options.report, sessionId);
@@ -1015,7 +1020,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       const task: string | undefined =
         options.task === false ? undefined : typeof options.task === "string" ? options.task : spec?.task ?? readTaskPulseFor(sessionId)?.task;
       const category: string | undefined = options.category ?? spec?.category;
-      if (category && !/^[a-z]+$/.test(category)) fail("--category is one lowercase word from the vocabulary (a person's alone: production, billing, data, access, external, product, limit; a role's under a grant: approach, scope, priority, retry, review, allocation).");
+      const badCategory = invalidCategory(category);
+      if (badCategory) fail(badCategory);
 
       // Publish the report first (existing artifact pipeline) so the decision
       // row carries only the slug.

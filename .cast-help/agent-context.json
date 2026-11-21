@@ -12783,7 +12783,7 @@
         },
         {
           "flags": "--category <c>",
-          "description": "Proposed category: approach|scope|priority|retry|review|allocation (the server may pin a protected one)",
+          "description": "Whose call it is. A person's alone: production|billing|data|access|external|product|limit. A role may answer under a grant: approach|scope|priority|retry|review|allocation (default review)",
           "type": "value",
           "long": "--category"
         },

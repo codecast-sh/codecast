@@ -18,16 +18,24 @@ export async function trialProjectOf(ctx: Ctx, task: { project_id?: Id<"projects
   return project?.line_trial ? project : null;
 }
 
+type RunSession = Pick<Doc<"conversations">, "parent_conversation_id" | "is_workflow_primary" | "workflow_run_id">;
+
+async function runOfPrimary(ctx: Ctx, primary: RunSession | null | undefined): Promise<Doc<"workflow_runs"> | null> {
+  return primary?.is_workflow_primary && primary.workflow_run_id ? await ctx.db.get(primary.workflow_run_id) : null;
+}
+
+/** The run a station works for: the session's parent is the run's primary conversation (the runner nests its hands there). */
+export async function runOfStation(ctx: Ctx, conversation: RunSession | null | undefined): Promise<Doc<"workflow_runs"> | null> {
+  return conversation?.parent_conversation_id ? runOfPrimary(ctx, await ctx.db.get(conversation.parent_conversation_id)) : null;
+}
+
 /** The trial run a session works for: a station nested under a trial run's primary conversation, or that conversation itself. */
 export async function trialStationOf(
   ctx: Ctx,
-  conversation: Pick<Doc<"conversations">, "parent_conversation_id" | "is_workflow_primary" | "workflow_run_id"> | null | undefined,
+  conversation: RunSession | null | undefined,
 ): Promise<{ run: Doc<"workflow_runs">; task: Doc<"tasks">; project: Doc<"projects"> } | null> {
   if (!conversation) return null;
-  const primary = conversation.is_workflow_primary
-    ? conversation
-    : conversation.parent_conversation_id ? await ctx.db.get(conversation.parent_conversation_id) : null;
-  const run: Doc<"workflow_runs"> | null = primary?.is_workflow_primary && primary.workflow_run_id ? await ctx.db.get(primary.workflow_run_id) : null;
+  const run = conversation.is_workflow_primary ? await runOfPrimary(ctx, conversation) : await runOfStation(ctx, conversation);
   const task: Doc<"tasks"> | null = run?.task_id ? await ctx.db.get(run.task_id) : null;
   const project = await trialProjectOf(ctx, task);
   return run && task && project ? { run, task, project } : null;
