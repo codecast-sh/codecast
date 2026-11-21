@@ -9,9 +9,12 @@
  * markers. Once the file carries upstream's change the next sweep levels by
  * itself.
  *
- * Each writer hears once per (path set, upstream sha): what was sent lives in
- * `.git/codecast/level-conflicts.json`, and a clean level (or a checkout found
- * already level) clears it with the merge files.
+ * A writer hears once per conflicting path and upstream content of that path:
+ * a busy main whose new commits leave the file alone sends nothing, and costs
+ * one ls-tree per sweep, while a commit that changes the file upstream briefs
+ * again. What was sent lives in `.git/codecast/level-conflicts.json`, and a
+ * clean level (or a checkout found already level) clears it with the merge
+ * files.
  */
 
 import * as fs from "node:fs";
@@ -31,11 +34,11 @@ export interface BriefDeps {
   now?: number;
 }
 
+/** Keyed `<path>\n<upstream blob of it>`, for the conflicts still standing. */
 interface ConflictRecord {
-  /** The upstream sha the record is about; a new one starts it over. */
-  to: string;
-  /** `<conversation>\n<path>\n<path>...` per brief delivered for `to`. */
-  sent: string[];
+  /** Key -> the conversation briefed about it. */
+  briefed: Record<string, string>;
+  /** Keys no transcript explained; tried again when upstream changes the file. */
   unattributed: string[];
 }
 
@@ -46,8 +49,23 @@ const BLOB_MAX_BUFFER = 256 * 1024 * 1024;
 const recordFile = (gitDir: string) => path.join(gitDir, "codecast", "level-conflicts.json");
 export const mergeDir = (gitDir: string) => path.join(gitDir, "codecast", "level-conflicts");
 
-function readRecord(gitDir: string): ConflictRecord | null {
-  try { return JSON.parse(fs.readFileSync(recordFile(gitDir), "utf-8")); } catch { return null; }
+function readRecord(gitDir: string): ConflictRecord {
+  try {
+    const r = JSON.parse(fs.readFileSync(recordFile(gitDir), "utf-8"));
+    if (r?.briefed && Array.isArray(r.unattributed)) return r;
+  } catch {}
+  return { briefed: {}, unattributed: [] };
+}
+
+/** Each path's blob in `rev`, "deleted" when it has none. */
+async function upstreamBlobs(root: string, rev: string, paths: string[]): Promise<Map<string, string>> {
+  const out = (await gitTry(root, ["--literal-pathspecs", "ls-tree", "-r", "-z", rev, "--", ...paths])) ?? "";
+  const blobs = new Map(paths.map((p) => [p, "deleted"]));
+  for (const entry of out.split("\0")) {
+    const tab = entry.indexOf("\t");
+    if (tab > 0) blobs.set(entry.slice(tab + 1), entry.slice(0, tab).split(" ")[2]);
+  }
+  return blobs;
 }
 
 function writeRecord(gitDir: string, record: ConflictRecord): void {
@@ -78,11 +96,12 @@ async function blobAt(root: string, rev: string, rel: string): Promise<Buffer | 
  * here or upstream deletes it).
  */
 async function writeMergeFile(root: string, gitDir: string, rel: string, head: string, to: string): Promise<string | null> {
+  const out = path.join(mergeDir(gitDir), rel);
+  fs.rmSync(out, { force: true });
   const other = await blobAt(root, to, rel);
   let current: Buffer;
   try { current = fs.readFileSync(path.join(root, rel)); } catch { return null; }
   if (!other) return null;
-  const out = path.join(mergeDir(gitDir), rel);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, current);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cast-level-conflict-"));
@@ -132,34 +151,47 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
   if (r.ok || !r.conflicts.length) return null;
   // A level that raced a writer has already moved HEAD; the next sweep finds it level.
   if ((await gitTry(root, ["rev-parse", "HEAD"])) !== r.from) return null;
-  const now = deps.now ?? Date.now();
   const prior = readRecord(gitDir);
-  const record: ConflictRecord = prior?.to === r.to ? { ...prior, unattributed: [] } : { to: r.to, sent: [], unattributed: [] };
-
-  fs.rmSync(mergeDir(gitDir), { recursive: true, force: true });
-  const merges = new Map<string, string | null>();
-  for (const p of r.conflicts) merges.set(p, await writeMergeFile(root, gitDir, p, r.from, r.to));
-
-  const since = Math.max(oldestMtime(root, r.conflicts, now) - 60_000, now - ATTRIBUTION_HORIZON_MS);
-  const { owners } = (deps.attribute ?? attributeEdits)(root, r.conflicts, { since });
-  const byWriter = new Map<string, string[]>();
+  const blobs = await upstreamBlobs(root, r.to, r.conflicts);
+  const keyOf = (p: string) => `${p}\n${blobs.get(p)}`;
+  // Only the conflicts still standing stay recorded.
+  const record: ConflictRecord = { briefed: {}, unattributed: [] };
+  const fresh: string[] = [];
   for (const p of r.conflicts) {
-    const conv = owners.get(p)?.conversationId;
-    if (!conv) { record.unattributed.push(p); continue; }
-    byWriter.set(conv, [...(byWriter.get(conv) ?? []), p]);
+    const key = keyOf(p);
+    if (prior.briefed[key]) record.briefed[key] = prior.briefed[key];
+    else if (prior.unattributed.includes(key)) record.unattributed.push(key);
+    else fresh.push(p);
   }
 
   const notes: string[] = [];
-  for (const [conv, paths] of byWriter) {
-    paths.sort();
-    const key = [conv, ...paths].join("\n");
-    const who = `${conv.slice(0, 7)} (${paths.join(", ")})`;
-    if (record.sent.includes(key)) { notes.push(`already briefed ${who}`); continue; }
-    const ok = await deps.send(conv, await briefFor(root, r.from, r.to, paths, merges)).catch(() => false);
-    if (ok) record.sent.push(key);
-    notes.push(ok ? `briefed ${who}` : `brief to ${who} failed`);
+  if (fresh.length) {
+    const now = deps.now ?? Date.now();
+    const since = Math.max(oldestMtime(root, fresh, now) - 60_000, now - ATTRIBUTION_HORIZON_MS);
+    const { owners } = (deps.attribute ?? attributeEdits)(root, fresh, { since });
+    const byWriter = new Map<string, string[]>();
+    for (const p of fresh) {
+      const conv = owners.get(p)?.conversationId;
+      if (conv) byWriter.set(conv, [...(byWriter.get(conv) ?? []), p]);
+      else record.unattributed.push(keyOf(p));
+    }
+    for (const [conv, paths] of byWriter) {
+      paths.sort();
+      const merges = new Map<string, string | null>();
+      for (const p of paths) merges.set(p, await writeMergeFile(root, gitDir, p, r.from, r.to));
+      const ok = await deps.send(conv, await briefFor(root, r.from, r.to, paths, merges)).catch(() => false);
+      if (ok) for (const p of paths) record.briefed[keyOf(p)] = conv;
+      notes.push(`${ok ? "briefed" : "brief failed to"} ${conv.slice(0, 7)} (${paths.join(", ")})`);
+    }
   }
-  if (record.unattributed.length) notes.push(`no writer for ${record.unattributed.join(", ")}`);
+  const already = new Map<string, string[]>();
+  for (const p of r.conflicts) {
+    const conv = record.briefed[keyOf(p)];
+    if (conv && !fresh.includes(p)) already.set(conv, [...(already.get(conv) ?? []), p]);
+  }
+  for (const [conv, paths] of already) notes.push(`already briefed ${conv.slice(0, 7)} (${paths.join(", ")})`);
+  const unattributed = r.conflicts.filter((p) => record.unattributed.includes(keyOf(p)));
+  if (unattributed.length) notes.push(`no writer for ${unattributed.join(", ")}`);
   writeRecord(gitDir, record);
   return notes.join("; ") || null;
 }

@@ -113,11 +113,13 @@ session that wrote it last, as the ship pass attributes its groups, and that
 session gets one message naming its conflicting files, the upstream commits
 that touched each, and a three-way merge with conflict markers saved under
 `.git/codecast/level-conflicts/<path>`. Once its file carries upstream's
-change, the next sweep levels by itself. A writer hears once per path set and
-upstream sha (`.git/codecast/level-conflicts.json` records what was sent),
-again when upstream moves, and never for a path no transcript explains: that
-path is only named in the daemon's `[LEVEL]` log line. A clean level, or a
-checkout found already level, clears the record and the merge files.
+change, the next sweep levels by itself. Briefs are keyed by path and
+upstream's blob of it (`.git/codecast/level-conflicts.json`): a writer hears
+again only when upstream changes that file, so on a busy main a standing
+conflict costs one `ls-tree` a sweep and no attribution. A path no transcript
+explains sends nothing and is named in the daemon's `[LEVEL]` log line; it is
+attributed again when upstream changes it. A clean level, or a checkout found
+already level, clears the record and the merge files.
 
 ## Fix forward
 
