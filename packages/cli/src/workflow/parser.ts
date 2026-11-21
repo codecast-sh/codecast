@@ -368,7 +368,7 @@ interface RawGraph {
 
 /** Reads a file for the parser: absolute path in, its text or null when there is none. */
 export type ReadFile = (abs: string) => string | null;
-const readDisk: ReadFile = (abs) => (fs.existsSync(abs) ? fs.readFileSync(abs, "utf-8") : null);
+const readDisk: ReadFile = (abs) => (fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf-8") : null);
 
 export interface ParseOptions {
   read?: ReadFile;
@@ -591,12 +591,14 @@ function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr>>, wri
     return seen;
   };
 
+  const ownOverrides = new Set([...written.keys()].filter((k) => overrides.has(k) && k.includes(SEGMENT_SEP)));
   // Guidance and prompts on a segment's node belong to the station inside it that reads a prompt.
   for (const [id, a] of own) {
     if (!isSegmentNode(raw, id) || id.includes(SEGMENT_SEP)) continue;
     const moved = Object.fromEntries((["guide", "prompt"] as const).filter((k) => a[k] !== undefined).map((k) => [k, a[k]]));
     if (!Object.keys(moved).length) continue;
     overrides.set(id, { ...overrides.get(id), ...moved });
+    ownOverrides.add(id);
     const n = nodes.get(id)!;
     delete n.guide;
     delete n.prompt;
@@ -610,6 +612,10 @@ function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr>>, wri
     if (!truthy(a.skip)) continue;
     if (!baseIds.has(id)) throw new Error(`${say(id, "skip", "true")}: ${baseName} has no station ${id} to skip; its stations: ${stations()}`);
     if (a.after !== undefined || a.before !== undefined) throw new Error(`${say(id, "skip", "true")}: a station is either skipped or placed, not both`);
+    const changed = [...overrides.keys()].filter((k) => k === id || k.startsWith(`${id}${SEGMENT_SEP}`));
+    // A base's changes to a station this file skips go with it; this file's own are a contradiction to name.
+    for (const k of changed.filter((k) => !ownOverrides.has(k))) overrides.delete(k);
+    if (changed.some((k) => ownOverrides.has(k))) throw new Error(`${say(id, "skip", "true")}: this file also changes ${changed.filter((k) => ownOverrides.has(k)).join(", ")}; a skipped station runs nothing, so drop those lines or the skip`);
     const to = onePassTarget(id, say(id, "skip", "true"));
     edges = edges.filter((e) => e.from !== id).map((e) => (e.to === id ? { ...e, to } : e));
     nodes.delete(id);

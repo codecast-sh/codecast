@@ -220,6 +220,7 @@ describe("variant edits: after=, before=, skip, when=, guide=", () => {
     expect(bad(`gone [skip=true]`)).toThrow("live has no station gone to skip; its stations:");
     expect(bad(`lint [fix="build"]`)).toThrow("place lint with after= or before=");
     expect(bad(`review [skip=true] lint [after="review"]`)).toThrow("this file skips review; place lint next to a station that stays");
+    expect(bad(`review [skip=true] review__x [model="opus"]`)).toThrow('review [skip="true"]: this file also changes review__x; a skipped station runs nothing, so drop those lines or the skip');
     expect(bad(`push [guide="x"]`)).toThrow("push [guide=...] adds to a prompt, and push has none; write prompt= instead");
     expect(() => parseWorkflowFile("/l/v.cast", { read: read(`digraph v { lint [after="build"] }`) })).toThrow('lint [after=...] edits the flow this one extends, and this file extends none: add graph [extends="<flow>"]');
   });
@@ -308,4 +309,14 @@ test("a repo change.cast read from its text and directory alone still extends th
   const g = parseWorkflowSource(src, "/r/.codecast/flows", { read: files({ "/r/.codecast/flows/change.cast": src }) });
   expect(validateWorkflow(g)).toEqual([]);
   expect(g.nodes.has("lint")).toBe(true);
+});
+
+test("a variant that skips a station its base guided drops the guidance with it", () => {
+  const read = files({
+    "/r/.codecast/flows/team.cast": `digraph team {\n  graph [extends="change"]\n  decide [guide="Ask about X."]\n}`,
+    "/r/.codecast/flows/mine.cast": `digraph mine {\n  graph [extends="team.cast"]\n  decide [skip=true]\n}`,
+  });
+  const g = parseWorkflowFile("/r/.codecast/flows/mine.cast", { read });
+  expect(validateWorkflow(g)).toEqual([]);
+  expect(g.nodes.has("decide__decide")).toBe(false);
 });

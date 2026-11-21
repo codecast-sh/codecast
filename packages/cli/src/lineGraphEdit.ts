@@ -87,7 +87,7 @@ function declaringFile(castAbs: string, node: string, field: GraphField, read: R
   return null;
 }
 
-const readDisk = (abs: string) => (fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null);
+const readDisk = (abs: string) => (fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf8") : null);
 
 /**
  * What a push of the graph in `castFile` records about where it lives, or
