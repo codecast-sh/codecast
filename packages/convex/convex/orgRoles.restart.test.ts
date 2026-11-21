@@ -8,13 +8,17 @@ import { isBootstrapPrompt } from "@codecast/shared/contracts";
 // session and retires the old.
 
 const ME = "u".repeat(31) + "m";
+const RUNNER = "u".repeat(31) + "r";
 const TEAM = "teams_acme" as any;
 const NOW = 1_800_000_000_000;
 
 function world() {
   const tables: Record<string, any[]> = {
-    users: [{ _id: ME, name: "Me", email: "me@x.ai" }],
-    team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 }],
+    users: [{ _id: ME, name: "Me", email: "me@x.ai" }, { _id: RUNNER, name: "Runner", email: "runner@x.ai" }],
+    team_memberships: [
+      { _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 },
+      { _id: "m2", user_id: RUNNER, team_id: TEAM, role: "member", joined_at: 1 },
+    ],
     teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
     counters: [],
     org_roles: [],
@@ -37,7 +41,10 @@ function world() {
     user_presence: [],
     devices: [],
     docs: [],
-    projects: [{ _id: "projects_p1", user_id: ME, title: "Repo", team_id: TEAM, workspace: `team:${TEAM}`, short_id: "pr-1", status: "active", created_at: 1, updated_at: 1, default_session_id: "projsess" }],
+    projects: [{ _id: "projects_p1", user_id: ME, title: "Repo", team_id: TEAM, workspace: `team:${TEAM}`, short_id: "pr-1", status: "active", created_at: 1, updated_at: 1, default_session_id: "projsess" },
+      // A project whose canonical session is the seat itself.
+      { _id: "projects_p2", user_id: ME, title: "Ops", team_id: TEAM, workspace: `team:${TEAM}`, short_id: "pr-2", status: "active", created_at: 1, updated_at: 1, default_session_id: "mine" },
+    ],
     plans: [],
     tasks: [],
     session_decisions: [],
@@ -94,6 +101,29 @@ describe("cast role restart --fresh", () => {
     const proj = tables.conversations.find((c) => c._id === "projsess")!;
     expect(proj.standing_role_id).toBeUndefined();
     expect(proj.anchor_id).toBeUndefined();
+  });
+
+  test("the new seat runs and bills on the old seat's runner, not on the admin who restarted it", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    // The seat moved to another account since it was seated (cast role move).
+    tables.conversations.find((c) => c._id === "mine")!.user_id = RUNNER;
+    await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+    const standing = await standingConversationOf(ctx, tables.org_roles[0]);
+    expect(String(standing._id)).not.toBe("mine");
+    expect(standing.user_id).toBe(RUNNER);
+    expect(tables.anchors.find((a) => a._id === tables.org_roles[0].anchor_id)!.host_user_id).toBe(RUNNER);
+    expect(tables.agent_tasks.filter((t) => String(t.originating_conversation_id) === String(standing._id) && live(t)).every((t) => t.user_id === RUNNER)).toBe(true);
+    expect(tables.pending_messages.some((p) => String(p.conversation_id) === String(standing._id) && isBootstrapPrompt(String(p.content)))).toBe(true);
+  });
+
+  test("a project whose canonical session was the old seat points at the new one; others are untouched", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+    const standing = await standingConversationOf(ctx, tables.org_roles[0]);
+    expect(String(tables.projects.find((p) => p._id === "projects_p2")!.default_session_id)).toBe(String(standing._id));
+    expect(tables.projects.find((p) => p._id === "projects_p1")!.default_session_id).toBe("projsess");
   });
 
   test("plain restart keeps the same standing session", async () => {
