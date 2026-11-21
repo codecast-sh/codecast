@@ -92,9 +92,15 @@ export function sourceAddBody(providerRaw: string, name: string | undefined, o: 
     ...(Object.keys(config).length ? { config } : {}),
     ...(o.project?.trim() ? { project: o.project.trim() } : {}),
     ...(o.fingerprintPrefix?.trim() ? { fingerprint_prefix: o.fingerprintPrefix.trim() } : {}),
-    ...(csv(o.promote) ? { promote: csv(o.promote) } : {}),
+    ...(promoteList(o.promote) ? { promote: promoteList(o.promote) } : {}),
     ...appBaseUrl(provider, o.baseUrl),
   };
+}
+
+/** --promote as a list; "none" is an explicit empty list (promote nothing), an absent flag is no change. */
+export function promoteList(raw: string | undefined): string[] | undefined {
+  if (raw === undefined) return undefined;
+  return raw.trim().toLowerCase() === "none" ? [] : csv(raw);
 }
 
 function appBaseUrl(provider: string, raw: unknown): { base_url?: string } {
@@ -211,7 +217,7 @@ export function registerSourcesCommand(program: Command, deps: PublishDeps): voi
   }
   add
     .option("--fingerprint-prefix <prefix>", "Group keys become <prefix>:<kind>:<key>, joining problems a finder files the same way")
-    .option("--promote <transitions>", "Transitions that become findings on the line (default: new, regressed)")
+    .option("--promote <transitions>", "Transitions that become findings on the line (default: new, regressed; none for nothing)")
     .option("--base-url <url>", "app: where the app answers; connects it with no secret, since codecast signs every request")
     .option("--write <path>", "The codecast.json to record the source in (default: the nearest one up to the checkout root, else the root's)")
     .option("--no-write", "Record nothing in codecast.json")
@@ -284,14 +290,14 @@ export function registerSourcesCommand(program: Command, deps: PublishDeps): voi
     set.option(`--${field.flag} <${field.list ? "a,b" : "value"}>`, `${field.help}${only}`);
   }
   set
-    .option("--promote <transitions>", "Transitions that become findings on the line")
+    .option("--promote <transitions>", "Transitions that become findings on the line; none for nothing")
     .option("--project <ref>", "The project its findings file into (id, short id or title); \"\" for none")
     .option("--fingerprint-prefix <prefix>", "Group keys become <prefix>:<kind>:<key>, joining problems a finder files the same way; \"\" for none")
     .option(...TEAM_OPTION)
     .option(...JSON_OPTION)
     .action(async (ref: string, o: Record<string, unknown> & { promote?: string; project?: string; fingerprintPrefix?: string; team?: string; json?: boolean }) => {
       const config = sourceConfigFromFlags(o);
-      const promote = csv(o.promote);
+      const promote = promoteList(o.promote);
       const project = typeof o.project === "string" ? o.project.trim() : undefined;
       const prefix = typeof o.fingerprintPrefix === "string" ? o.fingerprintPrefix.trim() : undefined;
       if (!Object.keys(config).length && !promote && project === undefined && prefix === undefined) fail(`Name a setting to change: ${[...SOURCE_CONFIG_FIELDS.map((f) => `--${f.flag}`), "--promote", "--project", "--fingerprint-prefix"].join(", ")}`);
