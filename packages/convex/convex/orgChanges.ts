@@ -229,6 +229,7 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
   for (const row of orderedRows) {
     if (row.undone_by) continue;
     if (!(await mayChangeRow(ctx, userId, row))) { preview.refused = "You can only undo changes you could make yourself"; continue; }
+    if (false) { preview.refused = "A fresh restart cannot be undone: the old session was retired. Restart the role fresh again for a new session"; continue; }
     const writes: OrgWrite[] = [];
     // Ids whose write stands: restored as recorded, or with only its owners
     // left as they are now.
@@ -283,7 +284,7 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
     messageCount += row.effects.takeover?.told?.sessions ?? 0;
   }
   const refusal = await validateRestoredRoles(ctx, steps.flatMap((s) => s.writes), read) ?? await refuseOrphans(ctx, steps.flatMap((s) => s.writes), read);
-  if (refusal) preview.refused = refusal;
+  if (refusal) preview.refused ??= refusal;
   if (messageCount) preview.cannot_take_back.push({ kind: "message_sent", count: messageCount });
   let worked = 0;
   for (const id of sessions) if ((await ctx.db.get(id))?.message_count) worked++;

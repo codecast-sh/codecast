@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 export type FrozenChange = {
-  source: "session" | "branch" | "task" | "pr";
+  source: "session" | "branch" | "task" | "pr" | "checkout";
   /** The session whose edits these are (its codecast id when it syncs). */
   session?: string;
   /** That session's full conversation id: the run's subject, which hears what each stage found (flows.md FL4). */
@@ -27,6 +27,8 @@ export type FrozenChange = {
   shared: Array<{ path: string; also: string[] }>;
   /** Files the session wrote that stay out: credentials, with why. */
   held: Array<{ path: string; why: string }>;
+  /** A checkout's change: the session that wrote each file, which hears findings that name it. A file no session's edit names has no entry. */
+  writers?: Record<string, { conversation: string; session: string }>;
 };
 
 const CHANGE_FILE = "change.json";
@@ -53,6 +55,7 @@ export function readFrozenChange(runDir: string | undefined): FrozenChange | nul
 export function changeReturnWords(change: Partial<FrozenChange>): string {
   if (change.source === "pr") return `Push the fix to the pull request's branch ${change.branch}; when you end your turn the run fetches that branch again`;
   if (change.source === "branch" || change.source === "task") return `Commit the fix to branch ${change.branch}; when you end your turn the run reads that branch again`;
+  if (change.source === "checkout") return "When you end your turn the run freezes the shared checkout's change again, your edits included";
   return "When you end your turn the run freezes this session's edits again";
 }
 
@@ -68,6 +71,8 @@ export function frozenChangeContext(runDir: string | undefined): Record<string, 
       ...(change.session ? { change_session: change.session } : {}),
       ...(change.conversation ? { change_conversation: change.conversation } : {}),
       change_files: (change.paths ?? []).join(" "),
+      // Where a reviewer's diff starts: a session's change sits on the upstream it was cut onto, which the local default branch may lag.
+      ...(change.source === "session" && change.base ? { diff_base: change.base } : {}),
       change_return: changeReturnWords(change),
     };
   } catch {
