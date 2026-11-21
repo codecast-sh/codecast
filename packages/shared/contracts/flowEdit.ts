@@ -6,6 +6,8 @@
 // `cast flow edit` prints the ones it made as a ```flow {"edit": FlowEdit}
 // fence the transcript draws (PL5).
 
+import type { FlowEdgeIn, FlowNodeIn } from "./flowPool";
+
 export type FlowEditOp = "add" | "guide" | "prompt" | "run" | "skip" | "when" | "undo";
 
 export type FlowEditChange = {
@@ -14,7 +16,7 @@ export type FlowEditChange = {
   station: string;
   /** The station's name, when the edit knows it. */
   label?: string;
-  /** add: the station it follows on the passing path. */
+  /** add: the station it follows on the passing path; skip, and undo of an added station: the one it stood after. */
   after?: string;
   /** add: the station it comes before. */
   before?: string;
@@ -31,6 +33,8 @@ export type FlowEditChange = {
   /** guide: the guidance text as the station reads it, appended after the inherited prompt (and the station it landed on). */
   text?: string;
   node?: string;
+  /** add, skip: what the station is: an agent, a command, or a person's question. */
+  who?: "agent" | "command" | "person";
   /** Who made the edit: a `cast flow edit` command, the app, or a person writing the file. */
   by?: "command" | "app" | "hand";
 };
@@ -45,6 +49,12 @@ export type FlowEdit = {
   /** The slug (or file) the flow extends. */
   base: string;
   changes: FlowEditChange[];
+  /** The repository the file is in (`owner/name`, lowercased), when its checkout has a GitHub origin. */
+  repository?: string;
+  /** The flow after the edit as it validated, segments expanded, with no prompt's or script's text: what the card draws. */
+  graph?: { nodes: FlowNodeIn[]; edges: FlowEdgeIn[] };
+  /** Every edit the file makes after this one (after=, skip, guide=, when=), as the parser read them. */
+  variant?: FlowEditChange[];
 };
 
 /** The fence body a transcript draws an edit from: ```flow {"edit": {...}}. */

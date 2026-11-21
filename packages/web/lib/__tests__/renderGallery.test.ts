@@ -17,7 +17,9 @@ import { CLOUD_AGENT_ACTION_SUBTYPE } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE } from "@codecast/shared/contracts/deliveryFailed";
 import { LINE_FENCE_LANG } from "@codecast/shared/contracts/lineChat";
 import { VIEW_FENCE_LANG } from "../productViewRefs";
-import { FLOW_FENCE_LANG } from "../line/flowFence";
+import { FLOW_FENCE_LANG, readFlowFence } from "../line/flowFence";
+import { editFromOutput, editRun } from "../line/flowEditCard";
+import { pipelineCommandRepo } from "../line/flowCommandOutput";
 import { CONVERSATION_FENCE_LANG } from "../conversationFence";
 import { DIFF_FENCE } from "../castDiff";
 
@@ -152,6 +154,22 @@ describe("render gallery", () => {
     expect(flags.length).toBeGreaterThan(5);
     expect(flags.filter((f) => !parsed.some((e) => e[f]))).toEqual([]);
     expect(parsed.some((e) => e.statusCode >= 500)).toBe(true);
+  });
+
+  test("shows the pipeline's objects: edits drawn from their tool cards and from a fence, one carried live, and a pipeline", () => {
+    const records = renderGalleryRecords(1_790_000_000_000, "u1", "team:t1", "conv1");
+    const calls = rows.flatMap((r) => (r.tool_calls ?? []).filter((c) => c.name === "Bash").map((c) => ({ command: String(JSON.parse(c.input).command), result: rows.flatMap((x) => x.tool_results ?? []).find((t) => t.tool_use_id === c.id)?.content ?? "" })));
+    const edits = calls.filter((c) => /^cast flow edit /.test(c.command)).map((c) => editFromOutput(c.result));
+    expect(edits.length).toBeGreaterThanOrEqual(2);
+    expect(edits.every((e) => !!e?.edit.graph && !!e.diff)).toBe(true);
+    // Not shipped: no run of the session carries the tool-card edits.
+    for (const e of edits) expect(editRun(e!.edit, records.workflowRuns, 1_790_000_000_000)).toBeNull();
+    const fences = assistantText.flatMap((c) => [...c.matchAll(new RegExp("```" + FLOW_FENCE_LANG + "\\n(.*)\\n```", "g"))].map((m) => readFlowFence(m[1]))).filter((r) => r.ok);
+    const fenced = fences.map((r) => r.ok && r.spec.edit).find(Boolean);
+    expect(fenced && editRun(fenced, records.workflowRuns, 1_790_000_000_000)?._id).toBe(GALLERY_FLOW.editLive);
+    const repo = fences.map((r) => r.ok && r.spec.pipeline).find(Boolean);
+    expect(repo && records.pipelines.some((p) => p.repository === repo)).toBe(true);
+    expect(calls.some((c) => c.command === "cast flow pipeline" && pipelineCommandRepo(c.result, false) === repo)).toBe(true);
   });
 
   test("shows the flow object: a flow a session defined, its live run with Save, a finished library run", () => {

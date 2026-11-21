@@ -24,7 +24,7 @@ import { CastCanvas, canvasAvailable } from './CastCanvas';
 import { CastDiff } from './CastDiff';
 import { DIFF_FENCE } from '@codecast/web/lib/castDiff';
 import { FLOW_FENCE_LANG, readFlowFence } from '@codecast/web/lib/line/flowFence';
-import { FlowCard, FlowRunCard } from './session/FlowCard';
+import { FlowCard, FlowEditCard, FlowPipelineCard, FlowRunCard } from './session/FlowCard';
 import { CONVERSATION_FENCE_LANG } from '@codecast/web/lib/conversationFence';
 import { ConversationFence } from './ConversationFence';
 import { EntityPill } from './EntityPill';
@@ -505,7 +505,11 @@ function renderBlock(node: Nodes, ctx: MdCtx, k: string, first: boolean): React.
       if (language === 'cast-canvas' && canvasAvailable) return <CastCanvas key={k} code={node.value} />;
       if (language === FLOW_FENCE_LANG) {
         const read = readFlowFence(node.value);
-        if (read.ok) return read.spec.run ? <FlowRunCard key={k} runId={read.spec.run} /> : <FlowCard key={k} slug={read.spec.flow!} />;
+        if (read.ok) {
+          if (read.spec.edit) return <FlowEditCard key={k} edit={read.spec.edit} />;
+          if (read.spec.pipeline) return <FlowPipelineCard key={k} repository={read.spec.pipeline} />;
+          return read.spec.run ? <FlowRunCard key={k} runId={read.spec.run} /> : <FlowCard key={k} slug={read.spec.flow!} />;
+        }
       }
       if (language === CONVERSATION_FENCE_LANG) return <ConversationFence key={k} code={node.value} fallback={<CodeBlockWithCopy content={node.value} language="json" />} />;
       if (language === DIFF_FENCE) return <CastDiff key={k} raw={node.value} fallback={<CodeBlockWithCopy content={node.value} language="diff" />} />;

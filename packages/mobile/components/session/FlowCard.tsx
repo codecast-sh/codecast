@@ -4,7 +4,7 @@
 // a segment's or a fan-out's steps indented under its name; on a run only the
 // route it took, red where it stopped; in a definition the routes off the path,
 // neutral.
-import React, { useMemo } from 'react';
+import React, { useContext, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View as RNView } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { Text as RNText } from '@/components/Themed';
@@ -19,6 +19,15 @@ import { flowDiagram, routeTail, runReached, stepStates, type DiagramStep, type 
 import { flowRunState, type FlowRunTone } from '@codecast/web/lib/line/flowFence';
 import { takesSessionChange } from '@codecast/web/lib/line/flowPool';
 import { journeyOf, WHO_WORDS, type JourneyNow, type StageState } from '@codecast/web/lib/ship/journey';
+import type { FlowEdit } from '@codecast/shared/contracts/flowEdit';
+import { asGitDiff, editDrawing, editLines, editRun, liveDeploy, type EditMark } from '@codecast/web/lib/line/flowEditCard';
+import { CastDiff } from '@/components/CastDiff';
+import { useSessionFlowRuns } from '@codecast/web/hooks/useSyncWorkflows';
+import { MessageIdentity } from '@codecast/web/lib/conversationBlockContexts';
+import { runShip } from '@codecast/web/lib/ship/sessionShip';
+import { usePipelineModels, usePipelineWorkspace } from '@codecast/web/hooks/usePipelines';
+import { useActiveWorkspaceKey } from '@codecast/web/hooks/useWorkspaceCollection';
+import { repoName, spanWords, type PipelineLane } from '@codecast/web/lib/line/pipelineModel';
 
 type FeatherName = React.ComponentProps<typeof Feather>['name'];
 type RunRow = Parameters<typeof stepStates>[1] & { _id: string; status: string; task_short_id?: string | null; fail_reason?: string | null; workflow_slug?: string; workflow_name?: string };
@@ -169,6 +178,124 @@ function FlowBody({ flow, run, library }: { flow: AppFlow; run: RunRow | null; l
   );
 }
 
+/**
+ * An edit to a project's flow where it was made (pipeline.md PL5), the web's FlowEditCard laid down the screen: the
+ * edit in words, the flow's passing path with this edit's stations marked (a skipped one struck through where it
+ * stood), the file's diff a press away, and how far it got: not shipped, the change run carrying it, Live in its deploy.
+ */
+export function FlowEditCard({ edit, diff = null, dryRun = false }: { edit: FlowEdit; diff?: string | null; dryRun?: boolean }) {
+  const Theme = useTheme();
+  const identity = useContext(MessageIdentity);
+  const conversationId = identity?.conversationId ?? null;
+  const madeAt = useMemo(() => {
+    if (!conversationId || !identity?.messageId) return null;
+    const rows = (useInboxStore.getState().messages?.[conversationId] ?? []) as Array<{ _id?: string; timestamp?: number }>;
+    return rows.find((r) => r._id === identity.messageId)?.timestamp ?? null;
+  }, [conversationId, identity?.messageId]);
+  const runs = useSessionFlowRuns(conversationId);
+  const run = useMemo(() => (dryRun ? null : editRun(edit, runs ?? [], madeAt)), [edit, runs, madeAt, dryRun]);
+  const { flow: runFlow } = useRunFlow(run);
+  const journey = useMemo(() => (run && runFlow ? journeyOf(runFlow, run) : null), [run, runFlow]);
+  const live = journey?.now.kind === 'live';
+  const { flow: base } = useNamedFlow(edit.graph ? null : edit.base);
+  const drawing = useMemo(() => editDrawing(edit, { base: base ?? null, live }), [edit, base, live]);
+  const lines = useMemo(() => editLines(edit), [edit]);
+  const [fileOpen, setFileOpen] = useState(false);
+  const ship = run ? runShip(run as any) : null;
+  const dp = journey && 'line' in journey.now ? liveDeploy(journey.now.line) : null;
+  const stateColor = !run ? Theme.textMuted : live ? Theme.green : ship?.tone === 'bad' ? Theme.red : ship?.tone === 'you' || ship?.tone === 'wait' ? Theme.yellow : Theme.blue;
+  const sign = (l: string) => (l.startsWith('+ ') ? ['+', Theme.green] : l.startsWith('~ ') ? ['~', Theme.cyan] : l.startsWith('- ') ? ['−', Theme.red] : ['·', Theme.textMuted]) as [string, string];
+  const markWords = (m: EditMark | undefined) => (m ? [m.skipped ? (m.proposed ?? 'skipped') : m.own === 'added' ? 'added' : m.own === 'changed' ? (m.changed?.filter((c) => c !== 'when').join(', ') || 'changed') : null, m.when ?? null].filter(Boolean).join(' · ') : '');
+  return (
+    <RNView style={[styles.card, { borderColor: Theme.border, backgroundColor: Theme.bgAlt }]}>
+      <RNView style={styles.head}>
+        <RNText style={[styles.kind, { color: Theme.blue, borderColor: Theme.blue }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>PIPELINE EDIT</RNText>
+        <RNText style={[styles.name, { color: Theme.text }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{drawing?.flow.label ?? edit.flow}</RNText>
+        {edit.repository ? <RNText style={[styles.task, codeFont, { color: Theme.textMuted }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{repoName(edit.repository)}</RNText> : null}
+        <RNView style={{ flex: 1 }} />
+        <RNText style={[styles.state, { color: stateColor }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{!run ? (dryRun ? 'Dry run' : 'Not shipped') : live ? `Live${dp ? ` · ${dp}` : ''}` : ship?.words ?? 'Shipping'}</RNText>
+      </RNView>
+      <RNView style={styles.lines}>
+        {lines.map((l, i) => {
+          const [g, c] = sign(l);
+          return (
+            <RNView key={i} style={styles.line}>
+              <RNText style={[styles.sign, codeFont, { color: c }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{g}</RNText>
+              <RNText style={[styles.lineText, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{l.replace(/^[+~-] /, '')}</RNText>
+            </RNView>
+          );
+        })}
+      </RNView>
+      {drawing ? (
+        <RNView style={[styles.steps, { gap: 6 }]}>
+          {drawing.diagram.steps.map((s) => {
+            const m = drawing.marks[s.id];
+            const words = markWords(m);
+            const accent = m?.skipped ? Theme.textMuted : m?.own ? Theme.cyan : null;
+            return (
+              <RNView key={s.id} style={[styles.step, { opacity: m?.skipped ? 0.6 : 1 }]}>
+                <Feather name={WHO[s.inner.length === 1 ? s.inner[0].kind : s.kind].icon} size={13} color={accent ?? Theme.textMuted} />
+                <RNText style={[styles.stepName, { color: accent && !m?.skipped ? Theme.cyan : Theme.text, textDecorationLine: m?.skipped ? 'line-through' : 'none' }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.label}</RNText>
+                {words ? <RNText style={[styles.who, { color: accent ?? Theme.textMuted }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{words}</RNText> : null}
+              </RNView>
+            );
+          })}
+          {drawing.diagram.end ? <RNText style={[styles.end, { color: Theme.textMuted, fontWeight: '400' }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>Ends at {drawing.diagram.end}</RNText> : null}
+        </RNView>
+      ) : null}
+      <Pressable disabled={!diff} onPress={() => setFileOpen((o) => !o)} hitSlop={6} style={[styles.file, { borderTopColor: Theme.border }]}>
+        {diff ? <Feather name={fileOpen ? 'chevron-down' : 'chevron-right'} size={12} color={Theme.textMuted} /> : null}
+        <RNText style={[styles.who, { color: Theme.textMuted, fontWeight: '600' }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>file</RNText>
+        <RNText style={[styles.who, codeFont, { color: Theme.textMuted, flexShrink: 1 }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{edit.file}</RNText>
+      </Pressable>
+      {fileOpen && diff ? <RNView style={styles.diff}><CastDiff raw={asGitDiff(diff)} fallback={<RNText style={[styles.who, codeFont, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{diff}</RNText>} /></RNView> : null}
+      {journey ? <NowLine now={journey.now} /> : null}
+    </RNView>
+  );
+}
+
+/** A repository's pipeline (pipeline.md PL6) as the landing's strip: each lane its passing path, main its targets. */
+export function FlowPipelineCard({ repository }: { repository: string }) {
+  const Theme = useTheme();
+  const { workspace: found, feeders } = usePipelineWorkspace(repository);
+  const active = useActiveWorkspaceKey();
+  const { models, ready } = usePipelineModels(found ?? active);
+  const model = models.find((m) => m.repository === repository.toLowerCase()) ?? null;
+  if (!model && !ready) return feeders;
+  const lane = (title: string, l: PipelineLane, live: string | null) => (
+    <RNView style={styles.stripRow}>
+      <RNText style={[styles.who, { color: Theme.textMuted, fontWeight: '600' }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{title}{live ? <RNText style={{ color: Theme.blue }}>{`  ${live}`}</RNText> : null}</RNText>
+      <RNText style={[styles.stepName, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>
+        {l.diagram.steps.map((st) => (st.kind === 'parallel' && st.inner.length ? st.inner.map((x) => x.label).join(' + ') : st.label)).join('  →  ')}
+      </RNText>
+    </RNView>
+  );
+  return (
+    <RNView style={[styles.card, { borderColor: Theme.border, backgroundColor: Theme.bgAlt }]}>
+      {feeders}
+      <RNView style={styles.head}>
+        <RNText style={[styles.kind, { color: Theme.blue, borderColor: Theme.blue }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>PIPELINE</RNText>
+        <RNText style={[styles.name, { color: Theme.text }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{model?.name ?? repoName(repository)}</RNText>
+        <RNText style={[styles.task, codeFont, { color: Theme.textMuted, flexShrink: 1 }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{repository}</RNText>
+      </RNView>
+      {model ? (
+        <RNView style={[styles.steps, { gap: 8 }]}>
+          {lane('Every change', model.change, model.change.inFlight ? `${model.change.inFlight} in flight` : null)}
+          <RNView style={styles.stripRow}>
+            <RNText style={[styles.who, codeFont, { color: Theme.textMuted, fontWeight: '600' }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>main</RNText>
+            <RNText style={[styles.who, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>
+              {model.main.targets.length ? model.main.targets.map((t) => `${t.name} ${t.going?.stuck ? `stuck ${spanWords(t.going.stuck)}` : t.going ? 'going out' : t.tone === 'waiting' ? `${t.waiting} waiting` : t.tone === 'current' ? 'up to date' : t.tone}`).join('   ') : 'no targets declared'}
+            </RNText>
+          </RNView>
+          {lane('Every release', model.release, model.release.stuck ? `${model.release.stuck.deploy} stuck` : model.release.run || model.release.outside ? 'going out' : null)}
+        </RNView>
+      ) : (
+        <RNText style={[styles.why, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>No pipeline published for {repository}</RNText>
+      )}
+    </RNView>
+  );
+}
+
 /** A route off the path: its outcome, then what it does (stops the run, ends here, back to or on to a step). */
 function Route({ r, stopped, indent = 0 }: { r: SideRoute; stopped: boolean; indent?: number }) {
   const Theme = useTheme();
@@ -195,4 +322,12 @@ const styles = StyleSheet.create({
   why: { fontSize: 11, paddingHorizontal: 12, paddingBottom: 10 },
   save: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 },
   saveText: { fontSize: 11, fontWeight: '600' },
+  kind: { fontSize: 9, fontWeight: '700', letterSpacing: 0.6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1 },
+  lines: { paddingHorizontal: 12, paddingBottom: 8, gap: 3 },
+  line: { flexDirection: 'row', gap: 6 },
+  sign: { width: 10, fontSize: 13, fontWeight: '700' },
+  lineText: { fontSize: 13, flexShrink: 1 },
+  file: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth },
+  diff: { paddingHorizontal: 8, paddingBottom: 8 },
+  stripRow: { gap: 2 },
 });

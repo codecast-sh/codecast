@@ -74,6 +74,7 @@ import { RoleFailoverBanner } from '@/components/org/RoleFailoverBanner';
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { appAlert, showActionSheet, type SheetItem } from '@/lib/popups';
+import { MessageIdentity } from '@codecast/web/lib/conversationBlockContexts';
 import { MessageLongPressContext, OutsideMessage, useMessageLongPress, type BlockCopy } from '@/components/MessageLongPress';
 import { openSelectText } from '@/components/SelectTextSheet';
 import { readableText } from '@/lib/markdown';
@@ -2017,6 +2018,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const router = useRouter();
   // Who the agent speaks as: its role, its character, or its product name.
   const speakerRow = useSessionIdentityRow(conversationId);
+  // Which message a block inside it belongs to: an edit card finds the session's runs and when it was made from it.
+  const identity = useMemo(() => (conversationId ? { conversationId, messageId: message._id } : null), [conversationId, message._id]);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     message.tool_calls?.forEach(tc => {
@@ -2159,6 +2162,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     // with nothing to do puts the keyboard away here. Links, tool rows and
     // images inside are deeper pressables and take their own taps.
     <MessageLongPressContext.Provider value={handleLongPress}>
+    <MessageIdentity.Provider value={identity}>
     <Pressable onLongPress={() => handleLongPress()} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : Keyboard.dismiss}>
       {isUser && sender ? <RNText style={styles.userBubbleSender} numberOfLines={1}>{sender}</RNText> : null}
       <RNView
@@ -2407,6 +2411,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       )}
       </RNView>
     </Pressable>
+    </MessageIdentity.Provider>
     </MessageLongPressContext.Provider>
   );
 }

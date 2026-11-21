@@ -2,10 +2,12 @@
 // PL6): the published pipelines (config, the store's `pipelines`), joined at
 // read time with the store's runs and deploy targets into the model the
 // pipeline page draws. The page mounts this once; it holds the feeder.
-import { useMemo } from "react";
+import { createElement, Fragment, useMemo, type ReactElement } from "react";
 import { useDeployTargets } from "./useSyncDeployTargets";
 import { useSyncRuns, useWorkspaceRuns } from "./useSyncRuns";
-import { usePipelines, useSyncPipelines } from "./useSyncPipelines";
+import { usePipelines, useSyncPipelines, type PipelineRow } from "./useSyncPipelines";
+import { useWorkspacesCollection } from "./useWorkspaceCollection";
+import { activeTeamIdOf } from "../lib/activeTeam";
 import { useCoarseNow } from "./useCoarseNow";
 import { pendingEdits, pipelineCheckout, pipelineModel, type PipelineModel, type PipelineRun } from "../lib/line/pipelineModel";
 import { useInboxStore } from "../store/inboxStore";
@@ -76,4 +78,38 @@ export function useEditWhere(p: Pipeline | null): { root: string; device: string
     return best?.git_root ? JSON.stringify({ root: best.git_root, device: null, machine: null }) : "";
   });
   return useMemo(() => (sig ? JSON.parse(sig) : null), [sig]);
+}
+
+/** One team's pipelines fed into the store, drawing nothing. */
+function TeamPipelinesFeeder({ teamId }: { teamId: string }) {
+  useSyncPipelines(teamId);
+  return null;
+}
+
+/** The viewer's teams, the active one first. */
+function useViewerTeamIds(): string[] {
+  const sig = useInboxStore((s) => {
+    const active = activeTeamIdOf(s as any);
+    const ids = ((s as any).teams ?? []).map((t: { _id: string }) => String(t._id)) as string[];
+    return [...(active ? [active] : []), ...ids.filter((id) => id !== active)].join(",");
+  });
+  return useMemo(() => (sig ? sig.split(",") : []), [sig]);
+}
+
+const rowSig = (p: PipelineRow) => `${p._id}|${p.repository}|${p.published_at}`;
+
+/**
+ * Where a repository's pipeline is published among the viewer's teams (a conversation in one team can name a repo
+ * another team ships): its workspace, or null until a team is found to publish it. `feeders` must be rendered: one
+ * feed per team, each drawing nothing.
+ */
+export function usePipelineWorkspace(repository: string): { workspace: string | null; feeders: ReactElement } {
+  const teams = useViewerTeamIds();
+  const keys = useMemo(() => teams.map((id) => `team:${id}`), [teams]);
+  const rows = useWorkspacesCollection<PipelineRow>("pipelines", rowSig, keys);
+  const repo = repository.toLowerCase();
+  // The active team's copy wins when two teams publish the same repository.
+  const found = keys.find((k) => rows.some((r) => r.workspace === k && r.repository === repo)) ?? null;
+  const feeders = createElement(Fragment, null, ...teams.map((id) => createElement(TeamPipelinesFeeder, { key: id, teamId: id })));
+  return { workspace: found, feeders };
 }

@@ -1,0 +1,41 @@
+/* The pipeline's inline objects (pipeline.md PL5, PL6): an edit to a project's flow, and a repository's pipeline strip.
+   They sit on the flow card's frame (.lw-flow in workspace.css). */
+.fe .lw-flow-head { align-items: center; }
+.fe-grow { flex: 1 1 auto; }
+.fe-repo { flex: none; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); text-decoration: none; font-family: var(--font-mono, monospace); }
+.fe-repo:hover { color: var(--lw-ink); text-decoration: underline; text-underline-offset: 3px; }
+.fe-repo-quiet { flex: 1 1 auto; min-width: 0; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); font-family: var(--font-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lw-flow-state.fe-draft { color: var(--lw-ink-2); background: color-mix(in srgb, var(--lw-ink-3) 13%, transparent); }
+
+/* The edit in words: one line a station, its sign a glyph in its own column. */
+.fe-lines { margin: 0; padding: 9px 12px 2px; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.fe-line { display: grid; grid-template-columns: 14px minmax(0, 1fr); align-items: baseline; font-size: var(--lw-fs-sm); color: var(--lw-ink); line-height: 1.45; }
+.fe-line::before { font-family: var(--font-mono, monospace); font-weight: 700; color: var(--lw-ink-3); }
+.fe-line[data-op="add"]::before { content: "+"; color: var(--sol-green); }
+.fe-line[data-op="change"]::before { content: "~"; color: var(--sol-cyan); }
+.fe-line[data-op="remove"]::before { content: "−"; color: var(--sol-red); }
+.fe-line[data-op="skip"]::before { content: "⤼"; }
+.fe-line[data-op="skip"] { color: var(--lw-ink-2); }
+.fe-line[data-op="other"]::before { content: "·"; }
+
+.fe-flow { padding: 4px 2px 0; }
+.fe-flow > .fd { padding-top: 8px; padding-bottom: 10px; }
+
+.fe-foot { display: flex; align-items: center; gap: 12px; padding: 6px 12px 8px; border-top: 1px solid var(--lw-rule-2); min-width: 0; }
+.fe-file { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; padding: 2px 0; border: 0; background: none; font: inherit; font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-2); cursor: pointer; }
+.fe-file[data-static] { cursor: default; }
+.fe-file:not([data-static]):hover .fe-path { color: var(--lw-ink); text-decoration: underline; text-underline-offset: 3px; }
+.fe-caret { width: 10px; color: var(--lw-ink-3); }
+.fe-path { min-width: 0; font-weight: 500; color: var(--lw-ink-3); font-family: var(--font-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-when { margin-left: auto; flex: none; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; }
+.fe-diff { padding: 0 12px 10px; }
+.fe-diff pre { margin: 0; }
+.fe-run { padding: 4px 12px 10px; border-top: 1px solid var(--lw-rule-2); }
+
+.fe-strip { display: block; padding: 0 12px; color: inherit; text-decoration: none; }
+.fe-strip:hover .rpl-strip-title { color: var(--lw-ink); }
+
+@media (max-width: 520px) {
+  .fe-when { display: none; }
+  .fe .lw-flow-head { flex-wrap: wrap; row-gap: 4px; }
+}

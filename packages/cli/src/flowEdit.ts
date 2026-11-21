@@ -15,6 +15,7 @@ import { flowEditWords, whenPaths, type FlowEdit, type FlowEditChange } from "@c
 import { generateUnifiedPatch } from "@codecast/shared/diff";
 import { graphExtends, graphHash, parseWorkflowFile, resolveFlowSource, validateWorkflow, type ReadFile } from "./workflow/parser.js";
 import type { WorkflowGraph } from "./workflow/types.js";
+import { drawnGraphIn } from "./workflow/flowGraphIn.js";
 import { dotQuote } from "./lineGraphEdit.js";
 import { dropNodeStmt, findNodeStmt, nodeAttrRaw, nodeStmtIds, upsertNodeAttrs } from "./repoLine.js";
 
@@ -148,7 +149,7 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
         ...(req.when !== undefined ? { when: req.when === "always" ? null : dotQuote(whenPaths(req.when).join(", ")) } : {}),
         fix: req.fix ? dotQuote(station(req.fix)) : null,
       });
-      changes.push({ op: "add", station: id, label: req.label ?? titleOf(id), [req.after ? "after" : "before"]: anchor, ...(req.fix ? { fix: req.fix } : {}) });
+      changes.push({ op: "add", station: id, label: req.label ?? titleOf(id), [req.after ? "after" : "before"]: anchor, ...(req.fix ? { fix: req.fix } : {}), who: req.run !== undefined ? "command" : req.agent !== undefined ? "agent" : "person" });
       if (req.when !== undefined && req.when !== "always") changes.push({ op: "when", station: id, paths: whenPaths(req.when) });
       break;
     }
@@ -161,7 +162,7 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
       const asks = n.type === "human" || (n.segment_entry && [...now.nodes.values()].some((x) => x.id.startsWith(`${s}${SEGMENT_SEP}`) && x.type === "human"));
       if (asks && req.op === "guide") throw new FlowEditError(`${label(s)} is a person's question, not an agent's prompt: change the question with cast flow edit ${flow} prompt ${s} "<text>"`);
       set(s, req.op === "guide" ? { guide: writeText(s, req.text, "guide") } : { prompt: writeText(s, req.text) });
-      changes.push({ op: req.op, station: s });
+      changes.push({ op: req.op, station: s, ...(req.op === "guide" ? { text: req.text.trim() } : {}) });
       break;
     }
     case "run": {
@@ -232,12 +233,27 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
     writes.push({ file: abs, content });
     diff += generateUnifiedPatch(rel(root, abs), was ?? "", content ?? "");
   }
-  const by = changes.map((c) => ({ ...c, by: "command" as const }));
   const labelAfter = (x: string) => after.nodes.get(x.split(SEGMENT_SEP)[0])?.label ?? now.nodes.get(x.split(SEGMENT_SEP)[0])?.label ?? x;
+  // Each change names its station as the flow does, so the card words it without the graph; a skipped station says where
+  // it stood (the station before it on the passing path) and what it was, so the card draws it as a ghost there.
+  const mainPath = folded.filter((x) => x.main);
+  // A segment is who its steps are: a person when one asks, else a command when all of them run one, else an agent.
+  const whoOf = (id: string): FlowEditChange["who"] => {
+    const steps = [...now.nodes.values()].filter((n) => (n.id === id || n.id.startsWith(`${id}${SEGMENT_SEP}`)) && !n.segment_entry && !n.segment_exit && n.type !== "start" && n.type !== "exit");
+    const own = steps.length ? steps : [now.nodes.get(id)!].filter(Boolean);
+    return own.some((n) => n.type === "human") ? "person" : own.length && own.every((n) => n.type === "command") ? "command" : "agent";
+  };
+  const placed = (c: FlowEditChange): FlowEditChange => {
+    if (c.op !== "skip" && !(c.op === "undo" && c.added)) return c;
+    const at = mainPath.findIndex((x) => x.id === c.station);
+    return { ...c, ...(at > 0 ? { after: mainPath[at - 1].id } : {}), ...(c.who ? {} : { who: whoOf(c.station) }) };
+  };
+  const by = changes.map((c) => ({ ...placed(c), label: c.label ?? labelAfter(c.station), by: "command" as const }));
   return {
     writes,
     changed: writes.length > 0,
-    edit: { flow, file: rel(root, file), graph_hash: graphHash(after), base, changes: by },
+    // The card draws the graph as it validated; the file's other edits ride along without their text.
+    edit: { flow, file: rel(root, file), graph_hash: graphHash(after), base, changes: by, graph: drawnGraphIn(after), variant: (after.edits ?? []).map(({ text: _t, node: _n, ...e }) => e) },
     words: changes.map((c) => flowEditWords(c, labelAfter)),
     diff,
     path: flowPathWords(foldFlow([...after.nodes.values()], after.edges)).path,

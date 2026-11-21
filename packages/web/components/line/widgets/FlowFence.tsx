@@ -8,6 +8,9 @@
 //
 // or `{"run":"<run id>"}` to show where a change is in its flow. The card of a
 // `cast flow run` in a transcript is the same widget on the run it started.
+// `{"edit":{...}}` is what `cast flow edit` made (FlowEditCard), and
+// `{"pipeline":"owner/repo"}` a repository's pipeline (FlowPipelineCard),
+// docs/architecture/pipeline.md PL5, PL6.
 import { memo, useMemo, useState } from "react";
 import Link from "next/link";
 import { useWorkspaceFeature } from "../../../lib/teamFeatures";
@@ -22,6 +25,8 @@ import { CodeBlock } from "../../CodeBlock";
 import { lineWorkspaceHref } from "../../../lib/line/lineWorkspaceUrl";
 import { useInboxStore } from "../../../store/inboxStore";
 import { FlowExplorer } from "./FlowStationPanel";
+import { FlowEditCard } from "./FlowEditCard";
+import { FlowPipelineCard } from "./FlowPipelineCard";
 import "../workspace/workspace.css";
 
 export default function FlowFence({ code, fallback }: { code: string; fallback?: React.ReactNode }) {
@@ -29,7 +34,10 @@ export default function FlowFence({ code, fallback }: { code: string; fallback?:
   const flowsOn = useWorkspaceFeature("line");
   const read = useMemo(() => readFlowFence(code), [code]);
   if (!read.ok || !flowsOn) return fallback !== undefined ? <>{fallback}</> : <CodeBlock code={code} language="json" />;
-  return read.spec.run ? <FlowRunCard runId={read.spec.run} title={read.spec.title} /> : <FlowCard slug={read.spec.flow!} title={read.spec.title} />;
+  const { spec } = read;
+  if (spec.edit) return <FlowEditCard edit={spec.edit} />;
+  if (spec.pipeline) return <FlowPipelineCard repository={spec.pipeline} title={spec.title} />;
+  return spec.run ? <FlowRunCard runId={spec.run} title={spec.title} /> : <FlowCard slug={spec.flow!} title={spec.title} />;
 }
 
 const KIND_WORD = { line: "Flow", segment: "Segment" } as const;

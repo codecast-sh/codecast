@@ -25,3 +25,11 @@ export function flowCommandTarget(subcommand: string, args: string, output: stri
   const runId = subcommand === "run" && !isError && !dryRun ? (text.match(/"run_id"\s*:\s*"([a-z0-9]+)"/)?.[1] ?? text.match(/\brun ([a-z0-9]{20,})\b/)?.[1] ?? null) : null;
   return { flow, runId, dryRun };
 }
+
+/** The repository a `cast flow pipeline` printed: `"repository": "owner/repo"` with --json, else its first line, "Pipeline of owner/repo". */
+export function pipelineCommandRepo(output: string, isError: boolean): string | null {
+  if (isError) return null;
+  const text = stripAnsi(output);
+  const repo = text.match(/"repository"\s*:\s*"([\w.-]+\/[\w.-]+)"/)?.[1] ?? text.match(/^Pipeline of ([\w.-]+\/[\w.-]+)/m)?.[1] ?? null;
+  return repo?.toLowerCase() ?? null;
+}

@@ -25,8 +25,9 @@ import {
   type ParsedCastCommand,
 } from '@codecast/web/components/castCommand';
 import { decideOutputId } from '@codecast/web/components/conversation/classify';
-import { flowCommandTarget } from '@codecast/web/lib/line/flowCommandOutput';
-import { FlowCard, FlowRunCard } from './FlowCard';
+import { flowCommandTarget, pipelineCommandRepo } from '@codecast/web/lib/line/flowCommandOutput';
+import { editFromOutput } from '@codecast/web/lib/line/flowEditCard';
+import { FlowCard, FlowEditCard, FlowPipelineCard, FlowRunCard } from './FlowCard';
 import { stripAnsiCodes } from '@codecast/web/lib/ansi';
 import { THREAD_STATE_STATUS_META } from '@codecast/web/lib/threadState';
 import { parseThreadStateStatus } from '@codecast/shared/contracts';
@@ -116,16 +117,19 @@ export function CastCommandBlock({ cast, output, isError, image }: {
   if (cat === 'flow') {
     const target = flowCommandTarget(subcommand, args, output, !!isError);
     const said = target.dryRun ? stripAnsiCodes(output).trim() : '';
+    // `edit` draws the edit it made (pipeline.md PL5), `pipeline` the repository's pipeline (PL6).
+    const made = subcommand === 'edit' && !isError ? editFromOutput(output) : null;
+    const repo = subcommand === 'pipeline' ? pipelineCommandRepo(output, !!isError) : null;
     return (
       <RNView style={styles.row}>
         <TouchableOpacity activeOpacity={0.6} onPress={() => setOpen((o) => !o)} style={styles.head}>
           <Feather name="shuffle" size={12} color={color} />
           <RNText style={[styles.label, { color }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>flow {subcommand}</RNText>
-          {target.flow ? <RNText style={styles.summaryMuted} numberOfLines={1}>{target.flow}{target.dryRun ? ' · dry run' : ''}</RNText> : null}
+          {target.flow && !made && !repo ? <RNText style={styles.summaryMuted} numberOfLines={1}>{target.flow}{target.dryRun ? ' · dry run' : ''}</RNText> : null}
           {status}
         </TouchableOpacity>
-        {target.runId ? <FlowRunCard runId={target.runId} /> : target.flow && !isError && (subcommand === 'show' || subcommand === 'validate' || target.dryRun) ? <FlowCard slug={target.flow} /> : null}
-        {said && !open ? <RNText style={styles.rawOut}>{said}</RNText> : null}
+        {made ? <FlowEditCard edit={made.edit} diff={made.diff} dryRun={target.dryRun} /> : repo ? <FlowPipelineCard repository={repo} /> : target.runId ? <FlowRunCard runId={target.runId} /> : target.flow && !isError && (subcommand === 'show' || subcommand === 'validate' || target.dryRun) ? <FlowCard slug={target.flow} /> : null}
+        {said && !open && !made ? <RNText style={styles.rawOut}>{said}</RNText> : null}
         {raw}
       </RNView>
     );

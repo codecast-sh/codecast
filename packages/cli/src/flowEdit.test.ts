@@ -25,7 +25,13 @@ describe("cast flow edit change", () => {
     expect(flowFile(root)).toContain(`graph [extends="change"]\n  lint [after="check", label="Lint", shape=parallelogram, script="bun run lint"]\n}`);
     expect(plan.words).toEqual(["+ Lint after Check"]);
     expect(plan.path).toBe("Check → Lint → Review → Decide → Land → Deploy");
-    expect(plan.edit).toEqual({ flow: "change", file: ".codecast/flows/change.cast", graph_hash: graphHash(parseWorkflowFile(path.join(root, ".codecast/flows/change.cast"))), base: "change", changes: [{ op: "add", station: "lint", label: "Lint", after: "check", by: "command" }] });
+    const { graph, variant, ...rest } = plan.edit;
+    expect(rest).toEqual({ flow: "change", file: ".codecast/flows/change.cast", graph_hash: graphHash(parseWorkflowFile(path.join(root, ".codecast/flows/change.cast"))), base: "change", changes: [{ op: "add", station: "lint", label: "Lint", after: "check", who: "command", by: "command" }] });
+    // The card draws the flow as it validated: the new station is in it, and no command's text is.
+    expect(graph!.nodes.find((n) => n.id === "lint")).toMatchObject({ label: "Lint", type: "command" });
+    expect(graph!.edges.some((e) => e.from === "lint")).toBe(true);
+    expect(JSON.stringify(graph)).not.toContain("bun run lint");
+    expect(variant).toEqual([{ op: "add", station: "lint", label: "Lint", after: "check" }]);
     expect(plan.diff).toContain("+++ b/.codecast/flows/change.cast");
   });
 
@@ -117,5 +123,18 @@ describe("cast flow edit change", () => {
     expect(fs.existsSync(path.join(root, ".codecast"))).toBe(false);
     const whole = repo({ ".codecast/flows/change.cast": `digraph change { start [shape=Mdiamond] exit [shape=Msquare] start -> exit }` });
     expect(() => planFlowEdit(whole, "change", { op: "skip", station: "x" })).toThrow("is a whole flow, not a variant of one");
+  });
+
+  test("the edit object draws without the graph's text: a skipped station says where it stood and who did it", () => {
+    const root = repo();
+    edit(root, { op: "guide", station: "review", text: "Also check the migrations" });
+    const plan = edit(root, { op: "skip", station: "decide" });
+    expect(plan.edit.changes).toEqual([{ op: "skip", station: "decide", after: "review", who: "person", label: "Decide", by: "command" }]);
+    // The fence's graph is what drawing reads: no prompt, script or shape travels in the transcript.
+    const nodes = plan.edit.graph!.nodes;
+    expect(nodes.some((n) => n.id === "decide")).toBe(false);
+    expect(nodes.every((n) => !("prompt" in n) && !("script" in n) && !("shape" in n) && !("segment_label" in n))).toBe(true);
+    // The file's other edits ride along, without their text.
+    expect(plan.edit.variant).toContainEqual({ op: "guide", station: "review" });
   });
 });

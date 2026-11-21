@@ -354,11 +354,13 @@ export function normalizeCastCategory(category: string): string {
 /** `cast flow run` that started a run (not a dry run): a change on its way through a flow, which the reader follows (flows.md FL6). */
 /**
  * A `cast flow` command whose card is a flow object: a run (live), a dry run (what it would run), or a flow the
- * session wrote on stdin and read back (`validate -`, `show -`). Reading a library flow by name stays a receipt.
+ * session wrote on stdin and read back (`validate -`, `show -`), an edit to a project's flow, or a repo's pipeline.
+ * Reading a library flow by name stays a receipt.
  */
 export function isFlowObjectCastCommand(cast: ParsedCastCommand | null | undefined): boolean {
   if (!cast || normalizeCastCategory(cast.category) !== "flow") return false;
-  return cast.subcommand === "run" || ((cast.subcommand === "validate" || cast.subcommand === "show") && /(^|\s)-(\s|$)/.test(cast.args));
+  // An edit draws what it changed and a pipeline draws the repo's (pipeline.md PL5, PL6): the object is the point of the row.
+  return cast.subcommand === "run" || cast.subcommand === "edit" || cast.subcommand === "pipeline" || ((cast.subcommand === "validate" || cast.subcommand === "show") && /(^|\s)-(\s|$)/.test(cast.args));
 }
 
 /** `cast vault request`: the card is a field the person fills, so it stays out of a folded receipt like a decision. */

@@ -6,7 +6,7 @@
 // `cast flow pipeline` prints it; every deploy targets publish sends it.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { foldFlow, segmentTopOf, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
+import { foldFlow, segmentTopOf } from "@codecast/shared/contracts/flowPool";
 import { deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
 import { EMPTY_RECENT, ownWords, packRecent, PIPELINE_RECENT_MAX, runsWords, type PipelineRecent, type PipelineFlow, type PipelineOwn, type PipelinePublish, type PipelineStation, type PipelineTarget, type PipelineWho } from "@codecast/shared/contracts/pipeline";
 import type { DeployTarget } from "@codecast/shared/contracts/deployTargets";
@@ -18,6 +18,7 @@ import { extendsSlug, poolFlows, repoFlowsDir, type PoolFlow, type PushedPoolRow
 import { graphExtends, parseWorkflowSource, resolveFlowSource, type FlowSource } from "./workflow/parser.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
 import type { WorkflowGraph, WorkflowNode } from "./workflow/types.js";
+import { edgesOf, flowNodeOf } from "./workflow/flowGraphIn.js";
 
 export const CHANGE_FLOW_SLUG = "change";
 
@@ -41,15 +42,6 @@ export type PipelineInputs = {
   recent?: PipelineRecent;
 };
 
-const FLOW_NODE_KEYS = ["id", "label", "type", "shape", "backend", "agent", "segment", "segment_label", "segment_flow", "segment_entry", "segment_exit", "slot", "segment_generated", "stop", "max_visits"] as const satisfies ReadonlyArray<keyof FlowNodeIn & keyof WorkflowNode>;
-
-function flowNodeOf(n: WorkflowNode): FlowNodeIn {
-  const out: Record<string, unknown> = {};
-  for (const k of FLOW_NODE_KEYS) if (n[k] !== undefined) out[k] = n[k];
-  return out as FlowNodeIn;
-}
-
-const edgesOf = (g: WorkflowGraph): FlowEdgeIn[] => g.edges.map((e) => ({ from: e.from, to: e.to, ...(e.label ? { label: e.label } : {}), ...(e.condition ? { condition: e.condition } : {}) }));
 
 /** The change flow a session's Ship runs in this checkout: the repo's `change`, else the team's default when it takes a session's change, else the shipped `change`. */
 export function changeFlowOf(pool: ReadonlyArray<PoolFlow>, teamDefault?: string | null): PoolFlow | null {

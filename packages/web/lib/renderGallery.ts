@@ -38,15 +38,16 @@ import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/s
 import { formatJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { LINE_FENCE_LANG } from "@codecast/shared/contracts/lineChat";
 import { FLOW_FENCE_LANG } from "./line/flowFence";
+import { EDIT_ADD, EDIT_GUIDE, GALLERY_PIPELINE_REPO, PIPELINE, PIPELINE_TEXT } from "./renderGalleryPipeline.generated";
+import { EDIT_SKIP_FENCE, FLOW_EDGES, FLOW_NODES, FLOW_SOURCE, GALLERY_FLOW, shipRuns } from "./renderGalleryFlows";
+
+export { GALLERY_FLOW };
 import { CONVERSATION_FENCE_LANG } from "./conversationFence";
 import { DIFF_FENCE } from "./castDiff";
 
 /** Every gallery row's id starts with this, so a loader can replace an earlier copy. */
 export const GALLERY_ID_PREFIX = "gallery-";
 
-// The flow object (ct-69934): a flow a session defined on a backbone, a live run of it with Save, and a
-// finished run of a library flow. Their runs, graph and session-flow row are store records the loader seeds
-// (renderGalleryRecords); ids are lowercase so a run id reads as one in `cast flow run` output.
 // The org objects an agent writes alone on a line (op-N, sd-N): a staffing
 // proposal with two changes and a decision this conversation is asking. The
 // loader seeds the rows (renderGalleryRecords) for the viewer, and the
@@ -59,20 +60,6 @@ export const GALLERY_ORG = {
   /** A second open decision, so a message naming both gets its review bar. */
   decision2: "gallerydecision000000002",
   decision2Short: "sd-90002",
-} as const;
-
-export const GALLERY_FLOW = {
-  slug: "gallery-flaky-fix",
-  graphId: "galleryflowgraph00000001",
-  liveRun: "galleryflowrunlive000001",
-  libraryRun: "galleryflowrunlibrary001",
-  sessionFlow: "galleryflowsession000001",
-  hash: "galleryflowhash1",
-  // A session's change on its way to live (components/ship/Journey): sent back to the session, at Decide, waiting on a deploy, live.
-  shipBack: "galleryshiprunback000001",
-  shipDecide: "galleryshiprundecide0001",
-  shipDeploy: "galleryshiprundeploy0001",
-  shipLive: "galleryshiprunlive000001",
 } as const;
 
 // Deploys and how far a change has gone (deploys.md DP7, DP16): a dp-N in each
@@ -171,62 +158,11 @@ function deployRecords(now: number, workspace: string) {
   };
 }
 
-const FLOW_SOURCE = `digraph gallery_flaky_fix {
-  graph [extends="spine", label="Spine, flaky test"]
-  subgraph implement {
-    reproduce [label="Reproduce", prompt="Reproduce the flake 20 times."]
-    patch [label="Patch the race", prompt="Patch the race the investigation found."]
-    prove [label="Prove 20 runs", shape=parallelogram, script="bun test --rerun-each 20"]
-    reproduce -> patch -> prove
-  }
-}`;
-
-// The graph as the parser expands it (a backbone's slot filled in place), as a run's push stores it.
-const FLOW_NODES = [
-  { id: "start", label: "start", type: "start", shape: "Mdiamond" },
-  { id: "exit", label: "Shipped", type: "exit", shape: "Msquare" },
-  { id: "investigate", label: "Investigate", type: "agent", shape: "box" },
-  { id: "review", label: "Review", type: "agent", shape: "box" },
-  { id: "implement__reproduce", label: "Reproduce", type: "agent", shape: "box" },
-  { id: "implement__patch", label: "Patch the race", type: "agent", shape: "box" },
-  { id: "implement__prove", label: "Prove 20 runs", type: "command", shape: "parallelogram" },
-  { id: "implement__exit", label: "exit", type: "command", shape: "parallelogram" },
-  { id: "implement", label: "Implement", type: "conditional", shape: "diamond" },
-];
-const FLOW_EDGES = [
-  { from: "start", to: "investigate" },
-  { from: "investigate", to: "implement" },
-  { from: "review", to: "exit", condition: "outcome = success" },
-  { from: "review", to: "implement", label: "Changes asked" },
-  { from: "implement__exit", to: "review", condition: "outcome = success" },
-  { from: "implement", to: "implement__reproduce" },
-  { from: "implement__reproduce", to: "implement__patch" },
-  { from: "implement__patch", to: "implement__prove" },
-  { from: "implement__prove", to: "implement__exit" },
-];
-
 /**
  * The store records the flow rows draw from, for a viewer and the workspace they read: the defined graph
  * (the viewer's own draft push), its live run and session-flow row (unsaved, so Save shows), and a finished
  * run of the shipped `check` segment (the library's own, so no Save).
  */
-/** Runs of the shipped Change flow from this session, one at each place a person meets it. */
-function shipRuns(now: number, viewerId: string, workspace: string, conversationId: string, status: (id: string, s: "completed" | "running") => object) {
-  const base = { user_id: viewerId, workflow_slug: "change", workflow_name: "change", workspace, spawner_conversation_id: conversationId, task_short_id: "ct-4110", task_title: "Rename the inbox divider", created_at: now - 900_000, updated_at: now };
-  const through = (...ids: string[]) => ids.map((id) => status(id, "completed"));
-  return [
-    { ...base, _id: GALLERY_FLOW.shipBack, status: "running", current_node_id: "fix_review",
-      waiting_on_session: { node_id: "fix_review", conversation_id: conversationId, since: now - 240_000, note: "The reviewer asked for changes. The divider's label repeats the bucket name; say how many sessions are below it instead." },
-      node_statuses: [...through("check__verify", "review__review"), { ...status("fix_review", "running"), visits: 2 }] },
-    { ...base, _id: GALLERY_FLOW.shipDecide, status: "paused", current_node_id: "decide__decide", gate_prompt: "Ship the inbox divider rename?", gate_decision_id: GALLERY_ORG.decision, gate_decision_short_id: GALLERY_ORG.decisionShort,
-      node_statuses: [...through("check__verify", "review__review"), status("decide__decide", "running")] },
-    { ...base, _id: GALLERY_FLOW.shipDeploy, status: "running", current_node_id: "deploy__wait",
-      node_statuses: [...through("check__verify", "review__review", "decide__decide", "ship__rebase", "ship__ship"), { ...status("deploy__wait", "running"), result_preview: "4a6e413b2c landed; live on web dp-12, waiting for backend." }] },
-    { ...base, _id: GALLERY_FLOW.shipLive, status: "completed", current_node_id: "exit",
-      node_statuses: [...through("check__verify", "review__review", "decide__decide", "ship__rebase", "ship__ship"), { ...status("deploy__wait", "completed"), result_preview: "Live: 4a6e413b2c on backend dp-13, web dp-12." }] },
-  ];
-}
-
 export function renderGalleryRecords(now: number, viewerId: string, workspace: string, conversationId = "__CONVERSATION__") {
   const author = { kind: "role" as const, id: "galleryrole0000000000001", name: "Head of People", handle: "head-of-people", short_id: "or-9", avatar: "fox" };
   const change = (seq: number, c: Record<string, unknown>, rationale: string) =>
@@ -237,7 +173,7 @@ export function renderGalleryRecords(now: number, viewerId: string, workspace: s
     workflowRuns: [
       { _id: GALLERY_FLOW.liveRun, user_id: viewerId, workflow_id: GALLERY_FLOW.graphId, workflow_slug: GALLERY_FLOW.slug, workflow_name: GALLERY_FLOW.slug, workflow_label: "Spine, flaky test", graph_hash: GALLERY_FLOW.hash, workspace, status: "running", current_node_id: "implement__patch", task_short_id: "ct-4102", node_statuses: [status("investigate", "completed"), status("implement", "completed"), status("implement__reproduce", "completed"), status("implement__patch", "running")], created_at: now - 120_000, updated_at: now },
       { _id: GALLERY_FLOW.libraryRun, user_id: viewerId, workflow_slug: "check", workflow_name: "check", workspace, status: "completed", current_node_id: "passed", task_short_id: "ct-4103", node_statuses: [status("verify", "completed")], created_at: now - 300_000, updated_at: now - 200_000 },
-      ...shipRuns(now, viewerId, workspace, conversationId, status),
+      ...shipRuns(now, viewerId, workspace, conversationId, status, { decision: GALLERY_ORG.decision, decisionShort: GALLERY_ORG.decisionShort, liveDeploy: GALLERY_DEPLOYS.live }),
     ],
     orgProposals: [{
       _id: GALLERY_ORG.proposal, short_id: GALLERY_ORG.proposalShort, scope_user_id: viewerId, workspace, author, title: "Bring platform under one lead",
@@ -259,6 +195,7 @@ export function renderGalleryRecords(now: number, viewerId: string, workspace: s
       options: [{ label: "Keep it", description: "One release, then delete" }, { label: "Delete now", description: "No fallback" }],
     }],
     ...deployRecords(now, workspace),
+    pipelines: [{ ...PIPELINE, _id: GALLERY_FLOW.pipeline, workspace, published_at: now - 3_600_000 }],
     sessionFlows: [{ _id: GALLERY_FLOW.sessionFlow, workspace, graph_hash: GALLERY_FLOW.hash, from: "graph", name: GALLERY_FLOW.slug, label: "Spine, flaky test", kind: null, base: "spine", fills: ["implement"], nodes: FLOW_NODES, edges: FLOW_EDGES, runs: [GALLERY_FLOW.liveRun], run_count: 1, more: false, last_at: now, sessions: [], by: [viewerId], saved: null }],
   };
 }
@@ -762,6 +699,13 @@ export function renderGalleryMessages(now: number): Row[] {
   asst(`Landed, waiting on a deploy:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipDeploy}"}\n\`\`\``);
   asst(`Live everywhere it ships:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipLive}"}\n\`\`\``);
   asst(`A finished run of a library flow:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.libraryRun}"}\n\`\`\``);
+
+  section("Pipeline");
+  sh(EDIT_ADD.command, EDIT_ADD.output);
+  sh(EDIT_GUIDE.command, EDIT_GUIDE.output);
+  asst(`Skipped Decide here; it went out with the change that carried it:\n\n\`\`\`${FLOW_FENCE_LANG}\n${EDIT_SKIP_FENCE}\n\`\`\``);
+  sh(PIPELINE_TEXT.command, PIPELINE_TEXT.output);
+  asst(`This repo's pipeline:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"pipeline":"${GALLERY_PIPELINE_REPO}"}\n\`\`\``);
 
   section("System rows");
   sys("compact_boundary", "Conversation compacted");

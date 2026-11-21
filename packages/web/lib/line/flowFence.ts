@@ -1,16 +1,19 @@
 // The `flow` fenced block's spec, and a flow run's state in words
 // (docs/architecture/flows.md FL6). Pure: components/line/widgets/FlowFence draws it.
 import { segmentTopOf } from "@codecast/shared/contracts/flowPool";
+import type { FlowEdit } from "@codecast/shared/contracts/flowEdit";
 import type { ShippedFlow } from "./flowPool";
+import { asEdit } from "./flowEditCard";
 
 export const FLOW_FENCE_LANG = "flow";
 
-export type FlowFenceSpec = { flow: string | null; run: string | null; title: string | null };
+/** `edit`: what `cast flow edit` made (pipeline.md PL5); `pipeline`: a repository's pipeline, `owner/repo` (PL6). */
+export type FlowFenceSpec = { flow: string | null; run: string | null; title: string | null; edit: FlowEdit | null; pipeline: string | null };
 export type FlowFenceRead = { ok: true; spec: FlowFenceSpec } | { ok: false; why: string };
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 
-/** A fence's body as a spec: `{"flow":"<slug>"}` or `{"run":"<run id>"}`, with an optional `title`. */
+/** A fence's body as a spec: `{"flow":"<slug>"}`, `{"run":"<run id>"}`, `{"edit":{...}}` or `{"pipeline":"owner/repo"}`, with an optional `title`. */
 export function readFlowFence(code: string): FlowFenceRead {
   let raw: unknown;
   try {
@@ -20,8 +23,9 @@ export function readFlowFence(code: string): FlowFenceRead {
   }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, why: "The block is not a JSON object." };
   const o = raw as Record<string, unknown>;
-  const spec = { flow: str(o.flow), run: str(o.run), title: str(o.title) };
-  if (!spec.flow && !spec.run) return { ok: false, why: "Name a flow or a run." };
+  const pipeline = str(o.pipeline);
+  const spec = { flow: str(o.flow), run: str(o.run), title: str(o.title), edit: asEdit(o.edit), pipeline: pipeline && /^[\w.-]+\/[\w.-]+$/.test(pipeline) ? pipeline.toLowerCase() : null };
+  if (!spec.flow && !spec.run && !spec.edit && !spec.pipeline) return { ok: false, why: "Name a flow, a run, an edit or a pipeline (owner/repo)." };
   return { ok: true, spec };
 }
 

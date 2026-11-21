@@ -100,7 +100,7 @@ describe("the pool", () => {
 
 describe("the fence and the command", () => {
   test("a flow fence names a flow or a run", () => {
-    expect(readFlowFence('{"flow":"change"}')).toEqual({ ok: true, spec: { flow: "change", run: null, title: null } });
+    expect(readFlowFence('{"flow":"change"}')).toEqual({ ok: true, spec: { flow: "change", run: null, title: null, edit: null, pipeline: null } });
     expect(readFlowFence('{"run":"th7abc"}').ok).toBe(true);
     expect(readFlowFence("{}").ok).toBe(false);
   });
