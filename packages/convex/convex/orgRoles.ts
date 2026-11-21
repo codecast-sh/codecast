@@ -58,6 +58,7 @@ import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, wh
 import { capsFor, countersNow, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
 import { cliDocWriter, docRevision, writeDocBody } from "./lib/docBody";
 import { defaultCharter, insertCharterDoc, roleCharterOf, writeRoleCharter } from "./lib/roleCharter";
+import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, findRoleNeedsInputTrigger, findRoleRoutine, findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
 import { autonomyChangeWords, defaultTrustFor, switchFromStageWord, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
@@ -1805,6 +1806,19 @@ async function performResumeRoleCore(ctx: any, userId: Id<"users">, args: { role
 // the org history: the old session is already killed.
 const FRESH_SEAT_GRACE_MS = 10 * 60_000;
 
+async function latestRestartSeated(ctx: any, role: any, conv: any): Promise<boolean> {
+  const row = await ctx.db.query("org_changes").withIndex("by_subject", (q: any) => q.eq("subject.id", String(role._id))).order("desc").first();
+  return !!row?.effects?.restarted_fresh && String(row.after?.standing_session?.conversation_id ?? "") === String(conv._id);
+}
+
+/** The machine a seat ran on, while it is online; else routing chooses. */
+async function onlineDeviceOf(ctx: any, conv: any): Promise<string | undefined> {
+  if (!conv.owner_device_id) return undefined;
+  const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", conv.user_id)).collect();
+  const device = devices.find((d) => d.device_id === conv.owner_device_id);
+  return device && Date.now() - device.last_seen < DEVICE_ONLINE_MS ? device.device_id : undefined;
+}
+
 export async function performRestartRole(ctx: any, userId: Id<"users">, args: { role_id: string; fresh?: boolean }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const conv = await standingConversationOf(ctx, role);
@@ -1818,9 +1832,11 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
   if (role.status === "paused") throw new Error(`@${role.handle} is paused: resume it first (cast role resume @${role.handle}), then restart it fresh`);
   const shortOf = (c: any) => c.short_id ?? String(c._id).slice(0, 7);
   // A second press: the seat a fresh restart started moments ago, before it
-  // said anything, is already the fresh session.
+  // said anything, is already the fresh session. The role's latest log row
+  // must be that restart, so an old previous_standing never matches.
   if (role.previous_standing_conversation_id && String(role.previous_standing_conversation_id) !== String(conv._id)
-    && !conv.message_count && Date.now() - (conv.started_at ?? 0) < FRESH_SEAT_GRACE_MS) {
+    && !conv.message_count && Date.now() - (conv.started_at ?? 0) < FRESH_SEAT_GRACE_MS
+    && await latestRestartSeated(ctx, role, conv)) {
     const prev = await ctx.db.get(role.previous_standing_conversation_id);
     return { role_id: role._id, conversation_id: conv._id, short_id: shortOf(conv), fresh: true, already_fresh: true, previous_conversation_id: role.previous_standing_conversation_id, previous_short_id: prev ? shortOf(prev) : undefined };
   }
@@ -1848,14 +1864,16 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
       agent_type: BACKENDS.has(conv.agent_type) ? conv.agent_type : undefined,
       fresh: true,
       host_user_id: conv.user_id,
-      target_device_id: conv.owner_device_id ?? undefined,
+      target_device_id: await onlineDeviceOf(ctx, conv),
     });
     for (const ch of channels) await ctx.db.patch(ch._id, { anchor_id: provisioned.anchor_id });
     const standing = provisioned.conversation_id ? await ctx.db.get(provisioned.conversation_id) : null;
     const newRoutine = standing ? await findRoleRoutineInAnyStatus(ctx, role, standing) : null;
     if (oldRoutine && newRoutine) {
-      // S25: a check the person cancelled stays cancelled, one they paused stays paused.
-      if (!isLiveTrigger(oldRoutine)) await applyCancel(ctx, newRoutine);
+      // S25: a check the person cancelled stays cancelled, one they paused
+      // stays paused. One that stopped by fault (failed slots, or cancelled
+      // with its killed session) comes back armed.
+      if (oldRoutine.status === "completed" && !oldRoutine.canceled_on_kill_at) await applyCancel(ctx, newRoutine);
       else {
         const interval = oldRoutine.interval_ms ?? newRoutine.interval_ms;
         await patchTask(ctx, newRoutine, {
@@ -1870,6 +1888,7 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
       }
     }
     if (provisioned.conversation_id) {
+      // Any workspace, past the access chokepoint: each project already named this seat as its session.
       const pointing: any[] = await ctx.db.query("projects").withIndex("by_default_session", (q: any) => q.eq("default_session_id", conv._id)).collect();
       for (const project of pointing) await ctx.db.patch(project._id, { default_session_id: provisioned.conversation_id });
     }
