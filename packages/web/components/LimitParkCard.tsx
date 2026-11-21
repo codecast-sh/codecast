@@ -23,9 +23,9 @@ import { useInboxStore } from "../store/inboxStore";
 import { DISPATCH_REFUSED, latestSessionCommand, switchPending } from "../lib/sessionCommands";
 import { formatResetPhrase, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
 import type { LimitRecoveryAction } from "../lib/limitRecovery";
-import { continueOnAccount, limitContinueTarget } from "../lib/limitContinue";
+import { continueOnAccount, continueOnModel, limitContinueTarget, otherModelFor } from "../lib/limitContinue";
 import { Button } from "./ui/button";
-import { commitModelChange } from "../lib/modelSwitchWeb";
+import { notifyModelToast } from "../lib/modelSwitchWeb";
 
 type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
 
@@ -83,23 +83,11 @@ export function LimitParkCard({
   // lands on the same spent model, and auto-switch leaves such a park alone
   // unless most sessions run that model. The way on is another model.
   const limitFamily = /^(fable|opus|sonnet|haiku) limit$/i.exec(windowLabel)?.[1]?.toLowerCase();
-  const otherModel = limitFamily ? (limitFamily === "opus" ? "sonnet" : "opus") : undefined;
-  const otherModelLabel = otherModel ? `${otherModel.charAt(0).toUpperCase()}${otherModel.slice(1)}` : undefined;
+  const other = limitFamily ? otherModelFor(limitFamily) : undefined;
+  const otherModel = other?.key;
+  const otherModelLabel = other?.label;
   const continueOnOtherModel = () => {
-    if (!conversationId || !otherModel) return;
-    const s = useInboxStore.getState();
-    const row = s.conversations[conversationId] ?? s.sessions[conversationId];
-    // The parked agent sits idle at its prompt, so /model runs before the
-    // continue; both ride the outbox in order.
-    void commitModelChange({
-      conversationId,
-      agentType: row?.agent_type,
-      current: { model: row?.model, effort: row?.effort },
-      sel: { model: otherModel },
-      blank: false,
-    });
-    const clientId = s.addOptimisticMessage(conversationId, "continue");
-    s.sendMessage(conversationId, "continue", undefined, clientId);
+    if (conversationId && otherModel) continueOnModel(conversationId, otherModel, notifyModelToast);
   };
 
   if (phase.phase === "recovering" || phase.phase === "resumed") {

@@ -11,8 +11,9 @@ import { isBlockedConversation } from '@codecast/convex/convex/ccAccountsShared'
 import { standingLabel } from '@codecast/shared/contracts';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
-import { continueOnAccount, limitContinueTarget } from '@codecast/web/lib/limitContinue';
+import { continueOnAccount, continueOnModel, limitContinueTarget, otherModelFor, parkedModelFamily } from '@codecast/web/lib/limitContinue';
 import { Text as RNText } from '@/components/Themed';
+import { showNotice } from '@/lib/undoBar';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { SignInSteps } from './accounts/SignInSteps';
 import { loginFlowPhase, useAccountDevices, useClaudeSignIn } from './accounts/claudeSignIn';
@@ -23,6 +24,7 @@ export function AccountRecoveryBanner({ conversationId }: { conversationId: stri
   const now = useCoarseNow(10_000);
   const session = useInboxStore((s) => s.sessions[conversationId]);
   const reviveAt = useInboxStore((s) => s.blockedReviveRequestedAt[conversationId]);
+  const limitFamily = useInboxStore((s) => parkedModelFamily(s.messages[conversationId]));
   const blocked = !!session && isBlockedConversation(session as any);
   const { devices } = useAccountDevices();
   const signIn = useClaudeSignIn();
@@ -54,6 +56,25 @@ export function AccountRecoveryBanner({ conversationId }: { conversationId: stri
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
           void signIn.start(device.device_id);
         }}
+      />
+    );
+  }
+
+  // Only one model's week is out: every account shares it, so the way on is
+  // another model, the same action as web's park card.
+  if (limitFamily) {
+    const other = otherModelFor(limitFamily);
+    const family = `${limitFamily.charAt(0).toUpperCase()}${limitFamily.slice(1)}`;
+    return (
+      <Bar
+        icon="hourglass-half"
+        text={`Only ${family} is out · waits for its reset`}
+        action={`Continue on ${other.label}`}
+        onAction={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          continueOnModel(conversationId, other.key, showNotice);
+        }}
+        onMore={() => router.push('/accounts')}
       />
     );
   }

@@ -1670,7 +1670,7 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     }) as any;
     const res = await refreshUsageSnapshots({ now: NOW, fetchImpl });
     expect(res.probed).toContain("c");
-    expect(models.sort()).toEqual(["claude-fable-5-1", "claude-haiku-4-5-20251001"]);
+    expect(models.sort()).toEqual(["claude-fable-5-2", "claude-haiku-4-5-20251001"]);
     const c = readUsageCache().accounts["uuid-c"];
     expect(c.weekly_scoped).toEqual({ percent: 100, resets_at: FABLE_RESET, label: "Fable" });
     expect(c.session).toEqual({ percent: 5, resets_at: SESSION_RESET_S * 1000 });
@@ -1715,7 +1715,7 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     }) as any;
     const res = await refreshUsageSnapshots({ now: NOW, fetchImpl, heldProfiles: new Set(["c"]) });
     expect(res.probed).toContain("c");
-    expect(models).toContain("claude-fable-5-1");
+    expect(models).toContain("claude-fable-5-2");
     expect(readUsageCache().accounts["uuid-c"].weekly_scoped?.percent).toBe(100);
     // Not overdue: the live feed holds the poll off and nothing is sent.
     models.length = 0;
@@ -1762,6 +1762,28 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
       const reset = NOW + 5 * 24 * 3600_000;
       expect(await probe({ percent: 55, resets_at: reset, label: "Fable" }, emptyRefusal)).toEqual({ percent: 55, resets_at: reset, label: "Fable" });
       expect(await probe({ percent: 100, resets_at: reset, label: "Fable" }, emptyRefusal)).toEqual({ percent: 100, resets_at: reset, label: "Fable" });
+    });
+
+    it("asks the scoped model as Claude Code, the only way the API reports its window", async () => {
+      // Asked bare, the API answered an empty 429 on every account; with
+      // Claude Code's system line it answered each one's spent Fable week
+      // (2026-11-21).
+      const reset = Math.floor(NOW / 1000) + 3 * 24 * 3600;
+      const asClaudeCode = (init: any) => JSON.parse(init.body).system === "You are Claude Code, Anthropic's official CLI for Claude.";
+      writeAccountToken("c", `sk-ant-oat01-${"z".repeat(60)}`);
+      fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify({
+        accounts: { "uuid-c": { fetched_at: NOW - 10_000, source: "live-session", polled_at: NOW - 30 * 3600_000 } },
+      }));
+      invalidateAccountsCache();
+      const fetchImpl = (async (url: any, init: any) => {
+        if (!String(url).includes("/v1/messages")) return usageFetch([])(url, init);
+        if (!JSON.parse(init.body).model.includes("fable")) return new Response("{}", { status: 200, headers: UNIFIED });
+        return asClaudeCode(init)
+          ? new Response("{}", { status: 429, headers: { "anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-unified-7d_oi-utilization": "1.0", "anthropic-ratelimit-unified-7d_oi-status": "rejected", "anthropic-ratelimit-unified-7d_oi-reset": String(reset) } })
+          : emptyRefusal();
+      }) as any;
+      await refreshUsageSnapshots({ now: NOW, fetchImpl, heldProfiles: new Set(["c"]) });
+      expect(readUsageCache().accounts["uuid-c"].weekly_scoped).toEqual({ percent: 100, resets_at: reset * 1000, label: "Fable" });
     });
 
     it("takes the model's own window from the answer when it carries one", async () => {
