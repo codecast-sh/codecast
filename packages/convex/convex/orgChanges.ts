@@ -229,7 +229,12 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
   for (const row of orderedRows) {
     if (row.undone_by) continue;
     if (!(await mayChangeRow(ctx, userId, row))) { preview.refused = "You can only undo changes you could make yourself"; continue; }
-    if (row.effects?.restarted_fresh) { preview.refused = "A fresh restart cannot be undone: the old session was retired. Restart the role fresh again for a new session"; continue; }
+    if (row.effects?.restarted_fresh) {
+      preview.refused = String(row.batch) === String(target._id)
+        ? "A fresh restart cannot be undone: the old session was retired. Restart the role fresh again for a new session"
+        : "This cannot be undone: a later fresh restart depends on it, and that restart retired the old session";
+      continue;
+    }
     const writes: OrgWrite[] = [];
     // Ids whose write stands: restored as recorded, or with only its owners
     // left as they are now.
