@@ -215,7 +215,10 @@ export async function freezeAndAttribute(root: string, upstream: string, log: Lo
   return { frozen, paths, attribution, credentials, stale };
 }
 
-export async function makePlan(root: string, opts: { roster?: (ids: string[]) => Promise<RosterRow[] | null>; fetch?: boolean; log?: Log } = {}): Promise<ShipPlan> {
+export type FrozenAttribution = Awaited<ReturnType<typeof freezeAndAttribute>>;
+
+/** The pass's plan; `frozen` plans a freeze already taken (a flow's checkout change keeps its per-file reasons). */
+export async function makePlan(root: string, opts: { roster?: (ids: string[]) => Promise<RosterRow[] | null>; fetch?: boolean; log?: Log; frozen?: FrozenAttribution } = {}): Promise<ShipPlan> {
   const log = opts.log ?? (() => {});
   const spec = shipSpec(root);
   const upstream = await upstreamRef(root);
@@ -224,7 +227,7 @@ export async function makePlan(root: string, opts: { roster?: (ids: string[]) =>
     await gitTry(root, ["fetch", "--quiet", remote, branch]);
   }
 
-  const { frozen, paths, attribution, credentials: held, stale } = await freezeAndAttribute(root, upstream, log);
+  const { frozen, paths, attribution, credentials: held, stale } = opts.frozen ?? await freezeAndAttribute(root, upstream, log);
   const owning = [...new Set([...attribution.owners.values()].map((s) => s.conversationId?.slice(0, 7)).filter((id): id is string => !!id))];
   const rows = opts.roster && owning.length ? await opts.roster(owning).catch(() => null) : null;
   const roster = new Map((rows ?? []).filter((r) => r.short_id).map((r) => [r.short_id!, r]));
@@ -370,7 +373,8 @@ export function runShell(command: string, cwd: string, log: Log, env: Record<str
   });
 }
 
-function trailerFor(group: ShipGroup): string {
+/** The Codecast-Session trailer for a group's commit, when its session is team visible; else nothing. */
+export function trailerFor(group: Pick<ShipGroup, "session">): string {
   const conversationId = group.session?.conversation_id;
   if (!conversationId) return "";
   const links = readSessionLinkCache();
