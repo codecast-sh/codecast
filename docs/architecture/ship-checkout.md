@@ -127,16 +127,33 @@ them (`land/levelConflicts.ts`). Each conflicting path is attributed to the
 session that wrote it last, as the ship pass attributes its groups, and that
 session gets one message naming its conflicting files, the upstream commits
 that touched each, and a three-way merge with conflict markers saved under
-`.git/codecast/level-conflicts/<path>`. Once its file carries upstream's
-change, the next sweep levels by itself. Briefs are keyed by path and
-upstream's blob of it (`.git/codecast/level-conflicts.json`): a writer hears
-again only when upstream changes that file, so on a busy main a standing
-conflict costs one `ls-tree` a sweep and no attribution. A path no transcript
-explains sends nothing and is named in the daemon's `[LEVEL]` log line; it is
-attributed again every 15 minutes, since a transcript can reach the sync
-ledger after the write it records, and whenever upstream changes the file. A
-clean level, or a checkout found already level, clears the record and the
-merge files.
+`.git/codecast/level-conflicts/<path>` (upstream's version when the file was
+deleted here; none for a binary file or a symlink). The message says to edit
+only those files and never to pull, merge, rebase, stash, check out, restore,
+reset or commit in the shared checkout. Once the file carries upstream's
+change, the next sweep levels by itself.
+
+The message is a machine wake from codecast's level sweep (origin
+`scheduler`), so it leaves the writer's pinned state and a hidden stash
+alone, and it revives a killed writer: the checkout stays stuck until
+someone reconciles the file. Each send carries a client id derived from the
+checkout, the writer and upstream's blobs, so a retried send lands once.
+
+`.git/codecast/level-conflicts.json` keeps, per conflicting path, upstream's
+blob of it, the blob on disk, the writer and whether it was briefed. On a
+busy main a standing conflict costs an `ls-tree` and a `hash-object` a sweep
+and no attribution. Upstream changing the file briefs again; the file
+changing on disk attributes again and briefs only a new writer. A path no
+transcript explains, or a brief the server refused, is tried again after 15
+minutes, since a transcript can reach the sync ledger after the write it
+records; the daemon's `[LEVEL]` log line names writerless paths every sweep.
+A machine that is signed out attributes nothing. A clean level, or a
+checkout found already level, clears the record and the merge files.
+
+A level that raced a writer (a file kept changing while it moved) leaves
+HEAD on upstream and that file without upstream's change. Its writer is told
+the file would revert upstream's change as it stands, with the merge saved
+under `.git/codecast/level-stale/<path>`, which a later level does not clear.
 
 ## Fix forward
 
