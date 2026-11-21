@@ -36,12 +36,13 @@ import { flowRunState, type FlowRunTone } from '@codecast/web/lib/line/flowFence
 import { useFlowStations } from '@codecast/web/lib/line/flowStations';
 import { stationView } from '@codecast/web/lib/line/stationView';
 import { journeyOf, journeyWords, readableWhy } from '@codecast/web/lib/ship/journey';
+import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
 
 type Tone = FlowRunTone;
 const RUNS_FEED = { limit: 200 };
 const RUNS_SHOWN = 20;
 /** A session change's journey tone as a run tone (the web's Flows view does the same). */
-const JOURNEY_TONE: Record<string, Tone> = { idle: 'running', working: 'running', agent: 'running', session: 'waiting', you: 'waiting', ok: 'passed', bad: 'stopped' };
+const JOURNEY_TONE: Record<string, Tone> = { idle: 'running', working: 'running', agent: 'running', session: 'waiting', you: 'waiting', wait: 'waiting', ok: 'passed', bad: 'stopped' };
 const TAKES_WORDS: Record<string, string> = { branch: "a branch or a session's edits", task: 'a task' };
 
 export default function FlowScreen() {
@@ -296,7 +297,8 @@ function RunRow({ run, flow, now, first, onPress }: { run: FlowRun; flow: AppFlo
   const Theme = useTheme();
   const tones = useToneColor();
   const st = flowRunState(run as any, flow);
-  const jw = takesSessionChange(flow) && flow.kind === 'line' ? journeyWords(journeyOf(flow, run as any)) : null;
+  const viewer = useJourneyViewer(run as any);
+  const jw = takesSessionChange(flow) && flow.kind === 'line' ? journeyWords(journeyOf(flow, run as any, [], viewer)) : null;
   const tone = jw ? JOURNEY_TONE[jw.tone] ?? st.tone : st.tone;
   const why = readableWhy(st.why);
   return (

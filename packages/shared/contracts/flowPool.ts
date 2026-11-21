@@ -28,6 +28,10 @@ export type FlowNodeIn = {
   stop?: string;
   /** How many times a run may enter the node (a way back to the session, usually); the next visit ends the run. */
   max_visits?: number;
+  /** Seconds the node may run: a run card's deadline for its wait. */
+  timeout?: number;
+  /** An exit the machine caused, not the change (a check it could not run): running again can help. */
+  machine?: boolean;
 };
 export type FlowEdgeIn = { from: string; to: string; label?: string; condition?: string };
 
@@ -57,6 +61,9 @@ export type FoldedFlow = {
   ends: string[];
   /** The segments it uses, by slug. */
   uses: string[];
+  /** The main path's stations in the order a passing run reaches them, a fan-out's branches right after it. Absent on a
+   *  pool snapshot folded before it existed. */
+  path?: string[];
 };
 
 /** A flow in the pool: what a picker lists and what a graph draws. */
@@ -173,15 +180,24 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
   for (const id of top.keys()) if (!seen.has(id)) order.push(id);
   // The main path: from the start, the edge a passing station takes; an end only when nothing else is left.
   const main = new Set<string>();
+  const path: string[] = [];
   // The subject's own stations (backend=subject: the session the change came from fixes what a stage found) are a way back, never the way on.
   const rank = (x: { to: string; score: number }) => x.score - (top.get(x.to)?.type === "exit" ? 10 : 0) - (top.get(x.to)?.backend === "subject" ? 20 : 0);
   for (let at = start?.id; at && !main.has(at); ) {
     main.add(at);
-    // A fan-out runs every branch: all are on the path, and the path goes on where they join.
+    path.push(at);
+    // A fan-out runs every branch: each branch's stations are on the path up to the join, and the path goes on there.
     if (top.get(at)?.type === "parallel_fanout") {
-      const branches = (outOf.get(at) ?? []).map((x) => x.to);
-      for (const b of branches) main.add(b);
-      at = branches.flatMap((b) => (outOf.get(b) ?? []).map((x) => x.to)).find((t) => top.get(t)?.type === "parallel_fanin");
+      let join: string | undefined;
+      for (const first of (outOf.get(at) ?? []).map((x) => x.to)) {
+        for (let b: string | undefined = first; b && !main.has(b); ) {
+          if (top.get(b)?.type === "parallel_fanin") { join ??= b; break; }
+          main.add(b);
+          path.push(b);
+          b = [...(outOf.get(b) ?? [])].filter((x) => !main.has(x.to)).sort((x, y) => rank(y) - rank(x))[0]?.to;
+        }
+      }
+      at = join;
       continue;
     }
     at = [...(outOf.get(at) ?? [])].filter((x) => !main.has(x.to)).sort((a, b) => rank(b) - rank(a))[0]?.to;
@@ -209,7 +225,7 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
   }
   // A stop inside a segment ends the run there: the flow's end too.
   for (const n of nodes) if (n.type === "exit" && n.segment && !ends.includes(n.label)) ends.push(n.label);
-  return { stations, ends, uses: [...uses] };
+  return { stations, ends, uses: [...uses], path: path.filter((id) => top.get(id)?.type !== "start" && top.get(id)?.type !== "exit") };
 }
 
 /** A flow's main path in words: its passing stations joined by arrows, and how many sit on side routes. */

@@ -16,12 +16,13 @@ import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 
 export const SHIPPED_FLOWS_SNAPSHOT_PATH = "packages/web/lib/line/shippedFlows.generated.ts";
 
-const NODE_FIELDS = ["id", "label", "shape", "type", "backend", "agent", "segment", "segment_label", "segment_flow", "segment_entry", "segment_exit", "slot", "segment_generated", "stop", "max_visits"] as const;
+const NODE_FIELDS = ["id", "label", "shape", "type", "backend", "agent", "segment", "segment_label", "segment_flow", "segment_entry", "segment_exit", "slot", "segment_generated", "stop", "max_visits", "timeout", "machine"] as const;
 
 /** One flow as the web reads it with no parser: what the pool lists, and its graph with segments and `extends` expanded.
  *  A repo's flow names its file, so its `extends` and `@file` stations resolve beside it. */
 export function flowSnapshot(slug: string, src: string, where: PoolWhere, file: string | null) {
-  const { where: _where, file: _file, errors: _errors, draft: _draft, ...flow } = describeFlow(slug, src, where, file);
+  // The main path's order is the journey's to fold again from the graph; the listing keeps its stations.
+  const { where: _where, file: _file, errors: _errors, draft: _draft, path: _path, ...flow } = describeFlow(slug, src, where, file);
   const graph = parseWorkflowSource(src, file ? path.dirname(file) : undefined, {}, file ?? undefined);
   const nodes = [...graph.nodes.values()].map((n) => Object.fromEntries(NODE_FIELDS.filter((k) => n[k] !== undefined).map((k) => [k, n[k]])));
   const edges = graph.edges.map((e) => ({ from: e.from, to: e.to, ...(e.label ? { label: e.label } : {}), ...(e.condition ? { condition: e.condition } : {}) }));

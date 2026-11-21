@@ -6,6 +6,7 @@
 // neutral.
 import React, { useContext, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View as RNView } from 'react-native';
+import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, useTheme } from '@/constants/Theme';
@@ -18,7 +19,7 @@ import { type AppFlow } from '@codecast/web/lib/line/flowPool';
 import { flowDiagram, routeTail, runReached, stepStates, type DiagramStep, type SideRoute, type StepState } from '@codecast/web/lib/line/flowDiagram';
 import { flowRunState, type FlowRunTone } from '@codecast/web/lib/line/flowFence';
 import { takesSessionChange } from '@codecast/shared/contracts/flowPool';
-import { journeyOf, WHO_WORDS, type JourneyNow, type StageState } from '@codecast/web/lib/ship/journey';
+import { gateWaitWords, holdWords, journeyOf, sentBackWords, stopWords, waitWords, WHO_WORDS, type JourneyNow, type JourneyStage, type JourneyWait, type StageState } from '@codecast/web/lib/ship/journey';
 import type { FlowEdit } from '@codecast/shared/contracts/flowEdit';
 import { asGitDiff, editDrawing, editLines, editRun, liveDeploy, type EditMark } from '@codecast/web/lib/line/flowEditCard';
 import { CastDiff } from '@/components/CastDiff';
@@ -28,6 +29,9 @@ import { runShip } from '@codecast/web/lib/ship/sessionShip';
 import { usePipelineModels, usePipelineWorkspace } from '@codecast/web/hooks/usePipelines';
 import { useActiveWorkspaceKey } from '@codecast/web/hooks/useWorkspaceCollection';
 import { repoName, spanWords, type PipelineLane } from '@codecast/web/lib/line/pipelineModel';
+import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
+import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
+import { ageShort } from '@codecast/web/lib/lineFlow';
 
 type FeatherName = React.ComponentProps<typeof Feather>['name'];
 type RunRow = Parameters<typeof stepStates>[1] & { _id: string; status: string; task_short_id?: string | null; fail_reason?: string | null; workflow_slug?: string; workflow_name?: string };
@@ -59,10 +63,12 @@ export function FlowRunCard({ runId }: { runId: string }) {
 /** A session's change on its way to live: one row per stage with who acts there, then what is happening now. */
 function ShipBody({ flow, run }: { flow: AppFlow; run: RunRow }) {
   const Theme = useTheme();
-  const journey = useMemo(() => journeyOf(flow, run as any), [flow, run]);
-  const finished = journey.stages.every((s) => s.state === 'done');
-  const tone: Record<StageState, string> = { idle: Theme.textDim, active: Theme.blue, back: Theme.violet, waiting: Theme.yellow, done: Theme.green, stopped: Theme.red };
-  const icon: Record<StageState, FeatherName> = { idle: 'circle', active: 'loader', back: 'corner-down-left', waiting: 'clock', done: 'check-circle', stopped: 'x-circle' };
+  const viewer = useJourneyViewer(run as any);
+  const journey = useMemo(() => journeyOf(flow, run as any, [], viewer), [flow, run, viewer]);
+  const finished = journey.stages.every((s) => s.state === 'done' || s.state === 'skipped') && journey.stages.some((s) => s.state === 'done');
+  const tone: Record<StageState, string> = { idle: Theme.textDim, active: Theme.blue, back: Theme.violet, waiting: Theme.yellow, done: Theme.green, routed: Theme.textMuted, stopped: Theme.red, skipped: Theme.textDim };
+  const icon: Record<StageState, FeatherName> = { idle: 'circle', active: 'loader', back: 'corner-down-left', waiting: 'clock', done: 'check-circle', routed: 'arrow-right-circle', stopped: 'x-circle', skipped: 'minus-circle' };
+  const whoWords = (s: JourneyStage) => (finished ? (s.round ? `round ${s.round}` : '') : `${s.state === 'back' ? 'This session' : s.role === 'live' || s.state === 'skipped' ? '' : WHO_WORDS[s.who]}${s.round ? ` · round ${s.round}` : ''}`);
   return (
     <RNView style={[styles.card, { borderColor: Theme.border, backgroundColor: Theme.bgAlt }]}>
       <RNView style={styles.head}>
@@ -71,31 +77,62 @@ function ShipBody({ flow, run }: { flow: AppFlow; run: RunRow }) {
       </RNView>
       <RNView style={styles.steps}>
         {journey.stages.map((s) => (
-          <RNView key={s.id} style={[styles.step, { opacity: s.state === 'idle' ? 0.55 : 1 }]}>
-            <Feather name={icon[s.state]} size={13} color={tone[s.state]} />
-            <RNText style={[styles.stepName, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.label}</RNText>
-            <RNText style={[styles.who, { color: s.state === 'back' ? Theme.violet : Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{finished ? (s.round ? `round ${s.round}` : '') : `${s.state === 'back' ? 'This session' : s.id === 'live' ? '' : WHO_WORDS[s.who]}${s.round ? ` · round ${s.round}` : ''}`}</RNText>
+          <RNView key={s.id} style={{ opacity: s.state === 'idle' || s.state === 'skipped' ? 0.55 : 1 }}>
+            <RNView style={styles.step}>
+              <Feather name={icon[s.state]} size={13} color={tone[s.state]} />
+              <RNText style={[styles.stepName, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.label}</RNText>
+              <RNText style={[styles.who, { color: s.state === 'back' ? Theme.violet : Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{whoWords(s)}</RNText>
+            </RNView>
+            {/* A fan-out's branches run side by side: each with its own state. */}
+            {s.branches?.map((b) => (
+              <RNView key={b.id} style={[styles.step, { marginLeft: 20, opacity: b.state === 'idle' ? 0.55 : 1 }]}>
+                <Feather name={icon[b.state]} size={12} color={tone[b.state]} />
+                <RNText style={[styles.who, { color: Theme.text, fontWeight: '600' }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{b.label}</RNText>
+                <RNText style={[styles.who, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{whoWords(b)}</RNText>
+              </RNView>
+            ))}
           </RNView>
         ))}
       </RNView>
-      <NowLine now={journey.now} />
+      <NowLine now={journey.now} run={run} />
     </RNView>
   );
 }
 
-function NowLine({ now }: { now: JourneyNow }) {
+/** The press that can work for where the run stands, as a native screen: the viewer's card, the run, the session, the deploy. */
+function nowAction(now: JourneyNow, run: RunRow): { label: string; href: string } | null {
+  if (now.kind === 'gate' && now.decisionId) return { label: now.mine ? 'Answer' : 'Open card', href: `/decisions/${now.decisionId}` };
+  if (now.kind === 'unlanded') return { label: 'Open run', href: `/run/${run._id}` };
+  if (now.kind !== 'stopped' && now.kind !== 'failed') return null;
+  if (now.fix === 'session' && now.session) return { label: 'Open session', href: `/session/${now.session}` };
+  if (now.fix === 'deploy') {
+    const dp = now.why?.match(/\bdp-\d+/)?.[0];
+    return dp ? { label: `Open ${dp}`, href: `/deploy/${dp}` } : { label: 'Open run', href: `/run/${run._id}` };
+  }
+  // A stop re-running can fix, or a deliberate one: the run's own screen, where it can be run again or read whole.
+  return { label: 'Open run', href: `/run/${run._id}` };
+}
+
+function NowLine({ now, run }: { now: JourneyNow; run: RunRow }) {
   const Theme = useTheme();
+  const router = useRouter();
+  const action = nowAction(now, run);
+  const at = useCoarseNow(30_000);
+  const waits = (list: JourneyWait[], named?: string) => list.map((w) => waitWords({ ...w, on: w.on === named ? '' : w.on }, at, ageShort)).filter(Boolean).join('\n') || null;
   const [head, body, color] = ((): [string, string | null, string] => {
     switch (now.kind) {
       case 'idle': return ['', null, Theme.textMuted];
       case 'starting': return ['Starting', null, Theme.blue];
-      case 'working': return [now.stage, now.activity, now.who === 'agent' ? Theme.orange : Theme.blue];
-      case 'session': return [`${now.stage} sent it back`, now.note || null, Theme.violet];
-      case 'you': return ['Your call', now.prompt ?? now.stage, Theme.yellow];
-      case 'landed': return ['Landed', now.line ?? 'waiting to deploy', Theme.green];
-      case 'deploying': return ['Deploying', now.line, Theme.blue];
+      case 'working': return [now.stage, waits(now.waits, now.stage), now.who === 'agent' ? Theme.orange : Theme.blue];
+      case 'session': return [sentBackWords(now), now.note || null, Theme.violet];
+      case 'gate': return [now.mine ? 'Your call' : gateWaitWords(now.holder), now.prompt ?? now.stage, Theme.yellow];
+      case 'landed': return [`Landed ${now.sha.slice(0, 7)} · ${holdWords(now.hold).words}`, waits(now.waits, 'Deploy') ?? now.line, Theme.green];
+      case 'merged': return [`Landed ${now.sha.slice(0, 7)}`, null, Theme.green];
+      case 'passed': return ['Done', null, Theme.green];
+      case 'unlanded': return ['Not landed', [now.why, waits(now.waits)].filter(Boolean).join('\n'), Theme.red];
+      case 'deploying': return ['Deploying', waits(now.waits, 'Deploy') ?? now.line, Theme.blue];
       case 'live': return ['Live', now.line?.replace(/^Live:\s*/, '') ?? null, Theme.green];
-      case 'stopped': case 'failed': return [now.kind === 'stopped' ? `Stopped${now.stage ? ` at ${now.stage}` : ''}` : 'Failed', now.why, Theme.red];
+      case 'stopped': case 'failed': return [now.kind === 'failed' && !now.end ? 'Failed' : stopWords(now), now.why, Theme.red];
     }
   })();
   if (!head) return null;
@@ -103,6 +140,11 @@ function NowLine({ now }: { now: JourneyNow }) {
     <RNView style={{ paddingHorizontal: 12, paddingBottom: 10, gap: 2 }}>
       <RNText style={[styles.state, { color }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{head}</RNText>
       {body ? <RNText style={[styles.why, { color: Theme.text, paddingHorizontal: 0, paddingBottom: 0 }]} numberOfLines={4} maxFontSizeMultiplier={CHROME_FONT_CAP}><CodeRuns text={body} /></RNText> : null}
+      {action ? (
+        <Pressable onPress={() => router.push(action.href as never)} hitSlop={8} style={[styles.save, styles.act, { borderColor: Theme.blue }]}>
+          <RNText style={[styles.saveText, { color: Theme.blue }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{action.label}</RNText>
+        </Pressable>
+      ) : null}
     </RNView>
   );
 }
@@ -249,7 +291,7 @@ export function FlowEditCard({ edit, diff = null, dryRun = false }: { edit: Flow
         <RNText style={[styles.who, codeFont, { color: Theme.textMuted, flexShrink: 1 }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{edit.file}</RNText>
       </Pressable>
       {fileOpen && diff ? <RNView style={styles.diff}><CastDiff raw={asGitDiff(diff)} fallback={<RNText style={[styles.who, codeFont, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{diff}</RNText>} /></RNView> : null}
-      {journey ? <NowLine now={journey.now} /> : null}
+      {journey && run ? <NowLine now={journey.now} run={run as RunRow} /> : null}
     </RNView>
   );
 }
@@ -330,4 +372,5 @@ const styles = StyleSheet.create({
   file: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth },
   diff: { paddingHorizontal: 8, paddingBottom: 8 },
   stripRow: { gap: 2 },
+  act: { alignSelf: 'flex-start', marginTop: 6, paddingVertical: 8, paddingHorizontal: 12, minHeight: 44, justifyContent: 'center' },
 });

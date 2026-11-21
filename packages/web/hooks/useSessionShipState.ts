@@ -73,16 +73,19 @@ type ShipState = {
   deployReach?: Record<string, DeployReachRow>;
   clientState: { ui?: { active_team_id?: string | null } };
   currentUser?: { _id?: unknown } | null;
+  /** The decisions the viewer's queue holds: a run's open card says "Your call" only when the viewer may answer it. */
+  sessionDecisions?: Record<string, any>;
 };
 
-let memo: { runs: unknown; deploys: unknown; reach: unknown; workspace: string | null; map: Map<string, SessionShip> } | null = null;
+let memo: { runs: unknown; deploys: unknown; reach: unknown; decisions: unknown; workspace: string | null; viewer: string | null; map: Map<string, SessionShip> } | null = null;
 
 function shipMap(s: ShipState): Map<string, SessionShip> {
   const workspace = activeWorkspaceKeyOf(s);
-  if (memo && memo.runs === s.workflowRuns && memo.deploys === s.teamDeploys && memo.reach === s.deployReach && memo.workspace === workspace) return memo.map;
+  const viewer = s.currentUser?._id ? String(s.currentUser._id) : null;
+  if (memo && memo.runs === s.workflowRuns && memo.deploys === s.teamDeploys && memo.reach === s.deployReach && memo.decisions === s.sessionDecisions && memo.workspace === workspace && memo.viewer === viewer) return memo.map;
   const deploys = workspaceRows<TeamDeployRow>("teamDeploys", s.teamDeploys ?? {}, workspace);
-  const map = sessionShips(Object.values(s.workflowRuns ?? {}), deploys, s.deployReach ?? {});
-  memo = { runs: s.workflowRuns, deploys: s.teamDeploys, reach: s.deployReach, workspace, map };
+  const map = sessionShips(Object.values(s.workflowRuns ?? {}), deploys, s.deployReach ?? {}, viewer, s.sessionDecisions ?? {});
+  memo = { runs: s.workflowRuns, deploys: s.teamDeploys, reach: s.deployReach, decisions: s.sessionDecisions, workspace, viewer, map };
   return map;
 }
 

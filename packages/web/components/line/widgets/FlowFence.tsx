@@ -21,6 +21,7 @@ import { takesSessionChange } from "@codecast/shared/contracts/flowPool";
 import { journeyOf, runIsLive } from "../../../lib/ship/journey";
 import { JourneyView } from "../../ship/Journey";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
+import { useJourneyViewer } from "../../../hooks/useJourneyViewer";
 import { flowRunState, readFlowFence } from "../../../lib/line/flowFence";
 import { CodeBlock } from "../../CodeBlock";
 import { lineWorkspaceHref } from "../../../lib/line/lineWorkspaceUrl";
@@ -28,6 +29,7 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { FlowExplorer } from "./FlowStationPanel";
 import { FlowEditCard } from "./FlowEditCard";
 import { FlowPipelineCard } from "./FlowPipelineCard";
+import { ShipAgainButton } from "./RunThroughFlow";
 import "../workspace/workspace.css";
 
 export default function FlowFence({ code, fallback }: { code: string; fallback?: React.ReactNode }) {
@@ -114,7 +116,8 @@ export const FlowRunCard = memo(function FlowRunCard({ runId, title }: { runId: 
 function ShipRunCard({ run, flow, title, library }: { run: any; flow: AppFlow; title?: string | null; library: FlowLibraryState }) {
   const [graph, setGraph] = useState(false);
   const now = useCoarseNow(15_000);
-  const journey = useMemo(() => journeyOf(flow, run), [flow, run]);
+  const viewer = useJourneyViewer(run);
+  const journey = useMemo(() => journeyOf(flow, run, [], viewer), [flow, run, viewer]);
   const live = runIsLive(run);
   return (
     <div className="lw-widget lw-flow" data-flow-run={run._id} data-ship-run-card={journey.now.kind}>
@@ -125,7 +128,7 @@ function ShipRunCard({ run, flow, title, library }: { run: any; flow: AppFlow; t
       {graph ? <FlowExplorer flow={flow} run={run} /> : null}
       <JourneyView journey={journey} run={run} now_ms={now} compact={graph} actions={
         live ? <button type="button" className="sj-btn" data-quiet onClick={() => void useInboxStore.getState().stopLineRun(run._id)} data-flow-stop={run._id}>Stop</button> : null
-      } />
+      } again={run.spawner_conversation_id ? (primary) => <ShipAgainButton flow={flow} conversationId={String(run.spawner_conversation_id)} sessionTitle={run.task_title ?? "This session"} primary={primary} /> : undefined} />
     </div>
   );
 }

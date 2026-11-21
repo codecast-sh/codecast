@@ -47,9 +47,12 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
   // A segment the graph wrote in place, and a slot it declares, read from its source (or the row's own list).
   const fills = new Set(row.fills ?? flowFills(row.source));
   const slots = flowSlotsOf(row.source);
-  // A stored node carries no backend or visit limit: the session's own stations and their limits read from the source.
+  // A stored node carries no backend, visit limit or stop: the session's own stations, their limits and the run's
+  // deliberate ends read from the source.
   const backends = flowNodeAttrOf(row.source, "backend");
   const maxVisits = flowNodeAttrOf(row.source, "max_visits");
+  const machine = flowNodeAttrOf(row.source, "machine");
+  const stops = flowNodeAttrOf(row.source, "stop");
   const nodes: FlowNodeIn[] = row.nodes.map((n) => {
     const top = segmentTopOf(n.id);
     const entry = top === n.id && row.nodes.some((x) => x.id.startsWith(`${n.id}__`));
@@ -61,6 +64,8 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
       id: n.id, label: n.label, type: n.type, shape: n.shape,
       ...(backends[n.id] ? { backend: backends[n.id] } : {}),
       ...(Number(maxVisits[n.id]) > 0 ? { max_visits: Number(maxVisits[n.id]) } : {}),
+      ...(machine[n.id] === "true" ? { machine: true } : {}),
+      ...(stops[n.id] ? { stop: stops[n.id] } : {}),
       ...(top !== n.id ? { segment: top } : {}),
       ...(exit ? { segment_exit: exit } : {}),
       ...(entry ? { segment_entry: true, ...(written ? {} : { segment_flow: n.id }) } : {}),

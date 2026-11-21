@@ -28,6 +28,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { JourneyView } from "../../ship/Journey";
 import { HEADER_CHIP } from "../../../lib/headerChip";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
+import { useJourneyViewer } from "../../../hooks/useJourneyViewer";
 import "../../ship/ship.css";
 
 /** Shown only where the workspace has Flows on: off, the button is gone with the rest of the feature. */
@@ -73,7 +74,8 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   const landed = run ? landedSha(run) : null;
   const reach = useDeployReach(landed);
   const targets = useMemo(() => reachTargets(reach), [reach]);
-  const journey = useMemo(() => (run && runFlow ? journeyOf(runFlow, run, targets) : null), [run, runFlow, targets]);
+  const viewer = useJourneyViewer(run);
+  const journey = useMemo(() => (run && runFlow ? journeyOf(runFlow, run, targets, viewer) : null), [run, runFlow, targets, viewer]);
   const press = usePress(conversationId, run?.created_at ?? 0);
   const settled = useSettled(conversationId);
   const live = runIsLive(run);
@@ -143,6 +145,7 @@ function PressNotice({ press, onRead }: { press: Press; onRead: () => void }) {
 function RunPanel({ run, flow, journey, targets, notice, onAgain }: { run: any; flow: AppFlow; journey: Journey; targets?: TargetState[]; notice?: React.ReactNode; onAgain: () => void }) {
   const now = useCoarseNow(15_000);
   const live = runIsLive(run);
+  const stop = journey.now.kind === "stopped" || journey.now.kind === "failed" ? journey.now : null;
   return (
     <div className="shp" data-ship-run={run._id}>
       <header className="shp-head">
@@ -152,15 +155,24 @@ function RunPanel({ run, flow, journey, targets, notice, onAgain }: { run: any; 
         <Link className="shp-link" href={`/workflows/runs/${run._id}`}>Open run</Link>
       </header>
       {notice}
-      <JourneyView journey={journey} run={run} now_ms={now} targets={targets} actions={
-        live
+      <JourneyView journey={journey} run={run} now_ms={now} targets={targets}
+        actions={live
           ? <button type="button" className="sj-btn" data-quiet onClick={() => void useInboxStore.getState().stopLineRun(run._id)} data-flow-stop={run._id}>Stop</button>
-          : journey.now.kind === "stopped" && journey.now.stage === "Deploy"
-            // The change is on main; only its deploy failed, and Ship again would land it again. Its target is a press away in the bar.
-            ? null
-            : <button type="button" className="sj-btn" data-primary={journey.now.kind === "stopped" || journey.now.kind === "failed" ? "" : undefined} onClick={onAgain} data-ship-again>Ship again</button>
-      } />
+          // A stop's bar places Ship again itself; a finished run offers it plainly.
+          : stop ? null : <button type="button" className="sj-btn" onClick={onAgain} data-ship-again>Ship again</button>}
+        again={(primary) => <button type="button" className="sj-btn" data-primary={primary ? "" : undefined} data-quiet={primary ? undefined : ""} onClick={onAgain} data-ship-again>Ship again</button>} />
     </div>
+  );
+}
+
+/** Ship again from a run's card in the thread: the same flow, through the same review a first Ship goes through. */
+export function ShipAgainButton({ flow, conversationId, sessionTitle, primary }: { flow: AppFlow; conversationId: string; sessionTitle: string; primary: boolean }) {
+  const [reviewing, setReviewing] = useState(false);
+  return (
+    <>
+      <button type="button" className="sj-btn" data-primary={primary ? "" : undefined} data-quiet={primary ? undefined : ""} onClick={() => setReviewing(true)} data-ship-again>Ship again</button>
+      {reviewing ? <SwitchReview ledger={shipLedgerFor(flow, sessionTitle)} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow)); }} /> : null}
+    </>
   );
 }
 

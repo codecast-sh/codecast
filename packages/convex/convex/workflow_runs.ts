@@ -1237,15 +1237,18 @@ export const updateProgress = mutation({
     const nodeStatuses = [...run.node_statuses];
     const existing = args.node_id && args.node_status ? nodeStatuses.findIndex((n) => n.node_id === args.node_id) : -1;
     const prev = existing >= 0 ? nodeStatuses[existing] : undefined;
+    // Entering the node (into running, or a new visit) starts its clock and its words; a progress line while it runs
+    // keeps both, so a wait's "since" and deadline count from entry and no earlier visit's line carries over.
+    const entering = args.node_status === "running" && (prev?.status !== "running" || (args.visits !== undefined && args.visits !== prev?.visits));
     const nodeEntry = !args.node_id || !args.node_status ? null : {
       node_id: args.node_id,
       status: args.node_status,
       outcome: args.outcome,
       session_id: args.session_id ?? prev?.session_id,
-      result_preview: args.result_preview ?? prev?.result_preview,
+      result_preview: args.result_preview ?? (entering ? undefined : prev?.result_preview),
       ...(args.cost_usd !== undefined || prev?.cost_usd !== undefined ? { cost_usd: (prev?.cost_usd ?? 0) + (args.cost_usd ?? 0) } : {}),
       ...(args.visits !== undefined || prev?.visits !== undefined ? { visits: args.visits ?? prev?.visits } : {}),
-      started_at: args.node_status === "running" ? now : (prev?.started_at ?? now),
+      started_at: entering ? now : (prev?.started_at ?? now),
       completed_at: args.node_status !== "running" ? now : undefined,
     };
 

@@ -35,6 +35,20 @@
 .sj-stage[data-state="active"] .sj-node { border-color: var(--sj-who-c); box-shadow: 0 0 0 4px color-mix(in srgb, var(--sj-who-c) 16%, transparent); }
 .sj-stage[data-state="waiting"] .sj-node { border-color: var(--sj-wait); background: color-mix(in srgb, var(--sj-wait) 16%, var(--sj-card)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--sj-wait) 14%, transparent); }
 .sj-stage[data-state="back"] .sj-node { border-color: var(--sj-session); background: color-mix(in srgb, var(--sj-session) 16%, var(--sj-card)); color: var(--sj-session); box-shadow: 0 0 0 4px color-mix(in srgb, var(--sj-session) 14%, transparent); }
+/* Routed: a step chose another way on (a script that exits non-zero to route), neither a pass nor a stop. */
+.sj-stage[data-state="routed"] .sj-node { border-color: var(--sol-text-dim); color: var(--sol-text-muted); }
+.sj-stage[data-state="skipped"] .sj-node { border-style: dashed; border-color: var(--sj-rule); }
+.sj-stage[data-state="skipped"] .sj-label { color: var(--sol-text-dim); }
+.sj-branch[data-state="back"] .sj-branch-mark { border-color: var(--sj-session); color: var(--sj-session); }
+.sj-branches { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; margin-top: 3px; max-width: 100%; }
+.sj-branch { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; line-height: 1.25; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sj-branch[data-state="idle"] { color: var(--sol-text-muted); }
+.sj-branch-mark { width: 12px; height: 12px; flex: none; display: grid; place-items: center; border-radius: 999px; border: 1px solid var(--sj-rule); color: var(--sol-text-dim); }
+.sj-branch-mark svg { width: 8px; height: 8px; }
+.sj-branch-mark .sj-pulse, .sj-branch-mark .sj-wait { width: 6px; height: 6px; }
+.sj-branch[data-state="done"] .sj-branch-mark { background: var(--sj-ok); border-color: var(--sj-ok); color: #fff; }
+.sj-branch[data-state="stopped"] .sj-branch-mark { background: var(--sj-bad); border-color: var(--sj-bad); color: #fff; }
+.sj-branch[data-state="active"] .sj-branch-mark { border-color: var(--sol-blue); }
 .sj-stage { --sj-who-c: var(--sj-auto); }
 .sj-stage[data-who="agent"] { --sj-who-c: var(--sj-agent); }
 .sj-stage[data-who="you"] { --sj-who-c: var(--sj-you); }
@@ -55,7 +69,8 @@
 .sj-now[data-kind="working"] { --sj-who-c: var(--sj-auto); }
 .sj-now[data-kind="working"][data-who="agent"] { --sj-who-c: var(--sj-agent); }
 .sj-now[data-kind="session"] { color: var(--sj-session); background: color-mix(in srgb, var(--sj-session) 7%, var(--sj-sunk)); }
-.sj-now[data-kind="you"] { background: color-mix(in srgb, var(--sj-wait) 9%, var(--sj-sunk)); }
+.sj-now:is([data-kind="you"], [data-kind="gate"]) { background: color-mix(in srgb, var(--sj-wait) 9%, var(--sj-sunk)); }
+.sj-what[data-late] { color: var(--sj-bad); }
 .sj-now[data-kind="landed"], .sj-now[data-kind="live"] { color: var(--sj-ok); }
 .sj-now[data-kind="stopped"] { color: var(--sj-bad); background: color-mix(in srgb, var(--sj-bad) 6%, var(--sj-sunk)); }
 .sj-now .sj-what { color: var(--sol-text-muted); min-width: 0; }
@@ -66,8 +81,8 @@
 .sj-gate { flex-basis: 100%; margin-top: 4px; }
 .sj-act, .sj-btn { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 7px; border: 1px solid var(--sj-rule); background: var(--sj-card); color: var(--sol-text); cursor: pointer; white-space: nowrap; text-decoration: none; }
 .sj-act:hover, .sj-btn:hover { background: color-mix(in srgb, var(--sol-bg-alt) 60%, var(--sj-card)); }
-.sj-btn[data-primary] { border-color: color-mix(in srgb, var(--sol-blue) 55%, transparent); background: color-mix(in srgb, var(--sol-blue) 14%, var(--sj-card)); color: var(--sol-blue); }
-.sj-btn[data-primary]:hover { background: color-mix(in srgb, var(--sol-blue) 22%, var(--sj-card)); }
+.sj-act[data-primary], .sj-btn[data-primary] { border-color: color-mix(in srgb, var(--sol-blue) 55%, transparent); background: color-mix(in srgb, var(--sol-blue) 14%, var(--sj-card)); color: var(--sol-blue); }
+.sj-act[data-primary]:hover, .sj-btn[data-primary]:hover { background: color-mix(in srgb, var(--sol-blue) 22%, var(--sj-card)); }
 .sj-btn[data-quiet] { border-color: transparent; background: none; color: var(--sol-text-muted); }
 .sj-btn[data-quiet]:hover { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 8%, transparent); }
 
@@ -77,6 +92,7 @@
 .shp-chip[data-tone="agent"] { --shp-c: var(--sol-orange); }
 .shp-chip[data-tone="session"] { --shp-c: var(--sol-violet); }
 .shp-chip[data-tone="you"] { --shp-c: var(--sol-yellow); color: var(--sol-text); border-color: color-mix(in srgb, var(--sol-yellow) 55%, transparent); background: color-mix(in srgb, var(--sol-yellow) 12%, transparent); }
+.shp-chip[data-tone="wait"] { --shp-c: var(--sol-yellow); }
 .shp-chip[data-tone="ok"] { --shp-c: var(--sol-green); }
 .shp-chip[data-tone="bad"] { --shp-c: var(--sol-red); }
 .shp-chip[data-tone="wait"] { --shp-c: var(--sol-yellow); }

@@ -39,7 +39,7 @@ import { formatJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { LINE_FENCE_LANG } from "@codecast/shared/contracts/lineChat";
 import { FLOW_FENCE_LANG } from "./line/flowFence";
 import { EDIT_ADD, EDIT_GUIDE, GALLERY_PIPELINE_REPO, PIPELINE, PIPELINE_TEXT } from "./renderGalleryPipeline.generated";
-import { EDIT_SKIP_FENCE, FLOW_EDGES, FLOW_NODES, FLOW_SOURCE, GALLERY_FLOW, shipRuns } from "./renderGalleryFlows";
+import { EDIT_SKIP_FENCE, FLOW_EDGES, FLOW_NODES, FLOW_SOURCE, GALLERY_FLOW, shipGraphs, shipRuns } from "./renderGalleryFlows";
 
 export { GALLERY_FLOW };
 import { CONVERSATION_FENCE_LANG } from "./conversationFence";
@@ -173,7 +173,7 @@ export function renderGalleryRecords(now: number, viewerId: string, workspace: s
     ({ _id: `galleryproposalchange0000${seq}`, proposal_id: GALLERY_ORG.proposal, seq, change: c, rationale, evidence: [], status: "proposed" });
   const status = (node_id: string, s: "completed" | "running", label?: string) => ({ node_id, status: s, ...(label ? { label } : {}), started_at: now - 60_000, ...(s === "completed" ? { completed_at: now - 30_000 } : {}) });
   return {
-    workflows: [{ _id: GALLERY_FLOW.graphId, user_id: viewerId, workspace: `user:${viewerId}`, slug: GALLERY_FLOW.slug, name: GALLERY_FLOW.slug, label: "Spine, flaky test", source: FLOW_SOURCE, nodes: FLOW_NODES, edges: FLOW_EDGES, created_at: now, updated_at: now }],
+    workflows: [{ _id: GALLERY_FLOW.graphId, user_id: viewerId, workspace: `user:${viewerId}`, slug: GALLERY_FLOW.slug, name: GALLERY_FLOW.slug, label: "Spine, flaky test", source: FLOW_SOURCE, nodes: FLOW_NODES, edges: FLOW_EDGES, created_at: now, updated_at: now }, ...shipGraphs(now, viewerId, workspace)],
     workflowRuns: [
       { _id: GALLERY_FLOW.liveRun, user_id: viewerId, workflow_id: GALLERY_FLOW.graphId, workflow_slug: GALLERY_FLOW.slug, workflow_name: GALLERY_FLOW.slug, workflow_label: "Spine, flaky test", graph_hash: GALLERY_FLOW.hash, workspace, status: "running", current_node_id: "implement__patch", task_short_id: "ct-4102", node_statuses: [status("investigate", "completed"), status("implement", "completed"), status("implement__reproduce", "completed"), status("implement__patch", "running")], created_at: now - 120_000, updated_at: now },
       { _id: GALLERY_FLOW.libraryRun, user_id: viewerId, workflow_slug: "check", workflow_name: "check", workspace, status: "completed", current_node_id: "passed", task_short_id: "ct-4103", node_statuses: [status("verify", "completed")], created_at: now - 300_000, updated_at: now - 200_000 },

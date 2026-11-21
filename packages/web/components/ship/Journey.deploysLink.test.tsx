@@ -20,15 +20,15 @@ const run = (extra: object) => ({ _id: "r1", status: "completed", workspace: "te
 
 describe("the Ship panel's links into Deploys", () => {
   test("a landed run's targets and its Deploys button open at the commit it landed", () => {
-    const journey: any = { stages: [], now: { kind: "landed", line: null, sha: SHA, at: null } };
+    const journey: any = { stages: [], now: { kind: "landed", line: null, sha: SHA, at: null, hold: { kind: "wait", by: null }, waits: [] } };
     const html = renderToStaticMarkup(<JourneyView journey={journey} run={run({ merge: { sha: SHA } })} now_ms={0} targets={[{ name: "web", state: "waiting" }]} />);
     expect(links(html)).toEqual([`/deploys?team=T1&sha=${SHA}`, `/deploys?team=T1&target=web&sha=${SHA}`]);
   });
 
   test("a now-bar line that names a deploy opens that deploy, on its target when the line names one", () => {
-    const deploying: any = { stages: [], now: { kind: "deploying", line: "waiting for web (going out in dp-13)", targets: ["web"] } };
+    const deploying: any = { stages: [], now: { kind: "deploying", line: "waiting for web (going out in dp-13)", targets: ["web"], waits: [] } };
     expect(links(renderToStaticMarkup(<JourneyView journey={deploying} run={run({ status: "running" })} now_ms={0} />))[0]).toBe("/deploys?team=T1&deploy=dp-13");
-    const live: any = { stages: [], now: { kind: "deploying", line: "live on web dp-12", targets: ["web"] } };
+    const live: any = { stages: [], now: { kind: "deploying", line: "live on web dp-12", targets: ["web"], waits: [] } };
     expect(links(renderToStaticMarkup(<JourneyView journey={live} run={run({ status: "running" })} now_ms={0} />))[0]).toBe("/deploys?team=T1&target=web&deploy=dp-12");
   });
 
