@@ -29,7 +29,7 @@ import * as readline from "readline";
 import { c } from "../colors.js";
 import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
-import { frozenChangeContext } from "./flowChangeFile.js";
+import { behindWords, frozenChangeContext } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
@@ -446,6 +446,8 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
   // Quiet: a subject stashed out of sight while the run went on stays there; it surfaces itself if it pins blocked.
   if (!options.runSession) console.log(`${c.dim}  this run has no session of its own, so the brief to ${subject.shortId} cannot go quietly: it brings it back to the inbox${c.reset}`);
+  // Taken before the send: only a pin the session sets after this can be its answer (waitOnStation).
+  const sentAt = Date.now();
   const sent = await sendToSubject(options, subject, brief, subjectSendKey(options, context, node.id), true);
   if (!sent) {
     context["last_error"] = `Could not send ${node.label} to session ${subject.shortId}.${found}`;
@@ -454,17 +456,16 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   }
   const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
   await waiting({ node_id: node.id, conversation_id: subject.conversationId, since: Date.now(), note: (context["stop_reason"] || brief).slice(0, 600) });
-  const outcome = await waitOnStation(node, graph, context, cwd, options, undefined, { ...subject, sentAtCount: row.message_count ?? 0 });
+  const outcome = await waitOnStation(node, graph, context, cwd, options, undefined, { ...subject, sentAtCount: row.message_count ?? 0, sentAt });
   await waiting(null);
   if (outcome !== "success") return outcome;
   try {
     const { refreezeSessionChange } = await import("./flowChange.js");
     const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
-    context["branch"] = change.branch;
-    context["change_files"] = change.paths.join(" ");
-    const said = moved
-      ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
-      : "the session's change is as it was: the stage runs again on the same change";
+    Object.assign(context, frozenChangeContext(context["run_dir"]));
+    const said = (change.landed ? `the session's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
+      : moved ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
+      : "the session's change is as it was: the stage runs again on the same change") + (behindWords(change) ? `; ${behindWords(change)}` : "");
     console.log(`  ${c.green}✓${c.reset} ${said}`);
     recordNodeOutput(context, node.id, said);
   } catch (err) {
@@ -552,8 +553,8 @@ async function waitOnStation(
   options: RunOptions,
   onSpawned?: () => void,
   // The run's subject (subjectStation.ts): the session the change came from, already sent its brief, which this
-  // station waits on instead of a hand of its own. It has answered once it has worked since the brief landed.
-  subject?: Subject & { sentAtCount: number },
+  // station waits on instead of a hand of its own. It has answered once a turn of its own has ended since the brief.
+  subject?: Subject & { sentAtCount: number; sentAt: number },
 ): Promise<NodeOutcome> {
   if (!options.convexSiteUrl || !options.apiToken) {
     console.log(`  ${c.red}✗ session nodes need an authenticated CLI (cast auth)${c.reset}`);
@@ -672,7 +673,8 @@ async function waitOnStation(
   }
   let askedForHandoffAt = 0;
   let seenMessages = -1;
-  let subjectWorked = false;
+  // Reads in a row that found the subject past its brief and not at work (below).
+  let subjectQuiet = 0;
   // The transcript length at which the hand's park flag was last re-stamped (/cli/accounts/restamp-park).
   let restampedAt = -1;
   // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts).
@@ -764,9 +766,18 @@ async function waitOnStation(
       continue;
     }
     askedOnce = asking;
-    // The subject read finished before its brief landed: only work after it (a working read, or a reply past the brief) answers.
-    if (subject && state === "working") subjectWorked = true;
-    if (subject && !subjectWorked && (row.message_count ?? 0) < subject.sentAtCount + 2 && !row.is_killed) continue;
+    // The subject's answer is a turn of its own that ends after the brief. Its row can read settled while it works: a
+    // dormant pin from before the brief stands until it pins again, and a snooze reads dormant too. A Union run took
+    // such a reading for the answer and froze the change mid-edit (ct-98624). So while it is at work (a working
+    // status, or a transcript that grew since the last read) the run waits; past the brief and its reply, the turn
+    // has ended once two reads in a row find it quiet, or once it pins after the brief (below).
+    if (subject && !row.is_killed) {
+      if (state === "working" || grew || SUBJECT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) < subject.sentAtCount + 2) {
+        subjectQuiet = 0;
+        continue;
+      }
+      subjectQuiet++;
+    }
     // A hand that pinned done after arming a once trigger into its own session reads dormant: the inbox files that
     // rest as parked until the trigger wakes it (inboxProjection doneRest). Its done pin is its answer. Two onefix
     // Builds armed their seven-day checks, pinned "watching" and waited at Build for hours (ct-74310, ct-86290,
@@ -780,6 +791,11 @@ async function waitOnStation(
     const pinned = restPin ?? await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
     // A presenter brought back still shows the pin it left last visit until it pins again.
     if (answeredAfter !== undefined && !row.is_killed && !(typeof pinned?.at === "number" && (answeredAfter === null || pinned.at > answeredAfter))) {
+      askedOnce = false;
+      continue;
+    }
+    // One quiet read is not yet the turn's end, and a pin from before the brief is the last turn's word, never this one's.
+    if (subject && !row.is_killed && subjectQuiet < 2 && !(typeof pinned?.at === "number" && pinned.at > subject.sentAt)) {
       askedOnce = false;
       continue;
     }
@@ -875,6 +891,9 @@ async function waitOnStation(
   context["station_dead"] = node.id;
   return "failure";
 }
+
+// Agent statuses of a subject inside a turn: whatever its row's work_state says, it has not answered yet.
+const SUBJECT_AT_WORK = new Set(["working", "thinking", "compacting"]);
 
 // How long a hand asked for its missing handoff has to start answering before
 // a finished reading counts again: the message lands at its next turn.
@@ -1822,6 +1841,8 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   const initialContext: Record<string, string> = {};
   initialContext["project_path"] = cwd;
   initialContext["default_branch"] = detectDefaultBranch(cwd);
+  // Where a reviewer's diff starts ($diff_base...$branch): the default branch, unless the run's change says where it was cut.
+  initialContext["diff_base"] = initialContext["default_branch"];
   // The run's own id, for a node that reports to the server about this run
   // (the line's merge step, the-line.md L12). Empty on a run with no row.
   initialContext["run_id"] = options.runId ?? "";
