@@ -35,8 +35,8 @@ describe("connectionChipCopy", () => {
     expect(connectionChipCopy({ offline: false, online: true })).toBeNull();
   });
 
-  it("names a dropped socket Reconnecting so the header LED can carry it", () => {
-    expect(connectionChipCopy({ offline: true, online: true })?.label).toBe("Reconnecting");
+  it("names a dropped socket on a live network Server unreachable", () => {
+    expect(connectionChipCopy({ offline: true, online: true })?.label).toBe("Server unreachable");
   });
 
   it("names a dead network Offline", () => {

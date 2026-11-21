@@ -7,7 +7,7 @@ import { connectionChipCopy, useAppOffline, type ConnectionChipCopy } from "../.
  *  happen to it; otherwise just the state. */
 export function hostedConnectionWords(copy: ConnectionChipCopy, sending: boolean): string {
   if (sending) return "Waiting for a connection. This sends when you're back online.";
-  return copy.label === "Offline" ? "You're offline" : "Reconnecting…";
+  return copy.label === "Offline" ? "You're offline" : "Server unreachable";
 }
 
 /** Live: the link's copy while it is down, else null. */

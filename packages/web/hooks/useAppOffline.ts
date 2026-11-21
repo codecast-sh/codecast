@@ -42,8 +42,12 @@ export function connectionChipCopy({ offline, online }: AppOffline): ConnectionC
   if (!offline) return null;
   return online
     ? {
-        label: "Reconnecting",
-        detail: "The live server link dropped. This view is from the cache, and it will sync when the link returns.",
+        // The device has a network, so it is the server this app cannot
+        // reach (down, or the path to it). A server outage on 2026-11-21 held
+        // every waiting message for 27 minutes under "Queued — delivering",
+        // with only this LED, wordless and hidden below md, saying anything.
+        label: "Server unreachable",
+        detail: "This app can't reach the codecast server. This view is from the cache, and it syncs when the server is back.",
       }
     : {
         label: "Offline",
