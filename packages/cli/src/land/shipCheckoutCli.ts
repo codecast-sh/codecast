@@ -4,6 +4,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fmt } from "../colors.js";
+import { spawnSync } from "../proc.js";
 import { formatAgeShort } from "../publishCommand.js";
 import { git } from "../wipSnapshot.js";
 import { inboxRoster } from "./cli.js";
@@ -137,9 +138,40 @@ export function shipPassBody(plan: ShipPlan, r: ShipOutcome, repository: string,
   };
 }
 
-export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: Record<string, unknown>) => Promise<any>): Promise<void> {
+/**
+ * The `cast flow run` a pass goes through when `[ship] flow` names a flow, or null when it names none (and on a dry
+ * run, which only plans). The flow freezes the checkout as its change and checks, lands and deploys it, so this
+ * command pushes nothing; "default" is the workspace's default flow, a nameless run. Flags that steer a pass this
+ * command pushes itself would be dropped silently, so they are refused.
+ */
+export function checkoutFlowArgs(flow: string | undefined, opts: CheckoutOptions): string[] | null {
+  if (!flow || opts.dryRun) return null;
+  const steered = [
+    opts.plan !== undefined && "--plan", opts.only !== undefined && "--only", opts.hold && "--hold", opts.commitsOnly && "--commits-only",
+    opts.message?.length && "--message", opts.check === false && "--no-check", opts.push === false && "--no-push", opts.deploy === false && "--no-deploy",
+  ].filter((f): f is string => !!f);
+  if (steered.length) throw new Error(`[ship] flow = "${flow}" runs the pass through that flow, which plans, checks and lands it; ${steered.join(", ")} only steer${steered.length === 1 ? "s" : ""} a pass cast ship checkout pushes itself`);
+  return ["flow", "run", ...(flow === "default" ? [] : [flow]), "--checkout", ...(opts.json ? ["--json"] : [])];
+}
+
+/** Run a `cast` command in `cwd` with this terminal, returning its exit code. */
+async function runCast(args: string[], cwd: string): Promise<number> {
+  const { resolveCastInvocation } = await import("../castInvocation.js");
+  const { cmd, prefixArgs } = resolveCastInvocation();
+  return spawnSync(cmd, [...prefixArgs, ...args], { cwd, stdio: "inherit", env: process.env }).status ?? 1;
+}
+
+export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: Record<string, unknown>) => Promise<any>, runFlow: (args: string[], cwd: string) => Promise<number> = runCast): Promise<void> {
   const startedAt = Date.now();
   const root = (await git(process.cwd(), ["rev-parse", "--show-toplevel"]));
+  const flow = shipSpec(root).flow;
+  const flowArgs = checkoutFlowArgs(flow, opts);
+  if (flowArgs) {
+    log(`[ship] flow = "${flow}": running the pass through it (cast ${flowArgs.join(" ")})`);
+    const code = await runFlow(flowArgs, root);
+    if (code !== 0) process.exitCode = code;
+    return;
+  }
   const gitDir = await git(root, ["rev-parse", "--absolute-git-dir"]);
   const file = typeof opts.plan === "string" ? path.resolve(opts.plan) : planPath(gitDir);
 
@@ -163,6 +195,7 @@ export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: 
   if (opts.dryRun) {
     // The plan file's own object, so what is read here is what is edited there; plan_file and ship ride beside it.
     console.log(opts.json ? JSON.stringify({ ...plan, plan_file: file, ship: shipSpec(root) }, null, 2) : formatPlan(plan, file));
+    if (flow && !opts.json) console.log(fmt.muted(`[ship] flow = "${flow}": cast ship checkout runs the pass through that flow, which freezes the checkout again when it starts.`));
     return;
   }
 
