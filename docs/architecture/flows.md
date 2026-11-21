@@ -210,7 +210,35 @@ message in the session's own thread, waits for the session to work and settle
 through a dormant pin and stops on a blocked one), then freezes the session's
 change again on the same branch and resets the run's worktree to it
 (`refreezeSessionChange`). The session is never reported as a hand of the run,
-so the run's end never stops it.
+so the run's end does not stop it as it stops hands. A subject that was killed
+is sent the brief all the same: the send restarts it, and the run's log says
+so. Only a subject the run cannot read stops the station.
+
+Between its own stations the run does not need the session, so it parks it
+(`subjectPark.ts`). Before every other station, and every minute while one runs
+(Deploy's wait can last days), the runner reads the subject; once it has
+settled (`done`, `dormant` or `idle`, live, not parked, not killed) the runner
+stashes it hidden, once per settle, so it leaves the inbox, and asks its daemon
+to hibernate it, at most every five minutes while it stays live. The daemon's
+parking gate may refuse (attached, mid turn, resumed in the last ten minutes);
+the run asks again later. A dry run and a run with no subject park nothing.
+The briefs go out as quiet sends (`sendSessionMessage` `quiet`): like a
+trigger's wake, a quiet send from a session leaves a hidden stash hidden, while
+a killed or dismissed session still revives. So a session working on a failed
+check stays out of the inbox, and surfaces on its own only when it pins
+blocked. A gate's answer is news the session need not act on, so a hibernated
+subject is not resumed to hear it.
+
+A run that completes retires its subject once the change is live: the change
+is on the default branch (`landedCommit`, fetched and decided with git), the
+subject has settled (parked counts), and nothing it wrote differs from what
+landed (every file `previewSessionChange` attributes to it reads as the landed
+commit or the default branch has it; an attribution that fails keeps it). The
+runner kills it (its transcript stays, and a later send revives it), sends no
+end message, which would only resume it to read "done", and says so in the
+exit station's `result_preview` ("Retired jx7...: its change is on main at
+..."). Otherwise the session hears the end as below; a failed run's end message
+is an ordinary send, so the session comes back to the inbox.
 
 The `change` flow (and `quick-change`, the same without Decide) routes every
 stop it can fix to such a station; the briefs live in `templates/change/`: a failed
