@@ -135,13 +135,21 @@ export async function publishLineProfile(deps: PublishDeps, read: ResolvedLinePr
 }
 
 /** Publish a checkout's deploy targets for its repository, from this machine, which is where a deploy of one runs. */
-export async function publishDeployTargets(deps: PublishDeps, root: string, targets: import("@codecast/shared/contracts/deployTargets").DeployTarget[], teamId?: string): Promise<{ team_id: string; repository: string; targets: Array<{ name: string; changed: boolean }>; commits?: any }> {
+export async function publishDeployTargets(deps: PublishDeps, root: string, targets: import("@codecast/shared/contracts/deployTargets").DeployTarget[], teamId?: string): Promise<{ team_id: string; repository: string; targets: Array<{ name: string; changed: boolean }>; commits?: any; pipeline?: any }> {
   const { readLocalGitContext } = await import("./prCommand.js");
   const { deviceId } = await import("./remote/device.js");
   const repository = readLocalGitContext(root).repository;
   if (!repository) throw new LineProfileError(`${root} has no GitHub origin, so its targets name no repository`);
   const { publishableTarget } = await import("@codecast/shared/contracts/deployTargets");
   const r = await apiPost(deps, "/cli/deploys/targets/publish", { repository, targets: targets.map(publishableTarget), device_id: deviceId(), root, ...(teamId ? { team_id: teamId } : {}) });
+  // The repository's pipeline rides with its targets, from the same checkout (pipeline.md PL6); one that fails to build or
+  // publish never fails the targets' (`cast flow pipeline --publish` says why).
+  try {
+    const { publishPipeline } = await import("./pipeline.js");
+    r.pipeline = await publishPipeline((p, b) => apiPost(deps, p, b, { exitOnError: false }), root, { teamId: r.team_id, repository, deviceId: deviceId() });
+  } catch (err) {
+    r.pipeline = { error: err instanceof Error ? err.message : String(err) };
+  }
   // A repository GitHub does not report (a local remote) gets main's order from its checkout; the server skips one it hears from GitHub.
   const main = mainCommitsOf(root);
   if (main) r.commits = await apiPost(deps, "/cli/deploys/main-commits", { team_id: r.team_id, repository, branch: main.branch, commits: main.commits }, { exitOnError: false }).catch(() => null);

@@ -256,6 +256,38 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     });
 
   flow
+    .command("pipeline")
+    .description("This repository's pipeline: the change flow a session's Ship runs here and the release flow each deploy runs, every station with who does it, own or inherited, when it runs and what it runs, and the targets a release goes out to")
+    .option("--team <name>", "Resolve the team's default flow and published flows for this team (default: the workspace this directory reads)")
+    .option("--publish", "Also publish it for the app's pipeline page (every deploy targets publish does this too)")
+    .option("--json", "Print the pipeline as JSON (contracts/pipeline.ts)")
+    .action(async (opts: { team?: string; publish?: boolean; json?: boolean }) => {
+      const { checkoutPipeline, pipelineLines, publishPipeline, teamFlowFacts } = await import("./pipeline.js");
+      const cwd = deps.realCwd();
+      const root = (spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim();
+      if (!root) { console.error("Not inside a repository: run from the checkout whose pipeline this is"); process.exit(1); }
+      const ws = await deps.readWorkspace(opts.team).catch(() => null);
+      const teamId = ws?.kind === "team" ? ws.teamId : null;
+      const post = (p: string, b: Record<string, unknown>) => deps.cliPost(p, b, { throwOnError: true });
+      const { deviceId } = await import("./remote/device.js");
+      let pipeline;
+      try {
+        ({ pipeline } = await checkoutPipeline(root, { ...(await teamFlowFacts(post, teamId)), deviceId: deviceId() }));
+      } catch (err) {
+        console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+      const published = opts.publish ? await publishPipeline(post, root, { teamId, deviceId: deviceId() }).catch((err: Error) => ({ error: err.message })) : null;
+      if (opts.json) { console.log(JSON.stringify({ ...pipeline, ...(published ? { published } : {}) }, null, 2)); return; }
+      for (const line of pipelineLines(pipeline)) console.log(line);
+      if (!published) return;
+      if ("error" in published) console.log(`\n✗ not published: ${published.error}`);
+      else if ("skipped" in published) console.log(`\nNot published: ${published.skipped}`);
+      else if (published.refused) console.log(`\nNot published: ${published.refused}`);
+      else console.log(`\n${published.changed ? "Published" : "Already published, unchanged"} for ${published.repository}`);
+    });
+
+  flow
     .command("validate <flow>")
     .description("Read a flow (a file, a library name, or - for a graph on stdin), segments and slots expanded, and name what is missing")
     .action(async (ref: string) => {

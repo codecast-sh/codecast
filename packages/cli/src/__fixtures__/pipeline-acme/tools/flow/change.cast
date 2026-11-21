@@ -1,0 +1,29 @@
+// A synthetic change flow written whole (no library backbone): open a request, tests and review side by side,
+// one fix back to the session, merge, then wait for the deploy that carries it (it sends none).
+digraph change {
+  graph [kind="line", label="Change", description="Open, tests and review side by side, merge, wait for the deploy", takes="task,branch", goal="$task_title", on_failure=stop]
+  rankdir=LR
+  start [shape=Mdiamond]
+  open   [label="Open", shape=parallelogram, timeout=600, script="./tools/flow/open.sh $branch"]
+  checks [label="Tests and review", shape=component]
+  tests  [label="Tests", shape=parallelogram, timeout=1800, script="./tools/flow/tests.sh $branch"]
+  review [label="Review", backend=session, agent=claude, reviewer=true, timeout=3600, prompt="@change/review.md"]
+  read   [label="Read", shape=tripleoctagon]
+  fix    [label="Tests and review", backend=subject, max_visits=3, prompt="@change/fix.md"]
+  merge  [label="Merge", shape=parallelogram, timeout=600, script="./tools/flow/merge.sh $branch"]
+  deploy [flow="deploy", send=""]
+  exit     [shape=Msquare, label="Live"]
+  unmerged [shape=Msquare, label="Not merged", stop="$merge.output"]
+  start -> open
+  open -> checks [condition="outcome = success"]
+  checks -> tests
+  checks -> review
+  tests -> read
+  review -> read
+  read -> merge [condition="tests.exit_code = 0 and review.json.verdict = ship", label="green, approved"]
+  read -> fix
+  fix -> open
+  merge -> deploy [condition="outcome = success"]
+  merge -> unmerged
+  deploy -> exit
+}

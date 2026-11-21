@@ -1,0 +1,4 @@
+[line.deploy]
+target = "api"
+trigger = "person"
+command = "./tools/deploy-api.sh --sha $sha"

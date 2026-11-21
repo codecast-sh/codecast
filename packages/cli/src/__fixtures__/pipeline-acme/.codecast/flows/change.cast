@@ -1,0 +1,4 @@
+// acme/widgets: the change flow lives in tools/flow/change.cast; this file gives it the name `change` here.
+digraph change {
+  graph [extends="../../tools/flow/change.cast"]
+}
