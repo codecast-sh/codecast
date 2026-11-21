@@ -79,6 +79,7 @@ mode = "direct"        # or "pr"
 check = "cast check --changed-since $CAST_SHIP_BASE"   # the projects this ship touches; "" skips
 tests = true           # run the test files the pass changed
 level = true           # the daemon keeps the checkout level with upstream
+flow = "change"        # run each pass through this flow; "default" is the workspace's default flow
 
 [[ship.deploy]]
 name = "convex"
@@ -92,6 +93,20 @@ edits the pass left out included. For Convex here that is deliberate: sessions
 deploy their uncommitted backend work to test it, and deploying only the
 shipped commit would remove functions they are using. A held group that
 touches deployed paths therefore still reaches the backend.
+
+### A pass through a flow
+
+With `flow` set, `cast ship checkout` neither pushes nor opens a pull request:
+it runs `cast flow run <flow> --checkout` (a nameless `cast flow run
+--checkout` for `"default"`) and prints what that started. The flow freezes the
+checkout as its change, planned as above, a commit per writer on a branch of
+its own cut onto fresh upstream, and its stages check, review, land and deploy
+it (flows.md FL4). A finding goes to the sessions that wrote the files it
+names, each told only its own files; the run waits for every one of them,
+freezes the pass again and goes on. `--dry-run` still prints the plan; flags
+that steer a pass this command pushes itself (`--plan`, `--only`, `--hold`,
+`--commits-only`, `--message`, `--no-check`, `--no-push`, `--no-deploy`) are
+refused.
 
 ## The level sweep
 

@@ -153,6 +153,7 @@ it. The map groups an expanded segment's stations under the segment's name.
 | `--session [id]` (the default from inside a session) | the session's own edits | the session's bound task while it is open, else a new task titled for the session and bound to it, so a second run finds the same task, branch and worktree |
 | `--branch <name>` | that branch | a new task titled for the branch |
 | `--pr <n>` | the pull request's head branch | the task linked to the pull request, else a new one |
+| `--checkout` | everything uncommitted in the shared checkout, a commit per session that wrote it | a new task titled for the pass |
 
 A session's own edits in a shared checkout are frozen the way `cast ship
 checkout` freezes them (ship-checkout.md, `freezeAndAttribute`): every changed
@@ -176,6 +177,18 @@ before the first station (`frozenChangeContext`), so `$branch` and `$worktree`
 are set from the start, for a detached daemon run too. A rerun on the same
 task moves the branch and resets that worktree to it, and refuses when the
 worktree holds uncommitted work of its own.
+
+A checkout's change (`--checkout`, what `cast ship checkout` starts when
+`[ship] flow` names a flow) is the whole shared tree's pass, planned as a ship
+pass plans it (`makePlan`): a commit per session that wrote files, with the
+session trailer when that session is team visible, one for files no session's
+edit names, and credentials and stale copies held out. The commits are built
+on HEAD and replayed onto the fetched upstream the same way (`cutChange` in
+`flowChange.ts`). `change.json` records `writers`, the session that wrote each
+file; the session that ran the command, when there is one, is the run's
+subject. A refreeze rebuilds it from the checkout as it is now, for the
+change's files and any file one of its writers now holds (a fix may add a
+test), still a commit per writer on the same branch.
 
 Every run binds to a task because the run's evidence, its gate decisions and
 its status already key on one (the-line.md L3, L6). The task is the record of
