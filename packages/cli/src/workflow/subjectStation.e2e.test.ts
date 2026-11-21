@@ -13,6 +13,8 @@ import { freezeSessionChange, writeFrozenChange } from "./flowChange";
 import { readFrozenChange } from "./flowChangeFile";
 import { parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow, type RunOptions } from "./runner";
+import { readCheckpoint } from "./runResume";
+import { startSubjectParker } from "./subjectPark";
 import { failureExcerpt, runEndMessage } from "./subjectStation";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
@@ -100,6 +102,12 @@ type Play = {
   row?: (briefed: boolean) => Record<string, unknown>;
   /** How many reads a brief's answer takes to show in the transcript (the station waits on it meanwhile). */
   lag?: number;
+  /** The repository's deploy targets, read when the run asks (`cast line deploy targets`); none by default. */
+  targets?: () => unknown[];
+  /** What the server answers a retire with. */
+  retire?: () => Record<string, unknown>;
+  /** The server is older than `quiet` and refuses a send that carries it. */
+  refuseQuiet?: boolean;
 };
 
 /** The server, playing the session: `fix` is what the session does when a brief reaches it. */
@@ -110,6 +118,8 @@ function server(fix: () => void, play: Play = {}) {
   let briefed = false;
   let lagLeft = 0;
   let owed = 0;
+  // The run's stash puts the row out of sight; a send that is not quiet brings it back.
+  let stashed = false;
   globalThis.fetch = (async (url: any, init: any) => {
     const route = String(url).replace(/^https?:\/\/[^/]+/, "");
     const body = JSON.parse(init?.body || "{}");
@@ -119,10 +129,15 @@ function server(fix: () => void, play: Play = {}) {
     if (route === "/cli/inbox") {
       if (lagLeft > 0) lagLeft--;
       else { messages += owed; owed = 0; }
-      return reply({ sessions: [{ id: CONV, work_state: dormant ? "dormant" : "done", is_live: true, is_killed: false, message_count: messages, ...play.row?.(briefed) }] });
+      return reply({ sessions: [{ id: CONV, work_state: dormant ? "dormant" : "done", bucket: stashed ? "stashed" : "done", is_live: true, is_killed: false, message_count: messages, ...play.row?.(briefed) }] });
     }
     if (route === "/cli/sessions/state/get" && dormant) return reply({ state: "Fixed it; the run re-checks when this turn ends", status: "dormant", at: Date.now() });
+    if (route === "/cli/sessions/dismiss") stashed = true;
+    if (route === "/cli/deploys/targets") return reply({ targets: play.targets?.() ?? [] });
+    if (route === "/cli/sessions/retire") return reply(play.retire?.() ?? { retired: true, short_id: CONV.slice(0, 7) });
     if (route === "/cli/messages/send") {
+      if (play.refuseQuiet && body.quiet) return new Response(JSON.stringify({ error: "ArgumentValidationError: Object contains extra field `quiet`" }), { status: 400 });
+      if (!body.quiet) stashed = false;
       // A brief starts a turn; the run's end and a gate's answer only inform.
       if (/^Check failed/.test(body.body)) {
         briefed = true;
@@ -166,6 +181,9 @@ describe("the session is the run's subject", () => {
     expect(brief.body).toContain("Check failed on ct-9");
     expect(brief.body).toContain("error: a.txt says bad, expected good");
     expect(answer.body).toMatch(/^Decide: Ship\./);
+    // The gate's answer is news: quiet, so a subject out of sight stays there.
+    expect(answer.quiet).toBe(true);
+    expect(end.quiet).toBeUndefined();
     expect(end.body).toContain("The Change run on ct-9 is over: Done.");
     expect(s.sent()).toHaveLength(3);
 
@@ -275,10 +293,60 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     expect(stashed).toBeLessThan(waitDone);
   }, 60_000);
 
-  /** A checkout with an origin, and a flow whose Land pushes the frozen change to origin's main (or, `lands: false`, does nothing). */
-  function landWorld(lands: boolean) {
+  test("a subject a person brought back from the run's stash is parked no more, and the run's context remembers it", async () => {
+    const { root } = world("good\n");
+    // Once the run has stashed it, a person restores it (it files in the inbox again at the same settle); later it
+    // works a turn and settles again, which the run would otherwise stash anew.
+    const dismissed = () => s.calls.filter((c) => c.route === "/cli/sessions/dismiss").length;
+    let restoredReads = 0;
+    const s: ReturnType<typeof server> = server(() => {}, {
+      row: () => {
+        if (!dismissed()) return {};
+        restoredReads++;
+        return { bucket: "done", ...(restoredReads > 5 ? { message_count: 40 } : {}) };
+      },
+    });
+    const graph = parseWorkflowSource(`digraph slow {
+      graph [label="Slow"]
+      start [shape=Mdiamond]
+      wait [label="Wait", shape=parallelogram, script="sleep 1"]
+      after [label="After", shape=parallelogram, script="true"]
+      exit [shape=Msquare, label="Done"]
+      start -> wait -> after -> exit
+    }`, root);
+    const { outcome, runDir } = await start(root, graph, { run: { subjectParkMs: 20 } });
+    expect(outcome).toBe("completed");
+    expect(restoredReads).toBeGreaterThan(5);
+    expect(dismissed()).toBe(1);
+    expect(readCheckpoint(runDir, "run-9")?.context.subject_kept).toBe("1");
+  }, 60_000);
+
+  test("a parker bound to a run whose context says a person kept the subject does nothing", async () => {
+    const calls: string[] = [];
+    const parker = startSubjectParker(async (route) => { calls.push(route); return { sessions: [{ id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 }] }; }, { conversationId: CONV, shortId: "jx7ssss" }, 60_000, () => {});
+    parker.bind({ subject_kept: "1" });
+    await parker.tick();
+    await parker.stop();
+    expect(calls.filter((r) => r !== "/cli/inbox")).toEqual([]);
+  });
+
+  test("every send to the subject carries one client_id; a server that refuses quiet gets the same send plain, under the same id", async () => {
+    const { root, edit } = world("bad\n");
+    const s = server(() => edit("good\n"), { refuseQuiet: true });
+    expect((await start(root)).outcome).toBe("completed");
+    const briefs = s.sent().filter((m) => /^Check failed/.test(m.body));
+    expect(briefs.map((b) => [b.quiet, b.client_id])).toEqual([[true, "run:run-9:fix_check:1"], [undefined, "run:run-9:fix_check:1"]]);
+    const answers = s.sent().filter((m) => /^Decide: Ship\./.test(m.body));
+    expect(answers.map((a) => [a.quiet, a.client_id])).toEqual([[true, "run:run-9:decide.answer:1"], [undefined, "run:run-9:decide.answer:1"]]);
+    expect(s.sent().at(-1)!.client_id).toMatch(/^run:run-9:end:/);
+  }, 60_000);
+
+  const PUSH = "git -C $project_path push -q origin $branch:main";
+  /** A checkout with an origin, and a flow whose Land runs `land`: PUSH puts the frozen change on origin's main, `true` lands nothing. */
+  function landWorld(land: string) {
     const w = world("good\n");
-    const origin = path.join(sandbox, `origin-${worlds}.git`);
+    // Under a github.com path, so the checkout names its repository the way a GitHub origin does.
+    const origin = path.join(sandbox, "github.com", "acme", `app-${worlds}.git`);
     execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
     git(w.root, "remote", "add", "origin", origin);
     git(w.root, "push", "-q", "origin", "main");
@@ -287,7 +355,7 @@ describe("the subject between its turns: restarted, parked, retired", () => {
       graph [label="Change", on_failure=stop]
       start [shape=Mdiamond]
       check [flow="tcheck"]
-      land [label="Land", shape=parallelogram, script="${lands ? "git -C $project_path push -q origin $branch:main" : "true"}"]
+      land [label="Land", shape=parallelogram, script="${land}"]
       exit [shape=Msquare, label="Done"]
       start -> check -> land -> exit
     }`, w.root);
@@ -295,18 +363,21 @@ describe("the subject between its turns: restarted, parked, retired", () => {
   }
 
   test("a subject whose change is live and that has no other work is retired: killed, not told", async () => {
-    const { root, graph } = landWorld(true);
+    const { root, graph } = landWorld(PUSH);
     const s = server(() => {});
     expect((await start(root, graph)).outcome).toBe("completed");
     expect(git(root, "show", "origin/main:a.txt")).toBe("good");
-    expect(routes(s, "/cli/sessions/kill")).toEqual([{ api_token: "tok", session: CONV }]);
+    // Retired through the server's guarded kill, with the transcript length the run read it settled at.
+    expect(routes(s, "/cli/sessions/retire")).toEqual([{ api_token: "tok", session: CONV, expected_message_count: 10 }]);
+    expect(routes(s, "/cli/sessions/kill")).toEqual([]);
+    expect(routes(s, "/cli/deploys/targets")[0]).toMatchObject({ repository: `acme/app-${worlds}` });
     expect(s.sent()).toEqual([]);
     const end = routes(s, "/cli/workflow-runs/progress").find((b) => b.run_status === "completed");
-    expect(end.result_preview).toMatch(/^Retired jx7ssss: its change is on main at [0-9a-f]{10} and it has no other work\.$/);
+    expect(end.result_preview).toMatch(/^Retired jx7ssss: its change is live from main at [0-9a-f]{10} and it has no other work\.$/);
   }, 60_000);
 
   test("a parked subject is retired too, and is not resumed to hear a gate's answer", async () => {
-    const { root } = landWorld(true);
+    const { root } = landWorld(PUSH);
     const graph = parseWorkflowSource(`digraph change {
       graph [label="Change", on_failure=stop]
       start [shape=Mdiamond]
@@ -320,26 +391,93 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     const s = server(() => {}, { row: () => ({ is_live: false, agent_status: "hibernated" }) });
     expect((await start(root, graph)).outcome).toBe("completed");
     expect(s.sent()).toEqual([]);
-    expect(routes(s, "/cli/sessions/kill")).toHaveLength(1);
+    expect(routes(s, "/cli/sessions/retire")).toHaveLength(1);
     // Nothing to park: it already is.
     expect(routes(s, "/cli/sessions/hibernate")).toEqual([]);
   }, 60_000);
 
+  test("merged is not live: a touched target still running a deploy from before the change keeps the subject, who hears the end", async () => {
+    const { root, graph } = landWorld(PUSH);
+    const before = git(root, "rev-parse", "main");
+    const s = server(() => {}, { targets: () => [{ name: "web", paths: ["a.txt"], live: { short_id: "dp-1", status: "live", sha: before, created_at: 1, live_at: 1 } }] });
+    expect((await start(root, graph)).outcome).toBe("completed");
+    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
+    expect(s.sent().at(-1)!.body).toContain("The Change run on ct-9 is over: Done.");
+  }, 60_000);
+
+  test("a touched target live at a deploy that holds the change retires the subject; a target the change does not touch is not waited on", async () => {
+    const { root, graph } = landWorld(PUSH);
+    const before = git(root, "rev-parse", "main");
+    const s = server(() => {}, {
+      targets: () => [
+        { name: "web", paths: ["a.txt"], live: { short_id: "dp-2", status: "live", sha: git(root, "rev-parse", "origin/main"), created_at: 2, live_at: 2 } },
+        { name: "docs", paths: ["docs/**"], live: { short_id: "dp-3", status: "live", sha: before, created_at: 1, live_at: 1 } },
+      ],
+    });
+    expect((await start(root, graph)).outcome).toBe("completed");
+    expect(routes(s, "/cli/sessions/retire")).toHaveLength(1);
+    expect(s.sent()).toEqual([]);
+  }, 60_000);
+
+  test("a retire the server refuses (the session moved, a trigger is armed) leaves the subject, who hears the end", async () => {
+    const { root, graph } = landWorld(PUSH);
+    const s = server(() => {}, { retire: () => ({ retired: false, short_id: "jx7ssss", reason: "a trigger is armed on it" }) });
+    expect((await start(root, graph)).outcome).toBe("completed");
+    expect(routes(s, "/cli/sessions/retire")).toHaveLength(1);
+    expect(s.sent().at(-1)!.body).toContain("The Change run on ct-9 is over: Done.");
+  }, 60_000);
+
+  test("a subject whose checkout has nothing uncommitted left (it pulled the landed main) is retired", async () => {
+    const { root, graph } = landWorld(`${PUSH} && git -C $project_path reset -q --hard origin/main`);
+    const s = server(() => {});
+    expect((await start(root, graph)).outcome).toBe("completed");
+    expect(git(root, "status", "--porcelain", "--", "a.txt")).toBe("");
+    expect(routes(s, "/cli/sessions/retire")).toHaveLength(1);
+    expect(s.sent()).toEqual([]);
+  }, 60_000);
+
+  test("a run that completes says nothing to a subject already stopped: no revival to read that it is over", async () => {
+    const { root, graph } = landWorld("true");
+    const s = server(() => {}, { row: () => ({ is_killed: true, is_live: false, work_state: "idle" }) });
+    expect((await start(root, graph)).outcome).toBe("completed");
+    expect(s.sent()).toEqual([]);
+    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
+  }, 60_000);
+
+  test("a run that fails still tells a stopped subject, which revives it so the failure reaches someone", async () => {
+    const { root } = world("bad\n");
+    const graph = parseWorkflowSource(`digraph change {
+      graph [label="Change", on_failure=stop]
+      start [shape=Mdiamond]
+      check [flow="tcheck"]
+      stopped [shape=Msquare, label="Checks failed", stop="$stop_reason"]
+      exit [shape=Msquare, label="Done"]
+      start -> check -> exit
+      check -> stopped [condition="outcome = failure"]
+    }`, root);
+    const s = server(() => {}, { row: () => ({ is_killed: true, is_live: false, work_state: "idle" }) });
+    expect((await start(root, graph)).outcome).toBe("failed");
+    const told = s.sent();
+    expect(told).toHaveLength(1);
+    expect(told[0].body).toContain("stopped at Checks failed");
+    expect(told[0].quiet).toBeUndefined();
+  }, 60_000);
+
   test("a subject with another file of its own changed stays, and hears the end", async () => {
-    const { root, edit, graph } = landWorld(true);
+    const { root, edit, graph } = landWorld(PUSH);
     edit("more work\n", "b.txt");
     const s = server(() => {});
     expect((await start(root, graph, { only: ["a.txt"] })).outcome).toBe("completed");
     expect(git(root, "show", "origin/main:a.txt")).toBe("good");
-    expect(routes(s, "/cli/sessions/kill")).toEqual([]);
+    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
     expect(s.sent().at(-1)!.body).toContain("The Change run on ct-9 is over: Done.");
   }, 60_000);
 
   test("a change that did not land leaves its subject, who hears the end", async () => {
-    const { root, graph } = landWorld(false);
+    const { root, graph } = landWorld("true");
     const s = server(() => {});
     expect((await start(root, graph)).outcome).toBe("completed");
-    expect(routes(s, "/cli/sessions/kill")).toEqual([]);
+    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
     expect(s.sent().at(-1)!.body).toContain("The Change run on ct-9 is over: Done.");
   }, 60_000);
 });
