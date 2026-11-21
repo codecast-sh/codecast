@@ -13,8 +13,8 @@ Each edit writes one line in the project's .codecast/flows/<flow>.cast (created 
 flow when the repo has none) and a prompt's text beside it in .codecast/flows/<flow>/<station>.md.
 It validates the flow, prints the diff, and commits nothing.
 
-  cast flow edit change add lint --after check --run "bun run lint"      lint [after="check", ...]
-  cast flow edit change add e2e --after check --run "bun e2e" --when "landing/**"
+  cast flow edit change add lint --after pr --fix brief --run "bun run lint"   lint [after="pr", fix="brief", ...]
+  cast flow edit change add e2e --after pr --fix brief --run "bun e2e" --when "landing/**"
   cast flow edit change guide review "Also check the migrations"          review [guide="@change/review.guide.md"]
   cast flow edit change prompt review @review.md                          replaces the inherited prompt
   cast flow edit change run lint "bun run lint --changed"

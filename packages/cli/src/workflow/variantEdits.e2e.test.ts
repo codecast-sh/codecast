@@ -72,6 +72,16 @@ describe("a fan-out", () => {
     const g = parseWorkflowSource(FAN().replace("a -> read", `a -> extra\n  extra -> read\n  ${step("extra")}`));
     expect(validateWorkflow(g)).toEqual(["checks's branch a goes on to extra, but a fan-out runs only its branches and goes on from read: lead a straight to read"]);
   });
+
+  test("a branch also run on its own, as the fan-out's retry or another station's target, may route that run elsewhere", () => {
+    const off = FAN().replace("a -> read", `a -> read\n  a -> fixed [condition="outcome = failure"]\n  ${step("fixed")}\n  fixed -> read`);
+    // A pure branch: its edge off the join never runs.
+    expect(validateWorkflow(parseWorkflowSource(off))).toEqual(["checks's branch a goes on to fixed, but a fan-out runs only its branches and goes on from read: lead a straight to read"]);
+    // The fan-out's retry_target runs alone after the fan-out fails, and routes by its own edges.
+    expect(validateWorkflow(parseWorkflowSource(off.replace(/checks \[([^\]]*)\]/, (_m, a) => `checks [${a}, retry_target="a"]`)))).toEqual([]);
+    // So does a branch another station sends the run to.
+    expect(validateWorkflow(parseWorkflowSource(off.replace("fixed -> read", "fixed -> a")))).toEqual([]);
+  });
 });
 
 const GATE = () => `digraph base {

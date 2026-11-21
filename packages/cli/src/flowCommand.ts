@@ -109,7 +109,7 @@ async function cast(args: string[], cwd: string): Promise<{ code: number; out: s
 }
 
 /** When each way of putting work in a flow fits: what `cast flow --help` says after the verbs. */
-const FLOW_HELP = `
+export const FLOW_HELP = `
 Choosing a flow:
   A library flow that fits the work runs as it stands: it carries what the team has learned.
   A library flow that fits as a backbone, with a step this change needs done its own way, is
@@ -121,12 +121,12 @@ Choosing a flow:
   cast flow run change                      a library flow by name, on this session's own edits
   cast flow run - <<'EOF'                   a flow written here, checked before it starts
   digraph flaky_fix {
-    graph [extends="change"]
+    graph [extends="quick-change"]
     subgraph check { reproduce -> prove }   steps that fill the backbone's check slot
   }
   EOF
 
-  cast flow edit change add lint --after check --run "bun run lint"
+  cast flow edit change add lint --after pr --fix brief --run "bun run lint"
                                             a project's own step, one line in its flow (cast flow edit --help)
 
   cast flow show <flow> lists a flow's slots. A flow written here is kept in .codecast/session-flows/

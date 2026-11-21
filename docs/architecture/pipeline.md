@@ -48,9 +48,9 @@ differs. Five edits cover what people do:
 ```dot
 digraph change {
   graph [extends="change"]
-  lint   [after="check", label="Lint", script="bun run lint --changed"]          // add a station
+  lint   [after="pr", fix="brief", label="Lint", script="bun run lint --changed"]  // add a station
   review [guide="@change/review.md"]                                             // add guidance to a prompt
-  e2e    [after="check", when="landing/**, backend/src/routes/**", script="…"]  // run only when files change
+  e2e    [after="pr", fix="brief", when="landing/**, backend/src/routes/**", script="…"]  // run only when files change
   decide [skip=true]                                                             // skip a station
 }
 ```
@@ -107,7 +107,7 @@ stations of this lane when they exist.
 The same five edits, three ways in, one path out:
 
 - **A sentence in a conversation.** An agent runs `cast flow edit <flow> add
-  lint --after check --run "bun run lint"` (or `guide`, `prompt`, `skip`,
+  lint --after pr --fix brief --run "bun run lint"` (or `guide`, `prompt`, `skip`,
   `when`). It writes the project's flow file, validates the result, and prints
   an edit object that draws inline: the pipeline with the new or changed
   station marked, the file diff folded under it, and what it costs (how many

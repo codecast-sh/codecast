@@ -106,16 +106,18 @@ function diagramOf(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<FlowEd
 
   // A segment's stop the flow sends back to the session the change came from (its subject station) is no stop:
   // the work goes back, the session fixes it, and the stage runs again. The route to the subject station itself
-  // is said once, on that exit, never as a separate way on.
+  // is said once, on that exit, never as a separate way on. A plain station (a script, a fan-in) has no exit to say
+  // it on, so its route to the subject station is the way back itself, said by the edge's words.
   const subjectIds = new Set(nodes.filter((n) => n.backend === "subject").map((n) => n.id));
-  const backExits = new Set(edges.filter((e) => subjectIds.has(e.to) && takesOwnExit(e)).map((e) => prefix + e.from));
-  const toSession = (r: SideRoute): SideRoute | null =>
-    subjectIds.has(r.toId.slice(prefix.length)) ? null : backExits.has(r.toId) ? { ...r, tone: "back", leadsTo: SESSION_WORDS } : r;
+  const backExits = new Set(edges.filter((e) => subjectIds.has(e.to) && !!byId.get(e.from)?.segment_exit && takesOwnExit(e)).map((e) => prefix + e.from));
+  const toSession = (r: SideRoute, fromSegment: boolean): SideRoute | null =>
+    subjectIds.has(r.toId.slice(prefix.length)) ? (fromSegment ? null : { ...r, tone: "back", leadsTo: SESSION_WORDS })
+    : backExits.has(r.toId) ? { ...r, tone: "back", leadsTo: SESSION_WORDS } : r;
   const reroute = (step: DiagramStep): DiagramStep => {
     const inner = step.inner.map(reroute);
     // A segment's frame repeats what one of its steps already says when the parent's end has the same name.
     const said = new Set(inner.flatMap((i) => i.side.map((r) => `${r.tone}|${r.outcome}`)));
-    const side = step.side.map(toSession).filter((r): r is SideRoute => !!r && !said.has(`${r.tone}|${r.outcome}`));
+    const side = step.side.map((r) => toSession(r, step.kind === "segment")).filter((r): r is SideRoute => !!r && !said.has(`${r.tone}|${r.outcome}`));
     return { ...step, side, inner };
   };
 

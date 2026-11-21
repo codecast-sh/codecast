@@ -29,26 +29,26 @@ describe("a checkout with no flows of its own runs the shipped change and line-d
     expect(p.head_sha).toBeNull();
     expect(p.recent).toEqual({ paths: [], commits: [], dropped: 0 });
     expect(p.change).toMatchObject({ slug: "change", label: "Change", base: "change", file: null, removed: [] });
-    expect(p.change.stations.filter((s) => s.main).map((s) => s.label)).toEqual(["Check", "Review", "Decide", "Land", "Deploy"]);
+    expect(p.change.stations.filter((s) => s.main).map((s) => s.label)).toEqual(["PR", "CI and review", "CI", "Review", "Both done", "Verdicts", "Merge", "Merged", "Deploy"]);
     expect(new Set(p.change.stations.map((s) => s.own))).toEqual(new Set(["inherited"]));
     expect(station(p.change, "review").who).toBe("agent");
     expect(station(p.change, "review").prompt).toBeTruthy();
     expect(station(p.change, "decide").who).toBe("person");
-    expect(station(p.change, "fix_check")).toMatchObject({ who: "agent", main: false });
+    expect(station(p.change, "brief")).toMatchObject({ who: "agent", main: false });
   });
 
   test("a segment that runs commands says what it runs; a Deploy that sends is a deploy", () => {
-    expect(station(p.change, "check")).toMatchObject({ who: "command" });
-    expect(station(p.change, "check").runs).toBeTruthy();
-    expect(station(p.change, "ship").runs).toBeTruthy();
+    expect(station(p.change, "ci")).toMatchObject({ who: "command" });
+    expect(station(p.change, "ci").runs).toBeTruthy();
+    expect(station(p.change, "merge").runs).toBeTruthy();
     expect(station(p.change, "deploy")).toMatchObject({ who: "deploy" });
     expect(station(p.change, "deploy").waits).toBeUndefined();
     expect(station(p.change, "deploy").runs).toContain('--send "release"');
   });
 
   test("the graph is the expanded one foldFlow reads", () => {
-    expect(p.change.graph.nodes.some((n) => n.id === "review__review")).toBe(true);
-    expect(p.change.graph.nodes.find((n) => n.id === "review")?.segment_entry).toBe(true);
+    expect(p.change.graph.nodes.some((n) => n.id === "decide__decide")).toBe(true);
+    expect(p.change.graph.nodes.find((n) => n.id === "decide")?.segment_entry).toBe(true);
   });
 
   test("with no targets and no [line.deploy], every release step passes with a note; Watch is codecast's own", () => {
@@ -67,16 +67,16 @@ describe("a variant of change written with the PL3 edits", async () => {
   fs.mkdirSync(path.join(root, ".codecast", "flows"), { recursive: true });
   fs.writeFileSync(path.join(root, ".codecast", "flows", "change.cast"), `digraph change {
   graph [extends="change"]
-  lint   [after="check", label="Lint", when="web/**, docs/", shape=parallelogram, script="bun run lint"]
+  lint   [after="pr", label="Lint", when="web/**, docs/", shape=parallelogram, script="bun run lint"]
   review [guide="House rule: name the migration a schema change needs."]
-  fix_review [prompt="Address the review, then say what you changed."]
+  brief [prompt="Address the findings, then say what you changed."]
 }`);
   const p = await build(root);
 
   test("own, changed and inherited stations, by id", () => {
     expect(p.change).toMatchObject({ slug: "change", base: "change", file: ".codecast/flows/change.cast" });
     expect(station(p.change, "lint")).toMatchObject({ own: "added", who: "command", runs: "bun run lint", main: true, when: ["web/**", "docs/"] });
-    expect(station(p.change, "fix_review")).toMatchObject({ own: "changed", changed: ["prompt"], prompt: "Address the review, then say what you changed." });
+    expect(station(p.change, "brief")).toMatchObject({ own: "changed", changed: ["prompt"], prompt: "Address the findings, then say what you changed." });
     expect(station(p.change, "decide").own).toBe("inherited");
     expect(station(p.change, "deploy").own).toBe("inherited");
   });
@@ -91,7 +91,7 @@ describe("a variant of change written with the PL3 edits", async () => {
   test("what an earlier file in the chain gates or skips still reads on the pipeline", async () => {
     const root = tmp("pipeline-chain-");
     fs.mkdirSync(path.join(root, ".codecast", "flows"), { recursive: true });
-    fs.writeFileSync(path.join(root, ".codecast", "flows", "house.cast"), `digraph house { graph [extends="change"] e2e [after="check", label="E2E", when="{api,web}/src/**, docs/", shape=parallelogram, script="bun run e2e"] decide [skip=true] }`);
+    fs.writeFileSync(path.join(root, ".codecast", "flows", "house.cast"), `digraph house { graph [extends="change"] e2e [after="pr", label="E2E", when="{api,web}/src/**, docs/", shape=parallelogram, script="bun run e2e"] decide [skip=true] }`);
     fs.writeFileSync(path.join(root, ".codecast", "flows", "outer.cast"), `digraph outer { graph [extends="house.cast"] e2e [script="bun run e2e --ci"] }`);
     const q = await build(root, { teamDefault: "outer" });
     expect(q.change).toMatchObject({ slug: "outer", base: "change", file: ".codecast/flows/house.cast" });
@@ -105,7 +105,7 @@ describe("a variant of change written with the PL3 edits", async () => {
     fs.mkdirSync(path.join(alt, ".codecast", "flows"), { recursive: true });
     fs.writeFileSync(path.join(alt, ".codecast", "flows", "house.cast"), `digraph house { graph [extends="change"] decide [skip=true] }`);
     const q = await build(alt, { teamDefault: "house" });
-    expect(q.change).toMatchObject({ slug: "house", base: "change", file: ".codecast/flows/house.cast", removed: ["Decide", "Revise"] });
+    expect(q.change).toMatchObject({ slug: "house", base: "change", file: ".codecast/flows/house.cast", removed: ["Decide"] });
     expect(q.change.stations.some((s) => s.id === "decide")).toBe(false);
   });
 });

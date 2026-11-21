@@ -22,25 +22,25 @@ const flowFile = (root: string) => fs.readFileSync(path.join(root, ".codecast/fl
 describe("cast flow edit change", () => {
   test("add creates the project's flow over the library's, one line, and prints the edit object", () => {
     const root = repo();
-    const plan = edit(root, { op: "add", station: "lint", after: "check", run: "bun run lint" });
+    const plan = edit(root, { op: "add", station: "lint", after: "pr", run: "bun run lint" });
     expect(plan.created).toBe(true);
-    expect(flowFile(root)).toContain(`graph [extends="change"]\n  lint [after="check", label="Lint", shape=parallelogram, script="bun run lint"]\n}`);
-    expect(plan.words).toEqual(["+ Lint after Check"]);
-    expect(plan.path).toBe("Check → Lint → Review → Decide → Land → Deploy");
+    expect(flowFile(root)).toContain(`graph [extends="change"]\n  lint [after="pr", label="Lint", shape=parallelogram, script="bun run lint"]\n}`);
+    expect(plan.words).toEqual(["+ Lint after PR; a failure goes to Fix findings"]);
+    expect(plan.path).toBe("PR → Lint → CI and review → Verdicts → Merge → Merged → Deploy");
     const { graph, variant, ...rest } = plan.edit;
-    expect(rest).toEqual({ flow: "change", file: ".codecast/flows/change.cast", graph_hash: graphHash(parseWorkflowFile(path.join(root, ".codecast/flows/change.cast"))), base: "change", changes: [{ op: "add", station: "lint", label: "Lint", after: "check", who: "command", by: "command" }] });
+    expect(rest).toEqual({ flow: "change", file: ".codecast/flows/change.cast", graph_hash: graphHash(parseWorkflowFile(path.join(root, ".codecast/flows/change.cast"))), base: "change", changes: [{ op: "add", station: "lint", label: "Lint", after: "pr", who: "command", by: "command", fix: "brief" }] });
     // The card draws the flow as it validated: the new station is in it, and no command's text is.
     expect(graph!.nodes.find((n) => n.id === "lint")).toMatchObject({ label: "Lint", type: "command" });
     expect(graph!.edges.some((e) => e.from === "lint")).toBe(true);
     expect(JSON.stringify(graph)).not.toContain("bun run lint");
-    expect(variant).toEqual([{ op: "add", station: "lint", label: "Lint", after: "check" }]);
+    expect(variant).toEqual([{ op: "add", station: "lint", label: "Lint", after: "pr", fix: "brief" }]);
     expect(plan.diff).toContain("+++ b/.codecast/flows/change.cast");
   });
 
   test("the same edit twice writes nothing; a changed one rewrites its line", () => {
     const root = repo();
-    edit(root, { op: "add", station: "lint", after: "check", run: "bun run lint" });
-    expect(planFlowEdit(root, "change", { op: "add", station: "lint", after: "check", run: "bun run lint" }).changed).toBe(false);
+    edit(root, { op: "add", station: "lint", after: "pr", run: "bun run lint" });
+    expect(planFlowEdit(root, "change", { op: "add", station: "lint", after: "pr", run: "bun run lint" }).changed).toBe(false);
     edit(root, { op: "run", station: "lint", cmd: "bun run lint --changed" });
     expect(flowFile(root)).toContain(`script="bun run lint --changed"`);
     expect(flowFile(root).match(/lint \[/g)?.length).toBe(1);
@@ -52,7 +52,7 @@ describe("cast flow edit change", () => {
     expect(plan.words).toEqual(["~ Review: guidance added"]);
     expect(flowFile(root)).toContain(`review [guide="@change/review.guide.md"]`);
     expect(fs.readFileSync(path.join(root, ".codecast/flows/change/review.guide.md"), "utf8")).toBe("Also check X.\n");
-    expect(parseWorkflowFile(path.join(root, ".codecast/flows/change.cast")).nodes.get("review__review")!.prompt).toEndWith("\n\nAlso check X.");
+    expect(parseWorkflowFile(path.join(root, ".codecast/flows/change.cast")).nodes.get("review")!.prompt).toEndWith("\n\nAlso check X.");
     const undo = edit(root, { op: "undo", station: "review" });
     expect(undo.words).toEqual(["Review: back to the base"]);
     // Back to saying nothing, the file this tool made goes with its directory, so the library's flow runs again.
@@ -67,7 +67,7 @@ describe("cast flow edit change", () => {
     expect(edit(root, { op: "skip", station: "decide" }).words).toEqual(["Decide skipped"]);
     expect(flowFile(root)).toContain(`decide [skip=true]`);
     expect(flowFile(root)).not.toContain("prompt=");
-    edit(root, { op: "add", station: "e2e", after: "check", run: "bun e2e", label: "E2E" });
+    edit(root, { op: "add", station: "e2e", after: "pr", run: "bun e2e", label: "E2E" });
     expect(edit(root, { op: "when", station: "e2e", paths: "landing/**, backend/src/routes/**" }).words).toEqual(["E2E runs when landing/**, backend/src/routes/**"]);
     expect(flowFile(root)).toContain(`when="landing/**, backend/src/routes/**"`);
     expect(edit(root, { op: "when", station: "e2e", paths: "always" }).words).toEqual(["E2E always runs"]);
@@ -81,7 +81,7 @@ describe("cast flow edit change", () => {
     edit(root, { op: "prompt", station: "review", text: "Review it fully." });
     edit(root, { op: "guide", station: "review", text: "Also check migrations." });
     expect(flowFile(root)).toContain(`review [prompt="@change/review.md", guide="@change/review.guide.md"]`);
-    expect(parseWorkflowFile(path.join(root, ".codecast/flows/change.cast")).nodes.get("review__review")!.prompt).toBe("Review it fully.\n\nAlso check migrations.");
+    expect(parseWorkflowFile(path.join(root, ".codecast/flows/change.cast")).nodes.get("review")!.prompt).toBe("Review it fully.\n\nAlso check migrations.");
   });
 
   test("words: a skipped station undone reads by its name, a replaced command says what it replaced", () => {
@@ -115,12 +115,12 @@ describe("cast flow edit change", () => {
   test("a wrong edit is refused with what to write instead, and nothing is written", () => {
     const root = repo();
     const bad = (req: FlowEditRequest) => () => planFlowEdit(root, "change", req);
-    expect(bad({ op: "add", station: "lint", after: "chek", run: "x" })).toThrow('change has no station "chek"; its stations: check, review, decide, ship, deploy, fix_check, fix_review, revise, fix_conflict');
-    expect(bad({ op: "add", station: "lint", after: "check" })).toThrow('say what lint does with one of --run "<command>", --agent "<prompt|@file>" or --person "<question>"');
-    expect(bad({ op: "add", station: "review", after: "check", run: "x" })).toThrow("change already has a station review");
+    expect(bad({ op: "add", station: "lint", after: "chek", run: "x" })).toThrow('change has no station "chek"; its stations: pr, checks, ci, review, joined, verdicts, merge, landed, deploy, moved, wait_main, ci_card, ci_conflict, brief, fix_conflict, retest, onto_main, decide');
+    expect(bad({ op: "add", station: "lint", after: "pr" })).toThrow('say what lint does with one of --run "<command>", --agent "<prompt|@file>" or --person "<question>"');
+    expect(bad({ op: "add", station: "review", after: "pr", run: "x" })).toThrow("change already has a station review");
     expect(bad({ op: "run", station: "review", cmd: "x" })).toThrow('Review is an agent, not a command: change what it reads with cast flow edit change prompt review "<text>"');
-    expect(bad({ op: "guide", station: "check", text: "x" })).toThrow("no station of check reads a prompt");
-    expect(bad({ op: "skip", station: "review" })).toThrow('answerer="review__review"');
+    expect(bad({ op: "guide", station: "deploy", text: "x" })).toThrow("no station of deploy reads a prompt");
+    expect(bad({ op: "skip", station: "review" })).toThrow("review is a branch of the checks fan-out");
     expect(() => planFlowEdit(root, "nope", { op: "skip", station: "x" })).toThrow("there is no flow nope to extend");
     expect(fs.existsSync(path.join(root, ".codecast"))).toBe(false);
     const whole = repo({ ".codecast/flows/change.cast": `digraph change { start [shape=Mdiamond] exit [shape=Msquare] start -> exit }` });
@@ -131,7 +131,7 @@ describe("cast flow edit change", () => {
     const root = repo();
     edit(root, { op: "guide", station: "review", text: "Also check the migrations" });
     const plan = edit(root, { op: "skip", station: "decide" });
-    expect(plan.edit.changes).toEqual([{ op: "skip", station: "decide", after: "review", who: "person", label: "Decide", by: "command" }]);
+    expect(plan.edit.changes).toEqual([{ op: "skip", station: "decide", after: "verdicts", who: "person", label: "Decide", by: "command" }]);
     // The fence's graph is what drawing reads: no prompt, script or shape travels in the transcript.
     const nodes = plan.edit.graph!.nodes;
     expect(nodes.some((n) => n.id === "decide")).toBe(false);

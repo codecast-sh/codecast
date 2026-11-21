@@ -16,7 +16,7 @@ cast flow run change                # or through a library flow by name
 cast flow run - <<'EOF' … EOF       # a flow written here (extends a backbone, or whole)
 \`\`\`
 
-To add a check to the project's pipeline or tweak a station's prompt (Review's, say), run \`cast flow edit\` (\`cast flow edit change add lint --after check --run "bun run lint"\`), never a rewrite of the flow file.
+To add a check to the project's pipeline or tweak a station's prompt (Review's, say), run \`cast flow edit\` (\`cast flow edit change add lint --after pr --fix brief --run "bun run lint"\`), never a rewrite of the flow file.
 
 \`cast guide workflows\` shows the graph syntax, segments, slots, import and every \`cast flow edit\`.
 ${WORKFLOW_SNIPPET_END}
@@ -81,7 +81,7 @@ digraph trial {
 A finished change goes through a flow before it ships, its run drawn live in the conversation. Asked to change the project's pipeline (add a lint check, tell Review about a house rule, skip a step, run e2e only when some paths change), make the edit with \`cast flow edit\`, never by rewriting the flow: it writes one line in \`.codecast/flows/<flow>.cast\`, validates it, and prints the edit for the conversation. It commits nothing; the edit ships through the pipeline like any change.
 
 \`\`\`bash
-cast flow edit change add lint --after check --run "bun run lint"   # or --agent "<prompt>", --person "<question>"; --when "<globs>"; --fix <station>
+cast flow edit change add lint --after pr --fix brief --run "bun run lint"   # red goes back to the session; or --agent, --person; --when "<globs>"
 cast flow edit change guide review "Also check the migrations"      # appended to the inherited prompt (prompt replaces it)
 cast flow edit change run lint "bun run lint --changed"
 cast flow edit change skip decide | when e2e "landing/**" | undo review
@@ -92,18 +92,18 @@ Each line desugars into the edges you would write by hand (the graph hashes the 
 \`\`\`dot
 digraph change {
   graph [extends="change"]
-  lint   [after="check", label="Lint", shape=parallelogram, script="bun run lint"]  // check -> lint -> review; fails back like Check (fix= elsewhere)
+  lint   [after="pr", fix="brief", label="Lint", shape=parallelogram, script="bun run lint"]  // pr -> lint -> checks; red goes back to the session
   review [guide="@change/review.md"]          // appended to Review's inherited prompt; review__review [...] edits a segment's station
-  e2e    [after="check", when="landing/**", shape=parallelogram, script="bun e2e"]  // runs only when $change_files touches it
-  decide [skip=true]                          // review -> ship; what only Decide reached goes too
+  e2e    [after="pr", fix="brief", when="landing/**", shape=parallelogram, script="bun e2e"]  // runs only when $change_files touches it
+  decide [skip=true]                          // ci_card -> merge; what only Decide reached goes too
 }
 \`\`\`
 
-A backbone leaves part of itself to the flow that extends it: a node marked \`slot="<what it must do>"\`, with \`flow=\` for the steps it runs when nothing fills it. A flow naming it by \`extends="<flow>"\` fills the slot with \`subgraph <slot> { ... }\`, whose steps run in its place as a segment's would: written as a chain they start at the first and leave by the slot's own routes after the last, or they name their own start and exit. A subgraph fills only a slot or a node of its own flow, so the backbone's other stations stay as the team keeps them, and a backbone with an empty slot does not run. \`cast flow run -\` and \`cast flow validate -\` read the graph from stdin, keep it in \`.codecast/session-flows/\` (outside git) as this session's draft, and check it, slots included, before anything starts. \`change\` leaves its Check as a slot.
+A backbone leaves part of itself to the flow that extends it: a node marked \`slot="<what it must do>"\`, with \`flow=\` for the steps it runs when nothing fills it. A flow naming it by \`extends="<flow>"\` fills the slot with \`subgraph <slot> { ... }\`, whose steps run in its place as a segment's would: written as a chain they start at the first and leave by the slot's own routes after the last, or they name their own start and exit. A subgraph fills only a slot or a node of its own flow, so the backbone's other stations stay as the team keeps them, and a backbone with an empty slot does not run. \`cast flow run -\` and \`cast flow validate -\` read the graph from stdin, keep it in \`.codecast/session-flows/\` (outside git) as this session's draft, and check it, slots included, before anything starts. \`quick-change\` leaves its Check as a slot.
 
 \`\`\`dot
 digraph flaky_fix {
-  graph [extends="change", label="Change, flaky test"]
+  graph [extends="quick-change", label="Quick, flaky test"]
   subgraph check {
     reproduce [prompt="Run the flaky test until it fails and name the race"]
     prove [shape=parallelogram, script="bun test --rerun-each 20"]

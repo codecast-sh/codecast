@@ -17,16 +17,16 @@ describe("the web's snapshot of the shipped pool", () => {
   test("carries each station's words once, by the expanded node id the graph draws", () => {
     const { texts, flows } = shippedFlowStationsSnapshot();
     expect(new Set(texts).size).toBe(texts.length);
-    const graph = shippedFlowsSnapshot().find((f) => f.slug === "change")!;
-    const reviewer = graph.nodes.find((n) => n.segment === "review" && n.type !== "exit" && flows.change[n.id as string]?.prompt !== undefined)!;
-    expect(texts[flows.change[reviewer.id as string].prompt as number]).toContain("review");
+    const graph = shippedFlowsSnapshot().find((f) => f.slug === "quick-change")!;
+    const reviewer = graph.nodes.find((n) => n.segment === "review" && n.type !== "exit" && flows["quick-change"][n.id as string]?.prompt !== undefined)!;
+    expect(texts[flows["quick-change"][reviewer.id as string].prompt as number]).toContain("review");
     expect(flows.review.review.backend).toBe("session");
   });
 
   test("carries each flow's kind and its segments, and no station's words", () => {
     const change = shippedFlowsSnapshot().find((f) => f.slug === "change")!;
     expect(change.kind).toBe("line");
-    expect(change.uses).toEqual(["check", "review", "decide", "ship", "deploy"]);
+    expect(change.uses).toEqual(["decide", "deploy"]);
     expect(change.nodes.some((n) => "prompt" in n || "script" in n)).toBe(false);
   });
 });

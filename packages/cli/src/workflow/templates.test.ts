@@ -13,7 +13,7 @@ import { conditionError, evalCondition, extractJsonOutput } from "./condition";
 import { graphHash, parseWorkflowFile, parseWorkflowSource, validateWorkflow } from "./parser";
 import { expandPromptVars, expandScriptVars, gatePayload, lineRunDir, parseGateEdgeLabel, runWorkflow } from "./runner";
 import { lineCommandEnv, lineProfileVars, parseLineProfileText, resolveLineProfile } from "../lineProfile";
-import { BUILTIN_WORKFLOW_TEMPLATES, LINE_TEMPLATE_FILES, inlineTemplateFiles, resolveWorkflowSource } from "./templates";
+import { BUILTIN_WORKFLOW_TEMPLATES, LINE_TEMPLATE_FILES, inlineTemplateFiles, resolveWorkflowSource, withTemplateIncludes } from "./templates";
 import { JUDGE_REVIEW_GRAPH } from "@codecast/shared/contracts/judgeReview";
 import type { WorkflowGraph } from "./types";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
@@ -70,7 +70,7 @@ describe("line.cast template", () => {
     // the blind judge's prompt, read as the judge segment run alone writes it, and the climb's stations (FL10).
     const shipped = [graph, ...[JUDGE_REVIEW_GRAPH, "change", "quick-change", "judge", "climb"].map((t) => parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[t]))];
     const used = new Set(shipped.flatMap((g) => [...g.nodes.values()].flatMap((n) => [n.prompt, n.script])));
-    for (const text of Object.values(LINE_TEMPLATE_FILES)) expect(used.has(text)).toBe(true);
+    for (const [ref, text] of Object.entries(LINE_TEMPLATE_FILES)) expect(used.has(withTemplateIncludes(text, ref, LINE_TEMPLATE_FILES))).toBe(true);
   });
 
   test("inlineTemplateFiles writes a DOT string the parser reads back exactly", () => {

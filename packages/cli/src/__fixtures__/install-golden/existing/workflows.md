@@ -49,7 +49,7 @@ cast flow run change                # or through a library flow by name
 cast flow run - <<'EOF' … EOF       # a flow written here (extends a backbone, or whole)
 ```
 
-To add a check to the project's pipeline or tweak a station's prompt (Review's, say), run `cast flow edit` (`cast flow edit change add lint --after check --run "bun run lint"`), never a rewrite of the flow file.
+To add a check to the project's pipeline or tweak a station's prompt (Review's, say), run `cast flow edit` (`cast flow edit change add lint --after pr --fix brief --run "bun run lint"`), never a rewrite of the flow file.
 
 `cast guide workflows` shows the graph syntax, segments, slots, import and every `cast flow edit`.
 <!-- cast @VERSION@ -->

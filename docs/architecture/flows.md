@@ -126,8 +126,8 @@ digraph review {
   criteria), `branch` (a branch or worktree holding the change), or both.
 - `draft`: the session an import belongs to until it is made general (FL5).
 
-The CLI ships a starter pool: the `line`, the `change` line (check, review,
-decide, ship), the `quick-change` line (check, review, ship: landed on the
+The CLI ships a starter pool: the `line`, the `change` line (PR, CI beside
+review, merge, deploy: FL4), the `quick-change` line (check, review, ship: landed on the
 reviewer's approval with no person asked), the `climb` line (FL10: hill-climbing one goal metric through its environments), and the segments `check`, `eval`, `review`, `judge` (FL9), `decide`, `ship`,
 and `prove-implement`, cut from the shipped line's own station files so their
 prompts stay one copy. The web reads the shipped pool from a generated
@@ -334,18 +334,109 @@ it, or an earlier run did) is not told either. Otherwise the session hears the
 end as below; a failed run's end message is an ordinary send that revives a
 killed subject on purpose, so the failure reaches someone.
 
-The `change` flow (and `quick-change`, the same without Decide) routes every
-stop it can fix to such a station; the briefs live in `templates/change/`: a failed
-Check (with the check's output), Review's "changes" (the reviewer's findings;
-the reviewer stays an independent session), Decide's Revise (the person's
-note), and a rebase conflict at Ship. Each goes back to Check, and the stages
-after run again on the new snapshot, so what Ship lands is exactly the commit
-Review approved and Decide accepted, never the session's live edits (the ship
-station passes `--branch $branch` to `cast ship run`). Each way back has
-`max_visits=3`; the fourth visit ends the run. A rejection, a Drop and a ship
-that fails for any other reason end it too. The session hears Decide's answer
-when it is Ship, and how the run ended (done, or stopped where and why) in its
-own turn. A run on a task, a branch or a pull request started from inside a
+The `change` flow is the ship model for every workspace, with no person asked
+on the way:
+
+```
+PR → (CI ‖ Review) → Verdicts → Merge → Merged → Deploy → Live
+ ↑                       │         │
+ ├──── Fix findings ←────┤         ├── Resolve conflict → PR
+ │                       │         └── Retest → CI   (at most 3 times)
+ │                       ├── Wait for main → Onto main → CI   (at most 2 times)
+ └──── Revise ←── Ship card ←── edits CI
+```
+
+PR (`cast flow pr`, `workflow/prStation.ts`) starts each round: it deletes
+the last round's `ci.json`, `review.json`, `merge.json` and `rebase.json` from
+the run's directory, pushes the run's change branch and opens its pull
+request, or finds the open one the push just updated, and writes `pr.json` =
+{url, number, head_sha, branch, round}, where `round` is a fresh random nonce.
+A branch goes up as a fast forward, or with `--force-with-lease` over exactly
+the head this run last pushed there (a branch frozen from a session's edits is
+the run's own, and a session's fix may rebase someone's branch); a head anyone
+else pushed is never overwritten, and a pull request from a fork stops the run
+(the station pushes only to origin). CI and Review then run at
+once in a fan-out (FL3's `shape=component`). CI (`cast flow ci --head <pr.json's
+head>`) always exits 0 with `ci.json`: the head it judged, green or not, and
+each failure with its job, test, assertion, file, line and excerpt. The
+reviewer is an independent session reading the line's review prompt plus
+`templates/change/review.md`: it reviews commit `pr.json.head_sha`, not the
+branch as it stands, records its verdict with `cast flow review-verdict`, and
+pins `{verdict, findings, round, head_sha}`, the verdict exactly `ship`,
+`changes` or `rejected`. A reviewer whose session dies in the fan-out is asked
+once more on its own; a second death stops the run at Review never finished.
+
+Verdicts (`cast flow verdicts`, `workflow/changeVerdicts.ts`) is given that
+pin and reads `pr.json` and `ci.json`. A file is never a verdict: anything on
+the machine could write one, the change's own author included, and a reviewer
+moved to another machine could not. The pin counts only with this round's
+nonce and the head CI judged, or a head the run's own stations rebased from
+it this round (`pr.json`'s `rebases`), so neither a pin left from an earlier
+round (a fan-out keeps a branch's last output when the new one holds none)
+nor one on a head someone pushed since ever does. Verdicts writes the
+accepted pin to `review.json` for Merge, removes the file otherwise, and
+prints `{ci, review, next, why, ...}` as its last line, which the run card
+reads; it shows at most ten of CI's failures, each excerpt cut, with their
+count, and the brief points at `ci.json` for the rest. When origin's branch
+has moved off the round's head (someone pushed while CI waited for it), a new
+round at PR reviews what is there, three times at most before the run stops at
+Branch keeps moving, naming the head it last saw. A pull request CI reports as conflicting
+with main (GitHub runs no CI on it) goes to the session to bring up to date
+(`templates/change/ci_conflict.md`). Green CI on the head PR pushed and a `ship` merge; a rejection ends at
+Rejected with the reviewer's findings. What only the machine can fix runs
+once more in the round, then stops at a machine end, and never reaches the
+session: CI that left no `ci.json`, judged another head, timed out
+(`timed_out`), or failed in its own station (a `failing` entry whose job is
+`ci-station`) stops at CI never reported, although real failures beside the
+station's go to the session after the rerun; a review that never arrived (no
+pin, another round's or head's, an unknown word) is asked once more, then
+briefed; a Verdicts station that fails stops at No verdicts. When every CI
+failure also fails on main (`ci.json.blocked_by_main`), nothing is the
+change's to fix: Wait for main (`cast flow wait-main`, `workflow/waitMain.ts`)
+parks until the default branch's own CI is green at its head, saying how long
+it has waited against its 4h deadline, then `cast flow pr --rebase` puts the
+change onto the new main, pushes it and records the rebase as Merge records
+its own (`workflow/rebaseRecord.ts`, on the server and in `rebase.json`, whose
+every link Merge checks is a real rebase), keeping the round and its review,
+and CI runs again. It waits at most twice a run; past the deadline the run
+stops at Main stayed red, naming main's red jobs, and the session is never
+briefed for it. A change that edits CI (`ci.json.ci_changed`) is one CI
+cannot vouch for: when CI is green and the reviewer says ship, the run comments why on the task and asks the `decide`
+segment's Ship card; Ship merges, Revise briefs the session with the person's
+note, Drop ends the run, and a run with no session behind it stops at Needs a
+person. A CI-editing change CI finds red goes back like any red. Anything
+else is one brief to the session (`templates/change/brief.md`) carrying the
+reason, the failures the change causes and the review, and with no session
+behind the run it stops at Found work with the same reason. The reruns are
+counted in `pr.json`, so each round gets its own. Merge (`cast flow merge`)
+reads `ci.json` and `review.json` and prints the sha it put on main; on
+success its station's output is `merge.json` alone, and Deploy is reachable
+only on `outcome = success and merge.json.sha`, through Merged, a step that
+prints the sha. Merged's id is `landed`, which the runner reads as the change
+being on main, so a deploy that fails after it tells the session its change
+landed. A conflict is Merge's exit 1 with its conflict line ("… conflicts
+with …") or its stale-tree line ("… rebuild the change on …"), briefed to the
+session (`templates/change/conflict.md`). A merge main moved under, where the
+two diffs interact, pushes the branch rebased and records the rebase the same
+way; Retest (`cast flow pr --refresh`) keeps the round and its review only
+when origin holds exactly a recorded rebase of one of the round's heads,
+records it in `rebases`, and runs CI again, at most three times before the run stops at Main
+keeps moving. Any other head on origin (someone pushed) exits 4, and a new
+round at PR reviews it; `--rebase` does the same. Any other end of Merge
+stops at Not merged with its output. When the session's fix lands on a local
+branch that lags such a rebase, PR replays the new commits onto origin's
+branch before it pushes. Every way back to the session returns to PR, so what
+merges is exactly the commit CI and the reviewer passed, never the session's
+live edits. Each way back has `max_visits=3`; the fourth visit ends the run.
+
+`quick-change` keeps the older shape, built from segments: Check (a slot),
+Review, Land (the `ship` segment), Deploy. A failed check, the reviewer's
+"changes" and a rebase conflict at Land each go back to the session and then
+to Check (`fix_check.md`, `fix_review.md` and `fix_conflict.md` in
+`templates/change/`).
+
+In both, the session hears how the run ended (done, or stopped where and why)
+in its own turn. A run on a task, a branch or a pull request started from inside a
 session has that session as its subject too (`callingSubject` in
 `flowCommand.ts` writes it into `change.json`): the session fixes the change by
 committing to the branch (pushing, for a pull request), and the run reads the
@@ -359,8 +450,8 @@ subject, and its first fixable stop ends it with what the stage found.
 
 A check the machine could not run (LP4: the check exits 2, say no test
 database could be built) is not a finding about the change. Check routes it to
-its own exit, `Not checked here`, marked `machine=true`, and the change flows
-send that exit to a stop of their own rather than to Fix check. The runner
+its own exit, `Not checked here`, marked `machine=true`, and `quick-change`
+sends that exit to a stop of its own rather than to Fix check. The runner
 returns the task to in_review, posts the reason as a note (not a blocker, so
 the task's followers are not notified), and the run's owner hears it: its
 subject session in the run's end message, else the person whose account ran
@@ -520,7 +611,8 @@ out, that production may run a backend the default branch lacks.
 
 ### Deploy: the run takes the merged commit live
 
-A change flow ends at Deploy, after Merge. The `deploy` segment is one station
+Both change flows end at Deploy: after Merge in `change`, after Land (the `ship`
+segment) in `quick-change`. The `deploy` segment is one station
 with `parks=true`: while the run stands there it holds no machine slot and no
 session. The station runs `cast flow await-deploy --merge $run_dir/merge.json`
 in the run's worktree. It starts only from the sha Merge wrote there, else the
@@ -695,7 +787,7 @@ this change needs done its own way written as generated segments; a flow is
 written whole only when nothing in the library has the work's shape.
 
 **Slots.** A backbone marks a node `slot="<what it must do>"`, optionally with
-`flow=` for the steps it runs when nothing fills it (`change` leaves its Check
+`flow=` for the steps it runs when nothing fills it (`quick-change` leaves its Check
 as a slot with the `check` segment as default). A flow that names the backbone
 by `extends="<slug>"` fills the slot with `subgraph <slot> { ... }`. The parser
 (`parser.ts`) reads a fill as an inline segment and expands it exactly as

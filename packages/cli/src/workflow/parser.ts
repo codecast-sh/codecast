@@ -438,12 +438,16 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
     if (g) errors.push(`Edge ${edge.from} -> ${edge.to} condition "${edge.condition}" reads ${g}, and ${g} ${runsWhen(g)}`);
   }
 
-  // A fan-out runs only its branches and goes on from the first join after them (runner.ts executeFanout).
+  // A fan-out runs only its branches and goes on from the first join after them (runner.ts executeFanout). A branch
+  // also entered from outside the fan-out (the fan-out's retry_target, or the target of another node's edge) runs on
+  // its own there, and its other edges route that run, so it may have them.
   for (const fan of [...graph.nodes.values()].filter((n) => n.type === "parallel_fanout")) {
     const branches = graph.edges.filter((e) => e.from === fan.id).map((e) => e.to);
     const join = branches.flatMap((b) => graph.edges.filter((e) => e.from === b).map((e) => e.to)).find((t) => graph.nodes.get(t)?.type === "parallel_fanin");
     if (!join) continue;
+    const alone = (b: string) => fan.retry_target === b || graph.edges.some((e) => e.to === b && e.from !== fan.id);
     for (const b of branches) {
+      if (alone(b)) continue;
       const off = graph.edges.filter((e) => e.from === b && e.to !== join).map((e) => e.to);
       if (off.length) errors.push(`${fan.id}'s branch ${b} goes on to ${off.join(", ")}, but a fan-out runs only its branches and goes on from ${join}: lead ${b} straight to ${join}`);
     }

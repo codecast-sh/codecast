@@ -67,7 +67,7 @@ describe("cast flow run right after cast flow edit", () => {
   const edit = (req: Parameters<typeof planFlowEdit>[2]) => applyFlowEdit(planFlowEdit(root, "change", req), { env: AGENT });
 
   test("the files an edit wrote are the session's change, with no --only", async () => {
-    edit({ op: "add", station: "lint", after: "check", run: "bun run lint" });
+    edit({ op: "add", station: "lint", after: "pr", run: "bun run lint" });
     edit({ op: "guide", station: "review", text: "Also check the migrations." });
     const change = await previewSessionChange(root, SESSION);
     expect(change.paths).toEqual([".codecast/flows/change.cast", ".codecast/flows/change/review.guide.md"]);

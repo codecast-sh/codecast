@@ -43,8 +43,11 @@ import climbPromoteLine from "./templates/climb/promote_line.md" with { type: "t
 import climbRecord from "./templates/climb/record.sh" with { type: "text" };
 import changeFixCheck from "./templates/change/fix_check.md" with { type: "text" };
 import changeFixReview from "./templates/change/fix_review.md" with { type: "text" };
-import changeRevise from "./templates/change/revise.md" with { type: "text" };
 import changeFixConflict from "./templates/change/fix_conflict.md" with { type: "text" };
+import changeReview from "./templates/change/review.md" with { type: "text" };
+import changeBrief from "./templates/change/brief.md" with { type: "text" };
+import changeConflict from "./templates/change/conflict.md" with { type: "text" };
+import changeCiConflict from "./templates/change/ci_conflict.md" with { type: "text" };
 import featureCast from "../../workflows/feature/workflow.cast" with { type: "text" };
 import planAutopilotCast from "../../workflows/plan-autopilot/workflow.cast" with { type: "text" };
 import { JUDGE_REVIEW_GRAPH } from "@codecast/shared/contracts/judgeReview";
@@ -81,8 +84,11 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   // What the change flows send back to the session a change came from (flows.md FL4).
   "change/fix_check.md": changeFixCheck,
   "change/fix_review.md": changeFixReview,
-  "change/revise.md": changeRevise,
   "change/fix_conflict.md": changeFixConflict,
+  "change/review.md": changeReview,
+  "change/brief.md": changeBrief,
+  "change/conflict.md": changeConflict,
+  "change/ci_conflict.md": changeCiConflict,
   // What the blind risk judge reads (judge.cast).
   "judge/risk.md": judgeRisk,
   // The climb's stations (climb.cast, flows.md FL10).
@@ -94,11 +100,22 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "climb/record.sh": climbRecord,
 };
 
+/** A template file's text with each line that is only `@include <file>` replaced by that file, as the parser takes them in from disk. */
+export function withTemplateIncludes(text: string, ref: string, files: Readonly<Record<string, string>>): string {
+  return text.replace(/^@include[ \t]+(\S+)[ \t]*$/gm, (_line, rel: string) => {
+    const key = path.posix.join(path.posix.dirname(ref), rel);
+    const part = files[key];
+    if (part === undefined) throw new Error(`${ref}: @include ${rel}: no template file ${key}`);
+    return withTemplateIncludes(part.replace(/\n$/, ""), key, files);
+  });
+}
+
 /** Replace each quoted `"@<file>"` value naming one of `files` with that file's text as a DOT string. */
 export function inlineTemplateFiles(source: string, files: Readonly<Record<string, string>>): string {
   return source.replace(/"@([\w./-]+)"/g, (whole, ref: string) => {
-    const text = files[ref];
-    if (text === undefined) return whole;
+    const raw = files[ref];
+    if (raw === undefined) return whole;
+    const text = withTemplateIncludes(raw, ref, files);
     return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
   });
 }

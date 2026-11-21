@@ -1304,6 +1304,7 @@ async function executeFanout(
       .slice(0, 12000);
     state.context[`${fanin.id}.fanout`] = node.id;
     state.context[`${fanin.id}.fanout_outcome`] = failed.length ? "failure" : "success";
+    state.context[`${fanin.id}.fanout_failed`] = failed.map((r) => r.branch.id).join(" ");
     state.context[`${fanin.id}.fanout_started`] = String(startedAt);
     state.context[`${fanin.id}.findings`] = failed
       .map(r => `## ${r.branch.label}\n\n${failureExcerpt(`${state.context[`${r.branch.id}.output`] ?? ""}\n${r.error ?? ""}`.trim() || "failed")}`)
@@ -2671,9 +2672,20 @@ async function runNodeLoop(
       if (outcome === "failure") {
         // Fabro: node failed with no matching outgoing edge → check retry_target (a fanin's, else its fanout's)
         const fanout = faninFailed ? state.context[`${current.id}.fanout`] : undefined;
-        const retryNode = getRetryTarget(current.id, graph) ?? (fanout ? getRetryTarget(fanout, graph) : null);
+        const own = getRetryTarget(current.id, graph);
+        const fanoutRetry = !own && fanout ? getRetryTarget(fanout, graph) : null;
+        // A fanout's retry_target that is one of its branches runs only that branch again, so it is taken only when
+        // that branch is every one that failed: re-running it cannot fix another branch's failure, and would only
+        // spend its visits (or loop forever without max_visits). Otherwise the run ends here with the branches'
+        // error. A target off the fanout (a fix that comes back to it) runs every branch again, and is taken.
+        const failedBranches = (state.context[`${current.id}.fanout_failed`] ?? "").split(" ").filter(Boolean);
+        const retriesBranch = !!fanoutRetry && graph.edges.some((e) => e.from === fanout && e.to === fanoutRetry.id);
+        const retryNode = own ?? (fanoutRetry && (!retriesBranch || (failedBranches.length && failedBranches.every((id) => id === fanoutRetry.id))) ? fanoutRetry : null);
         if (retryNode) {
           console.log(`${c.yellow}  no fail edge → retry_target '${retryNode.label}'${c.reset}\n`);
+          // The branch retried on its own reaches the fanin through its own edges: the fanout's failure is spent
+          // with the retry (else the fanin fails on it again and retries forever), and so are its findings.
+          if (retriesBranch && retryNode === fanoutRetry) for (const k of ["fanout_outcome", "fanout_failed", "findings"]) delete state.context[`${current.id}.${k}`];
           current = retryNode;
           continue;
         }

@@ -1,6 +1,6 @@
 // The edit card's model over what the real CLI printed (lib/renderGalleryPipeline.generated.ts, from
 // scripts/gen-gallery-pipeline.ts): `cast flow edit` and `cast flow pipeline` in a scratch repo (origin
-// example-org/example-app): add lint after check when landing/**, guide review, skip decide, in that order, so the
+// example-org/example-app): add lint after PR when landing/**, guide review, skip decide, in that order, so the
 // later fences carry the earlier edits in their graph.
 import { describe, expect, test } from "bun:test";
 import { asGitDiff, editDrawing, editLines, editRun, liveDeploy } from "../flowEditCard";
@@ -23,7 +23,7 @@ describe("the edit a `cast flow edit` printed", () => {
     expect(edit.flow).toBe("change");
     expect(edit.repository).toBe("example-org/example-app");
     expect(diff).toContain("+++ b/.codecast/flows/change.cast");
-    expect(diff).toContain(`lint [after="check"`);
+    expect(diff).toContain(`lint [after="pr"`);
     expect(diff).not.toContain("```");
   });
 
@@ -53,7 +53,7 @@ describe("the edit a `cast flow edit` printed", () => {
 
 describe("the edit in words", () => {
   test("a station added with a when reads as one line", () => {
-    expect(editLines(made("add").edit)).toEqual(["+ Lint after Check · runs when landing/**"]);
+    expect(editLines(made("add").edit)).toEqual(["+ Lint after PR; a failure goes to Fix findings · runs when landing/**"]);
   });
   test("guidance and a skip read by the station's name", () => {
     expect(editLines(made("guide").edit)).toEqual(["~ Review: guidance added"]);
@@ -64,7 +64,7 @@ describe("the edit in words", () => {
 describe("the flow the edit builds", () => {
   test("draws the graph as it validated, the new station marked added with its paths", () => {
     const d = editDrawing(made("add").edit)!;
-    expect(d.diagram.steps.map((s) => s.label)).toEqual(["Check", "Lint", "Review", "Decide", "Land", "Deploy"]);
+    expect(d.diagram.steps.map((s) => s.label)).toEqual(["PR", "Lint", "CI and review", "Verdicts", "Merge", "Merged", "Deploy"]);
     expect(d.marks.lint).toMatchObject({ own: "added", when: "landing/**" });
     expect(Object.keys(d.marks)).toEqual(["lint"]);
   });
@@ -77,8 +77,9 @@ describe("the flow the edit builds", () => {
   });
 
   test("a skipped station comes back as a ghost where it stood, the person's step it was", () => {
+    // Decide stood off the passing path, on the route out of Verdicts for a change that edits CI: its ghost stands there.
     const d = editDrawing(made("skip").edit)!;
-    expect(d.diagram.steps.map((s) => s.label)).toEqual(["Check", "Lint", "Review", "Decide", "Land", "Deploy"]);
+    expect(d.diagram.steps.map((s) => s.label)).toEqual(["PR", "Lint", "CI and review", "Verdicts", "Decide", "Merge", "Merged", "Deploy"]);
     expect(d.diagram.steps.find((s) => s.id === "decide")?.kind).toBe("person");
     expect(d.marks.decide).toEqual({ own: null, skipped: true, proposed: "proposed" });
     // Once live, it is no longer a proposal.
@@ -92,13 +93,13 @@ describe("the flow the edit builds", () => {
     expect(editDrawing(old)).toBeNull();
     const d = editDrawing(old, { base: backbone })!;
     const labels = d.diagram.steps.map((s) => s.label);
-    expect(labels.indexOf("Lint")).toBe(labels.indexOf("Check") + 1);
+    expect(labels.indexOf("Lint")).toBe(labels.indexOf("PR") + 1);
     expect(d.marks.decide?.skipped).toBe(true);
     expect(allSteps(d.diagram.steps).filter((s) => s.id === "decide")).toHaveLength(1);
   });
 
   test("the path the CLI printed is the path drawn, less the ghost", () => {
-    const printed = out("skip").match(/· (Check → .*)$/m)![1].split(" → ");
+    const printed = out("skip").match(/· (PR → .*)$/m)![1].split(" → ");
     expect(pathOf("skip").filter((l) => l !== "Decide")).toEqual(printed);
   });
 });

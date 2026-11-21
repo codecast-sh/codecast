@@ -149,6 +149,81 @@ describe("a fanout goes on to its fanin", () => {
     expect(fs.existsSync(path.join(dir, "shipped-green"))).toBe(true);
   }, 60_000);
 
+  test("a branch the fanout retries on its own reaches the fanin as itself: the spent failure does not loop it", async () => {
+    taskServer();
+    const graph = parseWorkflowSource(`digraph again {
+      graph [label="Again"]
+      start [shape=Mdiamond]
+      split [shape=component, retry_target=review]
+      ci [label="CI", shape=parallelogram, script="echo ci ok"]
+      review [label="Review", shape=parallelogram, max_visits=3, script="echo r >> ${dir}/reviews; [ -f ${dir}/died ] || { touch ${dir}/died; exit 1; }"]
+      join [label="Both done", shape=tripleoctagon]
+      gone [shape=Msquare, label="Review never finished", stop="review never finished"]
+      ship [label="Ship", shape=parallelogram, script="touch ${dir}/shipped"]
+      exit [shape=Msquare]
+      start -> split
+      split -> ci
+      split -> review
+      ci -> join [condition="outcome = success"]
+      review -> join [condition="outcome = success"]
+      review -> gone [condition="outcome = failure"]
+      join -> ship
+      ship -> exit
+    }`, dir);
+    expect(await runWorkflow(graph, options())).toBe("completed");
+    expect(fs.readFileSync(path.join(dir, "reviews"), "utf-8")).toBe("r\nr\n");
+    expect(fs.existsSync(path.join(dir, "shipped"))).toBe(true);
+  }, 60_000);
+
+  test("a fanout's retry_target is not taken for another branch's failure: CI red and the review fine ends failed", async () => {
+    taskServer();
+    const graph = parseWorkflowSource(`digraph red {
+      graph [label="Red"]
+      start [shape=Mdiamond]
+      split [shape=component, retry_target=review]
+      ci [label="CI", shape=parallelogram, script="echo 'error: lint failed'; exit 1"]
+      review [label="Review", shape=parallelogram, max_visits=3, script="echo r >> ${dir}/reviewed"]
+      join [label="Both done", shape=tripleoctagon]
+      ship [label="Ship", shape=parallelogram, script="touch ${dir}/shipped"]
+      exit [shape=Msquare]
+      start -> split
+      split -> ci
+      split -> review
+      ci -> join [condition="outcome = success"]
+      review -> join [condition="outcome = success"]
+      join -> ship
+      ship -> exit
+    }`, dir);
+    // The retry runs only the review, which cannot fix CI: it is not taken, and the run ends failed at once.
+    expect(await runWorkflow(graph, options())).toBe("failed");
+    expect(fs.existsSync(path.join(dir, "shipped"))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, "reviewed"), "utf-8")).toBe("r\n");
+  }, 60_000);
+
+  test("both branches failing: retrying one leaves the other's failure, so the run does not ship", async () => {
+    taskServer();
+    const graph = parseWorkflowSource(`digraph both {
+      graph [label="Both"]
+      start [shape=Mdiamond]
+      split [shape=component, retry_target=review]
+      ci [label="CI", shape=parallelogram, script="echo 'error: lint failed'; exit 1"]
+      review [label="Review", shape=parallelogram, max_visits=3, script="echo r >> ${dir}/reviews; [ -f ${dir}/died ] || { touch ${dir}/died; exit 1; }"]
+      join [label="Both done", shape=tripleoctagon]
+      ship [label="Ship", shape=parallelogram, script="touch ${dir}/shipped"]
+      exit [shape=Msquare]
+      start -> split
+      split -> ci
+      split -> review
+      ci -> join [condition="outcome = success"]
+      review -> join [condition="outcome = success"]
+      join -> ship
+      ship -> exit
+    }`, dir);
+    expect(await runWorkflow(graph, options())).toBe("failed");
+    expect(fs.existsSync(path.join(dir, "shipped"))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, "reviews"), "utf-8")).toBe("r\n");
+  }, 60_000);
+
   test("a round that finds nothing leaves no stop: the station after reads none of the last round's", async () => {
     taskServer();
     const graph = parseWorkflowSource(`digraph stale {

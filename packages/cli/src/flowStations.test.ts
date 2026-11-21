@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { Command } from "commander";
 import { registerFlowCommands, type FlowDeps } from "./flowCommand";
+import { stationProgress } from "./flowStations";
 import { sessionIdFromEnv } from "./sessionIdentity";
 
 // The change flow's station commands as `cast flow` parses them. The reviewer's
@@ -48,5 +49,33 @@ describe("cast flow review-verdict", () => {
     const { program, posts } = cast({ CODECAST_SESSION_ID: "rev-agent-uuid" });
     await program.parseAsync(["node", "cast", "flow", "review-verdict", "--verdict", "ship", "--head", "d".repeat(40), "--run", "run_9", "--node", "review__review"]);
     expect(posts[0].body).toEqual({ session_id: "rev-agent-uuid", verdict: "ship", head_sha: "d".repeat(40), run_id: "run_9", node_id: "review__review" });
+  });
+});
+
+describe("a waiting station's progress", () => {
+  test("a post the server answers with a 502 is logged, and the wait goes on", async () => {
+    const asked: Array<{ throwOnError?: boolean }> = [];
+    // As the CLI's cliPost does: without throwOnError an error reply exits the process.
+    const cliPost: FlowDeps["cliPost"] = async (_path, _body, opts) => {
+      asked.push({ throwOnError: opts?.throwOnError });
+      if (!opts?.throwOnError) throw new Error("process.exit(1)");
+      throw new Error("/cli/workflow-runs/progress answered 502 with a page that is not JSON");
+    };
+    const logged: string[] = [];
+    const error = console.error;
+    console.error = (line: string) => { logged.push(line); };
+    try {
+      const say = stationProgress({ cliPost }, "run_1", "wait_main");
+      say("Main CI is red at 9f8e7d6: test-web; looking again in 60s");
+      say("Main CI is still red");
+      await new Promise((r) => setTimeout(r, 0));
+    } finally {
+      console.error = error;
+    }
+    expect(asked).toEqual([{ throwOnError: true }, { throwOnError: true }]);
+    expect(logged).toEqual([
+      "Main CI is red at 9f8e7d6: test-web; looking again in 60s (not posted to the run: /cli/workflow-runs/progress answered 502 with a page that is not JSON)",
+      "Main CI is still red (not posted to the run: /cli/workflow-runs/progress answered 502 with a page that is not JSON)",
+    ]);
   });
 });

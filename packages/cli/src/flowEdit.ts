@@ -222,9 +222,11 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
   if (errors.length) throw new FlowEditError(`the flow would not run: ${errors.join("; ")}`);
   // A file this tool made that is back to saying nothing goes, so it no longer shadows the library's flow.
   if (src === newVariantSource(flow)) overlay.set(file, null);
-  // The engine knows what the placed station does on a failure (its anchor's way back, or the end of the run).
+  // The engine knows what the placed station does on a failure (its anchor's way back, the backbone's graph [fix=], or
+  // the end of the run).
   for (const c of changes) {
     const made = c.op === "add" ? after.edits?.find((e) => e.op === "add" && e.station === c.station) : undefined;
+    if (made?.fix && c.op === "add" && !c.fix) c.fix = made.fix;
     if (made?.ends_on_failure) c.ends_on_failure = true;
   }
 
@@ -246,10 +248,28 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
     const own = steps.length ? steps : [now.nodes.get(id)!].filter(Boolean);
     return own.some((n) => n.type === "human") ? "person" : own.length && own.every((n) => n.type === "command") ? "command" : "agent";
   };
+  // A station off the passing path (a gate a side route reaches) stood where that route leaves it: the nearest station
+  // of the path behind it.
+  const reachedFrom = (id: string): string | null => {
+    const onPath = new Set(mainPath.map((x) => x.id));
+    const seen = new Set([id]);
+    for (let frontier = [id]; frontier.length; ) {
+      const next: string[] = [];
+      for (const t of frontier) for (const e of now.edges) {
+        if (e.to !== t || seen.has(e.from)) continue;
+        if (onPath.has(e.from)) return e.from;
+        seen.add(e.from);
+        next.push(e.from);
+      }
+      frontier = next;
+    }
+    return null;
+  };
   const placed = (c: FlowEditChange): FlowEditChange => {
     if (c.op !== "skip" && !(c.op === "undo" && c.added)) return c;
     const at = mainPath.findIndex((x) => x.id === c.station);
-    return { ...c, ...(at > 0 ? { after: mainPath[at - 1].id } : {}), ...(c.who ? {} : { who: whoOf(c.station) }) };
+    const from = at > 0 ? mainPath[at - 1].id : at < 0 ? reachedFrom(c.station) : null;
+    return { ...c, ...(from ? { after: from } : {}), ...(c.who ? {} : { who: whoOf(c.station) }) };
   };
   const by = changes.map((c) => ({ ...placed(c), label: c.label ?? labelAfter(c.station), by: "command" as const }));
   return {

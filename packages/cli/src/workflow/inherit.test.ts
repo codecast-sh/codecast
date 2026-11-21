@@ -112,12 +112,12 @@ describe("editing a variant's step from the app", () => {
     expect(plan.writes).toEqual([{ file: "/l/live/investigate.md", content: "Find the cause, then the producer." }]);
   });
 
-  test("a segment's station edited on a variant of the shipped change is the variant's line", () => {
-    const flows = { "/r/.codecast/flows/change.cast": `digraph change {\n  graph [extends="change"]\n}\n` };
-    const plan = planGraphEdit("/r/.codecast/flows/change.cast", { node: "review__review", text: "Review it hard." }, { root: "/r", read: files(flows) });
+  test("a segment's station edited on a variant of the shipped quick-change is the variant's line", () => {
+    const flows = { "/r/.codecast/flows/quick-change.cast": `digraph quick_change {\n  graph [extends="quick-change"]\n}\n` };
+    const plan = planGraphEdit("/r/.codecast/flows/quick-change.cast", { node: "review__review", text: "Review it hard." }, { root: "/r", read: files(flows) });
     expect(plan.writes).toEqual([
-      { file: "/r/.codecast/flows/change/review__review.md", content: "Review it hard." },
-      { file: "/r/.codecast/flows/change.cast", content: `digraph change {\n  graph [extends="change"]\n  review__review [prompt="@change/review__review.md"]\n}\n` },
+      { file: "/r/.codecast/flows/quick-change/review__review.md", content: "Review it hard." },
+      { file: "/r/.codecast/flows/quick-change.cast", content: `digraph quick_change {\n  graph [extends="quick-change"]\n  review__review [prompt="@quick-change/review__review.md"]\n}\n` },
     ]);
   });
 
@@ -247,45 +247,60 @@ describe("variant edits on the shipped change flow", () => {
     expect(graphHash(variantOf(""))).toBe(graphHash(parseWorkflowSource(shipped)));
   });
 
-  test("lint after check, guide on review, skip decide, e2e when landing/** changes: the same graph as written by hand", () => {
-    const g = variantOf(`  lint   [after="check", label="Lint", shape=parallelogram, script="bun run lint"]
+  test("lint after PR, guide on review, skip decide, e2e when landing/** changes: the same graph as written by hand", () => {
+    const g = variantOf(`  lint   [after="pr", label="Lint", shape=parallelogram, script="bun run lint"]
   review [guide="Also check X."]
-  e2e    [after="check", label="E2E", when="landing/**, backend/src/routes/**", shape=parallelogram, script="bun run e2e"]
+  e2e    [after="pr", label="E2E", when="landing/**, backend/src/routes/**", shape=parallelogram, script="bun run e2e"]
   decide [skip=true]`);
     expect(validateWorkflow(g)).toEqual([]);
-    const reviewPrompt = parseWorkflowSource(shipped).nodes.get("review__review")!.prompt!;
-    expect(g.nodes.get("review__review")!.prompt).toBe(`${reviewPrompt.replace(/\s+$/, "")}\n\nAlso check X.`);
+    const reviewPrompt = parseWorkflowSource(shipped).nodes.get("review")!.prompt!;
+    expect(g.nodes.get("review")!.prompt).toBe(`${reviewPrompt.replace(/\s+$/, "")}\n\nAlso check X.`);
     const t = 'change_files touches \\"landing/**, backend/src/routes/**\\"';
     const written = handWritten((s) => {
-      s = swap(s, `  decide [flow="decide", answerer="review__review"]\n`, `  lint [label="Lint", shape=parallelogram, script="bun run lint"]\n  e2e [label="E2E", shape=parallelogram, script="bun run e2e"]\n`);
-      s = swap(s, `  revise [label="Revise", backend=subject, max_visits=3,\n    prompt=`, `  revise_gone [label="Revise", backend=subject, max_visits=3,\n    prompt=`);
-      s = s.replace(/  revise_gone \[[^\]]*\]\n/, "");
+      s = swap(s, `  decide [flow="decide", answerer="review"]\n`, `  lint [label="Lint", shape=parallelogram, script="bun run lint"]\n  e2e [label="E2E", shape=parallelogram, script="bun run e2e"]\n`);
       s = swap(s, `  dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]\n`, "");
-      s = swap(s, "  check -> review\n", "  check -> lint\n");
-      s = swap(s, "  review -> decide\n", "  review -> ship\n");
-      s = s.replace(/  decide -> .*\n/g, "");
-      s = swap(s, "  revise -> check\n", "");
-      s = swap(s, "  fix_conflict -> check\n", `  fix_conflict -> check
+      s = swap(s, `  pr -> checks [condition="outcome = success"]\n`, `  pr -> lint [condition="outcome = success"]\n`);
+      // PR has no way back of its own, so a failed lint or e2e goes where the backbone's graph [fix="brief"] names.
+      s = swap(s, "  moved -> pr\n", `  moved -> pr
   lint -> e2e [condition="(outcome = success) and ${t}"]
-  lint -> review [condition="(outcome = success) and not ${t}"]
-  lint -> fix_check [condition="outcome = failure", label="lint failed"]
-  e2e -> review [condition="outcome = success"]
-  e2e -> fix_check [condition="outcome = failure", label="e2e failed"]
+  lint -> checks [condition="(outcome = success) and not ${t}"]
+  lint -> brief [condition="outcome = failure", label="lint failed"]
+  e2e -> checks [condition="outcome = success"]
+  e2e -> brief [condition="outcome = failure", label="e2e failed"]
 `);
+      // Skipped, Decide's card is gone: a change that edits CI merges once the reviewer says ship.
+      s = swap(s, "  ci_card -> decide\n", "  ci_card -> merge\n");
+      s = s.replace(/  decide -> .*\n/g, "");
       return s;
     });
-    // By hand, Review's prompt is its segment's text with the guidance after it.
-    expect(graphHash(g)).toBe(graphHash(withStationPrompt(written, "review__review", `${reviewPrompt.replace(/\s+$/, "")}\n\nAlso check X.`)));
+    // By hand, Review's prompt is its own text with the guidance after it.
+    expect(graphHash(g)).toBe(graphHash(withStationPrompt(written, "review", `${reviewPrompt.replace(/\s+$/, "")}\n\nAlso check X.`)));
     expect(g.nodes.has("decide")).toBe(false);
-    expect(g.pruned).toEqual(["decide", "revise", "dropped"]);
+    expect(g.pruned).toEqual(["decide", "dropped"]);
     expect(g.edits).toEqual([
-      { op: "guide", station: "review", node: "review__review", text: "Also check X." },
+      { op: "guide", station: "review", node: "review", text: "Also check X." },
       { op: "skip", station: "decide" },
-      { op: "add", station: "lint", label: "Lint", after: "check" },
-      { op: "add", station: "e2e", label: "E2E", after: "check" },
+      { op: "add", station: "lint", label: "Lint", after: "pr", fix: "brief" },
+      { op: "add", station: "e2e", label: "E2E", after: "pr", fix: "brief" },
       { op: "when", station: "e2e", paths: ["landing/**", "backend/src/routes/**"] },
     ]);
   });
+
+  test("its fan-out's branches and join take no after=, before=, skip or when=, and each refusal says where to place the station", () => {
+    expect(() => variantOf(`  lint [after="ci", shape=parallelogram, script="true"]`)).toThrow("ci is a branch of the checks fan-out");
+    expect(() => variantOf(`  lint [after="checks", shape=parallelogram, script="true"]`)).toThrow("checks is a fan-out, which runs its branches side by side");
+    expect(() => variantOf(`  lint [before="joined", shape=parallelogram, script="true"]`)).toThrow('use the station before the fan-out (before="checks") or after the join (after="joined")');
+    expect(() => variantOf(`  review [skip=true]`)).toThrow("review is a branch of the checks fan-out");
+    expect(() => variantOf(`  review [when="src/**"]`)).toThrow("review is a branch of the checks fan-out");
+    // Before the fan-out is where a quick check goes: after PR, ahead of CI and review.
+    expect(validateWorkflow(variantOf(`  lint [after="pr", shape=parallelogram, script="true"]`))).toEqual([]);
+  });
+});
+
+// A shipped flow that keeps its stations in segments (quick-change: check and review), for edits to a segment's station.
+describe("variant edits on the shipped quick-change flow", () => {
+  const ROOT = "/r/.codecast/flows";
+  const variantOf = (body: string) => parseWorkflowFile(`${ROOT}/quick-change.cast`, { read: files({ [`${ROOT}/quick-change.cast`]: `digraph quick_change {\n  graph [extends="quick-change"]\n${body}\n}` }) });
 
   test("a station of a segment is changed by its qualified id, and a missing one is named", () => {
     const g = variantOf(`  review__review [model="opus"]`);
@@ -299,16 +314,24 @@ describe("variant edits on the shipped change flow", () => {
     expect(validateWorkflow(g)).toEqual([]);
     expect(g.pruned).toEqual(["check", "fix_check", "unchecked"]);
   });
+});
+
+// A gate's answerer must still run: gating or skipping the station a person's question goes to is refused.
+describe("a gate's answerer", () => {
+  const read = files({
+    "/l/gated.cast": `digraph gated {\n  graph [takes="task,branch"]\n  start [shape=Mdiamond]\n  review [prompt="Review it."]\n  decide [shape=hexagon, answerer="review", prompt="Ship?"]\n  exit [shape=Msquare]\n  start -> review -> decide\n  decide -> exit [label="[S] Ship"]\n}`,
+  });
+  const variantOf = (body: string) => parseWorkflowFile("/l/v.cast", { read: (p: string) => (p === "/l/v.cast" ? `digraph v {\n  graph [extends="gated.cast"]\n${body}\n}` : read(p)) });
 
   test("a station another one names (Decide's answerer) cannot be gated on paths either", () => {
     const g = variantOf(`  review [when="src/**"]`);
-    expect(validateWorkflow(g)).toEqual(['decide__decide [answerer="review__review"] names review__review, and review runs only when the change touches src/**: point answerer at a station that always runs, or drop review\'s when=']);
+    expect(validateWorkflow(g)).toEqual(['decide [answerer="review"] names review, and review runs only when the change touches src/**: point answerer at a station that always runs, or drop review\'s when=']);
     expect(g.gated).toEqual({ review: ["src/**"] });
   });
 
   test("skipping review leaves decide's answerer dangling, and validation says so", () => {
     const g = variantOf(`  review [skip=true]`);
-    expect(validateWorkflow(g)).toContain('decide__decide [answerer="review__review"] names review__review, and this flow skips review: point answerer at a station that stays, or stop skipping review');
+    expect(validateWorkflow(g)).toContain('decide [answerer="review"] names review, and this flow skips review: point answerer at a station that stays, or stop skipping review');
   });
 });
 
@@ -319,7 +342,7 @@ function withStationPrompt(g: ReturnType<typeof parseWorkflowSource>, id: string
 }
 
 test("a repo change.cast read from its text and directory alone still extends the shipped change, once", () => {
-  const src = `digraph change {\n  graph [extends="change"]\n  lint [after="check", shape=parallelogram, script="true"]\n}`;
+  const src = `digraph change {\n  graph [extends="change"]\n  lint [after="pr", shape=parallelogram, script="true"]\n}`;
   const g = parseWorkflowSource(src, "/r/.codecast/flows", { read: files({ "/r/.codecast/flows/change.cast": src }) });
   expect(validateWorkflow(g)).toEqual([]);
   expect(g.nodes.has("lint")).toBe(true);
@@ -337,13 +360,13 @@ test("a variant that skips a station its base guided drops the guidance with it"
 
 test("a variant of a variant keeps what the middle file gated and skipped; its edits are its own", () => {
   const read = files({
-    "/r/.codecast/flows/house.cast": `digraph house {\n  graph [extends="change"]\n  e2e [after="check", label="E2E", when="docs/", shape=parallelogram, script="bun run e2e"]\n  decide [skip=true]\n}`,
+    "/r/.codecast/flows/house.cast": `digraph house {\n  graph [extends="change"]\n  e2e [after="pr", label="E2E", when="docs/", shape=parallelogram, script="bun run e2e"]\n  decide [skip=true]\n}`,
     "/r/.codecast/flows/outer.cast": `digraph outer {\n  graph [extends="house.cast"]\n  e2e [script="bun run e2e --ci"]\n}`,
   });
   const g = parseWorkflowFile("/r/.codecast/flows/outer.cast", { read });
   expect(validateWorkflow(g)).toEqual([]);
   expect(g.gated).toEqual({ e2e: ["docs/"] });
-  expect(g.pruned).toEqual(["decide", "revise", "dropped"]);
+  expect(g.pruned).toEqual(["decide", "dropped"]);
   expect(g.edits ?? []).toEqual([]);
   expect(g.nodes.get("e2e")!.script).toBe("bun run e2e --ci");
 });

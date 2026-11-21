@@ -94,15 +94,15 @@ describe("a project's change flow written as edits", () => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `digraph change {
   graph [extends="change"]
-  lint   [after="check", label="Lint", shape=parallelogram, script="bun run lint"]
+  lint   [after="pr", label="Lint", shape=parallelogram, script="bun run lint"]
   review [guide="Also check X."]
   decide [skip=true]
-  e2e    [after="check", label="E2E", when="landing/**", shape=parallelogram, script="bun run e2e"]
+  e2e    [after="pr", label="E2E", when="landing/**", shape=parallelogram, script="bun run e2e"]
 }`);
     const variant = parseWorkflowFile(file);
     const base = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change);
     const c = variantChanges(base, variant);
-    expect(variantChangeLines(c)).toEqual(["~ Review: guidance added", "Decide skipped", "+ Lint after Check", "+ E2E after Check", "E2E runs when landing/**"]);
+    expect(variantChangeLines(c)).toEqual(["~ Review: guidance added", "Decide skipped", "+ Lint after PR; a failure goes to Fix findings", "+ E2E after PR; a failure goes to Fix findings", "E2E runs when landing/**"]);
     expect(variantSummary(c)).toBe("5 edits");
   });
 });

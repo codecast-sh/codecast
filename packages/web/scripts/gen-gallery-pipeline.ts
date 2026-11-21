@@ -2,7 +2,7 @@
 // Writes lib/renderGalleryPipeline.generated.ts: what the real CLI prints for
 // the pipeline's inline objects (docs/architecture/pipeline.md PL5, PL6), run
 // in a scratch repository whose origin is example-org/example-app. Three
-// edits in order (add lint after check when landing/**, guidance on review,
+// edits in order (add lint after PR when landing/**, guidance on review,
 // skip decide), then `cast flow pipeline` as text and as JSON. The render
 // gallery and the edit card's tests both read it, so they follow the CLI
 // when its output changes: rerun this after changing `cast flow edit` or
@@ -36,7 +36,7 @@ try {
   writeFileSync(join(dir, "README.md"), "Example app\n");
   sh("git", ["add", "."]);
   sh("git", ["-c", "user.name=Gallery", "-c", "user.email=gallery@example.com", "commit", "-qm", "init"]);
-  const add = cast("flow", "edit", "change", "add", "lint", "--after", "check", "--run", "bun run lint", "--when", "landing/**");
+  const add = cast("flow", "edit", "change", "add", "lint", "--after", "pr", "--run", "bun run lint", "--when", "landing/**");
   const guide = cast("flow", "edit", "change", "guide", "review", "Also check the migrations");
   const skip = cast("flow", "edit", "change", "skip", "decide");
   const pipelineText = cast("flow", "pipeline");
@@ -50,7 +50,7 @@ try {
 import type { PipelinePublish } from "@codecast/shared/contracts/pipeline";
 
 export const GALLERY_PIPELINE_REPO = "example-org/example-app";
-export const EDIT_ADD = ${JSON.stringify({ command: `cast flow edit change add lint --after check --run "bun run lint" --when "landing/**"`, output: add })};
+export const EDIT_ADD = ${JSON.stringify({ command: `cast flow edit change add lint --after pr --run "bun run lint" --when "landing/**"`, output: add })};
 export const EDIT_GUIDE = ${JSON.stringify({ command: `cast flow edit change guide review "Also check the migrations"`, output: guide })};
 export const EDIT_SKIP = ${JSON.stringify({ command: "cast flow edit change skip decide", output: skip })};
 export const PIPELINE_TEXT = ${JSON.stringify({ command: "cast flow pipeline", output: pipelineText })};

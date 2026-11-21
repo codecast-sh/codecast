@@ -1564,8 +1564,8 @@ describe("workflow/runner (typed text at a ship gate)", () => {
   test("the change flow names its reviewer as the answerer of the decide segment's gate", () => {
     const g = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change);
     const gate = g.nodes.get("decide__decide")!;
-    expect(gate.answerer).toBe("review__review");
-    expect(g.nodes.get("review__review")?.backend).toBe("session");
+    expect(gate.answerer).toBe("review");
+    expect(g.nodes.get("review")?.backend).toBe("session");
     expect(gate.asker).toBeUndefined();
     // Decide alone names nobody: a question there is asked again with the question on top.
     expect(parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.decide).nodes.get("decide")!.answerer).toBeUndefined();
