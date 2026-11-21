@@ -1624,7 +1624,7 @@ export async function resumeRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"wo
 }
 /**
  * A run goes back to `node` and its machine's daemon drives it from there, keeping what it made. Nothing it asked
- * stays on the row, a problem its failure blocked is unblocked, and `fresh_branch` has the machine read the line's
+ * stays on the row, nor its graph's clearance to land (merge_cleared), a problem its failure blocked is unblocked, and `fresh_branch` has the machine read the line's
  * graph as it is now. A decision the run waited on is the caller's to settle after, once the run no longer waits on it.
  * A run no runner took past its start made nothing to keep, and no runner continues it (runStart.ts): it goes back to
  * pending, as a new run is, a new attempt its machine starts from the top. `from_start` says it did.
@@ -1635,7 +1635,7 @@ export async function resumeRunAt(ctx: Ctx, _by: Id<"users">, run: Doc<"workflow
   // A station the run stood at when its runner stopped reads running until a runner reports it again; one the run no
   // longer goes on from never will, so it goes back to pending (ct-97276: Hold read running beside the resumed Guard).
   const node_statuses = (run.node_statuses ?? []).map((n) => (n.status === "running" && (fromStart || n.node_id !== node) ? { ...n, status: "pending" as const, started_at: undefined, activity: undefined } : n));
-  await ctx.db.patch(run._id, { ...at, node_statuses, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, resume_queued: undefined, ...(opts.newAttempt || fromStart ? { visits_reset_at: now } : {}), updated_at: now });
+  await ctx.db.patch(run._id, { ...at, node_statuses, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, resume_queued: undefined, merge_cleared: undefined, ...(opts.newAttempt || fromStart ? { visits_reset_at: now } : {}), updated_at: now });
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task?.execution_status === "blocked") await patchTask(ctx, task, { execution_status: undefined, execution_concerns: undefined });
   // The machine's daemon takes commands for its own account: the run's, whoever asked for the resume.
@@ -1711,7 +1711,7 @@ export async function landAgainCore(ctx: Ctx, userId: Id<"users">, runId: Id<"wo
   const device = await runMachine(ctx, run);
   if (!device) throw new ConvexError("The machine that built the fix is not known");
   const now = Date.now();
-  await ctx.db.patch(run._id, { status: "running", current_node_id: "rebase", fail_reason: undefined, fresh_branch: true, resume_requested_at: now, updated_at: now });
+  await ctx.db.patch(run._id, { status: "running", current_node_id: "rebase", fail_reason: undefined, fresh_branch: true, merge_cleared: undefined, resume_requested_at: now, updated_at: now });
   await queueRunOnDaemon(ctx, run.user_id, run._id, { device, now });
   return { ok: true };
 }

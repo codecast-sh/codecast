@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { makeFakeDb } from "./testDb";
-import { MERGE_AUTHORITY_ID, checkMergeCore, mergeAllowance, performSetLineMerge, prUrlFromEvidence, recordMergeCore } from "./orgLineMerge";
+import { makeFakeDb, schemaIndexes } from "./testDb";
+import schema from "./schema";
+import { resumeFailedRunCore } from "./failedRunResume";
+import { MERGE_AUTHORITY_ID, checkMergeCore, clearForMergeCore, mergeAllowance, performSetLineMerge, prUrlFromEvidence, recordMergeCore } from "./orgLineMerge";
 import { lineOfRole } from "./orgRoles";
 
 // The line's merge step on the server (the-line.md L12): the allowance read
@@ -32,7 +34,6 @@ function world(role: Record<string, any> = {}, extra: Record<string, any[]> = {}
     ],
     tasks: [{ _id: "tasks_1", short_id: "ct-7", title: "Add the thing", status: "done", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, verification_evidence: "Done.\n\nPR: https://github.com/o/r/pull/5", created_at: 1, updated_at: 1 }],
     workflow_runs: [{ _id: "workflow_runs_1", user_id: HOST, task_id: "tasks_1", spawner_conversation_id: STANDING, primary_conversation_id: "conversations_hand", status: "running", created_at: NOW, updated_at: NOW }],
-    session_decisions: [], projects: [],
     task_comments: [], pending_messages: [], org_role_history: [], org_changes: [], docs: [], counters: [], thread_reads: [], entity_subscriptions: [],
     ...extra,
   };
@@ -91,20 +92,6 @@ describe("performSetLineMerge", () => {
   });
 });
 
-// A run with no role behind it: no role's standing session spawned it, and its hand works for none.
-function noRole() {
-  const w = world();
-  w.tables.workflow_runs[0].spawner_conversation_id = undefined;
-  w.tables.conversations[1].org_role_id = undefined;
-  return w;
-}
-const merged = { run_id: "workflow_runs_1", sha: "abc123def456", branch: "codecast/line-ct-7", into: "main" };
-// A gate card on the task, answered Ship by the host unless the test says otherwise.
-const card = (id: string, short: string, over: Record<string, any> = {}) => ({
-  _id: id, short_id: short, task_id: "tasks_1", status: "answered", answer_index: 0, options: [{ label: "Ship" }, { label: "Revise" }, { label: "Drop" }],
-  answered_by: { kind: "user", id: HOST }, created_at: NOW - DAY, resolved_at: NOW - DAY, ...over,
-});
-
 describe("recordMergeCore", () => {
   test("counts the merge for today, stamps the run, comments on the task as the role, and tells the role to report it", async () => {
     const { ctx, tables, role } = world({ line_merge: true, authority: [grant()] });
@@ -123,78 +110,171 @@ describe("recordMergeCore", () => {
     expect(mergeAllowance(role(), NOW + 2)).toMatchObject({ allowed: false, used: 2 });
   });
 
-  test("a run no role started merges on a person's Ship at its card, and a role's Ship is no person's", async () => {
-    const { ctx, tables } = noRole();
-    // It stopped at its gate and asked: a role answering Ship is not a person's authorization.
-    tables.workflow_runs[0].gate_node_id = "decide__decide";
-    tables.session_decisions.push(card("sd_1", "sd-1", { workflow_run_id: "workflow_runs_1", answered_by: { kind: "role", id: ROLE } }));
-    tables.workflow_runs[0].gate_decision_id = "sd_1";
-    await expect(recordMergeCore(ctx, HOST as any, merged)).rejects.toThrow("no person answered Ship on its card, so nothing authorizes the merge");
+});
 
-    // A person's Ship authorizes it, records who and why on the run and the task, and counts against no role.
-    tables.session_decisions[0].answered_by = { kind: "user", id: HOST };
+// A run no role is behind merges on a person's word (orgLineMerge.personAuthorized): a Ship on a card of the task,
+// or the stamp a script station of its own graph wrote (clearForMergeCore) in its current attempt.
+describe("a merge no role is behind", () => {
+  function solo(opts: { indexes?: boolean } = {}) {
+    const tables: Record<string, any[]> = {
+      users: [{ _id: HOST, name: "Host", email: "host@x.ai" }],
+      team_memberships: [{ _id: "m1", user_id: HOST, team_id: TEAM, role: "admin", joined_at: 1 }],
+      teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
+      org_roles: [], anchors: [],
+      conversations: [{ _id: "conversations_hand", session_id: "hand", user_id: HOST, team_id: TEAM, status: "active", title: "Implement", agent_type: "claude_code", message_count: 1, updated_at: NOW, owner_device_id: "dev" }],
+      tasks: [{ _id: "tasks_1", short_id: "ct-7", title: "Add the thing", status: "open", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, created_at: 1, updated_at: 1 }],
+      workflow_runs: [{ _id: "workflow_runs_1", user_id: HOST, task_id: "tasks_1", primary_conversation_id: "conversations_hand", status: "running", workspace: `team:${TEAM}`, team_id: TEAM, runner_device: "dev",
+        current_node_id: "intent_gate", node_statuses: [{ node_id: "review__review", status: "completed", session_id: "rev" }, { node_id: "intent_gate", status: "running" }], created_at: NOW, updated_at: NOW }],
+      session_decisions: [], projects: [], daemon_commands: [], managed_sessions: [],
+      task_comments: [], pending_messages: [], org_role_history: [], org_changes: [], docs: [], counters: [], thread_reads: [], entity_subscriptions: [],
+    };
+    const db = makeFakeDb(tables, opts.indexes ? { indexes: schemaIndexes(schema as any) } : {});
+    const ctx: any = { db, scheduler: { runAfter: async () => {} } };
+    return { ctx, tables, run: () => tables.workflow_runs[0] };
+  }
+  // A gate card on the task, answered Ship by the host unless the test says otherwise.
+  const card = (id: string, over: Record<string, any> = {}) => ({
+    _id: id, short_id: id.replace("_", "-"), task_id: "tasks_1", status: "answered", answer_index: 0, options: [{ label: "Ship" }, { label: "Revise" }, { label: "Drop" }],
+    answered_by: { kind: "user", id: HOST }, created_at: NOW - DAY, resolved_at: NOW - DAY, user_id: HOST, conversation_id: "conversations_hand", session_id: "hand", question: "Ship?", blocking: true, ...over,
+  });
+  const merged = { run_id: "workflow_runs_1", sha: "abc123def456", branch: "codecast/line-ct-7", into: "main" };
+  const check = (ctx: any) => checkMergeCore(ctx, HOST as any, "workflow_runs_1");
+  const clear = (ctx: any, why = "founder-intent read: ship") => clearForMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", why }, NOW + 1);
+
+  test("a run its graph cleared merges under the person who started it, recorded with the station's words", async () => {
+    const { ctx, tables, run } = solo();
+    await expect(check(ctx)).rejects.toThrow("its graph did not clear it to land, and no person answered Ship on a card, so nothing authorizes the merge");
+    expect(await clear(ctx)).toEqual({ run_id: "workflow_runs_1", node_id: "intent_gate", attempt: NOW });
+    expect(run().merge_cleared).toMatchObject({ node_id: "intent_gate", why: "founder-intent read: ship", by: HOST, attempt: NOW });
+    const why = "cleared by the run's own graph at intent_gate (founder-intent read: ship), started by Host";
+    expect(await check(ctx)).toMatchObject({ allowed: true, role: null, authorized: { user_id: HOST, why } });
     const out = await recordMergeCore(ctx, HOST as any, merged);
-    expect(out).toMatchObject({ used: 0, limit: null, over: false, authorized: { user_id: HOST, why: "ship on card sd-1" } });
-    expect(tables.workflow_runs[0].merge).toMatchObject({ sha: "abc123def456", into: "main", authorized: { user_id: HOST, why: "ship on card sd-1" } });
-    expect(tables.task_comments.at(-1).text).toBe("merged codecast/line-ct-7 into main at abc123def4: authorized by ship on card sd-1");
-    expect(tables.org_roles[0].counters?.merges ?? 0).toBe(0);
+    expect(out).toMatchObject({ used: 0, limit: null, authorized: { user_id: HOST, why } });
+    expect(run().merge).toMatchObject({ sha: "abc123def456", authorized: { user_id: HOST, why } });
+    expect(tables.task_comments.at(-1).text).toBe(`merged codecast/line-ct-7 into main at abc123def4: authorized by ${why}`);
   });
 
-  test("a Ship on an earlier run's card authorizes a rerun of the task until a person answers otherwise on a later card", async () => {
-    const { ctx, tables } = noRole();
-    // Run 0 asked and a person answered Ship; this run (a rerun of the same task) asks nothing.
-    tables.workflow_runs.unshift({ _id: "workflow_runs_0", user_id: HOST, task_id: "tasks_1", status: "failed", gate_decision_id: "sd_1", gate_node_id: "decide__decide", created_at: NOW - DAY, updated_at: NOW - DAY });
-    tables.session_decisions.push(card("sd_1", "sd-1", { workflow_run_id: "workflow_runs_0", resolved_at: NOW - DAY }));
-    expect(await checkMergeCore(ctx, HOST as any, "workflow_runs_1")).toMatchObject({ allowed: true, role: null, authorized: { user_id: HOST, why: "ship on earlier run's card sd-1" } });
-
-    // A later card of the task answered Revise by a person revokes it, whichever run asked it.
-    tables.session_decisions.push(card("sd_2", "sd-2", { workflow_run_id: "workflow_runs_0", answer_index: 1, resolved_at: NOW - 1000 }));
-    await expect(checkMergeCore(ctx, HOST as any, "workflow_runs_1")).rejects.toThrow("a person answered Revise on sd-2, the task's newest answer, so nothing authorizes the merge");
-
-    // This run then asks its own card: while it waits nothing merges, and a person's Ship on it authorizes the merge.
-    tables.workflow_runs[1].gate_node_id = "decide__decide";
-    tables.workflow_runs[1].gate_decision_id = "sd_3";
-    tables.session_decisions.push(card("sd_3", "sd-3", { workflow_run_id: "workflow_runs_1", status: "pending", answer_index: undefined, answered_by: undefined, resolved_at: undefined }));
-    await expect(checkMergeCore(ctx, HOST as any, "workflow_runs_1")).rejects.toThrow("its card sd-3 is still waiting on a person, so nothing authorizes the merge");
-    Object.assign(tables.session_decisions[2], { status: "answered", answer_index: 0, answered_by: { kind: "user", id: HOST }, resolved_at: NOW });
-    expect(await checkMergeCore(ctx, HOST as any, "workflow_runs_1")).toMatchObject({ allowed: true, authorized: { why: "ship on card sd-3" } });
-  });
-
-  test("a run its own graph cleared to land with no card merges under the person who started it", async () => {
-    const { ctx, tables } = noRole();
-    expect(await checkMergeCore(ctx, HOST as any, "workflow_runs_1")).toMatchObject({ allowed: true, role: null, authorized: { user_id: HOST, why: "cleared by the run's own graph, started by Host" } });
-    const out = await recordMergeCore(ctx, HOST as any, merged);
-    expect(out.authorized).toEqual({ user_id: HOST, why: "cleared by the run's own graph, started by Host" });
-    expect(tables.task_comments.at(-1).text).toBe("merged codecast/line-ct-7 into main at abc123def4: authorized by cleared by the run's own graph, started by Host");
-    expect(tables.org_roles[0].counters?.merges ?? 0).toBe(0);
-  });
-
-  test("a run that asked a card, or that nothing shows asked none, is not cleared", async () => {
-    // It stopped at a gate whose card never posted, or whose card was withdrawn: it asked, and nobody said Ship.
-    const gated = noRole();
-    gated.tables.workflow_runs[0].gate_node_id = "decide__decide";
-    await expect(checkMergeCore(gated.ctx, HOST as any, "workflow_runs_1")).rejects.toThrow("no person answered Ship on its card");
-    const withdrawn = noRole();
-    withdrawn.tables.session_decisions.push(card("sd_1", "sd-1", { workflow_run_id: "workflow_runs_1", status: "withdrawn", answer_index: undefined, answered_by: undefined }));
-    await expect(checkMergeCore(withdrawn.ctx, HOST as any, "workflow_runs_1")).rejects.toThrow("no person answered Ship on its card");
-    // A run with no task has no cards to read.
-    const taskless = noRole();
-    taskless.tables.workflow_runs[0].task_id = undefined;
-    await expect(checkMergeCore(taskless.ctx, HOST as any, "workflow_runs_1")).rejects.toThrow("it has no task whose cards show it asked none");
-    // An agent account is no person.
-    const bot = noRole();
+  test("only a running script station of the run, on its own runner's account, clears it; an agent account is no person", async () => {
+    const other = solo();
+    await expect(clearForMergeCore(other.ctx, "users_someone" as any, { run_id: "workflow_runs_1", why: "x" })).rejects.toThrow("Only the run's own runner");
+    const agent = solo();
+    Object.assign(agent.run(), { current_node_id: "implement", node_statuses: [{ node_id: "implement", status: "running", session_id: "impl" }] });
+    await expect(clear(agent.ctx)).rejects.toThrow("implement is an agent's station");
+    const paused = solo();
+    paused.run().status = "paused";
+    await expect(clear(paused.ctx)).rejects.toThrow("only a running station clears it");
+    const blank = solo();
+    await expect(clear(blank.ctx, "  ")).rejects.toThrow("--why");
+    const bot = solo();
     bot.tables.users[0].is_bot = true;
-    await expect(checkMergeCore(bot.ctx, HOST as any, "workflow_runs_1")).rejects.toThrow("an agent account started it");
+    await clear(bot.ctx);
+    await expect(check(bot.ctx)).rejects.toThrow("an agent account started it");
+  });
+
+  test("a run that failed before its gate and is resumed at Land does not count as cleared, and a resume drops a stamp", async () => {
+    // Probe A: the library change run failed at Check and was resumed --at the ship station. Nothing cleared it.
+    const failed = solo();
+    Object.assign(failed.run(), { status: "failed", current_node_id: "check", fail_reason: "max_visits=3 exceeded on fix_check",
+      node_statuses: [{ node_id: "check__check", status: "completed", outcome: "failure" }, { node_id: "fix_check", status: "completed" }] });
+    await resumeFailedRunCore(failed.ctx, HOST as any, "workflow_runs_1" as any, "ship__rebase", {}, NOW + 1);
+    expect(failed.run()).toMatchObject({ status: "running", current_node_id: "ship__rebase" });
+    await expect(check(failed.ctx)).rejects.toThrow("its graph did not clear it to land");
+
+    // A run cleared on its last attempt, then failed and resumed, is not cleared on the new one.
+    const resumed = solo();
+    await clear(resumed.ctx);
+    Object.assign(resumed.run(), { status: "failed", current_node_id: "ship__ship", fail_reason: "push failed" });
+    await resumeFailedRunCore(resumed.ctx, HOST as any, "workflow_runs_1" as any, "ship__rebase", {}, NOW + 2);
+    expect(resumed.run().merge_cleared).toBeUndefined();
+    await expect(check(resumed.ctx)).rejects.toThrow("its graph did not clear it to land");
+    // A stamp from another attempt does not hold even when a path forgets to drop it.
+    Object.assign(resumed.run(), { merge_cleared: { at: NOW, node_id: "intent_gate", why: "x", by: HOST, attempt: NOW } });
+    expect(resumed.run().visits_reset_at).toBe(NOW + 2);
+    await expect(check(resumed.ctx)).rejects.toThrow("its graph did not clear it to land");
+  });
+
+  test("a person's Ship on the run's own card authorizes it; while the card waits nothing merges", async () => {
+    const { ctx, tables, run } = solo();
+    Object.assign(run(), { gate_node_id: "decide__decide", gate_decision_id: "sd_1" });
+    tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_1", status: "pending", answer_index: undefined, answered_by: undefined, resolved_at: undefined }));
+    await expect(check(ctx)).rejects.toThrow("its card sd-1 is still waiting on a person, so nothing authorizes the merge");
+    Object.assign(tables.session_decisions[0], { status: "answered", answer_index: 0, answered_by: { kind: "user", id: HOST }, resolved_at: NOW });
+    expect(await check(ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: "ship on card sd-1" } });
+  });
+
+  test("the run's own card decides whoever answered it: a role's Ship is no person's, and an older person's Ship does not override it", async () => {
+    // Probe C.
+    const { ctx, tables, run } = solo();
+    tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_0" }));
+    tables.session_decisions.push(card("sd_2", { workflow_run_id: "workflow_runs_1", answered_by: { kind: "role", id: "org_roles_x" }, resolved_at: NOW - 10 }));
+    Object.assign(run(), { gate_node_id: "decide__decide", gate_decision_id: "sd_2" });
+    await expect(check(ctx)).rejects.toThrow("a role answered Ship on its card sd-2, so nothing authorizes the merge");
+    // Even a stamp does not outrank the run's own card.
+    await clear(ctx);
+    await expect(check(ctx)).rejects.toThrow("a role answered Ship on its card sd-2");
+  });
+
+  test("a Ship on an earlier run's card carries to a rerun until a person's later verdict on the task says otherwise", async () => {
+    const { ctx, tables } = solo();
+    tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_0" }));
+    expect(await check(ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: "ship on earlier run's card sd-1" } });
+    tables.session_decisions.push(card("sd_2", { workflow_run_id: "workflow_runs_0", answer_index: 1, resolved_at: NOW - 1000 }));
+    await expect(check(ctx)).rejects.toThrow("a person answered Revise on sd-2, the task's newest verdict, so nothing authorizes the merge");
+    // A later verdict outranks a stamp too: a change a person sent back comes back to a person.
+    await clear(ctx);
+    await expect(check(ctx)).rejects.toThrow("answered Revise on sd-2");
+    // A role's answer on another run's card is no verdict either way.
+    tables.session_decisions.push(card("sd_3", { workflow_run_id: "workflow_runs_0", answered_by: { kind: "role", id: "org_roles_x" }, resolved_at: NOW - 10 }));
+    await expect(check(ctx)).rejects.toThrow("answered Revise on sd-2");
+  });
+
+  test("a person's dismissal is a verdict that is not Ship, on the run's own card or an earlier one", async () => {
+    // Probe B: the own card dismissed by a person, with an earlier Ship on the task.
+    const own = solo();
+    own.tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_0" }));
+    own.tables.session_decisions.push(card("sd_2", { workflow_run_id: "workflow_runs_1", status: "dismissed", answer_index: undefined, answered_by: undefined, resolved_at: NOW - 10, resolved_by: HOST }));
+    Object.assign(own.run(), { gate_node_id: "decide__decide", gate_decision_id: "sd_2" });
+    await expect(check(own.ctx)).rejects.toThrow("a person dismissed its card sd-2, so nothing authorizes the merge");
+    const earlier = solo();
+    earlier.tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_0" }));
+    earlier.tables.session_decisions.push(card("sd_2", { workflow_run_id: "workflow_runs_0", status: "dismissed", answer_index: undefined, answered_by: { kind: "user", id: HOST }, resolved_at: NOW - 10 }));
+    await expect(check(earlier.ctx)).rejects.toThrow("a person dismissed sd-2, the task's newest verdict");
+    // A withdrawal names nobody: the asker took its question back, and the Ship stands.
+    earlier.tables.session_decisions[1] = card("sd_2", { workflow_run_id: "workflow_runs_0", status: "withdrawn", answer_index: undefined, answered_by: undefined, resolved_at: NOW - 10 });
+    expect(await check(earlier.ctx)).toMatchObject({ allowed: true, authorized: { why: "ship on earlier run's card sd-1" } });
+  });
+
+  test("the newest verdict is read newest first off the index, past any number of older answers", async () => {
+    // Probe D: 500 older Ships, then a Revise; the real index order, not the seed's.
+    const { ctx, tables } = solo({ indexes: true });
+    let t = 1000;
+    for (let i = 0; i < 500; i++) tables.session_decisions.push({ ...card(`sd_${i}`, { workflow_run_id: "workflow_runs_0", resolved_at: NOW - DAY + i }), _creationTime: t++ });
+    tables.session_decisions.push({ ...card("sd_new", { workflow_run_id: "workflow_runs_0", answer_index: 1, resolved_at: NOW - 5 }), _creationTime: t++ });
+    await expect(check(ctx)).rejects.toThrow("answered Revise on sd-new, the task's newest verdict");
+  });
+
+  test("a card that offered no Ship is no word on shipping; another run's waiting card does not hold this one", async () => {
+    // Probe E: a runner failure card answered Reopen neither revokes a Ship nor stops a cleared run.
+    const reopen = solo();
+    reopen.tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_0", options: [{ label: "Reopen for another implement round" }, { label: "Drop the task" }, { label: "I will take it myself" }] }));
+    await clear(reopen.ctx);
+    expect(await check(reopen.ctx)).toMatchObject({ allowed: true, authorized: { why: expect.stringContaining("cleared by the run's own graph") } });
+    // Probe F: run A's card still waiting on the same task.
+    const waiting = solo();
+    waiting.tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_0", status: "pending", answer_index: undefined, answered_by: undefined, resolved_at: undefined }));
+    await clear(waiting.ctx);
+    expect(await check(waiting.ctx)).toMatchObject({ allowed: true });
   });
 
   test("a trial project's run never merges, cleared or shipped", async () => {
-    const { ctx, tables } = noRole();
+    const { ctx, tables, run } = solo();
     tables.projects.push({ _id: "projects_trial", title: "Trial", user_id: HOST, line_trial: { since: 1, by: HOST } });
     tables.tasks[0].project_id = "projects_trial";
-    expect(await checkMergeCore(ctx, HOST as any, "workflow_runs_1")).toMatchObject({ allowed: false, reason: "a trial project's run stops at the card: nothing merges" });
-    tables.session_decisions.push(card("sd_1", "sd-1", { workflow_run_id: "workflow_runs_1" }));
-    tables.workflow_runs[0].gate_decision_id = "sd_1";
-    expect(await checkMergeCore(ctx, HOST as any, "workflow_runs_1")).toMatchObject({ allowed: false, reason: "a trial project's run stops at the card: nothing merges" });
+    await clear(ctx);
+    expect(await check(ctx)).toMatchObject({ allowed: false, reason: "a trial project's run stops at the card: nothing merges" });
+    tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_1" }));
+    run().gate_decision_id = "sd_1";
+    expect(await check(ctx)).toMatchObject({ allowed: false, reason: "a trial project's run stops at the card: nothing merges" });
   });
 });
 

@@ -2053,7 +2053,7 @@ export const rebuildForCli = mutation({
     // read again from its file (fresh_branch makes the daemon re-read it; on a resume it never resets the branch).
     const current = (await dueProblems(ctx, project)).like.product;
     const graph = current && current.workflow_id !== run.workflow_id ? { workflow_id: current.workflow_id, workflow_name: current.workflow_name } : {};
-    await ctx.db.patch(run._id, { ...graph, fresh_branch: true, status: "running", current_node_id: args.from ?? "fresh", gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, updated_at: now });
+    await ctx.db.patch(run._id, { ...graph, fresh_branch: true, merge_cleared: undefined, status: "running", current_node_id: args.from ?? "fresh", gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, updated_at: now });
     await ctx.db.patch(row._id, { rebuild_at: now, updated_at: now });
     await queueRunOnDaemon(ctx as any, userId, run._id, { device: run.runner_device, now });
     return { short_id: row.short_id, run_id: run._id, stale: stale.detail };

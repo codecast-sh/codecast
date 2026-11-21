@@ -303,28 +303,39 @@ path (ninety days) in the same act. Human only, logged like the line.
 
 A run no role is behind (a flow a person's session started, `cast flow run
 change`) merges on a person's word instead, which counts against no role's
-limit (`orgLineMerge.personAuthorized`). The words are read off every gate
-card of every run of the run's task (`session_decisions.by_task`, with the
-run's own `gate_decision_id`); only `answered` by a user is an answer, so a
-role's answer or a withdrawn card is none.
+limit (`orgLineMerge.personAuthorized`). A card counts when it is a gate card
+(it names a run) that offered Ship, so a failure gate's "Reopen" says nothing
+about shipping. A person's verdict is an answer or a dismissal a user gave; a
+withdrawal names nobody. The cards are read off the task's index by status,
+newest first (`session_decisions.by_task`), with the run's own
+`gate_decision_id`. In order:
 
 - A card of this run still waiting refuses the merge.
-- Otherwise the newest answer a person gave decides. Ship authorizes, on
-  whichever run's card it was, so a rerun of a task already shipped at its
-  card lands without asking again; any other answer (Revise, Drop) refuses
-  until a person answers Ship on a later card.
-- With no answer at all, a run that asked no card reached Land because its
-  own graph cleared it (a founder-intent read, `quick-change`), and the person
-  who started it (`workflow_runs.user_id`) authorizes it. A run asked a card
-  when any card names it, its row names one, or it stopped at a gate
-  (`gate_node_id`, written before a gate asks and kept after). A run with no
-  task, or one an agent account started, merges only on a Ship.
+- This run's own decided card decides, whoever answered it: a person's Ship
+  authorizes, and a role's or a policy's Ship, Revise, Drop or a dismissal
+  refuses.
+- Otherwise the task's newest person verdict on another run's card decides.
+  Ship carries to a rerun, so a task shipped at its card lands without asking
+  again; anything else refuses until a person answers Ship on a later card. A
+  Ship covers the task, not a commit: only a newer verdict revokes it.
+- Otherwise the run merges only when its own graph cleared it to land: a
+  script station called `cast workflow clear $run_id --why "<text>"`
+  (`orgLineMerge.clearForMerge`), which stamps `workflow_runs.merge_cleared`
+  (when, the station, its words, the runner's account, the attempt). Only the
+  run's own runner account may write it, while the run is running, from the
+  station it stands at, and never from a station with a session, so an agent
+  cannot clear its own change. The stamp holds only in the attempt it was
+  written in (`visits_reset_at`, else `created_at`), and every way a run is
+  moved back drops it: `resumeRunAt` (resume, queued resume, reask, the trial's
+  resumes), `landAgainCore` and a trial rebuild. The person who started the run
+  (`workflow_runs.user_id`) then authorizes it; an agent account is no person.
 
 The record says whose word it was and why (`workflow_runs.merge.authorized`:
 "ship on card sd-N", "ship on earlier run's card sd-N", "cleared by the run's
-own graph, started by X"), in the task's comment too. Every refusal ends "so
-nothing authorizes the merge", which a flow may read to ask at the card. A
-trial project's run never merges, whoever said Ship.
+own graph at <station> (<its words>), started by X"), and the task's comment
+says the same. Every refusal ends "so nothing authorizes the merge", which a
+flow may read to ask at the card. A trial project's run never merges, whoever
+said Ship.
 
 The shipped line gains a `merge` node after an approving review:
 `review -> merge [approve]`, `merge -> exit`. It is a script node, `cast line
