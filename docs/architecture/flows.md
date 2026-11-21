@@ -175,7 +175,16 @@ A session's own edits in a shared checkout are frozen the way `cast ship
 checkout` freezes them (ship-checkout.md, `freezeAndAttribute`): every changed
 file the session wrote since that file's last commit becomes one commit on
 `codecast/<flow>-<task>`, and nothing in the shared tree, its index or HEAD
-moves. Attribution is per file, so a file another session also wrote carries
+moves. The upstream branch is fetched first (a failed fetch reads it as last
+fetched), so the stale-copy guard reads upstream as it is now. The commit is
+built on HEAD, the base its frozen content grew from, then replayed with the
+checkout's own unlanded commits onto that upstream in the object store
+(`replayOnto`), so Check and Review test the change on what it would land on.
+When the replay conflicts, the branch stays on the HEAD-based commit and
+`change.json` records `behind` (the upstream commit and the conflicting
+paths); Ship's rebase meets the same conflict and routes it to the session.
+A checkout already holding upstream, or with none, keeps the commit on HEAD.
+Attribution is per file, so a file another session also wrote carries
 that session's lines too; the run includes it and names the other session
 rather than leave out part of the change. Credential files stay out. The
 worktree is the one the run's isolated stations would make (`cast ws acquire`,
