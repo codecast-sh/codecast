@@ -997,6 +997,15 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, altKey: "client_key", deepFields: ["sessions", "steps", "tasks"] },
     feeds: ["deployTargets.view", "deployRefs.recentForTeam"],
   },
+  // How far a merged pull request or a main commit has gone toward production
+  // (deploys.md DP16), keyed by its `owner/repo#N` or `owner/repo@sha`. Each
+  // pill that names one feeds its own row, so delta.
+  deployReach: {
+    persistence: { kind: "collection", key: "deployReach" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["targets"] },
+    feeds: ["deployReach.get"],
+  },
   // The flows view's collections (live flows, session flows) live beside this file.
   ...FLOW_SYNC_COLLECTIONS,
   // Everything that entered a workspace's line, one row per event (convex
@@ -2195,6 +2204,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   lineDeploys: "shared",
   deployTargets: "shared",
   teamDeploys: "shared",
+  deployReach: "local",
   liveFlows: "shared",
   sessionFlows: "shared",
   flowMaps: "shared",

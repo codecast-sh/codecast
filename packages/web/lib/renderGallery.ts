@@ -75,6 +75,102 @@ export const GALLERY_FLOW = {
   shipLive: "galleryshiprunlive000001",
 } as const;
 
+// Deploys and how far a change has gone (deploys.md DP7, DP16): a dp-N in each
+// state, the Actions run that carries one, and merged pull requests and a main
+// commit in each reach state. The loader seeds the deploys into teamDeploys,
+// the changes into pullRequests and commits, and their reach into deployReach;
+// the repository starts with "gallery" so `--clear` takes every row out.
+export const GALLERY_DEPLOYS = {
+  repository: "gallery/deploys",
+  /** Asked for 20h ago and no machine has started it: orange. */
+  waiting: "dp-90001",
+  goingOut: "dp-90002",
+  live: "dp-90003",
+  replaced: "dp-90004",
+  failed: "dp-90005",
+  cancelled: "dp-90006",
+  /** What runs on web now, after dp-90004. */
+  liveWeb: "dp-90007",
+  /** Asked for 50m ago, not started yet: the queued pull request's deploy. */
+  queued: "dp-90008",
+  /** worker: a deploy rolled back by dp-90010, which sent the version before it out again. */
+  rolledBackOn: "dp-90009",
+  rollback: "dp-90010",
+  /** The run carrying dp-90002, by url and by bare id, and a CI run that carries no deploy. */
+  runId: "44822506482",
+  deployRun: "https://github.com/gallery/deploys/actions/runs/44822506482",
+  ciRunId: "44822599999",
+  ciRun: "https://github.com/gallery/deploys/actions/runs/44822599999",
+  /** Merged pull requests, one per reach state, then an open one. */
+  prs: { live: 4341, going_out: 4342, failed: 4343, rolled_back: 4344, waiting: 4345, open: 4346, queued: 4347 },
+  commit: "4a6e413b2c7d9e0f1a2b3c4d5e6f708192a3b4c5",
+} as const;
+
+function deployRecords(now: number, workspace: string) {
+  const D = GALLERY_DEPLOYS;
+  const min = 60_000;
+  const hour = 60 * min;
+  const sha = (n: number) => `${n}a6e41${n}b2c7d9e0f1a2b3c4d5e6f708192a3b`.slice(0, 40);
+  const deploy = (n: number, short_id: string, target: string, status: string, extra: Record<string, unknown>) => ({
+    _id: `gallerydeploy000000000${String(n).padStart(2, "0")}`, workspace, repository: D.repository, short_id, target, status, action: "deploy", trigger: "person",
+    rollback_of: null, sha: sha(n), previous_sha: null, version: null, url: null, source: "line",
+    started_by: "Ashot", note: null, commits: 3, sessions: [], live_at: null, finished_at: null, ...extra,
+  });
+  const steps = (running: number, at: number) => ["ci", "send", "gate", "rollout", "live", "finish"].map((id, i) =>
+    i < running ? { id, status: "completed", started_at: at, completed_at: at } : i === running ? { id, status: "running", started_at: now - 18 * min } : { id, status: "pending" });
+  const tasks = [{ short_id: "ct-4102", title: "Patch the race" }, { short_id: "ct-4103", title: "Retry 410s once" }, { short_id: "ct-4110", title: "Rename the inbox divider" }];
+  const quiet = (open: boolean) => ({ open, quiet: true, regressions: 0, new_errors: 0, reopened: 0 });
+  const teamDeploys = [
+    deploy(1, D.waiting, "web", "requested", { created_at: now - 20 * hour }),
+    deploy(2, D.goingOut, "web", "running", { created_at: now - 82 * min, url: D.deployRun, steps: steps(2, now - hour), tasks }),
+    deploy(3, D.live, "backend", "live", { created_at: now - 140 * min, live_at: now - 128 * min, finished_at: now - 128 * min, after: quiet(true) }),
+    // Live 29h ago on web, replaced 5h ago by dp-90007.
+    deploy(4, D.replaced, "web", "live", { created_at: now - 30 * hour, live_at: now - 29 * hour, finished_at: now - 29 * hour, after: quiet(false), replaced_by: { short_id: D.liveWeb, sha: sha(7), at: now - 5 * hour, rollback: false } }),
+    deploy(5, D.failed, "backend", "failed", { created_at: now - 60 * min, finished_at: now - 8 * min, note: "Health check on /api/health answered 502 for 5 minutes after the rollout; the old version kept serving." }),
+    // No sha or version: named by its dp-N.
+    deploy(6, D.cancelled, "web", "cancelled", { created_at: now - 5 * hour, finished_at: now - 296 * min, sha: null }),
+    deploy(7, D.liveWeb, "web", "live", { created_at: now - 6 * hour, live_at: now - 5 * hour, finished_at: now - 5 * hour, after: quiet(true) }),
+    deploy(8, D.queued, "backend", "requested", { created_at: now - 50 * min }),
+    // worker: live 3h ago, rolled back 40m ago to the version before it.
+    deploy(9, D.rolledBackOn, "worker", "live", { created_at: now - 190 * min, live_at: now - 3 * hour, finished_at: now - 3 * hour, after: quiet(false), replaced_by: { short_id: D.rollback, sha: sha(11), at: now - 40 * min, rollback: true } }),
+    deploy(10, D.rollback, "worker", "live", { action: "rollback", rollback_of: D.rolledBackOn, sha: sha(11), created_at: now - 45 * min, live_at: now - 40 * min, finished_at: now - 40 * min, after: quiet(true) }),
+  ];
+  const at = (short_id: string) => teamDeploys.find((d) => d.short_id === short_id)!;
+  const ref = (short_id: string) => { const d = at(short_id) as any; return { short_id, status: d.status, sha: d.sha, at: d.live_at ?? d.finished_at ?? d.created_at, url: d.url }; };
+  const reach = (id: string, state: string, targets: Array<[string, string, string | null, string | null]>) =>
+    ({ _id: id, ref: id, state, sha: null, targets: targets.map(([target, st, dp, nowDp]) => ({ target, state: st, deploy: dp ? ref(dp) : null, now: nowDp ? ref(nowDp) : null })) });
+  const prRef = (n: number) => `${D.repository}#${n}`;
+  // Each pull request merged before the deploys that hold it.
+  const pr = (n: number, title: string, state: "merged" | "open", mergedAgo: number) => ({
+    _id: `gallerypr00000000000${n}`, repository: D.repository, number: n, title, state, author_github_username: "ashot",
+    head_ref: `fix-${n}`, base_ref: "main", additions: 42, deletions: 7, changed_files: 3, created_at: now - mergedAgo - 2 * hour, updated_at: now - mergedAgo,
+    ...(state === "merged" ? { merged_at: now - mergedAgo } : {}),
+  });
+  return {
+    teamDeploys,
+    pullRequests: [
+      pr(D.prs.live, "Cap the Pages gallery read", "merged", 7 * hour),
+      pr(D.prs.going_out, "Read-only team keys", "merged", 2 * hour),
+      pr(D.prs.failed, "Move health checks behind the router", "merged", 90 * min),
+      pr(D.prs.rolled_back, "Batch the inbox apply", "merged", 31 * hour),
+      pr(D.prs.waiting, "Rename the inbox divider", "merged", 30 * min),
+      pr(D.prs.open, "Messages reach Orca terminals", "open", 20 * min),
+      pr(D.prs.queued, "Cap the session index page", "merged", 70 * min),
+    ],
+    // On main before backend's dp-90003 went live (128m ago) and before web's dp-90002 was asked for (82m ago).
+    commits: [{ _id: "gallerycommit0000000001", repository: D.repository, sha: D.commit, message: "fix(convex): cap the Pages gallery read\n\nLarge accounts timed out listing every page.", author_name: "Ashot", branch: "main", timestamp: now - 150 * min, insertions: 18, deletions: 4, files_changed: 2 }],
+    deployReach: [
+      reach(prRef(D.prs.live), "live", [["web", "live", D.liveWeb, null], ["backend", "live", D.live, null]]),
+      reach(prRef(D.prs.going_out), "going_out", [["web", "going_out", D.goingOut, D.liveWeb]]),
+      reach(prRef(D.prs.failed), "failed", [["backend", "failed", D.failed, D.live]]),
+      reach(prRef(D.prs.rolled_back), "rolled_back", [["web", "rolled_back", D.replaced, D.liveWeb]]),
+      reach(prRef(D.prs.waiting), "waiting", [["web", "waiting", null, D.liveWeb]]),
+      reach(prRef(D.prs.queued), "queued", [["backend", "queued", D.queued, D.live]]),
+      reach(`${D.repository}@${D.commit}`, "going_out", [["backend", "live", D.live, null], ["web", "going_out", D.goingOut, D.liveWeb]]),
+    ],
+  };
+}
+
 const FLOW_SOURCE = `digraph gallery_flaky_fix {
   graph [extends="spine", label="Spine, flaky test"]
   subgraph implement {
@@ -162,6 +258,7 @@ export function renderGalleryRecords(now: number, viewerId: string, workspace: s
       question: "Keep the old parser for a release as a fallback?", kind: "single", status: "pending", blocking: false, default_option: 0, created_at: now - 60_000, updated_at: now - 60_000,
       options: [{ label: "Keep it", description: "One release, then delete" }, { label: "Delete now", description: "No fallback" }],
     }],
+    ...deployRecords(now, workspace),
     sessionFlows: [{ _id: GALLERY_FLOW.sessionFlow, workspace, graph_hash: GALLERY_FLOW.hash, from: "graph", name: GALLERY_FLOW.slug, label: "Spine, flaky test", kind: null, base: "spine", fills: ["implement"], nodes: FLOW_NODES, edges: FLOW_EDGES, runs: [GALLERY_FLOW.liveRun], run_count: 1, more: false, last_at: now, sessions: [], by: [viewerId], saved: null }],
   };
 }
@@ -441,6 +538,15 @@ export function renderGalleryMessages(now: number): Row[] {
   asst(`A message naming two open decisions gets one review under it: ${GALLERY_ORG.decisionShort} first, then ${GALLERY_ORG.decision2Short}.`);
   asst(FENCES);
   asst(`<div style="padding:8px"><h3>A whole-HTML reply</h3><p>An agent wrote raw HTML without a fence.</p></div>`);
+
+  section("Deploys");
+  {
+    const D = GALLERY_DEPLOYS;
+    asst(`Each deploy wears its state: ${D.waiting}, ${D.queued}, ${D.goingOut}, ${D.live}, ${D.replaced} (then ${D.liveWeb}), ${D.failed} and ${D.cancelled}. A rollback: ${D.rollback} (it replaced ${D.rolledBackOn}). Named again, one is its id: ${D.goingOut}.`);
+    asst(`The Actions run carrying a deploy reads as the deploy: ${D.deployRun}. A CI run stays its link: ${D.ciRun}. By its bare id too: Deploy ${D.runId} is going out, and run ${D.ciRunId} is only CI.`);
+    const p = (n: number) => `${D.repository}#${n}`;
+    asst(`A merged change says how far it got: ${p(D.prs.live)}, ${p(D.prs.going_out)}, ${p(D.prs.queued)}, ${p(D.prs.failed)}, ${p(D.prs.rolled_back)} and ${p(D.prs.waiting)}. An open one says nothing: ${p(D.prs.open)}. A commit on main says it too: ${D.repository}@${D.commit.slice(0, 10)}.`);
+  }
 
   section("People and sessions");
   user("Plain words a person typed, with an id ct-42 and a link https://codecast.sh.");

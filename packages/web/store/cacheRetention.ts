@@ -326,6 +326,7 @@ export const COLLECTION_RETENTION: Record<string, (rows: any[], now: number) => 
   docDetails: partitionDocDetailRetention,
   taskComments: detailRetention(MAX_CACHED_TASK_THREADS),
   pullRequestDetails: detailRetention(MAX_CACHED_PULL_REQUEST_DETAILS),
+  deployReach: detailRetention(DETAIL_ROW_CAPS.deployReach),
   externalEvents: partitionExternalEventRetention,
   mySends: (rows, now) => partitionCacheRetention(rows, now, {
     ttlMs: Number.POSITIVE_INFINITY,

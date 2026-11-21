@@ -51,6 +51,7 @@ import {
   MESSAGE_REF_PREFIX,
   CONTEXTUAL_PR_REF_PREFIX,
   parseContextualPrRef,
+  parseDeployRunRef,
   pullRequestRepository,
   parseRepoObjectId,
   parseCallRef,
@@ -60,6 +61,7 @@ import {
   formatCallTime,
   repoObjectId,
   repoObjectGitHubUrl,
+  entityRoute,
   type EntityType,
 } from "../lib/entityLinks";
 import { isOnThreadRoute, openSessionAtMessage } from "../lib/openSessionAtMessage";
@@ -102,13 +104,21 @@ import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { SessionHoverContent } from "./SessionHoverContent";
 import { DocDates } from "./DocDates";
 import { TimeAgo } from "./tasks/TaskCommentStream";
-import { useRevealRef } from "../lib/revealHost";
+import { RevealHostCtx, useRevealRef } from "../lib/revealHost";
 import { RevealOpenLink } from "./ObjectReveal";
 import { ModObjectPill } from "./mods/ModObjectPill";
 import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "./ops/parts";
 import { replayFacts, replayTitle } from "./ops/opsModel";
 import { ModPaneEmbed } from "./mods/ModPaneEmbed";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
+import { actionsRunKey } from "@codecast/shared/contracts/deploys";
+import { DeployPillSuffix, ReachSegment } from "./deploys/deployRefLook";
+import { FAILED_ICON, REACH_ICON, TONE_TEXT, deployLook } from "../lib/deploys/deployLook";
+import { REACH_LOOK, deployAgo, deployElapsed, deployHeadline, deployPillSuffix, deployStepLabel, reachTime, replacedLine, runRefKey } from "../lib/deploys/deployPill";
+import { findEntityInStore } from "../lib/liveEntities";
+import { useDeployReach } from "../hooks/useDeployReach";
+import { useNowWhen } from "../hooks/useCoarseNow";
+import { fmtClock } from "./triggerCadence";
 
 export { SessionHoverContent };
 
@@ -497,13 +507,19 @@ function TriggerHoverContent({ trigger }: { trigger: any }) {
   );
 }
 
+/** The parts of a repository object's card that open it: each its own link, so the production rows between them can be links too. */
+type RepoCardLink = { href: string; onOpen: (e: React.MouseEvent) => void; production: React.ReactNode; showOpen: boolean };
+const CARD_LINK = "block no-underline cursor-pointer space-y-2";
+
 // A pull request reference answers: what it is, whether it is open, merged or
-// closed, who opened it, which branch goes where, and how big it is.
-function PullRequestHoverContent({ pr }: { pr: any }) {
+// closed, who opened it, where it stands in production once merged, which
+// branch goes where, and how big it is.
+function PullRequestHoverContent({ pr, href, onOpen, production, showOpen }: { pr: any } & RepoCardLink) {
   const state = prState(pr.state);
   const when = relativeTime(pr.merged_at ?? pr.updated_at);
   return (
     <div className="space-y-2">
+      <Link href={href} onClick={onOpen} className={CARD_LINK}>
       <div className="flex items-start gap-2">
         <GitPullRequest className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${state.color}`} />
         <div className="min-w-0 flex-1">
@@ -526,6 +542,9 @@ function PullRequestHoverContent({ pr }: { pr: any }) {
         </div>
       </div>
 
+      </Link>
+      {production}
+      <Link href={href} onClick={onOpen} className={CARD_LINK}>
       {pr.body && (
         <p className="text-meta text-sol-text-muted line-clamp-2 leading-relaxed pl-[22px]">
           {stripMarkdown(pr.body).slice(0, 200)}
@@ -569,12 +588,15 @@ function PullRequestHoverContent({ pr }: { pr: any }) {
         </div>
       )}
 
-      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
+      <div className="flex items-center justify-between gap-2 pt-1 border-t border-sol-border/40">
         <span className="text-meta text-sol-text-dim font-mono truncate">{repoObjectRefOf("pr", pr)}</span>
-        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5 flex-shrink-0">
-          Open <ArrowUpRight className="w-2.5 h-2.5" />
-        </span>
+        {showOpen && (
+          <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5 flex-shrink-0">
+            Open <ArrowUpRight className="w-2.5 h-2.5" />
+          </span>
+        )}
       </div>
+      </Link>
     </div>
   );
 }
@@ -607,14 +629,16 @@ function RepoObjectUnknownHoverContent({ rawId, served }: { rawId: string; serve
 }
 
 // A commit reference answers: its subject, who wrote it and when, the branch
-// it landed on, and the body when the message has one.
-function CommitHoverContent({ commit }: { commit: any }) {
+// it landed on, where it stands in production when it is on main, and the
+// body when the message has one.
+function CommitHoverContent({ commit, href, onOpen, production, showOpen }: { commit: any } & RepoCardLink) {
   const lines = String(commit.message ?? "").split("\n");
   const subject = lines[0]?.trim();
   const body = lines.slice(1).join("\n").trim();
   const when = relativeTime(commit.timestamp);
   return (
     <div className="space-y-2">
+      <Link href={href} onClick={onOpen} className={CARD_LINK}>
       <div className="flex items-start gap-2">
         <GitCommitHorizontal className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-yellow" />
         <div className="min-w-0 flex-1">
@@ -636,24 +660,201 @@ function CommitHoverContent({ commit }: { commit: any }) {
           </div>
         </div>
       </div>
-
+      </Link>
+      {production}
+      <Link href={href} onClick={onOpen} className={CARD_LINK}>
       {body && (
         <p className="text-meta text-sol-text-muted line-clamp-3 leading-relaxed pl-[22px] whitespace-pre-line">
           {body.slice(0, 220)}
         </p>
       )}
 
-      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
+      <div className="flex items-center justify-between gap-2 pt-1 border-t border-sol-border/40">
         <span className="text-meta text-sol-text-dim font-mono inline-flex items-center gap-2 min-w-0">
           <span className="truncate">{commit.repository ? `${commit.repository}@` : ""}{commit.sha.slice(0, 7)}</span>
           <DiffStat additions={commit.insertions} deletions={commit.deletions} files={commit.files_changed} />
         </span>
-        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5 flex-shrink-0">
-          Open <ArrowUpRight className="w-2.5 h-2.5" />
-        </span>
+        {showOpen && (
+          <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5 flex-shrink-0">
+            Open <ArrowUpRight className="w-2.5 h-2.5" />
+          </span>
+        )}
+      </div>
+      </Link>
+    </div>
+  );
+}
+
+// A step's dot: done is filled, the running one a ring, so the two part in
+// either theme without color alone.
+const STEP_DOT: Record<string, string> = {
+  completed: "bg-sol-green",
+  running: "ring-[1.5px] ring-inset ring-sol-yellow",
+  failed: "bg-sol-red",
+  pending: "ring-1 ring-inset ring-sol-text-dim/60",
+};
+
+// A deploy reference answers: did it finish, fail, or is it still going, and
+// since when; then where it went, which version, who sent it, the step it is
+// on and what it carried. Its own links (the carried fixes, the run on
+// GitHub), so it is not wrapped in the card's one link.
+function DeployHoverContent({ deploy: d, href, onOpen, showOpen }: { deploy: any; href: string; onOpen: (e: React.MouseEvent) => void; showOpen: boolean }) {
+  const steps: Array<{ id: string; status: string; started_at?: number; completed_at?: number }> = d.steps ?? [];
+  const current = steps.find((x) => x.status === "running") ?? steps.find((x) => x.status === "failed") ?? null;
+  const stepTime = (t: number) => (current?.started_at ? deployElapsed((current.status === "running" ? t : current.completed_at ?? t) - current.started_at) : null);
+  const ended = (d.status === "failed" || d.status === "cancelled") && d.finished_at ? d.finished_at : null;
+  const replaced = d.replaced_by as { short_id: string; sha?: string | null; at: number; rollback?: boolean } | null | undefined;
+  const now = useNowWhen((t) => `${deployHeadline(d, t, fmtClock)}|${stepTime(t) ?? ""}|${ended ? deployAgo(ended, t) : ""}|${replaced ? deployAgo(replaced.at, t) : ""}`, 15_000);
+  const { state, tone: toneName, Icon, iconClass } = deployLook(d, now);
+  const tone = TONE_TEXT[toneName];
+  const by = state === "replaced" && replaced ? replacedLine(replaced, now) : null;
+  const startedBy = typeof d.started_by === "string" ? d.started_by : d.started_by?.name;
+  const facts = [d.target, d.repository].filter(Boolean) as string[];
+  // A deploy the line sent lists what it carried; one from the Deploys page's feed lists the tasks its commits named.
+  const carried: string[] = (d.carries ?? []).map((c: any) => c.task_short_id).filter(Boolean);
+  const fixes = d.carries?.length ?? d.tasks?.length ?? 0;
+  const refs = carried.length ? carried : (d.tasks ?? []).map((t: any) => t.short_id).filter(Boolean);
+  const run = actionsRunKey(d.url) || /^https:\/\/github\.com\//i.test(d.url ?? "") ? d.url : null;
+  return (
+    <div className="p-3 space-y-2">
+      <div className="flex items-start gap-2">
+        <Icon className={`w-3.5 h-3.5 flex-shrink-0 mt-[3px] ${tone} ${iconClass}`} />
+        <div className="min-w-0 flex-1">
+          {/* What replaced it is a deploy of its own, linked, so the line is not inside the card's link. */}
+          <div className={`text-sm font-medium leading-snug ${state === "replaced" || state === "cancelled" || (state === "waiting" && toneName !== "orange") ? "text-sol-text" : tone}`}>
+            {by && replaced ? (
+              <>
+                {by.verb}{" "}
+                <Link href={entityRoute("deploy", replaced.short_id) ?? "#"} onClick={onOpen} title={replaced.short_id} className="font-mono underline decoration-current/30 underline-offset-2 hover:decoration-current">{by.label}</Link>
+                <span className="font-normal text-sol-text-muted"> · {by.ago}</span>
+              </>
+            ) : (
+              <Link href={href} onClick={onOpen} className="no-underline">{deployHeadline(d, now, fmtClock)}</Link>
+            )}
+          </div>
+          <Link href={href} onClick={onOpen} className="block no-underline cursor-pointer">
+            <div className="flex items-center gap-1.5 mt-1 text-meta text-sol-text-muted min-w-0">
+              {facts.map((f, i) => (
+                <React.Fragment key={f}>
+                  {i > 0 && <span className="text-sol-text-dim/60">·</span>}
+                  <span className={i === 0 ? "text-sol-text-secondary font-medium shrink-0" : "truncate"}>{f}</span>
+                </React.Fragment>
+              ))}
+              {d.sha && (
+                <>
+                  <span className="text-sol-text-dim/60">·</span>
+                  <span className="font-mono shrink-0">{d.sha.slice(0, 7)}</span>
+                </>
+              )}
+            </div>
+            <div className="mt-0.5 text-meta text-sol-text-dim truncate">
+              {startedBy ? `started by ${startedBy} · ` : "started "}{fmtClock(d.created_at, now)}
+              {ended ? ` · ended ${deployAgo(ended, now)}` : ""}
+            </div>
+          </Link>
+        </div>
+      </div>
+      {(steps.length > 0 || (state === "failed" && d.note)) && <Link href={href} onClick={onOpen} className="block no-underline cursor-pointer space-y-2">
+        {steps.length > 0 && (
+          <div className="flex items-center gap-2 pl-[22px] text-meta">
+            <span className="inline-flex items-center gap-1">
+              {steps.map((x) => (
+                <span key={x.id} title={`${deployStepLabel(x.id)} · ${STEP_WORD[x.status] ?? x.status}`} className={`block w-1.5 h-1.5 rounded-full ${STEP_DOT[x.status] ?? STEP_DOT.pending}`} />
+              ))}
+            </span>
+            {current && (
+              <span className={current.status === "failed" ? "text-sol-red" : "text-sol-text-muted"}>
+                {deployStepLabel(current.id)}
+                {stepTime(now) ? ` · ${stepTime(now)}` : ""}
+              </span>
+            )}
+          </div>
+        )}
+        {state === "failed" && d.note && <p title={d.note} className="pl-[22px] text-meta text-sol-red line-clamp-3 leading-relaxed">{d.note}</p>}
+      </Link>}
+      {fixes > 0 && (
+        <RevealHostCtx.Provider value={null}>
+          <div className="flex items-baseline gap-1.5 pl-[22px] text-meta text-sol-text-muted min-w-0 flex-wrap">
+            <span>carries {fixes} {fixes === 1 ? "fix" : "fixes"}</span>
+            {refs.slice(0, 2).map((r: string) => <EntityIdPill key={r} shortId={r} compact />)}
+            {refs.length > 2 && <span className="text-sol-text-dim">+{refs.length - 2}</span>}
+          </div>
+        </RevealHostCtx.Provider>
+      )}
+      <div className="flex items-center gap-3 pt-1 border-t border-sol-border/40 text-meta text-sol-text-dim">
+        <ShortId id={d.short_id} className="mr-auto" />
+        {run && (
+          <a href={run} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 no-underline text-sol-text-dim hover:text-sol-text">
+            View run on GitHub <ArrowUpRight className="w-2.5 h-2.5" />
+          </a>
+        )}
+        {showOpen && (
+          <Link href={href} onClick={onOpen} className="inline-flex items-center gap-0.5 no-underline text-sol-text-dim hover:text-sol-text">
+            Open <ArrowUpRight className="w-2.5 h-2.5" />
+          </Link>
+        )}
       </div>
     </div>
   );
+}
+
+const STEP_WORD: Record<string, string> = { completed: "done", running: "running", failed: "failed", pending: "waiting" };
+
+/** A deploy in a target's reach row: its sha, else its dp-N, linking to it. A row cached before reach carried the sha looks it up. */
+function ReachDeployLink({ deploy }: { deploy: { short_id: string; sha?: string | null } }) {
+  const sha = useMemo(
+    () => deploy.sha ?? (findEntityInStore(useInboxStore.getState(), "deploy", deploy.short_id) as { sha?: string | null } | undefined)?.sha,
+    [deploy.sha, deploy.short_id],
+  );
+  const closeCard = useContext(HoverCardClose);
+  return (
+    <Link href={entityRoute("deploy", deploy.short_id) ?? "#"} onClick={() => closeCard?.()} title={deploy.short_id} className="font-mono no-underline text-sol-text-muted hover:text-sol-text hover:underline">
+      {sha ? sha.slice(0, 7) : deploy.short_id}
+    </Link>
+  );
+}
+
+// Where a merged pull request or main commit stands in production, one row
+// per deploy target it touches: the target, the state, the deploy (its sha,
+// linking to it) and the time that state began. Its own links, so the card
+// draws it between its own.
+function ProductionReach({ refId }: { refId: string }) {
+  const reach = useDeployReach(refId, false);
+  const targets = reach?.targets ?? [];
+  const now = useNowWhen((t) => targets.map((x) => { const at = reachTime(x); return at ? deployAgo(at.at, t) : ""; }).join("|"), 15_000);
+  if (!targets.length) return null;
+  return (
+    <div className="pl-[22px]">
+      <div className="text-mark uppercase tracking-wide text-sol-text-dim mb-0.5">Production</div>
+      <div className="grid grid-cols-[auto_auto_auto_1fr] items-baseline gap-x-2 gap-y-0.5 text-meta">
+        {targets.map((t) => {
+          const look = REACH_LOOK[t.state];
+          const Icon = REACH_ICON[t.state];
+          const time = reachTime(t);
+          return (
+            <React.Fragment key={t.target}>
+              <span className="text-sol-text-secondary font-medium whitespace-nowrap">{t.target}</span>
+              <span className={`inline-flex items-baseline gap-1 whitespace-nowrap ${TONE_TEXT[look.tone]}`}>
+                <Icon aria-hidden className={`w-3 h-3 shrink-0 self-center ${t.state === "failed" ? FAILED_ICON : ""}`} />
+                {look.word}
+              </span>
+              <span>{t.deploy && <ReachDeployLink deploy={t.deploy} />}</span>
+              <span className="text-sol-text-dim whitespace-nowrap text-right">{time ? `${time.verb ? `${time.verb} ` : ""}${deployAgo(time.at, now)}` : ""}</span>
+              {t.now && t.state !== "live" && t.state !== "going_out" && (
+                <span className="col-start-2 col-span-3 text-sol-text-dim">now runs <ReachDeployLink deploy={t.now} /></span>
+              )}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** A merged pull request's or main commit's reach after its pill's name; nothing when the change goes nowhere. */
+function PillReach({ refId }: { refId: string }) {
+  const reach = useDeployReach(refId);
+  return reach ? <ReachSegment state={reach.state} /> : null;
 }
 
 const MENTION_RE = entityMentionRegex();
@@ -873,6 +1074,8 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
       if (kind === "artifact") return <PublishedPageEmbed slug={id} caption={caption} />;
       if (kind === "link") {
         const url = parseLinkPreviewUrl(safeDecode(id));
+        // A GitHub Actions run that carries a deploy is that deploy; any other run keeps its preview.
+        if (url && actionsRunKey(url)) return <div><EntityIdPill type="deploy" id={url} fallback={<LinkPreviewCard url={url} caption={caption} />} /></div>;
         if (url) return <LinkPreviewCard url={url} caption={caption} />;
       } else {
         return <ClaudeArtifactEmbed id={id} caption={caption} />;
@@ -891,6 +1094,8 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
       const pr = contextualPrReference(ref, pathCtx, mention);
       if (pr !== null) return pr;
     }
+    const run = parseDeployRunRef(ref);
+    if (run) return <EntityIdPill type="deploy" id={run.id} mention={mention} fallback={<>{run.label}</>} />;
     return <EntityIdPill shortId={ref} mention={mention} />;
   }
   // A file mention remarkEntityIds turned into a /files?path= link: re-resolve
@@ -936,6 +1141,11 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   if (text.startsWith(CONTEXTUAL_PR_REF_PREFIX)) {
     const pr = contextualPrReference(text, pathCtx, mention);
     if (pr !== null) return pr;
+  }
+  // A run named by its bare id (`deployrun:<id>|<as written>`): the deploy it carried, else the words as written.
+  {
+    const run = parseDeployRunRef(text);
+    if (run) return <EntityIdPill type="deploy" id={run.id} mention={mention} fallback={<>{run.label}</>} />;
   }
   if (isEntityId(text)) {
     // Fallback preserves the original link for a Convex-shaped id that turns
@@ -990,6 +1200,12 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
         to={repoObject ? repoObjectDeepHref(href) ?? undefined : entityRef.to}
       />
     );
+  }
+  // A GitHub Actions run that carries a deploy reads as the deploy's pill and
+  // opens its page (the hover keeps the run's link). Most runs are CI, not
+  // deploys: those, and any run before codecast answers, stay the link.
+  if (actionsRunKey(href)) {
+    return <EntityIdPill type="deploy" id={href} mention={mention} fallback={<a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>} />;
   }
   // A publish URL inside a sentence: a compact titled pill. The block-embed
   // case (URL alone on its line) never reaches here — remarkEntityIds hoists
@@ -1248,6 +1464,10 @@ export function EntityIdPill({
   const taskV = taskVisual(status);
   const decisionV = DECISION_STATE[status ?? "pending"] ?? DECISION_STATE.pending;
   const decisionSettled = type === "decision" && (status ?? "pending") !== "pending";
+  // A deploy wears its state: glyph and chrome say live, going out or failed before a word is read.
+  const deployV = type === "deploy" && entity ? deployLook(entity, Date.now()) : null;
+  // A merged pull request or a commit carries how far it has gone toward production.
+  const reachRef = entity && ((isPr && entity.state === "merged") || isCommit) ? repoObjectRefOf(type!, entity, 40) : null;
 
   // Who a session IS (session-characters.md S3): once a session wears a
   // character or a role, the reference reads as that person — the face in
@@ -1286,6 +1506,8 @@ export function EntityIdPill({
               ? Film
             : type === "flow"
               ? Workflow
+            : deployV
+              ? deployV.Icon
             : isPr
               ? GitPullRequest
               : isCommit
@@ -1328,8 +1550,11 @@ export function EntityIdPill({
             // A flow wears the cyan of plans: both say the way the work goes, step by step.
             : type === "flow"
               ? "bg-sol-cyan/[0.08] text-sol-cyan hover:bg-sol-cyan/[0.16]"
+            : deployV
+              ? deployV.chrome
+            // Merged is violet, as the pull request's own card and chip say it.
             : isPr
-              ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
+              ? entity?.state === "merged" ? "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]" : "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
                 ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
                 : "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]";
@@ -1394,15 +1619,22 @@ export function EntityIdPill({
   // reference (a URL, a number in a repository bound conversation) is exempt:
   // it pills and opens the codecast page, which handles a missing row itself.
   if ((isPr || isCommit) && !entity && !certain) return fallback !== undefined ? <>{fallback}</> : <span className="modern:font-mono">{rawId}</span>;
+  // A GitHub Actions run is a deploy only once codecast says so; until then, and for every CI run, it stays its link.
+  if (type === "deploy" && !entity && runRefKey(rawId)) return <>{fallback}</>;
 
   // Quiet chrome: the reference sits IN the sentence — same size as the
   // prose, no border, a faint tint of the type's color, the way a mention
   // reads in chat. The icon and the color say "this is an object"; the box
   // that used to say it was what turned a paragraph with four references
   // into a row of stamps.
+  // A deploy's state is part of its name for a reader who cannot see the color.
+  // A pill with a caret keeps it on its line: the caret never starts one.
+  const KeepWithCaret = canReveal ? "span" : React.Fragment;
+  const linkTitle = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : wide || reachRef || fullLabel !== pillLabel ? fullLabel : undefined;
   return (
     <>
     <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
+      <KeepWithCaret {...(canReveal ? { className: "whitespace-nowrap" } : {})}>
       <PopoverAnchor asChild>
         <Link
           ref={linkRef}
@@ -1413,8 +1645,9 @@ export function EntityIdPill({
           onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
           data-reveal-open={revealOpen ? "" : undefined}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
-          title={wide || fullLabel !== pillLabel ? fullLabel : undefined}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} whitespace-normal inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : reachRef ? (canReveal ? " max-w-[calc(100%-1.3em)]" : " max-w-full") : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          title={linkTitle}
+          aria-label={deployV ? linkTitle : undefined}
         >
           <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
             {persona && entity ? (
@@ -1426,7 +1659,7 @@ export function EntityIdPill({
             ) : isSession && (entity?.author_name || entity?.author_avatar) ? (
               <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size="1em" />
             ) : (
-              <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : type === "source" && status === "error" ? "text-sol-red" : ""}`} />
+              <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : type === "source" && status === "error" ? "text-sol-red" : deployV?.iconClass ?? ""}`} />
             )}
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
@@ -1434,7 +1667,10 @@ export function EntityIdPill({
           </span>
           {/* The label, not the icon, gives the pill its baseline, so the
               text sits on the line with the words around it. */}
-          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : "self-baseline"}>{pillLabel}</span>
+          {/* A pill that carries its reach cuts its title, so the reach stays on the line with it. */}
+          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : reachRef ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : "self-baseline"}>{pillLabel}</span>
+          {deployV && <DeployPillSuffix deploy={entity} />}
+          {reachRef && <PillReach refId={reachRef} />}
         </Link>
       </PopoverAnchor>
       {/* The other half of the pill: the caret opens the full page in a band
@@ -1452,8 +1688,9 @@ export function EntityIdPill({
           <ChevronDown aria-hidden className="entity-ref__caret" />
         </button>
       )}
+      </KeepWithCaret>
       <PopoverContent
-        className={`${type === "doc" ? "w-96" : "w-80"} max-w-[calc(100vw-16px)] bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
+        className={`${type === "doc" || reachRef ? "w-96" : "w-80"} max-w-[calc(100vw-16px)] bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
         side="top"
         align="start"
         sideOffset={6}
@@ -1469,7 +1706,14 @@ export function EntityIdPill({
         <HoverCardClose.Provider value={closeNow}>
         {/* A role's card is the one every place that names a role shows, a
             link of its own, so it is not wrapped in a second one. */}
-        {type === "role" && entity ? <RoleHoverContent role={entity} onOpen={handleOpen} /> : type === "person" && entity ? <PersonHoverContent person={{ userId: entity._id ? String(entity._id) : null, handle: entity.github_username || entity.username || null, name: entity.name, image: entity.image ?? entity.github_avatar_url }} onOpen={handleOpen} /> : type === "initiative" && entity ? <GoalHoverContent goal={entity} onOpen={handleOpen} /> : <Link
+        {type === "role" && entity ? <RoleHoverContent role={entity} onOpen={handleOpen} /> : type === "deploy" && entity ? <DeployHoverContent deploy={entity} href={href} onOpen={handleOpen} showOpen={!canReveal} /> : (isPr || isCommit) && entity ? (
+          // Its production rows are links of their own, so the card is links around them rather than inside one.
+          <div className="p-3">
+            {isPr
+              ? <PullRequestHoverContent pr={entity} href={href} onOpen={handleOpen} production={reachRef ? <ProductionReach refId={reachRef} /> : null} showOpen={!canReveal} />
+              : <CommitHoverContent commit={entity} href={href} onOpen={handleOpen} production={reachRef ? <ProductionReach refId={reachRef} /> : null} showOpen={!canReveal} />}
+          </div>
+        ) : type === "person" && entity ? <PersonHoverContent person={{ userId: entity._id ? String(entity._id) : null, handle: entity.github_username || entity.username || null, name: entity.name, image: entity.image ?? entity.github_avatar_url }} onOpen={handleOpen} /> : type === "initiative" && entity ? <GoalHoverContent goal={entity} onOpen={handleOpen} /> : <Link
           href={href}
           onClick={handleOpen}
           className="block p-3 no-underline cursor-pointer"
@@ -1485,8 +1729,6 @@ export function EntityIdPill({
             : type === "source" ? <SourceHoverContent source={entity} />
             : type === "replay" ? <ReplayHoverContent replay={entity} rawId={rawId} />
             : type === "flow" ? <FlowHoverContent flow={entity} />
-            : isPr ? <PullRequestHoverContent pr={entity} />
-            : isCommit ? <CommitHoverContent commit={entity} />
             : <GenericHoverContent entity={entity} type={type} />
           ) : (isPr || isCommit) ? (
             <RepoObjectUnknownHoverContent rawId={rawId} served={served} />

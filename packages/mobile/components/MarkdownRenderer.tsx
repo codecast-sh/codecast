@@ -28,12 +28,13 @@ import { FlowCard, FlowRunCard } from './session/FlowCard';
 import { CONVERSATION_FENCE_LANG } from '@codecast/web/lib/conversationFence';
 import { ConversationFence } from './ConversationFence';
 import { EntityPill } from './EntityPill';
+import { actionsRunKey } from '@codecast/shared/contracts/deploys';
 import { ProposalCard } from './org/ProposalCard';
 import { DecisionCard } from './decisions/DecisionCard';
 import { SearchHighlightContext, markedRuns } from './search/highlight';
 import { parseMarkdown, plainText, planTable } from '@/lib/markdown';
 import type { Nodes, Paragraph, Image, List, Table } from 'mdast';
-import { parseEntityUrl, parseSharedEntityUrl, isEntityId, entityTypeFromId, parseProposalChangeRef, parsePublishedPageUrl, parseClaudeArtifactUrl, BARE_ID_AFTER, BARE_ID_BEFORE, BARE_ID_SOURCE, MENTION_ID_SOURCE, type EntityType } from '@codecast/shared/entities';
+import { deployRunRefRegex, splitDeployRunRef, parseEntityUrl, parseSharedEntityUrl, isEntityId, entityTypeFromId, parseProposalChangeRef, parsePublishedPageUrl, parseClaudeArtifactUrl, BARE_ID_AFTER, BARE_ID_BEFORE, BARE_ID_SOURCE, MENTION_ID_SOURCE, type EntityType } from '@codecast/shared/entities';
 // Canonical "★ Insight ─────" parser shared with web (pure string/regex module,
 // Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
 // which silently missed most real-world insight forms — one parser, one truth.
@@ -86,7 +87,22 @@ function linkedEntity(url: string): { type: EntityType; id: string; to?: string 
 
 function renderTextRefs(text: string, ctx: MdCtx, kp: string): React.ReactNode[] {
   const out: React.ReactNode[] = [];
-  const plain = (s: string) => out.push(markedRuns(s, ctx.found, `${kp}h${out.length}-`));
+  const words = (s: string) => out.push(markedRuns(s, ctx.found, `${kp}h${out.length}-`));
+  // Prose between references may name a run by its bare id ("Deploy 44822506482"): the deploy it carried, if
+  // codecast knows one, else the words as written (the web's remarkEntityIds pass).
+  const plain = (s: string) => {
+    const run = deployRunRefRegex();
+    let at = 0;
+    let r: RegExpExecArray | null;
+    while ((r = run.exec(s)) !== null) {
+      const { text: lead } = splitDeployRunRef(r[1], r[2]);
+      words(s.slice(at, r.index) + lead);
+      const asWritten = r[0].slice(lead.length);
+      out.push(<EntityPill key={`${kp}run${r.index}`} type="deploy" id={r[2]} fallback={markedRuns(asWritten, ctx.found, `${kp}run${r.index}-`)} />);
+      at = r.index + r[0].length;
+    }
+    if (at < s.length) words(s.slice(at));
+  };
   const re = new RegExp(TEXT_REF_SOURCE, 'g');
   let last = 0;
   let m: RegExpExecArray | null;
@@ -98,9 +114,11 @@ function renderTextRefs(text: string, ctx: MdCtx, kp: string): React.ReactNode[]
       // pushed back as plain text instead of ending up inside the target.
       const url = trimUrlTail(m[1]);
       const entityRef = linkedEntity(url);
+      const link = <LinkText key={k} url={url} isUser={ctx.isUser} />;
       out.push(entityRef
         ? <EntityPill key={k} type={entityRef.type} id={entityRef.id} to={entityRef.to} />
-        : <LinkText key={k} url={url} isUser={ctx.isUser} />);
+        // An Actions run that carries a deploy is the deploy's pill; any other run stays its link.
+        : actionsRunKey(url) ? <EntityPill key={k} type="deploy" id={url} fallback={link} /> : link);
       const tail = m[1].slice(url.length);
       if (tail) plain(tail);
     } else if (m[2]) {
@@ -199,7 +217,8 @@ function renderInlineNode(node: Nodes, ctx: MdCtx, k: string): React.ReactNode {
       if (entityRef) return <EntityPill key={k} type={entityRef.type} id={entityRef.id} to={entityRef.to} />;
       // An autolink (<https://…>) reads as its shortened URL.
       const label = plainText(node) === node.url ? undefined : renderInline(node.children, ctx, k);
-      return <LinkText key={k} url={node.url} label={label} isUser={ctx.isUser} />;
+      const link = <LinkText key={k} url={node.url} label={label} isUser={ctx.isUser} />;
+      return actionsRunKey(node.url) ? <EntityPill key={k} type="deploy" id={node.url} fallback={link} /> : link;
     }
     case 'image':
       // Inline among text, or from a source that is not ours: a link, never an
@@ -427,7 +446,7 @@ function SoloRefCard({ solo, isUser }: { solo: SoloRef; isUser: boolean }) {
     path = (u.pathname + u.search).replace(/\/$/, '');
   } catch {}
   const kicker = parsePublishedPageUrl(solo.url) ? 'Published page' : parseClaudeArtifactUrl(solo.url) ? 'Claude artifact' : null;
-  return (
+  const card = (
     <TouchableOpacity
       activeOpacity={0.7}
       onPress={() => { void openLink(solo.url); }}
@@ -443,6 +462,8 @@ function SoloRefCard({ solo, isUser }: { solo: SoloRef; isUser: boolean }) {
       <FontAwesome name="external-link" size={11} color={Theme.textDim} />
     </TouchableOpacity>
   );
+  // An Actions run that carries a deploy is the deploy's pill; any other run keeps its card.
+  return actionsRunKey(solo.url) ? <EntityPill type="deploy" id={solo.url} fallback={card} /> : card;
 }
 
 const RULE_RESIDUE_RE = /^[─━═—–]{3,}$/;

@@ -110,6 +110,7 @@ export const DATA_SCOPE = {
   lineDeploys: "workspace",
   deployTargets: "workspace",
   teamDeploys: "workspace",
+  deployReach: "entity",
   liveFlows: "workspace",
   sessionFlows: "workspace",
   flowMaps: "workspace",

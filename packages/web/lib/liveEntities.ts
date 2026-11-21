@@ -28,6 +28,7 @@ import { docRelatesToTask } from "@codecast/shared/tasks";
 import { roleAssigneeInfo, sameAssigneeInfo, type AssigneeInfo as ResolvedAssignee, type AssigneeRole } from "@codecast/shared/contracts/orgAssignee";
 import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { roleAuthorOf, type IdentityPrefs } from "./sessionIdentity";
+import { deployMatchesRef } from "./deploys/deployPill";
 import { teamMembersOf } from "./activeTeam";
 import type { SessionRoleSnapshot } from "../store/inboxStore";
 
@@ -620,8 +621,9 @@ export function findEntityInStore(
       // (`rp-12@1:23`) names the replay's row.
       return lookup(state.opsReplays, parseReplayRef(rawId)?.replay ?? rawId);
     case "deploy":
-      // The line's deploys (lineDeploys), by `dp-N`.
-      return Object.values(state.lineDeploys ?? {}).find((d: any) => d?.short_id === rawId.toLowerCase()) as StoreEntitySeed | undefined;
+      // The line's deploys (lineDeploys), then the Deploys page's (teamDeploys), by `dp-N` or the Actions run that carries it.
+      return (Object.values(state.lineDeploys ?? {}).find((d: any) => deployMatchesRef(d, rawId))
+        ?? Object.values(state.teamDeploys ?? {}).find((d: any) => deployMatchesRef(d, rawId))) as StoreEntitySeed | undefined;
     case "trigger":
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.

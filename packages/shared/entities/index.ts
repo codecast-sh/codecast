@@ -472,6 +472,36 @@ export function parseContextualPrRef(payload: string | undefined | null): { numb
   return m ? { number: Number(m[2]), label: m[3], bare: !!m[1] } : null;
 }
 
+// ---------------------------------------------------------------------------
+// GitHub Actions runs named by their bare id
+//
+// Agents name a deploy by the run that carries it: "Deploy 44822506482",
+// "deploy run 44840113651", "(run 44825521157)". A run id is GitHub-wide and
+// at least nine digits, so a number that long right after "run" or "deploy"
+// is a run. Only codecast knows whether the run carried a deploy, so the
+// payload (`deployrun:<id>|<as written>`) renders as the deploy's pill when
+// it did and as the words written when it did not. Group 1 is the words in
+// front (kept as prose), group 2 the id.
+// ---------------------------------------------------------------------------
+
+export const DEPLOY_RUN_REF_PREFIX = "deployrun:";
+
+export function deployRunRefRegex(): RegExp {
+  return /(\b(?:deploy(?:\s+run)?|run)\s+#?)(\d{9,})\b/gi;
+}
+
+/** One deployRunRefRegex match as prose to keep and the run: the label is the id as written (`#44822506482` or `44822506482`). */
+export function splitDeployRunRef(lead: string, id: string): { text: string; payload: string } {
+  const hashed = lead.endsWith("#");
+  return { text: hashed ? lead.slice(0, -1) : lead, payload: `${DEPLOY_RUN_REF_PREFIX}${id}|${hashed ? "#" : ""}${id}` };
+}
+
+/** Reads a `deployrun:<id>|<label>` payload back; null for anything else. */
+export function parseDeployRunRef(payload: string | undefined | null): { id: string; label: string } | null {
+  const m = /^deployrun:(\d{9,})\|(.*)$/.exec((payload ?? "").trim());
+  return m ? { id: m[1], label: m[2] } : null;
+}
+
 /**
  * The pull requests a piece of prose names beyond doubt: GitHub pull request
  * links as repo object ids, and `PR 3263` or `pull request 12` as numbers the

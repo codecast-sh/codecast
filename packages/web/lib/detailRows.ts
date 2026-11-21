@@ -23,7 +23,7 @@
  *  the row to disk each time. */
 export const CACHED_AT_GRAIN_MS = 6 * 60 * 60 * 1000;
 
-const cachedAt = (prev: { _cachedAt?: number } | undefined, now: number): number => {
+export const cachedAt = (prev: { _cachedAt?: number } | undefined, now: number): number => {
   const held = prev?._cachedAt;
   return held !== undefined && now - held < CACHED_AT_GRAIN_MS ? held : now;
 };
@@ -39,14 +39,19 @@ type Row = Record<string, any>;
 // 1.1 MB). A pull request's detail averages 175 KB, so its cap is the handful
 // a person is working through, not a history. An evicted row is one read
 // away: the surface that shows it fetches it again.
-export const DETAIL_ROW_CAPS = { taskComments: 1500, pullRequestDetails: 12 } as const;
+//
+// `deployReach` is not split off a list row, but it is held the same way: a
+// row per merged pull request or main commit a pill named, read by the pill
+// that names it (hooks/useDeployReach), so the pill pins it and the rest age
+// out by when they were last fed.
+export const DETAIL_ROW_CAPS = { taskComments: 1500, pullRequestDetails: 12, deployReach: 300 } as const;
 export type DetailKey = keyof typeof DETAIL_ROW_CAPS;
 export const isDetailKey = (key: string): key is DetailKey => Object.prototype.hasOwnProperty.call(DETAIL_ROW_CAPS, key);
 
 // What is on screen in this window: each mounted reader of a detail row pins
 // it (useTaskComments, usePullRequestDetail, useSyncTaskThreads), and a
 // pinned row is never evicted, whatever the cap and whichever window asked.
-const pins: Record<DetailKey, Map<string, number>> = { taskComments: new Map(), pullRequestDetails: new Map() };
+const pins: Record<DetailKey, Map<string, number>> = { taskComments: new Map(), pullRequestDetails: new Map(), deployReach: new Map() };
 
 /** Hold these rows while a surface shows them. Returns the release. */
 export function pinDetailRows(key: DetailKey, ids: readonly string[]): () => void {

@@ -5,7 +5,8 @@ import { deployStateWords, type DeployAfter, type DeployView } from "@codecast/s
 type DeployLike = Partial<Pick<DeployView, "short_id" | "target" | "sha" | "version" | "status" | "carries" | "live_at" | "created_at" | "started_by">> & { after?: DeployAfter | null };
 
 export function deployTitle(d: DeployLike): string {
-  const v = d.sha ? d.sha.slice(0, 7) : d.version ? d.version.slice(0, 12) : null;
+  // A deploy with no sha or version is named by its dp-N.
+  const v = d.sha ? d.sha.slice(0, 7) : d.version ? d.version.slice(0, 12) : d.short_id ?? null;
   return `${d.target ?? "deploy"}${v ? ` ${v}` : ""}`;
 }
 

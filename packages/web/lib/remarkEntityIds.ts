@@ -1,7 +1,7 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
-import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseModPaneUrl, parseClaudeArtifactUrl, parseLinkPreviewUrl, parseMessageRefUrl, messageRefPayload, contextualPrRefRegex, contextualPrRefPayload, splitContextualPrRefs } from "./entityLinks";
+import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseModPaneUrl, parseClaudeArtifactUrl, parseLinkPreviewUrl, parseMessageRefUrl, messageRefPayload, contextualPrRefRegex, contextualPrRefPayload, splitContextualPrRefs, deployRunRefRegex, splitDeployRunRef } from "./entityLinks";
 import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
 import { mdastText } from "./remarkEntityCards";
 import { filesHref } from "./vault/vaultHref";
@@ -22,6 +22,7 @@ const MENTION_RE = entityMentionRegex();
 // `pr:#N|<as written>` payload (`pr:?#N|…` for a lone `#N`) that EntityAwareLink completes from the
 // conversation's repository, or prints back verbatim where there is none.
 const CONTEXTUAL_PR_RE = contextualPrRefRegex();
+const DEPLOY_RUN_RE = deployRunRefRegex();
 // `bug-14`: an object of a kind some mod declares (lib/mods/objects). The scan
 // is the shape alone; whether the prefix is a kind is asked per match, at
 // parse time, because kinds arrive with the mods rather than at build time.
@@ -394,6 +395,18 @@ export function remarkEntityIds() {
                   children: [{ type: "text" as const, value: contextualPrRefPayload(token.number, token.label, token.bare) }],
                 },
           );
+        },
+      ],
+      [
+        DEPLOY_RUN_RE,
+        // "Deploy 44822506482": the word stays prose, the run id becomes a
+        // reference that renders as the deploy only if the run carried one.
+        (_full: string, lead: string, id: string) => {
+          const { text, payload } = splitDeployRunRef(lead, id);
+          return [
+            { type: "text" as const, value: text },
+            { type: "link" as const, url: `entity://${payload}`, children: [{ type: "text" as const, value: payload }] },
+          ];
         },
       ],
     ], { ignore: ['link', 'inlineCode'] });
