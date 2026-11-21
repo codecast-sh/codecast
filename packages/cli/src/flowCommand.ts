@@ -190,6 +190,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         return;
       }
       const found = await findFlow(name, tdeps, pool);
+      const stale = staleRepoFlow(found, deps.realCwd());
+      if (stale) console.error(`! ${stale}`);
       const spineLive = live ?? lives.flows.find((l) => l.flow.slug === found.slug) ?? null;
       const base = found.extends ? pool.find((p) => p.slug === found.extends) ?? baseBeside(found) : null;
       const baseGraph = graphOf(base);
@@ -277,12 +279,15 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--foreground", "Run here and wait, rather than handing the run to this machine's daemon")
     .option("--dry-run", "Say what would run on what, and start nothing")
     .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
+    .option("--library", "Run the library's flow of that name even though the repo's default branch has its own")
     .option("--json", "Print {run_id, task, branch, worktree, files} as JSON")
-    .action(async (slug: string, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean; team?: string }) => {
+    .action(async (slug: string, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean; team?: string; library?: boolean }) => {
       await deps.requireFlows(opts.team);
       const only = opts.only ? opts.only.split(",").map((s) => s.trim()).filter(Boolean) : null;
       const cwd = deps.realCwd();
       const found = await findFlow(slug, teamDeps(deps, opts.team));
+      const stale = opts.library ? null : staleRepoFlow(found, cwd);
+      if (stale) { console.error(`✗ ${stale}`); process.exit(1); }
       if (found.errors.length) { console.error(`✗ ${found.slug} does not run: ${found.errors.join("; ")}`); process.exit(1); }
       const empty = found.stations.filter((s) => s.slot?.filled === "empty");
       if (empty.length) {
@@ -623,6 +628,25 @@ function printVariantChanges(slug: string, base: PoolFlow | null, changes: Varia
   const lines = changes ? variantChangeLines(changes) : [];
   console.log(`extends ${bold(base.label)} ${dim(`(${slug})`)}${lines.length ? ", changing:" : changes ? ", changing nothing" : ""}`);
   for (const l of lines) console.log(`  ${l}`);
+}
+
+/**
+ * Why a flow found by name must not run here: it came from the library or the
+ * team's pool, while the repo's default branch holds its own
+ * `.codecast/flows/<slug>.cast` and this checkout (cut before it landed) does
+ * not. Both sides are read at the repo root. Null when the flow is the repo's
+ * own, or outside a repo with a default branch. Reads only local refs.
+ */
+export function staleRepoFlow(f: Pick<PoolFlow, "slug" | "where">, cwd: string): string | null {
+  if (f.where === "repo") return null;
+  const git = (...args: string[]) => spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  const top = git("rev-parse", "--show-toplevel").stdout?.trim();
+  const rel = `.codecast/flows/${f.slug}.cast`;
+  if (!top || fs.existsSync(path.join(top, rel))) return null;
+  const head = git("symbolic-ref", "--short", "refs/remotes/origin/HEAD").stdout?.trim();
+  const ref = head || ["origin/main", "origin/master"].find((r) => git("rev-parse", "--verify", "--quiet", `${r}^{commit}`).status === 0);
+  if (!ref || git("cat-file", "-e", `${ref}:${rel}`).status !== 0) return null;
+  return `This checkout predates the repo's own ${f.slug} flow (${ref} has ${rel}), so the library's would run instead. Rebase onto ${ref}, or run from a checkout that has it (--library runs the library's anyway).`;
 }
 
 /** A graph file's base read from where its `extends` points, for a variant whose base is not in the library. */

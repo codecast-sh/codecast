@@ -60,7 +60,15 @@ code and published to the app on push, so anyone on the team can read it.
 Resolution of a flow name, in order: a path on disk; the repo's
 `.codecast/flows/<slug>.cast`; a flow the CLI ships
 (`packages/cli/src/workflow/templates/`); a flow published to the workspace's
-pool, by slug. The same order holds for a segment named inside another flow:
+pool, by slug. The repo's flow is read from the checkout, so a checkout cut
+before the repo's flow landed would resolve the name to the library or the
+pool instead. `cast flow run <name>` refuses that case before starting
+anything: when the name resolves outside the repo but the default branch
+(`origin/HEAD`, else `origin/main`) holds `.codecast/flows/<name>.cast` at the
+repo root and the checkout's root lacks it, it says so and names the fix
+(rebase, or run from a checkout that has it); `--library` runs the library's
+flow anyway. `cast flow show` prints the same note without failing. The same
+order holds for a segment named inside another flow:
 each published flow the CLI reads from the pool is written under
 `~/.codecast/flows/<row id>/` and indexed by slug (`teamFlowIndex.ts`), so the
 parser finds a team segment on this machine for a local run and a daemon run
