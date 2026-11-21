@@ -112,6 +112,7 @@
     "./contracts/orgTemplateLearningOptIn": "./contracts/orgTemplateLearningOptIn.ts",
     "./contracts/orgLead": "./contracts/orgLead.ts",
     "./contracts/orgWhere": "./contracts/orgWhere.ts",
+    "./contracts/projectContext": "./contracts/projectContext.ts",
     "./contracts/redirectWords": "./contracts/redirectWords.ts",
     "./contracts/orgRoute": "./contracts/orgRoute.ts",
     "./contracts/initiative": "./contracts/initiative.ts",

@@ -1,4 +1,4 @@
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import { useWatchEffect } from "./useWatchEffect";
 import { whenInputQuiet } from "../lib/inputQuiet";
@@ -87,11 +87,12 @@ export function useCoarseNow(intervalMs: number): number {
   // stale time. Bring it current before the first read; a running clock is left
   // alone so every subscriber in one tick sees the same value.
   if (c.timer === null) c.now = Date.now();
-  return useSyncExternalStore(
-    (notify) => subscribeCoarseTick(intervalMs, notify),
-    () => c.now,
-    () => c.now,
-  );
+  // A stable subscribe: a new one each render made React resubscribe on every
+  // render, so a clock whose subscribers re-render (each tick, at least) lost
+  // its last listener, stopped and restarted its timer, and one restarted
+  // sooner than its interval never ticked.
+  const subscribe = useCallback((notify: () => void) => subscribeCoarseTick(intervalMs, notify), [intervalMs]);
+  return useSyncExternalStore(subscribe, () => c.now, () => c.now);
 }
 
 /**

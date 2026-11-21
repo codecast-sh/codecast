@@ -78,6 +78,7 @@ export function HostedApprovalBody({
   clampPlan = true,
   later,
   yesIcon,
+  detail,
 }: {
   question?: string;
   contextMd?: string;
@@ -91,6 +92,8 @@ export function HostedApprovalBody({
   later?: { label: string; title?: string; onClick: () => void };
   /** Drawn before Yes: a permission ask's fingerprint, since its Yes confirms with Touch ID. */
   yesIcon?: ReactNode;
+  /** A fact Yes depends on (where a permission ask runs), above the buttons with the rest of what Yes means. */
+  detail?: ReactNode;
 }) {
   const yes = options.find((o) => o.label === APPROVAL_ANSWERS.approve) ?? options[0];
   const always = options.find((o) => o.label === APPROVAL_ANSWERS.always);
@@ -120,6 +123,7 @@ export function HostedApprovalBody({
           so it never reads as describing Not now. */}
       {yes?.description && <p data-hosted-approval-yes className="mt-2 text-[12.5px] leading-snug text-sol-text-dim">{yesWords(yes.description)}</p>}
       {yes?.description && isRoutineYes(yes.description) && !answered && <RoutineNotifyLine className="mt-1.5" />}
+      {detail}
       <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-2">
         {yes && (
           <Button type="button" variant="amber" size="sm" data-option={yes.index} disabled={answered} onClick={() => onPick(yes.index)} className={APPROVAL_RADIUS}>
