@@ -22118,7 +22118,14 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
   // state and pull it into the inbox.
   const svc = syncServiceRef;
   const send = svc && getAuthToken()
-    ? async (to: string, body: string, clientId: string) => !!(await svc.sendMessageToSession(to, body, "scheduler", clientId))
+    ? async (to: string, body: string, clientId: string) => {
+      try {
+        return (await svc.sendMessageToSession(to, body, "scheduler", clientId)) ? "sent" as const : "failed" as const;
+      } catch (e) {
+        // A teammate's session: this token may only message its own user's conversations, for good.
+        return /can only send messages to your own conversations/.test(String((e as Error)?.message ?? e)) ? "unreachable" as const : "failed" as const;
+      }
+    }
     : undefined;
   const outcomes: import("./land/levelSweep.js").LevelSweepOutcome[] = [];
   for (const root of roots) {
