@@ -22112,12 +22112,23 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
     if (root) roots.add(root);
   }
   if (!roots.size) return;
-  const { levelOne, describeLevel } = await import("./land/levelSweep.js");
-  const outcomes = [];
+  const { sweepOne } = await import("./land/levelSweep.js");
+  // A conflict that holds a checkout back is briefed to the session that wrote the file.
+  const send = async (to: string, body: string): Promise<boolean> => {
+    const siteUrl = getSiteUrl();
+    const token = getAuthToken();
+    if (!siteUrl || !token) return false;
+    const resp = await fetch(`${siteUrl}/cli/messages/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: token, to, body, wake: true }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return resp.ok && !((await resp.json().catch(() => null)) as { error?: unknown } | null)?.error;
+  };
+  const outcomes: import("./land/levelSweep.js").LevelSweepOutcome[] = [];
   for (const root of roots) {
-    const outcome = await levelOne(root).catch((e) => ({ root, skipped: String((e as Error)?.message ?? e) }));
-    outcomes.push(outcome);
-    const line = describeLevel(outcome);
+    const line = await sweepOne(root, { send }, outcomes).catch((e) => `${root}: ${(e as Error)?.message ?? e}`);
     // A refusal repeats every pass until someone moves the edit: say it when it changes, not every minute.
     if (line && line !== lastLevelLine.get(root)) log(`[LEVEL] ${line}`);
     lastLevelLine.set(root, line);
