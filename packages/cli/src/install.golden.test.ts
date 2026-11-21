@@ -89,6 +89,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { personEnv } from "./sessionIdentity";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -165,7 +166,9 @@ interface InstallRun {
 /** One `cast …` run against a scratch HOME. Throws on any non-zero exit. */
 function runCli(home: string, args: string[], attempt = ""): string {
   const proc = spawnSync(process.execPath, [cliEntry, ...args], {
-    env: { ...process.env, HOME: home, NO_COLOR: "1" },
+    // As a person's shell runs it: an agent session's id in the env makes every command deliver its plan log, which
+    // needs an auth the scratch HOME does not have.
+    env: { ...personEnv(process.env), HOME: home, NO_COLOR: "1" },
     encoding: "utf8",
     timeout: 60_000,
   });

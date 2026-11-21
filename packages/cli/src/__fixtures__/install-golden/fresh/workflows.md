@@ -1,16 +1,7 @@
 
 ## Workflows
 
-Workflows are DOT execution graphs with loops, conditions and human approval gates, bound to a task or plan. Nodes are agent sessions, shell commands, approval gates or conditionals; the dashboard shows progress and gate buttons.
-
-```bash
-cast workflow run flow.cast --task ct-N     # or --plan pl-N
-cast workflow list | runs | push
-```
-
-Flows are the team's library of these graphs: whole flows that take a change to done, and segments (check, review, eval, decide, ship) that do one part. A finished change goes through one before it ships, its run drawn live in the conversation.
-
-Run a library flow that fits as it stands. When one fits as a backbone but a step needs this change's own work, extend it and fill its slots. Write a whole flow only when nothing in the library has the shape of the work.
+Workflows are DOT graphs with loops, conditions and approval gates, bound to a task or plan (`cast workflow run flow.cast --task ct-N`). Flows are the team's library of them: whole flows that take a change to done, and segments (check, review, eval, decide, ship). Run a library flow that fits; extend one and fill its slots when a step needs this change's own work; write a whole flow only when nothing fits.
 
 ```bash
 cast flow ls                        # the library
@@ -18,15 +9,9 @@ cast flow run change                # this session's own edits through a library
 cast flow run - <<'EOF' … EOF       # a flow written here (extends a backbone, or whole)
 ```
 
-Asked to change the project's pipeline (add a lint check, tell Review about a house rule, skip a step, run e2e only when some paths change), make the edit with `cast flow edit`, never by rewriting the flow: it writes one line in `.codecast/flows/<flow>.cast`, validates it, and prints the edit for the conversation. It commits nothing; the edit ships through the pipeline like any change.
+To add a check to the project's pipeline or tweak a station's prompt (Review's, say), run `cast flow edit` (`cast flow edit change add lint --after check --run "bun run lint"`), never a rewrite of the flow file.
 
-```bash
-cast flow edit change add lint --after check --run "bun run lint"   # or --agent "<prompt>", --person "<question>"; --when "<globs>"
-cast flow edit change guide review "Also check the migrations"      # appended to the inherited prompt (prompt replaces it)
-cast flow edit change skip decide | when e2e "landing/**" | undo review
-```
-
-`cast guide workflows` shows the graph syntax, segments, slots and import.
+`cast guide workflows` shows the graph syntax, segments, slots, import and every `cast flow edit`.
 <!-- cast @VERSION@ -->
 <!-- /codecast-workflows -->
 
