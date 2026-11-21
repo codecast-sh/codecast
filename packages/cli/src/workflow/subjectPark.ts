@@ -1,0 +1,108 @@
+// The run's subject between its turns (docs/architecture/flows.md FL4). While
+// the run works on the change without it (a check, a review, a person's card,
+// a deploy), a settled subject leaves the inbox (a hidden stash) and the run
+// asks its daemon to park it, so a session that has nothing to do holds no
+// process and no place in anyone's attention. And once its change is live, a
+// subject with no other work left is retired: killed, not told "done", since a
+// send would resume a parked session just to read that.
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { git, gitTry } from "../wipSnapshot.js";
+import type { Subject } from "./subjectStation.js";
+
+type Call = (route: string, body: Record<string, unknown>) => Promise<any>;
+
+/** The subject's inbox row, or null when it cannot be read. */
+export async function subjectRow(call: Call, subject: Subject): Promise<any | null> {
+  const read = await call("/cli/inbox", { session_ids: [subject.conversationId], show_all: true, limit: 5 });
+  return (read?.sessions || []).find((r: any) => r.id === subject.conversationId) ?? null;
+}
+
+// Who acts next on it is nobody: it is not working and asks no one anything.
+const RESTING = ["done", "dormant", "idle"];
+
+/** Whether the subject has settled: not killed, not working, not asking. A parked one has settled too. */
+export function subjectSettled(row: any): boolean {
+  return !!row && !row.is_killed && RESTING.includes(row.work_state || "idle");
+}
+
+/** Whether there is anything to park: settled, and still holding a live process. */
+function parkable(row: any): boolean {
+  return subjectSettled(row) && row.is_live === true && row.agent_status !== "hibernated";
+}
+
+// The daemon refuses to park a session resumed in the last ten minutes, so asking more often only adds refusals.
+const HIBERNATE_RETRY_MS = 5 * 60_000;
+
+export type SubjectParker = { tick(): Promise<void>; pause(): Promise<void>; resume(): void; stop(): Promise<void> };
+
+/**
+ * Parks the subject while the run does not need it: a check every `intervalMs`
+ * (and whenever the runner calls `tick`, before each station), paused while a
+ * station of the subject's own runs. Each settle is stashed hidden once (a
+ * person who brings it back keeps it), and the daemon is asked to hibernate it
+ * at most every five minutes while it stays live; a refusal (attached, mid
+ * turn, just resumed) is the daemon's call, and the next ask may land.
+ */
+export function startSubjectParker(call: Call, subject: Subject, intervalMs: number, log: (line: string) => void): SubjectParker {
+  let paused = false;
+  let stopped = false;
+  let inFlight: Promise<void> | null = null;
+  let stashedAt = -1;
+  let askedAt = 0;
+  const check = async () => {
+    const row = await subjectRow(call, subject);
+    if (paused || stopped || !parkable(row)) return;
+    const settle = row.message_count ?? 0;
+    if (stashedAt !== settle) {
+      stashedAt = settle;
+      const stashed = await call("/cli/sessions/dismiss", { session: subject.conversationId, hidden: true });
+      log(stashed ? `${subject.shortId} is settled: stashed out of sight while the run goes on without it` : `could not stash ${subject.shortId}`);
+    }
+    if (Date.now() - askedAt >= HIBERNATE_RETRY_MS) {
+      askedAt = Date.now();
+      const asked = await call("/cli/sessions/hibernate", { session: subject.conversationId });
+      log(asked ? `asked ${subject.shortId}'s daemon to park it (it may refuse; the run asks again in 5m)` : `could not ask ${subject.shortId}'s daemon to park it`);
+    }
+  };
+  const tick = (): Promise<void> => {
+    if (paused || stopped) return Promise.resolve();
+    inFlight ??= check().catch(() => {}).finally(() => { inFlight = null; });
+    return inFlight;
+  };
+  const timer = setInterval(() => void tick(), intervalMs);
+  timer.unref?.();
+  return {
+    tick,
+    // A station of the subject's own sends it work: no stash or park may land on top of the brief.
+    pause: async () => { paused = true; await inFlight; },
+    resume: () => { paused = false; },
+    stop: async () => { stopped = true; clearInterval(timer); await inFlight; },
+  };
+}
+
+/**
+ * Why the subject still has work of its own beside the landed change, or null
+ * when it has none: every file it wrote that is changed in `root` reads as the
+ * landed commit (or the default branch now) has it. A session with no changed
+ * file left has none; an attribution that fails for any other reason counts as
+ * work, since retiring a session wrongly loses it.
+ */
+export async function subjectOtherWork(root: string, subject: Subject, landed: string, upstream: string): Promise<string | null> {
+  const { previewSessionChange } = await import("./flowChange.js");
+  let files: string[];
+  try {
+    const preview = await previewSessionChange(root, subject.conversationId);
+    files = [...preview.paths, ...preview.held.map((h) => h.path)];
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    return /^No uncommitted change\b/.test(why) ? null : `its changes could not be read: ${why}`;
+  }
+  const blob = (rev: string, f: string) => gitTry(root, ["rev-parse", "-q", "--verify", `${rev}:${f}`]).then((s) => s?.trim() ?? "");
+  const differs: string[] = [];
+  for (const f of files) {
+    const here = fs.existsSync(path.join(root, f)) ? (await git(root, ["hash-object", "--", f])).trim() : "";
+    if (here !== (await blob(landed, f)) && here !== (await blob(upstream, f))) differs.push(f);
+  }
+  return differs.length ? `it has other changes: ${differs.join(", ")}` : null;
+}
