@@ -7,7 +7,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./functions";
 import { normalizeRepository } from "./lib/gitRefs";
 import { normalizeDeployTarget } from "@codecast/shared/contracts/deploys";
-import { recordDeployMarker, type DeployMarker } from "./deploys";
+import { recordDeployMarker, urlFields, type DeployMarker } from "./deploys";
 import { carriesForMarker, lineDeployTargets, workspaceMergeWindow } from "./deployCarries";
 import { fillDeployRange } from "./deployTargets";
 import { mainAtOf } from "./deployTargetsState";
@@ -149,5 +149,25 @@ export const recarry = internalMutation({
       if (!args.dry) await ctx.db.patch(d._id, { carries, project_id: undefined, updated_at: now });
     }
     return { dry: !!args.dry, read: rows.length, changed, skipped, merges_from: window.from, deploys, ...(args.show ? { shown } : {}), next: rows.length === PER_CALL ? rows[rows.length - 1].created_at : null };
+  },
+});
+
+/**
+ * Stamp `workflow_run` on deploys recorded before it existed, from their url, so a run's link in an old message finds
+ * its deploy. A page per call, resumed from `cursor`; a rerun writes nothing.
+ */
+export const stampRunKeys = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())), dry: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("deploys").paginate({ cursor: args.cursor ?? null, numItems: 500 });
+    let stamped = 0;
+    for (const d of page.page) {
+      if (d.workflow_run || !d.url) continue;
+      const fields = urlFields(d.url);
+      if (!fields.workflow_run) continue;
+      stamped++;
+      if (!args.dry) await ctx.db.patch(d._id, { workflow_run: fields.workflow_run });
+    }
+    return { stamped, next: page.isDone ? null : page.continueCursor };
   },
 });

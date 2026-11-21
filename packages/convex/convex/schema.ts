@@ -3768,6 +3768,9 @@ export default defineSchema({
     updated_at: v.number(),
     merged_at: v.optional(v.number()),
     closed_at: v.optional(v.number()),
+    // The commit the merge put on the base branch (a squash, a merge commit, or the last rebased commit): what a
+    // deploy must hold for the change to be live (deployReach.ts).
+    merge_commit_sha: v.optional(v.string()),
     // Live state mirrored from GitHub by the webhook processors and the merge
     // state refresh (githubWebhooks / prShepherd). Every field is optional so
     // rows that predate it stay valid.
@@ -4259,6 +4262,9 @@ export default defineSchema({
     version: v.optional(v.string()),
     // The CI run or the page that shows the deploy.
     url: v.optional(v.string()),
+    // The GitHub Actions run that carried it (actionsRunKey of url, `<id>` or `<id>/attempts/<n>`), stamped wherever
+    // url is written: how a run's marker finds its deploy and a run link in a message resolves to it.
+    workflow_run: v.optional(v.string()),
     // What went out, with the session whose Codecast-Session trailer each commit carries.
     commits: v.optional(v.array(v.object({ sha: v.string(), subject: v.string(), author: v.optional(v.string()), conversation_id: v.optional(v.id("conversations")), task_ids: v.optional(v.array(v.id("tasks"))) }))),
     // The fixes it carried (contracts/deploys DeployCarry).
@@ -4295,7 +4301,8 @@ export default defineSchema({
     .index("by_workspace_created", ["workspace", "created_at"])
     .index("by_source_created", ["source_id", "created_at"])
     .index("by_repository_created", ["repository", "created_at"])
-    .index("by_workspace_target_created", ["workspace", "target", "created_at"]),
+    .index("by_workspace_target_created", ["workspace", "target", "created_at"])
+    .index("by_workflow_run", ["workflow_run"]),
 
   // Read-through cache of repository content fetched with the GitHub App
   // token for the source browser and history pages: branch lists, trees,

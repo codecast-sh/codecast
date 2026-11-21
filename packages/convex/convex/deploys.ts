@@ -45,6 +45,7 @@ import {
   workspaceMerges,
 } from "./deployCarries";
 import {
+  actionsRunKey,
   DAY,
   DEPLOY_SHORT_ID_PREFIX,
   DEPLOY_SHORT_ID_RE,
@@ -113,8 +114,15 @@ export type DeployMarker = {
   previous_sha?: string;
   commits?: Array<{ sha: string; subject: string; author?: string }>;
   started_by?: Doc<"deploys">["started_by"];
-  /** What the marker says happened: live (the default), still running, or failed. */
-  status?: "live" | "running" | "failed";
+  /** What the marker says happened: live (the default), still running, failed, or cancelled before it went out. */
+  status?: "live" | "running" | "failed" | "cancelled";
+  /**
+   * The Actions run the marker reports (its id, `/attempts/N` for a rerun): such a marker speaks only for that run's
+   * deploy, and a deploy already tied to another run is never its match.
+   */
+  workflow_run?: string;
+  /** When what it reports began (a run's start), when that is earlier than `at`: a new deploy's created_at. */
+  started_at?: number;
   note?: string;
   /** Uncommitted files under the target's sources that went out with the sha. */
   dirty?: number;
@@ -144,27 +152,36 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   const recent = await workspaceDeploys(ctx, m.workspace, 100);
   const named = m.deploy ? recent.find((d) => d.short_id === m.deploy!.toLowerCase()) ?? (await deployByRef(ctx, m.deploy)) : null;
   const ownNamed = named && named.workspace === m.workspace && named.target === target ? named : null;
+  // A workflow run's marker never lands on a deploy another run carries: two runs of one sha are two deploys.
+  const ownRun = m.workflow_run ? (await deploysOfRun(ctx, m.workflow_run)).find((d) => d.workspace === m.workspace && d.target === target) : undefined;
+  const runFree = (d: Doc<"deploys">) => !m.workflow_run || !d.workflow_run;
+  // A run that went live may be the target's live deploy another path already recorded; a run still going, failed,
+  // or shipping the sha of a superseded deploy (a rollback) is a deploy of its own.
+  const currentLive = m.workflow_run ? recent.find((d) => d.target === target && d.status === "live" && (!d.repository || !repository || d.repository === repository)) : undefined;
+  const liveMatch = (d: Doc<"deploys">) => d.status === "live" && (!m.workflow_run || (status === "live" && d === currentLive));
 
-  const same = ownNamed ?? recent.find((d) =>
-    d.target === target && (d.status === "live" || OPEN.has(d.status))
+  const same = ownNamed ?? ownRun ?? recent.find((d) =>
+    d.target === target && (liveMatch(d) || OPEN.has(d.status)) && runFree(d)
     && (!d.repository || !repository || d.repository === repository)
     && ((m.sha && sameSha(d.sha, m.sha)) || (!m.sha && m.version && d.version === m.version)),
   );
   const open = same ?? recent.find((d) =>
-    d.target === target && OPEN.has(d.status) && now - d.created_at < OPEN_DEPLOY_MAX_AGE_MS
+    d.target === target && OPEN.has(d.status) && now - d.created_at < OPEN_DEPLOY_MAX_AGE_MS && runFree(d)
     && (!d.repository || !repository || d.repository === repository)
     // A deploy asked for at an earlier sha (a redeploy, a rollback) is finished only by its own sha.
-    && (!d.action || d.action === "deploy" || !d.sha || (m.sha && sameSha(d.sha, m.sha))),
+    && (!d.action || d.action === "deploy" || !d.sha || (m.sha && sameSha(d.sha, m.sha)))
+    // A run's marker finishes an open deploy only when it ships that deploy's sha, or the deploy names none yet.
+    && (!m.workflow_run || !d.sha || (m.sha && sameSha(d.sha, m.sha))),
   );
 
   // The same failure reported again (a redelivery, a backfill) enriches the failed deploy it already recorded.
-  const failedBefore = !open && status === "failed" && m.sha
+  const failedBefore = !open && !m.workflow_run && status === "failed" && m.sha
     ? recent.find((d) => d.target === target && d.status === "failed" && sameSha(d.sha, m.sha) && (!d.repository || !repository || d.repository === repository))
     : null;
   if (failedBefore) {
     const patch: Partial<Doc<"deploys">> = {};
     if (m.note && !failedBefore.note) patch.note = m.note.slice(-NOTE_MAX);
-    if (m.url && !failedBefore.url) patch.url = m.url;
+    if (m.url && !failedBefore.url) Object.assign(patch, urlFields(m.url));
     if (Object.keys(patch).length) await ctx.db.patch(failedBefore._id, { ...patch, updated_at: now });
     return failedBefore.short_id;
   }
@@ -183,7 +200,7 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     if (m.ship_pass_id && !open.ship_pass_id) patch.ship_pass_id = m.ship_pass_id;
     if (m.version && !open.version) patch.version = m.version;
     if (repository && !open.repository) patch.repository = repository;
-    if (m.url && !open.url) patch.url = m.url;
+    if (m.url && !open.url) Object.assign(patch, urlFields(m.url));
     if (m.previous_sha && !open.previous_sha) patch.previous_sha = m.previous_sha;
     if (m.commits?.length && !open.commits?.length) patch.commits = m.commits.slice(0, COMMITS_MAX);
     if (m.source_id && !open.source_id) patch.source_id = m.source_id;
@@ -210,13 +227,13 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     ...(m.sha ? { sha: m.sha } : {}),
     ...(m.previous_sha ? { previous_sha: m.previous_sha } : {}),
     ...(m.version ? { version: m.version } : {}),
-    ...(m.url ? { url: m.url } : {}),
+    ...(m.url ? urlFields(m.url) : {}),
     ...(m.commits?.length ? { commits: m.commits.slice(0, COMMITS_MAX) } : {}),
     ...(m.note ? { note: m.note.slice(-NOTE_MAX) } : {}),
     ...(m.dirty ? { dirty: m.dirty } : {}),
     ...(m.ship_pass_id ? { ship_pass_id: m.ship_pass_id } : {}),
     carries: [],
-    created_at: m.at,
+    created_at: Math.min(m.started_at ?? m.at, m.at),
     ...(status === "live" ? { live_at: m.at } : {}),
     ...(status !== "running" ? { finished_at: m.at } : {}),
     updated_at: now,
@@ -512,7 +529,10 @@ export const report = mutation({
     if (!d || !(await workspaceGrantsAccess(ctx, userId, d.workspace))) throw new Error(`No deploy ${args.deploy} you can read`);
     const now = Date.now();
     const patch: Partial<Doc<"deploys">> = { updated_at: now };
-    if (args.url) patch.url = args.url;
+    // A run another deploy already carries (its own marker recorded it at the sha it shipped) stays that deploy's.
+    const run = args.url ? actionsRunKey(args.url) : null;
+    const taken = run ? (await deploysOfRun(ctx, run)).some((x) => String(x._id) !== String(d._id)) : false;
+    if (args.url && !taken) Object.assign(patch, urlFields(args.url));
     if (args.sha && !d.sha) patch.sha = args.sha.toLowerCase();
     if (args.previous_sha && !d.previous_sha) patch.previous_sha = args.previous_sha.toLowerCase();
     if (args.commits?.length && !d.commits?.length) patch.commits = args.commits.slice(0, COMMITS_MAX);
@@ -572,6 +592,18 @@ export const rewatchFromLive = internalMutation({
   },
 });
 
+/** A deploy's url, with the Actions run it names stamped beside it. */
+export function urlFields(url: string): Pick<Doc<"deploys">, "url" | "workflow_run"> {
+  const run = actionsRunKey(url);
+  return { url, ...(run ? { workflow_run: run } : {}) };
+}
+
+/** The deploys an Actions run carried (one per target that runs it; normally one). */
+export async function deploysOfRun(ctx: any, run: string): Promise<Doc<"deploys">[]> {
+  return await ctx.db.query("deploys").withIndex("by_workflow_run", (q: any) => q.eq("workflow_run", run)).take(10);
+}
+
+/** A deploy by its dp-N or its id. */
 async function deployByRef(ctx: any, ref: string): Promise<Doc<"deploys"> | null> {
   if (DEPLOY_SHORT_ID_RE.test(ref)) return await ctx.db.query("deploys").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.toLowerCase())).first();
   const id = ctx.db.normalizeId("deploys", ref);
@@ -585,8 +617,20 @@ export const get = query({
   args: { ref: v.string(), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
-    const d = await deployByRef(ctx, args.ref.trim());
-    if (!d || !(await workspaceGrantsAccess(ctx, userId, d.workspace))) return null;
+    const ref = args.ref.trim();
+    // A run's url, or its bare id (run ids are GitHub-wide): the deploy it carried that this viewer can read.
+    const run = actionsRunKey(ref) ?? (/^\d{9,}$/.test(ref) ? ref : null);
+    let d: Doc<"deploys"> | null = null;
+    if (run) {
+      const repository = normalizeRepository(/github\.com\/([^/\s]+\/[^/\s]+)\/actions\//i.exec(ref)?.[1] ?? "");
+      for (const x of await deploysOfRun(ctx, run)) {
+        if (!d && (!repository || !x.repository || x.repository === repository) && (await workspaceGrantsAccess(ctx, userId, x.workspace))) d = x;
+      }
+    } else {
+      d = await deployByRef(ctx, ref);
+      if (d && !(await workspaceGrantsAccess(ctx, userId, d.workspace))) d = null;
+    }
+    if (!d) return null;
     const around = (await workspaceDeploys(ctx, d.workspace)).filter((x) => x.target === d.target);
     const after = await afterFor(ctx, d.workspace, around.some((x) => String(x._id) === String(d._id)) ? around : [...around, d], Date.now());
     const events = [];
@@ -595,9 +639,12 @@ export const get = query({
       if (row) events.push({ _id: String(row._id), title: row.title, url: row.url ?? null, at: row.created_at, source: row.data?.source_name ?? row.source });
     }
     const project = d.project_id ? await ctx.db.get(d.project_id) : null;
+    // A live deploy that is no longer what runs: the live deploy after it on its target.
+    const replacer = d.status === "live" ? around.filter((x) => x.status === "live" && x.created_at > d.created_at).sort((a, b) => a.created_at - b.created_at)[0] : undefined;
     return {
       ...(await shapeView(ctx, d)),
       after: after.get(String(d._id)) ?? null,
+      replaced_by: replacer ? { short_id: replacer.short_id, sha: replacer.sha ?? null, at: replacer.live_at ?? replacer.created_at, rollback: replacer.action === "rollback" } : null,
       events,
       project: project ? { _id: String(project._id), short_id: project.short_id ?? null, title: project.title ?? null } : null,
     };

@@ -65,6 +65,7 @@ const targetValidator = v.object({
   policy: v.union(v.literal("press"), v.literal("release"), v.literal("auto")),
   paths: v.array(v.string()),
   ship_stage: v.optional(v.union(v.literal("before_push"), v.literal("after_push"), v.literal("press"))),
+  workflow: v.optional(v.string()),
 });
 
 /** The team a CLI call means: the one it names (a member), else the repository's (deployTeamFor). */
@@ -119,6 +120,7 @@ export const publish = mutation({
       if (!DEPLOY_TARGET_NAME_RE.test(name)) throw new Error(`"${t.name}" is not a target name`);
       if (declared.has(name)) throw new Error(`target ${name} is declared twice`);
       declared.add(name);
+      if (t.workflow && args.targets.some((o) => o !== t && o.workflow === t.workflow)) throw new Error(`target ${name}: workflow ${t.workflow} is named by another target; a run of it is one deploy of one target`);
       const readerRefusal = t.live.kind === "json" ? liveReaderUrlRefusal(t.live.url) : null;
       if (readerRefusal) throw new Error(`target ${name}: ${readerRefusal}`);
       const fields = {
@@ -129,6 +131,7 @@ export const publish = mutation({
         policy: t.policy,
         paths: t.paths,
         ship_stage: t.ship_stage,
+        workflow: t.workflow,
         device_id: args.device_id,
         root: args.root,
       };

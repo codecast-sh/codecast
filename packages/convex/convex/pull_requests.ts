@@ -142,6 +142,7 @@ export const syncPRFromGitHub = internalMutation({
     updated_at: v.number(),
     merged_at: v.optional(v.number()),
     closed_at: v.optional(v.number()),
+    merge_commit_sha: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ pr_id: Id<"pull_requests">; created: boolean }> => {
     const existing = await ctx.db
@@ -166,6 +167,7 @@ export const syncPRFromGitHub = internalMutation({
       updated_at: args.updated_at,
       merged_at: args.merged_at,
       closed_at: args.closed_at,
+      ...(args.merge_commit_sha ? { merge_commit_sha: args.merge_commit_sha.toLowerCase() } : {}),
     };
 
     if (existing) {

@@ -32,6 +32,8 @@ export const deployTables = {
     policy: v.union(v.literal("press"), v.literal("release"), v.literal("auto")),
     paths: v.array(v.string()),
     ship_stage: v.optional(v.union(v.literal("before_push"), v.literal("after_push"), v.literal("press"))),
+    // The Actions workflow file its deploys run as (deploy.yml): each run on the default branch records a deploy.
+    workflow: v.optional(v.string()),
     // The checkout that published it and the machine it is on: where a deploy of it runs.
     device_id: v.optional(v.string()),
     root: v.optional(v.string()),

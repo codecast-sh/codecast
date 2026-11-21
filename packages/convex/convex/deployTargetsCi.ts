@@ -5,6 +5,7 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import { normalizeRepository } from "./lib/gitRefs";
 import { resolveTeamForRepository } from "./githubWebhooks";
+import { commitBySha } from "./deployTargetsState";
 import { recordDeployMarker } from "./deploys";
 import { commitCiState, type CommitCiRun, type CommitCiState } from "@codecast/shared/contracts/deployTargets";
 
@@ -218,4 +219,108 @@ export function deploymentStatusEventOf(payload: any): Parameters<typeof recordG
     on_default_branch: ref === payload?.repository?.default_branch || ref === dep.sha,
     ...(dep.creator?.login ? { actor: dep.creator.login } : {}),
   };
+}
+
+// ── GitHub: a target's deploy workflow (DP11) ────────────────────────────────
+
+/** A workflow run's state as its deploy's: anything not yet finished is running. */
+function runDeployStatus(status: string, conclusion: string | null | undefined): "running" | "live" | "failed" | "cancelled" {
+  if (status !== "completed") return "running";
+  if (conclusion === "success") return "live";
+  if (conclusion === "cancelled" || conclusion === "skipped" || conclusion === "stale" || conclusion === "neutral") return "cancelled";
+  return "failed";
+}
+
+export type WorkflowRunDeploy = {
+  repository: string;
+  /** The workflow file, as a target's `workflow` names it. */
+  workflow: string;
+  /** The run, as `actionsRunKey` reads it from `url`. */
+  run: string;
+  url: string;
+  /** The commit the run is on (main's head when it was dispatched). */
+  head_sha: string;
+  /** A dispatched run's run-name hex words, any of which may be the commit its input said to ship. */
+  named_shas: string[];
+  /** When the run started, and when it last moved (its finish, once completed). */
+  started_at: number;
+  status: "running" | "live" | "failed" | "cancelled";
+  conclusion?: string;
+  name: string;
+  actor?: string;
+  at: number;
+};
+
+/**
+ * A workflow_run on the default branch as the deploy it carries. The commit it ships is the one its run name names
+ * (a dispatch input: Union's `Deploy 604c31732f for Samvit`), else the commit it runs on (recordWorkflowRunDeploy).
+ */
+export function workflowRunDeploy(payload: any): WorkflowRunDeploy | null {
+  const run = payload?.workflow_run;
+  const repository = normalizeRepository(payload?.repository?.full_name);
+  const defaultBranch = payload?.repository?.default_branch;
+  if (!run?.id || !run.head_sha || !run.path || !repository || !defaultBranch || run.head_branch !== defaultBranch) return null;
+  // A pull request from a fork's own main reports head_branch main too: it ships nothing (as workflowRunCi reads it).
+  if (String(run.event ?? "").startsWith("pull_request")) return null;
+  const headRepository = normalizeRepository(run.head_repository?.full_name);
+  if (headRepository && headRepository !== repository) return null;
+  const workflow = String(run.path).split("/").pop()!;
+  const attempt = Number(run.run_attempt ?? 1);
+  const base = String(run.html_url ?? `https://github.com/${payload.repository.full_name}/actions/runs/${run.id}`);
+  const url = attempt > 1 ? `${base}/attempts/${attempt}` : base;
+  // Only a dispatched run's title is its run-name (where an input can name the commit); a push run's is a commit subject.
+  const dispatched = run.event === "workflow_dispatch" || run.event === "repository_dispatch";
+  const title = dispatched ? [run.display_title, run.name].filter(Boolean).join(" ") : "";
+  const named = (title.match(/\b[0-9a-f]{7,40}\b/gi) ?? []).filter((t) => /[a-f]/i.test(t) || t.length === 40);
+  const started = Date.parse(run.run_started_at ?? run.created_at ?? "");
+  const moved = Date.parse(run.updated_at ?? "");
+  const name = payload?.workflow?.name ?? run.name ?? workflow;
+  return {
+    repository,
+    workflow,
+    run: attempt > 1 ? `${run.id}/attempts/${attempt}` : String(run.id),
+    url,
+    head_sha: String(run.head_sha).toLowerCase(),
+    named_shas: named.map((t) => t.toLowerCase()),
+    status: runDeployStatus(String(run.status ?? "queued"), run.conclusion),
+    ...(run.conclusion ? { conclusion: String(run.conclusion) } : {}),
+    name: String(name),
+    ...((run.triggering_actor?.login ?? run.actor?.login) ? { actor: String(run.triggering_actor?.login ?? run.actor?.login) } : {}),
+    started_at: Number.isFinite(started) ? started : Date.now(),
+    at: Number.isFinite(moved) ? moved : Number.isFinite(started) ? started : Date.now(),
+  };
+}
+
+/** A run of a target's deploy workflow, recorded as that target's deploy: running when it starts, then how it ended. */
+export async function recordWorkflowRunDeploy(ctx: any, payload: any): Promise<string[]> {
+  const r = workflowRunDeploy(payload);
+  if (!r) return [];
+  const targets: Doc<"deploy_targets">[] = (await ctx.db.query("deploy_targets").withIndex("by_repository_name", (q: any) => q.eq("repository", r.repository)).take(50))
+    .filter((t: Doc<"deploy_targets">) => !t.retired_at && t.workflow === r.workflow);
+  const out: string[] = [];
+  if (!targets.length) return [];
+  // The commit the run name names, when main knows it (a stray hex word in a title is not a commit); else the run's own.
+  // The named commit main knows, else the run-name's own word (a commit main never ingested still names what shipped).
+  let named: string | null = null;
+  for (const w of r.named_shas) if (!named) named = (await commitBySha(ctx, r.repository, w))?.sha ?? null;
+  const sha = named ?? r.named_shas[0] ?? r.head_sha;
+  for (const t of targets) {
+    const deploy = await recordDeployMarker(ctx, {
+      workspace: t.workspace,
+      ...(t.team_id ? { team_id: t.team_id } : {}),
+      target: t.name,
+      sha,
+      repository: r.repository,
+      source: `github: ${r.name}`,
+      url: r.url,
+      workflow_run: r.run,
+      status: r.status,
+      ...(r.status === "failed" ? { note: `${r.name} run ended ${r.conclusion ?? "failed"}.` } : {}),
+      ...(r.actor ? { started_by: { kind: "source" as const, name: r.actor } } : {}),
+      started_at: r.started_at,
+      at: r.status === "running" ? r.started_at : r.at,
+    });
+    if (deploy) out.push(deploy);
+  }
+  return out;
 }

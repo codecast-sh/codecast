@@ -64,6 +64,11 @@ export type DeployTarget = {
   ci?: string;
   /** Once live: what follows a deploy (raising the fleet's minimum CLI to the version that went out). `$version` expands. */
   finish?: string;
+  /**
+   * The GitHub Actions workflow file every deploy of this target runs as (`deploy.yml`), whoever starts it: each run
+   * on the default branch is a deploy (running, then live, failed or cancelled), so one dispatched by hand shows too.
+   */
+  workflow?: string;
 };
 
 /** The keys a target holds that only the CLI reads: the server stores the rest. */
@@ -122,7 +127,10 @@ export function readJsonLive(r: Extract<DeployLiveReader, { kind: "json" }>, doc
 /** A `[[ship.deploy]]` step of .codecast/workspace.toml, as far as a target needs it. */
 export type ShipStepRef = { name: string; when: string[]; run: string; stage: "before_push" | "after_push" };
 
-const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "finish"] as const;
+const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "finish", "workflow"] as const;
+
+/** A workflow file's name as `.github/workflows/` holds it. */
+export const DEPLOY_WORKFLOW_RE = /^[A-Za-z0-9_.-]+\.ya?ml$/;
 
 /**
  * The `[[target]]` tables of .codecast/deploy.toml as targets. The file is the targets' own: workspace.toml keeps
@@ -147,6 +155,8 @@ export function parseDeployTargetEntries(raw: unknown, ship: readonly ShipStepRe
     try {
       const t = targetFromEntry(entry, ship);
       if (out.some((o) => o.target.name === t.name)) throw new DeployTargetError(`target ${t.name} is declared twice`);
+      const shared = t.workflow ? out.find((o) => o.target.workflow === t.workflow) : undefined;
+      if (shared) throw new DeployTargetError(`target ${t.name}: workflow ${t.workflow} is already target ${shared.target.name}'s; a run of it is one deploy of one target`);
       const step = (entry as Record<string, unknown>)["ship"];
       out.push({ target: t, ...(typeof step === "string" ? { ship_step: step } : {}) });
     } catch (err) {
@@ -185,7 +195,7 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
   if (!e || typeof e !== "object" || Array.isArray(e)) throw new DeployTargetError("must be a table");
   const r = e as Record<string, unknown>;
   for (const key of Object.keys(r)) if (!(TARGET_KEYS as readonly string[]).includes(key)) throw new DeployTargetError(`unknown key '${key}'`);
-  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy", "ci", "finish"]) {
+  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy", "ci", "finish", "workflow"]) {
     if (r[key] !== undefined && typeof r[key] !== "string") throw new DeployTargetError(`'${key}' must be a string`);
   }
   const name = String(r["name"] ?? "").trim().toLowerCase();
@@ -205,6 +215,8 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
   const after = typeof afterRaw === "string" ? [afterRaw] : afterRaw;
   if (!Array.isArray(after) || after.some((a) => typeof a !== "string")) throw new DeployTargetError(`target ${name}: 'after' must be a target name or a list of them`);
   if (runs === "push" && (r["ci"] || r["finish"])) throw new DeployTargetError(`target ${name}: runs = "push" sends nothing, so it has no ci or finish step`);
+  const workflow = typeof r["workflow"] === "string" ? r["workflow"].trim().replace(/^\.github\/workflows\//, "") : "";
+  if (r["workflow"] !== undefined && !DEPLOY_WORKFLOW_RE.test(workflow)) throw new DeployTargetError(`target ${name}: workflow "${r["workflow"]}" is not a workflow file (deploy.yml)`);
   return {
     name,
     ...(command ? { command } : {}),
@@ -217,6 +229,7 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
     ...(after.length ? { after: (after as string[]).map((a) => a.trim().toLowerCase()) } : {}),
     ...(typeof r["ci"] === "string" && r["ci"].trim() ? { ci: r["ci"].trim() } : {}),
     ...(typeof r["finish"] === "string" && r["finish"].trim() ? { finish: r["finish"].trim() } : {}),
+    ...(workflow ? { workflow } : {}),
   };
 }
 

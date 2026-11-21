@@ -27,7 +27,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { recordPRMergedActivity, resolveActorUserIdForTeam } from "./pull_requests";
 import { recordExternalEvent } from "./externalEvents";
 import { recordCiRun, type CiRun } from "./ingest";
-import { checkSuiteCi, deploymentStatusEventOf, recordCommitCi, recordGithubDeployStatus, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
+import { checkSuiteCi, deploymentStatusEventOf, recordCommitCi, recordGithubDeployStatus, recordWorkflowRunDeploy, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
 import { markCommitDirty } from "./lib/changesDirty";
 import { claimDrain, releaseDrain, renewDrain } from "./lib/drainMarker";
 import { checkLabel, repositoryOwner } from "@codecast/shared/contracts";
@@ -670,6 +670,7 @@ export const processPRClosedEvent = internalMutation({
       state: merged ? "merged" : "closed",
       merged_at: mergedAt ? new Date(mergedAt).getTime() : undefined,
       closed_at: closedAt ? new Date(closedAt).getTime() : Date.now(),
+      ...(merged && prPayload.merge_commit_sha ? { merge_commit_sha: String(prPayload.merge_commit_sha).toLowerCase() } : {}),
     });
     if (!result) {
       await ctx.db.patch(args.event_id, { processed: true });
@@ -1291,6 +1292,8 @@ async function applyWorkflowRun(ctx: any, payload: any) {
   const commitCi = workflowRunCi(payload);
   const team = ci || commitCi ? await resolveTeamForRepository(ctx, repository) : null;
   if (commitCi && team) await recordCommitCi(ctx, commitCi, team);
+  // A run of a target's deploy workflow is that target's deploy, whoever dispatched it (deploys.md DP11).
+  await recordWorkflowRunDeploy(ctx, payload);
   const filed = ci && team ? await recordCiRun(ctx, { ...ci, team_id: team }) : undefined;
   return { success: true, suite_id: suiteId, event: row.event, ...(filed ? { ci: filed } : {}) };
 }

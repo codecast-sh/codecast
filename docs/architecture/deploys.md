@@ -183,13 +183,22 @@ as a deploy object, oldest first, one source or repository per call, paged by
 writes nothing. `deploysBackfill:backfillTargets` lists the sources and repositories
 to walk. `deploysBackfill:recarry` recomputes the carries of deploys recorded from
 markers, ten per call, oldest first, after the merges the rule reads change; it
-stamps each deploy's `cut_at` first. Run them
+stamps each deploy's `cut_at` first. `deploysBackfill:stampRunKeys` stamps
+`workflow_run` (the Actions run a deploy's url names) on deploys recorded
+before it, a page per call from `cursor`. Run them
 through `packages/convex/run.sh`.
 
 ## DP7. Where deploys show
 
-- `dp-N` is a reference everywhere (entity type `deploy`): a pill with its
-  state, opening `/flows?view=deploys&deploy=dp-N`.
+- `dp-N` is a reference everywhere (entity type `deploy`): a pill whose icon,
+  colour and last word are its state (waiting, going out with its elapsed
+  time, live, was live once replaced, failed, cancelled), opening
+  `/flows?view=deploys&deploy=dp-N`. A GitHub Actions run url in a message,
+  and a run's bare id after "run" or "deploy" ("Deploy 44822506482"), is the
+  same pill when that run carried a deploy (`deploys.get` takes either), and
+  stays as written otherwise.
+- A merged pull request's and a main commit's pill end with how far the change
+  has gone (DP16).
 - The Line app's Deploys view: what waits to go out per project with its
   Deploy press (through the shared confirm flow) and, on a role-trigger line,
   the role that sends it with today's deploys against its limit or why it
@@ -284,6 +293,8 @@ desktop app. They are declared once, in the checkout:
   Deploy, the default; `auto`, it goes out by itself when CI on main's head
   is green; `release`, it goes out with every release, DP15). `after`,
   `ci` and `finish` give a release its order and steps (DP15).
+  `workflow = "deploy.yml"` names the GitHub Actions workflow file every
+  deploy of the target runs as, whoever dispatches it (DP11).
   `ship = "<step>"` ties it to the `[[ship.deploy]]` step of
   workspace.toml that sends it at a ship: the target takes that step's `run`
   and `when` (unless it gives its own), and the ship records a deploy of it.
@@ -332,6 +343,22 @@ the oldest CLI in use reads.
   a target's `github-status` reader names: pending records a running deploy,
   success makes it live, failure or error fails it
   (`deployTargets.recordGithubDeployStatus`).
+- **A target's deploy workflow.** Every `workflow_run` webhook on the default
+  branch of the file a target's `workflow` names is that target's deploy
+  (`deployTargetsCi.recordWorkflowRunDeploy`), so a run dispatched by hand
+  shows while it runs and when it fails: queued or in progress is running,
+  success live, failure failed, cancelled or skipped cancelled. The commit a
+  dispatched run ships is the one its run-name names (a dispatch input:
+  Union's `run-name: Deploy <sha> for <actor>`), the commit main knows first;
+  any other run ships the commit it runs on, since its title is a commit
+  subject. One workflow is one target's: a file two targets name is refused.
+  The run's url is the deploy's, stamped as `workflow_run` (indexed, so a
+  run's link in a message is a point lookup), and a marker from a run speaks
+  only for that run's deploy: a second run queued behind the first is a deploy of its own, a
+  rerun (attempt 2) another, and a run finishes an open deploy asked for from
+  codecast only when it ships that deploy's sha or the deploy names none yet.
+  A later report of the same sha (the target's live reader) finds the same
+  deploy. A failure fires `deploy_failed` like any other.
 - **A release document.** `deployTargets.pollLiveReaders` (every five
   minutes) reads each `json` reader and records a deploy when it names a new
   commit or version: the CLI release goes live when latest.json says so.
@@ -454,3 +481,26 @@ The `cast-deploy` skill ships everything uncommitted in a shared checkout and
 ends with `cast deploy`, so what a project deploys, in what order and with what
 follow-ups lives in its `.codecast/deploy.toml`, not in the skill.
 
+## DP16. How far a change has gone
+
+A merged pull request (`owner/repo#N`) or a commit on main (`owner/repo@sha`)
+reads its reach through `deployReach.get`: for each target whose paths the
+change touches (the pull request's files, else its merge commit's), one of
+
+| State | When |
+|---|---|
+| live | the target's newest live deploy holds it; the deploy named is the first live one that did |
+| going out | a running deploy holds it |
+| queued | a deploy asked for, that no machine has started, holds it |
+| rolled back | an earlier live deploy held it and the one live now does not |
+| deploy failed | a deploy started after the live one held it and failed |
+| not live yet | none of the above |
+
+A deploy holds a change by DP3's rule: the same commit, else its sha's place
+on main at or after the change's, else (no place) live at or after the merge.
+A deploy is stamped with its place once live; an open or failed one is placed
+from `commits.main_at` at read. The change's state is the one that most needs
+an eye: failed, rolled back, not live yet, queued, going out, live. A pull request
+names its commit on main by `pull_requests.merge_commit_sha`, which the closed
+webhook and the GitHub sync write. The rule is `contracts/deployReach`; the
+web's store holds each answer in `deployReach`, keyed by its ref.

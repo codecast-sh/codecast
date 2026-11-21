@@ -23,6 +23,16 @@ export const DEPLOY_STATUSES = ["requested", "running", "live", "failed", "cance
 export type DeployStatus = (typeof DEPLOY_STATUSES)[number];
 
 /**
+ * The GitHub Actions run a url shows, as `<id>`, or `<id>/attempts/<n>` for a rerun: how a deploy names the run that
+ * carries it, and how a run's url in a message finds its deploy. Null for any other url.
+ */
+export function actionsRunKey(url: string | null | undefined): string | null {
+  const m = /github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/(\d+)(?:\/attempts\/(\d+))?/i.exec(url ?? "");
+  if (!m) return null;
+  return m[2] && m[2] !== "1" ? `${m[1]}/attempts/${m[2]}` : m[1]!;
+}
+
+/**
  * What started it. `person`: someone pressed Deploy (the Line page, `cast
  * line deploy`). `role`, `schedule`, `count`: the line's own triggers
  * (`[line.deploy] trigger`). `outside`: the team's own deploy path, recorded
