@@ -175,6 +175,13 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
       const { formatTargets, checkoutTargets } = await import("./lineDeploy.js");
       const { readLocalGitContext } = await import("./prCommand.js");
       const root = process.env.CODECAST_CWD || process.cwd();
+      try {
+        const { readDeployTargetEntries, deployTargetWarnings } = await import("./workspace/deployTargetsFile.js");
+        const { shipSpec } = await import("./land/shipCheckout.js");
+        for (const w of deployTargetWarnings(readDeployTargetEntries(root, shipSpec(root).deploy))) console.error(`! ${w}`);
+      } catch {
+        // An unreadable file fails below, with its own words.
+      }
       const repository = readLocalGitContext(root).repository;
       if (!repository) { console.error("No GitHub repository here: run inside a checkout with a GitHub origin"); process.exit(1); }
       if (options.publish) {

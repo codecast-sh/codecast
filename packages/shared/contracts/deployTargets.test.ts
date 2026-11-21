@@ -18,7 +18,8 @@ describe("deploy targets from config (deploys.md DP10)", () => {
     expect(() => parseDeployTargets({ target: [{ name: "x" }] }, SHIP)).toThrow(/target\[0\]: target x: runs = "here" needs run/);
     expect(() => parseDeployTargets({ target: [{ name: "x", run: "a", policy: "sometimes" }] }, SHIP)).toThrow(/policy/);
     expect(() => parseDeployTargets({ target: [{ name: "x", ship: "nope" }] }, SHIP)).toThrow(/names no \[\[ship.deploy\]\] step/);
-    expect(() => parseDeployTargets({ target: [{ name: "x", run: "a", colour: "red" }] }, SHIP)).toThrow(/unknown key 'colour'/);
+    // A key this CLI does not know (a newer CLI's step, or a typo) is read past and named, never refused (DP10).
+    expect(parseDeployTargetEntries({ target: [{ name: "x", run: "a", colour: "red" }] }, SHIP)).toMatchObject([{ target: { name: "x", command: "a" }, unknown: ["colour"] }]);
     expect(() => parseDeployTargets({ target: [{ name: "x", run: "a" }, { name: "x", run: "b" }] }, SHIP)).toThrow(/declared twice/);
     expect(() => parseDeployTargets({ targets: [] }, SHIP)).toThrow(DeployTargetError);
     expect(() => parseLiveReader("json:http://plain")).toThrow(/https/);
@@ -85,11 +86,14 @@ describe("a release's order and steps (DP15)", () => {
   test("an after naming no target, or a cycle, refuses the file", () => {
     expect(() => parse([{ name: "mobile", run: "x", after: "api" }])).toThrow("after names api, which is not a target");
     expect(() => parse([{ name: "a", run: "x", after: "b" }, { name: "b", run: "x", after: "a" }])).toThrow("wait on each other");
-    expect(() => parse([{ name: "web", runs: "push", finish: "x" }])).toThrow("no ci or finish step");
+    expect(() => parse([{ name: "web", runs: "push", finish: "x" }])).toThrow('runs = "push" sends nothing, so it has no finish step');
+    expect(() => parse([{ name: "web", runs: "push", gate: "x", rollout: "y" }])).toThrow("so it has no gate or rollout step");
   });
 
   test("the server is sent the target without the keys only the CLI reads", () => {
-    const [t] = parse([{ name: "cli", run: "x", policy: "release", after: [], ci: "c", finish: "f" }]);
+    const [t] = parse([{ name: "cli", run: "x", policy: "release", after: [], ci: "c", gate: "g", rollout: "r", finish: "f" }]);
+    expect([t.ci, t.gate, t.rollout, t.finish]).toEqual(["c", "g", "r", "f"]);
     expect(Object.keys(publishableTarget(t)).sort()).toEqual(["command", "live", "name", "paths", "policy", "runs", "ship_stage"]);
+    expect(() => parse([{ name: "cli", run: "x", gate: 3 }])).toThrow("'gate' must be a string");
   });
 });

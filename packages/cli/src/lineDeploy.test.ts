@@ -142,10 +142,15 @@ describe("watch and return", () => {
 describe("following the deploy path's own run", () => {
   const jobs = (...j: Array<[string, string, string | null]>) => j.map(([name, status, conclusion]) => ({ name, status, conclusion, databaseId: 7 }));
 
-  test("named jobs pass when they pass, fail when one fails or was skipped, and wait otherwise", () => {
+  test("named jobs pass when they pass, fail when one fails, and wait otherwise", () => {
     expect(jobsVerdict(jobs(["gate", "completed", "success"], ["evals", "completed", "success"]), ["gate", "evals"], false).state).toBe("passed");
-    // A gate that failed leaves the rollout job skipped: no rollout happened.
-    expect(jobsVerdict(jobs(["deploy", "completed", "skipped"]), ["deploy"], true)).toMatchObject({ state: "failed", detail: "deploy ended skipped" });
+    // A gate that failed leaves the rollout job skipped: the run ends failed, and no rollout happened.
+    expect(jobsVerdict(jobs(["deploy", "completed", "skipped"]), ["deploy"], true, "failure")).toMatchObject({ state: "failed", detail: "deploy was skipped: the run ended failure, so a job it needs did not pass" });
+    // While the run goes on (Union's finalize runs after a failed deploy), a skip cannot be told apart yet.
+    expect(jobsVerdict(jobs(["deploy", "completed", "skipped"]), ["deploy"], false).state).toBe("waiting");
+    // A job its workflow chose not to run (its if: said no) in a run that passed: passed, and said.
+    expect(jobsVerdict(jobs(["gate", "completed", "skipped"], ["evals", "completed", "success"]), ["gate", "evals"], true, "success")).toEqual({ state: "passed", detail: "gate: skipped by the workflow, evals: success" });
+    expect(jobsVerdict(jobs(["deploy", "completed", "cancelled"]), ["deploy"], true, "cancelled").state).toBe("failed");
     expect(jobsVerdict(jobs(["gate", "completed", "success"], ["evals", "in_progress", null]), ["gate", "evals"], false).state).toBe("waiting");
     expect(jobsVerdict(jobs(["gate", "completed", "failure"]), ["gate", "evals"], false)).toMatchObject({ state: "failed" });
     expect(jobsVerdict(jobs(["gate", "completed", "success"]), ["gate", "evals"], true)).toMatchObject({ state: "failed", detail: "the run finished with no job named evals" });
@@ -166,11 +171,31 @@ describe("following the deploy path's own run", () => {
     expect(await followJobs({ url: null, jobs: ["deploy"], gh, log: () => {} })).toBe(1);
   });
 
+  test("follow: a job the workflow skipped in a run that passed passes and says so; one the run failed past fails", async () => {
+    const view = (conclusion: string, jobs: Array<[string, string]>) => JSON.stringify({ status: "completed", conclusion, jobs: jobs.map(([name, c]) => ({ name, status: "completed", conclusion: c })) });
+    const out: string[] = [];
+    const passed = await followJobs({ url: "https://github.com/acme/app/actions/runs/7", jobs: ["gate", "evals"], gh: () => ({ code: 0, out: view("success", [["gate", "skipped"], ["evals", "success"]]) }), sleep: async () => {}, log: (l) => out.push(l) });
+    expect(passed).toBe(0);
+    expect(out).toEqual(["gate: skipped by the workflow, evals: success"]);
+    const failed = await followJobs({ url: "https://github.com/acme/app/actions/runs/7", jobs: ["deploy"], gh: () => ({ code: 0, out: view("failure", [["gate", "failure"], ["deploy", "skipped"]]) }), sleep: async () => {}, log: (l) => out.push(l) });
+    expect(failed).toBe(1);
+    expect(out.at(-1)).toBe("deploy was skipped: the run ended failure, so a job it needs did not pass");
+  });
+
   test("ci waits for the named workflow's newest finished run on the sha", async () => {
     const lists = [[], [{ status: "completed", conclusion: "success", url: "https://ci/1", startedAt: "2026-10-22T10:00:00Z" }]];
     const code = await waitForCi({ sha: "abc1234def", workflow: "ci.yml", repo: "acme/app", gh: () => ({ code: 0, out: JSON.stringify(lists.shift()) }), sleep: async () => {}, log: () => {} });
     expect(code).toBe(0);
     const red = await waitForCi({ sha: "abc1234def", workflow: "ci.yml", repo: "acme/app", gh: () => ({ code: 0, out: JSON.stringify([{ status: "completed", conclusion: "failure", url: "https://ci/2", startedAt: "x" }]) }), sleep: async () => {}, log: () => {} });
     expect(red).toBe(1);
+  });
+});
+
+describe("a deploy.toml written for a newer cast", () => {
+  test("its unknown keys are named, and the targets still read", async () => {
+    const { parseDeployTargetsText, deployTargetWarnings } = await import("./workspace/deployTargetsFile");
+    const entries = parseDeployTargetsText(`[[target]]\nname = "production"\nrun = "./deploy.sh"\ncanary = "x"\n`, []);
+    expect(entries.map((e) => e.target.name)).toEqual(["production"]);
+    expect(deployTargetWarnings(entries)).toEqual([".codecast/deploy.toml: target production: 'canary' is not a key this cast reads, so it is ignored (a newer cast's step? cast update; a typo? fix it)"]);
   });
 });

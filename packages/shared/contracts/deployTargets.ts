@@ -62,6 +62,10 @@ export type DeployTarget = {
   after?: string[];
   /** Before the send: the deploy sha's verdict, as the line-deploy graph's CI station runs it (`cast line deploy ci`). */
   ci?: string;
+  /** After the send: the gate's verdict on what went out (evals, a canary), e.g. `cast line deploy follow --jobs gate`. */
+  gate?: string;
+  /** After the gate: the rollout finishing, e.g. `cast line deploy follow --jobs deploy`. */
+  rollout?: string;
   /** Once live: what follows a deploy (raising the fleet's minimum CLI to the version that went out). `$version` expands. */
   finish?: string;
   /**
@@ -72,11 +76,11 @@ export type DeployTarget = {
 };
 
 /** The keys a target holds that only the CLI reads: the server stores the rest. */
-export const CLI_ONLY_TARGET_KEYS = ["after", "ci", "finish"] as const;
+export const CLI_ONLY_TARGET_KEYS = ["after", "ci", "gate", "rollout", "finish"] as const;
 
 /** A target as the server's publish takes it. */
 export function publishableTarget(t: DeployTarget): Omit<DeployTarget, (typeof CLI_ONLY_TARGET_KEYS)[number]> {
-  const { after: _a, ci: _c, finish: _f, ...rest } = t;
+  const { after: _a, ci: _c, gate: _g, rollout: _r, finish: _f, ...rest } = t;
   return rest;
 }
 
@@ -127,7 +131,9 @@ export function readJsonLive(r: Extract<DeployLiveReader, { kind: "json" }>, doc
 /** A `[[ship.deploy]]` step of .codecast/workspace.toml, as far as a target needs it. */
 export type ShipStepRef = { name: string; when: string[]; run: string; stage: "before_push" | "after_push" };
 
-const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "finish", "workflow"] as const;
+const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "gate", "rollout", "finish", "workflow"] as const;
+/** The step commands a target may give its deploy (DP13), each run like `run`. */
+const STEP_KEYS = ["ci", "gate", "rollout", "finish"] as const;
 
 /** A workflow file's name as `.github/workflows/` holds it. */
 export const DEPLOY_WORKFLOW_RE = /^[A-Za-z0-9_.-]+\.ya?ml$/;
@@ -143,22 +149,24 @@ export function parseDeployTargets(raw: unknown, ship: readonly ShipStepRef[]): 
 }
 
 /** The same, each with the [[ship.deploy]] step that sends it at a ship. */
-export function parseDeployTargetEntries(raw: unknown, ship: readonly ShipStepRef[]): Array<{ target: DeployTarget; ship_step?: string }> {
+export function parseDeployTargetEntries(raw: unknown, ship: readonly ShipStepRef[]): Array<{ target: DeployTarget; ship_step?: string; unknown?: string[] }> {
   if (raw === undefined || raw === null) return [];
   if (typeof raw !== "object" || Array.isArray(raw)) throw new DeployTargetError("deploy.toml must be a TOML table");
   for (const key of Object.keys(raw)) if (key !== "target") throw new DeployTargetError(`unknown top-level key '${key}' (the file holds [[target]] tables)`);
   const list = (raw as Record<string, unknown>)["target"] ?? [];
   if (!Array.isArray(list)) throw new DeployTargetError("'target' must be an array of tables ([[target]])");
-  const out: Array<{ target: DeployTarget; ship_step?: string }> = [];
+  const out: Array<{ target: DeployTarget; ship_step?: string; unknown?: string[] }> = [];
   list.forEach((entry, i) => {
     const at = `target[${i}]`;
     try {
       const t = targetFromEntry(entry, ship);
+      // A key a newer CLI added is read past, never refused, so a file written for it still deploys here (DP10).
+      const unknown = entry && typeof entry === "object" ? Object.keys(entry).filter((k) => !(TARGET_KEYS as readonly string[]).includes(k)) : [];
       if (out.some((o) => o.target.name === t.name)) throw new DeployTargetError(`target ${t.name} is declared twice`);
       const shared = t.workflow ? out.find((o) => o.target.workflow === t.workflow) : undefined;
       if (shared) throw new DeployTargetError(`target ${t.name}: workflow ${t.workflow} is already target ${shared.target.name}'s; a run of it is one deploy of one target`);
       const step = (entry as Record<string, unknown>)["ship"];
-      out.push({ target: t, ...(typeof step === "string" ? { ship_step: step } : {}) });
+      out.push({ target: t, ...(typeof step === "string" ? { ship_step: step } : {}), ...(unknown.length ? { unknown } : {}) });
     } catch (err) {
       throw err instanceof DeployTargetError ? new DeployTargetError(`${at}: ${err.message}`) : err;
     }
@@ -194,8 +202,7 @@ export function releaseOrder<T extends Pick<DeployTarget, "name" | "after">>(tar
 function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget {
   if (!e || typeof e !== "object" || Array.isArray(e)) throw new DeployTargetError("must be a table");
   const r = e as Record<string, unknown>;
-  for (const key of Object.keys(r)) if (!(TARGET_KEYS as readonly string[]).includes(key)) throw new DeployTargetError(`unknown key '${key}'`);
-  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy", "ci", "finish", "workflow"]) {
+  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy", ...STEP_KEYS, "workflow"]) {
     if (r[key] !== undefined && typeof r[key] !== "string") throw new DeployTargetError(`'${key}' must be a string`);
   }
   const name = String(r["name"] ?? "").trim().toLowerCase();
@@ -214,7 +221,8 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
   const afterRaw = r["after"] ?? [];
   const after = typeof afterRaw === "string" ? [afterRaw] : afterRaw;
   if (!Array.isArray(after) || after.some((a) => typeof a !== "string")) throw new DeployTargetError(`target ${name}: 'after' must be a target name or a list of them`);
-  if (runs === "push" && (r["ci"] || r["finish"])) throw new DeployTargetError(`target ${name}: runs = "push" sends nothing, so it has no ci or finish step`);
+  const steps = STEP_KEYS.filter((k) => typeof r[k] === "string" && (r[k] as string).trim());
+  if (runs === "push" && steps.length) throw new DeployTargetError(`target ${name}: runs = "push" sends nothing, so it has no ${steps.join(" or ")} step`);
   const workflow = typeof r["workflow"] === "string" ? r["workflow"].trim().replace(/^\.github\/workflows\//, "") : "";
   if (r["workflow"] !== undefined && !DEPLOY_WORKFLOW_RE.test(workflow)) throw new DeployTargetError(`target ${name}: workflow "${r["workflow"]}" is not a workflow file (deploy.yml)`);
   return {
@@ -227,8 +235,7 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
     paths: when as string[],
     ship_stage: step?.stage ?? "press",
     ...(after.length ? { after: (after as string[]).map((a) => a.trim().toLowerCase()) } : {}),
-    ...(typeof r["ci"] === "string" && r["ci"].trim() ? { ci: r["ci"].trim() } : {}),
-    ...(typeof r["finish"] === "string" && r["finish"].trim() ? { finish: r["finish"].trim() } : {}),
+    ...Object.fromEntries(steps.map((k) => [k, (r[k] as string).trim()])),
     ...(workflow ? { workflow } : {}),
   };
 }

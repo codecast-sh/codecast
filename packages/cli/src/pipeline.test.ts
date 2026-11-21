@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
-import { checkoutPipeline, pipelineLines, publishRefusal } from "./pipeline.js";
+import { checkoutPipeline, pipelineLines, pipelineTarget, publishRefusal } from "./pipeline.js";
+import { targetDeployProfile } from "./lineDeploy.js";
 import type { PipelineFlow } from "@codecast/shared/contracts/pipeline";
 
 // A repository's pipeline from its checkout (pipeline.md PL6). Synthetic repositories only: a bare one (shipped
@@ -141,6 +142,12 @@ describe("acme/widgets: a flow written whole behind an extends shim, targets who
     expect(steps.api).toEqual({ ci: "./tools/ci-verdict.sh $sha", send: "./tools/deploy-api.sh --sha $sha", gate: null, rollout: null, live: "cast line deploy await-live $deploy", finish: null });
     expect(steps.worker).toMatchObject({ ci: null, send: "./tools/deploy-worker.sh $sha", live: null });
     expect(p.release.targets.find((t) => t.name === "site")?.when).toEqual(["site/**"]);
+  });
+
+  test("a target's own gate and rollout show at those steps; a rollback runs none of its steps", () => {
+    const t = { name: "production", command: "./deploy.sh --sha $sha --no-watch", runs: "here" as const, live: { kind: "marker" as const }, policy: "press" as const, paths: [], ci: "cast line deploy follow --jobs ci-verdict", gate: "cast line deploy follow --jobs gate,evals", rollout: "cast line deploy follow --jobs deploy" };
+    expect(pipelineTarget(t).steps).toEqual({ ci: "cast line deploy follow --jobs ci-verdict", send: "./deploy.sh --sha $sha --no-watch", gate: "cast line deploy follow --jobs gate,evals", rollout: "cast line deploy follow --jobs deploy", live: null, finish: null });
+    expect(targetDeployProfile({ ...t, rollback: "./deploy.sh --rollback" }, "rollback")).toEqual({ command: "./deploy.sh --rollback", target: "production", trigger: "person" });
   });
 
   test("a release step reads one command where the targets agree and varies where they differ", () => {

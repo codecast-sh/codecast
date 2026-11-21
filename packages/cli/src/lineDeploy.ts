@@ -264,15 +264,23 @@ const JOB_PASSED = new Set(["success", "neutral"]);
 
 export type GhJob = { name: string; status: string; conclusion: string | null; databaseId?: number; url?: string };
 
-/** Where the named jobs of a run stand: all passed, one failed, or still going. A skipped or cancelled job fails: the step it stands for did not happen. */
-export function jobsVerdict(jobs: GhJob[], names: string[], runDone: boolean): { state: "passed" | "failed" | "waiting"; detail: string } {
+/**
+ * Where the named jobs of a run stand: all passed, one failed, or still going. A job the workflow skipped (its `if:`
+ * said no) passes and says "skipped by the workflow", unless the run failed: then it was skipped because a job it
+ * needs failed, and it fails. Which of the two it was is known only once the run ends, so until then a skipped job
+ * waits. A cancelled one fails: the step it stands for did not happen.
+ */
+export function jobsVerdict(jobs: GhJob[], names: string[], runDone: boolean, runConclusion?: string | null): { state: "passed" | "failed" | "waiting"; detail: string } {
   const picked = names.map((n) => ({ name: n, job: jobs.find((j) => j.name === n || j.name.startsWith(`${n} `) || j.name.startsWith(`${n} /`)) }));
-  const failed = picked.find((p) => p.job && p.job.status === "completed" && !JOB_PASSED.has(p.job.conclusion ?? ""));
+  const skippedByFailure = picked.find((p) => p.job?.status === "completed" && p.job.conclusion === "skipped" && runDone && runConclusion && runConclusion !== "success");
+  if (skippedByFailure) return { state: "failed", detail: `${skippedByFailure.name} was skipped: the run ended ${runConclusion}, so a job it needs did not pass` };
+  const failed = picked.find((p) => p.job && p.job.status === "completed" && p.job.conclusion !== "skipped" && !JOB_PASSED.has(p.job.conclusion ?? ""));
+  const skippedEarly = picked.find((p) => p.job?.status === "completed" && p.job.conclusion === "skipped" && !runDone);
   if (failed) return { state: "failed", detail: `${failed.name} ended ${failed.job!.conclusion}${failed.job!.url ? ` (${failed.job!.url})` : ""}` };
   const missing = picked.filter((p) => !p.job);
   if (missing.length && runDone) return { state: "failed", detail: `the run finished with no job named ${missing.map((p) => p.name).join(", ")}` };
-  if (missing.length || picked.some((p) => p.job!.status !== "completed")) return { state: "waiting", detail: picked.map((p) => `${p.name}: ${p.job ? p.job.conclusion ?? p.job.status : "not started"}`).join(", ") };
-  return { state: "passed", detail: picked.map((p) => `${p.name}: ${p.job!.conclusion}`).join(", ") };
+  if (missing.length || skippedEarly || picked.some((p) => p.job!.status !== "completed")) return { state: "waiting", detail: picked.map((p) => `${p.name}: ${p.job ? p.job.conclusion ?? p.job.status : "not started"}`).join(", ") };
+  return { state: "passed", detail: picked.map((p) => `${p.name}: ${p.job!.conclusion === "skipped" ? "skipped by the workflow" : p.job!.conclusion}`).join(", ") };
 }
 
 /**
@@ -301,7 +309,7 @@ export async function followJobs(opts: {
     const r = gh(["run", "view", run.id, "--repo", run.repo, "--json", "status,conclusion,jobs"]);
     if (r.code === 0) {
       const view = JSON.parse(r.out);
-      const v = jobsVerdict(view.jobs ?? [], opts.jobs, view.status === "completed");
+      const v = jobsVerdict(view.jobs ?? [], opts.jobs, view.status === "completed", view.conclusion);
       if (v.detail !== last) { log(v.detail); last = v.detail; }
       if (v.state === "passed") return 0;
       if (v.state === "failed") {
@@ -447,9 +455,8 @@ export function targetDeployProfile(t: DeployTarget, action: "deploy" | "redeplo
     target: t.name,
     trigger: "person",
     ...(t.live.kind !== "marker" ? { live: "cast line deploy await-live $deploy" } : {}),
-    // A rollback puts an earlier version back: what a release waits on and follows with does not apply to it.
-    ...(action !== "rollback" && t.ci ? { ci: t.ci } : {}),
-    ...(action !== "rollback" && t.finish ? { finish: t.finish } : {}),
+    // A rollback puts an earlier version back: the steps a release waits on and follows with do not apply to it.
+    ...(action !== "rollback" ? Object.fromEntries((["ci", "gate", "rollout", "finish"] as const).flatMap((k) => (t[k] ? [[k, t[k]]] : []))) : {}),
   };
 }
 

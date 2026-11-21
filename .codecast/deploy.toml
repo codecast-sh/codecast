@@ -16,6 +16,8 @@
 #             the change touches it) or auto (the server sends it when CI on main is green)
 #   after     targets that must be live with the same commit first
 #   ci        before the send: the deploy sha's CI verdict
+#   gate      after the send: the gate's verdict on what went out
+#   rollout   after the gate: the rollout finishing (a run's jobs: cast line deploy follow --jobs <names>)
 #   finish    once live: what follows the deploy ($version is what went out)
 #
 # These live apart from workspace.toml because every released CLI validates that

@@ -293,6 +293,9 @@ desktop app. They are declared once, in the checkout:
   Deploy, the default; `auto`, it goes out by itself when CI on main's head
   is green; `release`, it goes out with every release, DP15). `after`,
   `ci` and `finish` give a release its order and steps (DP15).
+  `ci`, `gate`, `rollout` and `finish` are the deploy's step commands
+  (DP13), each run like `run` with `$sha`, `$deploy` and `$actor`; a step
+  left out passes with a note.
   `workflow = "deploy.yml"` names the GitHub Actions workflow file every
   deploy of the target runs as, whoever dispatches it (DP11).
   `ship = "<step>"` ties it to the `[[ship.deploy]]` step of
@@ -320,9 +323,13 @@ Deploys page) parses through `contracts/deployTargets`.
 The targets have their own file because every released CLI validates
 workspace.toml strictly (an unknown key in `[[ship.deploy]]`, `[ship]` or at
 the top level refuses the whole manifest, and with it `cast ship` and
-workspace acquire). An older CLI never opens deploy.toml, so declaring a
-target is safe whatever CLI a machine runs. Keep workspace.toml to the keys
-the oldest CLI in use reads.
+workspace acquire). Keep workspace.toml to the keys the oldest CLI in use
+reads. deploy.toml is read past that: a target key this CLI does not know is
+ignored and named (`cast line deploy targets` prints it), so a file written
+for a newer CLI still deploys. CLIs before 1.1.249 refuse an unknown target
+key instead, and a pressed deploy of that repository fails on them: raise
+`min_cli_version` to a release that knows a key before any repository writes
+it (`gate` and `rollout` came after `ci` and `finish`, which 1.1.235 reads).
 
 ## DP11. Every way a target goes live leaves a dp-N
 
@@ -405,7 +412,28 @@ The row is `requested`, carries the commits it will send, and queues
 runs the line-deploy graph with the target's commands
 (`lineDeploy.deployProfileFor`): the send is its command or rollback, and a
 target read from elsewhere gets a live step (`cast line deploy await-live`)
-that waits for its reader to record the sha. From a terminal: `cast line
+that waits for its reader to record the sha. Its other steps run the
+target's own commands (DP10), and a rollback runs none of them:
+
+- `ci` before the send: the sha's verdict (`cast line deploy ci`).
+- `gate` after the send: the gate's verdict on what went out.
+- `rollout` after the gate: the rollout finishing.
+- `finish` once live: what follows (`$version` expands).
+
+A target whose send dispatches one GitHub Actions run that does CI, the gate
+and the rollout itself (Union's deploy.yml) mirrors that run's jobs as steps
+with `cast line deploy follow --jobs <names>`: the send's output names the
+run (`https://github.com/<repo>/actions/runs/<id>`), the deploy records it,
+and each later step reads it as `CAST_DEPLOY_URL`. A step passes when its
+jobs pass and fails when one fails or is cancelled. A job the workflow
+skipped passes and says "skipped by the workflow", unless the run ended
+failed, which means a job it needs did not pass, and then it fails.
+
+```toml
+ci      = "cast line deploy follow --jobs ci-verdict"
+gate    = "cast line deploy follow --jobs gate,evals"
+rollout = "cast line deploy follow --jobs deploy"
+``` From a terminal: `cast line
 deploy --target <name> [--redeploy dp-N | --rollback [dp-N]] --go`.
 
 A deploy that goes live fires `deploy_live`, one that fails `deploy_failed`
