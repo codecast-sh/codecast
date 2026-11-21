@@ -5,6 +5,7 @@ import { createHash } from "crypto";
 import { conditionError } from "./condition";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 import { SEGMENT_SEP } from "@codecast/shared/contracts/flowPool";
+import { whenPaths, type FlowEditChange } from "@codecast/shared/contracts/flowEdit";
 import { teamFlowFile } from "./teamFlowIndex";
 
 // --- Tokenizer ---
@@ -357,6 +358,12 @@ interface RawGraph {
   files: string[];
   /** `subgraph <node> { ... }` blocks: the steps that fill that node, by node id. */
   fills?: Map<string, RawGraph>;
+  /** A variant's attributes for stations inside a segment (`review__review [...]`, or `review [guide=...]` on the segment), applied once the segment is expanded. */
+  overrides?: Map<string, Record<string, Attr>>;
+  /** The edits the variant made (after=, before=, skip, when=, guide=), for the words `cast flow show` prints. */
+  edits?: FlowEditChange[];
+  /** Base stations the variant's skips took off the path. */
+  pruned?: string[];
 }
 
 /** Reads a file for the parser: absolute path in, its text or null when there is none. */
@@ -409,8 +416,14 @@ export function parseWorkflowSource(src: string, dir?: string, opts: ParseOption
   const resolve = opts.resolveFlow ?? resolveFlowSource;
   const loaded = loadRaw(src, dir, read, file ? [file] : [], resolve);
   const raw = expandFlows(ownParams(loaded), dir, read, resolve, opts.inline !== false, []);
-  const graph = buildGraph(raw);
   const sources = new Set<string>(raw.files);
+  const guides = withGuides(raw, opts.inline !== false ? read : null, sources);
+  const graph = buildGraph(raw);
+  // Each guide edit carries the text its station reads and which station that is.
+  for (const e of graph.edits ?? []) {
+    const g = e.op === "guide" ? guides.find((x) => x.node === e.station || x.node.startsWith(`${e.station}${SEGMENT_SEP}`)) : undefined;
+    if (g) Object.assign(e, { node: g.node, ...(g.text !== null ? { text: g.text } : {}) });
+  }
   if (dir && opts.inline !== false) {
     // Every file the graph inlined: a runner compares them at a gate's answer (runResume.ts runnerStamp).
     for (const node of graph.nodes.values()) {
@@ -433,7 +446,7 @@ function loadRaw(src: string, dir: string | undefined, read: ReadFile, chain: st
   if (dir) {
     // `@file` against the file that wrote it, so a base's stations keep reading the base's files.
     for (const attrs of raw.nodes.values()) {
-      for (const field of ["prompt", "script"]) {
+      for (const field of ["prompt", "script", "guide"]) {
         const v = attrs[field];
         if (typeof v !== "string" || !v.startsWith("@")) continue;
         const abs = path.resolve(dir, v.slice(1));
@@ -445,12 +458,24 @@ function loadRaw(src: string, dir: string | undefined, read: ReadFile, chain: st
   const here = chain[chain.length - 1] ?? raw.name;
   if (ext === undefined) {
     for (const id of raw.fills?.keys() ?? []) if (!raw.nodes.has(id)) throw new Error(`${here}: subgraph ${id} fills no node: declare ${id} in the graph, or name a slot of the flow this one extends`);
+    for (const [id, a] of raw.nodes) {
+      const key = VARIANT_KEYS.find((k) => a[k] !== undefined && a[k] !== false);
+      if (key) throw new Error(`${here}: ${id} [${key}=...] edits the flow this one extends, and this file extends none: add graph [extends="<flow>"], or write ${id}'s ${key === "guide" ? "prompt" : "edges"} out in full`);
+    }
     return raw;
   }
   // A file beside this one, else a flow by name (the repo's, then a shipped one).
   const asFile = dir ? path.resolve(dir, String(ext)) : null;
   const fileSrc = asFile ? read(asFile) : null;
-  const found: FlowSource | null = fileSrc !== null ? { src: fileSrc, dir: path.dirname(asFile!), file: asFile! } : resolve(String(ext), dir, read);
+  // A repo's `change.cast` that extends "change" means the flow it shadows, never itself.
+  const self = chain[chain.length - 1];
+  const bySlug = /^[\w-]+$/.test(String(ext));
+  // Callers that parse a source with only its directory name no file: the file whose text this is, is this file.
+  const notSelf: ReadFile = (abs) => {
+    const text = read(abs);
+    return bySlug && (abs === self || text === src) ? null : text;
+  };
+  const found: FlowSource | null = fileSrc !== null ? { src: fileSrc, dir: path.dirname(asFile!), file: asFile! } : resolve(String(ext), dir, notSelf);
   if (!found) throw new Error(`${here}: extends="${ext}": no graph at ${asFile ?? ext}, and no flow of that name in the pool`);
   const key = found.file ?? `flow:${ext}`;
   if (chain.includes(key)) throw new Error(`${here}: extends="${ext}" comes back to itself`);
@@ -477,21 +502,239 @@ function inherit(base: RawGraph, child: RawGraph, baseFile: string, here: string
       throw new Error(`${here}: ${e.from} goes to ${e.to}, which this file removes: write ${e.from}'s edges here`);
     }
   }
+  // `review__review [...]` names a station inside a segment, which exists only once the segment is expanded.
+  const inEdges = new Set(child.edges.flatMap((e) => [e.from, e.to]));
+  const overrides = new Map(base.overrides ?? []);
+  const own = new Map<string, Record<string, Attr>>();
+  for (const [id, a] of child.nodes) {
+    if (id.includes(SEGMENT_SEP) && !base.nodes.has(id) && !inEdges.has(id)) overrides.set(id, { ...overrides.get(id), ...a });
+    else own.set(id, a);
+  }
   const nodes = new Map<string, Record<string, Attr>>();
   for (const [id, a] of base.nodes) if (!removed.has(id)) nodes.set(id, a);
-  for (const [id, a] of child.nodes) if (!removed.has(id)) nodes.set(id, { ...nodes.get(id), ...a });
+  for (const [id, a] of own) if (!removed.has(id)) nodes.set(id, { ...nodes.get(id), ...a });
   // `serves` names the sources this file's own version runs, so a version never claims its base's.
   const { extends: _extends, serves: _baseServes, ...baseAttrs } = base.attrs;
   const { extends: _childExtends, ...childAttrs } = child.attrs;
   const attrs = { ...baseAttrs, ...childAttrs };
-  return {
+  const merged: RawGraph = {
     name: child.name,
     attrs,
     nodes,
     edges: [...base.edges.filter((e) => !routed.has(e.from) && !removed.has(e.from) && !removed.has(e.to)), ...child.edges],
     files: [...(path.isAbsolute(baseFile) ? [baseFile] : []), ...base.files],
     fills: new Map([...(base.fills ?? [])].filter(([id]) => !removed.has(id)).concat([...(child.fills ?? [])])),
+    overrides,
   };
+  return variantEdits(merged, own, child.nodes, new Set(base.nodes.keys()), path.basename(baseFile).replace(/\.cast$/, "").replace(/^flow:/, ""), here);
+}
+
+/** The attributes that edit the flow a variant extends rather than describe a station. */
+const VARIANT_KEYS = ["after", "before", "skip", "when", "guide", "fix"] as const;
+const truthy = (v: Attr | undefined) => v === true || v === "true";
+const isExit = (a: Record<string, Attr> | undefined) => !!a && shapeOf(a) === "Msquare";
+const isSegmentNode = (raw: RawGraph, id: string) => typeof raw.nodes.get(id)?.flow === "string" || !!raw.fills?.has(id);
+const SAYS_SUCCESS = /\boutcome\s*=\s*success\b/;
+const andCondition = (c: string | undefined, more: string) => (c ? `(${c}) and ${more}` : more);
+
+/**
+ * A variant's edits written as the edges they mean, so a flow written with
+ * after=, skip or when= builds (and hashes) exactly as the same flow written
+ * out by hand:
+ *
+ *   - `n [after="a"]` takes a's passing route: a -> n, n -> (where a went)
+ *     on success, and on failure the way back a uses (the edge out of a whose
+ *     condition says failure and leads to a station, not an end), or `fix=`.
+ *     A second station after the same one follows the first. `before="a"`
+ *     takes every edge into a instead.
+ *   - `s [skip=true]` sends every edge into s to where s goes when it passes,
+ *     and drops whatever the skip left unreachable.
+ *   - `n [when="glob, glob"]` runs n only when $change_files touches a glob:
+ *     each edge into n gains `change_files touches "..."`, and a twin edge
+ *     with `not change_files touches "..."` goes past it.
+ *   - `guide=` on a segment's node, and `prompt=` too, go to the one station
+ *     of the segment that has a prompt (applied once it is expanded).
+ */
+function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr>>, written: Map<string, Record<string, Attr>>, baseIds: Set<string>, baseName: string, here: string): RawGraph {
+  const nodes = new Map([...raw.nodes].map(([id, a]) => [id, { ...a }]));
+  let edges = [...raw.edges];
+  const overrides = new Map(raw.overrides ?? []);
+  const fills = new Map(raw.fills ?? []);
+  const edits: FlowEditChange[] = [];
+  const stations = () => [...nodes].filter(([id, a]) => !id.includes(SEGMENT_SEP) && shapeOf(a) !== "Mdiamond" && !isExit(a)).map(([id]) => id).join(", ");
+  const say = (id: string, key: string, v: Attr) => `${here}: ${id} [${key}="${v}"]`;
+  // A station's way on when it passes, and its ways back: an edge whose condition says failure, or a plain edge beside
+  // one that says `outcome = success` (the "otherwise" of that station).
+  const routesOf = (id: string) => {
+    const out = edges.filter((e) => e.from === id);
+    const rest = out.filter((e) => !mentionsFailure(e));
+    const success = rest.filter((e) => SAYS_SUCCESS.test(e.condition ?? ""));
+    const pass = success.length && success.length < rest.length ? success : rest;
+    return { pass, back: out.filter((e) => !pass.includes(e)) };
+  };
+  const passingOut = (id: string) => routesOf(id).pass;
+  const onePassTarget = (id: string, what: string): string => {
+    const to = [...new Set(passingOut(id).map((e) => e.to))];
+    if (to.length === 1) return to[0];
+    if (!to.length) throw new Error(`${what}: ${id} has no way on when it passes, so there is nowhere to join; name a station that leads on`);
+    throw new Error(`${what}: ${id} goes on to ${to.join(" and ")} when it passes, so there is no one way on; name one of them instead (before="${to[0]}")`);
+  };
+  const reachable = () => {
+    const seen = new Set<string>();
+    const queue = [...nodes].filter(([, a]) => shapeOf(a) === "Mdiamond").map(([id]) => id);
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const e of edges) if (e.from === id) queue.push(e.to);
+    }
+    return seen;
+  };
+
+  // Guidance and prompts on a segment's node belong to the station inside it that reads a prompt.
+  for (const [id, a] of own) {
+    if (!isSegmentNode(raw, id) || id.includes(SEGMENT_SEP)) continue;
+    const moved = Object.fromEntries((["guide", "prompt"] as const).filter((k) => a[k] !== undefined).map((k) => [k, a[k]]));
+    if (!Object.keys(moved).length) continue;
+    overrides.set(id, { ...overrides.get(id), ...moved });
+    const n = nodes.get(id)!;
+    delete n.guide;
+    delete n.prompt;
+  }
+  for (const [id, a] of written) if (a.guide !== undefined) edits.push({ op: "guide", station: id });
+
+  // Skips first: a station placed after a skipped one has nowhere to stand.
+  const before = reachable();
+  const skipped: string[] = [];
+  for (const [id, a] of own) {
+    if (!truthy(a.skip)) continue;
+    if (!baseIds.has(id)) throw new Error(`${say(id, "skip", "true")}: ${baseName} has no station ${id} to skip; its stations: ${stations()}`);
+    if (a.after !== undefined || a.before !== undefined) throw new Error(`${say(id, "skip", "true")}: a station is either skipped or placed, not both`);
+    const to = onePassTarget(id, say(id, "skip", "true"));
+    edges = edges.filter((e) => e.from !== id).map((e) => (e.to === id ? { ...e, to } : e));
+    nodes.delete(id);
+    fills.delete(id);
+    skipped.push(id);
+    edits.push({ op: "skip", station: id });
+  }
+  const pruned = [...skipped];
+  if (skipped.length) {
+    const after = reachable();
+    for (const id of before) {
+      if (after.has(id) || skipped.includes(id) || !baseIds.has(id)) continue;
+      nodes.delete(id);
+      fills.delete(id);
+      pruned.push(id);
+    }
+    edges = edges.filter((e) => !pruned.includes(e.from) && !pruned.includes(e.to));
+  }
+
+  // Inserts, in the order written.
+  const lastAfter = new Map<string, string>();
+  for (const [id, a] of own) {
+    const anchorKey = a.after !== undefined ? "after" : a.before !== undefined ? "before" : null;
+    if (!anchorKey) {
+      if (a.fix !== undefined) throw new Error(`${say(id, "fix", a.fix)}: fix= says where a placed station's failure goes; place ${id} with after= or before=`);
+      continue;
+    }
+    if (a.after !== undefined && a.before !== undefined) throw new Error(`${say(id, "after", a.after)}: a station goes after one station or before one, not both`);
+    const anchor = String(a[anchorKey]);
+    const what = say(id, anchorKey, anchor);
+    if (baseIds.has(id)) throw new Error(`${what}: ${baseName} already has a station ${id}; ${anchorKey}= adds a new one, so give it a new id`);
+    if (edges.some((e) => e.from === id)) throw new Error(`${what}: ${id} is placed with ${anchorKey}= and also routed here; keep one: drop its edges, or drop ${anchorKey}=`);
+    if (anchor.includes(SEGMENT_SEP)) throw new Error(`${what}: ${anchor} is a step inside the ${anchor.split(SEGMENT_SEP)[0]} segment; place ${id} ${anchorKey} the segment itself (${anchorKey}="${anchor.split(SEGMENT_SEP)[0]}")`);
+    if (pruned.includes(anchor)) throw new Error(`${what}: this file skips ${anchor}; place ${id} next to a station that stays`);
+    if (!nodes.has(anchor) && !edges.some((e) => e.from === anchor || e.to === anchor)) throw new Error(`${what}: ${baseName} has no station ${anchor}; its stations: ${stations()}`);
+    if (shapeOf(nodes.get(anchor) ?? {}) === "Mdiamond" && anchorKey === "before") throw new Error(`${what}: nothing comes before the start; place ${id} after="${anchor}"`);
+    if (isExit(nodes.get(anchor)) && anchorKey === "after") throw new Error(`${what}: ${anchor} ends the flow; place ${id} before="${anchor}"`);
+    // The way back a failure takes: fix=, else the anchor's own (to a station, not an end).
+    let fix: string | null = null;
+    if (a.fix !== undefined) {
+      fix = String(a.fix);
+      if (!nodes.has(fix) && !edges.some((e) => e.from === fix || e.to === fix)) throw new Error(`${say(id, "fix", fix)}: there is no station ${fix} to send a failure to; its stations: ${stations()}`);
+    } else {
+      const back = [...new Set(routesOf(anchor).back.filter((e) => !isExit(nodes.get(e.to))).map((e) => e.to))];
+      if (back.length > 1) throw new Error(`${what}: ${anchor} fails back to ${back.join(" or ")}, so it is not clear where ${id}'s failure goes; add fix="${back[0]}"`);
+      fix = back[0] ?? null;
+    }
+    if (anchorKey === "after") {
+      const from = lastAfter.get(anchor) ?? anchor;
+      const to = onePassTarget(from, what);
+      const pass = new Set(passingOut(from));
+      edges = edges.map((e) => (pass.has(e) ? { ...e, to: id } : e));
+      edges.push({ from: id, to, condition: "outcome = success" });
+      lastAfter.set(anchor, id);
+    } else {
+      edges = edges.map((e) => (e.to === anchor ? { ...e, to: id } : e));
+      edges.push({ from: id, to: anchor, condition: "outcome = success" });
+    }
+    if (fix) edges.push({ from: id, to: fix, condition: "outcome = failure", label: `${String(a.label ?? id).toLowerCase()} failed` });
+    edits.push({ op: "add", station: id, label: String(a.label ?? id), [anchorKey]: anchor, ...(a.fix !== undefined ? { fix: String(a.fix) } : {}) });
+  }
+
+  // Path conditions last, around the station where it now stands.
+  for (const [id, a] of own) {
+    if (a.when === undefined) continue;
+    const paths = whenPaths(String(a.when));
+    const what = say(id, "when", a.when);
+    if (!paths.length) throw new Error(`${what}: name the paths the change must touch (when="src/**, docs/*.md")`);
+    if (!nodes.has(id)) throw new Error(`${what}: ${baseName} has no station ${id}; its stations: ${stations()}`);
+    const to = onePassTarget(id, what);
+    const touches = `change_files touches ${JSON.stringify(paths.join(", "))}`;
+    const into = edges.filter((e) => e.to === id && e.from !== id);
+    if (!into.length) throw new Error(`${what}: nothing leads into ${id}, so there is no way past it`);
+    edges = edges.flatMap((e) => (e.to === id && e.from !== id ? [{ ...e, condition: andCondition(e.condition, touches) }, { from: e.from, to, condition: andCondition(e.condition, `not ${touches}`) }] : [e]));
+    edits.push({ op: "when", station: id, paths });
+  }
+
+  for (const a of nodes.values()) for (const k of VARIANT_KEYS) if (k !== "guide") delete a[k];
+  return { ...raw, nodes, edges, fills, overrides, edits, pruned: [...(raw.pruned ?? []), ...pruned] };
+}
+
+/** A variant's attributes for stations inside its segments, applied once they are expanded (an override of a station that is not there is refused). */
+function applyOverrides(raw: RawGraph): RawGraph {
+  if (!raw.overrides?.size) return raw;
+  const nodes = new Map(raw.nodes);
+  const stepsOf = (top: string) => [...nodes.keys()].filter((id) => id.startsWith(`${top}${SEGMENT_SEP}`) && !nodes.get(id)!.segment_exit);
+  for (const [key, attrs] of raw.overrides) {
+    let id = key;
+    if (!key.includes(SEGMENT_SEP)) {
+      const prompted = stepsOf(key).filter((s) => typeof nodes.get(s)!.prompt === "string" && shapeOf(nodes.get(s)!) !== "parallelogram");
+      const k = attrs.guide !== undefined ? "guide" : "prompt";
+      if (prompted.length !== 1) {
+        throw new Error(prompted.length
+          ? `${raw.name}: ${key} [${k}=...]: ${key} has ${prompted.length} stations that read a prompt (${prompted.join(", ")}); name one: ${prompted[0]} [${k}=...]`
+          : `${raw.name}: ${key} [${k}=...]: no station of ${key} reads a prompt (its steps: ${stepsOf(key).join(", ") || "none"}); ${k}= changes an agent's prompt`);
+      }
+      id = prompted[0];
+    }
+    const at = nodes.get(id);
+    if (!at) {
+      const top = key.split(SEGMENT_SEP)[0];
+      const steps = stepsOf(top);
+      throw new Error(steps.length
+        ? `${raw.name}: ${key} [...] changes a station of the ${top} segment, which has no ${key.slice(top.length + SEGMENT_SEP.length)}; its stations: ${steps.join(", ")}`
+        : `${raw.name}: ${key} [...] changes a station inside a segment, but ${top} is not a segment of this flow`);
+    }
+    nodes.set(id, { ...at, ...attrs });
+  }
+  return { ...raw, nodes, overrides: undefined };
+}
+
+/** `guide=` appended to the prompt it inherits; without inlining (where each station's file lives) the prompt stays its base's file. */
+function withGuides(raw: RawGraph, read: ReadFile | null, sources: Set<string>): Array<{ node: string; text: string | null }> {
+  const out: Array<{ node: string; text: string | null }> = [];
+  for (const [id, a] of raw.nodes) {
+    if (a.guide === undefined) continue;
+    const guide = String(a.guide);
+    delete a.guide;
+    if (typeof a.prompt !== "string" || !a.prompt) throw new Error(`${raw.name}: ${id} [guide=...] adds to a prompt, and ${id} has none; write prompt= instead`);
+    if (!read) { out.push({ node: id, text: null }); continue; }
+    const text = inlineRef(guide, read, sources).replace(/\s+$/, "");
+    a.prompt = `${inlineRef(a.prompt, read, sources).replace(/\s+$/, "")}\n\n${text}`;
+    out.push({ node: id, text });
+  }
+  return out;
 }
 
 function buildGraph(raw: RawGraph): WorkflowGraph {
@@ -510,6 +753,8 @@ function buildGraph(raw: RawGraph): WorkflowGraph {
   if (a.description) graph.description = String(a.description);
   if (a.draft) graph.draft = String(a.draft);
   if (a.takes) graph.takes = String(a.takes).split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  if (raw.edits?.length) graph.edits = raw.edits;
+  if (raw.pruned?.length) graph.pruned = raw.pruned;
   for (const [id, attrs] of raw.nodes) graph.nodes.set(id, Parser.buildNode(id, attrs));
   // Ensure nodes referenced in edges exist (as placeholder agent nodes)
   for (const e of raw.edges) for (const id of [e.from, e.to]) if (!graph.nodes.has(id)) graph.nodes.set(id, Parser.buildNode(id, {}));
@@ -553,7 +798,7 @@ export function resolveFlowSource(slug: string, dir: string | undefined, read: R
 const shapeOf = (a: Record<string, Attr>) => String(a.shape ?? "box");
 const isStopExit = (a: Record<string, Attr>) => shapeOf(a) === "Msquare" && !!a.stop;
 const mentionsFailure = (e: WorkflowEdge) => /\boutcome\s*=\s*failure\b/.test(e.condition ?? "");
-const STRING_FIELDS = ["prompt", "script", "doc", "card", "stop", "goal"];
+const STRING_FIELDS = ["prompt", "script", "doc", "card", "stop", "goal", "guide"];
 const ID_FIELDS = ["asker", "answerer", "retry_target"];
 
 /**
@@ -591,7 +836,7 @@ function ownParams(raw: RawGraph): RawGraph {
 function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, resolve: ResolveFlow, inline: boolean, chain: string[]): RawGraph {
   const fills = raw.fills ?? new Map<string, RawGraph>();
   const flowNodes = [...raw.nodes].filter(([id, a]) => fills.has(id) || (typeof a.flow === "string" && a.flow));
-  if (!flowNodes.length) return raw;
+  if (!flowNodes.length) return applyOverrides(raw);
   const nodes = new Map(raw.nodes);
   let edges = [...raw.edges];
   const files = [...raw.files];
@@ -662,7 +907,7 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
     nodes.set(id, { shape: "diamond", label: segLabel, segment: id, segment_label: segLabel, ...marks, segment_entry: true, ...(slot ? { slot } : {}) });
     for (const e of seg.edges) edges.push({ ...e, from: rename(e.from), to: rename(e.to), ...(e.condition ? { condition: rewriteCondition(e.condition) } : {}) });
   }
-  return { ...raw, nodes, edges, files, fills: undefined };
+  return applyOverrides({ ...raw, nodes, edges, files, fills: undefined });
 }
 
 /**
@@ -740,6 +985,29 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
     if (conditionErr) errors.push(`Edge ${edge.from} -> ${edge.to} condition "${edge.condition}": ${conditionErr}`);
   }
 
+  // A station named by another (who answers a gate, where a retry goes) must still be there, and so must one a $ref reads.
+  const gone = new Set(graph.pruned ?? []);
+  const goneRef = (text: string) => [...gone].find((id) => new RegExp(`(^|[^\\w.])\\$?${id}(\\.|${SEGMENT_SEP})`).test(text));
+  for (const node of graph.nodes.values()) {
+    for (const f of ID_FIELDS) {
+      const v = (node as unknown as Record<string, unknown>)[f];
+      if (typeof v !== "string" || graph.nodes.has(v)) continue;
+      const top = v.split(SEGMENT_SEP)[0];
+      errors.push(gone.has(top)
+        ? `${node.id} [${f}="${v}"] names ${v}, and this flow skips ${top}: point ${f} at a station that stays, or stop skipping ${top}`
+        : `${node.id} [${f}="${v}"] names no station of this flow`);
+    }
+    for (const f of ["prompt", "script", "doc", "card", "stop"] as const) {
+      const text = node[f];
+      const ref = typeof text === "string" && gone.size ? goneRef(text) : undefined;
+      if (ref) errors.push(`${node.id}'s ${f} reads ${ref}, and this flow skips ${ref}: change ${node.id}'s ${f}, or stop skipping ${ref}`);
+    }
+  }
+  for (const edge of graph.edges) {
+    const ref = edge.condition && gone.size ? goneRef(edge.condition.replace(/"[^"]*"/g, "")) : undefined;
+    if (ref) errors.push(`Edge ${edge.from} -> ${edge.to} condition "${edge.condition}" reads ${ref}, and this flow skips ${ref}`);
+  }
+
   // Check command nodes have scripts
   for (const node of graph.nodes.values()) {
     if (node.type === "command" && !node.script) {
@@ -768,7 +1036,7 @@ const sortedAttrs = (o: object) => Object.fromEntries(Object.entries(o).filter((
 export function graphHash(graph: WorkflowGraph): string {
   const sorted = sortedAttrs;
   // Where the graph was read from is not what it is.
-  const { nodes, edges, sources: _sources, ...attrs } = graph;
+  const { nodes, edges, sources: _sources, edits: _edits, pruned: _pruned, ...attrs } = graph;
   const canonical = JSON.stringify({
     graph: sorted(attrs),
     nodes: [...nodes.values()].sort((a, b) => a.id.localeCompare(b.id)).map(sorted),

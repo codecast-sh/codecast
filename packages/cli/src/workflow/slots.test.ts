@@ -94,3 +94,23 @@ describe("a backbone with a slot", () => {
     expect(() => parseWorkflowSource(`digraph m { start [shape=Mdiamond] subgraph ghost { a [prompt="x"] } }`)).toThrow(/fills no node/);
   });
 });
+
+describe("a station placed after a filled slot", () => {
+  test("follows the slot's steps on the passing path, and the slot's failure end stays the slot's", () => {
+    const g = parseWorkflowFile("/r/session/fix.cast", {
+      read: files({
+        ...REPO,
+        "/r/session/fix.cast": `digraph fix {
+          graph [extends="spine"]
+          lint [after="implement", label="Lint", shape=parallelogram, script="bun lint"]
+          subgraph implement { patch [prompt="Patch it."] }
+        }`,
+      }),
+    });
+    expect(validateWorkflow(g)).toEqual([]);
+    expect(g.edges.filter((e) => e.to === "lint").map((e) => [e.from, e.condition])).toEqual([["implement__exit", "outcome = success"]]);
+    expect(g.edges.filter((e) => e.from === "lint")).toEqual([{ from: "lint", to: "review", condition: "outcome = success" }]);
+    const folded = foldFlow([...g.nodes.values()], g.edges);
+    expect(folded.stations.filter((s) => s.main).map((s) => s.label)).toEqual(["investigate", "Implement", "Lint", "review"]);
+  });
+});

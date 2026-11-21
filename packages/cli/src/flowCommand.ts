@@ -194,7 +194,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const stale = staleRepoFlow(found, deps.realCwd());
       if (stale) console.error(`! ${stale}`);
       const spineLive = live ?? lives.flows.find((l) => l.flow.slug === found.slug) ?? null;
-      const base = found.extends ? pool.find((p) => p.slug === found.extends) ?? baseBeside(found) : null;
+      const base = found.extends ? baseOf(found, pool) : null;
       const baseGraph = graphOf(base);
       const ownGraph = baseGraph ? graphOf(found) : null;
       const changes = baseGraph && ownGraph ? variantChanges(baseGraph, ownGraph) : null;
@@ -629,6 +629,16 @@ function printVariantChanges(slug: string, base: PoolFlow | null, changes: Varia
   const lines = changes ? variantChangeLines(changes) : [];
   console.log(`extends ${bold(base.label)} ${dim(`(${slug})`)}${lines.length ? ", changing:" : changes ? ", changing nothing" : ""}`);
   for (const l of lines) console.log(`  ${l}`);
+}
+
+/**
+ * The flow a variant extends: the file its `extends` names, else the library flow of that name, never the variant
+ * itself (a repo's change.cast that extends "change" shadows the shipped change in the pool, and extends that).
+ */
+export function baseOf(found: FoundFlow, pool: ReadonlyArray<PoolFlow>): PoolFlow | null {
+  if (!found.extends) return null;
+  const shipped = Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, found.extends) ? describeFlow(found.extends, BUILTIN_WORKFLOW_TEMPLATES[found.extends], "shipped", null) : null;
+  return baseBeside(found) ?? pool.find((p) => p.slug === found.extends && (!p.file || p.file !== found.file)) ?? shipped;
 }
 
 /** A graph file's base read from where its `extends` points, for a variant whose base is not in the library. */

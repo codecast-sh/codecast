@@ -146,7 +146,7 @@ function codeMask(src: string): Uint8Array {
 }
 
 interface Attr { key: string; entryStart: number; valueStart: number; valueEnd: number; raw: string }
-interface NodeStmt { open: number; close: number; attrs: Attr[] }
+interface NodeStmt { start: number; open: number; close: number; attrs: Attr[] }
 
 /** The attribute list of the node statement `<id> [ ... ]`, or null when the source declares no such node. */
 export function findNodeStmt(src: string, id: string): NodeStmt | null {
@@ -159,7 +159,7 @@ export function findNodeStmt(src: string, id: string): NodeStmt | null {
     let close = open + 1;
     while (close < src.length && !(mask[close] && src[close] === "]")) close++;
     if (close >= src.length) return null;
-    return { open, close, attrs: lexAttrs(src, mask, open + 1, close) };
+    return { start: at, open, close, attrs: lexAttrs(src, mask, open + 1, close) };
   }
   return null;
 }
@@ -211,6 +211,53 @@ export function setNodeAttr(src: string, id: string, key: string, raw: string | 
   const last = stmt.attrs[stmt.attrs.length - 1];
   if (!last) return `${src.slice(0, stmt.open + 1)}${key}=${raw}${src.slice(stmt.close)}`;
   return `${src.slice(0, last.valueEnd)}, ${key}=${raw}${src.slice(last.valueEnd)}`;
+}
+
+/**
+ * `<id>`'s attributes set (a raw DOT value) or dropped (null), in its statement when the source has one, else in a
+ * new statement on its own line before the graph's closing brace. A statement left with no attributes goes, line
+ * and all; every other byte, comments included, stays.
+ */
+export function upsertNodeAttrs(src: string, id: string, attrs: Record<string, string | null>): string {
+  let out = src;
+  if (findNodeStmt(out, id)) {
+    for (const [k, v] of Object.entries(attrs)) out = setNodeAttr(out, id, k, v);
+    return findNodeStmt(out, id)!.attrs.length ? out : dropNodeStmt(out, id);
+  }
+  const set = Object.entries(attrs).filter(([, v]) => v !== null);
+  if (!set.length) return out;
+  const mask = codeMask(out);
+  let close = out.length - 1;
+  while (close >= 0 && !(mask[close] && out[close] === "}")) close--;
+  if (close < 0) throw new LineProfileError("the graph has no closing brace");
+  const stmt = `${id} [${set.map(([k, v]) => `${k}=${v}`).join(", ")}]`;
+  const lineStart = out.lastIndexOf("\n", close - 1) + 1;
+  if (!out.slice(lineStart, close).trim()) return `${out.slice(0, lineStart)}  ${stmt}\n${out.slice(lineStart)}`;
+  return `${out.slice(0, close).replace(/[ \t]*$/, "")}\n  ${stmt}\n${out.slice(close)}`;
+}
+
+/** The source without `<id>`'s node statement: its whole line when nothing else is on it (a trailing comment goes with it). */
+export function dropNodeStmt(src: string, id: string): string {
+  const stmt = findNodeStmt(src, id);
+  if (!stmt) return src;
+  const lineStart = src.lastIndexOf("\n", stmt.start - 1) + 1;
+  const nl = src.indexOf("\n", stmt.close);
+  const lineEnd = nl < 0 ? src.length : nl;
+  const after = src.slice(stmt.close + 1, lineEnd).trim();
+  if (!src.slice(lineStart, stmt.start).trim() && (!after || after.startsWith("//"))) return src.slice(0, lineStart) + src.slice(Math.min(src.length, lineEnd + 1));
+  return src.slice(0, stmt.start) + src.slice(stmt.close + 1);
+}
+
+/** The ids of every node statement in the source. */
+export function nodeStmtIds(src: string): string[] {
+  const mask = codeMask(src);
+  const ids: string[] = [];
+  const re = /(^|[\n;{\]])[ \t]*([A-Za-z_][\w-]*)\s*\[/g;
+  for (let m = re.exec(src); m; m = re.exec(src)) {
+    const at = m.index + m[1].length + m[0].slice(m[1].length).indexOf(m[2]);
+    if (mask[at] && !["graph", "node", "edge"].includes(m[2])) ids.push(m[2]);
+  }
+  return ids;
 }
 
 /** A node attribute's raw DOT text, or null. */

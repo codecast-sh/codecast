@@ -6,7 +6,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { holdUntil, libraryTree, liveFlowLines, namesLiveFlow, variantChangeLines, variantChanges, variantSummary, type LiveFlow } from "./flowLibrary.js";
 import { poolFlows, type PushedPoolRow } from "./workflow/flowPool.js";
-import { parseWorkflowFile } from "./workflow/parser.js";
+import { parseWorkflowFile, parseWorkflowSource } from "./workflow/parser.js";
+import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
 
 const tmp: string[] = [];
 const mkdtemp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "flowlib-")); tmp.push(d); return d; };
@@ -77,11 +78,32 @@ describe("the library", () => {
     const c = variantChanges(graph("agentwatch"), graph("agentwatch-system"));
     expect(c.added).toEqual(["Reproduce"]);
     expect(c.removed).toEqual(["Prove"]);
-    expect(c.changed).toEqual([{ station: "Investigate", fields: ["prompt"] }]);
+    expect(c.changed).toEqual([{ id: "investigate", station: "Investigate", fields: ["prompt"] }]);
+    expect(c.ids).toEqual({ added: ["reproduce"], removed: ["prove"] });
     expect(c.rerouted).toEqual(["Investigate"]);
     expect(c.graph.map((g) => g.key)).toEqual(["label", "serves"]);
     expect(variantSummary(c)).toBe("1 station added, 1 removed, 1 changed, 1 rerouted, own sources");
     expect(variantChangeLines(c)).toContain("~ Investigate: prompt");
+  });
+});
+
+describe("a project's change flow written as edits", () => {
+  test("cast flow show says each edit in words, and nothing else for what they move", () => {
+    const dir = mkdtemp();
+    const file = path.join(dir, ".codecast", "flows", "change.cast");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `digraph change {
+  graph [extends="change"]
+  lint   [after="check", label="Lint", shape=parallelogram, script="bun run lint"]
+  review [guide="Also check X."]
+  decide [skip=true]
+  e2e    [after="check", label="E2E", when="landing/**", shape=parallelogram, script="bun run e2e"]
+}`);
+    const variant = parseWorkflowFile(file);
+    const base = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change);
+    const c = variantChanges(base, variant);
+    expect(variantChangeLines(c)).toEqual(["~ Review: guidance added", "Decide skipped", "+ Lint after Check", "+ E2E after Check", "E2E runs when landing/**"]);
+    expect(variantSummary(c)).toBe("5 edits");
   });
 });
 

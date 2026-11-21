@@ -1,3 +1,4 @@
+import type { FlowEditChange } from "@codecast/shared/contracts/flowEdit";
 export type NodeShape =
   | "Mdiamond"       // start
   | "Msquare"        // exit
@@ -149,6 +150,10 @@ export interface WorkflowGraph {
   edges: WorkflowEdge[];
   /** The files the graph was read from: its own file and every @file it inlined (parser.ts). */
   sources?: string[];
+  /** The edits a variant made over the flow it extends (after=, skip, guide=, when=), as written: not part of the graph's hash. */
+  edits?: FlowEditChange[];
+  /** The base stations a skip took off the path, with the ones nothing reached after it: not part of the graph's hash. */
+  pruned?: string[];
 }
 
 export interface WorkflowRunState {

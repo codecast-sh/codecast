@@ -232,6 +232,23 @@ describe("evalCondition: the language", () => {
     expect(evalCondition("outcome > 0", ctx)).toBe(false);
   });
 
+  test("touches: a changed path matches a glob (a station's when=)", () => {
+    const files = { ...ctx, change_files: "landing/index.html packages/web/app.tsx README.md" };
+    expect(evalCondition('change_files touches "landing/**"', files)).toBe(true);
+    expect(evalCondition('change_files touches "backend/**, docs/*.md"', files)).toBe(false);
+    expect(evalCondition('change_files touches "backend/**, *.md"', files)).toBe(true);
+    expect(evalCondition('change_files touches "packages/web/"', files)).toBe(true);
+    expect(evalCondition('change_files touches "packages/web"', files)).toBe(true);
+    expect(evalCondition('change_files touches "packages/we"', files)).toBe(false);
+    expect(evalCondition('not change_files touches "backend/**"', files)).toBe(true);
+    expect(evalCondition('(outcome = success) and change_files touches "**/*.tsx"', files)).toBe(true);
+    expect(evalCondition('change_files touches "landing/**"', { ...ctx, change_files: "" })).toBe(false);
+    // No change files known: the gated station runs rather than passing unseen.
+    expect(evalCondition('change_files touches "landing/**"', ctx)).toBe(true);
+    expect(evalCondition('not change_files touches "landing/**"', ctx)).toBe(false);
+    expect(conditionError('change_files touches "a/**"')).toBeNull();
+  });
+
   test("a station that has not run in this attempt counts 0 visits", () => {
     expect(evalCondition("propose.visits < 3", ctx)).toBe(true);
     expect(evalCondition("propose.visits >= 3", ctx)).toBe(false);

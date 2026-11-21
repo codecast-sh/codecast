@@ -5,6 +5,7 @@
 // flow is a flow switched on with sources feeding one queue. Pure formatters
 // over the pool and the server's live flow rows; flowCommand.ts reads and prints.
 import { segmentTopOf } from "@codecast/shared/contracts/flowPool";
+import { flowEditWords } from "@codecast/shared/contracts/flowEdit";
 import type { PoolFlow } from "./workflow/flowPool.js";
 import type { WorkflowGraph, WorkflowNode } from "./workflow/types.js";
 
@@ -56,10 +57,14 @@ export function libraryTree(pool: ReadonlyArray<PoolFlow>, live: ReadonlyArray<L
 }
 
 export type VariantChanges = {
+  /** The variant's own edits in words ("+ Lint after Check", "Decide skipped"); the lists below leave out what these say. */
+  edits: string[];
   added: string[];
   removed: string[];
-  /** Stations both have, with the attributes that differ. */
-  changed: Array<{ station: string; fields: string[] }>;
+  /** Stations both have, with the attributes that differ (id: the station's top-level id). */
+  changed: Array<{ id: string; station: string; fields: string[] }>;
+  /** The ids behind `added` and `removed`, in the same order. */
+  ids: { added: string[]; removed: string[] };
   /** Stations whose routes out differ. */
   rerouted: string[];
   /** Graph attributes that differ, as base → variant. */
@@ -75,6 +80,15 @@ export function variantChanges(base: WorkflowGraph, variant: WorkflowGraph): Var
   const b = tops(base);
   const v = tops(variant);
   const routes = (g: WorkflowGraph, id: string) => g.edges.filter((e) => segmentTopOf(e.from) === id && segmentTopOf(e.to) !== id).map((e) => `${segmentTopOf(e.to)}|${e.condition ?? ""}|${e.label ?? ""}`).sort().join("\n");
+  const label = (id: string) => { const t = segmentTopOf(id); return variant.nodes.get(t)?.label || base.nodes.get(t)?.label || t; };
+  const edits = variant.edits ?? [];
+  // What the edits already say: the stations they add or take off, the prompts they guide, the routes they move.
+  const added = new Set(edits.filter((e) => e.op === "add").map((e) => e.station));
+  const gone = new Set([...(variant.pruned ?? []).map(segmentTopOf), ...edits.filter((e) => e.op === "skip").map((e) => e.station)]);
+  const guided = new Set(edits.filter((e) => e.op === "guide").map((e) => segmentTopOf(e.station)));
+  const moved = new Set([...gone, ...edits.filter((e) => e.op === "when" || e.op === "add").map((e) => e.station), ...edits.flatMap((e) => (e.op === "add" && e.before ? [e.before] : []))]);
+  const explained = new Set<string>();
+  for (const e of [...base.edges, ...variant.edges]) if (moved.has(segmentTopOf(e.to)) || added.has(segmentTopOf(e.to))) explained.add(segmentTopOf(e.from));
   const changed: VariantChanges["changed"] = [];
   const rerouted: string[] = [];
   for (const id of v) {
@@ -87,17 +101,22 @@ export function variantChanges(base: WorkflowGraph, variant: WorkflowGraph): Var
       for (const k of STATION_FIELDS) if (String(n[k] ?? "") !== String(was[k] ?? "")) fields.add(k);
     }
     for (const nid of base.nodes.keys()) if (segmentTopOf(nid) === id && !variant.nodes.has(nid)) fields.add("stations");
-    if (fields.size) changed.push({ station: name(variant, id), fields: [...fields] });
-    if (routes(base, id) !== routes(variant, id)) rerouted.push(name(variant, id));
+    if (guided.has(id)) fields.delete("prompt");
+    if (fields.size) changed.push({ id, station: name(variant, id), fields: [...fields] });
+    if (routes(base, id) !== routes(variant, id) && !explained.has(id)) rerouted.push(name(variant, id));
   }
+  const addedIds = [...v].filter((id) => !b.has(id) && !added.has(id));
+  const removedIds = [...b].filter((id) => !v.has(id) && !gone.has(id));
   const graph: VariantChanges["graph"] = [];
   for (const key of ["label", "goal", "serves", "takes", "stack", "on_failure"] as const satisfies ReadonlyArray<keyof WorkflowGraph>) {
     const val = (g: WorkflowGraph) => { const x = g[key]; return x == null ? null : Array.isArray(x) ? x.join(" ") : String(x); };
     if (val(base) !== val(variant)) graph.push({ key, from: val(base), to: val(variant) });
   }
   return {
-    added: [...v].filter((id) => !b.has(id)).map((id) => name(variant, id)),
-    removed: [...b].filter((id) => !v.has(id)).map((id) => name(base, id)),
+    edits: edits.map((e) => flowEditWords(e, label)),
+    added: addedIds.map((id) => name(variant, id)),
+    removed: removedIds.map((id) => name(base, id)),
+    ids: { added: addedIds, removed: removedIds },
     changed,
     rerouted,
     graph,
@@ -109,6 +128,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 /** One line for a variant's row in the tree: "2 stations added, 3 changed, own sources". */
 export function variantSummary(c: VariantChanges): string {
   const parts = [
+    c.edits.length ? plural(c.edits.length, "edit") : "",
     c.added.length ? `${plural(c.added.length, "station")} added` : "",
     c.removed.length ? `${c.removed.length} removed` : "",
     c.changed.length ? `${c.changed.length} changed` : "",
@@ -121,6 +141,7 @@ export function variantSummary(c: VariantChanges): string {
 /** A variant's changes, one line each, for `cast flow show`. */
 export function variantChangeLines(c: VariantChanges): string[] {
   return [
+    ...c.edits,
     ...c.added.map((s) => `+ ${s}`),
     ...c.removed.map((s) => `- ${s}`),
     ...c.changed.map((s) => `~ ${s.station}: ${s.fields.join(", ")}`),
