@@ -94,9 +94,11 @@ describe("a session's change runs through a flow", () => {
     expect(change.paths).not.toContain(".env.local");
     expect(change.session).toBe("jx7aaaa");
 
-    // The commit holds exactly that content, on its own branch, on top of HEAD.
+    // The commit holds exactly that content, on its own branch, on top of HEAD (no remote, so nothing to replay onto).
     expect(git(root, "rev-parse", "codecast/change-ct-1")).toBe(change.tip);
     expect(git(root, "rev-parse", `${change.tip}^`)).toBe(headBefore);
+    expect(change.base).toBe(headBefore);
+    expect(change.behind).toBeUndefined();
     expect(git(root, "diff", "--name-only", headBefore, change.tip).split("\n").sort()).toEqual(change.paths);
     expect(git(root, "show", `${change.tip}:src/util.ts`)).toBe("export const u = 2;");
     expect(git(root, "show", `${change.tip}:docs/notes.md`)).toContain("A line written by a heredoc.");
@@ -162,4 +164,73 @@ describe("a session's change runs through a flow", () => {
     transcript("sess-c", "jx7ccccccccccccccccccccccccccccc", [tool(root, "Edit", { file_path: path.join(root, "a.txt"), old_string: "a", new_string: "b" }, 10_000)]);
     await expect(freezeSessionChange(root, "jx7zzzz", { branch: "codecast/x", worktree: "x" })).rejects.toThrow(/No uncommitted change/);
   });
+});
+
+// A shared checkout whose HEAD lags its upstream: the change is cut on HEAD,
+// then replayed onto the freshly fetched upstream, so Check and Review test it
+// on what it would land on. Only the branch ref moves.
+describe("a session's change is cut on fresh upstream", () => {
+  function lagging(name: string) {
+    freshState();
+    const dir = path.join(sandbox, name);
+    const origin = path.join(dir, "origin.git");
+    const seed = path.join(dir, "seed");
+    const root = path.join(dir, "shared");
+    fs.mkdirSync(seed, { recursive: true });
+    git(dir, "init", "-q", "--bare", "-b", "main", origin);
+    git(seed, "init", "-q", "-b", "main");
+    write(seed, "a.ts", "export const a = 1;\n");
+    write(seed, "b.ts", "export const b = 1;\n");
+    git(seed, "add", "-A");
+    git(seed, "commit", "-qm", "base");
+    git(seed, "push", "-q", origin, "main");
+    git(dir, "clone", "-q", origin, root);
+    // Upstream moves on without the shared checkout fetching it.
+    const upstream = (file: string, text: string) => {
+      write(seed, file, text);
+      git(seed, "commit", "-qam", `upstream ${file}`);
+      git(seed, "push", "-q", origin, "main");
+      return git(origin, "rev-parse", "main");
+    };
+    // The session edits a.ts in the shared checkout.
+    write(root, "a.ts", "export const a = 2;\n");
+    transcript(`sess-${name}`, `jx7${name}`.padEnd(32, "0"), [tool(root, "Edit", { file_path: path.join(root, "a.ts"), old_string: "1", new_string: "2" }, 10_000)]);
+    const shared = () => ({ head: git(root, "rev-parse", "HEAD"), status: git(root, "status", "--porcelain"), index: git(root, "ls-files", "-s"), a: fs.readFileSync(path.join(root, "a.ts"), "utf-8") });
+    return { root, upstream, shared, session: `jx7${name}`.slice(0, 7) };
+  }
+
+  test("upstream changed another file: the branch sits on fresh upstream and holds both", async () => {
+    const { root, upstream, shared, session } = lagging("upaa");
+    const before = shared();
+
+    // HEAD already holds upstream: the change sits on HEAD.
+    const first = await freezeSessionChange(root, session, { branch: "codecast/fresh", worktree: "fresh" });
+    expect(git(root, "rev-parse", `${first.tip}^`)).toBe(before.head);
+
+    const fresh = upstream("b.ts", "export const b = 2;\n");
+    const change = await freezeSessionChange(root, session, { branch: "codecast/fresh", worktree: "fresh" });
+    expect(change.paths).toEqual(["a.ts"]);
+    expect(git(root, "rev-parse", "codecast/fresh")).toBe(change.tip);
+    expect(git(root, "rev-parse", `${change.tip}^`)).toBe(fresh);
+    expect(change.base).toBe(fresh);
+    expect(change.behind).toBeUndefined();
+    expect(git(root, "show", `${change.tip}:a.ts`)).toBe("export const a = 2;");
+    expect(git(root, "show", `${change.tip}:b.ts`)).toBe("export const b = 2;");
+    expect(git(root, "diff", "--name-only", fresh, change.tip)).toBe("a.ts");
+    // The fetch moved the remote-tracking ref, nothing else.
+    expect(git(root, "rev-parse", "origin/main")).toBe(fresh);
+    expect(shared()).toEqual(before);
+  }, 30_000);
+
+  test("upstream changed the same lines: the branch stays on HEAD and the conflict is recorded", async () => {
+    const { root, upstream, shared, session } = lagging("upbb");
+    const before = shared();
+    const fresh = upstream("a.ts", "export const a = 3;\n");
+    const change = await freezeSessionChange(root, session, { branch: "codecast/stale", worktree: "stale" });
+    expect(git(root, "rev-parse", `${change.tip}^`)).toBe(before.head);
+    expect(change.base).toBe(before.head);
+    expect(change.behind).toEqual({ upstream: fresh, conflicts: ["a.ts"] });
+    expect(git(root, "show", `${change.tip}:a.ts`)).toBe("export const a = 2;");
+    expect(shared()).toEqual(before);
+  }, 30_000);
 });

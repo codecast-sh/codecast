@@ -22084,9 +22084,22 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
     if (root) roots.add(root);
   }
   if (!roots.size) return;
-  const { levelOne, describeLevel } = await import("./land/levelSweep.js");
+  const { sweepOne } = await import("./land/levelSweep.js");
+  // A conflict that holds a checkout back is briefed to the session that wrote the file.
+  const send = async (to: string, body: string): Promise<boolean> => {
+    const siteUrl = getSiteUrl();
+    const token = getAuthToken();
+    if (!siteUrl || !token) return false;
+    const resp = await fetch(`${siteUrl}/cli/messages/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: token, to, body, wake: true }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return resp.ok && !((await resp.json().catch(() => null)) as { error?: unknown } | null)?.error;
+  };
   for (const root of roots) {
-    const line = describeLevel(await levelOne(root).catch((e) => ({ root, skipped: String((e as Error)?.message ?? e) })));
+    const line = await sweepOne(root, { send }).catch((e) => `${path.basename(root)}: ${(e as Error)?.message ?? e}`);
     if (line) log(`[LEVEL] ${line}`);
   }
 }
