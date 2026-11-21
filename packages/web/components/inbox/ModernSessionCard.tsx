@@ -150,7 +150,7 @@ export function ModernSessionCardView({
     row: session,
     status,
     now,
-    live: { pendingSend: isPendingSend, blocked, asking: liveness.asking, restarting: liveness.restarting && !liveness.isLive, asksOk: liveness.asksOk, stoppedKind: liveness.stopped ?? null },
+    live: { pendingSend: isPendingSend, held: liveness.held, blocked, asking: liveness.asking, restarting: liveness.restarting && !liveness.isLive, asksOk: liveness.asksOk, stoppedKind: liveness.stopped ?? null },
     stateLine: stateView?.cardLine,
     summary: sessionCardSummary(session),
     prompt: cleanUserMessage(session.last_user_message),

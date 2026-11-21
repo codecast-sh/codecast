@@ -55,7 +55,7 @@ export function useMinePlacement(enabled = true): PlacedInbox | null {
     s => sessionsWakeSig(s.sessions),
     s => s.sessionsWithQueuedMessages,
     s => s.blockedReviveRequestedAt,
-    s => pendingSendWakeSig(s.pendingMessages),
+    s => pendingSendWakeSig(s.pendingMessages, s.pendingMessageStatus),
     s => s.currentUser?._id,
     s => resolveShowOld(s.clientState.ui),
     s => placementDecisionsSig(s.sessionDecisions),
@@ -71,6 +71,6 @@ export function useMinePlacement(enabled = true): PlacedInbox | null {
   return useMemo(
     () => (enabled ? placeInboxRows(s, { scope: "mine", now: coarseNow }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), resolveShowOld(s.clientState.ui), placementDecisionsSig(s.sessionDecisions), s.questionResolutions, coarseNow],
+    [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages, s.pendingMessageStatus), resolveShowOld(s.clientState.ui), placementDecisionsSig(s.sessionDecisions), s.questionResolutions, coarseNow],
   );
 }

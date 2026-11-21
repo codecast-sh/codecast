@@ -1822,7 +1822,7 @@ function SessionListPanelImpl({
     // Structural change + the view keys + the question inputs + the epoch tick
     // (coarseNow drives the deadline signature).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), inboxScope, meId, teamInboxIdsOf(s), showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow, nestsWorkers(s.clientState.ui)],
+    [sessionsWakeSig(s.sessions), inboxScope, meId, teamInboxIdsOf(s), showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages, s.pendingMessageStatus), blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow, nestsWorkers(s.clientState.ui)],
   );
   // The section a held row is headed for, as its accent: the fuse and the
   // landing wash speak in the color of where the row is going.

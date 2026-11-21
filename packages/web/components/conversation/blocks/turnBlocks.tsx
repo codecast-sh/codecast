@@ -730,7 +730,18 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
               Held: {holdReason}
             </button>
           ) : (
-            <span>Held: {holdReason}</span>
+            <>
+              <span>Held: {holdReason}</span>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); void handleSendAnyway(); }}
+                disabled={sendingAnyway}
+                data-testid="held-send-anyway"
+                className="text-meta font-medium text-amber-400 border border-amber-500/40 hover:bg-amber-500/15 rounded px-1.5 py-0.5 transition-colors disabled:opacity-60"
+              >
+                {sendingAnyway ? "Sending…" : "Send anyway"}
+              </button>
+            </>
           )}
           <CancelPendingButton onClick={handleCancelPending} disabled={cancelState !== "idle"} />
         </div>

@@ -13,6 +13,7 @@
 // imports it), only types and pure helpers.
 import { TRIAGE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
+import { pendingRowHoldReason, serverPendingRows, type ServerPendingStatus } from "../lib/pendingBanner";
 
 // The exact overlay alphabet, per the pinned contract:
 //
@@ -96,13 +97,31 @@ export function pendingRowsUnsettled(pending?: Array<{ _isSettled?: boolean }>):
   return !!pending?.some((m) => !m._isSettled);
 }
 
+// Why the daemon is holding a conversation's send, from its server pending
+// row, or undefined while nothing is held. A held send is not landing: it
+// waits on the person (Send anyway, Cancel), so it is no longer the person's
+// move in flight (ct-97017).
+export function convHeldSendReason(status: unknown): string | undefined {
+  for (const row of serverPendingRows(status as ServerPendingStatus | undefined)) {
+    const reason = pendingRowHoldReason(row);
+    if (reason) return reason;
+  }
+  return undefined;
+}
+
 // Every conversation the person already sent into and is waiting to confirm:
-// a queued (Ctrl+Enter) send or an optimistic outbox entry.
+// a queued (Ctrl+Enter) send or an optimistic outbox entry, unless the daemon
+// is holding it.
 export function pendingSendIdsOf(state: {
   sessionsWithQueuedMessages: ReadonlySet<string>;
   pendingMessages?: Record<string, PendingSendRow[]>;
+  pendingMessageStatus?: Record<string, unknown>;
 }, now: number): Set<string> {
-  return new Set([...state.sessionsWithQueuedMessages, ...sessionsWithPendingSend(state.pendingMessages ?? {}, now)]);
+  const ids = new Set([...state.sessionsWithQueuedMessages, ...sessionsWithPendingSend(state.pendingMessages ?? {}, now)]);
+  for (const id in state.pendingMessageStatus ?? {}) {
+    if (convHeldSendReason(state.pendingMessageStatus![id])) ids.delete(id);
+  }
+  return ids;
 }
 
 // Conversation ids with an outbound message sent inside the placement bound
@@ -141,6 +160,7 @@ export type InboxOverlayState = {
   sessions: Record<string, { _id: string; _hasDraft?: boolean } & Record<string, any>>;
   pending: Record<string, { type: string; ts?: number } & Record<string, any>>;
   pendingMessages?: Record<string, Array<{ _isFailed?: boolean }>>;
+  pendingMessageStatus?: Record<string, unknown>;
   pendingSessionCreates: Record<string, unknown>;
   currentSessionId: string | null;
   sessionsWithQueuedMessages: ReadonlySet<string>;

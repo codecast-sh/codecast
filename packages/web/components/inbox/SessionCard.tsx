@@ -15,7 +15,7 @@ import { identityPrefsOf, identityRowOf, identitySig, roleLookingAfter } from ".
 import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 import { clickBucketChip, clickProjectChip } from "../../store/chipFilterClicks";
 import { workProjectSig } from "../../lib/workProjectSig";
-import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, railRowPlacement, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, convHasPendingSend, convHeldSendReason, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, railRowPlacement, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
 import { useNowWhen } from "../../hooks/useCoarseNow";
 import { latestRestartRow, restartPending } from "../../lib/sessionCommands";
@@ -153,6 +153,7 @@ export const SessionCard = memo(function SessionCard({
   const st = useTrackedStore([
     (s) => s.blockedReviveRequestedAt[cardId],
     (s) => convHasPendingSend(s.pendingMessages[cardId]),
+    (s) => convHeldSendReason(s.pendingMessageStatus[cardId]),
     // This row's restart, from the one sessionCommands home (small: one row
     // per commanded session), Object.is-stable until the row itself changes.
     (s) => latestRestartRow(s.sessionCommands, cardId),
@@ -362,7 +363,8 @@ export const SessionCard = memo(function SessionCard({
         // dot, whatever the work state's heartbeat still says.
         // So is one waiting on an OK: it is the person's turn, not work.
         isLive: isLive && !(hosted && (stoppedKind || awaitingOkIds(st.sessionDecisions).has(cardId))),
-        pendingSend: convHasPendingSend(st.pendingMessages[cardId]),
+        pendingSend: convHasPendingSend(st.pendingMessages[cardId]) && !convHeldSendReason(st.pendingMessageStatus[cardId]),
+        held: convHeldSendReason(st.pendingMessageStatus[cardId]),
         blockedReviveAt: reviveRequestedAt,
         restarting,
         draft: hasDraft ? ((st.drafts[cardId]?.draft_message as string | undefined) ?? "") : "",

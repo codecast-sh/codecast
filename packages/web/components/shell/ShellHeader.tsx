@@ -40,7 +40,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
     s => sessionsWakeSig(s.sessions),
     s => s.sessionsWithQueuedMessages,
     s => s.blockedReviveRequestedAt,
-    s => pendingSendWakeSig(s.pendingMessages),
+    s => pendingSendWakeSig(s.pendingMessages, s.pendingMessageStatus),
     s => s.currentUser?._id,
     s => resolveShowOld(s.clientState.ui),
   ]);
@@ -60,7 +60,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
   const working = useMemo(
     () => placeInboxRows(s, { scope: "mine", now: coarseNow }).working,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), resolveShowOld(s.clientState.ui), coarseNow],
+    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages, s.pendingMessageStatus), resolveShowOld(s.clientState.ui), coarseNow],
   );
   // The hover breakdown: every agent of mine with a process behind it,
   // subagents included, by the same live rule the dots and buckets read.

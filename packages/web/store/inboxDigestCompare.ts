@@ -200,6 +200,7 @@ export function evaluateInboxCompare(state: InboxCompareState, ctx: InboxCompare
       sessions: state.sessions,
       pending: state.pending,
       pendingMessages: state.pendingMessages,
+      pendingMessageStatus: state.pendingMessageStatus,
       pendingSessionCreates: state.pendingSessionCreates ?? {},
       currentSessionId: focusedId,
       sessionsWithQueuedMessages: state.sessionsWithQueuedMessages,

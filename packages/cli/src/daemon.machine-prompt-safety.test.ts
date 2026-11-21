@@ -314,7 +314,7 @@ function fixture(transport = "tmux", cached = true) {
       "tmuxWatchablePrefix", "promptIsOwnText", "holdScreen", "surfaceHeldDialog", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "composerTextStart", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
-      "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "transcriptEchoes", "injectViaTmux", "injectViaTmuxInner",
+      "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "transcriptEchoes", "notReadyHoldReason", "withNotReadyHold", "injectViaTmux", "injectViaTmuxInner",
       "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption", "isClaudeIdleResumeDialog", "isIdleResumeOptionRow",
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
@@ -352,6 +352,7 @@ function fixture(transport = "tmux", cached = true) {
     const code = [
       blockAt(source, source.indexOf("class InputBlockedError")).text,
       blockAt(source, source.indexOf("class UnreadableScreenError")).text,
+      blockAt(source, source.indexOf("class DeliveryNotReadyError")).text,
       blockAt(source, source.indexOf("const WEZTERM_KEY_SEQUENCES:")).text.replace(/},?$/, "};"),
       "class UndeliverableMessageError extends Error {}",
       source.slice(fatalStart, source.indexOf("];", fatalStart) + 2),
@@ -782,6 +783,30 @@ describe("machine prompt delivery safety", () => {
     f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = null; };
     await f.scan([{ _id: "held", content: "please continue", delivery_force: true }]);
     expect(f.bodies).toEqual(["please continue"]);
+  });
+
+  // ct-97017: a plain not-ready verdict held as "waiting for terminal input
+  // confirmation" with no screen, so the sender saw only Cancel. The hold now
+  // says what the daemon saw and carries the pane, unless the pane cannot be read.
+  test("a plain not-ready hold names its cause and carries the screen", async () => {
+    const f = fixture();
+    f.pendingInteractivePrompts.clear();
+    f.state.menu = null;
+    f.hooks.input = (event: string) => { if (event === "paste") f.state.composer = ""; };
+    await f.scan([{ _id: "held", content: "please continue" }]);
+    await f.timers.find((timer: { ms: number }) => timer.ms === 5000)!.fn();
+    expect(f.holds[0]?.holdReason).toBe("terminal input not confirmed: composer never showed the pasted payload");
+    expect(f.holds[0]?.holdScreen).toContain("❯");
+  });
+
+  test("a plain not-ready hold carries no screen only when the pane cannot be read", async () => {
+    const f = fixture();
+    f.pendingInteractivePrompts.clear();
+    f.state.captureFailure = true;
+    await f.scan([{ _id: "held", content: "please continue" }]);
+    await f.timers.find((timer: { ms: number }) => timer.ms === 5000)!.fn();
+    expect(f.holds[0]?.holdReason).toStartWith("terminal input not confirmed: terminal capture failed");
+    expect(f.holds[0]?.holdScreen).toBeUndefined();
   });
 
   // The held screen syncs beside the message and goes to daemon.log, so a

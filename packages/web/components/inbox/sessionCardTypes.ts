@@ -29,6 +29,8 @@ export type SessionCardLiveness = {
   isLive: boolean;
   /** A sent message the daemon has not confirmed yet. */
   pendingSend: boolean;
+  /** Why the daemon is holding this session's send, while it does (convHeldSendReason). */
+  held?: string;
   /** The blocked chip's revive stamp (showsBlockedBadge drops the chip while it is fresh). */
   blockedReviveAt?: number;
   /** A kill+restart is in flight for this session (useSessionRestart), age-gated. */

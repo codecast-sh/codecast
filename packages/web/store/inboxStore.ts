@@ -143,6 +143,7 @@ import {
   collectInboxOverlayDeps,
   overlaysAffecting,
   convHasPendingSend,
+  convHeldSendReason,
   pendingRowsUnsettled,
   isInterruptControlMessage,
   sessionsWithPendingSend,
@@ -161,6 +162,7 @@ export {
   overlaysAffecting,
   anyOverlayActive,
   convHasPendingSend,
+  convHeldSendReason,
   isInterruptControlMessage,
   sessionsWithPendingSend,
   pendingSendIdsOf,
@@ -3507,15 +3509,19 @@ export const ownTeamRowsSig = makeCollectionSig<InboxSession>(
 // pendingMessages mutates on every send-lifecycle tick, but placeInboxRows
 // only cares WHICH conversations have an unconfirmed send — subscribe to this
 // instead of the raw map and a badge/panel wakes only when that set changes.
+// A held send leaves the set (pendingSendIdsOf), so the held conversations are
+// part of the signature when the caller hands in the server pending rows.
 let _pendingSendSigRef: unknown;
+let _pendingSendSigStatusRef: unknown;
 let _pendingSendSig = "";
-export function pendingSendWakeSig(pendingMessages: Record<string, Message[]>): string {
-  if (pendingMessages === _pendingSendSigRef) return _pendingSendSig;
+export function pendingSendWakeSig(pendingMessages: Record<string, Message[]>, pendingMessageStatus?: Record<string, unknown>): string {
+  if (pendingMessages === _pendingSendSigRef && pendingMessageStatus === _pendingSendSigStatusRef) return _pendingSendSig;
   const ids: string[] = [];
   for (const id in pendingMessages) {
-    if (convHasPendingSend(pendingMessages[id])) ids.push(id);
+    if (convHasPendingSend(pendingMessages[id]) && !convHeldSendReason(pendingMessageStatus?.[id])) ids.push(id);
   }
   _pendingSendSigRef = pendingMessages;
+  _pendingSendSigStatusRef = pendingMessageStatus;
   _pendingSendSig = ids.sort().join(",");
   return _pendingSendSig;
 }
@@ -3661,6 +3667,8 @@ export type PlaceInboxState = {
   killedShelf?: Pick<KilledShelf, "ids">;
   sessionsWithQueuedMessages: Set<string>;
   pendingMessages: Record<string, Message[]>;
+  /** Server pending rows: a send the daemon holds is not in flight (convHeldSendReason). */
+  pendingMessageStatus?: Record<string, unknown>;
   clientState: { ui?: { inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean; active_team_id?: string | null } };
   currentUser?: { _id?: unknown } | null;
   teamInboxIds?: ReadonlySet<string>;
@@ -4140,7 +4148,7 @@ export function placeInboxRows(
     placementDeadlineSig(state, now),
     showOld, meId, teamInboxIds, epoch,
     state.sessionsWithQueuedMessages,
-    pendingSendWakeSig(state.pendingMessages),
+    pendingSendWakeSig(state.pendingMessages, state.pendingMessageStatus),
     Object.keys(pendingCreates).sort().join(","),
     placementDecisionsSig(decisions),
     state.questionResolutions,
@@ -4170,6 +4178,7 @@ export function placeInboxRows(
       sessions: state.sessions,
       pending: state.pending ?? {},
       pendingMessages: state.pendingMessages,
+      pendingMessageStatus: state.pendingMessageStatus,
       pendingSessionCreates: pendingCreates,
       currentSessionId: focusedId,
       sessionsWithQueuedMessages: state.sessionsWithQueuedMessages,

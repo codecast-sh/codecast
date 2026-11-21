@@ -25,6 +25,8 @@ export type CardLineInput = {
   live?: StatusLive & {
     /** A kill and restart is in flight. */
     restarting?: boolean;
+    /** Why the daemon is holding the person's send: theirs to send anyway or cancel. */
+    held?: string;
     /** A hosted turn waits on the person's OK. */
     asksOk?: boolean;
     /** The stop notice a hosted turn ended on. */
@@ -77,6 +79,7 @@ function reasonOf(input: CardLineInput): { reason: string | null; reasonTitle?: 
   // section re-files it the moment the agent confirms.
   if (status !== "stashed" && status !== "killed") {
     if (live.restarting) return { reason: "Restarting", reasonTitle: "Kill and restart in flight" };
+    if (live.held && !input.hosted) return { reason: "Held", reasonTitle: `Held: ${live.held}` };
     if (live.pendingSend && !input.hosted) return { reason: "Sending", reasonTitle: "Sent; waiting for the agent to confirm delivery" };
     if (row.subagent_slot === "queued") return { reason: "Queued", reasonTitle: "Waiting for a subagent slot" };
   }

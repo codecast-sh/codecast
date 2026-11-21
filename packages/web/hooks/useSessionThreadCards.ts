@@ -22,7 +22,7 @@ export function useSessionThreadCards(enabled: boolean): ThreadCardModel[] {
     s => sessionsWakeSig(s.sessions),
     s => s.sessionsWithQueuedMessages,
     s => s.blockedReviveRequestedAt,
-    s => pendingSendWakeSig(s.pendingMessages),
+    s => pendingSendWakeSig(s.pendingMessages, s.pendingMessageStatus),
     s => s.currentUser?._id,
     s => resolveShowOld(s.clientState.ui),
   ]);
@@ -35,5 +35,5 @@ export function useSessionThreadCards(enabled: boolean): ThreadCardModel[] {
     const placed = placeInboxRows(s as any, { scope: "mine", now: coarseNow });
     return sessionCards(placed.needsInput);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), resolveShowOld(s.clientState.ui), coarseNow]);
+  }, [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages, s.pendingMessageStatus), resolveShowOld(s.clientState.ui), coarseNow]);
 }

@@ -18921,11 +18921,44 @@ function transcriptEchoes(echoes: DeliveryEchoLedger, delivery: TmuxDeliveryIden
   return echoes.echoed(delivery.messageId);
 }
 
+// A not-ready verdict that names no hold of its own (a plain
+// AGENT_STDIN_NOT_READY, TMUX_SERVER_BUSY or INJECT_UNVERIFIED), held with what
+// it said and the pane it was decided on. The message is kept, so every match
+// on the code still reads it the same. Without it the sender read "waiting for
+// terminal input confirmation" with no screen and only Cancel (ct-97017).
+export class DeliveryNotReadyError extends Error {
+  readonly holdReason: string;
+  readonly screen?: string;
+  constructor(message: string, screen?: string) {
+    super(message);
+    this.holdReason = notReadyHoldReason(message);
+    this.screen = screen;
+  }
+}
+
+// "AGENT_STDIN_NOT_READY: composer never showed the pasted payload, leaving
+// message pending for retry" holds as "terminal input not confirmed: composer
+// never showed the pasted payload".
+export function notReadyHoldReason(message: string): string {
+  const detail = message
+    .replace(/^(?:AGENT_STDIN_NOT_READY|TMUX_SERVER_BUSY|INJECT_UNVERIFIED):\s*/, "")
+    .replace(/(?:;|,)\s*(?:message remains pending|leaving message pending for retry|preserving the original terminal write)\s*$/, "")
+    .trim();
+  return detail ? `terminal input not confirmed: ${detail}` : "waiting for terminal input confirmation";
+}
+
+async function withNotReadyHold(error: unknown, target: string): Promise<unknown> {
+  if (!(error instanceof Error) || "holdReason" in error || !/^(AGENT_STDIN_NOT_READY|TMUX_SERVER_BUSY|INJECT_UNVERIFIED):/.test(error.message)) return error;
+  const pane = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-80"], { timeout: 3000 }).then((r) => r.stdout, () => "");
+  return new DeliveryNotReadyError(error.message, pane.trim() ? holdScreen(pane) : undefined);
+}
+
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
   try {
     return await withTmuxLock(target, () => injectViaTmuxInner(target, content, agentType, opts));
   } catch (error) {
-    if (!opts?.delivery || isDeliveryVerdict(error)) throw error;
+    if (!opts?.delivery) throw error;
+    if (isDeliveryVerdict(error)) throw await withNotReadyHold(error, target);
     throw new TmuxDeliveryUncertainError(String(error), error instanceof UnreadableScreenError
       ? { holdReason: UNREADABLE_SCREEN_HOLD_REASON, screen: error.screen }
       : undefined);
@@ -34398,8 +34431,8 @@ async function main(): Promise<void> {
             }).catch(logConvexFailure);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|TMUX_SERVER_BUSY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
-            const hold = err instanceof TmuxDeliveryUncertainError ? err : null;
-            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, hold?.holdReason ?? "waiting for terminal input confirmation", undefined, hold?.screen);
+            const hold = err instanceof TmuxDeliveryUncertainError || err instanceof DeliveryNotReadyError ? err : null;
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, hold?.holdReason ?? notReadyHoldReason(errMsg), undefined, hold?.screen);
           } else if (err instanceof UndeliverableMessageError || err instanceof CloudAgentUnsentError) {
             // Terminal by construction: cancel (a status the server never
             // re-pends) instead of burning the retry ladder. A cloud agent

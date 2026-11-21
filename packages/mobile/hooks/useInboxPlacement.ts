@@ -18,7 +18,7 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
  *  times are time-driven, so a coarse clock re-runs it too. */
 export function useInboxPlacement() {
   const sessionsSig = useInboxStore((s) => sessionsWakeSig(s.sessions));
-  const pendingSendSig = useInboxStore((s) => pendingSendWakeSig(s.pendingMessages));
+  const pendingSendSig = useInboxStore((s) => pendingSendWakeSig(s.pendingMessages, s.pendingMessageStatus));
   const coarseNow = useCoarseNow(15_000);
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const pendingSessionCreates = useInboxStore((s) => s.pendingSessionCreates);
