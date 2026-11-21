@@ -21,7 +21,7 @@ const MEMBERS = 20;
 const ROLES = 40;
 const SHARED_PROJECTS = 3;
 
-function workspace(liveRows: number) {
+function workspace(liveRows: number, managed_sessions: any[] = []) {
   const users = Array.from({ length: MEMBERS }, (_, i) => ({ _id: uid(i), name: `M${i}` }));
   const team_memberships = users.map((u, i) => ({ _id: `team_memberships_${i}`, user_id: u._id, team_id: TEAM, role: i === 0 ? "admin" : "member", joined_at: i + 1 }));
   const projects = Array.from({ length: SHARED_PROJECTS }, (_, i) => ({ _id: `projects_${i}`, user_id: ME, team_id: TEAM, workspace: WS, title: `P${i}`, status: "active", created_at: 1, updated_at: NOW - D }));
@@ -42,7 +42,7 @@ function workspace(liveRows: number) {
   }
   const db = makeFakeDb({
     users, teams: [{ _id: TEAM, name: "Acme" }], team_memberships, org_roles, anchors, conversations, projects,
-    managed_sessions: [], messages: [], plans: [], tasks: [], docs: [], artifacts: [], user_presence: [], agent_tasks: [],
+    managed_sessions, messages: [], plans: [], tasks: [], docs: [], artifacts: [], user_presence: [], agent_tasks: [],
     session_decisions: [], workflow_runs: [], counters: [], inbox_buckets: [], bucket_assignments: [],
   }, { indexes: schemaIndexes(schema as any) });
   return db;
@@ -78,5 +78,12 @@ describe("org tree operations", () => {
     await computeOrgTree(big.ctx, ME as any, TEAM, NOW);
     console.log("ops at half cap:", small.ops.total, "at cap:", big.ops.total);
     expect(big.ops.total).toBeLessThanOrEqual(Math.ceil(small.ops.total * 1.1));
+  }, 60_000);
+
+  test("the newest teammate rows still read their own managed session", async () => {
+    const managed = [{ _id: "managed_sessions_1", user_id: uid(1), conversation_id: "conversations_1", session_id: "s_1", last_heartbeat: NOW - 30_000, agent_status: "done", agent_status_updated_at: NOW - 30_000 }];
+    const { ctx } = counting(workspace(ORG_ROW_CAP, managed));
+    const tree: any = await computeOrgTree(ctx, ME as any, TEAM, NOW);
+    expect(tree.people.find((p: any) => p.user_id === uid(1)).counts.done).toBe(1);
   }, 60_000);
 });

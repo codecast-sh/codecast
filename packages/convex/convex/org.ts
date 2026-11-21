@@ -46,6 +46,11 @@ import { roleCharterOf } from "./lib/roleCharter";
 
 export const ORG_TOP_N = 8;
 export const ORG_ROW_CAP = 3000;
+// The rows of the scan that may spend reads of their own while being
+// classified (classifyWorkStates): the newest, where live work is. Two reads a
+// row across ORG_ROW_CAP rows ran org:tree past Convex's per-execution
+// operation limit (ct-73206).
+export const ORG_ROW_READ_CAP = 300;
 const ORG_WINDOW_MS = WORKING_SET_RECENCY_MS;
 const PAGE_DEFAULT = 50;
 
@@ -187,7 +192,7 @@ export async function collectOrgSessions(
       topLevel.push(c);
     }
   }
-  const workStates = await classifyWorkStates(ctx, userId, topLevel, childrenByParent, now);
+  const workStates = await classifyWorkStates(ctx, userId, topLevel, childrenByParent, now, ORG_ROW_READ_CAP);
 
   const roleIds = new Set(roles.map((r: any) => r._id.toString()));
   const anchorByConv = new Map<string, any>(anchors.filter((a: any) => a.conversation_id).map((a: any) => [a.conversation_id.toString(), a]));

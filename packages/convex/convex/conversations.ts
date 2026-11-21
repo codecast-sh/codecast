@@ -10472,18 +10472,26 @@ function placeLivenessRowAt(
 // producing rollup that parks a settled parent while a child streams. The
 // asking input only moves the bucket, never work_state, so the row's own ask
 // is all it needs.
+//
+// `readRows` caps the rows that may spend reads of their own (a teammate's
+// managed_sessions row, the newest-message probe). The org tree classifies up
+// to ORG_ROW_CAP rows, and two reads a row put it past Convex's per-execution
+// operation limit (ct-73206). The newest rows spend the budget; the rest are
+// classified from their own fields and the newest-message cache, with no read.
 export async function classifyWorkStates(
   ctx: any,
   userId: Id<"users">,
   conversations: any[],
   childrenByParent: Map<string, any[]>,
   now: number,
+  readRows = Infinity,
 ): Promise<Map<string, WorkState>> {
   const maps = await buildUserSessionMaps(ctx, userId, now);
   const uid = userId.toString();
-  const foreign = conversations.filter((c) => c.user_id.toString() !== uid);
+  const readIds = new Set([...conversations].sort((a, b) => b.updated_at - a.updated_at).slice(0, readRows).map((c) => c._id.toString()));
+  const foreign = conversations.filter((c) => c.user_id.toString() !== uid && readIds.has(c._id.toString()));
   if (foreign.length > 0) await mergeForeignConversationLiveness(ctx, maps, foreign, now);
-  const reads = await Promise.all(conversations.map((conv) => readLivenessRowInputs(ctx, conv, maps, now)));
+  const reads = await Promise.all(conversations.map((conv) => readLivenessRowInputs(ctx, conv, maps, now, !readIds.has(conv._id.toString()))));
   const out = new Map<string, WorkState>();
   conversations.forEach((conv, i) => {
     const cid = conv._id.toString();
@@ -10513,7 +10521,8 @@ export async function classifyNamedWorkState(
 
 // The reads for one row: the un-backfilled last-role fallback and the AUQ
 // probe are the same newest-message read, so a row pays it at most once.
-async function readLivenessRowInputs(ctx: any, conv: any, maps: InboxSessionMaps, now: number): Promise<LivenessRowReads> {
+async function readLivenessRowInputs(ctx: any, conv: any, maps: InboxSessionMaps, now: number, cacheOnly = false): Promise<LivenessRowReads> {
+  const newestMessageFacts = cacheOnly ? cachedNewestMessageFacts : readNewestMessageFacts;
   let lastMsgRole: string | undefined = conv.last_message_role;
   let lastUserMessage: string | null = conv.last_message_preview || null;
   let facts: NewestMessageFacts | null | undefined = undefined; // undefined = not read yet
@@ -10547,8 +10556,14 @@ type NewestMessageFacts = { role: string; userText: string | null; auqOpen: bool
 const NEWEST_MESSAGE_CACHE_MAX = 4096;
 const newestMessageCache = new Map<string, NewestMessageFacts>();
 
-async function newestMessageFacts(ctx: any, conv: any): Promise<NewestMessageFacts | null> {
-  const key = `${conv._id.toString()}:${conv.message_count ?? 0}`;
+const newestMessageKey = (conv: any) => `${conv._id.toString()}:${conv.message_count ?? 0}`;
+
+async function cachedNewestMessageFacts(_ctx: any, conv: any): Promise<NewestMessageFacts | null> {
+  return newestMessageCache.get(newestMessageKey(conv)) ?? null;
+}
+
+async function readNewestMessageFacts(ctx: any, conv: any): Promise<NewestMessageFacts | null> {
+  const key = newestMessageKey(conv);
   const hit = newestMessageCache.get(key);
   if (hit) return hit;
   const msg = await newestMessage(ctx, conv._id);
