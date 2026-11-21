@@ -12,7 +12,7 @@ import { shareTokenArg } from "../lib/shareTokenScope";
 import { hoverFocus } from "../shortcuts/focusSource";
 import { buildNavigatorRows, MACHINE_KIND_LABEL, type NavigatorRow } from "../lib/messageNavigator";
 import { resolveSessionTitle } from "../lib/sessionTitle";
-import { MachineKindIcon, MachineSourceLabel } from "./MessageBrowserPopover";
+import { MachineKindIcon, MachineSourceLabel } from "./MessageNavPreview";
 import {
   useForkTree,
   branchDisplayCount,

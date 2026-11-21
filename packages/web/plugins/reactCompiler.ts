@@ -41,6 +41,7 @@ export const REACT_COMPILER_SOURCES: readonly string[] = [
   // Chrome that re-renders with the conversation on every message: the
   // message navigator, the assignment badge and the model control.
   "components/MessageBrowserPopover.tsx",
+  "components/MessageNavPreview.tsx",
   "components/AssignmentBadge.tsx",
   "components/SessionControlMenu.tsx",
 ];
