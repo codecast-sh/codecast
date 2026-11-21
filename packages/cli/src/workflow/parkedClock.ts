@@ -9,27 +9,41 @@ import { waitLabel, type TaskWait } from "@codecast/shared/tasks";
 /** A node's clock that leaves out the time its hand spends parked: from the first poll that finds it parked to the first that does not. */
 export class ParkedClock {
   private parkedMs = 0;
-  private parkedSince = 0;
+  private parkedSince: number | null = null;
   private parkedLast = false;
-  constructor(private readonly startMs: number) {}
+  // It also leaves out the time the machine sleeps. A laptop closed for hours
+  // woke to a first poll whose wall clock read past the hand's timeout, and
+  // the station failed though nothing had been waited on (ct-98526). The clock
+  // runs on performance.now(), which stops while the machine is suspended
+  // (the daemon's suspend detection rests on the same fact: suspendClock.ts).
+  private readonly offsetMs: number;
+  constructor(startMs: number, private readonly awakeNow: () => number = () => performance.now(), wallNow: () => number = Date.now) {
+    // Wall time between startMs and this clock's creation counts as it was.
+    this.offsetMs = wallNow() - startMs - awakeNow();
+  }
 
-  elapsed(now = Date.now()): number {
-    return now - this.startMs - this.parkedMs - (this.parkedSince ? now - this.parkedSince : 0);
+  private now(): number {
+    return this.awakeNow() + this.offsetMs;
+  }
+
+  elapsed(): number {
+    const now = this.now();
+    return now - this.parkedMs - (this.parkedSince === null ? 0 : now - this.parkedSince);
   }
 
   /** At the top of each poll: a park the last poll did not see again has ended. */
-  beginPoll(now = Date.now()): void {
-    if (!this.parkedLast && this.parkedSince) {
-      this.parkedMs += now - this.parkedSince;
-      this.parkedSince = 0;
+  beginPoll(): void {
+    if (!this.parkedLast && this.parkedSince !== null) {
+      this.parkedMs += this.now() - this.parkedSince;
+      this.parkedSince = null;
     }
     this.parkedLast = false;
   }
 
   /** This poll found the hand parked; true when the park starts here. */
-  park(now = Date.now()): boolean {
-    const starts = !this.parkedSince;
-    this.parkedSince ||= now;
+  park(): boolean {
+    const starts = this.parkedSince === null;
+    this.parkedSince ??= this.now();
     this.parkedLast = true;
     return starts;
   }
