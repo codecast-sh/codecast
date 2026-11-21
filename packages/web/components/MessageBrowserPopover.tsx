@@ -5,7 +5,7 @@ import type { ScrollProgressSignal } from "./conversation/scrollProgressSignal";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { MessagePromptPreview } from "./MessagePromptPreview";
-import { MachineKindIcon, MachineSourceLabel, AuthorFace, AuthorTag, HoverPreview, authorToneColor, possessive } from "./MessageNavPreview";
+import { MachineKindIcon, MachineSourceLabel, AuthorFace, AuthorTag, HoverPreview } from "./MessageNavPreview";
 import { AvatarImg } from "../lib/avatarCache";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -21,6 +21,8 @@ import {
   mergeNavigatorSources,
   MACHINE_KIND_LABEL,
   resolveNavigatorAuthors,
+  authorToneColor,
+  possessive,
   type NavigatorRow,
   type NavigatorAuthorship,
 } from "../lib/messageNavigator";

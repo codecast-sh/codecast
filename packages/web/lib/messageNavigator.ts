@@ -138,6 +138,17 @@ export function authorToneName(tone: number): AuthorToneName | null {
   return tone > 0 ? AUTHOR_TONE_NAMES[(tone - 1) % AUTHOR_TONE_NAMES.length] : null;
 }
 
+// The tone as a theme color for the web, shared by a person's rail ticks and face.
+export function authorToneColor(tone: number): string | undefined {
+  const name = authorToneName(tone);
+  return name ? `var(--sol-${name})` : undefined;
+}
+
+/** "your" for the viewer, else "Cam’s": how the filter's placeholder and chips name a person's messages. */
+export function possessive(author: NavigatorAuthor): string {
+  return author.label === "You" ? "your" : `${author.label}\u2019s`;
+}
+
 export type NavigatorAuthorship = {
   byRow: Map<string, NavigatorAuthor>;
   // The unmarked voice first, then in the order they first wrote.

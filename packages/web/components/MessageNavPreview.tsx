@@ -10,7 +10,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import {
   formatTimeAgo,
   navigatorRowBody,
-  authorToneName,
+  authorToneColor,
   type HiddenKind,
   type NavigatorRow,
   type NavigatorAuthor,
@@ -49,14 +49,6 @@ export function MachineKindIcon({ kind }: { kind: HiddenKind }) {
   );
 }
 
-// A person's color, by their tone in the conversation (resolveNavigatorAuthors):
-// the owner is the unmarked voice, everyone else gets one hue, shared by their
-// rail ticks and their face so the two read as the same person.
-export function authorToneColor(tone: number): string | undefined {
-  const name = authorToneName(tone);
-  return name ? `var(--sol-${name})` : undefined;
-}
-
 /** A sender's face, square like the transcript's (UserIcon); their initial on
  *  their color when they have no picture. */
 export function AuthorFace({ author, size }: { author: NavigatorAuthor; size: number }) {
@@ -81,10 +73,6 @@ export function AuthorTag({ author, strong }: { author: NavigatorAuthor; strong?
       <span className={`text-meta font-medium truncate ${strong ? "text-sol-text" : "text-sol-text-muted"}`}>{author.label}</span>
     </span>
   );
-}
-
-export function possessive(author: NavigatorAuthor): string {
-  return author.label === "You" ? "your" : `${author.label}\u2019s`;
 }
 
 // Hover card for one navigator row. The row carries a server snippet (capped
