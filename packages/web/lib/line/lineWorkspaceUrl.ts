@@ -129,8 +129,9 @@ function resolveView(v: string | null | undefined): [LineView, LineMode | null] 
   return null;
 }
 
-/** What names a place on Steps' map, so an address naming one with no view opens the map, not the landing page. */
-const MAP_PLACES = ["step", "source", "finding"] as const;
+/** What names a place on Steps' map, so an address naming one with no view opens the map, not the landing page. A
+ *  flow (`graph`) is one: the landing page and a pipeline's page never write it (LineWorkspace `drawsNoLine`). */
+const MAP_PLACES = ["step", "source", "graph", "finding"] as const;
 
 export function readLineSelection(search: Search): LineSelection {
   // An older link named a problem's own chart `view=timeline&case=…`: that is the problem's page.
