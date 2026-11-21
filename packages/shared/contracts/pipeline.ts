@@ -81,6 +81,66 @@ export type PipelineTarget = {
   steps: Record<LineDeployStep, string | null>;
 };
 
+/** At most how many of the default branch's commits a pipeline carries, paths of each, characters of a subject, and bytes of the whole block. */
+export const PIPELINE_RECENT_MAX = 50;
+export const PIPELINE_COMMIT_FILES_MAX = 100;
+export const PIPELINE_SUBJECT_MAX = 120;
+export const PIPELINE_RECENT_MAX_BYTES = 64 * 1024;
+
+/** A commit as git reads it, before packing. */
+export type PipelineCommitIn = { sha: string; subject: string; at: number; files: string[] };
+
+/**
+ * The default branch's last commits, newest first, each path stored once: a commit's `files` index into `paths`.
+ * What a `when=` would have matched ("would have run on 12 of the last 50").
+ */
+export type PipelineRecent = {
+  paths: string[];
+  /** `at` is the commit time in ms; `files` holds at most PIPELINE_COMMIT_FILES_MAX paths of a larger commit. */
+  commits: Array<{ sha: string; subject: string; at: number; files: number[] }>;
+  /** The oldest commits of the window left out to stay under PIPELINE_RECENT_MAX_BYTES; 0 when every one fit. */
+  dropped: number;
+};
+
+export const EMPTY_RECENT: PipelineRecent = { paths: [], commits: [], dropped: 0 };
+
+const byteLength = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
+
+function packFirst(commits: ReadonlyArray<PipelineCommitIn>, n: number): Omit<PipelineRecent, "dropped"> {
+  const index = new Map<string, number>();
+  const paths: string[] = [];
+  const at = (p: string) => {
+    let i = index.get(p);
+    if (i === undefined) { i = paths.length; paths.push(p); index.set(p, i); }
+    return i;
+  };
+  return {
+    paths,
+    commits: commits.slice(0, n).map((c) => ({ sha: c.sha, subject: c.subject.split("\n")[0].slice(0, PIPELINE_SUBJECT_MAX), at: c.at, files: c.files.slice(0, PIPELINE_COMMIT_FILES_MAX).map(at) })),
+  };
+}
+
+/** Pack commits (newest first) into a PipelineRecent under the byte cap, leaving out the oldest until it fits. */
+export function packRecent(commits: ReadonlyArray<PipelineCommitIn>, maxBytes = PIPELINE_RECENT_MAX_BYTES): PipelineRecent {
+  const window = commits.slice(0, PIPELINE_RECENT_MAX);
+  for (let n = window.length; n > 0; n--) {
+    const packed = { ...packFirst(window, n), dropped: window.length - n };
+    if (byteLength(packed) <= maxBytes) return packed;
+  }
+  return { ...EMPTY_RECENT, dropped: window.length };
+}
+
+/** A packed commit's paths. */
+export const recentFiles = (r: PipelineRecent, c: PipelineRecent["commits"][number]): string[] => c.files.map((i) => r.paths[i]);
+
+/** Why a published recent block is not one packRecent makes, or null. */
+export function recentRefusal(r: PipelineRecent): string | null {
+  if (r.commits.length > PIPELINE_RECENT_MAX) return `recent holds ${r.commits.length} commits, over ${PIPELINE_RECENT_MAX}`;
+  if (r.commits.some((c) => c.files.length > PIPELINE_COMMIT_FILES_MAX || c.files.some((i) => !Number.isInteger(i) || i < 0 || i >= r.paths.length))) return "recent names a path index it does not hold";
+  const bytes = byteLength(r);
+  return bytes > PIPELINE_RECENT_MAX_BYTES ? `recent is ${bytes} bytes, over ${PIPELINE_RECENT_MAX_BYTES}` : null;
+}
+
 export type Pipeline = {
   /** `owner/name`, lowercased: the key. */
   repository: string;
@@ -89,6 +149,10 @@ export type Pipeline = {
   device_id: string | null;
   /** The commit it was built from: on the default branch, its flow files clean (a publish refuses anything else). */
   head_sha: string | null;
+  /** The checkout it was read from, an absolute path on `device_id`'s machine: where a session that edits it starts. */
+  root: string | null;
+  /** The default branch's last commits on origin with the paths each changed (packRecent). */
+  recent: PipelineRecent;
   change: PipelineFlow;
   release: PipelineFlow & { targets: PipelineTarget[] };
 };

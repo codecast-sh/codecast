@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { foldFlow, segmentTopOf, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
-import { ownWords, runsWords, type PipelineFlow, type PipelineOwn, type PipelinePublish, type PipelineStation, type PipelineTarget, type PipelineWho } from "@codecast/shared/contracts/pipeline";
+import { EMPTY_RECENT, ownWords, packRecent, PIPELINE_RECENT_MAX, runsWords, type PipelineRecent, type PipelineFlow, type PipelineOwn, type PipelinePublish, type PipelineStation, type PipelineTarget, type PipelineWho } from "@codecast/shared/contracts/pipeline";
 import type { DeployTarget } from "@codecast/shared/contracts/deployTargets";
 import type { FlowEditChange } from "@codecast/shared/contracts/flowEdit";
 import { targetDeployProfile } from "./lineDeploy.js";
@@ -37,6 +37,8 @@ export type PipelineInputs = {
   cacheRoot?: string;
   /** The commit the checkout's files are. */
   headSha?: string | null;
+  /** The default branch's last commits with their paths (checkoutPipeline reads them from origin). */
+  recent?: PipelineRecent;
 };
 
 const FLOW_NODE_KEYS = ["id", "label", "type", "shape", "backend", "agent", "segment", "segment_label", "segment_flow", "segment_entry", "segment_exit", "slot", "segment_generated", "stop", "max_visits"] as const satisfies ReadonlyArray<keyof FlowNodeIn & keyof WorkflowNode>;
@@ -258,7 +260,7 @@ export function buildPipeline(i: PipelineInputs): { pipeline: PipelinePublish; f
   const c = flowFrom(change.slug, changeSrc, i.root);
   const r = flowFrom(LINE_DEPLOY_GRAPH, releaseSrc, i.root, { targets, line: i.deploy });
   return {
-    pipeline: { repository: i.repository.toLowerCase(), device_id: i.deviceId ?? null, head_sha: i.headSha ?? null, change: c.flow, release: { ...r.flow, targets } },
+    pipeline: { repository: i.repository.toLowerCase(), device_id: i.deviceId ?? null, head_sha: i.headSha ?? null, root: i.root, recent: i.recent ?? EMPTY_RECENT, change: c.flow, release: { ...r.flow, targets } },
     files: [...new Set([...c.files, ...r.files])],
   };
 }
@@ -328,6 +330,12 @@ export function publishRefusal(root: string, files: ReadonlyArray<string>): stri
   return null;
 }
 
+/** The default branch's last commits on origin, newest first, with the paths each changed (mainCommitsOf), packed. */
+export async function recentCommits(root: string): Promise<PipelineRecent> {
+  const main = (await import("./lineProfileCommand.js")).mainCommitsOf(root, PIPELINE_RECENT_MAX);
+  return packRecent((main?.commits ?? []).reverse().map((c) => ({ sha: c.sha, subject: c.message, at: c.at, files: c.files })));
+}
+
 /** A checkout's pipeline from its own files: its targets and release step commands read the way a deploy reads them. */
 export async function checkoutPipeline(root: string, i: Omit<PipelineInputs, "root" | "deploy" | "targets" | "repository" | "headSha"> & { repository?: string }): Promise<{ pipeline: PipelinePublish; files: string[]; head: { sha: string; at: number } | null }> {
   const { checkoutTargets, loadLineDeployProfile } = await import("./lineDeploy.js");
@@ -338,7 +346,7 @@ export async function checkoutPipeline(root: string, i: Omit<PipelineInputs, "ro
     // An unreadable line.toml leaves a target-less release without step commands; `cast line profile` says why.
   }
   const head = headOf(root);
-  return { ...buildPipeline({ ...i, root, repository, deploy, targets: await checkoutTargets(root), headSha: head?.sha ?? null }), head };
+  return { ...buildPipeline({ ...i, root, repository, deploy, targets: await checkoutTargets(root), headSha: head?.sha ?? null, recent: await recentCommits(root) }), head };
 }
 
 type Post = (urlPath: string, body: Record<string, unknown>) => Promise<any>;

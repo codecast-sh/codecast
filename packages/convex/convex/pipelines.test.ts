@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
 import { forTeam, PIPELINE_MAX_BYTES, publish } from "./pipelines";
+import { packRecent } from "@codecast/shared/contracts/pipeline";
 
 // A repository's pipeline (docs/architecture/pipeline.md PL6): published from
 // the checkout into its team's workspace, replaced whole, read back only by
@@ -84,6 +85,21 @@ describe("pipelines", () => {
     const newer = await (publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, ...PIPE, head_sha: "c".repeat(40), head_at: 2_000 });
     expect(newer.changed).toBe(true);
     expect(tables.pipelines[0].head_sha).toBe("c".repeat(40));
+  });
+
+  test("the checkout's root and the default branch's recent commits ride along, capped", async () => {
+    const tables = await seed();
+    const ctx = ctxFor(tables);
+    const recent = packRecent(Array.from({ length: 60 }, (_, i) => ({ sha: String(i).padStart(40, "0"), subject: `c${i}`, at: 1_000 - i, files: [`src/f${i % 3}.ts`] })));
+    await (publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, ...PIPE, root: "/work/app", recent });
+    const [row] = await (forTeam as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM });
+    expect(row.root).toBe("/work/app");
+    expect(row.recent.commits).toHaveLength(50);
+    expect(row.recent.paths).toEqual(["src/f0.ts", "src/f1.ts", "src/f2.ts"]);
+    const again = await (publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, ...PIPE, root: "/work/app", recent: packRecent([{ sha: "f".repeat(40), subject: "new", at: 2_000, files: ["x"] }]) });
+    expect(again.changed).toBe(true);
+    const bad = { paths: ["a"], commits: [{ sha: "x", subject: "", at: 0, files: [3] }], dropped: 0 };
+    await expect((publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, ...PIPE, recent: bad })).rejects.toThrow("path index");
   });
 
   test("the size cap counts bytes, not characters", async () => {

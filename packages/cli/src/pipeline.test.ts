@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { checkoutPipeline, pipelineLines, pipelineTarget, publishRefusal } from "./pipeline.js";
 import { targetDeployProfile } from "./lineDeploy.js";
-import type { PipelineFlow } from "@codecast/shared/contracts/pipeline";
+import { recentFiles, type PipelineFlow } from "@codecast/shared/contracts/pipeline";
 
 // A repository's pipeline from its checkout (pipeline.md PL6). Synthetic repositories only: a bare one (shipped
 // flows), a variant of the shipped change written with the PL3 edits, and acme/widgets (a flow written whole behind
@@ -27,6 +27,7 @@ describe("a checkout with no flows of its own runs the shipped change and line-d
   test("the change lane is the library's change, every station inherited", () => {
     expect(p.repository).toBe("acme/widgets");
     expect(p.head_sha).toBeNull();
+    expect(p.recent).toEqual({ paths: [], commits: [], dropped: 0 });
     expect(p.change).toMatchObject({ slug: "change", label: "Change", base: "change", file: null, removed: [] });
     expect(p.change.stations.filter((s) => s.main).map((s) => s.label)).toEqual(["Check", "Review", "Decide", "Land", "Deploy"]);
     expect(new Set(p.change.stations.map((s) => s.own))).toEqual(new Set(["inherited"]));
@@ -189,6 +190,12 @@ describe("a pipeline publishes only from the default branch with its flow files 
     const { pipeline, files, head } = await checkoutPipeline(root, { repository: "acme/widgets", cacheRoot: tmp("pipeline-cache-") });
     expect(head?.sha).toBe(sh(root, "rev-parse", "HEAD"));
     expect(pipeline.head_sha).toBe(head!.sha);
+    // Where an edit session starts, and the default branch's commits a when= is matched against, newest first.
+    expect(pipeline.root).toBe(root);
+    expect(pipeline.recent.commits.map((c) => c.sha)).toEqual([head!.sha]);
+    expect(pipeline.recent.commits[0]).toMatchObject({ at: head!.at, subject: "init" });
+    expect(recentFiles(pipeline.recent, pipeline.recent.commits[0])).toContain("tools/flow/change.cast");
+    expect(pipeline.recent.dropped).toBe(0);
     expect(files.map((f) => path.relative(fs.realpathSync(root), fs.realpathSync(f))).sort()).toEqual([".codecast/flows/change.cast", "tools/flow/change.cast", "tools/flow/change/fix.md", "tools/flow/change/review.md"]);
     expect(publishRefusal(root, files)).toBeNull();
   });

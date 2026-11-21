@@ -14,6 +14,7 @@ import { normalizeRepository } from "./lib/gitRefs";
 import { deployTeamFor } from "./changesDeploy";
 import { teamKey } from "./deployTargetsCi";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
+import { EMPTY_RECENT, recentRefusal } from "@codecast/shared/contracts/pipeline";
 
 /** The most a published pipeline may weigh: well under a document's 1 MiB. */
 export const PIPELINE_MAX_BYTES = 700_000;
@@ -42,6 +43,8 @@ export const publish = mutation({
     device_id: v.optional(v.union(v.string(), v.null())),
     head_sha: v.optional(v.union(v.string(), v.null())),
     head_at: v.optional(v.number()),
+    root: v.optional(v.union(v.string(), v.null())),
+    recent: v.optional(v.object({ paths: v.array(v.string()), commits: v.array(v.object({ sha: v.string(), subject: v.string(), at: v.number(), files: v.array(v.number()) })), dropped: v.number() })),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
@@ -54,7 +57,11 @@ export const publish = mutation({
     flowShape(args.change, "change");
     flowShape(args.release, "release");
     if (!Array.isArray(args.release.targets)) throw new Error("the pipeline's release flow names no targets list");
-    const body = JSON.stringify({ change: args.change, release: args.release });
+    const recent = args.recent ?? EMPTY_RECENT;
+    const refusal = recentRefusal(recent);
+    if (refusal) throw new Error(refusal);
+    const root = args.root ?? undefined;
+    const body = JSON.stringify({ change: args.change, release: args.release, recent, root });
     const bytes = new TextEncoder().encode(body).length;
     if (bytes > PIPELINE_MAX_BYTES) throw new Error(`the pipeline is ${bytes} bytes, over ${PIPELINE_MAX_BYTES}`);
     const hash = hashOf(body);
@@ -71,7 +78,7 @@ export const publish = mutation({
       return { team_id: teamId, repository, changed: false, refused: `the published pipeline is from a newer commit (${String(row.head_sha ?? "").slice(0, 10)})` };
     }
     if (row && row.hash === hash && row.device_id === device_id && row.head_sha === head_sha) return { team_id: teamId, repository, changed: false };
-    const fields = { change: args.change, release: args.release, device_id, head_sha, head_at: args.head_at, hash, publisher_user_id: userId, published_at: now, updated_at: now };
+    const fields = { change: args.change, release: args.release, recent, root, device_id, head_sha, head_at: args.head_at, hash, publisher_user_id: userId, published_at: now, updated_at: now };
     if (row) await ctx.db.patch(row._id, fields);
     else await ctx.db.insert("pipelines", { workspace, team_id: teamId, repository, ...fields });
     return { team_id: teamId, repository, changed: true };
@@ -85,6 +92,8 @@ const rowOut = (r: Doc<"pipelines">) => ({
   published_at: r.published_at,
   device_id: r.device_id ?? null,
   head_sha: r.head_sha ?? null,
+  root: r.root ?? null,
+  recent: r.recent ?? EMPTY_RECENT,
   change: r.change,
   release: r.release,
 });

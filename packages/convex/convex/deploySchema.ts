@@ -115,6 +115,9 @@ export const deployTables = {
     // The commit it was built from and when that commit was made: a publish from an older commit is refused.
     head_sha: v.optional(v.string()),
     head_at: v.optional(v.number()),
+    // The checkout's path on device_id's machine, and the default branch's last commits with their paths.
+    root: v.optional(v.string()),
+    recent: v.optional(v.object({ paths: v.array(v.string()), commits: v.array(v.object({ sha: v.string(), subject: v.string(), at: v.number(), files: v.array(v.number()) })), dropped: v.number() })),
     // A hash of what was published, so a republish of the same files writes nothing.
     hash: v.string(),
     publisher_user_id: v.id("users"),
