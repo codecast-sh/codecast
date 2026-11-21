@@ -21,6 +21,7 @@ import type { OrgReportsTo, OrgRole } from "./org/orgTypes";
 import { RoleHoverCard } from "./identity/RoleHoverCard";
 import { PersonHoverCard } from "./identity/PersonHoverCard";
 import { sessionFitsARole } from "../lib/makeRole";
+import { canEditRole } from "../lib/scopePage";
 import { AvatarImg } from "../lib/avatarCache";
 import { formatRelative, formatDateFull } from "../lib/utils";
 import {
@@ -107,6 +108,7 @@ export function OwnerMenuItems({
   useSyncOrgTreeFeeder();
   const { liveRoles, orgRoleId, currentRole, isStandingThread, seatRoleId } = useSessionRoleFacts(conversationId);
   const reparentOrgRole = useInboxStore((s) => (s as any).reparentOrgRole) as ((roleId: string, to: OrgReportsTo) => unknown) | undefined;
+  const mayMoveSeat = useInboxStore((s) => !!seatRoleId && canEditRole(s.orgTree, s.orgTree?.roles.find((r) => r._id === seatRoleId), s.currentUser?._id));
   // A session older than a week may already be a role nobody has named
   // (org-roles-run-work.md R2); the analyzer proposes those it finds, and this
   // is the way to name one it left out. Read once: the menu is short lived.
@@ -124,7 +126,7 @@ export function OwnerMenuItems({
           ownerId={ownerList[0]}
           roles={liveRoles.filter((r) => r._id !== seatRoleId)}
           parentRoleId={orgRoleId}
-          onPick={(to) => reparentOrgRole(seatRoleId, to)}
+          onPick={mayMoveSeat ? (to) => reparentOrgRole(seatRoleId, to) : undefined}
         />
       ) : (
         <OwnersSection owners={owners} people={selectable} handingOff={handingOff} onHandingOff={onHandingOff} onDone={onDone} />
@@ -357,7 +359,7 @@ function SeatReportsToItems({ people, currentUserId, ownerId, roles, parentRoleI
   ownerId?: string;
   roles: OrgRole[];
   parentRoleId?: string;
-  onPick: (to: OrgReportsTo) => void;
+  onPick?: (to: OrgReportsTo) => void;
 }) {
   return (
     <>
@@ -371,7 +373,8 @@ function SeatReportsToItems({ people, currentUserId, ownerId, roles, parentRoleI
             <DropdownMenuCheckboxItem
               key={m._id}
               checked={!parentRoleId && ownerId === m._id}
-              onSelect={() => { if (parentRoleId || ownerId !== m._id) onPick({ kind: "user", user_id: m._id }); }}
+              disabled={!onPick}
+              onSelect={() => { if (parentRoleId || ownerId !== m._id) onPick?.({ kind: "user", user_id: m._id }); }}
               className="text-xs gap-2"
             >
               <PersonHoverCard person={{ userId: m._id, handle: m.github_username, name, image: m.image || m.github_avatar_url }} side="left" triggerClassName="flex flex-1 min-w-0 items-center gap-2">
@@ -382,7 +385,7 @@ function SeatReportsToItems({ people, currentUserId, ownerId, roles, parentRoleI
           );
         })}
         {roles.map((r) => (
-          <DropdownMenuCheckboxItem key={r._id} checked={parentRoleId === r._id} onSelect={() => { if (parentRoleId !== r._id) onPick({ kind: "role", role_id: r._id }); }} className="text-xs gap-2">
+          <DropdownMenuCheckboxItem key={r._id} checked={parentRoleId === r._id} disabled={!onPick} onSelect={() => { if (parentRoleId !== r._id) onPick?.({ kind: "role", role_id: r._id }); }} className="text-xs gap-2">
             <RoleHoverCard role={r} side="left" triggerClassName="flex flex-1 min-w-0 items-center gap-2">
               <RoleFace role={r} size={16} />
               <span className="flex-1 truncate">{r.name}</span>
