@@ -89,14 +89,14 @@ export function startSubjectParker(call: Call, subject: Subject, intervalMs: num
  * work, since retiring a session wrongly loses it.
  */
 export async function subjectOtherWork(root: string, subject: Subject, landed: string, upstream: string): Promise<string | null> {
-  const { previewSessionChange } = await import("./flowChange.js");
+  const { previewSessionChange, NoSessionChange } = await import("./flowChange.js");
   let files: string[];
   try {
     const preview = await previewSessionChange(root, subject.conversationId);
     files = [...preview.paths, ...preview.held.map((h) => h.path)];
   } catch (err) {
-    const why = err instanceof Error ? err.message : String(err);
-    return /^No uncommitted change\b/.test(why) ? null : `its changes could not be read: ${why}`;
+    if (err instanceof NoSessionChange) return null;
+    return `its changes could not be read: ${err instanceof Error ? err.message : String(err)}`;
   }
   const blob = (rev: string, f: string) => gitTry(root, ["rev-parse", "-q", "--verify", `${rev}:${f}`]).then((s) => s?.trim() ?? "");
   const differs: string[] = [];
