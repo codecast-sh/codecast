@@ -559,8 +559,10 @@ deadline: `cli: dp-13 sending 1a2b3c4 (12m of 45m)`. A target's deadline starts
 when it can first go out: every `after` target live with the commit, whoever
 sends it, and, when gated, main green, so a target behind a person's day never
 spends its own hour waiting for that person. Until then it reads `held 12m, then 45m`, as in `cli: waiting on main CI at 9f8e7d6
-(red since 5e4d3c2: test-cli; held 12m, then 45m)`; "red since" is the oldest
-commit of the red run main's first-parent history ends in. Deadlines default to
+(red since 5e4d3c2: test-cli; held 12m, then 45m)`; "red since" names red
+main's open culprit for the repository (main-red.md, `/cli/main-red/open`) that
+the commit's history holds, and, when the server names none or cannot answer,
+the oldest commit of the red run main's first-parent history ends in. Deadlines default to
 a day for a target a person or a role sends, an hour for one the stage sends and
 half an hour for one that deploys itself; `deadline` overrides each, up to a day.
 The whole wait is capped at the longest deadline and an hour, from the station's

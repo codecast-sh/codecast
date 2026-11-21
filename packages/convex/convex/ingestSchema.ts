@@ -14,6 +14,7 @@
 
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
+import { mainRedPayloadValidator } from "./deploySchema";
 import { ADDABLE_SOURCE_PROVIDERS, GROUP_KINDS, GROUP_STATUSES, SOURCE_PROVIDERS, SOURCE_STATUSES, TRANSITIONS, WATCH_DIRECTIONS, WATCH_KINDS } from "@codecast/shared/contracts/ingest";
 import { REPLAY_BACKFILL_STATUSES, REPLAY_BACKFILL_WINDOWS, REPLAY_PROVIDERS, VENDOR_REFRESH_WHYS } from "@codecast/shared/contracts/replay";
 
@@ -181,6 +182,8 @@ export const externalEventDataValidator = v.object({
   environment: v.optional(v.string()),
   value: v.optional(v.number()),
   threshold: v.optional(v.number()),
+  // A main_red or main_green row's payload (docs/architecture/main-red.md).
+  main_red: v.optional(mainRedPayloadValidator),
 });
 
 export const ingestTables = {

@@ -86,6 +86,8 @@
     "./contracts/deploys": "./contracts/deploys.ts",
     "./contracts/deployTargets": "./contracts/deployTargets.ts",
     "./contracts/deployReach": "./contracts/deployReach.ts",
+    "./contracts/ciFailures": "./contracts/ciFailures.ts",
+    "./contracts/mainRed": "./contracts/mainRed.ts",
     "./contracts/lineDeploy": "./contracts/lineDeploy.ts",
     "./contracts/deployAuthority": "./contracts/deployAuthority.ts",
     "./contracts/linePhases": "./contracts/linePhases.ts",

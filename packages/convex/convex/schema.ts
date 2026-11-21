@@ -3640,6 +3640,9 @@ export default defineSchema({
     // commits a millisecond apart): what orders main, so a target's waiting
     // queue is the commits after its live sha (deploys.md DP12).
     main_at: v.optional(v.number()),
+    // The GitHub login that pushed it onto the default branch (the push webhook's pusher, which GitHub
+    // authenticates; author_login is derived from an email anyone can set). Red main wakes only its sessions.
+    pushed_by: v.optional(v.string()),
   })
     .index("by_repository_main", ["repository", "main_at"])
     .index("by_conversation_id", ["conversation_id"])

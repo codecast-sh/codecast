@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { parseDeadline, parseFailures } from "./ciStation.js";
+import { parseFailures } from "@codecast/shared/contracts/ciFailures";
+import { parseDeadline } from "./ciStation.js";
 import { BUN_LOG, BUN_TEST, STEP_END, bunLogBody, VITE_LOG, tests } from "./ciStation.testkit.js";
 
 describe("parseFailures", () => {

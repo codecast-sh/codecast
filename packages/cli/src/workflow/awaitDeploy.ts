@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DEPLOY_WAIT_CAP_MS, deployDeadlineMs, releaseOrder, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
+import { mainRedSince, type MainRedPayload } from "@codecast/shared/contracts/mainRed";
 import { git, gitTry } from "../wipSnapshot.js";
 
 /** One deploy of a target, as the targets read lists its history. */
@@ -422,6 +423,8 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
     return verdict;
   };
   const clockFile = opts.merge ? path.join(path.dirname(opts.merge), "deploy-clock.json") : null;
+  const { checkoutRepository } = await import("../checkoutWords.js");
+  const repository = checkoutRepository(cwd);
   const { resolveCastInvocation } = await import("../castInvocation.js");
   const castCmd = resolveCastInvocation();
 
@@ -439,7 +442,19 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
     },
     carries: (deployed) => holds(cwd, merged.sha, deployed),
     mainCi: ciOf,
-    redSince: (at, gate) => firstRed(cwd, at, (c) => ciOf(c, gate)),
+    redSince: (at, gate) => redSinceWords({
+      base: opts.base,
+      open: async () => {
+        if (!repository) return null;
+        const answer = await Promise.race([
+          env.post("/cli/main-red/open", { repository }).catch(() => null),
+          new Promise<null>((r) => setTimeout(() => r(null), CALL_MS).unref?.()),
+        ]) as { open?: MainRedPayload[] } | null;
+        return Array.isArray(answer?.open) ? answer.open : null;
+      },
+      holds: async (culprit) => (await within("git", ["-C", cwd, "merge-base", "--is-ancestor", culprit, at], cwd, CALL_MS)).code === 0,
+      walk: () => firstRed(cwd, at, (c) => ciOf(c, gate)),
+    }),
     send: (targets) => sendDetached(cwd, targets, merged.sha, opts.merge ? path.dirname(opts.merge) : os.tmpdir()),
     // Inside a run the waiting lines go to the station on the card, and only the verdict is the station's output,
     // which is what a stop and the session's end message quote. At a terminal every line prints.
@@ -498,8 +513,21 @@ function within(cmd: string, args: string[], cwd: string, ms: number): Promise<{
 }
 
 /**
+ * Where main went red at or before a commit, in words. Red main's own culprit comes first (`/cli/main-red/open`,
+ * oldest first): the first open on this branch that the commit's history holds, named by `mainRedSince`. When the
+ * server cannot answer (an older server without the route, an error) or names none that fits (a repository it does
+ * not judge), the walk back through main's CI answers instead.
+ */
+export async function redSinceWords(o: { base: string; open: () => Promise<MainRedPayload[] | null>; holds: (culprit: string) => Promise<boolean>; walk: () => Promise<string | null> }): Promise<string | null> {
+  for (const p of (await o.open().catch(() => null)) ?? []) {
+    if (p.branch === o.base && (await o.holds(p.culprit_sha))) return mainRedSince(p);
+  }
+  return o.walk();
+}
+
+/**
  * Where main went red: the oldest commit of the red run that main's first-parent history ends in at `sha`, looking at
- * most 30 commits back; commits with no verdict yet are passed over. The seam a recorded culprit fills later.
+ * most 30 commits back; commits with no verdict yet are passed over.
  */
 async function firstRed(cwd: string, sha: string, ciOf: (at: string) => Promise<MainCi>): Promise<string | null> {
   const shas = (await gitTry(cwd, ["rev-list", "--first-parent", "--max-count=30", sha]))?.split("\n").filter(Boolean) ?? [];

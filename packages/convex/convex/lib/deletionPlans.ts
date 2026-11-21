@@ -289,6 +289,8 @@ function plans() {
     byWorkspace("deploys", "by_workspace_created"),
     byWorkspace("ship_passes", "by_workspace_finished"),
     byWorkspace("repo_leases", "by_workspace_repository"),
+    byWorkspace("main_ci_runs", "by_scope_seq"),
+    byWorkspace("main_reds", "by_scope_status_created"),
     byWorkspace("trial_cards", "by_workspace_created"),
     byWorkspace("line_labels", "by_workspace_at"),
     byWorkspace("team_kit_items", "by_workspace_updated", { children: [under("team_kit_versions", "by_item_version", "item_id")] }),
@@ -349,6 +351,7 @@ export const LEFT_OUT: Record<string, string> = {
   user_usage_daily: "per-person counts, no content",
   user_activity_daily: "per-person counts, no content",
   project_task_counts: "counts, no content",
+  ci_workflows: "which workflow files of a repository are CI, read from GitHub: paths, no content",
   // Per-person pointers, indexed by person first: no index reaches them from the conversation.
   inbox_hides: "per-person pointer, no conversation-leading index",
   bookmarks: "per-person pointer, no conversation-leading index",

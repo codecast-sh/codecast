@@ -8,8 +8,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DEPLOY_WAIT_CAP_MS, parseDeployTargets } from "@codecast/shared/contracts/deployTargets";
+import type { MainRedPayload } from "@codecast/shared/contracts/mainRed";
 import { parseWorkflowSource } from "./parser";
-import { awaitDeploy, ciGateOf, deployDuties, holds, lineHeld, mainCiAt, mergedCommit, mergedSha, recordMergedSha, targetState, targetTouches, type DeployClock, type DeployTargetRow, type DeployWaitIO, type MainCi } from "./awaitDeploy";
+import { awaitDeploy, ciGateOf, deployDuties, holds, lineHeld, mainCiAt, mergedCommit, mergedSha, recordMergedSha, redSinceWords, targetState, targetTouches, type DeployClock, type DeployTargetRow, type DeployWaitIO, type MainCi } from "./awaitDeploy";
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
 let dir = "";
@@ -394,6 +395,32 @@ describe("awaitDeploy", () => {
     expect(f.sends).toEqual([]);
     expect(f.lines[0]).toBe("backend: waiting for a deploy that carries 1a2b3c4 (0m of 60m)");
     expect(r.code).toBe(0);
+  });
+});
+
+describe("redSinceWords", () => {
+  const culprit = (sha: string, over: Partial<MainRedPayload> = {}): MainRedPayload => ({
+    repo: "acme/app", branch: "main", culprit_sha: sha.repeat(40), culprit_exact: true, candidates: [sha.repeat(40)], culprit_subject: `Break ${sha}`,
+    culprit_author: null, culprit_session: null, culprit_run: null, culprit_task: null, red_shas: [], first_red_at: 0, ci_run_url: null, reran: false, failing: [], ...over,
+  });
+  const walked: string[] = [];
+  const walk = async () => { walked.push("walk"); return "5e4d3c2"; };
+
+  test("names red main's open culprit, the oldest the commit's history holds on this branch", async () => {
+    walked.length = 0;
+    const open = async () => [culprit("a", { branch: "release" }), culprit("b"), culprit("c", { culprit_exact: false, candidates: ["c".repeat(40), "d".repeat(40)] })];
+    expect(await redSinceWords({ base: "main", open, holds: async (s) => s !== "b".repeat(40), walk })).toBe("ccccccc Break c (2 commits)");
+    expect(await redSinceWords({ base: "main", open, holds: async () => true, walk })).toBe("bbbbbbb Break b");
+    expect(walked).toEqual([]);
+  });
+
+  test("walks main's CI when the server cannot answer or names no culprit that fits", async () => {
+    walked.length = 0;
+    expect(await redSinceWords({ base: "main", open: async () => null, holds: async () => true, walk })).toBe("5e4d3c2");
+    expect(await redSinceWords({ base: "main", open: async () => { throw new Error("Unknown route"); }, holds: async () => true, walk })).toBe("5e4d3c2");
+    expect(await redSinceWords({ base: "main", open: async () => [], holds: async () => true, walk })).toBe("5e4d3c2");
+    expect(await redSinceWords({ base: "main", open: async () => [culprit("e")], holds: async () => false, walk })).toBe("5e4d3c2");
+    expect(walked).toHaveLength(4);
   });
 });
 

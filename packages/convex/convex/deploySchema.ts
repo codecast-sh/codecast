@@ -16,6 +16,37 @@ const liveReader = v.union(
   v.object({ kind: v.literal("json"), url: v.string(), sha_field: v.string(), version_field: v.optional(v.string()) }),
 );
 
+const nullableString = v.union(v.string(), v.null());
+
+// One failure read out of a CI job's log (shared/contracts/ciFailures.ts).
+const ciFailureValidator = v.object({
+  job: v.string(),
+  test: nullableString,
+  assertion: nullableString,
+  file: nullableString,
+  line: v.union(v.number(), v.null()),
+  excerpt: v.string(),
+});
+
+// The main_red / main_green payload (shared/contracts/mainRed.ts MainRedPayload).
+export const mainRedPayloadValidator = v.object({
+  repo: v.string(),
+  branch: v.string(),
+  culprit_sha: v.string(),
+  culprit_exact: v.boolean(),
+  candidates: v.array(v.string()),
+  culprit_subject: nullableString,
+  culprit_author: nullableString,
+  culprit_session: nullableString,
+  culprit_run: nullableString,
+  culprit_task: nullableString,
+  red_shas: v.array(v.string()),
+  first_red_at: v.number(),
+  ci_run_url: nullableString,
+  reran: v.boolean(),
+  failing: v.array(ciFailureValidator),
+});
+
 export const deployTables = {
   // One repository's deploy targets as its checkout declares them
   // (contracts/deployTargets), published from the machine that holds the
@@ -71,6 +102,90 @@ export const deployTables = {
     updated_at: v.number(),
   })
     .index("by_repository_sha", ["repository", "sha"]),
+
+  // A workflow that runs on pull requests as well as pushes: CI, which red
+  // main judges. A push-only workflow (a release, a publish) is never rerun.
+  // `workspace` and `team_id` pin where its runs are judged: set on its first
+  // judgment from a deploy target declaring the repository, and kept until
+  // that workspace no longer declares one.
+  ci_workflows: defineTable({
+    repository: v.string(),
+    // The workflow file, as GitHub reports it (`.github/workflows/ci.yml`).
+    path: v.string(),
+    seen_at: v.number(),
+    workspace: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+  })
+    .index("by_repository_path", ["repository", "path"]),
+
+  // One CI run on a repository's default branch as red main judges it
+  // (docs/architecture/main-red.md), in its pinned workspace: rerunning after
+  // its first red attempt, unproven when GitHub refused that rerun, then green
+  // or red with the jobs that ran and the jobs that failed of their own accord,
+  // recovered when the next run passed what an unproven run failed, or lost when
+  // no verdict ever came. `seq` is its commit's place in the branch's order
+  // (commits.main_at). `failing` (the parsed failures, for a brief) is kept
+  // only while a verdict waits on it.
+  main_ci_runs: defineTable({
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    repository: v.string(),
+    branch: v.string(),
+    workflow: v.string(),
+    // The workflow file (`.github/workflows/ci.yml`): what a candidate commit's runs are matched on.
+    path: v.string(),
+    run_id: v.string(),
+    attempt: v.number(),
+    sha: v.string(),
+    seq: v.number(),
+    url: v.optional(v.string()),
+    state: v.union(v.literal("judging"), v.literal("rerunning"), v.literal("unproven"), v.literal("green"), v.literal("red"), v.literal("recovered"), v.literal("lost")),
+    // Every job that ran (the jobs API), and whether it passed.
+    jobs: v.array(v.object({ name: v.string(), ok: v.boolean() })),
+    // The failed jobs that are not aggregates of other failed jobs: a culprit's identity.
+    failed: v.array(v.string()),
+    failing: v.array(ciFailureValidator),
+    reran: v.optional(v.boolean()),
+    // Why GitHub would not rerun the failed jobs: the run waits for the next run of those jobs.
+    rerun_refused: v.optional(v.string()),
+    // A red not yet placed: it waits for the runs before it to settle, until this plus the hold deadline.
+    held_since: v.optional(v.number()),
+    // A held red's question to GitHub: which candidate commits with no run here yet still have one going.
+    candidates_probe: v.optional(v.object({ at: v.number(), answered: v.boolean(), failed: v.boolean(), pending: v.array(v.string()) })),
+    // Why reading the run from GitHub last failed (judge retries twice before the run is lost).
+    judge_error: v.optional(v.string()),
+    at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_repository_run", ["repository", "run_id"])
+    .index("by_scope_seq", ["workspace", "repository", "workflow", "seq"]),
+
+  // One culprit of red main: the main_red event's payload and the jobs it
+  // still owns. Red while it owns a failing job; fixed once each of its jobs
+  // ran and passed (a later failure of one is a new culprit); green when the
+  // branch's CI is next green (main_green); expired, with no event, when its
+  // jobs stop running or leave the workflow file.
+  main_reds: defineTable({
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    repository: v.string(),
+    payload: mainRedPayloadValidator,
+    jobs: v.array(v.object({ workflow: v.string(), job: v.string() })),
+    newest_red_seq: v.number(),
+    status: v.union(v.literal("red"), v.literal("fixed"), v.literal("green"), v.literal("expired")),
+    // When a run last ran one of its jobs.
+    seen_at: v.number(),
+    // Who was told of this culprit commit: a conversation id, or `task:<user id>`. Any later culprit row for the
+    // same commit reads these, so nobody is told twice of one commit.
+    briefed: v.optional(v.array(v.string())),
+    green_sha: v.optional(v.string()),
+    green_at: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_repository_status", ["repository", "status"])
+    .index("by_scope_status_created", ["workspace", "repository", "status", "created_at"])
+    .index("by_scope_culprit", ["workspace", "repository", "payload.culprit_sha"]),
 
   // One pass of `cast ship checkout` (the /deploy path): what it committed,
   // what it held back, and each deploy step's result, so a ship is visible
