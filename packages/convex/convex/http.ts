@@ -895,7 +895,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, show_all, state, limit, label, project_path, session_ids } = body;
+      const { api_token, show_all, state, limit, label, project_path, session_ids, include_killed } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -912,6 +912,7 @@ http.route({
         label,
         project_path,
         session_ids: Array.isArray(session_ids) ? session_ids : undefined,
+        include_killed: include_killed === true ? true : undefined,
       });
 
       if (result.error) {
@@ -4330,6 +4331,9 @@ cliRoute("/cli/read/ask", async (ctx, body) => ctx.runAction(internal.sessionAsk
 cliRoute("/cli/sessions/dismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "dismiss" }));
 cliRoute("/cli/sessions/undismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "undismiss" }));
 cliRoute("/cli/sessions/kill", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "kill" }));
+// Retire (a flow run's subject once its change is live, flows.md FL4): a kill that refuses when anything would be
+// lost. body: { api_token, session, expected_message_count }.
+cliRoute("/cli/sessions/retire", async (ctx, body) => ctx.runMutation(api.conversations.cliRetireSession, body));
 
 // Resume (cast resume <session> --tmux): bring the agent up in its managed pane
 // without killing a live one. body: { api_token, session }.
