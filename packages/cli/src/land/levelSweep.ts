@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { gitTry } from "../wipSnapshot.js";
 import { levelCheckout, type LevelResult } from "./level.js";
+import { briefLevelConflicts, clearLevelConflicts, type BriefDeps } from "./levelConflicts.js";
 import { isAncestor } from "./replay.js";
 import { shipLockHeld, shipSpec, upstreamRef } from "./shipCheckout.js";
 
@@ -22,8 +23,8 @@ export const LEVEL_FETCH_MS = 60_000;
 const lastFetch = new Map<string, number>();
 
 export type LevelSweepOutcome =
-  | { root: string; skipped: string }
-  | { root: string; result: LevelResult };
+  | { root: string; skipped: string; gitDir?: string }
+  | { root: string; gitDir: string; result: LevelResult };
 
 export async function levelOne(root: string, now = Date.now()): Promise<LevelSweepOutcome> {
   if (!shipSpec(root).level) return { root, skipped: "level not enabled" };
@@ -46,16 +47,31 @@ export async function levelOne(root: string, now = Date.now()): Promise<LevelSwe
   }
   const head = await gitTry(root, ["rev-parse", "HEAD"]);
   const up = await gitTry(root, ["rev-parse", upstream]);
-  if (!head || !up || head === up) return { root, skipped: "level" };
+  if (head && head === up) return { root, gitDir, skipped: "level" };
+  if (!head || !up) return { root, skipped: "level" };
   if (!(await isAncestor(root, head, up))) {
     // Commits pushed from elsewhere (a detached worktree, a cherry-pick) leave
     // the checkout diverged but holding nothing upstream lacks: `git cherry`
     // marks each such commit "-". Those level like any other.
     const cherry = ((await gitTry(root, ["cherry", upstream, head])) ?? "+").split("\n").filter(Boolean);
     if (cherry.some((l) => !l.startsWith("-"))) return { root, skipped: "holds commits upstream lacks" };
-    return { root, result: await levelCheckout(root, upstream, { rewritten: true }) };
+    return { root, gitDir, result: await levelCheckout(root, upstream, { rewritten: true }) };
   }
-  return { root, result: await levelCheckout(root, upstream) };
+  return { root, gitDir, result: await levelCheckout(root, upstream) };
+}
+
+/**
+ * Level one checkout and act on the outcome: a conflict briefs the session
+ * that wrote each conflicting file (levelConflicts.ts), a level checkout
+ * forgets those briefs. Returns the log line, or null when there is none.
+ */
+export async function sweepOne(root: string, deps: BriefDeps): Promise<string | null> {
+  const o = await levelOne(root, deps.now);
+  if (o.gitDir && ("skipped" in o ? o.skipped === "level" : o.result.ok)) clearLevelConflicts(o.gitDir);
+  const line = describeLevel(o);
+  if (!line || "skipped" in o) return line;
+  const briefs = await briefLevelConflicts(root, o.gitDir, o.result, deps).catch((e) => `briefing failed: ${(e as Error)?.message ?? e}`);
+  return briefs ? `${line}; ${briefs}` : line;
 }
 
 export function describeLevel(o: LevelSweepOutcome): string | null {
