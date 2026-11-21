@@ -8,7 +8,7 @@ import { allModules } from "./testModules.testkit";
 setDefaultTimeout(60_000);
 
 // A quiet send (flows.md FL4): a flow run hands its subject session work out
-// of sight. A hidden stash stays hidden, the way a trigger's wake leaves it;
+// of sight. A hidden stash and a snooze stay, the way a trigger's wake leaves them;
 // a killed or dismissed session still revives, and a send with no sender
 // session (a person) is never quiet.
 
@@ -39,6 +39,16 @@ describe("a quiet send from a session", () => {
     expect(conv.inbox_killed_at).toBeUndefined();
     expect(conv.inbox_dismissed_at).toBeUndefined();
     expect(conv.has_pending_messages).toBe(true);
+  });
+
+  test("leaves a snooze in place; an ordinary session send clears it", async () => {
+    const until = Date.now() + 3_600_000;
+    const quiet = await setup({ inbox_snoozed_until: until });
+    await quiet.send({ from: "jx7send", quiet: true });
+    expect((await quiet.row()).inbox_snoozed_until).toBe(until);
+    const loud = await setup({ inbox_snoozed_until: until });
+    await loud.send({ from: "jx7send" });
+    expect((await loud.row()).inbox_snoozed_until).toBeUndefined();
   });
 
   test("clears a plain stash, as any wake does", async () => {

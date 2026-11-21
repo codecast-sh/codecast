@@ -71,6 +71,8 @@ export function frozenChangeContext(runDir: string | undefined): Record<string, 
       ...(change.session ? { change_session: change.session } : {}),
       ...(change.conversation ? { change_conversation: change.conversation } : {}),
       change_files: (change.paths ?? []).join(" "),
+      // Where a reviewer's diff starts: a session's change sits on the upstream it was cut onto, which the local default branch may lag.
+      ...(change.source === "session" && change.base ? { diff_base: change.base } : {}),
       change_return: changeReturnWords(change),
     };
   } catch {
