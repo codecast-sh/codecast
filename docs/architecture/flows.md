@@ -223,9 +223,10 @@ message in the session's own thread, waits for the session to work and settle
 through a dormant pin and stops on a blocked one), then freezes the session's
 change again on the same branch and resets the run's worktree to it
 (`refreezeSessionChange`). The session is never reported as a hand of the run,
-so the run's end does not stop it as it stops hands. A subject that was killed
-is sent the brief all the same: the send restarts it, and the run's log says
-so. Only a subject the run cannot read stops the station.
+so the run's end does not stop it as it stops hands. The runner reads the
+subject's row with `include_killed` (`/cli/inbox`), so a killed subject is
+still read, and sent the brief all the same: the send restarts it, and the
+run's log says so. Only a subject the run cannot read stops the station.
 
 Between its own stations the run does not need the session, so it parks it
 (`subjectPark.ts`). Before every other station, and every minute while one runs
@@ -234,24 +235,45 @@ settled (`done`, `dormant` or `idle`, live, not parked, not killed) the runner
 stashes it hidden, once per settle, so it leaves the inbox, and asks its daemon
 to hibernate it, at most every five minutes while it stays live. The daemon's
 parking gate may refuse (attached, mid turn, resumed in the last ten minutes);
-the run asks again later. A dry run and a run with no subject park nothing.
-The briefs go out as quiet sends (`sendSessionMessage` `quiet`): like a
-trigger's wake, a quiet send from a session leaves a hidden stash hidden, while
-a killed or dismissed session still revives. So a session working on a failed
-check stays out of the inbox, and surfaces on its own only when it pins
-blocked. A gate's answer is news the session need not act on, so a hibernated
-subject is not resumed to hear it.
+the run asks again later. A subject that is back in the inbox at the settle the
+run stashed was brought back by a person: the run stashes and parks it no more,
+and notes it in the run's context (`subject_kept`), so a resumed runner keeps
+to that. A dry run and a run with no subject park nothing.
 
-A run that completes retires its subject once the change is live: the change
-is on the default branch (`landedCommit`, fetched and decided with git), the
-subject has settled (parked counts), and nothing it wrote differs from what
-landed (every file `previewSessionChange` attributes to it reads as the landed
-commit or the default branch has it; an attribution that fails keeps it). The
-runner kills it (its transcript stays, and a later send revives it), sends no
-end message, which would only resume it to read "done", and says so in the
-exit station's `result_preview` ("Retired jx7...: its change is on main at
-..."). Otherwise the session hears the end as below; a failed run's end message
-is an ordinary send, so the session comes back to the inbox.
+Everything the run sends its subject carries a `client_id` (the run, the
+station, its visit), so a send retried after a lost answer lands once. Briefs
+and a gate's answer go out as quiet sends (`sendSessionMessage` `quiet`): like
+a trigger's wake, a quiet send from a session leaves a hidden stash and a
+snooze in place, while a killed or dismissed session still revives. So a
+session working on a failed check stays out of the inbox, and surfaces on its
+own only when it pins blocked. A run with no session of its own sends no
+quiet briefs, and its log says so. A hibernated subject is not resumed to hear
+a gate's answer. A server older than `quiet` refuses the send, and the runner
+sends it again plain under the same `client_id`.
+
+A run that completes retires its subject once the change is live. The change
+is on the default branch (`landedCommit`, fetched and decided with git), and
+every deploy target its files touch runs a deploy that holds it, read once
+from `/cli/deploys/targets` the way `cast flow await-deploy --once` reads it
+(a change no target ships is live when it lands; targets that cannot be read
+are not live). Merged is not live: a flow that ends at its merge leaves the
+subject to hear the end, which carries the deploy's reach. The subject has
+settled (parked counts), and nothing it wrote differs from what landed (every
+file `previewSessionChange` attributes to it reads as the landed commit or the
+default branch has it; a session with no changed file left has nothing, and an
+attribution that fails keeps it). Then the runner asks the server to retire it
+(`cliRetireSession`, with the transcript length it read): the same kill as
+`cast kill`, refused when anything would be cut off, because a kill also
+cancels the session's triggers, drops its queued messages and tears down its
+nested sessions. It refuses when the transcript moved since the read, a
+message is queued, a trigger is armed on it, it is working or waiting on
+background work, or a nested session of its own is live. A retired subject is
+not told the run is over, which would only resume it to read "done"; the exit
+station's `result_preview` says it ("Retired jx7...: its change is live from
+main at ..."). A subject already killed when a run completes (someone retired
+it, or an earlier run did) is not told either. Otherwise the session hears the
+end as below; a failed run's end message is an ordinary send that revives a
+killed subject on purpose, so the failure reaches someone.
 
 The `change` flow (and `quick-change`, the same without Decide) routes every
 stop it can fix to such a station; the briefs live in `templates/change/`: a failed
