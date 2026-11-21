@@ -40,9 +40,9 @@ import { nextCadenceRun } from "@platform/assistant/cadence";
 import { startHostedConversationFor } from "./assistant/start";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
-import { type TaskCtx, mayRewriteTrigger, roleTriggerRunnerOf, handRoleTriggersToRunner, projectQuiet, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill, projectRunsInline, scheduleProjectFire } from "./lib/agentTaskRows";
 import { isSpawnedWorker } from "./lib/workerSettleTrigger";
 import { roleCharterOf } from "./lib/roleCharter";
+import { type TaskCtx, rewriterOf, roleTriggerRunnerOf, handRoleTriggersToRunner, projectQuiet, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill, projectRunsInline, scheduleProjectFire } from "./lib/agentTaskRows";
 export { refreshArmedTriggerKind, patchTask, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill };
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -1163,22 +1163,26 @@ export async function ensureRoleEventTriggers(ctx: TaskCtx, role: { _id: Id<"org
 }
 
 export const dispatchCloudTriggers = internalMutation({
-  args: { cursor: v.optional(v.string()) },
+  // A continuation carries the first page's due bound: a cursor is valid only
+  // for the exact query that issued it, so a fresh Date.now() bound would
+  // refuse it and strand every due row past the first page.
+  args: { cursor: v.optional(v.string()), due_before: v.optional(v.number()) },
   handler: async (ctx, args): Promise<{ scanned: number; dispatched: number; done: boolean }> => {
     // Hosted conversations take their routines through this path on every
     // deployment. With no cloud wake host configured they are the only rows
     // it can fire, so it reads just those (hosted_home); otherwise it reads
     // every due row, the hosted ones included.
     const now = Date.now();
+    const dueBefore = args.cursor && args.due_before !== undefined ? args.due_before : now;
     const page = configuredCloudWakeHosts().length === 0
       ? await ctx.db
         .query("agent_tasks")
-        .withIndex("by_hosted_status_run_at", (q) => q.eq("hosted_home", true).eq("status", "scheduled").gt("run_at", 0).lte("run_at", now))
+        .withIndex("by_hosted_status_run_at", (q) => q.eq("hosted_home", true).eq("status", "scheduled").gt("run_at", 0).lte("run_at", dueBefore))
         .order("asc")
         .paginate({ cursor: args.cursor ?? null, numItems: 50 })
       : await ctx.db
         .query("agent_tasks")
-        .withIndex("by_status_run_at", (q) => q.eq("status", "scheduled").gt("run_at", 0).lte("run_at", now))
+        .withIndex("by_status_run_at", (q) => q.eq("status", "scheduled").gt("run_at", 0).lte("run_at", dueBefore))
         .order("asc")
         .paginate({ cursor: args.cursor ?? null, numItems: 50 });
     let dispatched = 0;
@@ -1213,7 +1217,7 @@ export const dispatchCloudTriggers = internalMutation({
       });
     }
     if (!page.isDone) {
-      await ctx.scheduler.runAfter(0, internal.agentTasks.dispatchCloudTriggers, { cursor: page.continueCursor });
+      await ctx.scheduler.runAfter(0, internal.agentTasks.dispatchCloudTriggers, { cursor: page.continueCursor, due_before: dueBefore });
     }
     return { scanned: page.page.length, dispatched, done: page.isDone };
   },
@@ -2570,11 +2574,36 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
 const ROUTINE_LIMIT_FIELDS: ReadonlySet<string> = new Set(["originating_conversation_id", "target_conversation_id", "schedule_type", "interval_ms"]);
 const RUNNING_SAFE_FIELDS: ReadonlySet<string> = new Set(["interval_ms", "precheck", "precheck_mode", "role_focus", "tune_why", "prompt", "title"]);
 
+// What a trigger runs and where are one account's (ct-96220): the precheck is
+// a shell command its daemon runs, the home and target are the sessions it
+// lands in, and the prompt, agent, checkout and permissions are what a run
+// starts with. Anyone who may manage a trigger still pauses, cancels, runs,
+// reschedules and retitles it; a person changing what it runs must be the
+// account rewriterOf names. The server's own rewrites of a role's routines
+// (a prompt brought up to date) are not a person's and pass.
+const RUN_FIELD_WORDS: Partial<Record<(typeof EDITABLE_FIELDS)[number], string>> = {
+  precheck: "precheck", precheck_mode: "precheck", originating_conversation_id: "the session it runs in", target_conversation_id: "the thread it posts to",
+  prompt: "prompt", agent_type: "agent", model: "model", agent_definition: "agent definition", project_path: "checkout", mode: "permissions",
+};
+
+async function assertMayRewrite(ctx: TaskCtx, task: Doc<"agent_tasks">, changed: string[], userId: Id<"users">): Promise<void> {
+  const words = [...new Set(changed.map((k) => RUN_FIELD_WORDS[k as keyof typeof RUN_FIELD_WORDS]).filter(Boolean))];
+  if (!words.length) return;
+  const rewriter = await rewriterOf(ctx, task);
+  if (String(rewriter.userId) === String(userId)) return;
+  const what = words.join(", ");
+  throw new Error(rewriter.seat
+    ? `Only the account running this role's session can change its ${what}: it runs on that machine`
+    : `Only the trigger's owner can change its ${what}: it runs on their machine`);
+}
+
 export async function applyTaskUpdate(
   ctx: TaskCtx,
   task: Doc<"agent_tasks">,
   args: TaskUpdateArgs,
-  actor: { userId: Id<"users">; source: "cli" | "web" },
+  // `person`: a person's edit through a door (web, CLI, the role's tune),
+  // held to who may change what the trigger runs (assertMayRewrite).
+  actor: { userId: Id<"users">; source: "cli" | "web"; person?: boolean },
 ): Promise<{ ok: boolean; changed: string[] }> {
   // `--every` restates the schedule type; one equal to the current one changes nothing.
   const whileRunning = task.status === "running" && Object.entries(args).every(([k, value]) =>
@@ -2694,6 +2723,7 @@ export async function applyTaskUpdate(
       JSON.stringify((patch as any)[k] ?? null) !== JSON.stringify((task as any)[k] ?? null)
   );
   if (changed.length === 0) return { ok: true, changed };
+  if (actor.person) await assertMayRewrite(ctx, task, changed, actor.userId);
   // Any edit, the prompt included, is the hosted owner's (hostedOwnerRefusal),
   // on the anchors the routine has now and the ones this edit moves it to.
   const anchorRefusal = await hostedOwnerRefusal(ctx, actor.userId, [
@@ -2741,23 +2771,6 @@ const TASK_UPDATE_ARG_VALIDATORS = {
   wake_creator: v.optional(v.boolean()),
 };
 
-// What a trigger runs and where are its owner's (ct-96220): the precheck is a
-// shell command the owner's daemon runs, and the home is the session it
-// injects into and whose machine runs it. Anyone who may manage a trigger
-// still pauses, cancels, runs and retitles it; changing the precheck or the
-// home is for the owner (mayRewriteTrigger). The role's tune door
-// (orgRoles.applyRoutineTune) holds a precheck change to the same rule.
-async function assertMayChangeGateOrHome(ctx: TaskCtx, task: Doc<"agent_tasks">, update: TaskUpdateArgs, userId: Id<"users">): Promise<void> {
-  const precheckMoves = (update.precheck !== undefined && (update.precheck.trim() || undefined) !== task.precheck)
-    || (update.precheck_mode !== undefined && (update.precheck_mode || undefined) !== task.precheck_mode);
-  const homeMoves = update.originating_conversation_id !== undefined && String(update.originating_conversation_id ?? "") !== String(task.originating_conversation_id ?? "");
-  if (!precheckMoves && !homeMoves) return;
-  if (await mayRewriteTrigger(ctx, task, userId)) return;
-  throw new Error(precheckMoves
-    ? "Only the trigger's owner can change its precheck: it runs as a shell command on their machine"
-    : "Only the trigger's owner can change the session it runs in");
-}
-
 export const webUpdate = mutation({
   args: { task_id: v.id("agent_tasks"), ...TASK_UPDATE_ARG_VALIDATORS },
   handler: async (ctx, args) => {
@@ -2767,8 +2780,7 @@ export const webUpdate = mutation({
     if (!task) return false;
     const { task_id: _id, ...rest } = args;
     await requireTriggerConversations(ctx, userId, rest);
-    await assertMayChangeGateOrHome(ctx, task, rest, userId);
-    const result = await applyTaskUpdate(ctx, task, rest, { userId, source: "web" });
+    const result = await applyTaskUpdate(ctx, task, rest, { userId, source: "web", person: true });
     return result.ok;
   },
 });
@@ -2812,8 +2824,7 @@ export const updateTask = mutation({
       if (!conv) throw new Error(`No session of yours matches "${created_by_session_ref}"`);
       update.created_by_conversation_id = conv._id;
     }
-    await assertMayChangeGateOrHome(ctx, task, update, auth.userId);
-    return await applyTaskUpdate(ctx, task, update, { userId: auth.userId, source: "cli" });
+    return await applyTaskUpdate(ctx, task, update, { userId: auth.userId, source: "cli", person: true });
   },
 });
 

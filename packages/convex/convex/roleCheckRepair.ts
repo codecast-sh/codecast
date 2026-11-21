@@ -38,7 +38,9 @@ type RoleCheckRepairRow = {
   action: "rearm" | "adopt" | "cancel" | "ambiguous" | "create" | "reown" | "skip";
   trigger: string | null; title?: string; owner?: { from: string; to: string }; replaced_by?: string; check_title?: string;
   /** An adopted trigger's precheck, cleared because it moves to another account's daemon. */
-  precheck_cleared?: string; reason: string;
+  precheck_cleared?: string;
+  /** What adopting it brings back to the role check's own (its prompt, its mode). */
+  resets?: Array<"prompt" | "mode">; reason: string;
 };
 
 // The recurring routines a role holds beside its check.
@@ -60,7 +62,8 @@ export async function performRepairRoleChecks(ctx: any, args: { dryRun?: boolean
     const standing = await standingConversationOf(ctx, role);
     const base = { role: role.short_id, handle: role.handle, standing: standing ? (standing.short_id ?? String(standing._id)) : null };
     if (!standing) { rows.push({ ...base, action: "skip", trigger: null, reason: "no standing session" }); continue; }
-    const title = roleRoutineFor(role).title;
+    const spec = roleRoutineFor(role);
+    const title = spec.title;
     const mine = (t: any) => String(t.role_id ?? "") === String(role._id);
     // The owner change a row makes once the row carries this role's id: what
     // handRoleTriggersToRunner then does to it.
@@ -75,7 +78,10 @@ export async function performRepairRoleChecks(ctx: any, args: { dryRun?: boolean
     const adoptable = liveRecurring.find((t) => mine(t) || (!t.role_id && ((t.title === title && runsSeat(t)) || chosen.has(ref(t))))) ?? null;
     const lookalikes = adoptable ? [] : liveRecurring.filter((t) => !t.role_id && (t.title === title || looksLikeACheck(t)));
     const clearsPrecheck = !!adoptable && !mine(adoptable) && !runsSeat(adoptable) && !!adoptable.precheck;
-    const stamps = adoptable ? { ...(mine(adoptable) ? {} : { role_id: role._id }), ...(adoptable.title === title ? {} : { title }), ...(clearsPrecheck ? { precheck: undefined, precheck_mode: undefined, precheck_state: undefined } : {}) } : {};
+    // An adopted trigger runs as the role's check from its next firing: the
+    // check's own prompt and mode, as refreshRoutine sets them at an arming.
+    const resets = adoptable && !mine(adoptable) ? ([adoptable.prompt !== spec.prompt ? "prompt" : null, adoptable.mode !== "apply" ? "mode" : null].filter(Boolean) as Array<"prompt" | "mode">) : [];
+    const stamps = adoptable ? { ...(mine(adoptable) ? {} : { role_id: role._id }), ...(adoptable.title === title ? {} : { title }), ...(clearsPrecheck ? { precheck: undefined, precheck_mode: undefined, precheck_state: undefined } : {}), ...(resets.includes("prompt") ? { prompt: spec.prompt, display_title: undefined, display_summary: undefined, summary_for_person: undefined } : {}), ...(resets.includes("mode") ? { mode: "apply" } : {}) } : {};
     const adopting = !!adoptable && Object.keys(stamps).length > 0;
 
     // Live role triggers on the seat under the wrong account move, paused role or not.
@@ -91,7 +97,7 @@ export async function performRepairRoleChecks(ctx: any, args: { dryRun?: boolean
     let rearmed: any = null;
     if (adoptable) {
       if (adopting) {
-        rows.push({ ...base, action: "adopt", trigger: ref(adoptable), title: adoptable.title, check_title: title, owner: await ownerMove(adoptable), ...(clearsPrecheck ? { precheck_cleared: adoptable.precheck } : {}), reason: chosen.has(ref(adoptable)) ? `named by a person as the role's check${clearsPrecheck ? "; its precheck is cleared, since it moves to the seat runner's machine" : ""}` : "the seat's runner armed it under the check's title" });
+        rows.push({ ...base, action: "adopt", trigger: ref(adoptable), title: adoptable.title, check_title: title, owner: await ownerMove(adoptable), ...(clearsPrecheck ? { precheck_cleared: adoptable.precheck } : {}), ...(resets.length ? { resets } : {}), reason: chosen.has(ref(adoptable)) ? `named by a person as the role's check${clearsPrecheck ? "; its precheck is cleared, since it moves to the seat runner's machine" : ""}` : "the seat's runner armed it under the check's title" });
         if (!dryRun) await ctx.db.patch(adoptable._id, stamps);
       }
       for (const t of dead) {

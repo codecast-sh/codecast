@@ -3,7 +3,7 @@ import { roleRunner } from "./lib/seatPlace";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
-import { handRoleTriggersToRunner, mayRewriteTrigger } from "./lib/agentTaskRows";
+import { handRoleTriggersToRunner } from "./lib/agentTaskRows";
 import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, andList, lineSlugOf, orgAuthorityGrantsError, authorityWords, orgEveryToMs, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
@@ -2061,10 +2061,6 @@ export async function applyRoutineTune(
     ...(change.focus !== undefined ? { focus: change.focus.trim() || null } : {}),
   };
   if (wanted.every_ms === before.every_ms && wanted.precheck === before.precheck && wanted.focus === before.focus) throw new Error("Nothing to change: the check already runs that way");
-  // The cadence and focus are the role's to tune; the precheck is a shell
-  // command on the seat's machine, so it is for the check's owner or the
-  // account running the seat (mayRewriteTrigger), as on every edit door.
-  if (wanted.precheck !== before.precheck && !(await mayRewriteTrigger(ctx, routine, userId))) throw new Error("Only the account running this role's session can change its check's precheck: it runs as a shell command on that machine");
   return withOrgChange(ctx, userId, { kind: "routine_tune", subject: roleSubject(role), ...head }, async () => {
     const now = Date.now();
     const cadenceMoved = wanted.every_ms !== before.every_ms;
@@ -2075,7 +2071,9 @@ export async function applyRoutineTune(
       ...(wanted.precheck !== before.precheck ? { precheck: wanted.precheck ?? "" } : {}),
       ...(wanted.focus !== before.focus ? { role_focus: wanted.focus ?? "" } : {}),
       tune_why: change.why,
-    }, { userId, source: "cli" });
+      // A person's tune: the cadence and focus are the role's admins' to set,
+      // the precheck runs on the seat's machine (applyTaskUpdate, assertMayRewrite).
+    }, { userId, source: "cli", person: true });
     if (!result.ok) throw new Error("The check cannot be changed right now; try again when this run has ended");
     await ctx.db.patch(routine._id, { tuned_at: now });
     const tuned = await ctx.db.get(routine._id);

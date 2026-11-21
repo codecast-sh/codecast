@@ -66,28 +66,37 @@ async function world(overrides: Record<string, any[]> = {}) {
   const query = db.query.bind(db);
   const pages: Array<{ cursor: string | null; numItems: number }> = [];
   const indexes: string[] = [];
+  const cursorRanges = new Map<string, string>();
   db.query = (table: string) => {
     const builder = query(table);
     if (table !== "agent_tasks") return builder;
     const withIndex = builder.withIndex.bind(builder);
+    // Convex ties a cursor to the exact query that issued it: the same range
+    // read with a different bound refuses the cursor with InvalidCursor.
+    let range = "";
     builder.withIndex = (name: string, fn: any) => {
       indexes.push(name);
+      const bounds: unknown[] = [];
+      const recorder: any = new Proxy({}, { get: (_t, op) => (...args: unknown[]) => { bounds.push([op, ...args]); return recorder; } });
+      fn(recorder);
+      range = JSON.stringify([name, bounds]);
       return withIndex(name, fn);
     };
     const key = (row: any): [number, number] => [row.run_at, row._creationTime];
     const compare = (a: number[], b: number[]) => a[0] - b[0] || a[1] - b[1];
     builder.paginate = async (opts: { cursor: string | null; numItems: number }) => {
       pages.push(opts);
+      if (opts.cursor && cursorRanges.get(opts.cursor) !== range) {
+        throw new Error("InvalidCursor: Tried to run a query starting from a cursor, but it looks like this cursor is from a different query.");
+      }
       const after = opts.cursor ? JSON.parse(opts.cursor) : null;
       const rows = (await builder.collect())
         .sort((a: any, b: any) => compare(key(a), key(b)))
         .filter((row: any) => !after || compare(key(row), after) > 0);
       const page = rows.slice(0, opts.numItems);
-      return {
-        page,
-        isDone: page.length === rows.length,
-        continueCursor: page.length ? JSON.stringify(key(page[page.length - 1])) : opts.cursor,
-      };
+      const continueCursor = page.length ? JSON.stringify(key(page[page.length - 1])) : opts.cursor;
+      if (continueCursor) cursorRanges.set(continueCursor, range);
+      return { page, isDone: page.length === rows.length, continueCursor };
     };
     return builder;
   };
@@ -286,7 +295,10 @@ describe("dispatchCloudTriggers", () => {
     const { ctx, tables, scheduled, pages } = await world({ agent_tasks: [...local, task({ _creationTime: 51 })] });
     expect(await dispatch(ctx)).toEqual({ scanned: 50, dispatched: 0, done: false });
     const continuation = scheduled.find((call) => call.name === "agentTasks:dispatchCloudTriggers")!;
-    expect(continuation).toMatchObject({ delay: 0, args: { cursor: JSON.stringify([NOW - 1, 50]) } });
+    expect(continuation).toMatchObject({ delay: 0, args: { cursor: JSON.stringify([NOW - 1, 50]), due_before: NOW } });
+    // The continuation runs later than the page that scheduled it, and still
+    // reads the same range, so its cursor stays valid.
+    time.mockReturnValue(NOW + 5_000);
     expect(await dispatch(ctx, continuation.args)).toEqual({ scanned: 1, dispatched: 1, done: true });
     expect(pages).toHaveLength(2);
     expect(tables.pending_messages).toHaveLength(1);
