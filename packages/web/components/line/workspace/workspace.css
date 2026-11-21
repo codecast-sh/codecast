@@ -568,6 +568,19 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-seg[data-own] { border-color: color-mix(in srgb, var(--sol-cyan) 50%, transparent); }
 .fd-step[data-passes] { border-style: dashed; background: transparent; }
 .fd-step[data-passes] .fd-step-name { color: var(--lw-ink-3); font-weight: 500; }
+/* A pipeline's diagram (FlowDiagram quietRoutes): the passing path leads. Names wrap rather than cut off, and each step's
+   other ways are one quiet line that opens over the drawing on hover or press, never an alarm. */
+.fd[data-quiet] .fd-step-wrap { max-width: 150px; }
+.fd[data-quiet] .fd-step { height: auto; min-height: 32px; padding-top: 5px; padding-bottom: 5px; white-space: normal; }
+.fd[data-quiet] .fd-step-name { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.2; }
+.fd-caption { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.fd-routes-fold { position: relative; }
+.fd-routes-more { position: relative; z-index: 1; font: inherit; font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); background: var(--lw-paper); border: 0; padding: 0 3px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+.fd-routes-more:hover, .fd-routes-fold[data-open] .fd-routes-more { color: var(--lw-ink-2); text-decoration: underline; }
+.fd-routes-fold > .fd-routes { display: none; position: absolute; top: 100%; left: 0; z-index: 5; margin-top: 4px; padding: 6px; width: max-content; max-width: 260px; background: var(--lw-card); border: 1px solid var(--lw-rule); border-radius: 8px; box-shadow: 0 6px 18px -6px color-mix(in srgb, var(--sol-text) 22%, transparent); }
+.fd-routes-fold:hover > .fd-routes, .fd-routes-fold:focus-within > .fd-routes, .fd-routes-fold[data-open] > .fd-routes { display: flex; }
+.fd[data-quiet] .fd-route:not([data-taken]) { color: var(--lw-ink-2); border-color: var(--lw-rule); background: transparent; }
+.fd[data-quiet] .fd-route:not([data-taken]) .fd-route-mark { color: var(--lw-ink-3); }
 .fd-step[data-written] { border-color: color-mix(in srgb, var(--sol-violet) 45%, transparent); }
 .fd-seg-name { margin: -2px 0 0 2px; white-space: nowrap; font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .02em; color: var(--lw-ink-2); }
 .fd-seg-steps { display: flex; align-items: flex-start; }

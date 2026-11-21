@@ -13,6 +13,8 @@ describe("the line app's selection in the URL", () => {
     expect(readLineSelection(q("view=process")).landing).toBe(false);
     // A place on the map with no view is the map, never the landing page.
     expect(readLineSelection(q("step=prove")).landing).toBe(false);
+    // The process picker reads on every view: a remembered process leaves the landing page the landing page.
+    expect(readLineSelection(q("graph=onefix")).landing).toBe(true);
     expect(readLineSelection(q("view=line&mode=map"))).toMatchObject({ view: "line", mode: "map", landing: false });
     expect(readLineSelection(q("view=line")).mode).toBe("table");
     expect(readLineSelection(q("need=sd-6")).view).toBe("foryou");

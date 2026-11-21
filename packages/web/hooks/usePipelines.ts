@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { useDeployTargets } from "./useSyncDeployTargets";
 import { useSyncRuns, useWorkspaceRuns } from "./useSyncRuns";
 import { usePipelines, useSyncPipelines } from "./useSyncPipelines";
+import { useCoarseNow } from "./useCoarseNow";
 import { pipelineModel, type PipelineModel, type PipelineRun } from "../lib/line/pipelineModel";
 import type { Pipeline } from "../lib/line/pipelineTypes";
 
@@ -19,7 +20,9 @@ export function usePipelineModels(workspace: string | null | undefined): { model
   useSyncRuns({ limit: 100 }, !!teamId, workspace);
   const runs = useWorkspaceRuns(workspace) as unknown as PipelineRun[];
   const { targets, deploys } = useDeployTargets(teamId);
-  const models = useMemo(() => pipelines.map((p) => pipelineModel(p, runs, targets, deploys)), [pipelines, runs, targets, deploys]);
+  // A deploy's "stuck" reads the clock: a coarse minute is enough.
+  const now = useCoarseNow(60_000);
+  const models = useMemo(() => pipelines.map((p) => pipelineModel(p, runs, targets, deploys, now)), [pipelines, runs, targets, deploys, now]);
   const failed = refused ? "not allowed in this workspace" : error ? "could not be read" : null;
   return { models, pipelines, ready: ready || !teamId, failed };
 }

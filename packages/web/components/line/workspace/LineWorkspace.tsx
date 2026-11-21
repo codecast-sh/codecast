@@ -245,7 +245,9 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   // line (Problems narrows by its own `process`), so they name none.
   const drawnKey = model?.graphKey ?? null;
   // With no live flow the Flows stage is the library, so an address that names no flow is left naming none.
-  const namesLine = !embedded && selection.view === "line" && ws.ready && !!drawnKey && !ownGraph && (!!liveKey || !!address.graph);
+  // The team's pipelines (the landing page) and one pipeline's page draw no line, so their address names none.
+  const drawsNoLine = pipeline !== null || (selection.landing && !flow && !settingsPage);
+  const namesLine = !embedded && !drawsNoLine && selection.view === "line" && ws.ready && !!drawnKey && !ownGraph && (!!liveKey || !!address.graph);
   const askedKey = address.graph ? processKeyOf(address.graph) : null;
   useWatchEffect(() => {
     if (!namesLine || !drawnKey) return;
@@ -312,7 +314,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
       {!unresolved && ws.historyFeeds.map((f) => <HistoryFeed key={f.projectId} projectId={f.projectId} repositories={f.repositories} />)}
       {trialSpaces.map((key) => <TrialFeed key={key} workspace={key} />)}
       {ws.decisionRuns.map((id) => <RunFeed key={id} id={id} />)}
-      <div className="lw lw-app" data-line-workspace={projectId ?? "all"} data-line-app data-view={selection.view}>
+      <div className="lw lw-app" data-line-workspace={projectId ?? "all"} data-line-app data-view={selection.view} data-landing={landing ? "" : undefined}>
         <header className="lw-head">
           {!embedded && (flow
             ? <h1 className="lw-title lw-app-title" data-flow-title={flow.owner}><Link href="/flows" className="lw-title-up">Flows</Link><span aria-hidden className="lw-title-sep">/</span>{flow.name}</h1>

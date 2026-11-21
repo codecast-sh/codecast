@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { PIPELINE_FIXTURES } from "./pipelines.fixture.generated";
-import { changesHere, pipelineModel, pipelineStation, runInRepo, stationRuns, whenWords, type PipelineRun } from "../pipelineModel";
+import { changesHere, pipelineModel, spanWords, pipelineStation, runInRepo, stationRuns, whenWords, type PipelineRun } from "../pipelineModel";
 import type { Pipeline } from "../pipelineTypes";
 import type { DeployTargetRow, TeamDeployRow } from "../../deploys/targets";
 
@@ -81,6 +81,7 @@ describe("what is on the pipeline now", () => {
       run({ _id: "d", current_node_id: "check", project_path: "/w/example-app" }),
     ]);
     expect(m.change.marks.review.here).toBe(2);
+    expect(m.change.marks.review.hereNames).toHaveLength(2);
     expect(m.change.marks.check.here).toBeUndefined();
     expect(m.change.inFlight).toBe(2);
   });
@@ -113,6 +114,20 @@ describe("what is on the pipeline now", () => {
     expect(m.release.marks.send.here).toBe(1);
     expect(m.release.outside).toBeNull();
     expect(m.main.targets[0]).toMatchObject({ tone: "going", going: { deploy: "dp-8", step: "Send", outside: false } });
+  });
+
+  test("a deploy open for hours without going live is stuck, not going out", () => {
+    const H = 3600_000;
+    const silent = deploy({ _id: "s", short_id: "dp-9", status: "running", live_at: null, created_at: 0 });
+    const m = pipelineModel(example, [], [targetRow({})], [silent], 40 * H);
+    expect(m.main.targets[0]).toMatchObject({ tone: "stuck", going: { deploy: "dp-9", stuck: 40 * H } });
+    expect(m.release.stuck).toEqual({ deploy: "dp-9", for: 40 * H, outside: true });
+    // Silent for an hour is still going out; a deploy reporting its steps gets a slow gate's hours.
+    expect(pipelineModel(example, [], [targetRow({})], [silent], 1 * H).main.targets[0].tone).toBe("going");
+    const reporting = deploy({ ...silent, steps: [{ id: "gate", status: "running" }] });
+    expect(pipelineModel(example, [], [targetRow({})], [reporting], 4 * H).main.targets[0].tone).toBe("going");
+    expect(spanWords(40 * H)).toBe("1d 16h");
+    expect(spanWords(45 * 60_000)).toBe("45m");
   });
 
   test("a deploy sent outside codecast says so instead of drawing passed steps", () => {

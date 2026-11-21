@@ -67,7 +67,9 @@ const STATE_MARK: Record<StepState, string> = { idle: "", done: "✓", current: 
 
 /** `marks`: what a pipeline says on each step beside its name (who changed it, when it runs, what stands on it now), by step id.
  *  `diagram`: the flow's model as the host already shaped it (a pipeline lane says a shared route once), else the flow's own. */
-export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact = false, picked = null, onPick, marks, diagram }: { flow: ShippedFlow; run?: RunLike; compact?: boolean; marks?: Readonly<Record<string, StepMark>>; diagram?: FlowDiagramModel } & Partial<Pick>) {
+/** `quietRoutes`: the passing path leads; each step's other ways fold into one "N other ways" that opens on hover or press
+ *  (a pipeline, where the path is what a person reads), and a fan-out always shows its branches by name. */
+export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact = false, picked = null, onPick, marks, diagram, quietRoutes = false }: { flow: ShippedFlow; run?: RunLike; compact?: boolean; marks?: Readonly<Record<string, StepMark>>; diagram?: FlowDiagramModel; quietRoutes?: boolean } & Partial<Pick>) {
   const model = useMemo(() => diagram ?? flowDiagram(flow), [diagram, flow]);
   const states = useMemo(() => stepStates(model, run), [model, run]);
   const pick: Pick = { picked, onPick };
@@ -75,7 +77,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
   // pressing it opens its frame.
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const toggle = (id: string) => setOpened((o) => { const n = new Set(o); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const folded = (st: DiagramStep) => (st.kind === "segment" || st.kind === "parallel") && st.inner.length > 1 && !opened.has(st.id);
+  const folded = (st: DiagramStep) => (st.kind === "segment" || (st.kind === "parallel" && !quietRoutes)) && st.inner.length > 1 && !opened.has(st.id);
   const fit = useFitPath(`${model.steps.length}|${flow.slug}|${compact}|${run ? "run" : ""}|${states.size}|${[...opened].join(",")}`);
   // Where the ways back lead: the session the change came from (a Session cell opens the path), or, in a flow run
   // around one step, that step on the path (its stages run on a row of their own, the rail under them back to it).
@@ -88,7 +90,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
       <div className="fd-cell-main">
         {lead ? <span className="fd-arrow" aria-hidden /> : null}
         {folded(s) ? <Step step={{ ...s, side: foldedRoutes(s) }} state={states.get(s.id) ?? "idle"} compact={compact} run={run} pick={pick} fold={{ count: s.inner.length, words: s.kind === "parallel" ? "at once" : "steps", toggle: () => toggle(s.id) }} />
-          : s.kind === "parallel" ? <Segment step={s} states={states} compact={compact} run={run} pick={pick} parallel onFold={() => toggle(s.id)} />
+          : s.kind === "parallel" ? <Segment step={s} states={states} compact={compact} run={run} pick={pick} parallel onFold={quietRoutes ? undefined : () => toggle(s.id)} />
           : s.kind === "segment" && s.inner.length > 1 ? <Segment step={s} states={states} compact={compact} run={run} pick={pick} onFold={() => toggle(s.id)} />
           : s.kind === "segment" && s.inner.length === 1 ? <Step step={{ ...s.inner[0], label: s.label, side: [...s.inner[0].side, ...s.side], slot: s.slot }} markId={s.id} state={states.get(s.inner[0].id) ?? "idle"} compact={compact} run={run} pick={pick} />
           : <Step step={s} state={states.get(s.id) ?? "idle"} compact={compact} run={run} pick={pick} />}
@@ -108,8 +110,9 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
   const split = hubAt > 0 && !compact;
   return (
     <Marks.Provider value={marks ?? null}>
+    <QuietRoutes.Provider value={quietRoutes}>
     <RailTo.Provider value={railTo}>
-    <div ref={fit} className="fd" data-compact={compact ? "" : undefined} data-has-run={run ? "" : undefined} data-pickable={onPick ? "" : undefined} data-returns={lastReturn >= 0 ? "" : undefined} data-rows={split ? "2" : undefined}>
+    <div ref={fit} className="fd" data-quiet={quietRoutes ? "" : undefined} data-compact={compact ? "" : undefined} data-has-run={run ? "" : undefined} data-pickable={onPick ? "" : undefined} data-returns={lastReturn >= 0 ? "" : undefined} data-rows={split ? "2" : undefined}>
       <div className="fd-rows">
         {split ? <ol className="fd-path" data-row="in">{model.steps.slice(0, hubAt).map((s, i) => cell(s, i, i > 0))}<li className="fd-cell" aria-hidden><div className="fd-cell-main"><span className="fd-arrow fd-arrow-down" /></div></li></ol> : null}
         <ol className="fd-path">
@@ -125,6 +128,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
       </div>
     </div>
     </RailTo.Provider>
+    </QuietRoutes.Provider>
     </Marks.Provider>
   );
 });
@@ -133,7 +137,9 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
 function Segment({ step, states, compact, run, pick, parallel = false, onFold }: { step: DiagramStep; states: Map<string, StepState>; compact: boolean; run: RunLike; pick: Pick; parallel?: boolean; onFold?: () => void }) {
   const state = states.get(step.id) ?? "idle";
   const mark = useContext(Marks)?.[step.id];
-  const name = <>{step.label}{parallel ? <span className="fd-seg-par"> · {step.inner.length} side by side</span> : null}{written(step) ? <span className="fd-seg-tag">written here</span> : null}</>;
+  const quiet = useContext(QuietRoutes);
+  // Quiet (a pipeline), the stacked branches say they run side by side; the frame keeps only its name.
+  const name = <>{step.label}{parallel && !quiet ? <span className="fd-seg-par"> · {step.inner.length} side by side</span> : null}{written(step) ? <span className="fd-seg-tag">written here</span> : null}</>;
   return (
     <div className="fd-seg" data-own={mark?.own ?? undefined} data-state={state} data-parallel={parallel ? "" : undefined} data-written={written(step) ? "" : undefined} data-picked={pick.picked === step.id ? "" : undefined} title={slotTitle(step)}>
       {pick.onPick
@@ -206,6 +212,9 @@ const returnsTo = (step: DiagramStep, railTo: string): boolean => step.side.some
 const dropsToRail = (step: DiagramStep, railTo: string) =>
   step.kind === "parallel" || (step.kind === "segment" && step.inner.length > 1) ? step.side.some((r) => ridesRail(r, railTo)) : returnsTo(step, railTo);
 
+/** Whether each step's other ways fold into one quiet line (FlowDiagram `quietRoutes`). */
+const QuietRoutes = createContext(false);
+
 /** A pipeline's marks by step id; null for a plain flow. */
 const Marks = createContext<Readonly<Record<string, StepMark>> | null>(null);
 
@@ -214,7 +223,7 @@ const OWN_WORD: Record<NonNullable<StepMark["own"]>, string> = { added: "added",
 /** What a pipeline says under a step: how many changes stand on it now, the project's own mark, when it runs, that it passes. */
 function MarkRow({ mark, compact = false }: { mark: StepMark; compact?: boolean }) {
   const own = mark.own ? <span className="fd-mark" data-mark="own" title={mark.changed?.join(", ") || undefined}>{OWN_WORD[mark.own]}</span> : null;
-  const here = mark.here ? <span className="fd-mark" data-mark="here" title={`${mark.here} ${mark.here === 1 ? "change" : "changes"} here now`}>{mark.here}</span> : null;
+  const here = mark.here ? <span className="fd-mark" data-mark="here" title={mark.hereNames?.join("\n") || undefined}>{mark.here} here</span> : null;
   if (compact) return here || own ? <div className="fd-marks">{here}{own}</div> : null;
   if (!own && !here && !mark.when && !mark.passes && !mark.varies && !mark.waits) return null;
   return (
@@ -222,7 +231,7 @@ function MarkRow({ mark, compact = false }: { mark: StepMark; compact?: boolean 
       {here}
       {own}
       {mark.when ? <span className="fd-mark" data-mark="when" title={`Runs only when a change touches ${mark.when}`}>{mark.when}</span> : null}
-      {mark.passes ? <span className="fd-mark" data-mark="passes">no command · passes</span> : null}
+      {mark.passes ? <span className="fd-caption">no command</span> : null}
       {mark.varies ? <span className="fd-mark">varies by target</span> : null}
       {mark.waits ? <span className="fd-mark">waits · sends none</span> : null}
     </div>
@@ -239,9 +248,24 @@ const RailTo = createContext<string>(SESSION_WORDS);
  * took, red only where it stopped.
  */
 function Routes({ routes, run }: { routes: SideRoute[]; run: RunLike }) {
-  const railTo = useContext(RailTo);
+  const quiet = useContext(QuietRoutes);
+  const [open, setOpen] = useState(false);
   const shown = run ? routes.filter((r) => runReached(run, r.toId)) : routes;
   if (!shown.length) return null;
+  // The path leads: a step's other ways are one quiet line that opens on hover or press. A run's taken route stays out.
+  if (quiet && !run) {
+    return (
+      <div className="fd-routes-fold" data-open={open ? "" : undefined}>
+        <button type="button" className="fd-routes-more" aria-expanded={open} onClick={() => setOpen((o) => !o)}>{shown.length} other {shown.length === 1 ? "way" : "ways"}</button>
+        <RouteList routes={shown} run={run} />
+      </div>
+    );
+  }
+  return <RouteList routes={shown} run={run} />;
+}
+
+function RouteList({ routes: shown, run }: { routes: SideRoute[]; run: RunLike }) {
+  const railTo = useContext(RailTo);
   return (
     <ul className="fd-routes">
       {shown.map((r, i) => {

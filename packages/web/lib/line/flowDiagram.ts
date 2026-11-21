@@ -35,7 +35,7 @@ export type DiagramStep = {
  * (null: inherited from the backbone), what it changed, the paths it runs for, that it has no command and passes,
  * that its command differs by target, that it waits for a deploy and sends none, and how many changes stand on it now. A plain flow draws no marks.
  */
-export type StepMark = { own: "added" | "changed" | null; changed?: string[]; when?: string; passes?: true; varies?: true; waits?: true; here?: number };
+export type StepMark = { own: "added" | "changed" | null; changed?: string[]; when?: string; passes?: true; varies?: true; waits?: true; here?: number; hereNames?: string[] };
 
 /** `hub`: in a flow run around one step (every stage hands the work back to it, as a one-session flow does), that step:
  *  its stages follow it in the order it names them, and their ways back lead to it. */

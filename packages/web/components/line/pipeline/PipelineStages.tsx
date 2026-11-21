@@ -15,13 +15,15 @@ const teamOf = (workspace: string | null) => (workspace?.startsWith("team:") ? w
 
 /** A pipeline's state in figures: changes in flight, commits waiting on main, deploys going out. */
 function Figures({ model }: { model: PipelineModel }) {
-  const going = model.main.targets.filter((t) => t.going).length;
+  const going = model.main.targets.filter((t) => t.going && !t.going.stuck).length;
+  const stuck = model.main.targets.filter((t) => t.going?.stuck).length;
   const failed = model.main.targets.filter((t) => t.tone === "failed").length;
   return (
     <span className="rpl-figs">
       <span className="rpl-fig" data-on={model.change.inFlight ? "" : undefined}><b className="lw-num">{model.change.inFlight}</b> in flight</span>
       <span className="rpl-fig" data-on={model.main.waiting ? "" : undefined}><b className="lw-num">{model.main.waiting}</b> waiting on main</span>
       <span className="rpl-fig" data-on={going ? "" : undefined}><b className="lw-num">{going}</b> going out</span>
+      {stuck ? <span className="rpl-fig" data-tone="bad"><b className="lw-num">{stuck}</b> stuck</span> : null}
       {failed ? <span className="rpl-fig" data-tone="bad"><b className="lw-num">{failed}</b> failed</span> : null}
     </span>
   );

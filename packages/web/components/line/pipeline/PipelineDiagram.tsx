@@ -13,7 +13,7 @@ import { FlowDiagram, type StepPick } from "../widgets/FlowDiagram";
 import { routeTail } from "../../../lib/line/flowDiagram";
 import { FlowStationPanel } from "../widgets/FlowStationPanel";
 import { EntityIdPill } from "../../EntityIdPill";
-import { agoWords, laneStationDetails, pipelineStation, stationRuns, WHO_WORDS, type MainTarget, type PipelineLane, type PipelineModel } from "../../../lib/line/pipelineModel";
+import { agoWords, spanWords, laneStationDetails, pipelineStation, stationRuns, WHO_WORDS, type MainTarget, type PipelineLane, type PipelineModel } from "../../../lib/line/pipelineModel";
 import type { AppFlow } from "../../../lib/line/flowPool";
 import type { Pipeline } from "../../../lib/line/pipelineTypes";
 import { runHref } from "../../../lib/decisionLinks";
@@ -23,30 +23,39 @@ import "./pipeline.css";
 type LaneName = "change" | "release";
 type Picked = { lane: LaneName; pick: StepPick } | null;
 
+/** One deploy on the Deploys page. */
+const deployHref = (teamId: string | null, deploy: string) => `/deploys?${teamId ? `team=${teamId}&` : ""}deploy=${encodeURIComponent(deploy)}`;
+
+/** A deploy named by its dp-N, opening it on Deploys; a record named otherwise (a commit) is not shown. */
+function DeployRef({ teamId, deploy }: { teamId: string | null; deploy: string }) {
+  return /^dp-\d+$/.test(deploy) ? <Link href={deployHref(teamId, deploy)} className="rpl-target-ref">{deploy}</Link> : null;
+}
+
 /** What starts a deploy to a target, in a word or two. */
 const POLICY_WORDS: Record<MainTarget["policy"], string> = { press: "on a press", release: "with each release", auto: "on green CI" };
-const TONE_WORDS = { going: "going out", failed: "failed", waiting: "waiting", current: "up to date", unknown: "not read" } as const;
+const TONE_WORDS = { going: "going out", failed: "failed", waiting: "waiting", current: "up to date", unknown: "not read", stuck: "stuck" } as const;
 
 export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, teamId, compact = false }: { model: PipelineModel; pipeline: Pipeline; teamId: string | null; compact?: boolean }) {
   const [picked, setPicked] = useState<Picked>(null);
+  if (compact) return <PipelineStrip model={model} />;
   const onPick = (lane: LaneName) => (p: StepPick) => setPicked((cur) => (cur?.lane === lane && cur.pick.id === p.id ? null : { lane, pick: p }));
   const lane = (name: LaneName, l: PipelineLane, head: ReactNode, run: PipelineModel["release"]["run"] = null) => (
     <section className="rpl-lane" data-lane={name} aria-label={name === "change" ? "Every change" : "Every release"}>
       {head}
-      <FlowDiagram flow={l.drawn} diagram={l.diagram} run={run} compact={compact} marks={l.marks} picked={!compact && picked?.lane === name ? picked.pick.id : null} onPick={compact ? undefined : onPick(name)} />
-      {!compact && picked?.lane === name ? <StationPanel lane={name} l={l} model={model} pipeline={pipeline} pick={picked.pick} run={run} onClose={() => setPicked(null)} /> : null}
+      <FlowDiagram flow={l.drawn} diagram={l.diagram} run={run} marks={l.marks} quietRoutes picked={picked?.lane === name ? picked.pick.id : null} onPick={onPick(name)} />
+      {picked?.lane === name ? <StationPanel lane={name} l={l} model={model} pipeline={pipeline} pick={picked.pick} run={run} onClose={() => setPicked(null)} /> : null}
     </section>
   );
   return (
-    <div className="rpl" data-compact={compact ? "" : undefined}>
-      {lane("change", model.change, <LaneHead title="Every change" l={model.change} live={model.change.inFlight ? `${model.change.inFlight} in flight` : null} />)}
-      <MainRail model={model} teamId={teamId} compact={compact} />
-      {lane("release", model.release, <LaneHead title="Every release" l={model.release} live={model.release.run ? "going out" : null} outside={model.release.outside} />, model.release.run)}
+    <div className="rpl">
+      {lane("change", model.change, <LaneHead title="Every change" l={model.change} live={model.change.inFlight ? `${model.change.inFlight} in flight` : null} edit />)}
+      <MainRail model={model} teamId={teamId} />
+      {lane("release", model.release, <LaneHead title="Every release" l={model.release} live={model.release.run ? "going out" : null} outside={model.release.outside} stuck={model.release.stuck} teamId={teamId} />, model.release.run)}
     </div>
   );
 });
 
-function LaneHead({ title, l, live, outside = null }: { title: string; l: PipelineLane; live: string | null; outside?: string | null }) {
+function LaneHead({ title, l, live, outside = null, stuck = null, edit = false, teamId = null }: { title: string; l: PipelineLane; live: string | null; outside?: string | null; stuck?: PipelineModel["release"]["stuck"]; edit?: boolean; teamId?: string | null }) {
   return (
     <header className="rpl-lane-head">
       <span className="rpl-lane-title">{title}</span>
@@ -55,14 +64,17 @@ function LaneHead({ title, l, live, outside = null }: { title: string; l: Pipeli
       <span className="rpl-lane-fact" data-tone={l.own ? "own" : undefined}>{l.flow.base === null ? "this repo's own" : l.own ? `${l.own} own · ${l.inherited} inherited` : "all inherited"}</span>
       {l.flow.removed.length ? <span className="rpl-lane-fact">skips {l.flow.removed.join(", ")}</span> : null}
       {l.shared ? <span className="rpl-lane-fact" title={`${l.shared.outcome}: ${routeTail(l.shared)}`}>a failing step → {l.shared.leadsTo ?? l.shared.outcome}</span> : null}
-      {live && !outside ? <span className="rpl-lane-live">{live}</span> : null}
-      {outside ? <span className="rpl-lane-outside">going out {outside} · steps not tracked</span> : null}
+      {stuck ? <span className="rpl-lane-stuck"><Link href={deployHref(teamId, stuck.deploy)}>{stuck.deploy}</Link> stuck {spanWords(stuck.for)}{stuck.outside ? " · sent outside codecast, never reported live" : ""}</span>
+        : outside ? <span className="rpl-lane-outside">going out {outside} · steps not tracked</span>
+        : live ? <span className="rpl-lane-live">{live}</span> : null}
+      {/* ct-98678 puts Edit on each station; until then a change to this flow is a sentence in a conversation. */}
+      {edit ? <span className="rpl-lane-edit">change it in a conversation: <code>cast flow edit {l.flow.slug}</code></span> : null}
     </header>
   );
 }
 
 /** Main: each target with what waits for it, what is going out and what is live there. */
-function MainRail({ model, teamId, compact }: { model: PipelineModel; teamId: string | null; compact: boolean }) {
+function MainRail({ model, teamId }: { model: PipelineModel; teamId: string | null }) {
   const now = useCoarseNow(60_000);
   const deploysAt = (t: string) => `/deploys?${teamId ? `team=${teamId}&` : ""}target=${encodeURIComponent(t)}`;
   return (
@@ -75,19 +87,21 @@ function MainRail({ model, teamId, compact }: { model: PipelineModel; teamId: st
               <i className="rpl-dot" aria-hidden />
               <span className="rpl-target-name">{t.name}</span>
               <span className="rpl-target-state">
-                {t.going ? <>going out{t.going.step ? ` · ${t.going.step}` : ""}{t.going.outside ? " · steps not tracked" : ""}</>
+                {t.going?.stuck ? <>{t.going.deploy} stuck {spanWords(t.going.stuck)} · {t.going.outside ? "sent outside codecast, never reported live" : "never went live"}</>
+                  : t.going ? <>going out{t.going.step ? ` · ${t.going.step}` : ""}{t.going.outside ? " · steps not tracked" : ""}</>
                   : t.tone === "waiting" ? <><b className="lw-num">{t.waiting}</b> waiting</>
                   : TONE_WORDS[t.tone]}
               </span>
             </Link>
-            {!compact ? (
+            {(
               <span className="rpl-target-facts">
-                {t.going ? <EntityIdPill shortId={t.going.deploy} /> : t.failed ? <EntityIdPill shortId={t.failed.deploy} /> : null}
+                {t.going && !t.going.stuck ? <DeployRef teamId={teamId} deploy={t.going.deploy} /> : t.failed ? <DeployRef teamId={teamId} deploy={t.failed.deploy} /> : null}
+                {t.going && t.waiting ? <span className="rpl-target-how"><b className="lw-num">{t.waiting}</b> waiting</span> : null}
                 {t.live ? <span className="rpl-target-live">live {t.live.version ? `${t.live.version} · ` : ""}{agoWords(t.live.at, now)}</span> : null}
                 <span className="rpl-target-how">{t.runs === "push" ? "builds on push" : POLICY_WORDS[t.policy]}</span>
                 {t.groups.length ? <Waiting groups={t.groups} /> : null}
               </span>
-            ) : null}
+            )}
           </li>
         ))}
         {!model.main.targets.length ? <li className="rpl-target" data-tone="unknown"><span className="rpl-target-state">no targets declared</span></li> : null}
@@ -134,7 +148,7 @@ function StationPanel({ lane, l, model, pipeline, pick, run, onClose }: { lane: 
           <StationEditSlot />
         </div>
       ) : null}
-      {station?.varies && station.targets?.length ? (
+      {lane === "release" && station?.targets?.length ? (
         <ul className="rpl-cmds" aria-label="Command by target">
           {station.targets.map((t) => (
             <li key={t.name} className="rpl-cmd"><span className="rpl-cmd-target">{t.name}</span>{t.runs ? <code className="rpl-cmd-text">{t.runs}</code> : <span className="rpl-cmd-none">no command · passes</span>}</li>
@@ -162,4 +176,50 @@ function StationPanel({ lane, l, model, pipeline, pick, run, onClose }: { lane: 
 /** The Edit slot ct-98678 fills: nothing until an edit can be drafted from here. */
 function StationEditSlot() {
   return null;
+}
+
+/** A pipeline as a compact strip (the list's card): each lane its passing path as named steps, main its targets.
+ *  Narrower than a strip reads (the card under 440px), each lane folds to one line of figures. */
+function PipelineStrip({ model }: { model: PipelineModel }) {
+  return (
+    <div className="rpl-strip">
+      <StripLane title="Every change" l={model.change} live={model.change.inFlight ? `${model.change.inFlight} in flight` : null} />
+      <div className="rpl-strip-row" data-row="main">
+        <span className="rpl-strip-title">main</span>
+        <span className="rpl-strip-path">
+          {model.main.targets.map((t) => (
+            <span key={t.name} className="rpl-strip-target" data-tone={t.tone}>
+              <i className="rpl-dot" aria-hidden />{t.name}
+              <span className="rpl-strip-state">{t.going?.stuck ? `stuck ${spanWords(t.going.stuck)}` : t.going ? "going out" : t.tone === "waiting" ? `${t.waiting} waiting` : TONE_WORDS[t.tone]}</span>
+            </span>
+          ))}
+        </span>
+      </div>
+      <StripLane title="Every release" l={model.release} bad={!!model.release.stuck} live={model.release.stuck ? `${model.release.stuck.deploy} stuck ${spanWords(model.release.stuck.for)}` : model.release.run || model.release.outside ? "going out" : null} />
+    </div>
+  );
+}
+
+function StripLane({ title, l, live, bad = false }: { title: string; l: PipelineLane; live: string | null; bad?: boolean }) {
+  const steps = l.diagram.steps;
+  return (
+    <div className="rpl-strip-row">
+      <span className="rpl-strip-title">{title}</span>
+      <ol className="rpl-strip-path">
+        {steps.map((st) => {
+          const mark = l.marks[st.id];
+          // A fan-out reads as its branches side by side, each by its own name.
+          const name = st.kind === "parallel" && st.inner.length ? st.inner.map((x) => x.label).join(" + ") : st.label;
+          const here = mark?.here ?? 0;
+          return (
+            <li key={st.id} className="rpl-strip-step" data-passes={mark?.passes ? "" : undefined} data-here={here ? "" : undefined} title={mark?.hereNames?.join("\n")}>
+              {name}{here ? <b className="rpl-strip-here">{here} here</b> : null}
+            </li>
+          );
+        })}
+      </ol>
+      <span className="rpl-strip-sum">{steps.length} steps{live ? ` · ${live}` : ""}</span>
+      {live ? <span className="rpl-strip-live" data-tone={bad ? "bad" : undefined}>{live}</span> : null}
+    </div>
+  );
 }

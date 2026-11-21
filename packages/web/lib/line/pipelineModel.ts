@@ -46,12 +46,14 @@ export type MainTarget = {
   policy: PipelineTarget["policy"];
   /** `push`: it builds itself when main moves; `here`: a command sends it. */
   runs: PipelineTarget["runs"];
-  tone: TargetTone;
+  /** `stuck`: a deploy has sat open too long without going live (STUCK_*_MS). */
+  tone: TargetTone | "stuck";
   /** Commits on main not live there yet, and whose sessions wrote them. */
   waiting: number;
   groups: QueueGroup[];
   live: { deploy: string; version: string | null; at: number } | null;
-  going: { deploy: string; step: string | null; outside: boolean } | null;
+  /** `stuck`: how long it has been open without going live, when that is too long. */
+  going: { deploy: string; step: string | null; outside: boolean; stuck: number | null } | null;
   failed: { deploy: string } | null;
 };
 
@@ -67,6 +69,8 @@ export type PipelineModel = {
     /** A deploy going out whose steps this flow did not follow, in words ("by GitHub", "outside this flow"). */
     outside: string | null;
     targets: PipelineTarget[];
+    /** An open deploy that has sat too long without going live; `outside`: it reported no steps. */
+    stuck: { deploy: string; for: number; outside: boolean } | null;
   };
 };
 
@@ -92,7 +96,7 @@ export function whenWords(when: readonly string[] | undefined): string | null {
   return when.length > 1 ? `${when[0]} +${when.length - 1}` : when[0];
 }
 
-function markOf(s: PipelineStation, here: number, release: boolean): StepMark {
+function markOf(s: PipelineStation, here: readonly string[], release: boolean): StepMark {
   return {
     own: s.own === "inherited" ? null : s.own,
     ...(s.changed?.length ? { changed: s.changed } : {}),
@@ -101,31 +105,31 @@ function markOf(s: PipelineStation, here: number, release: boolean): StepMark {
     ...(release && s.runs === null ? { passes: true } : {}),
     ...(s.varies ? { varies: true } : {}),
     ...(s.waits ? { waits: true } : {}),
-    ...(here ? { here } : {}),
+    ...(here.length ? { here: here.length, hereNames: [...here] } : {}),
   };
 }
 
-function lane(flow: PipelineFlow, here: Map<string, number>, release: boolean): PipelineLane {
+function lane(flow: PipelineFlow, here: Map<string, string[]>, release: boolean): PipelineLane {
   const drawn = drawnFlow(flow);
   const { diagram, shared } = sharedRoutes(flowDiagram(drawn));
   // A station off the passing path (a fix, a brief) is not drawn: what stands there counts on the step whose route leads to it.
   const drawnIds = new Set(diagram.steps.flatMap((st) => [st.id, ...st.inner.map((x) => x.id)]));
-  const on = new Map<string, number>();
-  for (const [id, n] of here) {
+  const on = new Map<string, string[]>();
+  for (const [id, names] of here) {
     const from = drawnIds.has(id) ? id : diagram.steps.flatMap((st) => [st, ...st.inner]).find((st) => st.side.some((r) => r.toId === id))?.id;
-    if (from) on.set(from, (on.get(from) ?? 0) + n);
+    if (from) on.set(from, [...(on.get(from) ?? []), ...names]);
   }
   // A frame drawn folded counts what stands on the steps inside it.
   const counts = new Map(on);
   for (const st of diagram.steps) {
-    const inside = st.inner.reduce((n, x) => n + (on.get(x.id) ?? 0), 0);
-    if (inside && !st.inner.some((x) => x.id === st.id)) counts.set(st.id, (on.get(st.id) ?? 0) + inside);
+    const inside = st.inner.flatMap((x) => on.get(x.id) ?? []);
+    if (inside.length && !st.inner.some((x) => x.id === st.id)) counts.set(st.id, [...(on.get(st.id) ?? []), ...inside]);
   }
   // A flow the repo wrote whole is all its own: the lane says so once, and no step is singled out.
   const whole = flow.base === null;
   const marks: Record<string, StepMark> = {};
   for (const s of flow.stations) {
-    const m = markOf(s, counts.get(s.id) ?? 0, release);
+    const m = markOf(s, counts.get(s.id) ?? [], release);
     marks[s.id] = whole ? { ...m, own: null } : m;
   }
   const own = flow.stations.filter((s) => s.own !== "inherited").length;
@@ -149,16 +153,31 @@ export function sharedRoutes(model: FlowDiagramModel): { diagram: FlowDiagramMod
   return { diagram: { ...model, steps: model.steps.map(strip) }, shared: top.route };
 }
 
-/** How many live runs stand on each station of a flow (a segment's steps count on the segment). */
-export function changesHere(flow: PipelineFlow, runs: readonly PipelineRun[]): Map<string, number> {
+/** The changes standing on each station of a flow now, by what each is (a segment's steps count on the segment). */
+export function changesHere(flow: PipelineFlow, runs: readonly PipelineRun[]): Map<string, string[]> {
   const ids = new Set(flow.stations.map((s) => s.id));
-  const out = new Map<string, number>();
+  const out = new Map<string, string[]>();
   for (const r of runs) {
     if (!LIVE.has(r.status) || !r.current_node_id) continue;
     const at = ids.has(r.current_node_id) ? r.current_node_id : segmentTopOf(r.current_node_id);
-    if (ids.has(at)) out.set(at, (out.get(at) ?? 0) + 1);
+    if (ids.has(at)) out.set(at, [...(out.get(at) ?? []), r.task_title || r.task_short_id || "a change"]);
   }
   return out;
+}
+
+/** A deploy open this long with nothing reported: stuck, not going out. One with steps reporting gets the length of a
+ *  slow gate (hours) before it is called stuck. */
+const STUCK_SILENT_MS = 2 * 3600_000;
+const STUCK_REPORTING_MS = 8 * 3600_000;
+
+/** A stretch of time in a glance: "45m", "3h", "1d 16h". */
+export function spanWords(ms: number): string {
+  const m = Math.max(0, Math.round(ms / 60_000));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  return h % 24 ? `${d}d ${h % 24}h` : `${d}d`;
 }
 
 /** The step of a deploy going out, by its label. */
@@ -168,7 +187,13 @@ const stepLabel = (id: string | null | undefined) => (id ? LINE_DEPLOY_STEP_LABE
  * The pipeline with what is on it now. `runs` are the workspace's runs (this repo's change runs are picked out);
  * `targets` and `deploys` are the team's (this repo's are picked out).
  */
-export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], targets: readonly DeployTargetRow[] = [], deploys: readonly TeamDeployRow[] = []): PipelineModel {
+export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], targets: readonly DeployTargetRow[] = [], deploys: readonly TeamDeployRow[] = [], now: number = 0): PipelineModel {
+  /** An open deploy that has sat too long without going live, and for how long; null while it is still moving. */
+  const stuckFor = (d: TeamDeployRow | null) => {
+    if (!d || !now) return null;
+    const open = now - d.created_at;
+    return open > (d.steps?.length ? STUCK_REPORTING_MS : STUCK_SILENT_MS) ? open : null;
+  };
   const repo = p.repository.toLowerCase();
   const changeRuns = runs.filter((r) => (r.workflow_slug ?? r.workflow_name) === p.change.slug && runInRepo(r, repo));
   const change = lane(p.change, changesHere(p.change, changeRuns), false);
@@ -177,19 +202,20 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
   const mine = targets.filter((t) => t.repository.toLowerCase() === repo);
   const mainTargets: MainTarget[] = p.release.targets.map((cfg) => {
     const row = mine.find((t) => t.name === cfg.name);
-    const now = targetNow({ name: cfg.name, repository: row?.repository ?? p.repository }, deploys.filter((d) => !d.repository || d.repository.toLowerCase() === repo));
-    const running = now.open?.steps?.find((s) => s.status === "running") ?? null;
+    const at = targetNow({ name: cfg.name, repository: row?.repository ?? p.repository }, deploys.filter((d) => !d.repository || d.repository.toLowerCase() === repo));
+    const running = at.open?.steps?.find((s) => s.status === "running") ?? null;
+    const stuck = stuckFor(at.open);
     return {
       name: cfg.name,
       policy: cfg.policy,
       runs: cfg.runs,
-      tone: row ? targetTone(row, now) : now.open ? "going" : now.failed ? "failed" : "unknown",
+      tone: stuck ? "stuck" : row ? targetTone(row, at) : at.open ? "going" : at.failed ? "failed" : "unknown",
       waiting: row?.queue.known ? row.queue.commits : 0,
       groups: row?.queue.groups ?? [],
       // A version that is only a commit hash says nothing a person reads: the age says it.
-      live: now.live ? { deploy: now.live.short_id, version: now.live.version && !/^[0-9a-f]{7,40}$/i.test(now.live.version) ? now.live.version : null, at: now.live.live_at ?? now.live.created_at } : null,
-      going: now.open ? { deploy: now.open.short_id, step: stepLabel(running?.id), outside: !now.open.steps?.length } : null,
-      failed: now.failed ? { deploy: now.failed.short_id } : null,
+      live: at.live ? { deploy: at.live.short_id, version: at.live.version && !/^[0-9a-f]{7,40}$/i.test(at.live.version) ? at.live.version : null, at: at.live.live_at ?? at.live.created_at } : null,
+      going: at.open ? { deploy: at.open.short_id, step: stepLabel(running?.id), outside: !at.open.steps?.length, stuck } : null,
+      failed: at.failed ? { deploy: at.failed.short_id } : null,
     };
   });
 
@@ -199,8 +225,11 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
   const run = open && steps.length
     ? { status: "running", current_node_id: steps.find((s) => s.status === "running")?.id ?? null, node_statuses: steps.filter((s) => s.status !== "pending").map((s) => ({ node_id: s.id, status: s.status })) }
     : null;
-  const here = new Map<string, number>();
-  if (run?.current_node_id) here.set(run.current_node_id, 1);
+  // A stuck deploy is what the lane says, whichever deploy opened last.
+  const stuckOpen = deploys.filter((d) => isOpen(d) && (!d.repository || d.repository.toLowerCase() === repo) && p.release.targets.some((t) => t.name === d.target) && stuckFor(d))
+    .map((d) => ({ deploy: d.short_id, for: stuckFor(d)!, outside: !d.steps?.length }))[0] ?? null;
+  const here = new Map<string, string[]>();
+  if (run?.current_node_id) here.set(run.current_node_id, [open!.short_id]);
   const release = lane(p.release, here, true);
 
   return {
@@ -208,7 +237,7 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
     name: repoName(p.repository),
     change: { ...change, inFlight: live.length, runs: changeRuns },
     main: { targets: mainTargets, waiting: Math.max(0, ...mainTargets.map((t) => t.waiting)) },
-    release: { ...release, run, outside: open && !steps.length ? outsideWords(open) : null, targets: p.release.targets },
+    release: { ...release, run, outside: open && !steps.length ? outsideWords(open) : null, stuck: stuckOpen, targets: p.release.targets },
   };
 }
 
@@ -235,7 +264,8 @@ export function stationRuns(runs: readonly PipelineRun[], id: string, limit = 5)
 export function laneStationDetails(flow: PipelineFlow): Record<string, { prompt?: string; guide?: string; script?: string; agent?: string; model?: string }> {
   const out: Record<string, { prompt?: string; guide?: string; script?: string; agent?: string; model?: string }> = {};
   for (const s of flow.stations) {
-    const d = { ...(s.prompt ? { prompt: s.prompt } : {}), ...(s.guide ? { guide: s.guide } : {}), ...(s.runs ? { script: s.runs } : {}), ...(s.agent ? { agent: s.agent } : {}), ...(s.model ? { model: s.model } : {}) };
+    // A release step with a command per target says each one in the panel's own list, never as one script.
+    const d = { ...(s.prompt ? { prompt: s.prompt } : {}), ...(s.guide ? { guide: s.guide } : {}), ...(s.runs && !s.targets?.length ? { script: s.runs } : {}), ...(s.agent ? { agent: s.agent } : {}), ...(s.model ? { model: s.model } : {}) };
     if (!Object.keys(d).length) continue;
     out[s.id] = d;
     const inner = flow.graph.nodes.filter((n) => n.id !== s.id && segmentTopOf(n.id) === s.id && n.type !== "exit" && !n.segment_exit);
