@@ -134,6 +134,8 @@ Configure it in .codecast/workspace.toml:
   check = "cast check"     # run in the checkout before anything leaves; "" skips
   tests = true             # also run the test files the ship changes
   level = true             # the daemon keeps this checkout level with upstream
+  flow = "change"          # run each pass through this flow instead (cast flow run change --checkout);
+                           # "default" names the workspace's default flow
 
   [[ship.deploy]]
   name = "convex"
