@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { attributeEdits } from "./attribute.js";
 import { sweepOne } from "./levelSweep.js";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
@@ -71,12 +72,14 @@ function world(attributed: boolean) {
   const gitDir = sh(shared, "rev-parse", "--absolute-git-dir");
   const sent: Array<{ to: string; body: string }> = [];
   const send = async (to: string, body: string) => { sent.push({ to, body }); return true; };
-  return { shared, gitDir, upstream, sent, sweep: () => sweepOne(shared, { send }) };
+  const attributions: string[][] = [];
+  const attribute = (r: string, paths: string[], opts: { since: number }) => { attributions.push([...paths]); return attributeEdits(r, paths, opts); };
+  return { shared, gitDir, upstream, sent, attributions, sweep: () => sweepOne(shared, { send, attribute }) };
 }
 
 describe("a level conflict reaches its writer", () => {
-  test("briefed once per upstream sha, with the merge on disk; levelled and forgotten once the file carries upstream's change", async () => {
-    const { shared, gitDir, upstream, sent, sweep } = world(true);
+  test("briefed once per upstream content of the file, with the merge on disk; levelled and forgotten once the file carries upstream's change", async () => {
+    const { shared, gitDir, upstream, sent, attributions, sweep } = world(true);
     upstream("a.txt", A.replace("one", "theirs"), "Rename the first line");
     const head = sh(shared, "rev-parse", "HEAD");
     const subject = sh(shared, "log", "-1", "--format=%h %s", "origin/main");
@@ -98,21 +101,34 @@ describe("a level conflict reaches its writer", () => {
     expect(merged).toContain("theirs");
     expect(merged).toContain(">>>>>>>");
 
+    expect(attributions).toEqual([["a.txt"]]);
+
     const second = await sweep();
-    expect(second).toContain("already briefed");
+    expect(second).toContain(`already briefed ${CONV.slice(0, 7)} (a.txt)`);
     expect(sent).toHaveLength(1);
 
+    // A busy main: a commit that leaves the file alone sends nothing and attributes nothing.
     upstream("c.txt", "c\n", "Add c");
-    await sweep();
+    expect(await sweep()).toContain("already briefed");
+    expect(sent).toHaveLength(1);
+    expect(attributions).toHaveLength(1);
+
+    // A commit that changes the file upstream briefs its writer again.
+    const upstreamA = A.replace("one", "theirs").replace("three", "THREE");
+    upstream("a.txt", upstreamA, "Shout the third line");
+    expect(await sweep()).toContain(`briefed ${CONV.slice(0, 7)} (a.txt)`);
     expect(sent).toHaveLength(2);
-    expect(sent[1].body).toContain(sh(shared, "rev-parse", "--short=9", "origin/main"));
+    expect(sent[1].body).toContain(sh(shared, "log", "-1", "--format=%h %s", "origin/main"));
+    expect(fs.readFileSync(merge, "utf-8")).toContain("THREE");
+    expect(attributions).toHaveLength(2);
 
     // The writer brings upstream's change into its copy and keeps its own edit elsewhere.
-    write(shared, "a.txt", A.replace("one", "theirs").replace("five", "mine"));
+    const resolved = upstreamA.replace("five", "mine");
+    write(shared, "a.txt", resolved);
     const last = await sweep();
     expect(last).toContain("levelled");
     expect(sh(shared, "rev-parse", "HEAD")).toBe(sh(shared, "rev-parse", "origin/main"));
-    expect(fs.readFileSync(path.join(shared, "a.txt"), "utf-8")).toBe(A.replace("one", "theirs").replace("five", "mine"));
+    expect(fs.readFileSync(path.join(shared, "a.txt"), "utf-8")).toBe(resolved);
     expect(fs.readFileSync(path.join(shared, "b.txt"), "utf-8")).toBe("b edited\n");
     expect(fs.existsSync(path.join(gitDir, "codecast", "level-conflicts.json"))).toBe(false);
     expect(fs.existsSync(path.join(gitDir, "codecast", "level-conflicts"))).toBe(false);
@@ -120,11 +136,12 @@ describe("a level conflict reaches its writer", () => {
   }, 120_000);
 
   test("a conflict nobody's transcript explains sends nothing and is named in the log line", async () => {
-    const { gitDir, upstream, sent, sweep } = world(false);
+    const { upstream, sent, attributions, sweep } = world(false);
     upstream("a.txt", A.replace("one", "theirs"), "Rename the first line");
-    const line = await sweep();
-    expect(line).toContain("no writer for a.txt");
+    expect(await sweep()).toContain("no writer for a.txt");
     expect(sent).toHaveLength(0);
-    expect(JSON.parse(fs.readFileSync(path.join(gitDir, "codecast", "level-conflicts.json"), "utf-8")).unattributed).toEqual(["a.txt"]);
+    // Asked once per upstream content of the file, not every minute.
+    expect(await sweep()).toContain("no writer for a.txt");
+    expect(attributions).toEqual([["a.txt"]]);
   }, 60_000);
 });
