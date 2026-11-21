@@ -79,7 +79,7 @@ describe("the flow the edit builds", () => {
     const d = editDrawing(made("skip").edit)!;
     expect(d.diagram.steps.map((s) => s.label)).toEqual(["Check", "Lint", "Review", "Decide", "Land", "Deploy"]);
     expect(d.diagram.steps.find((s) => s.id === "decide")?.kind).toBe("person");
-    expect(d.marks.decide).toEqual({ own: null, skipped: true, proposed: "skipped" });
+    expect(d.marks.decide).toEqual({ own: null, skipped: true, proposed: "proposed" });
     // Once live, it is no longer a proposal.
     expect(editDrawing(made("skip").edit, { live: true })!.marks.decide).toEqual({ own: null, skipped: true });
   });

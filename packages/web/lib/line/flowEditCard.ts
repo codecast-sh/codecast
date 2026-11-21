@@ -12,8 +12,8 @@ import type { ShippedFlow } from "./flowPool";
 import { whenWords } from "./pipelineModel";
 import { stripAnsi } from "./flowCommandOutput";
 
-/** A step's mark on the edit card. `skipped` and `proposed` draw a station this edit takes off the path as a ghost. */
-export type EditMark = StepMark & { skipped?: true; proposed?: string };
+/** A step's mark on the edit card: a station this edit takes off the path is `skipped`, `proposed` until it is live. */
+export type EditMark = StepMark;
 
 export type EditDrawing = { flow: ShippedFlow; diagram: FlowDiagramModel; marks: Record<string, EditMark> };
 
@@ -88,7 +88,7 @@ function marksOf(edit: FlowEdit, diagram: FlowDiagramModel, live: boolean): Reco
   for (const c of edit.changes) {
     if (c.op === "add") mark(c.station, { own: "added" });
     else if (c.op === "when") mark(c.station, { own: "changed", ...(whenWords(c.paths) ? { when: whenWords(c.paths)! } : {}), changed: ["when"] });
-    else if (c.op === "skip" || (c.op === "undo" && c.added)) mark(c.station, { own: null, skipped: true, ...(live ? {} : { proposed: c.op === "skip" ? "skipped" : "taken out" }) });
+    else if (c.op === "skip" || (c.op === "undo" && c.added)) mark(c.station, { own: null, skipped: true, ...(live ? {} : { proposed: "proposed" }) });
     else if (WHAT[c.op]) mark(c.station, { own: "changed", changed: [WHAT[c.op]!] });
   }
   return marks;

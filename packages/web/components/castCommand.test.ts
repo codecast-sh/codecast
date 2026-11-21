@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs, isDecideCastCommand, extractVaultArgs, vaultShortIdIn, isVaultRequestCastCommand, sayTextOf } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs, isDecideCastCommand, extractVaultArgs, vaultShortIdIn, isVaultRequestCastCommand, isFlowObjectCastCommand, sayTextOf } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -1008,5 +1008,16 @@ describe("sayTextOf", () => {
     expect(say("cast say")).toBeNull();
     expect(say("cast say -")).toBeNull();
     expect(say(`cast send jx7abcd "hi"`)).toBeNull();
+  });
+});
+
+describe("isFlowObjectCastCommand", () => {
+  test("an edit and a pipeline draw their objects, so they stay out of a folded receipt; a library flow by name is a receipt", () => {
+    const is = (cmd: string) => isFlowObjectCastCommand(parseCastCommandString(cmd));
+    expect(is(`cd /tmp/app && cast flow edit change add lint --after check --run "bun run lint"`)).toBe(true);
+    expect(is("cast flow pipeline")).toBe(true);
+    expect(is("cast flow run change")).toBe(true);
+    expect(is("cast flow show change")).toBe(false);
+    expect(is("cast flow ls")).toBe(false);
   });
 });

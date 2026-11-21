@@ -205,7 +205,7 @@ export function FlowEditCard({ edit, diff = null, dryRun = false }: { edit: Flow
   const dp = journey && 'line' in journey.now ? liveDeploy(journey.now.line) : null;
   const stateColor = !run ? Theme.textMuted : live ? Theme.green : ship?.tone === 'bad' ? Theme.red : ship?.tone === 'you' || ship?.tone === 'wait' ? Theme.yellow : Theme.blue;
   const sign = (l: string) => (l.startsWith('+ ') ? ['+', Theme.green] : l.startsWith('~ ') ? ['~', Theme.cyan] : l.startsWith('- ') ? ['−', Theme.red] : ['·', Theme.textMuted]) as [string, string];
-  const markWords = (m: EditMark | undefined) => (m ? [m.skipped ? (m.proposed ?? 'skipped') : m.own === 'added' ? 'added' : m.own === 'changed' ? (m.changed?.filter((c) => c !== 'when').join(', ') || 'changed') : null, m.when ?? null].filter(Boolean).join(' · ') : '');
+  const markWords = (m: EditMark | undefined) => (m ? [m.skipped ? 'skipped' : m.own === 'added' ? 'added' : m.own === 'changed' ? (m.changed?.filter((c) => c !== 'when').join(', ') || 'changed') : null, m.when ?? null].filter(Boolean).join(' · ') : '');
   return (
     <RNView style={[styles.card, { borderColor: Theme.border, backgroundColor: Theme.bgAlt }]}>
       <RNView style={styles.head}>
