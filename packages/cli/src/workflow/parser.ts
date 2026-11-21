@@ -527,6 +527,9 @@ function inherit(base: RawGraph, child: RawGraph, baseFile: string, here: string
     files: [...(path.isAbsolute(baseFile) ? [baseFile] : []), ...base.files],
     fills: new Map([...(base.fills ?? [])].filter(([id]) => !removed.has(id)).concat([...(child.fills ?? [])])),
     overrides,
+    // What the base gated or took off stays so down a chain; edits are this file's own (cast flow show reads them against its base).
+    pruned: base.pruned,
+    gated: base.gated,
   };
   return variantEdits(merged, own, child.nodes, new Set(base.nodes.keys()), path.basename(baseFile).replace(/\.cast$/, "").replace(/^flow:/, ""), here);
 }
@@ -746,7 +749,7 @@ function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr>>, wri
   }
 
   for (const a of nodes.values()) for (const k of VARIANT_KEYS) if (k !== "guide") delete a[k];
-  for (const id of pruned) delete gated[id];
+  for (const id of Object.keys(gated)) if (pruned.includes(id) || !nodes.has(id)) delete gated[id];
   return { ...raw, nodes, edges, fills, overrides, edits, pruned: [...(raw.pruned ?? []), ...pruned], gated };
 }
 

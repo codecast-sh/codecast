@@ -334,3 +334,16 @@ test("a variant that skips a station its base guided drops the guidance with it"
   expect(validateWorkflow(g)).toEqual([]);
   expect(g.nodes.has("decide__decide")).toBe(false);
 });
+
+test("a variant of a variant keeps what the middle file gated and skipped; its edits are its own", () => {
+  const read = files({
+    "/r/.codecast/flows/house.cast": `digraph house {\n  graph [extends="change"]\n  e2e [after="check", label="E2E", when="docs/", shape=parallelogram, script="bun run e2e"]\n  decide [skip=true]\n}`,
+    "/r/.codecast/flows/outer.cast": `digraph outer {\n  graph [extends="house.cast"]\n  e2e [script="bun run e2e --ci"]\n}`,
+  });
+  const g = parseWorkflowFile("/r/.codecast/flows/outer.cast", { read });
+  expect(validateWorkflow(g)).toEqual([]);
+  expect(g.gated).toEqual({ e2e: ["docs/"] });
+  expect(g.pruned).toEqual(["decide", "revise", "dropped"]);
+  expect(g.edits ?? []).toEqual([]);
+  expect(g.nodes.get("e2e")!.script).toBe("bun run e2e --ci");
+});
