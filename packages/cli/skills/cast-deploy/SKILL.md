@@ -49,6 +49,8 @@ Save the edited plan to the file the dry run printed.
 
 `cast ship checkout --plan` commits each group, replays onto origin, runs the repository's check and changed tests, deploys what must precede the push, pushes, and deploys the rest, as the repository's `[ship]` table says.
 
+When the `[ship]` table names a `flow`, `cast ship checkout` (without `--plan` or steering flags) runs the whole pass through that flow instead: the flow commits it per session, checks, lands and deploys it, and sends each finding to the session that wrote the failing files. Follow the run it prints rather than pushing yourself.
+
 Ship through the checkout. If `cast ship checkout` cannot replay, level the checkout and run it again rather than building commits somewhere else; if you did commit from another worktree, level the checkout onto what you pushed before going on. After every push, the checkout is level with the pushed head.
 
 When it stops, fix the cause and run again. A type error or failing test in shipped work is fixed forward in place, the smallest change that makes it correct; never hold the file to get past it, and never skip the check. A conflict with upstream is merged keeping both sides. When a changed behaviour makes an old test stale, update the test to the intended behaviour. CI red on the default branch after the push blocks everyone: fix forward at once.
