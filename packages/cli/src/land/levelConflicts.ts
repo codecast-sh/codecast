@@ -18,7 +18,8 @@
  * and sends nothing. Upstream changing the file briefs again; a change on disk
  * attributes again and briefs only a new writer. A path with no writer, or a
  * brief that failed, is tried again after RETRY_MS; a writer the server will
- * never deliver to (a teammate's session) only when either blob changes. A clean level (or
+ * never deliver to (a teammate's session) only when either blob or the owner
+ * changes. A clean level (or
  * a checkout found already level) clears the record and the merge files.
  *
  * The brief is a machine wake (origin "scheduler"), never a person's message:
@@ -42,6 +43,17 @@ import { worktreeBlobs, type LevelResult } from "./level.js";
  */
 export type SendBrief = (to: string, body: string, clientId: string) => Promise<"sent" | "failed" | "unreachable">;
 
+/**
+ * A send that threw: "unreachable" when the server refused because the
+ * conversation is not the token user's (pendingMessages.sendMessageToSession),
+ * which no retry changes; "failed" for anything transient (a timeout, a 5xx,
+ * the network).
+ */
+export function classifySendError(e: unknown): "failed" | "unreachable" {
+  const text = String((e as Error)?.message ?? e);
+  return /can only send messages to your own conversations/.test(text) ? "unreachable" : "failed";
+}
+
 export interface BriefDeps {
   /** Absent when this machine cannot reach the server: then nothing is attributed or briefed. */
   send?: SendBrief;
@@ -58,7 +70,7 @@ interface PathState {
   owner: string | null;
   /** The owner has this brief (for this `up`). */
   briefed: boolean;
-  /** The server refuses to deliver to the owner; tried again only when `up` or `local` changes. */
+  /** The server refuses to deliver to the owner; tried again only when `up`, `local` or the owner changes. */
   unreachable?: boolean;
   /** When attribution or the send was last tried. */
   at: number;
@@ -243,7 +255,8 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
     const up = ups.get(p)!.blob;
     const local = locals.get(p) ?? "missing";
     const sameUp = prev?.up === up;
-    if (prev?.unreachable) { if (sameUp && prev.local === local) record.paths[p] = prev; else fresh.push(p); }
+    // Unreachable: the blobs are checked every sweep, the owner (which takes attribution) every RETRY_MS.
+    if (prev?.unreachable) { if (sameUp && prev.local === local && now - prev.at < RETRY_MS) record.paths[p] = prev; else fresh.push(p); }
     else if (prev && sameUp && !prev.briefed && now - prev.at < RETRY_MS) record.paths[p] = prev;
     else if (prev && sameUp && prev.briefed && prev.local === local) record.paths[p] = prev;
     else fresh.push(p);
@@ -261,6 +274,8 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
       if (!state.owner) continue;
       // The same writer, already told about this upstream content: only the disk moved.
       if (prev?.briefed && prev.up === state.up && prev.owner === state.owner) { record.paths[p] = { ...state, briefed: true, at: prev.at }; continue; }
+      // The same teammate's session behind the same blobs: the server would refuse again.
+      if (prev?.unreachable && prev.up === state.up && prev.local === state.local && prev.owner === state.owner) { record.paths[p] = { ...state, unreachable: true }; continue; }
       toBrief.set(state.owner, [...(toBrief.get(state.owner) ?? []), p]);
     }
   }
