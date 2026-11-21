@@ -75,8 +75,8 @@ function world(attributed = false) {
   };
   const gitDir = sh(shared, "rev-parse", "--absolute-git-dir");
   const sent: Array<{ to: string; body: string; clientId: string }> = [];
-  let accept = true;
-  const send = async (to: string, body: string, clientId: string) => { sent.push({ to, body, clientId }); return accept; };
+  let reply: "sent" | "failed" | "unreachable" = "sent";
+  const send = async (to: string, body: string, clientId: string) => { sent.push({ to, body, clientId }); return reply; };
   const attributions: string[][] = [];
   /** Who wrote each path, for the faked attribution; real attribution when `real`. */
   const writers = new Map<string, string>();
@@ -88,7 +88,8 @@ function world(attributed = false) {
   };
   return {
     shared, gitDir, upstream, sent, attributions, writers,
-    accept: (v: boolean) => { accept = v; },
+    accept: (v: boolean) => { reply = v ? "sent" : "failed"; },
+    reply: (v: typeof reply) => { reply = v; },
     useReal: (v: boolean) => { real = v; },
     sweep: (now?: number, over: Partial<BriefDeps> = {}) => sweepOne(shared, { send, attribute, ...(now ? { now } : {}), ...over }),
     deps: (now: number): BriefDeps => ({ send, attribute, now }),
@@ -194,6 +195,19 @@ describe("a level conflict reaches its writer", () => {
     expect(sent).toHaveLength(2);
     expect(sent[1].clientId).toBe(sent[0].clientId);
     expect(record(gitDir).paths["a.txt"].briefed).toBe(true);
+  }, 300_000);
+
+  test("a teammate's session the server will never deliver to is not asked again until the file changes", async () => {
+    const { shared, upstream, sent, writers, reply, sweep } = world();
+    writers.set("a.txt", OTHER);
+    upstream({ "a.txt": A.replace("one", "theirs") }, "Rename the first line");
+    reply("unreachable");
+    expect(await sweep(T)).toContain(`${OTHER.slice(0, 7)} is a teammate's session; brief not sent (a.txt)`);
+    expect(await sweep(T + RETRY_MS)).toContain(`${OTHER.slice(0, 7)} is a teammate's session; brief not sent (a.txt)`);
+    expect(sent).toHaveLength(1);
+    write(shared, "a.txt", A.replace("one", "theirs, edited again"));
+    await sweep(T + RETRY_MS + 60_000);
+    expect(sent).toHaveLength(2);
   }, 300_000);
 
   test("a merge file that cannot be written still briefs, and the brief is recorded so it is not sent again", async () => {
