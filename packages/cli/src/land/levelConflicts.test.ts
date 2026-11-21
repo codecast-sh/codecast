@@ -6,7 +6,8 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { attributeEdits } from "./attribute.js";
+import { attributeEdits, type SessionEdits } from "./attribute.js";
+import { UNATTRIBUTED_RETRY_MS } from "./levelConflicts.js";
 import { sweepOne } from "./levelSweep.js";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
@@ -135,13 +136,30 @@ describe("a level conflict reaches its writer", () => {
     expect(sent).toHaveLength(2);
   }, 120_000);
 
-  test("a conflict nobody's transcript explains sends nothing and is named in the log line", async () => {
-    const { upstream, sent, attributions, sweep } = world(false);
+  test("a conflict nobody's transcript explains sends nothing, and is asked about again every 15 minutes until its writer turns up", async () => {
+    const { shared, upstream, sent } = world(false);
     upstream("a.txt", A.replace("one", "theirs"), "Rename the first line");
+    // The writer's transcript reaches the ledger late: attribution finds no one until `known` flips.
+    let known = false;
+    const asked: number[] = [];
+    let clock = Date.now();
+    const attribute = (_root: string, paths: string[]) => {
+      asked.push(clock);
+      return { owners: new Map(known ? paths.map((p) => [p, { conversationId: CONV } as SessionEdits]) : []) };
+    };
+    const send = async (to: string, body: string) => { sent.push({ to, body }); return true; };
+    const sweep = () => sweepOne(shared, { send, attribute, now: clock });
+
     expect(await sweep()).toContain("no writer for a.txt");
     expect(sent).toHaveLength(0);
-    // Asked once per upstream content of the file, not every minute.
+    clock += 60_000;
+    known = true;
     expect(await sweep()).toContain("no writer for a.txt");
-    expect(attributions).toEqual([["a.txt"]]);
-  }, 60_000);
+    expect(asked).toHaveLength(1);
+
+    clock += UNATTRIBUTED_RETRY_MS;
+    expect(await sweep()).toContain(`briefed ${CONV.slice(0, 7)} (a.txt)`);
+    expect(asked).toHaveLength(2);
+    expect(sent.map((m) => m.to)).toEqual([CONV]);
+  }, 120_000);
 });
