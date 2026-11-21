@@ -157,11 +157,35 @@ describe("cast role restart --fresh", () => {
     const { ctx, tables } = world();
     const role = await lead(ctx);
     const check = tables.agent_tasks.find((t) => t.originating_conversation_id === "mine" && t.schedule_type === "recurring" && String(t.role_id) === String(role._id))!;
-    check.status = "cancelled";
+    // A person's cancel (cast trigger cancel) completes the trigger.
+    check.status = "completed";
     await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
     const standing = await standingConversationOf(ctx, tables.org_roles[0]);
     const fresh = tables.agent_tasks.find((t) => String(t.originating_conversation_id) === String(standing._id) && t.title === check.title)!;
     expect(live(fresh)).toBe(false);
+  });
+
+  for (const [why, stop] of [["failed three slots", { status: "failed", failed_slots: 3 }], ["was cancelled with its killed session", { status: "completed", canceled_on_kill_at: NOW }]] as const) {
+    test(`a check that ${why} comes back armed, with its tuning`, async () => {
+      const { ctx, tables } = world();
+      const role = await lead(ctx);
+      const check = tables.agent_tasks.find((t) => t.originating_conversation_id === "mine" && t.schedule_type === "recurring" && String(t.role_id) === String(role._id))!;
+      Object.assign(check, stop, { interval_ms: 7_200_000, role_focus: "only CI" });
+      await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+      const standing = await standingConversationOf(ctx, tables.org_roles[0]);
+      const fresh = tables.agent_tasks.find((t) => String(t.originating_conversation_id) === String(standing._id) && t.title === check.title)!;
+      expect(fresh).toMatchObject({ status: "scheduled", interval_ms: 7_200_000, role_focus: "only CI" });
+    });
+  }
+
+  test("a check the person paused stays paused on the new seat", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    const check = tables.agent_tasks.find((t) => t.originating_conversation_id === "mine" && t.schedule_type === "recurring" && String(t.role_id) === String(role._id))!;
+    check.status = "paused";
+    await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+    const standing = await standingConversationOf(ctx, tables.org_roles[0]);
+    expect(tables.agent_tasks.find((t) => String(t.originating_conversation_id) === String(standing._id) && t.title === check.title)!.status).toBe("paused");
   });
 
   test("the old seat's Slack channels move to the new anchor", async () => {
@@ -188,6 +212,20 @@ describe("cast role restart --fresh", () => {
     expect(standing.owner_device_id).toBe("host-1");
   });
 
+  test("an old seat's machine that is offline is not named; routing picks a live one", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    const now = Date.now();
+    tables.devices.push(
+      { _id: "devices_old", user_id: ME, device_id: "old-1", last_seen: now - 7 * 86_400_000, local_project_roots: ["/repo"] },
+      { _id: "devices_live", user_id: ME, device_id: "live-1", last_seen: now, local_project_roots: ["/repo"] },
+    );
+    tables.conversations.find((c) => c._id === "mine")!.owner_device_id = "old-1";
+    await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+    const standing = await standingConversationOf(ctx, tables.org_roles[0]);
+    expect(standing.owner_device_id).toBe("live-1");
+  });
+
   test("a runner who left the team is named, with the move to run first", async () => {
     const { ctx, tables } = world();
     const role = await lead(ctx);
@@ -209,6 +247,18 @@ describe("cast role restart --fresh", () => {
     expect(tables.anchors.filter((a) => a.status !== "decommissioned")).toHaveLength(1);
   });
 
+  test("an old previous seat never makes a quiet new seat look like a second press", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    // A seat from months ago, and a current seat that has not spoken yet.
+    tables.org_roles[0].previous_standing_conversation_id = "projsess";
+    Object.assign(tables.conversations.find((c) => c._id === "mine")!, { message_count: 0, started_at: Date.now() });
+    const out = await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+    expect(out.already_fresh).toBeUndefined();
+    expect(String(out.conversation_id)).not.toBe("mine");
+    expect(String(tables.org_roles[0].previous_standing_conversation_id)).toBe("mine");
+  });
+
   test("the org history refuses to undo a fresh restart and changes nothing", async () => {
     const { ctx, tables } = world();
     // Each gesture is its own transaction, so its own history entry.
@@ -223,6 +273,8 @@ describe("cast role restart --fresh", () => {
     await expect(performUndo(fresh(), ME as any, { batch: String(row.batch) })).rejects.toThrow("cannot be undone");
     expect(JSON.stringify({ anchors: tables.anchors, roles: tables.org_roles })).toBe(before);
     expect(String((await standingConversationOf(ctx, tables.org_roles[0]))._id)).toBe(String(standing._id));
+    // Undoing the hire before it names the restart that depends on it.
+    await expect(performUndo(fresh(), ME as any, { batch: String(tables.org_changes[0].batch), with: [String(row.batch)] })).rejects.toThrow("a later fresh restart depends on it");
   });
 
   test("plain restart keeps the same standing session", async () => {
