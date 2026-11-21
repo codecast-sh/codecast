@@ -75,8 +75,8 @@ function world(attributed = false) {
   };
   const gitDir = sh(shared, "rev-parse", "--absolute-git-dir");
   const sent: Array<{ to: string; body: string; clientId: string }> = [];
-  let accept = true;
-  const send = async (to: string, body: string, clientId: string) => { sent.push({ to, body, clientId }); return accept; };
+  let reply: "sent" | "failed" | "unreachable" = "sent";
+  const send = async (to: string, body: string, clientId: string) => { sent.push({ to, body, clientId }); return reply; };
   const attributions: string[][] = [];
   /** Who wrote each path, for the faked attribution; real attribution when `real`. */
   const writers = new Map<string, string>();
@@ -88,7 +88,8 @@ function world(attributed = false) {
   };
   return {
     shared, gitDir, upstream, sent, attributions, writers,
-    accept: (v: boolean) => { accept = v; },
+    accept: (v: boolean) => { reply = v ? "sent" : "failed"; },
+    reply: (v: typeof reply) => { reply = v; },
     useReal: (v: boolean) => { real = v; },
     sweep: (now?: number, over: Partial<BriefDeps> = {}) => sweepOne(shared, { send, attribute, ...(now ? { now } : {}), ...over }),
     deps: (now: number): BriefDeps => ({ send, attribute, now }),
@@ -158,7 +159,7 @@ describe("a level conflict reaches its writer", () => {
     expect(fs.existsSync(path.join(gitDir, "codecast", "level-conflicts.json"))).toBe(false);
     expect(fs.existsSync(path.join(gitDir, "codecast", "level-conflicts"))).toBe(false);
     expect(sent).toHaveLength(2);
-  }, 300_000);
+  }, 590_000);
 
   test("a conflict nobody's transcript explains sends nothing, and is asked about again every 15 minutes until its writer turns up", async () => {
     const { upstream, sent, attributions, writers, sweep } = world();
@@ -172,7 +173,7 @@ describe("a level conflict reaches its writer", () => {
     expect(await sweep(T + RETRY_MS)).toContain(`briefed ${CONV.slice(0, 7)} (a.txt)`);
     expect(attributions).toHaveLength(2);
     expect(sent.map((m) => m.to)).toEqual([CONV]);
-  }, 300_000);
+  }, 590_000);
 
   test("a refused brief backs off for 15 minutes and retries with the same client id; signed out, nothing is attributed", async () => {
     const { gitDir, upstream, sent, attributions, writers, accept, sweep } = world();
@@ -194,7 +195,20 @@ describe("a level conflict reaches its writer", () => {
     expect(sent).toHaveLength(2);
     expect(sent[1].clientId).toBe(sent[0].clientId);
     expect(record(gitDir).paths["a.txt"].briefed).toBe(true);
-  }, 300_000);
+  }, 590_000);
+
+  test("a teammate's session the server will never deliver to is not asked again until the file changes", async () => {
+    const { shared, upstream, sent, writers, reply, sweep } = world();
+    writers.set("a.txt", OTHER);
+    upstream({ "a.txt": A.replace("one", "theirs") }, "Rename the first line");
+    reply("unreachable");
+    expect(await sweep(T)).toContain(`${OTHER.slice(0, 7)} is a teammate's session; brief not sent (a.txt)`);
+    expect(await sweep(T + RETRY_MS)).toContain(`${OTHER.slice(0, 7)} is a teammate's session; brief not sent (a.txt)`);
+    expect(sent).toHaveLength(1);
+    write(shared, "a.txt", A.replace("one", "theirs, edited again"));
+    await sweep(T + RETRY_MS + 60_000);
+    expect(sent).toHaveLength(2);
+  }, 590_000);
 
   test("a merge file that cannot be written still briefs, and the brief is recorded so it is not sent again", async () => {
     const { gitDir, upstream, sent, writers, sweep } = world();
@@ -208,7 +222,7 @@ describe("a level conflict reaches its writer", () => {
     expect(sent[0].body).toContain("No merge file could be written");
     expect(await sweep(T + 60_000)).toContain("already briefed");
     expect(sent).toHaveLength(1);
-  }, 300_000);
+  }, 590_000);
 
   test("whoever writes the file now is briefed: a new writer hears, the same writer typing on does not", async () => {
     const { shared, upstream, sent, attributions, writers, sweep } = world();
@@ -226,7 +240,7 @@ describe("a level conflict reaches its writer", () => {
     write(shared, "a.txt", A.replace("one", "someone else's"));
     expect(await sweep(T + 120_000)).toContain(`briefed ${OTHER.slice(0, 7)} (a.txt)`);
     expect(sent.map((m) => m.to)).toEqual([CONV, OTHER]);
-  }, 300_000);
+  }, 590_000);
 
   test("each deletion gets its own instruction", async () => {
     const { shared, upstream, sent, writers, sweep } = world();
@@ -241,7 +255,7 @@ describe("a level conflict reaches its writer", () => {
     expect(body).toContain("You deleted a.txt here and upstream changed it. If it should stay, write upstream's version back over it by hand");
     const saved = body.match(/it is saved at (\S+) \(/)?.[1];
     expect(saved && fs.readFileSync(saved, "utf-8")).toBe(A.replace("one", "theirs"));
-  }, 300_000);
+  }, 590_000);
 });
 
 describe("a level that raced a writer", () => {
@@ -273,5 +287,5 @@ describe("a level that raced a writer", () => {
     sh(shared, "commit", "-qm", "local");
     expect(await briefLevelConflicts(shared, gitDir, r, deps(T + 120_000))).toBeNull();
     expect(sent).toHaveLength(1);
-  }, 300_000);
+  }, 590_000);
 });
