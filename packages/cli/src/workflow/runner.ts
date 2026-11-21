@@ -31,7 +31,7 @@ import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { behindWords, frozenChangeContext } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
-import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
+import { checkoutChangeOf, failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { restoreRunTree } from "./runWorktree.js";
@@ -430,6 +430,10 @@ async function executeSessionNode(
 async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions): Promise<NodeOutcome> {
   const subject = subjectOf(context);
   const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
+  // A checkout's change: the finding goes to the writers of the files it names; one that names none goes on to the subject.
+  const checkout = checkoutChangeOf(context["run_dir"]);
+  const writers = checkout ? writersNamed(checkout, `${context["stop_reason"] ?? ""}\n${expandAgentPrompt(node.prompt ?? "", graph, context)}`) : [];
+  if (writers.length) return briefWriters(node, graph, context, cwd, options, writers);
   if (!subject) {
     context["last_error"] = `This run's change came from no session, so nobody can work on what the run found.${found}`;
     context["station_dead"] = node.id;
@@ -485,17 +489,63 @@ function lastSaid(state: WorkflowRunState): string | undefined {
   return undefined;
 }
 
-/** One send of the run to its subject, named so a second attempt (or a second runner) lands it once: the server keeps the first message under a client_id. */
+// A checkout's change names who wrote each file (flows.md FL4), so a station the subject would do goes to the writers
+// of the files the finding names: each gets the station's brief, quietly, with a line naming its own files among the
+// failing ones. The run waits until every one of them has worked and settled (the subject's wait, run for each at
+// once; one that never answers fails the station as a subject would), then freezes the checkout's change again. The
+// writers are other people's sessions in a shared checkout: nothing here parks or retires them.
+async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions, writers: Writer[]): Promise<NodeOutcome> {
+  const call = (route: string, body: Record<string, unknown>) => cliCall(options, route, body);
+  const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
+  const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
+  const names = writers.map((w) => `${w.shortId} (${w.files.join(", ")})`).join(", ");
+  const dead = (why: string): NodeOutcome => { context["last_error"] = `${why}${found}`; context["station_dead"] = node.id; return "failure"; };
+  const waits: Array<Writer & { sentAtCount: number; sentAt: number }> = [];
+  for (const w of writers) {
+    const row = await subjectRow(call, w);
+    if (!row) return dead(`${w.shortId}, who wrote ${w.files.join(", ")}, cannot be read, so nobody can work on what the run found.`);
+    const sentAt = Date.now();
+    if (!(await sendToSubject(options, w, writerBrief(brief, w), subjectSendKey(options, context, `${node.id}:${w.shortId}`), true))) return dead(`Could not send ${node.label} to session ${w.shortId}.`);
+    waits.push({ ...w, sentAtCount: row.message_count ?? 0, sentAt });
+  }
+  console.log(`  ${c.green}briefed${c.reset} ${names}`);
+  const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
+  await waiting({ node_id: node.id, conversation_id: writers[0].conversationId, since: Date.now(), note: `${names}: ${context["stop_reason"] || brief}`.slice(0, 600) });
+  const outcomes = await Promise.all(waits.map((w) => waitOnStation(node, graph, context, cwd, options, undefined, w)));
+  await waiting(null);
+  const failed = outcomes.find((o) => o !== "success");
+  if (failed) return failed;
+  try {
+    const { refreezeSessionChange, inboxRosterVia } = await import("./flowChange.js");
+    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call) });
+    Object.assign(context, frozenChangeContext(context["run_dir"]));
+    const said = `briefed ${names}; ${moved
+      ? `froze the checkout's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
+      : "the checkout's change is as it was: the stage runs again on the same change"}`;
+    console.log(`  ${c.green}✓${c.reset} ${said}`);
+    recordNodeOutput(context, node.id, said);
+    context[`${node.id}.briefed`] = writers.map((w) => w.shortId).join(" ");
+  } catch (err) {
+    return dead(`Could not freeze the checkout's change again: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return "success";
+}
+
+/** What a send of the run to its subject is, as the start of its client_id: the run, and what is sent (a station, an answer, the end). */
 function subjectSendKey(options: RunOptions, context: Record<string, string>, what: string): string {
-  return `run:${options.runId || path.basename(context["run_dir"] || "local")}:${what}:${context[`${context["station_id"]}.visits`] || "1"}`;
+  return `run:${options.runId || path.basename(context["run_dir"] || "local")}:${what}`;
 }
 
 /**
  * Send to the run's subject. Quiet (sendSessionMessage `quiet`): a subject stashed out of sight stays there. A
- * backend older than this CLI refuses the arg it does not know, so a refused send goes again plain, under the same
- * client_id: if the first did land (the answer was lost, not the send) the server keeps that one.
+ * backend older than this CLI refuses the arg it does not know, so a refused send goes again plain. Each send gets a
+ * client_id of its own (the key and a nonce), shared only by that plain retry: if the first did land (the answer was
+ * lost, not the send) the server keeps that one. Nothing a run can count names a send once: visits restart after a
+ * person's answer and on a new attempt, and a resume repeats the visit it stopped in, so a second Revise brief keyed
+ * on them was dropped as a duplicate and its station waited out its timeout.
  */
-async function sendToSubject(options: RunOptions, subject: Subject, body: string, clientId: string, quiet: boolean): Promise<any> {
+async function sendToSubject(options: RunOptions, subject: Subject, body: string, key: string, quiet: boolean): Promise<any> {
+  const clientId = `${key}:${crypto.randomUUID().slice(0, 8)}`;
   const send = (q: boolean) => cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body, wake: true, client_id: clientId, ...(q ? { quiet: true } : {}) });
   return (quiet ? await send(true) : null) ?? await send(false);
 }
@@ -525,6 +575,8 @@ async function retireSubject(options: RunOptions, context: Record<string, string
   const branch = context["branch"];
   const base = context["default_branch"] || "main";
   if (!subject || options.dryRun || !branch) return null;
+  // A checkout's subject is the session that ran it, whose own work is no part of the change: it stays.
+  if (checkoutChangeOf(context["run_dir"])) return null;
   const keep = (why: string) => { console.log(`${c.dim}  ${subject.shortId} stays: ${why}${c.reset}`); return null; };
   const { landedCommit } = await import("./awaitDeploy.js");
   const landed = await landedCommit(cwd, branch, base, (context["change_files"] || "").split(" ").filter(Boolean)).catch(() => null);
@@ -1884,7 +1936,8 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     return "invalid";
   }
   // The session the change came from is parked while the run goes on without it (subjectPark.ts).
-  const subject = options.dryRun ? null : subjectOf(initialContext);
+  // A checkout's change parks nobody: its subject is the session that ran it, and its writers are others' sessions.
+  const subject = options.dryRun || checkoutChangeOf(initialContext["run_dir"]) ? null : subjectOf(initialContext);
   const parker = subject
     ? startSubjectParker((route, body) => cliCall(options, route, body), subject, options.subjectParkMs ?? SUBJECT_PARK_MS, (line) => console.log(`${c.dim}  ${line}${c.reset}`))
     : undefined;
