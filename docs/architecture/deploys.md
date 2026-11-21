@@ -504,7 +504,11 @@ A deploy holds a change by DP3's rule: the same commit, else its sha's place
 on main at or after the change's, else (no place) live at or after the merge.
 A deploy is stamped with its place once live; an open or failed one is placed
 from `commits.main_at` at read. The change's state is the one that most needs
-an eye: failed, rolled back, not live yet, queued, going out, live. A pull request
+an eye: failed, rolled back, not live yet, queued, going out, live, over the
+targets still shipping: a target with nothing going out and no deploy in a
+week (Union's aivery-operator, a backend copy shipped rarely) keeps its row
+but would otherwise hold every change at not live yet; when every target is
+dormant, all of them speak. A pull request
 names its commit on main by `pull_requests.merge_commit_sha`, which the closed
 webhook and the GitHub sync write. The rule is `contracts/deployReach`; the
 web's store holds each answer in `deployReach`, keyed by its ref.

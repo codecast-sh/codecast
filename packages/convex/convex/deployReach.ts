@@ -58,7 +58,7 @@ async function reachOf(ctx: any, userId: any, repository: string, change: ReachC
     }
     targets.push({ target: t.name, deploys: out });
   }
-  return deployReach(change, targets);
+  return deployReach(change, targets, Date.now());
 }
 
 /**

@@ -88,10 +88,25 @@ export function targetReach(target: string, deploys: ReadonlyArray<ReachDeploy>,
 
 const ATTENTION: Record<ReachState, number> = { failed: 0, rolled_back: 1, waiting: 2, queued: 3, going_out: 4, live: 5 };
 
-/** The change's reach over the targets it touches; null when it touches none. */
-export function deployReach(c: ReachChange, targets: ReadonlyArray<{ target: string; deploys: ReadonlyArray<ReachDeploy> }>): DeployReach | null {
+/** A target that has shipped nothing for this long, and has nothing going out, no longer speaks for a change's state. */
+export const DORMANT_TARGET_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Whether a target is dormant: no deploy open and none in a week (Union's aivery-operator, a backend copy shipped rarely). */
+function dormant(deploys: ReadonlyArray<ReachDeploy>, now: number): boolean {
+  if (deploys.some((d) => d.status === "running" || d.status === "requested")) return false;
+  const last = Math.max(0, ...deploys.map((d) => d.live_at ?? d.finished_at ?? d.created_at));
+  return now - last > DORMANT_TARGET_MS;
+}
+
+/**
+ * The change's reach over the targets it touches; null when it touches none. Its state is the one that most needs a
+ * reader's eye over the targets still shipping; a dormant target keeps its own row but would otherwise hold every
+ * change at "not live yet". When every target is dormant, all of them speak.
+ */
+export function deployReach(c: ReachChange, targets: ReadonlyArray<{ target: string; deploys: ReadonlyArray<ReachDeploy> }>, now: number): DeployReach | null {
   if (!targets.length) return null;
   const each = targets.map((t) => targetReach(t.target, t.deploys, c));
-  const state = each.reduce<ReachState>((worst, t) => (ATTENTION[t.state] < ATTENTION[worst] ? t.state : worst), "live");
+  const active = each.filter((_, i) => !dormant(targets[i]!.deploys, now));
+  const state = (active.length ? active : each).reduce<ReachState>((worst, t) => (ATTENTION[t.state] < ATTENTION[worst] ? t.state : worst), "live");
   return { state, sha: c.sha, targets: each };
 }

@@ -117,6 +117,9 @@ describe("one target's reach", () => {
   });
 });
 
+// Moments after every fixture deploy: every target is still shipping, so all of them speak.
+const NOW_ACTIVE = 5_000;
+
 describe("the change's reach over its targets", () => {
   const LIVE = [dp("live", { sha: SHA, created_at: 10 })];
   const GOING = [dp("running", { sha: SHA, created_at: 10 })];
@@ -124,7 +127,7 @@ describe("the change's reach over its targets", () => {
   const WAITING: ReachDeploy[] = [];
   const ROLLED = [dp("live", { cut_at: 1200, created_at: 10 }), dp("live", { cut_at: 800, created_at: 20 })];
   const FAILED = [dp("failed", { sha: SHA, created_at: 10 })];
-  const of = (...ds: ReachDeploy[][]) => deployReach(ON_MAIN, ds.map((deploys, i) => ({ target: `t${i}`, deploys })))!.state;
+  const of = (...ds: ReachDeploy[][]) => deployReach(ON_MAIN, ds.map((deploys, i) => ({ target: `t${i}`, deploys })), NOW_ACTIVE)!.state;
 
   test("the state that most needs a reader's eye: failed, rolled back, waiting, queued, going out, live", () => {
     expect(of(LIVE, LIVE)).toBe("live");
@@ -138,9 +141,30 @@ describe("the change's reach over its targets", () => {
   });
 
   test("each target is reported, with the change's sha; no targets is no reach", () => {
-    const r = deployReach(ON_MAIN, [{ target: "web", deploys: LIVE }, { target: "api", deploys: WAITING }])!;
+    const r = deployReach(ON_MAIN, [{ target: "web", deploys: LIVE }, { target: "api", deploys: WAITING }], NOW_ACTIVE)!;
     expect(r.sha).toBe(SHA);
     expect(r.targets.map((t) => [t.target, t.state])).toEqual([["web", "live"], ["api", "waiting"]]);
-    expect(deployReach(ON_MAIN, [])).toBeNull();
+    expect(deployReach(ON_MAIN, [], NOW_ACTIVE)).toBeNull();
+  });
+});
+
+describe("a dormant target keeps its row but does not set the change's state", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = 100 * DAY;
+  test("a backend copy last shipped 15 days ago does not hold a change live on production at not live yet", () => {
+    const production = [dp("live", { sha: SHA, created_at: now - DAY, live_at: now - DAY })];
+    const operator = [dp("live", { sha: "1111111aaaa", cut_at: 1, created_at: now - 15 * DAY, live_at: now - 15 * DAY })];
+    const r = deployReach(ON_MAIN, [{ target: "production", deploys: production }, { target: "aivery-operator", deploys: operator }], now)!;
+    expect(r.state).toBe("live");
+    expect(r.targets.map((t) => [t.target, t.state])).toEqual([["production", "live"], ["aivery-operator", "waiting"]]);
+  });
+  test("a target with a deploy open, or one in the week, still speaks; when all are dormant, all speak", () => {
+    const production = [dp("live", { sha: SHA, created_at: now - DAY, live_at: now - DAY })];
+    const recent = [dp("live", { sha: "1111111aaaa", cut_at: 1, created_at: now - 2 * DAY, live_at: now - 2 * DAY })];
+    expect(deployReach(ON_MAIN, [{ target: "p", deploys: production }, { target: "app", deploys: recent }], now)!.state).toBe("waiting");
+    const old = [dp("live", { sha: "1111111aaaa", cut_at: 1, created_at: now - 15 * DAY, live_at: now - 15 * DAY })];
+    const queued = [...old, dp("requested", { sha: SHA, created_at: now - 20 * DAY })];
+    expect(deployReach(ON_MAIN, [{ target: "p", deploys: production }, { target: "q", deploys: queued }], now)!.state).toBe("queued");
+    expect(deployReach(ON_MAIN, [{ target: "only", deploys: old }], now)!.state).toBe("waiting");
   });
 });
