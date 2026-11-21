@@ -6,7 +6,7 @@
 // node's timeout. The hand reads finished with no pin, the runner asks it for
 // its handoff, and it pins dormant on the check, which holds it until it hands
 // off or the node times out.
-import { describe, test, expect, beforeEach, afterEach, setSystemTime } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setSystemTime, spyOn } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -49,6 +49,11 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
   let pinned: { state: string; status: string };
   // Inbox reads on which the hand sits parked on a usage limit.
   let limitReads: (n: number) => boolean;
+  // A jump is time the machine was awake: the node's clock runs on
+  // performance.now(), which setSystemTime leaves alone (parkedClock.ts).
+  let awakeShift: number;
+  let awakeSpy: { mockRestore(): void };
+  const jump = (ms: number) => { setSystemTime(new Date(Date.now() + ms)); awakeShift += ms; };
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-wf-late-"));
@@ -65,6 +70,9 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     jumpMs = 0;
     pinned = { state: "", status: "" };
     limitReads = () => false;
+    awakeShift = 0;
+    const realAwake = performance.now.bind(performance);
+    awakeSpy = spyOn(performance, "now").mockImplementation(() => realAwake() + awakeShift);
     globalThis.fetch = (async (url: any, init: any) => {
       const route = String(url).replace(/^https?:\/\/[^/]+/, "");
       const body = JSON.parse(init?.body || "{}");
@@ -73,7 +81,7 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
       if (route === "/cli/spawn") return reply({ conversation_id: "conv_hand", short_id: "jx7hand" });
       if (route === "/cli/inbox") {
         reads++;
-        if (reads === jumpAt) setSystemTime(new Date(Date.now() + jumpMs));
+        if (reads === jumpAt) jump(jumpMs);
         if (reads === handoffAt) task = { ...task, status: "in_review", execution_status: handoffStatus, verification_evidence: "cannot build: x" };
         // The hand ended its turn on a backgrounded check: live, needs input, nothing pinned.
         return reply({ sessions: [{ id: "conv_hand", work_state: "needs_input", is_live: true, message_count: 40, ...(limitReads(reads) ? { blocked_on: "limit" } : {}) }] });
@@ -88,6 +96,7 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
 
   afterEach(() => {
     setSystemTime();
+    awakeSpy.mockRestore();
     globalThis.fetch = origFetch;
     console.log = origLog;
     fs.rmSync(tmpDir, { recursive: true });
