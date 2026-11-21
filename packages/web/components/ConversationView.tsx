@@ -21,7 +21,6 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { msUntilInputQuiet, TYPING_QUIET_MS } from "../lib/inputQuiet";
-import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import { useShortcutContext, usePaneShortcutAction, isMac, hasOpenModal, withShortcut } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../hooks/useSessionComposerControls";
@@ -147,6 +146,8 @@ import { ForkMapBox, ForkMapFallback, BranchMapLayers } from "./ForkTreePanel";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
+import { resolveMessageSender } from "../lib/messageSender";
+import { useSenderContext } from "../hooks/useSenderContext";
 import { createScrollProgressSignal } from "./conversation/scrollProgressSignal";
 import { AskSessionPanel } from "./conversation/AskSessionPanel";
 import { askSideQuestion } from "../lib/sideAnswers";
@@ -182,7 +183,7 @@ import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
 import { AgentWorkingBubble, AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { cleanChatOf, cleanKeepsSystemRow } from "../lib/cleanThread";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
-import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, stickyCommand, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
+import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, directUserOf, cleanStickyContent, stickyCommand, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
 import { PeerTransferStrip } from "./conversation/PeerTransferStrip";
 import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SummaryOnlyState, SessionGalleryButton, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
@@ -677,37 +678,23 @@ const ConversationViewInner = (
   const permissionRole = !proposalConvId || !currentUser?._id ? null : isRunner ? "runner" as const : "proposer" as const;
   useSyncPendingSuggestions(proposalConvId ?? "", proposalRole === "owner", currentUser?._id ? String(currentUser._id) : null);
   useSyncMyTeamSuggestions(proposalConvId ?? "", currentUser?._id ? String(currentUser._id) : null, !!proposalConvId && !isRunner);
-  // Per-message sender attribution. A user message carries from_user_id when
-  // someone other than the conversation owner sent it (team send into a
-  // teammate's daemon, fork replies); resolve it against the cached team
-  // roster so the prompt shows the actual sender, falling back to the
-  // conversation owner for owner-typed and legacy messages.
-  const teamRoster = useTeamRosterIdentity();
-  const senderById = useMemo(() => {
-    const m = new Map<string, { name?: string; avatar_url?: string | null }>();
-    for (const mem of teamRoster || []) {
-      if (!mem?._id) continue;
-      m.set(String(mem._id), {
-        name: mem.name || mem.email?.split("@")[0],
-        avatar_url: mem.image || mem.github_avatar_url || null,
-      });
-    }
-    const me = currentUser as any;
-    if (me?._id && !m.has(String(me._id))) {
-      m.set(String(me._id), {
-        name: me.name || me.email?.split("@")[0],
-        avatar_url: me.image || me.github_avatar_url || null,
-      });
-    }
-    return m;
-  }, [teamRoster, currentUser]);
-  const resolveMsgSender = useCallback((msg: Message): { name?: string; avatar_url?: string | null } | undefined => {
-    // Locally-created optimistic rows have no server from_user_id yet, but the
-    // sender is by definition the viewer.
-    const senderId = msg.from_user_id ?? ((msg._isOptimistic || msg._isQueued) ? (currentUser as any)?._id : undefined);
-    if (!senderId) return undefined;
-    return senderById.get(String(senderId));
-  }, [senderById, currentUser]);
+  // Per-message sender attribution, through lib/messageSender so the bubbles,
+  // the sticky banner and the message navigator name the same person. A user
+  // message carries from_user_id (team sends into a teammate's daemon, fork
+  // replies, and the owner's own rows on newer clients); it resolves against
+  // the cached team roster, falling back to a wrapper's name, then the owner.
+  const senderContext = useSenderContext({
+    id: conversation?.user_id ? String(conversation.user_id) : null,
+    name: conversation?.user?.name || conversation?.user?.email?.split("@")[0],
+    image: conversation?.user?.avatar_url,
+  });
+  // Locally-created optimistic rows have no server from_user_id yet, but the
+  // sender is by definition the viewer. `wireFrom` is the name a direct send's
+  // wrapper carries.
+  const resolveMsgSender = useCallback((msg: Message, wireFrom?: string) => resolveMessageSender(
+    { fromUserId: msg.from_user_id ? String(msg.from_user_id) : undefined, wireFrom, pending: !!(msg._isOptimistic || msg._isQueued) },
+    senderContext,
+  ), [senderContext]);
   // Width reserved on the right by the teammate comment rail (per-conversation, so
   // multiple tab panes don't fight). Pads the transcript/composer and nudges the
   // scroll affordances left so nothing hides under the panel.
@@ -1183,12 +1170,9 @@ const ConversationViewInner = (
       if (m.role !== 'user') return false;
       const me = (currentUser as any)?._id;
       if (!me) return false;
-      // Same attribution as resolveMsgSender: optimistic rows are the viewer's,
-      // rows without from_user_id belong to the conversation owner.
-      const senderId = m.from_user_id ?? ((m._isOptimistic || m._isQueued) ? me : conversation?.user_id);
-      return !!senderId && String(senderId) === String(me);
+      return resolveMsgSender(m, directUserOf((m.content ?? "").trim())?.from).key === String(me);
     }),
-    [timeline, unreadAnchorAt, enteredAt, currentUser, conversation?.user_id],
+    [timeline, unreadAnchorAt, enteredAt, currentUser, resolveMsgSender],
   );
   // Handoff markers, drawn the same way: each transfer sits above the first
   // row at or after the moment it happened, with the assigner's note under
@@ -3866,17 +3850,17 @@ const ConversationViewInner = (
           return null;
         case 'command': {
           const cmdSender = resolveMsgSender(msg);
-          return <CommandMessageBlock key={msg._id} messageId={msg._id} content={msg.content!} expansion={commandExpansionMap.byCommand.get(msg._id)} timestamp={msg.timestamp} userName={cmdSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={cmdSender ? cmdSender.avatar_url : conversation?.user?.avatar_url} agentType={conversation?.agent_type} />;
+          return <CommandMessageBlock key={msg._id} messageId={msg._id} content={msg.content!} expansion={commandExpansionMap.byCommand.get(msg._id)} timestamp={msg.timestamp} userName={cmdSender.name} avatarUrl={cmdSender.image} agentType={conversation?.agent_type} />;
         }
         case 'bash_input': {
           const bashSender = resolveMsgSender(msg);
           const paired = commandExpansionMap.bashByInput.get(msg._id);
-          return <BashCommandBlock key={msg._id} messageId={msg._id} command={kind.command} stdout={paired?.stdout} stderr={paired?.stderr} timestamp={msg.timestamp} userName={bashSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={bashSender ? bashSender.avatar_url : conversation?.user?.avatar_url} />;
+          return <BashCommandBlock key={msg._id} messageId={msg._id} command={kind.command} stdout={paired?.stdout} stderr={paired?.stderr} timestamp={msg.timestamp} userName={bashSender.name} avatarUrl={bashSender.image} />;
         }
         case 'bash_output': {
           if (commandExpansionMap.consumed.has(msg._id)) return null;
           const bashSender = resolveMsgSender(msg);
-          return <BashCommandBlock key={msg._id} messageId={msg._id} stdout={kind.stdout} stderr={kind.stderr} timestamp={msg.timestamp} userName={bashSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={bashSender ? bashSender.avatar_url : conversation?.user?.avatar_url} />;
+          return <BashCommandBlock key={msg._id} messageId={msg._id} stdout={kind.stdout} stderr={kind.stderr} timestamp={msg.timestamp} userName={bashSender.name} avatarUrl={bashSender.image} />;
         }
         case 'interrupt':
           // A hosted conversation's stop is told by its own notice
@@ -3942,7 +3926,10 @@ const ConversationViewInner = (
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           if (nudgeRuns.folded.has(msg._id)) return null;
-          const msgSender = resolveMsgSender(msg);
+          // A direct send names its sender on the wire, so the bubble is theirs
+          // even when the roster can't resolve the row (no from_user_id yet, or
+          // a sender outside the viewer's team).
+          const msgSender = resolveMsgSender(msg, kind.kind === 'direct_user' ? kind.from : undefined);
           // A "continue" account recovery sent after a usage limit is part of
           // that recovery, not something the person said.
           if (kind.kind === 'normal' && isMidWorkReviveNotice(msg.content)) {
@@ -3956,13 +3943,9 @@ const ConversationViewInner = (
           }
           const nudgeRun = kind.kind === 'normal' ? nudgeRuns.runs.get(msg._id) : undefined;
           if (nudgeRun) {
-            return <NudgeLine key={msg._id} messageId={msg._id} text={nudgeRun.text} count={nudgeRun.count} timestamp={msg.timestamp} userName={msgSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={msgSender ? msgSender.avatar_url : conversation?.user?.avatar_url} />;
+            return <NudgeLine key={msg._id} messageId={msg._id} text={nudgeRun.text} count={nudgeRun.count} timestamp={msg.timestamp} userName={msgSender.name} avatarUrl={msgSender.image} />;
           }
-          // A direct send names its sender on the wire, so the bubble is theirs
-          // even when the roster can't resolve the row (no from_user_id yet, or
-          // a sender outside the viewer's team).
-          const directFrom = kind.kind === 'direct_user' ? kind.from : undefined;
-          const userName = msgSender?.name || directFrom || conversation?.user?.name || conversation?.user?.email?.split("@")[0];
+          const userName = msgSender.name;
           if (retryFold?.hidden.has(msg._id)) return null;
           // A hosted conversation's approval answer is a quiet receipt line,
           // and only when it says more than the step's own receipt, which
@@ -3977,7 +3960,7 @@ const ConversationViewInner = (
           // option; the footer carries the question and the way back to the ask.
           const decision = kind.kind === 'decision_answer' ? kind.decision : undefined;
           const forkSeedParent = isForkSeedClientId(msg.client_id) ? conversation?.forked_from : undefined;
-          const userPrompt = <UserPrompt key={msg._id} bubble={foldWorkingTurns} content={kind.kind === 'direct_user' ? kind.body : kind.kind === 'screen_recording' ? kind.recording.caption : decision ? decision.answer : (msg.content || "")} screenRecording={kind.kind === 'screen_recording' ? kind.recording : undefined} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={startShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          const userPrompt = <UserPrompt key={msg._id} bubble={foldWorkingTurns} content={kind.kind === 'direct_user' ? kind.body : kind.kind === 'screen_recording' ? kind.recording.caption : decision ? decision.answer : (msg.content || "")} screenRecording={kind.kind === 'screen_recording' ? kind.recording : undefined} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender.image} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={startShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
           // A permission ask's answer reads as its one-line record instead.
           const prompt = decision ? <PermissionAnswer key={msg._id} decision={decision}>{userPrompt}</PermissionAnswer> : userPrompt;
           // A clean thread shows the agent took the message while it works on a reply.
@@ -4889,6 +4872,7 @@ const ConversationViewInner = (
           <div className="absolute top-full right-3 mt-24 z-30">
             <MessageNavButton
               conversationId={conversation._id}
+              senders={senderContext}
               currentMessageId={navigatorCurrentId ?? activeStickyMsg?.id ?? null}
               loadedMessages={messages}
               scrollProgress={navScrollProgress}
@@ -5005,12 +4989,11 @@ const ConversationViewInner = (
                   if (kind?.kind === "workflow_frame") {
                     return <><Workflow className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">{kind.frame === "user request" ? "Request" : "Workflow task"}</span></>;
                   }
-                  const stickySender = activeStickyMsg.fromUserId ? senderById.get(String(activeStickyMsg.fromUserId)) : undefined;
-                  const stickyDirectFrom = kind?.kind === "direct_user" ? kind.from : undefined;
+                  const stickySender = resolveMessageSender({ fromUserId: activeStickyMsg.fromUserId ? String(activeStickyMsg.fromUserId) : undefined, wireFrom: kind?.kind === "direct_user" ? kind.from : undefined }, senderContext);
                   return (
                     <>
-                      <UserIcon avatarUrl={stickySender ? stickySender.avatar_url : stickyDirectFrom ? null : conversation?.user?.avatar_url} />
-                      <span className="text-sol-blue text-xs font-medium">{stickySender?.name || stickyDirectFrom || conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
+                      <UserIcon avatarUrl={stickySender.image} />
+                      <span className="text-sol-blue text-xs font-medium">{stickySender.name}</span>
                     </>
                   );
                 })()}

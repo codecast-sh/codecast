@@ -10,7 +10,8 @@ import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { Text } from '@/components/Themed';
 import { CHROME_FONT_CAP, Theme, themedStyles, useTheme } from '@/constants/Theme';
-import { type NavigatorRow, type NavigatorTick } from '@codecast/web/lib/messageNavigator';
+import { type NavigatorAuthor, type NavigatorAuthorship, type NavigatorRow, type NavigatorTick } from '@codecast/web/lib/messageNavigator';
+import { AuthorFace, useAuthorToneColor } from './AuthorFace';
 
 export const TICK_RAIL_WIDTH = 12;
 // The wrap is much wider than the tick strip so the absolutely positioned
@@ -33,6 +34,9 @@ type Props = {
   // True prompt count from the full rows list: `ticks` is sampled to 24, so
   // counting its user rows undercounts the thread for the VoiceOver label.
   promptCount: number;
+  /** Who sent each row: a tick wears its sender's color when the thread has
+   *  more than one, the same color as their face in the sheet. */
+  authors: NavigatorAuthorship;
   activeMessageId: string | null;
   visible: boolean;
   onOpen: () => void;
@@ -46,14 +50,17 @@ function tickIndexAt(offsetY: number, count: number): number {
   return Math.max(0, Math.min(count - 1, Math.floor(offsetY / TICK_PITCH)));
 }
 
-function tickColor(row: NavigatorRow, active: boolean): string {
+function tickColor(row: NavigatorRow, active: boolean, authorColor: string | undefined): string {
   if (active) return Theme.text;
+  if (authorColor) return authorColor;
   if (row.commentCount > 0) return Theme.cyan;
   return Theme.textMuted;
 }
 
-export function MessageTickRail({ ticks, promptCount, activeMessageId, visible, onOpen, onScrub, onScrubEnd }: Props) {
+export function MessageTickRail({ ticks, promptCount, authors, activeMessageId, visible, onOpen, onScrub, onScrubEnd }: Props) {
   const Theme = useTheme();
+  const toneColor = useAuthorToneColor();
+  const authorOf = (row: NavigatorRow) => (authors.attributed ? authors.byRow.get(row._id) : undefined);
   const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const [scrubIndex, setScrubIndex] = useState(-1);
   const scrubIndexRef = useRef(-1);
@@ -160,14 +167,14 @@ export function MessageTickRail({ ticks, promptCount, activeMessageId, visible, 
               pointerEvents="none"
               style={[
                 styles.tick,
-                { backgroundColor: tickColor(tick.row, active), width: active ? ACTIVE_TICK_WIDTH : TICK_WIDTH },
+                { backgroundColor: tickColor(tick.row, active, toneColor(authorOf(tick.row)?.tone ?? 0)), width: active ? ACTIVE_TICK_WIDTH : TICK_WIDTH },
               ]}
             />
           );
         })}
       </View>
       {scrubIndex >= 0 && ticks[scrubIndex] && (
-        <ScrubLabel row={ticks[scrubIndex].row} top={scrubIndex * TICK_PITCH - 12} />
+        <ScrubLabel row={ticks[scrubIndex].row} author={authorOf(ticks[scrubIndex].row)} top={scrubIndex * TICK_PITCH - 12} />
       )}
     </Animated.View>
   );
@@ -179,13 +186,14 @@ export function MessageTickRail({ ticks, promptCount, activeMessageId, visible, 
 // active tick's y, inside the wide wrap so it both inherits the fade and has
 // width to render its text in. No entry animation (it must track the finger
 // instantly); it disappears with the scrub state on release.
-function ScrubLabel({ row, top }: { row: NavigatorRow; top: number }) {
+function ScrubLabel({ row, author, top }: { row: NavigatorRow; author?: NavigatorAuthor; top: number }) {
   const Theme = useTheme();
   return (
     <View pointerEvents="none" style={[styles.scrubLabel, { top }]}>
       <Text style={styles.scrubOrdinal} maxFontSizeMultiplier={CHROME_FONT_CAP}>
         {`#${row.originalIndex + 1}`}
       </Text>
+      {author && <AuthorFace author={author} size={14} />}
       {row.display.length > 0 && (
         <Text style={styles.scrubText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>
           {row.display.slice(0, 24)}

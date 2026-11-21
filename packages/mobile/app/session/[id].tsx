@@ -39,7 +39,9 @@ import { ROW_LAYOUT, arriveEntering, sendEntering } from '@/lib/transcriptMotion
 import { messageRowKey, uniqueRowKeys } from '@codecast/web/lib/messageRowKey';
 import Reanimated, { Easing as ReEasing, FadeIn, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { chatWakePlace, chatWakeAction, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
-import { buildNavigatorRows, sampleTicks, stickyEligibleIds, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
+import { buildNavigatorRows, sampleTicks, stickyEligibleIds, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, resolveNavigatorAuthors, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
+import { resolveMessageSender } from '@codecast/web/lib/messageSender';
+import { useSenderContext } from '@codecast/web/hooks/useSenderContext';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { hasRichMarkdown } from '@codecast/web/lib/richMarkdown';
 import { formatModel, isCommandMessage, isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
@@ -198,6 +200,8 @@ type Message = {
   files?: SentFileData[];
   subtype?: string;
   message_uuid?: string;
+  /** The account that sent a user row (lib/messageSender resolves it). */
+  from_user_id?: string;
   /** A synthetic pull request row: the PR it opens. */
   pr?: { repository: string; number: number };
   usage?: {
@@ -272,7 +276,8 @@ type ConversationData = {
     username: string;
     share_token?: string;
   };
-  user?: { name?: string; email?: string } | null;
+  user_id?: string;
+  user?: { name?: string; email?: string; avatar_url?: string | null } | null;
   git_branch?: string | null;
   git_remote_url?: string | null;
   git_status?: string | null;
@@ -3585,6 +3590,15 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     () => buildNavigatorRows(navSourceMessages ?? [], commentCountsByMessage, resolveSessionTitle),
     [navSourceMessages, commentCountsByMessage],
   );
+  // Who sent each prompt (lib/messageSender, the resolver web's transcript
+  // and navigator use, against the same roster), so the sheet, the rail and
+  // the bubbles name one person.
+  const senderContext = useSenderContext({
+    id: conversation?.user_id ? String(conversation.user_id) : null,
+    name: conversation?.user?.name || conversation?.user?.email?.split('@')[0],
+    image: conversation?.user?.avatar_url,
+  });
+  const navAuthors = useMemo(() => resolveNavigatorAuthors(navigatorRows, senderContext), [navigatorRows, senderContext]);
   const navRowById = useMemo(() => {
     const map = new Map<string, NavigatorRow>();
     for (const r of navigatorRows) map.set(r._id, r);
@@ -4430,7 +4444,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           globalImageMap={globalImageMap}
           openGallery={openGallery}
           openFullscreen={openFullscreen}
-          userName={sender || conversation.user?.name || conversation.user?.email?.split('@')[0]}
+          userName={resolveMessageSender({ fromUserId: item.from_user_id ? String(item.from_user_id) : undefined, wireFrom: sender, pending: isPending }, senderContext).name}
           sender={sender}
           showToast={showToast}
           collapsed={collapsed}
@@ -4889,6 +4903,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         <MessageTickRail
           ticks={navTicks}
           promptCount={promptCount}
+          authors={navAuthors}
           activeMessageId={activeStickyId}
           visible={userScrolled}
           onOpen={openNavigatorSheet}
@@ -5014,6 +5029,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         visible={navSheetVisible}
         onClose={closeNavigatorSheet}
         rows={navigatorRows}
+        authors={navAuthors}
         currentMessageId={activeStickyId}
         onSelect={jumpToMessage}
       />
