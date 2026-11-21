@@ -69,14 +69,14 @@ import { internal } from "./_generated/api";
 import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage } from "./pendingMessages";
 import { latestImagePreviewUrl, listConversationFileChanges } from "./lib/messageReads";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
-import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRunConversation } from "./lib/agentTaskRows";
+import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRunConversation, tasksOriginatedBy } from "./lib/agentTaskRows";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId, stopAndSendForUser, insertEscapeCommand } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, localAgentTypeOf, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, THREAD_STATE_RESULT_MAX_CHARS, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, isHostedAgentType, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
-import { subagentLinkFields } from "./ccAccountsShared";
+import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, sessionOwnerRow } from "./sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, navPromptField, navPromptPatch, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
@@ -9584,6 +9584,9 @@ export async function computeInboxSessions(
     projection?: boolean;
     // Only the named extraConvIds, read per conversation (scan's namedOnly).
     namedOnly?: boolean;
+    // With namedOnly: list a named row even when it is killed. A flow run reads the session its change came from
+    // this way (flows.md FL4): a killed subject still owns the change, and the run needs its row to revive it.
+    includeKilled?: boolean;
     // Debug-only (timing harness) — see InboxEnrichSkip.
     _skip?: InboxEnrichSkip;
     // The split wire form's hot set (shared/contracts/inboxSplit), read off
@@ -9646,7 +9649,8 @@ export async function computeInboxSessions(
   // Rows are independent — enrich them concurrently (sequential per-row awaits
   // made this heartbeat-hot path slow enough to time out under load; see
   // computeSessionsLiveness). Assembly below stays in candidate order.
-  const shownConvs = conversations.filter((conv) => shouldShowInInbox(conv));
+  const includeKilled = !!opts.includeKilled && !!opts.namedOnly;
+  const shownConvs = conversations.filter((conv) => shouldShowInInbox(conv) || (includeKilled && shouldShowInInbox({ ...conv, inbox_killed_at: undefined })));
   const enrichedRows = await Promise.all(shownConvs.map(async (conv) => {
     // Deliberately-filed rows (label extras, sessions assigned to me by another
     // account) never cluster-hide: an assignment routes a session into my inbox
@@ -10996,6 +11000,8 @@ export const inboxForCLI = query({
     // or conversation id). Resolved own-only; the rows are hydrated past the
     // recency window and a subagent row among them is listed instead of hidden.
     session_ids: v.optional(v.array(v.string())),
+    // With session_ids alone: list those rows even when killed (computeInboxSessions includeKilled).
+    include_killed: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -11073,6 +11079,7 @@ export const inboxForCLI = query({
       extraConvIds: extraConvIds.length ? extraConvIds : undefined,
       projection: true,
       namedOnly,
+      includeKilled: !!args.include_killed,
     });
 
     // Project bounding (label views): scope the inbox to one project so labels
@@ -11787,6 +11794,65 @@ export const cliSetSessionVisibility = mutation({
       canceled_messages: canceledMessages,
       cascaded_children: cascaded,
     };
+  },
+});
+
+// Statuses of a live agent that is doing something or asking: retiring it would cut that off.
+const RETIRE_BUSY_STATUSES = new Set(["working", "thinking", "compacting", "starting", "waiting", "permission_blocked"]);
+
+/**
+ * Why a session must not be retired now, or null when nothing would be lost. The run read the session settled and
+ * found no other work of its own, but that read is old by the time it asks, and it only sees the inbox row. A kill
+ * also cancels every trigger bound to the session, drops its queued messages and tears down its nested children.
+ */
+export async function retireRefusal(ctx: { db: any }, conv: any, expectedMessageCount: number, now: number): Promise<string | null> {
+  if (conv.inbox_killed_at) return "it is already stopped";
+  if ((conv.message_count ?? 0) !== expectedMessageCount) return `it has moved since the run read it (${expectedMessageCount} messages then, ${conv.message_count ?? 0} now)`;
+  for (const status of ["pending", "injected", "held"]) {
+    const queued = await ctx.db.query("pending_messages").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id).eq("status", status)).first();
+    if (queued) return "a message is queued for it";
+  }
+  const armed = (await tasksOriginatedBy(ctx, conv._id)).find((t: any) => t.status === "scheduled" || t.status === "running" || t.status === "paused");
+  if (armed) return "a trigger is armed on it";
+  const liveAgent = async (id: Id<"conversations">) => (await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", id)).collect())
+    .filter((m: any) => now - (m.last_heartbeat ?? 0) < HEARTBEAT_ALIVE_MS);
+  if ((await liveAgent(conv._id)).some((m: any) => RETIRE_BUSY_STATUSES.has(m.agent_status ?? ""))) return "it is working";
+  const [subs, spawned] = await Promise.all([
+    ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conv._id)).take(200),
+    ctx.db.query("conversations").withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", conv._id)).take(200),
+  ]);
+  for (const child of [...subs, ...spawned]) {
+    if (child.inbox_killed_at || nestParentIdOf(child) !== conv._id.toString()) continue;
+    if ((await liveAgent(child._id)).length) return `its nested session ${child.short_id ?? String(child._id).slice(0, 7)} is live`;
+  }
+  return null;
+}
+
+// A flow run retires the session its change came from once that change is live (flows.md FL4): the same kill as
+// `cast kill`, but only when retireRefusal finds nothing it would cut off. A refusal kills nothing and says why; the
+// run then tells the session it is over instead.
+export const cliRetireSession = mutation({
+  args: {
+    session: v.string(),
+    // The transcript length the run read the session settled at: any later message means it moved since.
+    expected_message_count: v.number(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    noteWriteCause(ctx, "cli:retire");
+    const userId = args.api_token ? await getAuthenticatedUserId(ctx, args.api_token) : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      c.user_id?.toString() === userId.toString() || c.owner_user_id?.toString() === userId.toString()
+    );
+    if (!conv) throw new Error(`No session found for "${args.session}" (you can only retire sessions you run or own)`);
+    const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
+    const reason = await retireRefusal(ctx, conv, args.expected_message_count, Date.now());
+    if (reason) return { retired: false as const, short_id: shortId, reason };
+    const patch = { inbox_dismissed_at: Date.now() };
+    await ctx.db.patch(conv._id, patch);
+    await applyHideTransition(ctx, conv, patch, { forceKill: true, cause: "cli:retire" });
+    return { retired: true as const, short_id: shortId };
   },
 });
 
