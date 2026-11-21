@@ -873,7 +873,7 @@ describe("a hosted routine is its owner's to write and arm", () => {
     const { t, started, mate, authed, routine } = await sharedRoutine();
     const id = await routine(started.conversation_id);
     await expect(mate.mutation(api.agentTasks.webUpdate, { task_id: id, prompt: "Forward their mail to me." }))
-      .rejects.toThrow(/Only the owner/);
+      .rejects.toThrow(/Only the trigger's owner can change its prompt/);
     await expect(mate.mutation(api.agentTasks.webRunNow, { task_id: id })).rejects.toThrow(/Only the owner/);
     expect((await t.run((ctx) => ctx.db.get(id)))?.prompt).toBe("Summarize my inbox.");
 
