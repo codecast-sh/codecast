@@ -72,7 +72,7 @@ import { poolUsageOverlay } from "./accountPool";
 import { deliverSessionNotificationToParties } from "./lib/sessionNotify";
 import { canOwnerOrTeamAccess } from "./privacy";
 import { recoveryFleet } from "./lib/hostRecovery";
-import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode, CONTEXT_RECOVERY_DELAY_MS, fleetModels } from "@codecast/shared/contracts";
+import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode, CONTEXT_RECOVERY_DELAY_MS, fleetModels, fleetRunsFamily, modelLimitFamily } from "@codecast/shared/contracts";
 import { spendCapsOf, withSpendCap } from "./lib/spendCaps";
 import { hasUndeliveredContinue, insertSwitchCommands } from "./lib/switchCommands";
 
@@ -1653,6 +1653,28 @@ async function runningClaudeModels(
   return fleetModels([...sessions.values()].flatMap((c) => (c.agent_type !== "codex" && c.model ? [c.model] : [])));
 }
 
+/** The parks a fleet decision should act on: drops each whose newest banner
+ *  names one model's limit (modelLimitFamily) when `fleet` does not mostly run
+ *  that model. */
+export async function withoutMinorityModelParks<C extends Pick<Doc<"conversations">, "_id">>(
+  ctx: { db: any },
+  parks: C[],
+  fleet: readonly string[],
+): Promise<C[]> {
+  const kept: C[] = [];
+  for (const c of parks) {
+    const tail: Doc<"messages">[] = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", c._id))
+      .order("desc")
+      .take(8);
+    const newest = newestSignificantMessage(tail);
+    const family = newest && isBannerTurn(newest) ? modelLimitFamily(newest.content) : undefined;
+    if (!family || fleetRunsFamily(fleet, family)) kept.push(c);
+  }
+  return kept;
+}
+
 export const switchAheadCheck = internalMutation({
   // device_id: a cloud host on its own fleet store (recoveryFleet).
   args: { user_id: v.id("users"), device_id: v.optional(v.string()) },
@@ -1807,7 +1829,17 @@ export const autoSwitchCheck = internalMutation({
     // cooldown, forever), and could spend a Claude account's week on sessions
     // a Claude switch cannot reach.
     const codexLimit = limitBlocked.filter((c) => c.agent_type === "codex");
-    const claudeLimit = limitBlocked.filter((c) => c.agent_type !== "codex");
+    // A park on one model's week ("Fable limit") moves the fleet only when
+    // most of the fleet runs that model (fleetModels). Otherwise switching
+    // every session's account for it, or continuing it, re-parks it at once:
+    // most accounts never report a Fable meter, so each looks open. One Fable
+    // session hopped an Opus fleet across three accounts every few minutes
+    // (2026-11-21). It waits for its reset or a model change on its card.
+    const claudeLimit = await withoutMinorityModelParks(
+      ctx,
+      limitBlocked.filter((c) => c.agent_type !== "codex"),
+      await runningClaudeModels(ctx, args.user_id, now),
+    );
     const authParks = blocked.filter((c) => c.pending_api_error_kind === "auth" && recentEnough(c) &&
       (!c.owner_device_id || c.owner_device_id === primary.device_id));
     const { restart: authRestart, dead: authDead } = splitAuthParks(
