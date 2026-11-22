@@ -194,8 +194,26 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
     skipped.push(...discovered.skipped);
     warnings.push(...discovered.warnings);
     const context = { fromHome: home, toHome: opts.hostHome, pathMappings: mappings(project) };
+    const strandedLinks = new Set<string>();
     for (const file of discovered.files) {
       const dest = projectDestination(file.sourcePath, project, home, opts.hostHome);
+      // The host's checkout recreates a tracked link that leaves the project;
+      // its files are of use only where that link, resolved on the host, lands.
+      // Its target here may be another link (`.codex -> ../alias`), so the
+      // host's landing is compared with this machine's first hop, not the real path.
+      if (file.throughLink) {
+        const link = file.throughLink;
+        const hostLink = path.posix.join(opts.hostHome, projectDestination(link.path, project, home, opts.hostHome));
+        const lands = path.posix.resolve(path.posix.dirname(hostLink), link.target);
+        const firstHop = path.resolve(path.dirname(link.path), link.target);
+        let hostFirstHop: string | null = null;
+        try { hostFirstHop = path.posix.join(opts.hostHome, projectDestination(firstHop, project, home, opts.hostHome)); } catch { /* outside home: nowhere the host can match */ }
+        if (lands !== hostFirstHop) {
+          if (!strandedLinks.has(link.path)) warnings.push(`${hostLink} -> ${link.target} resolves elsewhere on the host; the files behind it stay on this machine`);
+          strandedLinks.add(link.path);
+          continue;
+        }
+      }
       const scoped = file.scope === "project" || dest !== path.relative(home, file.sourcePath);
       if (!scoped && dest === ".gitconfig") continue;
       add({ path: dest, kind: file.kind, mode: file.mode, bytes: file.bytes }, scoped ? context : ctx);

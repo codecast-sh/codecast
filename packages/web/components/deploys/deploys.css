@@ -114,10 +114,10 @@ a.dpp-session:hover { text-decoration: underline; }
 .dpp-labels + .dpp-mine { margin-left: 8px; }
 .dpp-focus { display: flex; align-items: center; gap: 8px; margin: 8px 16px 0; padding: 4px 6px 4px 10px; border-radius: 6px; font-size: var(--fs-meta); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); border: 1px solid color-mix(in srgb, var(--sol-yellow) 45%, transparent); }
 .dpp-focus b { font-family: var(--font-mono); font-weight: 600; }
-.dpp-focus span { color: var(--sol-text-muted); }
+.dpp-focus > span { color: var(--sol-text-muted); }
 .dpp-focus[data-state="missing"] { background: none; border-style: dashed; }
-.dpp-focus button { margin-left: auto; display: inline-flex; padding: 3px; color: var(--sol-text-dim); background: none; border: 0; border-radius: 4px; cursor: pointer; }
-.dpp-focus button:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 9%, transparent); }
+.dpp-focus > button { margin-left: auto; display: inline-flex; padding: 3px; color: var(--sol-text-dim); background: none; border: 0; border-radius: 4px; cursor: pointer; }
+.dpp-focus > button:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 9%, transparent); }
 .dpp-commit[data-mine] { background: color-mix(in srgb, var(--sol-blue) 9%, transparent); box-shadow: inset 2px 0 0 var(--sol-blue); }
 .dpp-mine { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; font-weight: 500; color: var(--sol-text-muted); background: none; border: 1px solid var(--dp-rule); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
 .dpp-mine[aria-pressed="true"] { color: var(--sol-blue); border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 12%, transparent); }
