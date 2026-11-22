@@ -504,7 +504,7 @@ function LabelSwitch({ labels, onToggle }: { labels: DeployLabel[]; onToggle: (l
 }
 
 /** The thing the link pointed at, and where it is on this target: waiting, live in a deploy, on its way out, or not here. */
-function FocusChip({ focus, waiting, deploys, live, onClear }: { focus: DeployFocus; waiting: boolean; deploys: TeamDeployRow[]; live: TeamDeployRow | null; onClear: () => void }) {
+export function FocusChip({ focus, waiting, deploys, live, onClear }: { focus: DeployFocus; waiting: boolean; deploys: TeamDeployRow[]; live: TeamDeployRow | null; onClear: () => void }) {
   const d = deploys[0];
   const where = !d && !waiting ? "not on this target"
     : waiting ? "waiting"
@@ -512,7 +512,8 @@ function FocusChip({ focus, waiting, deploys, live, onClear }: { focus: DeployFo
     : d._id === live?._id ? `live in ${d.short_id}` : d.status === "live" ? `went out in ${d.short_id}` : `${d.status} in ${d.short_id}`;
   return (
     <div className="dpp-focus" data-state={waiting ? "waiting" : d ? "deployed" : "missing"} data-deploy-focus={focusWord(focus)}>
-      <b>{focusWord(focus)}</b>
+      {/* A session reads as its short id (a conversation id's first seven characters), the way the queue names it. */}
+      {focus.kind === "session" ? <EntityIdPill type="session" id={focus.id} idLabel={focus.id.slice(0, 7)} compact /> : <b>{focusWord(focus)}</b>}
       <span>{where}</span>
       <button type="button" onClick={onClear} aria-label="Clear highlight" data-deploy-focus-clear><X className="w-3 h-3" aria-hidden /></button>
     </div>
