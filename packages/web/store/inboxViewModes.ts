@@ -4,11 +4,13 @@
 import type { InboxViewMode } from "./clientPrefsTypes";
 import type { OrgLensMode } from "./orgLens";
 
-export function inboxViewModes({ hasLabels, hasPlans, orgLenses, hasTriggers }: {
+export function inboxViewModes({ hasLabels, hasPlans, orgLenses, hasTriggers, hasMachines }: {
   hasLabels: boolean;
   hasPlans: boolean;
   orgLenses: readonly OrgLensMode[];
   hasTriggers: boolean;
+  /** Sessions run on more than one machine. */
+  hasMachines: boolean;
 }): InboxViewMode[] {
   return [
     "grouped", "recent", "time",
@@ -16,5 +18,6 @@ export function inboxViewModes({ hasLabels, hasPlans, orgLenses, hasTriggers }: 
     ...(hasPlans ? ["plan" as const] : []),
     ...orgLenses,
     ...(hasTriggers ? ["trigger" as const] : []),
+    ...(hasMachines ? ["machine" as const] : []),
   ];
 }

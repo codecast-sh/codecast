@@ -21,6 +21,7 @@ import { scheduleWorkerSettle } from "./lib/workerSettleTrigger";
 import { closeSessionRepliesAfterTurn } from "./chatSessionReplies";
 import { onRoundTurnEnded } from "./chatRounds";
 import { scheduleGoalJudge } from "./lib/sessionGoalTrigger";
+import { releaseDecisionPushes } from "./lib/decisionPush";
 
 // A status CHANGE is the entry point to the needs-input push (see
 // notifications.checkNeedsInput). "idle" only settles into needs_input after
@@ -41,6 +42,7 @@ async function scheduleNeedsInputCheck(
   // push must not chime and the settle classifier must not invent a verdict for
   // a turn that never happened. Standing the schedule down is what keeps a
   // resume out of both (ct-49533).
+  if (!ACTIVE_AGENT_STATUSES.has(agentStatus)) await releaseDecisionPushes(ctx, conversationId, Date.now()); // the turn's cards are all in: their grouped push goes out
   if (sessionBoundary) return;
   // A spawned worker that settles tells the session it reports to.
   if (!ACTIVE_AGENT_STATUSES.has(agentStatus)) await scheduleWorkerSettle(ctx, conversationId, statusTs);

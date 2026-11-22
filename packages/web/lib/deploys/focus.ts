@@ -2,12 +2,14 @@
 // A chip clicked anywhere (a PR, a commit, a task, a session, a deploy) opens
 // the page with that thing highlighted: on the target that has it, in the
 // queue while it waits, or on the deploy in History that took it out. The
-// IDs the queue shows ride the same address (show=), so a link opens the
-// page as its sender saw it.
+// IDs the queue shows and the filters both columns share ride the same
+// address (show=, mine=, group=), so a link opens the page as its sender saw
+// it.
 import type { QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import type { DeployReach, ReachState } from "@codecast/shared/contracts/deployReach";
 import { prNumberOf } from "@codecast/shared/changes";
 import { deploysOf, type DeployTargetRow, type TeamDeployRow } from "./targets";
+import { PICKABLE_GROUPS, type ChangeGroupId, type ChangeRow } from "../changes/rows";
 
 export type DeployLabel = "pr" | "sha" | "task" | "session" | "branch";
 export const DEPLOY_LABELS: ReadonlyArray<{ id: DeployLabel; word: string }> = [
@@ -61,6 +63,18 @@ export function labelsOf(p: Params, focus: DeployFocus | null): DeployLabel[] {
   return DEPLOY_LABELS.map((l) => l.id).filter((id) => DEFAULT_LABELS.includes(id) || extra.includes(id));
 }
 
+/** What both columns are narrowed to: the viewer's own, and one group of what is on its way. */
+export type DeployFilters = { mine: boolean; group: ChangeGroupId | null };
+
+/** The filters an address names (`mine=1`, `group=you`); anything else reads as none. */
+export function filtersOf(p: Params): DeployFilters {
+  const group = p.get("group") as ChangeGroupId | null;
+  return { mine: p.get("mine") === "1", group: group && PICKABLE_GROUPS.includes(group) ? group : null };
+}
+
+/** The filters as address params; a filter that is off drops its param. */
+export const filterParams = (f: DeployFilters): Record<"mine" | "group", string | null> => ({ mine: f.mine ? "1" : null, group: f.group });
+
 const sameSession = (s: { conversation_id: string; short_id?: string | null } | null | undefined, id: string) =>
   !!s && (s.conversation_id === id || (!!s.short_id && s.short_id === id));
 
@@ -74,6 +88,25 @@ export function commitMatches(c: Pick<QueueCommit, "sha" | "subject" | "tasks" |
     case "session": return sameSession(c.session, f.id);
     case "branch": return c.branch === f.name;
     case "deploy": return false;
+  }
+}
+
+/**
+ * Whether a change on its way is the thing the link names: its pull request, one of its commits, its branch, or a
+ * session that wrote it (by its conversation id or the short id that is that id's first seven characters).
+ */
+export function changeMatches(r: Pick<ChangeRow, "refs" | "writers">, f: DeployFocus | null): boolean {
+  if (!f) return false;
+  const refs = r.refs;
+  switch (f.kind) {
+    case "pr": return refs?.pr === f.pr;
+    case "sha": return !!refs?.shas.some((s) => s.toLowerCase().startsWith(f.sha));
+    case "branch": return refs?.branch === f.name;
+    case "session": {
+      const id = f.id.toLowerCase();
+      return !!r.writers?.some((w) => !!w.conversation_id && (w.conversation_id === f.id || (id.length >= 7 && w.conversation_id.toLowerCase().startsWith(id))));
+    }
+    default: return false;
   }
 }
 
@@ -189,7 +222,7 @@ export function focusWord(f: DeployFocus): string {
 }
 
 /** A link into /deploys at one thing, on a team and target when the caller knows them. */
-export function deploysFocusHref(o: { team?: string | null; repository?: string | null; target?: string | null; focus?: DeployFocus | null; show?: ReadonlyArray<DeployLabel> | null }): string {
+export function deploysFocusHref(o: { team?: string | null; repository?: string | null; target?: string | null; focus?: DeployFocus | null; show?: ReadonlyArray<DeployLabel> | null; filters?: DeployFilters | null }): string {
   const q = new URLSearchParams();
   if (o.team) q.set("team", o.team);
   if (o.repository) q.set("repo", o.repository);
@@ -197,6 +230,7 @@ export function deploysFocusHref(o: { team?: string | null; repository?: string 
   const f = o.focus;
   if (f) q.set(f.kind, f.kind === "pr" ? String(f.pr) : f.kind === "sha" ? f.sha : f.kind === "branch" ? f.name : f.id);
   if (o.show) q.set("show", o.show.join(","));
+  if (o.filters) for (const [k, v] of Object.entries(filterParams(o.filters))) if (v) q.set(k, v);
   const s = q.toString();
   return `/deploys${s ? `?${s}` : ""}`;
 }

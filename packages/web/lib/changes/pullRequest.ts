@@ -30,6 +30,8 @@ export type ChangePullRequest = {
   /** GitHub's auto-merge, when someone turned it on: the pull request lands itself once its requirements pass. */
   auto_merge?: unknown;
   linked_session_ids?: ReadonlyArray<string>;
+  /** Who opened it on GitHub. */
+  author_github_username?: string;
 };
 
 const CI: Record<string, NonNullable<ChangeFacts["check"]>["ci"]> = { pending: "pending", success: "success", failure: "failure", none: "none" };
