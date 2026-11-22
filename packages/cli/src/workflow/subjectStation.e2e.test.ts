@@ -110,6 +110,8 @@ type Play = {
   retire?: () => Record<string, unknown>;
   /** The server is older than `quiet` and refuses a send that carries it. */
   refuseQuiet?: boolean;
+  /** A gate's answers, one per card the run raises; Ship by default. */
+  answers?: string[];
 };
 
 /** The server, playing the session: `fix` is what the session does when a brief reaches it. */
@@ -122,6 +124,9 @@ function server(fix: () => void, play: Play = {}) {
   let owed = 0;
   // The run's stash puts the row out of sight; a send that is not quiet brings it back.
   let stashed = false;
+  // A message the server already holds under a client_id is not queued again (enqueuePendingMessage).
+  const held = new Set<string>();
+  let cards = 0;
   globalThis.fetch = (async (url: any, init: any) => {
     const route = String(url).replace(/^https?:\/\/[^/]+/, "");
     const body = JSON.parse(init?.body || "{}");
@@ -139,6 +144,8 @@ function server(fix: () => void, play: Play = {}) {
     if (route === "/cli/sessions/retire") return reply(play.retire?.() ?? { retired: true, short_id: CONV.slice(0, 7) });
     if (route === "/cli/messages/send") {
       if (play.refuseQuiet && body.quiet) return new Response(JSON.stringify({ error: "ArgumentValidationError: Object contains extra field `quiet`" }), { status: 400 });
+      if (body.client_id && held.has(body.client_id)) return reply({ ok: true });
+      if (body.client_id) held.add(body.client_id);
       if (!body.quiet) stashed = false;
       // A brief starts a turn; the run's end and a gate's answer only inform.
       if (/^Check failed/.test(body.body)) {
@@ -149,11 +156,16 @@ function server(fix: () => void, play: Play = {}) {
       } else messages += 3;
       return reply({ ok: true });
     }
-    if (route === "/cli/workflow-runs/gate") return reply({ ok: true });
-    if (route === "/cli/workflow-runs/poll-gate") return reply({ status: "running", gate_response: "S" });
+    if (route === "/cli/workflow-runs/gate") { cards++; return reply({ ok: true }); }
+    if (route === "/cli/workflow-runs/poll-gate") return reply({ status: "running", gate_response: play.answers?.[Math.max(0, cards - 1)] ?? "S" });
     return reply({ ok: true });
   }) as typeof fetch;
-  return { calls, sent: () => calls.filter((c) => c.route === "/cli/messages/send").map((c) => c.body) };
+  return {
+    calls,
+    sent: () => calls.filter((c) => c.route === "/cli/messages/send").map((c) => c.body),
+    // What reached the session: a resend under a client_id it already holds is not a second message.
+    delivered: () => calls.filter((c, i) => c.route === "/cli/messages/send" && !(c.body.client_id && calls.slice(0, i).some((p) => p.route === "/cli/messages/send" && p.body.client_id === c.body.client_id))).map((c) => c.body),
+  };
 }
 
 async function start(root: string, graph = graphIn(root), opts: { only?: string[]; run?: Partial<RunOptions> } = {}) {
@@ -329,23 +341,43 @@ describe("the subject between its turns: restarted, parked, retired", () => {
       row: () => {
         if (!dismissed()) return {};
         restoredReads++;
+        // Wait ends once the run has read the new settle a few times, however slow the machine.
+        if (restoredReads > 8) fs.writeFileSync(`${root}.go`, "");
         return { bucket: "done", ...(restoredReads > 5 ? { message_count: 40 } : {}) };
       },
     });
     const graph = parseWorkflowSource(`digraph slow {
       graph [label="Slow"]
       start [shape=Mdiamond]
-      wait [label="Wait", shape=parallelogram, script="sleep 1"]
+      wait [label="Wait", shape=parallelogram, script="while [ ! -f ${root}.go ]; do sleep 0.05; done"]
       after [label="After", shape=parallelogram, script="true"]
       exit [shape=Msquare, label="Done"]
       start -> wait -> after -> exit
     }`, root);
     const { outcome, runDir } = await start(root, graph, { run: { subjectParkMs: 20 } });
     expect(outcome).toBe("completed");
-    expect(restoredReads).toBeGreaterThan(5);
+    expect(restoredReads).toBeGreaterThan(8);
     expect(dismissed()).toBe(1);
     expect(readCheckpoint(runDir, "run-9")?.context.subject_kept).toBe("1");
   }, 60_000);
+
+  test("a parker does nothing until it is bound to the run's context, so a resumed runner reads subject_kept first", async () => {
+    const calls: string[] = [];
+    const read = async (route: string) => { calls.push(route); return { sessions: [{ id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 }] }; };
+    const kept = startSubjectParker(read, { conversationId: CONV, shortId: "jx7ssss" }, 1, () => {});
+    await kept.tick();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls).toEqual([]);
+    kept.bind({ subject_kept: "1" });
+    await new Promise((r) => setTimeout(r, 30));
+    await kept.stop();
+    expect(calls).toEqual([]);
+    const fresh = startSubjectParker(read, { conversationId: CONV, shortId: "jx7ssss" }, 1, () => {});
+    fresh.bind({});
+    await new Promise((r) => setTimeout(r, 30));
+    await fresh.stop();
+    expect(calls).toContain("/cli/sessions/dismiss");
+  });
 
   test("a parker bound to a run whose context says a person kept the subject does nothing", async () => {
     const calls: string[] = [];
@@ -361,10 +393,42 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     const s = server(() => edit("good\n"), { refuseQuiet: true });
     expect((await start(root)).outcome).toBe("completed");
     const briefs = s.sent().filter((m) => /^Check failed/.test(m.body));
-    expect(briefs.map((b) => [b.quiet, b.client_id])).toEqual([[true, "run:run-9:fix_check:1"], [undefined, "run:run-9:fix_check:1"]]);
+    expect(briefs.map((b) => b.quiet)).toEqual([true, undefined]);
+    expect(briefs[0].client_id).toMatch(/^run:run-9:fix_check:[0-9a-f]{8}$/);
+    expect(briefs[1].client_id).toBe(briefs[0].client_id);
     const answers = s.sent().filter((m) => /^Decide: Ship\./.test(m.body));
-    expect(answers.map((a) => [a.quiet, a.client_id])).toEqual([[true, "run:run-9:decide.answer:1"], [undefined, "run:run-9:decide.answer:1"]]);
-    expect(s.sent().at(-1)!.client_id).toMatch(/^run:run-9:end:/);
+    expect(answers.map((a) => a.quiet)).toEqual([true, undefined]);
+    expect(answers[0].client_id).toMatch(/^run:run-9:decide\.answer:[0-9a-f]{8}$/);
+    expect(answers[1].client_id).toBe(answers[0].client_id);
+    expect(s.sent().at(-1)!.client_id).toMatch(/^run:run-9:end:[0-9a-f]{8}$/);
+  }, 60_000);
+
+  test("a second Revise and a second answer on the same gate each reach the subject: no send repeats another's client_id", async () => {
+    const { root } = world("good\n");
+    // A person answers Revise twice, then Wait (a look again that comes back to the card), then Ship. Each answer
+    // starts the visit counts over, so a key built on them repeated, and the server dropped the repeat.
+    const graph = parseWorkflowSource(`digraph change {
+      graph [label="Change", on_failure=stop]
+      start [shape=Mdiamond]
+      check [flow="tcheck"]
+      decide [label="Decide", shape=hexagon, prompt="Ship it?"]
+      revise [label="Revise", backend=subject, max_visits=3, prompt="Revise on $task_id: $human.message"]
+      look [label="Look", shape=parallelogram, script="true"]
+      exit [shape=Msquare, label="Done"]
+      start -> check -> decide
+      decide -> revise [label="[R] Revise :: Change it"]
+      decide -> look [label="[W] Wait :: Look again"]
+      decide -> exit [label="[S] Ship :: Land it"]
+      revise -> check
+      look -> decide
+    }`, root);
+    const s = server(() => {}, { answers: ["R", "R", "W", "S"] });
+    expect((await start(root, graph)).outcome).toBe("completed");
+    const delivered = s.delivered();
+    expect(delivered.filter((m) => /^Revise on ct-9/.test(m.body))).toHaveLength(2);
+    expect(delivered.filter((m) => /^Decide: /.test(m.body)).map((m) => m.body.split(".")[0])).toEqual(["Decide: Wait", "Decide: Ship"]);
+    const ids = s.sent().map((m) => m.client_id);
+    expect(new Set(ids).size).toBe(ids.length);
   }, 60_000);
 
   const PUSH = "git -C $project_path push -q origin $branch:main";
@@ -443,6 +507,18 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     expect((await start(root, graph)).outcome).toBe("completed");
     expect(routes(s, "/cli/sessions/retire")).toHaveLength(1);
     expect(s.sent()).toEqual([]);
+  }, 60_000);
+
+  test("a target the checkout declares but the server has never listed is not live: the subject stays", async () => {
+    const { root, graph } = landWorld(PUSH);
+    fs.mkdirSync(path.join(root, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".codecast", "deploy.toml"), `[[target]]\nname = "web"\nruns = "push"\nwhen = ["a.txt"]\nlive = "marker"\n`);
+    git(root, "add", ".codecast/deploy.toml");
+    git(root, "commit", "-qm", "declare web");
+    const s = server(() => {});
+    expect((await start(root, graph)).outcome).toBe("completed");
+    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
+    expect(s.sent().at(-1)!.body).toContain("The Change run on ct-9 is over: Done.");
   }, 60_000);
 
   test("a retire the server refuses (the session moved, a trigger is armed) leaves the subject, who hears the end", async () => {

@@ -22085,17 +22085,22 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
   }
   if (!roots.size) return;
   const { sweepOne } = await import("./land/levelSweep.js");
+  const { classifySendError } = await import("./land/levelConflicts.js");
   // A conflict that holds a checkout back is briefed to the session that wrote
   // the file, as a machine wake: a person's message would clear its pinned
   // state and pull it into the inbox.
   const svc = syncServiceRef;
   const send = svc && getAuthToken()
     ? async (to: string, body: string, clientId: string) => {
+      // A hung mutation would stall every checkout's sweep; the client id keeps the retry idempotent.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<"failed">((resolve) => { timer = setTimeout(() => resolve("failed"), 10_000); });
+      const sending = svc.sendMessageToSession(to, body, "scheduler", clientId)
+        .then((id) => (id ? "sent" as const : "failed" as const), classifySendError);
       try {
-        return (await svc.sendMessageToSession(to, body, "scheduler", clientId)) ? "sent" as const : "failed" as const;
-      } catch (e) {
-        // A teammate's session: this token may only message its own user's conversations, for good.
-        return /can only send messages to your own conversations/.test(String((e as Error)?.message ?? e)) ? "unreachable" as const : "failed" as const;
+        return await Promise.race([sending, timeout]);
+      } finally {
+        clearTimeout(timer);
       }
     }
     : undefined;
