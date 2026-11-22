@@ -338,9 +338,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     retryEligible: retryVisible && pendingMessageCanRetry(content),
     restartInFlight: retrying,
     idleGraceElapsed,
-    // A hosted request waiting behind the person's other one is on its way,
-    // however long that takes.
-    bootGraceElapsed: hostedConversation && agentStatus === "waiting" ? false : bootGraceElapsed,
+    bootGraceElapsed,
     messageReachedSession,
   });
   // Live restart progress, scoped to THIS click: the conversation feed carries the
