@@ -57,7 +57,7 @@ beforeEach(() => {
   } as any);
 });
 
-async function mountRow() {
+async function mountRow(machineCounts: Array<[string, number]> = []) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -69,6 +69,7 @@ async function mountRow() {
           bucketCounts={{}}
           projectCounts={[]}
           projectPathByName={{}}
+          machineCounts={machineCounts}
           dropSessionOnLabel={() => {}}
         />
       </MemoryRouter>,
@@ -84,6 +85,21 @@ const popoverEl = () =>
   [...document.body.querySelectorAll("div")].find((d) =>
     (d.getAttribute("class") || "").includes("z-[9999]"),
   );
+
+test("machines stay in the popover; one joins the row only while it is in the filter", async () => {
+  useInboxStore.setState({ machineRoster: [{ device_id: "m2", label: "jb-m2-pro" }] } as any);
+  const { container, root } = await mountRow([["mc:m2", 4]]);
+  const rowChip = () => [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("jb-m2-pro"));
+  try {
+    expect(rowChip()).toBeUndefined();
+    await act(() => useInboxStore.setState({ activeProjectFilter: "mc:m2" } as any));
+    expect(rowChip()).toBeTruthy();
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useInboxStore.setState({ machineRoster: [] } as any);
+  }
+});
 
 test("the pill renders outside the clip shell that can collapse to zero width", async () => {
   const { container, root, pill } = await mountRow();
