@@ -528,7 +528,10 @@ function settleSend(clientId: string, outcome: string | Error) {
  * raw Convex error and stack as a crash toast.
  */
 function driveChatSend(
-  get: () => { dispatchChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => unknown },
+  get: () => {
+    dispatchChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => unknown;
+    markChatSendFailed: (rowId: string, reason?: string) => void;
+  },
   channelId: string,
   content: string,
   clientId: string,
@@ -537,9 +540,12 @@ function driveChatSend(
   // chat.sendMessage refuses a line with no text and no attachment, and the
   // outbox would re-drive that refusal forever. Hold it back here, where every
   // send, retry and edit of an unsent line passes (ct-91208). A row already on
-  // screen keeps its failed state, so discard stays the way out.
+  // screen is marked failed with the server's reason, so the person sees why
+  // and discard stays the way out.
   if (!content.trim() && !opts?.attachments?.length) {
-    settleSend(clientId, new Error("A message needs text or an attachment"));
+    const reason = "A message needs text or an attachment";
+    get().markChatSendFailed(clientId, reason);
+    settleSend(clientId, new Error(reason));
     return undefined;
   }
   // (The impl type says void because the BODY returns nothing; the middleware
