@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { attributeEdits, type SessionEdits } from "./attribute.js";
-import { briefLevelConflicts, RETRY_MS, type BriefDeps } from "./levelConflicts.js";
+import { briefLevelConflicts, classifySendError, RETRY_MS, type BriefDeps } from "./levelConflicts.js";
 import { sweepOne } from "./levelSweep.js";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
@@ -197,18 +197,35 @@ describe("a level conflict reaches its writer", () => {
     expect(record(gitDir).paths["a.txt"].briefed).toBe(true);
   }, 300_000);
 
-  test("a teammate's session the server will never deliver to is not asked again until the file changes", async () => {
+  test("a teammate's session the server will never deliver to is not asked again until a blob or the owner changes", async () => {
     const { shared, upstream, sent, writers, reply, sweep } = world();
     writers.set("a.txt", OTHER);
     upstream({ "a.txt": A.replace("one", "theirs") }, "Rename the first line");
     reply("unreachable");
-    expect(await sweep(T)).toContain(`${OTHER.slice(0, 7)} is a teammate's session; brief not sent (a.txt)`);
-    expect(await sweep(T + RETRY_MS)).toContain(`${OTHER.slice(0, 7)} is a teammate's session; brief not sent (a.txt)`);
+    const teammate = `${OTHER.slice(0, 7)} is a teammate's session; brief not sent (a.txt)`;
+    expect(await sweep(T)).toContain(teammate);
+    // Same blobs, same owner, past the retry window: no send.
+    expect(await sweep(T + RETRY_MS)).toContain(teammate);
     expect(sent).toHaveLength(1);
+    // The file changes on disk: tried again.
     write(shared, "a.txt", A.replace("one", "theirs, edited again"));
-    await sweep(T + RETRY_MS + 60_000);
+    expect(await sweep(T + RETRY_MS + 60_000)).toContain(teammate);
     expect(sent).toHaveLength(2);
+    // Same blobs, a new owner (its transcript arrived late): briefed.
+    writers.set("a.txt", CONV);
+    reply("sent");
+    expect(await sweep(T + RETRY_MS + 120_000)).toContain(teammate);
+    expect(sent).toHaveLength(2);
+    expect(await sweep(T + 2 * RETRY_MS + 60_000)).toContain(`briefed ${CONV.slice(0, 7)} (a.txt)`);
+    expect(sent.map((m) => m.to)).toEqual([OTHER, OTHER, CONV]);
   }, 300_000);
+
+  test("the ownership refusal is told apart from a transient failure", () => {
+    expect(classifySendError(new Error("[Request ID: 1a2b] Server Error\nUncaught Error: Unauthorized: can only send messages to your own conversations\n    at handler"))).toBe("unreachable");
+    for (const transient of [new Error("fetch failed"), Object.assign(new Error("The operation timed out."), { name: "TimeoutError" }), new Error("[Request ID: 3c4d] Server Error"), new Error("502 Bad Gateway"), "ECONNRESET"]) {
+      expect(classifySendError(transient)).toBe("failed");
+    }
+  });
 
   test("a merge file that cannot be written still briefs, and the brief is recorded so it is not sent again", async () => {
     const { gitDir, upstream, sent, writers, sweep } = world();

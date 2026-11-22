@@ -14,7 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { gitTry } from "../wipSnapshot.js";
 import { levelCheckout, type LevelResult } from "./level.js";
-import { briefLevelConflicts, clearLevelConflicts, type BriefDeps } from "./levelConflicts.js";
+import { briefLevelConflicts, clearLevelConflicts, pruneStale, type BriefDeps } from "./levelConflicts.js";
 import { isAncestor } from "./replay.js";
 import { shipLockHeld, shipSpec, upstreamRef } from "./shipCheckout.js";
 
@@ -67,6 +67,7 @@ export async function levelOne(root: string, now = Date.now()): Promise<LevelSwe
  */
 export async function sweepOne(root: string, deps: BriefDeps): Promise<string | null> {
   const o = await levelOne(root, deps.now);
+  if (o.gitDir) pruneStale(o.gitDir);
   if (o.gitDir && ("skipped" in o ? o.skipped === "level" : o.result.ok)) clearLevelConflicts(o.gitDir);
   const line = describeLevel(o);
   if (!line || "skipped" in o) return line;
