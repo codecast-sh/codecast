@@ -10,8 +10,9 @@
 import type { CheckoutRow, CheckoutSession } from "@codecast/shared/contracts/checkouts";
 import type { CommitCiState, QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
-import { entityRoute, parseRepoObjectId } from "@codecast/shared/entities";
+import { parseRepoObjectId } from "@codecast/shared/entities";
 import { commitPageHref, prPageHref, repoCompareHref } from "../repoView";
+import { deploysFocusHref } from "../deploys/focus";
 import type { ChangeFacts, ChangeWriter } from "./lifecycle";
 import { finishedAt, isMerged, prActive, pullRequestFacts, type ChangePullRequest } from "./pullRequest";
 
@@ -319,7 +320,7 @@ export function withReach(change: AssembledChange, reach: DeployReach | null | u
   return {
     ...change,
     facts: { ...change.facts, reach },
-    links: { ...change.links, deploys: ids.map((id) => ({ id, href: entityRoute("deploy", id) ?? `/deploys?deploy=${id}` })) },
+    links: { ...change.links, deploys: ids.map((id) => ({ id, href: deploysFocusHref({ focus: { kind: "deploy", id } }) })) },
   };
 }
 
