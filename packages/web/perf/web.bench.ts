@@ -34,6 +34,10 @@ const WORKLOAD: Record<string, string> = {
   "load an inbox of 5000 sessions": "inbox-load",
   // One drawn session's heartbeat through the liveness overlay.
   "heartbeat in an inbox of 5000 sessions": "inbox-heartbeat",
+  // One 600-session listInboxSessions payload into the drawn inbox.
+  "live update of 600 sessions in an inbox of 5000": "inbox-update",
+  // A cold boot hydrating 5,000 sessions, 54,000 tasks and 27,000 docs.
+  "hydrate a large cache": "hydrate",
   // A 1,560-line diff shown whole, highlighted, in a warm app.
   "open a long diff": "diff",
 };
@@ -52,6 +56,8 @@ export default bench({
     "a message arrives in an open conversation": harnessCase(),
     "load an inbox of 5000 sessions": harnessCase(["cards"]),
     "heartbeat in an inbox of 5000 sessions": harnessCase(),
+    "live update of 600 sessions in an inbox of 5000": harnessCase(["longTasks"]),
+    "hydrate a large cache": harnessCase(["longTasks", "sessions", "tasks", "docs"]),
     "open a long diff": harnessCase(["diffLines"]),
   },
 });

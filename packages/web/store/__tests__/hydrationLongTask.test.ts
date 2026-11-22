@@ -56,13 +56,12 @@ describe("cache hydration on a large account (ct-98162)", () => {
     await seedLargeCache();
     // Heartbeat: a macrotask that re-arms itself; the gap between beats is the
     // longest stretch nothing else could run (no input, no paint).
-    const gaps: string[] = []; let imported0 = performance.now();
     let last = performance.now();
     let longest = 0;
     let beating = true;
     const beat = () => {
       const t = performance.now();
-      longest = Math.max(longest, t - last); if (t - last > 15) gaps.push(`${(t - last).toFixed(0)}@${(t - imported0).toFixed(0)}`);
+      longest = Math.max(longest, t - last);
       last = t;
       if (beating) setTimeout(beat, 0);
     };
@@ -70,7 +69,7 @@ describe("cache hydration on a large account (ct-98162)", () => {
 
     const { useInboxStore } = await import("../inboxStore");
     const imported = performance.now();
-    last = imported; longest = 0; gaps.length = 0; imported0 = imported; // module evaluation is not hydration
+    last = imported; longest = 0; // module evaluation is not hydration
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 5));
@@ -79,7 +78,7 @@ describe("cache hydration on a large account (ct-98162)", () => {
     }
     beating = false;
     const s = useInboxStore.getState() as any;
-    console.log(`hydrated sessions=${Object.keys(s.sessions).length} tasks=${Object.keys(s.tasks).length} docs=${Object.keys(s.docs ?? {}).length}; longest block ${longest.toFixed(0)} ms gaps ${gaps.join(" ")}`);
+    console.log(`hydrated sessions=${Object.keys(s.sessions).length} tasks=${Object.keys(s.tasks).length} docs=${Object.keys(s.docs ?? {}).length}; longest block ${longest.toFixed(0)} ms`);
     if (!hadWindow) delete (globalThis as any).window;
     expect(Object.keys(s.tasks).length).toBe(6000 * SCALE);
     expect(longest).toBeLessThanOrEqual(LONG_TASK_BUDGET_MS);

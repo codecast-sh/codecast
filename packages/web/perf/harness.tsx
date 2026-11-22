@@ -14,7 +14,7 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
 // The -modern workloads are the same inbox with the Modern style on (its
 // session card, ModernSessionCardView, and section header): the same budgets.
-export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
+export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "inbox-update" | "hydrate" | "diff";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -507,6 +507,141 @@ async function setupInboxHeartbeat(modern = false): Promise<Bench> {
   };
 }
 
+// The longest stretch the main thread ran without a break while `action`
+// ran: a macrotask heartbeat re-arms itself, and the widest gap between two
+// beats is the longest time nothing else (input, paint) could have run.
+// Reported in the detail and as `longTasks`, the gaps over the browser's
+// 50 ms long-task line.
+const LONG_TASK_MS = 50;
+async function longestSlice(action: () => Promise<void>): Promise<{ longest: number; longTasks: number }> {
+  let last = performance.now();
+  let longest = 0;
+  let longTasks = 0;
+  let beating = true;
+  const beat = () => {
+    const t = performance.now();
+    if (t - last > longest) longest = t - last;
+    if (t - last > LONG_TASK_MS) longTasks++;
+    last = t;
+    if (beating) setTimeout(beat, 0);
+  };
+  setTimeout(beat, 0);
+  await action();
+  beating = false;
+  beat();
+  return { longest, longTasks };
+}
+
+// A live update of the inbox list (ct-98162): one listInboxSessions payload,
+// the size of the viewer's live set (600 sessions, full rows, freshly decoded
+// as the WebSocket hands it over), through the feeder's own applier into the
+// 5,000-session inbox with the list drawn. Only one drawn row changed.
+async function setupInboxUpdate(): Promise<Bench> {
+  const { applyInboxListPayload } = await import("../hooks/useLiveInboxSessions");
+  const { show } = await inboxPanel();
+  await show();
+  const target = host.querySelector("[data-session-id]")!.getAttribute("data-session-id")!;
+  const ids = Object.keys(useInboxStore.getState().sessions).slice(0, LIVE_SET);
+  if (!ids.includes(target)) ids.push(target);
+  // The live set the store already knows, so a payload moves only rows.
+  await act(async () => { applyInboxListPayload(structuredClone(ids.map((id) => useInboxStore.getState().sessions[id]))); });
+  await settle();
+  let n = 0;
+  return {
+    run: async () => {
+      n++;
+      const rows = useInboxStore.getState().sessions as Record<string, any>;
+      const payload = structuredClone(ids.map((id) => id === target ? { ...rows[id], title: `Renamed ${n}` } : rows[id]));
+      let slice = { longest: 0, longTasks: 0 };
+      const report = await measure(async () => {
+        slice = await longestSlice(async () => {
+          await act(async () => { applyInboxListPayload(payload); });
+        });
+        await settle();
+      });
+      report.counts.longTasks = slice.longTasks;
+      report.detail.longestSliceMs = [slice.longest.toFixed(1)];
+      return report;
+    },
+    reset: () => settle(),
+  };
+}
+
+// Boot from a large account's cache (ct-98162): fake-indexeddb holding 5,000
+// sessions and their conversations blob, the live id list, 54,000 tasks and
+// 27,000 docs (a cache a few months old; before ct-98162 the uninterrupted
+// read of the deferred tables grew with them), hydrated through the store's
+// own boot path (rebootPersistence, the hydration a cold window runs) until
+// every row is in the store.
+const HYDRATE = { sessions: INBOX_SESSIONS, tasks: 54_000, docs: 27_000 };
+async function setupHydrate(): Promise<Bench> {
+  const Dexie = (await import("dexie")).default;
+  const { _reopenForTests } = await import("../store/idbCache");
+  const { AUTH_JWT_STORAGE_KEY, issueFakeToken } = await import("../store/__tests__/fixtures/fakeAuthToken");
+  const { clearProtectedInboxMemory, rebootPersistence } = await import("../store/inboxStore");
+  // Dexie announces each write with a DOM CustomEvent (jsdom's here) sent
+  // through the global dispatchEvent (Bun's, which takes only its own events).
+  (globalThis as any).dispatchEvent = (event: Event) => w.dispatchEvent(event);
+  // The window's own boot hydration ran over an empty, unowned disk; it must
+  // be over before the disk is seeded, or its ownership check finds rows
+  // nobody owns and purges them.
+  await until(() => useInboxStore.getState().clientStateInitialized, "the boot hydration");
+  await new Promise((r) => setTimeout(r, 100));
+  // The cache is served only to the account it belongs to.
+  w.localStorage.setItem(AUTH_JWT_STORAGE_KEY, issueFakeToken(ME));
+  await _reopenForTests({ indexedDB, IDBKeyRange });
+  const db = Dexie.connections.find((d) => d.name === "codecast-store")!;
+  const sessions = Object.values(sessionRows(HYDRATE.sessions));
+  const conversations: Record<string, any> = {};
+  for (const s of sessions) conversations[s._id] = { ...s, preview: `${s.title} `.repeat(8) };
+  const body = (i: number) => `row ${i} `.repeat(40);
+  await db.table("sessions").bulkPut(sessions);
+  await db.table("tasks").bulkPut(Array.from({ length: HYDRATE.tasks }, (_, i) => ({ _id: `kt${String(i).padStart(30, "0")}`, short_id: `ct-${i}`, title: `Task ${i}`, status: "open", updated_at: now - i * 1000, description: body(i) })));
+  await db.table("docs").bulkPut(Array.from({ length: HYDRATE.docs }, (_, i) => ({ _id: `kd${String(i).padStart(30, "0")}`, title: `Doc ${i}`, updated_at: now - i * 1000, content: body(i) })));
+  await db.table("meta").bulkPut([
+    { key: "currentUser", value: { _id: ME, name: "Perf" } },
+    { key: "conversations", value: conversations },
+    { key: "liveInboxIdList", value: sessions.slice(0, LIVE_SET).map((s) => s._id) },
+  ]);
+  const hydrated = () => {
+    const s = useInboxStore.getState() as any;
+    return Object.keys(s.tasks ?? {}).length >= HYDRATE.tasks && Object.keys(s.docs ?? {}).length >= HYDRATE.docs && Object.keys(s.sessions).length > 0;
+  };
+  // One hydration before anything is measured, as the window's boot ran
+  // over an empty disk.
+  mount();
+  clearProtectedInboxMemory();
+  rebootPersistence();
+  await until(hydrated, "the first hydration");
+  await new Promise((r) => setTimeout(r, 50));
+  return {
+    run: async () => {
+      clearProtectedInboxMemory();
+      let slice = { longest: 0, longTasks: 0 };
+      const report = await measure(async () => {
+        slice = await longestSlice(async () => {
+          rebootPersistence();
+          const deadline = Date.now() + 60_000;
+          while (!hydrated()) {
+            if (Date.now() > deadline) throw new Error("perf harness: hydration did not finish");
+            await new Promise((r) => setTimeout(r, 5));
+          }
+        });
+      });
+      const s = useInboxStore.getState() as any;
+      report.counts.longTasks = slice.longTasks;
+      report.counts.sessions = Object.keys(s.sessions).length;
+      report.counts.tasks = Object.keys(s.tasks).length;
+      report.counts.docs = Object.keys(s.docs).length;
+      report.detail.longestSliceMs = [slice.longest.toFixed(1)];
+      return report;
+    },
+    // A cold window's hydration ends with write-through re-enabled; let the
+    // writes it queued land before the next boot reads the disk.
+    reset: async () => { await new Promise((r) => setTimeout(r, 200)); },
+  };
+}
+
 // Opening a long diff: a 1,560-line TypeScript file with every 20th line
 // changed, shown whole (expandUnchanged) in the diff viewer, from mount until
 // its window is drawn. A diff past VIRTUALIZE_LINE_THRESHOLD draws windowed
@@ -569,6 +704,8 @@ const setups: Record<Workload, () => Promise<Bench>> = {
   "inbox-heartbeat": () => setupInboxHeartbeat(),
   "inbox-load-modern": () => setupInboxLoad(true),
   "inbox-heartbeat-modern": () => setupInboxHeartbeat(true),
+  "inbox-update": setupInboxUpdate,
+  hydrate: setupHydrate,
   diff: setupDiff,
 };
 
