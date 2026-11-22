@@ -79,7 +79,7 @@ mode = "direct"        # or "pr"
 check = "cast check --changed-since $CAST_SHIP_BASE"   # the projects this ship touches; "" skips
 tests = true           # run the test files the pass changed
 level = true           # the daemon keeps the checkout level with upstream
-flow = "change"        # run each pass through this flow; "default" is the workspace's default flow
+flow = "change"        # run each pass through this flow, always by name
 
 [[ship.deploy]]
 name = "convex"
@@ -97,16 +97,22 @@ touches deployed paths therefore still reaches the backend.
 ### A pass through a flow
 
 With `flow` set, `cast ship checkout` neither pushes nor opens a pull request:
-it runs `cast flow run <flow> --checkout` (a nameless `cast flow run
---checkout` for `"default"`) and prints what that started. The flow freezes the
-checkout as its change, planned as above, a commit per writer on a branch of
-its own cut onto fresh upstream, and its stages check, review, land and deploy
-it (flows.md FL4). A finding goes to the sessions that wrote the files it
-names, each told only its own files; the run waits for every one of them,
-freezes the pass again and goes on. `--dry-run` still prints the plan; flags
-that steer a pass this command pushes itself (`--plan`, `--only`, `--hold`,
-`--commits-only`, `--message`, `--no-check`, `--no-push`, `--no-deploy`) are
-refused.
+it runs `cast flow run <flow> --checkout` and prints what that started. `flow`
+always names its flow; shipping never takes a workspace's default flow, so
+`"default"` is refused. The flow freezes the checkout as its change, planned
+as above, a commit per writer on a branch of its own cut onto freshly fetched
+upstream, and its stages check, review, land and deploy it (flows.md FL4). A
+finding goes to the sessions that wrote the files it names, each told only its
+own files; the run waits for them, freezes the pass again and goes on.
+
+What changes for whoever ships: the plan file is not read. `--dry-run` still
+prints the plan, but the pass is frozen again when the flow starts, its
+messages come from the writers' session titles, and every group that can ship
+does. So the flags that steer a pass this command pushes itself (`--plan`,
+`--only`, `--hold`, `--commits-only`, `--message`, `--no-check`, `--no-push`,
+`--no-deploy`) and `--no-fetch` are refused rather than ignored. Work that is
+half done stays out by its writer finishing it or setting it aside, not by a
+hold.
 
 ## The level sweep
 
