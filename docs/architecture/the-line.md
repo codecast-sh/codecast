@@ -275,9 +275,10 @@ person's goes through `cast decide`, which pins the holder to a person. What one
 station may do, such as committing and pushing its branch, is in that
 station's own prompt. A hand that settles with no message and no result
 never ran a turn, and one that shows no work for a while is killed (no
-transcript growth and no working status for the run's `--agent-timeout`, else
-30 minutes, stretched up to four times on a loaded machine; time parked on a
-limit or a task's wait does not count), as is one that reaches its node's
+transcript growth and no working status for 30 minutes, stretched up to four
+times on a loaded machine; time parked on a limit or a task's wait does not
+count, and a hand waiting on its own background work, holding a dormant pin,
+or under a daemon gone dark is not quiet), as is one that reaches its node's
 `timeout`, else four hours (`handWatch.ts`): either
 fails its station, routes only on an edge that asks about the outcome, and
 otherwise returns the task to open with a comment. Two implement cycles, then the task goes

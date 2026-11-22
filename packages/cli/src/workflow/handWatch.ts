@@ -15,7 +15,7 @@ const HAND_CAP_MS = 4 * 60 * 60_000;
 const MAX_LOAD_STRETCH = 4;
 
 /**
- * A hand's quiet window is the run's --agent-timeout, else 30 minutes; its cap
+ * A hand's quiet window is 30 minutes (RunOptions.agentTimeout, which no flag sets, overrides it); its cap
  * is its node's `timeout` (seconds) when the graph sets one, since a station
  * that replays evals under load needs more than one that writes criteria, else
  * four hours.
@@ -31,7 +31,7 @@ export class HandWatch {
     this.activeAt = clock.elapsed();
   }
 
-  /** The hand showed work this poll: its transcript grew, or it reads working. */
+  /** The hand showed work this poll: its transcript grew, it reads working, or it waits on work it declared. */
   active(): void {
     this.activeAt = this.clock.elapsed();
   }
