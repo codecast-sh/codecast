@@ -852,6 +852,7 @@ export const listInstallations = query({
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
+    if (args.team_id && !(await isTeamMember(ctx, userId, args.team_id))) return [];
     return await installationsForScope(ctx, { team_id: args.team_id, user_id: userId });
   },
 });
