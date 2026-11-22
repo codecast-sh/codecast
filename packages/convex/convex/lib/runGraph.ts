@@ -98,13 +98,18 @@ export async function runWorkflowOf(ctx: Ctx, run: PinnedRun & Pick<Doc<"workflo
 /**
  * The version a run starting now pins: the one its push named, when it is a
  * version of the run's own row (`cast workflow run` pushes, then creates, and
- * another checkout's push may land between), else the row's newest.
+ * another checkout's push may land between), else the one the row stands at
+ * (workflows.version_id), else, for a row from before that, its newest.
  */
 export async function versionToPin(ctx: Ctx, workflowId: Id<"workflows"> | undefined, named?: string | null): Promise<Doc<"workflow_versions"> | null> {
   if (!workflowId) return null;
+  const ofRow = (ver: Doc<"workflow_versions"> | null) => (ver && String(ver.workflow_id) === String(workflowId) ? ver : null);
   const id = named ? ctx.db.normalizeId("workflow_versions", named) : null;
-  const ver: Doc<"workflow_versions"> | null = id ? await ctx.db.get(id) : null;
-  if (ver && String(ver.workflow_id) === String(workflowId)) return ver;
+  const ver = ofRow(id ? await ctx.db.get(id) : null);
+  if (ver) return ver;
+  const row: Doc<"workflows"> | null = await ctx.db.get(workflowId);
+  const standing = ofRow(row?.version_id ? await ctx.db.get(row.version_id) : null);
+  if (standing) return standing;
   return await ctx.db.query("workflow_versions").withIndex("by_workflow_at", (q: any) => q.eq("workflow_id", workflowId)).order("desc").first();
 }
 

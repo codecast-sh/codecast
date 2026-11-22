@@ -254,7 +254,7 @@ export function gateGone(nodeId: string, workflow: { nodes: ReadonlyArray<{ id: 
   return nodes.length > 0 && !nodes.some((n: { id: string }) => n.id === nodeId);
 }
 
-async function staleGateOf(ctx: Ctx, row: Pick<Doc<"trial_cards">, "node_id">, run: Pick<Doc<"workflow_runs">, "workflow_id" | "graph_version_id" | "flow_versions"> | null, memo?: LineMemo): Promise<boolean> {
+export async function staleGateOf(ctx: Ctx, row: Pick<Doc<"trial_cards">, "node_id">, run: Pick<Doc<"workflow_runs">, "workflow_id" | "graph_version_id" | "flow_versions"> | null, memo?: LineMemo): Promise<boolean> {
   if (!run) return false;
   // A run that pinned its version is judged against its own line only (lib/runGraph.ts).
   const pinned = await pinnedRowOf(ctx, run, memo?.graph);
@@ -263,6 +263,8 @@ async function staleGateOf(ctx: Ctx, row: Pick<Doc<"trial_cards">, "node_id">, r
     if (!after) return false;
     return gateGone(row.node_id, { nodes: after.nodes.length ? after.nodes : (await graphOfVersion(ctx, after, memo?.graph))?.nodes ?? [] });
   }
+  // A pin from no file resumes with its own graph, which nothing replaces (lib/superseded.ts ownLineOf).
+  if (pinned?.graph_id) return false;
   let workflow: Doc<"workflows"> | null = null;
   if (run.workflow_id && memo) {
     // The call's shared memo holds each workflows row once (runSuperseded reads the same rows).

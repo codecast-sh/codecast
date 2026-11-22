@@ -543,6 +543,8 @@ export const create = mutation({
       node_statuses: [],
       goal_override: args.goal_override,
       project_path: args.project_path,
+      // The version the row stands at: a later push from elsewhere never moves the run (lib/runGraph.ts).
+      ...(await pinFor(ctx, args.workflow_id, undefined)),
       created_at: now,
       updated_at: now,
     });

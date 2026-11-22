@@ -82,11 +82,17 @@ export async function recordWorkflowVersion(ctx: any, workflowId: Id<"workflows"
     const snapshot: Snapshot = { ...snapshotOfRow(row), file: origin?.file || `${row.slug}.cast`, files: origin?.files ?? [], ...(row.model_stylesheet ? { model_stylesheet: row.model_stylesheet } : {}) };
     const pushed_from = origin?.device_id && origin.root ? { device_id: origin.device_id, root: origin.root } : undefined;
     const graph = JSON.stringify(snapshot).length <= SNAPSHOT_MAX_BYTES ? () => keptGraph(ctx, workflowId, snapshot) : undefined;
-    return await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, undefined, { ...(pushed_from ? { line: placeLine(pushed_from), pushed_from } : {}), graph });
+    return await standAt(ctx, row, await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, undefined, { ...(pushed_from ? { line: placeLine(pushed_from), pushed_from } : {}), graph }));
   }
   const snapshot = snapshotOfRow(row);
   if (JSON.stringify(snapshot).length > SNAPSHOT_MAX_BYTES) throw new ConvexError(`${row.slug} is too big to keep as a library version (over ${SNAPSHOT_MAX_BYTES} bytes)`);
-  return await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, snapshot, { line: LIBRARY_LINE });
+  return await standAt(ctx, row, await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, snapshot, { line: LIBRARY_LINE }));
+}
+
+/** The row now stands at this version (workflows.version_id): a run started with no version named pins it. */
+async function standAt<T extends { id: Id<"workflow_versions"> }>(ctx: any, row: Doc<"workflows">, version: T): Promise<T> {
+  if (String(row.version_id) !== String(version.id)) await ctx.db.patch(row._id, { version_id: version.id });
+  return version;
 }
 
 /** The newest version that holds its content: the one a run starting now reads. */
@@ -235,8 +241,9 @@ async function versionsOf(ctx: any, row: Doc<"workflows">) {
   const names = new Map<string, string | null>();
   for (const ver of vs) if (!names.has(String(ver.by))) names.set(String(ver.by), ((await ctx.db.get(ver.by)) as any)?.name ?? null);
   const current = row.runs_from === "library" ? [...vs].reverse().find((x) => x.snapshot)?._id : undefined;
+  // Its own number (seq, which a card's label and a restore name), else its place among the newest 500.
   return vs.map((ver, i) => ({
-    n: i + 1, id: ver._id, at: ver.at, by: names.get(String(ver.by)) ?? null, graph_hash: ver.graph_hash, changed: ver.changed,
+    n: ver.seq ?? i + 1, id: ver._id, at: ver.at, by: names.get(String(ver.by)) ?? null, graph_hash: ver.graph_hash, changed: ver.changed,
     restorable: !!ver.snapshot, current: ver._id === current,
   })).reverse();
 }
@@ -262,8 +269,10 @@ async function restoreCore(ctx: any, userId: Id<"users">, ref: string, version: 
     updated_at: now,
   });
   // The same graph as that version: a new row in the history, so the restore is itself a version.
-  const id = await ctx.db.insert("workflow_versions", { workflow_id: row._id, graph_hash: ver.graph_hash, nodes: ver.nodes, changed: [], by: userId, at: now, snapshot: s, line: LIBRARY_LINE, seq: await nextSeq(ctx, row._id) });
-  return { slug: row.slug, restored: want.n, version: list.length + 1, version_id: id };
+  const seq = await nextSeq(ctx, row._id);
+  const id = await ctx.db.insert("workflow_versions", { workflow_id: row._id, graph_hash: ver.graph_hash, nodes: ver.nodes, changed: [], by: userId, at: now, snapshot: s, line: LIBRARY_LINE, seq });
+  await ctx.db.patch(row._id, { version_id: id });
+  return { slug: row.slug, restored: want.n, version: seq, version_id: id };
 }
 
 /** Where a flow's runs read its graph: the library's current version, or the checkout's file. A switch to the library keeps the flow as it stands as its first version with content. */

@@ -8543,6 +8543,10 @@ export default defineSchema({
     // current version, on every machine; "repo" = the checkout's file (pinned).
     // Unset: the resolution from before the library (daemonGraph.ts).
     runs_from: v.optional(v.union(v.literal("library"), v.literal("repo"))),
+    // The version the row stands at now (ct-98653): the one its last push or save left, which a run started with no
+    // version named pins. A place that pushes a graph again keeps its old version, so the newest version by time can
+    // be another checkout's.
+    version_id: v.optional(v.id("workflow_versions")),
     created_at: v.number(),
     updated_at: v.number(),
   })

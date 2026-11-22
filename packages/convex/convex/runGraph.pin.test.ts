@@ -13,6 +13,7 @@ import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
 import { decisionSuperseded, runSuperseded } from "./lib/superseded";
+import { staleGateOf } from "./lineTrial";
 
 const api = anyApi as any;
 const TOKEN = "p".repeat(64);
@@ -284,5 +285,59 @@ describe("a graph is kept once, and goes with its row", () => {
     expect(await graphs()).toBe(1);
     await t.withIdentity({ subject: `${owner}|s` }).mutation(api.workflows.webRemove, { slug: "change" });
     expect(await graphs()).toBe(0);
+  });
+});
+
+// Runs created with no version named (the sweep, the trial, a live flow, the web's Run, an older CLI) pin the
+// version the row stands at, never the newest by time: a place that pushes a graph again keeps its old version.
+describe("a run started with no version named pins the version the row stands at", () => {
+  test("Codecast pushes G1, Union G2, Codecast G1 again: the run is Codecast's", async () => {
+    const { t, owner, push, daemon } = await setup();
+    const { id } = await push(codecastPush);
+    await push(unionPush(1));
+    await push(codecastPush);
+    const runId = await t.run(async (ctx) => {
+      const { createRunCore } = await import("./workflow_runs");
+      return (await createRunCore(ctx as any, owner, { workflow_name: "change", workflow_id: id, project_path: "/code/codecast" })).run_id;
+    });
+    const got = await daemon(runId);
+    expect(ids(got.workflow.nodes)).toEqual(ids(CODECAST.nodes));
+    expect(got.workflow.origin.root).toBe("/code/codecast");
+  });
+
+  test("a run started from the web's Run, paused at Decide, stays open through Union's push", async () => {
+    const { t, owner, push, pauseAt, standing } = await setup();
+    const { id } = await push(codecastPush);
+    const runId = await t.withIdentity({ subject: `${owner}|s` }).mutation(api.workflow_runs.create, { workflow_id: id });
+    await pauseAt(runId, "decide__decide");
+    await push(unionPush(1));
+    expect(await standing(runId, "decide__decide")).toEqual({ run: null, decision: null });
+  });
+});
+
+describe("a trial card on a run pinned from no file", () => {
+  test("is never a stale gate: its run resumes with its own graph", async () => {
+    const { t, push, start, pauseAt } = await setup();
+    const runId = await start(CODECAST);
+    await pauseAt(runId, "decide__decide");
+    await push(UNION);
+    const stale = await t.run(async (ctx) => staleGateOf(ctx as any, { node_id: "decide__decide" }, (await ctx.db.get(runId as any)) as any));
+    expect(stale).toBe(false);
+  });
+});
+
+describe("the version list, the card's label and a restore number versions alike", () => {
+  test("each version is listed by its own number, older ones by their place", async () => {
+    const { t, push } = await setup();
+    const { id } = await push(codecastPush);
+    // Two versions from before numbers, older than the first push.
+    await t.run(async (ctx) => {
+      const by = (await ctx.db.query("users").first())!._id;
+      for (const at of [1, 2]) await ctx.db.insert("workflow_versions", { workflow_id: id, graph_hash: `old${at}`, nodes: [], changed: [], by, at } as any);
+      for (const v of await ctx.db.query("workflow_versions").collect()) if (v.seq) await ctx.db.patch(v._id, { seq: 3 });
+    });
+    await push(unionPush(1));
+    const listed = await t.mutation(api.flowVersions.fromCli, { api_token: TOKEN, op: "versions", flow: "change" });
+    expect(listed.versions.map((x: any) => x.n)).toEqual([4, 3, 2, 1]);
   });
 });
