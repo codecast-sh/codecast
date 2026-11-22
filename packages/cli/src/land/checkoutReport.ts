@@ -26,7 +26,7 @@ import {
 import { defaultConfigDir } from "../config/configDir.js";
 import { gitTry } from "../wipSnapshot.js";
 import { attributeEdits, isMidTurn, type Attribution } from "./attribute.js";
-import { heldBrief, mergeDir, writeMerges, type SendBrief } from "./levelConflicts.js";
+import { heldBrief, type SendBrief } from "./levelConflicts.js";
 import type { LevelSweepOutcome } from "./levelSweep.js";
 import { attributionSince, upstreamRef } from "./shipCheckout.js";
 
@@ -229,13 +229,11 @@ export async function tellWriters(deps: { post: Post; sendBrief: SendBrief }, re
   const told: CheckoutTold[] = [];
   const unreachable: string[] = [];
   const notes: string[] = [];
-  const dir = mergeDir(held.gitDir);
   const brief = async (who: string, mine: string[], whose: "session" | "nobody") => {
     const list = listFile(report, who, opts.dir);
     fs.mkdirSync(path.dirname(list), { recursive: true });
     fs.writeFileSync(list, `${mine.join("\n")}\n`);
-    const merges = await writeMerges(report.path, dir, mine, held.from, held.to);
-    return heldBrief({ root: report.path, host, upstream: report.upstream ?? "origin/main", from: held.from, to: held.to, behind: report.behind, since: level.since, total: level.files.length, mine, list, dir, merges, whose });
+    return heldBrief({ root: report.path, gitDir: held.gitDir, upstream: report.upstream, behind: report.behind, level, mine, from: held.from, to: held.to, list, host, whose });
   };
   for (const [conversation, mine] of writers) {
     if (skip.has(conversation)) continue;
