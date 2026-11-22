@@ -93,6 +93,7 @@
     "./contracts/flowPool": "./contracts/flowPool.ts",
     "./contracts/flowEdit": "./contracts/flowEdit.ts",
     "./contracts/pipeline": "./contracts/pipeline.ts",
+    "./contracts/checkouts": "./contracts/checkouts.ts",
     "./contracts/linePriority": "./contracts/linePriority.ts",
     "./contracts/jointMessage": "./contracts/jointMessage.ts",
     "./contracts/changeGuide": "./contracts/changeGuide.ts",

@@ -161,6 +161,11 @@ function mtimeOf(root: string, p: string): number {
   try { return fs.statSync(path.join(root, p)).mtimeMs; } catch { return 0; }
 }
 
+/** Since when a dirty file's writer can be found: its oldest mtime, less a minute, within the attribution horizon. */
+export function attributionSince(root: string, paths: string[], now = Date.now()): number {
+  return Math.max(oldestMtime(root, paths) - 60_000, now - ATTRIBUTION_HORIZON_MS);
+}
+
 function oldestMtime(root: string, paths: string[]): number {
   let oldest = Date.now();
   for (const p of paths) {
@@ -196,7 +201,7 @@ export async function freezeAndAttribute(root: string, upstream: string, log: Lo
   const frozen = await freezeWorktree(root);
   const paths = frozen.changes.map((c) => c.path);
   log(`froze ${paths.length} changed file(s) at ${frozen.tree.slice(0, 9)}`);
-  const since = Math.max(oldestMtime(root, paths) - 60_000, Date.now() - ATTRIBUTION_HORIZON_MS);
+  const since = attributionSince(root, paths);
   const attribution = attributeEdits(root, paths, { since });
   log(`attributed ${attribution.owners.size}/${paths.length} to ${attribution.sessions.length} session(s) in ${attribution.tookMs}ms`);
   const texts = await readBlobs(root, frozen.changes.map((c) => c.blob ?? ""));
