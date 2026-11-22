@@ -2,12 +2,11 @@
 
 /**
  * The inbox store's half of the owners environment, shared by the web
- * OwnersBadge and the mobile AssignmentChip. useOwners stays free of the store;
- * this file binds it: the implicit owner read off the session row, and the one
- * reparent path (org-staffing.md S11), so an owner change or a role move from
- * either platform dispatches through reparentOrgSession and reaches the same
- * core. Each platform injects only what differs: its roster, its current user
- * and its toast.
+ * OwnersBadge and the mobile AssignmentChip: the implicit owner read off the
+ * session row, a role's face from the org roles, and the one write
+ * (applySessionOwners), so an owner change from either platform paints the
+ * store row and reaches the same core. Each platform injects only what
+ * differs: its roster, its current user and its toast.
  *
  * MOBILE-SAFE like useOwners: bundled into the Expo app, so no DOM and no
  * sonner here.
@@ -15,7 +14,6 @@
 
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
-import { reparentToastLine } from "../store/orgSlice";
 import { useOrgRoles } from "./useOrgRoles";
 import type { OwnersEnv } from "./useOwners";
 
@@ -46,27 +44,17 @@ export function useStoreOwnersEnv(
     }
     return undefined;
   })();
+  const { roles } = useOrgRoles();
   return {
     teamMembers,
     currentUser,
     implicitOwnerId,
     notify,
-    reparent: async (target, opts) => {
-      const r = await useInboxStore.getState().reparentOrgSession(conversationId, target, { note: opts.note });
-      // Always a SESSION reparent here, whether the new parent is a person or a
-      // role: the session is what is told. A stale session is DEFERRED rather
-      // than woken, which still deserves the line — it says when it will read.
-      if (r && (r.told?.sessions || r.told?.deferred)) {
-        notify(reparentToastLine(r.short_id ?? "The session", r.reports_to?.name ?? opts.parentName ?? "its new parent", "session", r.told), "success");
-      } else if (opts.toastFallback) {
-        notify(opts.toastFallback, "success");
-      }
-    },
-    applyOwners: async (change, undo) => {
-      const r = await useInboxStore.getState().applySessionOwners(conversationId, change, undo);
-      if (r && (r.told?.sessions || r.told?.deferred) && r.reports_to) {
-        notify(reparentToastLine(r.short_id ?? "The session", r.reports_to.name, "session", r.told), "success");
-      }
+    ack: () => useInboxStore.getState().ackSessionAssignment(conversationId),
+    apply: (change, view, inverse) => useInboxStore.getState().applySessionOwners(conversationId, change, view, inverse),
+    roleById: (roleId) => {
+      const r = roles.find((x) => x._id === roleId);
+      return r ? { role_id: r._id, short_id: r.short_id, handle: r.handle, name: r.name, avatar: (r as any).avatar ?? null } : null;
     },
   };
 }

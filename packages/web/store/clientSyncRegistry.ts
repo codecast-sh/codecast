@@ -353,6 +353,22 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["sessionGoals.forConversation"],
     writtenBy: ["sessionGoals"],
   },
+  // A session's owners (convex sessionOwnership.listOwners): one row per
+  // conversation, keyed by its id, fed while its header is mounted, so delta.
+  // The people, the role, who drives and who runs it; the header's faces and
+  // the owners menu read it. localFirst: a Save writes owner_ids, role_id,
+  // driver and driver_user_id on the draft before applyOwnersChange lands.
+  sessionOwners: {
+    persistence: { kind: "collection", key: "sessionOwners" },
+    // Every field but the ids is a list or an object: compared by content.
+    sync: { isDelta: true, deepFields: ["owners", "owner_ids", "role", "driver", "runner"] },
+    localFirst: true,
+    feeds: ["sessionOwnership.listOwners"],
+    writtenBy: ["sessionOwnership"],
+    // The server derives `owners` (names, faces, stamps): an ack's seen_at is
+    // painted there and replaced by the server's own, never held.
+    unprotectedFields: ["owners"],
+  },
   // The composer's suggested reply (convex composerSuggestions.ts): one row
   // per conversation, its owner's only, fed while the conversation is open,
   // so delta. The ghost in the empty composer reads it (hooks/useComposerSuggestion).
@@ -2163,6 +2179,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sessionDecisions: "shared",
   decisionStacks: "shared",
   sessionGoals: "shared",
+  sessionOwners: "shared",
   composerSuggestions: "shared",
   handledDecisions: "shared",
   decisionDetails: "shared",

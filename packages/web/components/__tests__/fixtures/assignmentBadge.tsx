@@ -41,7 +41,12 @@ replies.set("devices:ownerDeviceDisplay", foreign);
 replies.set("sessionOwnership:listOwnerCandidates", { team_members: [me, { _id: "jason", name: "Jason" }] });
 const container = document.getElementById("root")!;
 const root = createRoot(container);
-const setOwners = (owners: any[]) => replies.set("sessionOwnership:listOwners", { conversation_id: id, owners });
+// listOwners as the server answers it (sessionOwnership.performListOwners).
+const ownersReply = (owners: any[], extra: Record<string, any> = {}) => ({
+  conversation_id: id, short_id: "jx1", owners, owner_ids: owners.map((o) => o.user_id), role: null, role_id: null,
+  driver: owners[0] ? { kind: "user", user_id: owners[0].user_id } : null, driver_user_id: null, runner: null, can_edit: true, ...extra,
+});
+const setOwners = (owners: any[], extra: Record<string, any> = {}) => replies.set("sessionOwnership:listOwners", ownersReply(owners, extra));
 let generation = 0;
 const render = async (isOwner = false, compact = false, reset = true, guest = false) => {
   if (reset) generation++;
@@ -50,8 +55,11 @@ const render = async (isOwner = false, compact = false, reset = true, guest = fa
 const ownersSeg = () => container.querySelector<HTMLButtonElement>("[data-owners-seg]");
 afterAll(async () => { await act(async () => root.unmount()); dom.window.close(); });
 
+// With no owner rows the server names the human who started it (Jason).
+const starterOnly = () => setOwners([{ user_id: "jason", name: "Jason" }]);
+
 test("a teammate sees the machine and can claim before being an owner", async () => {
-  setOwners([]);
+  starterOnly();
   await render();
   expect(container.textContent).toContain("Jason MacBook");
   expect(container.textContent).not.toContain("Take ownership");
@@ -60,7 +68,9 @@ test("a teammate sees the machine and can claim before being an owner", async ()
 });
 
 test("share-only viewers and failed permission reads get no assignment controls", async () => {
-  for (const reply of [null, new Error("Permission lookup unavailable"), undefined]) {
+  // A refusal or a failure hides the controls even over a cached row; a row
+  // cached from before paints while the answer is still on its way.
+  for (const reply of [null, new Error("Permission lookup unavailable")]) {
     replies.set("sessionOwnership:listOwners", reply);
     await render();
     expect(container.textContent).toContain("Jason");
@@ -76,7 +86,7 @@ test("a server denial overrides even a stale owner flag", async () => {
 });
 
 test("guests never receive machine or ownership controls", async () => {
-  setOwners([]);
+  starterOnly();
   await render(true, false, true, true);
   expect(container.textContent).toContain("Jason");
   expect(container.textContent).not.toContain("Jason MacBook");
@@ -86,7 +96,7 @@ test("guests never receive machine or ownership controls", async () => {
 test("a viewer with no registered devices still sees the foreign machine", async () => {
   replies.set("devices:listDevices", []);
   await act(async () => useInboxStore.setState({ machineRoster: [] }));
-  setOwners([]);
+  starterOnly();
   await render();
   expect(container.textContent).toContain("Jason MacBook");
   expect(container.textContent).not.toContain("Take ownership");
@@ -107,11 +117,11 @@ test("owners are faces on the chip, named on hover", async () => {
 });
 
 test("the driver is ringed and a paused role greyed", async () => {
-  replies.set("sessionOwnership:listOwners", {
-    conversation_id: id,
-    owners: [{ user_id: "me", name: "Ashot" }],
+  setOwners([{ user_id: "me", name: "Ashot" }], {
     role: { role_id: "role1", short_id: "or-1", handle: "evals", name: "Eval Suite lead", avatar: null },
+    role_id: "role1",
     driver: { kind: "user", user_id: "me" },
+    driver_user_id: "me",
   });
   await render(true);
   expect(ownersSeg()!.title).toBe("Owners: Ashot (driver), Eval Suite lead (paused)");
@@ -133,11 +143,7 @@ const click = async (el: Element | null | undefined) => { await act(async () => 
 
 test("leaving a session that runs on your account asks where to move it first", async () => {
   useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: "me" } } });
-  replies.set("sessionOwnership:listOwners", {
-    conversation_id: id,
-    owners: [{ user_id: "me", name: "Ashot" }, { user_id: "jason", name: "Jason" }],
-    role: null,
-    driver: { kind: "user", user_id: "me" },
+  setOwners([{ user_id: "me", name: "Ashot" }, { user_id: "jason", name: "Jason" }], {
     runner: { user_id: "me", name: "Ashot", email: null, is_bot: false },
   });
   await render(true);
@@ -157,13 +163,9 @@ test("leaving a session that runs on your account asks where to move it first", 
 test("Save sends the whole staged change once, and the faces follow at once", async () => {
   const dispatched: any[] = [];
   const real = useInboxStore.getState().applySessionOwners;
-  useInboxStore.setState({ applySessionOwners: (async (...args: any[]) => { dispatched.push(args); return undefined; }) as any });
+  useInboxStore.setState({ applySessionOwners: ((...args: any[]) => { dispatched.push(args); return (real as any)(...args); }) as any });
   useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: runner.id } } });
-  replies.set("sessionOwnership:listOwners", {
-    conversation_id: id,
-    owners: [{ user_id: "jason", name: "Jason" }],
-    role: null,
-    driver: { kind: "user", user_id: "jason" },
+  setOwners([{ user_id: "jason", name: "Jason" }], {
     runner: { user_id: "jason", name: "Jason", email: null, is_bot: false },
   });
   await render(true);
@@ -173,15 +175,13 @@ test("Save sends the whole staged change once, and the faces follow at once", as
   await click(document.querySelector("[data-owners-save]"));
   expect(dispatched).toHaveLength(1);
   expect(dispatched[0][1]).toEqual({ add: ["me"] });
-  expect(dispatched[0][2]).toEqual({ remove: ["me"], driver: { kind: "user", user_id: "jason" } });
+  // The view paints on the store row; the inverse puts it back.
+  expect(dispatched[0][2]).toEqual({ owner_ids: ["jason", "me"], role_id: null, driver: { kind: "user", user_id: "jason" } });
+  expect(dispatched[0][3]).toEqual({ change: { remove: ["me"] }, view: { owner_ids: ["jason"], role_id: null, driver: { kind: "user", user_id: "jason" } } });
+  expect((useInboxStore.getState() as any).sessionOwners[id].owner_ids).toEqual(["jason", "me"]);
   expect(ownersSeg()!.title).toBe("Owners: Jason (driver), Ashot");
   // The server echoes the Save: the pending view settles and goes.
-  replies.set("sessionOwnership:listOwners", {
-    conversation_id: id,
-    owners: [{ user_id: "jason", name: "Jason" }, { user_id: "me", name: "Ashot" }],
-    role: null,
-    driver: { kind: "user", user_id: "jason" },
-  });
+  setOwners([{ user_id: "jason", name: "Jason" }, { user_id: "me", name: "Ashot" }]);
   await render(true, false, false);
   useInboxStore.setState({ applySessionOwners: real });
 });
@@ -189,12 +189,8 @@ test("Save sends the whole staged change once, and the faces follow at once", as
 test("Select all teammates stages every non-owner, then hides itself", async () => {
   const dispatched: any[] = [];
   const real = useInboxStore.getState().applySessionOwners;
-  useInboxStore.setState({ applySessionOwners: (async (...args: any[]) => { dispatched.push(args); return undefined; }) as any });
-  replies.set("sessionOwnership:listOwners", {
-    conversation_id: id,
-    owners: [{ user_id: "jason", name: "Jason" }],
-    role: null,
-    driver: { kind: "user", user_id: "jason" },
+  useInboxStore.setState({ applySessionOwners: ((...args: any[]) => { dispatched.push(args); return (real as any)(...args); }) as any });
+  setOwners([{ user_id: "jason", name: "Jason" }], {
     runner: { user_id: "jason", name: "Jason", email: null, is_bot: false },
   });
   await render(true);
@@ -203,5 +199,20 @@ test("Select all teammates stages every non-owner, then hides itself", async () 
   expect(document.querySelector("[data-select-all-teammates]")).toBeNull();
   await click(document.querySelector("[data-owners-save]"));
   expect(dispatched[0][1]).toEqual({ add: ["me"] });
+  // The server echoes the Save, which releases the row's held fields.
+  setOwners([{ user_id: "jason", name: "Jason" }, { user_id: "me", name: "Ashot" }]);
+  await render(true, false, false);
   useInboxStore.setState({ applySessionOwners: real });
+});
+
+test("a teammate who only sees the session reads the owners and can only claim it", async () => {
+  setOwners([{ user_id: "jason", name: "Jason" }], { can_edit: false });
+  await render(false);
+  const menu = await openOwnersMenu();
+  expect(menu?.textContent).toContain("Jason");
+  expect(menu!.querySelector('[aria-label="Remove Jason"]')).toBeNull();
+  expect(menu!.querySelector("[data-owners-save]")).toBeNull();
+  expect(menu!.querySelector("[data-owner-candidates]")).toBeNull();
+  expect(menu!.querySelector("[data-take-ownership]")).not.toBeNull();
+  await act(async () => root.render(<></>));
 });

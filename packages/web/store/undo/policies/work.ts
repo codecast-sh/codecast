@@ -354,7 +354,7 @@ function reparentSessionLabel(ctx: UndoCtx): string {
   const names = owners.map((id) => personName(ctx.before, id)).join(", ");
   if (target.mode === "add") return `Made ${names} ${owners.length === 1 ? "an owner" : "owners"} of ${session}`;
   if (target.mode === "remove") return `Removed ${names} from ${session}`;
-  // The named person goes last in a handoff's owner set (handoffOwnerSet).
+  // A set names the person it re-homes under last.
   return owners.length ? `Handed ${session} off to ${personName(ctx.before, owners[owners.length - 1]!)}` : `Cleared the owners of ${session}`;
 }
 
@@ -877,18 +877,17 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
 
   // ── Org record (display-only history items) ────────────────────────────────
   reparentOrgSession: org(reparentSessionLabel),
-  // The owners menu's Save carries the change that puts it back (args[2]),
-  // built from the owners it was opened on: undo replays that.
+  // The owners menu's Save carries the change and view that put it back
+  // (args[3]), built from the owners it was opened on: undo replays that,
+  // and its own inverse is the Save again. A leave that moved the session
+  // has none: nothing here moves it back.
   applySessionOwners: {
     spec: {
       label: (ctx) => `Changed the owners of ${sessionTitle(ctx.before, ctx.args[0] as string)}`,
-      inverse: (ctx) => (ctx.args[2] ? [call("applySessionOwners", ctx.args[0], ctx.args[2], ctx.args[1])] : null),
-    },
-  },
-  setSessionDriver: {
-    spec: {
-      label: (ctx) => `Changed who drives ${sessionTitle(ctx.before, ctx.args[0] as string)}`,
-      inverse: (ctx) => (ctx.args[2] ? [call("setSessionDriver", ctx.args[0], ctx.args[2], ctx.args[1])] : null),
+      inverse: (ctx) => {
+        const back = ctx.args[3] as { change: unknown; view: unknown } | null | undefined;
+        return back ? [call("applySessionOwners", ctx.args[0], back.change, back.view, { change: ctx.args[1], view: ctx.args[2] })] : null;
+      },
     },
   },
   reparentOrgRole: org((ctx) => `Moved ${roleName(ctx.before, ctx.args[0] as string)} in the org`),

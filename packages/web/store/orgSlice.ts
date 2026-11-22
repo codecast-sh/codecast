@@ -226,24 +226,28 @@ export type OrgReparentSessionTarget =
   | { kind: "user"; user_id?: string; owners?: string[]; mode?: "set" | "add" | "remove"; drop_role?: boolean }
   | { kind: "role"; role_id: string | null };
 
-/** Who drives a session: the role it is filed under, or one of its people. */
-export type SessionDriverTarget = { kind: "role" } | { kind: "user"; user_id: string };
+/** Who drives a session: the role it is filed under, one of its people, or
+ *  (`none`) the default, which is how an undo puts back a driver nobody chose. */
+export type SessionDriverTarget = { kind: "role" } | { kind: "user"; user_id: string } | { kind: "none" };
 
 /** One Save of the owners menu (sessionOwnership.applyOwnersChange): people
  *  added and removed, the role set or taken off (`role` absent leaves it),
- *  and who drives. */
+ *  who drives, and leaving (after a move off your account when it runs there). */
 export type SessionOwnersChange = {
   add?: string[];
   remove?: string[];
   role?: string | null;
   driver?: SessionDriverTarget;
+  leave?: { move_to_device_id?: string };
   note?: string;
 };
 
-export type SessionOwnersResult = {
-  told: { sessions: number; roles: number; deferred?: number };
-  reports_to: { kind: "user" | "role"; name: string } | null;
-  short_id: string | null;
+/** What a Save paints on the sessionOwners row before the server answers:
+ *  the fields listOwners echoes back exactly. */
+export type SessionOwnersView = {
+  owner_ids: string[];
+  role_id: string | null;
+  driver: { kind: "role"; role_id: string } | { kind: "user"; user_id: string } | null;
 };
 
 export type OrgCreateRoleInput = {
@@ -307,12 +311,11 @@ export type OrgSliceActions = DecisionAreasSliceActions & {
    *  Resolves to the reparent result (told counts + the new parent) so the
    *  caller can toast both things once the server echoes. */
   reparentOrgSession: (conversationId: string, target: OrgReparentSessionTarget, opts?: { row?: OrgSession | null; note?: string; from_session?: string }) => Promise<ReparentResult | undefined>;
-  /** The owners menu's Save: the whole change in one dispatch. `undo` is the
-   *  change that puts it back, which the undo policy replays. The role moves
-   *  on the session row in the same tick. */
-  applySessionOwners: (conversationId: string, change: SessionOwnersChange, undo?: SessionOwnersChange) => Promise<SessionOwnersResult | undefined>;
-  /** Hand the wheel to the filed role or one of the people (sessionOwnership.setSessionDriver). `prior` is who drove, for undo. */
-  setSessionDriver: (conversationId: string, driver: SessionDriverTarget, prior?: SessionDriverTarget) => void;
+  /** The owners menu's Save: `view` paints on the sessionOwners row (and the
+   *  role on the session row) now, `change` rides one dispatch to
+   *  applyOwnersChange. `inverse` is the change and view that put it back,
+   *  which the undo policy replays; null when nothing can (a leave moved it). */
+  applySessionOwners: (conversationId: string, change: SessionOwnersChange, view: SessionOwnersView, inverse?: { change: SessionOwnersChange; view: SessionOwnersView } | null) => void;
   /** Change a role's reports_to. Resolves to the reparent result (told counts). */
   reparentOrgRole: (roleId: string, reportsTo: OrgParentRef, note?: string) => Promise<ReparentResult | undefined>;
   /** Change who a team member reports to (null: nobody). Dispatch runs orgPeople.reparentPerson. */
@@ -419,10 +422,9 @@ export type OrgSliceState = OrgSliceData & OrgSliceActions;
 // as a promise; the function BODY returns nothing. The slice is written against
 // the body's signature, the store interface against the caller's.
 type OrgSliceImpl = OrgSliceData &
-  Omit<OrgSliceActions, "reparentOrgSession" | "applySessionOwners" | "reparentOrgRole" | "staffHeadOfPeople" | "hireExecutiveAssistant" | keyof OrgServerVerbs<unknown>> & OrgServerVerbs<void> & {
+  Omit<OrgSliceActions, "reparentOrgSession" | "reparentOrgRole" | "staffHeadOfPeople" | "hireExecutiveAssistant" | keyof OrgServerVerbs<unknown>> & OrgServerVerbs<void> & {
     hireExecutiveAssistant: (input: OrgHireAssistantInput) => void;
     reparentOrgSession: (conversationId: string, target: OrgReparentSessionTarget, opts?: { row?: OrgSession | null; note?: string; from_session?: string }) => void;
-    applySessionOwners: (conversationId: string, change: SessionOwnersChange, undo?: SessionOwnersChange) => void;
     reparentOrgRole: (roleId: string, reportsTo: OrgParentRef, note?: string) => void;
     staffHeadOfPeople: (input: OrgStaffInput) => void;
   };
@@ -1447,18 +1449,24 @@ export function createOrgSlice(): OrgSliceImpl {
       }
     }),
 
-    // The owners menu's Save. The session row's role moves now; the owner
-    // set and the driver paint from the menu's own pending view
-    // (hooks/useOwners) until listOwners echoes.
-    applySessionOwners: asyncAction(function (this: OrgDraft, conversationId: string, change: SessionOwnersChange, _undo?: SessionOwnersChange) {
+    // The owners menu's Save. The sessionOwners row takes the view (a
+    // localFirst collection: the fields hold until listOwners echoes them)
+    // and the session row its role, in the same tick.
+    applySessionOwners: action(function (this: OrgDraft, conversationId: string, change: SessionOwnersChange, view: SessionOwnersView, _inverse?: { change: SessionOwnersChange; view: SessionOwnersView } | null) {
+      const draft = this as OrgDraft & {
+        sessionOwners?: Record<string, { owner_ids?: string[]; role_id?: string | null; driver?: SessionOwnersView["driver"] }>;
+        sessions?: Record<string, { org_role_id?: string | null; standing_role_id?: string | null }>;
+      };
+      const row = draft.sessionOwners?.[conversationId];
+      if (row) {
+        row.owner_ids = view.owner_ids;
+        row.role_id = view.role_id;
+        row.driver = view.driver;
+      }
       if (change.role === undefined) return;
-      const session = (this as OrgDraft & { sessions?: Record<string, { org_role_id?: string | null; standing_role_id?: string | null }> }).sessions?.[conversationId];
+      const session = draft.sessions?.[conversationId];
       if (session && !session.standing_role_id) session.org_role_id = change.role;
     }),
-
-    // Nothing in the store holds the driver yet (the owners read does); the
-    // dispatch is the write.
-    setSessionDriver: action(function (this: OrgDraft, _conversationId: string, _driver: SessionDriverTarget, _prior?: SessionDriverTarget) {}),
 
     reparentOrgPerson: action(function (this: OrgDraft, _teamId: string, userId: string, reportsTo: string | null) {
       const tree = this.orgTree;

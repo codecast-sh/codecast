@@ -13,9 +13,13 @@ describe("the owners menu's staged change", () => {
   test("adding a role makes it drive; Save sends only the role", () => {
     const d = addRole(justMe, EVALS);
     expect(d.driver).toEqual({ kind: "role", role_id: "r1" });
-    const { change, undo } = diffOwners(justMe, d);
+    const { change, view, inverse } = diffOwners(justMe, d);
     expect(change).toEqual({ role: "r1", driver: { kind: "role" } });
-    expect(undo).toEqual({ role: null, driver: { kind: "user", user_id: "me" } });
+    expect(view).toEqual({ owner_ids: ["me"], role_id: "r1", driver: { kind: "role", role_id: "r1" } });
+    // The driver nobody chose comes back unset, not stamped as "me".
+    expect(inverse).toEqual({ change: { role: null, driver: { kind: "none" } }, view: { owner_ids: ["me"], role_id: null, driver: { kind: "user", user_id: "me" } } });
+    // A driver someone did choose comes back as that person.
+    expect(diffOwners(justMe, d, { initialDriverUserId: "me" }).inverse?.change.driver).toEqual({ kind: "user", user_id: "me" });
   });
 
   test("one role at a time: a second role replaces the first", () => {
@@ -41,14 +45,28 @@ describe("the owners menu's staged change", () => {
     expect(removeRole(roleDrives).driver).toEqual({ kind: "user", user_id: "me" });
   });
 
-  test("leaving moves the session first and takes you off", () => {
+  test("leaving rides the change with its move, and has no undo", () => {
     const two: OwnersDraft = { ownerIds: ["me", "ashot"], role: null, driver: { kind: "user", user_id: "ashot" }, moveTo: null };
-    const d = leave(two, "me", { device_id: "mini", is_remote: false, label: "Ashot's Mac mini" });
-    const { change, undo, dirty } = diffOwners(two, d);
+    const d = leave(two, "me", { device_id: "mini", is_remote: false, label: "Ashot's Mac mini", runner_id: "ashot", runner_is_bot: false });
+    const { change, view, inverse, dirty } = diffOwners(two, d, { meId: "me" });
     expect(dirty).toBe(true);
-    expect(d.moveTo?.device_id).toBe("mini");
-    expect(change).toEqual({ remove: ["me"] });
-    expect(undo).toEqual({ add: ["me"], driver: { kind: "user", user_id: "ashot" } });
+    expect(change).toEqual({ leave: { move_to_device_id: "mini" } });
+    expect(view.owner_ids).toEqual(["ashot"]);
+    expect(inverse).toBeNull();
+  });
+
+  test("the only owner leaving by a move: the new runner owns it and drives", () => {
+    const d = leave(justMe, "me", { device_id: "mini", is_remote: false, label: "Ashot's Mac mini", runner_id: "ashot", runner_is_bot: false });
+    const { change, view } = diffOwners(justMe, d, { meId: "me" });
+    expect(change).toEqual({ leave: { move_to_device_id: "mini" } });
+    expect(view).toEqual({ owner_ids: ["ashot"], role_id: null, driver: { kind: "user", user_id: "ashot" } });
+  });
+
+  test("leaving a teammate's session needs no move, and undo adds you back", () => {
+    const two: OwnersDraft = { ownerIds: ["ashot", "me"], role: null, driver: { kind: "user", user_id: "ashot" }, moveTo: null };
+    const { change, inverse } = diffOwners(two, leave(two, "me", null), { meId: "me" });
+    expect(change).toEqual({ leave: {} });
+    expect(inverse?.change).toEqual({ add: ["me"] });
   });
 });
 

@@ -216,6 +216,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   updateClientDismissed: READ_STATE,
   markSessionSeen: READ_STATE,
   clearAssignedPing: READ_STATE,
+  ackSessionAssignment: READ_STATE,
   markBlockedAcknowledged: never("banner: \"never restart this\" answers the blocked banner; the row's restart control asks again"),
   toggleChatReaction: never("reaction: the same click takes it back, and it notifies the author"),
   skipChatRoundFloor: never("round: the next agent is already woken; the skipped one can still answer in the thread"),

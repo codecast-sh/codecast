@@ -22,7 +22,6 @@ import { addPeople, addPerson, addRole, diffOwners, driverKey, leave, removePers
 import { useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
 import { useMoveTargets } from "../hooks/useBulkMoveSessions";
-import { requestSessionMove } from "../lib/sessionCommands";
 import { teamMembersOf } from "../lib/activeTeam";
 import { isPerson } from "@codecast/shared/team/memberKind";
 import { memberPresenceVisual, presenceLabel } from "./presence/memberPresence";
@@ -114,7 +113,11 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
   const roster = useInboxStore(teamMembersOf) as any[];
   const sessionWork = useInboxStore((s) => {
     const row = (s.sessions as any)?.[s.resolveLiveSessionId(conversationId)] ?? (s.conversations as any)?.[conversationId];
-    return `${row?.project_id ?? ""}|${row?.active_plan?._id ?? ""}`;
+    return `${row?.project_id ?? ""}|${row?.active_plan?._id ?? ""}|${row?.active_plan?.title ?? ""}`;
+  });
+  const projectTitle = useInboxStore((s) => {
+    const id = sessionWork.split("|")[0];
+    return id ? ((s as any).projects?.[id]?.title as string | undefined) ?? null : null;
   });
   const { meId, people: initialPeople, role: initialRole, driver: initialDriver } = useOwnersView(owners);
   const runsOnMine = !!meId && owners.runner?.user_id === meId;
@@ -138,9 +141,17 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
 
   const q = query.trim().toLowerCase();
   const matches = (...texts: (string | undefined)[]) => !q || texts.some((t) => t?.toLowerCase().includes(q));
-  const [projectId, planId] = sessionWork.split("|");
+  const [projectId, planId, planTitleRaw] = sessionWork.split("|");
+  const planTitle = planTitleRaw || null;
+  const projectTitles: Record<string, string> = projectId && projectTitle ? { [projectId]: projectTitle } : {};
   const offerRoles = isStandingThread ? [] : liveRoles.filter((r) => r._id !== draft.role?.role_id && matches(r.name, r.handle));
-  const fits = offerRoles.filter((r) => (projectId && r.scope?.project_ids?.includes(projectId)) || (planId && r.scope?.plan_ids?.includes(planId)));
+  // Why a role is suggested: its area holds this session's project or plan.
+  // The fallback roles (none fits) carry no reason.
+  const reasonOf = (r: OrgRole): string | null =>
+    projectId && r.scope?.project_ids?.includes(projectId) ? `This session is in ${projectTitles[projectId] ?? "its project"}`
+      : planId && r.scope?.plan_ids?.includes(planId) ? `This session works on ${planTitle ?? "its plan"}`
+        : null;
+  const fits = offerRoles.filter((r) => reasonOf(r));
   const suggested = (fits.length ? fits : offerRoles).slice(0, SUGGESTED_ROLES);
   const restRoles = offerRoles.filter((r) => !suggested.includes(r));
   const shownRoles = q || moreRoles ? [...suggested, ...restRoles] : suggested;
@@ -158,16 +169,17 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
 
   const add = (c: Candidate, drive = false) => setDraft((d) => (c.kind === "role" ? addRole(d, roleOwnerOf(c.role)) : addPerson(d, c.person._id, drive)));
   const makeDriver = (driver: SessionDriver) => setDraft((d) => ({ ...d, driver }));
-  const leaveTo = (device: Device) => {
+  const leaveTo = (device: Device & { owner_user_id?: string; is_bot?: boolean }) => {
     setLeaving(false);
-    if (meId) setDraft((d) => leave(d, meId, { device_id: device.device_id, is_remote: device.is_remote, label: deviceDisplayName(device) }));
+    if (meId) setDraft((d) => leave(d, meId, { device_id: device.device_id, is_remote: device.is_remote, label: deviceDisplayName(device), runner_id: String(device.owner_user_id ?? ""), runner_is_bot: !!device.is_bot }));
   };
 
-  const { added, removed, roleChanged, driverChanged, dirty, change, undo } = diffOwners(initial, draft);
+  // Leave, the move with it, and everything else land as one change, so a
+  // refusal (the move or the leave) rolls the whole Save back.
+  const { added, removed, leaving: iLeave, roleChanged, driverChanged, dirty, change, view, inverse } = diffOwners(initial, draft, { meId, initialDriverUserId: owners.row?.driver_user_id ?? null });
   const save = () => {
     if (!dirty) return;
-    if (draft.moveTo) void requestSessionMove(conversationId, draft.moveTo).catch(() => {});
-    void owners.applyChange(change, { ownerIds: draft.ownerIds, role: draft.role, driver: draft.driver }, undo);
+    owners.applyChange(change, view, inverse);
     onClose();
   };
 
@@ -194,23 +206,32 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
     // A long multi-select reads as one count, not a wall of chips.
     ...(added.length > 3 ? [`+ ${added.length} people`] : added.map((id) => `+ ${personOf(id).name}${drivesTag(`p:${id}`)}`)),
     ...(roleChanged && draft.role ? [`+ ${draft.role.name}${drivesTag(`r:${draft.role.role_id}`)}`] : []),
-    ...removed.map((id) => (id === meId ? "You leave" : `− ${personOf(id).name}`)),
+    ...removed.map((id) => `− ${personOf(id).name}`),
+    ...(iLeave ? ["You leave"] : []),
     ...(roleChanged && initial.role ? [`− ${initial.role.name}`] : []),
     ...(driverChanged && draft.driver && !driverOnNew ? [`${driverName(draft.driver)} · driver`] : []),
     ...(draft.moveTo ? [`Move to ${draft.moveTo.label}`] : []),
   ];
 
-  const ownerRow = (key: string, face: ReactNode, name: string, sub: string, onRemove: () => void, removeLabel: string, driverOf: SessionDriver | null, dim = false) => (
+  // A teammate who only sees the session reads the owners: no ×, no Make
+  // driver, no candidates (the server refuses the rest anyway).
+  const readOnly = !owners.canEdit;
+  // The only owner of a session someone else runs cannot leave it: nobody
+  // would be left to own it.
+  const soleOwner = !!meId && draft.ownerIds.length === 1 && draft.ownerIds[0] === meId && !runsOnMine;
+  const ownerRow = (key: string, face: ReactNode, name: string, sub: string, onRemove: (() => void) | null, removeLabel: string, driverOf: SessionDriver | null, dim = false) => (
     <div key={key} className={ROW} data-owner-row={key} onMouseEnter={(e) => e.currentTarget.setAttribute("data-highlighted", "")} onMouseLeave={(e) => e.currentTarget.removeAttribute("data-highlighted")}>
       {face}
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
         <span className="truncate">{name}</span>
         <span className={`truncate text-meta ${dim ? "text-sol-text-dim" : "text-sol-text-muted"}`}>{sub}</span>
       </span>
-      {driverOf && <Button type="button" variant="outline" size="xs" className="own-mk" onClick={() => makeDriver(driverOf)}>Make driver</Button>}
-      <button type="button" onClick={onRemove} title={removeLabel} aria-label={removeLabel} className={`${ICON_BTN} hover:text-sol-red hover:bg-sol-red/10`}>
-        <X className="w-3.5 h-3.5" />
-      </button>
+      {driverOf && !readOnly && <Button type="button" variant="outline" size="xs" className="own-mk" onClick={() => makeDriver(driverOf)}>Make driver</Button>}
+      {!readOnly && (
+        <button type="button" onClick={onRemove ?? undefined} aria-disabled={!onRemove} title={removeLabel} aria-label={removeLabel} className={`${ICON_BTN} ${onRemove ? "hover:text-sol-red hover:bg-sol-red/10" : "opacity-40 cursor-default"}`}>
+          <X className="w-3.5 h-3.5" />
+        </button>
+      )}
     </div>
   );
 
@@ -239,8 +260,8 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
         const sub = [drives ? "Driver" : "Owner", runs ? (id === meId ? "runs on your account" : "runs it") : null, added.includes(id) ? "new" : null].filter(Boolean).join(" · ");
         const mine = id === meId;
         return ownerRow(`p:${id}`, <Face person={p} size={20} driver={drives} />, p.name, sub,
-          mine && runsOnMine && !draft.moveTo ? () => setLeaving((v) => !v) : () => setDraft((d) => removePerson(d, id)),
-          mine ? "Leave" : `Remove ${p.name}`,
+          mine && soleOwner ? null : mine && runsOnMine && !draft.moveTo ? () => setLeaving((v) => !v) : () => setDraft((d) => removePerson(d, id)),
+          mine ? (soleOwner ? "You are its only owner: add someone before you leave" : "Leave") : `Remove ${p.name}`,
           drives ? null : { kind: "user", user_id: id });
       })}
       {draft.role && (() => {
@@ -249,11 +270,16 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
         return ownerRow(`r:${draft.role.role_id}`, <Face role={draft.role} size={20} driver={drives} paused={!drives} />, draft.role.name, sub, () => setDraft(removeRole), `Remove ${draft.role.name}`,
           drives ? null : { kind: "role", role_id: draft.role.role_id }, !drives);
       })()}
-      {meId && isPerson(owners.currentUser) && !draft.ownerIds.includes(meId) && !removed.includes(meId) && (
-        <button type="button" className={`${ROW} w-full text-sol-cyan`} onClick={() => add({ key: `p:${meId}`, kind: "person", person: personOf(meId) })}>
+      {meId && isPerson(owners.currentUser) && !draft.ownerIds.includes(meId) && !iLeave && (
+        <button type="button" data-take-ownership className={`${ROW} w-full text-sol-cyan`} onClick={() => {
+          // A claim is one press: the server lets anyone who sees the session take it.
+          if (readOnly) { owners.applyChange({ add: [meId] }, { ...view, owner_ids: [...view.owner_ids, meId] }, { change: { remove: [meId] }, view }); onClose(); }
+          else add({ key: `p:${meId}`, kind: "person", person: personOf(meId) });
+        }}>
           <UserCheck className="w-3.5 h-3.5" /> Take ownership
         </button>
       )}
+      {!readOnly && <>
       <div className={SEP} />
       <label className="flex h-8 items-center gap-2 px-2 text-sol-text-dim">
         <Search className="w-3.5 h-3.5" />
@@ -299,6 +325,7 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
                     <span className="truncate">{name}</span>
                     {isRole && <span className="truncate font-mono text-meta text-sol-text-dim">@{c.role.handle}</span>}
                   </span>
+                  {isRole && reasonOf(c.role) && <span className="truncate text-meta text-sol-text-dim" data-role-reason>{reasonOf(c.role)}</span>}
                   {presence && (
                     <span className="inline-flex items-center gap-1.5 text-meta text-sol-text-dim">
                       <span className={`inline-flex h-1.5 w-1.5 rounded-full ${presence === "Active" ? "bg-sol-green" : "bg-sol-text-dim"}`} />{presence}
@@ -330,6 +357,7 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
           Save <KeyCap size="xs" tone="onAccent">{isMac ? "⌘↵" : "Ctrl ↵"}</KeyCap>
         </Button>
       </div>
+      </>}
     </div>
   );
 }

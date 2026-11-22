@@ -1,32 +1,33 @@
 "use client";
 
 /**
- * The OWNERS axis of a session — the SET of teammates whose inboxes it appears
- * in and who receive its notifications. This is the platform-free core shared
- * by the web AssignmentBadge and the mobile AssignmentChip: it owns the live
- * listOwners query (owner set only — the picker roster is a separate
- * listOwnerCandidates subscription, mounted only while the menu is open) and
- * the optimistic in-flight overrides, and exposes toggle / clearAll / display
- * helpers.
+ * The OWNERS of a session: the people whose inboxes it is in, at most one
+ * role, who drives (messages the agent) and the account that runs it. Shared
+ * by the web header (AssignmentBadge, OwnersMenu) and the mobile
+ * AssignmentChip.
+ *
+ * Local-first: listOwners FEEDS the `sessionOwners` store collection (one row
+ * per conversation, keyed by its id) and this hook reads that row. Every
+ * write is the store's applySessionOwners action, which patches owner_ids,
+ * role_id and driver on the row before applyOwnersChange lands, so the faces
+ * and the menu repaint in the same tick, undo and redo included; a refusal
+ * rolls the row back through the store's own refusal path.
  *
  * MOBILE-SAFE by construction: this file is bundled into the Expo app, so no
  * DOM, no sonner, no window/document (see shared-code Hermes traps). The
- * environment injects what differs per platform: the team roster + current
- * user (web reads the inbox store; mobile queries convex per screen) and a
- * notify callback (web: sonner toast; mobile: the session screen's toast).
- * useStoreOwnersEnv adds the rest, the same for both: the implicit owner and
- * the one reparent write path.
+ * environment injects what differs per platform: the team roster, the current
+ * user and a notify callback; useStoreOwnersEnv adds the rest.
  */
 
-import { useMemo, useState, useSyncExternalStore } from "react";
-import { useMutation } from "convex/react";
+import { useMemo } from "react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { humanizeConvexError } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
-import { useWatchEffect } from "./useWatchEffect";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useSyncCollection } from "./useSyncCollection";
+import { useCollectionRows } from "./useCollectionRows";
 import { peopleOf } from "@codecast/shared/team/memberKind";
-import type { SessionOwnersChange } from "../store/orgSlice";
+import type { SessionOwnersChange, SessionOwnersView } from "../store/orgSlice";
+import { driverKey } from "../lib/ownersDraft";
 
 type OwnerInfo = {
   user_id: string;
@@ -58,45 +59,28 @@ export type SessionDriver = { kind: "role"; role_id: string } | { kind: "user"; 
 /** The account that runs the session, whether or not it owns it. */
 export type OwnerRunner = OwnerInfo & { is_bot: boolean };
 
-/** What the owners menu shows once a Save lands: people in the order added,
- *  the role, and who drives. */
-export type OwnersView = { ownerIds: string[]; role: OwnerRole | null; driver: SessionDriver | null };
+/** The `sessionOwners` row: listOwners as the server answers it, keyed by the
+ *  conversation. `owners`, `role` and `runner` are enrichment the server
+ *  derives; `owner_ids`, `role_id` and `driver` are what a Save writes. */
+export type SessionOwnersRow = {
+  _id: string;
+  short_id: string;
+  conversation_id: string;
+  owners: OwnerInfo[];
+  owner_ids: string[];
+  role: OwnerRole | null;
+  role_id: string | null;
+  driver: SessionDriver | null;
+  driver_user_id: string | null;
+  runner: OwnerRunner | null;
+  can_edit: boolean;
+};
 
-export const sameDriver = (a: SessionDriver | null, b: SessionDriver | null): boolean =>
-  !a || !b ? a === b : a.kind === b.kind && (a.kind === "role" ? a.role_id === (b as any).role_id : a.user_id === (b as any).user_id);
-
-/** Whether the server's owners read already says what a pending Save wants. */
-export function viewSettled(view: OwnersView, server: { owners?: OwnerInfo[]; role?: OwnerRole | null; driver?: SessionDriver | null } | null | undefined): boolean {
-  if (!server) return false;
-  const ids = (server.owners ?? []).map((o) => o.user_id);
-  return ids.length === view.ownerIds.length && view.ownerIds.every((id) => ids.includes(id))
-    && (server.role?.role_id ?? null) === (view.role?.role_id ?? null)
-    && sameDriver(server.driver ?? null, view.driver);
-}
-
-// A Save in flight, shared by every useOwners instance on a conversation (the
-// header faces and the menu): what to draw until listOwners echoes it. Module
-// state for the same reason as the handoffs below.
-const pendingViews = new Map<string, OwnersView>();
-const viewListeners = new Set<() => void>();
-function setPendingView(conversationId: string, view: OwnersView | null) {
-  if (view) pendingViews.set(conversationId, view);
-  else if (!pendingViews.delete(conversationId)) return;
-  for (const l of viewListeners) l();
-}
-function usePendingView(conversationId: string): OwnersView | undefined {
-  return useSyncExternalStore(
-    (l) => { viewListeners.add(l); return () => { viewListeners.delete(l); }; },
-    () => pendingViews.get(conversationId),
-    () => undefined,
-  );
-}
 
 /**
  * One handoff as the transcript draws it: who passed the session to whom, when,
  * and the note they wrote. Derived from the owner row the handoff created (a
- * self-claim is not a handoff), plus an optimistic entry for a transfer still
- * in flight so the marker lands the instant the composer clears.
+ * self-claim is not a handoff).
  */
 export type HandoffInfo = {
   to: string;
@@ -108,59 +92,7 @@ export type HandoffInfo = {
   at: number;
   note: string | null;
   seen: boolean;
-  pending?: boolean;
 };
-
-// In-flight handoffs, shared by every useOwners instance on a conversation:
-// the composer writes one when a teammate is picked and the transcript (a
-// separate instance) draws it the same frame. Module state, not the inbox
-// store — it lives only until the server row echoes back.
-const pendingHandoffsByConv = new Map<string, Record<string, HandoffInfo>>();
-const pendingListeners = new Set<() => void>();
-const EMPTY_PENDING: Record<string, HandoffInfo> = {};
-function setPendingHandoffs(conversationId: string, update: (p: Record<string, HandoffInfo>) => Record<string, HandoffInfo>) {
-  const prev = pendingHandoffsByConv.get(conversationId) ?? EMPTY_PENDING;
-  const next = update(prev);
-  if (next === prev) return;
-  if (Object.keys(next).length === 0) pendingHandoffsByConv.delete(conversationId);
-  else pendingHandoffsByConv.set(conversationId, next);
-  for (const l of pendingListeners) l();
-}
-function usePendingHandoffs(conversationId: string): Record<string, HandoffInfo> {
-  return useSyncExternalStore(
-    (l) => { pendingListeners.add(l); return () => { pendingListeners.delete(l); }; },
-    () => pendingHandoffsByConv.get(conversationId) ?? EMPTY_PENDING,
-    () => EMPTY_PENDING,
-  );
-}
-
-/** How the owner set was changed, for a `reparent` binding that reaches the one
- *  reparent core (org-staffing.md S11). `add` adds people beside the others
- *  (the role stays), `set` makes the LAST listed primary (callers put the named
- *  person last), `remove` leaves the line to whoever remains; a role files the
- *  session under the role, and a null role takes it off. */
-export type OwnerReparentTarget =
-  | { kind: "user"; owners: string[]; mode: "set" | "add" | "remove" }
-  | { kind: "role"; role_id: string | null };
-
-/**
- * The owner set a hand-off sends, in the order the core reads it.
- *
- * The person the hand-off NAMES must come last, because
- * performReparentSession takes the LAST owner as the session's new reporting
- * parent. A Set keeps insertion order and re-adding a member already in it does
- * not move it, so handing a thread to someone who is ALREADY a co-owner would
- * otherwise leave the reporting line with whoever happened to be last, filing
- * the thread under the wrong person. Deleting before adding moves them to the
- * end. `keepSelf` decides whether the person handing it over stays an owner.
- */
-export function handoffOwnerSet(ownerIds: Iterable<string>, to: string, meId?: string, keepSelf = false): string[] {
-  const desired = new Set(ownerIds);
-  if (!keepSelf && meId && meId !== to) desired.delete(meId);
-  desired.delete(to);
-  desired.add(to);
-  return Array.from(desired);
-}
 
 export type OwnersEnv = {
   // Warm-paint fallback roster only: the picker overlays the SESSION team's
@@ -168,28 +100,23 @@ export type OwnersEnv = {
   teamMembers: any[] | undefined;
   currentUser: any;
   notify?: (msg: string, kind: "success" | "error") => void;
-  // The store binding (org-staffing.md S11, built by useStoreOwnersEnv for web
-  // and mobile alike): every owner change and role move goes through the org
-  // store's reparentOrgSession, so the chart node moves in the same tick and
-  // one dispatch reaches the core. It owns its own toast (the "now reports to"
-  // line from the told counts, or the fallback for a plain remove/clear).
-  reparent: (target: OwnerReparentTarget, opts: { note?: string; parentName?: string; toastFallback?: string }) => Promise<void>;
-  // The owners menu's Save (store applySessionOwners): the whole change in
-  // one dispatch, with the change that undoes it.
-  applyOwners: (change: SessionOwnersChange, undo: SessionOwnersChange) => Promise<void>;
-  // Human who started the session (author, else runner). When the owner set
-  // is empty the chip and menu treat them as the owner — a person who started
-  // a thread already owns it, even before a session_owners row exists.
+  // The store write (useStoreOwnersEnv): applySessionOwners with the view it
+  // paints and the change that puts it back.
+  apply: (change: SessionOwnersChange, view: SessionOwnersView, inverse: { change: SessionOwnersChange; view: SessionOwnersView } | null) => void;
+  // The assignee's acknowledgement (store ackSessionAssignment).
+  ack: () => void;
+  // A role's face for a role id the row does not describe yet (just added).
+  roleById?: (roleId: string) => OwnerRole | null;
+  // Human who started the session (author, else runner): the owner until the
+  // row has loaded.
   implicitOwnerId?: string;
 };
 
 /**
  * Whether the live listOwners subscription should run. Skipped while the row
- * is an optimistic stub (client UUID, no server row yet) — the query resolves
- * null for a ref the server doesn't know — and whenever there is no current
- * user: every feature this hook powers is per-user, and a guest on a share
- * link has nothing to assign. The server also returns null without auth
- * rather than throwing, so a stale cookie cannot unmount the view.
+ * is an optimistic stub (client UUID, no server row yet) and whenever there is
+ * no current user: every feature this hook powers is per-user, and a guest on
+ * a share link has nothing to assign.
  */
 export function shouldQueryOwners(conversationId: string, currentUser: unknown): boolean {
   return Boolean(conversationId && isConvexId(conversationId) && currentUser);
@@ -227,44 +154,44 @@ export function useOwnerCandidates(
   return data?.team_members;
 }
 
-export function useOwners(conversationId: string, env: OwnersEnv) {
-  const { teamMembers, currentUser, notify, implicitOwnerId } = env;
+const selectOwnersRow = (d: any) => (d ? [{ ...d, _id: String(d.conversation_id), conversation_id: String(d.conversation_id) }] : []);
+const ownersRowSig = (r: SessionOwnersRow) => [
+  (r.owner_ids ?? []).join(","),
+  r.role_id ?? "",
+  r.role?.name ?? "",
+  driverKey(r.driver) ?? "",
+  r.driver_user_id ?? "",
+  r.runner?.user_id ?? "",
+  r.can_edit ? 1 : 0,
+  (r.owners ?? []).map((o) => `${o.user_id}:${o.name ?? ""}:${o.image ?? ""}:${o.seen_at ?? ""}:${o.added_at ?? ""}`).join(","),
+].join("|");
 
-  // useQueryNoThrow: listOwners is enrichment (chips, the handoff banner). A
-  // timeout or auth miss must not unmount ConversationView — that is what
-  // useQuery does with a terminal server error.
-  const { data, error } = useQueryNoThrow(
+/** The row as a Save's view: what applySessionOwners writes. */
+export const viewOfRow = (r: Pick<SessionOwnersRow, "owner_ids" | "role_id" | "driver">): SessionOwnersView => ({ owner_ids: r.owner_ids, role_id: r.role_id, driver: r.driver });
+
+export function useOwners(conversationId: string, env: OwnersEnv) {
+  const { teamMembers, currentUser, implicitOwnerId } = env;
+
+  // The feeder: useQueryNoThrow underneath, so a timeout or a client ahead of
+  // a deploy keeps the cached row and never unmounts the conversation.
+  const feed = useSyncCollection(
+    "sessionOwners",
     api.sessionOwnership.listOwners,
     shouldQueryOwners(conversationId, currentUser) ? { session_id: conversationId } : "skip",
+    { select: selectOwnersRow },
   );
-  const ackAssignment = useMutation(api.sessionOwnership.ackSessionAssignment);
+  const where = useMemo(() => (r: SessionOwnersRow) => r._id === conversationId, [conversationId]);
+  const row = useCollectionRows<SessionOwnersRow>("sessionOwners", { where, sig: ownersRowSig })[0] ?? null;
 
-  // In-flight optimistic overrides: user_id -> desired membership. Each entry is
-  // dropped once the reactive query confirms it (reconcile effect), so the chip
-  // never flickers back to the server value mid-round-trip.
-  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
-  // In-flight handoffs (assignee -> the marker to draw), dropped once the
-  // server's owner row carries this handoff (same assigner, stamped no earlier).
-  const pendingHandoffs = usePendingHandoffs(conversationId);
-  const pendingView = usePendingView(conversationId);
-
-  const serverIds = useMemo(
-    () => new Set((data?.owners ?? []).map((o: OwnerInfo) => o.user_id)),
-    [data],
-  );
-  const ownerIds = useMemo(() => {
-    if (pendingView) return new Set(pendingView.ownerIds);
-    const s = new Set(serverIds);
-    for (const [id, want] of Object.entries(overrides)) want ? s.add(id) : s.delete(id);
-    if (s.size === 0 && implicitOwnerId && overrides[implicitOwnerId] !== false) s.add(implicitOwnerId);
-    return s;
-  }, [serverIds, overrides, implicitOwnerId, pendingView]);
-  const role: OwnerRole | null = pendingView ? pendingView.role : (data?.role as OwnerRole | null | undefined) ?? null;
-  const driver: SessionDriver | null = pendingView ? pendingView.driver : (data?.driver as SessionDriver | null | undefined) ?? null;
-  const runner = (data?.runner as OwnerRunner | null | undefined) ?? null;
+  const ownerList: string[] = row ? row.owner_ids : implicitOwnerId ? [implicitOwnerId] : [];
+  const ownerIds = useMemo(() => new Set(ownerList), [ownerList.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const role: OwnerRole | null = !row?.role_id ? null
+    : row.role?.role_id === row.role_id ? row.role
+    : env.roleById?.(row.role_id) ?? { role_id: row.role_id, short_id: "", handle: "", name: "Role", avatar: null };
+  const driver = row?.driver ?? null;
+  const runner = row?.runner ?? null;
 
   const roster: any[] = useMemo(() => teamMembers ?? [], [teamMembers]);
-
   const memberById = useMemo(() => {
     const m = new Map<string, any>();
     for (const mem of roster) if (mem?._id) m.set(mem._id, mem);
@@ -273,7 +200,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
 
   const displayFor = (id: string) => {
     const mem = memberById.get(id);
-    const info = (data?.owners ?? []).find((o: OwnerInfo) => o.user_id === id);
+    const info = (row?.owners ?? []).find((o) => o.user_id === id) ?? (runner?.user_id === id ? runner : undefined);
     const name =
       mem?.name || info?.name || mem?.email?.split("@")[0] || info?.email?.split("@")[0] || "Teammate";
     return { name, image: mem?.image || mem?.github_avatar_url || info?.image || undefined };
@@ -281,16 +208,15 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
 
   const meId = currentUser?._id?.toString?.();
 
-  // Every handoff the owner rows record, oldest first, with in-flight ones
-  // overlaid by assignee. Visible to every viewer: the transcript marks where
-  // each transfer landed, not just the current user's own.
+  // Every handoff the owner rows record, oldest first. Visible to every
+  // viewer: the transcript marks where each transfer landed.
   const handoffs: HandoffInfo[] = useMemo(() => {
-    const byTo = new Map<string, HandoffInfo>();
-    for (const o of data?.owners ?? []) {
+    const out: HandoffInfo[] = [];
+    for (const o of row?.owners ?? []) {
       if (!o.added_by || o.added_by === o.user_id || !o.added_at) continue;
       const from = memberById.get(o.added_by);
       const to = memberById.get(o.user_id);
-      byTo.set(o.user_id, {
+      out.push({
         to: o.user_id,
         to_name: to?.name || o.name || to?.email?.split("@")[0] || o.email?.split("@")[0] || "Teammate",
         to_image: to?.image || to?.github_avatar_url || o.image,
@@ -302,144 +228,66 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
         seen: !!o.seen_at,
       });
     }
-    for (const [id, h] of Object.entries(pendingHandoffs)) byTo.set(id, h);
-    return Array.from(byTo.values()).sort((a, b) => a.at - b.at);
-  }, [data, memberById, pendingHandoffs]);
+    return out.sort((a, b) => a.at - b.at);
+  }, [row, memberById]);
 
-  // Once the server reflects an override's desired state, drop it.
-  useWatchEffect(() => {
-    const pending = pendingViews.get(conversationId);
-    if (pending && viewSettled(pending, data)) setPendingView(conversationId, null);
-    setOverrides((o) => {
-      let changed = false;
-      const n = { ...o };
-      for (const [id, want] of Object.entries(o)) {
-        if (serverIds.has(id) === want) { delete n[id]; changed = true; }
-      }
-      return changed ? n : o;
-    });
-    setPendingHandoffs(conversationId, (p) => {
-      let changed = false;
-      const n = { ...p };
-      for (const [id, h] of Object.entries(p)) {
-        const row = (data?.owners ?? []).find((o: OwnerInfo) => o.user_id === id);
-        if (row && row.added_by === h.from && (row.added_at ?? 0) >= h.at - 60_000) { delete n[id]; changed = true; }
-      }
-      return changed ? n : p;
-    });
-  }, [serverIds, data]);
-
-  const toggle = async (id: string, note?: string) => {
-    const wasOwner = ownerIds.has(id);
-    const disp = displayFor(id);
-    setOverrides((o) => ({ ...o, [id]: !wasOwner })); // optimistic
-    try {
-      // One path (S11): add puts this person beside the other owners (a role
-      // stays); remove leaves the line to whoever remains. The binding toasts.
-      await env.reparent(
-        { kind: "user", owners: [id], mode: wasOwner ? "remove" : "add" },
-        wasOwner ? { toastFallback: `Removed ${disp.name}` } : { note, parentName: disp.name },
-      );
-      // Leave the override; the reconcile effect clears it when the query catches up.
-    } catch (e: any) {
-      setOverrides((o) => { const n = { ...o }; delete n[id]; return n; }); // revert
-      notify?.(humanizeConvexError(e, "Owner change failed"), "error");
-    }
+  /** One Save: `view` paints on the row now, `change` goes to the server, and
+   *  `inverse` (null when nothing can put it back, as after a move) is undo's. */
+  const applyChange = (change: SessionOwnersChange, view: SessionOwnersView, inverse: { change: SessionOwnersChange; view: SessionOwnersView } | null) => {
+    if (!row) return;
+    env.apply(change, view, inverse);
   };
 
-  /**
-   * Apply one Save of the owners menu: `view` paints at once (header faces
-   * and the menu), `change` goes to the server in one dispatch, and `undo`
-   * is what puts it back.
-   */
-  const applyChange = async (change: SessionOwnersChange, view: OwnersView, undo: SessionOwnersChange) => {
-    setPendingView(conversationId, view);
-    try {
-      await env.applyOwners(change, undo);
-    } catch (e: any) {
-      setPendingView(conversationId, null);
-      notify?.(humanizeConvexError(e, "Owner change failed"), "error");
-    }
+  // Who drives once `removed` is gone: the role, else the first person left.
+  const fallbackDriver = (ids: string[], roleId: string | null): SessionDriver | null =>
+    roleId ? { kind: "role", role_id: roleId } : ids[0] ? { kind: "user", user_id: ids[0] } : null;
+
+  /** The phone's single toggle: add or remove one person; `note` rides an add
+   *  to the person added. */
+  const toggle = (id: string, note?: string) => {
+    if (!row) return;
+    const before = viewOfRow(row);
+    const removing = ownerIds.has(id);
+    const owner_ids = removing ? row.owner_ids.filter((x) => x !== id) : [...row.owner_ids, id];
+    const driver = removing && driverKey(row.driver) === `p:${id}` ? fallbackDriver(owner_ids, row.role_id) : row.driver;
+    const change: SessionOwnersChange = removing ? { remove: [id] } : { add: [id], ...(note?.trim() ? { note: note.trim() } : {}) };
+    applyChange(change, { owner_ids, role_id: row.role_id, driver }, { change: removing ? { add: [id] } : { remove: [id] }, view: before });
   };
 
-  /** File the session under a role (S11): the role becomes an owner and drives. */
-  const moveToRole = async (roleId: string, roleName: string) => {
-    try {
-      await env.reparent({ kind: "role", role_id: roleId }, { parentName: roleName, toastFallback: `Filed under ${roleName}` });
-    } catch (e: any) {
-      notify?.(humanizeConvexError(e, "Move to a role failed"), "error");
-    }
+  /** File the session under a role: the role becomes an owner and drives. */
+  const moveToRole = (roleId: string, _roleName?: string) => {
+    if (!row) return;
+    applyChange({ role: roleId }, { owner_ids: row.owner_ids, role_id: roleId, driver: { kind: "role", role_id: roleId } },
+      { change: { role: row.role_id, driver: row.driver_user_id ? { kind: "user", user_id: row.driver_user_id } : { kind: "none" } }, view: viewOfRow(row) });
   };
 
-  /**
-   * Hand the session to a teammate with a note, in ONE mutation: the desired
-   * set is the current owners plus them, minus me unless `keepSelf`. The note
-   * rides the assignee's row (their banner, their notification) and the
-   * transcript marker everyone sees. The marker is drawn optimistically so it
-   * lands the instant the composer clears.
-   */
-  const handoffTo = async (id: string, note: string, opts: { keepSelf?: boolean } = {}) => {
-    const trimmed = note.trim();
-    // The named person goes last; see handoffOwnerSet for why that matters.
-    const desired = handoffOwnerSet(ownerIds, id, meId, opts.keepSelf);
-    const disp = displayFor(id);
-    const me = meId ? displayFor(meId) : { name: "You", image: undefined };
-    setOverrides((o) => ({ ...o, [id]: true, ...(!opts.keepSelf && meId ? { [meId]: false } : {}) }));
-    if (meId) {
-      setPendingHandoffs(conversationId, (p) => ({
-        ...p,
-        [id]: { to: id, to_name: disp.name, to_image: disp.image, from: meId, from_name: me.name, from_image: me.image, at: Date.now(), note: trimmed || null, seen: false, pending: true },
-      }));
-    }
-    try {
-      // One path (S11): set the owner line to `desired`, last listed becomes
-      // the reporting parent. The binding toasts the "now reports to" line.
-      await env.reparent({ kind: "user", owners: desired, mode: "set" }, { note: trimmed, parentName: disp.name, toastFallback: `Handed off to ${disp.name}` });
-      return true;
-    } catch (e: any) {
-      setOverrides((o) => { const n = { ...o }; delete n[id]; if (meId) delete n[meId]; return n; });
-      setPendingHandoffs(conversationId, (p) => { const n = { ...p }; delete n[id]; return n; });
-      notify?.(humanizeConvexError(e, "Handoff failed"), "error");
-      return false;
-    }
-  };
-
-  const clearAll = async () => {
-    const ids = Array.from(ownerIds);
-    setOverrides((o) => { const n = { ...o }; for (const id of ids) n[id] = false; return n; });
-    try {
-      // One path (S11): an empty set disowns everyone in one call.
-      await env.reparent({ kind: "user", owners: [], mode: "set" }, { toastFallback: "Cleared owners" });
-    } catch (e: any) {
-      notify?.(humanizeConvexError(e, "Failed to clear owners"), "error");
-    }
+  /** Remove every person (the phone's "clear"); the role stays. */
+  const clearAll = () => {
+    if (!row || row.owner_ids.length === 0) return;
+    applyChange({ remove: row.owner_ids }, { owner_ids: [], role_id: row.role_id, driver: fallbackDriver([], row.role_id) },
+      { change: { add: row.owner_ids }, view: viewOfRow(row) });
   };
 
   // Bots (Mr Bot, Anchors) can't own a session — a bot's inbox is nobody's.
   const selectable = peopleOf(roster as any[]);
-  const ownerList = Array.from(ownerIds);
 
   // The current user's own UNACKED handoff (someone else assigned them, no
-  // seen_at) — drives the "assigned to you" banner. Locally-acked state hides
-  // it instantly while the mutation round-trips.
-  const [ackedLocally, setAckedLocally] = useState(false);
-  const myRow = meId ? (data?.owners ?? []).find((o: OwnerInfo) => o.user_id === meId) : undefined;
+  // seen_at) — drives the "assigned to you" banner. The store's ack stamps
+  // seen_at on the row, which hides it in the same tick.
+  const myRow = meId ? (row?.owners ?? []).find((o) => o.user_id === meId) : undefined;
   // The handoff: my owner row when someone ELSE added me. Outlives the ack —
   // the conversation marks where in the timeline the handoff landed for as
   // long as I own the session, not just until I press "Got it".
   const handoff = myRow && myRow.added_by && myRow.added_by !== meId ? myRow : null;
-  const myAssignment = !ackedLocally && handoff && !handoff.seen_at ? handoff : null;
-  const ack = async () => {
-    setAckedLocally(true);
-    try {
-      await ackAssignment({ session_id: conversationId });
-    } catch {
-      setAckedLocally(false);
-    }
-  };
+  const myAssignment = handoff && !handoff.seen_at ? handoff : null;
+  const ack = env.ack;
 
-  const canManage = error || data === null ? false : data ? true : undefined;
-  return { ownerIds, ownerList, implicitOwnerId, role, driver, runner, displayFor, toggle, moveToRole, applyChange, handoffTo, handoffs, clearAll, selectable, currentUser, handoff, myAssignment, ack, canManage };
+  // Whether the viewer may see the owners at all (false: the server refused
+  // or failed, undefined: not answered yet), and whether they may change them.
+  // A refusal or a failure wins over a cached row: the controls go rather than offer a write the server refuses.
+  const canManage = feed.refused || feed.error ? false : row ? true : undefined;
+  const canEdit = !!row?.can_edit;
+  return { row, ownerIds, ownerList, implicitOwnerId, role, driver, runner, displayFor, toggle, moveToRole, applyChange, handoffs, clearAll, selectable, currentUser, handoff, myAssignment, ack, canManage, canEdit };
 }
 
 export type OwnersApi = ReturnType<typeof useOwners>;

@@ -601,6 +601,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // and removed, the role, and who drives, in one transaction.
   applySessionOwners: async (ctx, _userId, [conversationId, change]: [string, any]) =>
     ctx.runMutation!((api as any).sessionOwnership.applyOwnersChange, { session_id: conversationId, change }),
+  // The assignee acknowledges a handoff (the banner's Got it, an inbox pill).
+  ackSessionAssignment: async (ctx, _userId, [conversationId]: [string]) =>
+    ctx.runMutation!((api as any).sessionOwnership.ackSessionAssignment, { session_id: conversationId }),
   reparentOrgRole: async (ctx, _userId, [roleId, reportsTo, note]: [string, any, string | undefined]) => {
     return await ctx.runMutation!((api as any).orgRoles.reparent, { role_id: roleId, reports_to: reportsTo, ...(note ? { note } : {}) });
   },

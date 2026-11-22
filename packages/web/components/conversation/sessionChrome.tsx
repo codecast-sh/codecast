@@ -197,13 +197,13 @@ export function ThreadTailLoader({ loading }: { loading: boolean }) {
 // passed the session to whom, and the note they wrote sits under it as a
 // message from the assigner. Every viewer sees it — it is the record of the
 // transfer, not a private ping (that is AssignedToYouBanner, for the assignee
-// until they acknowledge). A transfer still in flight renders dimmed.
+// until they acknowledge).
 export function HandoffMarker({ handoff, meId }: { handoff: HandoffInfo; meId?: string }) {
   "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const from = handoff.from === meId ? "You" : handoff.from_name;
   const to = handoff.to === meId ? "you" : handoff.to_name;
   return (
-    <div className={`mt-2 mb-3 ${handoff.pending ? "opacity-70" : ""}`} data-handoff-marker={handoff.to}>
+    <div className="mt-2 mb-3" data-handoff-marker={handoff.to}>
       <TimelineRule color="var(--sol-violet)" className="mb-2" label={`${from} handed this to ${to}`}>
         <span className="flex items-center gap-2 text-mark font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoff.at)}>
           <span className="flex items-center -space-x-1.5">

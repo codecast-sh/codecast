@@ -6610,6 +6610,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // Local-first clear of a row's "assigned to you" ping (paired with the
   // ackSessionAssignment mutation, which the caller fires separately).
   clearAssignedPing: (conversationId: string) => void;
+  // The assignee acknowledges a handoff: the ping and the banner retire now,
+  // and the ackSessionAssignment side effect stamps seen_at on the server.
+  ackSessionAssignment: (conversationId: string) => void;
   syncOverlay: (field: string, overlayById: Record<string, Record<string, any>>) => void;
   syncMentionIndex: (kind: "tasks" | "docs" | "plans", items: any[]) => void;
   // -- Incremental-sync watermark (IDB-persisted, keyed by "<namespace>:<wsKey>") --
@@ -13108,6 +13111,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
   clearAssignedPing: sync(function (this: Draft, conversationId: string) {
     const row = this.sessions[conversationId];
     if (row?.assigned_ping) row.assigned_ping = null;
+  }),
+
+  // My owner entry on the session's owners row takes seen_at, which hides the
+  // assigned-to-you banner; `owners` is unprotected (the server's own stamp
+  // replaces this one on the next push).
+  ackSessionAssignment: action(function (this: Draft, conversationId: string) {
+    const session = this.sessions[conversationId];
+    if (session?.assigned_ping) session.assigned_ping = null;
+    const me = String(this.currentUser?._id ?? "");
+    const mine = (this as any).sessionOwners?.[conversationId]?.owners?.find((o: any) => o.user_id === me);
+    if (mine && !mine.seen_at) mine.seen_at = Date.now();
   }),
 
   // Merge a small high-churn map (e.g. heartbeat liveness keyed by id) onto a
