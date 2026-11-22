@@ -120,14 +120,28 @@ export function isValidPort(port: unknown): port is number {
   return typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
+/** An endpoint a loopback socket can be opened against: a valid port and a
+ *  token to say hello with. */
+export function isUsableEndpoint(ep: { port?: unknown; token?: unknown } | null | undefined): ep is TerminalEndpoint {
+  return !!ep && isValidPort(ep.port) && typeof ep.token === "string" && ep.token.length > 0;
+}
+
+/** The one builder of a loopback daemon socket URL (terminal, browser watch,
+ *  vault): null for an endpoint whose URL the browser would reject. */
+export function loopbackWsUrl(ep: TerminalEndpoint, path: string): string | null {
+  // Literal IPv4: macOS resolves `localhost` to ::1 first and the daemon may
+  // bind IPv4 only.
+  return isUsableEndpoint(ep) ? `ws://127.0.0.1:${ep.port}${path}` : null;
+}
+
 function readOverride(): TerminalEndpoint | null {
   try {
     const raw = localStorage.getItem(OVERRIDE_KEY);
     if (!raw) return null;
     const [port, token] = raw.split(":");
-    if (!port || !token || !/^\d+$/.test(port)) return null;
-    const n = Number(port);
-    return isValidPort(n) ? { port: n, token, deviceId: OVERRIDE_DEVICE_ID, tmux: true } : null;
+    if (!port || !/^\d+$/.test(port)) return null;
+    const ep = { port: Number(port), token, deviceId: OVERRIDE_DEVICE_ID, tmux: true };
+    return isUsableEndpoint(ep) ? ep : null;
   } catch {
     return null;
   }
@@ -136,11 +150,13 @@ function readOverride(): TerminalEndpoint | null {
 function readCache(): TerminalEndpoint | null {
   try {
     const raw = sessionStorage.getItem(CACHE_KEY);
-    const ep = raw ? (JSON.parse(raw) as TerminalEndpoint | null) : null;
-    return ep && isValidPort(ep.port) ? ep : null;
-  } catch {
-    return null;
-  }
+    if (!raw) return null;
+    const ep = JSON.parse(raw) as TerminalEndpoint | null;
+    if (isUsableEndpoint(ep)) return ep;
+  } catch {}
+  // A malformed entry is dropped, so the next lookup runs discovery afresh.
+  writeCache(null);
+  return null;
 }
 
 function writeCache(ep: TerminalEndpoint | null): void {
@@ -156,8 +172,8 @@ export function termHttpBase(ep: TerminalEndpoint): string {
   return `http://127.0.0.1:${ep.port}`;
 }
 
-export function termWsUrl(ep: TerminalEndpoint): string {
-  return `ws://127.0.0.1:${ep.port}/term/ws`;
+export function termWsUrl(ep: TerminalEndpoint): string | null {
+  return loopbackWsUrl(ep, "/term/ws");
 }
 
 /** Probe an endpoint: does a daemon with this token answer on loopback? */
@@ -271,11 +287,11 @@ async function discover(convex: ConvexReactClient, deviceId?: string): Promise<T
           tmux: parsed.tmux,
         };
         // First endpoint that actually answers on loopback wins.
-        if (isValidPort(ep.port) && (await probeWithPatience(ep)) !== null) {
+        if (isUsableEndpoint(ep) && (await probeWithPatience(ep)) !== null) {
           lastFailure = "none";
           return ep;
         }
-        if (deviceId && isValidPort(ep.port) && ep.deviceId === deviceId) missedReplies.set(deviceId, ep);
+        if (deviceId && isUsableEndpoint(ep) && ep.deviceId === deviceId) missedReplies.set(deviceId, ep);
         if (lastProbeMiss === "timeout") sawTimeout = true;
       } catch {}
     }
@@ -358,7 +374,8 @@ export async function forwardHostPort(convex: ConvexReactClient, deviceId: strin
     );
     if (!res.ok) return null;
     if (port === undefined) return 0;
-    return ((await res.json()) as { port: number }).port;
+    const forwarded = ((await res.json()) as { port?: unknown }).port;
+    return isValidPort(forwarded) ? forwarded : null;
   } catch {
     return null;
   }
