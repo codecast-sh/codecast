@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useLocation } from "react-router";
 import { useInboxStore, isSessionHidden } from "../store/inboxStore";
@@ -63,5 +63,11 @@ export function useOpenSession(): (id: string) => void {
     router.push(`/inbox?s=${id}`);
   }, [router]);
 
-  return kind === "leave" ? leaveAndOpen : openInPlace;
+  // One function for the life of the caller, choosing at call time. The kind
+  // flips with the route, and the rail hands this callback to each of its
+  // cards: a new function per route change re-rendered every card in the
+  // rail on the way back to the inbox (ct-97296).
+  const chosenRef = useRef(openInPlace);
+  chosenRef.current = kind === "leave" ? leaveAndOpen : openInPlace;
+  return useCallback((id: string) => chosenRef.current(id), []);
 }
