@@ -22540,8 +22540,7 @@ workflow
           workflow_name: graph.name,
           workflow_goal: graph.goal,
           workflow_id: workflowId,
-          // The run pins the version this push left (ct-98653).
-          ...(pushResult?.version_id ? { workflow_version_id: pushResult.version_id } : {}),
+          workflow_version_id: pushResult?.version_id,
           task_id: runOpts.taskId,
           plan_id: runOpts.planId,
           goal_override: runOpts.goalOverride,
