@@ -44,6 +44,9 @@ mock.module("../../hooks/useSyncOrgHealth", () => ({ ...realHealth, useSyncOrgHe
 const realUnder = { ...(await import("../../hooks/useOrgSessionsUnder")) };
 mock.module("../../hooks/useOrgSessionsUnder", () => ({ ...realUnder, useOrgSessionsUnder: () => ({ data: undefined }) }));
 mock.module("./OrgGraph", () => ({ OrgGraph: (props: any) => h("div", { "data-graph-lens": props.lens }) }));
+// The Head of People's thread itself is the real conversation view, which needs a Convex client; the drawer around it is what this test reads.
+const realAnchor = { ...(await import("../anchor/AnchorConversation")) };
+mock.module("../anchor/AnchorConversation", () => ({ ...realAnchor, AnchorConversation: (props: any) => h("div", { "data-thread": props.conversationId }) }));
 
 const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../store/inboxStore");
