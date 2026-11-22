@@ -13,7 +13,7 @@ import { useInboxStore, selectChannelReadMarker, selectThreadMuted } from '@code
 import { useThreadMessages, useThreadSync } from '@codecast/web/hooks/useChatSync';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
-import { lineGroupKey, buildChatTimeline, memberHandle, dmOtherIds } from '@codecast/shared/chat';
+import { lineGroupKey, buildChatTimeline, memberHandle, dmOtherIds, dmWatcher } from '@codecast/shared/chat';
 import { channelDisplayName } from '@codecast/web/lib/chatViews';
 import { MessageRow, fromChatView, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
@@ -241,7 +241,7 @@ export default function ChatThreadScreen() {
   const armed = thread.anchor?.armed ?? false;
   const isDm = channel?.kind === 'dm';
   const roomLabel = !channel ? '' : isDm
-    ? channelDisplayName({ name: channel.name ?? '', kind: 'dm', dmMemberIds: dmOtherIds(channel.dm_key, viewerId) }, teamMembers)
+    ? channelDisplayName({ name: channel.name ?? '', kind: 'dm', dmMemberIds: dmOtherIds(channel.dm_key, viewerId), dmWatching: dmWatcher(channel.dm_key, viewerId) }, teamMembers)
     : channel.name ? `#${channel.name}` : '';
   // The rollup the channel page carried says how many replies exist; until
   // the thread page lands, the gap is said rather than drawn as an empty room.

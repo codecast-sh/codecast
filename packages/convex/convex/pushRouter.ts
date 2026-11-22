@@ -464,7 +464,7 @@ export async function performPushFlush(ctx: any, userId: any): Promise<void> {
   // person (a mention, a DM line, @here), the time-sensitive interruption
   // level — a message TO you should raise a Focus-respecting banner, not sit
   // in the summary tray.
-  const CHAT_TYPES = new Set(["chat_mention", "chat_reply", "chat_here", "chat_dm", "chat_added", "chat_post"]);
+  const CHAT_TYPES = new Set(["chat_mention", "chat_reply", "chat_here", "chat_dm", "chat_added", "chat_post", "call_chat"]);
   // Addressed to this person by construction — a direct mention, or a session
   // of theirs that stopped and is waiting on them. Those ride the
   // time-sensitive interruption level so they break through a Focus mode; an

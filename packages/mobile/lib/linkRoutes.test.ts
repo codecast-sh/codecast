@@ -331,6 +331,9 @@ describe('mobileNotificationRoute', () => {
     expect(mobileNotificationRoute({ entity_type: 'passkey', entity_id: 'pk' })).toBe('/passkeys');
     expect(mobileNotificationRoute({ entity_type: 'team', entity_id: 't' })).toBe('/settings/team');
     expect(mobileNotificationRoute({ entity_type: 'org_role', entity_id: 'or-35' })).toBe('/org/or-35');
+    // A huddle chat line opens that call's screen (ct-79021).
+    expect(mobileNotificationRoute({ entity_type: 'call', entity_id: 'jx7abcdefghijklmnopqrstuvwxyz012' }))
+      .toBe('/recording/jx7abcdefghijklmnopqrstuvwxyz012');
   });
 
   test('a session notification opens the session; one with nothing to name opens the inbox', () => {

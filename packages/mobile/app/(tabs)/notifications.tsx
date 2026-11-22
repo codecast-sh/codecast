@@ -35,7 +35,7 @@ type Notification = {
   read: boolean;
   created_at: number;
   conversation_id?: Id<"conversations">;
-  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel" | "device" | "machine" | "passkey" | "weekly_card" | "metric_watch";
+  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel" | "device" | "machine" | "passkey" | "weekly_card" | "metric_watch" | "call";
   entity_id?: string;
   chat_message_id?: string;
   link?: string;
@@ -98,6 +98,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "chat_reply": return { name: "comments", color: Theme.accent };
     case "chat_here": return { name: "bullhorn", color: Theme.orange };
     case "chat_post": return { name: "hashtag", color: Theme.cyan };
+    case "call_chat": return { name: "headphones", color: Theme.green };
     case "daemon_overloaded": return { name: "hourglass-half", color: Theme.orange };
     case "machine_overloaded": return { name: "tachometer", color: Theme.red };
     case "card_waiting": return { name: "question-circle", color: Theme.orange };
