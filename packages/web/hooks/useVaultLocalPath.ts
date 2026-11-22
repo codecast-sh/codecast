@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { captureException } from "@sentry/react";
 import { isVaultAssetPath, isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { useWatchEffect } from "./useWatchEffect";
@@ -25,6 +25,9 @@ export function useVaultLocalPath(
   );
   const abs = localPath ? resolveCustomPath(localPath, inferHomeDir(vaults.map((v) => v.root)), activeRoot) : null;
   const needsLocate = !!localPath && !target;
+  // Bumped by the strip's Retry after a lookup that failed for a reason other
+  // than the file being absent.
+  const [attempt, setAttempt] = useState(0);
 
   useWatchEffect(() => {
     if (!needsLocate || !abs || !endpoint) return;
@@ -36,14 +39,18 @@ export function useVaultLocalPath(
       const mirror = mirroredTarget(abs, useVaultStore.getState().remoteVaults);
       if (!mirror) return false;
       await useVaultStore.getState().openRemoteVault(mirror.vaultId);
-      if (!cancelled) router.replace(filesHref({ path: mirror.rel || null, line: targetLine }));
+      if (cancelled) return true;
+      // A mirror that does not carry the file is no answer: fall through to
+      // not-found, which offers a search of what the mirror does hold.
+      const { files } = useVaultStore.getState();
+      const rel = mirror.rel;
+      if (rel && !files[rel] && !Object.keys(files).some((p) => p.startsWith(`${rel}/`))) return false;
+      router.replace(filesHref({ path: rel || null, line: targetLine }));
       return true;
     };
-    // Nowhere to open it: offer the file switcher, prefilled with its name.
-    const notFound = (message: string) => {
-      useVaultStore.setState({ opError: message });
-      useVaultStore.getState().openQuickSwitch(abs.slice(abs.lastIndexOf("/") + 1));
-    };
+    // Nowhere to open it: the strip names the file and offers to find it or
+    // copy its path.
+    const notFound = (message: string) => useVaultStore.getState().reportOpError(message, { file: abs });
     void (async () => {
       const located = await locateVault(endpoint, abs);
       if (cancelled) return;
@@ -69,13 +76,15 @@ export function useVaultLocalPath(
       const tooOld = error instanceof VaultRequestError && error.status === 404;
       if (tooOld && (await openMirror() || cancelled)) return;
       captureException(error);
-      const detail = tooOld
-        ? "Update Codecast on this machine to open files outside known folders."
-        : `${error instanceof Error ? error.message : String(error)}. Reload to retry.`;
-      notFound(`Could not open ${abs}: ${detail}`);
+      if (tooOld) return notFound(`Could not open ${abs}: Update Codecast on this machine to open files outside known folders.`);
+      // The file may well exist; the lookup itself failed. Offer it again.
+      useVaultStore.getState().reportOpError(
+        `Could not open ${abs}: ${error instanceof Error ? error.message : String(error)}.`,
+        { file: abs, retry: () => setAttempt((n) => n + 1) },
+      );
     });
     return () => { cancelled = true; };
-  }, [needsLocate, abs, endpoint]);
+  }, [needsLocate, abs, endpoint, attempt]);
 
   useWatchEffect(() => {
     if (!target || (connection !== "connected" && connection !== "cached")) return;
