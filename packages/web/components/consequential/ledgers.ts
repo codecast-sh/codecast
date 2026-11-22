@@ -793,3 +793,23 @@ export function castTokenRevokeLedger(r: { name: string; lastRead: string }): Sw
     keep: "Keep it",
   };
 }
+
+/** Ship on a line run's change card: the flow's ship station commits, pushes and opens a pull request, and merges
+ *  when the flow says so. `failing`: the card's red checks, which lead the review. */
+export function cardShipLedger(r: { title: string; failing: number }): SwitchLedger {
+  const alert = r.failing > 0 ? `${r.failing} ${r.failing === 1 ? "check" : "checks"} red` : undefined;
+  return {
+    name: "Ship",
+    subject: r.title,
+    shift: ["Waiting", "Shipping"],
+    alert,
+    figures: [],
+    rows: [
+      { k: "Starts", v: "The flow's ship station", list: ["Commit", "Push", "Pull request", "Merge, if the flow merges"] },
+      { k: "Decision", v: "Answered Ship" },
+      { k: "To undo", v: "Revert PR" },
+    ],
+    confirm: alert ? "Ship anyway" : "Ship",
+    keep: "Not now",
+  };
+}

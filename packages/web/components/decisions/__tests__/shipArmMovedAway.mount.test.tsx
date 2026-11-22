@@ -37,6 +37,12 @@ const restoreGlobals = replaceGlobals({
   Element: dom.window.Element,
   Node: dom.window.Node,
   KeyboardEvent: dom.window.KeyboardEvent,
+  MutationObserver: dom.window.MutationObserver,
+  Event: dom.window.Event,
+  CustomEvent: dom.window.CustomEvent,
+  FocusEvent: dom.window.FocusEvent,
+  HTMLButtonElement: dom.window.HTMLButtonElement,
+  HTMLInputElement: dom.window.HTMLInputElement,
   localStorage: dom.window.localStorage,
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number,
@@ -86,4 +92,62 @@ test("one Ship press on a real flow card, then moving to the next decision, is n
 
   useInboxStore.setState({ startShip: realStart });
   await act(() => root.unmount());
+  container.remove();
+});
+
+// Each card's Ship: the start is recorded, never sent.
+async function mountCards(ids: string[], keys = false) {
+  const started: unknown[][] = [];
+  const realStart = useInboxStore.getState().startShip;
+  useInboxStore.setState({ startShip: ((...args: unknown[]) => { started.push(args); }) as never });
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(() => root.render(
+    <MemoryRouter>
+      {ids.map((id) => <section key={id} data-card={id}><DecisionAnswerControls decision={realCard(id)} onAnswer={() => {}} keys={keys} size="line" /></section>)}
+    </MemoryRouter>,
+  ));
+  const shipOf = (id: string) => container.querySelector(`[data-card=${id}] [data-verdict=ship]`) as HTMLButtonElement;
+  const done = async () => { useInboxStore.setState({ startShip: realStart }); await act(() => root.unmount()); container.remove(); };
+  return { started, shipOf, done };
+}
+const review = () => document.querySelector("[data-switch-review=Ship]");
+const key = (k: string, init: KeyboardEventInit = {}) => act(() => { (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...init })); });
+
+test("one Ship press on each of three real cards in a row ships none and says nothing was sent", async () => {
+  const { started, shipOf, done } = await mountCards(["a1", "a2", "a3"]);
+  toasts.length = 0;
+  for (const id of ["a1", "a2", "a3"]) {
+    await act(() => { shipOf(id).focus(); shipOf(id).click(); });
+    // The review stays open for this card until the person backs out of it.
+    expect(review()).toBeTruthy();
+    await key("Escape");
+    expect(review()).toBeNull();
+  }
+  expect(started).toHaveLength(0);
+  expect(toasts.some((t) => /sent/i.test(t))).toBe(false);
+  await done();
+});
+
+test("on the keys, Ship's digit opens the confirm and its chord ships once; Escape cancels without shipping", async () => {
+  const { started, shipOf, done } = await mountCards(["k1"], true);
+  await act(() => { shipOf("k1").focus(); });
+  // The row's digit selects Ship and return asks for the confirm: still nothing ships.
+  await key("1");
+  await key("Enter");
+  expect(review()).toBeTruthy();
+  expect(started).toHaveLength(0);
+  await key("Escape");
+  expect(review()).toBeNull();
+  expect(started).toHaveLength(0);
+  toasts.length = 0;
+  await key("1");
+  await key("Enter");
+  await key("Enter", { ctrlKey: true });
+  expect(started).toHaveLength(1);
+  expect((started[0] as any[])[2]).toBe("k1");
+  expect(review()).toBeNull();
+  expect(toasts).toContain("Ship sent");
+  await done();
 });
