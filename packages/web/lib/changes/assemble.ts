@@ -48,6 +48,8 @@ export type ChangeLinks = {
   pr: string | null;
   /** The deploys that carry it (dp-N), once its reach is laid on. */
   deploys: Array<{ id: string; href: string }>;
+  /** A commit on main whose CI there failed: the failing run, where its "red on main" is read. */
+  ci_run: string | null;
   action: null;
 };
 
@@ -171,7 +173,7 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
       vehicle: { kind: "pass", folder: row.path, sessions: row.uncommitted.sessions.length, files: row.uncommitted.total },
       work: { uncommitted: row.uncommitted.total, ahead: row.ahead, pushed: false, writers: factWriters(writers) },
     }, {
-      links: { href: null, pr: null, deploys: [], action: null },
+      links: { href: null, pr: null, deploys: [], ci_run: null, action: null },
       writers,
       where: `${basename(row.path)} · ${deviceName(row)}`,
       updated_at: lastWrite([row]),
@@ -210,7 +212,7 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
     const others = new Set(group.map((r) => r.device_id)).size - 1;
     out.push(base(`branch:${name}`, facts, {
       reach_ref,
-      links: { href: prHref ?? repoCompareHref(repository, defaultOf(fresh, fallbackDefault), name), pr: prHref, deploys: [], action: null },
+      links: { href: prHref ?? repoCompareHref(repository, defaultOf(fresh, fallbackDefault), name), pr: prHref, deploys: [], ci_run: null, action: null },
       writers,
       where: `${basename(fresh.path)} · ${deviceName(fresh)}${others > 0 ? ` +${others}` : ""}`,
       updated_at: Math.max(lastWrite(group), pr ? prActive(pr) : 0, remote.get(name)?.committed_at ?? 0),
@@ -236,7 +238,7 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
     }, pr);
     out.push(base(`pr:${pr.number}`, facts, {
       reach_ref,
-      links: { href: prHref, pr: prHref, deploys: [], action: null },
+      links: { href: prHref, pr: prHref, deploys: [], ci_run: null, action: null },
       writers,
       updated_at: prActive(pr),
       refs: { branch: pr.head_ref ?? null, pr: pr.number, shas: [pr.head_sha, pr.merge_commit_sha].filter((s): s is string => !!s) },
@@ -252,7 +254,7 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
       vehicle: { kind: "branch", name: b.name, worktree: null, pr: b.open_pr?.number ?? null },
       work: { uncommitted: 0, ahead: b.ahead_by, pushed: true, writers: [] },
     }, {
-      links: { href: b.open_pr ? prPageHref(repository, b.open_pr.number) : repoCompareHref(repository, rows.branches!.default_branch, b.name), pr: b.open_pr ? prPageHref(repository, b.open_pr.number) : null, deploys: [], action: null },
+      links: { href: b.open_pr ? prPageHref(repository, b.open_pr.number) : repoCompareHref(repository, rows.branches!.default_branch, b.name), pr: b.open_pr ? prPageHref(repository, b.open_pr.number) : null, deploys: [], ci_run: null, action: null },
       writers: [],
       updated_at: b.committed_at,
       refs: { branch: b.name, pr: b.open_pr?.number ?? null, shas: [b.sha] },
@@ -285,7 +287,7 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
           deploys: true,
         }, {
           reach_ref: ref,
-          links: { href, pr: prN != null ? prPageHref(repository, prN) : null, deploys: [], action: null },
+          links: { href, pr: prN != null ? prPageHref(repository, prN) : null, deploys: [], ci_run: c.ci === "failed" ? c.ci_url ?? null : null, action: null },
           writers,
           where: null,
           updated_at: c.at,

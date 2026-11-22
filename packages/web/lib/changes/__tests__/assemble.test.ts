@@ -9,7 +9,8 @@ import type { QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import { assemble, findChange, withReach, type AssembledChange, type ChangePullRequest, type ChangeTarget } from "../assemble";
 import { changeLifecycle } from "../lifecycle";
-import { isParked } from "../rows";
+import { changeAction, isParked } from "../rows";
+import type { RepoChange } from "../../../hooks/useRepoChanges";
 
 const now = 1_790_000_000_000;
 const MIN = 60_000;
@@ -114,7 +115,7 @@ describe("assemble", () => {
     expect(c.facts.vehicle).toEqual({ kind: "branch", name: "change-chips", worktree: "/Users/ashot/code/app/.codecast/worktrees/change-chips", pr: 101 });
     expect(c.facts.check).toEqual({ ci: "failure", review: "approved", failing: ["test-web"], passed: 2 });
     expect(c.facts.work).toMatchObject({ uncommitted: 0, ahead: 3, pushed: true });
-    expect(c.links).toEqual({ href: "/pr/acme/app/101", pr: "/pr/acme/app/101", deploys: [], action: null });
+    expect(c.links).toEqual({ href: "/pr/acme/app/101", pr: "/pr/acme/app/101", deploys: [], ci_run: null, action: null });
     expect(c.writers).toEqual([{ conversation_id: "c-chip", title: "Change chips", state: "finished", href: "/conversation/c-chip" }]);
     expect(c.where).toBe("change-chips · Ashot Main Mac");
     expect(c.reach_ref).toBeNull();
@@ -218,6 +219,19 @@ describe("the grid's Parked group, for what nothing is moving", () => {
     const got = assemble({ repository: repo, now, pullRequests: [old(91, { checks_state: "success", review_decision: "REVIEW_REQUIRED" }), old(92, { checks_state: "failure" }), old(93, { draft: true, checks_state: "success" })] });
     const parked = (n: number) => isParked(rowOf(got.find((x) => x.refs.pr === n)!), now);
     expect([parked(91), parked(92), parked(93)]).toEqual([false, false, true]);
+  });
+});
+
+describe("the one action a change offers", () => {
+  test("a commit red on main opens main's failing run, never its pull request's checks, which passed", () => {
+    const red = { ...queued("f00dfeed1234", "Fix the thing (#77)", "failed"), ci_url: "https://github.com/acme/app/actions/runs/9" };
+    const t: ChangeTarget[] = [{ name: "web", repository: repo, queue: { groups: [{ commits: [red] }] } }];
+    const c = assemble({ repository: repo, now, targets: t }).find((x) => x.key.startsWith("commit:"))!;
+    const change = { ...c, lifecycle: changeLifecycle(c.facts) } as RepoChange;
+    expect(change.lifecycle.now.word).toBe("red on main");
+    expect(changeAction(change)).toEqual({ label: "Open the failing run", href: "https://github.com/acme/app/actions/runs/9" });
+    const unknown = assemble({ repository: repo, now, targets: [{ ...t[0], queue: { groups: [{ commits: [{ ...red, ci_url: null }] }] } }] }).find((x) => x.key.startsWith("commit:"))!;
+    expect(changeAction({ ...unknown, lifecycle: changeLifecycle(unknown.facts) } as RepoChange)).toBeNull();
   });
 });
 

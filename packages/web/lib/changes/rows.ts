@@ -31,6 +31,8 @@ export function changeAction(c: RepoChange): ChangeLinks["action"] {
   if (n.stage === "work" && n.state === "waiting" && writer) return { label: writer.title ? `Ship from ${writer.title}` : "Ship from its session", href: writer.href! };
   if (n.tone === "blue" && c.links.pr) return { label: "Open the pull request", href: c.links.pr };
   if (n.tone === "red" && n.stage === "deploy" && c.links.deploys[0]) return { label: `Open ${c.links.deploys[0].id}`, href: c.links.deploys[0].href };
+  // Red on main is main's run, never the pull request's checks (they passed before it landed).
+  if (n.tone === "red" && n.stage === "check" && c.facts.check?.after_land) return c.links.ci_run ? { label: "Open the failing run", href: c.links.ci_run } : null;
   if (n.tone === "red" && c.links.pr) return { label: "See the failing check", href: `${c.links.pr}?tab=checks` };
   if (n.stage === "live" && n.state === "back" && c.links.deploys[0]) return { label: `Open ${c.links.deploys[0].id}`, href: c.links.deploys[0].href };
   return null;
