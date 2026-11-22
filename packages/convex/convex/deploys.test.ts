@@ -184,6 +184,15 @@ describe("the line's deploy stage (DP2)", () => {
     expect(s.open).toBeNull();
   });
 
+  test("a dev watcher's push takes no fix off the waiting set; a real deploy of the same sha does", async () => {
+    const t = await seed();
+    const ctx = ctxFor(t);
+    await recordDeployMarker(ctx, marker({ sha: "eeeeeee5555", at: NOW - 30_000, pushed_via: "dev watcher", machine: "ana-mac", dirty: 2 }));
+    expect((await (stage as any)._handler(ctx, { project_id: "pj-1", api_token: TOKEN })).waiting.map((w: any) => w.task_short_id)).toEqual(["ct-1", "ct-2"]);
+    await recordDeployMarker(ctx, marker({ sha: "eeeeeee5555", at: NOW, pushed_via: "deploy.sh", machine: "ana-mac" }));
+    expect((await (stage as any)._handler(ctx, { project_id: "pj-1", api_token: TOKEN })).waiting).toEqual([]);
+  });
+
   test("a report never moves a deploy backwards, and a failure keeps its fixes waiting", async () => {
     const t = await seed();
     const ctx = ctxFor(t);

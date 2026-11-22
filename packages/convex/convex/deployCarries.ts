@@ -143,7 +143,8 @@ export async function previousCut(ctx: any, d: Doc<"deploys">, cuts?: ReadonlyMa
     .order("desc")
     .take(30);
   for (const x of earlier) {
-    if (x._id === d._id || x.status !== "live" || (x.live_at ?? x.created_at) > at) continue;
+    // A watcher's push carried nothing, so its range belongs to the next real deploy.
+    if (x._id === d._id || x.status !== "live" || x.pushed_via === "dev watcher" || (x.live_at ?? x.created_at) > at) continue;
     const cut = x.cut_at ?? cuts?.get(String(x._id));
     if (cut != null) return cut;
   }
@@ -183,7 +184,8 @@ export async function carriesForMarker(ctx: any, row: Doc<"deploys">, now: numbe
       if (at != null) m.main_at = at;
     }
   }
-  const deploys = (await workspaceDeploys(ctx, row.workspace)).filter(isLiveDeploy).map((d) => (String(d._id) === String(row._id) ? self : withCut(d)));
+  // A watcher's push is a working tree, never the first deploy to carry a fix.
+  const deploys = (await workspaceDeploys(ctx, row.workspace)).filter((d) => isLiveDeploy(d) && d.pushed_via !== "dev watcher").map((d) => (String(d._id) === String(row._id) ? self : withCut(d)));
   const carries: Doc<"deploys">["carries"] = carriedBy(self, merges, deploys).map((c) => ({
     task_id: c.task_id as Id<"tasks">,
     ...(runIdOf(c.run_id) ? { run_id: runIdOf(c.run_id) } : {}),

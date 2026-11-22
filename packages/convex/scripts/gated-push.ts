@@ -301,7 +301,9 @@ async function record(changes: PushChanges | null): Promise<void> {
   try {
     if (markHelp === null) {
       const help = await run(["cast", "ship", "mark", "--help"], { cwd: ROOT, timeoutMs: 15_000 });
-      markHelp = help.code === 0 ? help.stdout : "";
+      // Only a real answer is kept: a slow or missing cast is asked again at the next push.
+      if (help.code !== 0) return log("Push not recorded: `cast ship mark --help` did not answer (cast missing or busy); the push itself went out.");
+      markHelp = help.stdout;
     }
     if (!watcherMarkArgs(markHelp, "", 0)) return log("Push not recorded: this cast is older than `cast ship mark --via`; update cast to record watcher pushes.");
     const head = await run(["git", "rev-parse", "HEAD"], { cwd: ROOT, timeoutMs: 10_000 });

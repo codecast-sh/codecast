@@ -120,3 +120,36 @@ describe("the viewer's pull requests in the queue", () => {
     expect(out.map((g: any) => [g.key, g.commits.map((x: any) => x.sha), g.ci])).toEqual([["s:a", ["1"], "passed"]]);
   });
 });
+
+describe("a dev watcher's push on the target", () => {
+  const row = (over: Partial<TeamDeployRow>): TeamDeployRow => ({
+    _id: over.short_id!, workspace: "team:x", target: "backend", repository: "acme/app", short_id: "dp-0", status: "live", action: "deploy", rollback_of: null,
+    sha: "aaa", previous_sha: null, version: null, url: null, started_by: null, note: null, commits: 0, sessions: [], created_at: 1, live_at: 1, finished_at: 1, ...over,
+  });
+  const t = { name: "backend", repository: "acme/app" };
+
+  test("is what runs, but leaves the line's waiting deploy going out and is never a rollback point", () => {
+    const real = row({ short_id: "dp-1", sha: "aaa", created_at: 1, live_at: 1 });
+    const asked = row({ short_id: "dp-2", status: "requested", sha: null, created_at: 2, live_at: null, finished_at: null });
+    const watcher = row({ short_id: "dp-3", sha: "bbb", created_at: 3, live_at: 3, pushed_via: "dev watcher", dirty: 2 });
+    const now = targetNow(t, [real, asked, watcher]);
+    expect(now.live?.short_id).toBe("dp-3");
+    expect(now.open?.short_id).toBe("dp-2");
+    // Rolling back from it returns to the last real deploy.
+    expect(rollbackTarget(now.history, now.live)?.short_id).toBe("dp-1");
+  });
+
+  test("an older watcher push is never the deploy a Roll back returns to", () => {
+    const first = row({ short_id: "dp-1", sha: "aaa", created_at: 1, live_at: 1 });
+    const watcher = row({ short_id: "dp-2", sha: "bbb", created_at: 2, live_at: 2, pushed_via: "dev watcher" });
+    const latest = row({ short_id: "dp-3", sha: "ccc", created_at: 3, live_at: 3 });
+    const now = targetNow(t, [first, watcher, latest]);
+    expect(rollbackTarget(now.history, now.live)?.short_id).toBe("dp-1");
+  });
+
+  test("a real deploy after the ask still closes it", () => {
+    const asked = row({ short_id: "dp-2", status: "requested", sha: null, created_at: 2, live_at: null, finished_at: null });
+    const real = row({ short_id: "dp-4", sha: "ccc", created_at: 4, live_at: 4 });
+    expect(targetNow(t, [asked, real]).open).toBe(null);
+  });
+});
