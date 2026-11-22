@@ -9,6 +9,9 @@ import { useSyncOrgProposal } from '@codecast/web/hooks/useSyncOrgProposals';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme, type Palette } from '@/constants/Theme';
+import { solColor } from '@/lib/solColor';
+import { accentVar } from '@codecast/web/lib/externalEvents';
+import { PR_STATE_META, prStateKey } from '@codecast/web/lib/prView';
 import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { openLink } from '@/lib/links';
@@ -225,6 +228,8 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   // A merged pull request or a commit carries how far it has gone toward production.
   const reachRef = entity && ((type === 'pr' && entity.state === 'merged') || type === 'commit') ? repoObjectRefOf(type, entity, 40) : null;
   const reach = useDeployReach(reachRef);
+  // A pull request with no reach to say says its state: open, draft, closed, or merged when nothing deploys it.
+  const prState = type === 'pr' && entity && !reach ? PR_STATE_META[prStateKey(entity)] : null;
 
   // Unknown id shape, a Convex id resolving to no entity table, or the
   // transient state while resolveIdType is in flight.
@@ -287,6 +292,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
       {/* NBSP so the icon never strands on the previous line when the pill wraps */}
       {' '}{label}
       {deployState && ` · ${deployPillSuffix(entity, now)}`}
+      {prState && <RNText style={{ color: solColor(accentVar(prState.accent), Theme) }}>{' · '}{prState.label.toLowerCase()}</RNText>}
       {reach && (
         <RNText style={{ color: toneColor(Theme, REACH_LOOK[reach.state].tone) }}>
           {' · '}

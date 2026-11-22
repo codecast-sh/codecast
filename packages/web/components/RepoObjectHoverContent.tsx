@@ -8,7 +8,9 @@ import { ArrowUpRight, GitCommitHorizontal, GitPullRequest } from "lucide-react"
 import { DiffStat } from "./entityDisplay";
 import { relativeTime } from "../lib/entityDisplay";
 import { parseRepoObjectId } from "../lib/entityLinks";
-import { prState, repoObjectRefOf } from "../lib/repoObjects";
+import { repoObjectRefOf } from "../lib/repoObjects";
+import { PR_STATE_META, prStateKey } from "../lib/prView";
+import { accentVar } from "../lib/externalEvents";
 import { stripMarkdown } from "../lib/notificationText";
 
 /** The parts of a repository object's card that open it: each its own link, so the production rows between them can be links too. */
@@ -19,17 +21,18 @@ const CARD_LINK = "block no-underline cursor-pointer space-y-2";
 // closed, who opened it, where it stands in production once merged, which
 // branch goes where, and how big it is.
 export function PullRequestHoverContent({ pr, href, onOpen, production, showOpen }: { pr: any } & RepoCardLink) {
-  const state = prState(pr.state);
+  const state = PR_STATE_META[prStateKey(pr)];
+  const ink = { color: accentVar(state.accent) };
   const when = relativeTime(pr.merged_at ?? pr.updated_at);
   return (
     <div className="space-y-2">
       <Link href={href} onClick={onOpen} className={CARD_LINK}>
       <div className="flex items-start gap-2">
-        <GitPullRequest className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${state.color}`} />
+        <GitPullRequest className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" style={ink} />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug">{pr.title || `#${pr.number}`}</div>
           <div className="flex items-center gap-2 mt-1 text-meta">
-            <span className={`font-medium ${state.color}`}>{state.label}</span>
+            <span className="font-medium" style={ink}>{state.label}</span>
             {pr.author_github_username && (
               <>
                 <span className="text-sol-text-dim/60">·</span>

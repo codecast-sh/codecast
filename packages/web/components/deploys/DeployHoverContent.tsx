@@ -8,7 +8,7 @@ import { actionsRunKey } from "@codecast/shared/contracts/deploys";
 import { EntityIdPill } from "../EntityIdPill";
 import { ShortId } from "../ShortId";
 import { fmtClock } from "../triggerCadence";
-import { ReachSegment } from "./deployRefLook";
+import { PrStateSegment, ReachSegment } from "./deployRefLook";
 import { useNowWhen } from "../../hooks/useCoarseNow";
 import { useDeployReach } from "../../hooks/useDeployReach";
 import { FAILED_ICON, REACH_ICON, TONE_TEXT, deployLook } from "../../lib/deploys/deployLook";
@@ -185,8 +185,8 @@ export function ProductionReach({ refId }: { refId: string }) {
   );
 }
 
-/** A merged pull request's or main commit's reach after its pill's name; nothing when the change goes nowhere. */
-export function PillReach({ refId }: { refId: string }) {
+/** A merged pull request's or main commit's reach after its pill's name. A pull request that goes nowhere still says "merged"; a commit says nothing. */
+export function PillReach({ refId, pr = false }: { refId: string; pr?: boolean }) {
   const reach = useDeployReach(refId);
-  return reach ? <ReachSegment state={reach.state} /> : null;
+  return reach ? <ReachSegment state={reach.state} /> : pr ? <PrStateSegment state="merged" /> : null;
 }

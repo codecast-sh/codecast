@@ -52,7 +52,9 @@ import {
   taskPeople,
   useEntityResolution,
 } from "../lib/entityDisplay";
-import { prState, repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
+import { repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
+import { PR_STATE_META, prStateKey } from "../lib/prView";
+import { accentVar } from "../lib/externalEvents";
 import { DocDates } from "./DocDates";
 import { FileDiffList } from "./FileDiffView";
 import { PullRequestFiles } from "./pr/PullRequestFiles";
@@ -118,7 +120,8 @@ export function EntityKindIcon({ type, entity, className = "h-3.5 w-3.5" }: { ty
     return <v.icon className={`${className} ${v.color}`} />;
   }
   const Icon = TYPE_ICON[type];
-  return <Icon className={`${className} ${type === "pr" ? prState(entity?.state).color : ACCENT[type].text}`} />;
+  if (type === "pr") return <Icon className={className} style={{ color: accentVar(PR_STATE_META[prStateKey(entity ?? {})].accent) }} />;
+  return <Icon className={`${className} ${ACCENT[type].text}`} />;
 }
 
 /** The words a call reference names (`cl-42:15-25`), as turns; null for a whole call. */
@@ -204,8 +207,8 @@ export function CardMetaLine({ type, entity }: { type: EntityType; entity: any }
     push(<span className={`whitespace-nowrap font-medium ${color}`}>{describeTaskCadence(entity)}</span>, "cadence");
     push(<span className="whitespace-nowrap">{taskStateLabel(entity, Date.now())}</span>, "state");
   } else if (type === "pr") {
-    const state = prState(entity.state);
-    push(<span className={`whitespace-nowrap font-medium ${state.color}`}>{state.label}</span>, "state");
+    const state = PR_STATE_META[prStateKey(entity)];
+    push(<span className="whitespace-nowrap font-medium" style={{ color: accentVar(state.accent) }}>{state.label}</span>, "state");
     if (entity.author_github_username) push(<span className="truncate">{entity.author_github_username}</span>, "author", true);
     if (entity.head_ref) {
       push(

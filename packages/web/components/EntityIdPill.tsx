@@ -111,11 +111,12 @@ import { replayFacts, replayTitle } from "./ops/opsModel";
 import { ModPaneEmbed } from "./mods/ModPaneEmbed";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
 import { actionsRunKey } from "@codecast/shared/contracts/deploys";
-import { DeployPillSuffix } from "./deploys/deployRefLook";
+import { DeployPillSuffix, PrStateSegment } from "./deploys/deployRefLook";
 import { DeployHoverContent, PillReach, ProductionReach } from "./deploys/DeployHoverContent";
 import { CommitHoverContent, PullRequestHoverContent, RepoObjectUnknownHoverContent } from "./RepoObjectHoverContent";
 import { deployLook } from "../lib/deploys/deployLook";
 import { deployPillSuffix, runRefKey } from "../lib/deploys/deployPill";
+import { prStateKey } from "../lib/prView";
 
 export { SessionHoverContent };
 
@@ -1115,6 +1116,9 @@ export function EntityIdPill({
   const deployV = type === "deploy" && entity ? deployLook(entity, Date.now()) : null;
   // A merged pull request or a commit carries how far it has gone toward production.
   const reachRef = entity && ((isPr && entity.state === "merged") || isCommit) ? repoObjectRefOf(type!, entity, 40) : null;
+  // Every other pull request says its state: open, draft or closed.
+  const prState = isPr && entity && !reachRef ? prStateKey(entity) : null;
+  const saysState = !!reachRef || !!prState;
 
   // Who a session IS (session-characters.md S3): once a session wears a
   // character or a role, the reference reads as that person — the face in
@@ -1277,7 +1281,7 @@ export function EntityIdPill({
   // A deploy's state is part of its name for a reader who cannot see the color.
   // A pill with a caret keeps it on its line: the caret never starts one.
   const KeepWithCaret = canReveal ? "span" : React.Fragment;
-  const linkTitle = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : wide || reachRef || fullLabel !== pillLabel ? fullLabel : undefined;
+  const linkTitle = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : wide || saysState || fullLabel !== pillLabel ? fullLabel : undefined;
   return (
     <>
     <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
@@ -1292,7 +1296,7 @@ export function EntityIdPill({
           onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
           data-reveal-open={revealOpen ? "" : undefined}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} whitespace-normal inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : reachRef ? (canReveal ? " max-w-[calc(100%-1.3em)]" : " max-w-full") : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} whitespace-normal inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : saysState ? (canReveal ? " max-w-[calc(100%-1.3em)]" : " max-w-full") : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
           title={linkTitle}
           aria-label={deployV ? linkTitle : undefined}
         >
@@ -1314,10 +1318,11 @@ export function EntityIdPill({
           </span>
           {/* The label, not the icon, gives the pill its baseline, so the
               text sits on the line with the words around it. */}
-          {/* A pill that carries its reach cuts its title, so the reach stays on the line with it. */}
-          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : reachRef ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : "self-baseline"}>{pillLabel}</span>
+          {/* A pill that carries its state cuts its title, so the state stays on the line with it. */}
+          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : saysState ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : "self-baseline"}>{pillLabel}</span>
           {deployV && <DeployPillSuffix deploy={entity} />}
-          {reachRef && <PillReach refId={reachRef} />}
+          {reachRef && <PillReach refId={reachRef} pr={isPr} />}
+          {prState && <PrStateSegment state={prState} />}
         </Link>
       </PopoverAnchor>
       {/* The other half of the pill: the caret opens the full page in a band

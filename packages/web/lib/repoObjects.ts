@@ -4,16 +4,6 @@
 // boundaries (lib/__tests__/fastRefreshBoundaries.guard.test.ts).
 import { repoObjectId, type EntityType } from "@codecast/shared/entities";
 
-/** Pull request state as the app reads it: GitHub's three states, one color each. */
-const PR_STATE: Record<string, { label: string; color: string }> = {
-  open: { label: "Open", color: "text-sol-green" },
-  merged: { label: "Merged", color: "text-sol-violet" },
-  closed: { label: "Closed", color: "text-sol-red" },
-};
-export function prState(state?: string | null): { label: string; color: string } {
-  return PR_STATE[state ?? "open"] ?? PR_STATE.open;
-}
-
 /**
  * The `owner/repo#482` / `owner/repo@sha` reference for a resolved pull
  * request or commit row — what routes and labels are built from once the row

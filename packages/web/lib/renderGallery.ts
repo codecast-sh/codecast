@@ -88,8 +88,8 @@ export const GALLERY_DEPLOYS = {
   deployRun: "https://github.com/gallery/deploys/actions/runs/44822506482",
   ciRunId: "44822599999",
   ciRun: "https://github.com/gallery/deploys/actions/runs/44822599999",
-  /** Merged pull requests, one per reach state, then an open one. */
-  prs: { live: 4341, going_out: 4342, failed: 4343, rolled_back: 4344, waiting: 4345, open: 4346, queued: 4347 },
+  /** Merged pull requests, one per reach state, then one that deploys nothing, an open, a draft and a closed one. */
+  prs: { live: 4341, going_out: 4342, failed: 4343, rolled_back: 4344, waiting: 4345, open: 4346, queued: 4347, shipsNothing: 4348, closed: 4349, draft: 4350 },
   commit: "4a6e413b2c7d9e0f1a2b3c4d5e6f708192a3b4c5",
 } as const;
 
@@ -128,10 +128,11 @@ function deployRecords(now: number, workspace: string) {
     ({ _id: id, ref: id, state, sha: null, targets: targets.map(([target, st, dp, nowDp]) => ({ target, state: st, deploy: dp ? ref(dp) : null, now: nowDp ? ref(nowDp) : null })) });
   const prRef = (n: number) => `${D.repository}#${n}`;
   // Each pull request merged before the deploys that hold it.
-  const pr = (n: number, title: string, state: "merged" | "open", mergedAgo: number) => ({
+  const pr = (n: number, title: string, state: "merged" | "open" | "closed", mergedAgo: number, draft = false) => ({
     _id: `gallerypr00000000000${n}`, repository: D.repository, number: n, title, state, author_github_username: "ashot",
     head_ref: `fix-${n}`, base_ref: "main", additions: 42, deletions: 7, changed_files: 3, created_at: now - mergedAgo - 2 * hour, updated_at: now - mergedAgo,
     ...(state === "merged" ? { merged_at: now - mergedAgo } : {}),
+    ...(draft ? { draft } : {}),
   });
   return {
     teamDeploys,
@@ -143,6 +144,9 @@ function deployRecords(now: number, workspace: string) {
       pr(D.prs.waiting, "Rename the inbox divider", "merged", 30 * min),
       pr(D.prs.open, "Messages reach Orca terminals", "open", 20 * min),
       pr(D.prs.queued, "Page the session index", "merged", 70 * min),
+      pr(D.prs.shipsNothing, "Note the eval brief", "merged", 40 * min),
+      pr(D.prs.closed, "Check every new ruling", "closed", 3 * hour),
+      pr(D.prs.draft, "Sketch the deploy queue", "open", 10 * min, true),
     ],
     // On main before backend's dp-90003 went live (128m ago) and before web's dp-90002 was asked for (82m ago).
     commits: [{ _id: "gallerycommit0000000001", repository: D.repository, sha: D.commit, message: "fix(convex): page the Pages gallery read\n\nLarge accounts timed out listing every page.", author_name: "Ashot", branch: "main", timestamp: now - 150 * min, insertions: 18, deletions: 4, files_changed: 2 }],
@@ -482,7 +486,7 @@ export function renderGalleryMessages(now: number): Row[] {
     asst(`Each deploy wears its state: ${D.waiting}, ${D.queued}, ${D.goingOut}, ${D.live}, ${D.replaced} (then ${D.liveWeb}), ${D.failed} and ${D.cancelled}. A rollback: ${D.rollback} (it replaced ${D.rolledBackOn}). Named again, one is its id: ${D.goingOut}.`);
     asst(`The Actions run carrying a deploy reads as the deploy: ${D.deployRun}. A CI run stays its link: ${D.ciRun}. By its bare id too: Deploy ${D.runId} is going out, and run ${D.ciRunId} is only CI.`);
     const p = (n: number) => `${D.repository}#${n}`;
-    asst(`A merged change says how far it got: ${p(D.prs.live)}, ${p(D.prs.going_out)}, ${p(D.prs.queued)}, ${p(D.prs.failed)}, ${p(D.prs.rolled_back)} and ${p(D.prs.waiting)}. An open one says nothing: ${p(D.prs.open)}. A commit on main says it too: ${D.repository}@${D.commit.slice(0, 10)}.`);
+    asst(`A merged change says how far it got: ${p(D.prs.live)}, ${p(D.prs.going_out)}, ${p(D.prs.queued)}, ${p(D.prs.failed)}, ${p(D.prs.rolled_back)} and ${p(D.prs.waiting)}. One that deploys nothing says merged: ${p(D.prs.shipsNothing)}. Every other one says its state: ${p(D.prs.open)}, ${p(D.prs.draft)}, ${p(D.prs.closed)}. A commit on main says it too: ${D.repository}@${D.commit.slice(0, 10)}.`);
   }
 
   section("People and sessions");

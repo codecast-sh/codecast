@@ -232,14 +232,17 @@ function render(markdown: string): string {
 
 // The pill's visible text, with the surrounding markup stripped — what a reader
 // actually sees where the id was written.
+// A pull request's state segment is checked on its own (data-pr-state); the label is the name.
+const withoutPrState = (html: string) => html.replace(/<span data-pr-state="[^"]*"[^>]*>[^<]*<\/span>/g, "");
+
 function pillText(html: string): string {
-  const m = html.match(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span[^>]*>([^<]*)<\/span><\/a>/);
+  const m = withoutPrState(html).match(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span[^>]*>([^<]*)<\/span><\/a>/);
   return m ? m[1] : "";
 }
 
 // Every pill's visible text, in reading order.
 function pillTexts(html: string): string[] {
-  return [...html.matchAll(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span[^>]*>([^<]*)<\/span><\/a>/g)].map((m) => m[1]);
+  return [...withoutPrState(html).matchAll(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span[^>]*>([^<]*)<\/span><\/a>/g)].map((m) => m[1]);
 }
 
 const { EstablishedRefsProvider } = await import("../hooks/entityMentionScope");
@@ -651,6 +654,7 @@ describe("pull request references", () => {
   test("#N in a repository bound conversation reads as the title once the row is in hand", () => {
     const html = renderIn("codecast-sh/codecast", "landed PR #482 this morning");
     expect(pillText(html)).toBe("#482 Fix the auth race");
+    expect(html).toContain('data-pr-state="open"');
     expect(html).toContain('href="/pr/codecast-sh/codecast/482"');
   });
 
