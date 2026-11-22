@@ -154,7 +154,12 @@ export function useOwnerCandidates(
   return data?.team_members;
 }
 
-const selectOwnersRow = (d: any) => (d ? [{ ...d, _id: String(d.conversation_id), conversation_id: String(d.conversation_id) }] : []);
+// A server from before the owners fields (a deploy gap) answers only `owners`:
+// derive the rest so the header still draws, read-only.
+const selectOwnersRow = (d: any) => (d ? [{
+  owner_ids: (d.owners ?? []).map((o: OwnerInfo) => o.user_id), role: null, role_id: null, driver: null, driver_user_id: null, runner: null, can_edit: false,
+  ...d, _id: String(d.conversation_id), conversation_id: String(d.conversation_id),
+}] : []);
 const ownersRowSig = (r: SessionOwnersRow) => [
   (r.owner_ids ?? []).join(","),
   r.role_id ?? "",
