@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { byIdsMustReturn, inboxFloorFlags, runInboxFloorStep } from "../useSyncInboxSessions";
+import { __reconcileCrawlSimSlots } from "../reconcileCrawl";
 import { useInboxStore } from "../../store/inboxStore";
 
 // The floor's warm-cache probe re-reads by id the cached rows a complete floor
@@ -85,5 +86,47 @@ describe("runInboxFloorStep probe", () => {
     // Still on my team board, with only its claim cleared.
     expect(s.sessions[STALE_CLAIM]).toBeDefined();
     expect(s.sessions[STALE_CLAIM]?.owned_by_me).toBe(false);
+  });
+});
+
+describe("the floor's lower bound", () => {
+  // A resumed checkpoint's cursor is valid only for the query that produced
+  // it. The bound was Date.now() minus the window, a different query on every
+  // launch, so every resume failed with InvalidCursor.
+  test("two launches minutes apart ask the identical query", async () => {
+    const sinces: number[] = [];
+    const launch = async (now: number) => {
+      // Each launch is a fresh window: no crawl state carried over.
+      const slots = __reconcileCrawlSimSlots();
+      slots.set(slots.fresh());
+      const realNow = Date.now;
+      Date.now = () => now;
+      try {
+        useInboxStore.setState({
+          clientStateInitialized: true,
+          currentUser: { _id: ME } as any,
+          syncMeta: {},
+          syncLogScopeStamps: { [`user:${ME}`]: 1 } as any,
+          sessions: {} as any,
+        });
+        let done!: () => void;
+        const asked = new Promise<void>((r) => { done = r; });
+        const convex = {
+          query: async (fn: any, args: any) => {
+            if (getFunctionName(fn) === "conversations:listInboxSessionsPaginated") { sinces.push(args.since); done(); }
+            return { page: [], isDone: true, continueCursor: "", sessions: [] };
+          },
+        };
+        runInboxFloorStep(convex as any, inboxFloorFlags(useInboxStore.getState(), ME));
+        await asked;
+      } finally {
+        Date.now = realNow;
+      }
+    };
+    const t = Date.UTC(2026, 10, 14, 13, 0, 0);
+    await launch(t);
+    await launch(t + 7 * 60 * 1000);
+    expect(sinces.length).toBe(2);
+    expect(sinces[0]).toBe(sinces[1]);
   });
 });
