@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { MessagesSquare, FolderKanban, Layers, Users, Hash, PinOff, BellOff, Lock } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
@@ -14,6 +15,8 @@ import { ContextMenu, CtxItem, useContextMenu } from "../ui/context-menu";
 import type { DesktopApp } from "../../lib/desktopApps";
 import { RailHeading, SectionRow, NavCount, type SectionRowSpec } from "./navPrimitives";
 import { channelSignals } from "../../lib/chatRowSignals";
+import { useProjectSessionCounts } from "../../hooks/useProjectSessionCounts";
+import { projectStatusOf } from "../../lib/projectStatus";
 
 /** True when the pathname is this project's board. The board's address is the
  *  project's pj- ref; an older link or pin may still carry its Convex id. */
@@ -29,7 +32,7 @@ function pinnedRowsSig(s: any): string {
   for (const p of readPins(s)) {
     if (p.kind === "project") {
       const r = s.projects?.[p.id];
-      sig += `p\u0001${r?.title ?? ""}\u0001${r?.short_id ?? ""}\u0002`;
+      sig += `p\u0001${r?.title ?? ""}\u0001${r?.short_id ?? ""}\u0001${r?.status ?? ""}\u0002`;
     } else if (p.kind === "channel") {
       const id = supersededChannelId(s.chatChannels ?? {}, p.id) ?? p.id;
       const c = s.chatChannels?.[id];
@@ -62,6 +65,9 @@ export function PinnedRail({
 }) {
   const pathname = usePathname();
   const pins = useInboxStore((s) => readPins(s));
+  // Sessions waiting on a person in each pinned project this window shows, counted only for those.
+  const pinnedProjectIds = useMemo(() => (scope && scope !== "work" ? [] : pins.filter((p) => p.kind === "project").map((p) => p.id)), [pins, scope]);
+  const projectCounts = useProjectSessionCounts(pinnedProjectIds);
   const threadsUnread = useThreadUnread();
   // The counted rail: a pinned channel is that channel's ONLY row (the Chat
   // sublist skips pinned ids), so its unread signals must ride the pin.
@@ -118,11 +124,19 @@ export function PinnedRail({
     if (pin.kind === "project") {
       const p = (projects as any)?.[pin.id];
       const path = `/projects/${p?.short_id ?? pin.id}`;
+      // A done project stays pinned until its person drops it, drawn quiet.
+      const st = p ? projectStatusOf(p.status) : null;
+      const StatusIcon = st?.icon;
+      const needs = projectCounts.get(pin.id)?.needs_input ?? 0;
       return {
         ...base,
         name: p?.title ?? pin.label,
         path,
-        icon: <FolderKanban className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
+        icon: StatusIcon
+          ? <span className="inline-flex flex-shrink-0" title={st!.label}><StatusIcon className={`w-3 h-3 ${st!.color}`} /></span>
+          : <FolderKanban className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
+        trailing: needs > 0 ? <span title={`${needs} session${needs === 1 ? "" : "s"} need${needs === 1 ? "s" : ""} input`}><NavCount n={needs} tone="bg-sol-cyan/15 text-sol-cyan" small /></span> : null,
+        dim: p?.status === "done",
         active: isOnProjectBoard(pathname, p ?? { _id: pin.id }),
         onSelect: () => onNavigate(path),
       };

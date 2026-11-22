@@ -22,7 +22,7 @@ import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { withDecisionFacts } from "./lib/decisionRowFacts";
 import { decisionTeamOf } from "./lib/decisionTeam";
-import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, advisoryAnswerOpen, isHostedAgentType } from "@codecast/shared/contracts";
+import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, answerChangeable, isHostedAgentType } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { emitNotification } from "./notificationRouter";
 import { nextShortId } from "./counters";
@@ -921,15 +921,13 @@ export async function settleClientResolution(
   presence?: string,
 ) {
   if (patch.status !== "answered" && patch.status !== "dismissed") return;
-  // A person changing an advisory answer (advisoryAnswerOpen): the client sent
+  // A person changing a settled answer (answerChangeable): the client sent
   // the new answer into the session, and the side effects already ran when
-  // the row first settled, so the row only learns who answered last, and the
+  // the row first settled, so the row records the answer it replaced and who
+  // answered last, a role's granted answer is scored as an override, and the
   // waits it met carry the new answer (taskWaits.restateAnswer).
   if (row.status !== "pending") {
-    if (patch.status === "answered" && advisoryAnswerOpen(row)) {
-      await ctx.db.patch(row._id, { answered_by: { kind: "user", id: String(userId) }, resolved_by: userId, resolved_at: now });
-      await scheduleDecisionSettle(ctx as any, row, { user_id: userId });
-    }
+    if (patch.status === "answered" && answerChangeable(row)) await recordChangedAnswer(ctx, row, patch, userId, now);
     return;
   }
   const verdict: Verdict = {
@@ -944,16 +942,55 @@ export async function settleClientResolution(
   if (row.workflow_run_id && !consumed) await deliverAnswer(ctx, row, verdict, by);
 }
 
+async function recordChangedAnswer(ctx: Ctx, row: DecisionRow, patch: { answer_index?: number; answer_text?: string; answer_json?: any }, userId: Id<"users">, now: number) {
+  const replaced = {
+    status: row.status,
+    ...(row.answer_index !== undefined ? { answer_index: row.answer_index } : {}),
+    ...(row.answer_text !== undefined ? { answer_text: row.answer_text } : {}),
+    ...(row.answer_json !== undefined ? { answer_json: row.answer_json } : {}),
+    ...(row.answered_by ? { answered_by: row.answered_by } : {}),
+    ...(row.resolved_at !== undefined ? { resolved_at: row.resolved_at } : {}),
+    replaced_at: now,
+    replaced_by: userId,
+  };
+  await ctx.db.patch(row._id, {
+    answer_history: [...((row as any).answer_history ?? []), replaced],
+    answered_by: { kind: "user", id: String(userId) },
+    resolved_by: userId,
+    resolved_at: now,
+    grant_id: undefined,
+  });
+  const by: AnsweredBy = { kind: "user", id: String(userId), user_id: userId };
+  const verdict: Verdict = { status: "answered", answer_index: patch.answer_index, answer_text: patch.answer_text, answer_json: patch.answer_json };
+  if (row.answered_by?.kind === "role" && row.grant_id) {
+    await scoreOverride(ctx, { ...row, reopened_from: { grant_id: row.grant_id, answer_index: row.answer_index, at: now } }, verdict, by, now);
+  }
+  await noticeAnsweredForPeople(ctx, row, verdict, by);
+  await scheduleDecisionSettle(ctx as any, row, { user_id: userId });
+}
+
+// Why a changeable-looking answer may not change after all (answerChangeable
+// reads row facts only): an expectations proposal its answer already applied
+// or dropped. A row the rule itself locks is left to guardClientResolution,
+// which drops the patch silently as a lost race.
+export async function answerChangeRefusal(ctx: Ctx, row: DecisionRow, revision: unknown): Promise<string | null> {
+  if (row.status === "pending" || !answerChangeable(row) || revision !== ((row as any).answer_revision ?? 0) + 1) return null;
+  const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
+  return proposal ? "This answer already settled its expectations proposal and cannot change" : null;
+}
+
 // The dispatch rail's pending guard (first writer wins on every rail): a
 // resolution patch on a row that is no longer pending is dropped whole, so a
 // web answer cannot overwrite what a role already wrote. The one exception is
-// a new answer on an advisory ask (advisoryAnswerOpen): the agent went ahead
-// on its default, and a person may still change its course.
+// a person's new answer on a settled decision that only told its agent what
+// to do (answerChangeable), sent as a change: it names the next
+// answer_revision, so an answer sent while the row looked pending (a lost
+// race) or a second change racing the first is still dropped.
 // Pure, so it is unit tested without the dispatch mutation.
-const RESOLUTION_FIELDS = ["status", "answer_index", "answer_text", "answer_json", "resolved_at"];
-export function guardClientResolution(doc: { status?: string; blocking?: boolean; workflow_run_id?: unknown; answered_by?: { kind: string } | null }, safe: Record<string, any>): Record<string, any> {
+const RESOLUTION_FIELDS = ["status", "answer_index", "answer_text", "answer_json", "resolved_at", "answer_revision"];
+export function guardClientResolution(doc: { status?: string; blocking?: boolean; workflow_run_id?: unknown; answered_by?: { kind: string } | null; answer_revision?: number }, safe: Record<string, any>): Record<string, any> {
   if (doc.status === "pending") return safe;
-  if (safe.status === "answered" && advisoryAnswerOpen(doc as any)) return safe;
+  if (safe.status === "answered" && answerChangeable(doc as any) && safe.answer_revision === (doc.answer_revision ?? 0) + 1) return safe;
   return RESOLUTION_FIELDS.some((f) => f in safe) ? {} : safe;
 }
 

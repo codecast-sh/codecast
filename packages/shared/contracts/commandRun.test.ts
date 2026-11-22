@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { RUN_OPTIONS, approvesCommandRun, approvesPersonsAct, clipRunOutput, commandLine, parseRunCommand, runResultText, MAX_RUN_OUTPUT } from "./commandRun";
+import { RUN_OPTIONS, approveNeedsPresence, approvesCommandRun, approvesPersonsAct, clipRunOutput, commandLine, parseRunCommand, runResultText, MAX_RUN_OUTPUT } from "./commandRun";
 import { APPROVE_FOR_SESSION } from "./secrets";
 import { formatDecisionAnswer, parseDecisionAnswer } from "./decisionAnswers";
 
@@ -25,6 +25,9 @@ test("only Run on a run card, or Approve on an Ask first card, is a person's act
   expect(approvesPersonsAct(run, 0)).toBe(true);
   expect(approvesPersonsAct({ options: RUN_OPTIONS }, 0)).toBe(false);
   expect(approvesPersonsAct({ category: "access", options: [{ label: APPROVE_FOR_SESSION }] }, 0)).toBe(true);
+  expect(approveNeedsPresence(run, 0)).toBe(true);
+  expect(approveNeedsPresence({ category: "access", options: [{ label: APPROVE_FOR_SESSION }] }, 0)).toBe(false);
+  expect(approveNeedsPresence({ category: "access", touch_id: true, options: [{ label: APPROVE_FOR_SESSION }] }, 0)).toBe(true);
 });
 
 test("the result rides after the answer's tag, and the answer stays the label", () => {
