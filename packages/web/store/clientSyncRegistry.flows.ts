@@ -49,7 +49,8 @@ export const FLOW_SYNC_COLLECTIONS = {
     persistence: { kind: "collection", key: "repoFlows" },
     hydration: { phase: "deferred" },
     indexes: "_id, root, repository",
-    // Each picker feeds the one row of its session's checkout, so delta.
+    // Each picker feeds the one row of its session's checkout, so delta; its
+    // feeder drops that checkout's row when the answer lacks it (dropAbsent).
     sync: { isDelta: true, deepFields: ["flows"] },
     feeds: ["repoFlows.forCheckout"],
   },

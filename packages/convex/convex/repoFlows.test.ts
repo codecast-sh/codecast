@@ -63,7 +63,7 @@ describe("a checkout's own flows", () => {
     expect(await s.read(s.ana, "/never-reported", "other/repo")).toEqual([]);
   });
 
-  test("an unchanged report keeps the row alive, an empty one removes it", async () => {
+  test("an unchanged report keeps the row alive", async () => {
     const s = await seed();
     await s.report("/repo", "h1", [flow("Main")]);
     const at = (await s.read(s.ana, "/repo"))[0].updated_at;
@@ -71,8 +71,17 @@ describe("a checkout's own flows", () => {
     expect(await s.report("/repo", "h1", [flow("Main")])).toEqual({ ok: true, unchanged: true });
     setSystemTime();
     expect((await s.read(s.ana, "/repo"))[0].updated_at).toBeGreaterThan(at);
-    await s.report("/repo", "h0", []);
-    expect(await s.read(s.ana, "/repo", null)).toEqual([]);
+  });
+
+  test("a checkout with no flows reads none, not another worktree's", async () => {
+    const s = await seed();
+    await s.report("/repo", "h1", [flow("Main")]);
+    await s.report("/repo-wt", "h0", []);
+    const rows = await s.read(s.ana, "/repo-wt");
+    expect(rows.map((r: any) => [r.root, r.flows.length])).toEqual([["/repo-wt", 0]]);
+    // Flows removed from a checkout that had them leave it with none.
+    await s.report("/repo", "h2", []);
+    expect((await s.read(s.ana, "/repo"))[0].flows).toEqual([]);
   });
 
   test("a checkout silent for two weeks goes when its repository reports again", async () => {

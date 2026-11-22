@@ -30,6 +30,11 @@ describe("the checkout whose flows the Ship picker shows", () => {
     expect(sessionRootOf({ sessions: { a: { git_root: "/um" } } }, "a")).toBe("/um");
   });
 
+  test("a checkout that reported no flows shows none, not another worktree's", () => {
+    const rows = [row("/um", "Main", 2), { ...row("/um-no-flows", "", 1), flows: [] }];
+    expect(checkoutRow(rows, "/um-no-flows")?.flows).toEqual([]);
+  });
+
   test("a checkout that never reported falls back to its repository's newest report", () => {
     const rows = [row("/um", "Main", 1), row("/um-wt", "Newer", 2)];
     expect(checkoutRow(rows, "/um-unreported")?.flows[0].label).toBe("Newer");
