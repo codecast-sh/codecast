@@ -2,6 +2,7 @@ import type { ConvoMessage } from '@platform/evals';
 import { UsageError } from '@platform/evals/cli';
 
 import { mayBeTyped, typedPart } from '../../../../convex/convex/lib/messageProvenance';
+import { parseDecisionAnswer } from '../../../../shared/contracts';
 import { normalizeQuote } from '../../../../convex/convex/lib/originatorChain';
 import { parseJsonBlock } from '../../../../convex/convex/lib/anthropic';
 import { blindDiff } from '../../../../cli/src/workflow/blindChange';
@@ -132,7 +133,8 @@ const impl: SurfaceImpl = {
     const typed: IntentTyped[] = [];
     for (const msg of read.messages) {
       const at = Date.parse(msg.timestamp);
-      if (msg.role !== 'user' || at > card.created_at || programLines.has(msg.line) || !mayBeTyped(msg.content ?? '')) continue;
+      // A card answer reaches the session as a frame the decision rail queues, never the composer's typed send: a program line.
+      if (msg.role !== 'user' || at > card.created_at || programLines.has(msg.line) || !mayBeTyped(msg.content ?? '') || parseDecisionAnswer(msg.content ?? '')) continue;
       const words = typedPart(msg.content ?? '', 'typed_local', null);
       if (words) typed.push({ short_id: shortId, line: msg.line, user_name: asked, provenance: 'typed_local', text: words, created_at: isoOf(at) });
     }
