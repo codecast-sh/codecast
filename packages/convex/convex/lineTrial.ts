@@ -540,9 +540,9 @@ export const cards = query({
     const limit = Math.min(Math.max(1, args.limit ?? 300), CARDS_CAP);
     const project = args.project ? await resolveWorkspaceProject(ctx, workspaceKey, args.project) : null;
     if (args.project && !project) throw new Error(`No project "${args.project}" in this workspace`);
-    const waiting: Doc<"trial_cards">[] = (await ctx.db.query("trial_cards")
-      .withIndex("by_workspace_status_created", (q: any) => q.eq("workspace", workspaceKey).eq("status", "waiting")).order("desc").take(CARDS_CAP))
-      .filter((r) => !project || String(r.project_id) === String(project._id));
+    const waiting: Doc<"trial_cards">[] = project
+      ? await ctx.db.query("trial_cards").withIndex("by_project_status_created", (q: any) => q.eq("project_id", project._id).eq("status", "waiting")).order("desc").take(CARDS_CAP)
+      : await ctx.db.query("trial_cards").withIndex("by_workspace_status_created", (q: any) => q.eq("workspace", workspaceKey).eq("status", "waiting")).order("desc").take(CARDS_CAP);
     const recent: Doc<"trial_cards">[] = project
       ? await ctx.db.query("trial_cards").withIndex("by_project_created", (q: any) => q.eq("project_id", project._id)).order("desc").take(limit)
       : await ctx.db.query("trial_cards").withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspaceKey)).order("desc").take(limit);
