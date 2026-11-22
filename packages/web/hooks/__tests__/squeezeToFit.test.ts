@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { applySqueeze } from "../useSqueezeToFit";
+import { squeezeStateFor, squeezeStep } from "../useSqueezeToFit";
 
 // The conversation header is one row. It sheds chip detail step by step and
 // lets the title truncate last, but it never grows a second line: a two line
@@ -16,16 +16,39 @@ const headerBar = readFileSync(join(web, "components/conversation/ConversationHe
 const placeholder = readFileSync(join(web, "components/ConversationPlaceholder.tsx"), "utf8");
 
 /** A row whose content width depends on the squeeze level it carries. */
-function fakeRow(clientWidth: number, widthAtLevel: (level: number) => number) {
+function fakeRow(clientWidth: number, widthAtLevel: (level: number) => number, partWidth = 0) {
   const attrs = new Map<string, string>();
   const level = () => (attrs.get("data-squeeze")?.split(" ").length ?? 0);
+  const counts = { reads: 0, writes: 0 };
   return {
-    setAttribute: (k: string, v: string) => attrs.set(k, v),
-    removeAttribute: (k: string) => attrs.delete(k),
+    counts,
+    getAttribute: (k: string) => attrs.get(k) ?? null,
+    setAttribute: (k: string, v: string) => { counts.writes++; attrs.set(k, v); },
+    removeAttribute: (k: string) => { counts.writes++; attrs.delete(k); },
     get clientWidth() { return clientWidth; },
-    get scrollWidth() { return widthAtLevel(level()); },
+    get scrollWidth() { counts.reads++; return widthAtLevel(level()); },
+    // One part per level, `partWidth` wide while its level is not shed.
+    querySelectorAll: (sel: string) => {
+      const k = Number(sel.replace(".cq-sq", ""));
+      return k > level() && partWidth ? [{ getBoundingClientRect: () => ({ width: partWidth }) }] : [];
+    },
     attr: () => attrs.get("data-squeeze"),
   };
+}
+
+/** Run passes the way frames would, until one asks for no further check. */
+function settle(row: ReturnType<typeof fakeRow>, max: number) {
+  const el = row as unknown as HTMLElement;
+  const state = squeezeStateFor(el);
+  const perPass: Array<{ reads: number; writes: number }> = [];
+  let more = true;
+  while (more) {
+    const before = { ...row.counts };
+    more = squeezeStep(el, max, state);
+    perPass.push({ reads: row.counts.reads - before.reads, writes: row.counts.writes - before.writes });
+    if (perPass.length > 20) throw new Error("did not settle");
+  }
+  return { level: state.level, perPass, state };
 }
 
 describe("conversation header squeeze", () => {
@@ -50,33 +73,53 @@ describe("conversation header squeeze", () => {
     expect(css).toMatch(deepest);
   });
 
-  test("applySqueeze picks the smallest level that fits", () => {
+  test("the squeeze settles on the smallest level that fits", () => {
     const row = fakeRow(500, (l) => 800 - l * 100);
-    expect(applySqueeze(row as unknown as HTMLElement, 7)).toBe(3);
+    expect(settle(row, 7).level).toBe(3);
     expect(row.attr()).toBe("1 2 3");
   });
 
-  // The search starts from the last answer; it must land on the same level
-  // from anywhere, and a pass where nothing moved must measure only twice.
-  test("applySqueeze finds the same level from any starting level", () => {
+  // Each restyle-then-read is a whole-page layout (ct-97578), so a pass may
+  // read the row once and write once; checks wait for the next frame.
+  test("every pass reads the row once and writes at most one level", () => {
+    const row = fakeRow(500, (l) => 800 - l * 100);
+    for (const pass of settle(row, 7).perPass) {
+      expect(pass.reads).toBe(1);
+      expect(pass.writes).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test("a raise jumps to the level whose parts cover the overflow", () => {
+    // Shedding a part frees its width plus a gap, so the estimate undershoots
+    // the saving; the squeeze still lands on the smallest level.
+    const row = fakeRow(500, (l) => 830 - l * 110, 100);
+    const { level, perPass } = settle(row, 7);
+    expect(level).toBe(3);
+    expect(perPass.length).toBeLessThanOrEqual(3);
+  });
+
+  test("the same level from any starting level", () => {
     for (let from = 0; from <= 7; from++) {
       const row = fakeRow(500, (l) => 800 - l * 100);
-      expect(applySqueeze(row as unknown as HTMLElement, 7, from)).toBe(3);
+      if (from) row.setAttribute("data-squeeze", Array.from({ length: from }, (_, i) => i + 1).join(" "));
+      expect(settle(row, 7).level).toBe(3);
       expect(row.attr()).toBe("1 2 3");
     }
   });
 
-  test("applySqueeze measures twice when the last answer still holds", () => {
-    let reads = 0;
-    const row = fakeRow(500, (l) => { reads++; return 800 - l * 100; });
-    expect(applySqueeze(row as unknown as HTMLElement, 7, 3)).toBe(3);
-    expect(reads).toBe(2);
+  test("a pass where nothing that fits changed reads once and writes nothing", () => {
+    const row = fakeRow(500, (l) => 800 - l * 100);
+    const { state } = settle(row, 7);
+    const before = { ...row.counts };
+    expect(squeezeStep(row as unknown as HTMLElement, 7, state)).toBe(false);
+    expect(row.counts.reads - before.reads).toBe(1);
+    expect(row.counts.writes - before.writes).toBe(0);
   });
 
-  test("applySqueeze clears the attribute when the row already fits", () => {
+  test("the squeeze clears the attribute when the row already fits", () => {
     const row = fakeRow(900, () => 800);
     row.setAttribute("data-squeeze", "1 2 3 4");
-    expect(applySqueeze(row as unknown as HTMLElement, 7)).toBe(0);
+    expect(settle(row, 7).level).toBe(0);
     expect(row.attr()).toBeUndefined();
   });
 });
