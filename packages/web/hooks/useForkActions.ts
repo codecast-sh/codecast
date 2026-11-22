@@ -6,6 +6,8 @@ import { useInboxStore, type ForkChild, type InboxSession, type OptimisticImage 
 import { DispatchNotWiredError } from "../store/mutativeMiddleware";
 import { beginLocalFork, newForkSessionId, seedForkSessionRow, type LocalFork } from "../store/beginLocalFork";
 import { canAnchorForkChips } from "../components/conversation/classify";
+import { parseSentQuotes } from "../lib/quoteFormat";
+import { genCommentId } from "../lib/reviewActions";
 import type { ConversationData } from "../components/conversation/types";
 
 export function useForkActions({ conversation, currentUser, hasMoreAbove, convCommand, timelineRef, populateInputRef, addOptimisticMsg, sendInlineMessage }: {
@@ -44,24 +46,39 @@ export function useForkActions({ conversation, currentUser, hasMoreAbove, convCo
     beginLocalFork(conversation, messageUuid, { currentUser, hasMoreAbove, onError: (message) => toast.error(message) })
   ), [conversation, currentUser, hasMoreAbove]);
 
+  // Forking from the person's own sent message branches from the message above
+  // it and reopens that message in the fork's composer the way it was built:
+  // each quote back in the fork's batch as its own item with its note, and
+  // only the typed reply in the box (sending it unchanged gives the same
+  // text). Forking from the assistant message just above their latest sent
+  // reply does the same, since that is where the reply was answered from.
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
+    const isMsg = (item: any) => item.type === "message" && canAnchorForkChips(item.data);
+    const anchorAbove = (i: number) => { for (let j = i - 1; j >= 0; j--) if (isMsg(tl[j])) return j; return -1; };
     const idx = tl.findIndex((item: any) => item.type === "message" && item.data?.message_uuid === messageUuid);
-    if (idx !== -1) {
-      const msg = tl[idx].data;
-      if (msg.role === "user") {
-        for (let i = idx - 1; i >= 0; i--) {
-          if (tl[i].type === "message" && canAnchorForkChips(tl[i].data)) {
-            await doFork(tl[i].data.message_uuid);
-            if (msg.content && populateInputRef.current) {
-              setTimeout(() => populateInputRef.current?.(msg.content), 100);
-            }
-            return;
-          }
-        }
-      }
+    let anchor = idx;
+    let reply: string | undefined;
+    if (idx !== -1 && tl[idx].data.role === "user") {
+      const above = anchorAbove(idx);
+      if (above !== -1) { anchor = above; reply = tl[idx].data.content; }
+    } else if (idx !== -1 && tl[idx].data.role === "assistant") {
+      const last = tl.findLastIndex((item: any) => isMsg(item) && item.data.role === "user");
+      if (last > idx && anchorAbove(last) === idx) reply = tl[last].data.content;
     }
-    await doFork(messageUuid);
+    if (anchor === -1 || (anchor === idx && reply === undefined)) { await doFork(messageUuid); return; }
+    const fork = await doFork(tl[anchor].data.message_uuid);
+    if (!fork || !reply) return;
+    const parsed = parseSentQuotes(reply);
+    if (parsed) {
+      const store = useInboxStore.getState();
+      const now = Date.now();
+      parsed.quotes.forEach((q, i) => store.addReviewComment(fork.conversationId, {
+        id: genCommentId(), messageId: "", blockIndex: i, quote: q.quote, body: q.body, createdAt: now + i,
+      }));
+    }
+    const text = parsed ? parsed.reply : reply;
+    if (text && populateInputRef.current) setTimeout(() => populateInputRef.current?.(text), 100);
   }, [doFork, populateInputRef, timelineRef]);
 
   // Gate every fork affordance on the client's fork capability: claude/codex/opencode

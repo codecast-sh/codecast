@@ -8,7 +8,7 @@ import { useContext, useLayoutEffect, useRef, useState, useMemo, useCallback, me
 import { RevealInBandCtx } from "../lib/revealHost";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { isMac, hasOpenModal, altChordDirection } from "../shortcuts";
+import { isMac, hasOpenModal, altChordDirection, formatAcceleratorParts } from "../shortcuts";
 import { armJointSend, disarmJointSend, jointSendReady, takeJointSend } from "../lib/jointSend";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { createPortal } from "react-dom";
@@ -29,7 +29,7 @@ import { cancelDraftWrite, scheduleDraftWrite } from "../lib/pendingDraftWrites"
 import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { KeyCap, ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { QUEUE_CHORD } from "../shortcuts/sendChords";
+import { FORK_SEND_CHORD, QUEUE_CHORD } from "../shortcuts/sendChords";
 import { toast } from "sonner";
 import { toastWriteError } from "../lib/dispatchBinding";
 import { appendToDraft } from "../lib/quoteFormat";
@@ -2544,6 +2544,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // When the send is carried entirely by attached quotes, tint the button cyan to
   // match the tray so it reads as "this sends the quotes".
   const quotesOnlySend = !hasContent && reviewCount > 0;
+  // Quotes waiting and nothing typed: the batch can go into a new branch in
+  // one step, so the placeholder names it and the fork button shows its keys.
+  const forkQuotesOffer = quotesOnlySend && batchWords.quotes > 0 && !batchWords.placeholder && !!onForkTail && !hostedConversation && !onGateSend && !onWorkflowLaunch && !bareComposer;
   const { colWidth, colClass } = composerColumn({ inline, expanded: isExpanded });
   // A hosted turn at work with an empty box: the disc is the visible Stop
   // (store stopHostedTurn), so stopping never rests on a key a person who
@@ -2623,7 +2626,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           </ShortcutTooltip>
         </HandoffPicker>
       )}
-      {onForkTail && !hostedConversation && canSubmit && !onGateSend && !onWorkflowLaunch && (
+      {onForkTail && !hostedConversation && canSubmit && !onGateSend && !onWorkflowLaunch && (<>
+        {forkQuotesOffer && (
+          <span data-fork-quotes-keys className="inline-flex items-center gap-0.5 text-meta text-sol-text-dim">
+            {formatAcceleratorParts(FORK_SEND_CHORD).map((k) => <KeyCap key={k} size="xs">{k}</KeyCap>)}
+          </span>
+        )}
         <ShortcutTooltip label="Fork and send" action="msg.forkSend" side="top">
           <button
             type="button"
@@ -2634,7 +2642,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             <Split className="w-3.5 h-3.5" />
           </button>
         </ShortcutTooltip>
-      )}
+      </>)}
     </>
   );
 
@@ -3156,7 +3164,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
+                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is${forkQuotesOffer ? ", fork and send them" : ""}, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {shared.active && <SharedCarets inputRef={textareaRef} text={message} rows={shared.others} editors={shared.editors} />}
