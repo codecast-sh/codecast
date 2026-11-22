@@ -416,5 +416,15 @@ describe("a session's change is cut on fresh upstream", () => {
     expect(again.landed).toBe(fresh);
     expect(again.tip).toBe(fresh);
     expect(readFrozenChange(runDir)?.landed).toBe(fresh);
+
+    // The level sweep then pulls it in: the session has nothing uncommitted left, and the refreeze still reads landed.
+    writeFrozenChange(runDir, change);
+    git(root, "fetch", "-q", "origin");
+    git(root, "reset", "-q", "--hard", "origin/main");
+    await expect(previewSessionChange(root, session)).rejects.toBeInstanceOf(NoSessionChange);
+    const { change: levelled, moved } = await refreezeSessionChange(root, runDir, null);
+    expect(levelled.landed).toBe(fresh);
+    expect(levelled.tip).toBe(change.tip);
+    expect(moved).toBe(false);
   }, 180_000);
 });

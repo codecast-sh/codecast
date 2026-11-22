@@ -70,6 +70,14 @@ function fetchRef(root: string, remote: string, refspec: string) {
   return execFileAsync("git", ["-C", root, "fetch", "--quiet", remote, refspec], { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
 }
 
+/** Each of `paths` that `commit` holds, with its blob; a path it lacks is absent. */
+async function blobsAt(root: string, commit: string, paths: string[]): Promise<Map<string, string>> {
+  return new Map(((await gitTry(root, ["ls-tree", "-r", "-z", commit, "--", ...paths])) ?? "").split("\0").filter(Boolean).map((l) => {
+    const tab = l.indexOf("\t");
+    return [l.slice(tab + 1), l.slice(0, tab).split(" ")[2]] as const;
+  }));
+}
+
 /**
  * The upstream commit when it already holds every one of `paths` at its frozen content, so the change has nothing
  * left to land; else null. A checkout already holding upstream is not asked: there a match means its own commits
@@ -78,10 +86,7 @@ function fetchRef(root: string, remote: string, refspec: string) {
 async function landedOn(root: string, frozen: Frozen, upstream: string, paths: string[]): Promise<string | null> {
   const upstreamSha = upstream === "HEAD" ? null : await gitTry(root, ["rev-parse", `${upstream}^{commit}`]);
   if (!upstreamSha || !paths.length || (await isAncestor(root, upstreamSha, frozen.base))) return null;
-  const theirs = new Map(((await gitTry(root, ["ls-tree", "-r", "-z", upstreamSha, "--", ...paths])) ?? "").split("\0").filter(Boolean).map((l) => {
-    const tab = l.indexOf("\t");
-    return [l.slice(tab + 1), l.slice(0, tab).split(" ")[2]] as const;
-  }));
+  const theirs = await blobsAt(root, upstreamSha, paths);
   const ours = new Map(frozen.changes.map((c) => [c.path, c.blob]));
   return paths.every((p) => (ours.get(p) ?? null) === (theirs.get(p) ?? null)) ? upstreamSha : null;
 }
@@ -260,16 +265,14 @@ async function branchTip(root: string, change: FrozenChange): Promise<{ tip: str
 
 /**
  * The upstream commit when it holds every one of `paths` as the checkout holds them now (a file gone from both is
- * held too), so a pass with nothing left uncommitted has landed; else null.
+ * held too), so a change with nothing left uncommitted (another pass shipped it, or the level sweep pulled it in) has
+ * landed; else null.
  */
-async function passLandedOn(root: string, paths: string[]): Promise<string | null> {
+async function pathsLandedOn(root: string, paths: string[]): Promise<string | null> {
   const upstream = await upstreamRef(root).catch(() => "HEAD");
   const sha = upstream === "HEAD" ? null : await gitTry(root, ["rev-parse", `${upstream}^{commit}`]);
   if (!sha || !paths.length) return null;
-  const theirs = new Map(((await gitTry(root, ["ls-tree", "-r", "-z", sha, "--", ...paths])) ?? "").split("\0").filter(Boolean).map((l) => {
-    const tab = l.indexOf("\t");
-    return [l.slice(tab + 1), l.slice(0, tab).split(" ")[2]] as const;
-  }));
+  const theirs = await blobsAt(root, sha, paths);
   for (const p of paths) {
     const ours = fs.existsSync(path.join(root, p)) ? await git(root, ["hash-object", "--", p]) : null;
     if (ours !== (theirs.get(p) ?? null)) return null;
@@ -344,7 +347,18 @@ async function refreezeCheckoutChange(root: string, before: FrozenChange, roster
     });
     return { ...change, ...subject };
   } catch (err) {
-    const landed = err instanceof NoCheckoutChange ? await passLandedOn(root, before.paths) : null;
+    const landed = err instanceof NoCheckoutChange ? await pathsLandedOn(root, before.paths) : null;
+    if (!landed) throw err;
+    return { ...before, landed };
+  }
+}
+
+/** A session's change frozen again; one whose files upstream now holds as the checkout does comes back as it was, landed. */
+async function refreezeOwnChange(root: string, before: FrozenChange): Promise<FrozenChange> {
+  try {
+    return await freezeSessionChange(root, before.conversation ?? before.session!, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null });
+  } catch (err) {
+    const landed = err instanceof NoSessionChange ? await pathsLandedOn(root, before.paths) : null;
     if (!landed) throw err;
     return { ...before, landed };
   }
@@ -365,7 +379,7 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
   const change: FrozenChange = before.source === "checkout"
     ? await refreezeCheckoutChange(root, before, opts.roster, opts.since)
     : before.source === "session"
-    ? await freezeSessionChange(root, before.conversation ?? before.session!, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null })
+    ? await refreezeOwnChange(root, before)
     : { ...before, ...(await branchTip(root, before)) };
   const tree = (rev: string) => git(root, ["rev-parse", `${rev}^{tree}`]).then((s) => s.trim()).catch(() => rev);
   const moved = (await tree(before.tip)) !== (await tree(change.tip));
