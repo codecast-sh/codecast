@@ -488,7 +488,7 @@ test("a file behind a tracked in-project linked folder is named once by its real
   expect(sync.files.find((f) => f.relativePath === "outreach/.claude/skills/flags/SKILL.md")?.sourcePath).toBe(path.join(root, "outreach/.claude/skills/flags/SKILL.md"));
 });
 
-test("a required hook holding credential material fails under either name of a tracked linked folder, whichever name the walk read it by", async () => {
+test("a required hook holding credential material fails under either name of a tracked linked folder, whichever name the walk read it by, and behind a tracked `.claude` link to a folder not named like one", async () => {
   execFileSync("git", ["init", "-q", root]);
   write("src/repo/.claude/hooks/hook.sh", "export SERVICE_API_KEY='opaque-random-credential-12345'\n");
   // .agents sorts before .claude: the walk reads the hook as .agents/hooks/hook.sh first.
@@ -501,6 +501,47 @@ test("a required hook holding credential material fails under either name of a t
     expect(() => collectProjectContext({ root, home, includeAncestors: false })).toThrow("active context reference contains credential material");
     await expect(collectProjectContextAsync({ root, home, includeAncestors: false })).rejects.toThrow("active context reference contains credential material");
   }
+  // A tracked `.claude` link to a folder not named like one: its settings are
+  // still Claude's, whether the walk meets the link first or the real name
+  // (AGENTS.md links it, and sorts before `zz/`).
+  for (const [project, linkDir, target] of [["src/a", ".claude", "agent-config"], ["src/b", "zz/.claude", "../agent-config"]] as const) {
+    const dir = path.join(home, project);
+    execFileSync("git", ["init", "-q", dir]);
+    write(`${project}/agent-config/hooks/hook.sh`, "export SERVICE_API_KEY='opaque-random-credential-12345'\n");
+    fs.mkdirSync(path.dirname(path.join(dir, linkDir)), { recursive: true });
+    fs.symlinkSync(target, path.join(dir, linkDir));
+    execFileSync("git", ["-C", dir, "add", linkDir]);
+    write(`${project}/agent-config/settings.json`, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ command: path.join(dir, linkDir, "hooks/hook.sh") }] }] } }));
+    if (linkDir === "zz/.claude") write(`${project}/AGENTS.md`, "Hooks are set in [settings](agent-config/settings.json).\n");
+    expect(() => collectProjectContext({ root: dir, home, includeAncestors: false })).toThrow("active context reference contains credential material");
+    await expect(collectProjectContextAsync({ root: dir, home, includeAncestors: false })).rejects.toThrow("active context reference contains credential material");
+  }
+});
+
+test("settings behind a tracked `.claude` link to a folder not named like one stay Claude's settings; with agent context only they are left to the folder sync, with a warning", async () => {
+  execFileSync("git", ["init", "-q", root]);
+  fs.symlinkSync("agent-config", path.join(root, ".claude"));
+  execFileSync("git", ["-C", root, "add", ".claude"]);
+  write("src/repo/agent-config/settings.local.json", JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ command: `${home}/.local/bin/tool` }] }] } }));
+  write(".local/bin/tool", "#!/bin/sh\n");
+  const all = collectProjectContext({ root, home, includeAncestors: false });
+  expect(await collectProjectContextAsync({ root, home, includeAncestors: false })).toEqual(all);
+  expect(all.files.find((f) => f.relativePath === "agent-config/settings.local.json")?.kind).toBe("claude-settings");
+  const narrow = collectProjectContext({ root, home, includeAncestors: false, includeTracked: false, agentContextOnly: true });
+  expect(narrow.files.filter((f) => f.scope === "project")).toEqual([]);
+  expect(narrow.warnings).toContain("agent-config/settings.local.json: agent config behind a tracked link travels with the folder sync, its paths not rewritten for the host");
+});
+
+test("a tracked link behind another tracked link is located at its real path too", async () => {
+  execFileSync("git", ["init", "-q", root]);
+  write("src/repo/outreach/.codex/skills/f/SKILL.md", "untracked skill\n");
+  fs.mkdirSync(path.join(root, "outreach/.claude"));
+  fs.symlinkSync("../.codex/skills", path.join(root, "outreach/.claude/skills"));
+  fs.symlinkSync(".claude", path.join(root, "outreach/.agents"));
+  execFileSync("git", ["-C", root, "add", "outreach/.agents", "outreach/.claude/skills"]);
+  const sync = collectProjectContext({ root, home, includeAncestors: false, includeTracked: false, agentContextOnly: true });
+  expect(await collectProjectContextAsync({ root, home, includeAncestors: false, includeTracked: false, agentContextOnly: true })).toEqual(sync);
+  expect(sync.files.map((f) => f.relativePath)).toEqual(["outreach/.codex/skills/f/SKILL.md"]);
 });
 
 test("agent context behind a tracked link to a folder outside agent context is left to the folder sync; behind an untracked link it travels by its link name", async () => {
