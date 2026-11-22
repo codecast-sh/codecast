@@ -19,8 +19,12 @@ const OUT = join(import.meta.dir, "../lib/renderGalleryPipeline.generated.ts");
 const ansi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 const dir = mkdtempSync(join(tmpdir(), "gallery-pipeline-"));
+// An inherited GIT_DIR (under `git rebase --exec`, say) points every git below
+// at the surrounding repository: `git init` there reinitialized it as bare.
+const env: Record<string, string | undefined> = { ...process.env, NO_COLOR: "1", GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" };
+for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"]) delete env[k];
 const sh = (cmd: string, args: string[]) => {
-  const r = spawnSync(cmd, args, { cwd: dir, encoding: "utf8", env: { ...process.env, NO_COLOR: "1", GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" } });
+  const r = spawnSync(cmd, args, { cwd: dir, encoding: "utf8", env });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} failed:\n${r.stderr}${r.stdout}`);
   return ansi(r.stdout).trimEnd();
 };
