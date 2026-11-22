@@ -725,7 +725,9 @@ describe("command groups stay off the boot graph", () => {
     // workspace/trash.ts, which removes a worktree whole or not at all.
     // 619 the same day: workflow/stationProcs.ts, which ends a flow station's whole
     // process tree and reaps a dead runner's stations by what their record proves.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(619);
+    // 620 the same day: cloud/mirror/contextOps.ts, the project-context walk's file and git
+    // operations split out of discovery.ts for max-lines, no new code.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(620);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
