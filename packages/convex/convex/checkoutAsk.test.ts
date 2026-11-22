@@ -62,10 +62,14 @@ describe("asking about a stuck checkout from the page", () => {
     expect(scheduled[0].title).toBe("app on Mac-mini: 1 file no session wrote conflicts with origin/main");
   });
 
-  test("someone outside the team, a session that wrote none of the files, or a checkout no longer stuck is refused", async () => {
+  test("someone outside the team, a session that wrote none of the files, a finding before the writers are known, or a checkout no longer stuck is refused", async () => {
     const { ctx, id, tables } = await setup();
     await expect(askCheckoutCore(ctx, "user_x" as any, id, "conv_1")).rejects.toThrow("Checkout not found");
     await expect(askCheckoutCore(ctx, ME as any, id, "conv_9")).rejects.toThrow("wrote none of the conflicting files");
+    // While the daemon still reads who wrote the files, nobody's files are not settled: no finding yet.
+    tables.checkouts[0].report.uncommitted.attributing = true;
+    await expect(askCheckoutCore(ctx, ME as any, id, "finding")).rejects.toThrow("Still reading who wrote these files");
+    delete tables.checkouts[0].report.uncommitted.attributing;
     tables.checkouts[0].report.level = { state: "level", levelled_at: 20 };
     await expect(askCheckoutCore(ctx, ME as any, id, "conv_1")).rejects.toThrow("not stuck any more");
   });

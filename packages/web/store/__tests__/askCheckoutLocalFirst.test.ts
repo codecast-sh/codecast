@@ -43,8 +43,11 @@ describe("asking about a stuck checkout", () => {
     expect(told()).toEqual([expect.objectContaining({ to: "finding", files: 1 })]);
   });
 
-  it("a session that wrote none of the files, or a checkout no longer stuck, asks nothing", () => {
+  it("a session that wrote none of the files, a finding before the writers are known, or a checkout no longer stuck, asks nothing", () => {
     useInboxStore.getState().askCheckout(ID, "conv_9", 50);
+    expect(told()).toEqual([]);
+    useInboxStore.setState({ checkouts: { [ID]: { ...row(), uncommitted: { ...row().uncommitted, attributing: true } } } } as any);
+    useInboxStore.getState().askCheckout(ID, "finding", 50);
     expect(told()).toEqual([]);
     useInboxStore.setState({ checkouts: { [ID]: { ...row(), level: { state: "level", levelled_at: 20 } } } } as any);
     useInboxStore.getState().askCheckout(ID, "conv_1", 50);

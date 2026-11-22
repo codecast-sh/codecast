@@ -23,6 +23,9 @@ export async function askCheckoutCore(ctx: any, userId: Id<"users">, checkoutId:
   const report = row.report as Omit<CheckoutReport, "repository" | "device_id" | "path">;
   const level = report?.level;
   if (level?.state !== "stuck") throw new ConvexError("This checkout is not stuck any more");
+  // While the daemon is still reading transcripts, the report's grouping is not the daemon's: a finding filed now would
+  // hash another file set than the daemon's later one, and the episode would carry two.
+  if (who === "finding" && report.uncommitted?.attributing) throw new ConvexError("Still reading who wrote these files: file it once they are known");
   const { writers, nobody } = levelWriters(report);
   const mine = who === "finding" ? nobody : writers.find((w) => w.conversation_id === who)?.files ?? [];
   if (!mine.length) throw new ConvexError(who === "finding" ? "Every conflicting file has a session that wrote it" : "That session wrote none of the conflicting files");

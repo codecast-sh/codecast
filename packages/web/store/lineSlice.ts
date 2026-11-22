@@ -122,6 +122,8 @@ export function createLineSlice(): LineSliceActions {
     askCheckout: action(function (this: { checkouts: Record<string, CheckoutRow> }, checkoutId: string, who: string, at: number) {
       const row = this.checkouts[checkoutId];
       if (!row || row.level.state !== "stuck") return;
+      // A finding waits until the daemon knows who wrote the files (convex checkoutAsk refuses it before then).
+      if (who === "finding" && row.uncommitted.attributing) return;
       const { writers, nobody } = levelWriters(row);
       const files = who === "finding" ? nobody.length : writers.find((w) => w.conversation_id === who)?.files.length ?? 0;
       if (!files) return;

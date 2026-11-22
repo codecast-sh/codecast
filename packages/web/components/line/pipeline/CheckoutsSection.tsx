@@ -153,7 +153,11 @@ function NeedsAction({ c, onOpen, onShip }: { c: CheckoutView; onOpen: (id: stri
     if (untold.length) {
       return <button type="button" className="pv-btn ck-primary" onClick={() => { for (const w of untold) ask(c.id, w.conversationId); }} title={untold.map((w) => w.title).join("\n")} data-checkout-tell>{untold.length === 1 ? "Tell writer" : `Tell ${untold.length} writers`}</button>;
     }
-    if (c.asks.nobody.files.length && !c.asks.nobody.told) return <button type="button" className="pv-btn" onClick={() => ask(c.id, "finding")} data-checkout-finding>File a finding</button>;
+    if (c.asks.nobody.files.length && !c.asks.nobody.told) {
+      // Until the daemon knows who wrote the files, the ones it calls nobody's are not settled: no finding yet.
+      if (c.unattributed.reading) return <span className="ck-told">reading who wrote them</span>;
+      return <button type="button" className="pv-btn" onClick={() => ask(c.id, "finding")} data-checkout-finding>File a finding</button>;
+    }
     return <span className="ck-told" title={c.level.told ?? undefined}>{c.level.toldBrief}</span>;
   }
   if (c.finished.length) return <button type="button" className="pv-btn" onClick={() => onShip(c)} data-checkout-ship>Ship{c.finished.length > 1 ? ` ${c.finished.length}` : ""}</button>;
@@ -197,7 +201,7 @@ const STATE_WORDS = { working: "working", idle: "idle", finished: "finished" } a
  *  writer's files, and each session's work with its own Ship. */
 function CheckoutDetails({ c, now, onShip }: { c: CheckoutView; now: number; onShip: (s: CheckoutSessionView) => void }) {
   const last = c.asks?.writers.find((w) => !w.told) ?? null;
-  const nobodyUntold = !!c.asks && c.asks.nobody.files.length > 0 && !c.asks.nobody.told;
+  const nobodyUntold = !!c.asks && c.asks.nobody.files.length > 0 && !c.asks.nobody.told && !c.unattributed.reading;
   return (
     <div className="pd-body">
       <div className="pd-crumb">{c.machine} · checkout</div>
@@ -237,7 +241,9 @@ function CheckoutDetails({ c, now, onShip }: { c: CheckoutView; now: number; onS
               <div className="ck-writer-head">
                 <span className="ck-writer-name" data-quiet>No session wrote</span>
                 <span className="pd-dim">{plural(c.asks.nobody.files.length, "file")}</span>
-                {c.asks.nobody.told ? <span className="ck-writer-told">finding filed</span> : <button type="button" className="pv-btn ck-small" onClick={() => ask(c.id, "finding")} data-checkout-finding>File a finding</button>}
+                {c.asks.nobody.told ? <span className="ck-writer-told">finding filed</span>
+                  : c.unattributed.reading ? <span className="ck-writer-told">reading who wrote them</span>
+                  : <button type="button" className="pv-btn ck-small" onClick={() => ask(c.id, "finding")} data-checkout-finding>File a finding</button>}
               </div>
               <FolderFiles paths={c.asks.nobody.files} />
             </div>
