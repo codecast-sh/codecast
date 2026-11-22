@@ -13,8 +13,14 @@
 // (bun aliases import.meta.env to process.env, so a beforeAll stub lands
 // after this module is already in the cache); the const form is for
 // module-init consumers (auth namespace, Convex clients).
+// A set but malformed value ("convex.codecast.sh", no scheme) falls back too:
+// the Convex client opens its socket from this URL, and a relative one makes
+// `new WebSocket` throw "the provided URL is invalid" at boot (ct-73198).
+const FALLBACK_CONVEX_URL = "https://convex.codecast.sh";
+
 export function getConvexUrl(): string {
-  return import.meta.env.VITE_CONVEX_URL || "https://convex.codecast.sh";
+  const raw = import.meta.env.VITE_CONVEX_URL;
+  return typeof raw === "string" && /^https?:\/\/[^/\s]+/i.test(raw) ? raw : FALLBACK_CONVEX_URL;
 }
 
 export const CONVEX_URL = getConvexUrl();

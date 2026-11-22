@@ -207,6 +207,19 @@ describe("asrPipe: a pipe that cannot work lets go", () => {
     expect(h.audio().closed).toBe(true);
   });
 
+  test("a socket the browser refuses to construct fails the pipe instead of throwing (ct-73198)", async () => {
+    (globalThis as any).WebSocket = class {
+      constructor() {
+        throw new SyntaxError("Failed to construct 'WebSocket': the provided URL is invalid.");
+      }
+    };
+    const failed: string[] = [];
+    const h = open({ onFailed: (m) => failed.push(m) });
+    await h.connect();
+    expect(failed).toEqual(["Could not start transcription"]);
+    expect(h.audio().closed).toBe(true);
+  });
+
   test("a socket that drops closes its capture too — the caller opens a fresh pipe, not this one", async () => {
     let openAtDrop: boolean | undefined;
     const h = open({ onDropped: () => (openAtDrop = h.audio().closed) });

@@ -16,9 +16,11 @@ import type {
 } from "@codecast/shared/contracts";
 import {
   getTerminalEndpoint,
+  loopbackWsUrl,
   termHttpBase,
   type TerminalEndpoint,
 } from "../terminal/endpoint";
+import { openWebSocket } from "../openWebSocket";
 
 const FETCH_TIMEOUT_MS = 10_000;
 
@@ -306,7 +308,17 @@ export function subscribeVaultEvents(
 
   const connect = () => {
     if (disposed) return;
-    ws = new WebSocket(`ws://127.0.0.1:${ep.port}/vault/ws`);
+    ws = openWebSocket(loopbackWsUrl(ep, "/vault/ws"));
+    if (!ws) {
+      // No socket can ever open against this endpoint: report it down and
+      // stale at once so the caller rediscovers, and stop retrying it.
+      handlers.onDown?.();
+      if (!staleNotified) {
+        staleNotified = true;
+        handlers.onStale?.();
+      }
+      return;
+    }
     ws.onopen = () => {
       ws?.send(JSON.stringify({ type: "hello", token: ep.token, vault: vaultId }));
       retryMs = 1000;
