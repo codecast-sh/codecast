@@ -145,7 +145,7 @@ export async function deployCommitsOf(ctx: any, rows: Doc<"commits">[]) {
   return out;
 }
 
-function pushSummary(d: Doc<"deploys">): DeployPushSummary {
+export function pushSummary(d: Doc<"deploys">): DeployPushSummary {
   return { dirty: d.dirty ?? null, machine: d.machine ?? null, pushed_via: d.pushed_via ?? null, adds_count: d.adds?.length ?? 0, drops_count: d.drops?.length ?? 0 };
 }
 
@@ -197,17 +197,35 @@ export async function deployLine(ctx: any, d: Doc<"deploys">, caches: { conv: Ma
   };
 }
 
-export async function targetDeploys(ctx: any, workspace: string, target: string, take = 60): Promise<Doc<"deploys">[]> {
-  return await ctx.db
+/** A query filter that leaves out the dev watcher's pushes: a read of real deploys applies it before it counts. */
+export const notWatcher = (q: any) => q.neq(q.field("pushed_via"), "dev watcher");
+
+/** The newest rows of any kind a read of real deploys adds for what prod runs now and a history: the watcher's among them. */
+export const RECENT_PUSHES = 20;
+
+/** Newest-first reads of deploys as one: each row once, the row created last first. */
+export function newestFirst(...reads: ReadonlyArray<ReadonlyArray<Doc<"deploys">>>): Doc<"deploys">[] {
+  const byId = new Map<string, Doc<"deploys">>();
+  for (const read of reads) for (const d of read) byId.set(String(d._id), d);
+  return [...byId.values()].sort((a, b) => b.created_at - a.created_at || b._creationTime - a._creationTime);
+}
+
+/**
+ * A target's newest `take` real deploys: the dev watcher's pushes are left out before the read counts, so however many
+ * of them pile up, the real live deploy stays in reach. `pushes` adds the target's newest that many rows of any kind.
+ */
+export async function targetDeploys(ctx: any, workspace: string, target: string, take = 60, opts: { pushes?: number } = {}): Promise<Doc<"deploys">[]> {
+  const read = () => ctx.db
     .query("deploys")
     .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", workspace).eq("target", target))
-    .order("desc")
-    .take(take);
+    .order("desc");
+  const real: Doc<"deploys">[] = await read().filter(notWatcher).take(take);
+  return opts.pushes ? newestFirst(real, await read().take(opts.pushes)) : real;
 }
 
 /** One target's state: live, going out, recent history, and what waits on main. */
 export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
-  const deploys = await targetDeploys(ctx, t.workspace, t.name);
+  const deploys = await targetDeploys(ctx, t.workspace, t.name, 60, { pushes: RECENT_PUSHES });
   const deploysHere = deploys.filter((d) => !d.repository || d.repository === t.repository);
   // The queue, rollback and "already live" go on from the last real deploy; a watcher's push is nobody's deploy, so
   // what prod runs when that is one is `running`, beside it.

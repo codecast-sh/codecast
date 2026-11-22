@@ -98,7 +98,9 @@ export const sessionsOf = (d: Pick<TeamDeployRow, "sessions">): DeploySession[] 
  * sha already live. With no commits named but a new sha, its commits are only
  * unrecorded (or none touched the target), so it is not called a rebuild.
  */
-export function rebuiltOnly(d: Pick<TeamDeployRow, "status" | "action" | "commits" | "sha" | "previous_sha">): boolean {
+export function rebuiltOnly(d: Pick<TeamDeployRow, "status" | "action" | "commits" | "sha" | "previous_sha" | "dirty" | "pushed_via">): boolean {
+  // A push with uncommitted files (a dev watcher's, or a dirty deploy.sh) shipped something new even on the same sha.
+  if (d.dirty || isWatcherPush(d)) return false;
   return d.status === "live" && d.action === "deploy" && !d.commits && (!d.previous_sha || d.previous_sha === d.sha);
 }
 

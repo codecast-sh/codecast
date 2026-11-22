@@ -39,7 +39,7 @@ import {
 } from "@codecast/shared/contracts/deployTargets";
 import { liveDeployOf } from "@codecast/shared/contracts/deploys";
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
-import { COMMITS_MAX, commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, repositoryArg, targetDeploys, targetRows, targetState, upsertMainCommits } from "./deployTargetsState";
+import { COMMITS_MAX, commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, notWatcher, repositoryArg, targetDeploys, targetRows, targetState, upsertMainCommits } from "./deployTargetsState";
 import { requestTargetDeployCore } from "./deployTargetRequest";
 export { requestTargetDeployCore };
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
@@ -218,6 +218,7 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
       .query("deploys")
       .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", d.workspace).eq("target", d.target).lte("created_at", d.created_at))
       .order("desc")
+      .filter(notWatcher)
       .take(30);
     // The real deploy that went live last before it: a watcher's push is nobody's deploy, so a range never starts there.
     const before = liveDeployOf(earlier.filter((x) => x._id !== d._id && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at)), { repository: d.repository, real: true });

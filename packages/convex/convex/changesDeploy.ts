@@ -22,6 +22,7 @@ import { resolveTeamForRepository } from "./githubWebhooks";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
 import { adderOf, latestLiveDeploy, ownWatcherRowFor, recordDeployMarker } from "./deploys";
 import { sameSha } from "./deployCarries";
+import { targetDeploys } from "./deployTargetsState";
 import { normalizeDeployTarget } from "@codecast/shared/contracts/deploys";
 
 const SURFACE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -219,11 +220,7 @@ export const addedBy = query({
 
     if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
     const teamId = args.team_id ?? (await deployTeamFor(ctx, userId, repository));
-    const rows = await ctx.db
-      .query("deploys")
-      .withIndex("by_workspace_target_created", (q) => q.eq("workspace", `team:${teamId}`).eq("target", target))
-      .order("desc")
-      .take(ADDED_BY_SCAN);
+    const rows = await targetDeploys(ctx, `team:${teamId}`, target, ADDED_BY_SCAN, { pushes: ADDED_BY_SCAN });
     const mine = rows.filter((d) => d.repository === normalizeRepository(repository));
     const found: AddedBy[] = [];
     for (const name of new Set(args.names)) {
