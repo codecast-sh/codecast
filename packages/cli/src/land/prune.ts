@@ -13,9 +13,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { codecastPath } from "../codecastDir.js";
-import { execFileAsync, spawn } from "../proc.js";
+import { execFileAsync } from "../proc.js";
 import { locateWorktree } from "../worktreeEnv.js";
 import { moveToTrash } from "../workspace/trash.js";
+import { deleteInBackground } from "../worktreeGc.js";
 import { withWorkingIndex, type FileVerdict, type TreeReport } from "./scan.js";
 
 export const ARCHIVE_REF_PREFIX = "refs/codecast/land-archive/";
@@ -100,13 +101,4 @@ export async function pruneTree(tree: TreeReport, repoRoot: string): Promise<Pru
   }
   if (tree.branch) await git(repoRoot, ["branch", "-D", tree.branch]).catch(() => "");
   return { path: tree.path, archived, branchRef };
-}
-
-/** Unlink a trashed tree after this command exits. */
-function deleteInBackground(dir: string): void {
-  try {
-    spawn("rm", ["-rf", dir], { detached: true, stdio: "ignore" }).unref();
-  } catch {
-    /* the workspace trash sweep removes it later */
-  }
 }
