@@ -328,8 +328,10 @@ export async function relayLineToFeeds(
  *  words. The people in it are the live seats of the room (liveMembers). A
  *  person's line names them and never reaches them; an agent's mirrored line
  *  names the agent (no account behind it, so `actor_user_id` stays empty and
- *  the person who fed it hears it like everyone else) and rings no phone,
- *  like every line a machine writes (agent-channels.md C3). A line typed on
+ *  the person who fed it hears it like everyone else). No line rings a phone:
+ *  the people it reaches are on the call already, so a typed line is a bell
+ *  only (sd-4300), as is an agent's, like every line a machine writes
+ *  (agent-channels.md C3). A line typed on
  *  an ended call's page, or in a room with no record running, has no huddle
  *  to reach. */
 export async function notifyCallChat(
@@ -370,9 +372,7 @@ export async function notifyCallChat(
     entity_id: String(transcript._id),
     message: `${name} in the huddle chat: ${words}`,
     recipient_ids: recipients,
-    push_subtitle: transcript.title ? `huddle · ${transcript.title}` : "huddle chat",
-    push_body: words,
-    ...(agent ? { push: false } : {}),
+    push: false,
   });
   return notified;
 }

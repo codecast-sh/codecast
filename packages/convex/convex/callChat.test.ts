@@ -617,4 +617,22 @@ describe("ct-79021: the huddle's chat notifies the people in the huddle", () => 
     await call(post, ctx, { room_key: "session:conv1", text: "can you check the deploy?" });
     expect(bells(ctx)).toEqual([{ to: "ub", type: "call_chat", entity: "call:t1", actor: "ua", name: "Ada Lovelace" }]);
   });
+
+  test("no line in the huddle's chat buzzes a phone: the bell is the whole notice (sd-4300)", async () => {
+    const r = room();
+    const users = r.users.map((u) => ({ ...u, push_token: `tok-${u._id}`, notifications_enabled: true }));
+    const ctx = ctxWith({
+      ...r, users, push_outbox: [],
+      call_agent_feeds: [{ _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "session:conv1", team_id: "team1", added_by: "ua", last_mirrored_message_id: "m1" }],
+      messages: [
+        { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
+        { _id: "m2", conversation_id: "conv1", role: "assistant", content: "Deploy is green.", timestamp: 2 },
+      ],
+    }, { userId: "ua" });
+    await call(post, ctx, { room_key: "session:conv1", text: "can you check the deploy?" });
+    await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+    expect(bells(ctx).length).toBe(3);
+    expect(ctx.db._tables.push_outbox ?? []).toEqual([]);
+    expect(ctx._scheduled.filter((s) => s.name.startsWith("pushRouter"))).toEqual([]);
+  });
 });
