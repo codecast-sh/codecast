@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   View as RNView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
@@ -22,7 +24,7 @@ import { DOC_TYPE_CONFIG } from "@/components/DocItem";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
 import { describeDates } from "@codecast/shared/time";
 import { isArtifactDocType } from "@codecast/shared/artifacts";
-import { openWebPage, WEB_ORIGIN } from "@/lib/links";
+import { ArtifactView } from "@/components/artifacts/ArtifactView";
 
 export default function DocDetailScreen() {
   const Theme = useTheme();
@@ -83,17 +85,36 @@ export default function DocDetailScreen() {
   // The stored body opens with the title heading; this screen prints the
   // title in its own header, so the body renders without it.
   const content = stripTitleHeading(docDetail?.content ?? doc.content ?? "");
+  const header = (
+    <Stack.Screen
+      options={{
+        title: cfg.label,
+        headerStyle: { backgroundColor: Theme.bgAlt },
+        headerTintColor: Theme.text,
+        headerTitleStyle: { fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted },
+      }}
+    />
+  );
+
+  // Boards, sheets and dashboards fill the screen with their own live view.
+  if (isArtifactDocType(doc.doc_type)) {
+    return (
+      <>
+        {header}
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={90}
+        >
+          <ArtifactView doc={doc} />
+        </KeyboardAvoidingView>
+      </>
+    );
+  }
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: cfg.label,
-          headerStyle: { backgroundColor: Theme.bgAlt },
-          headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted },
-        }}
-      />
+      {header}
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         <RNText style={styles.title}>{doc.title || "Untitled"}</RNText>
 
@@ -126,19 +147,7 @@ export default function DocDetailScreen() {
           </TouchableOpacity>
         )}
 
-        {isArtifactDocType(doc.doc_type) ? (
-          // Boards, sheets and dashboards are drawn by the web app; the phone opens them there.
-          <TouchableOpacity
-            style={styles.webOnly}
-            onPress={() => void openWebPage(`${WEB_ORIGIN}/docs/${doc._id}`)}
-            activeOpacity={0.7}
-            accessibilityRole="link"
-          >
-            <FontAwesome name={cfg.icon as any} size={18} color={cfg.color} />
-            <RNText style={styles.webOnlyText}>Open {cfg.label.toLowerCase()} on the web</RNText>
-            <FontAwesome name="external-link" size={12} color={Theme.textMuted0} />
-          </TouchableOpacity>
-        ) : content ? (
+        {content ? (
           <RNView style={styles.section}>
             <MarkdownContent text={content} baseStyle={styles.bodyText} />
           </RNView>
@@ -266,23 +275,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 14,
     color: Theme.text,
     lineHeight: 21,
-  },
-  webOnly: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    backgroundColor: Theme.bgAlt,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-    marginTop: Spacing.sm,
-  },
-  webOnlyText: {
-    flex: 1,
-    fontSize: 15,
-    color: Theme.text,
   },
   emptyContent: {
     alignItems: "center",
