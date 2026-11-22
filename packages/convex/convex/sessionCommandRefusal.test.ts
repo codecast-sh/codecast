@@ -42,10 +42,14 @@ describe("a session command from someone who may not command the session", () =>
     expectTypedRefusal(await refusal(resumeConversationSession(ctx, STRANGER, "conversations_1" as any)));
   });
 
-  test("the runner and the second-party owner are still let through", async () => {
-    const ctx = { db: makeFakeDb({ conversations: [conv] }) } as any;
-    expect((await requireSessionCommandTarget(ctx, RUNNER, "conversations_1" as any)).user_id).toBe(RUNNER);
-    expect((await requireSessionCommandTarget(ctx, OWNER, "conversations_1" as any)).user_id).toBe(RUNNER);
+  test("the runner and the second-party owner still resume: a resume_session row stamped with the runner", async () => {
+    for (const who of [RUNNER, OWNER]) {
+      const db = makeFakeDb({ conversations: [{ ...conv, message_count: 3 }], daemon_commands: [], pending_messages: [] });
+      const res = await resumeConversationSession({ db } as any, who, "conversations_1" as any);
+      expect(res).toHaveProperty("command_id");
+      const rows = db._tables.daemon_commands.filter((r: any) => r.command === "resume_session");
+      expect(rows.map((r: any) => r.user_id)).toEqual([RUNNER]);
+    }
   });
 
   test("convCommand's routing re-throw keeps the refusal typed and names command, conversation and user", async () => {
