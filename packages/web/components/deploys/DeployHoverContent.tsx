@@ -13,6 +13,7 @@ import { useNowWhen } from "../../hooks/useCoarseNow";
 import { useDeployReach } from "../../hooks/useDeployReach";
 import { FAILED_ICON, REACH_ICON, TONE_TEXT, deployLook } from "../../lib/deploys/deployLook";
 import { REACH_LOOK, deployAgo, deployElapsed, deployHeadline, deployStepLabel, reachTime, replacedLine } from "../../lib/deploys/deployPill";
+import { deploysFocusHref, focusOfRef } from "../../lib/deploys/focus";
 import { entityRoute } from "../../lib/entityLinks";
 import { findEntityInStore } from "../../lib/liveEntities";
 import { HoverCardClose } from "../../lib/hoverCardsOff";
@@ -155,6 +156,8 @@ function ReachDeployLink({ deploy }: { deploy: { short_id: string; sha?: string 
 export function ProductionReach({ refId }: { refId: string }) {
   const reach = useDeployReach(refId, false);
   const targets = reach?.targets ?? [];
+  // Each target opens Deploys there with this change highlighted.
+  const link = focusOfRef(refId);
   const now = useNowWhen((t) => targets.map((x) => { const at = reachTime(x); return at ? deployAgo(at.at, t) : ""; }).join("|"), 15_000);
   if (!targets.length) return null;
   return (
@@ -167,7 +170,7 @@ export function ProductionReach({ refId }: { refId: string }) {
           const time = reachTime(t);
           return (
             <React.Fragment key={t.target}>
-              <span className="text-sol-text-secondary font-medium whitespace-nowrap">{t.target}</span>
+              {link ? <Link href={deploysFocusHref({ repository: link.repository, target: t.target, focus: link.focus })} className="text-sol-text-secondary font-medium whitespace-nowrap hover:underline" data-reach-target={t.target}>{t.target}</Link> : <span className="text-sol-text-secondary font-medium whitespace-nowrap">{t.target}</span>}
               <span className={`inline-flex items-baseline gap-1 whitespace-nowrap ${TONE_TEXT[look.tone]}`}>
                 <Icon aria-hidden className={`w-3 h-3 shrink-0 self-center ${t.state === "failed" ? FAILED_ICON : ""}`} />
                 {look.word}
