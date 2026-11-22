@@ -1,29 +1,24 @@
 /**
- * Bring a level conflict to the session that wrote the file.
+ * What a level conflict's writer is handed, and the one brief the sweep sends
+ * at once.
  *
  * The level sweep moves a shared checkout only when every changed path has a
  * clean answer (level.ts), so one file edited here and upstream without a
- * clean merge holds the whole checkout behind. Nobody reads the daemon log, so
- * the writer of each conflicting file is told: which of its files conflict
- * with which upstream commits, where the three-way merge sits with its
- * markers, and what not to do in a shared checkout. Once the file carries
- * upstream's change the next sweep levels by itself. A level that raced a
- * writer moves HEAD but leaves that file without upstream's change (a stale
- * copy); its writer is told the same way, with its merge file kept apart so a
- * later level does not delete it (pruned after a day).
+ * clean merge holds the whole checkout behind. Once that has lasted
+ * LEVEL_STUCK_FILE_MS, checkoutReport.ts tells each file's writer
+ * (tellWriters), with the brief written here: which of its files conflict,
+ * the upstream commits that touched them, and a three-way merge per file
+ * under `.git/codecast/level-conflicts/`, cleared once the checkout levels.
  *
- * Each path is recorded with upstream's blob of it, the blob on disk and the
- * session briefed (`.git/codecast/level-conflicts.json`). A busy main whose
- * commits leave the file alone costs an ls-tree and a hash-object per sweep
- * and sends nothing. Upstream changing the file briefs again; a change on disk
- * attributes again and briefs only a new writer. A path with no writer, or a
- * brief that failed, is tried again after RETRY_MS; a writer the server will
- * never deliver to (a teammate's session) only when either blob or the owner
- * changes. A clean level (or
- * a checkout found already level) clears the record and the merge files.
+ * A level that raced a writer moves HEAD but leaves that file without
+ * upstream's change (a stale copy), which would revert upstream's change when
+ * shipped. The next sweep finds the checkout level and cannot see it, so its
+ * writer is told at once (briefRacedStale), with the merge kept apart under
+ * `.git/codecast/level-stale/` so the next level does not delete it (pruned
+ * after a day).
  *
- * The brief is a machine wake (origin "scheduler"), never a person's message:
- * it leaves the writer's pinned state and a hidden stash alone.
+ * Every brief is a machine wake (origin "scheduler"), never a person's
+ * message: it leaves the writer's pinned state and a hidden stash alone.
  */
 
 import { createHash } from "node:crypto";
@@ -31,10 +26,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatSessionMessage } from "@codecast/shared/contracts";
+import { LEVEL_TOLD_PATHS_MAX } from "@codecast/shared/contracts/checkouts";
 import { execFileAsync } from "../proc.js";
 import { gitTry } from "../wipSnapshot.js";
 import { attributeEdits, type Attribution } from "./attribute.js";
-import { worktreeBlobs, type LevelResult } from "./level.js";
+import type { LevelResult } from "./level.js";
 
 /**
  * Deliver `body` to conversation `to` as a machine wake. `clientId` makes a
@@ -61,35 +57,13 @@ export interface BriefDeps {
   now?: number;
 }
 
-interface PathState {
-  /** Upstream's blob of the path, "deleted" when upstream has none. */
-  up: string;
-  /** The blob on disk, "missing" when the file is gone. */
-  local: string;
-  /** The conversation that wrote it last, null when no transcript says. */
-  owner: string | null;
-  /** The owner has this brief (for this `up`). */
-  briefed: boolean;
-  /** Which brief: "held" (the checkout cannot follow upstream) or "raced" (it moved and left the file stale). */
-  kind?: BriefKind;
-  /** The server refuses to deliver to the owner; tried again only when `up`, `local` or the owner changes. */
-  unreachable?: boolean;
-  /** When attribution or the send was last tried. */
-  at: number;
-}
-
-type BriefKind = "held" | "raced";
-
-interface ConflictRecord { paths: Record<string, PathState> }
-
-/** A transcript can reach the sync ledger after the write it records, and a server can refuse a send: both are tried again this often. */
-export const RETRY_MS = 15 * 60_000;
 /** A write older than this cannot be the one that left a file dirty. */
 const ATTRIBUTION_HORIZON_MS = 14 * 86_400_000;
 const BLOB_MAX_BUFFER = 256 * 1024 * 1024;
 const SYMLINK = "120000";
+/** At most this many upstream commits a brief lists. */
+const COMMITS_MAX = 10;
 
-const recordFile = (gitDir: string) => path.join(gitDir, "codecast", "level-conflicts.json");
 /** Merge files of conflicts holding the checkout back; cleared once it levels. */
 export const mergeDir = (gitDir: string) => path.join(gitDir, "codecast", "level-conflicts");
 /** Merge files of stale copies a raced level left behind; kept past the level, pruned after STALE_KEEP_MS. */
@@ -113,39 +87,21 @@ export function pruneStale(gitDir: string): void {
   try { if (walk(dir)) fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
-function readRecord(gitDir: string): ConflictRecord {
-  try {
-    const r = JSON.parse(fs.readFileSync(recordFile(gitDir), "utf-8"));
-    if (r?.paths && typeof r.paths === "object") return r;
-  } catch {}
-  return { paths: {} };
-}
-
-function writeRecord(gitDir: string, record: ConflictRecord): void {
-  const file = recordFile(gitDir);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(record, null, 2));
-  fs.renameSync(tmp, file);
-}
-
-/** Forget every brief and merge file for this checkout: it is level again. */
-export function clearLevelConflicts(gitDir: string): void {
-  fs.rmSync(recordFile(gitDir), { force: true });
+/** Forget the held conflicts' merge files: the checkout is level again. */
+export function clearMerges(gitDir: string): void {
   fs.rmSync(mergeDir(gitDir), { recursive: true, force: true });
 }
 
-/** Each path's blob and mode in `rev`; blob "deleted" when it has none. */
-async function upstreamEntries(root: string, rev: string, paths: string[]): Promise<Map<string, { blob: string; mode: string }>> {
+/** Each path's mode in `rev`; "" when it has none. */
+async function upstreamModes(root: string, rev: string, paths: string[]): Promise<Map<string, string>> {
   const out = (await gitTry(root, ["--literal-pathspecs", "ls-tree", "-r", "-z", rev, "--", ...paths])) ?? "";
-  const entries = new Map(paths.map((p) => [p, { blob: "deleted", mode: "" }]));
+  const modes = new Map(paths.map((p) => [p, ""]));
   for (const entry of out.split("\0")) {
     const tab = entry.indexOf("\t");
     if (tab <= 0) continue;
-    const [mode, , blob] = entry.slice(0, tab).split(" ");
-    entries.set(entry.slice(tab + 1), { blob, mode });
+    modes.set(entry.slice(tab + 1), entry.slice(0, tab).split(" ")[0]);
   }
-  return entries;
+  return modes;
 }
 
 async function blobAt(root: string, rev: string, rel: string): Promise<Buffer | null> {
@@ -158,7 +114,7 @@ async function blobAt(root: string, rev: string, rel: string): Promise<Buffer | 
 
 const isBinary = (b: Buffer) => b.subarray(0, 8000).includes(0);
 
-type Merge =
+export type Merge =
   | { kind: "merged"; file: string }
   | { kind: "upstream-deleted" }
   | { kind: "local-deleted"; file: string | null }
@@ -205,6 +161,74 @@ async function writeMerge(root: string, dir: string, rel: string, from: string, 
   }
 }
 
+/** A three-way merge of each path under `dir`, from the level's base `from` and upstream `to`. Never throws. */
+export async function writeMerges(root: string, dir: string, paths: string[], from: string, to: string): Promise<Map<string, Merge>> {
+  const modes = await upstreamModes(root, to, paths).catch(() => new Map<string, string>());
+  const merges = new Map<string, Merge>();
+  for (const p of paths) merges.set(p, await writeMerge(root, dir, p, from, to, modes.get(p) ?? ""));
+  return merges;
+}
+
+/** The upstream commits in from..to that touched any of `paths`, newest first, capped. */
+async function upstreamCommits(root: string, from: string, to: string, paths: string[]): Promise<string[]> {
+  const log = (await gitTry(root, ["--literal-pathspecs", "log", "--format=- %h %s", `${from}..${to}`, "--", ...paths])) ?? "";
+  const lines = log.split("\n").filter(Boolean);
+  if (!lines.length) return ["- (upstream's history does not name them)"];
+  return lines.length > COMMITS_MAX ? [...lines.slice(0, COMMITS_MAX), `- +${lines.length - COMMITS_MAX} more`] : lines;
+}
+
+/** What to do with one path whose merge is not an ordinary merge file; null for one that is. */
+function exception(m: Merge): string | null {
+  switch (m.kind) {
+    case "merged": return null;
+    case "upstream-deleted": return "upstream deletes it: delete your copy, or move your edit to where upstream moved that code";
+    case "local-deleted": return "deleted here and changed upstream: its merge file is upstream's version, to write back if the file should stay";
+    case "binary": return "binary or a symlink, so no merge file: take upstream's version or redo your edit on it";
+    case "none": return "no merge file could be written";
+  }
+}
+
+const FORBID = "Never run git pull, merge, rebase, stash, checkout, restore, reset or commit in this shared checkout: other sessions' uncommitted work lives in it.";
+
+/**
+ * The brief for a checkout held behind upstream, to one writer (or, `whose:
+ * "nobody"`, the finding for files no session wrote): its conflicting files
+ * (up to LEVEL_TOLD_PATHS_MAX named, all of them in `list`), that the others
+ * are other sessions', the upstream commits touching its files, where the
+ * merge files are, and the one way out.
+ */
+export async function heldBrief(c: {
+  root: string; host: string; upstream: string; from: string; to: string; behind: number | null; since: number;
+  total: number; mine: string[]; list: string; dir: string; merges: Map<string, Merge>; whose: "session" | "nobody";
+}): Promise<{ title: string; body: string }> {
+  const n = c.mine.length;
+  const s = n === 1 ? "" : "s";
+  const others = c.total - n;
+  const since = new Date(c.since).toISOString().replace("T", " ").slice(0, 16);
+  const what = c.whose === "session" ? `${n} of your file${s}` : `${n} file${s} no session wrote`;
+  const title = `${path.basename(c.root)} on ${c.host}: ${what} conflict${n === 1 ? "s" : ""} with ${c.upstream}`;
+  const shown = c.mine.slice(0, LEVEL_TOLD_PATHS_MAX).map((p) => {
+    const note = exception(c.merges.get(p) ?? { kind: "none" });
+    return `  ${p}${note ? ` (${note})` : ""}`;
+  });
+  const to = c.to.slice(0, 9);
+  const body = [
+    `The shared checkout ${c.root} on ${c.host} cannot follow ${c.upstream}: it has stayed at ${c.from.slice(0, 9)} since ${since} UTC while upstream is at ${to}${c.behind ? ` (${c.behind} commits behind)` : ""}, so every session in it misses upstream's work. ${c.whose === "session" ? `These ${n} uncommitted file${n === 1 ? " was" : "s were"} last written by this session` : `These ${n} uncommitted file${n === 1 ? " has" : "s have"} no session that wrote ${n === 1 ? "it" : "them"}`} and conflict with upstream:`,
+    ...shown,
+    ...(n > LEVEL_TOLD_PATHS_MAX ? [`  +${n - LEVEL_TOLD_PATHS_MAX} more`] : []),
+    `The full list: ${c.list}`,
+    ...(others > 0 ? [`The other ${others} conflicting file${others === 1 ? "" : "s"} belong${others === 1 ? "s" : ""} to other sessions, which are told separately: leave ${others === 1 ? "it" : "them"} alone.`] : []),
+    "",
+    `Upstream changed ${n === 1 ? "it" : "them"} in:`,
+    ...(await upstreamCommits(c.root, c.from, c.to, c.mine)),
+    "",
+    `The way out, over these files only: bring upstream's change into each by hand. Its three-way merge, with conflict markers, is at ${c.dir}/<file>: resolve the markers and write the result over the file, or redo your edit on upstream's version (\`git show ${to}:<file>\`).`,
+    `Edit only the files named here and in the list. ${FORBID}`,
+    "Once they carry upstream's change, the next level sweep (within a minute) moves the checkout by itself.",
+  ].join("\n");
+  return { title, body };
+}
+
 function oldestMtime(root: string, paths: string[], now: number): number {
   let oldest = now;
   for (const p of paths) {
@@ -224,119 +248,45 @@ function action(p: string, m: Merge, to: string): string {
   }
 }
 
-async function briefFor(root: string, r: LevelResult, raced: boolean, paths: string[], merges: Map<string, Merge>): Promise<string> {
-  const files = paths.join(", ");
+async function racedBrief(root: string, r: LevelResult, paths: string[], merges: Map<string, Merge>): Promise<string> {
   const one = paths.length === 1;
-  const lines = [
-    raced
-      ? `The shared checkout ${root} moved to upstream ${r.to.slice(0, 9)}, but your ${files} changed while it moved and still ${one ? "lacks" : "lack"} upstream's change: as ${one ? "it stands" : "they stand"}, ${one ? "it" : "they"} would revert that change when shipped.`
-      : `The shared checkout ${root} cannot follow upstream: your uncommitted ${one ? "edit" : "edits"} to ${files} ${one ? "conflicts" : "conflict"} with upstream's change. It stays at ${r.from.slice(0, 9)} while upstream is at ${r.to.slice(0, 9)}, so every session in it misses upstream's work.`,
-  ];
+  const lines = [`The shared checkout ${root} moved to upstream ${r.to.slice(0, 9)}, but your ${paths.join(", ")} changed while it moved and still ${one ? "lacks" : "lack"} upstream's change: as ${one ? "it stands" : "they stand"}, ${one ? "it" : "they"} would revert that change when shipped.`];
   for (const p of paths) {
-    const log = (await gitTry(root, ["log", "--format=- %h %s", `${r.from}..${r.to}`, "--", p])) ?? "";
-    lines.push("", `${p} changed upstream in:`, log || "- (upstream's history does not name it)", action(p, merges.get(p) ?? { kind: "none" }, r.to));
+    lines.push("", `${p} changed upstream in:`, ...(await upstreamCommits(root, r.from, r.to, [p])), action(p, merges.get(p) ?? { kind: "none" }, r.to));
   }
-  lines.push(
-    "",
-    `Edit only the ${one ? "file" : "files"} named here. Never run git pull, merge, rebase, stash, checkout, restore, reset or commit in this shared checkout: other sessions' uncommitted work lives in it.`,
-    raced
-      ? "Once your file carries upstream's change, nothing else is needed."
-      : "Once your file carries upstream's change, the next level sweep (within a minute) moves the checkout by itself.",
-  );
+  lines.push("", `Edit only the ${one ? "file" : "files"} named here. ${FORBID}`, "Once your file carries upstream's change, nothing else is needed.");
   return formatSessionMessage("codecast", lines.join("\n"), { name: "level sweep" });
 }
 
-/** The same brief retried lands once: keyed by checkout, writer, kind, upstream commit and what upstream holds for each path. */
-function clientIdFor(gitDir: string, owner: string, kind: BriefKind, to: string, paths: string[], ups: Map<string, { blob: string }>): string {
-  const h = createHash("sha256").update([gitDir, owner, kind, to, ...paths.map((p) => `${p}:${ups.get(p)?.blob}`)].join("\n")).digest("hex");
-  return `level-conflict:${h.slice(0, 24)}`;
-}
-
 /**
- * Brief the writer of each path in a failed level's conflicts. Returns a
- * short account for the log line, or null when there is nothing to say.
+ * Brief the writer of each file a raced level left stale, at once: the next
+ * sweep finds the checkout level and will not see it. Returns a short account
+ * for the log line, or null when the level did not race (HEAD is not on `to`).
  */
-export async function briefLevelConflicts(root: string, gitDir: string, r: LevelResult, deps: BriefDeps): Promise<string | null> {
+export async function briefRacedStale(root: string, gitDir: string, r: LevelResult, deps: BriefDeps): Promise<string | null> {
   if (r.ok || !r.conflicts.length) return null;
-  const head = await gitTry(root, ["rev-parse", "HEAD"]);
-  // Held: HEAD stayed. Raced: the level moved HEAD and left these files stale.
-  // Anything else moved HEAD since; the next sweep reads it afresh.
-  const raced = head === r.to;
-  if (head !== r.from && !raced) return null;
-  const kind: BriefKind = raced ? "raced" : "held";
+  if ((await gitTry(root, ["rev-parse", "HEAD"])) !== r.to) return null;
   if (!deps.send) return `cannot brief writers of ${r.conflicts.join(", ")}: not signed in`;
-  const send = deps.send;
   const now = deps.now ?? Date.now();
-  const prior = readRecord(gitDir);
-  const ups = await upstreamEntries(root, r.to, r.conflicts);
-  const locals = await worktreeBlobs(root, r.conflicts);
-  // Only the conflicts still standing stay recorded.
-  const record: ConflictRecord = { paths: {} };
-  const fresh: string[] = [];
+  const since = Math.max(oldestMtime(root, r.conflicts, now) - 60_000, now - ATTRIBUTION_HORIZON_MS);
+  const { owners } = (deps.attribute ?? attributeEdits)(root, r.conflicts, { since });
+  const byOwner = new Map<string, string[]>();
+  const nobody: string[] = [];
   for (const p of r.conflicts) {
-    const prev = prior.paths[p];
-    const up = ups.get(p)!.blob;
-    const local = locals.get(p) ?? "missing";
-    const sameUp = prev?.up === up;
-    // Unreachable: the blobs are checked every sweep, the owner (which takes attribution) every RETRY_MS.
-    if (prev?.unreachable) { if (sameUp && prev.local === local && now - prev.at < RETRY_MS) record.paths[p] = prev; else fresh.push(p); }
-    else if (prev && sameUp && !prev.briefed && now - prev.at < RETRY_MS) record.paths[p] = prev;
-    // Briefed: a writer typing on in the file is attributed again at most every RETRY_MS.
-    else if (prev && sameUp && prev.briefed && prev.kind === kind && (prev.local === local || now - prev.at < RETRY_MS)) record.paths[p] = prev;
-    else fresh.push(p);
+    const owner = owners.get(p)?.conversationId;
+    if (owner) byOwner.set(owner, [...(byOwner.get(owner) ?? []), p]);
+    else nobody.push(p);
   }
-
   const notes: string[] = [];
-  const toBrief = new Map<string, string[]>();
-  if (fresh.length) {
-    const since = Math.max(oldestMtime(root, fresh, now) - 60_000, now - ATTRIBUTION_HORIZON_MS);
-    const { owners } = (deps.attribute ?? attributeEdits)(root, fresh, { since });
-    for (const p of fresh) {
-      const prev = prior.paths[p];
-      const state: PathState = { up: ups.get(p)!.blob, local: locals.get(p) ?? "missing", owner: owners.get(p)?.conversationId ?? null, briefed: false, at: now };
-      record.paths[p] = state;
-      if (!state.owner) continue;
-      // The same writer, already told about this upstream content: only the disk moved.
-      if (prev?.briefed && prev.kind === kind && prev.up === state.up && prev.owner === state.owner) { record.paths[p] = { ...state, briefed: true, kind }; continue; }
-      // The same teammate's session behind the same blobs: the server would refuse again.
-      if (prev?.unreachable && prev.up === state.up && prev.local === state.local && prev.owner === state.owner) { record.paths[p] = { ...state, unreachable: true }; continue; }
-      toBrief.set(state.owner, [...(toBrief.get(state.owner) ?? []), p]);
-    }
-  }
-  // Written when it changed, and again after each delivered brief, so a later failure cannot lose one.
-  let written = JSON.stringify(prior);
-  const save = () => {
-    const json = JSON.stringify(record);
-    if (json !== written) { writeRecord(gitDir, record); written = json; }
-  };
-  save();
-
-  const dir = raced ? staleDir(gitDir) : mergeDir(gitDir);
-  for (const [owner, paths] of toBrief) {
+  for (const [owner, paths] of byOwner) {
     paths.sort();
-    const merges = new Map<string, Merge>();
-    for (const p of paths) merges.set(p, await writeMerge(root, dir, p, r.from, r.to, ups.get(p)!.mode));
-    const body = await briefFor(root, r, raced, paths, merges);
-    const outcome = await send(owner, body, clientIdFor(gitDir, owner, kind, r.to, paths, ups)).catch(() => "failed" as const);
-    if (outcome === "failed") { notes.push(`brief failed to ${owner.slice(0, 7)} (${paths.join(", ")})`); continue; }
-    if (outcome === "sent") notes.push(`briefed ${owner.slice(0, 7)} (${paths.join(", ")})`);
-    for (const p of paths) record.paths[p] = { ...record.paths[p], ...(outcome === "sent" ? { briefed: true, kind } : { unreachable: true }) };
-    save();
+    const body = await racedBrief(root, r, paths, await writeMerges(root, staleDir(gitDir), paths, r.from, r.to));
+    const clientId = `level-raced:${createHash("sha256").update([gitDir, owner, r.to, ...paths].join("\n")).digest("hex").slice(0, 24)}`;
+    const outcome = await deps.send(owner, body, clientId).catch(() => "failed" as const);
+    notes.push(outcome === "sent" ? `briefed ${owner.slice(0, 7)} (${paths.join(", ")})`
+      : outcome === "unreachable" ? `${owner.slice(0, 7)} is a teammate's session; brief not sent (${paths.join(", ")})`
+      : `brief failed to ${owner.slice(0, 7)} (${paths.join(", ")})`);
   }
-
-  const already = new Map<string, string[]>();
-  for (const p of r.conflicts) {
-    const s = record.paths[p];
-    if (s?.briefed && s.owner && ![...toBrief.values()].some((ps) => ps.includes(p))) already.set(s.owner, [...(already.get(s.owner) ?? []), p]);
-  }
-  for (const [owner, paths] of already) notes.push(`already briefed ${owner.slice(0, 7)} (${paths.join(", ")})`);
-  const unreachable = new Map<string, string[]>();
-  for (const p of r.conflicts) {
-    const s = record.paths[p];
-    if (s?.unreachable && s.owner) unreachable.set(s.owner, [...(unreachable.get(s.owner) ?? []), p]);
-  }
-  for (const [owner, paths] of unreachable) notes.push(`${owner.slice(0, 7)} is a teammate's session; brief not sent (${paths.join(", ")})`);
-  const waiting = r.conflicts.filter((p) => record.paths[p] && !record.paths[p].owner);
-  if (waiting.length) notes.push(`no writer for ${waiting.join(", ")}`);
+  if (nobody.length) notes.push(`no writer for ${nobody.join(", ")}`);
   return notes.join("; ") || null;
 }
