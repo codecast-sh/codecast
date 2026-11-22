@@ -97,19 +97,25 @@ const heldReason = ({ credentials, stale }: Pick<FrozenAttribution, "credentials
  * commits, as a ship does, and point `branch` at the result. When the replay
  * conflicts the branch stays on the HEAD-based commits and the change records
  * it is `behind`, for a later stage to resolve. The shared tree, its index and
- * HEAD are untouched.
+ * HEAD are untouched. `base` is where the ship's push starts (the change's
+ * $diff_base): upstream, or where HEAD left it when the change is behind, so
+ * a review sees the checkout's own unpushed commits the ship carries with it.
  */
 async function cutChange(root: string, frozen: Frozen, upstream: string, specs: CommitSpec[], branch: string): Promise<Pick<FrozenChange, "base" | "tip" | "behind">> {
   const { tip: onHead } = await buildCommits(root, frozen, specs);
   let [base, tip] = [frozen.base, onHead];
   let behind: FrozenChange["behind"];
   const upstreamSha = upstream === "HEAD" ? null : await gitTry(root, ["rev-parse", `${upstream}^{commit}`]);
-  if (upstreamSha && !(await isAncestor(root, upstreamSha, frozen.base))) {
+  if (upstreamSha && (await isAncestor(root, upstreamSha, frozen.base))) base = upstreamSha;
+  else if (upstreamSha) {
     // A throw is a history the replay cannot carry (a merge commit in the checkout's own) or merge-tree failing, not a conflict.
     const replayed = await replayOnto(root, upstreamSha, onHead, upstreamSha)
       .catch((err: Error) => ({ ok: false as const, why: "unreplayable" as const, conflicts: [] as string[], reason: err.message }));
     if (replayed.ok) [base, tip] = [upstreamSha, replayed.tip];
-    else behind = { upstream: upstreamSha, why: "why" in replayed ? replayed.why : "conflict", conflicts: replayed.conflicts, reason: replayed.reason };
+    else {
+      behind = { upstream: upstreamSha, why: "why" in replayed ? replayed.why : "conflict", conflicts: replayed.conflicts, reason: replayed.reason };
+      base = (await gitTry(root, ["merge-base", frozen.base, upstreamSha])) ?? frozen.base;
+    }
   }
   await git(root, ["update-ref", `refs/heads/${branch}`, tip]);
   return { base, tip, ...(behind ? { behind } : {}) };
