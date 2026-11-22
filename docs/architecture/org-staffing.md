@@ -973,9 +973,9 @@ Hands, wakes and tokens per day stay as the bound that keeps a runaway role from
 - The role page shows no numbers by default. A disclosure under the role's settings, **Limits**, holds the three values, each empty (no limit) until the person sets one.
 - A role that reaches a cap waits. It writes one line in its brief and its pinned state says it is waiting for tomorrow; the org health view carries that line; nothing reaches the person's inbox or their queue. The role's standing text drops "caps are real" and the frame drops the counters.
 
-### S23.3 A role's sessions are the role's
+### S23.3 A role is one of a session's owners
 
-A role's sessions are subagent rows under the role's card: the same small row a Task subagent gets, hidden and shown by the same subagent toggle, with no gesture of their own. The card also carries a count, **3 sessions**, that opens the role's page, where the sessions are the panel's business (F4). What reaches the person from under a role is what the role raises in its own thread (S28), and nothing else. (Revised 2026-09-24: the first cut drew no rows at all, and the founder read the count alone as hiding the reports.)
+A role owns a session beside the people who own it (org-roles-run-work.md R1). Each session is its own card, filed by its own state; nothing nests under the role's standing session and the role's card carries no count. A session its role drives that waits on input files under Working with **With <role>** on its card, because the role reads it first; the role's page lists all its sessions (F4). What reaches the person from a role is what the role raises in its own thread (S28). A session a role started on its own, with no person owner, is in no person's inbox.
 
 ### S23.4 The line a person reads names who did it
 
@@ -983,7 +983,7 @@ A role's sessions are subagent rows under the role's card: the same small row a 
 
 ### What this changes
 
-Web: the role page's Settings tab (one switch, Limits disclosure), the chart's role card, the inbox card (count, no nested rows), the proposal thread and asks, history lines, the first visit copy. CLI: `cast role trust` becomes `cast role autonomy on|off` with the old verb as an alias for one release; `cast role caps` moves under `cast role limits`. Convex: the switch mapping, the actor resolution in `performEscalateSession`, the analyzer input and prompt (sizing gone), the standing text and the frame. Eval: the sizing rubric line removed; one round on Union to confirm no ask about limits appears and the cards still stand alone.
+Web: the role page's Settings tab (one switch, Limits disclosure), the chart's role card, the proposal thread and asks, history lines, the first visit copy. CLI: `cast role trust` becomes `cast role autonomy on|off` with the old verb as an alias for one release; `cast role caps` moves under `cast role limits`. Convex: the switch mapping, the actor resolution in `performEscalateSession`, the analyzer input and prompt (sizing gone), the standing text and the frame. Eval: the sizing rubric line removed; one round on Union to confirm no ask about limits appears and the cards still stand alone.
 
 **As built (2026-09-23).** The switch is one shared mapping,
 `@codecast/shared/contracts/roleAutonomy`: `autonomyOn(trust)` is true for
@@ -1027,20 +1027,15 @@ disclosure, empty until set (`ScopeSettings.mount.test.tsx`); the
 hire dialog names neither; `orgProposal.changeSentence`, the history line
 (`orgLogLine`), the chips and the kind labels say "starts work on its own";
 the proposal pane's cost line and sheet are gone; the overview tile with the
-day's counters is gone; the charter's project line reads "Daily limit". The
-inbox nests a role's hands under its standing session in `subsByParent`
-like any subagent (the toggle hides them; no "Put in my inbox" on the row)
-and hands the standing session a count (`roleSessionsByLead`) that the web
-card and the phone card draw as "N sessions" opening `/org/or-N`
-(`inboxRoleTriage.mount.test.tsx`);
-the role's own lines (R1, revised) stay. `lib/__tests__/roleWords.guard.test.ts`
+day's counters is gone; the charter's project line reads "Daily limit".
+`lib/__tests__/roleWords.guard.test.ts`
 pins trust, the stage words in their stage sense, cap, budget and allowance
 out of the web's readable strings, the way S22's guard pins anchor. The CLI
 has `cast role autonomy <handle> on|off` (`trust` hidden as an alias for one
 release) and `cast role limits` (`caps` as its alias); `cast role ls` and
 `show` say whether a role starts work on its own and read today's use
 against its limits. The phone's org page and role rows carried none of the
-words; its inbox card gained the same count.
+words.
 
 ## S24. The review is a conversation
 
@@ -1090,21 +1085,21 @@ Resetting a workspace's org retires every role with its standing session and tri
 
 ## S28. A request goes up the reporting line
 
-Written 2026-09-29, replacing escalation (`cast escalate`, org-roles-run-work.md R1 and R1 revised). The founder's reading of the escalation card was that a role's line, crammed into the inbox card with its own buttons and a hand-back gesture, was a surface nobody wanted. The fix is not a better surface. The org already has a way for a request to travel: messages, up the line, with the person at the top of the tree.
+Written 2026-09-29, replacing escalation (`cast escalate`). The founder's reading of the escalation card was that a role's line, crammed into the inbox card with its own buttons and a hand-back gesture, was a surface nobody wanted. The fix is not a better surface. The org already has a way for a request to travel: messages, up the line, with the person at the top of the tree.
 
 **The route.** A session under a role that is waiting on anyone, for any reason (an open prompt, a stopped process, a declared blocked state, a question asked in prose), fires its role's needs-input trigger (S25): one run per ask, where a declared block is one ask per pinned state line and a stall is one per settle, and the key clears when the session works again (`agentTasks.routeUpWaitingSession`). Any agent can also write to a role with `cast role wake @handle "<the request>"`. The role answers when it can. A role that cannot answer tells the role it reports to the same way: its own waiting fires its parent's trigger, speaking as the role. The role that reports to a person raises it in its own thread and nowhere else: its pinned state says what the person will decide and why (`cast state --status blocked`), and a real choice between options is a `cast decide` card posted there with the role's recommendation. That card reaches the person the role reports to, not whoever hosts its session.
 
 **A decision travels the same way.** A `cast decide` posted by a session under a role fires that role's needs-input trigger, naming the session and the question (the waiting session's reason is "decision", with its short id); the role answers it when it holds the grant, or hands the same card up to its people: with the option it recommends, or passed up with no recommendation, and either way with a note giving the person what the role knows that the card does not say. The note shows on the role's line of the card's ladder; there is no second card and no separate surface. A role that does neither within five minutes hands it up by lapse, so a decision never waits on a role that stays silent. It reaches a person's queue at once only when the role cannot be told. A decision posted by a lead that reports to a person goes to that person.
 
-**A role's own session belongs to whom the role reports to.** Reporting to someone is being in their inbox, so there is one fact, `reports_to`, and the standing session's owners follow it (`sessionOwners.stampSeatOwners`, called wherever a role's parent is set: provisioning, a move, a retire's re-home, the backfill `migrations:stampStandingSeats`). Under a person, that person is its only owner; under a role, it has no person owner and rides the parent lead's card. The owner gesture on a standing session refuses and names the role move, the owner menu there offers "Reports to" instead of an owner list, and writing to it never claims it. The machine and account it runs on stay separate: that is where it runs, not whom it answers to.
+**A role's own session belongs to whom the role reports to.** Reporting to someone is being in their inbox, so there is one fact, `reports_to`, and the standing session's owners follow it (`sessionOwners.stampSeatOwners`, called wherever a role's parent is set: provisioning, a move, a retire's re-home, the backfill `migrations:stampStandingSeats`). Under a person, that person is its only owner; under a role, it has no person owner, so the parent role holds it alone and it is in no person's inbox. The owner gesture on a standing session refuses and names the role move, the owner menu there offers "Reports to" instead of an owner list, and writing to it never claims it. The machine and account it runs on stay separate: that is where it runs, not whom it answers to.
 
 **Nothing waiting is lost.** When the route cannot reach a role (the person paused or cancelled its trigger, the role has no session, the org is off, or the machine the role's session runs on has been silent for thirty minutes, `lib/orgRoutine.roleMachineAway`), the waiting session is the person's again: it notifies them as any session would. A role on a machine that is away is not woken at all: a wake queued for it would sit unread while the session it names waits on nobody, and the ask is kept unspent so the role is told once its machine is back. Sessions a role takes over that were already waiting route up when they move.
 
-**What the person sees.** One card per lead that needs them, filed the way any session that needs input is: the standing session's own facts put it in needs input (a blocked declaration, an open prompt) or in questions (a pending decision in its thread; projection v14 stopped the anchor rule from hiding an asking standing session). Never the sessions under it, never a special block. The sessions under a role stay subagent rows under its card with no gesture of their own, and their settles ring nobody (`under_role`).
+**What the person sees.** One card per lead that needs them, filed the way any session that needs input is: the standing session's own facts put it in needs input (a blocked declaration, an open prompt) or in questions (a pending decision in its thread; projection v14 stopped the anchor rule from hiding an asking standing session). Never a special block. A session its role drives files by its own state: waiting, it files under Working with "With <role>" on its card, and its settle rings nobody (`under_role`). A session whose role is paused (a person drives) files and rings like any session.
 
 **What is gone.** `cast escalate` and `/cli/sessions/escalate`; `conversations.escalated_by_role` and every reader (the inbox projection's lift of a role's card, the `escalations` lines on the role's card and the phone's, the "with you" tag, Hand back and Put in my inbox, the role page's "Needs you" section, the digest's "In front of you", the CLI's escalation rows); `performEscalateSession` and its dividers. The `<session-escalation>` machine message keeps a reader only, so threads written before this still draw their dividers; the schema keeps the field optional until `migrations:clearEscalationStamps` has run in prod, then drops it. A session that moves under a role with a question to a person open no longer carries a stamp: the role hears about it as a line.
 
-**A sub-lead rides its parent lead.** A role's standing session reports to what the role reports to. Under a role, the row carries that role's id in `org_role_id` (`lib/standingSeat.standingReportsToFields`, stamped on provisioning, on a role move and when a retire re-homes children; `migrations:stampStandingSeats` backfills seats from before the rule), so `isUnderRole` holds for it and it rides the parent lead's card exactly as a hand does: a sub row under the parent, never a card of its own in the host's inbox, whatever it declares; its settle rings nobody (`under_role`). Under a person the field is clear and the row is that person's own card. So the only card a person ever sees for their org is a role that reports to them, and what a sub-lead cannot answer reaches that top lead as a line in its thread. The org scan and `handsOf` leave standing sessions out of a role's hands, so a sub-lead is a child role on the page and the tree, not a hand.
+**A sub-lead belongs to its parent lead.** A role's standing session reports to what the role reports to. Under a role, the row carries that role's id in `org_role_id` (`lib/standingSeat.standingReportsToFields`, stamped on provisioning, on a role move and when a retire re-homes children; `migrations:stampStandingSeats` backfills seats from before the rule) and has no person owner, so the parent role holds it alone: it is in no person's inbox, whatever it declares, and its settle rings nobody (`under_role`). Under a person the field is clear and the row is that person's own card. So the only card a person ever sees for their org is a role that reports to them, and what a sub-lead cannot answer reaches that top lead as a line in its thread. The org scan and `handsOf` leave standing sessions out of a role's hands, so a sub-lead is a child role on the page and the tree, not a hand.
 
 **The decide sheet names who asks.** A decision posted from a role's standing thread reads as that role on the sheet and on the fold: its face and handle (`SessionDecisionCard`, the same `RoleFace` the inbox card draws), never "Waiting on your decision".
 

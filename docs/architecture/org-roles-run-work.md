@@ -17,33 +17,32 @@ Everywhere the product shows a person, it can show a role in the same place
 with the same gestures, and the person above the role sees its work rolled up
 under their own.
 
-## R1. A role's sessions are the role's to triage
+## R1. A role owns its sessions
 
-> Superseded in part on 2026-09-29 by org-staffing.md S28: `cast escalate`,
-> the count on the role's card and the person's Put in my inbox / Hand back
-> gestures are gone. A request travels up the reporting line as messages and
-> the role that reports to a person raises it in its own thread. The ride
-> rule (a session under a role files with the role and never counts toward
-> the person's needs input) stands.
+**A role is one of a session's owners.** A session filed under a role
+(`conversations.org_role_id`, with `org_role_hold`) has the role among its
+owners, beside the people in `session_owners`. Exactly one owner drives it,
+the one who messages the agent: with the role filed and
+`conversations.driver_user_id` unset the role drives; with `driver_user_id`
+set that person drives and the role is paused.
 
-**Where a session sits.** A session that reports to a role
-(`conversations.org_role_id`) is that role's. In its host's inbox it renders
-as a nested row under the role's card, the row a subagent already uses, and it
-does not count toward the host's needs input. The role's card carries the
-role's own state and one number: how many of its sessions it has put in front
-of the person. Opening the role's card shows its sessions grouped by who acts
-next, the same grouping the scope page's Sessions tab uses (F4.3).
+**Whose inbox it is in.** A session is in the inbox of each person who owns
+it and of the account that runs it (`user_id`), except a session a role holds
+with no person owner: the role started it on its own, and it is the role's
+alone (`isHeldByRoleAlone` in the shared inbox projection, read by the server
+scan and the web scope filter). Owning a session never takes it away from the
+account that runs it.
 
-**Escalation is the role's verb.** `cast escalate <session> "<one line>"`
-puts one of its sessions in front of the person: the session becomes a first
-class card in the host's needs input with the role's face and line on it
-("@growth: the pricing copy is ready and needs your eye"). `cast escalate
---clear <session>` takes it back under the role. A person has the same two
-gestures on the row (Put in my inbox, Hand back to @growth). A role may
-escalate at any trust level; answering a session's question itself needs the
-decide or direct trust it already has, inside its grants (W2 D4). Escalation
-writes `conversations.escalated_by_role: { role_id, line, at }`; the inbox
-classifies on it; clearing removes it.
+**Where it sits.** Every session files by its own state. Nothing rides a
+role's standing session, which stays hidden on its own facts until it needs a
+person (org-staffing.md S28). A session its role drives that is waiting on
+input (a settled turn, an open question or prompt) files under Working, and
+its card says **With <role>** where the status word goes: the role reads it
+first (its needs-input trigger, `agentTasks.routeUpWaitingSession`) and raises
+in its own thread what needs a person. It does not count toward the person's
+needs input and its settle rings nobody (`under_role`). A paused role changes
+nothing: the person drives, and the session files and rings like any other
+(`roleDrives`, `placeInboxRow`, projection version 29).
 
 **Taking over a scope takes over its sessions.** When a role gains scope (a
 role change with projects, a scope change, an adopt, or a person's edit in
@@ -122,9 +121,9 @@ hand that strips its session variables passes as the person; the refusal
 keeps an honest hand from escalating itself and is not a boundary. And a
 reparent to a person clears the row's stash, because the new owner has never
 seen the session and it must appear in their inbox, while a reparent to a role
-keeps it, because the role triages and the row nests under it without needing
-anyone's eyes (`sessionOwnership.performReparentSession`, both cases pinned
-in orgRoles.test.ts).
+keeps it, because the role reads it first without needing anyone's eyes
+(`sessionOwnership.performReparentSession`, both cases pinned in
+orgRoles.test.ts).
 
 ## R2. A long running session is a role that has not been named
 
@@ -349,93 +348,3 @@ section says what codecast does on that machine, in the sentence `cast usage`
 prints (`describeLimitRecovery` in `contracts/usageLimits.ts`, one body for
 both), and what a person can do: move the session to another machine from its
 header chip, or add an account with `cast accounts save <name>`.
-
-## R1, revised: an escalation reaches the person through the role
-
-> Retired on 2026-09-29 by org-staffing.md S28. Kept as the record of what
-> was built and why it went. The `<session-escalation>` divider keeps a
-> reader for threads written while this stood.
-
-Written 2026-09-21 from the founder's reading of the first real escalation
-(Market growth mandate, escalated by @calling with a line about how a market
-is filled). Two things were wrong. The child session landed as its own card
-in his needs input, with the line cut short on the strip. And the line was
-nowhere inside the conversation itself.
-
-**By default the role's own card carries the ask, not the child.** When a
-role escalates one of its sessions, the role's standing session becomes the
-card in the person's needs input, carrying the role's face, the full line,
-and the session it is about as a pill. The child stays nested under the
-role, where it was. The person answers the role, which holds the context and
-relays, or opens the child from the pill. A role with several escalations
-has one card with several lines, newest first. This is the default because
-the role is the colleague the person deals with; its sessions are its own.
-
-**The child lands only as the exception.** `cast escalate --direct <session>
-"<line>"` puts the child session itself in front of the person as a first
-class card with the line, and it exists for the case where the person must
-act inside that session: an open permission prompt, an interactive question,
-a review of the child's own transcript. The role says why it chose direct in
-the line. A person's own "Put in my inbox" on a nested row stays what it is:
-the owner's gesture, always direct.
-
-**The line is in the conversation, whole.** An escalation writes one machine
-message into the child's conversation and one into the role's standing
-session, and each renders as an inline divider, not a bubble: the role's
-face, "handed to <person>" (or "put in front of <person>"), the full line
-rendered as markdown, the time. Handing back writes the same divider the
-other way ("back with @calling"). The strip on a card shows the first line
-of the reason and the divider holds all of it, so a person reads the whole
-reason where the work is. The same divider renders a person's own put in my
-inbox and hand back, so every move of a session between a role and a person
-is visible in the thread it moved.
-
-**Where it is recorded.** `escalated_by_role` on the child keeps its shape
-and gains `direct: boolean`; the role's standing session row carries
-`escalations: [{ conversation_id, line, at }]` derived by the inbox
-projection from its children (never a second store of the line), so the
-role's card and the child's strip cannot disagree. The chime and the digest
-follow the same rule: the role's card, or the child when direct.
-
-**As shipped (2026-09-21).** `escalated_by_role` gained `direct`; it is set by
-`cast escalate --direct`, by a person's own gesture (always direct), and
-when the role escalates its own standing session or has no standing session
-to reach the person through. The projection rule is one place:
-`inboxProjection.rideLeadPlacements` lifts a role's standing session into
-needs input before anything rides it whenever a session under it carries a
-stamp without `direct` (`roleEscalationsOf`), so the role's sessions file in
-that one section under its card, on the server overlay, the CLI, the web and
-the phone alike; `isUnderRole` treats a non direct stamp as still under the
-role. The server row, the web store (`escalationsByLead`) and the golden
-`roles` fixture derive the lines with the same helper. Version 12 of the
-projection. The divider is one wire tag, `<session-escalation …>`
-(`machineMessages.formatSessionEscalation`, moves `handed`, `direct`,
-`back`), written by `performEscalateSession` into the child and the standing
-session through the pending message rail (`sayIntoSession`, shared with the
-reparent line), so it lands in the pane and syncs like any message; the web
-draws it through the one `SwitchDivider` (`EscalationDivider`), the phone
-draws the same rule inline. The chime is a `session_idle` notification on the
-card it reached, delivered by the `escalateSession` mutation from the
-`notify` the core returns; a session under a role no longer rings on its own
-settle (`under_role`), the idle fold keeps an escalation row while it is open
-(`escalationOpenFor`), and the email digest lists them under "In front of
-you". The card's lines, the nested row's "with you" mark and Hand back per
-line are `RoleEscalationLines` in `GlobalSessionPanel`; the count badge now
-counts direct escalations only. The triage principle in
-`anchors.bootstrapMessage` and rule 6 of `ROLE_RULES` say when direct is
-right and that the line says why.
-
-After the adversarial review (2026-09-22): the line keeps its newlines and
-paragraphs, the only cap is `ESCALATION_LINE_MAX` (4,000, refused above it),
-and every strip, chime and CLI row shows its first line through one helper
-(`escalationFirstLine`) while both dividers render all of it. The role's
-card carries its lines on the phone (`SessionItem`, from the store's
-`escalationsByLead`) and in `cast sessions` (`inboxForCLI` ships
-`escalations`, `formatMonitor` prints one row per line with the hand back);
-`cast escalate --clear` is the hand back there. The copy of the divider that
-lands in the caller's own thread rides the held rail (`enqueuePendingMessage`
-`hold`), so a role is not woken to read what it just wrote. A visibility
-change that a team role may no longer hold (`roleMayHoldSession`) clears
-`org_role_id` and the escalation in the same patch
-(`patchConversationVisibility` → `roleDropForVisibility`) and both threads
-record it as a `back` divider marked `left`.

@@ -274,19 +274,18 @@ window is dark to the proof, and the heartbeat counts it. The owned window's cap
 is a server side detail (owner row order) the replica does not hold, so an overflowing
 owned window is likewise dropped; under the cap, ordering does not matter.
 
-**Assignment decides whose inbox a session is in.** A session whose owner set
-excludes the viewer belongs to its owners, not to the account that runs it: the
-server scan drops it from the runner's candidate set and the replica drops it
-from "mine" (`isAssignedAwayFromViewer`, `isForeignRow`), so it cannot sit in
-one of them and not the other. Two exceptions, both deliberate: a row the caller
-named by id is hydrated because they asked for it, and a teammate's row on the
-team board is there by team visibility, which its owner says nothing about. The
-mirror image is the owned window above: an owner seat needs no recency and no
-status, because a handoff nobody has opened for six weeks is exactly the one
-that must not age out. The alert follows the row: notification delivery drops
-the runner by the same rule (`isAssignedAwayFromOwnerSet`), and the handoff
-itself clears the previous holder's dismiss, stash and snooze stamps, which live
-on the row rather than per viewer.
+**Owners and the runner decide whose inbox a session is in.** A session is in
+the inbox of each of its owners and of the account that runs it, except one a
+role holds with no person owner, which is the role's alone: the server scan
+drops it from the runner's candidate set and the replica drops it from "mine"
+(`isHeldByRoleAlone`, `isForeignRow`), so it cannot sit in one of them and not
+the other. Two exceptions, both deliberate: a row the caller named by id is
+hydrated because they asked for it, and a teammate's row on the team board is
+there by team visibility, which its owner says nothing about. The owned window
+above admits an owner seat with no recency and no status, because a handoff
+nobody has opened for six weeks is exactly the one that must not age out. The
+handoff itself clears the previous holder's dismiss, stash and snooze stamps,
+which live on the row rather than per viewer.
 
 Team scope membership depends on inputs the replica does not hold (member visibility
 settings, redaction). The team overlay still delivers facts and stamps for rendering
