@@ -965,6 +965,19 @@ export function CommentEditor({
     close(refocus);
   }, [flush, close]);
 
+  // Enter with nothing typed in the composer means the quote and its note are
+  // the whole reply: save and press the composer's send in one gesture. With a
+  // half-written reply in the composer, Enter only saves, so the reply is never
+  // sent unfinished.
+  const composer = useReviewComposer();
+  const saveAndMaybeSend = useCallback(() => {
+    save(true);
+    const send = composer?.conversationId === conversationId && composer?.canSend ? composer.send : undefined;
+    if (!send) return;
+    const draft = useInboxStore.getState().drafts[conversationId]?.draft_message;
+    if (!draft?.trim()) send();
+  }, [save, composer, conversationId]);
+
   const cancel = useCallback((refocus: boolean) => {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     latestRef.current = openedWithRef.current;
@@ -1011,10 +1024,11 @@ export function CommentEditor({
           }}
           onKeyDown={(e) => {
             e.stopPropagation();
-            // Enter saves like every other composer; Shift+Enter breaks the line.
+            // Enter saves like every other composer, and sends too when the
+            // composer is empty; Shift+Enter breaks the line.
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              save(true);
+              saveAndMaybeSend();
             } else if (onStep && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
               const up = e.key === "ArrowUp";
               // ⌘ jumps out of the note from anywhere; a bare arrow only once the
