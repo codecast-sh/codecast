@@ -49,3 +49,32 @@ export async function restoreRunWorktree(cwd: string, name: string, branch: stri
   await acquireWorkspace(repoRoot, name, { branch, skipPool: true });
   return "restored";
 }
+
+/**
+ * Stop the run's workspace Chrome, if one runs. Called when each station ends
+ * and when the run ends (runner.ts), so a browser a station started never
+ * outlives it: a run parked at a gate, waiting on CI or at Go live, holds
+ * none. Six parked change runs each held one at ~460% CPU on Nov 21 (ct-98941).
+ * Reads the state file first, so a run with no browser pays one file read.
+ */
+export async function stopRunBrowser(cwd: string, context: Record<string, string>): Promise<boolean> {
+  const worktree = context["worktree"];
+  if (!worktree) return false;
+  let repoRoot: string;
+  try {
+    repoRoot = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return false; // not a checkout: no workspace, so no browser
+  }
+  const { readState } = await import("../workspace/contract.js");
+  if (!readState(repoRoot, worktree)?.chrome) return false;
+  try {
+    const { stopWorkspaceBrowser } = await import("../workspace/lifecycle.js");
+    const stopped = await stopWorkspaceBrowser(repoRoot, worktree);
+    if (stopped) console.log(`${c.dim}Stopped worktree ${worktree}'s Chrome${c.reset}`);
+    return stopped;
+  } catch (err) {
+    console.error(`${c.yellow}Could not stop worktree ${worktree}'s Chrome: ${(err as Error).message}${c.reset}`);
+    return false;
+  }
+}
