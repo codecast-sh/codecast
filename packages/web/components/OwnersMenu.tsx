@@ -14,7 +14,7 @@
  * machine, so it stays somewhere someone can see it.
  */
 
-import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { Plus, Search, UserCheck, X, ChevronRight, BadgePlus } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwnerCandidates, pickRoster, type OwnersApi, type OwnerRole, type SessionDriver } from "../hooks/useOwners";
@@ -130,15 +130,10 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
   const [moreRoles, setMoreRoles] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [hi, setHi] = useState(0);
-  const searchRef = useRef<HTMLInputElement>(null);
 
   const people = pickRoster(serverRoster, owners.selectable).filter(isPerson);
-  const personById = useMemo(() => {
-    const m = new Map<string, Person>();
-    for (const p of initialPeople) m.set(p._id, p);
-    for (const p of people) m.set(p._id, { _id: p._id, name: memberName(p), image: p.image || p.github_avatar_url });
-    return m;
-  }, [initialPeople, people]);
+  const personById = new Map<string, Person>(initialPeople.map((p) => [p._id, p]));
+  for (const p of people) personById.set(p._id, { _id: p._id, name: memberName(p), image: p.image || p.github_avatar_url });
   const personOf = (id: string): Person => personById.get(id) ?? { _id: id, name: owners.displayFor(id).name };
 
   const q = query.trim().toLowerCase();
@@ -259,7 +254,7 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
       <div className={SEP} />
       <label className="flex h-8 items-center gap-2 px-2 text-sol-text-dim">
         <Search className="w-3.5 h-3.5" />
-        <input ref={searchRef} autoFocus value={query} onChange={(e) => { setQuery(e.target.value); setHi(0); }} placeholder={isStandingThread ? "Add a teammate" : "Add a role or teammate"} aria-label="Add a role or teammate" autoComplete="off" className="min-w-0 flex-1 bg-transparent text-ui text-sol-text placeholder:text-sol-text-dim outline-none" />
+        <input autoFocus value={query} onChange={(e) => { setQuery(e.target.value); setHi(0); }} placeholder={isStandingThread ? "Add a teammate" : "Add a role or teammate"} aria-label="Add a role or teammate" autoComplete="off" className="min-w-0 flex-1 bg-transparent text-ui text-sol-text placeholder:text-sol-text-dim outline-none" />
       </label>
       <div className="max-h-[320px] overflow-y-auto" data-owner-candidates>
         {shownRoles.length > 0 && <div className={LABEL}>{q ? "Roles" : "Suggested roles"}</div>}
