@@ -19,6 +19,7 @@ setHydrating(false);
 const db = () => Dexie.connections.find((d) => d.name === "codecast-store") as any;
 const ID = (n: number) => `k17row${String(n).padStart(26, "a")}`;
 const settle = () => Bun.sleep(30);
+const write = (key: string, value: any) => writePatchesToIDB([{ op: "replace", path: [key], value } as any], { [key]: value, pending: {} });
 
 describe("incremental persistence", () => {
   it("writes the patched rows, keeps unpatched ones, and still honors a whole-collection replace and snapshot drops", async () => {
@@ -118,6 +119,45 @@ describe("incremental persistence", () => {
     db().meta.put = metaPut;
   });
 
+  // A row held for a liveness tick and then written durably by a local action
+  // must not be overwritten at the flush by the held, older value: the disk
+  // kept dismissed: false while the cursor moved past the echo, so a reload
+  // never repaired it.
+  it("never flushes a held row over a later durable write of it", async () => {
+    _resetPersistedShadow();
+    const S = `jx7sess${"b".repeat(25)}`;
+    let sessions: Record<string, any> = { [S]: { _id: S, title: "t", dismissed: false, message_count: 1, updated_at: 1 } };
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: sessions } as any], { sessions, pending: {} });
+    await settle();
+
+    sessions = { [S]: { ...sessions[S], message_count: 2, updated_at: 2 } };
+    writePatchesToIDB([
+      { op: "replace", path: ["sessions", S, "message_count"], value: 2 } as any,
+      { op: "replace", path: ["syncMeta", "s"], value: { cursor: 2 } } as any,
+    ], { sessions, syncMeta: { s: { cursor: 2 } }, pending: {} });
+    sessions = { [S]: { ...sessions[S], dismissed: true } };
+    writePatchesToIDB([{ op: "replace", path: ["sessions", S, "dismissed"], value: true } as any], { sessions, syncMeta: { s: { cursor: 2 } }, pending: {} });
+    await settle();
+    expect((await db().sessions.get(S)).dismissed).toBe(true);
+
+    flushLivenessWrites();
+    await settle();
+    expect(await db().sessions.get(S)).toEqual({ _id: S, title: "t", dismissed: true, message_count: 2, updated_at: 2 });
+    expect((await db().meta.get("syncMeta")).value).toEqual({ s: { cursor: 2 } });
+  });
+
+  it("never flushes a held meta value over a later durable write of it", async () => {
+    const member = (extra = {}) => ({ _id: "m", name: "m", role: "member", daemon_last_seen: 0, ...extra });
+    write("teamMembers", [member()]);
+    await Bun.sleep(400);
+    write("teamMembers", [member({ daemon_last_seen: 1 })]);
+    write("teamMembers", [member({ daemon_last_seen: 1, role: "admin" })]);
+    await Bun.sleep(400);
+    flushLivenessWrites();
+    await settle();
+    expect((await db().meta.get("teamMembers")).value).toEqual([member({ daemon_last_seen: 1, role: "admin" })]);
+  });
+
   // The roster is one 17 KB blob, and every teammate's heartbeat or
   // conversation switch changed it; it reached disk about once a second.
   it("holds a roster whose rows changed only in presence for the liveness flush", async () => {
@@ -166,13 +206,16 @@ describe("incremental persistence", () => {
     const session = (_id: string, tick: number) => ({ _id, title: _id, updated_at: tick, state: tick % 2 ? "working" : "idle" });
     const person = (id: string, working: number, sessions: string[], tick: number) =>
       ({ user_id: id, name: id, counts: { working, idle: 0 }, total: working, sessions: (tick % 2 ? [...sessions].reverse() : sessions).map((sid) => session(sid, tick)) });
-    const tree = (working: number, sessions = ["s1", "s2"], tick = 0) => ({
+    // Anchors carry their standing session's state too, keyed by anchor_id.
+    const anchor = (id: string, tick: number, name = id) =>
+      ({ anchor_id: id, name, org_role_id: "r1", status: "active", state: tick % 2 ? "working" : "idle", state_line: `turn ${tick}`, state_status: null, state_at: tick });
+    const tree = (working: number, sessions = ["s1", "s2"], tick = 0, anchorName = "a1") => ({
       people: [person("u1", working, sessions, tick)],
       roles: [{ _id: "r1", name: "Lead", counts: { working: 0 }, total: 0, counters: { day: "d", wakes: tick }, standing: { conversation_id: "c1", state_line: `turn ${tick}` }, sessions: [session("s9", tick)] }],
+      anchors: tick % 2 ? [anchor("a2", tick), anchor("a1", tick, anchorName)] : [anchor("a1", tick, anchorName), anchor("a2", tick)],
       workspace: "team",
     });
 
-    const write = (key: string, value: any) => writePatchesToIDB([{ op: "replace", path: [key], value } as any], { [key]: value, pending: {} });
     write("machineRoster", [device("mac", 1), device("box", 0)]);
     write("orgTree", tree(1));
     await Bun.sleep(400);
@@ -189,6 +232,14 @@ describe("incremental persistence", () => {
     await Bun.sleep(400);
     expect(writes).toHaveLength(4);
     expect((await db().meta.get("machineRoster")).value[0].label).toBe("renamed");
+
+    // An anchor's name is durable; its state is not.
+    write("orgTree", tree(5, ["s1", "s2", "s3"], 2));
+    await Bun.sleep(400);
+    expect(writes).toHaveLength(4);
+    write("orgTree", tree(5, ["s1", "s2", "s3"], 2, "renamed"));
+    await Bun.sleep(400);
+    expect(writes).toHaveLength(5);
     db().meta.put = metaPut;
   });
 });

@@ -345,7 +345,7 @@ function onlyLiveFieldsChanged(onDisk: any, next: any, live: ReadonlySet<string>
 // A meta key's live paths as a tree: `null` marks a live field, a nested
 // tree the live fields inside it ("people.counts" → people → counts).
 type LiveTree = Map<string, LiveTree | null>;
-const META_LIVE: Record<string, { tree: LiveTree; rowKey: string }> = Object.fromEntries(
+const META_LIVE: Record<string, { tree: LiveTree; rowKeyAt: (path: string) => string }> = Object.fromEntries(
   Object.entries(META_LIVE_FIELDS).map(([key, { fields, rowKey }]) => {
     const tree: LiveTree = new Map();
     for (const path of fields) {
@@ -358,18 +358,21 @@ const META_LIVE: Record<string, { tree: LiveTree; rowKey: string }> = Object.fro
         node = next;
       });
     }
-    return [key, { tree, rowKey }];
+    const rowKeyAt = typeof rowKey === "string" ? () => rowKey : (path: string) => rowKey[path] ?? "_id";
+    return [key, { tree, rowKeyAt }];
   })
 );
 
 /**
  * How a meta value moved from what is on disk: "same", "live" (only live
- * paths changed, list rows matched by `rowKey` in any order), or "durable".
+ * paths changed, list rows matched by their path's row key in any order), or
+ * "durable". `path` is where this value sits ("people.sessions").
  */
-function liveChange(onDisk: any, next: any, tree: LiveTree, rowKey: string): "same" | "live" | "durable" {
+function liveChange(onDisk: any, next: any, tree: LiveTree, rowKeyAt: (path: string) => string, path = ""): "same" | "live" | "durable" {
   if (onDisk === next) return "same";
   if (Array.isArray(onDisk) && Array.isArray(next)) {
     if (onDisk.length !== next.length) return "durable";
+    const rowKey = rowKeyAt(path);
     const idOf = (row: any) => (row && typeof row === "object" ? row[rowKey] ?? row._id : undefined);
     const byId = new Map<unknown, any>();
     for (const row of onDisk) {
@@ -381,7 +384,7 @@ function liveChange(onDisk: any, next: any, tree: LiveTree, rowKey: string): "sa
     for (let i = 0; i < next.length; i++) {
       const id = idOf(next[i]);
       if (id === undefined || !byId.has(id)) return "durable";
-      const row = liveChange(byId.get(id), next[i], tree, rowKey);
+      const row = liveChange(byId.get(id), next[i], tree, rowKeyAt, path);
       if (row === "durable") return "durable";
       if (row === "live" || onDisk[i] !== next[i]) moved = "live";
     }
@@ -399,7 +402,7 @@ function liveChange(onDisk: any, next: any, tree: LiveTree, rowKey: string): "sa
     }
     const inner = tree.get(field);
     if (inner) {
-      const sub = liveChange(onDisk[field], next[field], inner, rowKey);
+      const sub = liveChange(onDisk[field], next[field], inner, rowKeyAt, path ? `${path}.${field}` : field);
       if (sub === "durable") return "durable";
       if (sub === "same") continue;
     }
@@ -523,6 +526,12 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
           }
           ids = now;
         }
+        // This write puts the row's current value on disk, so a held (older) copy must never land over it.
+        const held = livenessRows.get(key);
+        if (held) {
+          if (ids) for (const id of ids) held.delete(id);
+          else held.clear();
+        }
         let puts: any[];
         let deletes: string[];
         if (prevShadow && ids) {
@@ -556,7 +565,7 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
       const live = META_LIVE[key];
       if (live) {
         // A change in liveness fields only waits for the liveness flush; any other change takes this value now.
-        if (lastPersistedMeta.has(key) && liveChange(lastPersistedMeta.get(key), state[key], live.tree, live.rowKey) === "live") {
+        if (lastPersistedMeta.has(key) && liveChange(lastPersistedMeta.get(key), state[key], live.tree, live.rowKeyAt) === "live") {
           livenessMeta.add(key);
           scheduleLivenessFlush(state);
           continue;

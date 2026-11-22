@@ -52,9 +52,10 @@ export type ClientSyncRegistryEntry = {
     // (idbCache), not once per change.
     liveFields?: readonly string[];
     // A meta key's liveFields may be dotted paths into nested rows
-    // ("people.counts"), and its list rows are matched by this field, in any
-    // order (default `_id`).
-    rowKey?: string;
+    // ("people.counts"), and its list rows are matched in any order by this
+    // field: one for every list, or one per list path ({ people: "user_id" }),
+    // `_id` where none is named.
+    rowKey?: string | Readonly<Record<string, string>>;
   };
   // How the collection syncs (see RegistrySyncOpts). Omit for meta keys.
   sync?: RegistrySyncOpts;
@@ -1203,15 +1204,17 @@ export const CLIENT_SYNC_REGISTRY = {
     // standing agents' pinned state and each role's day counters move with
     // every agent's turn (a roles-only push changed only `roles.counters`,
     // measured 2026-11-21); the 60 KB tree reaches disk for those on the
-    // liveness flush. People rows are keyed by user_id, roles and sessions by _id.
+    // liveness flush. People rows are keyed by user_id, anchors by anchor_id,
+    // roles and sessions by _id.
     persistence: {
       kind: "meta",
       key: "orgTree",
-      rowKey: "user_id",
+      rowKey: { people: "user_id", anchors: "anchor_id" },
       liveFields: [
         "people.counts", "people.total", "people.presence", "people.sessions.updated_at", "people.sessions.state",
         "roles.counts", "roles.total", "roles.counters", "roles.sessions.updated_at", "roles.sessions.state",
         "roles.standing.state", "roles.standing.state_line", "roles.standing.state_status", "roles.standing.state_at",
+        "anchors.state", "anchors.state_line", "anchors.state_status", "anchors.state_at",
       ],
     },
     hydration: { phase: "deferred", merge: "fill" },
@@ -2037,7 +2040,7 @@ export const META_STORE_KEYS = registryEntries
   .map(([key]) => key) as ClientSyncMetaStoreKey[];
 
 /** Each persisted meta key's liveness fields and row key (`persistence.liveFields`, `persistence.rowKey`). */
-export const META_LIVE_FIELDS: Record<string, { fields: readonly string[]; rowKey: string }> = Object.fromEntries(
+export const META_LIVE_FIELDS: Record<string, { fields: readonly string[]; rowKey: string | Readonly<Record<string, string>> }> = Object.fromEntries(
   registryEntries
     .filter(([, entry]) => entry.persistence?.kind === "meta" && entry.persistence.liveFields?.length)
     .map(([key, entry]) => [key, { fields: entry.persistence!.liveFields!, rowKey: entry.persistence!.rowKey ?? "_id" }])
