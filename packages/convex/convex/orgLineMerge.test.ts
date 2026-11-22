@@ -166,11 +166,32 @@ describe("a merge no role is behind", () => {
 
   test("a clear on the starter's cited word merges under them and says which line it rests on", async () => {
     const { ctx, tables, run } = solo();
-    const cited = { cite: { conversation_short_id: "jx7b0m0", line: 115 }, quote: "Yes, ship this", name: "Host" };
+    const cited = { cite: { conversation_short_id: "jx7b0m0", line: 115 }, quote: "Yes, ship this", name: "Host", said_at: NOW - 1 };
     await clearForMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", why: "they said ship", cited }, NOW + 1);
-    expect(run().merge_cleared).toMatchObject({ node_id: "intent_gate", cite: cited.cite, quote: "Yes, ship this", attempt: NOW });
-    expect(tables.task_comments.at(-1).text).toBe(`Cleared to land on Host's word: "Yes, ship this" (jx7b0m0:115), no card.`);
+    expect(run().merge_cleared).toMatchObject({ node_id: "intent_gate", cite: cited.cite, quote: "Yes, ship this", said_at: NOW - 1, attempt: NOW });
+    expect(tables.task_comments.at(-1).text).toBe(`Host said to ship: "Yes, ship this" (jx7b0m0:115), checked against the record.`);
     expect(await check(ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: `Host's own word "Yes, ship this" (jx7b0m0:115), checked at intent_gate` } });
+  });
+
+  // The newest word wins between a typed ship the run cleared on and a person's verdict on a Ship card.
+  test("a typed ship newer than a Revise on the run's card authorizes; a Revise newer than the typed ship refuses", async () => {
+    const cleared = (saidAt: number, revisedAt: number) => {
+      const s = solo();
+      s.tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_1", answer_index: 1, resolved_at: revisedAt, created_at: revisedAt }));
+      s.run().merge_cleared = { at: NOW + 1, node_id: "intent_gate", why: "they said ship", by: HOST, attempt: NOW, cite: { conversation_short_id: "jx7b0m0", line: 120 }, quote: "ok, ship it now", said_at: saidAt };
+      return s;
+    };
+    const newer = cleared(NOW - 1, NOW - DAY);
+    expect(await check(newer.ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: `Host's own word "ok, ship it now" (jx7b0m0:120), checked at intent_gate` } });
+    const older = cleared(NOW - DAY, NOW - 1);
+    await expect(check(older.ctx)).rejects.toThrow("a person answered Revise on its card sd-1");
+    // The same holds for a Revise on an earlier run's card of the task.
+    const earlier = cleared(NOW - 1, NOW - DAY);
+    earlier.tables.session_decisions[0].workflow_run_id = "workflow_runs_0";
+    expect(await check(earlier.ctx)).toMatchObject({ allowed: true });
+    const later = cleared(NOW - DAY, NOW - 1);
+    later.tables.session_decisions[0].workflow_run_id = "workflow_runs_0";
+    await expect(check(later.ctx)).rejects.toThrow("a person answered Revise on sd-1, the task's newest verdict");
   });
 
   test("only a running script station of the run, on its own runner's account, clears it; an agent account is no person", async () => {

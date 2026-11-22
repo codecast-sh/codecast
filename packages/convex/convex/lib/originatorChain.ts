@@ -7,7 +7,7 @@
 export const ORIGINATOR_MAX_HOPS = 8;
 
 /** How a session links to the one above it, in the order the walk tries them. */
-export type ChainLink = "spawned_by" | "parent" | "forked_from" | "workflow_run" | "agent_task";
+export type ChainLink = "spawned_by" | "parent" | "forked_from" | "handed_off" | "workflow_run" | "agent_task";
 
 /** Why a walk ended before a session with no link above it. */
 export type ChainStop = "access_denied" | "missing" | "cycle" | "depth_cap";
@@ -17,6 +17,7 @@ export type ChainConversation = {
   spawned_by_conversation_id?: string | null;
   parent_conversation_id?: string | null;
   forked_from?: string | null;
+  handed_off_from_conversation_id?: string | null;
   workflow_run_id?: string | null;
   agent_task_id?: string | null;
 };
@@ -43,6 +44,7 @@ async function nextUp<C extends ChainConversation>(
   if (c.spawned_by_conversation_id) return { link: "spawned_by", id: String(c.spawned_by_conversation_id) };
   if (c.parent_conversation_id) return { link: "parent", id: String(c.parent_conversation_id) };
   if (c.forked_from) return { link: "forked_from", id: String(c.forked_from) };
+  if (c.handed_off_from_conversation_id) return { link: "handed_off", id: String(c.handed_off_from_conversation_id) };
   const spawner = c.workflow_run_id ? await loader.runSpawner(String(c.workflow_run_id)) : null;
   if (spawner) return { link: "workflow_run", id: spawner };
   const creator = c.agent_task_id ? await loader.scheduleCreator(String(c.agent_task_id)) : null;
@@ -129,9 +131,12 @@ export type CiteRun = {
   starter_name: string | null;
   starter_is_bot: boolean;
   chain: Array<{ conversation_id: string; short_id: string }>;
+  /** The newest verdict a person gave on the task's Ship cards. */
+  verdict?: { ref: string; at: number; ship: boolean; label: string };
 };
 
-export type CitedLine = { conversation_id: string; short_id: string; line: number; user_id: string; user_name: string | null; quote: string };
+/** `said_at`: when the cited line was typed (ms). */
+export type CitedLine = { conversation_id: string; short_id: string; line: number; user_id: string; user_name: string | null; quote: string; said_at: number };
 
 /** Whitespace runs read as one space, so a quote matches across the line breaks a model folds. */
 export const normalizeQuote = (text: string): string => text.replace(/\s+/g, " ").trim();
@@ -139,7 +144,8 @@ export const normalizeQuote = (text: string): string => text.replace(/\s+/g, " "
 /**
  * Whether a cited line is the run's starter's own typed word holding the quote: the cited session is on the run's
  * change chain, its line is one a person typed (typedStep leaves out every program line), that person started the
- * run and is no agent account, and the line holds the quote once whitespace is folded. A refusal says which failed.
+ * run and is no agent account, the line holds the quote once whitespace is folded, and no person gave a verdict other
+ * than Ship on the task's cards after it was typed. A refusal says which failed.
  */
 export async function verifyCitation(
   steps: { run: () => Promise<CiteRun | { error: string }>; typedStep: OriginatorSteps<ChainHead>["typedStep"] },
@@ -168,5 +174,9 @@ export async function verifyCitation(
     return { refused: `${where} was typed by ${typed.user_name ?? "someone else"}, not by ${run.starter_name ?? "the person"} who started the run` };
   }
   if (!normalizeQuote(typed.text).includes(quoted)) return { refused: `${where} does not say "${quoted.slice(0, 200)}"` };
-  return { conversation_id: hop.conversation_id, short_id: hop.short_id, line: typed.line, user_id: typed.user_id, user_name: typed.user_name, quote: quoted };
+  const saidAt = Date.parse(typed.created_at);
+  if (run.verdict && !run.verdict.ship && run.verdict.at > saidAt) {
+    return { refused: `a person answered ${run.verdict.label} on ${run.verdict.ref} after ${where} was typed` };
+  }
+  return { conversation_id: hop.conversation_id, short_id: hop.short_id, line: typed.line, user_id: typed.user_id, user_name: typed.user_name, quote: quoted, said_at: saidAt };
 }

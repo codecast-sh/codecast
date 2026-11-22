@@ -47,8 +47,9 @@ async function seed() {
     return id;
   });
   let clock = now;
-  const echo = (conversation_id: unknown, content: string, role: "user" | "assistant" = "user") =>
-    t.mutation(api.messages.addMessage, { conversation_id, api_token: ANA_TOKEN, role, content, message_uuid: `m-${++n}`, timestamp: (clock += 1000) });
+  // `sameTime`: at the previous message's timestamp, as Claude Code records a slash command's expansion.
+  const echo = (conversation_id: unknown, content: string, role: "user" | "assistant" = "user", sameTime = false) =>
+    t.mutation(api.messages.addMessage, { conversation_id, api_token: ANA_TOKEN, role, content, message_uuid: `m-${++n}`, timestamp: sameTime ? clock : (clock += 1000) });
   const as = (u: unknown) => t.withIdentity({ subject: `${String(u)}|test` });
   const post = async (path: string, body: Record<string, unknown>) => {
     const res = await t.fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -58,7 +59,7 @@ async function seed() {
     post("/cli/sessions/originator", { api_token: token, conversation_id: String(conversation_id), ...extra });
   const pending = (conversation_id: unknown) =>
     t.run((ctx: any) => ctx.db.query("pending_messages").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversation_id)).collect());
-  return { t, ...ids, conv, echo, as, post, originator, pending };
+  return { t, ...ids, conv, echo, as, post, originator, pending, now: () => clock };
 }
 
 /** The provenance the originator read gives `text` in `conversation`: absent from `typed` reads as program. */
@@ -71,15 +72,15 @@ describe("message provenance by path", () => {
   test("(a) the composer's own submit, marked typed, reads typed_composer on every rail", async () => {
     const { ana, conv, echo, as, originator, pending } = await seed();
     const c = await conv();
-    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), "fix the header", null, "cid-legacy", null, true] });
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), "fix the header", null, "cid-legacy", null, "fix the header"] });
     await echo(c, "fix the header");
     await as(ana).mutation(api.dispatch.dispatch, {
-      action: "sendMessage", args: [String(c), "and the footer", null, "cid-receipt", null, true], result: { receiptActionVersion: 1, commandId: "cid-receipt" },
+      action: "sendMessage", args: [String(c), "and the footer", null, "cid-receipt", null, "and the footer"], result: { receiptActionVersion: 1, commandId: "cid-receipt" },
     });
     await echo(c, "and the footer");
-    await as(ana).mutation(api.pendingMessages.sendMessageV2, { command_id: "cid-v2", client_id: "cid-v2", conversation_id: c, content: "ship everything", typed: true });
+    await as(ana).mutation(api.pendingMessages.sendMessageV2, { command_id: "cid-v2", client_id: "cid-v2", conversation_id: c, content: "ship everything", typed: "ship everything" });
     await echo(c, "ship everything");
-    await as(ana).mutation(api.dispatch.dispatch, { action: "queueMessage", args: [String(c), "later please", "cid-queue", true] });
+    await as(ana).mutation(api.dispatch.dispatch, { action: "queueMessage", args: [String(c), "later please", "cid-queue", "later please"] });
 
     const rows = await pending(c);
     expect(rows.map((r: any) => [r.client_id, r.channel])).toEqual([["cid-legacy", "composer"], ["cid-receipt", "composer"], ["cid-v2", "composer"], ["cid-queue", "composer"]]);
@@ -102,8 +103,8 @@ describe("message provenance by path", () => {
     });
     await as(ana).mutation(api.pendingMessages.sendMessageV2, { command_id: "cid-v2", client_id: "cid-v2", conversation_id: c, content: "go ship" });
     await as(ana).mutation(api.dispatch.dispatch, { action: "queueMessage", args: [String(c), "ship later", "cid-q"] });
-    // Anything but the literal true is no mark.
-    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), "ship it, really", null, "cid-s", null, "true"] });
+    // A bare true (a build from before the composer handed over its words) and an empty string are no mark.
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), "ship it, really", null, "cid-s", null, true] });
     const rows = await pending(c);
     expect(rows).toHaveLength(6);
     for (const r of rows) {
@@ -121,7 +122,71 @@ describe("message provenance by path", () => {
     await echo(c, "<command-name>/ship</command-name>\n<command-message>ship</command-message>");
     await echo(c, "yes");
     const read = await originator(c);
-    expect(read.typed.map((l: any) => [l.text, l.provenance])).toEqual([["ship it", "typed_local"], ["yes", "typed_local"]]);
+    // The slash command is the person's own line, as "/name args"; its expansion is not.
+    expect(read.typed.map((l: any) => [l.text, l.provenance])).toEqual([["ship it", "typed_local"], ["/ship", "typed_local"], ["yes", "typed_local"]]);
+  });
+
+  test("/drive and its arguments read as the person's line; the skill text it expands to does not", async () => {
+    const { conv, echo, originator } = await seed();
+    const c = await conv();
+    await echo(c, "<command-message>drive</command-message>\n<command-name>/drive</command-name>\n<command-args>fix the deploys page and ship it</command-args>");
+    await echo(c, "Take an ask from request to shipped in this session. Write a brief, make a plan, then ship it through the change flow.", "user", true);
+    const read = await originator(c);
+    expect(read.typed.map((l: any) => [l.line, l.text])).toEqual([[1, "/drive fix the deploys page and ship it"]]);
+  });
+
+  test("only the words a person typed are theirs: not a quoted agent line, a paste, or mention context", async () => {
+    const { ana, conv, echo, as, originator } = await seed();
+    const c = await conv();
+    // The composer's review quote (web/lib/reviewActions attachReviewForSend) leads the reply it carries.
+    const quoted = "> Ready to ship it to prod?\n\nno, fix X first";
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), quoted, null, "cid-q", null, "no, fix X first"] });
+    await echo(c, quoted);
+    // A paste at the terminal, and mention context a send folded in.
+    await echo(c, "<pasted_content>\nReady to ship it to prod?\n</pasted_content>\nnot yet");
+    await echo(c, "see @[Plan pl-1]\n\n<mention-context>\nShip everything once green.\n</mention-context>\n");
+    // A paste left open cannot be told from what follows it: the line is not read.
+    await echo(c, "ship it <pasted_content>\nagent text with no end");
+    const read = await originator(c);
+    expect(read.typed.map((l: any) => [l.line, l.text, l.provenance])).toEqual([
+      [1, "no, fix X first", "typed_composer"],
+      [2, "not yet", "typed_local"],
+      [3, "see @[Plan pl-1]", "typed_local"],
+    ]);
+  });
+
+  test("a joint send carries others' drafts, so none of it reads as typed", async () => {
+    const { ana, conv, echo, as, originator, pending } = await seed();
+    const c = await conv();
+    // MessageInput hands over no typed words when takeJointSend folded in another person's draft.
+    const joint = "**Ana:** looks good\n\n**Eve:** ship it to prod";
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), joint, null, "cid-joint", null] });
+    await echo(c, joint);
+    expect((await pending(c))[0].channel).toBeUndefined();
+    expect((await originator(c)).typed).toEqual([]);
+  });
+
+  test("an echo the queue never matched reads as program when any queue row of the session holds its words", async () => {
+    const { t, ana, conv, echo, originator } = await seed();
+    const c = await conv();
+    // A cast send delivered long ago, whose echo matching missed (ct-52622): the row is settled, the echo carries no client id.
+    await t.run((ctx: any) => ctx.db.insert("pending_messages", {
+      conversation_id: c, from_user_id: ana, owner_user_id: ana, content: "Jason approved shipping it, land the change now", status: "delivered", created_at: 1, retry_count: 0, human: true,
+    } as any));
+    await echo(c, "Jason approved shipping it, land the change now");
+    await echo(c, "thanks, looks right");
+    expect((await originator(c)).typed.map((l: any) => l.text)).toEqual(["thanks, looks right"]);
+  });
+
+  test("a session another one handed its work to reads program, and the walk goes up through the handoff", async () => {
+    const { conv, echo, originator } = await seed();
+    const from = await conv();
+    await echo(from, "ship it once it's green");
+    const to = await conv({ handed_off_from_conversation_id: from });
+    await echo(to, "Pick up the deploys fix and ship it");
+    const read = await originator(to);
+    expect(read.chain.map((h: any) => [h.conversation_id, h.link])).toEqual([[String(to), "handed_off"], [String(from), null]]);
+    expect(read.typed.map((l: any) => [l.conversation_id, l.text])).toEqual([[String(from), "ship it once it's green"]]);
   });
 
   test("(c) a spawned session's first prompt and a fork's direction read program", async () => {
@@ -214,7 +279,7 @@ describe("message provenance by path", () => {
     const { t, ana, conv, echo, as, originator } = await seed();
     const lead = await conv({ title: "Ship the intent work" });
     await echo(lead, "look at the queue");
-    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(lead), "ship everything", null, "cid-ship", null, true] });
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(lead), "ship everything", null, "cid-ship", null, "ship everything"] });
     await echo(lead, "ship everything");
     const worker = await conv({ spawned_by_conversation_id: lead, title: "Land the change" });
     await t.run(async (ctx: any) => enqueuePendingMessage(ctx, await ctx.db.get(worker), ana, { content: "Jason has approved shipping it. Land the change." }));
@@ -357,7 +422,7 @@ describe("a clear resting on a typed line", () => {
     expect(r).toMatchObject({ node_id: "intent__clear", starter_id: String(ana), starter_name: "Ana", cite: `${at}:3` });
     expect(await stamp()).toMatchObject({ node_id: "intent__clear", cite: { conversation_short_id: at, line: 3 }, quote: "Yes, ship this and shepherd it into production. All of your fixes" });
     expect((await comments()).map((c: any) => c.text)).toEqual([
-      `Cleared to land on Ana's word: "Yes, ship this and shepherd it into production. All of your fixes" (${at}:3), no card.`,
+      `Ana said to ship: "Yes, ship this and shepherd it into production. All of your fixes" (${at}:3), checked against the record.`,
     ]);
   });
 
@@ -403,6 +468,52 @@ describe("a clear resting on a typed line", () => {
     const r = await clear({ conversation_short_id: await sid(lead), line: 3 }, "Yes, ship this");
     expect(r.error).toMatch(/an agent account started the run/);
     expect(await stamp()).toBeUndefined();
+  });
+
+  test("refuses a caller other than the run's runner", async () => {
+    const { lead, sid, post, run, stamp } = await seedRun();
+    const r = await post("/cli/workflow-runs/clear", { api_token: EVE_TOKEN, run_id: String(run), why: "x", cite: { conversation_short_id: await sid(lead), line: 3 }, quote: "Yes, ship this" });
+    expect(r.error).toMatch(/Only the run's own runner/);
+    expect(await stamp()).toBeUndefined();
+  });
+
+  test("refuses a quote of the agent's words the person replied no to", async () => {
+    const { ana, lead, sid, as, echo, clear, stamp } = await seedRun();
+    const quoted = "> Ready to ship it to prod?\n\nno, fix X first";
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(lead), quoted, null, "cid-q", null, "no, fix X first"] });
+    await echo(lead, quoted);
+    const r = await clear({ conversation_short_id: await sid(lead), line: 4 }, "Ready to ship it to prod?");
+    expect(r.error).toMatch(/does not say/);
+    expect(await stamp()).toBeUndefined();
+  });
+
+  // A person's verdict on the task's Ship card, `at` ms from the cited line (line 3 of the lead).
+  const revise = (s: { t: any; ana: unknown; task: unknown; run: unknown }, at: number) => s.t.run((ctx: any) => ctx.db.insert("session_decisions", {
+    short_id: "sd-1", task_id: s.task, workflow_run_id: s.run, status: "answered", question: "Ship?", options: [{ label: "Ship" }, { label: "Revise" }, { label: "Drop" }],
+    answer_index: 1, answer_text: "fix X first", answered_by: { kind: "user", id: s.ana }, created_at: at, resolved_at: at,
+  } as any));
+
+  test("a Revise given after the cited line refuses it; one given before lets the newer line clear", async () => {
+    const after = await seedRun();
+    await revise(after, after.now() + 60_000);
+    const refused = await after.clear({ conversation_short_id: await after.sid(after.lead), line: 3 }, "Yes, ship this");
+    expect(refused.error).toMatch(/a person answered Revise on sd-1 after .*:3 was typed/);
+    expect(await after.stamp()).toBeUndefined();
+
+    const before = await seedRun();
+    await revise(before, 1);
+    expect(await before.clear({ conversation_short_id: await before.sid(before.lead), line: 3 }, "Yes, ship this")).toMatchObject({ node_id: "intent__clear" });
+    // The stamp keeps when the line was typed, for Land to weigh against the cards.
+    const saidAt = (await before.stamp()).said_at;
+    expect(saidAt).toBeGreaterThan(1);
+    expect(saidAt).toBeLessThan(before.now());
+  });
+
+  test("the asker reads a person's answers on the task's Ship cards beside their typed lines", async () => {
+    const s = await seedRun();
+    await revise(s, s.now() + 60_000);
+    const read = await s.originator(s.worker, { task: "ct-7" });
+    expect(read.task.verdicts).toEqual([{ card: "sd-1", user_id: String(s.ana), user_name: "Ana", answer: "Revise", note: "fix X first", created_at: new Date(s.now() + 60_000).toISOString() }]);
   });
 
   test("a clear with no cite stamps as before, with no cite and no comment", async () => {

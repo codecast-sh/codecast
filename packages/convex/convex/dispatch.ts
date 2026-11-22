@@ -1292,7 +1292,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   mergeQueued: async (ctx, userId, [convId, messageId, intoId]: [string, string, string]) =>
     mergeQueuedForUser(ctx, userId, convId as Id<"conversations">, { messageId, intoId }),
   // The composer's "Queue for later": a row held for the end of the turn.
-  queueMessage: async (ctx, userId, [convId, content, clientId, typed]: [string, string, string, boolean | undefined]) => {
+  queueMessage: async (ctx, userId, [convId, content, clientId, typed]: [string, string, string, string | undefined]) => {
     const conversation = await ctx.db.get(convId as Id<"conversations">);
     if (!conversation) throw new Error("conversation_deleted");
     if (!(await canSendProductMessage(ctx, userId, conversation))) throw new Error("Unauthorized");
@@ -1306,8 +1306,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     userId,
     // quoteIds: the composer quotes the message carries (quoteDrafts.ts), sent
     // only by builds with the quote record on. Older builds send four args.
-    // typed: true only from the composer's own submit (composerChannel).
-    [convId, content, imageIds, clientId, quoteIds, typed]: [string, string, string[] | undefined, string | undefined, string[] | undefined, boolean | undefined],
+    // typed: the words the person typed, only from the composer's own submit (composerChannel).
+    [convId, content, imageIds, clientId, quoteIds, typed]: [string, string, string[] | undefined, string | undefined, string[] | undefined, string | undefined],
     result,
   ) => {
     const quoteClientIds = Array.isArray(quoteIds) && quoteIds.length ? quoteIds : undefined;
@@ -1320,7 +1320,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         content,
         ...(imageIds?.length ? { image_storage_ids: imageIds as Id<"_storage">[] } : {}),
         ...(quoteClientIds ? { quote_client_ids: quoteClientIds } : {}),
-        ...(typed === true ? { typed: true } : {}),
+        ...(typeof typed === "string" ? { typed } : {}),
       });
     }
     const conversation = await ctx.db.get(convId as Id<"conversations">);

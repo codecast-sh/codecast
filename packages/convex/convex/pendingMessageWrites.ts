@@ -23,6 +23,7 @@ export type PendingMessageInsertFields = {
   human?: boolean;
   // Sent from a signed-in composer (schema pending_messages.channel).
   channel?: "composer";
+  typedText?: string;
   createdAt: number;
   // Park the row as "held" (a standing session's turn, released by the wake
   // rail's flush) instead of "pending".
@@ -34,13 +35,14 @@ export type PendingMessageInsertFields = {
 };
 
 /**
- * The channel a send on a session login carries: "composer" only when the
- * composer's own submit marked it typed. Every other send through the same
- * rail (a mod, an ask-agent brief, a limit "continue", a button's words)
+ * The channel a send on a session login carries: "composer", with the words
+ * the person typed, only when the composer's own submit hands those words
+ * over. Every other send through the same rail (a mod, an ask-agent brief, a
+ * limit "continue", a button's words, a joint send carrying others' drafts)
  * leaves it unset and reads as a program.
  */
-export function composerChannel(typed: unknown): { channel?: "composer" } {
-  return typed === true ? { channel: "composer" } : {};
+export function composerChannel(typed: unknown): { channel?: "composer"; typed_text?: string } {
+  return typeof typed === "string" && typed.trim() ? { channel: "composer", typed_text: typed } : {};
 }
 
 export class PendingMessageWriteError extends Error {
@@ -124,7 +126,7 @@ async function insertPendingMessageRow(
     client_id: fields.clientId,
     origin: fields.origin,
     human: fields.human || undefined,
-    ...(fields.channel ? { channel: fields.channel } : {}),
+    ...(fields.channel ? { channel: fields.channel, ...(fields.typedText ? { typed_text: fields.typedText } : {}) } : {}),
     status: fields.held || fields.queued ? ("held" as const) : ("pending" as const),
     ...(fields.queued ? { queued: true } : {}),
     ...(fields.quiet ? { quiet: true } : {}),

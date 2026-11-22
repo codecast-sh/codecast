@@ -419,10 +419,12 @@ export async function enqueuePendingMessage(
     human?: boolean;
     // Sent from a signed-in person's web or phone composer, never through an
     // API token (schema pending_messages.channel). Set only through
-    // composerChannel, when the composer's own submit marked the send typed;
+    // composerChannel, when the composer's own submit hands over its words;
     // every other producer leaves it unset, which reads as a program
     // (lib/messageProvenance.ts).
     channel?: "composer";
+    // With channel: what the person typed in the box (composerChannel).
+    typed_text?: string;
     // A note the session reads on its NEXT turn, never a turn of its own: the
     // row is parked as "held" (the daemon and the retry cron read "pending"
     // only) and nothing about the conversation moves, so a session whose
@@ -508,6 +510,7 @@ export async function enqueuePendingMessage(
       clientId: fields.client_id,
       human: fields.human,
       channel: fields.channel,
+      typedText: fields.typed_text,
       createdAt: Date.now(),
       queued: true,
     });
@@ -526,6 +529,7 @@ export async function enqueuePendingMessage(
       clientId: fields.client_id,
       human: fields.human,
       channel: fields.channel,
+      typedText: fields.typed_text,
       createdAt: Date.now(),
       held: true,
     });
@@ -557,6 +561,7 @@ export async function enqueuePendingMessage(
     origin: fields.origin,
     human: fields.human,
     channel: fields.channel,
+    typedText: fields.typed_text,
     createdAt: Date.now(),
     quiet: fields.quiet,
     delivery: fenced ?? undefined,
@@ -734,9 +739,10 @@ export const sendMessageV2 = mutation({
     // The composer quotes this message carries (quoteDrafts.ts): stamped sent
     // here, in the transaction that queues it.
     quote_client_ids: v.optional(v.array(v.string())),
-    // Sent by the composer's own submit (composerChannel). Left out of the
-    // command fingerprint, so a redrive that lacks it still matches its receipt.
-    typed: v.optional(v.boolean()),
+    // The words the person typed, sent by the composer's own submit
+    // (composerChannel). Left out of the command fingerprint, so a redrive
+    // that lacks it still matches its receipt.
+    typed: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);

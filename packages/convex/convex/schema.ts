@@ -2893,6 +2893,10 @@ export default defineSchema({
     // absent reads as a program (lib/messageProvenance.ts). Unlike `human`,
     // no caller can declare it.
     channel: v.optional(v.literal("composer")),
+    // With channel "composer": the words the person typed in the box, before
+    // the composer folded in quotes, mention context or attachments. The part
+    // of the message that is theirs (lib/messageProvenance.typedPart).
+    typed_text: v.optional(v.string()),
     status: v.union(
       v.literal("pending"),
       v.literal("injected"),
@@ -8769,6 +8773,8 @@ export default defineSchema({
       at: v.number(), node_id: v.string(), why: v.string(), by: v.id("users"), attempt: v.number(),
       cite: v.optional(v.object({ conversation_short_id: v.string(), line: v.number() })),
       quote: v.optional(v.string()),
+      // When the cited line was typed: Land weighs it against the person's card verdicts, newest first.
+      said_at: v.optional(v.number()),
     })),
     graph_hash: v.optional(v.string()), // LE14: content hash of the graph the runner executed (parser.graphHash)
     graph_nodes: v.optional(v.array(v.object({ id: v.string(), h: v.string() }))), // LE14: each station's hash in that graph (parser.graphNodeHashes)

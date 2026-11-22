@@ -13,6 +13,7 @@
 
 import { internalMutation, mutation, query } from "./functions";
 import type { Cite } from "./lib/originatorChain";
+import { byPerson, cardRef, isShipAnswer, newestFirst, offersShip, verdictAt, verdictLabel } from "./lib/taskVerdicts";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -121,18 +122,9 @@ async function runAndRole(ctx: any, userId: Id<"users">, runRef: string): Promis
 // Every refusal ends with these words: a flow reads them to ask at the card instead (a repo's change flow does).
 const NOTHING_AUTHORIZES = "so nothing authorizes the merge";
 
-const optionIsShip = (label: unknown): boolean => /^ship\b/i.test(String(label ?? "").trim());
-const isShipAnswer = (card: any): boolean => card.status === "answered" && optionIsShip(card.options?.[card.answer_index ?? -1]?.label);
-const offersShip = (card: any): boolean => (card.options ?? []).some((o: any) => optionIsShip(o?.label));
-const cardRef = (card: any): string => card.short_id ?? String(card._id);
 // "answered Revise on sd-N" / "dismissed sd-N": what a verdict was, for a refusal.
 const verdictWords = (card: any, ref = cardRef(card)): string =>
-  card.status === "dismissed" ? `dismissed ${ref}` : `answered ${String(card.options?.[card.answer_index ?? -1]?.label ?? card.answer_text ?? "something other than Ship").trim()} on ${ref}`;
-// A person's verdict: an answer a user gave, or a dismissal a user made (a dismissal names its person in answered_by,
-// or, on older rows, only in resolved_by). A withdrawal names nobody: the asker took its own question back.
-const byPerson = (card: any): boolean =>
-  card.answered_by ? card.answered_by.kind === "user" : card.status === "dismissed" && !!card.resolved_by;
-const newestFirst = (a: any, b: any) => (b.resolved_at ?? b.created_at ?? 0) - (a.resolved_at ?? a.created_at ?? 0);
+  card.status === "dismissed" ? `dismissed ${ref}` : `answered ${verdictLabel(card)} on ${ref}`;
 
 /** The attempt a run is on: a resume that counts as a new attempt moves it, and a cleared stamp holds only for the
  *  attempt it was written in (`run.merge_cleared.attempt`). */
@@ -153,6 +145,9 @@ export const runAttempt = (run: { visits_reset_at?: number; created_at: number }
  * 4. Otherwise a run its own graph cleared to land: the stamp a script station wrote (`clearForMergeCore`) in the
  *    run's current attempt, and the person who started the run (`run.user_id`) authorizes it. Every resume, reask
  *    and land-again drops the stamp, so it is never inferred from what a run lacks. An agent account is no person.
+ * A stamp that rests on the starter's typed word (the intent segment's cited clear) is weighed against the cards by
+ * when the word was typed (`said_at`): the newest word wins, so a typed ship after a Revise authorizes, and a
+ * Revise after the typed ship refuses (the cited clear is refused then too, verifyCitation).
  */
 export async function personAuthorized(ctx: any, run: any): Promise<PersonAuthorization> {
   const byStatus = (status: string) => run.task_id
@@ -170,18 +165,25 @@ export async function personAuthorized(ctx: any, run: any): Promise<PersonAuthor
   const decided = rows.filter((d) => (d.status === "answered" || d.status === "dismissed") && !d.trial && offersShip(d) && (isOwn(d) || !!d.workflow_run_id)).sort(newestFirst);
 
   const own = decided.find(isOwn);
+  const verdict = own ?? decided.find(byPerson);
+  const stamp = run.merge_cleared && run.merge_cleared.attempt === runAttempt(run) ? run.merge_cleared : null;
+  if (stamp?.cite && stamp.said_at !== undefined && (!verdict || stamp.said_at > verdictAt(verdict))) return await stampAuthorization(ctx, run, stamp);
   if (own) {
     if (isShipAnswer(own) && own.answered_by?.kind === "user") return { user_id: String(own.answered_by.id), why: `ship on card ${cardRef(own)}` };
     const who = own.answered_by?.kind && own.answered_by.kind !== "user" ? `a ${own.answered_by.kind}` : "a person";
     throw new Error(`No role started this run and ${who} ${verdictWords(own, `its card ${cardRef(own)}`)}, ${NOTHING_AUTHORIZES}`);
   }
-  const earlier = decided.find(byPerson);
+  const earlier = verdict;
   if (earlier) {
     if (isShipAnswer(earlier)) return { user_id: String(earlier.answered_by.id), why: `ship on earlier run's card ${cardRef(earlier)}` };
     throw new Error(`No role started this run and a person ${verdictWords(earlier)}, the task's newest verdict, ${NOTHING_AUTHORIZES}`);
   }
-  const stamp = run.merge_cleared;
-  if (!stamp || stamp.attempt !== runAttempt(run)) throw new Error(`No role started this run, its graph did not clear it to land, and no person answered Ship on a card, ${NOTHING_AUTHORIZES}`);
+  if (!stamp) throw new Error(`No role started this run, its graph did not clear it to land, and no person answered Ship on a card, ${NOTHING_AUTHORIZES}`);
+  return await stampAuthorization(ctx, run, stamp);
+}
+
+/** The run's starter authorizes a merge its graph cleared, unless an agent account started it. */
+async function stampAuthorization(ctx: any, run: any, stamp: any): Promise<PersonAuthorization> {
   const starter: any = await ctx.db.get(run.user_id);
   if (!starter || starter.is_bot) throw new Error(`No role started this run, an agent account started it, and no person answered Ship on a card, ${NOTHING_AUTHORIZES}`);
   const name = starter.name || starter.github_username || starter.email?.split("@")[0] || String(starter._id);
@@ -200,12 +202,12 @@ export async function personAuthorized(ctx: any, run: any): Promise<PersonAuthor
  * An agent that fakes the runner's progress reports could still stamp; whoever holds the owner's token and git can push main anyway.
  *
  * `cited`: the starter's own typed line the clear rests on, already checked by verifyCitation (the intent segment's
- * clear, /cli/workflow-runs/clear with a cite). The stamp keeps it, and the task says the change lands on that word.
+ * clear, /cli/workflow-runs/clear with a cite), and when it was typed. The stamp keeps it, and the task says what they said.
  */
 export async function clearForMergeCore(
   ctx: any,
   userId: Id<"users">,
-  args: { run_id: string; why: string; cited?: { cite: Cite; quote: string; name: string } },
+  args: { run_id: string; why: string; cited?: { cite: Cite; quote: string; name: string; said_at: number } },
   now = Date.now(),
 ): Promise<{ run_id: string; node_id: string; attempt: number }> {
   const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
@@ -220,13 +222,13 @@ export async function clearForMergeCore(
     throw new Error(`${run.current_node_id} is not a script station of the run's graph: only a flow's script station clears a run to land`);
   }
   const attempt = runAttempt(run);
-  const cited = args.cited ? { cite: args.cited.cite, quote: args.cited.quote.slice(0, 2000) } : {};
+  const cited = args.cited ? { cite: args.cited.cite, quote: args.cited.quote.slice(0, 2000), said_at: args.cited.said_at } : {};
   await ctx.db.patch(run._id, { merge_cleared: { at: now, node_id: run.current_node_id, why: why.slice(0, 500), by: userId, attempt, ...cited }, updated_at: now });
   if (args.cited && run.task_id) {
     const { cite, quote, name } = args.cited;
     await insertTaskComment(ctx, run.task_id, {
       author: "line",
-      text: `Cleared to land on ${name}'s word: "${quote}" (${cite.conversation_short_id}:${cite.line}), no card.`,
+      text: `${name} said to ship: "${quote}" (${cite.conversation_short_id}:${cite.line}), checked against the record.`,
       comment_type: "progress",
       conversation_id: run.primary_conversation_id ?? undefined,
     });
@@ -243,8 +245,9 @@ const citeValidator = v.object({ conversation_short_id: v.string(), line: v.numb
 
 /** A clear resting on the starter's own typed line: only /cli/workflow-runs/clear writes it, after verifyCitation. */
 export const clearForMergeCited = internalMutation({
-  args: { api_token: v.string(), run_id: v.string(), why: v.string(), cite: citeValidator, quote: v.string(), name: v.string() },
-  handler: async (ctx, { api_token, cite, quote, name, ...args }) => clearForMergeCore(ctx, await requireToken(ctx, api_token), { ...args, cited: { cite, quote, name } }),
+  args: { api_token: v.string(), run_id: v.string(), why: v.string(), cite: citeValidator, quote: v.string(), name: v.string(), said_at: v.number() },
+  handler: async (ctx, { api_token, cite, quote, name, said_at, ...args }) =>
+    clearForMergeCore(ctx, await requireToken(ctx, api_token), { ...args, cited: { cite, quote, name, said_at } }),
 });
 
 const PERSON_ALLOWANCE = { on: true, used: 0, limit: null, grant: null, allowed: true, reason: null, mode: "count" as const, bar: null, measured: null };

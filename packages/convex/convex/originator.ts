@@ -14,11 +14,11 @@ import { findTaskByRef } from "./taskEvidence";
 import { isNonEmptyMessage } from "./lib/conversationBasics";
 import type { ScanCursor } from "./lib/conversationRead";
 import { commandExpansionName } from "../../web/lib/conversationProcessor";
-import { launchedByProgram, mayBeTyped, messageProvenance } from "./lib/messageProvenance";
+import { launchedByProgram, mayBeTyped, messageProvenance, queuedTwin, sameWordsKey, typedPart } from "./lib/messageProvenance";
 import { walkOriginatorChain, type ChainLink, type ChainStop, type CiteRun, type TypedLine } from "./lib/originatorChain";
 import { verifyApiToken } from "./apiTokens";
 import { canReadRun } from "./workflow_runs";
-import { changeSessionOf } from "./lib/taskOwner";
+import { personVerdicts } from "./lib/taskVerdicts";
 
 type Conv = Doc<"conversations">;
 
@@ -34,8 +34,11 @@ export type OriginatorHead = {
     is_bot: boolean;
     launched_by_program: boolean;
   };
-  task?: { short_id: string; chain: ChainEntry[]; stopped?: ChainStop };
+  task?: { short_id: string; chain: ChainEntry[]; stopped?: ChainStop; verdicts: TaskVerdictLine[] };
 };
+
+/** A person's verdict on one of the task's Ship cards, read beside their typed lines. */
+export type TaskVerdictLine = { card: string; user_id: string; user_name: string | null; answer: string; note?: string; created_at: string };
 
 const shortIdOf = (c: Conv) => c.short_id ?? String(c._id).slice(0, 7);
 const nameOf = (u: Doc<"users"> | null) => u?.name || u?.github_username || u?.email?.split("@")[0] || null;
@@ -110,18 +113,32 @@ export const chain = internalQuery({
     if (args.task) {
       const task = await findTaskByRef(ctx, args.task);
       if (!task || !(await canAccessTask(ctx, userId, task))) return { error: `Task ${args.task} not found` };
-      head.task = { short_id: task.short_id ?? String(task._id), ...(await filingChain(ctx, userId, task)) };
+      const verdicts = await personVerdicts(ctx, task._id);
+      const names = new Map<string, string | null>();
+      for (const v of verdicts) if (!names.has(v.user_id)) names.set(v.user_id, nameOf(await ctx.db.get(v.user_id as Id<"users">)));
+      head.task = {
+        short_id: task.short_id ?? String(task._id),
+        ...(await filingChain(ctx, userId, task)),
+        verdicts: verdicts.map((v) => ({
+          card: v.ref, user_id: v.user_id, user_name: names.get(v.user_id) ?? null, answer: v.label, ...(v.note ? { note: v.note } : {}),
+          created_at: new Date(v.at).toISOString(),
+        })),
+      };
     }
     return run ? { ...head, ...(await starterOf(ctx, run)) } : head;
   },
 });
 
 /**
- * What a cited clear (`cast workflow clear --cite`) is checked against: who started the run, and every session its
- * change came through, as the run's own runner may read them. Every anchor is the server's own record of the run,
- * never the caller's word: the session that started it (spawner_conversation_id), the session its task's change
- * came from (changeSessionOf, what the runner was handed as the change's session) and the one that filed the task,
- * each walked up to its originator.
+ * What a cited clear (`cast workflow clear --cite`) is checked against: who started the run, every session its
+ * change came through as the run's own runner may read them, and the newest verdict a person gave on the task's
+ * Ship cards. The chain is walked up from two anchors only, both written by the server, not by agents: the session
+ * that started the run (spawner_conversation_id) and the one that filed its task (created_from_conversation). Task
+ * comments, which any agent can post, name no anchor.
+ *
+ * The threat this guards against is an honest misread: a model citing a line a person did not type, a quote not on
+ * it, another person's word, or a word a later verdict took back. It does not guard against a holder of the
+ * starter's token forging a session's environment or links; such a holder can push main anyway (clearForMergeCore).
  */
 export const citeRun = internalQuery({
   args: { api_token: v.string(), run_id: v.string() },
@@ -131,17 +148,19 @@ export const citeRun = internalQuery({
     const run = runId ? await ctx.db.get(runId) : null;
     if (!auth || !run || String(run.user_id) !== String(auth.userId)) return { error: "Only the run's own runner clears it to land" };
     const task = run.task_id ? await ctx.db.get(run.task_id) : null;
-    const comments = task ? await ctx.db.query("task_comments").withIndex("by_task_id", (q: any) => q.eq("task_id", task._id)).collect() : [];
-    const made = task ? await changeSessionOf(ctx, task, comments) : null;
     const spawner = run.spawner_conversation_id ? await ctx.db.get(run.spawner_conversation_id) : null;
     const chain = new Map<string, { conversation_id: string; short_id: string }>();
-    for (const anchor of [spawner, made]) {
-      if (!anchor || !(await canOwnerOrTeamAccess(ctx, run.user_id, anchor))) continue;
-      for (const hop of (await walkFrom(ctx, run.user_id, anchor)).chain) chain.set(hop.conversation_id, hop);
+    if (spawner && (await canOwnerOrTeamAccess(ctx, run.user_id, spawner))) {
+      for (const hop of (await walkFrom(ctx, run.user_id, spawner)).chain) chain.set(hop.conversation_id, hop);
     }
     if (task) for (const hop of (await filingChain(ctx, run.user_id, task)).chain) chain.set(hop.conversation_id, hop);
     const starter = await starterOf(ctx, run);
-    return { ...starter, chain: [...chain.values()].map(({ conversation_id, short_id }) => ({ conversation_id, short_id })) };
+    const [verdict] = task ? await personVerdicts(ctx, task._id) : [];
+    return {
+      ...starter,
+      chain: [...chain.values()].map(({ conversation_id, short_id }) => ({ conversation_id, short_id })),
+      ...(verdict ? { verdict: { ref: verdict.ref, at: verdict.at, ship: verdict.ship, label: verdict.label } } : {}),
+    };
   },
 });
 
@@ -191,6 +210,18 @@ export const typedStep = internalQuery({
 
     const names = new Map<string, string | null>();
     const typed: TypedLine[] = [];
+    // The words of every row this session's queue ever held, read once a line might be typed at its terminal.
+    let queuedKeys: Set<string> | null = null;
+    const queued = async () => {
+      if (!queuedKeys) {
+        queuedKeys = new Set();
+        for await (const row of ctx.db.query("pending_messages").withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))) {
+          const key = sameWordsKey(row.content);
+          if (key) queuedKeys.add(key);
+        }
+      }
+      return queuedKeys;
+    };
     for (const c of candidates) {
       const pending = c.client_id
         ? await ctx.db
@@ -198,12 +229,11 @@ export const typedStep = internalQuery({
             .withIndex("by_conversation_client_id", (q) => q.eq("conversation_id", conv._id).eq("client_id", c.client_id))
             .first()
         : null;
-      const provenance = messageProvenance(
-        c,
-        pending ? { channel: pending.channel, echo_message_id: pending.echo_message_id ? String(pending.echo_message_id) : undefined } : null,
-        conv,
-      );
-      if (provenance === "program") continue;
+      const row = pending ? { channel: pending.channel, typed_text: pending.typed_text, echo_message_id: pending.echo_message_id ? String(pending.echo_message_id) : undefined } : null;
+      const terminal = !pending && !c.client_id && !c.from_user_id;
+      const provenance = messageProvenance(c, row, conv, terminal && queuedTwin(c.content, await queued()));
+      const words = typedPart(c.content, provenance, row);
+      if (provenance === "program" || !words) continue;
       const userId = String(provenance === "typed_composer" ? pending!.from_user_id : conv.user_id);
       if (!names.has(userId)) names.set(userId, nameOf(await ctx.db.get(userId as Id<"users">)));
       typed.push({
@@ -214,7 +244,7 @@ export const typedStep = internalQuery({
         user_id: userId,
         user_name: names.get(userId) ?? null,
         provenance,
-        text: c.content,
+        text: words,
         created_at: new Date(c.timestamp).toISOString(),
       });
     }

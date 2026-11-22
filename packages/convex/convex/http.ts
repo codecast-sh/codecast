@@ -3468,6 +3468,7 @@ cliRoute("/cli/workflow-runs/clear", async (ctx, body) => {
     cite: { conversation_short_id: cited.short_id, line: cited.line },
     quote: cited.quote,
     name: cited.user_name ?? "the person who started the run",
+    said_at: cited.said_at,
   });
   return { ...cleared, starter_id: cited.user_id, starter_name: cited.user_name, cite: `${cited.short_id}:${cited.line}`, quote: cited.quote };
 });
