@@ -186,6 +186,7 @@ a.dpp-headci:hover span { text-decoration: underline; }
 
 .dpp-head-name, .dpp-live, .dpp-policy, .dpp-v, .dpp-dp { white-space: nowrap; }
 .dpp-live { flex-wrap: wrap; row-gap: 2px; }
+.dpp-devpush { flex-basis: 100%; font-size: var(--fs-meta); color: var(--sol-orange); white-space: normal; }
 .dpp-head-sub { margin-right: 6px; }
 @container (max-width: 760px) { .dpp-head { grid-template-areas: "name" "live" "actions"; grid-template-columns: minmax(0, 1fr); } .dpp-actions { justify-self: start; flex-wrap: wrap; } }
 .dpp-detail-sessions a.dpp-detail-task { background: color-mix(in srgb, var(--sol-blue) 10%, transparent); }

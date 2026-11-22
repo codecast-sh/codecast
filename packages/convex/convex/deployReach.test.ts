@@ -192,17 +192,3 @@ test("a deploy's corrected sha moves its place on main: commits after it are no 
   expect((await w.reach("acme/app#12")).state).toBe("live");
   expect((await w.reach(`acme/app@${sha(4)}`)).state).toBe("waiting");
 });
-
-test("a watcher push after the live deploy is nobody's deploy: the real live deploy is still placed on main", async () => {
-  const w = await world();
-  // The live deploy ships a commit from before the merge, and main's order reaches codecast only after it went live,
-  // so the deploy is stamped with no place on main.
-  w.t.commits.push({ _id: "commit_6", sha: sha(6), message: "change 6", author_name: "Ana", author_email: "a@x", timestamp: NOW, files_changed: 1, insertions: 0, deletions: 0, repository: REPO, team_id: TEAM, branch: "main", files: [file("web/e.tsx")] });
-  await w.mark("web", 6, "live", NOW - 9_000);
-  expect(w.t.deploys[0].cut_at).toBeUndefined();
-  await stampMainOrder(w.ctx, ["commit_6" as any], NOW - 20_000);
-  // Then someone's dev watcher pushes a working tree from a branch.
-  await recordDeployMarker(w.ctx, { workspace: WS, team_id: TEAM, target: "web", sha: sha(7), repository: REPO, source: "m", pushed_via: "dev watcher", machine: "ana-mac", dirty: 2, at: NOW - 8_000 });
-  // The live deploy is read by its place on main, before the merge, not by the time it went live, after it.
-  expect((await w.reach("acme/app#12")).targets[0]).toMatchObject({ state: "waiting", now: { short_id: "dp-1" } });
-});

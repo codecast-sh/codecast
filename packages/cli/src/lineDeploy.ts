@@ -15,7 +15,7 @@ import { spawn, spawnSync } from "./proc.js";
 import { deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
 import { resolveCastInvocation } from "./castInvocation.js";
 import type { ResolvedLineProfile } from "./lineProfile.js";
-import { targetFromLineDeploy, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
+import { targetFromLineDeploy, type DeployTarget, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 
 export type DeployStageReply = {
   project: { _id: string; short_id: string | null; title: string | null };
@@ -512,13 +512,38 @@ export async function awaitLive(opts: { deploy: string; read: DeployRead; sleep?
 }
 
 /** The targets view in words, for `cast line deploy targets`. */
-export function formatTargets(view: { targets: any[] }): string {
+/** "just now", "3m ago", "5h ago", "2d ago". */
+function agoWords(ms: number): string {
+  const m = Math.floor(Math.max(0, ms) / 60_000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
+}
+
+/** A target's dev push (a dev watcher's push of a working tree after the live deploy) in one line, as the Deploys
+ *  page says it: `uncommitted push · ana-mac · Ana · 3m ago · 2 files`. */
+export function devPushLine(p: TargetDevPush, now: number = Date.now()): string {
+  return [
+    p.dirty > 0 ? "uncommitted push" : `dev push of ${p.sha.slice(0, 7)}`,
+    p.machine,
+    p.by,
+    agoWords(now - p.at),
+    p.dirty > 0 ? `${p.dirty} ${p.dirty === 1 ? "file" : "files"}` : null,
+    p.adds_count ? `added ${p.adds_count}` : null,
+    p.drops_count ? `dropped ${p.drops_count}` : null,
+  ].filter(Boolean).join(" · ");
+}
+
+export function formatTargets(view: { targets: any[] }, now: number = Date.now()): string {
   if (!view.targets.length) return "No deploy targets published. Declare one as a [[target]] in .codecast/deploy.toml, then: cast line deploy targets --publish";
   const out: string[] = [];
   const short = (s: string | null | undefined) => (s ? s.slice(0, 9) : "-");
   for (const t of view.targets) {
     const live = t.live ? `${t.live.short_id} ${short(t.live.sha)}${t.live.version ? ` ${t.live.version}` : ""}, ${new Date(t.live.live_at ?? t.live.created_at).toLocaleString()}` : "nothing recorded live";
     out.push(`${t.name}  live: ${live}${t.open ? `  · ${t.open.short_id} ${t.open.status}` : ""}`);
+    // Prod runs someone's uncommitted work on top of the live deploy.
+    if (t.dev_push) out.push(`  ${devPushLine(t.dev_push, now)}`);
     const q = t.queue;
     if (!q.known) out.push(`  waiting: unknown (the live sha is not on main as codecast knows it)`);
     else if (!q.commits) out.push(`  nothing waiting${q.untouched ? ` (${q.untouched} commit${q.untouched === 1 ? "" : "s"} on main touch none of its paths)` : ""}`);

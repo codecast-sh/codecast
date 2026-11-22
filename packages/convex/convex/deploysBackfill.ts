@@ -127,8 +127,7 @@ export const recarry = internalMutation({
     const deploys = [];
     const shown: Array<{ deploy: string; carries: string[] }> = [];
     for (const row of rows) {
-      // A watcher's push carries no fix (deploys.recordDeployMarker): it is uncommitted work, never a deploy of a merge.
-      if (row.trigger !== "outside" || row.status !== "live" || row.pushed_via === "dev watcher") continue;
+      if (row.trigger !== "outside" || row.status !== "live") continue;
       if ((row.live_at ?? row.created_at) < window.from || row.carries.some((c) => (c.merged_at ?? now) < window.from)) { skipped++; continue; }
       // Its sha's place on main first (cut_at), which the rule holds merges against; oldest first, so every earlier
       // deploy is already placed when this one's carries are read.
@@ -182,8 +181,7 @@ export const closeSupersededDeploys = internalMutation({
   handler: async (ctx, args) => {
     const PAGE = 2000;
     const page: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_creation_time", (q: any) => q.gt("_creationTime", args.since ?? 0)).order("asc").take(PAGE);
-    // A watcher's push supersedes nothing (closeSuperseded), so the newest real deploy is the one that closes.
-    const lives = page.filter((d) => d.status === "live" && d.pushed_via !== "dev watcher");
+    const lives = page.filter((d) => d.status === "live");
     const seen = new Set<string>();
     const closed: Array<{ short_id: string; workspace: string; repository: string | null; target: string; status: string; created_at: number; superseded_by: string }> = [];
     // The newest live of each target closes everything open before it, so one per target is enough.

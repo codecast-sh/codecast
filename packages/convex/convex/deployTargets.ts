@@ -39,7 +39,7 @@ import {
 } from "@codecast/shared/contracts/deployTargets";
 import { liveDeployOf } from "@codecast/shared/contracts/deploys";
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
-import { COMMITS_MAX, commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, notWatcher, repositoryArg, targetDeploys, targetRows, targetState, upsertMainCommits } from "./deployTargetsState";
+import { COMMITS_MAX, commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, repositoryArg, targetDeploys, targetRows, targetState, upsertMainCommits } from "./deployTargetsState";
 import { requestTargetDeployCore } from "./deployTargetRequest";
 export { requestTargetDeployCore };
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
@@ -218,10 +218,9 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
       .query("deploys")
       .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", d.workspace).eq("target", d.target).lte("created_at", d.created_at))
       .order("desc")
-      .filter(notWatcher)
       .take(30);
-    // The real deploy that went live last before it: a watcher's push is nobody's deploy, so a range never starts there.
-    const before = liveDeployOf(earlier.filter((x) => x._id !== d._id && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at)), { repository: d.repository, real: true });
+    // The deploy that went live last before it.
+    const before = liveDeployOf(earlier.filter((x) => x._id !== d._id && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at)), { repository: d.repository });
     if (before?.sha && before.sha !== d.sha) previous = patch.previous_sha = before.sha;
   }
   if (!d.commits?.length && previous) {
@@ -327,11 +326,12 @@ export const recordShipPass = mutation({
     deploys: v.array(v.object({
       name: v.string(), stage: v.string(), ok: v.boolean(), target: v.optional(v.string()), output: v.optional(v.string()), dirty: v.optional(v.number()),
       // The push the step made, as deploy.sh reports it (changesDeploy.markDeploy takes the same): the machine, the
-      // path, and the names it put on the target and took off it.
+      // path, the names it put on the target and took off it, and when its diff read prod.
       machine: v.optional(v.string()),
-      via: v.optional(v.union(v.literal("deploy.sh"), v.literal("dev watcher"))),
+      via: v.optional(v.literal("deploy.sh")),
       adds: v.optional(v.array(v.string())),
       drops: v.optional(v.array(v.string())),
+      changes_read_at: v.optional(v.number()),
     })),
     started_at: v.number(),
   },
@@ -386,6 +386,7 @@ export const recordShipPass = mutation({
           // Sent exactly when the push's diff ran, empty or not: a deploy whose diff ran is evidence of what its tree held.
           ...(step.adds ? { adds: step.adds } : {}),
           ...(step.drops ? { drops: step.drops } : {}),
+          ...(step.changes_read_at != null ? { changes_read_at: step.changes_read_at } : {}),
           ship_pass_id: passId,
           at: now,
         });

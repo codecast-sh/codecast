@@ -11,7 +11,7 @@ import type { AppFlow } from "./flowPool";
 import type { OwnedFlow } from "./ownedFlows";
 
 type Run = { _id: string; status: string; workflow_slug?: string; current_node_id?: string | null };
-type Deploy = { status: string; live_at?: number | null; created_at: number; workspace?: string; pushed_via?: string | null };
+type Deploy = { status: string; live_at?: number | null; created_at: number; workspace?: string };
 
 export const LOOP_DAY_MS = 86_400_000;
 const LIVE = new Set(["pending", "running", "paused"]);
@@ -104,8 +104,7 @@ export function flowLoop(o: {
     ship: {
       landing: live.filter((r) => LANDING.test(stationOf(r))).length,
       going: o.deploys.filter((d) => d.status !== "live" && d.status !== "failed").length + live.filter((r) => DEPLOYING.test(stationOf(r))).length,
-      // A dev watcher's push is prod running someone's uncommitted files, not a deploy the line shipped.
-      liveToday: o.deploys.filter((d) => d.status === "live" && d.pushed_via !== "dev watcher" && (d.live_at ?? d.created_at) > now - LOOP_DAY_MS).length,
+      liveToday: o.deploys.filter((d) => d.status === "live" && (d.live_at ?? d.created_at) > now - LOOP_DAY_MS).length,
       failedToday: o.deploys.filter((d) => d.status === "failed" && d.created_at > now - LOOP_DAY_MS).length,
       watching: map?.header.watching ?? 0,
     },

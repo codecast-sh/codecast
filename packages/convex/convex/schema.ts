@@ -4304,12 +4304,16 @@ export default defineSchema({
     dirty: v.optional(v.number()),
     // The hostname of the machine that pushed it.
     machine: v.optional(v.string()),
-    // Which push path sent it: deploy.sh, or the dev watcher (scripts/gated-push.ts) pushing a working tree.
-    pushed_via: v.optional(v.union(v.literal("deploy.sh"), v.literal("dev watcher"))),
+    // Which push path sent it. The dev watcher's pushes are not deploys: they are dev_pushes.
+    pushed_via: v.optional(v.literal("deploy.sh")),
     // What it put on the target that was not there before, and what it took off, as names (`fn:<module>:<export>`,
     // `http:<METHOD> <path>`, `index:<table>.<index>`, `table:<table>`). At most 500 each, 200 characters a name.
+    // Present exactly when the push's diff ran (possibly empty).
     adds: v.optional(v.array(v.string())),
     drops: v.optional(v.array(v.string())),
+    // When the push's diff read prod: a clean deploy that kept a name proves it committed only for pushes made before
+    // this (deploys.adderOf).
+    changes_read_at: v.optional(v.number()),
     // The `cast ship checkout` pass that sent it (DP11).
     ship_pass_id: v.optional(v.id("ship_passes")),
     // The line-deploy run that carries it through its steps (DP8): each
@@ -4329,6 +4333,45 @@ export default defineSchema({
     .index("by_repository_created", ["repository", "created_at"])
     .index("by_workspace_target_created", ["workspace", "target", "created_at"])
     .index("by_workflow_run", ["workflow_run"]),
+
+  // A dev watcher's push (scripts/gated-push.ts) of someone's working tree to a
+  // target, which is not a deploy: nobody asked for it, it carries no fix and
+  // ends no deploy's window, so it never enters `deploys`. One row per pusher,
+  // machine, repository and sha between deploys of the target: a save lands on
+  // its pusher's row from that machine that began after the target's live
+  // deploy went live, and is a row of its own otherwise
+  // (deploys.recordDevPush). Read for who added a name (deploys.adderOf), for
+  // the notice that a push dropped someone's work, and for the uncommitted
+  // work a target runs on top of its live deploy (deployTargetsState).
+  dev_pushes: defineTable({
+    // Access: the key the deploy of the same push would carry (`team:<id>`).
+    workspace: v.string(),
+    // Routing: the team whose deploys these are.
+    team_id: v.optional(v.id("teams")),
+    repository: v.optional(v.string()),
+    target: v.string(),
+    sha: v.string(),
+    // The hostname of the machine that pushed.
+    machine: v.optional(v.string()),
+    started_by: v.optional(v.object({
+      kind: v.union(v.literal("person"), v.literal("role"), v.literal("line"), v.literal("source"), v.literal("cli")),
+      name: v.string(),
+      user_id: v.optional(v.id("users")),
+      role_id: v.optional(v.id("org_roles")),
+    })),
+    // Uncommitted files under the target's sources at the last save.
+    dirty: v.number(),
+    // The net change of the row's saves against what the target ran before the row began, by name (as deploys.adds):
+    // a save's add of a name the row dropped takes it off drops, and its drop of a name the row added takes it off adds.
+    adds: v.array(v.string()),
+    drops: v.array(v.string()),
+    created_at: v.number(),
+    // The last save.
+    live_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_workspace_target_live", ["workspace", "target", "live_at"])
+    .index("by_workspace_target_machine_sha", ["workspace", "target", "machine", "sha", "created_at"]),
 
   // Read-through cache of repository content fetched with the GitHub App
   // token for the source browser and history pages: branch lists, trees,

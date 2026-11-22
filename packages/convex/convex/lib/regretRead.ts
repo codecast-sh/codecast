@@ -68,8 +68,7 @@ type LiveDeploy = { cut_at: number | null; live_at: number };
 
 async function liveDeploys(ctx: any, workspace: string, from: number): Promise<LiveDeploy[]> {
   const rows: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspace).gte("created_at", from)).collect();
-  // A watcher's push is a working tree, never the deploy that took a change on main live.
-  return rows.filter((d) => d.status === "live" && d.pushed_via !== "dev watcher" && d.live_at).map((d) => ({ cut_at: d.cut_at ?? null, live_at: d.live_at! }));
+  return rows.filter((d) => d.status === "live" && d.live_at).map((d) => ({ cut_at: d.cut_at ?? null, live_at: d.live_at! }));
 }
 
 /** The first live deploy holding a change on main: placed deploys by their cut, unplaced ones by time (deploys.md DP3). */

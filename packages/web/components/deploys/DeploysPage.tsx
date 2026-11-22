@@ -23,7 +23,7 @@ import { DEPLOY_LABELS, FOCUS_PARAMS, commitMatches, deployMatches, focusRef, fo
 import { useDeployReach } from "../../hooks/useDeployReach";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { changeGroups, hasChangeNames, originWords, shownNames, type ChangeGroup } from "./deployRecord";
+import { changeGroups, devPushWords, hasChangeNames, originWords, shownNames, type ChangeGroup } from "./deployRecord";
 import type { CommitCiState, QueueGroup } from "@codecast/shared/contracts/deployTargets";
 import { entityRoute } from "@codecast/shared/entities";
 import { ShareControl } from "../ShareControl";
@@ -240,6 +240,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
           {n.live ? (
             <span className="dpp-v"><code>{short(n.live.sha)}</code>{n.live.version && !(n.live.sha ?? "").startsWith(n.live.version.slice(0, 7)) ? <span className="dpp-ver">{n.live.version}</span> : null}<span className="dpp-dp">{n.live.short_id}</span><span className="dpp-age">{ago(now, n.live.live_at ?? n.live.created_at)}</span></span>
           ) : <span className="dpp-v dpp-dim">no live version known</span>}
+          {t.dev_push ? <span className="dpp-devpush" data-deploy-dev-push={t.name}>{devPushWords(t.dev_push, now)}</span> : null}
         </div>
         <div className="dpp-actions">
           {t.record_only ? null : t.runs === "push"

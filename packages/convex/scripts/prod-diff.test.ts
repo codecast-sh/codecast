@@ -205,7 +205,7 @@ describe("drops name the push that put them there", () => {
 
   test("an uncommitted push, a watcher push, a commit, and nobody", () => {
     expect(describeAdder(adder)).toStartWith("dp-2372, uncommitted push (78 files) by Ashot on MBP-182, ");
-    expect(describeAdder({ ...adder, via: "dev watcher", dirty: 2 })).toStartWith("dp-2372, dev watcher by Ashot on MBP-182");
+    expect(describeAdder({ ...adder, deploy: null, dev_push: true, via: "dev watcher", dirty: 2 })).toStartWith("dev watcher push by Ashot on MBP-182, ");
     expect(describeAdder({ ...adder, dirty: 0, machine: null })).toStartWith("dp-2372, push of a commit by Ashot, ");
     expect(describeAdder(undefined)).toBe("no recorded push added it");
     expect(describeAdder({ ...adder, via: "dev watcher", committed_in: "dp-2380" })).toEndWith("; committed since (dp-2380 carried it)");

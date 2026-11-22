@@ -141,6 +141,8 @@ const PAGE_ROUTES: Record<string, string> = {
   '/decisions': '/decisions',
   '/questions': '/decisions',
   '/calls': '/calls',
+  // The team's deploy targets, each with its live deploy and any dev push on top (a dev push's notice links here).
+  '/deploys': '/deploys',
   '/plans': '/(tabs)/tasks?segment=plans',
   '/docs': '/(tabs)/tasks?segment=docs',
   '/triggers': '/(tabs)/tasks?segment=routines',

@@ -2,6 +2,8 @@
 // screen, so imports stay relative. A list row (the targets feed) carries the origin and the counts
 // (DeployPushSummary); the names come only with the deploy itself (deploys.get, a DeployView).
 import type { DeployPushSummary, DeployView } from "@codecast/shared/contracts/deploys";
+import type { TargetDevPush } from "@codecast/shared/contracts/deployTargets";
+import { agoOf } from "../../lib/threadState";
 
 type Row = Partial<DeployPushSummary>;
 type View = Pick<DeployView, "machine" | "pushed_via" | "dirty" | "adds" | "drops">;
@@ -15,7 +17,7 @@ export function hasChangeNames(row: object | null | undefined): boolean {
   return !!(r.adds_count || r.drops_count || r.adds?.length || r.drops?.length);
 }
 
-/** Where a push came from: `dev watcher · ana-mac · 3 uncommitted files`, or null when nothing was recorded. */
+/** Where a push came from: `deploy.sh · ana-mac · 3 uncommitted files`, or null when nothing was recorded. */
 export function originWords(row: object | null | undefined, view?: object | null): string | null {
   const at = <K extends keyof View>(k: K) => ((row ?? {}) as Partial<View>)[k] ?? ((view ?? {}) as Partial<View>)[k];
   const n = at("dirty");
@@ -44,4 +46,19 @@ export function changeGroups(row: object | null | undefined, view?: object | nul
 export function shownNames(names: string[], all: boolean): { shown: string[]; more: number } {
   if (all || names.length <= NAMES_SHOWN) return { shown: names, more: 0 };
   return { shown: names.slice(0, NAMES_SHOWN), more: names.length - NAMES_SHOWN };
+}
+
+/** A target's dev push in one line: `uncommitted push · ana-mac · Ana · 3m ago · 2 files`, with what it added and
+ *  dropped when it did. A push of a clean tree names its sha instead (`dev push of 1a2b3c4`). */
+export function devPushWords(p: TargetDevPush, now: number): string {
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  return [
+    p.dirty > 0 ? "uncommitted push" : `dev push of ${p.sha.slice(0, 7)}`,
+    p.machine,
+    p.by,
+    agoOf(now - p.at),
+    p.dirty > 0 ? n(p.dirty, "file", "files") : null,
+    p.adds_count ? `added ${p.adds_count}` : null,
+    p.drops_count ? `dropped ${p.drops_count}` : null,
+  ].filter((x): x is string => !!x).join(" · ");
 }

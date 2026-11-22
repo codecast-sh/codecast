@@ -329,6 +329,9 @@ describe('mobileNotificationRoute', () => {
     expect(mobileNotificationRoute({ entity_type: 'metric_watch', entity_id: 'mw-4' })).toBe('/metric/mw-4');
     expect(mobileNotificationRoute({ entity_type: 'deploy', entity_id: 'dp-2374' })).toBe('/deploy/dp-2374');
     expect(mobileNotificationRoute({ link: '/deploys?deploy=dp-2374', entity_type: 'deploy', entity_id: 'dp-2374' })).toBe('/deploy/dp-2374');
+    // A dev push dropped the work: no deploy to open, so the targets screen.
+    expect(mobileNotificationRoute({ link: '/deploys' })).toBe('/deploys');
+    expect(mobileRouteForUrl('https://codecast.sh/deploys')).toBe('/deploys');
     expect(mobileNotificationRoute({ entity_type: 'weekly_card', entity_id: '2026-W47' })).toBe('/week?w=2026-W47');
     expect(mobileNotificationRoute({ entity_type: 'passkey', entity_id: 'pk' })).toBe('/passkeys');
     expect(mobileNotificationRoute({ entity_type: 'team', entity_id: 't' })).toBe('/settings/team');

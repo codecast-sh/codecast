@@ -144,37 +144,50 @@ export function summarizeAfter(from: number, to: number, open: boolean, problems
   return { from, to, open, problems, errors, regressions, reopened, new_errors: newErrors, quiet: regressions === 0 && errors.length === 0 };
 }
 
-/** Which path pushed a deploy: deploy.sh, or the dev watcher pushing a working tree. */
-export type DeployPushedVia = "deploy.sh" | "dev watcher";
+/** Which path pushed a deploy. The dev watcher's pushes are not deploys (dev pushes, TargetDevPush). */
+export type DeployPushedVia = "deploy.sh";
 
 /** What "the live deploy" reads of a deploy row. */
 export type LiveCandidate = {
   target: string;
   status: string;
   repository?: string | null;
-  pushed_via?: DeployPushedVia | null;
   live_at?: number | null;
   created_at: number;
   _creationTime?: number;
 };
 
 /**
- * The live deploys among `rows`, the one that went live last first (a tie goes to the row written later): a watcher's
- * row goes live again on every save, so creation order is not what runs. `target` and `repository` narrow them (a row
- * naming no repository matches any). `real` leaves out the dev watcher's pushes: prod runs one, but it is nobody's
- * deploy, so queue math, rollback, "already live" and a deploy's after window read real deploys only.
+ * The live deploys among `rows`, the one that went live last first (a tie goes to the row written later): a redeploy
+ * or a re-sent status can go live after a deploy created later, so creation order is not what runs. `target` and
+ * `repository` narrow them (a row naming no repository matches any).
  */
-export function liveDeploys<T extends LiveCandidate>(rows: ReadonlyArray<T>, opts: { target?: string; repository?: string | null; real?: boolean } = {}): T[] {
+export function liveDeploys<T extends LiveCandidate>(rows: ReadonlyArray<T>, opts: { target?: string; repository?: string | null } = {}): T[] {
   return rows
     .filter((d) => d.status === "live" && (!opts.target || d.target === opts.target)
-      && (!d.repository || !opts.repository || d.repository === opts.repository)
-      && (!opts.real || d.pushed_via !== "dev watcher"))
+      && (!d.repository || !opts.repository || d.repository === opts.repository))
     .sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at) || (b._creationTime ?? 0) - (a._creationTime ?? 0));
 }
 
 /** The live deploy among `rows` that went live last (liveDeploys). */
-export const liveDeployOf = <T extends LiveCandidate>(rows: ReadonlyArray<T>, opts: { target?: string; repository?: string | null; real?: boolean } = {}): T | undefined =>
+export const liveDeployOf = <T extends LiveCandidate>(rows: ReadonlyArray<T>, opts: { target?: string; repository?: string | null } = {}): T | undefined =>
   liveDeploys(rows, opts)[0];
+
+/**
+ * Who put a name on a target (changesDeploy.addedBy): the deploy (`deploy`, dp-N) or dev push (`dev_push`, `deploy`
+ * null) active last whose adds hold it. `committed_in` names the clean deploy whose diff, read after that push, kept it.
+ */
+export type AddedBy = {
+  name: string;
+  deploy: string | null;
+  dev_push: boolean;
+  by: string | null;
+  machine: string | null;
+  via: DeployPushedVia | "dev watcher" | null;
+  at: number;
+  dirty: number;
+  committed_in?: string;
+};
 
 /** What a list row says of a push (the targets view's history): how many names it added and dropped, never the names. */
 export type DeployPushSummary = {

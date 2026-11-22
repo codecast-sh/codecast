@@ -9,6 +9,7 @@ import { ciOf } from "./deployTargetsCi";
 import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
 import { liveDeployOf, type DeployPushSummary } from "@codecast/shared/contracts/deploys";
+import type { TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 
 const DAY = 86_400_000;
 /** Commits on main read for one target's queue. */
@@ -197,47 +198,54 @@ export async function deployLine(ctx: any, d: Doc<"deploys">, caches: { conv: Ma
   };
 }
 
-/** A query filter that leaves out the dev watcher's pushes: a read of real deploys applies it before it counts. */
-export const notWatcher = (q: any) => q.neq(q.field("pushed_via"), "dev watcher");
+export async function targetDeploys(ctx: any, workspace: string, target: string, take = 60): Promise<Doc<"deploys">[]> {
+  return await ctx.db
+    .query("deploys")
+    .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", workspace).eq("target", target))
+    .order("desc")
+    .take(take);
+}
 
-/** The newest rows of any kind a read of real deploys adds for what prod runs now and a history: the watcher's among them. */
-export const RECENT_PUSHES = 20;
+/** A target's dev pushes, the one saved last first; `after` keeps those saved since then. */
+export async function targetDevPushes(ctx: any, workspace: string, target: string, take: number, after?: number): Promise<Doc<"dev_pushes">[]> {
+  return await ctx.db
+    .query("dev_pushes")
+    .withIndex("by_workspace_target_live", (q: any) => {
+      const range = q.eq("workspace", workspace).eq("target", target);
+      return after == null ? range : range.gt("live_at", after);
+    })
+    .order("desc")
+    .take(take);
+}
 
-/** Newest-first reads of deploys as one: each row once, the row created last first. */
-export function newestFirst(...reads: ReadonlyArray<ReadonlyArray<Doc<"deploys">>>): Doc<"deploys">[] {
-  const byId = new Map<string, Doc<"deploys">>();
-  for (const read of reads) for (const d of read) byId.set(String(d._id), d);
-  return [...byId.values()].sort((a, b) => b.created_at - a.created_at || b._creationTime - a._creationTime);
+/** Whether a dev push of the repository saved after a deploy went live: prod runs someone's working tree on top of it. */
+export async function devPushedOver(ctx: any, d: Doc<"deploys">): Promise<boolean> {
+  const rows = await targetDevPushes(ctx, d.workspace, d.target, 5, d.live_at ?? d.created_at);
+  return rows.some((p) => !p.repository || !d.repository || p.repository === d.repository);
 }
 
 /**
- * A target's newest `take` real deploys: the dev watcher's pushes are left out before the read counts, so however many
- * of them pile up, the real live deploy stays in reach. `pushes` adds the target's newest that many rows of any kind.
+ * Uncommitted work prod runs on top of a target's live deploy: the dev push saved last after the deploy went live, or
+ * null when there is none (a deploy since put the committed tree back).
  */
-export async function targetDeploys(ctx: any, workspace: string, target: string, take = 60, opts: { pushes?: number } = {}): Promise<Doc<"deploys">[]> {
-  const read = () => ctx.db
-    .query("deploys")
-    .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", workspace).eq("target", target))
-    .order("desc");
-  const real: Doc<"deploys">[] = await read().filter(notWatcher).take(take);
-  return opts.pushes ? newestFirst(real, await read().take(opts.pushes)) : real;
+export async function devPushOver(ctx: any, t: Pick<Doc<"deploy_targets">, "workspace" | "name" | "repository">, live: Doc<"deploys"> | null): Promise<TargetDevPush | null> {
+  const rows = await targetDevPushes(ctx, t.workspace, t.name, 10, live ? live.live_at ?? live.created_at : undefined);
+  const p = rows.find((x) => !x.repository || x.repository === t.repository);
+  if (!p) return null;
+  return { sha: p.sha, machine: p.machine ?? null, by: p.started_by?.name ?? null, at: p.live_at, dirty: p.dirty, adds_count: p.adds.length, drops_count: p.drops.length };
 }
 
 /** One target's state: live, going out, recent history, and what waits on main. */
 export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
-  const deploys = await targetDeploys(ctx, t.workspace, t.name, 60, { pushes: RECENT_PUSHES });
+  const deploys = await targetDeploys(ctx, t.workspace, t.name);
   const deploysHere = deploys.filter((d) => !d.repository || d.repository === t.repository);
-  // The queue, rollback and "already live" go on from the last real deploy; a watcher's push is nobody's deploy, so
-  // what prod runs when that is one is `running`, beside it.
-  const live = liveDeployOf(deploysHere, { real: true }) ?? null;
-  const runningRow = liveDeployOf(deploysHere) ?? null;
-  const running = runningRow && runningRow !== live ? runningRow : null;
+  const live = liveDeployOf(deploysHere) ?? null;
   const open = deploysHere.find((d) => d.status === "requested" || d.status === "running") ?? null;
   const convCache = new Map<string, any>();
   const taskCache = new Map<string, any>();
   const caches = { conv: convCache, task: taskCache };
   const history = deploysHere.slice(0, HISTORY);
-  const aftermath = await afterFor(ctx, t.workspace, [...history, ...[live, running].filter((d): d is Doc<"deploys"> => !!d && !history.includes(d))], Date.now());
+  const aftermath = await afterFor(ctx, t.workspace, live && !history.includes(live) ? [...history, live] : history, Date.now());
   const countsOf = (d: Doc<"deploys">): DeployAfterCounts | null => {
     const a = aftermath.get(String(d._id));
     return a ? { new_errors: a.new_errors, regressions: a.regressions, reopened: a.reopened, quiet: a.quiet, open: a.open } : null;
@@ -265,7 +273,7 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
     device_id: t.device_id ?? null,
     publisher_user_id: String(t.publisher_user_id),
     live: live ? await deployLine(ctx, live, caches, countsOf(live)) : null,
-    running: running ? await deployLine(ctx, running, caches, countsOf(running)) : null,
+    dev_push: await devPushOver(ctx, t, live),
     open: open ? { ...(await deployLine(ctx, open, caches)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,
     history: await Promise.all(history.map((d) => deployLine(ctx, d, caches, countsOf(d)))),
     last_read: t.last_read ?? null,
