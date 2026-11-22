@@ -526,10 +526,14 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
   if (failed) return failed;
   try {
     const { refreezeSessionChange, inboxRosterVia } = await import("./flowChange.js");
-    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call) });
+    // Files a writer's shell made after its brief (a lockfile, codegen output) are its fix too.
+    const since = Math.min(...waits.map((w) => w.sentAt));
+    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call), since });
     Object.assign(context, frozenChangeContext(context["run_dir"]));
-    const said = `briefed ${names}; ${moved
-      ? `froze the checkout's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
+    // Nothing is left to check or land: the run ends done here (runNodeLoop).
+    if (change.landed) context["change_landed"] = change.landed;
+    const said = `briefed ${names}; ${change.landed ? `the checkout's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
+      : moved ? `froze the checkout's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
       : "the checkout's change is as it was: the stage runs again on the same change"}`;
     console.log(`  ${c.green}✓${c.reset} ${said}`);
     recordNodeOutput(context, node.id, said);
@@ -968,6 +972,9 @@ async function waitOnStation(
   context["station_dead"] = node.id;
   return "failure";
 }
+
+// The most of a fanin's findings one brief carries: each failed branch's words are already an excerpt.
+const FANIN_STOP_CHARS = 12_000;
 
 // Agent statuses of a hand inside a turn: whatever its row's work_state says, it is at work (a subject has not
 // answered yet, and no hand is quiet).
@@ -2370,11 +2377,15 @@ async function runNodeLoop(
     }
     // At a fanin, everything its branches found is one stop: the failed branches' words and a review that asked
     // for changes, so the station it routes to (the subject's fix) gets one brief with all of it.
+    // A round that found nothing leaves no stop: the last round's would otherwise brief the next station again.
     if (current.type === "parallel_fanin") {
-      const findings = [state.context[`${current.id}.findings`], state.context["review_verdict"] === "changes" ? `## Review asked for changes\n\n${state.context["review_note"] || "(no note)"}` : ""].filter(Boolean);
+      const findings = [state.context[`${current.id}.findings`], state.context["review_verdict"] === "changes" ? `## Review asked for changes\n\n${failureExcerpt(state.context["review_note"] || "(no note)")}` : ""].filter(Boolean);
       if (findings.length) {
-        state.context["stop_reason"] = findings.join("\n\n");
+        state.context["stop_reason"] = findings.join("\n\n").slice(0, FANIN_STOP_CHARS);
         state.context["stop_stage"] = current.label;
+      } else {
+        delete state.context["stop_reason"];
+        delete state.context["stop_stage"];
       }
     }
     if (options.planId && current.type !== "start" && !options.dryRun) {
@@ -2445,8 +2456,9 @@ async function runNodeLoop(
     // its timeout and was killed) has nothing for the next node to read: only
     // an edge that asks about the outcome routes it, never a plain one.
     const stationDead = outcome === "failure" && state.context["station_dead"] === current.id;
-    // A fanin whose fanout failed routes only on an edge that asks (an outcome, a verdict, a branch's json): a plain
-    // edge would carry a failed branch on as if it passed.
+    // A fanin whose fanout failed routes the same way: an edge on a verdict or a branch's json never asks about the
+    // failure, and would carry a red branch on as if it passed (a loop's "again != true" went on, a "verdict = pass"
+    // shipped with CI red). With no such edge it takes its retry_target, or its fanout's, or the run stops (below).
     const faninFailed = current.type === "parallel_fanin" && outcome === "failure";
     delete state.context["station_dead"];
     // A subject's change found already on upstream when frozen again has nothing left to check or land: the run goes
@@ -2456,12 +2468,10 @@ async function runNodeLoop(
     if (landedExit) console.log(`  ${c.green}✓${c.reset} the change is already on upstream at ${state.context["change_landed"].slice(0, 10)}: the run ends done`);
     const next = landedExit ? landedExit : stationBlocked
       ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\bhandoff\b/.test(e.condition ?? "")) }, current, state.context)
-      : stationDead
+      : stationDead || faninFailed
         ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\boutcome\b/.test(e.condition ?? "")) }, current, state.context)
       : unanswered
         ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || (!e.label && !!e.condition)) }, current, state.context)
-      : faninFailed
-        ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || !!e.condition) }, current, state.context)
       : current.type === "parallel_fanout"
         // A fanout's own edges are its branches, which all ran: a failed one
         // follows none of them (that reran the first branch alone and went on

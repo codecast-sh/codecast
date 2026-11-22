@@ -19,8 +19,10 @@ beforeAll(() => { savedDir = process.env.CODECAST_DIR; configDir = tmp("checkout
 afterAll(() => { if (savedDir === undefined) delete process.env.CODECAST_DIR; else process.env.CODECAST_DIR = savedDir; });
 
 const MIN = 60_000;
-const refused = (root: string, conflicts: string[], to = "a".repeat(40)): { root: string; gitDir: string; result: LevelResult } => ({
-  root, gitDir: `${root}/.git`, result: { ok: false, from: "f".repeat(40), to, written: [], deleted: [], absorbed: [], merged: [], kept: [], conflicts, reason: `${conflicts.length} file(s) changed here and in ${to.slice(0, 9)} without a clean merge` },
+// A pass that must not brief anyone: a call is a failed send, never a told writer.
+const neverSend = async (): Promise<"failed"> => { throw new Error("no brief was expected"); };
+const refused = (root: string, conflicts: string[], to = "a".repeat(40), from = "f".repeat(40)): { root: string; gitDir: string; result: LevelResult } => ({
+  root, gitDir: `${root}/.git`, result: { ok: false, from, to, written: [], deleted: [], absorbed: [], merged: [], kept: [], conflicts, reason: `${conflicts.length} file(s) changed here and in ${to.slice(0, 9)} without a clean merge` },
 });
 const levelled = (root: string): { root: string; gitDir: string; result: LevelResult } => ({ root, gitDir: `${root}/.git`, result: { ...refused(root, []).result, ok: true, reason: undefined } });
 const session = (id: string, over: Partial<SessionEdits> = {}): SessionEdits => ({ sessionId: id, conversationId: `conv_${id}`, client: "claude", transcript: `/t/${id}.jsonl`, edits: new Map(), lastText: null, lastActivity: 0, status: null, ...over });
@@ -68,6 +70,8 @@ describe("a stuck level tells each writer about its own files, once", () => {
   const files = Array.from({ length: 123 }, (_, i) => `pkg/f${String(i).padStart(3, "0")}.ts`);
   const level = (told: CheckoutTold[] = []): Extract<CheckoutLevel, { state: "stuck" }> => ({ state: "stuck", files, reason: "123 file(s) changed here and in abc123456 without a clean merge", since: Date.UTC(2026, 10, 22, 4, 27), told });
   const report = { path: "/work/app", upstream: "origin/main", behind: 828, repository: "acme/app", device_id: "dev-1" } as any;
+  // No checkout on disk: each merge file comes back as an instruction, never a throw.
+  const held = { gitDir: tmp("level-gitdir-"), from: "f".repeat(40), to: "a".repeat(40) };
   // A wrote 100 of the files, B 20, and 3 have no session.
   const a = session("a");
   const b = session("b");
@@ -79,66 +83,61 @@ describe("a stuck level tells each writer about its own files, once", () => {
     expect(g.nobody).toEqual(files.slice(120));
   });
 
-  test("each writer hears only of its files, briefly, with ways out over a list of exactly them; the rest go to one finding", async () => {
+  test("each writer hears only of its files, briefly, as a machine wake with a list of exactly them; the rest go to one finding", async () => {
     const dir = tmp("level-asks-");
-    const sent: Array<[string, any]> = [];
-    const post = async (p: string, x: any) => { sent.push([p, structuredClone(x)]); return {}; };
-    const told = await tellWriters(post, report, level(), { owners }, { host: "laptop", now: 7, dir });
-    expect(told).toEqual([{ at: 7, files: 100, to: "session", conversation_id: "conv_a" }, { at: 7, files: 20, to: "session", conversation_id: "conv_b" }, { at: 7, files: 3, to: "finding" }]);
-    expect(sent.map(([p, x]) => [p, x.to ?? null])).toEqual([["/cli/messages/send", "conv_a"], ["/cli/messages/send", "conv_b"], ["/cli/signal/add", null]]);
-    const toA: string = sent[0][1].body;
-    expect(toA.split("\n")[0]).toBe("app on laptop: 100 of your files conflict with origin/main");
+    const posts: Array<[string, any]> = [];
+    const sends: Array<{ to: string; body: string; clientId: string }> = [];
+    const deps = { post: async (p: string, x: any) => { posts.push([p, structuredClone(x)]); return {}; }, sendBrief: async (to: string, body: string, clientId: string) => { sends.push({ to, body, clientId }); return "sent" as const; } };
+    const out = await tellWriters(deps, report, level(), { owners }, held, { host: "laptop", now: 7, dir });
+    expect(out).toEqual({ told: [{ at: 7, files: 100, to: "session", conversation_id: "conv_a" }, { at: 7, files: 20, to: "session", conversation_id: "conv_b" }, { at: 7, files: 3, to: "finding" }], unreachable: [], notes: [] });
+    expect(sends.map((s) => s.to)).toEqual(["conv_a", "conv_b"]);
+    // Never a person's message: the sessions are reached through the machine wake alone.
+    expect(posts.map(([p]) => p)).toEqual(["/cli/signal/add"]);
+    const toA = sends[0].body;
+    expect(toA.split("\n").slice(0, 2)).toEqual(['<session-message from="codecast" name="level sweep">', "app on laptop: 100 of your files conflict with origin/main"]);
     expect(toA).toContain("+92 more");
     expect(toA).toContain("The other 23 conflicting files belong to other sessions, which are told separately: leave them alone.");
+    expect(toA).toContain("Never run git pull, merge, rebase, stash, checkout, restore, reset or commit in this shared checkout");
+    // One way out: no set-aside patch, no checkout of the files.
+    expect(toA).not.toContain("pathspec-from-file");
+    expect(toA).not.toContain(".patch");
     // Short: eight paths inline, never one of B's or the unwritten ones, never the whole list.
-    expect(toA.length).toBeLessThan(2_000);
+    expect(toA.length).toBeLessThan(3_000);
     expect(files.filter((f) => toA.includes(f))).toEqual(files.slice(0, 8));
     const list = toA.match(/The full list: (\S+)/)![1];
     expect(fs.readFileSync(list, "utf-8").trim().split("\n")).toEqual(files.slice(0, 100));
-    expect(toA).toContain(`checkout --pathspec-from-file=${list}`);
-    expect(sent[1][1].body).toContain("20 of your files");
-    expect(sent[2][1]).toMatchObject({ source: "level", project_path: "/work/app", title: "app on laptop: 3 files no session wrote conflict with origin/main" });
+    expect(sends[1].body).toContain("20 of your files");
+    expect(posts[0][1]).toMatchObject({ source: "level", project_path: "/work/app", title: "app on laptop: 3 files no session wrote conflict with origin/main" });
   });
 
-  test("once per episode per writer: a writer already told, by this daemon or an earlier one, hears nothing again", async () => {
+  test("once per episode per writer: a writer already told, by this daemon or an earlier one, or out of reach, hears nothing again", async () => {
     const dir = tmp("level-asks-");
     const sent: string[] = [];
-    const post = async (_p: string, x: any) => { sent.push(x.to ?? "finding"); return {}; };
-    expect(await tellWriters(post, report, level([{ at: 1, files: 100, to: "session", conversation_id: "conv_a" }]), { owners }, { dir })).toHaveLength(2);
+    const deps = { post: async () => { sent.push("finding"); return {}; }, sendBrief: async (to: string) => { sent.push(to); return "sent" as const; } };
+    expect((await tellWriters(deps, report, level([{ at: 1, files: 100, to: "session", conversation_id: "conv_a" }]), { owners }, held, { dir })).told).toHaveLength(2);
     expect(sent).toEqual(["conv_b", "finding"]);
     sent.length = 0;
     const all: CheckoutTold[] = [{ at: 1, files: 100, to: "session", conversation_id: "conv_a" }, { at: 1, files: 20, to: "session", conversation_id: "conv_b" }, { at: 1, files: 3, to: "finding" }];
-    expect(await tellWriters(post, report, level(all), { owners }, { dir })).toEqual([]);
+    expect((await tellWriters(deps, report, level(all), { owners }, held, { dir })).told).toEqual([]);
+    expect(sent).toEqual([]);
+    // A writer the server refused for good is skipped for the rest of the episode.
+    expect((await tellWriters(deps, report, level(all.slice(1)), { owners }, held, { dir, unreachable: ["conv_a"] })).told).toEqual([]);
     expect(sent).toEqual([]);
     // An earlier daemon's single ask (`filed`) counts as that writer told.
     const legacy = nextLevel({ stuck: { key: [...files].sort().join("\n"), files, reason: "r", since: 1, filed: { at: 1, to: "session", conversation_id: "conv_a" } } as any }, refused("/r", files), 2);
     expect(legacy.level).toMatchObject({ state: "stuck", since: 1, told: [{ to: "session", conversation_id: "conv_a", files: 0 }] });
   });
 
-  test("the set-aside command in the ask sets aside exactly that writer's files, and leaves the others' edits", async () => {
-    const origin = tmp("level-origin-");
-    spawnSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: origin });
-    const root = fs.realpathSync(tmp("level-repo-"));
-    const git = (...args: string[]) => spawnSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", ...args], { cwd: root, encoding: "utf-8" });
-    git("init", "-q", "-b", "main");
-    // Brackets as in a route file: a pathspec would read them as a glob.
-    const names = ["mine/[id].tsx", "mine/b.ts", "theirs/c.ts"];
-    for (const f of names) { fs.mkdirSync(path.join(root, path.dirname(f)), { recursive: true }); fs.writeFileSync(path.join(root, f), "base\n"); }
-    git("add", ".");
-    git("commit", "-q", "-m", "base");
-    for (const f of names) fs.writeFileSync(path.join(root, f), "edited\n");
-    const sent: any[] = [];
-    const mineOwners = new Map<string, SessionEdits>([["mine/[id].tsx", a], ["mine/b.ts", a], ["theirs/c.ts", b]]);
-    const stuck: Extract<CheckoutLevel, { state: "stuck" }> = { state: "stuck", files: names, reason: "r", since: 0, told: [] };
-    await tellWriters(async (_p, x) => { sent.push(x); return {}; }, { ...report, path: root, upstream: "HEAD" }, stuck, { owners: mineOwners }, { dir: tmp("level-asks-") });
-    const aside = sent[0].body.match(/2\. Set them aside as a patch, then restore main's: `([^`]+)`/)![1];
-    expect(spawnSync("sh", ["-c", aside], { encoding: "utf-8" }).status).toBe(0);
-    expect(fs.readFileSync(path.join(root, "mine/[id].tsx"), "utf-8")).toBe("base\n");
-    expect(fs.readFileSync(path.join(root, "mine/b.ts"), "utf-8")).toBe("base\n");
-    expect(fs.readFileSync(path.join(root, "theirs/c.ts"), "utf-8")).toBe("edited\n");
-    const patch = fs.readFileSync(sent[0].body.match(/> (\S+\.patch)/)![1], "utf-8");
-    expect(patch).toContain("mine/[id].tsx");
-    expect(patch).not.toContain("theirs/c.ts");
+  test("a refused send is not told; a teammate's session comes back unreachable; a finding that failed to file is filed again", async () => {
+    const dir = tmp("level-asks-");
+    const deps = {
+      post: async () => { throw new Error("offline"); },
+      sendBrief: async (to: string) => (to === "conv_a" ? "failed" as const : "unreachable" as const),
+    };
+    const out = await tellWriters(deps, report, level(), { owners }, held, { dir });
+    expect(out.told).toEqual([]);
+    expect(out.unreachable).toEqual(["conv_b"]);
+    expect(out.notes).toEqual(["could not reach conv_a; asking again next pass", "could not file the finding (offline); filing again next pass"]);
   });
 });
 
@@ -165,12 +164,13 @@ describe("reporting a machine's checkouts", () => {
 
   test("a checkout is sent when it changes, not every pass; the stuck ask goes once past 30 minutes; a removed checkout is gone", async () => {
     const root = repo();
+    const head = sh(root, "rev-parse", "HEAD");
     fs.writeFileSync(path.join(root, "a.ts"), "edited\n");
     const posts: Array<[string, any]> = [];
     const post = async (p: string, b: any) => { posts.push([p, structuredClone(b)]); return {}; };
-    const deps = { post, deviceId: "dev-1", repositoryOf: () => "Acme/App", stateFile: path.join(configDir, "state-1.json"), host: "laptop", askDir: configDir };
+    const deps = { post, sendBrief: neverSend, deviceId: "dev-1", repositoryOf: () => "Acme/App", stateFile: path.join(configDir, "state-1.json"), host: "laptop", askDir: configDir };
     const t0 = 1_000_000;
-    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: t0 });
+    await reportCheckouts([refused(root, ["a.ts"], undefined, head)], { ...deps, now: t0 });
     const first = posts.filter(([p]) => p === "/cli/checkouts/report");
     expect(first).toHaveLength(1);
     const sentReport = first[0][1].reports[0];
@@ -178,19 +178,102 @@ describe("reporting a machine's checkouts", () => {
     expect(sentReport.uncommitted).toEqual({ total: 1, sessions: [], unattributed: ["a.ts"], unattributed_more: 0 });
 
     // The same state a minute later: nothing sent, nothing filed.
-    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: t0 + MIN });
+    await reportCheckouts([refused(root, ["a.ts"], undefined, head)], { ...deps, now: t0 + MIN });
     expect(posts).toHaveLength(1);
 
     // Past 30 minutes on the same file: one ask (no writer session here: a finding), and the report says it went.
-    await reportCheckouts([refused(root, ["a.ts"], "b".repeat(40))], { ...deps, now: t0 + LEVEL_STUCK_FILE_MS + MIN });
+    await reportCheckouts([refused(root, ["a.ts"], "b".repeat(40), head)], { ...deps, now: t0 + LEVEL_STUCK_FILE_MS + MIN });
     expect(posts.map(([p]) => p)).toEqual(["/cli/checkouts/report", "/cli/signal/add", "/cli/checkouts/report"]);
     expect(posts[2][1].reports[0].level).toMatchObject({ since: t0, told: [{ at: t0 + LEVEL_STUCK_FILE_MS + MIN, files: 1, to: "finding" }] });
-    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: t0 + 2 * LEVEL_STUCK_FILE_MS });
+    await reportCheckouts([refused(root, ["a.ts"], undefined, head)], { ...deps, now: t0 + 2 * LEVEL_STUCK_FILE_MS });
     expect(posts.filter(([p]) => p === "/cli/signal/add")).toHaveLength(1);
 
     fs.rmSync(root, { recursive: true, force: true });
     await reportCheckouts([], { ...deps, now: t0 + 3 * LEVEL_STUCK_FILE_MS });
     expect(posts[posts.length - 1]).toEqual(["/cli/checkouts/report", { device_id: "dev-1", reports: [], gone: [root] }]);
+  });
+
+  test("a stuck level whose HEAD moved off the level's base (a raced level, a local commit) asks nobody", async () => {
+    const root = repo();
+    fs.writeFileSync(path.join(root, "a.ts"), "edited\n");
+    const posts: string[] = [];
+    const deps = { post: async (p: string) => { posts.push(p); return {}; }, sendBrief: neverSend, deviceId: "dev-5", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-5.json"), askDir: configDir };
+    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: 1 });
+    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: 2 + LEVEL_STUCK_FILE_MS });
+    expect(posts.filter((p) => p !== "/cli/checkouts/report")).toEqual([]);
+  });
+
+  test("past the grace, each writer gets one machine-wake brief about its own files with their merge files, the rest one finding; a failed send is asked again with the same client id", async () => {
+    const root = repo();
+    for (const f of ["b.ts", "c.ts"]) fs.writeFileSync(path.join(root, f), "one\n");
+    sh(root, "add", ".");
+    sh(root, "commit", "-q", "-m", "b and c");
+    sh(root, "push", "-q", "origin", "main");
+    const head = sh(root, "rev-parse", "HEAD");
+    // Upstream rewrites the line each file's writer is editing here.
+    const other = fs.realpathSync(tmp("checkout-other-"));
+    sh(other, "clone", "-q", sh(root, "remote", "get-url", "origin"), ".");
+    for (const f of ["a.ts", "b.ts", "c.ts"]) fs.writeFileSync(path.join(other, f), "upstream\n");
+    sh(other, "commit", "-qam", "Rewrite the first line upstream");
+    sh(other, "push", "-q", "origin", "main");
+    sh(root, "fetch", "-q", "origin");
+    const up = sh(root, "rev-parse", "origin/main");
+    for (const f of ["a.ts", "b.ts", "c.ts"]) fs.writeFileSync(path.join(root, f), `edited ${f}\n`);
+    // Session A wrote a.ts, session B b.ts; nobody wrote c.ts.
+    for (const [who, file] of [["a", "a.ts"], ["b", "b.ts"]]) {
+      const transcript = path.join(configDir, `writer-${who}.jsonl`);
+      fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: new Date().toISOString(), cwd: root, message: { role: "assistant", content: [{ type: "tool_use", name: "Edit", input: { file_path: path.join(root, file) } }] } }) + "\n");
+      updateSyncRecord(transcript, { conversationId: `conv_${who}` });
+    }
+    const posts: Array<[string, any]> = [];
+    const sends: Array<{ to: string; body: string; clientId: string }> = [];
+    const bReplies: Array<"failed" | "sent"> = ["failed", "sent"];
+    const deps = {
+      post: async (p: string, b: any) => { posts.push([p, structuredClone(b)]); return {}; },
+      sendBrief: async (to: string, body: string, clientId: string) => { sends.push({ to, body, clientId }); return to === "conv_b" ? bReplies.shift()! : "sent" as const; },
+      deviceId: "dev-6", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-6.json"), host: "laptop", askDir: configDir,
+    };
+    const outcome = refused(root, ["a.ts", "b.ts", "c.ts"], up, head);
+    const lastReport = () => posts.filter(([p]) => p === "/cli/checkouts/report").pop()![1].reports[0];
+
+    // Inside the grace: nobody hears.
+    await reportCheckouts([outcome], { ...deps, now: Date.now() - LEVEL_STUCK_FILE_MS - 2 * MIN });
+    expect(sends).toEqual([]);
+    expect(posts.map(([p]) => p)).toEqual(["/cli/checkouts/report"]);
+
+    // Past it: A and B are each sent one brief (B's fails), c.ts goes to one finding; only who heard is told.
+    await reportCheckouts([outcome], { ...deps, now: Date.now() });
+    expect(sends.map((s) => s.to).sort()).toEqual(["conv_a", "conv_b"]);
+    const toA = sends.find((s) => s.to === "conv_a")!;
+    expect(toA.body).toStartWith('<session-message from="codecast" name="level sweep">');
+    expect(toA.body).toContain("1 of your files conflicts with origin/main");
+    expect(toA.body).toContain("  a.ts");
+    expect(toA.body).not.toContain("b.ts");
+    expect(toA.body).not.toContain("c.ts");
+    expect(toA.body).toContain("Rewrite the first line upstream");
+    const merges = path.join(root, ".git", "codecast", "level-conflicts");
+    expect(toA.body).toContain(`${merges}/<file>`);
+    expect(fs.readFileSync(path.join(merges, "a.ts"), "utf-8")).toBe(`<<<<<<< yours\nedited a.ts\n=======\nupstream\n>>>>>>> upstream ${up.slice(0, 9)}\n`);
+    expect(fs.readFileSync(path.join(merges, "b.ts"), "utf-8")).toContain("edited b.ts");
+    const findings = posts.filter(([p]) => p === "/cli/signal/add");
+    expect(findings).toHaveLength(1);
+    expect(findings[0][1].detail_md).toContain("  c.ts");
+    expect(lastReport().level.told).toEqual([expect.objectContaining({ to: "session", conversation_id: "conv_a", files: 1 }), expect.objectContaining({ to: "finding", files: 1 })]);
+
+    // The next pass asks B again, with the same client id, and nobody else.
+    const failedId = sends.find((s) => s.to === "conv_b")!.clientId;
+    await reportCheckouts([outcome], { ...deps, now: Date.now() });
+    expect(sends.map((s) => s.to).sort()).toEqual(["conv_a", "conv_b", "conv_b"]);
+    expect(sends[2].clientId).toBe(failedId);
+    expect(sends[2].clientId).toMatch(/^level-told:/);
+    expect(posts.filter(([p]) => p === "/cli/signal/add")).toHaveLength(1);
+    const told = lastReport().level.told;
+    expect(told.map((t: CheckoutTold) => (t.to === "session" ? t.conversation_id : "finding")).sort()).toEqual(["conv_a", "conv_b", "finding"]);
+
+    // Everyone told: nothing more this episode.
+    await reportCheckouts([outcome], { ...deps, now: Date.now() });
+    expect(sends).toHaveLength(3);
+    expect(posts.some(([p]) => p === "/cli/messages/send")).toBe(false);
   });
 
   test("dirty paths read every status: a modified first file, a rename by its new name, an untracked file", async () => {
@@ -211,20 +294,23 @@ describe("reporting a machine's checkouts", () => {
     fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: new Date().toISOString(), cwd: root, message: { role: "assistant", content: [{ type: "tool_use", name: "Edit", input: { file_path: path.join(root, "a.ts") } }] } }) + "\n");
     updateSyncRecord(transcript, { conversationId: "conv_writer" });
     const posts: Array<[string, any]> = [];
+    const head = sh(root, "rev-parse", "HEAD");
+    const sends: string[] = [];
     const post = async (p: string, b: any) => { posts.push([p, structuredClone(b)]); return {}; };
-    const deps = { post, deviceId: "dev-3", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-3.json"), host: "laptop", askDir: configDir };
+    const deps = { post, sendBrief: async (to: string) => { sends.push(to); return "sent" as const; }, deviceId: "dev-3", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-3.json"), host: "laptop", askDir: configDir };
     const t0 = Date.now() - LEVEL_STUCK_FILE_MS - 2 * MIN;
-    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: t0, budgetMs: 0 });
+    await reportCheckouts([refused(root, ["a.ts"], undefined, head)], { ...deps, now: t0, budgetMs: 0 });
     // Past the grace with no budget left this pass: the report says it is still reading, and nobody is asked.
-    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: Date.now(), budgetMs: 0 });
+    await reportCheckouts([refused(root, ["a.ts"], undefined, head)], { ...deps, now: Date.now(), budgetMs: 0 });
     const reading = posts.filter(([p]) => p === "/cli/checkouts/report").pop()![1].reports[0];
     expect(reading.uncommitted).toMatchObject({ attributing: true, sessions: [], unattributed: ["a.ts"] });
-    expect(posts.some(([p]) => p === "/cli/messages/send" || p === "/cli/signal/add")).toBe(false);
-    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: Date.now() });
+    expect(sends).toEqual([]);
+    expect(posts.some(([p]) => p === "/cli/signal/add")).toBe(false);
+    await reportCheckouts([refused(root, ["a.ts"], undefined, head)], { ...deps, now: Date.now() });
     const read = posts.filter(([p]) => p === "/cli/checkouts/report").pop()![1].reports[0];
     expect(read.uncommitted.attributing).toBeUndefined();
     expect(read.uncommitted.sessions.map((x: any) => x.conversation_id)).toEqual(["conv_writer"]);
-    expect(posts.filter(([p]) => p === "/cli/messages/send").map(([, b]) => b.to)).toEqual(["conv_writer"]);
+    expect(sends).toEqual(["conv_writer"]);
     expect(read.level.told).toEqual([expect.objectContaining({ to: "session", conversation_id: "conv_writer", files: 1 })]);
   });
 
@@ -243,7 +329,7 @@ describe("reporting a machine's checkouts", () => {
       fs.writeFileSync(file, lines.join("\n") + "\n");
       updateSyncRecord(file, { conversationId: `conv_big_${i}` });
     }
-    const deps = { post: async () => ({}), deviceId: "dev-4", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-4.json") };
+    const deps = { post: async () => ({}), sendBrief: neverSend, deviceId: "dev-4", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-4.json") };
     let worst = 0;
     let last = Date.now();
     const timer = setInterval(() => { const t = Date.now(); worst = Math.max(worst, t - last); last = t; }, 5);
@@ -273,7 +359,7 @@ describe("reporting a machine's checkouts", () => {
     let fail = true;
     const posts: string[] = [];
     const post = async (p: string) => { posts.push(p); if (fail) throw new Error("offline"); return {}; };
-    const deps = { post, deviceId: "dev-2", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-2.json") };
+    const deps = { post, sendBrief: neverSend, deviceId: "dev-2", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-2.json") };
     await reportCheckouts([{ root, skipped: "level" }], { ...deps, now: 1 });
     fail = false;
     await reportCheckouts([{ root, skipped: "level" }], { ...deps, now: 2 });

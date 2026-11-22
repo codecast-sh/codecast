@@ -18,7 +18,7 @@ beforeEach(() => {
   dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fanout-")));
   origFetch = globalThis.fetch;
   origLog = console.log;
-  console.log = () => {};
+  if (!process.env.FANOUT_LOG) console.log = () => {};
 });
 afterEach(() => {
   globalThis.fetch = origFetch;
@@ -96,6 +96,83 @@ describe("a fanout goes on to its fanin", () => {
     }`, dir);
     expect(await runWorkflow(graph, options())).toBe("completed");
     expect(briefs()).toHaveLength(1);
+  }, 60_000);
+
+  test("a failed branch never takes a loop's edge on another branch's json: the run stops (flowImport's rounds)", async () => {
+    taskServer();
+    const graph = parseWorkflowSource(`digraph rounds {
+      graph [label="Rounds"]
+      start [shape=Mdiamond]
+      split [shape=component]
+      a [label="A", shape=parallelogram, script="echo 'error: a broke'; exit 1"]
+      b [label="B", shape=parallelogram, script="echo '{\"again\": false}'"]
+      join [label="Join", shape=tripleoctagon]
+      ship [label="Ship", shape=parallelogram, script="touch ${dir}/shipped"]
+      exit [shape=Msquare]
+      start -> split
+      split -> a
+      split -> b
+      a -> join
+      b -> join
+      join -> split [condition="b.json.again = true", label="another round"]
+      join -> ship [condition="b.json.again != true", label="rounds done"]
+      ship -> exit
+    }`, dir);
+    expect(await runWorkflow(graph, options())).toBe("failed");
+    expect(fs.existsSync(path.join(dir, "shipped"))).toBe(false);
+  }, 60_000);
+
+  test("a review that passes never ships a red CI: the run takes the fanout's retry_target", async () => {
+    taskServer();
+    const graph = parseWorkflowSource(`digraph pass {
+      graph [label="Pass"]
+      start [shape=Mdiamond]
+      split [shape=component, retry_target=fix]
+      ci [label="CI", shape=parallelogram, script="if [ -f ${dir}/round2 ]; then echo ci ok; else echo 'error: lint failed in a.ts'; exit 1; fi"]
+      review [label="Review", shape=parallelogram, script="echo '{\"verdict\": \"pass\"}'"]
+      join [label="CI and Review", shape=tripleoctagon]
+      fix [label="Fix", shape=parallelogram, max_visits=2, script="touch ${dir}/round2"]
+      ship [label="Ship", shape=parallelogram, script="if [ -f ${dir}/round2 ]; then touch ${dir}/shipped-green; else touch ${dir}/shipped-red; fi"]
+      exit [shape=Msquare]
+      start -> split
+      split -> ci
+      split -> review
+      ci -> join
+      review -> join
+      join -> ship [condition="review.json.verdict = pass"]
+      join -> fix [condition="review.json.verdict = changes"]
+      fix -> split
+      ship -> exit
+    }`, dir);
+    expect(await runWorkflow(graph, options())).toBe("completed");
+    expect(fs.existsSync(path.join(dir, "shipped-red"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, "shipped-green"))).toBe(true);
+  }, 60_000);
+
+  test("a round that finds nothing leaves no stop: the station after reads none of the last round's", async () => {
+    taskServer();
+    const graph = parseWorkflowSource(`digraph stale {
+      graph [label="Stale"]
+      start [shape=Mdiamond]
+      split [shape=component]
+      ci [label="CI", shape=parallelogram, script="if [ -f ${dir}/round2 ]; then echo ci ok; else echo 'error: lint failed in a.ts'; exit 1; fi"]
+      review [label="Review", shape=parallelogram, script="echo reviewed"]
+      join [label="CI and Review", shape=tripleoctagon]
+      fix [label="Fix", shape=parallelogram, max_visits=2, script="touch ${dir}/round2"]
+      report [label="Report", shape=parallelogram, script="printf '%s' \"$stop_reason|$stop_stage\" > ${dir}/report"]
+      exit [shape=Msquare]
+      start -> split
+      split -> ci
+      split -> review
+      ci -> join
+      review -> join
+      join -> fix [condition="outcome = failure"]
+      join -> report [condition="outcome = success"]
+      fix -> split
+      report -> exit
+    }`, dir);
+    expect(await runWorkflow(graph, options())).toBe("completed");
+    expect(fs.readFileSync(path.join(dir, "report"), "utf-8")).not.toContain("lint failed");
   }, 60_000);
 
   test("a review branch that died routes to the fanin's No review edge", async () => {
