@@ -1,6 +1,6 @@
 // A hand station ends on quiet, never on working long (ct-98764), on a simulated clock.
 import { describe, expect, test } from "bun:test";
-import { HandWatch, handTimeouts } from "./handWatch";
+import { HandWatch, handTimeouts, steadyTail } from "./handWatch";
 import { ParkedClock } from "./parkedClock";
 import { loadScaledMs, machineLoadFactor } from "../machineLoad";
 
@@ -71,6 +71,17 @@ describe("a hand's wait", () => {
     expect(watch.over()).toBe("showed no work for 90m");
     load = 50;
     expect(watch.idleWindowMs()).toBe(120 * MIN);
+  });
+});
+
+describe("a pane's tail as work", () => {
+  test("a hung TUI's ticking clock and spinner are no work; new output and a moving token count are", () => {
+    const pane = (status: string, body = "● Bash(bun test)") => `${body}\n${status}\n> `;
+    // Claude Code and Codex status lines a second apart, the agent hung.
+    expect(steadyTail(pane("✻ Thinking… (12m 3s · ↓ 1.2k tokens · esc to interrupt)"))).toBe(steadyTail(pane("✶ Thinking… (12m 4s · ↓ 1.2k tokens · esc to interrupt)")));
+    expect(steadyTail(pane("• Working (41s • esc to interrupt)"))).toBe(steadyTail(pane("◦ Working (42s • esc to interrupt)")));
+    expect(steadyTail(pane("✻ Thinking… (12m 3s · ↓ 1.2k tokens · esc to interrupt)"))).not.toBe(steadyTail(pane("✻ Thinking… (12m 9s · ↓ 1.4k tokens · esc to interrupt)")));
+    expect(steadyTail(pane("• Working (41s • esc to interrupt)"))).not.toBe(steadyTail(pane("• Working (49s • esc to interrupt)", "● Bash(bun test)\n  ⎿ 12 pass")));
   });
 });
 

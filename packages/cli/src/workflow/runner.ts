@@ -6,7 +6,7 @@ import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
 import { NO_CAUSE_HISTORY } from "@codecast/shared/contracts/causeHistory";
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { ParkedClock, taskWaiting } from "./parkedClock.js";
-import { HandWatch, handTimeouts } from "./handWatch.js";
+import { HandWatch, handTimeouts, steadyTail } from "./handWatch.js";
 import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
@@ -327,7 +327,7 @@ async function executeCliAgent(
       return "success";
     }
 
-    const tail = runtime.getOutput(handle, 20).text;
+    const tail = steadyTail(runtime.getOutput(handle, 20).text);
     if (tail !== lastTail) watch.active();
     lastTail = tail;
     const elapsed = Math.round((Date.now() - startMs) / 60_000);
