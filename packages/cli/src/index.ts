@@ -6030,7 +6030,7 @@ program
         return;
       }
 
-  const validAgents = ["claude", "codex", "gemini", "cursor", "opencode", "pi", "grok", "muse"];
+  const validAgents = ["claude", "codex", "gemini", "cursor", "opencode", "pi", "grok", "muse", "antigravity"];
       if (!validAgents.includes(agentArg)) {
         console.error(`Unknown agent: ${agentArg}`);
         console.log(`Valid agents: ${validAgents.join(", ")}`);

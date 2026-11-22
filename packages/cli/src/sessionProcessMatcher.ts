@@ -118,6 +118,7 @@ export interface StartedSessionEntry {
 }
 
 export function isResumeInvocation(agentType: AgentClientId, commandLine: string): boolean {
+  if (agentType === "antigravity") return /\s(?:--conversation|--continue|-c)(\s|=|$)/.test(commandLine); // agy reopens by id or the latest
   if (agentType === "codex" || agentType === "gemini" || agentType === "muse") {
     return /\s--resume(\s|$)/.test(commandLine) || /\sresume(\s|$)/.test(commandLine);
   }
@@ -445,6 +446,7 @@ const ARGV_SESSION_FLAG_RES = [
   // its binary). `muse exec --session-id <id>` is covered by the generic
   // --session-id pattern above.
   new RegExp(`(?:^|\\s|/)muse\\s+resume\\s+${ARGV_ID}`),
+  new RegExp(`(?:^|\\s)--conversation[\\s=]+${ARGV_ID}`), // `agy --conversation <uuid>`
 ];
 
 /** The session id an agent process names on its own command line, or null. */

@@ -163,6 +163,27 @@ export const MUSE_MODEL_OPTIONS: ModelOption[] = [
 // both are launch-time flags tracked from the transcript after (run_model).
 export const MUSE_EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 
+// Antigravity CLI's `--model` takes the base model id and `--effort` the
+// level, and the transcript records the pair joined (`--model gemini-4-neon
+// --effort low` ran as `gemini-4-neon-low`; agy 1.5.14, 2026-11-22). The ids
+// below are the base names of the Gemini rows `agy models` printed on a Google
+// AI Ultra account that day; the listing also offers Claude and GPT-OSS rows,
+// left out here because only the Gemini family was launched through the flag.
+// Keys are bare ids, not `provider/model`, so antigravity is a STATIC client.
+export const ANTIGRAVITY_MODEL_OPTIONS: ModelOption[] = [
+  { key: "default", label: "Default", hint: "Your Antigravity configured model" },
+  { key: "gemini-4-neon", label: "Gemini 4 Neon", hint: "Balance of intelligence, cost and latency", cliAlias: "gemini-4-neon" },
+  { key: "gemini-4-argon", label: "Gemini 4 Argon", hint: "Gemini 4 Argon", cliAlias: "gemini-4-argon" },
+  { key: "gemini-4-carbon", label: "Gemini 4 Carbon", hint: "Gemini 4 Carbon", cliAlias: "gemini-4-carbon" },
+  { key: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen", hint: "Gemini 4 Hydrogen, the smaller model", cliAlias: "gemini-4-hydrogen" },
+  { key: "gemini-3.8-flash", label: "Gemini 3.8 Flash", hint: "Fast, previous generation", cliAlias: "gemini-3.8-flash" },
+];
+
+// `--effort` (agy --help: low|medium|high|xhigh|max). The models' own menus
+// run low..high, and Neon and Hydrogen add xhigh; no listed model offers max,
+// so the picker carries the union of what the models list.
+export const ANTIGRAVITY_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+
 // ---------------------------------------------------------------------------
 // Dynamic model inventory (opencode / pi)
 //

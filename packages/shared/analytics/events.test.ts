@@ -20,6 +20,7 @@ describe("the codecast event catalog", () => {
       ["cli_daemon_connected", { cli_version: "1.1.100", cli_platform: "darwin-arm64" }],
       ["first_session_synced", { agent_type: "claude_code" }],
       ["first_session_synced", { agent_type: "muse" }],
+      ["first_session_synced", { agent_type: "antigravity" }],
       ["nux_tour_opened", {}],
       ["nux_tour_step", { step: 2 }],
       ["nux_tour_finished", { step: 4 }],

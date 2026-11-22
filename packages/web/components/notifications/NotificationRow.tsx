@@ -59,7 +59,7 @@ export function AgentIcon({ agentType, className = "w-9 h-9" }: { agentType: str
         <GrokIcon className="w-4 h-4 text-white" />
       </span>
     );
-  } else if (agentType === "opencode" || agentType === "pi" || agentType === "muse") {
+  } else if (agentType === "opencode" || agentType === "pi" || agentType === "muse" || agentType === "antigravity") {
     // No dedicated brand glyph — reuse the canonical AgentTypeIcon so these
     // never fall through to the Claude badge. (The bell's own copy knew only
     // muse and badged opencode and pi as Claude; the page's knew all three.)

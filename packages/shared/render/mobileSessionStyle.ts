@@ -107,6 +107,7 @@ export const MOBILE_AGENT_TINT: Record<string, string> = {
   gemini: "#1a73e8",
   opencode: "#f97316",
   pi: "#14b8a6",
+  antigravity: "#6366f1",
 };
 
 /** The tile behind each agent's logo; others take the theme's (grok its text colour, the rest Solarized orange). */
@@ -117,7 +118,12 @@ export const MOBILE_AGENT_LOGO_BG: Record<string, string> = {
   opencode: "#f97316",
   pi: "#14b8a6",
   muse: "#0866FF",
+  antigravity: "#4f46e5",
 };
+
+/** Antigravity's mark: an arch, after the arch the CLI draws in block
+ *  characters on its splash (24x24, filled), on web and mobile alike. */
+export const ANTIGRAVITY_MARK_PATH = "M3 21v-9a9 9 0 0 1 18 0v9h-4.5v-9a4.5 4.5 0 0 0-9 0v9z";
 
 /** Muse Spark's mark: Meta's infinity logo (24x24, evenodd), on web and mobile alike. */
 export const MUSE_MARK_PATH =

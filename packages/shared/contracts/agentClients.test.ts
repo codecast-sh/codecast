@@ -48,6 +48,7 @@ describe("fromConvexAgentType", () => {
     expect(fromConvexAgentType("pi")).toBe("pi");
     expect(fromConvexAgentType("grok")).toBe("grok");
     expect(fromConvexAgentType("muse")).toBe("muse");
+    expect(fromConvexAgentType("antigravity")).toBe("antigravity");
   });
 
   it("normalizes cowork, unknown, null and undefined to claude", () => {
@@ -68,6 +69,7 @@ describe("toConvexAgentType", () => {
     expect(toConvexAgentType("pi")).toBe("pi");
     expect(toConvexAgentType("grok")).toBe("grok");
     expect(toConvexAgentType("muse")).toBe("muse");
+    expect(toConvexAgentType("antigravity")).toBe("antigravity");
   });
 });
 
@@ -83,6 +85,7 @@ describe("parseExecutionAgentClientId", () => {
     expect(parseExecutionAgentClientId("pi")).toBe("pi");
     expect(parseExecutionAgentClientId("grok")).toBe("grok");
     expect(parseExecutionAgentClientId("muse")).toBe("muse");
+    expect(parseExecutionAgentClientId("antigravity")).toBe("antigravity");
   });
 
   it("fails closed for unknown, nullish, and non-string execution values", () => {
@@ -115,6 +118,7 @@ describe("print mode", () => {
     expect(AGENT_CLIENTS.codex.printMode).toEqual({ kind: "subcommand", token: "exec" });
     expect(AGENT_CLIENTS.opencode.printMode).toEqual({ kind: "subcommand", token: "run" });
     expect(AGENT_CLIENTS.muse.printMode).toEqual({ kind: "subcommand", token: "exec" });
+    expect(AGENT_CLIENTS.antigravity.printMode).toEqual({ kind: "flag", token: "-p", promptAsValue: true });
   });
 });
 
@@ -128,6 +132,7 @@ describe("fenced execution transports", () => {
     expect(AGENT_CLIENTS.pi.executionTransports).toEqual(["tmux"]);
     expect(AGENT_CLIENTS.grok.executionTransports).toEqual(["tmux"]);
     expect(AGENT_CLIENTS.muse.executionTransports).toEqual(["tmux"]);
+    expect(AGENT_CLIENTS.antigravity.executionTransports).toEqual(["tmux"]);
   });
 
   it("rejects unsupported app-server and external routing without fallback", () => {
@@ -290,6 +295,18 @@ describe("capabilitySupport", () => {
       plugin: "unsupported",
       hook: "unsupported",
     },
+    // Verified 2026-11-22 (agy 1.5.14, planted files): a project AGENTS.md and
+    // a user ~/.gemini/GEMINI.md both reached `agy -p`. Skills, MCP, hooks and
+    // plugins appear only in agy's bundled docs, so they stay unsupported.
+    antigravity: {
+      snippet: "write",
+      skill: "unsupported",
+      command: "unsupported",
+      subagent: "unsupported",
+      mcp: "unsupported",
+      plugin: "unsupported",
+      hook: "unsupported",
+    },
     // The hosted assistant runs in codecast's backend and reads no file on
     // any machine: every kind is honestly unsupported.
     codecast: {
@@ -353,7 +370,7 @@ describe("agentFileTargets path templates", () => {
   const withTargets = Object.values(AGENT_CLIENTS).filter((d) => d.agentFileTargets);
 
   it("declares targets for exactly the verified clients", () => {
-    expect(withTargets.map((d) => d.id).sort()).toEqual(["claude", "codex", "cursor", "grok", "muse"]);
+    expect(withTargets.map((d) => d.id).sort()).toEqual(["antigravity", "claude", "codex", "cursor", "grok", "muse"]);
   });
 
   // The cross-client `.agents/skills` project dir is read by cursor (via
@@ -595,5 +612,36 @@ describe("the hosted codecast client", () => {
     expect(agentSupportsFork("codecast")).toBe(false);
     expect(agentForksNatively("codecast")).toBe(false);
     expect(capabilitySupport("skill", "codecast")).toBe("unsupported");
+  });
+});
+
+// Antigravity CLI (agy 1.5.14): the facts measured on a live pane and install.
+describe("antigravity descriptor", () => {
+  const agy = AGENT_CLIENTS.antigravity;
+
+  it("launches agy and resumes a conversation by id", () => {
+    expect(agy.binary).toBe("agy");
+    expect(agy.resumeCmd("42733a6f-f5ef-48ca-9f08-d571bd62efdd")).toBe("agy --conversation 42733a6f-f5ef-48ca-9f08-d571bd62efdd");
+    expect(agy.transcriptRoots).toEqual(["~/.gemini/antigravity-cli/brain"]);
+    expect(agy.tmuxPrefix).toBe("ag");
+  });
+
+  it("reads the composer under its rule, never the trust dialog or a shell continuation", () => {
+    const idle = "────────────────\n> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\n────────────────\n? for shortcuts      auto · Gemini 4 Argon · high";
+    const empty = "────────────────\n>\n────────────────";
+    const trust = "Do you trust the contents of this project?\nAntigravity CLI requires permission to read, edit, and execute files here.\n> Yes, I trust this folder\n  No, exit\n  ↑/↓ Navigate · enter Confirm";
+    const shell = "$ echo 'unterminated\n> ";
+    expect(agy.promptReadyPattern.test(idle)).toBe(true);
+    expect(agy.promptReadyPattern.test(empty)).toBe(true);
+    expect(agy.promptReadyPattern.test(trust)).toBe(false);
+    expect(agy.promptReadyPattern.test(shell)).toBe(false);
+    expect(agy.paneReadiness?.frameCompleteAfter?.test(idle)).toBe(true);
+    expect(agy.paneReadiness?.frameCompleteAfter?.test(trust)).toBe(false);
+  });
+
+  it("forks and reconstitutes nothing, so moves into it are refused up front", () => {
+    expect(agy.capabilities.fork).toBeFalsy();
+    expect(agy.capabilities.reconstitute).toBeFalsy();
+    expect(agy.forkCmd).toBeUndefined();
   });
 });

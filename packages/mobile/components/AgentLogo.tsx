@@ -2,7 +2,7 @@ import { View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import { Theme } from '@/constants/Theme';
-import { MOBILE_AGENT_LOGO_BG, MUSE_MARK_PATH } from '@codecast/shared/render/mobileSessionStyle';
+import { ANTIGRAVITY_MARK_PATH, MOBILE_AGENT_LOGO_BG, MUSE_MARK_PATH } from '@codecast/shared/render/mobileSessionStyle';
 import { CODECAST_MARK_ARROW_PATH, CODECAST_MARK_C_PATH, CODECAST_MARK_VIEWBOX } from '@codecast/shared/render/codecastMark';
 import { isHostedAgentType } from '@codecast/shared/contracts';
 
@@ -80,6 +80,15 @@ export function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; siz
       <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
         <Svg width={size * 0.7} height={size * 0.7} viewBox="0 0 24 24">
           <Path d={MUSE_MARK_PATH} fill="white" fillRule="evenodd" />
+        </Svg>
+      </RNView>
+    );
+  }
+  if (agentType === 'antigravity') {
+    return (
+      <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={size * 0.66} height={size * 0.66} viewBox="0 0 24 24">
+          <Path d={ANTIGRAVITY_MARK_PATH} fill="white" />
         </Svg>
       </RNView>
     );
@@ -162,6 +171,13 @@ export function AgentGlyph({ agentType, size = 16 }: { agentType?: string; size?
     return (
       <Svg width={size} height={size} viewBox="0 0 24 24">
         <Path d={MUSE_MARK_PATH} fill="#3b82f6" fillRule="evenodd" />
+      </Svg>
+    );
+  }
+  if (agentType === 'antigravity') {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 24 24">
+        <Path d={ANTIGRAVITY_MARK_PATH} fill="#6366f1" />
       </Svg>
     );
   }

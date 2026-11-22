@@ -14,6 +14,7 @@ import {
   CODEX_EFFORT_LEVELS,
   GROK_EFFORT_LEVELS,
   MUSE_EFFORT_LEVELS,
+  ANTIGRAVITY_EFFORT_LEVELS,
   PI_EFFORT_LEVELS,
   cloudAgentModel,
   findModelOption,
@@ -159,6 +160,14 @@ export function getPermissionFlags(agentType: AgentClientId, config?: Config | n
     if (/(?:^|\s)(?:--force|-f|--yolo|--mode|--plan)\b/.test(existing)) return null;
     if (modes?.cursor === "default") return null;
     return "--force";
+  } else if (agentType === "antigravity") {
+    // A managed agy pane is driven from the web, and nothing watches its pane
+    // for permission prompts, so it launches with every tool request
+    // auto-approved (--dangerously-skip-permissions; agy --help). A --mode or
+    // the flag itself pinned in agent_args.antigravity wins.
+    const existing = getAgentArgs(config, "antigravity") || "";
+    if (/(?:^|\s)(?:--dangerously-skip-permissions|--mode)\b/.test(existing)) return null;
+    return "--dangerously-skip-permissions";
   } else if (agentType === "gemini") {
     // gemini flags TBD for TUI launch; print mode adds --yolo separately.
   }
@@ -211,6 +220,13 @@ export function permissionFlagsForMode(
     if (m === "bypass") return "--yolo";
     if (m === "default") return null;
     return `--approval-mode ${m}`;
+  }
+  if (agentType === "antigravity") {
+    if (/(?:^|\s)(?:--dangerously-skip-permissions|--mode)\b/.test(configuredArgs)) return null;
+    if (m === "bypass") return "--dangerously-skip-permissions";
+    if (m === "default") return null;
+    // agy's own execution modes: accept-edits | auto | plan.
+    return ["accept-edits", "auto", "plan"].includes(m) ? `--mode ${m}` : null;
   }
   return null;
 }
@@ -297,9 +313,10 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     // pins a permission mode, so concatenating can't double up (codex shape).
     if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
     if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
-  } else if (agentType === "muse" || agentType === "cursor") {
+  } else if (agentType === "muse" || agentType === "cursor" || agentType === "antigravity") {
     // Same grok/codex shape: configured args + the permission flag
-    // (`--disable-approval` / `--force`), with getPermissionFlags yielding
+    // (`--disable-approval` / `--force` / `--dangerously-skip-permissions`),
+    // with getPermissionFlags yielding
     // null when agent_args pins a mode.
     if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
     if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
@@ -364,6 +381,13 @@ export function appendModelEffortFlags(
     if (modelAlias) args.push("--model", modelAlias);
     if (input.requestedEffort && (MUSE_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
       args.push("--reasoning-effort", input.requestedEffort);
+    }
+  } else if (agentType === "antigravity") {
+    // agy takes the base model id and the effort apart (`--model gemini-4-neon
+    // --effort low` ran as gemini-4-neon-low, agy 1.5.14).
+    if (modelAlias) args.push("--model", modelAlias);
+    if (input.requestedEffort && (ANTIGRAVITY_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
+      args.push("--effort", input.requestedEffort);
     }
   }
 }
@@ -462,6 +486,10 @@ export function buildPrintArgs(input: PrintArgsInput): PrintArgsResult {
   } else if (agentType === "gemini") {
     if (input.resumeId) args.push("-r", input.resumeId);
     else if (input.continueLast) args.push("-r", "latest");
+  } else if (agentType === "antigravity") {
+    // `agy --conversation <id>` / `--continue` (agy --help).
+    if (input.resumeId) args.push("--conversation", input.resumeId);
+    else if (input.continueLast) args.push("--continue");
   } else {
     if (input.resumeId) args.push("--resume", input.resumeId);
     else if (input.continueLast) args.push("--continue");
@@ -526,7 +554,7 @@ export function buildPrintArgs(input: PrintArgsInput): PrintArgsResult {
     else ignored.push("--append-system-prompt");
   }
   if (input.jsonSchema) {
-    if (agentType === "claude" || agentType === "grok") args.push("--json-schema", input.jsonSchema);
+    if (agentType === "claude" || agentType === "grok" || agentType === "antigravity") args.push("--json-schema", input.jsonSchema);
     else ignored.push("--json-schema");
   }
   if (input.bare) {
@@ -567,7 +595,9 @@ function pushOutputFormat(
   ignored: string[],
 ): void {
   if (!format || format === "text") return;
-  if (agentType === "claude" || agentType === "cursor" || agentType === "gemini") {
+  if (agentType === "claude" || agentType === "cursor" || agentType === "gemini" || agentType === "antigravity") {
+    // agy: --output-format text|json|stream-json (stream-json emits init,
+    // step_update and result events, measured on 1.5.14).
     args.push("--output-format", format);
     return;
   }

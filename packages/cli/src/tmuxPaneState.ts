@@ -123,6 +123,16 @@ export function isGrokTrustDialog(text: string): boolean {
     && /No,\s*quit\b[^\n]*\bn\b/i.test(text);
 }
 
+// agy's first launch in a folder it has not trusted: "Do you trust the contents
+// of this project?" over "> Yes, I trust this folder" / "No, exit", with a
+// "↑/↓ Navigate · enter Confirm" footer. "Yes" is preselected, so the shared
+// highlight walker in acceptTrustPrompt confirms it. The daemon writes the
+// folder into agy's trustedWorkspaces before launch (antigravityLocal.ts), so
+// this is the fallback. Answered, the dialog is cleared off the pane.
+export function isAntigravityTrustDialog(text: string): boolean {
+  return /Do you trust the contents of this project\?/.test(text) && /Yes, I trust this folder/.test(text);
+}
+
 // cursor-agent's first launch in a directory: "Workspace Trust Required" over
 // "[a] Trust this workspace" / "[q] Quit". The TUI names `a` as the grant key.
 // The answered box stays in the pane's history under the composer, so only a
@@ -499,8 +509,9 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
 //  - Glyph that LIES while busy: grok keeps its ❯ composer visible for the whole
 //    turn (live pane capture, v1.0.5), so the glyph-whitelist path would read a
 //    mid-turn pane "idle" and the paste's leading Escape would cancel the running
-//    turn. grok needs the busy-first order this classifier guarantees.
-export const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode", "pi", "grok", "cursor"]);
+//    turn. grok needs the busy-first order this classifier guarantees. agy does
+//    the same with its `>` composer ("esc to cancel" in the footer while busy).
+export const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode", "pi", "grok", "cursor", "antigravity"]);
 
 // The registry promptReadyPattern for a client classified whole-pane (see
 // GLYPHLESS_PROMPT_CLIENTS above), null for the ❯/›-glyph clients. Every pane
@@ -533,7 +544,7 @@ export function classifyGlyphlessClientPaneState(
   // BEFORE any store/transcript exists (jx702ea). Without this rule the pane
   // classified "unknown" (no ❯ yet) and ensureTmuxReady's glyphless skip polled
   // until timeout, never sending the `y` the dialog asks for.
-  if (isGrokTrustDialog(paneContent) || isCursorTrustDialog(paneContent)) return "trust";
+  if (isGrokTrustDialog(paneContent) || isCursorTrustDialog(paneContent) || isAntigravityTrustDialog(paneContent)) return "trust";
   if (isAgentLoginScreen(paneContent)) return "signed_out";
   // cursor-agent's tool approval menu ("Run this command?" … "Skip & tell the
   // agent what to do instead") when it runs without --force: only a person
@@ -548,7 +559,10 @@ export function classifyGlyphlessClientPaneState(
   // an idle grok pane as busy forever.
   // cursor-agent's spinner is a two-glyph braille pair before a verb
   // ("⠰⠳ Working", "⠀⠞ Editing") while its composer stays painted.
-  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|⬝⬝|esc (?:to )?interrupt|Esc:cancel|Waiting for response|\[stop\]/i.test(paneContent)) return "busy";
+  // agy's footer reads "esc to cancel" for the whole turn (its spinner is an
+  // eight-dot braille frame beside "Running command..."); idle it reads
+  // "? for shortcuts". Its promo banners say "esc to dismiss", never "cancel".
+  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|⬝⬝|esc (?:to )?interrupt|esc to cancel|Esc:cancel|Waiting for response|\[stop\]/i.test(paneContent)) return "busy";
   if (/^\s*[\u2800-\u28FF]{2} [A-Z][a-z]+\b/m.test(paneContent)) return "busy";
   if (readyPattern.test(paneContent)) return "idle";
   return "unknown";

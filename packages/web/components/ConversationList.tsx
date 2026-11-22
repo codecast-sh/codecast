@@ -27,8 +27,8 @@ export function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: str
         <GrokIcon className="w-2.5 h-2.5 text-white" />
       </span>
     );
-  } else if (agentType === "opencode" || agentType === "pi" || agentType === "muse" || isHostedAgentType(agentType)) {
-    // opencode/pi/muse and the hosted assistant have no dedicated badge glyph
+  } else if (agentType === "opencode" || agentType === "pi" || agentType === "muse" || agentType === "antigravity" || isHostedAgentType(agentType)) {
+    // opencode/pi/muse/antigravity and the hosted assistant have no dedicated badge glyph
     // here — reuse the canonical AgentTypeIcon (its own accent color) inside
     // the badge chrome so they never fall through to the Claude icon.
     return (

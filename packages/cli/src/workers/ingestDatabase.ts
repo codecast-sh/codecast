@@ -3,15 +3,19 @@ import type { TranscriptEmissionObserver } from '../parser.js';
 import { assembleOpencodeRows, type SessionRow } from '../opencodeTranscriptAssembly.js';
 import { OPENCODE_SESSION_ID_RE } from '../resumeCommand.js';
 import { INGEST_MAX_BYTES } from './ingestTypes.js';
+import { antigravityCwdFromWorkspaceUris } from '../antigravityPaths.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 type Query = {get:(...args:any[])=>any;all:(...args:any[])=>any[]};
-async function open(file: string): Promise<{query:(sql:string)=>Query;exec:(sql:string)=>void;close:()=>void}> {
+async function open(file: string, writable = false): Promise<{query:(sql:string)=>Query;exec:(sql:string)=>void;close:()=>void}> {
   if (typeof Bun !== 'undefined') {
     const {Database} = await import('bun:sqlite');
-    const db = new Database(file,{readonly:true});
+    const db = new Database(file,writable ? {} : {readonly:true});
     return {query:sql=>db.query(sql),exec:sql=>db.exec(sql),close:()=>db.close()};
   }
   const {DatabaseSync} = await import('node:sqlite');
-  const db = new DatabaseSync(file,{readOnly:true});
+  const db = new DatabaseSync(file,{readOnly:!writable});
   return {query:sql=>db.prepare(sql),exec:sql=>db.exec(sql),close:()=>db.close()};
 }
 export async function readCursorIngest(file: string, offset: number, onEmit?: TranscriptEmissionObserver) {
@@ -46,5 +50,44 @@ export async function readOpencodeIngest(file: string, sessionId: string) {
     const columns = new Set(db.query('PRAGMA table_info(session)').all().map(row=>row.name));
     const lineage = columns.has('parent_id') && columns.has('agent') ? db.query('SELECT parent_id,agent FROM session WHERE id = ?').get(sessionId) : undefined;
     return {sessionExists:true,content:assembleOpencodeRows(session,messages,parts,true) ?? '',cwd:session.directory ?? undefined,parentSessionId:lineage?.parent_id && OPENCODE_SESSION_ID_RE.test(lineage.parent_id) ? lineage.parent_id : undefined,agentName:lineage?.agent ?? undefined};
+  } finally { db.close(); }
+}
+/**
+ * One conversation's row in Antigravity's conversation_summaries.db: the
+ * workspace it runs in and whether a parent conversation started it.
+ *
+ * agy keeps the database in WAL mode, and while an agy runs there is no -shm
+ * file beside it, so SQLite refuses every read-only open ("unable to open
+ * database file", measured beside a running agy, 2026-11-22). Then the
+ * database (and its -wal, when one exists) is copied to a temporary directory
+ * and the copy opened writable, so SQLite can build its own index and replay
+ * the log. The original is never opened for writing.
+ */
+export async function readAntigravitySummary(file: string, conversationId: string): Promise<{cwd?: string; parentConversationId?: string; nestingDepth?: number; title?: string} | undefined> {
+  try { return await readAntigravitySummaryFrom(file, conversationId, false); }
+  catch (error) { if (!/unable to open database file|SQLITE_CANTOPEN/i.test(String(error))) throw error; }
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agy-summaries-'));
+  try {
+    const copy = path.join(dir, 'conversation_summaries.db');
+    await fs.promises.copyFile(file, copy);
+    await fs.promises.copyFile(`${file}-wal`, `${copy}-wal`).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; });
+    return await readAntigravitySummaryFrom(copy, conversationId, true);
+  } finally { await fs.promises.rm(dir, { recursive: true, force: true }); }
+}
+async function readAntigravitySummaryFrom(file: string, conversationId: string, writable: boolean): Promise<{cwd?: string; parentConversationId?: string; nestingDepth?: number; title?: string} | undefined> {
+  const db = await open(file, writable);
+  try {
+    const columns = new Set(db.query('PRAGMA table_info(conversation_summaries)').all().map(row=>row.name));
+    if (!columns.has('conversation_id') || !columns.has('workspace_uris')) return undefined;
+    const pick = ['workspace_uris', ...['parent_conversation_id','nesting_depth','title'].filter(c => columns.has(c))].join(',');
+    const row = db.query(`SELECT ${pick} FROM conversation_summaries WHERE conversation_id = ?`).get(conversationId);
+    if (!row) return undefined;
+    const parent = typeof row.parent_conversation_id === 'string' && row.parent_conversation_id ? row.parent_conversation_id : undefined;
+    return {
+      cwd: antigravityCwdFromWorkspaceUris(row.workspace_uris),
+      parentConversationId: parent,
+      nestingDepth: typeof row.nesting_depth === 'number' ? row.nesting_depth : undefined,
+      title: typeof row.title === 'string' && row.title.trim() ? row.title.trim() : undefined,
+    };
   } finally { db.close(); }
 }

@@ -336,7 +336,11 @@ describe("command groups stay off the boot graph", () => {
     // detect.ts, share.ts, manifest.ts and contracts/dataSync.ts off the graph.
     // 370 the same day: contracts/fileAttachment.ts, the [File <path>] tag a
     // web attachment becomes (no imports), carried by the contracts barrel.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(370);
+    // 372 on 2026-11-22: Antigravity CLI (agy) as a client: contracts/
+    // antigravityClient.ts, its registry descriptor (out of agentClients.ts for
+    // its max-lines pin), and antigravityTranscript.ts, its parser (out of
+    // parser.ts the way museTranscript.ts is).
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(372);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -505,7 +509,12 @@ describe("command groups stay off the boot graph", () => {
     // across the person's machines (folderLists.ts +1, syncPlan.ts), a start
     // clones a missing checkout (resumePlacement.ts +2),
     // syncService.getSyncSettings +1, reconciliation.ts and projectRoots.ts +1.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4839);
+    // 4840 on 2026-11-22, measured on main at 07e47c2f8 plus the change: the
+    // Antigravity CLI client adds 17 KB, contracts/antigravityClient.ts +4 and
+    // antigravityTranscript.ts +8 (the parser parser.ts dispatches to, as it
+    // does museTranscript.ts), its model options +2, and its launch, resume,
+    // process and scan branches +3; main had shrunk by 16 since the last pin.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4840);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -727,7 +736,11 @@ describe("command groups stay off the boot graph", () => {
     // process tree and reaps a dead runner's stations by what their record proves.
     // 620 the same day: cloud/mirror/contextOps.ts, the project-context walk's file and git
     // operations split out of discovery.ts for max-lines, no new code.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(620);
+    // 624 the same day: Antigravity CLI (agy) as a client: the descriptor and
+    // parser above, antigravityPaths.ts (pure path rules the watcher and scan
+    // worker share without loading the parser) and antigravityLocal.ts (folder
+    // trust and the conversation's cwd from agy's own files).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(624);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

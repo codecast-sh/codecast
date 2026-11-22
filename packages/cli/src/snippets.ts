@@ -99,10 +99,11 @@ export function getSnippetTargets(home = process.env.HOME || os.homedir()): Snip
   const candidates: TargetCandidate[] = [];
 
   for (const descriptor of Object.values(LOCAL_AGENT_CLIENTS)) {
-    // DECLARED is the gate, not "a dot directory exists": gemini and pi have
-    // dot directories on plenty of machines and no verified instruction file,
-    // and a directory-driven loop would start writing ~/.gemini files nothing
-    // reads. Cursor drops out here too — its registry entry declares only a
+    // DECLARED is the gate, not "a dot directory exists": pi has a dot
+    // directory on plenty of machines and no verified instruction file, and a
+    // directory-driven loop would start writing files nothing reads. ~/.gemini
+    // is declared by antigravity, whose agy loads ~/.gemini/GEMINI.md (verified
+    // with a planted file), not by the gemini entry. Cursor drops out here too — its registry entry declares only a
     // project-level rules dir, because the user-level ~/.cursor/rules/*.mdc
     // this function used to emit was never loaded by Cursor (ecosystem
     // research); `cast uninstall` keeps its own legacy list to clean those up.

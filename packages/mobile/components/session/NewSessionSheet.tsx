@@ -88,6 +88,7 @@ const agentAccents: Record<AgentClientId, string> = {
   pi: Theme.cyan,
   grok: Theme.text,
   muse: Theme.greenBright,
+  antigravity: Theme.violet,
   codecast: Theme.cyan,
 };
 

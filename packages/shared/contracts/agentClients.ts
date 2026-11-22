@@ -19,6 +19,7 @@
 
 import type { CapabilityKind } from "./capabilities";
 import type { ModelOption } from "./modelOptions";
+import { ANTIGRAVITY_CLIENT } from "./antigravityClient";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentLaunchModelOptions } from "./cloudAgents";
 import {
   CLAUDE_MODEL_OPTIONS,
@@ -42,7 +43,17 @@ import {
  *  agent-type spelling and the registry key. Every id but `codecast` is a
  *  local CLI a daemon launches (LocalAgentClientId); `codecast` is the hosted
  *  assistant, whose turns run in codecast's backend (plan pl-840). */
-export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse" | "codecast";
+export type AgentClientId =
+  | "claude"
+  | "codex"
+  | "cursor"
+  | "gemini"
+  | "opencode"
+  | "pi"
+  | "grok"
+  | "muse"
+  | "antigravity"
+  | "codecast";
 
 /** The clients a daemon launches, watches and drives through a pane. */
 export type LocalAgentClientId = Exclude<AgentClientId, "codecast">;
@@ -81,6 +92,7 @@ export type ConvexAgentType =
   | "pi"
   | "grok"
   | "muse"
+  | "antigravity"
   | "codecast";
 
 const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
@@ -92,6 +104,7 @@ const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
   pi: "pi",
   grok: "grok",
   muse: "muse",
+  antigravity: "antigravity",
   codecast: "codecast",
 };
 
@@ -127,6 +140,8 @@ export function fromConvexAgentType(agentType: string | null | undefined): Agent
       return "grok";
     case "muse":
       return "muse";
+    case "antigravity":
+      return "antigravity";
     case "codecast":
       return "codecast";
     default:
@@ -178,6 +193,7 @@ export function parseExecutionAgentClientId(agentType: unknown): LocalAgentClien
     case "pi":
     case "grok":
     case "muse":
+    case "antigravity":
       return agentType;
     default:
       throw new InvalidExecutionAgentTypeError(agentType);
@@ -606,7 +622,7 @@ const MUSE_MODEL: AgentModelConfig = {
 };
 
 /**
- * The eight local clients, populated from the facts currently hardcoded across
+ * The nine local clients, populated from the facts currently hardcoded across
  * the daemon (binaries, resume commands, transcript roots, watcher kinds, tmux
  * prefixes, prompt-ready glyphs). Every daemon, launch, tmux, watcher and
  * picker path iterates THIS map, so the hosted client never reaches one.
@@ -1073,6 +1089,7 @@ export const LOCAL_AGENT_CLIENTS: Record<LocalAgentClientId, AgentClientDescript
       // forkCmd (no native fork), liveEvents (no event bus researched).
     },
   },
+  antigravity: ANTIGRAVITY_CLIENT,
   gemini: {
     // Unpinned and last: Google retired Gemini CLI for consumer accounts on
     // 2026-06-18 in favor of Antigravity CLI (`agy`). Kept for existing sessions.
