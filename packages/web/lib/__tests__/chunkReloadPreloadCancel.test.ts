@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import { installStaleChunkReload, MAX_AUTO_RELOADS, RELOAD_COUNT_KEY } from "../chunkReloadGuard";
-import { namedExportLoader } from "../lazyNamed";
+import { loadedModule, namedExport, namedExportLoader } from "../lazyNamed";
 
 // ct-91263: production reported "Cannot read properties of undefined (reading
 // 'SettingsModal')" from DashboardLayout. Its lazy loader is
@@ -104,4 +104,28 @@ test("a module with the export resolves to it", async () => {
   const SettingsModal = () => null;
   const loader = namedExportLoader(() => Promise.resolve({ SettingsModal }), "SettingsModal");
   expect((await loader()).default).toBe(SettingsModal);
+});
+
+// The loaders that hold the export themselves (composeViewLoader's ComposeView,
+// the evals sim pages) or read the module their own way (guide figures, mod
+// icons) wait out the same cancelled preload instead of reading off undefined.
+const PENDING = Symbol("pending");
+const settle = (p: Promise<unknown>) =>
+  Promise.race([
+    p.then(() => "resolved", (e: unknown) => String(e)),
+    new Promise<typeof PENDING>((r) => setTimeout(() => r(PENDING), 50)),
+  ]);
+
+test("namedExport stays pending while the stale-chunk reload runs", async () => {
+  installStaleChunkReload();
+  const compose = namedExport(() => vitePreload(staleChunk) as Promise<{ ComposeView: () => null }>, "ComposeView");
+  expect(await settle(compose)).toBe(PENDING);
+  expect(lastEvent!.defaultPrevented).toBe(true);
+});
+
+test("loadedModule stays pending while the stale-chunk reload runs", async () => {
+  installStaleChunkReload();
+  const icons = loadedModule(() => vitePreload(staleChunk) as Promise<Record<string, unknown>>);
+  expect(await settle(icons)).toBe(PENDING);
+  expect(lastEvent!.defaultPrevented).toBe(true);
 });
