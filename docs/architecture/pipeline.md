@@ -160,9 +160,9 @@ A daemon reports its checkouts on change only, within a time budget per pass,
 and never on the path of its own event loop; a checkout whose attribution is
 not warm yet reports its paths unattributed. A level that keeps refusing on
 the same files asks for help once per episode: the session that last wrote one
-of those files hears the conflict and the two ways out (rebase the edit onto
-main's version, or set it aside), else a finding is filed on the repository's
-project. A refusal is logged when it changes, not every pass.
+of those files hears the conflict and the one way out (bring main's change
+into each file by hand, from its merge file or `git show`), else a finding is
+filed on the repository's project. A refusal is logged when it changes, not every pass.
 
 ## PL9. What dogfooding taught the design
 
