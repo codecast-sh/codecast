@@ -431,19 +431,22 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     ? status === "live" && d === currentLive && !!d.dirty === !!m.dirty
     : (!changes && (!push || (!d.dirty && d === runningNow && !overDevPush))) || (!!m.event_id && d.event_ids.some((e) => String(e) === String(m.event_id))));
 
+  // A push carrying uncommitted files is that person's own deploy: it finishes a deploy only when it names it
+  // (--deploy dp-N), never one somebody else asked for, or its work would be recorded as theirs.
+  const uncommitted = push && !!m.dirty;
   const same = ownNamed || ownRun || recent.find((d) =>
-    d.target === target && (liveMatch(d) || OPEN.has(d.status)) && runFree(d)
+    d.target === target && (liveMatch(d) || (OPEN.has(d.status) && !uncommitted)) && runFree(d)
     && (!d.repository || !repository || d.repository === repository)
     && ((m.sha && sameSha(d.sha, m.sha)) || (!m.sha && m.version && d.version === m.version)),
   );
-  const open = same ?? recent.find((d) =>
+  const open = same ?? (uncommitted ? undefined : recent.find((d) =>
     d.target === target && OPEN.has(d.status) && now - d.created_at < OPEN_DEPLOY_MAX_AGE_MS && runFree(d)
     && (!d.repository || !repository || d.repository === repository)
     // A deploy asked for at an earlier sha (a redeploy, a rollback) is finished only by its own sha.
     && (!d.action || d.action === "deploy" || !d.sha || (m.sha && sameSha(d.sha, m.sha)))
     // A run's marker finishes an open deploy only when it ships that deploy's sha, or the deploy names none yet.
     && (!m.workflow_run || !d.sha || (m.sha && sameSha(d.sha, m.sha))),
-  );
+  ));
 
   // The same failure reported again (a redelivery, a backfill) enriches the failed deploy it already recorded.
   const failedBefore = !open && !m.workflow_run && status === "failed" && m.sha

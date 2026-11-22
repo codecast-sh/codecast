@@ -42,6 +42,10 @@ describe("markBody", () => {
     expect(readChanges(undefined)).toEqual({});
     writeFileSync(file, JSON.stringify({ adds: [] }));
     expect(readChanges(file)).toEqual({});
+    // A broken or missing file costs the lists, not the mark.
+    writeFileSync(file, "{trunc");
+    expect(readChanges(file)).toEqual({});
+    expect(readChanges(join(dir, "missing.json"))).toEqual({});
   });
 
   test("outside a GitHub checkout it says what to pass", () => {
