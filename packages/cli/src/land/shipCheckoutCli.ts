@@ -141,17 +141,18 @@ export function shipPassBody(plan: ShipPlan, r: ShipOutcome, repository: string,
 /**
  * The `cast flow run` a pass goes through when `[ship] flow` names a flow, or null when it names none (and on a dry
  * run, which only plans). The flow freezes the checkout as its change and checks, lands and deploys it, so this
- * command pushes nothing; "default" is the workspace's default flow, a nameless run. Flags that steer a pass this
- * command pushes itself would be dropped silently, so they are refused.
+ * command pushes nothing. Flags that steer a pass this command pushes itself would be dropped silently, so they are
+ * refused, `--no-fetch` among them: the flow always cuts the pass onto freshly fetched upstream.
  */
 export function checkoutFlowArgs(flow: string | undefined, opts: CheckoutOptions): string[] | null {
   if (!flow || opts.dryRun) return null;
   const steered = [
     opts.plan !== undefined && "--plan", opts.only !== undefined && "--only", opts.hold && "--hold", opts.commitsOnly && "--commits-only",
     opts.message?.length && "--message", opts.check === false && "--no-check", opts.push === false && "--no-push", opts.deploy === false && "--no-deploy",
+    opts.fetch === false && "--no-fetch",
   ].filter((f): f is string => !!f);
   if (steered.length) throw new Error(`[ship] flow = "${flow}" runs the pass through that flow, which plans, checks and lands it; ${steered.join(", ")} only steer${steered.length === 1 ? "s" : ""} a pass cast ship checkout pushes itself`);
-  return ["flow", "run", ...(flow === "default" ? [] : [flow]), "--checkout", ...(opts.json ? ["--json"] : [])];
+  return ["flow", "run", flow, "--checkout", ...(opts.json ? ["--json"] : [])];
 }
 
 /** Run a `cast` command in `cwd` with this terminal, returning its exit code. */

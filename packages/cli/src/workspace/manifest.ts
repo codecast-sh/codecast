@@ -178,7 +178,8 @@ function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
     if (raw[key] !== undefined && typeof raw[key] !== "boolean") throw new ManifestError(`'ship.${key}' must be true or false`, file, `ship.${key}`);
   }
   const flow = raw["flow"];
-  if (flow !== undefined && (typeof flow !== "string" || !flow.trim())) throw new ManifestError("'ship.flow' must name a flow, or \"default\" for the workspace's default flow", file, "ship.flow");
+  if (flow !== undefined && (typeof flow !== "string" || !flow.trim())) throw new ManifestError("'ship.flow' must name a flow", file, "ship.flow");
+  if (typeof flow === "string" && flow.trim() === "default") throw new ManifestError("'ship.flow' must name the flow a pass ships through: shipping never takes a workspace's default flow", file, "ship.flow");
   const deployRaw = raw["deploy"] ?? [];
   if (!Array.isArray(deployRaw)) throw new ManifestError("'ship.deploy' must be an array of tables ([[ship.deploy]])", file, "ship.deploy");
   const deploy = deployRaw.map((step, i): ShipDeployStep => {
