@@ -111,3 +111,103 @@ describe("writersNamed", () => {
     expect(named(c, "error: notes.txt is not good\nerror: src/a.ts is not good")).toEqual({ writers: { jx7aaaa: ["src/a.ts"] }, unclaimed: ["notes.txt"] });
   });
 });
+
+// Paths as a tool run inside one package of the repo prints them, and the boundaries between one file's results and the next.
+describe("writersNamed in a repo of packages", () => {
+  const R = { conversation: "jx7rrrrrrrrrrrrrrrrrrrrrrrrrrrr3", session: "jx7rrrr" };
+  const c = change({ "packages/cli/src/land/checkoutReport.test.ts": A, "packages/cli/src/workflow/runner.ts": B, "packages/web/lib/foo.ts": R });
+
+  test("cast check's tsc lines, relative to the package, name the file by its one tail", () => {
+    // Captured from `cast check cli` in this repo.
+    const out = [
+      "src/land/checkoutReport.test.ts(192,31): error TS2345: Argument of type '{ now: number; post: (p: string, b: any) => Promise<{}>; }' is not assignable to parameter of type '{ post: Post; sendBrief: SendBrief; }'.",
+      "  Property 'sendBrief' is missing in type '{ now: number; post: (p: string, b: any) => Promise<{}>; }' but required in type '{ post: Post; sendBrief: SendBrief; }'.",
+      "✗ cli: 1 error (pass 8s old, watcher started by this call)",
+    ].join("\n");
+    expect(named(c, out)).toEqual({ writers: { jx7aaaa: ["packages/cli/src/land/checkoutReport.test.ts"] }, unclaimed: [] });
+    // tsc's pretty form.
+    expect(named(c, "src/workflow/runner.ts:12:5 - error TS2322: Type 'string' is not assignable to type 'number'.").writers).toEqual({ jx7bbbb: ["packages/cli/src/workflow/runner.ts"] });
+  });
+
+  test("a tail two files of the change end with names neither", () => {
+    const two = change({ "packages/cli/src/index.ts": A, "packages/web/src/index.ts": B });
+    expect(named(two, "src/index.ts(1,1): error TS1005: ';' expected.").writers).toEqual({});
+    expect(named(two, "cli/src/index.ts(1,1): error TS1005: ';' expected.").writers).toEqual({ jx7aaaa: ["packages/cli/src/index.ts"] });
+  });
+
+  test("bun run in a package names the failing files and not the one that passed", () => {
+    const t = change({ "packages/cli/src/a.test.ts": A, "packages/cli/src/b.test.ts": B, "packages/cli/src/c.test.ts": R });
+    // Captured from `bun test ./src` inside a package, not on a terminal: b.test.ts passed and prints nothing.
+    const out = [
+      "bun test v1.3.14 (0d9b296a)",
+      "",
+      "src/c.test.ts:",
+      "1 | import { expect, test } from \"bun:test\";",
+      "2 | test(\"c breaks\", () => { expect(\"x\").toBe(\"y\"); });",
+      "                                         ^",
+      "error: expect(received).toBe(expected)",
+      "",
+      "Expected: \"y\"",
+      "Received: \"x\"",
+      "",
+      "      at <anonymous> (/repo/packages/cli/src/c.test.ts:2:38)",
+      "(fail) c breaks [0.15ms]",
+      "",
+      "src/a.test.ts:",
+      "1 | import { expect, test } from \"bun:test\";",
+      "2 | test(\"a works\", () => { expect(1 + 1).toBe(3); });",
+      "                                          ^",
+      "error: expect(received).toBe(expected)",
+      "",
+      "Expected: 3",
+      "Received: 2",
+      "",
+      "      at <anonymous> (/repo/packages/cli/src/a.test.ts:2:39)",
+      "(fail) a works [0.07ms]",
+      "",
+      " 2 pass",
+      " 2 fail",
+      " 4 expect() calls",
+      "Ran 4 tests across 3 files. [24.00ms]",
+    ].join("\n");
+    expect(named(t, out, ["/repo"])).toEqual({ writers: { jx7rrrr: ["packages/cli/src/c.test.ts"], jx7aaaa: ["packages/cli/src/a.test.ts"] }, unclaimed: [] });
+  });
+
+  test("bun's closing recap is its own section: the last passing file's header stays unnamed", () => {
+    const t = change({ "packages/cli/src/a.test.ts": A, "packages/cli/src/b.test.ts": B });
+    const out = [
+      "packages/cli/src/a.test.ts:",
+      "error: expect(received).toBe(expected)",
+      "      at /repo/packages/cli/src/a.test.ts:5:3",
+      "(fail) a > works [0.3ms]",
+      "",
+      "packages/cli/src/b.test.ts:",
+      "(pass) b > ok [0.1ms]",
+      "",
+      "1 tests failed:",
+      "(fail) a > works [0.3ms]",
+      "",
+      " 1 pass",
+      " 1 fail",
+    ].join("\n");
+    expect(named(t, out, ["/repo"]).writers).toEqual({ jx7aaaa: ["packages/cli/src/a.test.ts"] });
+  });
+
+  test("eslint: a file with only warnings is not named by the next file's error", () => {
+    const t = change({ "packages/cli/src/a.ts": A, "packages/cli/src/b.test.ts": B });
+    const out = [
+      "/repo/packages/cli/src/a.ts",
+      "  3:1  warning  Unexpected console statement  no-console",
+      "",
+      "/repo/packages/cli/src/b.test.ts",
+      "  4:7  error  'y' is assigned a value but never used  @typescript-eslint/no-unused-vars",
+      "",
+      "✖ 2 problems (1 error, 1 warning)",
+    ].join("\n");
+    expect(named(t, out, ["/repo"]).writers).toEqual({ jx7bbbb: ["packages/cli/src/b.test.ts"] });
+  });
+
+  test("a passed test whose name holds a file's name names nothing", () => {
+    expect(named(c, "(pass) runner.ts does x\nerror: something in other.ts").writers).toEqual({});
+  });
+});
