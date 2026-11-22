@@ -49,7 +49,8 @@ const OUT_OF_SIGHT = ["stashed", "dismissed", "hidden"];
  * the daemon is asked to hibernate it at most every five minutes while it
  * stays live; a refusal (attached, mid turn, just resumed) is the daemon's
  * call, and the next ask may land. A person who brings it back from a stash
- * the run made keeps it: the run parks it no more. Nothing runs until `bind`
+ * the run made keeps it: the run parks it no more, whatever they do with it
+ * after (typing to it moves its transcript on). Nothing runs until `bind`
  * gives it the run's context, which remembers that across a resume: a resumed
  * runner that checked before reading it would stash a session a person kept.
  */
@@ -58,6 +59,10 @@ export function startSubjectParker(call: Call, subject: Subject, intervalMs: num
   let stopped = false;
   let inFlight: Promise<void> | null = null;
   let stashedAt = -1;
+  // The run's stash stands: it put the subject out of sight, and nothing of the run's has brought it back since. Only
+  // a station of the subject's own sends it anything that could (pause), so a read that finds it back in the inbox
+  // while this holds is a person's doing.
+  let ours = false;
   let askedAt = 0;
   let context: Record<string, string> | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -66,8 +71,8 @@ export function startSubjectParker(call: Call, subject: Subject, intervalMs: num
     const row = await subjectRow(call, subject);
     if (idle() || !row) return;
     const settle = row.message_count ?? 0;
-    // The run stashed it at this very settle and it is back in the inbox: a person put it there.
-    if (stashedAt === settle && !OUT_OF_SIGHT.includes(row.bucket)) {
+    // The run stashed it and it is back in the inbox: a person put it there, though it may have moved on since.
+    if (ours && !OUT_OF_SIGHT.includes(row.bucket)) {
       context![KEPT] = "1";
       log(`${subject.shortId} was brought back to the inbox: the run leaves it there and parks it no more`);
       return;
@@ -76,7 +81,10 @@ export function startSubjectParker(call: Call, subject: Subject, intervalMs: num
     if (stashedAt !== settle) {
       if (idle()) return;
       const stashed = await call("/cli/sessions/dismiss", { session: subject.conversationId, hidden: true });
-      if (stashed) stashedAt = settle;
+      if (stashed) {
+        stashedAt = settle;
+        ours = true;
+      }
       log(stashed ? `${subject.shortId} is settled: stashed out of sight while the run goes on without it` : `could not stash ${subject.shortId}`);
     }
     if (Date.now() - askedAt >= HIBERNATE_RETRY_MS) {
@@ -94,7 +102,7 @@ export function startSubjectParker(call: Call, subject: Subject, intervalMs: num
   return {
     tick,
     // A station of the subject's own sends it work: no stash or park may land on top of the brief.
-    pause: async () => { paused = true; await inFlight; },
+    pause: async () => { paused = true; await inFlight; ours = false; },
     resume: () => { paused = false; },
     stop: async () => { stopped = true; if (timer) clearInterval(timer); await inFlight; },
     bind: (ctx) => {
