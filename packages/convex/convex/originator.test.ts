@@ -522,9 +522,17 @@ describe("a clear resting on a typed line", () => {
     const sid = async (c: unknown) => (await t.run((ctx: any) => ctx.db.get(c))).short_id;
     const clear = async (cite: { conversation_short_id: string; line: number }, quote: string) =>
       post("/cli/workflow-runs/clear", { api_token: token, run_id: String(ids.run), why: "they said ship", cite, quote });
+    const clearCard = async (card: string, quote: string) =>
+      post("/cli/workflow-runs/clear", { api_token: token, run_id: String(ids.run), why: "they said ship", cite_card: card, quote });
+    // A decision card a session asked, answered `answer` by `by` (a user id, or a role) at `at`.
+    const card = (short_id: string, conversation_id: unknown, answer: string, by: { kind: string; id: unknown }, at: number) => t.run((ctx: any) => ctx.db.insert("session_decisions", {
+      conversation_id, session_id: "s", user_id: ana, short_id, question: "Ship the Deploys deep links together with the PR numbers, or the links first?",
+      options: [{ label: "Ship both together" }, { label: "Links first" }, { label: "Revise" }], answer_index: answer === "Revise" ? 2 : answer === "Links first" ? 1 : 0,
+      status: "answered", answered_by: { kind: by.kind, id: String(by.id) }, created_at: at - 1_000, resolved_at: at,
+    } as any));
     const stamp = async () => (await t.run((ctx: any) => ctx.db.get(ids.run))).merge_cleared;
     const comments = () => t.run((ctx: any) => ctx.db.query("task_comments").withIndex("by_task_id", (q: any) => q.eq("task_id", ids.task)).collect());
-    return { ...s, lead, worker, elsewhere, sid, clear, stamp, comments, ...ids };
+    return { ...s, lead, worker, elsewhere, sid, clear, clearCard, card, stamp, comments, ...ids };
   }
 
   test("clears on the starter's own typed line holding the quote, keeps the cite and says so on the task", async () => {
@@ -636,11 +644,52 @@ describe("a clear resting on a typed line", () => {
     expect(await s.stamp()).toBeUndefined();
   });
 
+  test("clears on the starter's own answer to a card a session on the chain asked, and names the card", async () => {
+    const s = await seedRun();
+    await s.card("sd-4235", s.lead, "Ship both together", { kind: "user", id: s.ana }, s.now() + 5_000);
+    const r = await s.clearCard("sd-4235", "Ship both together");
+    expect(r).toMatchObject({ node_id: "intent__clear", starter_id: String(s.ana), starter_name: "Ana", cite: "card:sd-4235", quote: "Ship both together" });
+    expect(await s.stamp()).toMatchObject({ cite: { card: "sd-4235" }, quote: "Ship both together", said_at: s.now() + 5_000 });
+    expect((await s.comments()).map((c: any) => c.text)).toEqual([`Ana said to ship: "Ship both together" (card:sd-4235), checked against the record.`]);
+  });
+
+  test("refuses a card answer that is another person's or an agent's, off the chain, without the quote, or older than a Revise", async () => {
+    const other = await seedRun();
+    await other.card("sd-4235", other.lead, "Ship both together", { kind: "user", id: other.eve }, other.now() + 5_000);
+    expect((await other.clearCard("sd-4235", "Ship both together")).error).toMatch(/answered by someone other than Ana/);
+    const agent = await seedRun();
+    await agent.card("sd-4235", agent.lead, "Ship both together", { kind: "role", id: "release-captain" }, agent.now() + 5_000);
+    expect((await agent.clearCard("sd-4235", "Ship both together")).error).toMatch(/holds no person's answer/);
+    const off = await seedRun();
+    await off.card("sd-4235", off.elsewhere, "Ship both together", { kind: "user", id: off.ana }, off.now() + 5_000);
+    expect((await off.clearCard("sd-4235", "Ship both together")).error).toMatch(/not asked in a session this change came through/);
+    const quote = await seedRun();
+    await quote.card("sd-4235", quote.lead, "Links first", { kind: "user", id: quote.ana }, quote.now() + 5_000);
+    expect((await quote.clearCard("sd-4235", "Ship both together")).error).toMatch(/answer does not say/);
+    const revised = await seedRun();
+    await revised.card("sd-4235", revised.lead, "Ship both together", { kind: "user", id: revised.ana }, revised.now() + 5_000);
+    await revise(revised, revised.now() + 60_000);
+    expect((await revised.clearCard("sd-4235", "Ship both together")).error).toMatch(/answered Revise on sd-1 after sd-4235 was answered/);
+    expect((await revised.clearCard("sd-9999", "Ship")).error).toMatch(/no card sd-9999/);
+    for (const s of [other, agent, off, quote, revised]) expect(await s.stamp()).toBeUndefined();
+  });
+
+  test("the asker reads a person's answers to cards a session on the chain asked, with where and on what", async () => {
+    const s = await seedRun();
+    await s.card("sd-4235", s.lead, "Ship both together", { kind: "user", id: s.ana }, s.now() + 5_000);
+    await s.card("sd-4236", s.lead, "Links first", { kind: "role", id: "release-captain" }, s.now() + 6_000);
+    const read = await s.originator(s.worker);
+    expect(read.cards).toEqual([{
+      card: "sd-4235", session_short_id: await s.sid(s.lead), question: "Ship the Deploys deep links together with the PR numbers, or the links first?",
+      answer: "Ship both together", user_id: String(s.ana), user_name: "Ana", created_at: new Date(s.now() + 5_000).toISOString(),
+    }]);
+  });
+
   test("the asker reads a person's answers on the task's Ship cards beside their typed lines", async () => {
     const s = await seedRun();
     await revise(s, s.now() + 60_000);
     const read = await s.originator(s.worker, { task: "ct-7" });
-    expect(read.task.verdicts).toEqual([{ card: "sd-1", user_id: String(s.ana), user_name: "Ana", answer: "Revise", note: "fix X first", created_at: new Date(s.now() + 60_000).toISOString() }]);
+    expect(read.cards).toEqual([{ card: "sd-1", on_task: true, question: "Ship?", user_id: String(s.ana), user_name: "Ana", answer: "Revise", note: "fix X first", created_at: new Date(s.now() + 60_000).toISOString() }]);
   });
 
   test("a clear with no cite stamps as before, with no cite and no comment", async () => {

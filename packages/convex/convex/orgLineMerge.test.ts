@@ -173,6 +173,15 @@ describe("a merge no role is behind", () => {
     expect(await check(ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: `Host's own word "Yes, ship this" (jx7b0m0:115), checked at intent_gate` } });
   });
 
+  test("a clear on the starter's card answer merges under them, weighed by when they answered", async () => {
+    const { ctx, tables } = solo();
+    tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_0", answer_index: 1, resolved_at: NOW - DAY, created_at: NOW - DAY }));
+    const cited = { cite: { card: "sd-4235" }, quote: "Ship both together", name: "Host", said_at: NOW - 1 };
+    await clearForMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", why: "they chose ship", cited }, NOW + 1);
+    expect(tables.task_comments.at(-1).text).toBe(`Host said to ship: "Ship both together" (card:sd-4235), checked against the record.`);
+    expect(await check(ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: `Host's own word "Ship both together" (card:sd-4235), checked at intent_gate` } });
+  });
+
   // The newest word wins between a typed ship the run cleared on and a person's verdict on a Ship card.
   test("a typed ship newer than a Revise on the run's card authorizes; a Revise newer than the typed ship refuses", async () => {
     const cleared = (saidAt: number, revisedAt: number) => {

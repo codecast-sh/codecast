@@ -12,7 +12,7 @@
 // (`clearForMerge`), the person who started it.
 
 import { internalMutation, mutation, query } from "./functions";
-import type { Cite } from "./lib/originatorChain";
+import { citeRef, type StampCite } from "./lib/originatorChain";
 import { byPerson, cardRef, isShipAnswer, newestFirst, offersShip, verdictAt, verdictLabel } from "./lib/taskVerdicts";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
@@ -187,7 +187,7 @@ async function stampAuthorization(ctx: any, run: any, stamp: any): Promise<Perso
   const starter: any = await ctx.db.get(run.user_id);
   if (!starter || starter.is_bot) throw new Error(`No role started this run, an agent account started it, and no person answered Ship on a card, ${NOTHING_AUTHORIZES}`);
   const name = starter.name || starter.github_username || starter.email?.split("@")[0] || String(starter._id);
-  if (stamp.cite) return { user_id: String(run.user_id), why: `${name}'s own word "${stamp.quote}" (${stamp.cite.conversation_short_id}:${stamp.cite.line}), checked at ${stamp.node_id}` };
+  if (stamp.cite) return { user_id: String(run.user_id), why: `${name}'s own word "${stamp.quote}" (${citeRef(stamp.cite)}), checked at ${stamp.node_id}` };
   return { user_id: String(run.user_id), why: `cleared by the run's own graph at ${stamp.node_id} (${stamp.why}), started by ${name}` };
 }
 
@@ -201,13 +201,14 @@ async function stampAuthorization(ctx: any, run: any, stamp: any): Promise<Perso
  * rebuild) drops it.
  * An agent that fakes the runner's progress reports could still stamp; whoever holds the owner's token and git can push main anyway.
  *
- * `cited`: the starter's own typed line the clear rests on, already checked by verifyCitation (the intent segment's
- * clear, /cli/workflow-runs/clear with a cite), and when it was typed. The stamp keeps it, and the task says what they said.
+ * `cited`: the starter's own typed line or card answer the clear rests on, already checked by verifyCitation or
+ * verifyCardCitation (the intent segment's clear, /cli/workflow-runs/clear with a cite), and when it was said. The
+ * stamp keeps it, and the task says what they said.
  */
 export async function clearForMergeCore(
   ctx: any,
   userId: Id<"users">,
-  args: { run_id: string; why: string; cited?: { cite: Cite; quote: string; name: string; said_at: number } },
+  args: { run_id: string; why: string; cited?: { cite: StampCite; quote: string; name: string; said_at: number } },
   now = Date.now(),
 ): Promise<{ run_id: string; node_id: string; attempt: number }> {
   const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
@@ -228,7 +229,7 @@ export async function clearForMergeCore(
     const { cite, quote, name } = args.cited;
     await insertTaskComment(ctx, run.task_id, {
       author: "line",
-      text: `${name} said to ship: "${quote}" (${cite.conversation_short_id}:${cite.line}), checked against the record.`,
+      text: `${name} said to ship: "${quote}" (${citeRef(cite)}), checked against the record.`,
       comment_type: "progress",
       conversation_id: run.primary_conversation_id ?? undefined,
     });
@@ -241,7 +242,7 @@ export const clearForMerge = mutation({
   handler: async (ctx, { api_token, ...args }) => clearForMergeCore(ctx, await requireToken(ctx, api_token), args),
 });
 
-const citeValidator = v.object({ conversation_short_id: v.string(), line: v.number() });
+const citeValidator = v.union(v.object({ conversation_short_id: v.string(), line: v.number() }), v.object({ card: v.string() }));
 
 /** A clear resting on the starter's own typed line: only /cli/workflow-runs/clear writes it, after verifyCitation. */
 export const clearForMergeCited = internalMutation({

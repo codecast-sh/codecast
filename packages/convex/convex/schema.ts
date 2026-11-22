@@ -8774,7 +8774,7 @@ export default defineSchema({
     // graph cleared on a person's word (the intent segment), checked by the server before the stamp.
     merge_cleared: v.optional(v.object({
       at: v.number(), node_id: v.string(), why: v.string(), by: v.id("users"), attempt: v.number(),
-      cite: v.optional(v.object({ conversation_short_id: v.string(), line: v.number() })),
+      cite: v.optional(v.union(v.object({ conversation_short_id: v.string(), line: v.number() }), v.object({ card: v.string() }))),
       quote: v.optional(v.string()),
       // When the cited line was typed: Land weighs it against the person's card verdicts, newest first.
       said_at: v.optional(v.number()),

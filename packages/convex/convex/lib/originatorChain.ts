@@ -125,12 +125,20 @@ export async function readOriginator<H extends ChainHead>(steps: OriginatorSteps
 /** The line a flow says a person authorized its change on (`cast workflow clear --cite`). */
 export type Cite = { conversation_short_id: string; line: number };
 
+/** What a clear rests on: a line the starter typed, or their answer to a decision card. */
+export type StampCite = Cite | { card: string };
+
+/** A citation as the task, intent.json and the merge record name it: `<session>:<line>` or `card:sd-N`. */
+export const citeRef = (cite: StampCite): string => ("card" in cite ? `card:${cite.card}` : `${cite.conversation_short_id}:${cite.line}`);
+
 /** What the server knows of the run a citation clears: who started it, and the sessions its change came through. */
 export type CiteRun = {
   starter_id: string;
   starter_name: string | null;
   starter_is_bot: boolean;
   chain: Array<{ conversation_id: string; short_id: string }>;
+  /** The run's task, whose own cards a citation may name. */
+  task_id?: string;
   /** The newest verdict a person gave on the task's Ship cards. */
   verdict?: { ref: string; at: number; ship: boolean; label: string };
 };
@@ -179,4 +187,50 @@ export async function verifyCitation(
     return { refused: `a person answered ${run.verdict.label} on ${run.verdict.ref} after ${where} was typed` };
   }
   return { conversation_id: hop.conversation_id, short_id: hop.short_id, line: typed.line, user_id: typed.user_id, user_name: typed.user_name, quote: quoted, said_at: saidAt };
+}
+
+/** A decision card a citation names, as the server holds it. */
+export type CardFacts = {
+  short_id: string;
+  conversation_id: string;
+  task_id?: string;
+  status: string;
+  answered_by?: { kind: string; id: string };
+  /** The option chosen, or the words typed in its place. */
+  answer: string;
+  note?: string;
+  resolved_at?: number;
+};
+
+export type CitedCard = { card: string; user_id: string; quote: string; said_at: number };
+
+/**
+ * Whether a cited card answer is the run starter's own word holding the quote: the card was asked in a session on
+ * the run's change chain or on the run's task, a person answered it and that person started the run (no agent
+ * account), its answer or note holds the quote once whitespace is folded, and no person gave a verdict other than
+ * Ship on the task's cards after it. When it was answered (resolved_at) is its time for the newest-word rules.
+ */
+export async function verifyCardCitation(
+  steps: { run: () => Promise<CiteRun | { error: string }>; card: (ref: string) => Promise<CardFacts | null | { error: string }> },
+  ref: string,
+  quote: string,
+): Promise<CitedCard | { refused: string }> {
+  const run = await steps.run();
+  if ("error" in run) return { refused: run.error };
+  if (run.starter_is_bot) return { refused: "an agent account started the run, and only a person's word clears it" };
+  const quoted = normalizeQuote(quote);
+  if (!quoted) return { refused: "the citation quotes nothing" };
+  const card = await steps.card(ref);
+  if (!card) return { refused: `no card ${ref}` };
+  if ("error" in card) return { refused: card.error };
+  const onChain = run.chain.some((h) => h.conversation_id === card.conversation_id);
+  const onTask = !!run.task_id && card.task_id === run.task_id;
+  if (!onChain && !onTask) return { refused: `${ref} was not asked in a session this change came through, nor on its task` };
+  if (card.status !== "answered" || card.answered_by?.kind !== "user" || card.resolved_at === undefined) return { refused: `${ref} holds no person's answer` };
+  if (card.answered_by.id !== run.starter_id) return { refused: `${ref} was answered by someone other than ${run.starter_name ?? "the person"} who started the run` };
+  if (!normalizeQuote(`${card.answer} ${card.note ?? ""}`).includes(quoted)) return { refused: `${ref}'s answer does not say "${quoted.slice(0, 200)}"` };
+  if (run.verdict && !run.verdict.ship && run.verdict.ref !== ref && run.verdict.at > card.resolved_at) {
+    return { refused: `a person answered ${run.verdict.label} on ${run.verdict.ref} after ${ref} was answered` };
+  }
+  return { card: ref, user_id: card.answered_by.id, quote: quoted, said_at: card.resolved_at };
 }

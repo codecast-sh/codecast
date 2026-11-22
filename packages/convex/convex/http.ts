@@ -13,7 +13,7 @@ import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthC
 import { installCallbackHandler } from "./lib/githubInstallCallback";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./lib/conversationRead";
-import { readOriginator, verifyCitation } from "./lib/originatorChain";
+import { citeRef, readOriginator, verifyCardCitation, verifyCitation, type StampCite } from "./lib/originatorChain";
 import { SHARED_CALL_VIDEO_PATH, signForCli } from "./callRecordings";
 import { SHARED_CALL_AUDIO_PATH, sharedCallAudio, sharedCallVideo } from "./lib/sharedCallMedia";
 import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMirror";
@@ -3452,25 +3452,32 @@ cliRoute("/cli/line/merge/record", async (ctx, body) => ctx.runMutation(api.orgL
 // With a cite (the intent segment): the clear rests on the run starter's own typed line, and code checks that line
 // before the stamp is written (verifyCitation); the model that chose it decides nothing here.
 cliRoute("/cli/workflow-runs/clear", async (ctx, body) => {
-  if (body.cite === undefined) return ctx.runMutation(api.orgLineMerge.clearForMerge, body);
-  const { api_token, run_id, why, cite, quote } = body;
+  if (body.cite === undefined && body.cite_card === undefined) return ctx.runMutation(api.orgLineMerge.clearForMerge, body);
+  const { api_token, run_id, why, cite, cite_card, quote } = body;
   if (typeof api_token !== "string" || typeof run_id !== "string" || typeof why !== "string") return { error: "Missing api_token, run_id or why" };
-  if (typeof cite?.conversation_short_id !== "string" || !Number.isInteger(cite?.line) || typeof quote !== "string") {
-    return { error: "A cite is {conversation_short_id, line} with a quote" };
+  if (typeof quote !== "string") return { error: "A cite comes with a quote" };
+  const facts = await ctx.runQuery(internal.originator.citeRun, { api_token, run_id });
+  const run = async () => facts;
+  let said: { cite: StampCite; quote: string; user_id: string; said_at: number };
+  if (cite_card !== undefined) {
+    if (typeof cite_card !== "string") return { error: "A card cite is sd-N" };
+    const card = await verifyCardCitation({ run, card: (ref) => ctx.runQuery(internal.originator.citedCard, { api_token, run_id, card: ref }) }, cite_card, quote);
+    if ("refused" in card) return { error: `Not cleared: ${card.refused}` };
+    said = { cite: { card: card.card }, quote: card.quote, user_id: card.user_id, said_at: card.said_at };
+  } else {
+    if (typeof cite?.conversation_short_id !== "string" || !Number.isInteger(cite?.line)) return { error: "A cite is {conversation_short_id, line} with a quote" };
+    const line = await verifyCitation({
+      run,
+      typedStep: (id, state) => ctx.runQuery(internal.originator.typedStep, { api_token, conversation_id: id, ...(state === undefined ? {} : { state }) }),
+    }, { conversation_short_id: cite.conversation_short_id, line: cite.line }, quote);
+    if ("refused" in line) return { error: `Not cleared: ${line.refused}` };
+    said = { cite: { conversation_short_id: line.short_id, line: line.line }, quote: line.quote, user_id: line.user_id, said_at: line.said_at };
   }
-  const cited = await verifyCitation({
-    run: () => ctx.runQuery(internal.originator.citeRun, { api_token, run_id }),
-    typedStep: (id, state) => ctx.runQuery(internal.originator.typedStep, { api_token, conversation_id: id, ...(state === undefined ? {} : { state }) }),
-  }, { conversation_short_id: cite.conversation_short_id, line: cite.line }, quote);
-  if ("refused" in cited) return { error: `Not cleared: ${cited.refused}` };
+  const name = "error" in facts ? null : facts.starter_name;
   const cleared = await ctx.runMutation(internal.orgLineMerge.clearForMergeCited, {
-    api_token, run_id, why,
-    cite: { conversation_short_id: cited.short_id, line: cited.line },
-    quote: cited.quote,
-    name: cited.user_name ?? "the person who started the run",
-    said_at: cited.said_at,
+    api_token, run_id, why, cite: said.cite, quote: said.quote, name: name ?? "the person who started the run", said_at: said.said_at,
   });
-  return { ...cleared, starter_id: cited.user_id, starter_name: cited.user_name, cite: `${cited.short_id}:${cited.line}`, quote: cited.quote };
+  return { ...cleared, starter_id: said.user_id, starter_name: name, cite: citeRef(said.cite), quote: said.quote };
 });
 cliRoute("/cli/line/requeue", async (ctx, body) => ctx.runMutation(api.orgLine.requeueFromCli, body));
 // `cast flow show|on|off` on a team's live flow (liveFlows.ts). on and off are a person's, on the web: the CLI's are refused with that reason.

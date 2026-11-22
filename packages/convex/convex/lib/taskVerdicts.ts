@@ -30,7 +30,7 @@ export async function taskShipCards(ctx: any, taskId: Id<"tasks">, statuses: str
   return rows.flat().filter((d: any) => !d.trial && offersShip(d)).sort(newestFirst);
 }
 
-export type PersonVerdict = { ref: string; at: number; ship: boolean; label: string; note?: string; user_id: string };
+export type PersonVerdict = { ref: string; at: number; ship: boolean; label: string; note?: string; user_id: string; question: string };
 
 /** A person's verdicts on the task's Ship cards of its runs, newest first. */
 export async function personVerdicts(ctx: any, taskId: Id<"tasks">): Promise<PersonVerdict[]> {
@@ -42,5 +42,31 @@ export async function personVerdicts(ctx: any, taskId: Id<"tasks">): Promise<Per
     label: verdictLabel(d),
     ...(d.answer_text && d.answer_text.trim() !== verdictLabel(d) ? { note: String(d.answer_text) } : {}),
     user_id: verdictPerson(d)!,
+    question: String(d.question ?? ""),
+  }));
+}
+
+/** How many answered cards of each session the asker reads, newest first. */
+export const CARDS_PER_SESSION = 50;
+
+/**
+ * A person's answers to the decision cards a session asked, newest first: the option chosen (or the words they
+ * typed), when, and on what question. An agent's or a policy's answer is no person's word and is left out.
+ */
+export async function personAnswersIn(ctx: any, conversationId: Id<"conversations">): Promise<Array<PersonVerdict & { session: string }>> {
+  const rows = await ctx.db
+    .query("session_decisions")
+    .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", "answered"))
+    .order("desc")
+    .take(CARDS_PER_SESSION);
+  return rows.filter((d: any) => d.answered_by?.kind === "user").map((d: any) => ({
+    ref: cardRef(d),
+    at: verdictAt(d),
+    ship: isShipAnswer(d),
+    label: verdictLabel(d),
+    ...(d.answer_text && d.answer_text.trim() !== verdictLabel(d) ? { note: String(d.answer_text) } : {}),
+    user_id: String(d.answered_by.id),
+    question: String(d.question ?? ""),
+    session: String(conversationId),
   }));
 }

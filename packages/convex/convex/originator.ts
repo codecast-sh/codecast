@@ -15,10 +15,10 @@ import { isNonEmptyMessage } from "./lib/conversationBasics";
 import type { ScanCursor } from "./lib/conversationRead";
 import { commandExpansionName } from "../../web/lib/conversationProcessor";
 import { launchedByProgram, mayBeTyped, messageProvenance, queuedTwin, sameWordsKey, typedPart } from "./lib/messageProvenance";
-import { walkOriginatorChain, type ChainLink, type ChainStop, type CiteRun, type TypedLine } from "./lib/originatorChain";
+import { walkOriginatorChain, type CardFacts, type ChainLink, type ChainStop, type CiteRun, type TypedLine } from "./lib/originatorChain";
 import { verifyApiToken } from "./apiTokens";
 import { canReadRun } from "./workflow_runs";
-import { personVerdicts } from "./lib/taskVerdicts";
+import { cardRef, personAnswersIn, personVerdicts, verdictLabel, type PersonVerdict } from "./lib/taskVerdicts";
 
 type Conv = Doc<"conversations">;
 
@@ -34,11 +34,26 @@ export type OriginatorHead = {
     is_bot: boolean;
     launched_by_program: boolean;
   };
-  task?: { short_id: string; chain: ChainEntry[]; stopped?: ChainStop; verdicts: TaskVerdictLine[] };
+  task?: { short_id: string; chain: ChainEntry[]; stopped?: ChainStop };
+  /** A person's answers to the decision cards the chain's sessions asked, and to the task's Ship cards. */
+  cards: CardLine[];
 };
 
-/** A person's verdict on one of the task's Ship cards, read beside their typed lines. */
-export type TaskVerdictLine = { card: string; user_id: string; user_name: string | null; answer: string; note?: string; created_at: string };
+/**
+ * A person's answer to a decision card, read beside their typed lines: the card, the session that asked it (when one
+ * on the chain did), whether it is one of the task's Ship cards, its question, the answer and its words, and when.
+ */
+export type CardLine = {
+  card: string;
+  session_short_id?: string;
+  on_task?: true;
+  question: string;
+  answer: string;
+  note?: string;
+  user_id: string;
+  user_name: string | null;
+  created_at: string;
+};
 
 const shortIdOf = (c: Conv) => c.short_id ?? String(c._id).slice(0, 7);
 const nameOf = (u: Doc<"users"> | null) => u?.name || u?.github_username || u?.email?.split("@")[0] || null;
@@ -109,21 +124,28 @@ export const chain = internalQuery({
         is_bot: !!authorRow?.is_bot,
         launched_by_program: launchedByProgram(walk.root),
       },
+      cards: [],
     };
+    const task = args.task ? await findTaskByRef(ctx, args.task) : null;
     if (args.task) {
-      const task = await findTaskByRef(ctx, args.task);
       if (!task || !(await canAccessTask(ctx, userId, task))) return { error: `Task ${args.task} not found` };
-      const verdicts = await personVerdicts(ctx, task._id);
-      const names = new Map<string, string | null>();
-      for (const v of verdicts) if (!names.has(v.user_id)) names.set(v.user_id, nameOf(await ctx.db.get(v.user_id as Id<"users">)));
-      head.task = {
-        short_id: task.short_id ?? String(task._id),
-        ...(await filingChain(ctx, userId, task)),
-        verdicts: verdicts.map((v) => ({
-          card: v.ref, user_id: v.user_id, user_name: names.get(v.user_id) ?? null, answer: v.label, ...(v.note ? { note: v.note } : {}),
-          created_at: new Date(v.at).toISOString(),
-        })),
-      };
+      head.task = { short_id: task.short_id ?? String(task._id), ...(await filingChain(ctx, userId, task)) };
+    }
+    // Cards asked in any session on the chain, then the task's Ship cards: one line per card.
+    const sessions = new Map([...head.chain, ...(head.task?.chain ?? [])].map((h) => [h.conversation_id, h.short_id]));
+    const answers = new Map<string, { v: PersonVerdict; session?: string; on_task?: true }>();
+    for (const [conversationId, shortId] of sessions) {
+      for (const v of await personAnswersIn(ctx, conversationId as Id<"conversations">)) answers.set(v.ref, { v, session: shortId });
+    }
+    if (task) for (const v of await personVerdicts(ctx, task._id)) answers.set(v.ref, { ...answers.get(v.ref), v, on_task: true });
+    const names = new Map<string, string | null>();
+    for (const { v, session, on_task } of answers.values()) {
+      if (!names.has(v.user_id)) names.set(v.user_id, nameOf(await ctx.db.get(v.user_id as Id<"users">)));
+      head.cards.push({
+        card: v.ref, ...(session ? { session_short_id: session } : {}), ...(on_task ? { on_task } : {}),
+        question: v.question, answer: v.label, ...(v.note ? { note: v.note } : {}),
+        user_id: v.user_id, user_name: names.get(v.user_id) ?? null, created_at: new Date(v.at).toISOString(),
+      });
     }
     return run ? { ...head, ...(await starterOf(ctx, run)) } : head;
   },
@@ -158,8 +180,32 @@ export const citeRun = internalQuery({
     const [verdict] = task ? await personVerdicts(ctx, task._id) : [];
     return {
       ...starter,
+      ...(task ? { task_id: String(task._id) } : {}),
       chain: [...chain.values()].map(({ conversation_id, short_id }) => ({ conversation_id, short_id })),
       ...(verdict ? { verdict: { ref: verdict.ref, at: verdict.at, ship: verdict.ship, label: verdict.label } } : {}),
+    };
+  },
+});
+
+/** A cited card as verifyCardCitation reads it, for the run's own runner (citeRun's rule). */
+export const citedCard = internalQuery({
+  args: { api_token: v.string(), run_id: v.string(), card: v.string() },
+  handler: async (ctx, args): Promise<CardFacts | null | { error: string }> => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    const runId = ctx.db.normalizeId("workflow_runs", args.run_id);
+    const run = runId ? await ctx.db.get(runId) : null;
+    if (!auth || !run || String(run.user_id) !== String(auth.userId)) return { error: "Only the run's own runner clears it to land" };
+    const d: any = await ctx.db.query("session_decisions").withIndex("by_short_id", (q) => q.eq("short_id", args.card)).first();
+    if (!d) return null;
+    return {
+      short_id: cardRef(d),
+      conversation_id: String(d.conversation_id),
+      ...(d.task_id ? { task_id: String(d.task_id) } : {}),
+      status: d.status,
+      ...(d.answered_by ? { answered_by: { kind: d.answered_by.kind, id: String(d.answered_by.id) } } : {}),
+      answer: verdictLabel(d),
+      ...(d.answer_text ? { note: String(d.answer_text) } : {}),
+      ...(d.resolved_at ? { resolved_at: d.resolved_at } : {}),
     };
   },
 });
