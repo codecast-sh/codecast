@@ -21,7 +21,7 @@ function DevicePermissionRow() {
   return <PermissionRow kind="notifications" readiness={readiness} onChange={refresh} />;
 }
 
-type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_idle_digest" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity" | "email_notifications" | "task_status_changes";
+type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_idle_digest" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity" | "email_notifications" | "task_status_changes" | "machine_alerts";
 
 const NOTIF_SECTIONS = [
   {
@@ -33,6 +33,7 @@ const NOTIF_SECTIONS = [
       { key: "session_idle_digest" as NotifType, label: "Hourly digest", desc: "Fold sessions waiting for input into one alert an hour instead of one each" },
       { key: "session_error" as NotifType, label: "Session errors", desc: "When a session encounters an error" },
       { key: "permission_request" as NotifType, label: "Permission requests", desc: "When a session needs your approval" },
+      { key: "machine_alerts" as NotifType, label: "Machine alerts", desc: "When a machine running your agents stays under heavy load" },
     ],
   },
   {
@@ -79,6 +80,7 @@ const DEFAULT_PREFS = {
   chat_activity: true,
   email_notifications: true,
   task_status_changes: false,
+  machine_alerts: true,
 };
 
 export default function NotificationsSettingsPage() {

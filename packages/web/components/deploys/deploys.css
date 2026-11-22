@@ -110,7 +110,9 @@ a.dpp-session:hover { text-decoration: underline; }
 .dpp-labels button { font: inherit; font-size: 12px; font-weight: 500; color: var(--sol-text-dim); background: none; border: 0; padding: 2px 9px; cursor: pointer; }
 .dpp-labels button + button { border-left: 1px solid var(--dp-rule); }
 .dpp-labels button[aria-pressed="true"] { color: var(--sol-text); font-weight: 600; background: color-mix(in srgb, var(--sol-text) 12%, transparent); }
-.dpp-labels + .dpp-mine { margin-left: 8px; }
+/* One filter row over both columns: Mine narrows both, the IDs are which ones the waiting commits show. */
+.dpp-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.dpp-filters > .dpp-mine, .dpp-filters > .dpp-labels { margin-left: 0; }
 .dpp-focus { display: flex; align-items: center; gap: 8px; margin: 8px 16px 0; padding: 4px 6px 4px 10px; border-radius: 6px; font-size: var(--fs-meta); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); border: 1px solid color-mix(in srgb, var(--sol-yellow) 45%, transparent); }
 .dpp-focus b { font-family: var(--font-mono); font-weight: 600; }
 .dpp-focus > span { color: var(--sol-text-muted); }
@@ -216,5 +218,6 @@ a.dpp-headci:hover span { text-decoration: underline; }
   .dpp-targets { padding: 8px 16px; overflow-x: auto; scrollbar-width: none; }
   .dpp-targets ul { flex-wrap: nowrap; }
   .dpp-target { min-height: 44px; }
+  .dpp-filters .dpp-mine, .dpp-filters .dpp-labels button, .dpp .chb-pick { min-height: 44px; }
   .dpp-main { padding: 14px 16px 32px; }
 }
