@@ -31,6 +31,14 @@ describe("a Ship press", () => {
     expect(read([press(10), later, said("a2", "Renamed the button to Save.", 14)])?.reply).toBeNull();
   });
 
+  test("what reaches the session on its own between the press and its answer does not take the answer away", () => {
+    // jx7dhj9, Nov 21: a task comment and another session's report arrived while it checked, then it answered the press.
+    const comment = { _id: "c", role: "user", content: '<task-comment task="ct-1" from="Ana">\nAbout ct-1\n</task-comment>', timestamp: 12 };
+    const report = { _id: "s", role: "user", content: '<session-message from="jx7005k">\nThe Built change passed.\n</session-message>', timestamp: 13 };
+    const msgs = [press(10), comment, report, said("a", "I didn't run the Change flow: it had nothing to take.", 14)];
+    expect(read(msgs)?.reply).toEqual({ id: "a", text: "I didn't run the Change flow: it had nothing to take." });
+  });
+
   test("a long stretch of tool work after it does not lose it", () => {
     const tools = Array.from({ length: 150 }, (_, i) => ({ _id: `t${i}`, role: "assistant", content: "", timestamp: 11 + i }));
     expect(read([press(10), ...tools])?.id).toBe("p10");

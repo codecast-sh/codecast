@@ -1,6 +1,7 @@
 // What a person's press asks a session to do with flows (docs/architecture/flows.md FL4, FL5): the words the
 // session receives, kept beside the other flow libs so the components that send them stay components.
-import { isNoiseUserMessage } from "../conversationProcessor";
+import { classifyUserMessage } from "../../components/conversation/classify";
+import type { Message } from "../../components/conversation/types";
 
 /** What the session is asked: run its change through the flow, named after what the change does, and say how it ended. */
 export function runThroughMessage(flow: { slug: string; label: string }): string {
@@ -51,13 +52,13 @@ function scanPress(msgs: ReadonlyArray<PressMsg>, newestRunAt: number): string {
   for (let i = msgs.length - 1; i >= 0 && i >= msgs.length - 400; i--) {
     const m = msgs[i]!;
     if (!reply && m.role === "assistant" && typeof m.content === "string" && m.content.trim()) reply = m;
-    // A person's message: a tool's result or a machine notice is not one.
-    if (m.role !== "user" || m.tool_results?.length || isNoiseUserMessage(m.content)) continue;
-    if (isRunThroughPress(m.content!)) {
+    if (m.role !== "user" || typeof m.content !== "string" || !m.content.trim()) continue;
+    if (isRunThroughPress(m.content)) {
       return (m.timestamp ?? 0) > newestRunAt ? [m.timestamp ?? 0, m._id ?? "", reply?._id ?? "", reply ? gist(reply.content!) : ""].join("\u0000") : "";
     }
-    // Words after a later message answer that message: the press's reply is the session's last words before it.
-    reply = null;
+    // Words after something the person typed later answer that; the press's reply is the session's last words before it.
+    // What reaches the session on its own (a tool's result, another session's message, a task comment) does not.
+    if (classifyUserMessage(m as Message).kind === "normal") reply = null;
   }
   return "";
 }
