@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
-import { filePathMention, filePathHref, parseFilePathHref, matchSessionChangedFile, FILE_PATH_SCAN_RE, mentionFromMatch, namedAbsolutePaths, resolveMentionPath } from "../filePathLinks";
+import { editedFileNamed, filePathMention, filePathHref, parseFilePathHref, matchSessionChangedFile, FILE_PATH_SCAN_RE, mentionFromMatch, namedAbsolutePaths, resolveMentionPath } from "../filePathLinks";
 import { entityRemarkPlugins } from "../remarkEntityIds";
 import { resolveVaultTarget, filesHref } from "../vault/vaultHref";
 
@@ -218,5 +218,18 @@ describe("matchSessionChangedFile", () => {
       kind: "dir",
     });
     expect(matchSessionChangedFile("/Users/alex/Posix/untouched.ts", changes, ctx)).toBeNull();
+  });
+});
+
+describe("editedFileNamed", () => {
+  test("names the one changed file with that name", () => {
+    expect(editedFileNamed("constitution.md", { editedPaths: ["/r/docs/constitution.md", "/r/lib/a.ts"] })).toBe("/r/docs/constitution.md");
+  });
+  test("two changed files share the name: no guess", () => {
+    expect(editedFileNamed("index.ts", { editedPaths: ["/r/a/index.ts", "/r/b/index.ts"] })).toBeUndefined();
+  });
+  test("a name the session never changed, or no conversation", () => {
+    expect(editedFileNamed("notes.md", { editedPaths: ["/r/docs/constitution.md"] })).toBeUndefined();
+    expect(editedFileNamed("constitution.md", null)).toBeUndefined();
   });
 });

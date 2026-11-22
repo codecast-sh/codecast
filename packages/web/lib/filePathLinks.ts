@@ -132,6 +132,30 @@ export interface FilePathContextValue {
    *  checkout this machine does not have. */
   conversationId?: string | null;
   foreign?: boolean;
+  /** Absolute paths of the files the session changed (the diff panel's
+   *  files). A reply that names one by its bare file name ("the edited
+   *  constitution.md") links to it. */
+  editedPaths?: readonly string[];
+}
+
+/** A bare file name in prose: no directory, an extension on the end
+ *  ("constitution.md"). Far too common to link on its own; it links only
+ *  when it names a file the session changed (editedFileNamed). */
+export const BARE_FILE_NAME_SCAN_RE = new RegExp(
+  String.raw`${BEFORE}([\w@+\-]+(?:\.[\w@+\-]+)*\.[A-Za-z][A-Za-z0-9]{0,9})${AFTER}`,
+  "g",
+);
+
+/** The one changed file whose name is `name`, or undefined when none is, or
+ *  two in different directories are (a guess there would be a wrong link). */
+export function editedFileNamed(name: string, ctx: FilePathContextValue | null | undefined): string | undefined {
+  let found: string | undefined;
+  for (const p of ctx?.editedPaths ?? []) {
+    if (p.slice(p.lastIndexOf("/") + 1) !== name) continue;
+    if (found !== undefined && found !== p) return undefined;
+    found = p;
+  }
+  return found;
 }
 
 /** The absolute and `~/` paths named anywhere in these tool call inputs
