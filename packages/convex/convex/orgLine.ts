@@ -19,7 +19,7 @@ import { verifyApiToken } from "./apiTokens";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineRouteFor } from "./workflows";
 import { seatPlace } from "./lib/seatPlace";
-import { deviceWorking, holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, slotRuns, takeSlot, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
+import { deviceWorking, holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, slotRuns, takeSlot, WORKING_RUN_STATUSES, type LinePool, type LineSlot } from "./lib/linePlacement";
 import { allRolesInBoundary, projectLeadRole, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownerOf, projectLeadOf } from "@codecast/shared/contracts/orgLead";
@@ -249,12 +249,29 @@ export async function lineLoadFor(ctx: Ctx, role: any, now: number, loads: LineL
   const key = `${seat.runner}|${seat.project_path ?? ""}|${role.team_id ?? ""}|${needs?.join(",") ?? ""}`;
   const known = loads.get(key);
   if (known) return known;
-  const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now, role.team_id ? String(role.team_id) : null, needs);
-  const load: LineLoad = pool
-    ? { runner: seat.runner, working: poolWorking(pool), cap: poolCap(pool), pool }
-    : { ...await runnerLoad(ctx, seat.runner, roles), pool: null };
+  const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now, role.team_id ? String(role.team_id) : null, needs, passSlots(loads));
+  let load: LineLoad;
+  if (pool) load = { runner: seat.runner, working: poolWorking(pool), cap: poolCap(pool), pool };
+  else {
+    // Every role seated on this runner with no pool shares the one machine: one load, read once, claimed through any of them.
+    const own = `runner:${seat.runner}`;
+    load = loads.get(own) ?? { ...await runnerLoad(ctx, seat.runner, roles), pool: null };
+    loads.set(own, load);
+  }
   loads.set(key, load);
   return load;
+}
+
+/**
+ * A pass's pool machines, each read once and shared by every pool it is in. Roles seated in different folders of one
+ * repository each have a pool of their own, and each once read every run on every machine again: Union's ~2,500 runs
+ * parked at its merge queue, read for each of its 62 roles, went past the 100 MB a query may read (Nov 22).
+ */
+const slotsByPass = new WeakMap<LineLoads, Map<string, LineSlot>>();
+function passSlots(loads: LineLoads): Map<string, LineSlot> {
+  let slots = slotsByPass.get(loads);
+  if (!slots) slotsByPass.set(loads, (slots = new Map()));
+  return slots;
 }
 
 export const freeSlots = (load: LineLoad): number => (load.pool ? poolFree(load.pool) : load.cap - load.working);

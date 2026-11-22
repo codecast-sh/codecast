@@ -1,4 +1,5 @@
-import { useSettingsData } from "../../../hooks/useSyncSettings";
+import { useSyncTeamMembers } from "../../../hooks/useSyncTeamMembers";
+import { teamMembersOf } from "../../../lib/activeTeam";
 import { useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
@@ -57,7 +58,11 @@ export default function TeamPage() {
   const setTeamMemberRole = useInboxStore((s) => s.setTeamMemberRole);
   const syncGithubOrg = useAction(api.teams.syncGithubOrg);
   const updateTeamIcon = useInboxStore((s) => s.updateTeamIcon);
-  const { data: teamMembers, error: membersError } = useSettingsData("teamMembers");
+  // The roster's one home is the store's teamMembers, which the role and
+  // remove actions above write, so the list shows their result at once.
+  const roster = useInboxStore(teamMembersOf);
+  const teamMembers = roster.length ? roster : undefined;
+  const { error: membersError } = useSyncTeamMembers(activeTeamId);
   // Nothing cached and the roster query failed: no count is known, so none
   // is claimed.
   const membersUnknown = teamMembers === undefined && !!membersError;
