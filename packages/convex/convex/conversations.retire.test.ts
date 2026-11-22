@@ -99,6 +99,24 @@ describe("cliRetireSession", () => {
     await refuses(s, /nested session jx7chld is live/);
   });
 
+  test("refuses while a nested session that is not live has a message queued or a trigger armed: the kill would drop them", async () => {
+    const child = async (s: Awaited<ReturnType<typeof setup>>, shortId: string) => s.t.run(async (ctx) => ctx.db.insert("conversations", {
+      user_id: s.ids.user, agent_type: "claude_code", started_at: Date.now(), status: "active", short_id: shortId, is_subagent: true, parent_conversation_id: s.ids.conv,
+    } as any));
+    const queued = await setup();
+    const q = await child(queued, "jx7chlq");
+    await queued.t.run(async (ctx) => {
+      await ctx.db.insert("pending_messages", { conversation_id: q, from_user_id: queued.ids.user, content: "later", status: "pending", created_at: Date.now(), retry_count: 0 } as any);
+    });
+    await refuses(queued, /a message is queued for its nested session jx7chlq/);
+    const armed = await setup();
+    const a = await child(armed, "jx7chla");
+    await armed.t.run(async (ctx) => {
+      await ctx.db.insert("agent_tasks", { user_id: armed.ids.user, title: "check", prompt: "check", schedule_type: "once", mode: "apply", status: "scheduled", retry_count: 0, run_count: 0, created_at: Date.now(), originating_conversation_id: a } as any);
+    });
+    await refuses(armed, /a trigger is armed for its nested session jx7chla/);
+  });
+
   test("refuses a session already stopped", async () => {
     const s = await setup({ inbox_killed_at: 5 });
     const r = (await s.retire()) as any;
