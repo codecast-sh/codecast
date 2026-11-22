@@ -148,6 +148,8 @@ export type DeployMarker = {
    * deploy, and a deploy already tied to another run is never its match.
    */
   workflow_run?: string;
+  /** The run's name named `sha`: it corrects the run's head an earlier delivery recorded before GitHub filled the name in. */
+  sha_named?: true;
   /** When what it reports began (a run's start), when that is earlier than `at`: a new deploy's created_at. */
   started_at?: number;
   note?: string;
@@ -221,8 +223,10 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
       else { patch.status = status; patch.finished_at = now; if (status === "live") patch.live_at = m.at; }
       if (open.superseded_by) patch.superseded_by = undefined;
     }
-    // The deploy path that names its deploy says what actually went out; otherwise the first sha stands.
-    if (m.sha && (!open.sha || (ownNamed && !sameSha(open.sha, m.sha) && (open.action ?? "deploy") === "deploy"))) patch.sha = m.sha;
+    // The deploy path that names its deploy, or a run whose name now names its commit, says what actually went out;
+    // otherwise the first sha stands.
+    const says = (ownNamed && (open.action ?? "deploy") === "deploy") || (m.sha_named && open === ownRun);
+    if (m.sha && (!open.sha || (says && !sameSha(open.sha, m.sha)))) patch.sha = m.sha;
     if (m.note && !open.note) patch.note = m.note.slice(-NOTE_MAX);
     if (m.dirty && !open.dirty) patch.dirty = m.dirty;
     if (m.ship_pass_id && !open.ship_pass_id) patch.ship_pass_id = m.ship_pass_id;

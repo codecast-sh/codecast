@@ -251,6 +251,21 @@ describe("a run of a target's deploy workflow is its deploy", () => {
     expect(w.dp("dp-4").sha).toBe(sha(2));
   });
 
+  test("a run first heard before its name resolved takes the commit a later delivery names, and its reader's marker is the same deploy", async () => {
+    const w = await world();
+    const id = nextRun();
+    // GitHub's requested delivery can carry the workflow's name before the run-name is filled in.
+    await w.deliver(workflowRun(id, { status: "queued", display_title: "Deploy" }));
+    expect(w.dp("dp-1").sha).toBe(HEAD);
+    await w.deliver(workflowRun(id));
+    expect(w.dp("dp-1").sha).toBe(sha(1));
+    await w.deliver(done(id, "success"));
+    // Production's own reader then reports the version it runs: the run's deploy, not a second one.
+    await recordDeployMarker(w.ctx, { workspace: WS, team_id: TEAM, target: "web", sha: sha(1).slice(0, 9), version: sha(1).slice(0, 9), repository: REPO, source: "live reader", at: NOW });
+    expect(w.t.deploys).toHaveLength(1);
+    expect(w.dp("dp-1")).toMatchObject({ status: "live", sha: sha(1) });
+  });
+
   test("a json marker of the same full sha (no run) finishes the running workflow deploy", async () => {
     const w = await world();
     await w.deliver(workflowRun(nextRun()));

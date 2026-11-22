@@ -358,7 +358,9 @@ it (`gate` and `rollout` came after `ci` and `finish`, which 1.1.235 reads).
   dispatched run ships is the one its run-name names (a dispatch input:
   Union's `run-name: Deploy <sha> for <actor>`), the commit main knows first;
   any other run ships the commit it runs on, since its title is a commit
-  subject. One workflow is one target's: a file two targets name is refused.
+  subject. A requested delivery can come before GitHub fills the run-name in,
+  so a later delivery that names the commit corrects the head the first one
+  recorded. One workflow is one target's: a file two targets name is refused.
   The run's url is the deploy's, stamped as `workflow_run` (indexed, so a
   run's link in a message is a point lookup), and a marker from a run speaks
   only for that run's deploy: a second run queued behind the first is a deploy of its own, a

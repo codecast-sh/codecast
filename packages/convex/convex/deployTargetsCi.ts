@@ -314,6 +314,7 @@ export async function recordWorkflowRunDeploy(ctx: any, payload: any): Promise<s
       source: `github: ${r.name}`,
       url: r.url,
       workflow_run: r.run,
+      ...(sha !== r.head_sha ? { sha_named: true as const } : {}),
       status: r.status,
       ...(r.status === "failed" ? { note: `${r.name} run ended ${r.conclusion ?? "failed"}.` } : {}),
       ...(r.actor ? { started_by: { kind: "source" as const, name: r.actor } } : {}),
