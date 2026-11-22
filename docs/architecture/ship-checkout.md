@@ -119,8 +119,12 @@ to `.git/codecast/checkout-run.json` (`checkoutRunHold.ts`): the starting
 `cast flow run`'s pid until its run exists, then the run's id. A second `cast
 flow run --checkout`, or `cast ship checkout` with `flow` set, is refused
 before it freezes anything while that run is pending, running or paused,
-naming it. A hold whose starter died or whose run ended is stale and taken
-over, so nothing has to clear it.
+naming it. A hold whose starter died, or is still starting after five
+minutes (its pid may be another process's now), or whose run ended is stale
+and taken over, so nothing has to clear it. A stale hold is moved aside and
+read again before it is deleted, so two passes that both judged it stale
+cannot delete each other's fresh hold: one takes the checkout and the other is
+refused.
 
 ## The level sweep
 
