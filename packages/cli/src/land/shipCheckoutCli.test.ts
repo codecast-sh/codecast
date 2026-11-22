@@ -58,18 +58,19 @@ describe("defaultMessage", () => {
 });
 
 describe("[ship] flow: a pass runs through a flow", () => {
-  test("the manifest takes a flow name or \"default\", and refuses an empty or non-string one", () => {
+  test("the manifest takes a flow's name, and refuses \"default\", an empty or a non-string one", () => {
     expect(parseManifestText(`[ship]\nflow = "change"\n`).ship?.flow).toBe("change");
-    expect(parseManifestText(`[ship]\nflow = "default"\n`).ship?.flow).toBe("default");
+    expect(() => parseManifestText(`[ship]\nflow = "default"\n`)).toThrow("never takes a workspace's default flow");
     expect(parseManifestText(`[ship]\nmode = "direct"\n`).ship?.flow).toBeUndefined();
     expect(() => parseManifestText(`[ship]\nflow = ""\n`)).toThrow("'ship.flow' must name a flow");
     expect(() => parseManifestText(`[ship]\nflow = 3\n`)).toThrow("'ship.flow' must name a flow");
   });
 
-  test("set, the pass is the flow's checkout change; \"default\" runs the nameless form; a dry run only plans; steering flags are refused", () => {
+  test("set, the pass is the named flow's checkout change; a dry run only plans; steering flags and --no-fetch are refused", () => {
     expect(checkoutFlowArgs(undefined, {})).toBeNull();
     expect(checkoutFlowArgs("change", {})).toEqual(["flow", "run", "change", "--checkout"]);
-    expect(checkoutFlowArgs("default", { json: true })).toEqual(["flow", "run", "--checkout", "--json"]);
+    expect(checkoutFlowArgs("change", { json: true })).toEqual(["flow", "run", "change", "--checkout", "--json"]);
+    expect(() => checkoutFlowArgs("change", { fetch: false })).toThrow("--no-fetch only steers");
     expect(checkoutFlowArgs("change", { dryRun: true })).toBeNull();
     expect(() => checkoutFlowArgs("change", { hold: "s:jx7abc1", push: false })).toThrow("--hold, --no-push only steer a pass cast ship checkout pushes itself");
     expect(() => checkoutFlowArgs("change", { plan: true })).toThrow("--plan only steers");
