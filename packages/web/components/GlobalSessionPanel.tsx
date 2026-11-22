@@ -3,6 +3,7 @@ import { InboxDecisionQueue } from "./decisions/InboxDecisionQueue";
 import { forkTreeRootId } from "../lib/forkTreeRoot";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useHiddenBucketsOpen } from "../hooks/useHiddenBucketsOpen";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -1935,20 +1936,13 @@ function SessionListPanelImpl({
     [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv, globalSubByParent],
   );
 
-  // The Stashed / Killed buckets' open state is ephemeral and CLOSED by
-  // default: closed on every load, and re-closed whenever the chip filter
-  // (label, layout, project) changes — filterByChip's identity is that filter.
-  // It used to live in the synced clientState (show_stashed / show_dismissed),
-  // so one auto-reveal left the bucket open on every device, forever.
-  const CLOSED_BUCKETS = { snoozed: false, stashed: false, dismissed: false };
-  const [openBuckets, setOpenBuckets] = useState(CLOSED_BUCKETS);
-  const [bucketsFilter, setBucketsFilter] = useState(() => filterByChip);
-  if (bucketsFilter !== filterByChip) {
-    // The state holds a FUNCTION: pass it through a thunk, or React runs it
-    // as an updater with the previous filter as its argument.
-    setBucketsFilter(() => filterByChip);
-    setOpenBuckets(CLOSED_BUCKETS);
-  }
+  // The Stashed / Killed buckets' open state is ephemeral and closed by
+  // default, re-closed when the chip filter (label, project) changes. It used
+  // to live in the synced clientState (show_stashed / show_dismissed), so one
+  // auto-reveal left the bucket open on every device, forever.
+  const [openBuckets, setOpenBuckets] = useHiddenBucketsOpen(
+    JSON.stringify([chipProjectFilters(s), chipBucketFilters(s)]),
+  );
 
   const filteredPinned = useMemo(() => filterByChip(pinned), [filterByChip, pinned]);
   const filteredNew = useMemo(() => filterByChip(newSessions), [filterByChip, newSessions]);
