@@ -168,6 +168,13 @@ export type StationWatch = { ended?: () => Promise<boolean>; everyMs?: number; g
 
 /** Seconds a station may print nothing before it is flagged (node `silent=`, 0 never). */
 const SILENT_DEFAULT_S = 1800;
+
+/**
+ * How long a station may print nothing before it is flagged, in ms (0 never). A station that parks waits on
+ * something outside it (a deploy going live, a guard's next round) and prints only when it lands, so only an
+ * explicit `silent=` bounds it: the default put a false "printed nothing" note on every change waiting to deploy.
+ */
+export const silentBoundMs = (node: WorkflowNode): number => (node.silent ?? (node.parks ? 0 : SILENT_DEFAULT_S)) * 1000;
 /**
  * How long a station whose script exited waits for its output pipes to close.
  * A process that left the station's group (setsid) can hold them for good, and
@@ -193,7 +200,7 @@ export async function executeCommand(
     // minute cap on most repos; a timeout read as a failed check and burned an
     // implement visit. Per node, in seconds.
     const timeoutMs = (node.timeout ?? 120) * 1000;
-    const silentMs = (node.silent ?? SILENT_DEFAULT_S) * 1000;
+    const silentMs = silentBoundMs(node);
     type Result = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean; stopped: boolean; notes: string[] };
     const result = await new Promise<Result>((resolve, reject) => {
       const child = spawn("bash", ["-c", script], {

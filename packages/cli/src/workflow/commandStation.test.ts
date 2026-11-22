@@ -6,7 +6,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pollUntil } from "../test-helpers/pollUntil.js";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "../test-helpers/codecastDir.js";
-import { executeCommand } from "./commandStation";
+import { executeCommand, silentBoundMs } from "./commandStation";
+import { parseWorkflowSource } from "./parser";
 import { KILL_IF_SAME, bootTimeMs, reapDeadRunnerStations, stationRecordDir } from "./stationProcs";
 import { snapshotProcessTable } from "../processTable.js";
 import type { WorkflowNode } from "./types";
@@ -198,6 +199,25 @@ describe("a station that ends on its own", () => {
     expect(ctx["quiet.exit_code"]).toBe("3");
     expect(ctx["quiet.output"]).toContain("printed nothing for");
   }, 30_000);
+
+  test("that parks has no silence bound unless it names one, and one it names still notes", async () => {
+    // A park waits on something outside it and prints at its verdict: Go live waits up to a week on a deploy.
+    expect(silentBoundMs({ id: "wait", type: "command", parks: true } as WorkflowNode)).toBe(0);
+    expect(silentBoundMs({ id: "check", type: "command" } as WorkflowNode)).toBe(1_800_000);
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "station-procs-"));
+    const node = { id: "parked", type: "command", script: "sleep 3; echo ok", parks: true, silent: 1 } as WorkflowNode;
+    const told: string[] = [];
+    expect(await executeCommand(node, {}, tmp, { silent: (note) => told.push(note) })).toBe("success");
+    expect(told).toHaveLength(1);
+  }, 30_000);
+
+  test("the shipped stations quiet by design (waits, holds, gates) are never flagged", () => {
+    const templates = path.join(import.meta.dir, "templates");
+    const station = (file: string, id: string) => parseWorkflowSource(fs.readFileSync(path.join(templates, file), "utf-8")).nodes.get(id)!;
+    for (const [file, id] of [["deploy.cast", "wait"], ["climb.cast", "hold"], ["climb.cast", "guard"], ["line.cast", "ship"], ["ship.cast", "ship"]]) {
+      expect([file, id, silentBoundMs(station(file, id))]).toEqual([file, id, 0]);
+    }
+  });
 
   test("that goes quiet is told while it still runs, and a success keeps the note beside its output, not in it", async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "station-procs-"));
