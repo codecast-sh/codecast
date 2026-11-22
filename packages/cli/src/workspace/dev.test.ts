@@ -2,8 +2,14 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { devServices, ensureService, expandVars, isAlive, portNameOf, readyProbe, serviceStatus, stopService } from "./dev.js";
+import { execSync, spawn, type ChildProcess } from "node:child_process";
+import {
+  devServices, devStateDir, ensureService, expandVars, isAlive, parseProcNetTcp, pgidFromStat, portNameOf, readRecord, readyProbe, serviceStatus, stopService,
+  type DevRecord, type DevService, type DevStatus,
+} from "./dev.js";
 import { detectProject } from "./detect.js";
+import { isPortFree } from "./ports.js";
+import { pollUntil } from "../test-helpers/pollUntil.js";
 import type { ServiceSpec, WorkspaceManifest } from "./types.js";
 
 let tmp: string;
@@ -107,5 +113,166 @@ describe("dev server detection", () => {
     const root = repo({ "bun.lock": "", "vite.config.ts": "", "package.json": JSON.stringify({ scripts: { build: "vite build" } }) });
     expect(detectProject(root).services).toEqual({});
     expect(detectProject(root).browser.enabled).toBe(true);
+  });
+});
+
+describe("cast dev never calls another checkout's server its own", () => {
+  const running: ChildProcess[] = [];
+  const started: Array<[DevService, string]> = [];
+  afterAll(async () => {
+    for (const [svc, checkout] of started) await stopService(svc, checkout);
+    for (const child of running) { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } }
+  });
+
+  /** The first of `n` consecutive free ports, from a random start so concurrent runs do not collide. */
+  async function freePorts(n: number): Promise<number> {
+    for (let tries = 0; tries < 50; tries++) {
+      const base = 41_000 + Math.floor(Math.random() * 18_000);
+      const free = await Promise.all(Array.from({ length: n }, (_, i) => isPortFree(base + i)));
+      if (!free.includes(false)) return base;
+    }
+    throw new Error(`no ${n} consecutive free ports`);
+  }
+
+  function gitRepo(): string {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(tmp, "checkout-")));
+    execSync("git init -q", { cwd: root });
+    return root;
+  }
+
+  /** A server answering `body` on `port`, run from `cwd` in its own process group like cast dev's. */
+  async function serve(cwd: string, port: number, body: string, hostname = "0.0.0.0"): Promise<ChildProcess> {
+    const child = spawn("bun", ["-e", `Bun.serve({ port: ${port}, hostname: "${hostname}", fetch: () => new Response("${body}") })`], { cwd, detached: true, stdio: "ignore" });
+    running.push(child);
+    const url = `http://${hostname.includes(":") ? `[${hostname}]` : "127.0.0.1"}:${port}/`;
+    await pollUntil(() => fetch(url).then((r) => r.ok, () => false), `${body} server on ${port}`, { ms: 15_000, every: 100 });
+    return child;
+  }
+
+  /** ensureService, with whatever it starts stopped after the suite even when an assertion fails. */
+  function ensure(m: WorkspaceManifest, checkout: string, timeoutSec: number): Promise<DevStatus> {
+    const svc = devServices(m)[0];
+    started.push([svc, checkout]);
+    return ensureService(svc, { checkout, manifest: m, timeoutSec });
+  }
+
+  function writeDevRecord(checkout: string, record: Partial<DevRecord> & { pid: number; port: number }): void {
+    fs.mkdirSync(devStateDir(checkout), { recursive: true });
+    fs.writeFileSync(path.join(devStateDir(checkout), "web.json"), JSON.stringify({
+      name: "web", url: `http://localhost:${record.port}`, command: "", cwd: checkout, log: path.join(tmp, "none.log"), startedAt: "", ...record,
+    }));
+  }
+
+  /** Our server, run from `checkout`, recorded on `port` while another checkout's server holds that port. */
+  async function recordedOnTheirPort(port: number, ours: ChildProcess): Promise<string> {
+    const checkout = gitRepo();
+    writeDevRecord(checkout, { pid: ours.pid!, port });
+    return checkout;
+  }
+
+  const text = async (url: string) => (await fetch(url)).text();
+  const web = (base: number, env: Record<string, string> = {}) => ({ ...manifest({ web: { mode: "isolated", start: SERVER, port: "web" } }, base), env });
+
+  test("a port another server holds only on ::1 is not free", async () => {
+    const base = await freePorts(2);
+    await serve(gitRepo(), base, "theirs", "::1");
+    expect(await isPortFree(base)).toBe(false);
+    const status = await ensure(web(base), gitRepo(), 30);
+    if (status.state !== "started") throw new Error(`expected started, got ${JSON.stringify(status)}`);
+    expect(status.record.port).toBe(base + 1);
+    expect(await text(status.record.url)).toBe("ok");
+  }, 60_000);
+
+  test("a server that moves off its given port is reported where it listens", async () => {
+    const base = await freePorts(3);
+    const moves = `exec bun -e 'Bun.serve({ port: Number(process.env.PORT_WEB) + 2, fetch: () => new Response("moved") })'`;
+    const m = manifest({ web: { mode: "isolated", start: moves, port: "web" } }, base);
+    const status = await ensure(m, gitRepo(), 30);
+    if (status.state !== "started") throw new Error(`expected started, got ${JSON.stringify(status)}`);
+    expect(status.record.port).toBe(base + 2);
+    expect(status.record.url).toBe(`http://localhost:${base + 2}`);
+    expect(await text(status.record.url)).toBe("moved");
+  }, 60_000);
+
+  test("reuse: a recorded port another checkout answers on is not 'already running'", async () => {
+    const base = await freePorts(2);
+    const checkout = gitRepo();
+    const nested = path.join(checkout, "nested-worktree");
+    fs.mkdirSync(nested);
+    execSync("git init -q", { cwd: nested });
+    await serve(nested, base, "theirs");
+    const ours = await serve(checkout, base + 1, "ours");
+    writeDevRecord(checkout, { pid: ours.pid!, port: base });
+
+    const status = await ensure(web(base), checkout, 10);
+    if (status.state !== "running") throw new Error(`expected running, got ${JSON.stringify(status)}`);
+    expect(status.record.port).toBe(base + 1);
+    expect(await text(status.record.url)).toBe("ours");
+    expect(readRecord(checkout, "web")?.port).toBe(base + 1);
+  }, 60_000);
+
+  test("reuse: our server listening nowhere while another checkout holds its port fails, naming that checkout", async () => {
+    const base = await freePorts(1);
+    const other = gitRepo();
+    await serve(other, base, "theirs");
+    const idle = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+    running.push(idle);
+    const checkout = await recordedOnTheirPort(base, idle);
+
+    const status = await ensure(web(base), checkout, 3);
+    expect(status.state).toBe("failed");
+    if (status.state === "failed") expect(status.reason).toContain(`held by another checkout's server (${other}`);
+    expect((await serviceStatus(devServices(web(base))[0], checkout, web(base))).state).toBe("failed");
+  }, 30_000);
+
+  test("an assigned port: another checkout's server fails, this checkout's own is external", async () => {
+    const base = await freePorts(2);
+    const other = gitRepo();
+    await serve(other, base, "theirs");
+    const checkout = gitRepo();
+    const held = await ensure(web(base, { PORT_WEB: String(base) }), checkout, 10);
+    expect(held.state).toBe("failed");
+    if (held.state === "failed") expect(held.reason).toContain(other);
+
+    fs.mkdirSync(path.join(checkout, "packages/web"), { recursive: true });
+    await serve(path.join(checkout, "packages/web"), base + 1, "by hand");
+    expect((await ensure(web(base + 1, { PORT_WEB: String(base + 1) }), checkout, 10)).state).toBe("external");
+  }, 60_000);
+
+  test.skipIf(process.platform === "linux")("when lsof cannot answer, no path calls the server on the port ours", async () => {
+    const base = await freePorts(2);
+    const other = gitRepo();
+    await serve(other, base, "theirs");
+    const ours = await serve(gitRepo(), base + 1, "ours");
+    const checkout = await recordedOnTheirPort(base, ours);
+    const bin = fs.mkdtempSync(path.join(tmp, "bin-"));
+    fs.writeFileSync(path.join(bin, "lsof"), "#!/bin/sh\nexit 2\n", { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath}`;
+    try {
+      const reuse = await ensure(web(base), checkout, 3);
+      expect(reuse.state).toBe("failed");
+      if (reuse.state === "failed") expect(reuse.reason).toContain("could not tell which process listens");
+      expect((await serviceStatus(devServices(web(base))[0], checkout, web(base))).state).toBe("failed");
+      const assigned = await ensure(web(base, { PORT_WEB: String(base) }), gitRepo(), 3);
+      expect(assigned.state).toBe("failed");
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  }, 60_000);
+});
+
+describe("reading listeners from /proc", () => {
+  test("LISTEN rows of /proc/net/tcp, by socket inode", () => {
+    const table = [
+      "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+      "   0: 0100007F:0C81 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 41234 1 0000000000000000 100 0 0 10 0",
+      "   1: 0100007F:0C82 0100007F:A1B2 01 00000000:00000000 00:00000000 00000000  1000        0 41299 1 0000000000000000 20 4 30 10 -1",
+    ].join("\n");
+    expect([...parseProcNetTcp(table)]).toEqual([["41234", 3201]]);
+  });
+
+  test("the process group from a stat line whose command holds spaces and parens", () => {
+    expect(pgidFromStat("4242 (node (vite) dev) S 4200 4100 4100 0 -1 4194560 1203")).toBe(4100);
   });
 });
