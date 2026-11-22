@@ -90,7 +90,12 @@ a.dpp-session:hover { text-decoration: underline; }
 .dpp-task { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--sol-blue); text-decoration: none; flex: none; }
 .dpp-group-n { margin-left: auto; font-size: var(--fs-meta); color: var(--sol-text-dim); flex: none; }
 .dpp-commits { list-style: none; margin: 0; padding: 4px 0; }
-.dpp-commit { display: grid; grid-template-columns: 16px auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 12px; }
+.dpp-commit { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; row-gap: 2px; padding: 4px 12px; }
+.dpp-commit > .dpp-subject { flex: 1 1 16ch; min-width: 16ch; }
+.dpp-commit > .dpp-age { margin-left: auto; }
+.dpp-commit > .dpp-ci, .dpp-commit > .dpp-ci-link { flex: none; }
+/* The IDs stay on the CI mark's line: past the row's width the last column is cut, never the mark left alone. */
+.dpp-commit > .dpp-ids { flex: 0 1 auto; max-width: calc(100% - 24px); overflow: hidden; }
 .dpp-ids { display: inline-flex; align-items: center; gap: 8px; }
 .dpp-ids:empty { display: none; }
 .dpp-id { display: inline-flex; min-width: 0; font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; }
@@ -98,8 +103,8 @@ a.dpp-session:hover { text-decoration: underline; }
 .dpp-id[data-kind="pr"] { width: 56px; }
 .dpp-id[data-kind="sha"] { width: 72px; }
 .dpp-id[data-kind="task"] { width: 84px; }
-.dpp-id[data-kind="session"] { width: 120px; }
-.dpp-id[data-kind="branch"] { width: 180px; }
+.dpp-id[data-kind="session"] { width: 92px; }
+.dpp-id[data-kind="branch"] { width: 160px; }
 .dpp-id[data-kind="branch"] code { overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); color: var(--sol-text-muted); }
 .dpp-commits .dpp-commit[data-focus], .dpp-dp-item[data-focus] > .dpp-dp-row { background: color-mix(in srgb, var(--sol-yellow) 30%, transparent); box-shadow: inset 0 0 0 1.5px var(--sol-yellow), inset 4px 0 0 var(--sol-yellow); }
 .dpp-labels { margin-left: auto; display: inline-flex; border: 1px solid var(--dp-rule); border-radius: 999px; overflow: hidden; }

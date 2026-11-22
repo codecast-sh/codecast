@@ -90,7 +90,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
     // The target the link opened stays open once the highlight goes.
     setPicked((was) => was ?? picked?._id ?? null);
     setFocus(null);
-    rewriteAddress({ pr: null, sha: null, task: null, session: null, deploy: null });
+    rewriteAddress({ pr: null, sha: null, task: null, session: null, branch: null, deploy: null, repo: null });
   };
   const [pickedId, setPicked] = useState<string | null>(initialTarget ?? null);
   // A PR or commit's own reach says where it went out, so a deploy that listed only its newest commits still finds it.
@@ -99,7 +99,12 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   const focusAt = useMemo(() => (pickedId ? null : focusTarget(allTargets, deploys, focus, reach)), [pickedId, allTargets, deploys, focus, reach]);
   // A deploy link opens at that deploy's target; a change's link opens where its reach says (focusAt), not at the deploy that found the team.
   const want = pickedId ?? (initialDeploy && where ? (where.repository ? `${where.repository}#${where.target}` : where.target) : null) ?? focusAt?._id ?? null;
-  const picked = ordered.find((t) => t._id === want || t.name === want) ?? ordered[0] ?? null;
+  // A target is named alone (`target=production`); the repository the link names, when it names one, tells apart two
+  // repositories' targets of the same name.
+  const wantRepo = pickedId ? null : initialRepo ?? null;
+  const picked = ordered.find((t) => t._id === want)
+    ?? ordered.find((t) => (t.name === want || `${t.repository}#${t.name}` === want) && (!wantRepo || t.repository === wantRepo))
+    ?? ordered[0] ?? null;
   const press = useDeployPress(teamId, deploys);
   const modern = useIsModernStyle();
   const repos = new Set(allTargets.map((t) => t.repository).filter(Boolean));
@@ -208,11 +213,14 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
   const focusDeploys = !focus ? [] : held ? n.history.filter((d) => d.short_id === held.short_id) : n.history.filter((d) => deployMatches(d, focus));
   const focusOpen = focusWaiting ? null : focusDeploys[0]?.short_id ?? null;
   const [open, setOpen] = useState<string | null>(openDeploy ?? focusOpen);
-  // Reach lands after the first paint: open the deploy it names once it does, and bring the highlight on screen.
+  // Reach lands after the first paint: once the linked thing is found here, open the deploy it names and bring it on
+  // screen, once. Later moves (the commit going out while the page is open) never move the page on their own.
+  const landed = useRef(false);
   useEffect(() => {
-    if (!focus) return;
+    if (!focus || landed.current || (!focusWaiting && !focusOpen)) return;
+    landed.current = true;
     if (focusOpen && !openDeploy) setOpen(focusOpen);
-    return keepFocusInView();
+    keepFocusInView();
   }, [focus, focusOpen, focusWaiting, openDeploy]);
   const [mineOn, setMineOn] = useState(false);
   const login = useInboxStore((s) => (s.currentUser as { github_username?: string } | null)?.github_username ?? null);
