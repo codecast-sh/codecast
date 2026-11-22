@@ -807,6 +807,7 @@ export function FaceRow({
               viewerId={viewerId}
               callsEnabled={callsEnabled}
               faceKey={keys.current.get(openId) ?? null}
+              entry={row.entries.find((e) => e.id === openId) ?? null}
               anchor={anchor}
               density={density}
               onOpenProfile={openProfile}
