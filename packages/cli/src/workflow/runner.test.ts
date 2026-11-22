@@ -615,6 +615,23 @@ describe("workflow/runner (LE14: json vars, graph hash, plan ready_tasks)", () =
     expect(ctx["fail.output"]).toBe("why it failed");
   });
 
+  test("a station gone quiet is noted on the run's task while it runs, and its node keeps the note after it succeeds", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      quiet [shape=parallelogram, script="sleep 3; echo ok", silent=1]
+      exit  [shape=Msquare]
+      start -> quiet -> exit
+    }`);
+    expect(await runWorkflow(g, { cwd: tmpDir, runId: "run-1", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test" })).toBe("completed");
+    const note = calls.findIndex(c => c.route === "/cli/work/comment" && /quiet has printed nothing for \d+s; still running/.test(c.body.text));
+    const settled = calls.findIndex(c => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "quiet" && c.body.node_status === "completed");
+    expect(note).toBeGreaterThanOrEqual(0);
+    expect(calls[note].body).toMatchObject({ short_id: "ct-9", comment_type: "note" });
+    expect(calls[note].body.text).toContain("/workflows/runs/run-1");
+    expect(note).toBeLessThan(settled);
+    expect(calls[settled].body.result_preview).toMatch(/^ok\nprinted nothing for \d+s$/);
+  }, 30_000);
+
   test("a fanout with a failed branch stops the run: no branch reruns and nothing past the fanin runs", async () => {
     const log = path.join(tmpDir, "fanout.log");
     const g = parseWorkflowSource(`digraph g {

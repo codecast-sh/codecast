@@ -1590,13 +1590,17 @@ function stopIfEnded(options: RunOptions): void {
  */
 function stationWatch(options: RunOptions): StationWatch {
   if (!options.runId || !options.convexSiteUrl || !options.apiToken) return {};
+  const runId = options.runId;
   return {
     ended: async () => {
-      const status = (await cliCall(options, "/cli/workflow-runs/poll-gate", { run_id: options.runId }))?.status;
+      const status = (await cliCall(options, "/cli/workflow-runs/poll-gate", { run_id: runId }))?.status;
       if (status !== "completed" && status !== "failed") return false;
       options.endedOnServer ??= `the run is ${status}`;
       return true;
     },
+    // A station gone quiet is told on its run's task while it still runs. The run's row takes no note mid-station:
+    // a second "running" report restarts the station's clock and posts it as started again (updateProgress).
+    ...(options.taskId ? { silent: (note: string) => void runComment(options, "note", `${note}: ${runPageUrl(runId)}`) } : {}),
   };
 }
 
@@ -2528,7 +2532,8 @@ async function runNodeLoop(
         // A station script's own words (the dissolve station's JSON, a
         // check's failure) are what its node shows; an agent's is what it
         // concluded, so the run reads it without loading the transcript.
-        result_preview: current.type === "command" || current.type === "call" ? resultPreview(state.context[`${current.id}.output`] ?? "")
+        result_preview: current.type === "command" || current.type === "call"
+          ? [resultPreview(state.context[`${current.id}.output`] ?? ""), state.context[`${current.id}.notes`]].filter(Boolean).join("\n") || undefined
           : current.type === "agent" || current.type === "prompt" ? agentResultPreview(state.context[`${current.id}.output`] ?? "")
           : undefined,
         // A call node's cost, as the server charged it (learning-loop.md LL10).

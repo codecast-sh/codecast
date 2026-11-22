@@ -161,8 +161,10 @@ function stationEnded(group: number): void {
  * `everyMs`, which is also how often silence is checked and the station's
  * processes are read again for its record. `graceMs` is how long
  * its processes get between TERM and KILL when it is cut off (tests shorten it).
+ * `silent` hears a station that printed nothing past its `silent=` bound,
+ * while it still runs, so the runner can tell a person.
  */
-export type StationWatch = { ended?: () => Promise<boolean>; everyMs?: number; graceMs?: number };
+export type StationWatch = { ended?: () => Promise<boolean>; everyMs?: number; graceMs?: number; silent?: (note: string) => void };
 
 /** Seconds a station may print nothing before it is flagged (node `silent=`, 0 never). */
 const SILENT_DEFAULT_S = 1800;
@@ -223,13 +225,16 @@ export async function executeCommand(
           flagged = true;
           const note = `printed nothing for ${seconds(Date.now() - quietSince)}`;
           notes.push(note);
-          console.log(`  ${c.yellow}! ${node.label || node.id} has ${note}; still running (timeout ${seconds(timeoutMs)})${c.reset}`);
+          const told = `${node.label || node.id} has ${note}; still running (timeout ${seconds(timeoutMs)})`;
+          console.log(`  ${c.yellow}! ${told}${c.reset}`);
+          watch.silent?.(told);
         }
         if (watch.ended && !looking && !ending) {
           looking = true;
           watch.ended().then((ended) => { if (ended && !done) { stopped = true; end(); } }, () => {}).finally(() => { looking = false; });
         }
-      }, watch.everyMs ?? 30_000);
+        // A silence bound under the tick is checked as often as it asks.
+      }, watch.everyMs ?? Math.min(30_000, silentMs || 30_000));
       const heard = () => { quietSince = Date.now(); flagged = false; };
       child.stdout!.on("data", (d) => { stdout += d; heard(); });
       child.stderr!.on("data", (d) => { stderr += d; heard(); });
@@ -269,6 +274,10 @@ export async function executeCommand(
     const ok = result.status === 0 && !result.timedOut && !result.stopped;
     recordNodeOutput(context, node.id, ok ? result.stdout.trim() || result.stderr.trim() : output.trim(), result.stdout);
     context[`${node.id}.exit_code`] = String(stationExitCode(result));
+    // What the runner noticed about a station that succeeded (silent=) rides beside its result, never in it: later
+    // stations read `$<id>.output` as the station's own words. A failure's output carries the notes already.
+    if (ok && result.notes.length) context[`${node.id}.notes`] = result.notes.join("\n");
+    else delete context[`${node.id}.notes`];
 
     if (ok) {
       console.log(`  ${c.green}✓ success${c.reset}`);

@@ -198,4 +198,19 @@ describe("a station that ends on its own", () => {
     expect(ctx["quiet.exit_code"]).toBe("3");
     expect(ctx["quiet.output"]).toContain("printed nothing for");
   }, 30_000);
+
+  test("that goes quiet is told while it still runs, and a success keeps the note beside its output, not in it", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "station-procs-"));
+    const done = path.join(tmp, "done");
+    const node = { id: "slowok", type: "command", script: `sleep 4; touch ${done}; echo ok`, silent: 1 } as WorkflowNode;
+    const told: Array<{ note: string; running: boolean }> = [];
+    const ctx: Record<string, string> = {};
+    // No everyMs: a bound under the 30 s tick is checked as often as it asks.
+    expect(await executeCommand(node, ctx, tmp, { silent: (note) => told.push({ note, running: !fs.existsSync(done) }) })).toBe("success");
+    expect(told).toHaveLength(1);
+    expect(told[0].note).toMatch(/^slowok has printed nothing for \d+s; still running/);
+    expect(told[0].running).toBe(true);
+    expect(ctx["slowok.output"]).toBe("ok");
+    expect(ctx["slowok.notes"]).toContain("printed nothing for");
+  }, 30_000);
 });
