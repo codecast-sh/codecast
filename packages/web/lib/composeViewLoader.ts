@@ -9,6 +9,7 @@
 // rendered it stays: swapping the element type under an open composer would
 // remount it and drop the draft.
 import { lazy } from "react";
+import { namedExport } from "./lazyNamed";
 import type { ComposeView as ComposeViewType } from "../components/ComposeView";
 
 let loaded: typeof ComposeViewType | null = null;
@@ -18,8 +19,8 @@ let lazyRendered = false;
 export function loadComposeView(): Promise<typeof ComposeViewType> {
   // A failed warm-up must not become the open's answer: forget it, so the key
   // press imports again.
-  loading ??= import("../components/ComposeView").then(
-    (module) => (loaded = module.ComposeView),
+  loading ??= namedExport(() => import("../components/ComposeView"), "ComposeView").then(
+    (ComposeView) => (loaded = ComposeView),
     (error) => { loading = null; throw error; },
   );
   return loading;
