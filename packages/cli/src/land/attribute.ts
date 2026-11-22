@@ -57,6 +57,8 @@ export interface Attribution {
   sessions: SessionEdits[];
   scanned: number;
   tookMs: number;
+  /** The budget ran out before every transcript was read: owners may name an earlier writer than the last. What was read is kept. */
+  partial?: true;
 }
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -89,9 +91,79 @@ function realOf(p: string): string {
   return path.join(real, path.basename(p));
 }
 
+/** Where other volumes and on-demand mounts live: resolving a path there can wait on a disk or the automounter for minutes. */
+const MOUNT_ROOTS = ["/Volumes", "/home", "/net", "/Network", "/mnt", "/media", "/run/media"];
+/** macOS's own symlinked roots: /tmp/x is /private/tmp/x. */
+const PRIVATE_LINKS: ReadonlyArray<[string, string]> = [["/tmp", "/private/tmp"], ["/var", "/private/var"], ["/etc", "/private/etc"]];
+
+/** The volume a path sits on under a mount root (`/Volumes/Archive`, `/home/ubuntu`), or null for the system's own disk. */
+function volumeOf(p: string): string | null {
+  for (const m of MOUNT_ROOTS) {
+    if (p !== m && !p.startsWith(`${m}/`)) continue;
+    const next = p.slice(m.length + 1).split("/")[0];
+    return next ? `${m}/${next}` : m;
+  }
+  return null;
+}
+
+const under = (p: string, base: string) => p === base || p.startsWith(`${base}/`);
+const rootNames = new Map<string, { real: string; bases: string[]; volumes: Array<string | null> }>();
+/** The names a checkout goes by without a symlink anyone made: as given, its real path, and through /tmp and /var's links. */
+function namesOf(root: string): { real: string; bases: string[]; volumes: Array<string | null> } {
+  let n = rootNames.get(root);
+  if (!n) {
+    const real = realOf(path.join(root, "x")).slice(0, -2);
+    const bases = new Set([root, real]);
+    for (const b of [root, real]) for (const [link, target] of PRIVATE_LINKS) {
+      if (under(b, target)) bases.add(link + b.slice(target.length));
+      if (under(b, link)) bases.add(target + b.slice(link.length));
+    }
+    n = { real, bases: [...bases], volumes: [...new Set([volumeOf(root), volumeOf(real)])] };
+    rootNames.set(root, n);
+  }
+  return n;
+}
+
+const aliases = new Map<string, string | null>();
+/**
+ * The prefix of `cwd` that is the checkout under a name someone linked (`~/work/app` to `/Volumes/Dev/app`), or
+ * null. Only the prefix ending in a segment named like the checkout is ever resolved, and only on the checkout's
+ * own volume: a session's cwd elsewhere is never looked at on disk.
+ */
+function aliasIn(root: string, cwd: string): string | null {
+  const n = namesOf(root);
+  const name = path.basename(n.real);
+  const parts = cwd.split("/");
+  const at = parts.lastIndexOf(name);
+  if (at <= 0) return null;
+  const candidate = parts.slice(0, at + 1).join("/");
+  if (n.bases.some((b) => under(candidate, b)) || !n.volumes.includes(volumeOf(candidate))) return null;
+  const key = `${root}\0${candidate}`;
+  if (!aliases.has(key)) {
+    let real: string | null = null;
+    try { real = fs.realpathSync(candidate); } catch {}
+    aliases.set(key, real === n.real ? candidate : null);
+  }
+  return aliases.get(key)!;
+}
+
+/**
+ * Whether `p` can name something inside `root`, from the path's text: under one of the checkout's own names, or
+ * under the name the session's cwd reaches it by (aliasIn). Nothing else is touched on disk: commands name paths
+ * on other volumes, network mounts, remote hosts and cloud-backed folders (`cd /Volumes/Archive`, `/home/ubuntu`
+ * on macOS, which mounts on demand, a Photos library), and resolving one once held attribution for minutes.
+ */
+function nearRoot(root: string, p: string, cwd?: string): boolean {
+  if (namesOf(root).bases.some((b) => under(p, b))) return true;
+  const alias = cwd ? aliasIn(root, cwd) : null;
+  return !!alias && under(p, alias);
+}
+
 /** The repo-relative path of `p`, as written or through the symlinks either side names (git reports a checkout by its real path; a transcript records the path the agent typed). */
-function relIn(root: string, p: string): string | null {
-  return relDirect(root, p) ?? relDirect(realOf(path.join(root, "x")).slice(0, -2), realOf(p));
+function relIn(root: string, p: string, cwd?: string): string | null {
+  const direct = relDirect(root, p);
+  if (direct !== null || !nearRoot(root, p, cwd)) return direct;
+  return relDirect(namesOf(root).real, realOf(p));
 }
 
 // ── shell commands ───────────────────────────────────────────────────────────
@@ -138,14 +210,16 @@ export function shellWrites(command: string, cwd: string, root: string): string[
   if (!WRITES.test(command.replace(NULL_REDIRECTS, " "))) return [];
   const ran = [cwd, ...cdTargets(command, cwd)];
   const here = realOf(path.join(root, "."));
-  const bases = [...new Set([...ran, ...(ran.some((d) => checkoutOf(d) === here) ? [root] : [])])];
+  // Only a directory that can be inside the checkout is looked at on disk (nearRoot).
+  const bases = [...new Set([...ran, ...(ran.some((d) => nearRoot(root, d, cwd) && checkoutOf(d) === here) ? [root] : [])])];
   const found = new Set<string>();
   for (const m of command.matchAll(PATH_TOKEN)) {
     const token = m[0].replace(/^\.\//, "");
     if (token.length < 3 || token.includes("://")) continue;
     for (const base of token.startsWith("/") ? [""] : bases) {
       const abs = base ? path.resolve(base, token) : token;
-      const rel = relIn(root, abs);
+      if (!nearRoot(root, abs, cwd)) continue;
+      const rel = relIn(root, abs, cwd);
       if (rel && fs.existsSync(abs)) { found.add(rel); break; }
       if (rel && !base) found.add(rel);
     }
@@ -190,7 +264,7 @@ export function scanChunk(chunk: string, root: string, state: ScanState): void {
       const input = block.input ?? {};
       if (EDIT_TOOLS.has(block.name)) {
         const p = input.file_path ?? input.notebook_path;
-        if (typeof p === "string") note(relIn(root, path.resolve(cwd, p)), at);
+        if (typeof p === "string") note(relIn(root, path.resolve(cwd, p), cwd), at);
       } else if (SHELL_TOOLS.has(block.name) && typeof input.command === "string") {
         for (const rel of shellWrites(input.command, cwd, root)) note(rel, at);
       }
@@ -206,7 +280,7 @@ export function scanChunk(chunk: string, root: string, state: ScanState): void {
       if (command) for (const rel of shellWrites(command, workdir, root)) note(rel, at);
       const patchText = typeof args === "string" ? args : command ?? (typeof args?.input === "string" ? args.input : null);
       if (patchText?.includes("*** ")) {
-        for (const m of patchText.matchAll(PATCH_HEADER)) note(relIn(root, path.resolve(workdir, (m[1] ?? m[2]).trim())), at);
+        for (const m of patchText.matchAll(PATCH_HEADER)) note(relIn(root, path.resolve(workdir, (m[1] ?? m[2]).trim()), workdir), at);
       }
     }
   }
@@ -235,21 +309,40 @@ function saveCache(cache: Cache): void {
   fs.renameSync(tmp, file);
 }
 
-/** Read what `file` appended since the cached offset. */
-function scanIncremental(file: string, size: number, root: string, prior: CacheEntry | undefined): CacheEntry {
+/** The most of a transcript read at once: a long session's transcript runs to hundreds of MB. */
+const CHUNK_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Read what `file` appended since the cached offset, a chunk at a time, until it is read or `deadline` passes; a
+ * file left part read keeps `size` at what it has read, so the next call goes on from its offset.
+ */
+function scanIncremental(file: string, size: number, root: string, prior: CacheEntry | undefined, deadline = Infinity): CacheEntry {
   const state: CacheEntry = prior && prior.size <= size && prior.offset <= size
     ? { ...prior, writes: { ...prior.writes } }
     : { offset: 0, size: 0, cwd: null, writes: {} };
   if (state.offset >= size) return { ...state, size };
   const fd = fs.openSync(file, "r");
   try {
-    const len = size - state.offset;
-    const buf = Buffer.alloc(len);
-    fs.readSync(fd, buf, 0, len, state.offset);
-    const lastNewline = buf.lastIndexOf(0x0a);
-    if (lastNewline < 0) return { ...state, size };
-    scanChunk(buf.subarray(0, lastNewline).toString("utf-8"), root, state);
-    return { ...state, offset: state.offset + lastNewline + 1, size };
+    while (state.offset < size) {
+      const len = Math.min(size - state.offset, CHUNK_BYTES);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, state.offset);
+      let lastNewline = buf.lastIndexOf(0x0a);
+      let text = buf;
+      // A line longer than a chunk: read the rest whole, once.
+      if (lastNewline < 0 && state.offset + len < size) {
+        text = Buffer.alloc(size - state.offset);
+        fs.readSync(fd, text, 0, text.length, state.offset);
+        lastNewline = text.lastIndexOf(0x0a);
+      }
+      if (lastNewline < 0) break;
+      scanChunk(text.subarray(0, lastNewline).toString("utf-8"), root, state);
+      state.offset += lastNewline + 1;
+      if (Date.now() >= deadline) break;
+    }
+    // Read to the last whole line: the entry stands for the file at `size`, or, cut short, at the offset reached.
+    const done = state.offset >= size || size - state.offset < CHUNK_BYTES && Date.now() < deadline;
+    return { ...state, size: done ? size : state.offset };
   } finally {
     fs.closeSync(fd);
   }
@@ -328,8 +421,11 @@ function subagentTranscripts(root: string, since: number): Array<{ file: string;
  * transcripts written since `since` are read: a write older than the oldest
  * dirty file cannot be the one that left it dirty.
  */
-export function attributeEdits(root: string, paths: Iterable<string>, opts: { since: number; now?: number; ledger?: string }): Attribution {
+export function attributeEdits(root: string, paths: Iterable<string>, opts: { since: number; now?: number; ledger?: string; budgetMs?: number }): Attribution {
   const started = Date.now();
+  // A caller on a shared loop (the daemon's checkout report) reads for at most this long, and goes on next call.
+  const deadline = opts.budgetMs === undefined ? Infinity : started + opts.budgetMs;
+  let partial = false;
   const now = opts.now ?? started;
   const wanted = new Set(paths);
   const cache = loadCache();
@@ -354,7 +450,10 @@ export function attributeEdits(root: string, paths: Iterable<string>, opts: { si
     try { st = fs.statSync(src.file); } catch { continue; }
     seenFiles.add(src.file);
     if (st.mtimeMs < opts.since) continue;
-    const entry = scanIncremental(src.file, st.size, root, byFile[src.file]);
+    const prior = byFile[src.file];
+    if (Date.now() >= deadline && prior?.size !== st.size) { partial = true; continue; }
+    const entry = scanIncremental(src.file, st.size, root, prior, deadline);
+    if (entry.size < st.size) partial = true;
     if (entry.offset !== byFile[src.file]?.offset) scanned++;
     byFile[src.file] = entry;
     const hits = Object.entries(entry.writes).filter(([p]) => wanted.has(p));
@@ -399,5 +498,5 @@ export function attributeEdits(root: string, paths: Iterable<string>, opts: { si
       if (!cur || (cur.edits.get(p) ?? 0) < at) owners.set(p, s);
     }
   }
-  return { owners, sessions: [...sessions.values()], scanned, tookMs: Date.now() - started };
+  return { owners, sessions: [...sessions.values()], scanned, tookMs: Date.now() - started, ...(partial ? { partial: true as const } : {}) };
 }
