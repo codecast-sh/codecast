@@ -3,6 +3,7 @@
 // (EntityIdPill) and its parts (components/deploys/deployRefLook) draw these.
 import { Circle, CircleCheck, CircleMinus, CircleX, Clock, Rocket, Undo2, type LucideIcon } from "lucide-react";
 import type { ReachState } from "@codecast/shared/contracts/deployReach";
+import type { ExternalEventAccent } from "../externalEvents";
 import { deployPillState, deployTone, isRollback, type DeployPillState, type DeployTone } from "./deployPill";
 
 export const TONE_TEXT: Record<DeployTone, string> = {
@@ -13,6 +14,9 @@ export const TONE_TEXT: Record<DeployTone, string> = {
   muted: "text-sol-text-muted",
   dim: "text-sol-text-dim",
 };
+
+/** A tone as the accent a chip takes. */
+export const TONE_ACCENT: Record<DeployTone, ExternalEventAccent> = { green: "green", yellow: "yellow", red: "red", orange: "orange", muted: "muted", dim: "muted" };
 
 /** A pill's chrome in a tone: the same faint tint every reference wears. */
 export const TONE_CHROME: Record<DeployTone, string> = {

@@ -4,42 +4,16 @@
 // state, the deploy that took it there (or what runs instead), the commits
 // waiting with it, and the press that sends them. An open one: the targets it
 // will go to once it merges. The rule is lib/deploys/prDeploy; this draws it.
-import { useMemo } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Check, CircleDashed, X } from "lucide-react";
-import { useDeployReach } from "../../hooks/useDeployReach";
-import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
-import { useDeployPress } from "../../hooks/useDeployPress";
-import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { entityRoute, repoObjectId } from "../../lib/entityLinks";
-import { REACH_LOOK, deployAgo, type DeployTone } from "../../lib/deploys/deployPill";
-import { FAILED_ICON, REACH_ICON, TONE_TEXT } from "../../lib/deploys/deployLook";
-import { CI_WORDS, deployLabel, prDeployRows, prReachHeadline, prRowParts, prShipsTo, type PrDeployRow } from "../../lib/deploys/prDeploy";
+import type { PrDeployModel } from "../../hooks/usePrDeploy";
+import { entityRoute } from "../../lib/entityLinks";
+import { REACH_LOOK, deployAgo } from "../../lib/deploys/deployPill";
+import { FAILED_ICON, REACH_ICON, TONE_ACCENT, TONE_TEXT } from "../../lib/deploys/deployLook";
+import { CI_WORDS, deployLabel, prRowParts, type PrDeployRow } from "../../lib/deploys/prDeploy";
 import type { DeployTargetRow } from "../../lib/deploys/targets";
 import type { ExternalEventAccent } from "../../lib/externalEvents";
 import type { ReachState } from "@codecast/shared/contracts/deployReach";
-
-export const TONE_ACCENT: Record<DeployTone, ExternalEventAccent> = { green: "green", yellow: "yellow", red: "red", orange: "orange", muted: "muted", dim: "muted" };
-
-export type PrDeployModel = ReturnType<typeof usePrDeploy>;
-
-/** Everything the page says about production, read once for the chip and the band. */
-export function usePrDeploy(pr: any, repository: string, authed: boolean) {
-  const merged = pr.state === "merged";
-  const open = pr.state === "open";
-  const reach = useDeployReach(merged ? repoObjectId({ type: "pr", repository, number: pr.number }) : null);
-  // The team's targets carry each one's queue and press. A closed pull request goes nowhere, and a public reader
-  // reads no team.
-  const teamId = authed && (merged || open) ? ((pr.team_id as string | undefined) ?? null) : null;
-  const { targets, deploys } = useDeployTargets(teamId, repository);
-  const now = useCoarseNow(30_000);
-  const { rows, dormant } = useMemo(() => prDeployRows(reach, targets, deploys, repository, now), [reach, targets, deploys, repository, now]);
-  const files: string[] | undefined = useMemo(() => pr.files?.map((f: { filename: string }) => f.filename), [pr.files]);
-  const shipsTo = useMemo(() => (open ? prShipsTo(targets, deploys, repository, files, now) : null), [open, targets, deploys, repository, files, now]);
-  const declares = targets.some((t) => t.repository.toLowerCase() === repository.toLowerCase() && !t.record_only);
-  const press = useDeployPress(teamId, deploys);
-  return { merged, open, teamId, rows, dormant, shipsTo, declares, headline: prReachHeadline(reach?.state, rows), press, now, mergedAt: (pr.merged_at as number | undefined) ?? null };
-}
 
 /** The chip beside a merged pull request's state: live, or what holds it. */
 export function PRReachChip({ model, Chip }: { model: PrDeployModel; Chip: (p: { accent: ExternalEventAccent; title?: string; children: React.ReactNode }) => React.ReactNode }) {

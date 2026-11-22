@@ -21,7 +21,8 @@ import { RepoWindowControl } from "../repo/RepoWindowControl";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { EntityIdPill } from "../EntityIdPill";
 import { PRLinked, PRReviewers } from "./PRLinked";
-import { PRDeployBand, PRReachChip, PRShipsTo, usePrDeploy } from "./PRDeploy";
+import { PRDeployBand, PRReachChip, PRShipsTo } from "./PRDeploy";
+import { usePrDeploy } from "../../hooks/usePrDeploy";
 import { copyToClipboard, relTimeShort } from "../../lib/utils";
 import { withShortcut } from "../../shortcuts/registry";
 import {
