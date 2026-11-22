@@ -31,6 +31,7 @@
 // completed line after `input_audio_buffer.commit`, so `speech_stopped` is
 // that commit. The previous model closed turns on VAD by itself.
 import { api } from "@codecast/convex/convex/_generated/api";
+import { openWebSocket } from "../openWebSocket";
 import {
   LIVE_TRANSCRIBE_MODEL,
   isUnexpectedTranscript,
@@ -336,10 +337,18 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
     // ephemeral secret as a subprotocol.
     // GA subprotocol auth: just "realtime" + the ephemeral key. (Verified
     // against the live API; the old beta subprotocol is gone.)
-    const socket = new WebSocket("wss://api.openai.com/v1/realtime?intent=transcription", [
+    const socket = openWebSocket("wss://api.openai.com/v1/realtime?intent=transcription", [
       "realtime",
       `openai-insecure-api-key.${minted.client_secret}`,
     ]);
+    if (!socket) {
+      // A secret the browser refuses as a subprotocol throws here: finish the
+      // pipe through the same path as a refused mint.
+      hopeless = true;
+      pipe.close();
+      events?.onFailed?.("Could not start transcription");
+      return;
+    }
     ws = socket;
 
     socket.onopen = () => {

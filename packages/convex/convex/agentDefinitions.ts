@@ -30,6 +30,19 @@ async function requireCaller(ctx: any, apiToken?: string): Promise<Id<"users">> 
   return userId;
 }
 
+/** A list feed with no caller at all (the web subscribes before auth settles,
+ *  or after it lapses) answers [] like the other workspace feeds. A token that
+ *  fails to resolve still throws, so the CLI reports a bad token instead of an
+ *  empty list. */
+async function listForCaller(ctx: any, apiToken: string | undefined, table: Table) {
+  const userId = await getAuthenticatedUserId(ctx, apiToken);
+  if (!userId) {
+    if (apiToken) throw new Error("Authentication failed: invalid token or session");
+    return [];
+  }
+  return listFor(ctx, userId, table);
+}
+
 /** Rows of one table across every workspace the viewer holds a key for. */
 async function listFor(ctx: any, userId: Id<"users">, table: Table) {
   const keys = await heldKeysFor(ctx, userId);
@@ -162,7 +175,7 @@ async function upsertRow(
 
 export const list = query({
   args: { api_token: v.optional(v.string()) },
-  handler: async (ctx, args) => listFor(ctx, await requireCaller(ctx, args.api_token), "agent_definitions"),
+  handler: async (ctx, args) => listForCaller(ctx, args.api_token, "agent_definitions"),
 });
 
 export const get = query({
@@ -209,7 +222,7 @@ export const remove = mutation({
 
 export const listChains = query({
   args: { api_token: v.optional(v.string()) },
-  handler: async (ctx, args) => listFor(ctx, await requireCaller(ctx, args.api_token), "agent_chains"),
+  handler: async (ctx, args) => listForCaller(ctx, args.api_token, "agent_chains"),
 });
 
 export const getChain = query({

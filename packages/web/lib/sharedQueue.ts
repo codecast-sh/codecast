@@ -68,3 +68,38 @@ export function isHeldForTurnEnd(row: QueueRow): boolean {
 export function heldQueueRowsOf(status: { inflight?: QueueRow[] } | null | undefined): QueueRow[] {
   return queueRowsOf(status).filter(isHeldForTurnEnd);
 }
+
+/**
+ * A push of status rows with each queued row this store already let go
+ * ("Send now") kept let go. The server moves a queued row from held to
+ * pending once and never back (only an insert writes "held"), so a push that
+ * still says held for a row the store holds as released was computed before
+ * the release reached the server: the row stays out of the line rather than
+ * jumping back into it until the server answers. A push saying anything else
+ * for the row is newer, and wins.
+ */
+export function carryReleasedQueueRows<T extends { _id?: string; inflight?: QueueRow[] }>(
+  incoming: T[],
+  current: Record<string, { inflight?: QueueRow[] } | undefined> | undefined,
+): T[] {
+  if (!current || !Array.isArray(incoming)) return incoming;
+  return incoming.map((row) => {
+    const held = row?._id ? current[row._id]?.inflight : undefined;
+    if (!held?.length || !row.inflight?.length) return row;
+    const released = new Map(held.filter((r) => r.queued && r.status !== "held").map((r) => [r.message_id, r.status]));
+    if (released.size === 0) return row;
+    let changed = false;
+    const inflight = row.inflight.map((r) => {
+      const status = isHeldForTurnEnd(r) ? released.get(r.message_id) : undefined;
+      if (status === undefined) return r;
+      changed = true;
+      return { ...r, status };
+    });
+    return changed ? { ...row, inflight } : row;
+  });
+}
+
+/** A refused "Send now": the rows it let go back in the line, until the server says otherwise. */
+export function rehold(rows: QueueRow[] | undefined): void {
+  for (const r of rows ?? []) if (r.queued && r.status === "pending") r.status = "held";
+}

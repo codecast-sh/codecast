@@ -358,6 +358,58 @@ describe("a face opens one card", () => {
     expect(h.q("[data-member-card]")).toBeNull();
   });
 
+  // ct-91259 (rage click on a face, rp-6849): two or three quick clicks on
+  // the same face are one ask to open it, never open-close-open.
+  test("rapid repeat clicks on a face leave its card open and pinned", async () => {
+    for (const clicks of [2, 3]) {
+      const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+      const circle = h.circle(ANN);
+      for (let i = 0; i < clicks; i++) await h.click(circle);
+      expect({ clicks, expanded: circle.getAttribute("aria-expanded") }).toEqual({ clicks, expanded: "true" });
+      expect(h.q("[data-member-card]")).not.toBeNull();
+      await act(async () => root?.unmount());
+      root = null;
+      host?.remove();
+      host = null;
+    }
+  });
+
+  test("a click well after the one that pinned the card closes it", async () => {
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    try {
+      const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+      const circle = h.circle(ANN);
+      await h.click(circle);
+      expect(circle.getAttribute("aria-expanded")).toBe("true");
+      now += 800;
+      await h.click(circle);
+      expect(circle.getAttribute("aria-expanded")).toBe("false");
+      expect(h.q("[data-member-card]")).toBeNull();
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  // ct-91259: a click shows the card at once, from what the row knows, even
+  // before the roster has the person; its door leads to their profile.
+  test("a click before the roster loads still shows their name and the way to their profile", async () => {
+    useInboxStore.setState({
+      ...withTeamRoster([], { clientState: useInboxStore.getState().clientState }),
+    } as any);
+    const opened: any[] = [];
+    const h = await mount(bar(rowOf([entry(ANN, "Ann")]), { onOpenProfile: (m: any) => opened.push(m) }));
+    await h.click(h.circle(ANN));
+    const card = h.q("[data-member-card]");
+    expect(card).not.toBeNull();
+    expect(card!.querySelector(".face-card-name")?.textContent).toContain("Ann");
+    const door = h.q("[data-door]")!;
+    expect(door).not.toBeNull();
+    await h.click(door);
+    expect(opened.map((m) => String(m._id))).toEqual([ANN]);
+  });
+
   test("calls off: the card names them and keeps the reply box, with no call buttons", async () => {
     const h = await mount(bar(rowOf([entry(ANN, "Ann")]), { callsEnabled: false }));
     await h.click(h.circle(ANN));

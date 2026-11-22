@@ -209,8 +209,21 @@ export function stageFocus(leafId: string) {
 }
 
 export function stageClose(leafId: string) {
+  leafVisits.delete(leafId);
   useInboxStore.getState().stageCloseLeaf(leafId);
   syncUrl();
+}
+
+// The places each pane has navigated away from, by pathname: a pane's own
+// trail, so a detail's close can tell a pane opened on the detail (close the
+// pane) from one that came to it from its parent (go back up). Kept for the
+// window's life; after a reload a pane counts as opened where it stands.
+const leafVisits = new Map<string, Set<string>>();
+const pathnameOf = (path: string) => path.split(/[?#]/)[0];
+
+/** Whether this pane has been at `path` (its pathname) before where it is now. */
+export function leafHasBeenAt(leafId: string, path: string): boolean {
+  return leafVisits.get(leafId)?.has(pathnameOf(path)) ?? false;
 }
 
 /** The pane takes the whole stage (its route becomes the tab). */
@@ -224,6 +237,12 @@ export function stageExpand(leafId: string) {
 export function stageNavigateLeaf(leafId: string, path: string, mode: "push" | "replace") {
   const tab = activeTab();
   if (!tab) return;
+  const from = mode === "push" ? findLeaf(tab.layout, leafId)?.path : null;
+  if (from && pathnameOf(from) !== pathnameOf(path)) {
+    const seen = leafVisits.get(leafId) ?? new Set<string>();
+    seen.add(pathnameOf(from));
+    leafVisits.set(leafId, seen);
+  }
   if (tab.focusedLeafId === leafId) {
     tabNavigate(path, mode);
   } else {
@@ -271,6 +290,7 @@ export function performStageDrop(zone: DropZone, payload: PaneDragPayload): bool
       // the target never navigated.
       st.stageFocusLeaf(zone.leafId);
       st.stageSetLeafPath(zone.leafId, payload.path);
+      leafVisits.delete(zone.leafId); // opens afresh: its old trail is not this one's
       if (from?.kind === "leaf") st.stageCloseLeaf(from.leafId);
       if (from?.kind === "tab" && from.tabId !== st.activeTabId) st.closeTab(from.tabId);
       syncUrl();
@@ -402,6 +422,7 @@ function openBesideReused(tab: AppTab, path: string): boolean {
   if (target) {
     if (target.path !== path) {
       st.stageSetLeafPath(targetId, path);
+      leafVisits.delete(targetId); // opens afresh: its old trail is not this one's
       // Re-pointing the focused pane moves `tab.path`; mirror it (a no-op
       // when the target is unfocused, the ordinary case).
       syncUrl();
