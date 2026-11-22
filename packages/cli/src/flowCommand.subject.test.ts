@@ -23,18 +23,18 @@ describe("callingSubject", () => {
     expect(await callingSubject({ callingSession: () => undefined, cliPost: async () => { throw new Error("not asked"); } })).toBeUndefined();
   });
 
-  test("a plain shell running a task's change takes the session that owns the task (a run started over ssh)", async () => {
+  test("a plain shell running a task's change takes the session the task's change came from (a run started over ssh)", async () => {
     const asked: any[] = [];
     const subject = await callingSubject({
       callingSession: () => undefined,
-      cliPost: async (route, body) => { asked.push({ route, body }); return { short_id: "ct-9", owner: { short_id: "jx756fb", conversation_id: FULL } }; },
+      cliPost: async (route, body) => { asked.push({ route, body }); return { short_id: "ct-9", change_session: { short_id: "jx756fb", conversation_id: FULL } }; },
     }, "ct-9");
     expect(subject).toEqual({ session: "jx756fb", conversation: FULL });
     expect(asked).toEqual([{ route: "/cli/work/get", body: { short_id: "ct-9" } }]);
   });
 
-  test("a task nobody owns leaves a plain shell with none", async () => {
-    expect(await callingSubject({ callingSession: () => undefined, cliPost: async () => ({ short_id: "ct-9", owner: null }) }, "ct-9")).toBeUndefined();
+  test("a task no session worked leaves a plain shell with none", async () => {
+    expect(await callingSubject({ callingSession: () => undefined, cliPost: async () => ({ short_id: "ct-9", change_session: null }) }, "ct-9")).toBeUndefined();
   });
 
   test("a session the server cannot read has none", async () => {

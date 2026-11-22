@@ -1105,8 +1105,6 @@ async function executeRemoteHumanGate(
     .filter(e => e.label)
     .map((e) => ({ ...parseGateEdgeLabel(e.label!), target: e.to }));
   const payload = gatePayload(node, graph, context);
-  // A run its spawner started asks from the spawner, so only a run with none names its subject.
-  if (options.spawnerSession) delete payload.subject_conversation_id;
   // A resumed run never asks again what its gate already asked: an answer
   // that came while nothing drove the run is taken as given, and a gate
   // still open is waited on, not posted twice (runResume.ts).
