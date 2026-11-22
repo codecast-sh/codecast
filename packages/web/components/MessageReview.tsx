@@ -17,6 +17,7 @@
 import React, { lazy, memo, Suspense, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
+import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import type { PendingComment, ReviewVerdict } from "../lib/quoteFormat";
 import { VerdictLabel } from "./ReviewVerdictLabel";
 import { ProsePlacementChip } from "./comments/AnchorPlacementNote";
@@ -965,18 +966,22 @@ export function CommentEditor({
     close(refocus);
   }, [flush, close]);
 
-  // Enter with nothing typed in the composer means the quote and its note are
-  // the whole reply: save and press the composer's send in one gesture. With a
-  // half-written reply in the composer, Enter only saves, so the reply is never
-  // sent unfinished.
+  // Enter with an empty composer (no text, no images) means the quote and its
+  // note are the whole reply: save and press the composer's send in one
+  // gesture. With anything in the composer, Enter only saves, so a half-written
+  // reply or an attached image is never sent unfinished. The footer's primary
+  // button says which of the two Enter will do, and its click does the same.
   const composer = useReviewComposer();
+  const send = composer?.conversationId === conversationId && composer?.canSend ? composer.send : undefined;
+  const composerEmpty = useInboxStore((s) => draftIsEmpty(s.drafts[conversationId]));
+  const willSend = !!send && composerEmpty;
   const saveAndMaybeSend = useCallback(() => {
     save(true);
-    const send = composer?.conversationId === conversationId && composer?.canSend ? composer.send : undefined;
     if (!send) return;
-    const draft = useInboxStore.getState().drafts[conversationId]?.draft_message;
-    if (!draft?.trim()) send();
-  }, [save, composer, conversationId]);
+    // Decide on the composer as it is at the press, last keystrokes included.
+    flushDraftWrite(conversationId);
+    if (draftIsEmpty(useInboxStore.getState().drafts[conversationId])) send();
+  }, [save, send, conversationId]);
 
   const cancel = useCallback((refocus: boolean) => {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
@@ -1025,7 +1030,7 @@ export function CommentEditor({
           onKeyDown={(e) => {
             e.stopPropagation();
             // Enter saves like every other composer, and sends too when the
-            // composer is empty; Shift+Enter breaks the line.
+            // composer is empty (willSend); Shift+Enter breaks the line.
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               saveAndMaybeSend();
@@ -1051,14 +1056,19 @@ export function CommentEditor({
             {comment.body ? "Cancel" : "None"}
             <KeyCap size="xs">Esc</KeyCap>
           </button>
-          <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => save(true)}>
-            Save
+          <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={saveAndMaybeSend}>
+            {willSend ? "Send" : "Save"}
             <KeyCap size="xs">↵</KeyCap>
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+/** Nothing in the composer: no text and no image rows (images reach the draft at paste time). */
+function draftIsEmpty(draft: Record<string, any> | null | undefined): boolean {
+  return !draft?.draft_message?.trim() && !draft?.draft_image_storage_ids?.length && !draft?.draft_image_storage_id;
 }
 
 export const MessageReview = memo(MessageReviewImpl);
