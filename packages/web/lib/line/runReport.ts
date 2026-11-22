@@ -461,6 +461,7 @@ const DOES: Record<string, string> = {
   drop: "Closes the problem without a change",
   rebase: "Puts the branch on the default branch and checks it again",
   ship: "Lands the change the project's way",
+  ci_red: "Stops when CI stays red after three rounds back to the builder, and leaves the problem open",
   merge: "Merges the branch",
   watch: "Watches for the problem to come back",
 };

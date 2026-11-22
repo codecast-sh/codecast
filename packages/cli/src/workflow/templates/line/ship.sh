@@ -6,6 +6,9 @@
 # the profile sets [line.merge] auto or the line's role holds a merge grant.
 # A ship command exits 3 when the default branch moved past the branch since
 # the rebase station put it there: the graph sends the run back to rebase.
+# It exits 7 when CI went red on the landing, with its brief already on the
+# task as a blocker and printed on stdout: the graph sends the run back to the
+# builder with that brief.
 cmd=$line.commands.ship
 if [ -z "$cmd" ]; then
   # A change frozen from a session ships as the snapshot the run reviewed: its branch, never the session's live edits.
@@ -28,6 +31,23 @@ dir=$run_dir
 mkdir -p "$dir"
 bash -c "$cmd" > "$dir/ship.out" 2> "$dir/ship.log"
 code=$?
+if [ "$code" -eq 7 ]; then
+  # Exit 7: CI is red. The command's blocker is the brief, so nothing more goes on the task. Its stdout, the same
+  # brief, becomes the builder's file. Both files are this run's: $run_dir is the task's and every run on it shares
+  # it, so a later run starts its rounds at 0 and a resumed one keeps its count. The JSON is a bare count, never a path.
+  run=$run_id
+  brief="$dir/${run}-ci-brief.md"
+  count="$dir/${run}-ci-red-rounds"
+  if grep -q '[^[:space:]]' "$dir/ship.out"; then
+    cp "$dir/ship.out" "$brief"
+  else
+    echo "The ship command said CI is red (exit 7) and printed no brief: read the task's latest blocker comment." > "$brief"
+  fi
+  rounds=$(( $(cat "$count" 2>/dev/null || echo 0) + 1 ))
+  echo "$rounds" > "$count"
+  echo "{\"ci_red_rounds\": $rounds}"
+  exit 7
+fi
 tail -n 40 "$dir/ship.log"
 # Its one line is on stdout; a command that refused says why on stderr instead.
 said="$(grep -v '^[[:space:]]*$' "$dir/ship.out" | tail -n 1)"

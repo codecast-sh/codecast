@@ -49,10 +49,10 @@ describe("line ship station", () => {
     ]);
   });
 
-  test("a branch the default branch moved past since the rebase goes back to rebase, three rebases at most", () => {
+  test("a branch the default branch moved past since the rebase goes back to rebase, three times after the Ship answer", () => {
     expect(fired("ship", { outcome: "failure", "ship.exit_code": "3" })).toEqual(["rebase"]);
     expect(fired("ship", { outcome: "failure", "ship.exit_code": "1" })).toEqual(["exit"]);
-    expect(graph.nodes.get("rebase")?.max_visits).toBe(3);
+    expect(graph.nodes.get("rebase")?.max_visits).toBe(4);
   });
 });
 

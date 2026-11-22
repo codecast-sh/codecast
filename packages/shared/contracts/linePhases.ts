@@ -13,7 +13,7 @@ export const LINE_PHASES: ReadonlyArray<{ key: LinePhaseKey; label: string; stat
   { key: "build", label: "Build", stations: ["implement", "implement_line", "ask", "reopen", "stopped"] },
   { key: "check", label: "Check", stations: ["verify", "green", "eval", "unscored", "review", "rejected"] },
   { key: "decide", label: "Decide", stations: ["card_draft", "card_write", "card", "decide", "drop"] },
-  { key: "ship", label: "Ship", stations: ["rebase", "ship", "merge", "watch"] },
+  { key: "ship", label: "Ship", stations: ["rebase", "ship", "ci_red", "merge", "watch"] },
 ];
 
 const PHASE_OF = new Map(LINE_PHASES.flatMap((p) => p.stations.map((s) => [s, p.key] as const)));

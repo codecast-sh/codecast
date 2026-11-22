@@ -43,10 +43,13 @@ describe("line.cast template", () => {
     expect(graph.name).toBe("line");
     expect(validateWorkflow(graph)).toEqual([]);
     expect([...graph.nodes.keys()]).toEqual([
-      "start", "exit", "stopped", "rejected", "ground", "park", "plan", "analyze", "prove", "prove_line", "red", "dissolve",
+      "start", "exit", "stopped", "rejected", "ci_red", "ground", "park", "plan", "analyze", "prove", "prove_line", "red", "dissolve",
       "unproven", "implement", "implement_line", "verify", "green", "eval", "unscored", "review", "card_draft", "card_write", "card",
       "decide", "reopen", "drop", "rebase", "ship", "watch",
     ]);
+    // A ship command may wait on CI for half an hour: the station parks, holding no machine slot.
+    expect(graph.nodes.get("ship")?.parks).toBe(true);
+    expect(graph.nodes.get("ship")?.timeout).toBeGreaterThanOrEqual(3600);
     expect(graph.nodes.get("verify")?.type).toBe("command");
     expect(graph.nodes.get("verify")?.script).toContain("bash -c $line.commands.check");
     expect(graph.nodes.get("card_write")?.type).toBe("prompt");
@@ -152,12 +155,13 @@ describe("line.cast template", () => {
     const fromStart = reach("start", next);
     expect([...graph.nodes.keys()].filter((id) => !fromStart.has(id))).toEqual([]);
     const toExit = reach("exit", (id) => graph.edges.filter((e) => e.to === id).map((e) => e.from));
-    // The two exits that end a run on purpose are ends too.
-    const stops = ["stopped", "rejected"];
-    expect([...fromStart].filter((id) => !toExit.has(id))).toEqual(stops);
+    // The exits that end a run on purpose are ends too.
+    const stops = ["stopped", "rejected", "ci_red"];
+    expect([...fromStart].filter((id) => !toExit.has(id)).sort()).toEqual([...stops].sort());
     expect(stops.map((id) => [graph.nodes.get(id)?.type, graph.nodes.get(id)?.stop])).toEqual([
       ["exit", "$handoff_note"],
       ["exit", "The reviewer rejected the change. $review_note"],
+      ["exit", "Not shipped: CI stayed red after three rounds back to the builder. The last CI brief is the task's latest blocker comment."],
     ]);
     // Only the exits are dead ends.
     expect([...graph.nodes.keys()].filter((id) => next(id).length === 0)).toEqual(["exit", ...stops]);
@@ -261,9 +265,26 @@ describe("line.cast template", () => {
     expect(fired("eval", { outcome: "success" })).toEqual(["review"]);
   });
 
-  test("review keeps its verdict routing; approve goes to the card; a refused card goes back to its writer", () => {
+  test("review keeps its verdict routing; approve goes to the card, or to rebase once Ship was answered; a refused card goes back to its writer", () => {
     expect(from(graph, "implement")).toEqual(["verify:handoff = done", "stopped:handoff = needs_context or handoff = blocked"]);
-    expect(from(graph, "review")).toEqual(["card_draft:review_verdict = approve", "implement:review_verdict = changes and category != line", "implement_line:review_verdict = changes and category = line", "rejected:review_verdict = reject"]);
+    expect(from(graph, "review")).toEqual([
+      "card_draft:review_verdict = approve and human.gate.selected != S",
+      "rebase:review_verdict = approve and human.gate.selected = S",
+      "implement:review_verdict = changes and category != line",
+      "implement_line:review_verdict = changes and category = line",
+      "rejected:review_verdict = reject",
+    ]);
+    // Before any answer, and after a Revise, an approved change goes to the card; after Ship, a fix round lands without one.
+    expect(fired("review", { review_verdict: "approve" })).toEqual(["card_draft"]);
+    expect(fired("review", { review_verdict: "approve", "human.gate.selected": "R" })).toEqual(["card_draft"]);
+    expect(fired("review", { review_verdict: "approve", "human.gate.selected": "S" })).toEqual(["rebase"]);
+    expect(fired("review", { review_verdict: "changes", "human.gate.selected": "S", category: "code" })).toEqual(["implement"]);
+    expect(fired("review", { review_verdict: "reject", "human.gate.selected": "S" })).toEqual(["rejected"]);
+    // A fix round's rebase and a CI round's build spend no visit: the caps are the default branch moving and ci_red_rounds.
+    expect(graph.edges.filter((e) => e.free_visit).map((e) => `${e.from}->${e.to}:${e.free_visit}`)).toEqual(["review->rebase:rebase", "ship->implement:implement", "ship->implement_line:implement_line"]);
+    // Rebase: the Ship answer's own visit plus three for the default branch moving; fix rounds' rebases are free.
+    expect([graph.nodes.get("rebase")?.max_visits, graph.nodes.get("rebase")?.max_free_visits]).toEqual([4, 6]);
+    expect([graph.nodes.get("implement")?.max_free_visits, graph.nodes.get("implement_line")?.max_free_visits]).toEqual([3, 3]);
     expect(graph.nodes.get("review")?.reviewer).toBe(true);
     expect(graph.nodes.get("implement")?.reviewer).toBeUndefined();
     expect(from(graph, "card_draft")).toEqual(["card_write:"]);
@@ -277,6 +298,21 @@ describe("line.cast template", () => {
     expect(fired("ship", { outcome: "success", ...UNION_VARS })).toEqual(["watch"]);
     expect(fired("ship", { outcome: "failure", "ship.exit_code": "1", ...UNION_VARS })).toEqual(["exit"]);
     expect(fired("ship", { outcome: "failure", "ship.exit_code": "1", ...EMPTY_VARS })).toEqual(["exit"]);
+    expect(fired("ship", { outcome: "failure", "ship.exit_code": "3", ...UNION_VARS })).toEqual(["rebase"]);
+  });
+
+  test("ship: CI red (exit 7) goes back to the builder for three rounds a run, and a fourth red ends it not shipped", () => {
+    const red = (rounds: number, category = "code") => ({ outcome: "failure", "ship.exit_code": "7", "ship.json": JSON.stringify({ ci_red_rounds: rounds }), category });
+    for (const n of [1, 2, 3]) {
+      expect(fired("ship", red(n))).toEqual(["implement"]);
+      expect(fired("ship", red(n, "line"))).toEqual(["implement_line"]);
+    }
+    expect(fired("ship", red(4))).toEqual(["ci_red"]);
+    expect(fired("ship", red(4, "line"))).toEqual(["ci_red"]);
+    expect(graph.nodes.get("ci_red")?.label).toBe("Not shipped: CI stayed red");
+    expect(graph.nodes.get("ci_red")?.stop).toStartWith("Not shipped: CI stayed red");
+    // Each builder's prompt names the brief the ship station wrote.
+    for (const id of ["implement", "implement_line"]) expect(graph.nodes.get(id)?.prompt).toContain("When Ship sent it back, CI went red on the landing and nothing shipped: the CI brief, the same text as the task's latest blocker comment, is `$run_dir/$run_id-ci-brief.md`.");
   });
 
   test("the template names no path or tool of one project: everything per project comes from the profile", () => {
@@ -575,6 +611,29 @@ describe("line.cast station scripts", () => {
       ["task", "comment", "ct-1", "Shipped: merged codecast/line-ct-1 for ct-1 (run_1); deploy pending", "-t", "progress"],
       ["task", "comment", "ct-1", "Not shipped: not merged: no green eval gate", "-t", "blocker"],
     ]);
+  });
+
+  test("ship passes exit 7 through with the brief the command printed as the run's own builder file, counts the run's rounds, and adds no comment of its own", () => {
+    const dir = runDir();
+    const cmd = { run_id: "run_1", "line.commands.ship": 'echo "waiting on CI" >&2; printf "CI is red on PR #12.\\n- unit: auth.test.ts expected 2, got 3\\n"; exit 7' };
+    const first = run("ship", cmd);
+    expect(first.code).toBe(7);
+    // Its whole stdout is the JSON: a bare count, so no path can break it.
+    expect(first.out).toBe('{"ci_red_rounds": 1}\n');
+    expect(fs.readFileSync(path.join(dir, "run_1-ci-brief.md"), "utf-8")).toBe("CI is red on PR #12.\n- unit: auth.test.ts expected 2, got 3\n");
+    expect(run("ship", cmd).json.ci_red_rounds).toBe(2);
+    // The command's own blocker is the brief: nothing goes on the task after it.
+    expect(calls()).toEqual([]);
+    const silent = run("ship", { run_id: "run_1", "line.commands.ship": "exit 7" });
+    expect(silent.code).toBe(7);
+    expect(silent.json.ci_red_rounds).toBe(3);
+    expect(fs.readFileSync(path.join(dir, "run_1-ci-brief.md"), "utf-8")).toContain("read the task's latest blocker comment");
+    // The task's run dir is shared by every run on it: a later run counts its own rounds from 0.
+    expect(run("ship", { ...cmd, run_id: "run_2" }).json.ci_red_rounds).toBe(1);
+    expect(fs.existsSync(path.join(dir, "run_2-ci-brief.md"))).toBe(true);
+    // Exit 3 still asks for a rebase.
+    expect(run("ship", { "line.commands.ship": 'echo "main moved"; exit 3' }).code).toBe(3);
+    expect(calls()).toEqual([["task", "comment", "ct-1", "Rebasing again: main moved", "-t", "progress"]]);
   });
 
   test("dissolve: a miss that did not reproduce, and findings that were the judge's own mistake", () => {

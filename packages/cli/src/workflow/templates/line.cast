@@ -63,7 +63,10 @@
 //               answer opening with Ship lands it, Drop closes the problem,
 //               any other goes back to the builder as the note (LE11). Every
 //               other way a run ends (a stop, a failure) leaves the problem
-//               open with why and asks nobody (on_failure=stop)
+//               open with why and asks nobody (on_failure=stop). A Ship answer
+//               covers the fixes that follow it: a round back from a rebase
+//               conflict or red CI that review approves goes straight to
+//               rebase, with no second card
 //   rebase      the branch put on the default branch as the remote has it, and
 //               the project's check run on the result, since a card waits and
 //               the default branch moves; a conflict, a rebase git refused to
@@ -73,7 +76,12 @@
 //   ship        the project's ship command, when it has one: it lands the
 //               change its own way and says in one line what is true now;
 //               an exit 3 says the default branch moved past the branch since
-//               the rebase, and the run rebases again (at most three rebases);
+//               the rebase, and the run rebases again (three times at most
+//               after the Ship answer);
+//               an exit 7 says CI went red with its brief on the task, and the
+//               run goes back to the builder with that brief (three rounds a
+//               run; a fourth red ends it not shipped). The station parks, so
+//               a command waiting on CI holds no machine slot;
 //               without one, `cast ship run --task`: a ship session opens the
 //               pull request and shepherds it, merging only when the profile
 //               sets [line.merge] auto or the line's role holds a merge grant
@@ -89,6 +97,7 @@ digraph line {
   // on: the problem goes back to open with them, and nobody is asked.
   stopped  [shape=Msquare, label="Stopped", stop="$handoff_note"]
   rejected [shape=Msquare, label="Rejected", stop="The reviewer rejected the change. $review_note"]
+  ci_red   [shape=Msquare, label="Not shipped: CI stayed red", stop="Not shipped: CI stayed red after three rounds back to the builder. The last CI brief is the task's latest blocker comment."]
 
   ground [label="Ground", backend=session, agent=claude, prompt="@line/ground.md"]
 
@@ -116,10 +125,14 @@ digraph line {
   unproven [label="Unproven", shape=parallelogram, script="@line/unproven.sh"]
 
   // The builder runs the project's check and its failing check, which for a
-  // prompt is the proof's replays: the same hours as prove.
-  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, timeout=10800, prompt="@line/implement.md"]
+  // prompt is the proof's replays: the same hours as prove. A round back from
+  // red CI spends no visit (its three rounds are capped at ship), so after a
+  // Ship answer, which starts the counts again, a run has three red-CI rounds
+  // and three other rounds (a conflict, a failed check, review changes) in any
+  // order. Before it, three builds.
+  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, max_free_visits=3, timeout=10800, prompt="@line/implement.md"]
 
-  implement_line [label="Build line", backend=session, agent=claude, isolated=true, max_visits=3, timeout=10800, prompt="@line/implement_line.md"]
+  implement_line [label="Build line", backend=session, agent=claude, isolated=true, max_visits=3, max_free_visits=3, timeout=10800, prompt="@line/implement_line.md"]
 
   verify [label="Verify", shape=parallelogram,
     timeout=3600,
@@ -157,10 +170,15 @@ digraph line {
 
   // The check runs again when the base moved: the same hour verify has.
   // The default branch can move between the rebase and the ship: a ship that
-  // finds the branch behind comes back here, three rebases at most.
-  rebase [label="Rebase", shape=parallelogram, max_visits=3, timeout=3600, script="@line/rebase.sh"]
+  // finds the branch behind comes back here. The Ship answer's own rebase is
+  // one visit and each such return is one more, so after the answer the run
+  // rebases again for the default branch moving three times at most, however
+  // many fix rounds there are: a fix round's rebase (at most six, three for
+  // red CI and three others) spends no visit.
+  rebase [label="Rebase", shape=parallelogram, max_visits=4, max_free_visits=6, timeout=3600, script="@line/rebase.sh"]
 
-  ship [label="Ship", shape=parallelogram, timeout=3600, script="@line/ship.sh"]
+  // A ship command that lands through a pull request waits on its CI (8 to 25 minutes): the station parks.
+  ship [label="Ship", shape=parallelogram, parks=true, timeout=3600, script="@line/ship.sh"]
 
   watch [label="Watch", shape=parallelogram, script="cast task update $task_id --watch-days $line.watch_days"]
 
@@ -208,7 +226,11 @@ digraph line {
   eval -> unscored       [condition="outcome = failure and eval.exit_code != 1", label="eval could not score"]
   unscored -> exit
 
-  review -> card_draft [condition="review_verdict = approve"]
+  // A person who answered Ship answered for the fix rounds after it: an approved fix lands without a second card.
+  // The answer survives `cast workflow resume` on purpose: whoever resumes the run continues the change that was
+  // approved, and review still gates every fix.
+  review -> card_draft [condition="review_verdict = approve and human.gate.selected != S"]
+  review -> rebase     [condition="review_verdict = approve and human.gate.selected = S", label="Ship already answered", free_visit="rebase"]
   review -> implement      [condition="review_verdict = changes and category != line", label="changes"]
   review -> implement_line [condition="review_verdict = changes and category = line", label="changes"]
   review -> rejected   [condition="review_verdict = reject"]
@@ -233,6 +255,10 @@ digraph line {
   rebase -> ship      [condition="outcome = failure and rebase.exit_code != 1", label="could not rebase"]
   ship -> watch  [condition="outcome = success"]
   ship -> rebase [condition="outcome = failure and ship.exit_code = 3", label="default branch moved"]
-  ship -> exit   [condition="outcome = failure and ship.exit_code != 3", label="not shipped"]
+  // CI red goes back to the builder with its brief, three rounds a run (ship.sh counts them over the whole run).
+  ship -> implement      [condition="outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category != line", label="CI red", free_visit="implement"]
+  ship -> implement_line [condition="outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category = line", label="CI red", free_visit="implement_line"]
+  ship -> ci_red [condition="outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds > 3", label="CI stayed red"]
+  ship -> exit   [condition="outcome = failure and ship.exit_code != 3 and ship.exit_code != 7", label="not shipped"]
   watch -> exit
 }
