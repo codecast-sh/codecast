@@ -145,7 +145,7 @@ about its own files only. The files no session wrote go to one finding on
 the repository's project. An episode is the set of files; it ends when the
 checkout levels. A level whose HEAD moved off its base asks nobody.
 
-Each writer's brief (`land/levelConflicts.ts`, `heldBrief`) names up to eight
+Each writer's brief (`heldBrief` in `land/levelConflicts.ts`) names up to eight
 of its conflicting files and points at a list file holding all of them. It
 says the other conflicting files belong to other sessions, told separately.
 It lists the upstream commits that touched its files, and it points at a
@@ -156,7 +156,10 @@ upstream's change into each file by hand, from its merge file or `git show
 <upstream>:<path>`. The brief forbids pull, merge, rebase, stash, checkout,
 restore, reset and commit in the shared checkout, where other sessions'
 uncommitted work lives. Once the files carry upstream's change, the next
-sweep levels by itself and clears the merge files.
+sweep levels by itself and clears the merge files. The words are
+`levelAskWords` (`contracts/checkouts.ts`), which the pipeline page's ask
+shares: sent from the page, with no list or merge files, it names every file
+and the `git show` of upstream's version of each.
 
 The brief is a machine wake from codecast's level sweep (origin
 `scheduler`), so it leaves the writer's pinned state and a hidden stash
