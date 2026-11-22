@@ -136,6 +136,9 @@ Choosing a flow:
 
   cast flow show <flow> lists a flow's slots. A flow written here is kept in .codecast/session-flows/
   as this session's draft; its run draws in the conversation, where it can be saved to the library.
+  A run keeps the station prompts it started with: an edited flow reaches it only at a gate answered
+  after the edit, or when the run moves onto a newer version. The line profile's $line.* values are
+  read again before every station.
 `;
 
 export function registerFlowCommands(program: Command, deps: FlowDeps): Command {
