@@ -3,8 +3,9 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, reportRunStopped, refreshedOnResume, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, runRegistrationIsFatal, buildNodePrompt, PRESENTER_BASE, type RunOptions } from "./runner.js";
+import { runWorkflow, reportRunStopped, refreshedOnResume, graphToPushPayload, parseGateEdgeLabel, gatePayload, stationTitle, runRegistrationIsFatal, buildNodePrompt, PRESENTER_BASE, type RunOptions } from "./runner.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
+import { handTimeouts } from "./handWatch.js";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
 isolateCodecastDirEachTest("cast-wf-state-");
 
@@ -356,10 +357,10 @@ describe("workflow/runner (gate payload)", () => {
     fs.rmSync(tmpDir, { recursive: true });
   });
 
-  test("a hand runs as long as its node's timeout, else the run's, else 30 minutes", () => {
-    expect(handTimeoutMs({ timeout: 5400 }, { agentTimeout: 60_000 })).toBe(5_400_000);
-    expect(handTimeoutMs({}, { agentTimeout: 60_000 })).toBe(60_000);
-    expect(handTimeoutMs({}, {})).toBe(1_800_000);
+  test("a hand may stay quiet for the run's agent timeout, else 30 minutes, and runs at most its node's timeout, else 4 hours", () => {
+    expect(handTimeouts({ timeout: 5400 }, { agentTimeout: 60_000 })).toEqual({ idleMs: 60_000, capMs: 5_400_000 });
+    expect(handTimeouts({}, { agentTimeout: 60_000 })).toEqual({ idleMs: 60_000, capMs: 14_400_000 });
+    expect(handTimeouts({}, {})).toEqual({ idleMs: 1_800_000, capMs: 14_400_000 });
   });
 
   test("a failing dry run on a bound task never moves or comments on the task", async () => {
