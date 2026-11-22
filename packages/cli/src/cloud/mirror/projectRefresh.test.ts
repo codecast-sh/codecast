@@ -486,3 +486,34 @@ test("union-mobile's tracked outreach/.agents -> .claude link: placement mirrors
   expect(read(targetRoot, "outreach/.claude/agents/arc.md")).toBe("tracked agent\n");
   expect(verifyMirrorStamp(remote)?.complete).toBe(true);
 }, 60_000);
+
+test("a tracked link leaving the project (`.codex -> ../shared-agents`): its files go by their home path where the host's recreated link lands there, and stay behind with a warning where it lands elsewhere; placement never fails", async () => {
+  const gitEnv = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { env: { ...process.env, ...gitEnv }, stdio: "ignore" });
+  const checkout = (root: string) => {
+    write(root, "AGENTS.md", "repo rules\n");
+    fs.symlinkSync("../shared-agents", path.join(root, ".codex"));
+    git(root, "init", "-q");
+    git(root, "add", ".");
+    git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+  };
+  const local = temp();
+  const sourceRoot = path.join(local, "code", "repo");
+  write(local, "code/shared-agents/skills/team/SKILL.md", "shared skill\n");
+  checkout(sourceRoot);
+  for (const narrowProjects of [true, false]) {
+    for (const [layout, lands] of [["code", true], ["work", false]] as const) {
+      const remote = temp();
+      const targetRoot = path.join(remote, layout, "repo");
+      checkout(targetRoot);
+      const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects: [{ host: "u@h", sourceRoot, targetRoot }], narrowProjects, gitEnv });
+      const parsed = await parseMirrorBundle(built.bytes);
+      const shared = parsed.files.map((f) => f.path).filter((p) => p.includes("shared-agents") || p.includes(".codex/"));
+      expect(shared).toEqual(lands ? ["code/shared-agents/skills/team/SKILL.md"] : []);
+      expect(built.summary.warnings.some((w) => w.includes(".codex -> ../shared-agents resolves elsewhere on the host"))).toBe(!lands);
+      const result = await applyMirrorBundle(parsed, { home: remote, configUserId: "u", previousStamp: null, refresh: () => {} });
+      expect(result.errors).toEqual([]);
+      if (lands) expect(read(targetRoot, ".codex/skills/team/SKILL.md")).toBe("shared skill\n");
+    }
+  }
+}, 60_000);

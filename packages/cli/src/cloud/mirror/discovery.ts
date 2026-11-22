@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFile, spawnSync } from "../../proc.js";
+import { execFile, spawn, spawnSync } from "../../proc.js";
 import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
 import type { TouchLedger } from "./ledger.js";
@@ -454,6 +454,12 @@ export interface ProjectContextFile {
   kind: MirrorKind;
   mode: "0600" | "0700";
   bytes: Buffer;
+  /**
+   * The tracked project link a home-scope file was reached through: the host's
+   * checkout recreates it, so the file is of use there only when the link,
+   * resolved from its place on the host, lands where the file is mirrored.
+   */
+  throughLink?: { path: string; target: string; real: string };
 }
 
 export interface ProjectContextOptions {
@@ -521,10 +527,11 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
   // Outside a git repo nothing else carries the files, so all of them travel.
   const inRepo: boolean = opts.agentContextOnly ? yield { op: "inRepo", path: root } : false;
   // A folder reached through a link git tracks inside the project (union-mobile
-  // tracks `outreach/.agents -> .claude`) is located at its real path: the
-  // host's checkout recreates that link, and its receiver never writes through
-  // one. Behind an untracked link the host has no link, so the logical name
-  // stays. The index names a link by its located name, so a link behind
+  // tracks `outreach/.agents -> .claude`, a repo may track `.codex ->
+  // ../shared-agents`) is located at its real path, in the project or in home:
+  // the host's checkout recreates that link, and its receiver never writes
+  // through one. Behind an untracked link the host has no link, so the logical
+  // name stays. The index names a link by its located name, so a link behind
   // another tracked link is looked up there.
   const locatedDirs = new Map<string, string>([[root, root]]);
   const locateDir = function* (dir: string): ContextSteps<string> {
@@ -537,7 +544,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     if (link?.isSymbolicLink() && tracked.has(homeRelative(name, root)!)) {
       try {
         const real: string = yield { op: "realpath", path: dir };
-        if (homeRelative(real, root) !== null) located = real;
+        if (homeRelative(real, root) !== null || homeRelative(real, home) !== null) located = real;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT" && (err as NodeJS.ErrnoException).code !== "ELOOP") throw err;
       }
@@ -545,20 +552,21 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     locatedDirs.set(dir, located);
     return located;
   };
-  // [real folder, tracked link reaching it], project-relative: every name an
+  // Each tracked link with the real folder it is located at: every name an
   // agent can read a located file by, so its kind never depends on which name
   // the walk met first.
-  const linkAliases: Array<[string, string]> = [];
+  const linkAliases: Array<{ path: string; target: string; real: string }> = [];
   for (const entry of index) {
     if (!entry.link) continue;
-    const located = homeRelative(yield* locateDir(path.join(root, entry.path)), root)!;
-    if (located !== entry.path) linkAliases.push([located, entry.path]);
+    const link = path.join(root, entry.path);
+    const real = yield* locateDir(link);
+    if (real !== link) linkAliases.push({ path: link, target: yield { op: "readlink", path: link }, real });
   }
-  const agentNames = (rel: string): string[] => {
-    const names = [rel];
+  const agentNames = (file: string): string[] => {
+    const names = [file];
     for (let i = 0; i < names.length && names.length < 32; i++) {
-      for (const [target, link] of linkAliases) {
-        const alias = names[i]!.startsWith(`${target}/`) ? link + names[i]!.slice(target.length) : null;
+      for (const link of linkAliases) {
+        const alias = names[i]!.startsWith(`${link.real}/`) ? link.path + names[i]!.slice(link.real.length) : null;
         if (alias && !names.includes(alias)) names.push(alias);
       }
     }
@@ -621,7 +629,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     }
     const projectRel = homeRelative(located, root);
     const scope = projectRel === null ? "home" : "project";
-    const rel = projectRel ?? homeRelative(logical, home)!;
+    const rel = projectRel ?? homeRelative(located, home)!;
     const reachedAs = projectPath ?? rel;
     if (!includeAll && !isContextFile(reachedAs)) return;
     if ((!includeAll || optionalReference) && MEDIA_FILE_RE.test(rel)) { if (!skippedMedia.has(logical)) result.skipped.push({ path: logical, reason: "audio or video" }); skippedMedia.add(logical); return; }
@@ -643,7 +651,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     scanned.add(logical).add(located);
     // Judged by the names an agent reads it by: `.claude -> agent-config` makes
     // agent-config/settings.json Claude's settings, hooks and credential gate included.
-    const kind = scope === "project" ? [...agentNames(rel), reachedAs].map(kindForPath).find(isActiveConfig) ?? kindForPath(rel) : kindForPath(rel);
+    const kind = [...agentNames(located).map((name) => homeRelative(name, root) ?? homeRelative(name, home)!), reachedAs].map(kindForPath).find(isActiveConfig) ?? kindForPath(rel);
     // Under a name that is not agent context, the folder sync carries it verbatim.
     if (scope === "project" && inRepo && isActiveConfig(kind) && !isAgentContext(rel) && !tracked.has(rel)) result.warnings.push(`${rel}: agent config behind a tracked link travels with the folder sync, its paths not rewritten for the host`);
     const hooks = yield* portableHookSteps(bytes, logical, home, kind);
@@ -652,7 +660,8 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { credentialPaths.add(logical).add(located); result.skipped.push({ path: logical, reason: credential }); return; }
     if (emit) {
-      files.set(`${scope}:${rel}`, { sourcePath: located, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes });
+      const throughLink = scope === "home" && projectPath !== null ? linkAliases.find((link) => located.startsWith(`${link.real}/`)) : undefined;
+      files.set(`${scope}:${rel}`, { sourcePath: located, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes, ...(throughLink ? { throughLink } : {}) });
       result.totalBytes += bytes.length;
       if (droppable) candidates.push({ path: homeRelative(logical, home) ?? logical, bytes: bytes.length });
     }
@@ -715,7 +724,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
 }
 
 
-type ContextOperation = { op: "lstat" | "realpath" | "stat" | "readdir" | "prefix" | "bytes" | "tracked" | "inRepo"; path: string };
+type ContextOperation = { op: "lstat" | "realpath" | "readlink" | "stat" | "readdir" | "prefix" | "bytes" | "tracked" | "inRepo"; path: string };
 type ContextSteps<T> = Generator<ContextOperation, T, any>;
 
 
@@ -723,20 +732,24 @@ export function isAccessError(err: unknown): boolean {
   return ["EACCES", "EPERM", "ENOENT", "ENOTDIR"].includes((err as NodeJS.ErrnoException)?.code ?? "");
 }
 
+// `ls-files -s` lines: "<mode> <object> <stage>\t<path>"; 120000 is a symlink.
+const indexEntry = (line: string) => ({ path: line.slice(line.indexOf("\t") + 1), link: line.startsWith("120000 ") });
+
 function trackedFiles(stdout: string, stderr: string, code: number | null): Array<{ path: string; link: boolean }> {
   if (code !== 0 && !stderr.includes("not a git repository")) throw new Error(`project context git enumeration failed (exit ${code})`);
-  // `ls-files -s` lines: "<mode> <object> <stage>\t<path>"; 120000 is a symlink.
-  return code === 0 ? stdout.split("\0").filter(Boolean).map((line) => ({ path: line.slice(line.indexOf("\t") + 1), link: line.startsWith("120000 ") })) : [];
+  return code === 0 ? stdout.split("\0").filter(Boolean).map(indexEntry) : [];
 }
 
 function executeContextSync(op: ContextOperation): unknown {
   if (op.op === "lstat") return fs.lstatSync(op.path, { throwIfNoEntry: false });
   if (op.op === "realpath") return fs.realpathSync(op.path);
+  if (op.op === "readlink") return fs.readlinkSync(op.path);
   if (op.op === "stat") return fs.statSync(op.path);
   if (op.op === "readdir") return fs.readdirSync(op.path);
   if (op.op === "inRepo") return spawnSync("git", ["-C", op.path, "rev-parse", "--git-dir"], { stdio: "ignore", timeout: 30_000 }).status === 0;
   if (op.op === "tracked") {
-    const r = spawnSync("git", ["-C", op.path, "ls-files", "-s", "-z"], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
+    // About 90 bytes a tracked file: room for several million.
+    const r = spawnSync("git", ["-C", op.path, "ls-files", "-s", "-z"], { encoding: "utf8", timeout: 30_000, maxBuffer: 512 * 1024 * 1024 });
     if (r.error) throw r.error;
     return trackedFiles(r.stdout, r.stderr, r.status);
   }
@@ -752,13 +765,28 @@ function executeContextSync(op: ContextOperation): unknown {
 async function executeContextAsync(op: ContextOperation): Promise<unknown> {
   if (op.op === "lstat") return fs.promises.lstat(op.path).catch((err: NodeJS.ErrnoException) => { if (err.code !== "ENOENT") throw err; return undefined; });
   if (op.op === "realpath") return fs.promises.realpath(op.path);
+  if (op.op === "readlink") return fs.promises.readlink(op.path);
   if (op.op === "stat") return fs.promises.stat(op.path);
   if (op.op === "readdir") return fs.promises.readdir(op.path);
   if (op.op === "inRepo") return new Promise((resolve) => { execFile("git", ["-C", op.path, "rev-parse", "--git-dir"], { timeout: 30_000 }, (err) => resolve(!err)); });
+  // Streamed and parsed as it arrives, so no repo is too large to list.
   if (op.op === "tracked") return new Promise((resolve, reject) => {
-    execFile("git", ["-C", op.path, "ls-files", "-s", "-z"], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err && !stderr.includes("not a git repository")) { reject(new Error("project context git enumeration failed")); return; }
-      resolve(trackedFiles(stdout, stderr, err ? 1 : 0));
+    const child = spawn("git", ["-C", op.path, "ls-files", "-s", "-z"], { stdio: ["ignore", "pipe", "pipe"] });
+    const entries: Array<{ path: string; link: boolean }> = [];
+    let rest = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill(), 30_000);
+    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
+      const lines = (rest + chunk).split("\0");
+      rest = lines.pop()!;
+      for (const line of lines) if (line) entries.push(indexEntry(line));
+    });
+    child.stderr!.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+    child.on("error", (err) => { clearTimeout(timer); reject(err); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0 && !stderr.includes("not a git repository")) { reject(new Error("project context git enumeration failed")); return; }
+      resolve(code === 0 ? entries : []);
     });
   });
   const fd = await fs.promises.open(op.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);

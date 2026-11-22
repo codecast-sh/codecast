@@ -469,7 +469,7 @@ test("a socket named by a home instruction file is skipped by the home walk, not
   } finally { server.close(); }
 });
 
-test("a file behind a tracked in-project linked folder is named once by its real path, even when a reference reaches it before the walk; an untracked link or one leaving the project keeps its own name", async () => {
+test("a file behind a tracked linked folder is named once by its real path, in the project or in home, even when a reference reaches it before the walk; an untracked link keeps its own name", async () => {
   execFileSync("git", ["init", "-q", root]);
   write("src/repo/outreach/.claude/skills/flags/SKILL.md", "untracked skill\n");
   fs.symlinkSync(".claude", path.join(root, "outreach/.agents"));
@@ -481,11 +481,18 @@ test("a file behind a tracked in-project linked folder is named once by its real
   write("src/repo/AGENTS.md", "See [flags](outreach/.agents/skills/flags/SKILL.md).\n");
   write("shared-agents/skills/team/SKILL.md", "shared skill\n");
   fs.symlinkSync(path.join(home, "shared-agents"), path.join(root, "outreach/.codex"));
+  // A tracked link leaving the project: the host's checkout recreates it, so
+  // its files go by their home path, never through the link.
+  fs.symlinkSync("../../../shared-agents", path.join(root, "outreach/.cursor"));
+  execFileSync("git", ["-C", root, "add", "outreach/.cursor"]);
   const sync = collectProjectContext({ root, home, includeAncestors: false });
   expect(await collectProjectContextAsync({ root, home, includeAncestors: false })).toEqual(sync);
   const project = sync.files.filter((f) => f.scope === "project").map((f) => f.relativePath).sort();
   expect(project).toEqual(["AGENTS.md", "outreach/.claude/skills/flags/SKILL.md", "outreach/.codex/skills/team/SKILL.md", "outreach/.gemini/skills/flags/SKILL.md"]);
   expect(sync.files.find((f) => f.relativePath === "outreach/.claude/skills/flags/SKILL.md")?.sourcePath).toBe(path.join(root, "outreach/.claude/skills/flags/SKILL.md"));
+  expect(sync.files.filter((f) => f.scope === "home").map((f) => ({ path: f.relativePath, source: f.sourcePath, link: f.throughLink }))).toEqual([
+    { path: "shared-agents/skills/team/SKILL.md", source: path.join(home, "shared-agents/skills/team/SKILL.md"), link: { path: path.join(root, "outreach/.cursor"), target: "../../../shared-agents", real: path.join(home, "shared-agents") } },
+  ]);
 });
 
 test("a required hook holding credential material fails under either name of a tracked linked folder, whichever name the walk read it by, and behind a tracked `.claude` link to a folder not named like one", async () => {
@@ -556,3 +563,15 @@ test("agent context behind a tracked link to a folder outside agent context is l
   expect(await collectProjectContextAsync({ root, home, includeAncestors: false, agentContextOnly: true })).toEqual(sync);
   expect(sync.files.map((f) => f.relativePath)).toEqual([".codex/skills/x/SKILL.md"]);
 });
+
+test("an index whose listing passes 64 MiB is still read", async () => {
+  execFileSync("git", ["init", "-q", root]);
+  write("src/repo/CLAUDE.md", "root");
+  // 20k entries with 4 KB paths, in the index only: about 78 MB of `ls-files -s`.
+  const deep = Array.from({ length: 16 }, () => "s".repeat(240)).join("/");
+  const entries = Array.from({ length: 20_000 }, (_, i) => `100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391\t${deep}/f${i}\n`).join("");
+  execFileSync("git", ["-C", root, "update-index", "--index-info"], { input: entries });
+  const opts = { root, home, includeAncestors: false, includeTracked: false, agentContextOnly: true };
+  expect((await collectProjectContextAsync(opts)).files.map((f) => f.relativePath)).toEqual(["CLAUDE.md"]);
+  expect(collectProjectContext(opts).files.map((f) => f.relativePath)).toEqual(["CLAUDE.md"]);
+}, 60_000);
