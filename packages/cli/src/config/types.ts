@@ -331,6 +331,9 @@ export interface Config extends CloudSessionSyncSettings {
   // `check.per_machine` (default 16), with a few first builds at a time. Interactive jobs run 8 at
   // once by default. Past either, a caller waits its turn (machineCaps.ts).
   check?: { per_machine?: number; reserve_gb?: number };
+  // Where `cast flow run` places a run (workflow/placedChange.ts): `device` for every repository, `devices` keyed by
+  // a repository (owner/name) for one. A device id, label or hostname of the user's own; "here" keeps runs local.
+  flow?: { device?: string; devices?: Record<string, string> };
   interactive_jobs?: { per_machine?: number };
 
   // --- Server-stamped bookkeeping (index.ts) ---
