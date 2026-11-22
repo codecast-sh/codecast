@@ -13,7 +13,8 @@ import { heapCapMb, heapDeath, isNativeFrame, tscNodeOptions, TSC_HEAP_MB } from
 import { CheckFailure, summarize } from "./checkOutcome.js";
 import { acquireFileLock } from "./lockFile.js";
 import { EXIT_BUSY } from "./infraExit.js";
-import { listWatchers, removeOwnState, stopWatcher, watcherIdentity, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, tscFileVersion, unlistedChanges, projectsTouching, buildInfoPath, IDLE_EXIT_MS, STUCK_PASS_MS, watcherExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { listWatchers, removeOwnState, stopWatcher, watcherIdentity, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, unlistedChanges, projectsTouching, buildInfoPath, IDLE_EXIT_MS, STUCK_PASS_MS, watcherExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { tscFileVersion } from "./tscFileVersion.js";
 
 let isolation: IsolatedCodecastDir;
 const realIdentity = watcherIdentity.matches;
