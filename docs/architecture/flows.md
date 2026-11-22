@@ -88,6 +88,21 @@ flow, the CLI writes the row's source and each station's text under
 `~/.codecast/flows/<row id>/` at the paths the publisher's checkout held them,
 and runs that file.
 
+The web holds no parser and reads no checkout, so each checkout reports its
+repo's own flows: the session-start refresh (`stableContext.ts`,
+`workflow/repoFlowsReport.ts`) sends every non-draft `.codecast/flows` graph,
+parsed with its `extends` expanded, under the repository its origin remote
+names, whenever they changed since this machine last sent that repository's
+(`repo_flows`: one row per person and repository, read only by that person).
+The Ship picker reads the row for the session's repository and builds the pool
+in the CLI's order: those flows, then each shipped flow they do not name, then
+the published ones, so it draws the flow a press runs. A checkout with no
+origin reports nothing, and a teammate's picker on someone else's session
+lacks the repo's flows until their own checkout of it has reported. A team
+flow never overrides a shipped one of the same slug: a directory that is not
+mapped reads the active team's pool, so an override would follow the person
+into every other repository they open.
+
 The graph says what kind of flow it is and what it is for, so the pool needs no
 second record of it:
 
@@ -145,7 +160,9 @@ it. The map groups an expanded segment's stations under the segment's name.
 
 ## FL4. How a change enters a flow
 
-`cast flow run <flow>` binds a run to one change:
+`cast flow run <flow>` binds a run to one change. With no flow named it runs
+the workspace's default flow (below, `defaultFlowOf`), says which, and `cast
+flow ls` marks it, so instructions that say `cast flow run` outlive a rename:
 
 | Flag | The change | Bound task |
 |---|---|---|
@@ -328,7 +345,13 @@ the route it took, red only where it stopped.
   change is offered first. A team admin sets it with Make default on a flow's
   page in /flows, where the library marks it Default; any flow that takes a
   branch qualifies. A team that set none, or set one that left the pool, gets
-  Change (`defaultFlowOf` in `lib/line/flowPool.ts`).
+  Change (`defaultFlowOf` in `shared/contracts/flowPool.ts`). The CLI reads it
+  from `default_flow` on `/cli/workflows/pool` and resolves it by the same
+  function against its own pool (FL2's, the repo's flows included): a nameless
+  `cast flow run` runs it, `cast flow ls` marks it, and session start names it.
+  The default is the team's only when that team was named or the directory is
+  mapped to it; an unmapped directory takes none and gets Change, as session
+  start, which reads no team there, names it.
 - **On a session's header**, Flows lists the pool's flows that take a
   branch, the team's default first and picked, then lines, each named with its
   description; it draws the picked one, and opens the shared confirm
@@ -356,8 +379,8 @@ and its passing path (`Check → Review → Decide → Ship`, side routes counte
 work, a fan-out's branches under it. The Workflows section of the agent
 instructions (`shared/contracts/snippetsWorkflow.ts`, also `cast guide
 workflows`) carries the commands and the segment syntax. Session start adds
-one `<flows>` line naming the flows a session's own edits can run through:
-this checkout's and its mapped team's (`flowsLine` in `stableContext.ts`,
+one `<flows>` line naming the flows a session's own edits can run through,
+the default first: this checkout's and its mapped team's (`flowsLine` in `stableContext.ts`,
 about 320 bytes inside the 9000-byte budget the feed gives way to). Reading
 the team pool there also refreshes this machine's copies of the team's flows.
 
