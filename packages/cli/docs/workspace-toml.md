@@ -191,11 +191,18 @@ command = "bun run typecheck && bun test"
 
 ## `[browser]`
 
-A Chromium instance bound to the workspace, off by default. `allow` is the list
-of origins `cast browser` may navigate to from this project; omitting it means
-no policy, and an empty list refuses every site. A browser that does not start
-within a minute leaves the workspace without one and prints why; the worktree
-itself is still created.
+`allow` is the list of origins `cast browser` may navigate to from this
+project; omitting it means no policy, and an empty list refuses every site.
+
+`enabled = true` lets the workspace run a headless Chromium of its own, for a
+project's tooling that wants its own CDP port (Playwright, a hook). It is off
+by default, and detecting a web app does not turn it on. `cast browser` never
+needs it: it drives the machine's one managed Chrome. Nothing starts it at
+acquire. `cast ws browser <name>` starts it and prints `CDP_PORT=<port>` (it is
+also in the workspace's env while it runs). It stops when the flow station that
+started it ends, so a run waiting at a gate, on CI or at Go live holds none,
+and on `cast ws browser <name> --stop`, `cast ws browser --stop --all` or
+`cast ws destroy`.
 
 ```toml
 [browser]
