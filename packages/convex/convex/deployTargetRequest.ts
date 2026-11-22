@@ -7,7 +7,7 @@ import { enqueueConfigCommand } from "./users";
 import { DEPLOY_SHORT_ID_PREFIX, liveDeploys } from "@codecast/shared/contracts/deploys";
 import { canRedeploySha, commitTouchesTarget } from "@codecast/shared/contracts/deployTargets";
 import { teamKey } from "./deployTargetsCi";
-import { COMMITS_MAX, commitBySha, deployCommitsOf, mainCommitsAfter, repositoryArg, targetDeploys, targetRows } from "./deployTargetsState";
+import { COMMITS_MAX, commitBySha, deployCommitsOf, devPushOver, mainCommitsAfter, repositoryArg, targetDeploys, targetRows } from "./deployTargetsState";
 
 /**
  * Ask for a deploy of one target: main's head (`deploy`), an earlier deploy's
@@ -58,7 +58,9 @@ export async function requestTargetDeployCore(
     const named = args.sha.trim().toLowerCase();
     const commit = /^[0-9a-f]{7,40}$/.test(named) ? await commitBySha(ctx, t.repository, named) : null;
     if (commit?.main_at == null) throw new Error(`${args.sha} is not a commit on ${t.repository}'s default branch as codecast has read it: push it to the default branch (a push GitHub has not reported yet is read within a minute)`);
-    if (live?.sha && commit.sha === live.sha) throw new Error(`${commit.sha.slice(0, 10)} is already live on ${name}`);
+    // The live sha is already live only when prod runs its committed tree: a dirty deploy, or a dev push on top of it
+    // (what the targets view shows as dev_push), runs someone's working tree, and deploying the sha puts the commit back.
+    if (live?.sha && commit.sha === live.sha && !live.dirty && !(await devPushOver(ctx, t, live))) throw new Error(`${commit.sha.slice(0, 10)} is already live on ${name}`);
     const liveAt = live?.sha ? (await commitBySha(ctx, t.repository, live.sha))?.main_at ?? null : null;
     if (liveAt != null && commit.main_at < liveAt) throw new Error(`${commit.sha.slice(0, 10)} is older than what is live on ${name} (${live!.sha!.slice(0, 10)}): a rollback puts an earlier deploy back (action rollback)`);
     // A command that sends the tree it runs in (no $sha) ships main's head, so only that commit can be pinned.

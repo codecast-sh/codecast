@@ -136,7 +136,9 @@ export function shipPassBody(plan: ShipPlan, r: ShipOutcome, repository: string,
     deploys: r.deploys.map((d) => ({
       name: d.name, stage: d.stage, ok: d.ok, ...(d.target ? { target: d.target } : {}), ...(d.dirty ? { dirty: d.dirty } : {}),
       // What the push did to its target (machine, path, names added and dropped), when the step said.
-      ...(d.machine ? { machine: d.machine } : {}), ...(d.via ? { via: d.via } : {}), ...(d.adds && d.drops ? { adds: d.adds, drops: d.drops, ...(d.changes_read_at ? { changes_read_at: d.changes_read_at } : {}) } : {}),
+      ...(d.machine ? { machine: d.machine } : {}), ...(d.via ? { via: d.via } : {}),
+      // When the step's push went out, as an age the server dates on its own clock.
+      ...(d.pushed_at ? { pushed_age_ms: Math.max(0, Math.round(Date.now() - d.pushed_at)) } : {}), ...(d.adds && d.drops ? { adds: d.adds, drops: d.drops, ...(d.changes_read_at ? { changes_read_age_ms: Math.max(0, Math.round(Date.now() - d.changes_read_at)) } : {}) } : {}),
       ...(d.output ? { output: d.output.slice(-3000) } : {}),
     })),
     started_at: startedAt,

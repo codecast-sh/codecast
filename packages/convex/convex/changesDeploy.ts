@@ -114,8 +114,9 @@ export const markDeploy = mutation({
     // are sent, possibly empty, exactly when the push's diff ran, and both left out when it did not.
     adds: v.optional(v.array(v.string())),
     drops: v.optional(v.array(v.string())),
-    // When the push's diff read prod (ms): a deploy keeping a name proves it committed only for pushes before this.
-    changes_read_at: v.optional(v.number()),
+    // How long before this call the push's diff read prod (ms, by the pusher's clock): a deploy keeping a name proves it
+    // committed only for pushes before then. An age, not a time, so the pusher's clock never meets the server's.
+    changes_read_age_ms: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
@@ -134,6 +135,14 @@ export const markDeploy = mutation({
 
     // A dev watcher's push is not a deploy: a dev push, and nothing else (no event, no deploy, no trigger).
     if (args.via === "dev watcher") {
+      // The watcher pushes once as it starts: a committed tree whose diff found nothing, at the sha of the clean deploy
+      // the target runs with no dev push on top, changed nothing, and is not recorded.
+      if (!args.dirty && Array.isArray(args.adds) && Array.isArray(args.drops) && !args.adds.length && !args.drops.length) {
+        const live = await latestLiveDeploy(ctx, `team:${teamId}`, surface, repository);
+        if (live && !live.dirty && sameSha(live.sha, sha) && !(await devPushedOver(ctx, live))) {
+          return { ok: true as const, dev_push: false as const, noop: true as const, event_id: null, team_id: teamId, repository, surface, sha, version: version ?? null, deploy: null };
+        }
+      }
       await recordDevPush(ctx, {
         workspace: `team:${teamId}`,
         team_id: teamId,
@@ -188,6 +197,7 @@ export const markDeploy = mutation({
       ...(version ? { version } : {}),
       repository,
       source: "cast ship mark",
+      push: true,
       event_id: eventId,
       ...(args.dirty ? { dirty: args.dirty } : {}),
       ...(args.deploy ? { deploy: args.deploy } : {}),
@@ -196,7 +206,7 @@ export const markDeploy = mutation({
       // Sent exactly when the push's diff ran, empty or not: a deploy whose diff ran is evidence of what its tree held.
       ...(args.adds ? { adds: args.adds } : {}),
       ...(args.drops ? { drops: args.drops } : {}),
-      ...(args.changes_read_at != null ? { changes_read_at: args.changes_read_at } : {}),
+      ...(args.changes_read_age_ms != null ? { changes_read_at: now - Math.max(0, args.changes_read_age_ms) } : {}),
       started_by: startedBy,
       at: now,
     });

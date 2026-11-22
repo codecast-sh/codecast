@@ -130,12 +130,18 @@ describe("a ship pass as codecast records it", () => {
     const outcome: any = {
       ok: true, stage: "done", commits: [], held: [],
       deploys: [
-        { name: "convex", stage: "before_push", ok: true, target: "backend", machine: "box", via: "deploy.sh", adds: ["fn:a:b"], drops: [], changes_read_at: 1234 },
+        { name: "convex", stage: "before_push", ok: true, target: "backend", machine: "box", via: "deploy.sh", adds: ["fn:a:b"], drops: [], changes_read_at: 1234, pushed_at: Date.now() - 60_000 },
         { name: "convex2", stage: "before_push", ok: true, target: "backend", machine: "box", via: "deploy.sh", changes_read_at: 1234 },
       ],
     };
     const body: any = shipPassBody({ groups: [] } as any, outcome, "acme/app", 1, "dev1");
-    expect(body.deploys[0]).toEqual({ name: "convex", stage: "before_push", ok: true, target: "backend", machine: "box", via: "deploy.sh", adds: ["fn:a:b"], drops: [], changes_read_at: 1234 });
-    expect(body.deploys[1]).not.toHaveProperty("changes_read_at");
+    expect(body.deploys[0]).toMatchObject({ name: "convex", stage: "before_push", ok: true, target: "backend", machine: "box", via: "deploy.sh", adds: ["fn:a:b"], drops: [] });
+    // Sent as an age (the read at 1234 is long ago by now), dated by the server's clock.
+    expect(body.deploys[0].changes_read_age_ms).toBeGreaterThan(0);
+    expect(body.deploys[0]).not.toHaveProperty("changes_read_at");
+    expect(body.deploys[1]).not.toHaveProperty("changes_read_age_ms");
+    // When the step pushed, as an age: about a minute ago here.
+    expect(body.deploys[0].pushed_age_ms).toBeGreaterThanOrEqual(60_000);
+    expect(body.deploys[0]).not.toHaveProperty("pushed_at");
   });
 });

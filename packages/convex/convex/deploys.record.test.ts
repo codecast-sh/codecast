@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import * as notificationRouter from "./notificationRouter";
 import { hashToken } from "./apiTokens";
 import { latestLiveDeploy, projectDeployViews, recordDeployMarker } from "./deploys";
 import { deployLine } from "./deployTargetsState";
@@ -37,11 +38,19 @@ async function setup() {
     return { ana, ben, cy, team };
   });
   const ws = `team:${ids.team}`;
-  const mark = (who: keyof typeof tokens, over: Record<string, any> = {}) =>
-    t.mutation(api.changesDeploy.markDeploy, { api_token: tokens[who], repository: REPO, surface: "backend", sha: SHA, team_id: ids.team, ...over });
+  /** Lets what a write scheduled (telling people their dropped work) run, and waits for it. */
+  const settle = async () => {
+    await new Promise((r) => setTimeout(r, 0));
+    await t.finishInProgressScheduledFunctions();
+  };
+  const mark = async (who: keyof typeof tokens, over: Record<string, any> = {}) => {
+    const res = await t.mutation(api.changesDeploy.markDeploy, { api_token: tokens[who], repository: REPO, surface: "backend", sha: SHA, team_id: ids.team, ...over });
+    await settle();
+    return res;
+  };
   /** A deploy.sh push whose diff ran and read prod just now. */
   const ship = (who: keyof typeof tokens, over: Record<string, any> = {}) =>
-    mark(who, { via: "deploy.sh", machine: `${who}-mac`, adds: [], drops: [], changes_read_at: Date.now(), ...over });
+    mark(who, { via: "deploy.sh", machine: `${who}-mac`, adds: [], drops: [], changes_read_age_ms: 0, ...over });
   /** A dev watcher's save. */
   const save = (who: keyof typeof tokens, over: Record<string, any> = {}) =>
     mark(who, { via: "dev watcher", machine: `${who}-mac`, dirty: 1, adds: [], drops: [], ...over });
@@ -55,7 +64,24 @@ async function setup() {
     for (const n of await ctx.db.query("notifications").collect()) await ctx.db.patch(n._id, { created_at: n.created_at - ms });
   });
   const live = () => t.run(async (ctx) => (await latestLiveDeploy(ctx, ws, "backend", REPO))?.short_id);
-  return { t, ids, ws, tokens, mark, ship, save, deploys, devPushes, notes, events, addedBy, ageNotes, live };
+  return { t, ids, ws, tokens, settle, mark, ship, save, deploys, devPushes, notes, events, addedBy, ageNotes, live };
+}
+
+/** A 40-character sha for commit n. */
+const shaN = (n: number) => String(n % 10).repeat(30) + String(n).padStart(10, "0");
+
+/** Commits on the repository's default branch, so a deploy can name them. */
+async function onMain(t: Awaited<ReturnType<typeof setup>>["t"], team: any, ns: number[]) {
+  const base = Date.now() - 1_000_000;
+  await t.run(async (ctx) => {
+    for (const n of ns) {
+      await ctx.db.insert("commits", {
+        sha: shaN(n), message: `change ${n}`, author_name: "Ana", author_email: "a@x", timestamp: base, files_changed: 1, insertions: 1, deletions: 0,
+        repository: REPO, team_id: team, branch: "main", main_at: base + n,
+        files: [{ filename: `convex/f${n}.ts`, status: "modified", additions: 1, deletions: 0, changes: 1 }],
+      });
+    }
+  });
 }
 
 async function withTarget() {
@@ -167,6 +193,35 @@ describe("a dev watcher's push is a dev push, never a deploy", () => {
     expect(told).toHaveLength(2);
     expect(told.every((n) => String(n.recipient_user_id) === String(ids.ben))).toBe(true);
   });
+
+  test("the watcher's start-up push of the committed tree the clean live deploy runs changed nothing: nothing is recorded", async () => {
+    const { ship, save, devPushes } = await setup();
+    await ship("ana");
+    await pause();
+    expect(await save("ben", { dirty: 0 })).toMatchObject({ ok: true, dev_push: false, noop: true, deploy: null, event_id: null });
+    expect(await devPushes()).toHaveLength(0);
+    // Over a dev push, the committed tree changes what runs.
+    await save("ben", { dirty: 2 });
+    await pause();
+    expect(await save("cy", { dirty: 0 })).toMatchObject({ dev_push: true });
+    expect(await devPushes()).toHaveLength(2);
+    // So do uncommitted files, a name it added or dropped, and another sha.
+    for (const over of [{ dirty: 2 }, { dirty: 0, adds: ["fn:b:x"] }, { dirty: 0, drops: ["fn:a:y"] }, { dirty: 0, sha: SHA2 }]) {
+      const s = await setup();
+      await s.ship("ana");
+      await pause();
+      expect(await s.save("ben", over)).toMatchObject({ dev_push: true });
+      expect(await s.devPushes()).toHaveLength(1);
+    }
+  });
+
+  test("the watcher's push of a committed tree over a dirty live deploy of its sha is recorded", async () => {
+    const { ship, save, devPushes } = await setup();
+    await ship("ana", { dirty: 3 });
+    await pause();
+    expect(await save("ben", { dirty: 0 })).toMatchObject({ dev_push: true });
+    expect(await devPushes()).toHaveLength(1);
+  });
 });
 
 describe("a deploy.sh push", () => {
@@ -205,7 +260,7 @@ describe("a deploy.sh push", () => {
   test("only a clean push that changed nothing lands on the clean live deploy of its sha; a dirty one still finishes the deploy it names", async () => {
     const { t, ids, ws, deploys } = await setup();
     const push = (over: Record<string, any>) => t.run(async (ctx) =>
-      recordDeployMarker(ctx, { workspace: ws, team_id: ids.team, target: "backend", sha: SHA, repository: REPO, source: "test", pushed_via: "deploy.sh", at: Date.now(), ...over }));
+      recordDeployMarker(ctx, { workspace: ws, team_id: ids.team, target: "backend", sha: SHA, repository: REPO, source: "test", pushed_via: "deploy.sh", push: true, at: Date.now(), ...over }));
     const first = await push({ adds: ["fn:a:one"], drops: [] });
     expect(await push({ adds: [], drops: [] })).toBe(first);
     expect(await push({})).toBe(first);
@@ -290,16 +345,81 @@ describe("a deploy.sh push", () => {
     expect((await t.run(async (ctx) => latestLiveDeploy(ctx, ws, "web", REPO)))?.short_id).toBe(b);
   });
 
-  test("markDeploy and a ship pass's deploy step store when the push's diff read prod", async () => {
+  test("a report of a deploy already made lands on the live deploy of its sha, clean or dirty", async () => {
+    const { t, ids, ws, ship, deploys, live } = await withTarget();
+    const dirty = await ship("ana", { dirty: 3 });
+    await pause();
+    for (const source of ["live reader", "github: railway"]) {
+      const landed = await t.run(async (ctx) =>
+        recordDeployMarker(ctx, { workspace: ws, team_id: ids.team, target: "backend", sha: SHA, repository: REPO, source, status: "live", at: Date.now() }));
+      expect(landed).toBe(dirty.deploy);
+    }
+    expect(await t.mutation(internal.deployTargets.recordPastDeploy, { repository: REPO, target: "backend", sha: SHA, at: Date.now() - HOUR, source: "release history" })).toBe(dirty.deploy);
+    expect(await deploys()).toHaveLength(1);
+    expect(await live()).toBe(dirty.deploy);
+  });
+
+  test("a backfilled codecast marker of a sha live earlier is a report, not a fresh push: it lands on that deploy and fires nothing", async () => {
+    const { t, ids, ship, deploys, live } = await setup();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("agent_tasks", { user_id: ids.ana, title: "After a deploy", prompt: "x", schedule_type: "event", status: "scheduled", run_count: 0, event_filter: { event_type: "deploy_live" }, created_at: 0, updated_at: 0 } as any);
+    });
+    const triggers = () => t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect())
+      .filter((f: any) => f.name.includes("matchTaskTriggers") && f.args[0]?.event_type === "deploy_live").length);
+    const one = await ship("ana");
+    await pause();
+    const two = await ship("ana", { sha: SHA2 });
+    expect(await triggers()).toBe(2);
+    // A marker event of SHA that no deploy holds yet (one recorded before deploys were).
+    await t.run(async (ctx) => {
+      await ctx.db.insert("external_events", { source: "codecast", team_id: ids.team, repository: REPO, kind: "deploy", actor_user_id: ids.ana, title: "backend at aaaaaaa", sha: SHA, meta: { surface: "backend" }, dedupe_key: "old", created_at: Date.now() } as any);
+    });
+    expect(await t.mutation(internal.deploysBackfill.backfill, { repository: REPO })).toMatchObject({ recorded: 1 });
+    expect((await deploys()).map((d) => d.short_id)).toEqual([one.deploy, two.deploy]);
+    expect(await live()).toBe(two.deploy);
+    expect(await triggers()).toBe(2);
+  });
+
+  test("a ship pass's deploy went live when its step pushed: a dev push saved before the pass ended runs on top of it", async () => {
+    const { t, ids, tokens, settle, save, view, deploys, addedBy } = await withTarget();
+    const pushed = Date.now();
+    await pause();
+    await save("ben", { sha: SHA2, dirty: 2, adds: ["fn:b:x"] });
+    await pause();
+    const pass = await t.mutation(api.deployTargets.recordShipPass, {
+      api_token: tokens.ana, team_id: ids.team, repository: REPO, ok: true, stage: "done", pushed: SHA2, commits: [], held: [], started_at: pushed - 60_000,
+      deploys: [{ name: "convex", stage: "deploy", ok: true, target: "backend", machine: "ana-mac", via: "deploy.sh", adds: [], drops: [], changes_read_age_ms: Date.now() - pushed + 30_000, pushed_age_ms: Date.now() - pushed }],
+    });
+    await settle();
+    const [row] = await deploys();
+    expect(row.short_id).toBe(pass.deploys[0].deploy);
+    expect(row.live_at).toBeLessThanOrEqual(pushed + 2);
+    const shown = await view();
+    expect(shown.live).toMatchObject({ short_id: row.short_id });
+    expect(shown.dev_push).toMatchObject({ by: "Ben", adds_count: 1 });
+    // The deploy's diff read prod before Ben's save, so it proves nothing of his name.
+    expect((await addedBy(["fn:b:x"]))[0]).toMatchObject({ dev_push: true, by: "Ben" });
+    expect((await addedBy(["fn:b:x"]))[0].committed_in).toBeUndefined();
+  });
+
+  test("markDeploy and a ship pass's deploy step store when the push's diff read prod, by the server's clock", async () => {
     const { t, ids, tokens, ship, deploys } = await setup();
-    const marked = await ship("ana", { changes_read_at: 1234 });
+    // The pusher says how long ago its diff read prod; its own clock may be hours off the server's.
+    const before = Date.now();
+    const marked = await ship("ana", { changes_read_age_ms: 60_000 });
     const pass = await t.mutation(api.deployTargets.recordShipPass, {
       api_token: tokens.ana, team_id: ids.team, repository: REPO, ok: true, stage: "done", pushed: SHA2, commits: [], held: [], started_at: Date.now() - 1000,
-      deploys: [{ name: "convex", stage: "deploy", ok: true, target: "backend", machine: "ana-mac", via: "deploy.sh", adds: ["fn:a:new"], drops: [], changes_read_at: 5678 }],
+      deploys: [{ name: "convex", stage: "deploy", ok: true, target: "backend", machine: "ana-mac", via: "deploy.sh", adds: ["fn:a:new"], drops: [], changes_read_age_ms: 120_000 }],
     });
+    const after = Date.now();
     const rows = await deploys();
-    expect(rows.find((d) => d.short_id === marked.deploy)).toMatchObject({ changes_read_at: 1234 });
-    expect(rows.find((d) => d.short_id === pass.deploys[0].deploy)).toMatchObject({ changes_read_at: 5678, machine: "ana-mac", pushed_via: "deploy.sh", adds: ["fn:a:new"], drops: [] });
+    const m = rows.find((d) => d.short_id === marked.deploy)!;
+    const p = rows.find((d) => d.short_id === pass.deploys[0].deploy)!;
+    expect(m.changes_read_at).toBeGreaterThanOrEqual(before - 60_000);
+    expect(m.changes_read_at).toBeLessThanOrEqual(after - 60_000);
+    expect(p.changes_read_at).toBeGreaterThanOrEqual(before - 120_000);
+    expect(p.changes_read_at).toBeLessThanOrEqual(after - 120_000);
+    expect(p).toMatchObject({ machine: "ana-mac", pushed_via: "deploy.sh", adds: ["fn:a:new"], drops: [] });
   });
 });
 
@@ -340,7 +460,7 @@ describe("who added a name", () => {
     await save("ana", { adds: ["table:anas"] });
     await pause();
     // Ben's clean push goes out at t=10, its diff (read at t=1) dropped nothing.
-    const bens = await ship("ben", { sha: SHA2, changes_read_at: t1 });
+    const bens = await ship("ben", { sha: SHA2, changes_read_age_ms: Date.now() - t1 });
     expect(bens.deploy).toBeTruthy();
     expect((await addedBy(["table:anas"]))[0].committed_in).toBeUndefined();
     // So when Ben's next deploy drops it, Ana is told.
@@ -358,7 +478,7 @@ describe("who added a name", () => {
     await pause();
     await save("ana", { adds: ["fn:a:more"] });
     await pause();
-    await ship("ben", { sha: SHA2, changes_read_at: read });
+    await ship("ben", { sha: SHA2, changes_read_age_ms: Date.now() - read });
     expect((await addedBy(["table:anas"]))[0].committed_in).toBeUndefined();
   });
 
@@ -511,13 +631,14 @@ describe("telling people their dropped work", () => {
   });
 
   test("a ship pass's deploy step's drops tell the adder", async () => {
-    const { t, ids, tokens, save, notes } = await setup();
+    const { t, ids, tokens, settle, save, notes } = await setup();
     await save("ben", { adds: ["table:voiceprints"] });
     await pause();
     const pass = await t.mutation(api.deployTargets.recordShipPass, {
       api_token: tokens.ana, team_id: ids.team, repository: REPO, ok: true, stage: "done", pushed: SHA2, commits: [], held: [], started_at: Date.now() - 1000,
-      deploys: [{ name: "convex", stage: "deploy", ok: true, target: "backend", machine: "ana-mac", via: "deploy.sh", adds: ["fn:a:new"], drops: ["table:voiceprints"], changes_read_at: Date.now() }],
+      deploys: [{ name: "convex", stage: "deploy", ok: true, target: "backend", machine: "ana-mac", via: "deploy.sh", adds: ["fn:a:new"], drops: ["table:voiceprints"], changes_read_age_ms: 0 }],
     });
+    await settle();
     expect(await notes()).toEqual([expect.objectContaining({ recipient_user_id: ids.ben, entity_id: pass.deploys[0].deploy })]);
   });
 
@@ -529,6 +650,60 @@ describe("telling people their dropped work", () => {
     expect(bens.deploy).not.toBe(anas.deploy);
     expect(await deploys()).toHaveLength(2);
     expect(await notes()).toEqual([expect.objectContaining({ recipient_user_id: ids.ana, actor_user_id: ids.ben, entity_id: bens.deploy })]);
+  });
+
+  test("a dev push's notice never quiets the same person's deploy dropping other work", async () => {
+    const { ids, save, ship, notes } = await setup();
+    const bens = await ship("ben", { sha: SHA2, dirty: 3, adds: ["fn:b:dirty"] });
+    await pause();
+    await save("ana", { drops: ["fn:b:dirty"] });
+    await pause();
+    await save("ben", { sha: SHA3, adds: ["table:bens"] });
+    await pause();
+    const anas = await ship("ana", { sha: SHA4, drops: ["table:bens"] });
+    const rows = await notes();
+    expect(rows.map((r) => [String(r.recipient_user_id), String(r.actor_user_id), r.link])).toEqual([
+      [String(ids.ben), String(ids.ana), "/deploys"],
+      [String(ids.ben), String(ids.ana), `/deploys?deploy=${anas.deploy}`],
+    ]);
+    expect(rows[0].entity_id).toBe(bens.deploy);
+  });
+
+  test("telling people runs after the push is recorded, in a write of its own", async () => {
+    const { t, ids, tokens, settle, save, deploys, notes } = await setup();
+    await save("ben", { adds: ["table:bens"] });
+    await pause();
+    const res = await t.mutation(api.changesDeploy.markDeploy, {
+      api_token: tokens.ana, repository: REPO, surface: "backend", sha: SHA2, team_id: ids.team, via: "deploy.sh", machine: "ana-mac", adds: [], drops: ["table:bens"], changes_read_age_ms: 0,
+    });
+    expect(await notes()).toHaveLength(0);
+    const jobs = await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((f: any) => f.name.includes("tellDroppedWork")));
+    expect(jobs).toHaveLength(1);
+    await settle();
+    expect(await notes()).toEqual([expect.objectContaining({ recipient_user_id: ids.ben, entity_id: res.deploy })]);
+    expect(await deploys()).toHaveLength(1);
+  });
+
+  test("a notice that throws loses no push: the deploy and the dev push are recorded", async () => {
+    const { t, ids, ship, save, deploys, devPushes, notes } = await setup();
+    const real = { ...notificationRouter };
+    mock.module("./notificationRouter", () => ({ ...real, emitNotification: async () => { throw new Error("notice failed"); } }));
+    try {
+      await save("ben", { adds: ["table:bens"] });
+      await pause();
+      const anas = await ship("ana", { sha: SHA2, drops: ["table:bens"] });
+      expect(anas.deploy).toBeTruthy();
+      await pause();
+      await save("cy", { sha: SHA3, drops: ["table:bens"] });
+      expect((await deploys()).map((d) => d.short_id)).toEqual([anas.deploy]);
+      expect(await devPushes()).toHaveLength(2);
+      expect(await notes()).toHaveLength(0);
+      const jobs = await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((f: any) => f.name.includes("tellDroppedWork")));
+      expect(jobs.map((j: any) => j.state.kind)).toEqual(["failed", "failed"]);
+      void ids;
+    } finally {
+      mock.module("./notificationRouter", () => real);
+    }
   });
 
   test("someone who left the team is not told a push dropped their work", async () => {
@@ -602,7 +777,29 @@ describe("what readers see", () => {
     expect(after.dev_push).toBeNull();
   });
 
-  test("a pile of dev pushes after a deploy never hides it: it is live, already live, the way back, and the history is deploys only", async () => {
+  test("`cast deploy --sha` of the live sha is refused only while prod runs its committed tree", async () => {
+    const { t, ids, ship, save, request } = await withTarget();
+    await onMain(t, ids.team, [1]);
+    const S = shaN(1);
+    const cancel = (id: string) => t.run(async (ctx) => ctx.db.patch(id as any, { status: "cancelled" }));
+    await ship("ana", { sha: S });
+    await expect(request({ sha: S })).rejects.toThrow("is already live on backend");
+    await pause();
+    // A dev push runs Ben's working tree on top: deploying the sha puts the commit back.
+    await save("ben", { sha: S, dirty: 2 });
+    const back = await request({ sha: S });
+    expect(back).toMatchObject({ action: "deploy", sha: S, commits: 0 });
+    await cancel(back._id);
+    await pause();
+    await ship("ana", { sha: S });
+    await expect(request({ sha: S })).rejects.toThrow("is already live on backend");
+    await pause();
+    // A dirty deploy of the sha runs a working tree too.
+    await ship("ana", { sha: S, dirty: 3 });
+    expect(await request({ sha: S })).toMatchObject({ sha: S });
+  });
+
+  test("a pile of dev pushes after a deploy never hides it: it is live, the sha to put back, the way back, and the history is deploys only", async () => {
     const { t, ids, ship, save, view, request, deploys } = await withTarget();
     const sha = (n: number) => String(n % 10).repeat(30) + String(n).padStart(10, "0");
     const base = Date.now() - 1_000_000;
@@ -628,8 +825,10 @@ describe("what readers see", () => {
     expect(now.history.map((d: any) => d.short_id)).toEqual([two.deploy, expect.stringMatching(/^dp-/)]);
     expect(now.dev_push).toMatchObject({ sha: sha(209) });
     expect(now.queue.commits).toBe(1);
-    // `cast deploy --sha` of the live deploy's sha is refused as already live.
-    await expect(request({ sha: sha(2) })).rejects.toThrow("is already live on backend");
+    // `cast deploy --sha` of the live deploy's sha puts its committed tree back over the dev pushes.
+    const back = await request({ sha: sha(2) });
+    expect(back).toMatchObject({ action: "deploy", sha: sha(2), commits: 0 });
+    await t.run(async (ctx) => ctx.db.patch(back._id as any, { status: "cancelled" }));
     const reach = await t.withIdentity({ subject: `${ids.ana}|test` }).query(api.deployReach.get, { ref: `${REPO}@${sha(2)}` });
     expect(reach!.targets[0]).toMatchObject({ state: "live", deploy: { short_id: two.deploy } });
     // A rollback goes back to the deploy before it.
