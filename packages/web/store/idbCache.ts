@@ -173,6 +173,13 @@ if (MISSING_COLLECTION_TABLES.length > 0) {
 
 const META_KEYS = new Set<string>(META_STORE_KEYS);
 
+// Meta keys the registry no longer names. Nothing reads them and nothing
+// deleted them: the desktop app still held a 12 MB `messages` blob from
+// before conversationMessages (2026-11-21). Dropped at boot; a key leaving
+// the registry joins this list.
+export const RETIRED_META_KEYS = ["messages", "pagination", "sidePanelOpen", "sidePanelUserClosed", "teamUnreadCount"];
+let retiredMetaSwept = false;
+
 let _hydrating = false;
 
 // What each collection table currently holds on disk, by id → row reference.
@@ -613,6 +620,10 @@ export async function loadCache(
       Promise.all(collectionEntries.map(([, table]) => table.toArray())),
       db.meta.bulkGet(metaKeys),
     ]);
+    if (!retiredMetaSwept) {
+      retiredMetaSwept = true;
+      void db.meta.bulkDelete(RETIRED_META_KEYS).catch(() => {});
+    }
 
     // Meta lookup first — the sessions retention pass below needs
     // liveInboxIdList and lastFocusedConversationId from the same snapshot.
