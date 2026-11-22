@@ -25,7 +25,7 @@ Nothing new to learn. Ask for a typecheck the way you would anyway ("typecheck t
 
 - **The first check is the slow one.** It builds the program, so it takes as long as an ordinary typecheck. Every check after that, from any session in the same checkout, takes seconds.
 - **Your machine stays usable.** With a dozen agents at work, memory holds one program per project instead of one per agent.
-- **It tidies up after itself.** A shared typecheck nobody has asked in 45 minutes closes on its own. A machine always runs one per 12 GB of memory. Each project's typecheck is measured as it runs, and more start while the memory they need fits beside the ones already running. When nothing fits, the one asked least recently makes room, and if every one is busy the new check waits its turn for a few minutes, then the agent is told to ask again.
+- **It tidies up after itself.** A shared typecheck nobody has asked in 45 minutes closes on its own, as does one whose folder is deleted. Each project's typecheck is measured as it runs, and a new one starts only while the memory it needs fits in what the machine has free right now; under memory pressure, none starts beside the ones already running. First builds, the expensive part, run a few at a time, so a burst of agents asking at once waits its turn. When nothing fits, the one asked least recently makes room, and if every one is busy the new check waits its turn for a few minutes, then the agent is told to ask again.
 - **It tells a broken check from broken code.** When the typecheck itself fails (it ran out of memory, or stopped partway), the agent is told so, with the one thing to do next, instead of hunting for errors in code that has none.
 
 ## Repositories with several projects
