@@ -15,6 +15,8 @@
 // module stays importable by tests.
 
 import type { Command } from "commander";
+import { readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { gitTry } from "./gitPlane.js";
@@ -31,9 +33,18 @@ export type MarkOptions = {
   team?: string;
   dirty?: string;
   deploy?: string;
+  via?: string;
+  machine?: string;
+  changes?: string;
   dryRun?: boolean;
   json?: boolean;
 };
+
+/** What one push changed on the surface, by name (`fn:<module>:<export>`, `index:<table>.<index>`, ...). */
+export type PushChanges = { adds?: string[]; drops?: string[] };
+
+/** The pushes that put each name on the surface: `cast ship added-by`. */
+export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number };
 
 /** The checkout the command stands in: its GitHub repository and HEAD. */
 export type LocalCheckout = { repository: string | null; head: string | null };
@@ -43,7 +54,7 @@ async function readCheckout(cwd: string = process.cwd()): Promise<LocalCheckout>
 }
 
 /** The body `/cli/changes/mark-deploy` takes; flags win over the checkout. */
-export function markBody(options: MarkOptions, local: LocalCheckout): { repository: string; surface: string; sha: string; version?: string; dirty?: number; deploy?: string } {
+export function markBody(options: MarkOptions, local: LocalCheckout, changes: PushChanges = {}, machine: string = hostname()): { repository: string; surface: string; sha: string; version?: string; dirty?: number; deploy?: string; via?: string; machine?: string; adds?: string[]; drops?: string[] } {
   const repository = options.repo ?? local.repository;
   if (!repository) throw new Error("No GitHub repository here: run inside a checkout with a GitHub origin, or pass --repo <owner/name>.");
   const sha = options.sha ?? local.head;
@@ -54,7 +65,30 @@ export function markBody(options: MarkOptions, local: LocalCheckout): { reposito
     ...(options.version ? { version: options.version } : {}),
     ...(dirty > 0 ? { dirty } : {}),
     ...(options.deploy ? { deploy: options.deploy } : {}),
+    // A push's own record (deploy.sh, the dev watcher) names the machine it came from.
+    ...(options.via ? { via: options.via } : {}),
+    ...(options.via || options.machine ? { machine: options.machine ?? machine } : {}),
+    ...(changes.adds?.length ? { adds: changes.adds } : {}),
+    ...(changes.drops?.length ? { drops: changes.drops } : {}),
   };
+}
+
+/** `--changes <file>`: the JSON prod-diff writes, `{ adds, drops }`. */
+export function readChanges(path: string | undefined): PushChanges {
+  if (!path) return {};
+  const raw = JSON.parse(readFileSync(path, "utf-8"));
+  const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined);
+  return { adds: names(raw?.adds), drops: names(raw?.drops) };
+}
+
+/** Each name with the push that put it there, a line each. */
+export function formatAddedBy(found: AddedBy[]): string {
+  return found.map((f) => {
+    const how = f.via === "dev watcher" ? "dev watcher" : f.dirty > 0 ? "uncommitted push" : "push";
+    const who = [f.by, f.machine ? `on ${f.machine}` : null].filter(Boolean).join(" ");
+    const dirty = f.dirty > 0 ? `, ${f.dirty} uncommitted file${f.dirty === 1 ? "" : "s"}` : "";
+    return `${f.name}  ${f.deploy} ${how}${who ? ` by ${who}` : ""}, ${new Date(f.at).toLocaleString()}${dirty}`;
+  }).join("\n");
 }
 
 /** The plan as the popover says it: what, where, then each step. */
@@ -182,10 +216,13 @@ A push that upstream rejected because it moved is replayed and retried on its ow
     .option("--team <name|id>", "The team, when more than one of yours works on the repository")
     .option("--dirty <n>", "Files under the surface's sources that went out uncommitted with the sha")
     .option("--deploy <dp-N>", "The deploy this finishes: one codecast asked for, whose path now says what went out")
+    .option("--via <path>", "What pushed it: deploy.sh or dev watcher (records the machine too)")
+    .option("--machine <name>", "The machine it was pushed from (default: this one's hostname, with --via)")
+    .option("--changes <file>", "JSON { adds, drops }: what the push put on the surface and took off it, by name")
     .option("--dry-run", "Print the marker without recording it")
     .option("--json", "Machine-readable output")
     .action(async (options: MarkOptions) => {
-      const body = markBody(options, await (deps.checkout ?? readCheckout)());
+      const body = markBody(options, await (deps.checkout ?? readCheckout)(), readChanges(options.changes));
       const label = `${body.surface}${body.version ? ` ${body.version}` : ""} at ${body.sha.slice(0, 7)} on ${body.repository}`;
       if (options.dryRun) {
         console.log(options.json ? JSON.stringify({ dry_run: true, ...body }, null, 2) : `Would mark ${label}`);
@@ -200,5 +237,23 @@ A push that upstream rejected because it moved is replayed and retried on its ow
       }
       const result = await apiPost(deps, "/cli/changes/mark-deploy", { ...body, ...(team_id ? { team_id } : {}) });
       console.log(options.json ? JSON.stringify(result, null, 2) : `${c.green}✓${c.reset} Marked ${label}`);
+    });
+
+  ship.command("added-by")
+    .description("For each name a push would take off a surface, the recorded push that put it there")
+    .requiredOption("--surface <name>", "The surface: backend, web, ...")
+    .option("--names <file>", "JSON { drops } or a JSON array of names (default: the names given as arguments)")
+    .option("--repo <owner/name>", "The repository (default: this checkout's GitHub origin)")
+    .option("--json", "Machine-readable output")
+    .argument("[names...]", "Names such as index:voiceprints.by_user or fn:apiTokens:createToken")
+    .action(async (names: string[], options: { surface: string; names?: string; repo?: string; json?: boolean }) => {
+      const fromFile = options.names ? JSON.parse(readFileSync(options.names, "utf-8")) : null;
+      const asked = [...names, ...(Array.isArray(fromFile) ? fromFile : fromFile?.drops ?? [])].filter((n): n is string => typeof n === "string");
+      const repository = options.repo ?? (await (deps.checkout ?? readCheckout)()).repository;
+      if (!repository) throw new Error("No GitHub repository here: run inside a checkout with a GitHub origin, or pass --repo <owner/name>.");
+      const result = asked.length
+        ? (await apiPost(deps, "/cli/deploys/added-by", { repository, surface: options.surface, names: asked }, { read: true })) as { found: AddedBy[] }
+        : { found: [] };
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatAddedBy(result.found ?? []));
     });
 }

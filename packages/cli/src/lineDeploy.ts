@@ -102,7 +102,17 @@ export function formatDeploy(d: any): string {
     `${d.short_id}  ${d.target}${d.sha ? ` ${String(d.sha).slice(0, 10)}` : ""}  ${d.status}`,
     `went live ${when(d.live_at)} · started by ${d.started_by?.name ?? d.source} (${d.trigger}) · reported by ${d.source}${d.url ? ` · ${d.url}` : ""}`,
   ];
+  if (d.pushed_via || d.machine || d.dirty) {
+    const from = [d.pushed_via ? `pushed by ${d.pushed_via}` : "pushed", d.machine ? `on ${d.machine}` : null].filter(Boolean).join(" ");
+    out.push(`${from}${d.dirty ? ` · ${d.dirty} uncommitted file${d.dirty === 1 ? "" : "s"} went out with ${String(d.sha ?? "").slice(0, 7)}` : ""}`);
+  }
   if (d.steps?.length) out.push(formatSteps(d.steps));
+  // What the push put on the surface and took off it, by name (prod-diff).
+  for (const [label, names] of [["added", d.adds], ["dropped", d.drops]] as const) {
+    if (!names?.length) continue;
+    out.push("", `${label} ${names.length}`, ...names.slice(0, 20).map((n: string) => `  ${n}`));
+    if (names.length > 20) out.push(`  … and ${names.length - 20} more`);
+  }
   out.push("", `carried ${d.carries.length}`);
   for (const c of d.carries) {
     const p = d.after?.problems?.find((x: any) => x.task_id === c.task_id);

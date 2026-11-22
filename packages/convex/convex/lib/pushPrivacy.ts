@@ -46,6 +46,7 @@ export const PUSH_TYPE_LABELS: Record<string, [string, string]> = {
   card_waiting: ["change card waiting", "change cards waiting"],
   change_shipped: ["change shipped", "changes shipped"],
   cause_reopened: ["problem came back", "problems came back"],
+  deploy_dropped_work: ["deploy dropped your work", "deploys dropped your work"],
   decision_answered_for_you: ["decision answered for you", "decisions answered for you"],
   decision_passed: ["decision passed to you", "decisions passed to you"],
   decision_escalated: ["decision escalated to you", "decisions escalated to you"],
