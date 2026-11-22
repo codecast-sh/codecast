@@ -187,8 +187,12 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
       if (options.publish) {
         const { publishDeployTargets } = await import("./lineProfileCommand.js");
         const r = await publishDeployTargets(deps, root, await checkoutTargets(root), options.team);
-        if (!options.json) console.log(`Published ${r.targets.length} target${r.targets.length === 1 ? "" : "s"} of ${r.repository}: ${r.targets.map((t: any) => t.name).join(", ")}`);
-        await apiPost(deps, "/cli/deploys/targets/poll", { team_id: r.team_id }, { exitOnError: false }).catch(() => null);
+        const notPublished = r.skipped ?? r.refused;
+        if (notPublished) console.error(`Not published: ${notPublished}`);
+        else {
+          if (!options.json) console.log(`Published ${r.targets.length} target${r.targets.length === 1 ? "" : "s"} of ${r.repository}: ${r.targets.map((t: any) => t.name).join(", ")}`);
+          await apiPost(deps, "/cli/deploys/targets/poll", { team_id: r.team_id }, { exitOnError: false }).catch(() => null);
+        }
       }
       const view = await apiPost(deps, "/cli/deploys/targets", { repository, ...(options.team ? { team_id: options.team } : {}), ...(options.target ? { target: String(options.target).toLowerCase() } : {}) }, { read: true });
       console.log(options.json ? JSON.stringify(view, null, 2) : formatTargets(view));

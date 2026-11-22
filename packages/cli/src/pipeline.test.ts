@@ -200,6 +200,17 @@ describe("a pipeline publishes only from the default branch with its flow files 
     expect(publishRefusal(root, files)).toBeNull();
   });
 
+  test("deploy targets publish under the same rule, without asking the server", async () => {
+    const { publishDeployTargets } = await import("./lineProfileCommand.js");
+    const root = repo();
+    // A GitHub origin names the repository; origin/main as last fetched stays what the rule compares with.
+    sh(root, "remote", "set-url", "origin", "git@github.com:acme/widgets.git");
+    fs.appendFileSync(path.join(root, ".codecast", "deploy.toml"), "\n# edited\n");
+    const neverCalled = { getCliEndpoint: () => { throw new Error("a refused publish reached the server"); } } as any;
+    const r = await publishDeployTargets(neverCalled, root, []);
+    expect(r).toMatchObject({ repository: "acme/widgets", targets: [], skipped: expect.stringContaining(".codecast/deploy.toml") });
+  });
+
   test("an uncommitted flow file or prompt, or a commit origin's main lacks, is refused with why", async () => {
     const root = repo();
     const { files } = await checkoutPipeline(root, { repository: "acme/widgets", cacheRoot: tmp("pipeline-cache-") });
