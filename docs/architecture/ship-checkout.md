@@ -114,6 +114,14 @@ does. So the flags that steer a pass this command pushes itself (`--plan`,
 half done stays out by its writer finishing it or setting it aside, not by a
 hold.
 
+One checkout runs one such pass at a time. The pass that holds it is written
+to `.git/codecast/checkout-run.json` (`checkoutRunHold.ts`): the starting
+`cast flow run`'s pid until its run exists, then the run's id. A second `cast
+flow run --checkout`, or `cast ship checkout` with `flow` set, is refused
+before it freezes anything while that run is pending, running or paused,
+naming it. A hold whose starter died or whose run ended is stale and taken
+over, so nothing has to clear it.
+
 ## The level sweep
 
 Every minute the daemon fetches each checkout a session runs in and, when the
