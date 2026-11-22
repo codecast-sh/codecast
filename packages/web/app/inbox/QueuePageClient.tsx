@@ -30,7 +30,6 @@ import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { TriggerContextPanel } from "../../components/TriggerContextPanel";
 import { animatedHideSession } from "../../store/undoActions";
-import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { devRenderCount } from "../../lib/devRenderCount";
 import { InboxShortcuts } from "../../components/inbox/InboxEffects";
@@ -41,7 +40,7 @@ import { useSeedOwnership } from "../../hooks/useSeedOwnership";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
 import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVisit";
-import { requestSessionRestart } from "../../lib/sessionCommands";
+import { useManualResume } from "../../hooks/useManualResume";
 import { SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
 import { windowOrgTree } from "../../store/orgSlice";
 
@@ -97,58 +96,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     isJumpingToTarget,
   } = useConversationMessages(sessionId, targetMessageId, undefined, targetTimestamp, targetNonce);
 
-  const convCommand = useInboxStore((s) => s.convCommand);
-  const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "failed">("idle");
-  const forceRestartAttemptedRef = useRef(false);
-  const [_trackedSessionId, _setTrackedSessionId] = useState(sessionId);
-  if (_trackedSessionId !== sessionId) {
-    _setTrackedSessionId(sessionId);
-    setResumeState("idle");
-    forceRestartAttemptedRef.current = false;
-  }
-
-  useWatchEffect(() => {
-    if (!isIdle && (resumeState === "sent" || resumeState === "resuming")) {
-      setResumeState("idle");
-      forceRestartAttemptedRef.current = false;
-    }
-  }, [isIdle, resumeState]);
-
-  useWatchEffect(() => {
-    if (resumeState !== "sent") return;
-    const timeout = setTimeout(async () => {
-      if (!forceRestartAttemptedRef.current && isConvexId(sessionId)) {
-        forceRestartAttemptedRef.current = true;
-        try {
-          await requestSessionRestart(sessionId);
-          setResumeState("sent");
-        } catch (err) {
-          // The outbox owns delivery now. Stay in the pending recovery state;
-          // a later response-dependent redirect cannot be fabricated here.
-          if (isParkedDispatchError(err)) return;
-          setResumeState("failed");
-        }
-      } else {
-        setResumeState("failed");
-      }
-    }, 45_000);
-    return () => clearTimeout(timeout);
-  }, [resumeState, sessionId, convCommand]);
-
-  // `leave_out` answers a cloud placement whose context was over the cap.
-  const handleManualResume = useCallback((extra?: { leave_out?: string[] }) => {
-    setResumeState("resuming");
-    convCommand(sessionId, "resumeSession", extra?.leave_out ? { leave_out: extra.leave_out } : undefined)
-      .then(() => setResumeState("sent"))
-      .catch((err) => {
-        if (isParkedDispatchError(err)) {
-          setResumeState("sent");
-          return;
-        }
-        setResumeState("failed");
-      });
-  }, [sessionId, convCommand]);
-
   const convId = (conversation?._id ?? sessionId) as Id<"conversations">;
   useSeedOwnership(sessionId, !!seat?.seedOwnership);
   const isOwnSession = !!conversation && (!!seat?.seedOwnership || (conversation as any).is_own !== false);
@@ -156,6 +103,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   // owner may send it (commandsSession), a narrower set than is_own.
   const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const canCommand = isOwnSession && viewerCommandsSession(conversation as any, meId);
+  const { resumeState, handleManualResume } = useManualResume(sessionId, isIdle, canCommand);
   // A seat opens on the agent talking to the person: its provisioning prompt,
   // and whatever came before it, fold into one row at the top
   // (scopes-and-feed.md F4.1). They are still the session's context, so the

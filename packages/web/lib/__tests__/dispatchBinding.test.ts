@@ -177,3 +177,52 @@ describe("one friendly message per refused write", () => {
     }
   });
 });
+
+// ct-91098 / eg-2899: a viewer who may not command a session pressed Resume.
+// The server now refuses with a typed ConvexError, and the Convex client hands
+// its data over on the error it throws (convex/browser forwardData). That
+// failure still tells the person, but files no error report; a real failure
+// on the same command still does.
+describe("a typed session-command refusal reaches the person, not the error tracker", () => {
+  const RUNNER = "users_runner";
+  const STRANGER = "users_stranger";
+  // The error exactly as the Convex client throws it: the server's own
+  // refusal, routed through convCommand's re-throw, its data forwarded.
+  async function clientRefusal() {
+    const { ConvexError } = await import("convex/values");
+    const { requireSessionCommandTarget, withCommandRouting } = await import("../../../convex/convex/daemonCommandUtils");
+    const { makeFakeDb } = await import("../../../convex/convex/testDb");
+    const db = makeFakeDb({ conversations: [{ _id: ID, user_id: RUNNER, owner_user_id: "users_owner" }] });
+    let thrown: any;
+    try { await requireSessionCommandTarget({ db } as any, STRANGER as any, ID as any); } catch (e) { thrown = e; }
+    const routed = withCommandRouting(thrown, "resumeSession", ID, STRANGER) as any;
+    const onClient = new ConvexError(`[CONVEX M(dispatch:dispatch)] [Request ID: r1] Server Error\nUncaught ConvexError: ${routed.message}\n  Called by client`) as any;
+    onClient.data = routed.data;
+    return onClient as Error;
+  }
+
+  beforeEach(() => {
+    useInboxStore.setState({ sessions: {}, conversations: {}, messages: {}, pendingMessages: {}, pending: {}, lastDispatchFailure: null } as any);
+    store()._setDispatch(async () => null);
+  });
+  afterEach(() => store()._clearRuntimeBindings());
+
+  it("records the failure for the toast and sends no error report; an untyped failure still reports", async () => {
+    const analytics = await import("../analytics");
+    const captured = spyOn(analytics, "captureError").mockImplementation(() => {});
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const refusal = await clientRefusal();
+      applyDispatchFailure("convCommand", refusal, [ID, "resumeSession"]);
+      expect(captured).not.toHaveBeenCalled();
+      expect(store().lastDispatchFailure).toMatchObject({ action: "convCommand" });
+      expect(dispatchRefusalReason(store().lastDispatchFailure!.message)).toBe("you don't have access to that session");
+
+      applyDispatchFailure("convCommand", new Error("[CONVEX M(dispatch:dispatch)] [Request ID: r2] Server Error"), [ID, "resumeSession"]);
+      expect(captured).toHaveBeenCalledTimes(1);
+    } finally {
+      captured.mockRestore();
+      err.mockRestore();
+    }
+  });
+});

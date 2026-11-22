@@ -12,7 +12,7 @@ import { isChatRoomRefusal, useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { dropRejectedOrgIntent } from "../store/orgSlice";
 import { offerRollbackToHost } from "../store/syncReplication";
-import { recordSessionCommandDispatchError, SESSION_COMMAND_ACTIONS } from "./sessionCommands";
+import { isSessionCommandRefusal, recordSessionCommandDispatchError, SESSION_COMMAND_ACTIONS } from "./sessionCommands";
 import { deadRecordingPress } from "./calls/recordingPress";
 import { storableActionArgs } from "./tabSafePath";
 import { getWriteLog, recordWrite } from "../store/writeLog";
@@ -206,7 +206,10 @@ export function applyDispatchFailure(action: string, error: unknown, args?: unkn
   console.error(`[sync] dispatch failed after retries: ${action}`, error);
   // The write the person (or an effect) asked for never landed. Report it with
   // the window's recent write trail, so the report names what led up to it.
-  captureError(error instanceof Error ? error : new Error(String(error)), {
+  // A typed refusal of a session command (the viewer may not command that
+  // session) is an answer, not a bug: the person still hears it below, but it
+  // files no error group (eg-2899).
+  if (!isSessionCommandRefusal(error)) captureError(error instanceof Error ? error : new Error(String(error)), {
     source: "dispatch",
     action,
     target: Array.isArray(args) && typeof args[0] === "string" ? args[0] : undefined,

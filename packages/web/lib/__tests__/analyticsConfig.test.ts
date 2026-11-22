@@ -188,18 +188,6 @@ describe("error toasts read the cause chain", () => {
     expect(count(sentryCalls, "captureException")).toBe(0);
   });
 
-  test("a typed session-command refusal is not reported; an untyped server failure still is", () => {
-    const refused = new Error(
-      '[CONVEX M(dispatch:dispatch)] [Request ID: r1] Server Error\nUncaught ConvexError: {"code":"SESSION_COMMAND_REFUSED","message":"Not authorized","retryable":false}',
-    );
-    handlers.unhandledrejection({ reason: refused, preventDefault: () => {} });
-    expect(count(sentryCalls, "captureException")).toBe(0);
-
-    const failure = new Error("[CONVEX M(dispatch:dispatch)] [Request ID: r2] Server Error");
-    handlers.unhandledrejection({ reason: failure, preventDefault: () => {} });
-    expect(count(sentryCalls, "captureException")).toBe(1);
-  });
-
   test("one report per failure per 30s across both reporting paths", () => {
     // React's recovered-render path and the window listener share the package's
     // dedupe, so a failure arriving on both toasts once.

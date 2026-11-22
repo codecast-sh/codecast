@@ -4,7 +4,7 @@
 // phone, reporting failures as toasts here.
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, viewerCommandsSession } from "../store/inboxStore";
 import { captureError } from "../lib/analytics";
 import { serverErrorText } from "../lib/errorCause";
 import type { MigrationBatch } from "../lib/migrationPlan";
@@ -26,6 +26,21 @@ function report(surface: string) {
 
 const REPORTING = { fail: report, notice: showError };
 
+/**
+ * Resume each conversation the viewer may command. resumeSession is a daemon
+ * command only the runner or second-party owner may send (commandsSession);
+ * the server refuses anyone else, so a row the viewer cannot command is not
+ * sent (ct-91098 / eg-2899).
+ */
+export function resumeCommandable(conversationIds: Array<string | undefined>, onError: (e: unknown) => void): void {
+  const state = useInboxStore.getState();
+  const meId = state.currentUser?._id ? String(state.currentUser._id) : null;
+  for (const c of conversationIds) {
+    if (!c || !viewerCommandsSession((state.sessions[c] ?? state.conversations[c]) as any, meId)) continue;
+    state.resumeSession(c).catch(onError);
+  }
+}
+
 export function useResourceActions(sessions: ResourceSession[], plans: OffloadPlan[], batches: MigrationBatch[], now: number, rehearsals: RehearsalRow[] = []) {
   const router = useRouter();
   const { request: requestPark } = useHibernationCommands();
@@ -41,12 +56,7 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
       }
       toast(`Asked to park ${ids.length} session${ids.length === 1 ? "" : "s"}; each machine checks it is safe first`);
     },
-    onResume: (ids) => {
-      for (const id of ids) {
-        const c = byId.get(id)?.conversationId;
-        if (c) useInboxStore.getState().resumeSession(c).catch(report("resources.resume"));
-      }
-    },
+    onResume: (ids) => resumeCommandable(ids.map((id) => byId.get(id)?.conversationId), report("resources.resume")),
   };
 
   return { actions, plans: checkedPlans };

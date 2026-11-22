@@ -45,6 +45,16 @@ export type SessionCommandRow = {
 // The store actions whose first argument is a sessionCommands request id.
 export const SESSION_COMMAND_ACTIONS = new Set(["hibernateSession", "restartSession", "moveSessionToDevice", "requestAccountSwitch", "editLineProfile", "switchClaudeBackend", "rewindFiles"]);
 
+// The server's typed refusal of a session command from a viewer who may not
+// command that session (convex daemonCommandUtils.sessionCommandRefused). The
+// Convex client hands the ConvexError's data over as `error.data`.
+export const SESSION_COMMAND_REFUSED = "SESSION_COMMAND_REFUSED";
+
+/** Whether a dispatch failed because the viewer may not command the session: an expected answer, not a bug. */
+export function isSessionCommandRefusal(error: unknown): boolean {
+  return (error as { data?: { code?: unknown } } | null)?.data?.code === SESSION_COMMAND_REFUSED;
+}
+
 // Marks a row the server refused outright (no daemon will ever answer it).
 export const DISPATCH_REFUSED = "dispatch_refused";
 
