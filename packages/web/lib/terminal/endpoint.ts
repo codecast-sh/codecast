@@ -113,13 +113,21 @@ export function isOverrideEndpoint(ep: TerminalEndpoint): boolean {
   return ep.deviceId === OVERRIDE_DEVICE_ID;
 }
 
+/** A port a loopback URL can carry. Every endpoint handed out passes this, so
+ *  a socket built from one (terminal, vault, browser watch) never throws
+ *  "the provided URL is invalid" (ct-73198). */
+export function isValidPort(port: unknown): port is number {
+  return typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
 function readOverride(): TerminalEndpoint | null {
   try {
     const raw = localStorage.getItem(OVERRIDE_KEY);
     if (!raw) return null;
     const [port, token] = raw.split(":");
-    if (!port || !token) return null;
-    return { port: parseInt(port, 10), token, deviceId: OVERRIDE_DEVICE_ID, tmux: true };
+    if (!port || !token || !/^\d+$/.test(port)) return null;
+    const n = Number(port);
+    return isValidPort(n) ? { port: n, token, deviceId: OVERRIDE_DEVICE_ID, tmux: true } : null;
   } catch {
     return null;
   }
@@ -128,7 +136,8 @@ function readOverride(): TerminalEndpoint | null {
 function readCache(): TerminalEndpoint | null {
   try {
     const raw = sessionStorage.getItem(CACHE_KEY);
-    return raw ? (JSON.parse(raw) as TerminalEndpoint) : null;
+    const ep = raw ? (JSON.parse(raw) as TerminalEndpoint | null) : null;
+    return ep && isValidPort(ep.port) ? ep : null;
   } catch {
     return null;
   }
@@ -262,11 +271,11 @@ async function discover(convex: ConvexReactClient, deviceId?: string): Promise<T
           tmux: parsed.tmux,
         };
         // First endpoint that actually answers on loopback wins.
-        if (ep.port > 0 && (await probeWithPatience(ep)) !== null) {
+        if (isValidPort(ep.port) && (await probeWithPatience(ep)) !== null) {
           lastFailure = "none";
           return ep;
         }
-        if (deviceId && ep.port > 0 && ep.deviceId === deviceId) missedReplies.set(deviceId, ep);
+        if (deviceId && isValidPort(ep.port) && ep.deviceId === deviceId) missedReplies.set(deviceId, ep);
         if (lastProbeMiss === "timeout") sawTimeout = true;
       } catch {}
     }
@@ -325,7 +334,7 @@ async function hostForwardedEndpoint(convex: ConvexReactClient, deviceId: string
   const reply = missedReplies.get(deviceId);
   if (!reply) return null;
   const port = await forwardHostPort(convex, deviceId, reply.port);
-  if (port === null) return null;
+  if (!isValidPort(port)) return null;
   const ep: TerminalEndpoint = { ...reply, port };
   if ((await probeWithPatience(ep)) === null) return null;
   forwardedByDevice.set(deviceId, ep);
