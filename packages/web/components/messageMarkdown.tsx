@@ -12,6 +12,7 @@ import type { Options } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { remarkEntityCards, type EntityCardsOptions } from "../lib/remarkEntityCards";
+import { remarkBareFileNames } from "../lib/remarkBareFileNames";
 import { MarkdownImg, ImageRowParagraph } from "./tools/MarkdownImages";
 import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { MarkdownReplyQuote } from "./ReplyQuote";
@@ -74,4 +75,6 @@ export const USER_MD_REMARK = [...entityRemarkPlugins, remarkBreaks, remarkUserH
 // promotes every shared reference to a card. Alone on its line only: the same
 // reference mid-sentence is a citation and keeps its pill.
 const ASSISTANT_CARDS: EntityCardsOptions = { types: ["proposal", "call", "replay", "flow"], aloneOnly: true };
-export const ASSISTANT_MD_REMARK = [...entityRemarkPlugins, [remarkEntityCards, ASSISTANT_CARDS] as [typeof remarkEntityCards, EntityCardsOptions]];
+// A bare file name ("constitution.md") is a candidate link, kept only when the
+// session changed that file (remarkBareFileNames).
+export const ASSISTANT_MD_REMARK = [...entityRemarkPlugins, [remarkEntityCards, ASSISTANT_CARDS] as [typeof remarkEntityCards, EntityCardsOptions], remarkBareFileNames];
