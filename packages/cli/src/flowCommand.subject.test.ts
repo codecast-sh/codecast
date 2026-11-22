@@ -1,6 +1,7 @@
 // `cast flow run change --task ct-N --branch <b>` from inside a session (ct-85594):
 // the session that started the run is its subject, so a failed stage reaches it
-// instead of failing with "This run's change came from no session".
+// instead of failing with "This run's change came from no session". From a plain
+// shell, the session that owns the task is.
 import { describe, expect, test } from "bun:test";
 import { callingSubject } from "./flowCommand";
 import { changeReturnWords } from "./workflow/flowChangeFile";
@@ -20,6 +21,20 @@ describe("callingSubject", () => {
 
   test("a plain shell has none", async () => {
     expect(await callingSubject({ callingSession: () => undefined, cliPost: async () => { throw new Error("not asked"); } })).toBeUndefined();
+  });
+
+  test("a plain shell running a task's change takes the session that owns the task (a run started over ssh)", async () => {
+    const asked: any[] = [];
+    const subject = await callingSubject({
+      callingSession: () => undefined,
+      cliPost: async (route, body) => { asked.push({ route, body }); return { short_id: "ct-9", owner: { short_id: "jx756fb", conversation_id: FULL } }; },
+    }, "ct-9");
+    expect(subject).toEqual({ session: "jx756fb", conversation: FULL });
+    expect(asked).toEqual([{ route: "/cli/work/get", body: { short_id: "ct-9" } }]);
+  });
+
+  test("a task nobody owns leaves a plain shell with none", async () => {
+    expect(await callingSubject({ callingSession: () => undefined, cliPost: async () => ({ short_id: "ct-9", owner: null }) }, "ct-9")).toBeUndefined();
   });
 
   test("a session the server cannot read has none", async () => {

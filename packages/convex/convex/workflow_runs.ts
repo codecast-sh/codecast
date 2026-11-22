@@ -13,7 +13,7 @@ import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, costParts, isLineRun, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { tookPastStart } from "@codecast/shared/contracts/runStart";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { canAccessTask, canAccessPlan, computeWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
+import { canAccessConversation, canAccessTask, canAccessPlan, computeWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
 import { repairedClosedAt, repairedLineStatus, statusHistory } from "./lib/lineCauseRepair";
 import { moveTaskStatus } from "./tasks";
@@ -189,7 +189,7 @@ export async function openDecisionOf(ctx: Ctx, conversationId: Id<"conversations
 export async function pauseAtGateCore(
   ctx: Ctx,
   auth: { userId: Id<"users"> },
-  args: { run_id: Id<"workflow_runs">; node_id: string; prompt: string; choices: GateChoice[]; doc_md?: string; category?: string; stack?: string; card?: ChangeCard; proposal?: unknown; judge_fix?: unknown; asker_session_id?: string; asker?: string },
+  args: { run_id: Id<"workflow_runs">; node_id: string; prompt: string; choices: GateChoice[]; doc_md?: string; category?: string; stack?: string; card?: ChangeCard; proposal?: unknown; judge_fix?: unknown; asker_session_id?: string; asker?: string; subject_conversation_id?: string },
 ) {
   const run = await ctx.db.get(args.run_id);
   if (!run || String(run.user_id) !== String(auth.userId)) return { error: "Not found" };
@@ -278,7 +278,13 @@ export async function pauseAtGateCore(
     await ctx.db.patch(args.run_id, { gate_decision_id: own._id, gate_choices: choices, ...answered });
     decision = { id: own._id, short_id: own.short_id };
   }
-  const askerId = station?._id ?? run.spawner_conversation_id ?? run.primary_conversation_id;
+  // A run no session started (a plain shell, say over ssh on another machine) asks from the session its change came
+  // from when that session works on the run's task, so the card opens where the work is, not on the run's own log.
+  // The caller must be able to read it, and a session reviewing the task never asks for it.
+  const subjectId = !run.spawner_conversation_id && args.subject_conversation_id ? ctx.db.normalizeId("conversations", args.subject_conversation_id) : null;
+  const subjectConv: any = subjectId && task && (task.conversation_ids ?? []).some((id: Id<"conversations">) => String(id) === String(subjectId)) ? await ctx.db.get(subjectId) : null;
+  const subject = subjectConv && String(subjectConv.review_of_task_id ?? "") !== String(task!._id) && (await canAccessConversation(ctx, auth.userId, subjectConv)) ? subjectConv._id : null;
+  const askerId = station?._id ?? run.spawner_conversation_id ?? subject ?? run.primary_conversation_id;
   const asker = decision ? null : askerId ? await ctx.db.get(askerId) : null;
   if (!decision && !asker) return { error: "the gate could not ask anyone: the run has no session to ask from" };
   if (asker) {
@@ -1504,6 +1510,8 @@ export const pauseAtGate = mutation({
     asker_session_id: v.optional(v.string()),
     /** The station the gate names (`asker=`), sent even before it ran: a gate with a presenter never asks a question of its own. */
     asker: v.optional(v.string()),
+    /** The session the run's change came from (flows.md FL4): a run with no spawner asks from it. */
+    subject_conversation_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);

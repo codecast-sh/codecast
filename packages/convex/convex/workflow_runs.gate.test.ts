@@ -100,6 +100,48 @@ describe("pauseAtGate asks through the decision rail (the-line.md L4)", () => {
     await pause(ctx);
     expect(tables.session_decisions[0].conversation_id).toBe("conversations_primary");
   });
+
+  // flows.md FL4: a run started over ssh on another machine has no spawner; its card opens on the session that
+  // made the change (another account's, here), never on the run's own log.
+  test("a run with no spawner asks from the session its change came from, when that session works on the task", async () => {
+    const { ctx, tables } = await seed({});
+    tables.workflow_runs[0].spawner_conversation_id = undefined;
+    tables.conversations.push({ _id: "conversations_maker", session_id: "sess-maker", user_id: MATE, team_id: TEAM, is_private: false, message_count: 40 });
+    tables.tasks[0].conversation_ids = ["conversations_maker"];
+    await pause(ctx, { subject_conversation_id: "conversations_maker" });
+    expect(tables.session_decisions[0].conversation_id).toBe("conversations_maker");
+    expect(tables.session_decisions[0].user_id).toBe(MATE);
+  });
+
+  test("a subject the run's task does not know asks nothing of it", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflow_runs[0].spawner_conversation_id = undefined;
+    tables.conversations.push({ _id: "conversations_other", session_id: "sess-other", user_id: MATE, team_id: TEAM, message_count: 4 });
+    await pause(ctx, { subject_conversation_id: "conversations_other" });
+    expect(tables.session_decisions[0].conversation_id).toBe("conversations_primary");
+  });
+
+  test("a subject the runner cannot read, or one reviewing the task, asks nothing of it", async () => {
+    for (const conv of [
+      { _id: "conversations_hidden", session_id: "sess-hidden", user_id: STRANGER, message_count: 4 },
+      { _id: "conversations_review", session_id: "sess-review", user_id: MATE, team_id: TEAM, is_private: false, message_count: 4, review_of_task_id: TASK },
+    ]) {
+      const { ctx, tables } = await seed();
+      tables.workflow_runs[0].spawner_conversation_id = undefined;
+      tables.conversations.push(conv);
+      tables.tasks[0].conversation_ids = [conv._id];
+      await pause(ctx, { subject_conversation_id: conv._id });
+      expect(tables.session_decisions[0].conversation_id).toBe("conversations_primary");
+    }
+  });
+
+  test("the spawner still asks when the run has one", async () => {
+    const { ctx, tables } = await seed();
+    tables.conversations.push({ _id: "conversations_maker", session_id: "sess-maker", user_id: HOST, team_id: TEAM, message_count: 40 });
+    tables.tasks[0].conversation_ids = ["conversations_maker"];
+    await pause(ctx, { subject_conversation_id: "conversations_maker" });
+    expect(tables.session_decisions[0].conversation_id).toBe("conversations_spawner");
+  });
 });
 
 describe("answering a gate resumes the run (the-line.md L4)", () => {
