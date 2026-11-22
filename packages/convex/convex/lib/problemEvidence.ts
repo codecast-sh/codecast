@@ -45,8 +45,9 @@ export function fateOf(reason: string): { fate: FindingFate; keeper?: string } {
  * problem's move note says. Only open problems count as where it went: one
  * that was dropped or closed holds nothing left to fix.
  */
-export async function problemEvidence(ctx: Ctx, task: Doc<"tasks">, since?: number): Promise<ProblemEvidence> {
-  const live: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
+export async function problemEvidence(ctx: Ctx, task: Doc<"tasks">, since?: number, findings?: Doc<"signals">[]): Promise<ProblemEvidence> {
+  // A caller that already read the problem's findings (lineTrial's cardView) passes them, so they are read once.
+  const live: Doc<"signals">[] = findings ?? await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
   if (live.length) return { findings: live.length, conversations: new Set(live.map((s) => findingConversation({ ...s, _id: String(s._id) }))).size, withdrawn: 0, moved_to: [] };
   const tasks = new Map<string, Doc<"tasks"> | null>();
   const taskById = async (id: Id<"tasks">) => {
