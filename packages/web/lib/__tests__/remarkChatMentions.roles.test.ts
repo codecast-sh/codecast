@@ -33,8 +33,17 @@ describe("a session mention stays inline", () => {
   it("is marked as a mention so remarkEntityCards does not card it", () => {
     const tree: any = { type: "root", children: [{ type: "paragraph", children: [{ type: "text", value: "cc @jx7c6zk" }] }] };
     remarkChatMentions({ sessions: new Set(["jx7c6zk"]) })(tree);
-    const link = tree.children[0].children.find((c: any) => c.type === "link");
+    const ask = tree.children[0].children.find((c: any) => c.data?.hProperties?.className === "ch-session-ask");
+    const link = ask.children.find((c: any) => c.type === "link");
     expect(link.data.hProperties["data-mention"]).toBe("jx7c6zk");
+  });
+  it("wears the reply mark, so a reader can tell it asked the session to reply", () => {
+    const tree: any = { type: "root", children: [{ type: "paragraph", children: [{ type: "text", value: "@jx7c6zk what next?" }] }] };
+    remarkChatMentions({ sessions: new Set(["jx7c6zk"]) })(tree);
+    const ask = tree.children[0].children[0];
+    expect(ask.data.hName).toBe("span");
+    expect(ask.children[0].data.hName).toBe("svg");
+    expect(ask.children[0].data.hProperties.className).toEqual(["ch-session-ask-mark"]);
   });
 });
 

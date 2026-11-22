@@ -3,7 +3,7 @@
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, MessageSquare, MessagesSquare } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, MessageSquare, MessagesSquare } from "lucide-react";
 import { useInboxStore, type SessionDecisionItem, type DecisionDetailItem } from "../../store/inboxStore";
 import { useSyncTaskEvidence, useTaskEvidenceByShortId } from "../../hooks/useSyncTaskEvidence";
 import { useDecisionThread } from "../../hooks/useDecisionThread";
@@ -13,7 +13,7 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls } from "./DecisionAnswerControls";
 import { RunFallbackLine } from "./RunFallbackLine";
-import { DecisionOptionList } from "./DecisionOptionList";
+import { DecisionOptionList, RecommendedMark } from "./DecisionOptionList";
 import { DecisionDiscussion } from "./DecisionDiscussion";
 import { DecisionBody, DecisionFacts, DecisionLadder, DecisionReport, LeadRecommendation } from "./DecisionSections";
 import { GateRunChip } from "./DecisionCompactCard";
@@ -21,26 +21,29 @@ import { DeployedIn } from "../line/widgets/DeployedIn";
 import { OriginTrail } from "../line/widgets/OriginTrail";
 import "../line/workspace/workspace.css";
 import { OptionPages } from "./OptionPages";
+import { DecisionPager } from "./DecisionPager";
+import { useDecisionStep, type DecisionStep } from "../../hooks/useDecisionStep";
+import { useDecisionQueue } from "../../hooks/useDecisionQueue";
 import { HandoffNote } from "./DecisionParties";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
-import { decisionWaitLabel, waitsOnViewer } from "../../lib/decisionLinks";
+import { decisionWaitLabel, ladderRecommenders, waitsOnViewer } from "../../lib/decisionLinks";
 import { DecisionAnswerPanel, restatesCard, useDecisionAnswering, useDecisionPage } from "./DecisionAnswering";
 import "./decisions.css";
-import { modernButton } from "../ui/modernLook";
+import { Button } from "../ui/button";
 
 // The decision document page (docs/architecture/decisions-as-documents.md
 // D4). Reads the store: the live row from sessionDecisions (optimistic
 // answers land there first) and the page context from decisionDetails, which
 // useSyncDecisionDetail feeds from getWithDoc. The answer footer is the same
 // store action the compact card and the transcript card use.
-export function DecisionDocument({ id }: { id: string }) {
+export function DecisionDocument({ id, pager = true }: { id: string; pager?: boolean }) {
   const page = useDecisionPage(id);
   if (!page.detail || !page.decision) {
     if (page.missing && page.ready) return <Empty text="This decision does not exist, or it is not yours to read." />;
     return <AppLoader />;
   }
-  return <DocumentBody decision={page.decision} detail={page.detail} answerable={page.answerable} />;
+  return <DocumentBody decision={page.decision} detail={page.detail} answerable={page.answerable} pager={pager} />;
 }
 
 function Empty({ text }: { text: string }) {
@@ -52,7 +55,7 @@ function Empty({ text }: { text: string }) {
   );
 }
 
-function DocumentBody({ decision, detail, answerable }: { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean }) {
+function DocumentBody({ decision, detail, answerable, pager }: { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean; pager: boolean }) {
   const a = useDecisionAnswering(decision, detail, answerable);
   const meId = useInboxStore((st) => st.currentUser?._id as string | undefined);
   const { now, pending, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, heldNote, outcome, closed, banner, doubt } = a;
@@ -62,10 +65,11 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const discussion = useDecisionThread(decision._id);
   const [discussOpen, setDiscussOpen] = useState(false);
 
-  // The thread that asked opens from its own button ("Talk to the session").
-  // An upward scroll no longer does: on a short decision, or in the peek, a
-  // small flick left the page with nothing on screen saying it would.
+  // The thread that asked opens from its own button ("Talk to the session"),
+  // the page's lead action: the session is selected in the inbox at once.
   const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
+  // Read before the answer, so the slot this decision held is known once it leaves the list.
+  const step = useDecisionStep([decision.short_id, decision._id]);
 
   // Who asked, who may answer, who holds it. A change card leads with the
   // change and its proof, so for one these facts follow the card.
@@ -83,9 +87,12 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
       {/* One measure for every decision: a change card stacks its proof over its examples, so it needs no wider page. */}
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
-        <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
-          <ArrowLeft className="w-3 h-3" /> The queue
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
+            <ArrowLeft className="w-3 h-3" /> The queue
+          </Link>
+          {pager && <span className="ml-auto"><DecisionPager step={step} /></span>}
+        </div>
 
         {/* ── Header ── */}
         <header className="mt-4">
@@ -128,22 +135,18 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             session that asked (its transcript, where a message brings it to
             the inbox), or onto the decision for the team. */}
         <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-discuss>
-          <button
+          <Button type="button" variant="blue" size="sm" onClick={() => void jumpToAsk()} data-decision-open-thread>
+            <MessagesSquare />Talk to the session
+          </Button>
+          <Button
             type="button"
-            onClick={() => void jumpToAsk()}
-            className={`inline-flex items-center gap-1.5 rounded-md border border-sol-blue/50 px-2.5 py-1 text-[12.5px] text-sol-blue hover:bg-sol-blue/10 transition-colors ${modernButton({ variant: "soft", tone: "blue", size: "sm" })}`}
-            data-decision-open-thread
-          >
-            <MessagesSquare className="w-3.5 h-3.5" />Talk to the session
-          </button>
-          <button
-            type="button"
+            variant="outline"
+            size="sm"
             onClick={() => { setDiscussOpen(true); requestAnimationFrame(() => document.getElementById("discuss")?.scrollIntoView({ block: "nearest", behavior: "smooth" })); }}
-            className={`inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12.5px] text-sol-text hover:border-sol-cyan/60 hover:text-sol-cyan transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}
             data-decision-discuss-button
           >
-            <MessageSquare className="w-3.5 h-3.5" />Comment for the team{discussion.rows.length > 0 && <span className="text-sol-text-dim">{discussion.rows.length}</span>}
-          </button>
+            <MessageSquare />Comment for the team{discussion.rows.length > 0 && <span className="text-sol-text-dim">{discussion.rows.length}</span>}
+          </Button>
         </div>
 
         {/* ── The team thread (ct-74449): people and the session that owns the
@@ -228,7 +231,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
                 ) : undefined}
                 tags={(i) => (
                   <>
-                    {rec === i && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">a lead recommends</span>}
+                    {rec === i && <RecommendedMark count={ladderRecommenders(decision).get(i)} />}
                     {decision.default_option === i && !decision.blocking && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">the agent's default</span>}
                   </>
                 )}
@@ -247,7 +250,28 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {a.answerSection && <section className="mt-8 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
           <DecisionAnswerPanel decision={decision} detail={detail} answerable={answerable} a={a} />
         </section>}
+
+        {/* Settled: where to go from here, the thread that asked or the next decision waiting. */}
+        {!pending && <DecisionNext decisionId={decision._id} step={step} openSession={jumpToAsk} />}
       </div>
+    </div>
+  );
+}
+
+function DecisionNext({ decisionId, step, openSession }: { decisionId: string; step: DecisionStep; openSession: () => Promise<boolean> }) {
+  // The list's next, else the first decision still waiting in the queue.
+  const queue = useDecisionQueue();
+  const queued = queue.find((q) => q.decisionId && q.decisionId !== decisionId);
+  const next = step.pos?.next ?? (queued ? queued.shortId ?? queued.decisionId ?? null : null);
+  return (
+    // Pinned to the bottom of the page's scroll, so the next step shows where the answer was given.
+    <div className="decision-next-bar mt-4 flex items-center gap-2.5 flex-wrap" data-decision-next>
+      <Button type="button" variant="outline" size="sm" onClick={() => void openSession()} data-decision-next-session>
+        <MessagesSquare />Open the session
+      </Button>
+      <Button type="button" variant="blue" size="sm" className="ml-auto" disabled={!next} onClick={() => step.go(next)} data-decision-next-decision>
+        {next ? <>Next decision<ArrowRight /></> : "No decisions waiting"}
+      </Button>
     </div>
   );
 }

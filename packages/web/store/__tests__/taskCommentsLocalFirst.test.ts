@@ -62,3 +62,54 @@ describe("task comment stream local-first", () => {
     expect(cleaned[`tasks:${TASK_ID}:status`]).toBeDefined();
   });
 });
+
+// List channels ship comment_count (and a problem its recent_comments) instead
+// of the thread (tasks.ts enrichTasks); the detail ships the thread and no
+// count. Either order of the two, and an older server's full list rows, must
+// leave the open task's thread on screen and the count right.
+describe("count-only list rows", () => {
+  beforeEach(() => {
+    useInboxStore.setState({ tasks: {}, pending: {} });
+  });
+
+  const SECOND = { _id: "c2", author: "Y", text: "second", created_at: 2 };
+  const slim = (count: number, extra: Record<string, unknown> = {}) => ({ _id: TASK_ID, short_id: "ct-1", title: "T", status: "open", comment_count: count, ...extra });
+
+  it("a list row after the detail keeps the thread and adds the count", () => {
+    useInboxStore.getState().syncTable("tasks", [taskRow([FIRST, SECOND])], { isDelta: true });
+    useInboxStore.getState().syncTable("tasks", [slim(2)], { isDelta: true });
+    const task = useInboxStore.getState().tasks[TASK_ID] as any;
+    expect(task.comments.map((c: any) => c._id)).toEqual(["c1", "c2"]);
+    expect(task.comment_count).toBe(2);
+  });
+
+  it("the detail after a list row keeps the count", () => {
+    useInboxStore.getState().syncTable("tasks", [slim(2)], { isDelta: true });
+    useInboxStore.getState().syncTable("tasks", [taskRow([FIRST, SECOND])], { isDelta: true });
+    const task = useInboxStore.getState().tasks[TASK_ID] as any;
+    expect(task.comments).toHaveLength(2);
+    expect(task.comment_count).toBe(2);
+  });
+
+  it("a reply on a count-only row counts at once", () => {
+    useInboxStore.getState().syncTable("tasks", [slim(4)], { isDelta: true });
+    useInboxStore.getState().addTaskComment("ct-1", "hello");
+    const task = useInboxStore.getState().tasks[TASK_ID] as any;
+    expect(task.comment_count).toBe(5);
+    expect(task.comments).toHaveLength(1);
+  });
+
+  it("hydration drops a count-only row's held thread and keeps an older server's", async () => {
+    const { hydrateMergeValue } = await import("../inboxStore");
+    const OLD = "b".repeat(32);
+    const cached = {
+      [TASK_ID]: { ...slim(2), comments: [FIRST, SECOND] },
+      [OLD]: { _id: OLD, short_id: "ct-2", title: "Old", status: "open", comments: [FIRST] },
+    };
+    const merged = hydrateMergeValue("tasks", cached, {});
+    const value = merged.value as Record<string, any>;
+    expect(value[TASK_ID].comments).toBeUndefined();
+    expect(value[TASK_ID].comment_count).toBe(2);
+    expect(value[OLD].comments).toHaveLength(1);
+  });
+});

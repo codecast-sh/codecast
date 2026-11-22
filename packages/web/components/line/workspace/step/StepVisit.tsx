@@ -14,6 +14,7 @@ import { useInboxStore } from "../../../../store/inboxStore";
 import { useSyncWorkflowRun } from "../../../../hooks/useSyncWorkflows";
 import { useLineNav } from "../../widgets/parts";
 import { RunStep } from "../views/run/RunStep";
+import { useSyncTaskDetail } from "../../../../hooks/useSyncTasks";
 import "../views/run/run.css";
 
 export function StepVisit({ model, ws, d, act, mark, fallback = null }: { model: LineModel; ws: Pick<LineWorkspace, "rows" | "names">; d: StepDecision; act?: ReactNode;
@@ -27,6 +28,8 @@ export function StepVisit({ model, ws, d, act, mark, fallback = null }: { model:
   const run = useMemo(() => model.runs.find((r) => r.id === d.runId) ?? null, [model.runs, d.runId]);
   const stored = useInboxStore((s) => (s as unknown as { workflowRuns?: Record<string, TraceRun> }).workflowRuns?.[d.runId] ?? null);
   const raw = (stored ? settledRun(stored) : null) ?? (ws.rows.runs.find((r) => r._id === d.runId) as TraceRun | undefined) ?? null;
+  // Reviews are comments: the case's whole thread comes from its detail (a list row carries only a count).
+  useSyncTaskDetail(d.caseId ?? undefined);
   const task = useMemo(() => (d.caseId ? (ws.rows.tasks as unknown as Array<ReviewSource & { _id: string }>).find((t) => t._id === d.caseId) ?? null : null), [ws.rows.tasks, d.caseId]);
   const reviews = useMemo(() => reviewsOf(task), [task]);
   const trace = useMemo(() => (run ? runTrace(model, run, raw, { reviews }) : []), [model, run, raw, reviews]);
