@@ -17,7 +17,7 @@ import { costParts, costUsd, isLineRun } from '@codecast/shared/contracts/change
 import { publicUrl } from '@codecast/shared/entities';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
-import { useWorkflow, useWorkflowRun, useWorkflowRuns } from '@codecast/web/hooks/useSyncWorkflows';
+import { useRunWorkflow, useWorkflowRun, useWorkflowRuns } from '@codecast/web/hooks/useSyncWorkflows';
 import { useSyncRuns } from '@codecast/web/hooks/useSyncRuns';
 import { useDecisionDetail, useSyncDecisionDetail } from '@codecast/web/hooks/useSyncDecisionDetail';
 import { answererNameOf } from '@codecast/web/lib/decisionLinks';
@@ -98,7 +98,7 @@ export default function RunScreen() {
   const goHref = (href: string) => { const r = mobileRouteForUrl(href); if (r) openAppRoute(router, r); };
 
   const run = useWorkflowRun(runId || null) as Run | null | undefined;
-  const workflow = useWorkflow(run?.workflow_id) as { nodes?: Array<{ id: string; label?: string; type?: string }>; label?: string; name?: string; slug?: string } | null | undefined;
+  const workflow = useRunWorkflow(run) as { nodes?: Array<{ id: string; label?: string; type?: string }>; label?: string; name?: string; slug?: string } | null | undefined;
   const task = useInboxStore((s) => (run?.task_id ? (s.tasks as Record<string, any>)[run.task_id] : undefined)) as (ReportTask & { title?: string }) | undefined;
   const decisionRef = run?.gate_decision_short_id ?? run?.gate_decision_id;
   useSyncDecisionDetail(decisionRef);

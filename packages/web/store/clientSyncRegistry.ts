@@ -914,6 +914,16 @@ export const CLIENT_SYNC_REGISTRY = {
     unprotectedFields: ["created_at", "updated_at"],
     feeds: ["workflows.webList", "workflows.webGet", "workflows.webGetBySlug", "workflows.webPool", "workflow_runs.graphOfRun"],
   },
+  // The graph a run executes when it pinned a version of its workflows row
+  // (convex lib/runGraph.ts, ct-98653), keyed by the version: runs of one
+  // slug started on different versions each draw their own, and the row in
+  // `workflows` stays the slug as last pushed. Delta: each run feeds its own.
+  runGraphs: {
+    persistence: { kind: "collection", key: "runGraphs" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["workflow_runs.pinnedGraphOfRun"],
+  },
   // Workflow runs, fed by four windows (listDynamicRuns, listForWorkflow,
   // get, listRuns) that overlay into one collection, last push wins. Every
   // feed attaches each node's `session` under a shared read budget, so a
@@ -2293,6 +2303,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   secrets: "shared",
   secretHistory: "shared",
   workflows: "shared",
+  runGraphs: "shared",
   workflowRuns: "shared",
   weeklyCards: "shared",
   signals: "shared",

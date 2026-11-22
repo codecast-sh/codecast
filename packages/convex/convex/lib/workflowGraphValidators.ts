@@ -59,6 +59,7 @@ export const workflowSnapshotValidator = v.object({
   edges: v.array(workflowEdgeValidator),
   file: v.string(),
   files: graphFilesValidator,
+  model_stylesheet: v.optional(v.string()),
 });
 
 /** A graph as a run path hands it over. */

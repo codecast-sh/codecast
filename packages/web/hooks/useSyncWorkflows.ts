@@ -186,6 +186,30 @@ export function useWorkflow(id: string | null | undefined): any | null | undefin
   return row ?? (ready ? null : undefined);
 }
 
+type PinnedRun = { _id: string; workflow_id?: string | null; graph_version_id?: string | null; flow_versions?: ReadonlyArray<{ version_id: string }> | null };
+
+/** The version a run pinned (convex lib/runGraph.ts): a library run's flow version, else its pin. */
+const pinOf = (run: PinnedRun | null | undefined) => run?.flow_versions?.[0]?.version_id ?? run?.graph_version_id ?? null;
+
+/**
+ * Reader: the workflows row a run executes. A run that pinned a version reads
+ * that version's graph (runGraphs, ct-98653), so another checkout's push of the
+ * same slug never redraws it; a run from before pins reads the row. The row's
+ * own id stays `_id`. Undefined while cold, null once the server said no.
+ */
+export function useRunWorkflow(run: PinnedRun | null | undefined): any | null | undefined {
+  const pin = pinOf(run);
+  const { ready, error } = useSyncCollection("runGraphs", api.workflow_runs.pinnedGraphOfRun, pin && run ? { run_id: run._id } : "skip", ONE_ROW);
+  // A refusal answers as "no pinned graph" does: a backend without the query yet, or a version that kept no content
+  // (one from before every push kept it), draws the row.
+  const answered = ready || !!error;
+  const pinned = useInboxStore((s) => (pin ? (s.runGraphs as any)[pin] : undefined));
+  const row = useRunGraph(run?._id, pin && (pinned || !answered) ? null : run?.workflow_id);
+  const graph = useMemo(() => (pinned ? { ...pinned, _id: pinned.workflow_id, version_id: pinned._id } : null), [pinned]);
+  if (!pin) return row;
+  return graph ?? (answered ? row : undefined);
+}
+
 /** Feeder: the runs a session started for its change (convex sessionFlowRuns), live ones first. */
 export function useSyncSessionFlowRuns(conversationId: string | null | undefined) {
   // entityIdArgs: a session not yet created on the server is a local stub id,

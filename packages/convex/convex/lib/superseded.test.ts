@@ -70,3 +70,28 @@ describe("currentDecisions", () => {
     expect((await currentDecisions(alone, [decision("d2", current)] as any)).map((d) => d._id)).toEqual(["d2"]);
   });
 });
+
+// ct-98653: a queue of decisions asked by runs pinned to different versions of one line. The line's newest version is
+// read once through its index, each pin is one version row, and no graph and no workflows row is read while the
+// versions' station hashes answer every check.
+describe("currentDecisions over pinned runs", () => {
+  const LINE = "builtin:team:codecast";
+  const version = (i: number) => ({
+    _id: `ver_${i}`, workflow_id: "wf1", line: LINE, at: i, created_at: i, graph_hash: "h", graph_id: "graph_1",
+    nodes: [{ id: "build", h: "b" }, { id: "decide", h: "d" }],
+  });
+  const runs = Array.from({ length: 40 }, (_, i) => ({ _id: `run_${i}`, status: "paused", gate_node_id: "decide", workflow_id: "wf1", graph_version_id: `ver_${i}`, created_at: i }));
+  const versions = runs.map((_, i) => version(i));
+
+  test("reads each pin's version row and the line once, never a graph or the row", async () => {
+    const ctx = fakeCtx([...runs, ...versions, { _id: "wf1", nodes: [] }, { _id: "graph_1", snapshot: { nodes: [] } }], { workflow_runs: runs, workflow_versions: versions });
+    const gets: string[] = [];
+    const get = ctx.db.get;
+    ctx.db.get = async (id: unknown) => { gets.push(String(id)); return get(id); };
+    const rows = runs.map((r, i) => ({ _id: `d${i}`, status: "pending", workflow_run_id: r._id, gate_node_id: "decide" }));
+    expect(await currentDecisions(ctx, rows as any)).toHaveLength(40);
+    expect(ctx.reads.filter((r) => r === "workflow_versions.by_workflow_line")).toHaveLength(1);
+    expect(gets.filter((id) => id === "graph_1" || id === "wf1")).toEqual([]);
+    expect(gets.filter((id) => id.startsWith("ver_"))).toHaveLength(40);
+  });
+});

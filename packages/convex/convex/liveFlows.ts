@@ -22,6 +22,7 @@ import { problemSourceOf } from "./workflows";
 import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
 import { projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { flowRouteFor } from "./lib/flowRoute";
+import { graphOfVersion, versionToPin } from "./lib/runGraph";
 import { agentAssignee, claimSlot, freeSlots, isReadyCause, lineLoadFor, lineOwnerOf, loadWorking, takeAdmissible, type LineLoad, type LineLoads, type RunPlace } from "./orgLine";
 
 type Ctx = { db: any };
@@ -134,8 +135,10 @@ export async function planLiveFlow(ctx: Ctx, flow: any, roles: any[], now: numbe
   const hold = flowHold(flow, now);
   const offWords = !flow.on ? "the flow is off" : hold ? holdWords(hold) : handsLeft <= 0 ? "hands cap reached" : null;
   const candidates = await liveFlowCandidates(ctx, flow, roles, Math.max(take, 0) + 16);
-  // Only machines that can start every agent the flow's stations run take its problems (linePoolFor).
-  const needs = flowAgents(flow.workflow_id ? (await ctx.db.get(flow.workflow_id))?.nodes : null);
+  // Only machines that can start every agent the flow's stations run take its problems (linePoolFor): the stations of
+  // the version its runs pin when they start (lib/runGraph.ts), never the row as another checkout last pushed it.
+  const pin = await versionToPin(ctx, flow.workflow_id);
+  const needs = flowAgents((await graphOfVersion(ctx, pin))?.nodes ?? (flow.workflow_id ? (await ctx.db.get(flow.workflow_id))?.nodes : null));
   // A judge problem waits while the flow's family has no judge route (lib/flowRoute); every other problem has a graph.
   const judgeRoute = candidates.some((c) => isJudgeProblem(c.task.cause)) ? await judgeRouteOf(ctx, flow) : null;
   const starts: LivePlanned[] = [];

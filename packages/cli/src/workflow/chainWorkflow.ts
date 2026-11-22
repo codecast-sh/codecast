@@ -241,6 +241,8 @@ export async function startRecordedRun(deps: PublishDeps, graph: WorkflowGraph, 
       workflow_name: graph.name,
       workflow_goal: graph.goal,
       workflow_id: pushed.id,
+      // The version this push left: the run pins it, whatever another checkout pushes under the slug after (ct-98653).
+      ...(pushed.version_id ? { workflow_version_id: pushed.version_id } : {}),
       task_id: opts.taskId,
       plan_id: opts.planId,
       project_path: opts.projectPath,

@@ -22,7 +22,7 @@ import { noticeCardWaiting, noticeChangeShipped } from "./lineNotices";
 import { createDataContext } from "./data";
 import { askTrialGate, trialProjectOf } from "./lineTrial";
 import { gateMirror, gateResponseOf, standingCard } from "./lib/gateChoices";
-import { runSuperseded } from "./lib/superseded";
+import { newLineMemo, runSuperseded, type LineMemo } from "./lib/superseded";
 import { resolveOwnerDevice } from "./devices";
 import { openRunPrice } from "./lib/trialRunPrices";
 import { isLineRunSlug, lineRouteFor } from "./workflows";
@@ -38,6 +38,7 @@ import { retainSessionCreator } from "./sessionLaunch";
 import { isSessionOwner } from "./sessionOwners";
 import { withAgentSessions } from "./lib/runAgentSessions";
 import { changeSessionOf } from "./lib/taskOwner";
+import { graphOfVersion, pinnedVersionOf, repinToReported, rowAtVersion, runWorkflowOf, versionToPin } from "./lib/runGraph";
 
 export { withAgentSessions };
 
@@ -459,7 +460,7 @@ async function withdrawOpenGate(ctx: Ctx, run: any, now: number): Promise<void> 
   const decision = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
   if (decision && decision.status === "pending") await withdrawCore(ctx, decision, now);
   if (!run.primary_conversation_id) return;
-  const wf: any = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+  const wf: any = await runWorkflowOf(ctx, run);
   const askers = new Set<string>(((wf?.nodes ?? []) as Array<{ type?: string; asker?: string }>).filter((n) => n.type === "human" && n.asker).map((n) => n.asker!));
   if (!askers.size) return;
   const why = `The run that asked it ${run.status === "failed" && run.fail_reason ? `stopped (${run.fail_reason})` : "ended"} before its gate took the question up, so an answer would drive nothing.`;
@@ -686,6 +687,14 @@ export async function liveRunRefusal(ctx: Ctx, task: any, force?: boolean): Prom
   return `${task.short_id ?? "this task"} already has a live run (${run._id}, ${run.status}${at ? ` at ${at}` : ""}); one problem holds one run at a time. Wait for it to end, cancel it from its run page, or pass --force to start a second.`;
 }
 
+/** The run's pin at its start: a library run reads its flow versions instead, so only another run takes one. */
+async function pinFor(ctx: Ctx, workflowId: Id<"workflows"> | undefined, named: Id<"workflow_versions"> | undefined): Promise<{ graph_version_id?: Id<"workflow_versions"> }> {
+  const row: any = workflowId ? await ctx.db.get(workflowId) : null;
+  if (!row || row.runs_from === "library") return {};
+  const ver = await versionToPin(ctx, workflowId, named);
+  return ver ? { graph_version_id: ver._id } : {};
+}
+
 export async function createRunCore(
   ctx: Ctx,
   userId: Id<"users">,
@@ -709,6 +718,8 @@ export async function createRunCore(
     // the problem's earlier branch aside and starts it again from origin/main
     // (cli lineTrialBranch.ts). Its fix stays on the set-aside branch, prior art.
     fresh_branch?: boolean;
+    // The version of workflow_id the run starts on (lib/runGraph.ts versionToPin); the row's newest when not given.
+    graph_version_id?: Id<"workflow_versions">;
     now?: number;
   },
 ): Promise<{ run_id: Id<"workflow_runs">; primary_conversation_id: Id<"conversations"> }> {
@@ -736,6 +747,7 @@ export async function createRunCore(
     project_path: opts.project_path,
     ...(opts.fresh_branch && opts.task ? { fresh_branch: true } : {}),
     ...(await runFlowVersions(ctx, opts.workflow_id)),
+    ...(await pinFor(ctx, opts.workflow_id, opts.graph_version_id)),
     created_at: now,
     updated_at: now,
   });
@@ -818,6 +830,8 @@ export const createFromCli = mutation({
     place_device: v.optional(v.string()),
     place_origin: v.optional(v.string()),
     placed_change: v.optional(v.any()),
+    // The version the caller's push left (workflows.upsert's version_id): the run pins it, whatever is pushed after.
+    workflow_version_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const result = await verifyApiToken(ctx, args.api_token);
@@ -867,8 +881,9 @@ export const createFromCli = mutation({
     const workflowRow: any = workflowDocId ? await ctx.db.get(workflowDocId) : null;
     // A line run: the shipped line or a role's, or a line version (one that serves a scenario).
     const lineRun = isLineRunSlug(args.workflow_name) || !!workflowRow?.serves?.length;
-    // Every agent its stations start: a machine that cannot start one of them takes no part of the run.
-    const needs = flowAgents(workflowRow?.nodes);
+    // Every agent its stations start, in the graph it starts on: a machine that cannot start one of them takes no part of the run.
+    const pin = await versionToPin(ctx, workflowDocId, args.workflow_version_id);
+    const needs = flowAgents((await graphOfVersion(ctx, pin))?.nodes ?? workflowRow?.nodes);
     // The asking machine, where a detached run stays when no pool takes it: held from line runs by an operator, or
     // without a sign-in one of its agents needs, it is no place for this run.
     if (args.place_device && !args.detach) throw new Error("A run placed on a machine is handed to its daemon: pass --detach");
@@ -927,6 +942,7 @@ export const createFromCli = mutation({
       ...(place ? { org_role_id: lead._id } : {}),
       force: args.force,
       fresh_branch: args.detach && lineRun,
+      ...(pin ? { graph_version_id: pin._id } : {}),
       now,
     });
     await retainSessionCreator(ctx, primary_conversation_id, userId, host);
@@ -963,8 +979,9 @@ export const listForWorkflow = query({
     // overlays all feeds on one collection, so a plain row from here would
     // strip the sessions the detail query attached. Newest runs first.
     const budget = { reads: 200 };
-    const takes_change = sourceTakesSessionChange(workflow.source);
-    return await Promise.all(runs.map(async (r) => ({ ...(await withAgentSessions(ctx, r, budget)), takes_change })));
+    // Read from the graph each run executes (lib/runGraph.ts), never the row another checkout pushed last.
+    const reads = newRunReads();
+    return await Promise.all(runs.map(async (r) => ({ ...(await withAgentSessions(ctx, r, budget)), takes_change: sourceTakesSessionChange((await runWorkflowOf(ctx, r, workflow, reads.line.graph))?.source) })));
   },
 });
 
@@ -994,7 +1011,7 @@ export const byIds = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    const workflows = new Map<string, any>();
+    const reads = newRunReads();
     const budget = { reads: 300 };
     const out = [];
     for (const raw of args.ids.slice(0, RUNS_BY_IDS_MAX)) {
@@ -1002,7 +1019,7 @@ export const byIds = query({
       if (!id) continue;
       const run = await ctx.db.get(id);
       if (!run || !(await canReadRun(ctx, userId, run))) continue;
-      out.push(await enrichRun(ctx, await withAgentSessions(ctx, run, budget), workflows));
+      out.push(await enrichRun(ctx, await withAgentSessions(ctx, run, budget), reads));
     }
     return out;
   },
@@ -1168,7 +1185,7 @@ export const getForDaemon = mutation({
     const gateAnswer = run.gate_response && run.gate_decision_id ? answeredOptionLabel(await ctx.db.get(run.gate_decision_id)) : undefined;
     return {
       run: { ...run, task_short_id: taskShortId, plan_short_id: planShortId, gate_card: gateCard, ...(gateAnswer ? { gate_answer: gateAnswer } : {}) },
-      workflow: workflow ? { ...workflow, ...(await libraryOfRun(ctx, run)) } : { name: "workflow", goal: run.goal_override, nodes: [], edges: [] },
+      workflow: workflow ? { ...(await runWorkflowOf(ctx, run, workflow)), ...(await libraryOfRun(ctx, run)) } : { name: "workflow", goal: run.goal_override, nodes: [], edges: [] },
     };
   },
 });
@@ -1212,7 +1229,9 @@ export const updateProgress = mutation({
     if (over) return over;
 
     const now = Date.now();
-    if (args.graph_hash) await recordRoutineRunGraph(ctx, run, args.graph_hash, now);
+    // A runner that loaded another version of its own graph moves the run's pin onto it (lib/runGraph.ts).
+    const repin = args.graph_hash ? await repinToReported(ctx, run, args.graph_hash) : {};
+    if (args.graph_hash) await recordRoutineRunGraph(ctx, { ...run, ...repin }, args.graph_hash, now);
     const nodeStatuses = [...run.node_statuses];
     const existing = args.node_id && args.node_status ? nodeStatuses.findIndex((n) => n.node_id === args.node_id) : -1;
     const prev = existing >= 0 ? nodeStatuses[existing] : undefined;
@@ -1240,7 +1259,7 @@ export const updateProgress = mutation({
       status: args.run_status ?? run.status,
       fail_reason: args.fail_reason,
       // A runner's first report names the graph it loaded, so a restart a re-pin asked for has happened.
-      ...(args.graph_hash ? { graph_hash: args.graph_hash, restart_runner_at: undefined } : {}),
+      ...(args.graph_hash ? { graph_hash: args.graph_hash, restart_runner_at: undefined, ...repin } : {}),
       ...(args.graph_nodes?.length ? { graph_nodes: args.graph_nodes } : {}),
       ...(args.runner_device ? { runner_device: args.runner_device } : {}),
       ...(args.waiting_on_session !== undefined || args.run_status === "completed" || args.run_status === "failed"
@@ -1304,7 +1323,7 @@ export const updateProgress = mutation({
     if (nodeEntry && run.primary_conversation_id && args.node_id !== "start") {
       const primaryConv = await ctx.db.get(run.primary_conversation_id);
       if (primaryConv) {
-        const workflow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+        const workflow = await runWorkflowOf(ctx, run);
         const nodeInfo = workflow?.nodes?.find((n: any) => n.id === args.node_id);
         const nodeLabel = nodeInfo?.label ?? args.node_id;
         const nodeType = nodeInfo?.type ?? "agent";
@@ -1714,7 +1733,7 @@ export async function reaskRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"wor
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task && isTerminalTaskStatus(task.status)) throw new ConvexError(`${task.short_id} is ${task.status}: a closed problem is not asked again`);
   if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast flow trial rerun ${task.short_id} --reask asks it again under the trial's budget`);
-  const wf = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+  const wf = await runWorkflowOf(ctx, run);
   const isGate = (id?: string) => !!id && ((wf as any)?.nodes ?? []).some((n: { id?: string; type?: string }) => n.id === id && n.type === "human");
   const gate = run.status === "paused" ? run.gate_node_id : run.status === "failed" && isGate(run.current_node_id) ? run.current_node_id : undefined;
   if (!gate) throw new ConvexError(`The run is ${run.status}${run.current_node_id ? ` at ${run.current_node_id}` : ""}: it is not waiting on a decision, and did not end at one`);
@@ -1763,7 +1782,7 @@ export async function landAgainCore(ctx: Ctx, userId: Id<"users">, runId: Id<"wo
   const refused = landAgainRefusal(run as any);
   if (refused) throw new ConvexError(refused);
   // The line the run's machine resumes on must have the Rebase station, or the runner refuses and the run stalls.
-  const wf = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+  const wf = await runWorkflowOf(ctx, run);
   if (!((wf as any)?.nodes ?? []).some((n: { id?: string }) => n.id === "rebase")) throw new ConvexError("Its line has no Rebase step");
   const device = await runMachine(ctx, run);
   if (!device) throw new ConvexError("The machine that built the fix is not known");
@@ -1871,14 +1890,14 @@ export async function listRunsCore(ctx: Ctx, userId: Id<"users">, args: ListRuns
   const out = rows.filter((r) => !args.status || r.status === args.status);
   out.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
 
-  const workflows = new Map<string, any>();
+  const reads = newRunReads();
   // Node sessions ride every feed (see listForWorkflow); the budget keeps a
   // 200 run page bounded, newest runs claiming lookups first.
   const budget = { reads: 300 };
   const shaped = [];
   // `slim` (the CLI's list) leaves the station sessions out: each carries its
   // report and handoff, and 200 runs of them outgrew the call's time limit.
-  for (const run of out.slice(0, limit)) shaped.push(await enrichRun(ctx, args.slim ? run : await withAgentSessions(ctx, run, budget), workflows));
+  for (const run of out.slice(0, limit)) shaped.push(await enrichRun(ctx, args.slim ? run : await withAgentSessions(ctx, run, budget), reads));
   return shaped;
 }
 
@@ -1892,12 +1911,21 @@ export function answeredOptionLabel(decision: any): string | undefined {
 // The one shape every run feed hands the web store (the-line.md L10): the
 // list and the single run query agree, so a store row replaced by either
 // keeps its task, workflow, node label and gate decision chips.
-export async function enrichRun(ctx: Ctx, run: any, workflows: Map<string, any> = new Map()) {
+/** What a feed of runs has read already: each workflows row and the graph each pinned version runs, and the
+ *  supersession reads (versions, lines, graphs), shared by every run of the feed. */
+export type RunReads = { workflows: Map<string, any>; line: LineMemo };
+export const newRunReads = (): RunReads => ({ workflows: new Map(), line: newLineMemo() });
+
+export async function enrichRun(ctx: Ctx, run: any, reads: RunReads = newRunReads()) {
+  const workflows = reads.workflows;
   let workflow: any = null;
   if (run.workflow_id) {
     const wid = String(run.workflow_id);
     if (!workflows.has(wid)) workflows.set(wid, await ctx.db.get(run.workflow_id));
-    workflow = workflows.get(wid);
+    // The graph the run executes, read once per version a list's runs pinned.
+    const at = `${wid}@${run.flow_versions?.[0]?.version_id ?? run.graph_version_id ?? ""}`;
+    if (!workflows.has(at)) workflows.set(at, await runWorkflowOf(ctx, run, workflows.get(wid), reads.line.graph));
+    workflow = workflows.get(at);
   }
   const node = workflow?.nodes?.find((n: any) => n.id === run.current_node_id);
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
@@ -1927,7 +1955,7 @@ export async function enrichRun(ctx: Ctx, run: any, workflows: Map<string, any> 
     // Billed money and the subscription sessions' list price, two kinds never added (changeCard costParts).
     ...(typeof decision?.card?.cost?.usd === "number" ? (({ billed_usd, list_usd }) => ({ card_billed_usd: billed_usd, card_list_usd: list_usd }))(costParts(decision.card.cost)) : {}),
     // line-versions.md LV1: a live run a later run, a dropped station or its problem replaced; null while current.
-    superseded: await runSuperseded(ctx, run, task),
+    superseded: await runSuperseded(ctx, run, task, reads.line),
   };
 }
 
@@ -2045,6 +2073,25 @@ export const graphOfRun = query({
     if (String(row.user_id) === String(userId)) return row;
     const { origin: _origin, ...shared } = row as typeof row & { origin?: unknown };
     return shared;
+  },
+});
+
+// The graph a run executes when it pinned a version (lib/runGraph.ts, ct-98653), for a viewer who may read the run:
+// its workflows row as of that version, keyed by the version, so runs of one slug on different versions each draw
+// their own (web store runGraphs). Null for a run that pinned none; its card reads the row (graphOfRun).
+export const pinnedGraphOfRun = query({
+  args: { run_id: v.id("workflow_runs") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const run = await ctx.db.get(args.run_id);
+    if (!run?.workflow_id || !(await canReadRun(ctx, userId, run))) return null;
+    const pinned = await pinnedVersionOf(ctx, run);
+    const row = pinned ? await ctx.db.get(run.workflow_id) : null;
+    if (!pinned || !row) return null;
+    const { origin, _id, _creationTime, ...graph } = rowAtVersion(row, pinned);
+    // A teammate reads the graph, never where it lives.
+    return { ...graph, _id: String(pinned.ver._id), workflow_id: String(_id), ...(String(row.user_id) === String(userId) && origin ? { origin } : {}) };
   },
 });
 

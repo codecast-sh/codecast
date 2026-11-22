@@ -59,7 +59,7 @@ async function setup() {
 }
 
 describe("a flow with no mode", () => {
-  test("resolves as before: pushes rewrite it, versions keep hashes only, runs record nothing", async () => {
+  test("resolves as before: pushes rewrite it, versions are not restorable, runs record no library versions and pin the newest", async () => {
     const { upsert, row, versions, run } = await setup();
     await upsert(push("spine", "aaaaaaaaaaaaaaaa", "Fix it."));
     await upsert(push("spine", "bbbbbbbbbbbbbbbb", "Fix it well."));
@@ -70,6 +70,7 @@ describe("a flow with no mode", () => {
     const { recorded, got } = await run("spine");
     expect(recorded).toBeUndefined();
     expect(got.workflow.library).toBeUndefined();
+    expect(got.run.graph_version_id).toBe(vs.versions[0].id);
   });
 });
 

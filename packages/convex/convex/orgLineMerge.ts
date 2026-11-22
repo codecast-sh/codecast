@@ -27,6 +27,7 @@ import { insertTaskComment } from "./tasks";
 import { getAuthenticatedUserId, tellRole } from "./pendingMessages";
 import { roleOfRun } from "./lib/actor";
 import { roleMergeAllowance } from "./lib/regretRead";
+import { runWorkflowOf } from "./lib/runGraph";
 
 /** The pull request a handoff named in its evidence ("PR: <url>", taskClaim
  *  handoffCommentText), or null. */
@@ -205,7 +206,7 @@ export async function clearForMergeCore(ctx: any, userId: Id<"users">, args: { r
   if (run.status !== "running" || !run.current_node_id) throw new Error(`The run is ${run.status}: only a running station clears it to land`);
   const station = (run.node_statuses ?? []).find((n: any) => n.node_id === run.current_node_id);
   if (!station || station.status !== "running") throw new Error(`${run.current_node_id} is not running: only the station the run stands at clears it`);
-  const node = run.workflow_id ? ((await ctx.db.get(run.workflow_id))?.nodes ?? []).find((n: any) => n.id === run.current_node_id) : null;
+  const node = ((await runWorkflowOf(ctx, run))?.nodes ?? []).find((n: any) => n.id === run.current_node_id);
   if (station.session_id || run.waiting_on_session || node?.type !== "command") {
     throw new Error(`${run.current_node_id} is not a script station of the run's graph: only a flow's script station clears a run to land`);
   }

@@ -30,6 +30,7 @@ import { canReadRun } from "./workflow_runs";
 import { CALL_LINK_REFUSED_WORDS, isRecRoomKey } from "@codecast/shared/contracts";
 import { publicName } from "./lib/displayNames";
 import { publicWeekCard, weeklyCardAllowed, type WeekCardStats } from "@codecast/shared/contracts/weeklyCard";
+import { runWorkflowOf } from "./lib/runGraph";
 
 export { SHARE_TOKEN_SHAPE, type ShareTable };
 
@@ -437,7 +438,7 @@ export const getSharedRun = query({
   handler: async (ctx, args) => {
     const run = await byShareToken(ctx, "workflow_runs", args.share_token);
     if (!run) return null;
-    const workflow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+    const workflow = await runWorkflowOf(ctx, run);
     const labelOf = new Map((workflow?.nodes ?? []).map((n) => [n.id, n.label]));
     return {
       name: workflow?.name ?? run.workflow_name ?? "Workflow run",

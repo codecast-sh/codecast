@@ -8552,8 +8552,8 @@ export default defineSchema({
     .index("by_user_slug", ["user_id", "slug"]),
 
   // Every version of a pushed graph (line-workspace.md LW4: every save is a
-  // version of the step): one row per new graph_hash a push of the row
-  // brought, with each station's hash and the stations that moved, so a
+  // version of the step): one row per new graph_hash, or per new place that
+  // pushed it, with each station's hash and the stations that moved, so a
   // step's history reads its saves whether or not a run has read them yet.
   workflow_versions: defineTable({
     workflow_id: v.id("workflows"),
@@ -8565,8 +8565,29 @@ export default defineSchema({
     at: v.number(),
     // The version itself (ct-70169): a run in the library runs it, and a restore writes it back.
     snapshot: v.optional(workflowSnapshotValidator),
+    // A flow outside the library keeps its graph apart (ct-98653), so a list of versions never loads it: a run
+    // reads the version it started on (workflow_runs.graph_version_id, convex lib/runGraph.ts).
+    graph_id: v.optional(v.id("workflow_version_graphs")),
+    // The checkout on a machine the push read its file from; absent for a push from no file.
+    pushed_from: v.optional(v.object({ device_id: v.string(), root: v.string() })),
+    // The versions a run pinned to this one resumes with (lib/runGraph.ts): "place:<device>:<root>" for a push from
+    // a file, "library" for a library flow. Only a later version of its line supersedes a pinned run. A push from no
+    // file has none: its run resumes with its own pinned graph. Unset too on versions from before ct-98653.
+    line: v.optional(v.string()),
+    // Its number in the row's history (`v<seq>`), from ct-98653 on.
+    seq: v.optional(v.number()),
   })
-    .index("by_workflow_at", ["workflow_id", "at"]),
+    .index("by_workflow_at", ["workflow_id", "at"])
+    .index("by_workflow_line", ["workflow_id", "line", "at"]),
+
+  // A pushed graph's content, once per row per content (`key`, a hash of the
+  // whole snapshot): the versions that pushed the same graph share it.
+  workflow_version_graphs: defineTable({
+    workflow_id: v.id("workflows"),
+    key: v.string(),
+    snapshot: workflowSnapshotValidator,
+  })
+    .index("by_workflow_key", ["workflow_id", "key"]),
 
   // A person's verdict on one decision a line step made (line-workspace.md
   // LW4): the step at `node_id` in run `run_id` decided right or wrong, with
@@ -8787,6 +8808,11 @@ export default defineSchema({
     // A rerun from the trial page: its runner sets the earlier run's branch
     // aside and starts from origin/main (cli lineTrialBranch.ts).
     fresh_branch: v.optional(v.boolean()),
+    // The version of its workflows row the run started on, or the one its runner reported loading since
+    // (lib/runGraph.ts, ct-98653). The row is one per (user, slug), rewritten by every checkout and team that
+    // pushes the slug, so the run's stations, agents and supersession read this, never the row. Unset on a run
+    // from before pins, which reads the row.
+    graph_version_id: v.optional(v.id("workflow_versions")),
     // The library versions the run executes, its flow and the base it extends (flowVersions.ts).
     flow_versions: v.optional(v.array(v.object({ workflow_id: v.id("workflows"), version_id: v.id("workflow_versions") }))),
     // When a failed run was last resumed at a station as a new attempt: its

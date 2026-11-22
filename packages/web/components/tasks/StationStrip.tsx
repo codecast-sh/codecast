@@ -6,7 +6,7 @@ import { ArrowUpRight, Eye, GitBranch } from "lucide-react";
 import { shortDay } from "../../lib/line/runReport";
 import { classifySession, sessionWorkState, useTrackedStore, type TaskItem } from "../../store/inboxStore";
 import { useTeamTaskStatusList, statusVisual } from "../../lib/taskStatuses";
-import { useWorkflow, useWorkflowRun } from "../../hooks/useSyncWorkflows";
+import { useRunWorkflow, useWorkflowRun } from "../../hooks/useSyncWorkflows";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { decisionHref } from "../../lib/decisionLinks";
 import { ORG_STATE_META } from "../org/orgMeta";
@@ -90,7 +90,7 @@ export function StationStrip({ task, embedded, aside }: { task: TaskItem & LineT
   const run = useWorkflowRun(task.workflow_run_id);
   // workflow_runs.get hands back the raw row: the node label lives on the
   // workflow, so resolve it there, the same way the run panel below does.
-  const workflow = useWorkflow(run?.workflow_id);
+  const workflow = useRunWorkflow(run);
   const node = runLiveNode(run, workflow?.nodes);
   const live = isLiveRun(run);
   // A line run's node is a station of the line graph: it links to that

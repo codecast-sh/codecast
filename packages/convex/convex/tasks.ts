@@ -95,6 +95,7 @@ import {
 import { forbidden, notFound } from "./lib/auth";
 import { boundSessionsOf, changeSessionOf, claimTaskOwnership, isSessionWorking, type TaskOwnerRef } from "./lib/taskOwner";
 import { changeGuideInputValidator } from "./lib/changeGuideValidator";
+import { runWorkflowOf } from "./lib/runGraph";
 export { canAccessTask };
 
 // The six status CATEGORIES (see @codecast/shared/tasks/statuses.ts). Teams
@@ -439,7 +440,7 @@ const LINE_CLOSING_STATIONS: ReadonlySet<string> = new Set(["drop", "dissolve"])
 async function closesItself(ctx: any, run: any): Promise<boolean> {
   if (LINE_CLOSING_STATIONS.has(run.current_node_id)) return true;
   if (run.status === "paused") return false;
-  const workflow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+  const workflow: any = await runWorkflowOf(ctx, run);
   const station = workflow?.nodes?.find((n: any) => n.id === run.current_node_id);
   if (!station?.script) return false;
   if (!isLineRun(run)) return true;

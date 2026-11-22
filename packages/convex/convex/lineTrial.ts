@@ -52,6 +52,7 @@ import { failedAtStation } from "@codecast/shared/contracts/causeHistory";
 import { insertTaskComment, moveTaskStatus } from "./tasks";
 import { newLineMemo, problemSuperseded, runSuperseded, type LineMemo } from "./lib/superseded";
 import { supersededCard, type Superseded } from "@codecast/shared/contracts/superseded";
+import { graphOfVersion, ownLineAfter, pinnedRowOf } from "./lib/runGraph";
 
 type Ctx = { db: any };
 
@@ -248,19 +249,27 @@ export function overlapOf(mine: string[], theirs: string[], sameRule: boolean): 
  * is held, never asked of a person (ct-59540's proposal_gate after the line
  * dropped its proposal stations). False when the graph is unknown.
  */
-export function gateGone(nodeId: string, workflow: Pick<Doc<"workflows">, "nodes"> | null | undefined): boolean {
+export function gateGone(nodeId: string, workflow: { nodes: ReadonlyArray<{ id: string }> } | null | undefined): boolean {
   const nodes = workflow?.nodes ?? [];
   return nodes.length > 0 && !nodes.some((n: { id: string }) => n.id === nodeId);
 }
 
-async function staleGateOf(ctx: Ctx, row: Pick<Doc<"trial_cards">, "node_id">, run: Pick<Doc<"workflow_runs">, "workflow_id"> | null, memo?: LineMemo): Promise<boolean> {
+async function staleGateOf(ctx: Ctx, row: Pick<Doc<"trial_cards">, "node_id">, run: Pick<Doc<"workflow_runs">, "workflow_id" | "graph_version_id" | "flow_versions"> | null, memo?: LineMemo): Promise<boolean> {
+  if (!run) return false;
+  // A run that pinned its version is judged against its own line only (lib/runGraph.ts).
+  const pinned = await pinnedRowOf(ctx, run, memo?.graph);
+  if (pinned?.line) {
+    const after = await ownLineAfter(ctx, pinned, memo?.graph);
+    if (!after) return false;
+    return gateGone(row.node_id, { nodes: after.nodes.length ? after.nodes : (await graphOfVersion(ctx, after, memo?.graph))?.nodes ?? [] });
+  }
   let workflow: Doc<"workflows"> | null = null;
-  if (run?.workflow_id && memo) {
+  if (run.workflow_id && memo) {
     // The call's shared memo holds each workflows row once (runSuperseded reads the same rows).
     const key = String(run.workflow_id);
     if (!memo.workflows.has(key)) memo.workflows.set(key, ctx.db.get(run.workflow_id));
     workflow = await memo.workflows.get(key)!;
-  } else if (run?.workflow_id) workflow = await ctx.db.get(run.workflow_id);
+  } else if (run.workflow_id) workflow = await ctx.db.get(run.workflow_id);
   return gateGone(row.node_id, workflow);
 }
 

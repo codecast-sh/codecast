@@ -22,6 +22,7 @@ import { verifyApiToken } from "./apiTokens";
 import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
 import { workspaceGrantsAccess } from "./lib/access";
 import { recordGraphVersion } from "./workflows";
+import { LIBRARY_LINE, nextSeq, placeLine } from "./lib/runGraph";
 import { extendsFile, isExtendsPath } from "./lib/flowRoute";
 
 type Snapshot = NonNullable<Doc<"workflow_versions">["snapshot"]>;
@@ -45,7 +46,10 @@ export function snapshotOfRow(row: Doc<"workflows">): Snapshot {
 
 /** A content hash for a version no parser hashed (the web's edit): FNV-1a over its content, 16 hex digits. */
 export function contentHash(s: Snapshot): string {
-  const text = JSON.stringify([s.source, s.nodes, s.edges, s.files]);
+  return textHash(JSON.stringify([s.source, s.nodes, s.edges, s.files]));
+}
+
+function textHash(text: string): string {
   let h1 = 0x811c9dc5, h2 = 0x01000193;
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
@@ -55,19 +59,34 @@ export function contentHash(s: Snapshot): string {
   return "w" + h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(7, "0").slice(0, 7);
 }
 
+/** A graph's content, kept once per row per content (workflow_version_graphs): the versions that pushed it share the row. */
+async function keptGraph(ctx: any, workflowId: Id<"workflows">, snapshot: Snapshot): Promise<Id<"workflow_version_graphs">> {
+  const key = textHash(JSON.stringify(snapshot));
+  const kept = await ctx.db.query("workflow_version_graphs").withIndex("by_workflow_key", (q: any) => q.eq("workflow_id", workflowId).eq("key", key)).first();
+  return kept?._id ?? await ctx.db.insert("workflow_version_graphs", { workflow_id: workflowId, key, snapshot });
+}
+
 /**
  * A version of the row as it now stands, when its graph moved: with its
- * content for a library flow (a run reads it), the hashes only otherwise,
- * as before the library. `origin` is what a push from a file says; a write
- * with none (the web's) is hashed by content.
+ * content for a library flow (a run reads it, a restore writes it back);
+ * otherwise with its graph kept apart (workflow_version_graphs), which only the
+ * run that pins it reads (lib/runGraph.ts). `origin` is what a push from a file
+ * says; a write with none (the web's, a shipped template's) is hashed by
+ * content and has no line. Returns the version the row now stands at.
  */
-export async function recordWorkflowVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }> } | undefined, now = Date.now()) {
+export async function recordWorkflowVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }>; device_id?: string; root?: string; file?: string; files?: Snapshot["files"] } | undefined, now = Date.now()) {
   const row: Doc<"workflows"> | null = await ctx.db.get(workflowId);
   if (!row) return null;
-  if (row.runs_from !== "library") return origin ? await recordGraphVersion(ctx, workflowId, userId, origin, now) : null;
+  if (row.runs_from !== "library") {
+    // The push's own file, never the origin an earlier push from another checkout left on the row.
+    const snapshot: Snapshot = { ...snapshotOfRow(row), file: origin?.file || `${row.slug}.cast`, files: origin?.files ?? [], ...(row.model_stylesheet ? { model_stylesheet: row.model_stylesheet } : {}) };
+    const pushed_from = origin?.device_id && origin.root ? { device_id: origin.device_id, root: origin.root } : undefined;
+    const graph = JSON.stringify(snapshot).length <= SNAPSHOT_MAX_BYTES ? () => keptGraph(ctx, workflowId, snapshot) : undefined;
+    return await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, undefined, { ...(pushed_from ? { line: placeLine(pushed_from), pushed_from } : {}), graph });
+  }
   const snapshot = snapshotOfRow(row);
   if (JSON.stringify(snapshot).length > SNAPSHOT_MAX_BYTES) throw new ConvexError(`${row.slug} is too big to keep as a library version (over ${SNAPSHOT_MAX_BYTES} bytes)`);
-  return await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, snapshot);
+  return await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, snapshot, { line: LIBRARY_LINE });
 }
 
 /** The newest version that holds its content: the one a run starting now reads. */
@@ -211,7 +230,8 @@ async function flowFor(ctx: any, userId: Id<"users">, ref: string): Promise<Doc<
 }
 
 async function versionsOf(ctx: any, row: Doc<"workflows">) {
-  const vs: Doc<"workflow_versions">[] = await ctx.db.query("workflow_versions").withIndex("by_workflow_at", (q: any) => q.eq("workflow_id", row._id)).order("asc").take(500);
+  // The newest 500, oldest first.
+  const vs: Doc<"workflow_versions">[] = (await ctx.db.query("workflow_versions").withIndex("by_workflow_at", (q: any) => q.eq("workflow_id", row._id)).order("desc").take(500)).reverse();
   const names = new Map<string, string | null>();
   for (const ver of vs) if (!names.has(String(ver.by))) names.set(String(ver.by), ((await ctx.db.get(ver.by)) as any)?.name ?? null);
   const current = row.runs_from === "library" ? [...vs].reverse().find((x) => x.snapshot)?._id : undefined;
@@ -242,7 +262,7 @@ async function restoreCore(ctx: any, userId: Id<"users">, ref: string, version: 
     updated_at: now,
   });
   // The same graph as that version: a new row in the history, so the restore is itself a version.
-  const id = await ctx.db.insert("workflow_versions", { workflow_id: row._id, graph_hash: ver.graph_hash, nodes: ver.nodes, changed: [], by: userId, at: now, snapshot: s });
+  const id = await ctx.db.insert("workflow_versions", { workflow_id: row._id, graph_hash: ver.graph_hash, nodes: ver.nodes, changed: [], by: userId, at: now, snapshot: s, line: LIBRARY_LINE, seq: await nextSeq(ctx, row._id) });
   return { slug: row.slug, restored: want.n, version: list.length + 1, version_id: id };
 }
 

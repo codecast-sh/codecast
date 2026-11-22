@@ -53,6 +53,7 @@ export const DATA_SCOPE = {
   shipTargets: "entity",
   taskEvidence: "entity",
   prGuides: "entity",
+  runGraphs: "entity",
   projectExpectations: "entity",
   projectOutputs: "entity",
   expectationsOverview: "workspace",

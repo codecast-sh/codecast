@@ -3,13 +3,13 @@
 // library. Web (FlowFence) and the phone (FlowCard) both read a flow through
 // these hooks, so the two draw the same graph and offer the same Save.
 //
-// The graph a run ran is its own workflows row (graphOfRun, readable by anyone
-// who may read the run); the library's copy by slug only when the row cannot
+// The graph a run ran is the version of its workflows row it pinned, else the
+// row (useRunWorkflow, readable by anyone who may read the run); the library's copy by slug only when the row cannot
 // be read. Save is the team's session-flow row for that graph (convex
 // flowLibrary.sessionFlows, matched by graph hash and workspace): a graph the
 // library holds as it stands is never collected, so it has no row and no Save.
 import { useMemo } from "react";
-import { usePoolFlowRows, useRunGraph, useWorkflowBySlug } from "./useSyncWorkflows";
+import { usePoolFlowRows, useRunWorkflow, useWorkflowBySlug } from "./useSyncWorkflows";
 import { useSessionFlows, type SessionFlow } from "./useLiveFlow";
 import { appPool, flowBySlug, flowOfRun, pushedFlow, type AppFlow } from "../lib/line/flowPool";
 
@@ -20,7 +20,7 @@ export type FlowLibraryState =
   | { kind: "library"; slug: string }
   | null;
 
-type RunRow = { _id: string; workflow_id?: string | null; graph_hash?: string | null; workspace?: string | null; workflow_slug?: string | null; workflow_name?: string | null; workflow_label?: string | null };
+type RunRow = { _id: string; workflow_id?: string | null; graph_version_id?: string | null; flow_versions?: ReadonlyArray<{ version_id: string }> | null; graph_hash?: string | null; workspace?: string | null; workflow_slug?: string | null; workflow_name?: string | null; workflow_label?: string | null };
 
 function usePool(enabled = true): AppFlow[] {
   const rows = usePoolFlowRows(undefined, enabled);
@@ -44,7 +44,7 @@ function libraryState(flow: AppFlow | null, row: SessionFlow | null): FlowLibrar
  */
 export function useRunFlow(run: RunRow | null | undefined): { flow: AppFlow | null | undefined; library: FlowLibraryState } {
   const pool = usePool();
-  const row = useRunGraph(run?._id ?? null, run?.workflow_id ?? null);
+  const row = useRunWorkflow(run);
   const session = useSessionFlowOf(run?.workspace, run?.graph_hash);
   const flow = useMemo(() => {
     if (!run) return undefined;

@@ -22540,6 +22540,9 @@ workflow
           workflow_name: graph.name,
           workflow_goal: graph.goal,
           workflow_id: workflowId,
+          // The version this push left: the run pins it, whatever another checkout pushes under the slug after (ct-98653).
+          // Only a backend new enough to return it takes it.
+          ...(pushResult?.version_id ? { workflow_version_id: pushResult.version_id } : {}),
           task_id: runOpts.taskId,
           plan_id: runOpts.planId,
           goal_override: runOpts.goalOverride,
