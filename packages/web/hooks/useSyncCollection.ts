@@ -26,11 +26,12 @@
 import { useCallback, useRef } from "react";
 import type { FunctionArgs, FunctionReference } from "convex/server";
 import { getFunctionName } from "convex/server";
+import { ConvexError } from "convex/values";
 import { captureError } from "../lib/analytics";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import type { SyncOpts } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
-import { useServerAuthSettled } from "./useServerAuthSettled";
+import { useServerAuthSettled, useServerIdentityLost } from "./useServerAuthSettled";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -41,16 +42,28 @@ import { useWatchEffect } from "./useWatchEffect";
  * once per distinct message per feeder — the subscription re-runs on the next
  * data change and the recovery poll re-probes on its own, so the same failure
  * can repeat every few seconds while the host is busy.
+ *
+ * UNAUTHENTICATED while the server has lost an identity it had confirmed is
+ * not reported: the auth gate latches, so a failed token refresh leaves the
+ * subscription re-running as an anonymous caller, and its requireUser throw is
+ * that lost identity, not a fault in the query (ct-74852). useConvexSync
+ * already discards what arrives in that window.
  */
 export function useFeederError(feeder: string, error: Error | undefined): void {
   const lastRef = useRef<string | null>(null);
+  const identityLost = useServerIdentityLost();
   useWatchEffect(() => {
     if (!error) { lastRef.current = null; return; }
+    if (identityLost && isUnauthenticated(error)) return;
     if (lastRef.current === error.message) return;
     lastRef.current = error.message;
     console.warn(`[feeder:${feeder}] query failed; serving the cached rows`, error);
     captureError(error, { feeder });
-  }, [feeder, error]);
+  }, [feeder, error, identityLost]);
+}
+
+function isUnauthenticated(error: Error): boolean {
+  return error instanceof ConvexError && (error.data as { code?: unknown } | null)?.code === "UNAUTHENTICATED";
 }
 
 /**
