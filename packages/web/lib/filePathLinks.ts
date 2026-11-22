@@ -132,10 +132,15 @@ export interface FilePathContextValue {
 /** A bare file name in prose: no directory, an extension on the end
  *  ("constitution.md"). Far too common to link on its own; it links only
  *  when it names a file the session changed (editedFileNamed). */
-export const BARE_FILE_NAME_SCAN_RE = new RegExp(
-  String.raw`${BEFORE}([\w@+\-]+(?:\.[\w@+\-]+)*\.[A-Za-z][A-Za-z0-9]{0,9})${AFTER}`,
-  "g",
-);
+const BARE_FILE_NAME = String.raw`[\w@+\-]+(?:\.[\w@+\-]+)*\.[A-Za-z][A-Za-z0-9]{0,9}`;
+export const BARE_FILE_NAME_SCAN_RE = new RegExp(String.raw`${BEFORE}(${BARE_FILE_NAME})${AFTER}`, "g");
+const BARE_FILE_NAME_RE = new RegExp(`^${BARE_FILE_NAME}$`);
+
+/** True when `text` is one bare file name and nothing else (`constitution.md`
+ *  written as inline code). */
+export function isBareFileName(text: string): boolean {
+  return BARE_FILE_NAME_RE.test(text);
+}
 
 /** The one changed file whose name is `name`, or undefined when none is, or
  *  two in different directories are (a guess there would be a wrong link). */

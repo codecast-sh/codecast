@@ -103,4 +103,16 @@ describe("a reply that names a file the session edited", () => {
     const html = render("I left notes.md alone.");
     expect(linksNamed(html, "notes.md")).toEqual([]);
   });
+
+  test("a bare file name written as code links to the edited file", () => {
+    const html = render("The block lives in `constitution.md`.");
+    const links = linksNamed(html, "constitution.md");
+    expect(links.length).toBe(1);
+    expect(html).toContain("<code");
+  });
+
+  test("a code span naming an untouched file stays plain code", () => {
+    const html = render("I left `notes.md` alone.");
+    expect(linksNamed(html, "notes.md")).toEqual([]);
+  });
 });
