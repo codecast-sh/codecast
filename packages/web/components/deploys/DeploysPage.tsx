@@ -84,6 +84,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
     setLabels((was) => DEPLOY_LABELS.map((x) => x.id).filter((id) => (id === l ? !was.includes(id) : was.includes(id))));
   // The address follows the switch once the viewer touches it, so a copied link opens with the same IDs.
   const firstLabels = useRef(labels);
+  // eslint-disable-next-line no-restricted-syntax -- keeps the address bar in step with the chosen labels
   useEffect(() => {
     if (labels !== firstLabels.current) rewriteAddress({ show: labels.join(",") });
   }, [labels]);
@@ -102,6 +103,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   // Once the link's target is settled, pin it, and write it into the address so a copy opens there too: a change that
   // waits on two targets and goes out to one must not move the page to the other while it is being read.
   const settled = !pickedId && !!focusAt && focusSettled(allTargets, focus, reach);
+  // eslint-disable-next-line no-restricted-syntax -- pins the linked target once, the first time the page settles, and writes it to the address
   useEffect(() => {
     if (!settled || !focusAt) return;
     setPicked(focusAt._id);
@@ -221,6 +223,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
   // Reach lands after the first paint: once the linked thing is found here, open the deploy it names and bring it on
   // screen, once. Later moves (the commit going out while the page is open) never move the page on their own.
   const landed = useRef(false);
+  // eslint-disable-next-line no-restricted-syntax -- scrolls the linked row into view once its data arrives
   useEffect(() => {
     if (!focus || landed.current || (!focusWaiting && !focusOpen)) return;
     landed.current = true;

@@ -48,6 +48,7 @@ export function looksLikeBranch(text: string): boolean {
 export function useMentionedChange(text: string, known: boolean): RepoChange | "unlisted" | null {
   const store = useContext(ChangesContext);
   const asks = !!store && (known || looksLikeBranch(text));
+  // eslint-disable-next-line no-restricted-syntax -- asks the shared change store to start loading once a mention needs it
   useEffect(() => {
     if (asks) store!.want();
   }, [asks, store]);

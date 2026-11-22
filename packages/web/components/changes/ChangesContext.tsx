@@ -65,6 +65,7 @@ function ChangesFeed({ repository, branches, onChanges }: { repository: string; 
   const { ready, changes } = useRepoChanges(repository, undefined, { branches: branches.data });
   const read = ready && branches.read;
   const listCut = !!branches.data?.truncated;
+  // eslint-disable-next-line no-restricted-syntax -- hands each new read up to the provider that owns the state
   useEffect(() => onChanges(changes, read, listCut), [changes, read, listCut, onChanges]);
   return null;
 }

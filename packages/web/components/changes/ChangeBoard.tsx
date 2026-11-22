@@ -13,7 +13,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useChangeReach } from "../../hooks/useRepoChanges";
 import { ChangeChip, ChangeJourney } from "./ChangeChip";
 import { VEHICLE_GLYPH } from "../../lib/changes/vehicleGlyph";
-import { groupChanges, groupTone, type ChangeRow } from "../../lib/changes/rows";
+import { attentionTone, groupChanges, type ChangeRow } from "../../lib/changes/rows";
 import "./changes.css";
 
 const MONO = new Set(["branch", "pr", "commit"]);
@@ -58,9 +58,7 @@ const Row = memo(function Row({ row, at }: { row: ChangeRow; at: number }) {
     </>
   );
   const aria = `${vehicleName(v)}: ${l.now.word}`;
-  // The edge a row in Needs you wears: red for a failure or a rollback, blue for a person's turn.
-  const g = groupTone(l);
-  const attn = g === "red" || g === "blue" ? g : undefined;
+  const attn = attentionTone(row);
   return row.links?.href
     ? <Link href={row.links.href} className="chb-row" data-tone={l.now.tone} data-attn={attn} aria-label={aria} data-change-row={row.key}>{body}</Link>
     : <div className="chb-row" data-tone={l.now.tone} data-attn={attn} aria-label={aria} data-change-row={row.key}>{body}</div>;

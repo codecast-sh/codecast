@@ -5,6 +5,7 @@
  */
 import { afterAll, beforeAll } from "bun:test";
 import { execFileSync } from "../proc";
+import { defaultConfigDir } from "../config/configDir";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -44,7 +45,7 @@ export const CONV = "jx7ssssssssssssssssssssssssssss1";
 export let worlds = 0;
 /** A shared checkout where session CONV changed a.txt, its transcript saying so; `edit` writes any file as the session. */
 export function world(content: string) {
-  process.env.CODECAST_DIR = path.join(sandbox, `.codecast-${++worlds}`);
+  Object.assign(process.env, { CODECAST_DIR: path.join(sandbox, `.codecast-${++worlds}`) });
   const root = path.join(sandbox, `repo-${worlds}`);
   fs.mkdirSync(root);
   git(root, "init", "-q", "-b", "main");
@@ -60,7 +61,7 @@ export function world(content: string) {
     fs.writeFileSync(path.join(root, name), text);
     lines.push({ type: "assistant", timestamp: new Date().toISOString(), cwd: root, message: { role: "assistant", content: [{ type: "tool_use", id: `t${lines.length}`, name: "Edit", input: { file_path: path.join(root, name), old_string: "x", new_string: "y" } }] } });
     fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-    const ledgerFile = path.join(process.env.CODECAST_DIR!, "sync-ledger.json");
+    const ledgerFile = path.join(defaultConfigDir(), "sync-ledger.json");
     fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
     fs.writeFileSync(ledgerFile, JSON.stringify({ [file]: { lastSyncedAt: Date.now(), lastSyncedPosition: 0, messageCount: lines.length, conversationId: CONV, sourceGeneration: { client: "claude", sessionId: `sess-${worlds}`, dev: 0, ino: 0, birthtimeMs: 0, unit: "bytes", watermark: 0, prefixProven: true } } }));
   };

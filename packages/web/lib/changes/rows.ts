@@ -80,6 +80,17 @@ export const groupTone = (l: Lifecycle): ChangeTone => (l.now.stage === "live" &
  * main, not in motion, nobody's turn, and nobody's work touched it in PARKED_AFTER_MS (or ever, as far as anything
  * reports). A landed change is never parked: where it stands in production always matters.
  */
+/** Whether a change still has somewhere to go: not live (green) and not set aside (dim). */
+export function isComing(r: ChangeRow): boolean {
+  return r.lifecycle.now.tone !== "green" && r.lifecycle.now.tone !== "dim";
+}
+
+/** The edge a row in Needs you wears: red for a failure or a rollback, blue for a person's turn. */
+export function attentionTone(r: ChangeRow) {
+  const g = groupTone(r.lifecycle);
+  return g === "red" || g === "blue" ? g : undefined;
+}
+
 export function isParked(r: ChangeRow, now: number): boolean {
   const n = r.lifecycle.now;
   // A person's turn and a failure wait on someone: their age is the reason to look, never a reason to fold them away.

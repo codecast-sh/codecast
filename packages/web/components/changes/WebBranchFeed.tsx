@@ -9,6 +9,7 @@ import type { RepoChangeRows } from "../../lib/changes/assemble";
 export function WebBranchFeed({ repository, onRead }: { repository: string; onRead: (r: { data: RepoChangeRows["branches"]; read: boolean }) => void }) {
   const r = useRepoBranchDetails(repository);
   const read = r.ready || !!r.error;
+  // eslint-disable-next-line no-restricted-syntax -- hands the query's answer up to the provider that owns the state
   useEffect(() => onRead({ data: r.data ?? null, read }), [r.data, read, onRead]);
   return null;
 }
