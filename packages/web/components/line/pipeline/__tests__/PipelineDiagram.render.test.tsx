@@ -12,7 +12,7 @@ import { PIPELINE_FIXTURES } from "../../../../lib/line/__tests__/pipelines.fixt
 import { pipelineModel, type PipelineRun } from "../../../../lib/line/pipelineModel";
 
 const example = PIPELINE_FIXTURES.find((p) => p.repository === "example-org/example-app")!;
-const run = (id: string, at: string): PipelineRun => ({ _id: id, status: "running", workflow_slug: "change", project_path: "/w/example-app", current_node_id: at, created_at: 1 });
+const run = (id: string, at: string): PipelineRun => ({ _id: id, status: "running", workflow_slug: "change", project_path: "/w/example-app", current_node_id: at, created_at: Date.now(), updated_at: Date.now() });
 
 test("a change on a station is counted on the full drawing and on the strip", () => {
   const m = pipelineModel(example, [run("a", "ci"), run("b", "merge")]);
@@ -37,13 +37,16 @@ test("a step with no command is quiet, and a waiting deploy says what it waits f
 
 test("the overview's track: only the passing path, a count on the pill a change stands on, hollow steps with no command", () => {
   const m = pipelineModel(example, [run("a", "ci")]);
-  const change = renderToStaticMarkup(<PipelineTrack items={trackOf(m.change, true)} onOpen={() => {}} />);
+  const change = renderToStaticMarkup(<PipelineTrack items={trackOf(m, "change")} onOpen={() => {}} onAdd={() => {}} />);
   expect(change).toContain(">Session<");
   expect(change).toMatch(/class="pt-count"[^>]*>1</);
+  // A "+" in each gap between stations, none inside the fork.
+  expect(change.match(/data-pt-add/g)?.length).toBe(4);
   // Side routes live in the drawer: none of their words reach the track.
   expect(change).not.toMatch(/other ways|sends|loop/i);
-  const release = renderToStaticMarkup(<PipelineTrack items={trackOf(m.release, false)} />);
+  const release = renderToStaticMarkup(<PipelineTrack items={trackOf(m, "release")} />);
   expect(release).toContain('data-kind="none"');
+  expect(release).toContain(">passes<");
   // Without onOpen (the list's card is one link) a pill is no button.
   expect(release).not.toContain("<button");
 });

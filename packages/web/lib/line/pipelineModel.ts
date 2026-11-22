@@ -65,7 +65,8 @@ export type MainTarget = {
   live: { deploy: string; version: string | null; at: number } | null;
   /** `stuck`: how long it has been open without going live, when that is too long. */
   going: { deploy: string; step: string | null; outside: boolean; stuck: number | null } | null;
-  failed: { deploy: string } | null;
+  /** The last deploy, when it failed: when it ended, and the step it failed on when it reported steps (a release station's id). */
+  failed: { deploy: string; at: number; step: string | null } | null;
 };
 
 export type PipelineModel = {
@@ -88,6 +89,8 @@ export type PipelineModel = {
 };
 
 const LIVE = new Set(["running", "pending", "paused"]);
+/** A run still in flight: running, waiting its turn, or paused. */
+export const isLiveRun = (r: Pick<PipelineRun, "status">) => LIVE.has(r.status);
 
 /** The repo's own name: `example-app` of `example-org/example-app`. */
 export const repoName = (repository: string) => repository.split("/").pop() ?? repository;
@@ -281,7 +284,7 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
       // A version that is only a commit hash says nothing a person reads: the age says it.
       live: at.live ? { deploy: at.live.short_id, version: at.live.version && !/^[0-9a-f]{7,40}$/i.test(at.live.version) ? at.live.version : null, at: at.live.live_at ?? at.live.created_at } : null,
       going: at.open ? { deploy: at.open.short_id, step: stepLabel(running?.id), outside: !at.open.steps?.length, stuck } : null,
-      failed: at.failed ? { deploy: at.failed.short_id } : null,
+      failed: at.failed ? { deploy: at.failed.short_id, at: at.failed.finished_at ?? at.failed.created_at, step: at.failed.steps?.find((x) => x.status === "failed")?.id ?? null } : null,
     };
   });
 

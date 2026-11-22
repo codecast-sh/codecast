@@ -13,21 +13,22 @@ import { ShareControl } from "../../ShareControl";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useEditWhere } from "../../../hooks/usePipelines";
 import { pipelineCheckout, pipelineHref, type PipelineModel } from "../../../lib/line/pipelineModel";
-import { runningOf, statTiles, targetWords, trackOf, waitingSessions } from "../../../lib/line/pipelineView";
+import { statTiles, targetWords, trackOf, waitingSessions, type StatTile } from "../../../lib/line/pipelineView";
+import { entityRoute } from "../../../lib/entityLinks";
 import type { EditOp } from "../../../lib/line/pipelineEdit";
 import type { Pipeline } from "../../../lib/line/pipelineTypes";
 import { PipelineTrack } from "./PipelineTrack";
-import { MainDetails, PipelineDrawer, StationDetails } from "./PipelineDrawer";
+import { FlightDetails, MainDetails, PipelineDrawer, StationDetails } from "./PipelineDrawer";
 import { EditComposer, type ComposerStart } from "./EditComposer";
 import { CheckoutsSection } from "./CheckoutsSection";
 import "./pipeline.css";
 
 type LaneName = "change" | "release";
-type Open = { kind: "station"; lane: LaneName; id: string } | { kind: "compose"; start: ComposerStart } | { kind: "main" } | null;
+type Open = { kind: "station"; lane: LaneName; id: string } | { kind: "compose"; start: ComposerStart } | { kind: "main" } | { kind: "flight" } | null;
 
 const LANE_WORDS: Record<LaneName, { title: string; does: string }> = {
-  change: { title: "Every change", does: "runs on each change, on its own branch" },
-  release: { title: "Every release", does: "runs once per release, for each target" },
+  change: { title: "Every change", does: "on its own branch" },
+  release: { title: "Every release", does: "once per target" },
 };
 
 /** A stable colour for a session's avatar, from its name. */
@@ -40,12 +41,14 @@ export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, 
   const now = useCoarseNow(60_000);
   const close = useCallback(() => setOpen(null), []);
   const tiles = useMemo(() => statTiles(model, now), [model, now]);
-  const tracks = useMemo(() => ({ change: trackOf(model.change, true), release: trackOf(model.release, false) }), [model]);
+  const tracks = useMemo(() => ({ change: trackOf(model, "change", now), release: trackOf(model, "release", now) }), [model, now]);
   if (compact) return <PipelineStrip model={model} />;
   const firstStation = (l: PipelineModel["change"] | PipelineModel["release"]) => l.flow.stations.find((s) => s.main && s.who !== "rule")?.id ?? null;
   const compose = (lane: LaneName, op: EditOp, station: string | null) => setOpen({ kind: "compose", start: { lane, op, station, at: "after" } });
   const sessions = waitingSessions(model);
-  const release = runningOf(model.release);
+  // A "+" between two stations: after the one before it, else before the first.
+  const add = (lane: LaneName) => (after: string | null, before: string | null) => setOpen({ kind: "compose", start: { lane, op: "add", station: after ?? before, at: after ? "after" : "before" } });
+  const tileOpen = (t: StatTile) => { if (t.open && t.open.kind !== "deploy") setOpen(t.open.kind === "station" ? { kind: "station", lane: t.open.lane, id: t.open.station } : { kind: t.open.kind }); };
 
   const lane = (name: LaneName) => {
     return (
@@ -55,10 +58,7 @@ export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, 
           <div className="pv-gutter-does">{LANE_WORDS[name].does}</div>
         </div>
         <div className="pv-lane-body">
-          <PipelineTrack items={tracks[name]} picked={open?.kind === "station" && open.lane === name ? open.id : null} onOpen={(id) => setOpen({ kind: "station", lane: name, id })} />
-          {name === "release" && release.running < release.steps ? (
-            <div className="pv-legend"><span className="pt-pill pv-legend-pill" data-kind="none">step</span> no command set: passes · {release.running} of {release.steps} steps run something</div>
-          ) : null}
+          <PipelineTrack items={tracks[name]} picked={open?.kind === "station" && open.lane === name ? open.id : null} onOpen={(id) => setOpen({ kind: "station", lane: name, id })} onAdd={add(name)} />
         </div>
       </section>
     );
@@ -77,12 +77,12 @@ export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, 
         </span>
       </header>
       <div className="pv-stats">
-        {tiles.map((t) => (
-          <div key={t.key} className="pv-stat" data-tone={t.tone}>
-            <div className="pv-stat-v">{t.value}{t.small ? <small>{t.small}</small> : null}</div>
-            <div className="pv-stat-l">{t.label}</div>
-          </div>
-        ))}
+        {tiles.map((t) => {
+          const inner = <><span className="pv-stat-v">{t.value}{t.small ? <small>{t.small}</small> : null}</span><span className="pv-stat-l">{t.label}</span></>;
+          return t.open?.kind === "deploy"
+            ? <Link key={t.key} href={entityRoute("deploy", t.open.deploy) ?? "#"} className="pv-stat" data-tone={t.tone} data-pv-tile={t.key}>{inner}</Link>
+            : <button key={t.key} type="button" className="pv-stat" data-tone={t.tone} onClick={() => tileOpen(t)} disabled={!t.open} data-pv-tile={t.key}>{inner}</button>;
+        })}
       </div>
       {lane("change")}
       <section className="pv-lane pv-main" aria-label="main">
@@ -105,11 +105,13 @@ export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, 
       {lane("release")}
       <CheckoutsSection pipeline={pipeline} teamId={teamId} />
       {open ? (
-        <PipelineDrawer label={open.kind === "main" ? "Waiting to ship" : open.kind === "compose" ? "Edit the pipeline" : "Station"} onClose={close}>
+        <PipelineDrawer label={open.kind === "main" ? "Waiting to ship" : open.kind === "flight" ? "Changes in flight" : open.kind === "compose" ? "Edit the pipeline" : "Station"} onClose={close}>
           {open.kind === "station" ? (
             <StationDetails key={`${open.lane}:${open.id}`} lane={open.lane} l={open.lane === "change" ? model.change : model.release} model={model} pipeline={pipeline} id={open.id} onEdit={(op, station) => compose(open.lane, op, station)} />
           ) : open.kind === "main" ? (
             <MainDetails model={model} teamId={teamId} />
+          ) : open.kind === "flight" ? (
+            <FlightDetails model={model} onStation={(id) => setOpen({ kind: "station", lane: "change", id })} />
           ) : (
             <EditComposer key={`${open.start.lane}:${open.start.op}:${open.start.station}`} pipeline={pipeline} start={open.start} where={where} recent={pipelineCheckout(pipeline).recent} onClose={close} />
           )}
@@ -122,8 +124,8 @@ export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, 
 /** A pipeline as the list's card draws it: the same tracks, small, with main's targets between. */
 export function PipelineStrip({ model }: { model: PipelineModel }) {
   const now = useCoarseNow(60_000);
-  const change = useMemo(() => trackOf(model.change, true), [model]);
-  const release = useMemo(() => trackOf(model.release, false), [model]);
+  const change = useMemo(() => trackOf(model, "change", now), [model, now]);
+  const release = useMemo(() => trackOf(model, "release", now), [model, now]);
   return (
     <div className="pv-strip">
       <div className="pv-strip-row"><span className="pv-strip-title">Every change</span><PipelineTrack items={change} small /></div>

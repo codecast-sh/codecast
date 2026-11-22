@@ -97,6 +97,18 @@ export function editWords(e: PipelineEdit, label: (id: string) => string): strin
   }
 }
 
+/** What an edit does to the station it is about, in two or three words: "adds guidance", "skips it". */
+export function editKindWords(e: PipelineEdit): string {
+  switch (e.op) {
+    case "add": return "adds this station";
+    case "guide": return "adds guidance";
+    case "prompt": return "replaces the prompt";
+    case "run": return "changes the command";
+    case "when": return e.globs === "always" ? "runs it on every change" : "limits when it runs";
+    case "skip": return "skips it";
+  }
+}
+
 /** The station an edit is about, by id (a new station's own id). */
 export const editStation = (e: PipelineEdit) => (e.op === "add" ? e.id : e.station);
 

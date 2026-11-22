@@ -8,6 +8,7 @@ import { memo } from "react";
 import Link from "next/link";
 import { usePipelineModels } from "../../../hooks/usePipelines";
 import { usePipeline, useSyncPipelines } from "../../../hooks/useSyncPipelines";
+import { useCheckouts, useSyncCheckouts } from "../../../hooks/useSyncCheckouts";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { pipelineHref, type PipelineModel } from "../../../lib/line/pipelineModel";
@@ -16,7 +17,7 @@ import { PipelineDiagram } from "./PipelineDiagram";
 const teamOf = (workspace: string | null) => (workspace?.startsWith("team:") ? workspace.slice(5) : null);
 
 /** A pipeline's state in figures: changes in flight, commits waiting on main, deploys going out. */
-function Figures({ model }: { model: PipelineModel }) {
+function Figures({ model, stuckCheckouts }: { model: PipelineModel; stuckCheckouts: number }) {
   const going = model.main.targets.filter((t) => t.going && !t.going.stuck).length;
   const stuck = model.main.targets.filter((t) => t.going?.stuck).length;
   const failed = model.main.targets.filter((t) => t.tone === "failed").length;
@@ -25,8 +26,9 @@ function Figures({ model }: { model: PipelineModel }) {
       <span className="rpl-fig" data-on={model.change.inFlight ? "" : undefined}><b className="lw-num">{model.change.inFlight}</b> in flight</span>
       <span className="rpl-fig" data-on={model.main.waiting ? "" : undefined}><b className="lw-num">{model.main.waiting}</b> waiting on main</span>
       <span className="rpl-fig" data-on={going ? "" : undefined}><b className="lw-num">{going}</b> going out</span>
-      {stuck ? <span className="rpl-fig" data-tone="bad"><b className="lw-num">{stuck}</b> stuck</span> : null}
+      {stuck ? <span className="rpl-fig" data-tone="bad"><b className="lw-num">{stuck}</b> {stuck === 1 ? "deploy" : "deploys"} stuck</span> : null}
       {failed ? <span className="rpl-fig" data-tone="bad"><b className="lw-num">{failed}</b> failed</span> : null}
+      {stuckCheckouts ? <span className="rpl-fig" data-tone="bad"><b className="lw-num">{stuckCheckouts}</b> {stuckCheckouts === 1 ? "checkout" : "checkouts"} stuck</span> : null}
     </span>
   );
 }
@@ -34,6 +36,10 @@ function Figures({ model }: { model: PipelineModel }) {
 /** /flows: every pipeline of the team, each a strip that opens its page. */
 export const PipelinesStage = memo(function PipelinesStage({ workspace }: { workspace: string | null }) {
   const { models, pipelines, ready, failed } = usePipelineModels(workspace);
+  // Each card counts its repo's stuck checkouts: the team's checkouts feed once here.
+  useSyncCheckouts(teamOf(workspace));
+  const checkouts = useCheckouts(teamOf(workspace));
+  const stuckIn = (repo: string) => checkouts.filter((c) => c.repository === repo.toLowerCase() && c.level.state === "stuck").length;
   if (!ready && !models.length) return <div className="lw-skeleton" aria-busy><i style={{ width: "70%" }} /><i style={{ width: "54%" }} /></div>;
   if (!models.length) return <div className="rpl-empty"><b>{failed ? `Pipelines ${failed}` : workspace?.startsWith("team:") ? "No pipelines published" : "Pipelines belong to a team"}</b></div>;
   return (
@@ -43,7 +49,7 @@ export const PipelinesStage = memo(function PipelinesStage({ workspace }: { work
           <header className="rpl-card-head">
             <Link href={pipelineHref(m.repository)} className="rpl-card-name">{m.name}</Link>
             <span className="rpl-card-repo">{m.repository}</span>
-            <Figures model={m} />
+            <Figures model={m} stuckCheckouts={stuckIn(m.repository)} />
           </header>
           <Link href={pipelineHref(m.repository)} className="rpl-card-body" aria-label={`Open ${m.name}'s pipeline`}>
             <PipelineDiagram model={m} pipeline={pipelines[i]} teamId={teamOf(workspace)} compact />
