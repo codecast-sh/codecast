@@ -45,6 +45,8 @@ export const socialTypes = new Set([
   "decision_passed",
   "decision_escalated",
   "decision_assigned",
+  // A card waiting on you: every card one session asked in one turn.
+  "decision_waiting",
   // A comment on a decision you own or discuss.
   "decision_comment",
   "team_join_request",
@@ -119,6 +121,7 @@ export const typeLabels: Record<string, string> = {
   decision_passed: "passed you a decision",
   decision_escalated: "escalated a decision to you",
   decision_assigned: "gave you decisions in your areas",
+  decision_waiting: "needs your decision",
   decision_comment: "commented on a decision",
   team_join_request: "asked to join your team",
   team_join_approved: "let you into a team",
@@ -166,6 +169,7 @@ export const typeColors: Record<string, string> = {
   decision_passed: "text-sol-yellow",
   decision_escalated: "text-sol-orange",
   decision_assigned: "text-sol-yellow",
+  decision_waiting: "text-sol-orange",
   decision_comment: "text-sol-blue",
   team_join_request: "text-sol-violet",
   team_join_approved: "text-sol-violet",
