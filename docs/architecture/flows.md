@@ -225,8 +225,8 @@ subject's wait, each on its own copy of the run's context. A writer is not
 parked, so its brief can queue behind a turn of its own: it has answered only
 when a turn after the brief reached it has ended (a pin after the brief's
 delivery, read from `/cli/messages/status`, or quiet reads after it; where
-delivery cannot be read, the transcript growing past the brief and then going
-quiet). The first writer to block or die stops the other waits, which hear
+delivery cannot be read, the transcript growing past the brief, going quiet,
+and a pin since the brief went out). The first writer to block or die stops the other waits, which hear
 the run no longer waits on them, and only its words reach the run: a block
 before a death, a death before success. Once every writer has answered the run
 freezes the pass again and goes on; the station's output names who was
