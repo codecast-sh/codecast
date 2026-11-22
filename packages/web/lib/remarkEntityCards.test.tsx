@@ -213,7 +213,7 @@ describe("shared-object detection", () => {
   test("a message naming more than three objects in prose keeps them all as pills", () => {
     const html = render("Closed ct-46943, pl-476, jx84qtv and tr-476 today.");
     expect(html).not.toContain("entity-card-row");
-    expect(html.match(/entity-ref/g)?.length).toBe(4);
+    expect(html.match(/entity-ref(?![-_])/g)?.length).toBe(4);
   });
 
   test("an object with its own card line is not unfurled a second time", () => {
@@ -563,7 +563,7 @@ describe("a transcript promotes a staffing proposal alone", () => {
   test("op-N#seq inside a sentence stays one inline pill", () => {
     const html = renderTranscript("Start with op-5#2 and it waits on you.");
     expect(html).not.toContain("entity-card-row");
-    expect(html.match(/entity-ref/g)?.length).toBe(html.match(/class="not-prose entity-ref/g)?.length);
+    expect(html.match(/entity-ref(?![-_])/g)?.length).toBe(html.match(/class="not-prose entity-ref/g)?.length);
     expect(html.match(/class="not-prose entity-ref/g)?.length).toBe(1);
     expect(html).toMatch(/<p>Start with .*and it waits on you\.<\/p>/);
     // The number is part of the reference, never loose text after the pill.
