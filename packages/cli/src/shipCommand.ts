@@ -14,7 +14,7 @@
 // Same deps pattern as prCommand.ts: index.ts hands in config access, this
 // module stays importable by tests.
 
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { apiPost, type PublishDeps } from "./castApi.js";
@@ -55,7 +55,7 @@ async function readCheckout(cwd: string = process.cwd()): Promise<LocalCheckout>
 }
 
 /** The body `/cli/changes/mark-deploy` takes; flags win over the checkout. */
-export function markBody(options: MarkOptions, local: LocalCheckout, changes: PushChanges = {}, machine: string = hostname()): { repository: string; surface: string; sha: string; version?: string; dirty?: number; deploy?: string; via?: string; machine?: string; adds?: string[]; drops?: string[]; changes_read_at?: number } {
+export function markBody(options: MarkOptions, local: LocalCheckout, changes: PushChanges = {}, machine: string = hostname(), now: number = Date.now()): { repository: string; surface: string; sha: string; version?: string; dirty?: number; deploy?: string; via?: string; machine?: string; adds?: string[]; drops?: string[]; changes_read_age_ms?: number } {
   const repository = options.repo ?? local.repository;
   if (!repository) throw new Error("No GitHub repository here: run inside a checkout with a GitHub origin, or pass --repo <owner/name>.");
   const sha = options.sha ?? local.head;
@@ -70,9 +70,13 @@ export function markBody(options: MarkOptions, local: LocalCheckout, changes: Pu
     ...(options.via ? { via: options.via } : {}),
     ...(options.via || options.machine ? { machine: options.machine ?? machine } : {}),
     // Both lists go exactly when the diff ran, empty or not: the server reads their presence as "this push's changes are known".
-    ...(changes.adds && changes.drops ? { adds: changes.adds, drops: changes.drops, ...(changes.changes_read_at ? { changes_read_at: changes.changes_read_at } : {}) } : {}),
+    // How long ago the diff read prod, not when: the server dates it on its own clock, so a laptop's skew cannot.
+    ...(changes.adds && changes.drops ? { adds: changes.adds, drops: changes.drops, ...(changes.changes_read_at ? { changes_read_age_ms: readAge(changes.changes_read_at, now) } : {}) } : {}),
   };
 }
+
+/** Milliseconds since a diff read prod, by this machine's clock (never negative). */
+export const readAge = (readAt: number, now: number = Date.now()): number => Math.max(0, Math.round(now - readAt));
 
 /** `--changes <file>`: the JSON prod-diff writes, `{ adds, drops, read_at }`. */
 export function readChanges(path: string | undefined): PushChanges {
@@ -219,7 +223,7 @@ A push that upstream rejected because it moved is replayed and retried on its ow
     .option("--team <name|id>", "The team, when more than one of yours works on the repository")
     .option("--dirty <n>", "Files under the surface's sources that went out uncommitted with the sha")
     .option("--deploy <dp-N>", "The deploy this finishes: one codecast asked for, whose path now says what went out")
-    .option("--via <path>", "What pushed it: deploy.sh or dev watcher (records the machine too)")
+    .addOption(new Option("--via <path>", "What pushed it (records the machine too)").choices(["deploy.sh", "dev watcher"]))
     .option("--machine <name>", "The machine it was pushed from (default: this one's hostname, with --via)")
     .option("--changes <file>", "JSON { adds, drops, read_at }: what the push put on the surface and took off it, by name, and when that was read")
     .option("--dry-run", "Print the marker without recording it")

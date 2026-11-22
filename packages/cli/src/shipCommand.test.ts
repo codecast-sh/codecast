@@ -23,8 +23,11 @@ describe("markBody", () => {
     expect(markBody({ surface: "backend", via: "deploy.sh" }, HERE, {}, "box-1")).not.toHaveProperty("drops");
     expect(markBody({ surface: "backend", machine: "named" }, HERE, {}, "box-1")).toMatchObject({ machine: "named" });
     expect(markBody({ surface: "backend" }, HERE, {}, "box-1")).not.toHaveProperty("machine");    // When the diff read prod goes with the lists, and never without them.
-    expect(markBody({ surface: "backend", via: "deploy.sh" }, HERE, { adds: [], drops: ["fn:x:y"], changes_read_at: 1234 }, "box-1")).toMatchObject({ drops: ["fn:x:y"], changes_read_at: 1234 });
-    expect(markBody({ surface: "backend", via: "deploy.sh" }, HERE, { changes_read_at: 1234 }, "box-1")).not.toHaveProperty("changes_read_at");
+    // The read is sent as an age, so the server dates it on its own clock.
+    expect(markBody({ surface: "backend", via: "deploy.sh" }, HERE, { adds: [], drops: ["fn:x:y"], changes_read_at: 1234 }, "box-1", 5234)).toMatchObject({ drops: ["fn:x:y"], changes_read_age_ms: 4000 });
+    expect(markBody({ surface: "backend", via: "deploy.sh" }, HERE, { changes_read_at: 1234 }, "box-1", 5234)).not.toHaveProperty("changes_read_age_ms");
+    // A clock that reads earlier than the diff never sends a negative age.
+    expect(markBody({ surface: "backend", via: "deploy.sh" }, HERE, { adds: [], drops: [], changes_read_at: 9000 }, "box-1", 5000)).toMatchObject({ changes_read_age_ms: 0 });
   });
 
   test("--changes reads prod-diff's JSON and keeps only names", () => {
@@ -160,5 +163,14 @@ describe("cast ship added-by", () => {
   test("a deploy reads with its dp-N", () => {
     expect(formatAddedBy([{ ...FOUND[0], dirty: 0 }])).toContain("index:voiceprints.by_user  dp-2372 push of a commit by Ashot Petrosian on MacBook-Pro-182");
     expect(formatAddedBy([{ ...FOUND[0], committed_in: "dp-2380" }])).toContain("; committed since (dp-2380 carried it)");
+  });
+});
+
+describe("cast ship mark --via", () => {
+  test("takes only the two paths the server knows", async () => {
+    const program = new Command().exitOverride();
+    program.configureOutput({ writeErr: () => {} });
+    registerShipCommand(program, { getCliEndpoint: () => ({ siteUrl: "https://cast.example", apiToken: "tok" }), detectCurrentSessionId: () => null, checkout: async () => HERE });
+    await expect(program.parseAsync(["bun", "cast", "ship", "mark", "--surface", "backend", "--via", "deploy-sh", "--dry-run"])).rejects.toThrow();
   });
 });

@@ -326,12 +326,15 @@ export const recordShipPass = mutation({
     deploys: v.array(v.object({
       name: v.string(), stage: v.string(), ok: v.boolean(), target: v.optional(v.string()), output: v.optional(v.string()), dirty: v.optional(v.number()),
       // The push the step made, as deploy.sh reports it (changesDeploy.markDeploy takes the same): the machine, the
-      // path, the names it put on the target and took off it, and when its diff read prod.
+      // path, the names it put on the target and took off it, and how long before this call its diff read prod.
       machine: v.optional(v.string()),
       via: v.optional(v.literal("deploy.sh")),
       adds: v.optional(v.array(v.string())),
       drops: v.optional(v.array(v.string())),
-      changes_read_at: v.optional(v.number()),
+      changes_read_age_ms: v.optional(v.number()),
+      // How long before this call the step's push finished (ms, by the shipper's clock): the pass records at its end,
+      // minutes after the push, and the deploy went live when it pushed.
+      pushed_age_ms: v.optional(v.number()),
     })),
     started_at: v.number(),
   },
@@ -386,9 +389,10 @@ export const recordShipPass = mutation({
           // Sent exactly when the push's diff ran, empty or not: a deploy whose diff ran is evidence of what its tree held.
           ...(step.adds ? { adds: step.adds } : {}),
           ...(step.drops ? { drops: step.drops } : {}),
-          ...(step.changes_read_at != null ? { changes_read_at: step.changes_read_at } : {}),
+          ...(step.changes_read_age_ms != null ? { changes_read_at: now - Math.max(0, step.changes_read_age_ms) } : {}),
           ship_pass_id: passId,
-          at: now,
+          push: true,
+          at: step.pushed_age_ms != null ? now - Math.max(0, step.pushed_age_ms) : now,
         });
       }
       deploys.push({ name: step.name, stage: step.stage, ok: step.ok, ...(step.target ? { target: step.target } : {}), ...(deploy ? { deploy } : {}), ...(step.output ? { output: step.output.slice(-3000) } : {}) });

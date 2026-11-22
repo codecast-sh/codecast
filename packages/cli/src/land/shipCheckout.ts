@@ -342,7 +342,7 @@ export interface RunOptions {
 }
 
 /** What a deploy step's push did to its target, as the step reports it (packages/convex/deploy.sh writes it). */
-export type PushChanges = { machine?: string; via?: "deploy.sh"; adds?: string[]; drops?: string[]; changes_read_at?: number };
+export type PushChanges = { machine?: string; via?: "deploy.sh"; adds?: string[]; drops?: string[]; changes_read_at?: number; pushed_at?: number };
 
 /**
  * Run a deploy step with a file it may fill with what its push put on its
@@ -357,12 +357,14 @@ export async function runDeployStep(
   const file = path.join(dir, "changes.json");
   try {
     const r = await run({ CAST_PUSH_CHANGES_FILE: file });
+    // The step's push went out by now; the ship records the deploy only after its own push and later steps.
+    const pushedAt = Date.now();
     let changes: PushChanges = {};
     try {
       const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
       if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-        // Any object says the step is a push that reports itself: where it came from, always.
-        changes = { machine: os.hostname(), via: "deploy.sh" };
+        // Any object says the step is a push that reports itself: where it came from and when it went out, always.
+        changes = { machine: os.hostname(), via: "deploy.sh", pushed_at: pushedAt };
         // Both lists, empty or not, only when its diff ran: their presence says so.
         if (Array.isArray(raw.adds) && Array.isArray(raw.drops)) {
           const names = (v: unknown[]) => v.filter((x): x is string => typeof x === "string");

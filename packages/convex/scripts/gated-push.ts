@@ -21,9 +21,10 @@
 // Around the push it also says what prod gains and loses: before it, the
 // diff against prod (scripts/prod-diff.ts) prints what the push would take
 // off prod and which recorded push put each thing there; after it, the push
-// is recorded as a deploy (`cast ship mark --via "dev watcher"`) with this
-// machine, the uncommitted file count and those changes, so the next deploy
-// that drops this work can name who to tell. Neither ever blocks a push.
+// is recorded as a dev push (`cast ship mark --via "dev watcher"`, never a
+// deploy) with this machine, the commit and uncommitted file count it pushed
+// and those changes, so a later push that drops this work can name who to
+// tell. Neither ever blocks a push.
 // Function logs keep streaming in the same pane through `convex logs`.
 //
 // The state machine is `Gate`, with every side effect injected, so the test
