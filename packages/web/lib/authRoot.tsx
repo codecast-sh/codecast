@@ -3,6 +3,7 @@ import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import type { ConvexReactClient } from "convex/react";
 import type { ReactNode } from "react";
 import { authPrincipal } from "./authPrincipal";
+import { installRefreshRetry } from "./authRefreshRetry";
 import { durableAuthStorage } from "./durableAuthStorage";
 import { installAuthPrincipalBoundary } from "../store/principalBoundary";
 
@@ -18,11 +19,13 @@ if (!import.meta.hot?.data?.principalBoundaryInstalled) {
  * The auth root every codecast window mounts: the Convex auth provider over
  * the durable token storage, remounted on every principal change so the
  * provider re-reads storage and nothing below it survives an account change.
+ * A token refresh that fails in transit is retried once the network is back
+ * (`authRefreshRetry`), so it never strands the socket until a reload.
  */
 export function CodecastAuthRoot({ client, children }: { client: ConvexReactClient; children: ReactNode }) {
   return (
     <AuthPrincipalBoundary tracker={authPrincipal}>
-      <ConvexAuthProvider client={client} storage={durableAuthStorage}>
+      <ConvexAuthProvider client={installRefreshRetry(client)} storage={durableAuthStorage}>
         {children}
       </ConvexAuthProvider>
     </AuthPrincipalBoundary>
