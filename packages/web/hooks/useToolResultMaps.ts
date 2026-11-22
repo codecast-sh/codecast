@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from "react";
 import { inferHomeDir } from "../lib/utils";
 import { namedAbsolutePaths } from "../lib/filePathLinks";
+import { extractFileChanges } from "../lib/fileChangeExtractor";
+import { resolveCustomPath } from "../lib/utils";
 import { typedPollAnswerTexts } from "../lib/pollPayload";
 import type { SentFileData } from "../components/tools/SentFileBlock";
 import type { ImageData, Message, ToolResult } from "../components/conversation/types";
@@ -44,6 +46,26 @@ export function knownPathsKeyOf(messages: readonly Message[], home: string | und
   for (const msg of messages) {
     for (const tc of msg.tool_calls ?? []) {
       for (const p of memo.get(tc, (call) => namedAbsolutePaths([call.input], home))) out.add(p);
+    }
+  }
+  memo.end();
+  return [...out].sort().join("\n");
+}
+
+/**
+ * The absolute paths of the files the transcript's tool calls changed, sorted,
+ * one per line: the files the diff panel lists (extractFileChanges), relative
+ * ones placed under `base`. Memoized per call like knownPathsKeyOf.
+ */
+export function editedPathsKeyOf(messages: readonly Message[], home: string | undefined, base: string | undefined, memo: ToolCallMemo<string[]>): string {
+  memo.begin(`${home}\n${base}`);
+  const out = new Set<string>();
+  for (const msg of messages) {
+    for (const tc of msg.tool_calls ?? []) {
+      const paths = memo.get(tc, (call) =>
+        extractFileChanges([{ _id: "", timestamp: 0, tool_calls: [call] }]).flatMap((c) => resolveCustomPath(c.filePath, home, base) ?? []),
+      );
+      for (const p of paths) out.add(p);
     }
   }
   memo.end();
@@ -119,6 +141,11 @@ export function useToolResultMaps({ conversation, codeRepository, pullRequestIds
     () => knownPathsKeyOf(conversation?.messages ?? [], home, knownPathsMemo),
     [conversation?.messages, home, knownPathsMemo],
   );
+  const [editedPathsMemo] = useState(() => new ToolCallMemo<string[]>());
+  const editedPathsKey = useMemo(
+    () => editedPathsKeyOf(conversation?.messages ?? [], home, filePathBase, editedPathsMemo),
+    [conversation?.messages, home, filePathBase, editedPathsMemo],
+  );
   const filePathCtx = useMemo(
     () => ({
       base: filePathBase,
@@ -127,8 +154,9 @@ export function useToolResultMaps({ conversation, codeRepository, pullRequestIds
       pullRequestIds,
       gitRoot,
       knownPaths: knownPathsKey ? knownPathsKey.split("\n") : [],
+      editedPaths: editedPathsKey ? editedPathsKey.split("\n") : [],
     }),
-    [filePathBase, home, codeRepository, pullRequestIds, gitRoot, knownPathsKey],
+    [filePathBase, home, codeRepository, pullRequestIds, gitRoot, knownPathsKey, editedPathsKey],
   );
 
   return { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx };

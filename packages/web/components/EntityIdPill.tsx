@@ -92,7 +92,8 @@ import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
 import { FilePathLink } from "./FilePathLink";
 import { useTaskPlace } from "../lib/taskHrefContext";
-import { FilePathContext, filePathMention, parseFilePathHref, type FilePathContextValue } from "../lib/filePathLinks";
+import { FilePathContext, editedFileNamed, filePathMention, parseFilePathHref, type FilePathContextValue } from "../lib/filePathLinks";
+import { BARE_FILE_ATTR } from "../lib/remarkBareFileNames";
 import { useKnownWorktrees } from "../hooks/useKnownWorktrees";
 import { worktreeRefOfCode } from "./worktree/worktreeModel";
 import { WorktreePill } from "./worktree/WorktreePill";
@@ -680,11 +681,17 @@ function safeDecode(text: string): string {
   }
 }
 
-export function EntityAwareLink({ href, children, ...allProps }: any) {
+export function EntityAwareLink({ href, children, [BARE_FILE_ATTR]: bareFile, ...allProps }: any) {
   const { mention, rest: props } = takeMentionProps(allProps);
   // The conversation this link sits in, when there is one: its repository is
   // what a bare `#3263` refers to.
   const pathCtx = useContext(FilePathContext);
+  // A bare file name in a reply (remarkBareFileNames): the file, when the
+  // session changed exactly one file of that name; otherwise the words.
+  if (typeof bareFile === "string") {
+    const edited = editedFileNamed(bareFile, pathCtx);
+    return edited ? <FilePathLink path={edited}>{children}</FilePathLink> : <>{children}</>;
+  }
   {
     // Transclusion: ![[doc:<id>]] arrives as a link whose TEXT is
     // "embed:doc:<id>" (the embed:// href is dropped by react-markdown's url
