@@ -177,12 +177,12 @@ export function detectProject(repoRoot: string): WorkspaceManifest {
   // ---------------------------------------------------------------------
   const share = resolveSharedDirectories(repoRoot, SHARE_CANDIDATES);
 
-  // Heuristic: web frameworks present → workspace likely needs a browser.
-  // We don't auto-enable (could surprise users), but we record the suggestion
-  // by setting `browser.enabled=true` so manifests inherit a sensible default.
-  // Users can disable via manifest if undesired.
+  // A web app gets a dev service, never a browser of its own: detection once
+  // turned `browser.enabled` on for any web framework, and every worktree of
+  // such a repo started a Chrome at acquire that only a destroy stopped
+  // (fifteen on one box, ~15 GB, Nov 21: ct-98941). A project that wants one
+  // says so in its manifest.
   const webApp = detectWebApp(repoRoot);
-  const browserEnabled = webApp !== null;
   const devService = webApp !== null && js ? detectDevService(repoRoot, webApp, js.name) : null;
 
   return {
@@ -191,7 +191,7 @@ export function detectProject(repoRoot: string): WorkspaceManifest {
     services: devService ? { web: devService } : {},
     env: {},
     teardown: { run: [] },
-    browser: { ...DEFAULT_BROWSER, enabled: browserEnabled },
+    browser: { ...DEFAULT_BROWSER },
     backend: "local",
     detected,
   };
