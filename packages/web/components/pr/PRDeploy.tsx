@@ -4,16 +4,43 @@
 // state, the deploy that took it there (or what runs instead), the commits
 // waiting with it, and the press that sends them. An open one: the targets it
 // will go to once it merges. The rule is lib/deploys/prDeploy; this draws it.
+import { useMemo } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Check, CircleDashed, X } from "lucide-react";
-import type { PrDeployModel } from "../../hooks/usePrDeploy";
-import { entityRoute } from "../../lib/entityLinks";
-import { REACH_LOOK, deployAgo } from "../../lib/deploys/deployPill";
-import { FAILED_ICON, REACH_ICON, TONE_ACCENT, TONE_TEXT } from "../../lib/deploys/deployLook";
-import { CI_WORDS, deployLabel, prRowParts, type PrDeployRow } from "../../lib/deploys/prDeploy";
+import { useDeployReach } from "../../hooks/useDeployReach";
+import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
+import { useDeployPress } from "../../hooks/useDeployPress";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { entityRoute, repoObjectId } from "../../lib/entityLinks";
+import { REACH_LOOK, deployAgo, type DeployTone } from "../../lib/deploys/deployPill";
+import { FAILED_ICON, REACH_ICON, TONE_TEXT } from "../../lib/deploys/deployLook";
+import { prDeployRows, prReachHeadline, prShipsTo, type PrDeployRow } from "../../lib/deploys/prDeploy";
 import type { DeployTargetRow } from "../../lib/deploys/targets";
 import type { ExternalEventAccent } from "../../lib/externalEvents";
+import type { CommitCiState } from "@codecast/shared/contracts/deployTargets";
 import type { ReachState } from "@codecast/shared/contracts/deployReach";
+
+export const TONE_ACCENT: Record<DeployTone, ExternalEventAccent> = { green: "green", yellow: "yellow", red: "red", orange: "orange", muted: "muted", dim: "muted" };
+
+export type PrDeployModel = ReturnType<typeof usePrDeploy>;
+
+/** Everything the page says about production, read once for the chip and the band. */
+export function usePrDeploy(pr: any, repository: string, authed: boolean) {
+  const merged = pr.state === "merged";
+  const open = pr.state === "open";
+  const reach = useDeployReach(merged ? repoObjectId({ type: "pr", repository, number: pr.number }) : null);
+  // The team's targets carry each one's queue and press. A closed pull request goes nowhere, and a public reader
+  // reads no team.
+  const teamId = authed && (merged || open) ? ((pr.team_id as string | undefined) ?? null) : null;
+  const { targets, deploys } = useDeployTargets(teamId, repository);
+  const now = useCoarseNow(30_000);
+  const { rows, dormant } = useMemo(() => prDeployRows(reach, targets, deploys, repository, now), [reach, targets, deploys, repository, now]);
+  const files: string[] | undefined = useMemo(() => pr.files?.map((f: { filename: string }) => f.filename), [pr.files]);
+  const shipsTo = useMemo(() => (open ? prShipsTo(targets, deploys, repository, files, now) : null), [open, targets, deploys, repository, files, now]);
+  const declares = targets.some((t) => t.repository.toLowerCase() === repository.toLowerCase() && !t.record_only);
+  const press = useDeployPress(teamId, deploys);
+  return { merged, open, teamId, rows, dormant, shipsTo, declares, headline: prReachHeadline(reach?.state, rows), press, now, mergedAt: (pr.merged_at as number | undefined) ?? null };
+}
 
 /** The chip beside a merged pull request's state: live, or what holds it. */
 export function PRReachChip({ model, Chip }: { model: PrDeployModel; Chip: (p: { accent: ExternalEventAccent; title?: string; children: React.ReactNode }) => React.ReactNode }) {
@@ -63,8 +90,9 @@ export function PRShipsTo({ model }: { model: PrDeployModel }) {
 const deploysHrefOf = (teamId: string | null, target: string) =>
   `/deploys?${teamId ? `team=${teamId}&` : ""}target=${encodeURIComponent(target)}`;
 
-function CiWord({ ci, url }: { ci: keyof typeof CI_WORDS; url: string | null }) {
-  const word = CI_WORDS[ci];
+function CiWord({ ci, url }: { ci: CommitCiState; url: string | null }) {
+  if (ci === "none") return null;
+  const word = ci === "passed" ? "CI passed" : ci === "failed" ? "CI failed" : "CI running";
   const mark = ci === "passed" ? <Check className="w-3 h-3" strokeWidth={3} /> : ci === "failed" ? <X className="w-3 h-3" strokeWidth={3} /> : <i className="pr-deploy-ci-run" />;
   const body = <span className={`pr-deploy-ci inline-flex items-center gap-1 ${ci === "passed" ? "text-sol-green" : ci === "failed" ? "text-sol-red" : "text-sol-yellow"}`} data-ci={ci} title="CI on what a deploy now would send">{mark}{word}</span>;
   return url ? <a href={url} target="_blank" rel="noreferrer" className="no-underline hover:underline">{body}</a> : body;
@@ -75,31 +103,54 @@ function Dp({ d }: { d: { short_id: string; sha?: string | null } | null }) {
   if (!d) return null;
   return (
     <Link href={entityRoute("deploy", d.short_id) ?? "#"} className="pr-deploy-dp" title={`${d.short_id}${d.sha ? ` · ${d.sha.slice(0, 7)}` : ""}`} data-pr-deploy-dp={d.short_id}>
-      {deployLabel(d)}
+      {d.sha ? d.sha.slice(0, 7) : d.short_id}
     </Link>
   );
 }
 
-/** What a row says after its state (lib/deploys/prDeploy prRowParts, the phone's words too), a deploy as its link. */
+const since = (at: number, now: number) => deployAgo(at, now).replace(/ ago$/, "");
+
+/** What a row says after its state: the deploy, when, and what it waits on. */
 function RowDetail({ row, now, mergedAt }: { row: PrDeployRow; now: number; mergedAt: number | null }) {
-  const parts = prRowParts(row, now, mergedAt);
+  const d = row.deploy;
+  const parts: React.ReactNode[] = [];
+  const at = (verb: string) => d && <span key="t">{verb} {deployAgo(d.at, now)}</span>;
+  switch (row.state) {
+    case "live":
+      parts.push(<span key="d" className="inline-flex items-baseline gap-1">in <Dp d={d} /></span>, at("went live"));
+      if (d && mergedAt && d.at > mergedAt) parts.push(<span key="lag" className="text-sol-text-dim">{since(mergedAt, d.at)} after merge</span>);
+      break;
+    case "going_out":
+      parts.push(<span key="d" className="inline-flex items-baseline gap-1">in <Dp d={d} /></span>, at("started"));
+      break;
+    case "queued":
+      parts.push(<span key="d" className="inline-flex items-baseline gap-1">in <Dp d={d} /></span>, at("asked for"));
+      break;
+    case "failed":
+      parts.push(<span key="d" className="inline-flex items-baseline gap-1">in <Dp d={d} /></span>, at("failed"));
+      break;
+    case "rolled_back":
+      parts.push(<span key="w" className="inline-flex items-baseline gap-1">was live in <Dp d={d} /></span>, row.now && <span key="n" className="inline-flex items-baseline gap-1">rolled back to <Dp d={row.now} /> {deployAgo(row.now.at, now)}</span>);
+      break;
+    case "waiting":
+      if (mergedAt) parts.push(<span key="w" className="text-sol-text" data-pr-deploy-waiting>waiting {since(mergedAt, now)}</span>);
+      break;
+  }
+  if (row.queue) {
+    const o = row.queue.others;
+    const plus = row.queue.atLeast ? "+" : "";
+    parts.push(<span key="q" data-pr-deploy-queue={o ?? "?"}>{o == null ? "with older commits" : o === 0 && !plus ? "the only commit waiting" : `with ${o}${plus} other ${o === 1 && !plus ? "commit" : "commits"}`}</span>);
+    parts.push(<CiWord key="ci" ci={row.queue.ci} url={row.queue.ciUrl} />);
+  }
+  if (row.state === "waiting" || row.state === "failed") {
+    if (row.now) parts.push(<span key="n" className="inline-flex items-baseline gap-1 text-sol-text-dim">live now <Dp d={row.now} /></span>);
+  }
+  const shown = parts.filter(Boolean);
   // Each part carries its own separator; the one that starts a wrapped line is clipped away (pr.css).
   return (
     <span className="pr-deploy-detail">
       <span className="pr-deploy-parts">
-        {parts.map((p) => (
-          <span key={p.key} className="pr-deploy-part" data-pr-deploy-part={p.key}>
-            {p.kind === "ci" ? (
-              <CiWord ci={p.ci} url={p.url} />
-            ) : p.kind === "deploy" ? (
-              <span className={`inline-flex items-baseline gap-1 ${p.tone === "dim" ? "text-sol-text-dim" : ""}`}>
-                {p.before.trim()} <Dp d={p.deploy} />{p.after ?? ""}
-              </span>
-            ) : (
-              <span className={p.tone === "dim" ? "text-sol-text-dim" : p.tone === "strong" ? "text-sol-text" : ""}>{p.text}</span>
-            )}
-          </span>
-        ))}
+        {shown.map((p, i) => <span key={i} className="pr-deploy-part">{p}</span>)}
       </span>
     </span>
   );
