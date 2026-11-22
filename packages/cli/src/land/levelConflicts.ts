@@ -10,7 +10,7 @@
  * upstream's change the next sweep levels by itself. A level that raced a
  * writer moves HEAD but leaves that file without upstream's change (a stale
  * copy); its writer is told the same way, with its merge file kept apart so a
- * later level does not delete it.
+ * later level does not delete it (pruned after a day).
  *
  * Each path is recorded with upstream's blob of it, the blob on disk and the
  * session briefed (`.git/codecast/level-conflicts.json`). A busy main whose
@@ -18,7 +18,8 @@
  * and sends nothing. Upstream changing the file briefs again; a change on disk
  * attributes again and briefs only a new writer. A path with no writer, or a
  * brief that failed, is tried again after RETRY_MS; a writer the server will
- * never deliver to (a teammate's session) only when either blob changes. A clean level (or
+ * never deliver to (a teammate's session) only when either blob or the owner
+ * changes. A clean level (or
  * a checkout found already level) clears the record and the merge files.
  *
  * The brief is a machine wake (origin "scheduler"), never a person's message:
@@ -42,6 +43,17 @@ import { worktreeBlobs, type LevelResult } from "./level.js";
  */
 export type SendBrief = (to: string, body: string, clientId: string) => Promise<"sent" | "failed" | "unreachable">;
 
+/**
+ * A send that threw: "unreachable" when the server refused because the
+ * conversation is not the token user's (pendingMessages.sendMessageToSession),
+ * which no retry changes; "failed" for anything transient (a timeout, a 5xx,
+ * the network).
+ */
+export function classifySendError(e: unknown): "failed" | "unreachable" {
+  const text = String((e as Error)?.message ?? e);
+  return /can only send messages to your own conversations/.test(text) ? "unreachable" : "failed";
+}
+
 export interface BriefDeps {
   /** Absent when this machine cannot reach the server: then nothing is attributed or briefed. */
   send?: SendBrief;
@@ -58,11 +70,15 @@ interface PathState {
   owner: string | null;
   /** The owner has this brief (for this `up`). */
   briefed: boolean;
-  /** The server refuses to deliver to the owner; tried again only when `up` or `local` changes. */
+  /** Which brief: "held" (the checkout cannot follow upstream) or "raced" (it moved and left the file stale). */
+  kind?: BriefKind;
+  /** The server refuses to deliver to the owner; tried again only when `up`, `local` or the owner changes. */
   unreachable?: boolean;
   /** When attribution or the send was last tried. */
   at: number;
 }
+
+type BriefKind = "held" | "raced";
 
 interface ConflictRecord { paths: Record<string, PathState> }
 
@@ -76,8 +92,26 @@ const SYMLINK = "120000";
 const recordFile = (gitDir: string) => path.join(gitDir, "codecast", "level-conflicts.json");
 /** Merge files of conflicts holding the checkout back; cleared once it levels. */
 export const mergeDir = (gitDir: string) => path.join(gitDir, "codecast", "level-conflicts");
-/** Merge files of stale copies a raced level left behind; kept past the level, overwritten per path. */
+/** Merge files of stale copies a raced level left behind; kept past the level, pruned after STALE_KEEP_MS. */
 export const staleDir = (gitDir: string) => path.join(gitDir, "codecast", "level-stale");
+const STALE_KEEP_MS = 86_400_000;
+
+/** Remove stale-copy merge files older than a day, and the directories they leave empty. Wall clock: it reads file mtimes. */
+export function pruneStale(gitDir: string): void {
+  const dir = staleDir(gitDir);
+  if (!fs.existsSync(dir)) return;
+  const cutoff = Date.now() - STALE_KEEP_MS;
+  const walk = (d: string): boolean => {
+    let empty = true;
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory() ? walk(f) : fs.statSync(f).mtimeMs < cutoff) fs.rmSync(f, { recursive: true, force: true });
+      else empty = false;
+    }
+    return empty;
+  };
+  try { if (walk(dir)) fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+}
 
 function readRecord(gitDir: string): ConflictRecord {
   try {
@@ -212,9 +246,9 @@ async function briefFor(root: string, r: LevelResult, raced: boolean, paths: str
   return formatSessionMessage("codecast", lines.join("\n"), { name: "level sweep" });
 }
 
-/** The same brief retried lands once: keyed by checkout, writer and what upstream holds for each path. */
-function clientIdFor(gitDir: string, owner: string, paths: string[], ups: Map<string, { blob: string }>): string {
-  const h = createHash("sha256").update([gitDir, owner, ...paths.map((p) => `${p}:${ups.get(p)?.blob}`)].join("\n")).digest("hex");
+/** The same brief retried lands once: keyed by checkout, writer, kind, upstream commit and what upstream holds for each path. */
+function clientIdFor(gitDir: string, owner: string, kind: BriefKind, to: string, paths: string[], ups: Map<string, { blob: string }>): string {
+  const h = createHash("sha256").update([gitDir, owner, kind, to, ...paths.map((p) => `${p}:${ups.get(p)?.blob}`)].join("\n")).digest("hex");
   return `level-conflict:${h.slice(0, 24)}`;
 }
 
@@ -229,6 +263,7 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
   // Anything else moved HEAD since; the next sweep reads it afresh.
   const raced = head === r.to;
   if (head !== r.from && !raced) return null;
+  const kind: BriefKind = raced ? "raced" : "held";
   if (!deps.send) return `cannot brief writers of ${r.conflicts.join(", ")}: not signed in`;
   const send = deps.send;
   const now = deps.now ?? Date.now();
@@ -243,9 +278,11 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
     const up = ups.get(p)!.blob;
     const local = locals.get(p) ?? "missing";
     const sameUp = prev?.up === up;
-    if (prev?.unreachable) { if (sameUp && prev.local === local) record.paths[p] = prev; else fresh.push(p); }
+    // Unreachable: the blobs are checked every sweep, the owner (which takes attribution) every RETRY_MS.
+    if (prev?.unreachable) { if (sameUp && prev.local === local && now - prev.at < RETRY_MS) record.paths[p] = prev; else fresh.push(p); }
     else if (prev && sameUp && !prev.briefed && now - prev.at < RETRY_MS) record.paths[p] = prev;
-    else if (prev && sameUp && prev.briefed && prev.local === local) record.paths[p] = prev;
+    // Briefed: a writer typing on in the file is attributed again at most every RETRY_MS.
+    else if (prev && sameUp && prev.briefed && prev.kind === kind && (prev.local === local || now - prev.at < RETRY_MS)) record.paths[p] = prev;
     else fresh.push(p);
   }
 
@@ -260,7 +297,9 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
       record.paths[p] = state;
       if (!state.owner) continue;
       // The same writer, already told about this upstream content: only the disk moved.
-      if (prev?.briefed && prev.up === state.up && prev.owner === state.owner) { record.paths[p] = { ...state, briefed: true, at: prev.at }; continue; }
+      if (prev?.briefed && prev.kind === kind && prev.up === state.up && prev.owner === state.owner) { record.paths[p] = { ...state, briefed: true, kind }; continue; }
+      // The same teammate's session behind the same blobs: the server would refuse again.
+      if (prev?.unreachable && prev.up === state.up && prev.local === state.local && prev.owner === state.owner) { record.paths[p] = { ...state, unreachable: true }; continue; }
       toBrief.set(state.owner, [...(toBrief.get(state.owner) ?? []), p]);
     }
   }
@@ -278,10 +317,10 @@ export async function briefLevelConflicts(root: string, gitDir: string, r: Level
     const merges = new Map<string, Merge>();
     for (const p of paths) merges.set(p, await writeMerge(root, dir, p, r.from, r.to, ups.get(p)!.mode));
     const body = await briefFor(root, r, raced, paths, merges);
-    const outcome = await send(owner, body, clientIdFor(gitDir, owner, paths, ups)).catch(() => "failed" as const);
+    const outcome = await send(owner, body, clientIdFor(gitDir, owner, kind, r.to, paths, ups)).catch(() => "failed" as const);
     if (outcome === "failed") { notes.push(`brief failed to ${owner.slice(0, 7)} (${paths.join(", ")})`); continue; }
     if (outcome === "sent") notes.push(`briefed ${owner.slice(0, 7)} (${paths.join(", ")})`);
-    for (const p of paths) record.paths[p] = { ...record.paths[p], ...(outcome === "sent" ? { briefed: true } : { unreachable: true }) };
+    for (const p of paths) record.paths[p] = { ...record.paths[p], ...(outcome === "sent" ? { briefed: true, kind } : { unreachable: true }) };
     save();
   }
 
