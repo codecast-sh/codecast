@@ -44,10 +44,6 @@ export const INBOX_FACT_FIELDS = [
   // pool, its status outlives its trust): the lift decays with time alone, so the
   // replica reads it at its own clock (childAskingAt). Null: no time bound.
   "child_asking_until",
-  // A nested child of this row is live (a non-idle trusted status): what puts
-  // a standing session in front of the person when its only work is a
-  // subagent, which is never a member the ride can see.
-  "child_live",
   // What the agent is doing right now (conversations.activity): stamped at
   // message ingest from the newest tool call, cleared when the turn settles.
   // Overlay borne so a tool call never changes the session list result; the

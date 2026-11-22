@@ -11,11 +11,11 @@ import { compressImage } from "../../lib/compressImage";
 import { threadStateView } from "../../lib/threadState";
 import { sessionIdleAt, sessionLiveAt } from "../../lib/liveness";
 import { sessionPanePath, startPaneDrag } from "../../lib/stage";
-import { identityPrefsOf, identityRowOf, identitySig, roleLookingAfter } from "../../lib/sessionIdentity";
+import { identityPrefsOf, identityRowOf, identitySig } from "../../lib/sessionIdentity";
 import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 import { clickBucketChip, clickProjectChip } from "../../store/chipFilterClicks";
 import { workProjectSig } from "../../lib/workProjectSig";
-import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, railRowPlacement, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, railRowPlacement, type InboxSession } from "../../store/inboxStore";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
 import { useNowWhen } from "../../hooks/useCoarseNow";
 import { latestRestartRow, restartPending } from "../../lib/sessionCommands";
@@ -64,19 +64,6 @@ function convAuthorSig(conv: any): string | null {
   return `${c.user_id ?? ""}\u0000${c.is_own === undefined ? "" : c.is_own ? "1" : "0"}\u0000${c.acting_user_id ?? ""}\u0000${c.user?.name ?? ""}\u0000${c.user?.email ?? ""}\u0000${c.user?.avatar_url ?? ""}`;
 }
 
-// The role a standing session rides (S28): the snapshot on the parent's own
-// standing row, found by the pointer the row carries. Read once per render
-// from the store; the aria text is all it feeds.
-function leadRoleOf(session: { org_role_id?: string | null; standing_role_id?: string | null }): SessionRoleSnapshot | null {
-  if (!session.standing_role_id || !session.org_role_id) return null;
-  const rows = useInboxStore.getState().sessions;
-  for (const id in rows) {
-    const r = rows[id];
-    if (r.standing_role_id && String(r.standing_role_id) === String(session.org_role_id) && r.role) return r.role;
-  }
-  return null;
-}
-
 // The card's name off its own store row: the hosted name rule for hosted
 // rows, the session's title otherwise.
 function liveCardTitle(s: Parameters<typeof hostedRowTitle>[0], cardId: string, hosted: boolean, session: InboxSession): string {
@@ -113,7 +100,7 @@ const paneDragStart = (sessionId: string) => (e: React.DragEvent, title: string)
 export type SessionCardProps = Pick<
   SessionCardViewProps,
   | "session" | "isActive" | "isParentActive" | "isSelected" | "isUnread" | "isFavorite" | "sessionLabel"
-  | "variant" | "sectionStatus" | "forkColorKey" | "subRow" | "roleSessions" | "hiddenRunningSubagents" | "foldedSubagentId"
+  | "variant" | "sectionStatus" | "forkColorKey" | "subRow" | "hiddenRunningSubagents" | "foldedSubagentId"
   | "onSelect" | "onDismiss" | "onDefer" | "onRestore" | "onKill" | "onNavigateToSession" | "onCardContextMenu" | "onPickCharacter"
 > & {
   globalIndex: number;
@@ -293,11 +280,6 @@ export const SessionCard = memo(function SessionCard({
   // standing member never reads as just another session.
   const anchorSig = anchorIdentitySig((st as any).anchors, anchorId);
   const anchorIdentity = useMemo(() => anchorIdentityFromSig(anchorSig), [anchorSig]);
-  // The role above a nested row (R1), read through lib/sessionIdentity.
-  // The role this row rides: its own pointer's snapshot for a hand; for a
-  // role's standing session under a role (org-staffing.md S28) the parent's
-  // snapshot lives on the parent's standing row, so it is read from there.
-  const roleAbove = rest.subRow === "role" ? roleLookingAfter(session) ?? leadRoleOf(session) : null;
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const ackAssignment = useAckAssignment();
 
@@ -354,7 +336,6 @@ export const SessionCard = memo(function SessionCard({
       session={session}
       workProject={workProjectSig(st as any, cardId)}
       liveTitle={draftTitle || liveTitle || undefined}
-      roleAbove={roleAbove}
       now={coarseNow}
       chrome={chrome}
       liveness={{

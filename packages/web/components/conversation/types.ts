@@ -429,7 +429,7 @@ export type UserMessageKind =
   // formatVaultReady): a system line, not the person's words.
   | { kind: 'vault_ready'; vault: VaultReadyMessage }
   // A session moving between its role and the person (<session-escalation …>,
-  // org-roles-run-work.md R1 revised): an inline divider with the role's face,
+  // a legacy divider, org-staffing.md S28): an inline divider with the role's face,
   // the move and the whole line as markdown, in both threads.
   | { kind: 'session_escalation'; escalation: SessionEscalationMessage };
 

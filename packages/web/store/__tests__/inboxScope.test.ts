@@ -58,11 +58,13 @@ describe("filterInboxScope — mine", () => {
     expect(ids(out)).toEqual([cid(3)]);
   });
 
-  it("drops a session I run that is assigned to someone else", () => {
+  it("keeps a session I run that is assigned to someone else; drops one a role holds alone", () => {
     const handed = mk(cid(10), { user_id: ME, owner_user_id: THEM, owned_by_me: false });
     const stillMine = mk(cid(11), { user_id: ME, owner_user_id: ME });
-    const out = filterInboxScope(byId([handed, stillMine]), "mine", ME);
-    expect(ids(out)).toEqual([cid(11)]);
+    const roleAlone = mk(cid(12), { user_id: ME, org_role_id: "org_roles_infra", owner_user_id: null });
+    const roleAndMe = mk(cid(13), { user_id: ME, org_role_id: "org_roles_infra", owner_user_id: ME, owned_by_me: true });
+    const out = filterInboxScope(byId([handed, stillMine, roleAlone, roleAndMe]), "mine", ME);
+    expect(ids(out)).toEqual([cid(10), cid(11), cid(13)].sort());
   });
 
   it("keeps optimistic stubs and thin rows with no known author", () => {

@@ -112,12 +112,11 @@ import {
   emptyInboxTally,
   isOrphanOrSubagent,
   isNestedIdentity,
-  isAssignedAwayFromViewer,
+  isHeldByRoleAlone,
+  roleDrives,
   commandsSession,
   rollupParentIdOf,
   rideLeadPlacements,
-  roleLeadIdsOf,
-  isUnderRole,
   isHardBlocked,
   rowArmedHomes,
   DEAD_AGENT_STATUSES,
@@ -1016,6 +1015,9 @@ export type InboxSession = {
   // conversation fields, so acting on a teammate's card would hide it from them.
   owner_user_id?: string | null;
   owned_by_me?: boolean;
+  // The person driving in the role's place (conversations.driver_user_id);
+  // unset under a role means the role drives (shared roleDrives).
+  driver_user_id?: string | null;
   // Unacknowledged handoff: a teammate assigned this session to the current user
   // and they haven't acked it yet (session_owners.seen_at unset). Stamped by
   // computeInboxSessions; cleared by ackSessionAssignment (server) and
@@ -2481,9 +2483,6 @@ function workingSetRowOf(s: InboxSession): WorkingSetRow {
     spawned_by_conversation_id: s.spawned_by_conversation_id ?? null,
     agent_team_name: s.agent_team_name ?? null,
     agent_name: s.agent_name ?? null,
-    // The role a session rides (isUnderRole): same shared computation.
-    org_role_id: s.org_role_id ?? null,
-    standing_role_id: s.standing_role_id ?? null,
   };
 }
 
@@ -2616,13 +2615,12 @@ export function partitionWorkingSet(
 
 // Is this cached row outside the caller's personal inbox? Two ways in: it is a
 // teammate's session that only entered the shared cache via team mode, a
-// deep-link or search — or it is a session the caller RUNS but has assigned to
-// someone else, which belongs in that person's inbox and not here (the server
-// scan drops it from the payload; this is the same rule over the never-pruned
-// client cache, which would otherwise keep rendering the last copy it saw).
-// A row is "mine" if I authored it and still own it (or nobody does), if it is
-// routed to me to steer, if it is an optimistic stub, or if it is a thin row
-// with no known author.
+// deep-link or search — or it is a session the caller RUNS that a role holds
+// with no person owner (isHeldByRoleAlone), which is the role's alone (the
+// server scan drops it from the payload; this is the same rule over the
+// never-pruned client cache, which would otherwise keep rendering the last
+// copy it saw). A row is "mine" if I run it, if I am one of its owners, if it
+// is an optimistic stub, or if it is a thin row with no known author.
 // Per row ref and viewer: the scope filter and the asking pass both ask it of
 // every cached row on each placement.
 const foreignByRow = new WeakMap<InboxSession, { meId: string; foreign: boolean }>();
@@ -2636,7 +2634,7 @@ export function isForeignRow(s: InboxSession, meId: string | null | undefined): 
 }
 function isForeignRowUncached(s: InboxSession, meId: string): boolean {
   if (!isConvexId(s._id)) return false; // optimistic stub — always mine
-  if (isAssignedAwayFromViewer(s, meId)) return true;
+  if (isHeldByRoleAlone(s) && !s.owned_by_me) return true;
   if (!s.user_id) return false; // thin/legacy row with no author → keep
   return isForeignSession(s, undefined, meId);
 }
@@ -3438,18 +3436,17 @@ export function sessionStructuralSig(s: InboxSession): string {
     // Changes only on assign/ack, never on heartbeats.
     s.assigned_ping ? 1 : 0,
     // WHO OWNS IT decides whose inbox it is in (isForeignRow →
-    // isAssignedAwayFromViewer): a session I run and hand to a teammate leaves
-    // my scope entirely. Written by an ownership change alone, never by a
-    // heartbeat — and without it here the placement memo would keep serving
-    // the pre-handoff answer until some other row happened to move.
+    // isHeldByRoleAlone): a session a role holds with no person owner leaves
+    // the runner's scope entirely. Written by an ownership change alone, never
+    // by a heartbeat — and without it here the placement memo would keep
+    // serving the previous answer until some other row happened to move.
     s.owner_user_id || "",
     s.owned_by_me ? 1 : 0,
-    // WHICH ROLE LOOKS AFTER IT decides whether it is a card or a small row
-    // under the role's standing session (isUnderRole): a session under a role
-    // rides the role's card and never counts toward the person's needs input.
-    // Written by a reparent alone, never by a heartbeat.
+    // WHO DRIVES IT decides where a waiting session files (roleDrives): one its
+    // role drives waits on the role, as working. Written by a reparent or a
+    // take-over alone, never by a heartbeat.
     s.org_role_id || "",
-    s.standing_role_id || "",
+    s.driver_user_id || "",
     // Harness loop state decides trigger-set membership and absorption
     // (partitionTriggerInbox reads it off this same subscription). Distilled to
     // the fields that change rows; stamps once per turn end/wakeup, never on
@@ -3609,10 +3606,8 @@ export interface PlacedInbox {
   forksByParent: Map<string, InboxSession[]>;
   /** Membership of the QUESTIONS section (the ask outranks placement). */
   isQuestion: (s: InboxSession) => boolean;
-  /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. A role's nested sessions add to none. */
+  /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. */
   counts: Record<InboxSectionKey, number>;
-  /** The role's standing session id → how many of its sessions ride its card (org-staffing.md S23.3): the count pill. The sessions themselves are never rows. */
-  roleSessionsByLead: Map<string, number>;
   /** A card's id → how many spawned workers (isSpawnedWorker) are under it, nested or not: the parent row's workers line. */
   workerCountByParent: Map<string, number>;
   /** A card's id → its spawned workers that wait on the person (they keep their own rows, or a workflow sub rides folded): the line's "needs you". */
@@ -3708,6 +3703,8 @@ function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow
     pending_api_error: s.pending_api_error === true,
     session_error: s.session_error ?? null,
     last_user_message: s.last_user_message ?? null,
+    org_role_id: s.org_role_id ?? null,
+    driver_user_id: s.driver_user_id ?? null,
     agent_status: live.agent_status,
     is_idle: live.is_idle,
     is_unresponsive: live.is_unresponsive,
@@ -4319,11 +4316,6 @@ export function placeInboxRows(
   // that keeps its own bucket is one the viewer pinned, stashed or dismissed
   // on its own (RIDE_KEEPS_OWN): it files where that act put it and never
   // nests under a lead in another section.
-  // A role's session is the role's (org-staffing.md S23.3): it rides its
-  // role's standing session, which the shared ride already filed it with, but
-  // it is never a row under the card. The card carries a count that opens the
-  // role's page, where the sessions are the panel's business. A retired role
-  // (dismissed card) triages nothing, so its sessions stand on their own facts.
   // A spawned worker (isSpawnedWorker: `cast spawn`, a workflow sub) nests
   // under its present spawner for display only, whatever its own bucket: like
   // a Task subagent it rides its parent's card, folded until the Sub-agents
@@ -4336,8 +4328,6 @@ export function placeInboxRows(
   const nestWorkers = nestsWorkers(state.clientState.ui);
   const nestParentOf = inboxNestParentOf(sorted, nestWorkers);
   const subsByParent = new Map<string, InboxSession[]>();
-  const roleSessionsByLead = new Map<string, number>();
-  const roleRidden = new Set<string>();
   const nestedUnder = new Map<string, string>();
   const spawnedPresent: Array<{ s: InboxSession; parent: string; nested: boolean; needsYou: boolean }> = [];
   for (const s of sorted) {
@@ -4349,12 +4339,6 @@ export function placeInboxRows(
       const keepsOwnRow = isMemberCandidate(s) && (needsYou || own === "pinned");
       spawnedPresent.push({ s, parent: nestParent, nested: !keepsOwnRow, needsYou });
       if (keepsOwnRow) continue;
-    // A role's session is a subagent row under the role's card, whatever
-    // bucket it would file in alone; the card carries the count too.
-    } else if (isUnderRole(s)) {
-      if (placements.get(nestParent)?.bucket === "dismissed") continue;
-      roleRidden.add(s._id);
-      roleSessionsByLead.set(nestParent, (roleSessionsByLead.get(nestParent) ?? 0) + 1);
     } else if (isMemberCandidate(s)) {
       const own = placements.get(s._id)?.bucket;
       const lead = placements.get(nestParent)?.bucket;
@@ -4378,19 +4362,19 @@ export function placeInboxRows(
     return cur;
   };
   for (const [parent, subs] of nestWorkers ? [...subsByParent] : []) {
-    if (!nestedUnder.has(parent) || roleRidden.has(parent)) continue;
+    if (!nestedUnder.has(parent)) continue;
     const top = topCardOf(parent);
     if (top === parent) continue;
-    const move = subs.filter((sub) => !roleRidden.has(sub._id) && isSpawnedWorker(sub));
+    const move = subs.filter(isSpawnedWorker);
     if (move.length === 0) continue;
     const stay = subs.filter((sub) => !move.includes(sub));
     if (stay.length) subsByParent.set(parent, stay); else subsByParent.delete(parent);
     if (!subsByParent.has(top)) subsByParent.set(top, []);
     subsByParent.get(top)!.push(...move);
   }
-  // The open session is always on the list: nested under a sub row (a role's
-  // session under a sub-lead under its parent lead's card), it moves up to
-  // the top card, whose rows the panel draws.
+  // The open session is always on the list: nested under a sub row (a worker
+  // under a worker under the top card), it moves up to the top card, whose
+  // rows the panel draws.
   const focusedParent = focusedId ? nestedUnder.get(focusedId) : undefined;
   const focusedTop = focusedParent ? topCardOf(focusedParent) : undefined;
   const focusedSiblings = focusedParent ? subsByParent.get(focusedParent) : undefined;
@@ -4423,7 +4407,7 @@ export function placeInboxRows(
     forks.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }
   const subsWithParent = nestedSessionIds(subsByParent);
-  const isTop = (s: InboxSession) => !subsWithParent.has(s._id) && !roleRidden.has(s._id);
+  const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
   // A child row (never its own member — the shared isOrphanOrSubagent) whose
   // parent did not nest above it rides that absent parent, never a loose
   // flat card (it would ignore membership and the fold). A MEMBER whose nest
@@ -4521,10 +4505,10 @@ export function placeInboxRows(
     if (!askingOf(s)) continue;
     if (s.inbox_killed_at || s.inbox_dismissed_at || s.inbox_snoozed_until) continue;
     if (rollupParentIdOf(s)) continue;
-    // A role's session asks its role first: it rides the role's standing
-    // session and never lifts itself in front of the person from outside the
-    // list. The role raises what it cannot answer in its own thread.
-    if (isUnderRole(s)) continue;
+    // A session its role drives asks its role first (placeInboxRow files it
+    // as working): it never lifts itself in front of the person from outside
+    // the list. The role raises what it cannot answer in its own thread.
+    if (roleDrives(s)) continue;
     questionIds.add(s._id);
     questions.push(s);
   }
@@ -4537,9 +4521,6 @@ export function placeInboxRows(
     questions: questions.length, pinned: pinned.length, newSessions: newSessions.length,
     needsInput: needsInput.length, done: done.length, dormant: dormant.length, working: working.length,
   };
-  // A role's sessions are the role's to triage, so they add to no header:
-  // the number beside a section is what the person looks after there, and the
-  // role's card is one thing however many sessions nest under it (R1, S23.3).
   // A nested spawned worker can sit under a card in another section (it nests
   // whatever its own bucket), so it counts where it renders: its card's section.
   const sectionOfCard = new Map<string, InboxSectionKey>();
@@ -4547,7 +4528,6 @@ export function placeInboxRows(
     for (const s of list) sectionOfCard.set(s._id, k);
   }
   for (const id of subsWithParent) {
-    if (roleRidden.has(id)) continue;
     const worker = scoped[id];
     if (nestWorkers && worker && isSpawnedWorker(worker)) {
       if (!isMemberCandidate(worker)) continue; // a workflow sub is no member, like a Task subagent
@@ -4613,7 +4593,6 @@ export function placeInboxRows(
     forksByParent: reuseArrayMap(prev?.forksByParent, forksByParent),
     isQuestion,
     counts,
-    roleSessionsByLead: prev && sameCounts(prev.roleSessionsByLead, roleSessionsByLead) ? prev.roleSessionsByLead : roleSessionsByLead,
     workerCountByParent: prev && sameCounts(prev.workerCountByParent, workerCountByParent) ? prev.workerCountByParent : workerCountByParent,
     workersNeedingYouByParent: reuseArrayMap(prev?.workersNeedingYouByParent, workersNeedingYouByParent),
   };
@@ -5688,8 +5667,7 @@ function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null, ne
   const nestParentOf = inboxNestParentOf(list, nestWorkers);
   return list.filter((s) => {
     if (s._id === focusedId || s.is_pinned) return true;
-    // A role's session is a subagent of the role's card.
-    if (!isSubagentConversation(s) && !isAgentTeamWorker(s) && !isUnderRole(s)) return true;
+    if (!isSubagentConversation(s) && !isAgentTeamWorker(s)) return true;
     const p = nestParentOf(s);
     return !!p && p !== s._id && present.has(p);
   });
@@ -5697,10 +5675,9 @@ function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null, ne
 
 // Which row a session nests under in a session list, over the rows present:
 // the shared child kinds (nestParentIdOf: a Task subagent, an agent-team
-// teammate) and a role's session under its role's standing session
-// (isUnderRole, org-roles-run-work.md R1). The ONE resolver every web nesting
-// computation calls, so the sections, the flat view, the set aside buckets and
-// the keyboard order cannot disagree about where a role's session sits.
+// teammate). The ONE resolver every web nesting computation calls, so the
+// sections, the flat view, the set aside buckets and the keyboard order
+// cannot disagree about where a session sits.
 //
 // A third kind nests here for DISPLAY only: a session an agent spawned
 // (isSpawnedWorker: a `cast spawn` worker, a workflow sub). The shared
@@ -5712,7 +5689,6 @@ function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null, ne
 export function inboxNestParentOf(rows: Iterable<InboxSession>, nestWorkers = false): (s: InboxSession) => string | null {
   const byId = new Map<string, InboxSession>();
   for (const r of rows) byId.set(r._id, r);
-  const roleLeads = roleLeadIdsOf(byId.keys(), (id) => byId.get(id));
   let runHosts: Map<string, string> | null = null;
   const runHostOf = (runId: string) => {
     if (!runHosts) {
@@ -5726,7 +5702,6 @@ export function inboxNestParentOf(rows: Iterable<InboxSession>, nestWorkers = fa
   return (s) => {
     const shared = nestParentIdOf(s);
     if (shared) return shared;
-    if (isUnderRole(s)) return s.org_role_id ? roleLeads.get(s.org_role_id) ?? null : null;
     if (!nestWorkers || !isSpawnedWorker(s)) return null;
     const p = s.is_workflow_sub ? runHostOf(s.workflow_run_id!) : s.spawned_by_conversation_id!;
     return p && p !== s._id ? p : null;
@@ -5754,7 +5729,7 @@ export function nestsWorkers(ui: { modern_style?: boolean; modern_focused?: bool
 // card of its own: its teammates nest under it, and a sub row never draws rows
 // of its own.
 export function isSpawnedWorker(s: InboxSession): boolean {
-  if (nestParentIdOf(s) || isUnderRole(s)) return false;
+  if (nestParentIdOf(s)) return false;
   if (s.is_workflow_sub) return !!s.workflow_run_id;
   if (!s.spawned_by_conversation_id) return false;
   return !(s.agent_team_name && s.agent_name === "team-lead");

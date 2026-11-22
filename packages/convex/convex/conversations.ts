@@ -54,7 +54,7 @@ import {
   INBOX_TRUNCATION_KINDS,
   INBOX_WINDOW_CAPS,
   isSessionActivityFresh,
-  isAssignedAwayFromViewer,
+  isHeldByRoleAlone,
   isStackedAsk,
   type InboxBucket,
   type InboxPlacement,
@@ -8895,7 +8895,7 @@ async function enrichInboxSessionRow(
     // author/owner display names are stamped by computeInboxSessions, which
     // caches the user docs across rows.
     owner_user_id: (conv as any).owner_user_id?.toString() ?? null,
-    // The person who took the wheel (schema: who drives).
+    // The person driving: with a role filed, unset means the role drives.
     driver_user_id: conv.driver_user_id?.toString() ?? null,
     user_id: conv.user_id,
     acting_user_id: (conv as any).acting_user_id ?? null,
@@ -9438,31 +9438,24 @@ export async function scanInboxConversations(
     extraBudget--;
   }
   // Every candidate's owner row before anything reads ownedByMeIds (the
-  // assignment drop, the fold, the working set): a no-op while the owner
+  // fold, the working set): a no-op while the owner
   // window is complete.
   if (truncated.has("owned")) await Promise.all([...byId.values(), ...recentSubagents].map(ownerRowFor));
 
-  // Assignment moves the session into the owners' inboxes. The recent / pin /
-  // stash windows are keyed on the runner (`user_id`), so without this drop a
-  // session handed to a teammate stays in the host's QUESTIONS and Needs You
-  // while also sitting in the assignee's owned window.
+  // A session a role holds with no person owner is the role's alone
+  // (isHeldByRoleAlone): the windows above are keyed on the runner
+  // (`user_id`), so without this drop it would sit in the runner's inbox. Every
+  // other session the caller runs stays theirs whoever else owns it.
   //
   // Only rows the caller RUNS are dropped, and only when the caller did not ask
   // for them by id. A teammate's row is here because the team board shows the
-  // team (its owner says nothing about my inbox), and an explicitly requested
-  // id was named by the caller — neither is mine to hide.
-  const uidForAssign = userId.toString();
+  // team, and an explicitly requested id was named by the caller — neither is
+  // mine to hide.
+  const uidForRole = userId.toString();
   for (const [idStr, conv] of [...byId.entries()]) {
-    if (conv.user_id?.toString() !== uidForAssign) continue;
+    if (conv.user_id?.toString() !== uidForRole) continue;
     if (extraIds.has(idStr)) continue;
-    if (
-      isAssignedAwayFromViewer(
-        { owner_user_id: conv.owner_user_id, owned_by_me: ownedByMeIds.has(idStr) },
-        uidForAssign,
-      )
-    ) {
-      byId.delete(idStr);
-    }
+    if (isHeldByRoleAlone(conv)) byId.delete(idStr);
   }
 
   const conversations = Array.from(byId.values());
@@ -9715,9 +9708,7 @@ export async function computeInboxSessions(
     // rideLeadPlacements), so `cast sessions` files the team where the
     // overlay and the web do.
     const byId = new Map(enrichedRows.map((r) => [r.conv._id.toString(), r]));
-    const childLive = new Set([...childrenByParent].filter(([, children]) => hasLiveNestedChild(children, maps, now)).map(([pid]) => pid));
-    const rideRowOf = (id: string) => (childLive.has(id) ? { ...byId.get(id)?.conv, child_live: true } : byId.get(id)?.conv);
-    rideLeadPlacements(new Map(enrichedRows.map((r) => [r.conv._id.toString(), r.row as { bucket: InboxBucket }])), rideRowOf);
+    rideLeadPlacements(new Map(enrichedRows.map((r) => [r.conv._id.toString(), r.row as { bucket: InboxBucket }])), (id) => byId.get(id)?.conv);
     // Children go through the SAME placement call as their parents, off the
     // same clock and the same asking inputs. A child has no probed last user
     // message (buildSubagentChildRow leaves it null), which is the honest
@@ -9931,9 +9922,6 @@ type LivenessFields = {
   // compute when that child lives outside its scan window. Member rows only.
   child_asking?: boolean;
   child_asking_until?: number | null;
-  // A nested child is live: lifts a standing session whose only work is a
-  // subagent (rideLeadPlacements). Member rows only.
-  child_live?: boolean;
   // What the agent is doing now (conversations.activity), overlay borne so a
   // tool call rides the flush push the overlay already makes and never
   // re-pushes the session list. Clients show it only while the row is working
@@ -10030,19 +10018,6 @@ export function groupPoolChildren(pool: any[]): Map<string, any[]> {
     else byParent.set(pid, [c]);
   }
   return byParent;
-}
-
-// A parent's child_live fact: some nested child with content holds a trusted
-// status that is still in play. A finished child (done, stopped, hibernated)
-// no longer puts its parent in front of the person.
-const SETTLED_CHILD_STATUSES: ReadonlySet<string> = new Set(["idle", "done", "stopped", "hibernated"]);
-export function hasLiveNestedChild(children: any[], maps: InboxSessionMaps, now: number): boolean {
-  return children.some((c) => {
-    if ((c.message_count ?? 0) === 0) return false;
-    const cid = c._id.toString();
-    const status = trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now, isLiveAt(maps, cid, now), verifiedWaitingFor(maps, cid, now));
-    return status !== undefined && !SETTLED_CHILD_STATUSES.has(status);
-  });
 }
 
 // The parents that a producing subagent child should keep in "working", derived ONCE
@@ -10667,7 +10642,6 @@ export async function computeSessionsLiveness(
     const childFacts = {
       child_asking: childAsking,
       child_asking_until: childAsking ? liftUntil(cid) : null,
-      child_live: hasLiveNestedChild(childrenByParent.get(cid) ?? [], maps, now),
     };
     const askingFor = (lv: LivenessFields, t: number) => ownAsk(lv, conv) || pendingDecisionIds.has(cid) || childAskingAt(childFacts, t);
     const placeAt = (t: number): InboxPlacement => placeLivenessRowAt(conv, maps, reads[i], producingUntil, askingFor, t).placement;
@@ -10695,8 +10669,7 @@ export async function computeSessionsLiveness(
   // inside computeFold). The tally and the digest read the FINAL stamps.
   const convById = new Map(shownConvs.map((conv) => [conv._id.toString(), conv]));
   const stamped = new Map(shownConvs.map((conv) => [conv._id.toString(), liveness[conv._id.toString()] as InboxOverlayRow & { bucket: InboxBucket; below_fold: boolean }]));
-  const rideRowOf = (id: string) => (liveness[id]?.child_live ? { ...convById.get(id), child_live: true } : convById.get(id));
-  rideLeadPlacements(stamped, rideRowOf, (rider, lead) => {
+  rideLeadPlacements(stamped, (id) => convById.get(id), (rider, lead) => {
     rider.bucket_stale_at = lead.bucket_stale_at;
     rider.stale_bucket = lead.stale_bucket;
   });

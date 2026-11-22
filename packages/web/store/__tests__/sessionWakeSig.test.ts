@@ -108,9 +108,9 @@ describe("sessionStructuralSig — real bucket/order changes flip it", () => {
   });
 
   // Ownership decides whose inbox the row is in (isForeignRow →
-  // isAssignedAwayFromViewer), so a handoff has to wake the placement. Without
-  // this the memo kept serving the pre-handoff answer until some other row
-  // moved, and a session assigned away stayed in the assigner's Needs You.
+  // isHeldByRoleAlone) and who drives it decides where it files (roleDrives),
+  // so an ownership change has to wake the placement. Without this the memo
+  // kept serving the previous answer until some other row moved.
   it("flips when the session is assigned to someone else, and when I am an owner", () => {
     expect(
       sessionStructuralSig(session("a", { owner_user_id: "users_them" })),
@@ -118,6 +118,12 @@ describe("sessionStructuralSig — real bucket/order changes flip it", () => {
     expect(
       sessionStructuralSig(session("a", { owner_user_id: "users_them", owned_by_me: true })),
     ).not.toBe(sessionStructuralSig(session("a", { owner_user_id: "users_them" })));
+  });
+
+  it("flips when a role is filed and when a person takes over driving", () => {
+    const filed = session("a", { org_role_id: "org_roles_infra" });
+    expect(sessionStructuralSig(filed)).not.toBe(sessionStructuralSig(base));
+    expect(sessionStructuralSig(session("a", { org_role_id: "org_roles_infra", driver_user_id: "users_me" }))).not.toBe(sessionStructuralSig(filed));
   });
 });
 

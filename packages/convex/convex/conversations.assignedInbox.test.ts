@@ -70,7 +70,10 @@ describe("assigned sessions and the inbox cluster cutoff", () => {
   });
 });
 
-describe("a session I run that I assigned away leaves my inbox", () => {
+// The membership rule (shared isHeldByRoleAlone): a session is in the inbox
+// of each of its owners and of the account that runs it, except one a role
+// holds with no person owner, which is the role's alone.
+describe("the runner keeps its session; a role-alone session leaves it", () => {
   const ME = "users_me";
   const THEM = "users_them";
   const NOW = Date.now();
@@ -81,43 +84,40 @@ describe("a session I run that I assigned away leaves my inbox", () => {
         { _id: ME, name: "Me", email: "me@example.com" },
         { _id: THEM, name: "Samvit", email: "samvit@example.com" },
       ],
+      org_roles: [{ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active" }],
       conversations: [
-        {
-          _id: "conversations_handed",
-          user_id: ME,
-          owner_user_id: THEM,
-          status: "active",
-          updated_at: NOW,
-          message_count: 4,
-          title: "Infra lead",
-        },
-        {
-          _id: "conversations_mine",
-          user_id: ME,
-          owner_user_id: ME,
-          status: "active",
-          updated_at: NOW,
-          message_count: 2,
-          title: "Still mine",
-        },
+        { _id: "conversations_handed", user_id: ME, owner_user_id: THEM, status: "active", updated_at: NOW, message_count: 4, title: "Handed to Samvit" },
+        { _id: "conversations_mine", user_id: ME, owner_user_id: ME, status: "active", updated_at: NOW, message_count: 2, title: "Still mine" },
+        // A role started it on its own: no person owner.
+        { _id: "conversations_role_alone", user_id: ME, org_role_id: "org_roles_infra", status: "active", updated_at: NOW, message_count: 3, title: "The role's" },
+        // A role holds it and Samvit owns it too: it stays with the runner and reaches Samvit.
+        { _id: "conversations_role_owned", user_id: ME, org_role_id: "org_roles_infra", owner_user_id: THEM, status: "active", updated_at: NOW, message_count: 3, title: "Role and Samvit" },
       ],
       session_owners: [
         { _id: "so_handed", conversation_id: "conversations_handed", user_id: THEM, added_by: ME, added_at: 1 },
         { _id: "so_mine", conversation_id: "conversations_mine", user_id: ME, added_by: ME, added_at: 1 },
+        { _id: "so_role_owned", conversation_id: "conversations_role_owned", user_id: THEM, added_by: ME, added_at: 1 },
       ],
       managed_sessions: [],
       messages: [],
     });
   }
 
-  test("the runner's inbox no longer lists it; the owner's inbox does", async () => {
+  test("the runner lists what it runs, owners and all, but not a role-alone session; owners list theirs", async () => {
     const db = fixtures();
     const mine = await computeInboxSessions({ db }, ME as any, { show_all: false, includeLiveness: false });
-    expect(mine.sessions.map((s: any) => s._id).sort()).toEqual(["conversations_mine"]);
+    expect(mine.sessions.map((s: any) => s._id).sort()).toEqual(["conversations_handed", "conversations_mine", "conversations_role_owned"]);
+    expect(mine.sessions.find((s: any) => s._id === "conversations_handed").owned_by_me).toBe(false);
 
     const theirs = await computeInboxSessions({ db }, THEM as any, { show_all: false, includeLiveness: false });
-    expect(theirs.sessions.map((s: any) => s._id)).toEqual(["conversations_handed"]);
-    expect(theirs.sessions[0].owned_by_me).toBe(true);
+    expect(theirs.sessions.map((s: any) => s._id).sort()).toEqual(["conversations_handed", "conversations_role_owned"]);
+    expect(theirs.sessions.every((s: any) => s.owned_by_me)).toBe(true);
+  });
+
+  test("a role-alone session named by id is still listed: the caller asked for it", async () => {
+    const db = fixtures();
+    const named = await computeInboxSessions({ db }, ME as any, { extraConvIds: ["conversations_role_alone"], includeLiveness: false });
+    expect(named.sessions.some((s: any) => s._id === "conversations_role_alone")).toBe(true);
   });
 });
 
@@ -164,7 +164,7 @@ describe("an owned row holds its seat whatever state it is in", () => {
 // the OWNER SET, so it must not reach rows that are in the candidate set for
 // another reason: a teammate's session on the team board, or a row the caller
 // named by id.
-describe("the assigned-away drop stays inside the caller's own rows", () => {
+describe("the role-alone drop stays inside the caller's own rows", () => {
   const ME = "users_me";
   const MATE = "users_mate";
   const THIRD = "users_third";
@@ -185,13 +185,14 @@ describe("the assigned-away drop stays inside the caller's own rows", () => {
         { _id: "tm_third", team_id: TEAM, user_id: THIRD },
       ],
       conversations: [
-        // A teammate's session, owned by a third person. Nothing to do with me.
-        { _id: "conversations_mate", user_id: MATE, owner_user_id: THIRD, status: "active", updated_at: NOW, message_count: 5, team_id: TEAM, is_private: false, title: "Mate's work" },
-        // Mine, handed to a teammate.
+        // A teammate's session a role holds alone: the team board shows the team.
+        { _id: "conversations_mate", user_id: MATE, org_role_id: "org_roles_infra", status: "active", updated_at: NOW, message_count: 5, team_id: TEAM, is_private: false, title: "Mate's role work" },
+        // Mine, handed to a teammate: still mine to see.
         { _id: "conversations_handed", user_id: ME, owner_user_id: MATE, status: "active", updated_at: NOW, message_count: 5, title: "Handed over" },
+        // Mine, held by a role alone: the role's.
+        { _id: "conversations_role_alone", user_id: ME, org_role_id: "org_roles_infra", status: "active", updated_at: NOW, message_count: 5, title: "The role's" },
       ],
       session_owners: [
-        { _id: "so_mate", conversation_id: "conversations_mate", user_id: THIRD, added_by: MATE, added_at: 1 },
         { _id: "so_handed", conversation_id: "conversations_handed", user_id: MATE, added_by: ME, added_at: 2 },
       ],
       managed_sessions: [],
@@ -199,20 +200,20 @@ describe("the assigned-away drop stays inside the caller's own rows", () => {
     });
   }
 
-  test("team scope keeps the teammate's row; my own handed-over row still goes", async () => {
+  test("team scope keeps the teammate's row and my handed-over row; my role-alone row goes", async () => {
     const scan = await scanInboxConversations({ db: fixtures() }, ME as any, NOW, {
       includeLiveness: false,
       teamScope: TEAM as any,
     });
     const ids = scan.conversations.map((c: any) => c._id.toString()).sort();
-    expect(ids).toEqual(["conversations_mate"]);
+    expect(ids).toEqual(["conversations_handed", "conversations_mate"]);
   });
 
-  test("naming the id brings my handed-over row back", async () => {
+  test("naming the id brings my role-alone row back", async () => {
     const scan = await scanInboxConversations({ db: fixtures() }, ME as any, NOW, {
       includeLiveness: false,
-      extraConvIds: ["conversations_handed"],
+      extraConvIds: ["conversations_role_alone"],
     });
-    expect(scan.conversations.map((c: any) => c._id.toString())).toEqual(["conversations_handed"]);
+    expect(scan.conversations.map((c: any) => c._id.toString()).sort()).toEqual(["conversations_handed", "conversations_role_alone"]);
   });
 });

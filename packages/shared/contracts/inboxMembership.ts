@@ -76,13 +76,6 @@ export interface RollupRow extends InboxRowIdentity {
   spawned_by_conversation_id?: unknown;
   agent_team_name?: string | null;
   agent_name?: string | null;
-  /** The role this session reports to (a role's session). */
-  org_role_id?: unknown;
-  /** Set when the row IS a role's standing session. */
-  standing_role_id?: unknown;
-  /** A nested child of this row is live (the overlay's child_live fact). */
-  child_live?: boolean | null;
-  /** The role put this session in front of the person; it stands alone again. */
 }
 
 export function rollupParentIdOf(row: RollupRow): string | null {

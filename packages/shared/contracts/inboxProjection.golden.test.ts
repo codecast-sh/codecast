@@ -112,6 +112,11 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // v28: the first row past the fold's gap folds (the edge rows in fold,
   // teammates and windows).
   28: "817c90c9dd300267",
+  // v29: role riding removed; a role is one of a session's owners. roles.json
+  // now holds the new model: every row files by its own facts, a session its
+  // role drives files what it waits on as working, a paused role files like
+  // any session. No other fixture moved.
+  29: "a893458fb0843767",
 };
 
 type Expected = {

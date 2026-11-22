@@ -188,7 +188,7 @@ describe("overlay projection — placement rules", () => {
     expect(liveness.conversations_stacked).toMatchObject({ asking: true, bucket: "questions" });
   });
 
-  test("a session you run but do not own is not in your overlay at all, decide or no decide", async () => {
+  test("a session you run but do not own stays in your overlay; a decide asked of its owner does not lift it for you", async () => {
     const THEM = "users_them";
     const tables = {
       conversations: [conv("hosted", { owner_user_id: THEM, updated_at: EPOCH - MIN })],
@@ -210,10 +210,10 @@ describe("overlay projection — placement rules", () => {
       ],
     };
     const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
-    // Assignment moved the row to its owner's inbox: it is not stamped for the
-    // account that merely runs it, so it can file under no section of mine —
-    // and its pending decide went with it (asked_user_ids names THEM).
-    expect(liveness.conversations_hosted).toBeUndefined();
+    // The runner keeps the session it runs (the membership rule), but the
+    // pending decide asks THEM (asked_user_ids), so it is not my question.
+    expect(liveness.conversations_hosted).toBeDefined();
+    expect(liveness.conversations_hosted.bucket).not.toBe("questions");
   });
 
   test("the assignee's overlay does lift a hosted session's pending decide", async () => {

@@ -115,21 +115,18 @@ type SessionAuthor = { name: string; avatar?: string | null; face?: AvatarKey; r
  * from a pre-assignment view is stale exactly when the flag is fresh.
  *
  * This answers "whose ACCOUNT is this", not "whose inbox is it in". A session I
- * run and then assign to a teammate is still mine by this test — it keeps its
- * owner controls and its author chip — and leaves my inbox through the scope
- * rule instead (isForeignRow, which adds isAssignedAwayFromViewer).
+ * run is mine by this test whoever else owns it; the one I run that still
+ * leaves my inbox (a role holds it with no person owner) leaves through the
+ * scope rule instead (isForeignRow, which adds isHeldByRoleAlone).
  */
 export function isForeignSession(
   session: { user_id?: string; author_name?: string | null; owned_by_me?: boolean; owner_user_id?: string | null },
   conv: { user_id?: string; is_own?: boolean } | null | undefined,
   myId: string | null | undefined,
 ): boolean {
-  // A co-owner seat is mine whatever the assignment says.
+  // A co-owner seat is mine whoever runs it.
   if (session.owned_by_me) return false;
-  // Assignment decides whose session this is, ahead of "I started it": a
-  // session handed to someone else leaves the runner's inbox, so the runner
-  // reads it as another person's even though they ran it.
-  if (myId && session.owner_user_id) return session.owner_user_id !== myId;
+  if (myId && session.owner_user_id === myId) return false;
   if (conv?.is_own === true) return false;
   if (conv?.is_own === false) return true;
   const uid = session.user_id ?? conv?.user_id;

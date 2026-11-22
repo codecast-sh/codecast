@@ -256,7 +256,7 @@ describe("the questions bucket", () => {
     expect(ids(mine.needsInput)).toEqual(["h1"]);
   });
 
-  it("an open prompt on a session assigned to someone else does not file under QUESTIONS", () => {
+  it("an open prompt files under QUESTIONS for the runner even when someone else owns it too", () => {
     const ME = "u1000000000000000000000000000001";
     const THEM = "u2000000000000000000000000000002";
     const hosted = row("h1", {
@@ -271,9 +271,24 @@ describe("the questions bucket", () => {
       undefined,
       { currentUser: { _id: ME } },
     );
-    expect(ids(mine.questions)).toEqual([]);
-    expect(ids(mine.needsInput)).toEqual([]);
-    expect(ids(mine.sorted)).toEqual([]);
+    expect(ids(mine.questions)).toEqual(["h1"]);
+  });
+
+  it("an open prompt its role drives waits on the role: Working, not QUESTIONS; a paused role asks the person", () => {
+    const ME = "u1000000000000000000000000000001";
+    const driven = row("r1", { user_id: ME, owner_user_id: ME, owned_by_me: true, org_role_id: "org_roles_infra", awaiting_input: true });
+    const paused = row("r2", { user_id: ME, owner_user_id: ME, owned_by_me: true, org_role_id: "org_roles_infra", driver_user_id: ME, awaiting_input: true });
+    // A role started it on its own: not in the runner's inbox at all.
+    const alone = row("r3", { user_id: ME, org_role_id: "org_roles_infra", awaiting_input: true });
+    const mine = placeSections(
+      Object.fromEntries([driven, paused, alone].map((s) => [s._id, s])),
+      new Set(),
+      undefined,
+      { currentUser: { _id: ME } },
+    );
+    expect(ids(mine.questions)).toEqual(["r2"]);
+    expect(ids(mine.working)).toEqual(["r1"]);
+    expect(ids(mine.sorted)).not.toContain("r3");
   });
 
   it("an open AskUserQuestion qualifies without any decide row, once", () => {

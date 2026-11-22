@@ -159,7 +159,7 @@ function useRowEnv(): InboxRowEnv {
   return env;
 }
 
-export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number }) {
+export function SessionItem({ session, isUnread, selected, onPress, onLongPress, reviveAt }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; onLongPress?: () => void; reviveAt?: number }) {
   if (PERF_PROBE) probeRender('SessionItem');
   const Theme = useTheme();
   const { projectFilter, showImageThumb } = useRowEnv();
@@ -278,13 +278,6 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
         </RNView>
       )}
 
-      {/* A role's sessions are the role's (org-staffing.md S23.3): never rows
-          in the inbox; the card says how many and opens the role's page. */}
-      {!!roleSessions && roleSessions > 0 && (
-        <Pressable onPress={onOpenRole} hitSlop={6} style={{ alignSelf: 'flex-start', marginTop: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.border }} accessibilityRole="button" accessibilityLabel={`${roleSessions} ${roleSessions === 1 ? 'session' : 'sessions'} under this role`}>
-          <RNText maxFontSizeMultiplier={1.2} style={{ fontSize: 11, color: Theme.textSecondary }}>{roleSessions} {roleSessions === 1 ? 'session' : 'sessions'}</RNText>
-        </Pressable>
-      )}
       {stateView ? (
         // The agent's pinned "where this stands" line (cast state) replaces the
         // generated summary, same rule as the web card. It dims once the
@@ -336,7 +329,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
 // only the rows whose props changed, and a heartbeat alone changes none
 // (lib/sessionRowEqual). The callbacks take the row's id (or the
 // row) so the list passes the same functions to every row.
-export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onDismiss, onLongPress, roleSessions, onOpenRole, reviveAt }: {
+export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onDismiss, onLongPress, reviveAt }: {
   session: SessionData;
   isUnread?: boolean;
   /** The row is the conversation on screen (a conversation's inbox panel). */
@@ -344,9 +337,6 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
   onPress: (conversationId: string) => void;
   onDismiss: (conversationId: string) => void;
   onLongPress?: (session: SessionData) => void;
-  roleSessions?: number;
-  /** Opens the role the row belongs to, by its short id. */
-  onOpenRole?: (roleShortId: string) => void;
   /** A clock tick (the list passes the minute). Unread here: a new value
    *  re-renders the row, which reads its relative time and staleness at
    *  render. */
@@ -366,8 +356,6 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
   cb.current = { onDismiss: () => onDismiss(id) };
   const press = useCallback(() => { if (!didSwipe.current) onPress(id); }, [onPress, id]);
   const longPress = useMemo(() => (onLongPress ? () => onLongPress(session) : undefined), [onLongPress, session]);
-  const roleShortId = session.role?.short_id;
-  const openRole = useMemo(() => (onOpenRole && roleShortId ? () => onOpenRole(roleShortId) : undefined), [onOpenRole, roleShortId]);
 
   const springBack = useCallback((after?: () => void) => {
     RNAnimated.spring(translateX, {
@@ -469,7 +457,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} />
+      <SessionItem session={session} selected={selected} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} />
       <RNView style={styles.separator} />
     </RNAnimated.View>
   );

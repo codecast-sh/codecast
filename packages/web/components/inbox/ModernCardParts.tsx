@@ -165,24 +165,19 @@ export function ModernCommentsChip({ session, viewerId, onOpenComments }: { sess
   );
 }
 
-/** A link to another session (the one that spawned or handed off this one,
- *  the one implementing its plan) or to a role's page. */
-export function ModernLinkChip({ kind, label, title, onOpen, href, className = "" }: {
-  kind: "parent" | "implementation" | "role";
+/** A link to another session: the one that spawned or handed off this one,
+ *  or the one implementing its plan. */
+export function ModernLinkChip({ kind, label, title, onOpen, className = "" }: {
+  kind: "parent" | "implementation";
   label: string;
   title: string;
   onOpen?: () => void;
-  href?: string;
   className?: string;
 }) {
-  const icon = kind === "parent" ? <CornerUpLeft aria-hidden className="w-3 h-3 shrink-0" />
-    : kind === "implementation" ? <ArrowRight aria-hidden className="w-3 h-3 shrink-0" />
-    : <Users aria-hidden className="w-3 h-3 shrink-0" />;
-  const body = <>{icon}<span className="truncate">{kind === "role" ? label : cleanTitle(label)}</span></>;
-  if (href) return <Link href={href} data-mc-chip={kind} title={title} onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>{body}</Link>;
+  const icon = kind === "parent" ? <CornerUpLeft aria-hidden className="w-3 h-3 shrink-0" /> : <ArrowRight aria-hidden className="w-3 h-3 shrink-0" />;
   return (
     <button type="button" data-mc-chip={kind} title={title} onClick={(e) => { stop(e); onOpen?.(); }} className={`${CHIP} ${PRESS} ${className}`}>
-      {body}
+      {icon}<span className="truncate">{cleanTitle(label)}</span>
     </button>
   );
 }

@@ -77,8 +77,6 @@ export function SessionCardView({
   sectionStatus,
   forkColorKey,
   subRow,
-  roleSessions = 0,
-  roleAbove = null,
   now,
   chrome,
   liveness,
@@ -284,8 +282,8 @@ export function SessionCardView({
                 only when the parent is directly above; this makes the
                 sub-of-parent relationship explicit when a nested row is
                 focused or pinned without the parent immediately above. */}
-            <svg className={`w-3 h-3 flex-shrink-0 ${subRow === "trigger" ? "text-sol-amber/60" : "text-sol-violet/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : "Subagent"}>
-              <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}, which decides what reaches you` : "Subagent — child of its parent session"}</title>
+            <svg className={`w-3 h-3 flex-shrink-0 ${subRow === "trigger" ? "text-sol-amber/60" : "text-sol-violet/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow === "trigger" ? "Trigger session" : "Subagent"}>
+              <title>{subRow === "trigger" ? "Session driven by the trigger above" : "Subagent — child of its parent session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
@@ -669,20 +667,6 @@ export function SessionCardView({
           {workProject && <SessionWorkProject sig={workProject} className="flex-shrink" />}
           {flowChip}
           {session.is_anchor && anchorIdentity && <><MetaSep /><AnchorScopePill anchor={anchorIdentity} quiet className="flex-shrink-0" /></>}
-          {/* A role's sessions are the role's (S23.3): never rows under its
-              card, one count that opens the role's page. Silent at zero. */}
-          {roleSessions > 0 && session.role?.short_id && <MetaSep />}
-          {roleSessions > 0 && session.role?.short_id && (
-            <Link
-              href={`/org/${session.role.short_id}`}
-              data-role-sessions={roleSessions}
-              onClick={(e) => e.stopPropagation()}
-              className="flex-shrink-0 text-meta text-sol-text-dim tabular-nums whitespace-nowrap hover:text-sol-text hover:underline underline-offset-2"
-              title={`${roleSessions} ${roleSessions === 1 ? "session" : "sessions"} under this role; its page lists them`}
-            >
-              {roleSessions} {roleSessions === 1 ? "session" : "sessions"}
-            </Link>
-          )}
           {worktreeChip}
           {fleetChip}
           {/* The task this session owns: the fact that ties the card to its

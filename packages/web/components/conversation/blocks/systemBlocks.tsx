@@ -463,8 +463,8 @@ function SwitchDivider({
   );
 }
 
-// A session moving between its role and the person (org-roles-run-work.md
-// R1, revised): the role's face, who moved what where, the whole line as
+// A session moving between its role and the person (a legacy divider,
+// org-staffing.md S28): the role's face, who moved what where, the whole line as
 // markdown, the time. The same divider in the child's thread and the role's;
 // `conversationShortId` says which side the reader is on.
 // The verb that wrote these machine messages (cast escalate) is gone; the

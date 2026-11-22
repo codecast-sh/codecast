@@ -133,7 +133,14 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // trigger-run session ends its turn this way and the trigger resumes it.
 // v28: the first row past the fold's gap folds with everything older. It used
 // to stay shown, so filing the oldest shown row surfaced the next older one.
-export const INBOX_PROJECTION_VERSION = 28 as const;
+// v29: role riding is gone (org-roles-run-work.md R1). A role is one of a
+// session's owners: the session files by its own facts, never under the
+// role's standing session, and no child_live fact lifts a hidden lead. A
+// session its role drives (roleDrives) files its ask or its settled turn as
+// working ("With <role>"). Membership: the runner always keeps its session
+// (no assigned-away drop), except one a role holds with no person owner
+// (isHeldByRoleAlone), which is the role's alone.
+export const INBOX_PROJECTION_VERSION = 29 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -370,6 +377,8 @@ export interface InboxPlacementInput extends WorkStateInput {
   personTurn?: boolean;
   /** Own open ask or permission prompt, a pending `cast decide`, or a child's open ask. */
   asking: boolean;
+  /** Its role drives it (roleDrives): what it waits on is the role's, not the person's. */
+  roleDrives?: boolean;
 }
 
 export type InboxPlacement = { bucket: InboxBucket; work_state: WorkState };
@@ -454,9 +463,12 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   // ask notwithstanding — they saw the ask and triaged past it (the same
   // standing snooze has above). The next activity expires the verdict and
   // the ask surfaces again.
-  else if (input.asking && !input.killed && !input.userRest) bucket = "questions";
+  // A session its role drives waits on the role, not the person: its ask and
+  // its settled turn file as working, where the card says "With <role>".
+  else if (input.asking && !input.killed && !input.userRest) bucket = input.roleDrives ? "working" : "questions";
   else if (input.pinned) bucket = "pinned";
   else if (input.messageCount === 0) bucket = "new";
+  else if (input.roleDrives && work_state === "needs_input" && !input.userRest) bucket = "working";
   else bucket = work_state;
   return { bucket, work_state };
 }
@@ -702,8 +714,6 @@ export function settleRiders(
   ride: (riderId: string, leadId: string) => void,
   keepsOwn: (id: string) => boolean = () => false,
 ): void {
-  const all = [...ids];
-  const roleLeads = roleLeadIdsOf(all, rowOf);
   const settled = new Set<string>();
   // Settles `id` and everything above it; false when the chain above closes
   // on itself, in which case nothing on it rides.
@@ -711,7 +721,7 @@ export function settleRiders(
     if (settled.has(id)) return true;
     if (trail.has(id)) return false;
     const row = rowOf(id);
-    const leadId = row && !keepsOwn(id) ? rollupParentIdOf(row) ?? (isUnderRole(row) ? roleLeads.get(String(row.org_role_id)) ?? null : null) : null;
+    const leadId = row && !keepsOwn(id) ? rollupParentIdOf(row) : null;
     if (leadId && leadId !== id && rowOf(leadId)) {
       trail.add(id);
       const acyclic = settle(leadId, trail);
@@ -722,40 +732,7 @@ export function settleRiders(
     settled.add(id);
     return true;
   };
-  for (const id of all) settle(id, new Set());
-}
-
-// ── A role's sessions ride the role (org-roles-run-work.md R1) ──────────────
-//
-// A session that reports to a role is the role's to triage: it rides the
-// role's standing session the way a teammate rides its lead, so it files in
-// the role's section, nests under the role's card and never counts toward the
-// person's needs input. A role's own standing session reports to what the
-// role reports to (org-staffing.md S28): under a role it carries that role's
-// id and rides the same way, so only a role that reports to a person reaches
-// that person. One thing ends the ride: the lead's standing session is not
-// on the list, which leaves nobody triaging it, so the row stands where its
-// own facts put it. What a session needs from a person travels up the
-// reporting line as messages; nothing on the row lifts it out from under
-// its role.
-//
-// This is a RIDE rule only, deliberately absent from rollupParentIdOf: a
-// child's open ask lifts its parent into QUESTIONS, and a role's session
-// asking a question must not reach the person until the role says so.
-export function isUnderRole(row: RollupRow): boolean {
-  return !!row.org_role_id;
-}
-
-// role id → the id of the row that is that role's standing session, over the
-// rows present. Read off the rows themselves (standing_role_id), so every
-// channel resolves the same lead with no extra read.
-export function roleLeadIdsOf(ids: Iterable<string>, rowOf: (id: string) => RollupRow | undefined): Map<string, string> {
-  const leads = new Map<string, string>();
-  for (const id of ids) {
-    const role = rowOf(id)?.standing_role_id;
-    if (role) leads.set(String(role), id);
-  }
-  return leads;
+  for (const id of ids) settle(id, new Set());
 }
 
 export const RIDE_KEEPS_OWN: ReadonlySet<InboxBucket> = new Set<InboxBucket>(["dismissed", "stashed", "snoozed", "pinned"]);
@@ -772,33 +749,12 @@ export function rideLeadPlacements<P extends { bucket: InboxBucket }>(
   rowOf: (id: string) => RollupRow | undefined,
   copy: (rider: P, lead: P) => void = () => {},
 ): void {
-  // A role's standing session whose work is a nested subagent has no rider
-  // here (children are never members), so the child_live fact stands in for
-  // one. A workspace anchor (no role) stays in its own space.
-  for (const [id, lead] of placements) {
-    const row = rowOf(id);
-    if (lead.bucket !== "hidden" || !row?.child_live || !row.standing_role_id) continue;
-    const state = (lead as { work_state?: WorkState }).work_state;
-    if (state && state !== "idle") lead.bucket = state;
-  }
   settleRiders(
     placements.keys(),
     (id) => (placements.has(id) ? rowOf(id) : undefined),
     (riderId, leadId) => {
       const rider = placements.get(riderId)!;
       const lead = placements.get(leadId)!;
-      if (isUnderRole(rowOf(riderId)!)) {
-        // A retired role triages nothing: its sessions are the person's again.
-        if (lead.bucket === "dismissed") return;
-        // A standing session is hidden until it needs a person (isAnchor). One
-        // with sessions under it is where they render, so it files by its own
-        // state instead; a role with nothing under it stays out of the inbox.
-        // A blank standing session (idle) has no section to file in, so it
-        // stays hidden and its sessions stand on their own facts.
-        const state = (lead as { work_state?: WorkState }).work_state;
-        if (lead.bucket === "hidden" && state && state !== "idle") lead.bucket = state;
-        if (lead.bucket === "hidden") return;
-      }
       rider.bucket = lead.bucket;
       copy(rider, lead);
     },
@@ -842,37 +798,26 @@ export function commandsSession(
     (row.owner_user_id != null && row.owner_user_id.toString() === me);
 }
 
-// THE ASSIGNMENT RULE, in one place: a session whose owner set excludes the
-// viewer belongs to its owners, not to the account that runs it. It leaves the
-// runner's inbox, takes its open questions with it, and stops ringing them.
-// An unowned session (empty set) stays with the runner — the implicit starter.
-//
-// Two callers, two shapes of the same fact. This one reads the owner SET, for
-// paths that already hold it (notification delivery).
-export function isAssignedAwayFromOwnerSet(
-  ownerIds: ReadonlyArray<string | { toString(): string }>,
-  viewerId: string | null | undefined,
-): boolean {
-  if (!viewerId) return false;
-  if (ownerIds.length === 0) return false;
-  const me = viewerId.toString();
-  return !ownerIds.some((id) => id.toString() === me);
+// THE MEMBERSHIP RULE, in one place: a session is in the inbox of each of its
+// owners and of the account that runs it, except a session a role holds with
+// no person owner (a role started it on its own). That one belongs to the
+// role: it leaves the runner's inbox, takes its open questions with it, and
+// stops ringing them. A role is one of a session's owners (org_role_id); the
+// people are session_owners, whose primary the owner_user_id cache names, so
+// the row alone answers. Paths that hold the owner SET pass its first id.
+export function isHeldByRoleAlone(row: {
+  org_role_id?: unknown;
+  owner_user_id?: string | { toString(): string } | null;
+}): boolean {
+  return !!row.org_role_id && (row.owner_user_id == null || row.owner_user_id.toString() === "");
 }
 
-// The row shape, for paths that hold a projected row instead: `owner_user_id`
-// is the primary-owner cache and `owned_by_me` is membership in the full set,
-// so the pair answers the same question with no extra read.
-export function isAssignedAwayFromViewer(
-  row: {
-    owner_user_id?: string | { toString(): string } | null;
-    owned_by_me?: boolean | null;
-  },
-  viewerId: string | null | undefined,
-): boolean {
-  if (row.owned_by_me) return false;
-  const owner = row.owner_user_id;
-  if (owner == null || owner === "") return false;
-  return isAssignedAwayFromOwnerSet([owner], viewerId);
+// The role drives the session: it is filed under a role and no person took
+// over (driver_user_id unset). What it waits on is the role's to answer, so it
+// files as working ("With <role>") instead of in the person's needs input or
+// questions. A person driving (the role paused) files it like any session.
+export function roleDrives(row: { org_role_id?: unknown; driver_user_id?: unknown }): boolean {
+  return !!row.org_role_id && !row.driver_user_id;
 }
 
 // `inbox_dismissed_at` is an absolute flag: a truthy value means dismissed until
@@ -1167,6 +1112,10 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   armed_trigger_kind?: string | null;
   /** conversations.agent_type: a hosted conversation's routine never parks it. */
   agent_type?: string | null;
+  /** The role that owns the session (conversations.org_role_id). */
+  org_role_id?: unknown;
+  /** The person driving it in the role's place (conversations.driver_user_id). */
+  driver_user_id?: unknown;
   // The pull request this session shepherds (prShepherd.refreshConversationPrStatus).
   // Presentation only: no bucket or work-state rule reads it.
   pr_status?: {
@@ -1208,7 +1157,6 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   producing_until?: number | null;
   child_asking?: boolean | null;
   child_asking_until?: number | null;
-  child_live?: boolean | null;
   open_tasks?: unknown[] | null;
   open_tasks_at?: number | null;
 }
@@ -1507,6 +1455,7 @@ export function placeProjectableRow(
     isAnchor: !!row.anchor_id,
     personTurn: row.last_turn_origin === "person",
     asking,
+    roleDrives: roleDrives(row),
   });
 }
 

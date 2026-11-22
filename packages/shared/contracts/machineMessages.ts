@@ -749,7 +749,7 @@ export function isRoleWakeFrame(rawContent: string | null | undefined): boolean 
   return !!rawContent && /^<role-wake[\s>]/.test(stripInjectionNoise(rawContent));
 }
 
-// --- A session moving between a role and a person (org-roles-run-work.md R1, revised) ---
+// --- A session moving between a role and a person (org-staffing.md S28) ---
 // A legacy <session-escalation> divider; sessionEscalation.ts reads it.
 export function isSessionEscalationMessage(rawContent: string | null | undefined): boolean {
   return !!rawContent && /^<session-escalation\s/.test(stripInjectionNoise(rawContent));

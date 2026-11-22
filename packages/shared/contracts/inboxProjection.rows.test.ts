@@ -8,7 +8,6 @@ import {
   inboxSortTimeOfRow,
   isBelowFoldAt,
   isFoldExempt,
-  isUnderRole,
   isWorkingSetWindow,
   projectInbox,
   type WorkingSetRow,
@@ -80,34 +79,34 @@ describe("inboxSortTimeOfRow — the replicated fields the sort reads", () => {
   });
 });
 
-// A role's standing session that reports to a role carries that role's id
-// (org-staffing.md S28) and rides the parent lead's card like a hand: it
-// never surfaces on its own, whatever it declares, and a blocked parent is the
-// card. Only a role that reports to a person reaches that person.
-describe("a sub-lead rides its parent lead", () => {
+// A role is one of a session's owners (org-roles-run-work.md R1): nothing
+// rides the role's standing session. Each row files by its own facts, and one
+// its role drives files what it waits on as working (With <role>).
+describe("a role's sessions file by their own facts", () => {
   const E = inboxEpoch(1_800_000_000_000);
   const base = (id: string, over: Record<string, unknown> = {}) => ({ _id: id, status: "active", updated_at: E - 120_000, message_count: 12, is_idle: true, ...over }) as any;
   const top = (over: Record<string, unknown> = {}) => base("top", { anchor_id: "a_top", standing_role_id: "role_top", agent_status: "dormant", thread_state_status: "dormant", ...over });
   const sub = (over: Record<string, unknown> = {}) => base("sub", { anchor_id: "a_sub", standing_role_id: "role_sub", org_role_id: "role_top", agent_status: "idle", thread_state_status: "blocked", ...over });
+  const hand = (over: Record<string, unknown> = {}) => base("hand", { org_role_id: "role_top", agent_status: "idle", ...over });
   const bucket = (p: ReturnType<typeof projectInbox>, id: string) => p.placements.get(id)?.bucket;
 
-  test("a blocked sub-lead files with its parent, which files by its own facts", () => {
-    const quiet = projectInbox([top(), sub()], E);
-    // The parent is dormant on its own facts; the blocked sub-lead is a row under it, not a card.
-    expect(bucket(quiet, "top")).toBe("dormant");
-    expect(bucket(quiet, "sub")).toBe("dormant");
-    expect(isUnderRole(sub())).toBe(true);
-    const raised = projectInbox([top({ thread_state_status: "blocked", agent_status: "idle" }), sub()], E);
-    expect(bucket(raised, "top")).toBe("needs_input");
-    expect(bucket(raised, "sub")).toBe("needs_input");
+  test("the standing session stays hidden on its own facts; nothing under it lifts it", () => {
+    const p = projectInbox([top(), sub(), hand()], E);
+    expect(bucket(p, "top")).toBe("hidden");
+    // A blocked sub-lead and a settled hand wait on the role that drives them.
+    expect(bucket(p, "sub")).toBe("working");
+    expect(bucket(p, "hand")).toBe("working");
+    expect(p.placements.get("hand")?.work_state).toBe("needs_input");
   });
 
-  test("a top lead reaches the person on its own; a sub-lead whose parent is off the list stands on its facts", () => {
+  test("a hand's own verdict stands, and a person driving files it like any session", () => {
+    expect(bucket(projectInbox([top(), hand({ agent_status: "done" })], E), "hand")).toBe("done");
+    expect(bucket(projectInbox([top(), hand({ driver_user_id: "users_me" })], E), "hand")).toBe("needs_input");
+    expect(bucket(projectInbox([top(), sub({ driver_user_id: "users_me" })], E), "sub")).toBe("needs_input");
+  });
+
+  test("a top lead reaches the person on its own", () => {
     const alone = projectInbox([top({ thread_state_status: "blocked", agent_status: "idle" })], E);
     expect(bucket(alone, "top")).toBe("needs_input");
-    const orphan = projectInbox([sub()], E);
-    expect(bucket(orphan, "sub")).toBe("needs_input");
-    const quietOrphan = projectInbox([sub({ thread_state_status: "dormant", agent_status: "dormant" })], E);
-    expect(bucket(quietOrphan, "sub")).toBe("hidden");
   });
 });

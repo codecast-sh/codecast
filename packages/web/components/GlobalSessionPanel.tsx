@@ -54,8 +54,6 @@ import { RoleHoverCard } from "./identity";
 import { RoleFace } from "./org/RoleFace";
 import { OwnerAvatar } from "./OwnersBadge";
 import { CharacterPicker } from "./identity/CharacterPicker";
-import { standingRoleIdOf } from "../lib/sessionIdentity";
-import { isUnderRole } from "@codecast/shared/contracts";
 import { AuthErrorBadge } from "./AuthErrorBadge";
 import { toast } from "sonner";
 import { toastWriteError } from "../lib/dispatchBinding";
@@ -1842,7 +1840,7 @@ function SessionListPanelImpl({
       "--hold-delay": `${left - NEW_SESSION_HOLD_MS}ms`,
     } as React.CSSProperties;
   };
-  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, roleSessionsByLead, workerCountByParent, workersNeedingYouByParent } = placed;
+  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, workerCountByParent, workersNeedingYouByParent } = placed;
 
   // -- Schedules in the inbox (status view) --
   // The same per-user webList the badges/strip/schedules page subscribe to
@@ -1995,7 +1993,7 @@ function SessionListPanelImpl({
     for (const subs of globalSubByParent.values()) for (const sub of subs) if (isSpawnedWorker(sub)) ids.add(sub._id);
     return ids;
   }, [globalSubByParent]);
-  const subRowOf = (sub: InboxSession) => (isUnderRole(sub) ? "role" : isSpawnedWorker(sub) ? "worker" : undefined);
+  const subRowOf = (sub: InboxSession) => (isSpawnedWorker(sub) ? "worker" : undefined);
   const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
     sectionHeaderCount(shown, full, n, showSubagents);
   const statusPinned = filteredPinned;
@@ -2807,7 +2805,7 @@ function SessionListPanelImpl({
                   isSelected={selectedSet.has(session._id)}
                   isActive={session._id === activeSessionId}
                   globalIndex={-1}
-                  {...foldedRunning(standingRoleIdOf(session) ? undefined : subMap.get(session._id), showSubagents, coarseNow, activeSessionId)}
+                  {...foldedRunning(subMap.get(session._id), showSubagents, coarseNow, activeSessionId)}
                   onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
@@ -2997,10 +2995,6 @@ function SessionListPanelImpl({
           }
           const hiddenCount = items.length - visibleItems.length;
           globalRenderedCards += visibleItems.length;
-          // The flat views hoist a role's session under its role's card as a
-          // row of its own (hoistNestedUnderParent), so it takes the small row
-          // there too; with the role's card absent it stays a full card.
-          const flatNestParentOf = flat ? inboxNestParentOf(items, nestWorkers) : null;
           return (<>
           {visibleItems.map((session) => {
             // In flat view, subagents already appear as their own top-level
@@ -3067,12 +3061,11 @@ function SessionListPanelImpl({
                   variant={sectionVariant || "default"}
                   sectionStatus={SECTION_DECLARED_STATUS[key]}
                   forkColorKey={forkColorKeyOf(session)}
-                  roleSessions={roleSessionsByLead.get(session._id)}
-                  subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
+                  subRow={flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
-                  {...foldedRunning(standingRoleIdOf(session) ? undefined : globalSubByParent.get(session._id), showSubagents, coarseNow, activeSessionId)}
+                  {...foldedRunning(globalSubByParent.get(session._id), showSubagents, coarseNow, activeSessionId)}
                 />
                 {/* The bars stack under their card the way subagent rows do —
                     schedule rows keep the dock roster's full anatomy (name,
@@ -3118,7 +3111,7 @@ function SessionListPanelImpl({
                     onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: true }))}
                     className="w-full px-2 py-0.5 text-meta text-sol-text-dim hover:text-sol-violet transition-colors text-left pl-[26px]"
                   >
-                    +{hiddenCount} more {standingRoleIdOf(session) ? "session" : "sub-session"}{hiddenCount > 1 ? "s" : ""}
+                    +{hiddenCount} more sub-session{hiddenCount > 1 ? "s" : ""}
                   </button>
                 )}
                 {subsExpanded && subs.length > 2 && (

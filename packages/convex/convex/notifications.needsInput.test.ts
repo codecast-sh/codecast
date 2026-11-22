@@ -41,11 +41,9 @@ describe("needs-input push — settled idle", () => {
     // is scheduled from here for this conversation.
   });
 
-  // Assignment moves the alert with the inbox row: the account that RUNS a
-  // session it no longer owns is not the one being asked (sessionOwnership,
-  // isAssignedAwayFromOwnerSet). Without this the row left the runner's inbox
-  // and kept ringing their phone.
-  test("a session handed to a teammate rings the owner, not the runner", async () => {
+  // The alert follows the inbox row: the account that RUNS a session keeps it
+  // whoever else owns it, so a session handed to a teammate rings them both.
+  test("a session handed to a teammate rings the owner and the runner", async () => {
     const { ctx, tables } = settledIdleWorld({
       conv: { owner_user_id: "u2" },
       users: [
@@ -57,7 +55,7 @@ describe("needs-input push — settled idle", () => {
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
 
     expect(res.notified).toBe(true);
-    expect(tables.notifications.map((n: Rec) => n.recipient_user_id)).toEqual(["u2"]);
+    expect(tables.notifications.map((n: Rec) => n.recipient_user_id).sort()).toEqual(["u1", "u2"]);
   });
 
   test("an owner set that still holds the runner rings them both", async () => {
@@ -403,9 +401,9 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
   });
 
   // The legacy shape: an owner in the cache with no join row yet (pre-backfill).
-  // It still names an owner, so it still moves the alert — the assigned owner
-  // is rung and the account that merely runs the session is not.
-  test("assigned owner gets the row+push; the runner does not", async () => {
+  // It still names an owner, so the assigned owner is rung, and the runner
+  // keeps hearing about the session it runs.
+  test("assigned owner gets the row+push; so does the runner", async () => {
     const { ctx, tables } = settledIdleWorld({
       conv: { owner_user_id: "u2" },
       users: [
@@ -415,8 +413,8 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
     });
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(res.notified).toBe(true);
-    expect(tables.notifications.map((n: Rec) => n.recipient_user_id)).toEqual(["u2"]);
-    expect(tables.push_outbox.map((r: Rec) => r.user_id)).toEqual(["u2"]);
+    expect(tables.notifications.map((n: Rec) => n.recipient_user_id).sort()).toEqual(["u1", "u2"]);
+    expect(tables.push_outbox.map((r: Rec) => r.user_id).sort()).toEqual(["u1", "u2"]);
   });
 });
 

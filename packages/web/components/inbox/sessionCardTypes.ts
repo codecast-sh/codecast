@@ -82,16 +82,10 @@ export type SessionCardViewProps = {
   // subagent — the trigger view renders a trigger's sessions as sub rows under
   // the trigger's own row. The ↳ arrow goes schedule-amber there (child of a
   // trigger, not of a parent session).
-  // "role": one of a role's sessions under the role's card (org-roles-run-work
-  // .md R1): a subagent row whose arrow names the role.
   // "worker": a session an agent spawned (cast spawn, a workflow sub) drawn
   // under its spawner's card in Modern (inboxStore.nestsWorkers). On its own
   // row it stays a full card.
-  subRow?: "trigger" | "role" | "worker";
-  /** On a role's own card: how many of its sessions ride it (org-staffing.md S23.3); the pill opens the role's page. */
-  roleSessions?: number;
-  /** On a "role" sub row: the role above it, which its arrow names. */
-  roleAbove?: SessionRoleSnapshot | null;
+  subRow?: "trigger" | "worker";
   /** The card's clock: relative ages, thread-state freshness, the blocked chip's TTL. */
   now: number;
   chrome: SessionCardChrome;

@@ -236,18 +236,9 @@ export function identityLine(
   return { name: id.name, title: t || null, handle: null };
 }
 
-/** The role a row IS the standing session of, or null. The inbox reads it to
- *  put the role's one number on its card (org-roles-run-work.md R1). */
+/** The role a row IS the standing session of, or null. */
 export function standingRoleIdOf(row: IdentityRow): string | null {
   return row.standing_role_id ?? null;
-}
-
-/** The role a session reports to, when the role looks after it: the session
- *  renders as a small row under that role's card. A role's own standing
- *  session answers null; it is the card. */
-export function roleLookingAfter(row: IdentityRow): SessionRoleSnapshot | null {
-  if (row.standing_role_id) return null;
-  return row.org_role_id && row.role ? row.role : null;
 }
 
 /** The identity fields alone, lifted off a bigger row. Surfaces that carry a

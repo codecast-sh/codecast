@@ -26,8 +26,8 @@ import {
   projectInbox,
   selectWorkingSet,
   shouldShowInInbox,
-  isAssignedAwayFromViewer,
-  isAssignedAwayFromOwnerSet,
+  isHeldByRoleAlone,
+  roleDrives,
   type InboxBucket,
   type InboxPlacementInput,
   type RollupRow,
@@ -254,6 +254,33 @@ describe("placeInboxRow — bucket precedence", () => {
     expect(placeInboxRow(input({ pinned: true, agentStatus: "working", isIdle: false })).work_state).toBe("working");
   });
 
+  test("a session its role drives files what it waits on as working (With <role>)", () => {
+    // A settled turn and an open ask wait on the role, not the person.
+    const settled = placeInboxRow(input({ roleDrives: true }));
+    expect(settled.bucket).toBe("working");
+    expect(settled.work_state).toBe("needs_input");
+    expect(placeInboxRow(input({ roleDrives: true, asking: true })).bucket).toBe("working");
+    expect(placeInboxRow(input({ roleDrives: true, awaitingInput: true, asking: true })).bucket).toBe("working");
+    expect(placeInboxRow(input({ roleDrives: true, agentStatus: "permission_blocked" })).bucket).toBe("working");
+    // Everything else files as it would without a role.
+    expect(placeInboxRow(input({ roleDrives: true, agentStatus: "done" })).bucket).toBe("done");
+    expect(placeInboxRow(input({ roleDrives: true, agentStatus: "dormant" })).bucket).toBe("dormant");
+    expect(placeInboxRow(input({ roleDrives: true, pinned: true })).bucket).toBe("pinned");
+    expect(placeInboxRow(input({ roleDrives: true, stashed: true })).bucket).toBe("stashed");
+    expect(placeInboxRow(input({ roleDrives: true, messageCount: 0 })).bucket).toBe("new");
+    // The person's own filing stands.
+    expect(placeInboxRow(input({ roleDrives: true, userRest: "needs_input" })).bucket).toBe("needs_input");
+    expect(placeInboxRow(input({ roleDrives: true, snoozeDue: true })).bucket).toBe("needs_input");
+  });
+
+  test("placement reads who drives off the row: a paused role files like any session", () => {
+    const base = { _id: "a", updated_at: 1, message_count: 5, is_idle: true, org_role_id: "org_roles_infra" };
+    expect(placeProjectableRow(base, false, 2).bucket).toBe("working");
+    expect(placeProjectableRow(base, true, 2).bucket).toBe("working");
+    expect(placeProjectableRow({ ...base, driver_user_id: "users_me" }, false, 2).bucket).toBe("needs_input");
+    expect(placeProjectableRow({ ...base, driver_user_id: "users_me" }, true, 2).bucket).toBe("questions");
+  });
+
   test("a blank row is new; content rows take their work state", () => {
     expect(placeInboxRow(input({ messageCount: 0 })).bucket).toBe("new");
     expect(placeInboxRow(input({})).bucket).toBe("needs_input");
@@ -380,37 +407,29 @@ function row(id: string, overrides: Record<string, any> = {}): WorkingSetRow & R
   };
 }
 
-describe("isAssignedAwayFromViewer", () => {
-  const ME = "users_me";
-  const THEM = "users_them";
-
-  test("unowned rows stay with the runner", () => {
-    expect(isAssignedAwayFromViewer({ owner_user_id: null }, ME)).toBe(false);
-    expect(isAssignedAwayFromViewer({}, ME)).toBe(false);
+describe("the membership rule: a session a role holds with no person owner is the role's alone", () => {
+  test("a role-held session with no person owner leaves the runner", () => {
+    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra" })).toBe(true);
+    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", owner_user_id: null })).toBe(true);
+    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", owner_user_id: "" })).toBe(true);
   });
 
-  test("a session I own is mine even when another account runs it", () => {
-    expect(isAssignedAwayFromViewer({ owner_user_id: ME }, ME)).toBe(false);
-    expect(isAssignedAwayFromViewer({ owner_user_id: THEM, owned_by_me: true }, ME)).toBe(false);
-  });
-
-  test("a session assigned to someone else leaves my inbox, even if I run it", () => {
-    expect(isAssignedAwayFromViewer({ owner_user_id: THEM }, ME)).toBe(true);
-    expect(isAssignedAwayFromViewer({ owner_user_id: THEM, owned_by_me: false }, ME)).toBe(true);
-  });
-
-  test("no viewer means do not hide", () => {
-    expect(isAssignedAwayFromViewer({ owner_user_id: THEM }, null)).toBe(false);
-  });
-
-  test("the owner-set form answers the same question", () => {
-    expect(isAssignedAwayFromOwnerSet([], ME)).toBe(false);
-    expect(isAssignedAwayFromOwnerSet([ME], ME)).toBe(false);
-    expect(isAssignedAwayFromOwnerSet([THEM, ME], ME)).toBe(false);
-    expect(isAssignedAwayFromOwnerSet([THEM], ME)).toBe(true);
-    expect(isAssignedAwayFromOwnerSet([THEM], null)).toBe(false);
+  test("a person owner, or no role, keeps it with the runner and its owners", () => {
+    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", owner_user_id: "users_them" })).toBe(false);
     // Convex ids arrive as objects with toString, not as strings.
-    expect(isAssignedAwayFromOwnerSet([{ toString: () => ME }], ME)).toBe(false);
+    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", owner_user_id: { toString: () => "users_them" } })).toBe(false);
+    expect(isHeldByRoleAlone({ owner_user_id: "users_them" })).toBe(false);
+    expect(isHeldByRoleAlone({})).toBe(false);
+  });
+});
+
+describe("roleDrives — the role drives until a person takes over", () => {
+  test("a role filed and no driver: the role drives; a driver set pauses it; no role, nothing to drive", () => {
+    expect(roleDrives({ org_role_id: "org_roles_infra" })).toBe(true);
+    expect(roleDrives({ org_role_id: "org_roles_infra", driver_user_id: null })).toBe(true);
+    expect(roleDrives({ org_role_id: "org_roles_infra", driver_user_id: "users_me" })).toBe(false);
+    expect(roleDrives({ driver_user_id: "users_me" })).toBe(false);
+    expect(roleDrives({})).toBe(false);
   });
 });
 
@@ -736,7 +755,7 @@ describe("field ownership constants", () => {
       "tmux_session", "claude_backend", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
       "message_count", "updated_at", "last_turn_allows_park",
       "agent_status_updated_at", "agent_status_boundary", "turn_completed_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
-      "child_asking", "child_asking_until", "child_live", "activity", "context_tokens", "last_model_call_at",
+      "child_asking", "child_asking_until", "activity", "context_tokens", "last_model_call_at",
     ]);
     expect([...INBOX_PROJECTION_FIELDS]).toEqual([
       "bucket", "work_state", "asking", "below_fold", "bucket_stale_at", "stale_bucket",
@@ -744,9 +763,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 28", () => {
+  test("the caps are the single source and the version is 29", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200, adopted: 100 });
-    expect(INBOX_PROJECTION_VERSION).toBe(28);
+    expect(INBOX_PROJECTION_VERSION).toBe(29);
   });
 });
 
@@ -827,27 +846,6 @@ describe("rideLeadPlacements — a teammate rides its present lead", () => {
     rideLeadPlacements(p, (id) => rowsById[id], (rider, lead) => { rider.stamp = lead.stamp; });
     expect(p.get("mate")!.stamp).toBe("lead");
     expect(p.get("mate_of_mate")!.stamp).toBe("lead");
-  });
-
-  test("a hidden standing session with a live nested child files by its own state; idle, childless or role-less stays hidden", () => {
-    const rows: Record<string, RollupRow> = {
-      nested_lead: { standing_role_id: "r1", child_live: true },
-      idle_lead: { standing_role_id: "r2", child_live: true },
-      quiet_lead: { standing_role_id: "r3" },
-      workspace_anchor: { child_live: true },
-    };
-    const p = new Map<string, { bucket: InboxBucket; work_state: string }>([
-      ["nested_lead", { bucket: "hidden", work_state: "dormant" }],
-      ["idle_lead", { bucket: "hidden", work_state: "idle" }],
-      ["quiet_lead", { bucket: "hidden", work_state: "dormant" }],
-      ["workspace_anchor", { bucket: "hidden", work_state: "dormant" }],
-    ]);
-    rideLeadPlacements(p, (id) => rows[id]);
-    expect(p.get("nested_lead")!.bucket).toBe("dormant");
-    expect(p.get("idle_lead")!.bucket).toBe("hidden");
-    expect(p.get("quiet_lead")!.bucket).toBe("hidden");
-    // A workspace anchor belongs to no role: its subagents never lift it.
-    expect(p.get("workspace_anchor")!.bucket).toBe("hidden");
   });
 
   test("input order never matters", () => {

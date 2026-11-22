@@ -44,7 +44,7 @@ export async function patchConversationVisibility(
 ): Promise<number> {
   // A team role may hold only a session its team can see: a session that
   // stops being visible leaves the role, and its escalation, in this same
-  // patch (org-roles-run-work.md R1, revised).
+  // patch (org-roles-run-work.md R1).
   // A static import. The Convex runtime refuses a dynamic import() ("dynamic
   // module import unsupported"), which took every share, unshare, lock-private
   // and retroactive directory share down with it from 2026-09-22. Nothing

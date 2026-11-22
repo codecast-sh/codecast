@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { Star, Rocket } from "lucide-react";
-import { withSafetyBlock, isStashHidden, isHostedAgentType } from "@codecast/shared/contracts";
+import { withSafetyBlock, isStashHidden, isHostedAgentType, roleDrives } from "@codecast/shared/contracts";
 import { entityRoute } from "@codecast/shared/entities";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
@@ -81,8 +81,6 @@ export function ModernSessionCardView({
   sectionStatus,
   forkColorKey,
   subRow,
-  roleSessions = 0,
-  roleAbove = null,
   now,
   chrome,
   liveness,
@@ -146,6 +144,12 @@ export function ModernSessionCardView({
     hosted,
   });
   const meta = SESSION_STATUS[status];
+  // A session its role drives files as working while it waits on the role
+  // (shared placeInboxRow): the word names who it waits on instead of
+  // claiming the agent runs.
+  const drivingRole = roleDrives(session) && session.role && String(session.role._id) === String(session.org_role_id) ? session.role : null;
+  const withRole = !!drivingRole && status === "working" && !isPendingSend && railRowPlacement(session, now).state !== "working";
+  const word = withRole ? `With ${drivingRole!.name}` : meta.word;
   const line = sessionCardLine({
     row: session,
     status,
@@ -244,9 +248,6 @@ export function ModernSessionCardView({
     const impl = session.implementation_session;
     chips.push(<ModernLinkChip key="impl" kind="implementation" label={sessionCardTitle(impl)} title="The session implementing this plan; open it" onOpen={() => onNavigateToSession?.(impl._id)} className="shrink-[10] min-w-[3rem]" />);
   }
-  if (roleSessions > 0 && session.role?.short_id) {
-    chips.push(<ModernLinkChip key="role" kind="role" label={`${roleSessions} ${roleSessions === 1 ? "session" : "sessions"}`} title="Sessions under this role; its page lists them" href={`/org/${session.role.short_id}`} className="shrink-[10]" />);
-  }
   if (session.is_anchor && anchorIdentity) {
     chips.push(<ModernFactChip key="anchor" kind="anchor" className="shrink-[10]"><AnchorScopePill anchor={anchorIdentity} quiet className="min-w-0" /></ModernFactChip>);
   }
@@ -259,8 +260,8 @@ export function ModernSessionCardView({
   chips.push(<ModernCommentsChip key="comments" session={session} viewerId={viewerId} onOpenComments={onOpenComments} />);
 
   const lead = nested ? (
-    <svg className={`w-3.5 h-3.5 ${subRow === "trigger" ? "text-sol-amber" : "text-sol-violet"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.4} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : subRow === "worker" ? "Worker" : "Subagent"}>
-      <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}` : subRow === "worker" ? `Worker spawned by the session above · ${agentWord}` : `Subagent · ${agentWord}`}</title>
+    <svg className={`w-3.5 h-3.5 ${subRow === "trigger" ? "text-sol-amber" : "text-sol-violet"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.4} role="img" aria-label={subRow === "trigger" ? "Trigger session" : subRow === "worker" ? "Worker" : "Subagent"}>
+      <title>{subRow === "trigger" ? "Session driven by the trigger above" : subRow === "worker" ? `Worker spawned by the session above · ${agentWord}` : `Subagent · ${agentWord}`}</title>
       {SUB_ARROW}
     </svg>
   ) : isPersonified ? (
@@ -300,7 +301,7 @@ export function ModernSessionCardView({
       <div
         role="button"
         tabIndex={0}
-        aria-label={`${displayTitle}, ${meta.word}${line.reason ? `, ${line.reason}` : ""}${time ? `, ${time}` : ""}`}
+        aria-label={`${displayTitle}, ${word}${line.reason ? `, ${line.reason}` : ""}${time ? `, ${time}` : ""}`}
         onClick={(e) => onSelect(session, e)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className={`block w-full cursor-pointer text-left ${nested ? "py-1.5 pl-6 pr-3" : "py-2 pl-3 pr-3"} outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color:var(--focus-ring)]`}
@@ -333,7 +334,7 @@ export function ModernSessionCardView({
         <div data-mc-line2 className={`mt-0.5 flex min-w-0 items-start gap-2 ${hasThumb ? "pr-11" : ""}`}>
           <span className="flex h-[18px] w-5 shrink-0 items-center justify-center"><SessionStatusMark status={status} /></span>
           <p title={lineTitle} className={`min-w-0 flex-1 ${nested ? "text-meta" : "text-ui"} ${expanded ? "line-clamp-2" : "truncate"}`}>
-            <SessionStatusWord status={status} title={meta.meaning} className="font-medium" />
+            <SessionStatusWord status={status} word={word} title={withRole ? `Waiting on ${drivingRole!.name}, which drives this session` : meta.meaning} className="font-medium" />
             {line.reason && <span className={meta.text}><span aria-hidden className="text-sol-text-dim"> · </span>{line.reason}</span>}
             {line.text && (
               <span className="text-sol-text-muted">

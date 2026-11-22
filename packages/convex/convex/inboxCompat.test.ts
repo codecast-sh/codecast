@@ -111,7 +111,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "_id", "acting_user_id", "active_plan", "active_task", "activity", "agent_name", "agent_started_at",
       "agent_status", "agent_status_boundary", "agent_status_updated_at", "agent_task_id", "agent_team_name", "agent_type",
       "anchor_id", "armed_trigger_kind", "auq_open", "author_avatar", "author_name",
-      "awaiting_input", "browser_pane_offer", "cc_account", "character_avatar", "character_name", "claude_backend", "cloud_context_too_large", "cloud_placement", "cloud_placement_progress", "cloud_seed", "cloud_workspace", "codex_account", "context_tokens", "daemon_alive_until", "drawn_icon", "effort", "flow_name", "flow_run_id", "forked_from", "git_branch", "git_remote_url", "git_root",
+      "awaiting_input", "browser_pane_offer", "cc_account", "character_avatar", "character_name", "claude_backend", "cloud_context_too_large", "cloud_placement", "cloud_placement_progress", "cloud_seed", "cloud_workspace", "codex_account", "context_tokens", "daemon_alive_until", "drawn_icon", "driver_user_id", "effort", "flow_name", "flow_run_id", "forked_from", "git_branch", "git_remote_url", "git_root",
       "handed_off_from_conversation_id", "handed_off_from_details", "handed_off_to_conversation_id", "handed_off_to_details",
       "has_pending", "hibernated_at", "hosted_stop", "icon", "icon_color", "idle_summary", "image_preview_url",
       "implementation_session", "inbox_adopted_at", "inbox_deferred_at", "inbox_dismissed_at", "inbox_killed_at",
@@ -245,8 +245,9 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
       org_roles: [{ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", given_name: "Rowan", status: "active", tenure: { kind: "program", ends: { date: 1 }, then: "review" } }],
       conversations: [
         conv("a", { updated_at: EPOCH - MIN, standing_role_id: "org_roles_infra", character_avatar: "fox" }),
-        conv("hand", { updated_at: EPOCH - 2 * MIN, org_role_id: "org_roles_infra" }),
+        conv("hand", { updated_at: EPOCH - 2 * MIN, org_role_id: "org_roles_infra", owner_user_id: ME }),
       ],
+      session_owners: [{ _id: "so_hand", conversation_id: "conversations_hand", user_id: ME, added_by: ME, added_at: EPOCH - 2 * MIN }],
     };
     const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {});
     const standing = sessions.find((s: any) => s._id === "conversations_a");
@@ -260,12 +261,14 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     expect(hand.role?.handle).toBe("infra");
   });
 
-  // org-roles-run-work.md R1 and org-staffing.md S28, on rows through the
-  // server's own overlay: a role's session files with the role and leaves
-  // needs input, whatever it waits on; the role's card files by its own facts
-  // (blocked or waiting: needs input; asking: questions), and nothing under it
-  // lifts it.
-  test("a role's sessions ride its standing session; the role's card files by its own facts", async () => {
+  // org-roles-run-work.md R1, on rows through the server's own overlay: a
+  // role is one of a session's owners. Each session files by its own facts,
+  // never under the role's standing session; one its role drives files what
+  // it waits on as working (With <role>); a paused role (a person drives)
+  // files like any session; one the role holds with no person owner is the
+  // role's alone and leaves the runner's inbox.
+  test("a role's sessions file by their own facts; a role-alone session leaves the runner", async () => {
+    const owned = (id: string) => ({ _id: `so_${id}`, conversation_id: `conversations_${id}`, user_id: ME, added_by: ME, added_at: EPOCH - 5 * MIN });
     const tables = {
       org_roles: [{ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active" }],
       managed_sessions: [
@@ -274,63 +277,38 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
       conversations: [
         // The lead raised something in its own thread: it declared blocked.
         conv("standing", { updated_at: EPOCH - MIN, anchor_id: "anchors_infra", standing_role_id: "org_roles_infra", thread_state_status: "blocked", thread_state: "Which price band for Texas?" }),
-        conv("waiting", { updated_at: EPOCH - 2 * MIN, org_role_id: "org_roles_infra" }),
-        conv("blocked_hand", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", thread_state_status: "blocked", thread_state: "needs a key" }),
+        conv("waiting", { updated_at: EPOCH - 2 * MIN, org_role_id: "org_roles_infra", owner_user_id: ME }),
+        conv("blocked_hand", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", owner_user_id: ME, thread_state_status: "blocked", thread_state: "needs a key" }),
+        conv("paused", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", owner_user_id: ME, driver_user_id: ME }),
+        conv("role_alone", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra" }),
         conv("mine", { updated_at: EPOCH - 4 * MIN }),
         conv("quiet", { updated_at: EPOCH - MIN, anchor_id: "anchors_quiet", standing_role_id: "org_roles_quiet" }),
       ],
+      session_owners: [owned("waiting"), owned("blocked_hand"), owned("paused")],
     };
-    const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
+    const { liveness, projection } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
     const bucketOf = (id: string) => (liveness as any)[`conversations_${id}`]?.bucket;
     expect(bucketOf("mine")).toBe("needs_input");
-    // The lead's own declaration puts its card in needs input; everything
-    // under it files there with it, and a blocked hand is still the role's.
+    // The lead's own declaration puts its card in needs input; nothing under
+    // it moves with it.
     expect(bucketOf("standing")).toBe("needs_input");
-    expect(bucketOf("waiting")).toBe("needs_input");
-    expect(bucketOf("blocked_hand")).toBe("needs_input");
-    // A standing session with nothing under it and nothing to raise stays out.
+    expect(bucketOf("waiting")).toBe("working");
+    expect((liveness as any).conversations_waiting.work_state).toBe("needs_input");
+    expect(bucketOf("blocked_hand")).toBe("working");
+    expect(bucketOf("paused")).toBe("needs_input");
+    expect((liveness as any).conversations_role_alone).toBeUndefined();
     expect(bucketOf("quiet")).toBe("hidden");
+    expect(projection.tally.shown.needs_input).toBe(3);
+    expect(projection.tally.shown.working).toBe(2);
 
-    const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {});
-    const hand = sessions.find((s: any) => s._id === "conversations_blocked_hand");
-    expect(hand.role?.handle).toBe("infra");
-    expect("escalated_by_role" in hand).toBe(false);
-    expect("escalations" in sessions.find((s: any) => s._id === "conversations_standing")).toBe(false);
-  });
-
-  // A lead that delegates with `cast spawn --subagent` has no hand beside it:
-  // its only live work is a nested child, which is never a member, so the
-  // child_live fact is what files it by its own state.
-  test("a standing session whose only live work is a nested subagent files by its own state", async () => {
-    const managed = (id: string, agent_status: string) => ({
-      _id: `ms_${id}`, user_id: ME, conversation_id: `conversations_${id}`, last_heartbeat: EPOCH - 1000,
-      agent_status, agent_status_updated_at: EPOCH - MIN, tmux_session: `cc-${id}`, permission_mode: "default",
-    });
-    const tables = {
-      org_roles: [{ _id: "org_roles_alive", short_id: "or-9", name: "Aliveness lead", handle: "aliveness", avatar: "goat", status: "active" }],
-      managed_sessions: [managed("lead", "dormant"), managed("nested", "dormant"), managed("quiet", "dormant"), managed("finished", "dormant"), managed("finished_child", "done")],
-      conversations: [
-        conv("lead", { updated_at: EPOCH - MIN, anchor_id: "anchors_alive", standing_role_id: "org_roles_alive", thread_state_status: "dormant", thread_state: "waiting on the review" }),
-        conv("nested", { updated_at: EPOCH - 2 * MIN, is_subagent: true, parent_conversation_id: "conversations_lead", org_role_id: "org_roles_alive", thread_state_status: "dormant", thread_state: "PR under review" }),
-        // A dormant lead with nothing under it stays out, as before.
-        conv("quiet", { updated_at: EPOCH - MIN, anchor_id: "anchors_quiet", standing_role_id: "org_roles_quiet", thread_state_status: "dormant", thread_state: "nothing running" }),
-        // A child that finished no longer lifts its lead.
-        conv("finished", { updated_at: EPOCH - MIN, anchor_id: "anchors_finished", standing_role_id: "org_roles_finished", thread_state_status: "dormant", thread_state: "worker reported" }),
-        conv("finished_child", { updated_at: EPOCH - 2 * MIN, is_subagent: true, parent_conversation_id: "conversations_finished", org_role_id: "org_roles_finished", thread_state_status: "done", thread_state: "report sent" }),
-      ],
-    };
-    const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
-    expect((liveness as any).conversations_lead.child_live).toBe(true);
-    expect((liveness as any).conversations_lead.bucket).toBe("dormant");
-    expect((liveness as any).conversations_quiet.bucket).toBe("hidden");
-    expect((liveness as any).conversations_finished.child_live).toBe(false);
-    expect((liveness as any).conversations_finished.bucket).toBe("hidden");
-
-    // `cast sessions` files it the same way, with the child listed under it.
     const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, { projection: true });
-    expect(sessions.find((s: any) => s._id === "conversations_lead").bucket).toBe("dormant");
-    expect(sessions.find((s: any) => s._id === "conversations_quiet").bucket).toBe("hidden");
-    expect(sessions.find((s: any) => s._id === "conversations_finished").bucket).toBe("hidden");
-    expect(sessions.some((s: any) => s._id === "conversations_nested")).toBe(true);
+    const byId = (id: string) => sessions.find((s: any) => s._id === `conversations_${id}`);
+    expect(byId("role_alone")).toBeUndefined();
+    expect(byId("waiting").bucket).toBe("working");
+    expect(byId("waiting").driver_user_id).toBeNull();
+    expect(byId("paused").driver_user_id).toBe(ME);
+    expect(byId("blocked_hand").role?.handle).toBe("infra");
+    expect("escalated_by_role" in byId("blocked_hand")).toBe(false);
+    expect("child_live" in (liveness as any).conversations_standing).toBe(false);
   });
 });

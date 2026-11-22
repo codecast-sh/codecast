@@ -16,7 +16,6 @@ import {
   INBOX_WINDOW_CAPS,
   digestProjection,
   inboxEpoch,
-  isUnderRole,
   projectInbox,
   rollupParentIdOf,
   selectWorkingSet,
@@ -392,14 +391,14 @@ describe("the row shape is INBOX_ROW_FIELDS plus the facts", () => {
 // agents watch their workers this way and act on every transition. Two
 // differences are allowed, both already defined behavior: a named row is
 // deliberate and never folds, and a row that rides a lead (an agent team
-// teammate, a session under a role) keeps its own bucket when its lead was not
-// named, as settleRiders does for any absent lead. work_state, which the watch
+// teammate) keeps its own bucket when its lead was not named, as settleRiders
+// does for any absent lead. work_state, which the watch
 // reports, never rides. Every other field of every named row, and of the
 // subagent child rows listed under them, must match byte for byte.
 describe("named sessions read alone classify as the full inbox does", () => {
   const strip = (row: any, raw: any) => {
     const { below_fold, bucket, ...rest } = row;
-    const rides = !!raw && (rollupParentIdOf(raw) !== null || isUnderRole(raw));
+    const rides = !!raw && rollupParentIdOf(raw) !== null;
     return rides ? rest : { ...rest, bucket };
   };
   // The schema's real indexes. The named path takes the user's daemon

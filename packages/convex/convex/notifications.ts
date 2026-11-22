@@ -7,6 +7,7 @@ import {
   IDLE_DIGEST_WINDOW_MS,
   summarizeIdleDigest,
   isHostedAgentType,
+  roleDrives,
 } from "@codecast/shared/contracts";
 import { v } from "convex/values";
 import { commentIdValidator } from "./lib/conversationCommentRows";
@@ -802,13 +803,12 @@ export async function performNeedsInputCheck(
     }
     return { notified: false, reason: "hidden" };
   }
-  // A session a role looks after reaches the person through the role
-  // (org-staffing.md S28): its own settle rings nobody. The role reads it
-  // first and raises what needs a person in its own thread, and that card
-  // chimes like any session waiting on them.
-  // A role's standing session that reports to a role rides that role's card
-  // the same way (S28), so it rings nobody either.
-  if (conv.org_role_id && !unheard) {
+  // A session its role drives (roleDrives) waits on the role, not a person
+  // (org-staffing.md S28): its own settle rings nobody, and the inbox files it
+  // as working, "With <role>". The role reads it first and raises what needs a
+  // person in its own thread, and that card chimes like any session waiting on
+  // them. A paused role (a person drives) rings that person like any session.
+  if (roleDrives(conv) && !unheard) {
     return { notified: false, reason: "under_role" };
   }
   // ── Push etiquette (chime only) ────────────────────────────────────────────

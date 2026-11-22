@@ -156,7 +156,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const manualOrderKey = useInboxStore((s) => JSON.stringify(s.clientState?.ui?.inbox_manual_order ?? null));
   const bucketByConv = useMemo(() => convBucketMap(bucketAssignments), [bucketAssignments]);
 
-  const { visibleSessions, sorted: sortedAll, subsByParent, questions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly, roleSessionsByLead } = placed;
+  const { visibleSessions, sorted: sortedAll, subsByParent, questions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly } = placed;
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
   // The number beside the title, in the attention colour: how much is open.
   const headerCount = activeSessions.length;
@@ -311,8 +311,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // Read here once for every row (components/SessionItem InboxRowEnv).
   const reviveByConv = useInboxStore((s) => s.blockedReviveRequestedAt);
 
-  const openRole = useCallback((roleShortId: string) => router.push(`/org/${roleShortId}`), [router]);
-
   const renderSessionItem = useCallback((s: InboxSession) => {
     const row = (
     <SwipeableSessionItem
@@ -323,8 +321,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       onPress={openSession}
       onDismiss={handleStash}
       onLongPress={handleSessionLongPress as (session: SessionData) => void}
-      roleSessions={roleSessionsByLead.get(s._id)}
-      onOpenRole={openRole}
       clock={rowMinute}
       reviveAt={reviveByConv[s._id]}
     />
@@ -332,7 +328,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     return s._id === heldKillId
       ? <RNView key={s._id} style={styles.heldKill} pointerEvents="none">{row}</RNView>
       : row;
-  }, [openSession, currentId, handleStash, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId]);
+  }, [openSession, currentId, handleStash, handleSessionLongPress, rowMinute, reviveByConv, unreadByConv, heldKillId]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;

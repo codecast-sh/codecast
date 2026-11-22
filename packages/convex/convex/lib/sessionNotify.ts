@@ -5,7 +5,7 @@
 // notices) does not import the needs-input check, which reaches agentTasks
 // and the whole function graph behind it (ct-92329).
 import { internal } from "../_generated/api";
-import { IDLE_DIGEST_WINDOW_MS, isAssignedAwayFromOwnerSet } from "@codecast/shared/contracts";
+import { IDLE_DIGEST_WINDOW_MS } from "@codecast/shared/contracts";
 import { enqueuePush } from "../pushRouter";
 import { listSessionOwnerIds } from "../sessionOwners";
 
@@ -165,18 +165,16 @@ export async function deliverSessionNotificationToParties(
   const recipients = await listSessionOwnerIds(ctx, conversation._id);
   if (conversation.owner_user_id) recipients.push(conversation.owner_user_id);
 
-  // The alert follows the inbox row. A session whose owner set excludes the
-  // account that runs it has been handed over (the same rule the inbox scan
-  // applies), so the runner is not rung about work that is no longer theirs to
-  // answer. An unowned session is the runner's own and always rings them.
-  const runnerAssignedAway = isAssignedAwayFromOwnerSet(recipients, conversation.user_id.toString());
-  let delivered = runnerAssignedAway
-    ? false
-    : await deliverSessionNotification(
-      ctx, conversation.user_id, conversation._id, type, title, message,
-    );
+  // The runner always hears about its session, as it always keeps it in its
+  // inbox. A session a role holds with no person owner is the role's, but a
+  // settle the role hears never reaches here (notifications' route up stops
+  // it), so what does reach here is the wait no role could take: the runner is
+  // the person left to hear it.
+  let delivered = await deliverSessionNotification(
+    ctx, conversation.user_id, conversation._id, type, title, message,
+  );
 
-  const seen = new Set<string>(runnerAssignedAway ? [] : [conversation.user_id.toString()]); // runner: done above
+  const seen = new Set<string>([conversation.user_id.toString()]); // runner: done above
   for (const ownerId of recipients) {
     const key = ownerId.toString();
     if (seen.has(key)) continue;
